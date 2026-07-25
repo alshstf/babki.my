@@ -1,4 +1,4 @@
-.PHONY: test lint tidy
+.PHONY: test lint tidy ui ui-dev
 
 test:
 	go test ./...
@@ -8,3 +8,9 @@ lint:
 
 tidy:
 	go mod tidy
+
+ui:
+	cd web && npm ci && npm run build
+
+ui-dev:
+	cd web && npm run dev
