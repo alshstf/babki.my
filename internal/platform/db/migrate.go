@@ -13,8 +13,8 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-// Migrate накатывает все миграции goose. Идемпотентна.
-// (River-миграции добавляются в Task 4.)
+// Migrate applies all goose migrations. Idempotent.
+// (River migrations are added in Task 4.)
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	goose.SetBaseFS(migrations)
 	if err := goose.SetDialect("postgres"); err != nil {

@@ -1,4 +1,4 @@
-// Package testdb поднимает одноразовый Postgres в Docker для тестов.
+// Package testdb spins up a one-time Postgres instance in Docker for tests.
 package testdb
 
 import (
@@ -12,8 +12,8 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// New возвращает пул к чистой БД в контейнере postgres:17-alpine.
-// Если Docker недоступен — t.Skip. Контейнер убирается в t.Cleanup.
+// New returns a connection pool to a clean database in a postgres:17-alpine container.
+// If Docker is unavailable, t.Skip is called. The container is cleaned up in t.Cleanup.
 func New(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()

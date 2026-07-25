@@ -1,4 +1,4 @@
-// Package logging настраивает structured-логгер приложения.
+// Package logging configures the application's structured logger.
 package logging
 
 import (
@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// New возвращает slog.Logger с заданным уровнем (debug|info|warn|error)
-// и форматом (json|text). Неизвестные значения откатываются к info/json.
+// New returns an slog.Logger with the given level (debug|info|warn|error)
+// and format (json|text). Unknown values default to info/json.
 func New(level, format string) *slog.Logger {
 	var lvl slog.Level
 	switch strings.ToLower(level) {

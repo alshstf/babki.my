@@ -1,4 +1,4 @@
-// Package db — подключение к PostgreSQL и миграции схемы.
+// Package db handles PostgreSQL connection and schema migrations.
 package db
 
 import (
@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Connect создает пул и проверяет соединение ping-ом.
+// Connect creates a pool and verifies the connection with a ping.
 func Connect(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	pool, err := pgxpool.New(ctx, url)
 	if err != nil {

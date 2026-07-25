@@ -26,7 +26,7 @@ func TestMigrate(t *testing.T) {
 		t.Error("instance_id is empty")
 	}
 
-	// Идемпотентность: повторный прогон не падает.
+	// Idempotency: running again does not fail.
 	if err := db.Migrate(ctx, pool); err != nil {
 		t.Fatalf("Migrate (second run): %v", err)
 	}
