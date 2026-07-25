@@ -7,3 +7,11 @@ dist/
 # Продуктовые документы (исследования, спеки, планы) — приватная IP, не публикуются
 docs/research/
 docs/superpowers/
+
+# SDD scratch
+.superpowers/
+
+# Build artifacts
+babki
+web/dist/
+coverage.out
