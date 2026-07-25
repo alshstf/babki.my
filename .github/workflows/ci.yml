@@ -1,0 +1,34 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build UI
+        run: cd web && npm ci && npm run build
+
+      # go.mod requires go 1.26.4; setup-go needs the .x wildcard to resolve it
+      # (approved deviation from the original brief's "1.25").
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+      - name: Lint
+        uses: golangci/golangci-lint-action@v8
+      - name: Test
+        run: go test ./...
+      - name: Test embedded UI
+        run: go test -tags embedui ./web/
+
+      - name: Docker build
+        run: docker build -t babki:ci .
