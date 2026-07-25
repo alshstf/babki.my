@@ -13,6 +13,7 @@ import (
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/jobs"
 	"babki.my/babki/internal/platform/version"
+	"babki.my/babki/web"
 )
 
 func newRootCmd() *cobra.Command {
@@ -52,6 +53,7 @@ func newAllCmd() *cobra.Command {
 				return err
 			}
 			srv := httpserver.New(r.log, r.pool)
+			srv.Mount("/", web.Handler())
 
 			g, gctx := errgroup.WithContext(ctx)
 			g.Go(func() error { return srv.Run(gctx, r.cfg.HTTPAddr) })
@@ -76,7 +78,9 @@ func newAPICmd() *cobra.Command {
 				return err
 			}
 			defer r.close()
-			return httpserver.New(r.log, r.pool).Run(ctx, r.cfg.HTTPAddr)
+			srv := httpserver.New(r.log, r.pool)
+			srv.Mount("/", web.Handler())
+			return srv.Run(ctx, r.cfg.HTTPAddr)
 		},
 	}
 }
