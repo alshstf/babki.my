@@ -1,0 +1,9 @@
+.DS_Store
+node_modules/
+dist/
+*.local
+.env
+
+# Продуктовые документы (исследования, спеки, планы) — приватная IP, не публикуются
+docs/research/
+docs/superpowers/
