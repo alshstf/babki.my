@@ -12,7 +12,7 @@ docs/superpowers/
 .superpowers/
 
 # Build artifacts
-babki
+/babki
 web/dist/
 web/node_modules/
 coverage.out
