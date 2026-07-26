@@ -12,6 +12,10 @@ describe("formatMinor", () => {
     expect(norm(formatMinor(-9_200_00, "USD"))).toContain("-9 200,00");
     expect(formatMinor(-9_200_00, "USD")).toContain("$");
   });
+  it("formats zero as positive, not -0", () => {
+    expect(norm(formatMinor(0, "RUB"))).toBe("0,00 ₽");
+    expect(norm(formatMinor(-0, "RUB"))).toBe("0,00 ₽");
+  });
   it("falls back for unknown currency", () => {
     const out = norm(formatMinor(1_00, "XXX"));
     expect(out).toContain("1,00");
@@ -31,11 +35,17 @@ describe("parseToMinor", () => {
     ["1234.56", 123_456],
     ["-92 000", -9_200_000],
     ["0", 0],
+    ["-0", 0],
     ["1 385 000,5", 138_500_050],
-  ])("parses ", (input, want) => {
-    expect(parseToMinor(input)).toBe(want);
+  ])("parses %s", (input, want) => {
+    const result = parseToMinor(input);
+    expect(result).toBe(want);
+    // Ensure -0 is normalized to +0, not IEEE -0
+    if (want === 0) {
+      expect(Object.is(result, 0)).toBe(true);
+    }
   });
-  it.each([["abc"], [""], ["12,34,56"], ["1.2.3"]])("rejects ", (input) => {
+  it.each([["abc"], [""], ["12,34,56"], ["1.2.3"]])("rejects %s", (input) => {
     expect(parseToMinor(input)).toBeNull();
   });
 });

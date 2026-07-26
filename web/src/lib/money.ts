@@ -9,7 +9,9 @@ function formatWith(
   currency: string,
   fractionDigits: number,
 ): string {
-  const major = amountMinor / 100;
+  // Normalize -0 to +0 to prevent "-0,00" formatting
+  const normalized = amountMinor === 0 ? 0 : amountMinor;
+  const major = normalized / 100;
   if (knownCurrency(currency)) {
     return new Intl.NumberFormat("ru-RU", {
       style: "currency",
@@ -35,7 +37,7 @@ export function formatMinorCompact(amountMinor: number, currency: string): strin
 
 // parseToMinor accepts "1 234,56" / "1234.56" / "-92 000"; returns null on junk.
 export function parseToMinor(input: string): number | null {
-  const cleaned = input.replace(/[\s  ]/g, "").replace(",", ".");
+  const cleaned = input.replace(/\s/g, "").replace(",", "."); // \s matches NBSP (U+00A0) too
   if (!/^-?\d+(\.\d{1,2})?$/.test(cleaned)) {
     return null;
   }
@@ -43,7 +45,9 @@ export function parseToMinor(input: string): number | null {
   const fracPadded = (frac + "00").slice(0, 2);
   const sign = whole.startsWith("-") ? -1 : 1;
   const wholeAbs = whole.replace("-", "");
-  return sign * (Number(wholeAbs) * 100 + Number(fracPadded));
+  // Compute magnitude first to avoid IEEE -0; integer exactness holds below Number.MAX_SAFE_INTEGER
+  const magnitude = Number(wholeAbs) * 100 + Number(fracPadded);
+  return magnitude === 0 ? 0 : sign * magnitude;
 }
 
 export function signClass(amountMinor: number): string {
