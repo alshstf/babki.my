@@ -42,6 +42,7 @@ export function AppLayout() {
                 size="icon"
                 aria-label={t("auth.signOut")}
                 onClick={() => logout.mutate()}
+                disabled={logout.isPending}
               >
                 <LogOut className="size-4" />
               </Button>

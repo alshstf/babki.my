@@ -82,7 +82,11 @@ export function SetupPage() {
             </div>
             {setup.isError && (
               <Alert variant="destructive">
-                <AlertDescription>{setup.error.message}</AlertDescription>
+                <AlertDescription>
+                  {setup.error.message.includes("already set up")
+                    ? t("setup.alreadySetUp")
+                    : t("setup.genericError")}
+                </AlertDescription>
               </Alert>
             )}
             <Button type="submit" disabled={!valid || setup.isPending}>
