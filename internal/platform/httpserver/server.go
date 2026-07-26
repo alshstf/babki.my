@@ -4,7 +4,6 @@ package httpserver
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/version"
 )
 
@@ -24,6 +24,11 @@ type Server struct {
 func New(log *slog.Logger, pool *pgxpool.Pool) *Server {
 	s := &Server{log: log, pool: pool, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /api/healthz", s.handleHealthz)
+	// Catch-all for unmatched API paths: JSON 404 instead of falling through
+	// to the SPA handler mounted at "/".
+	s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		httpjson.Error(w, http.StatusNotFound, "not found")
+	})
 	return s
 }
 
@@ -78,14 +83,8 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		status, code = "degraded", http.StatusServiceUnavailable
 		s.log.Warn("healthz: db ping failed", "err", err)
 	}
-	writeJSON(w, code, map[string]string{
+	httpjson.Write(w, code, map[string]string{
 		"status":  status,
 		"version": version.Version,
 	})
-}
-
-func writeJSON(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
 }

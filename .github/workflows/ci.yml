@@ -23,6 +23,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.x"
+      - name: Check generated code is fresh
+        run: |
+          make gen
+          git diff --exit-code
       - name: Lint
         uses: golangci/golangci-lint-action@v8
         with:

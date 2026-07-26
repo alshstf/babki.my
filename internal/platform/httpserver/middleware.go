@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"babki.my/babki/internal/platform/httpjson"
 )
 
 // withRequestLog logs each request: method, path, status, duration.
@@ -27,8 +29,7 @@ func withRecover(log *slog.Logger, next http.Handler) http.Handler {
 		defer func() {
 			if rec := recover(); rec != nil {
 				log.Error("panic in handler", "path", r.URL.Path, "panic", rec)
-				writeJSON(w, http.StatusInternalServerError,
-					map[string]string{"error": "internal server error"})
+				httpjson.Error(w, http.StatusInternalServerError, "internal server error")
 			}
 		}()
 		next.ServeHTTP(w, r)
@@ -43,4 +44,10 @@ type statusWriter struct {
 func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer
+// (Flusher/Hijacker passthrough for streaming handlers).
+func (w *statusWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }

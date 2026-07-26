@@ -13,12 +13,25 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
+	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/jobs"
 	"babki.my/babki/internal/platform/version"
 	"babki.my/babki/web"
 )
+
+// mountModules builds each domain module and mounts its routes on srv.
+// Shared by the "all" and "api" roles so route wiring lives in one place.
+func mountModules(srv *httpserver.Server, r *rt) {
+	famStore := family.NewStore(r.pool)
+	famSvc := family.NewService(famStore)
+	famSM := family.NewSessionManager(r.pool)
+	famAuth := family.NewAuth(famSM, famStore)
+	family.NewHandler(famSvc, famStore, famAuth, famSM).Mount(srv)
+	account.NewHandler(account.NewStore(r.pool), famAuth, famSM).Mount(srv)
+}
 
 // startJobClient wires up the job workers and River client and starts it.
 // Shared by the "all" and "worker" roles.
@@ -66,7 +79,7 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: false,
 	}
-	root.AddCommand(newAllCmd(), newAPICmd(), newWorkerCmd(), newMigrateCmd(), newVersionCmd())
+	root.AddCommand(newAllCmd(), newAPICmd(), newWorkerCmd(), newMigrateCmd(), newVersionCmd(), newSeedCmd())
 	return root
 }
 
@@ -92,6 +105,7 @@ func newAllCmd() *cobra.Command {
 				return err
 			}
 			srv := httpserver.New(r.log, r.pool)
+			mountModules(srv, r)
 			srv.Mount("/", web.Handler())
 
 			// Sequenced shutdown: let the HTTP server fully drain in-flight
@@ -119,6 +133,7 @@ func newAPICmd() *cobra.Command {
 			}
 			defer r.close()
 			srv := httpserver.New(r.log, r.pool)
+			mountModules(srv, r)
 			srv.Mount("/", web.Handler())
 			return srv.Run(ctx, r.cfg.HTTPAddr)
 		},

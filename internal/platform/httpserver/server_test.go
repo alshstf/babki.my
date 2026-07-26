@@ -3,7 +3,9 @@ package httpserver_test
 import (
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"babki.my/babki/internal/platform/httpserver"
@@ -47,5 +49,24 @@ func TestHealthzDegraded(t *testing.T) {
 
 	if rec.Code != 503 {
 		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestAPINotFoundIsJSON(t *testing.T) {
+	pool := testdb.New(t)
+	srv := httpserver.New(slog.Default(), pool)
+	srv.Mount("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("<html>spa</html>")) // imitate SPA mount
+	}))
+
+	req := httptest.NewRequest("GET", "/api/v1/definitely-not-there", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != 404 {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"error"`) {
+		t.Fatalf("body is not JSON error: %s", rec.Body.String())
 	}
 }

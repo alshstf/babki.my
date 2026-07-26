@@ -1,0 +1,6 @@
+package: apitypes
+output: internal/platform/apitypes/types.gen.go
+generate:
+  models: true
+output-options:
+  nullable-type: true
