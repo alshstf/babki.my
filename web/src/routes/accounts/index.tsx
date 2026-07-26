@@ -14,6 +14,7 @@ import { useAccounts, useArchiveAccount, useSummary, type AccountWithBalance } f
 import { SummaryCards } from "./summary-cards";
 import { AccountsTable } from "./accounts-table";
 import { AccountDialog } from "./account-dialog";
+import { BalanceDialog } from "./balance-dialog";
 import { RowMenu } from "./row-menu";
 
 export function AccountsPage() {
@@ -28,6 +29,7 @@ export function AccountsPage() {
     undefined,
   );
   const [archiveTarget, setArchiveTarget] = useState<AccountWithBalance | null>(null);
+  const [balanceTarget, setBalanceTarget] = useState<AccountWithBalance | null>(null);
 
   const isViewer = session?.role === "viewer";
 
@@ -74,7 +76,7 @@ export function AccountsPage() {
                   <RowMenu
                     account={account}
                     onEdit={setDialogAccount}
-                    onBalance={() => {}}
+                    onBalance={setBalanceTarget}
                     onArchive={setArchiveTarget}
                   />
                 )
@@ -86,6 +88,16 @@ export function AccountsPage() {
         open={dialogAccount !== undefined}
         onOpenChange={(open) => !open && setDialogAccount(undefined)}
         account={dialogAccount ?? undefined}
+      />
+
+      <BalanceDialog
+        open={balanceTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setBalanceTarget(null);
+          }
+        }}
+        account={balanceTarget ?? undefined}
       />
 
       <Dialog

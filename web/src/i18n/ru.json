@@ -59,6 +59,14 @@
       "ownership": "Принадлежность",
       "sharedOption": "Общий (семейный)",
       "personalOption": "Личный — {{name}}"
+    },
+    "balanceDialog": {
+      "title": "Баланс: {{name}}",
+      "current": "Текущий",
+      "amount": "Сумма, {{currency}}",
+      "date": "На дату",
+      "liabilityHint": "Для кредитки/кредита долг вводится с минусом",
+      "parseError": "Не удалось разобрать сумму"
     }
   },
   "accountTypes": {

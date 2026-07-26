@@ -89,3 +89,33 @@ export function useArchiveAccount() {
     onSuccess: invalidate,
   });
 }
+
+export function useSetBalance() {
+  const invalidate = useInvalidateAccounts();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      asOf,
+      amountMinor,
+    }: {
+      id: string;
+      asOf: string;
+      amountMinor: number;
+    }) => {
+      const { data, error, response } = await api.PUT(
+        "/api/v1/accounts/{accountId}/balance",
+        {
+          params: { path: { accountId: id } },
+          body: { as_of: asOf, amount_minor: amountMinor },
+        },
+      );
+      if (!data) {
+        throw new Error(
+          (error as { error?: string } | undefined)?.error ?? `balance failed: ${response.status}`,
+        );
+      }
+      return data;
+    },
+    onSuccess: invalidate,
+  });
+}
