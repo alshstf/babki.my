@@ -30,31 +30,118 @@ func (e AccountStatus) Valid() bool {
 
 // Defines values for AccountType.
 const (
-	Brokerage  AccountType = "brokerage"
-	Cash       AccountType = "cash"
-	Checking   AccountType = "checking"
-	CreditCard AccountType = "credit_card"
-	Deposit    AccountType = "deposit"
-	Loan       AccountType = "loan"
-	Savings    AccountType = "savings"
+	AccountTypeBrokerage  AccountType = "brokerage"
+	AccountTypeCash       AccountType = "cash"
+	AccountTypeChecking   AccountType = "checking"
+	AccountTypeCreditCard AccountType = "credit_card"
+	AccountTypeDeposit    AccountType = "deposit"
+	AccountTypeLoan       AccountType = "loan"
+	AccountTypeSavings    AccountType = "savings"
 )
 
 // Valid indicates whether the value is a known member of the AccountType enum.
 func (e AccountType) Valid() bool {
 	switch e {
-	case Brokerage:
+	case AccountTypeBrokerage:
 		return true
-	case Cash:
+	case AccountTypeCash:
 		return true
-	case Checking:
+	case AccountTypeChecking:
 		return true
-	case CreditCard:
+	case AccountTypeCreditCard:
 		return true
-	case Deposit:
+	case AccountTypeDeposit:
 		return true
-	case Loan:
+	case AccountTypeLoan:
 		return true
-	case Savings:
+	case AccountTypeSavings:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InstrumentType.
+const (
+	Bond     InstrumentType = "bond"
+	Crypto   InstrumentType = "crypto"
+	Currency InstrumentType = "currency"
+	Custom   InstrumentType = "custom"
+	Etf      InstrumentType = "etf"
+	Metal    InstrumentType = "metal"
+	Share    InstrumentType = "share"
+)
+
+// Valid indicates whether the value is a known member of the InstrumentType enum.
+func (e InstrumentType) Valid() bool {
+	switch e {
+	case Bond:
+		return true
+	case Crypto:
+		return true
+	case Currency:
+		return true
+	case Custom:
+		return true
+	case Etf:
+		return true
+	case Metal:
+		return true
+	case Share:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OperationType.
+const (
+	OperationTypeAmortization OperationType = "amortization"
+	OperationTypeBuy          OperationType = "buy"
+	OperationTypeConversion   OperationType = "conversion"
+	OperationTypeCoupon       OperationType = "coupon"
+	OperationTypeDeposit      OperationType = "deposit"
+	OperationTypeDividend     OperationType = "dividend"
+	OperationTypeFee          OperationType = "fee"
+	OperationTypeInterest     OperationType = "interest"
+	OperationTypeSell         OperationType = "sell"
+	OperationTypeSplit        OperationType = "split"
+	OperationTypeTax          OperationType = "tax"
+	OperationTypeTransferIn   OperationType = "transfer_in"
+	OperationTypeTransferOut  OperationType = "transfer_out"
+	OperationTypeWithdrawal   OperationType = "withdrawal"
+)
+
+// Valid indicates whether the value is a known member of the OperationType enum.
+func (e OperationType) Valid() bool {
+	switch e {
+	case OperationTypeAmortization:
+		return true
+	case OperationTypeBuy:
+		return true
+	case OperationTypeConversion:
+		return true
+	case OperationTypeCoupon:
+		return true
+	case OperationTypeDeposit:
+		return true
+	case OperationTypeDividend:
+		return true
+	case OperationTypeFee:
+		return true
+	case OperationTypeInterest:
+		return true
+	case OperationTypeSell:
+		return true
+	case OperationTypeSplit:
+		return true
+	case OperationTypeTax:
+		return true
+	case OperationTypeTransferIn:
+		return true
+	case OperationTypeTransferOut:
+		return true
+	case OperationTypeWithdrawal:
 		return true
 	default:
 		return false
@@ -119,12 +206,48 @@ type CreateAccountRequest struct {
 	Type        AccountType                           `json:"type"`
 }
 
+// CreateInstrumentRequest defines model for CreateInstrumentRequest.
+type CreateInstrumentRequest struct {
+	Currency       string                    `json:"currency"`
+	FaceCurrency   nullable.Nullable[string] `json:"face_currency,omitempty"`
+	FaceValueMinor nullable.Nullable[int64]  `json:"face_value_minor,omitempty"`
+	Figi           *string                   `json:"figi,omitempty"`
+	Isin           *string                   `json:"isin,omitempty"`
+	Name           string                    `json:"name"`
+	Ticker         *string                   `json:"ticker,omitempty"`
+	Type           InstrumentType            `json:"type"`
+}
+
 // CreateMemberRequest defines model for CreateMemberRequest.
 type CreateMemberRequest struct {
 	DisplayName string `json:"display_name"`
 	Password    string `json:"password"`
 	Role        Role   `json:"role"`
 	Username    string `json:"username"`
+}
+
+// CreateOperationRequest defines model for CreateOperationRequest.
+type CreateOperationRequest struct {
+	AccountId    openapi_types.UUID                    `json:"account_id"`
+	AmountMinor  int64                                 `json:"amount_minor"`
+	Currency     string                                `json:"currency"`
+	FeeMinor     *int64                                `json:"fee_minor,omitempty"`
+	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id,omitempty"`
+	Note         *string                               `json:"note,omitempty"`
+
+	// OccurredOn Date YYYY-MM-DD
+	OccurredOn string `json:"occurred_on"`
+
+	// Price Decimal as string
+	Price nullable.Nullable[string] `json:"price,omitempty"`
+
+	// Quantity Decimal as string
+	Quantity  nullable.Nullable[string] `json:"quantity,omitempty"`
+	SettledOn nullable.Nullable[string] `json:"settled_on,omitempty"`
+
+	// SplitRatio Decimal as string
+	SplitRatio nullable.Nullable[string] `json:"split_ratio,omitempty"`
+	Type       OperationType             `json:"type"`
 }
 
 // CurrencyTotal defines model for CurrencyTotal.
@@ -142,6 +265,23 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
+// Instrument defines model for Instrument.
+type Instrument struct {
+	Currency       string                    `json:"currency"`
+	FaceCurrency   nullable.Nullable[string] `json:"face_currency,omitempty"`
+	FaceValueMinor nullable.Nullable[int64]  `json:"face_value_minor,omitempty"`
+	Figi           string                    `json:"figi"`
+	Frozen         bool                      `json:"frozen"`
+	Id             openapi_types.UUID        `json:"id"`
+	Isin           string                    `json:"isin"`
+	Name           string                    `json:"name"`
+	Ticker         string                    `json:"ticker"`
+	Type           InstrumentType            `json:"type"`
+}
+
+// InstrumentType defines model for InstrumentType.
+type InstrumentType string
+
 // LoginRequest defines model for LoginRequest.
 type LoginRequest struct {
 	Password string `json:"password"`
@@ -154,6 +294,57 @@ type MemberInfo struct {
 	Id          openapi_types.UUID `json:"id"`
 	Role        Role               `json:"role"`
 	Username    string             `json:"username"`
+}
+
+// Operation defines model for Operation.
+type Operation struct {
+	AccountId    openapi_types.UUID                    `json:"account_id"`
+	AmountMinor  int64                                 `json:"amount_minor"`
+	CreatedAt    time.Time                             `json:"created_at"`
+	Currency     string                                `json:"currency"`
+	FeeMinor     int64                                 `json:"fee_minor"`
+	Id           openapi_types.UUID                    `json:"id"`
+	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id,omitempty"`
+	Note         string                                `json:"note"`
+
+	// OccurredOn Date YYYY-MM-DD
+	OccurredOn string `json:"occurred_on"`
+
+	// Price Decimal as string
+	Price nullable.Nullable[string] `json:"price,omitempty"`
+
+	// Quantity Decimal as string
+	Quantity nullable.Nullable[string] `json:"quantity,omitempty"`
+
+	// SettledOn Date YYYY-MM-DD
+	SettledOn nullable.Nullable[string] `json:"settled_on,omitempty"`
+	Source    string                    `json:"source"`
+
+	// SplitRatio Decimal as string
+	SplitRatio      nullable.Nullable[string]             `json:"split_ratio,omitempty"`
+	TransferGroupId nullable.Nullable[openapi_types.UUID] `json:"transfer_group_id,omitempty"`
+	Type            OperationType                         `json:"type"`
+}
+
+// OperationType defines model for OperationType.
+type OperationType string
+
+// Position defines model for Position.
+type Position struct {
+	CostMinor   int64      `json:"cost_minor"`
+	Currency    string     `json:"currency"`
+	FeesMinor   int64      `json:"fees_minor"`
+	IncomeMinor int64      `json:"income_minor"`
+	Instrument  Instrument `json:"instrument"`
+
+	// Quantity Decimal as string
+	Quantity         string `json:"quantity"`
+	RealizedPnlMinor int64  `json:"realized_pnl_minor"`
+}
+
+// PositionsResponse defines model for PositionsResponse.
+type PositionsResponse struct {
+	Positions []Position `json:"positions"`
 }
 
 // Role defines model for Role.
@@ -193,12 +384,45 @@ type Summary struct {
 	Totals []CurrencyTotal `json:"totals"`
 }
 
+// TransferRequest defines model for TransferRequest.
+type TransferRequest struct {
+	// CostMinor Cost basis override; default is FIFO carryover from the source account
+	CostMinor     nullable.Nullable[int64] `json:"cost_minor,omitempty"`
+	FromAccountId openapi_types.UUID       `json:"from_account_id"`
+	InstrumentId  openapi_types.UUID       `json:"instrument_id"`
+	Note          *string                  `json:"note,omitempty"`
+
+	// OccurredOn Date YYYY-MM-DD
+	OccurredOn string `json:"occurred_on"`
+
+	// Quantity Decimal as string
+	Quantity    string             `json:"quantity"`
+	ToAccountId openapi_types.UUID `json:"to_account_id"`
+}
+
+// TransferResponse defines model for TransferResponse.
+type TransferResponse struct {
+	In  Operation `json:"in"`
+	Out Operation `json:"out"`
+}
+
 // UpdateAccountRequest defines model for UpdateAccountRequest.
 type UpdateAccountRequest struct {
 	Institution *string                               `json:"institution,omitempty"`
 	Name        *string                               `json:"name,omitempty"`
 	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
 	Status      *AccountStatus                        `json:"status,omitempty"`
+}
+
+// UpdateInstrumentRequest defines model for UpdateInstrumentRequest.
+type UpdateInstrumentRequest struct {
+	FaceCurrency   nullable.Nullable[string] `json:"face_currency,omitempty"`
+	FaceValueMinor nullable.Nullable[int64]  `json:"face_value_minor,omitempty"`
+	Figi           *string                   `json:"figi,omitempty"`
+	Frozen         *bool                     `json:"frozen,omitempty"`
+	Isin           *string                   `json:"isin,omitempty"`
+	Name           *string                   `json:"name,omitempty"`
+	Ticker         *string                   `json:"ticker,omitempty"`
 }
 
 // UpdateMemberRequest defines model for UpdateMemberRequest.
@@ -216,6 +440,18 @@ type UserInfo struct {
 // Error defines model for Error.
 type Error = ErrorResponse
 
+// ListAccountOperationsParams defines parameters for ListAccountOperations.
+type ListAccountOperationsParams struct {
+	Limit  *int `form:"limit,omitempty" json:"limit,omitempty"`
+	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
+// SearchInstrumentsParams defines parameters for SearchInstruments.
+type SearchInstrumentsParams struct {
+	Query *string `form:"query,omitempty" json:"query,omitempty"`
+	Limit *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // CreateAccountJSONRequestBody defines body for CreateAccount for application/json ContentType.
 type CreateAccountJSONRequestBody = CreateAccountRequest
 
@@ -228,11 +464,23 @@ type SetAccountBalanceJSONRequestBody = SetBalanceRequest
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
 
+// CreateInstrumentJSONRequestBody defines body for CreateInstrument for application/json ContentType.
+type CreateInstrumentJSONRequestBody = CreateInstrumentRequest
+
+// UpdateInstrumentJSONRequestBody defines body for UpdateInstrument for application/json ContentType.
+type UpdateInstrumentJSONRequestBody = UpdateInstrumentRequest
+
 // CreateMemberJSONRequestBody defines body for CreateMember for application/json ContentType.
 type CreateMemberJSONRequestBody = CreateMemberRequest
 
 // UpdateMemberJSONRequestBody defines body for UpdateMember for application/json ContentType.
 type UpdateMemberJSONRequestBody = UpdateMemberRequest
+
+// CreateOperationJSONRequestBody defines body for CreateOperation for application/json ContentType.
+type CreateOperationJSONRequestBody = CreateOperationRequest
+
+// CreateTransferJSONRequestBody defines body for CreateTransfer for application/json ContentType.
+type CreateTransferJSONRequestBody = TransferRequest
 
 // PerformSetupJSONRequestBody defines body for PerformSetup for application/json ContentType.
 type PerformSetupJSONRequestBody = SetupRequest

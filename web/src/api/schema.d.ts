@@ -182,6 +182,120 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instruments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["searchInstruments"];
+        put?: never;
+        post: operations["createInstrument"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instruments/{instrumentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateInstrument"];
+        trace?: never;
+    };
+    "/api/v1/accounts/{accountId}/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAccountOperations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createOperation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Creates a linked transfer_out/transfer_in pair moving instrument quantity between accounts with FIFO cost-basis carryover. */
+        post: operations["createTransfer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/operations/{operationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Deletes the operation (whole pair for transfers). Rejected if the remaining journal becomes inconsistent (oversell). */
+        delete: operations["deleteOperation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{accountId}/positions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAccountPositions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -293,6 +407,136 @@ export interface components {
         };
         Summary: {
             totals: components["schemas"]["CurrencyTotal"][];
+        };
+        /** @enum {string} */
+        InstrumentType: "share" | "bond" | "etf" | "currency" | "crypto" | "metal" | "custom";
+        Instrument: {
+            /** Format: uuid */
+            id: string;
+            type: components["schemas"]["InstrumentType"];
+            name: string;
+            ticker: string;
+            isin: string;
+            figi: string;
+            currency: string;
+            /** Format: int64 */
+            face_value_minor?: number | null;
+            face_currency?: string | null;
+            frozen: boolean;
+        };
+        CreateInstrumentRequest: {
+            type: components["schemas"]["InstrumentType"];
+            name: string;
+            ticker?: string;
+            isin?: string;
+            figi?: string;
+            currency: string;
+            /** Format: int64 */
+            face_value_minor?: number | null;
+            face_currency?: string | null;
+        };
+        UpdateInstrumentRequest: {
+            name?: string;
+            ticker?: string;
+            isin?: string;
+            figi?: string;
+            frozen?: boolean;
+            /** Format: int64 */
+            face_value_minor?: number | null;
+            face_currency?: string | null;
+        };
+        /** @enum {string} */
+        OperationType: "buy" | "sell" | "deposit" | "withdrawal" | "dividend" | "coupon" | "amortization" | "fee" | "tax" | "transfer_in" | "transfer_out" | "split" | "interest" | "conversion";
+        Operation: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            account_id: string;
+            /** Format: uuid */
+            instrument_id?: string | null;
+            type: components["schemas"]["OperationType"];
+            /** @description Date YYYY-MM-DD */
+            occurred_on: string;
+            /** @description Date YYYY-MM-DD */
+            settled_on?: string | null;
+            /** @description Decimal as string */
+            quantity?: string | null;
+            /** @description Decimal as string */
+            price?: string | null;
+            /** Format: int64 */
+            amount_minor: number;
+            currency: string;
+            /** Format: int64 */
+            fee_minor: number;
+            note: string;
+            /** Format: uuid */
+            transfer_group_id?: string | null;
+            /** @description Decimal as string */
+            split_ratio?: string | null;
+            source: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        CreateOperationRequest: {
+            /** Format: uuid */
+            account_id: string;
+            /** Format: uuid */
+            instrument_id?: string | null;
+            type: components["schemas"]["OperationType"];
+            /** @description Date YYYY-MM-DD */
+            occurred_on: string;
+            settled_on?: string | null;
+            /** @description Decimal as string */
+            quantity?: string | null;
+            /** @description Decimal as string */
+            price?: string | null;
+            /** Format: int64 */
+            amount_minor: number;
+            currency: string;
+            /** Format: int64 */
+            fee_minor?: number;
+            note?: string;
+            /** @description Decimal as string */
+            split_ratio?: string | null;
+        };
+        TransferRequest: {
+            /** Format: uuid */
+            from_account_id: string;
+            /** Format: uuid */
+            to_account_id: string;
+            /** Format: uuid */
+            instrument_id: string;
+            /** @description Decimal as string */
+            quantity: string;
+            /** @description Date YYYY-MM-DD */
+            occurred_on: string;
+            /**
+             * Format: int64
+             * @description Cost basis override; default is FIFO carryover from the source account
+             */
+            cost_minor?: number | null;
+            note?: string;
+        };
+        TransferResponse: {
+            out: components["schemas"]["Operation"];
+            in: components["schemas"]["Operation"];
+        };
+        Position: {
+            instrument: components["schemas"]["Instrument"];
+            /** @description Decimal as string */
+            quantity: string;
+            /** Format: int64 */
+            cost_minor: number;
+            /** Format: int64 */
+            realized_pnl_minor: number;
+            /** Format: int64 */
+            income_minor: number;
+            /** Format: int64 */
+            fees_minor: number;
+            currency: string;
+        };
+        PositionsResponse: {
+            positions: components["schemas"]["Position"][];
         };
     };
     responses: {
@@ -670,6 +914,216 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+        };
+    };
+    searchInstruments: {
+        parameters: {
+            query?: {
+                query?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Matching instruments */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Instrument"][];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    createInstrument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInstrumentRequest"];
+            };
+        };
+        responses: {
+            /** @description Created instrument */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Instrument"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    updateInstrument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instrumentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateInstrumentRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated instrument */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Instrument"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    listAccountOperations: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Account operations, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Operation"][];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    createOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateOperationRequest"];
+            };
+        };
+        responses: {
+            /** @description Created operation */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Operation"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    createTransfer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransferRequest"];
+            };
+        };
+        responses: {
+            /** @description Created pair */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransferResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    listAccountPositions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Open positions computed from the journal */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PositionsResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
 }
