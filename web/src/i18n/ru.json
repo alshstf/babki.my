@@ -1,5 +1,24 @@
 {
   "app": { "name": "babki.my", "loading": "Загрузка…", "error": "Что-то пошло не так" },
   "common": { "close": "Закрыть" },
-  "todo": { "stub": "Раздел в разработке" }
+  "todo": { "stub": "Раздел в разработке" },
+  "nav": { "accounts": "Счета", "family": "Семья" },
+  "roles": { "owner": "владелец", "editor": "редактор", "viewer": "наблюдатель" },
+  "auth": {
+    "loginTitle": "Вход в семейный учёт",
+    "username": "Логин",
+    "password": "Пароль",
+    "signIn": "Войти",
+    "signOut": "Выйти",
+    "invalidCredentials": "Неверный логин или пароль"
+  },
+  "setup": {
+    "title": "Первый запуск",
+    "subtitle": "Создайте семейное пространство и владельца",
+    "spaceName": "Название пространства",
+    "spaceNamePlaceholder": "Наша семья",
+    "displayName": "Ваше имя",
+    "passwordHint": "минимум 8 символов",
+    "submit": "Создать"
+  }
 }
