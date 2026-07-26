@@ -10,6 +10,8 @@ import (
 	tc "github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"babki.my/babki/internal/platform/db"
 )
 
 // New returns a connection pool to a clean database in a postgres:17-alpine container.
@@ -35,7 +37,14 @@ func New(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Fatalf("connection string: %v", err)
 	}
-	pool, err := pgxpool.New(ctx, url)
+	// Use db.PoolConfig (not pgxpool.New) so the test pool registers the same
+	// pgx type codecs as production — notably shopspring/decimal <-> NUMERIC —
+	// which store tests rely on when scanning into *decimal.Decimal fields.
+	cfg, err := db.PoolConfig(url)
+	if err != nil {
+		t.Fatalf("pool config: %v", err)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatalf("pgxpool: %v", err)
 	}
