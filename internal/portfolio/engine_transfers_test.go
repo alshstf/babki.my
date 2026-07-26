@@ -4,18 +4,17 @@ import (
 	"errors"
 	"testing"
 
-	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/portfolio"
 )
 
 func TestSplitAdjustsQuantity(t *testing.T) {
-	split := op(operation.TypeSplit, 5, &sber, "", "", 0, 0)
+	split := op(portfolio.TypeSplit, 5, &sber, "", "", 0, 0)
 	split.SplitRatio = dp("10")
-	ops := []operation.Operation{
-		op(operation.TypeBuy, 1, &sber, "10", "3000", -3_000_000, 0),
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "10", "3000", -3_000_000, 0),
 		split,
 		// after a 1:10 split, sell 50 of 100; cost released = 3000000/2
-		op(operation.TypeSell, 6, &sber, "50", "310", 1_550_000, 0),
+		op(portfolio.TypeSell, 6, &sber, "50", "310", 1_550_000, 0),
 	}
 	pos, err := portfolio.Compute(ops)
 	if err != nil {
@@ -35,9 +34,9 @@ func TestSplitAdjustsQuantity(t *testing.T) {
 
 func TestTransferOutInCarryover(t *testing.T) {
 	// Source: 10 x 100.00 (cost 100000). Transfer out 4: released = 40000.
-	outOps := []operation.Operation{
-		op(operation.TypeBuy, 1, &sber, "10", "100", -100_000, 0),
-		op(operation.TypeTransferOut, 5, &sber, "4", "", 40_000, 0),
+	outOps := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "10", "100", -100_000, 0),
+		op(portfolio.TypeTransferOut, 5, &sber, "4", "", 40_000, 0),
 	}
 	pos, err := portfolio.Compute(outOps)
 	if err != nil {
@@ -49,9 +48,9 @@ func TestTransferOutInCarryover(t *testing.T) {
 	}
 
 	// Destination: transfer_in with the carried cost basis, then a profitable sell.
-	inOps := []operation.Operation{
-		op(operation.TypeTransferIn, 5, &sber, "4", "", 40_000, 0),
-		op(operation.TypeSell, 6, &sber, "4", "120", 48_000, 0),
+	inOps := []portfolio.Operation{
+		op(portfolio.TypeTransferIn, 5, &sber, "4", "", 40_000, 0),
+		op(portfolio.TypeSell, 6, &sber, "4", "120", 48_000, 0),
 	}
 	pos, err = portfolio.Compute(inOps)
 	if err != nil {
@@ -63,9 +62,9 @@ func TestTransferOutInCarryover(t *testing.T) {
 }
 
 func TestTransferOutOversell(t *testing.T) {
-	ops := []operation.Operation{
-		op(operation.TypeBuy, 1, &sber, "3", "100", -30_000, 0),
-		op(operation.TypeTransferOut, 2, &sber, "5", "", 0, 0),
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "3", "100", -30_000, 0),
+		op(portfolio.TypeTransferOut, 2, &sber, "5", "", 0, 0),
 	}
 	if _, err := portfolio.Compute(ops); !errors.Is(err, portfolio.ErrOversell) {
 		t.Fatalf("err = %v, want ErrOversell", err)
@@ -73,9 +72,9 @@ func TestTransferOutOversell(t *testing.T) {
 }
 
 func TestReleasedCostHelper(t *testing.T) {
-	ops := []operation.Operation{
-		op(operation.TypeBuy, 1, &sber, "10", "100", -100_000, 5),
-		op(operation.TypeBuy, 2, &sber, "10", "200", -200_000, 5),
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "10", "100", -100_000, 5),
+		op(portfolio.TypeBuy, 2, &sber, "10", "200", -200_000, 5),
 	}
 	// 15 units: all of lot 1 (100005) + half of lot 2 (floor(200005/2)=100002)
 	cost, err := portfolio.ReleasedCost(ops, sber, d("15"))

@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
-	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/portfolio"
 )
 
@@ -29,8 +28,8 @@ func day(n int) time.Time {
 	return time.Date(2026, 7, n, 0, 0, 0, 0, time.UTC)
 }
 
-func op(typ operation.Type, dayN int, inst *uuid.UUID, qty, price string, amount, fee int64) operation.Operation {
-	o := operation.Operation{
+func op(typ portfolio.Type, dayN int, inst *uuid.UUID, qty, price string, amount, fee int64) portfolio.Operation {
+	o := portfolio.Operation{
 		Type: typ, OccurredOn: day(dayN), AmountMinor: amount,
 		Currency: "RUB", FeeMinor: fee, InstrumentID: inst,
 	}
@@ -44,14 +43,14 @@ func op(typ operation.Type, dayN int, inst *uuid.UUID, qty, price string, amount
 }
 
 func TestBuySellFIFO(t *testing.T) {
-	ops := []operation.Operation{
-		op(operation.TypeDeposit, 1, nil, "", "", 1_000_000, 0),
+	ops := []portfolio.Operation{
+		op(portfolio.TypeDeposit, 1, nil, "", "", 1_000_000, 0),
 		// 10 × 100.00 + fee 10
-		op(operation.TypeBuy, 2, &sber, "10", "100", -100_000, 10),
+		op(portfolio.TypeBuy, 2, &sber, "10", "100", -100_000, 10),
 		// 10 × 110.00 + fee 11
-		op(operation.TypeBuy, 3, &sber, "10", "110", -110_000, 11),
+		op(portfolio.TypeBuy, 3, &sber, "10", "110", -110_000, 11),
 		// sell 15 × 120.00, fee 18: released = lot1 fully (100010) + 5/10 of lot2 (floor(110011*0.5)=55005)
-		op(operation.TypeSell, 4, &sber, "15", "120", 180_000, 18),
+		op(portfolio.TypeSell, 4, &sber, "15", "120", 180_000, 18),
 	}
 	pos, err := portfolio.Compute(ops)
 	if err != nil {
@@ -80,12 +79,12 @@ func TestBuySellFIFO(t *testing.T) {
 
 func TestLotDrainNoRoundingDrift(t *testing.T) {
 	// Lot of 3 shares at 100.00 (cost 30000): sells of 1+1+1 — released sums to exactly 30000.
-	ops := []operation.Operation{
-		op(operation.TypeBuy, 1, &sber, "3", "100", -30_000, 0),
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "3", "100", -30_000, 0),
 	}
 	// lot cost = 30000; equal thirds of 10000 — no drift, remainder 0
 	for i := 0; i < 3; i++ {
-		ops = append(ops, op(operation.TypeSell, 2+i, &sber, "1", "100", 10_000, 0))
+		ops = append(ops, op(portfolio.TypeSell, 2+i, &sber, "1", "100", 10_000, 0))
 	}
 	pos, err := portfolio.Compute(ops)
 	if err != nil {
@@ -105,11 +104,11 @@ func TestDriftRemainderGoesToLastPiece(t *testing.T) {
 	// Step by step: floor(10001*1/3)=3333 (lot: cost 6668, qty 2);
 	// floor(6668*1/2)=3334 (lot: cost 3334, qty 1); the last piece
 	// takes the lot's remaining cost 3334. Sum 3333+3334+3334 = 10001 — exact.
-	ops := []operation.Operation{
-		op(operation.TypeBuy, 1, &sber, "3", "", -10_001, 0),
-		op(operation.TypeSell, 2, &sber, "1", "", 4_000, 0),
-		op(operation.TypeSell, 3, &sber, "1", "", 4_000, 0),
-		op(operation.TypeSell, 4, &sber, "1", "", 4_000, 0),
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "3", "", -10_001, 0),
+		op(portfolio.TypeSell, 2, &sber, "1", "", 4_000, 0),
+		op(portfolio.TypeSell, 3, &sber, "1", "", 4_000, 0),
+		op(portfolio.TypeSell, 4, &sber, "1", "", 4_000, 0),
 	}
 	pos, err := portfolio.Compute(ops)
 	if err != nil {
@@ -125,9 +124,9 @@ func TestDriftRemainderGoesToLastPiece(t *testing.T) {
 }
 
 func TestOversellRejected(t *testing.T) {
-	ops := []operation.Operation{
-		op(operation.TypeBuy, 1, &sber, "10", "100", -100_000, 0),
-		op(operation.TypeSell, 2, &sber, "11", "100", 110_000, 0),
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "10", "100", -100_000, 0),
+		op(portfolio.TypeSell, 2, &sber, "11", "100", 110_000, 0),
 	}
 	_, err := portfolio.Compute(ops)
 	if !errors.Is(err, portfolio.ErrOversell) {
@@ -141,10 +140,10 @@ func TestOversellRejected(t *testing.T) {
 
 func TestConversionWithInstrumentNoGhost(t *testing.T) {
 	// A conversion operation with instrument_id should not create a ghost position
-	ops := []operation.Operation{
+	ops := []portfolio.Operation{
 		// Create a conversion op with instrument — it's cash-level and should be ignored,
 		// not creating an empty position in the result map
-		op(operation.TypeConversion, 1, &sber, "", "", 0, 0),
+		op(portfolio.TypeConversion, 1, &sber, "", "", 0, 0),
 	}
 	pos, err := portfolio.Compute(ops)
 	if err != nil {
@@ -156,12 +155,12 @@ func TestConversionWithInstrumentNoGhost(t *testing.T) {
 }
 
 func TestIncomeAndTaxes(t *testing.T) {
-	ops := []operation.Operation{
-		op(operation.TypeBuy, 1, &sber, "10", "100", -100_000, 0),
-		op(operation.TypeDividend, 5, &sber, "", "", 3_480, 0),
-		op(operation.TypeTax, 5, &sber, "", "", -452, 0),
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "10", "100", -100_000, 0),
+		op(portfolio.TypeDividend, 5, &sber, "", "", 3_480, 0),
+		op(portfolio.TypeTax, 5, &sber, "", "", -452, 0),
 		// dividend/tax without instrument — cash-level, ignored
-		op(operation.TypeInterest, 6, nil, "", "", 1_000, 0),
+		op(portfolio.TypeInterest, 6, nil, "", "", 1_000, 0),
 	}
 	pos, err := portfolio.Compute(ops)
 	if err != nil {
@@ -177,9 +176,9 @@ func TestIncomeAndTaxes(t *testing.T) {
 
 func TestAmortizationReducesCost(t *testing.T) {
 	// Bond: 10 units at 950.00 (cost 950000). Amortization 250 per unit → 2500.00 total.
-	ops := []operation.Operation{
-		op(operation.TypeBuy, 1, &ofz, "10", "950", -950_000, 0),
-		op(operation.TypeAmortization, 10, &ofz, "", "", 250_000, 0),
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &ofz, "10", "950", -950_000, 0),
+		op(portfolio.TypeAmortization, 10, &ofz, "", "", 250_000, 0),
 	}
 	pos, err := portfolio.Compute(ops)
 	if err != nil {
@@ -189,7 +188,7 @@ func TestAmortizationReducesCost(t *testing.T) {
 		t.Errorf("cost = %d, want 700000", pos[ofz].CostMinor)
 	}
 	// amortization beyond remaining cost basis goes to Realized
-	ops = append(ops, op(operation.TypeAmortization, 11, &ofz, "", "", 800_000, 0))
+	ops = append(ops, op(portfolio.TypeAmortization, 11, &ofz, "", "", 800_000, 0))
 	pos, err = portfolio.Compute(ops)
 	if err != nil {
 		t.Fatalf("Compute 2: %v", err)
@@ -200,9 +199,9 @@ func TestAmortizationReducesCost(t *testing.T) {
 }
 
 func TestClosedPositionKeptInResult(t *testing.T) {
-	ops := []operation.Operation{
-		op(operation.TypeBuy, 1, &lkoh, "5", "7000", -3_500_000, 0),
-		op(operation.TypeSell, 2, &lkoh, "5", "7500", 3_750_000, 0),
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &lkoh, "5", "7000", -3_500_000, 0),
+		op(portfolio.TypeSell, 2, &lkoh, "5", "7500", 3_750_000, 0),
 	}
 	pos, err := portfolio.Compute(ops)
 	if err != nil {
@@ -215,14 +214,14 @@ func TestClosedPositionKeptInResult(t *testing.T) {
 }
 
 func TestBadOperations(t *testing.T) {
-	for name, bad := range map[string]operation.Operation{
-		"buy without qty":      op(operation.TypeBuy, 1, &sber, "", "100", -1000, 0),
-		"buy negative qty":     op(operation.TypeBuy, 1, &sber, "-1", "100", -1000, 0),
-		"sell without inst":    op(operation.TypeSell, 1, nil, "1", "100", 1000, 0),
-		"buy positive amount":  op(operation.TypeBuy, 1, &sber, "1", "100", 1000, 0),
-		"sell negative amount": op(operation.TypeSell, 1, &sber, "1", "100", -1000, 0),
+	for name, bad := range map[string]portfolio.Operation{
+		"buy without qty":      op(portfolio.TypeBuy, 1, &sber, "", "100", -1000, 0),
+		"buy negative qty":     op(portfolio.TypeBuy, 1, &sber, "-1", "100", -1000, 0),
+		"sell without inst":    op(portfolio.TypeSell, 1, nil, "1", "100", 1000, 0),
+		"buy positive amount":  op(portfolio.TypeBuy, 1, &sber, "1", "100", 1000, 0),
+		"sell negative amount": op(portfolio.TypeSell, 1, &sber, "1", "100", -1000, 0),
 	} {
-		if _, err := portfolio.Compute([]operation.Operation{bad}); !errors.Is(err, portfolio.ErrBadOperation) {
+		if _, err := portfolio.Compute([]portfolio.Operation{bad}); !errors.Is(err, portfolio.ErrBadOperation) {
 			t.Errorf("%s: err = %v, want ErrBadOperation", name, err)
 		}
 	}

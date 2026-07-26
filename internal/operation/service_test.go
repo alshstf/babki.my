@@ -24,13 +24,39 @@ func TestServiceValidation(t *testing.T) {
 	}
 
 	cases := map[string]func(o operation.Operation) operation.Operation{
-		"buy positive amount":    func(o operation.Operation) operation.Operation { o.AmountMinor = 100; return o },
-		"buy without instrument": func(o operation.Operation) operation.Operation { o.InstrumentID = nil; return o },
-		"bad currency":           func(o operation.Operation) operation.Operation { o.Currency = "rub"; return o },
-		"future date":            func(o operation.Operation) operation.Operation { o.OccurredOn = date("2099-01-01"); return o },
-		"negative fee":           func(o operation.Operation) operation.Operation { o.FeeMinor = -1; return o },
-		"transfer via create": func(o operation.Operation) operation.Operation {
+		"buy positive amount": func(o operation.Operation) operation.Operation {
+			o.AmountMinor = 100
+			return o
+		},
+		"buy without instrument": func(o operation.Operation) operation.Operation {
+			o.InstrumentID = nil
+			return o
+		},
+		"sell without instrument": func(o operation.Operation) operation.Operation {
+			o.Type = operation.TypeSell
+			o.InstrumentID = nil
+			o.AmountMinor = 100_000
+			return o
+		},
+		"bad currency": func(o operation.Operation) operation.Operation {
+			o.Currency = "rub"
+			return o
+		},
+		"future date": func(o operation.Operation) operation.Operation {
+			o.OccurredOn = date("2099-01-01")
+			return o
+		},
+		"negative fee": func(o operation.Operation) operation.Operation {
+			o.FeeMinor = -1
+			return o
+		},
+		"transfer_in via create": func(o operation.Operation) operation.Operation {
 			o.Type = operation.TypeTransferIn
+			o.AmountMinor = 100
+			return o
+		},
+		"transfer_out via create": func(o operation.Operation) operation.Operation {
+			o.Type = operation.TypeTransferOut
 			o.AmountMinor = 100
 			return o
 		},
@@ -51,7 +77,7 @@ func TestServiceValidation(t *testing.T) {
 		}
 	}
 
-	// oversell отклоняется на записи
+	// oversell rejected on write
 	oversell := valid
 	oversell.Type = operation.TypeSell
 	oversell.Quantity = dec("999")
@@ -84,11 +110,11 @@ func TestServiceDeleteConsistency(t *testing.T) {
 		t.Fatalf("sell: %v", err)
 	}
 
-	// удаление buy ломает sell → 409
+	// deleting buy breaks sell → 409
 	if err := svc.Delete(f.ctx, f.spaceID, createdBuy.ID); !errors.Is(err, operation.ErrInconsistent) {
 		t.Errorf("delete buy: err = %v, want ErrInconsistent", err)
 	}
-	// удаление sell — ок, затем buy — ок
+	// deleting sell — ok, then buy — ok
 	if err := svc.Delete(f.ctx, f.spaceID, createdSell.ID); err != nil {
 		t.Fatalf("delete sell: %v", err)
 	}
@@ -126,7 +152,7 @@ func TestServiceTransfer(t *testing.T) {
 		t.Errorf("pair = %+v %+v", out, in)
 	}
 
-	// перенос больше остатка → ErrInconsistent
+	// transfer exceeding balance → ErrInconsistent
 	if _, _, err := svc.CreateTransfer(f.ctx, f.spaceID, operation.TransferParams{
 		FromAccountID: f.accountID, ToAccountID: f.account2ID,
 		InstrumentID: f.sberID, Quantity: decimal.RequireFromString("100"),
@@ -141,5 +167,61 @@ func TestServiceTransfer(t *testing.T) {
 		OccurredOn: date("2026-07-06"),
 	}); !errors.Is(err, family.ErrValidation) {
 		t.Errorf("same account: %v", err)
+	}
+}
+
+func TestServiceSplitValidation(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	// Valid split: instrument + positive ratio + amount 0 + source manual or empty
+	validSplit := operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeSplit,
+		OccurredOn: date("2026-07-01"), SplitRatio: dec("10"), AmountMinor: 0,
+		Currency: "RUB", Source: "manual",
+	}
+	if _, err := svc.Create(f.ctx, f.spaceID, validSplit); err != nil {
+		t.Fatalf("valid split with source=manual: %v", err)
+	}
+
+	validSplitNoSource := operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeSplit,
+		OccurredOn: date("2026-07-02"), SplitRatio: dec("2"), AmountMinor: 0,
+		Currency: "RUB", Source: "",
+	}
+	if _, err := svc.Create(f.ctx, f.spaceID, validSplitNoSource); err != nil {
+		t.Fatalf("valid split with empty source: %v", err)
+	}
+
+	cases := map[string]func(o operation.Operation) operation.Operation{
+		"split without instrument": func(o operation.Operation) operation.Operation {
+			o.InstrumentID = nil
+			return o
+		},
+		"split with nil ratio": func(o operation.Operation) operation.Operation {
+			o.SplitRatio = nil
+			return o
+		},
+		"split with zero ratio": func(o operation.Operation) operation.Operation {
+			o.SplitRatio = dec("0")
+			return o
+		},
+		"split with negative ratio": func(o operation.Operation) operation.Operation {
+			o.SplitRatio = dec("-5")
+			return o
+		},
+		"split with non-zero amount": func(o operation.Operation) operation.Operation {
+			o.AmountMinor = 100
+			return o
+		},
+		"split with csv source": func(o operation.Operation) operation.Operation {
+			o.Source = "csv"
+			return o
+		},
+	}
+	for name, mutate := range cases {
+		if _, err := svc.Create(f.ctx, f.spaceID, mutate(validSplit)); !errors.Is(err, family.ErrValidation) {
+			t.Errorf("%s: err = %v, want ErrValidation", name, err)
+		}
 	}
 }
