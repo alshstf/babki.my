@@ -1,6 +1,12 @@
 {
   "app": { "name": "babki.my", "loading": "Загрузка…", "error": "Что-то пошло не так" },
-  "common": { "close": "Закрыть" },
+  "common": {
+    "close": "Закрыть",
+    "cancel": "Отмена",
+    "save": "Сохранить",
+    "create": "Создать",
+    "actions": "Действия"
+  },
   "todo": { "stub": "Раздел в разработке" },
   "nav": { "accounts": "Счета", "family": "Семья" },
   "roles": { "owner": "владелец", "editor": "редактор", "viewer": "наблюдатель" },
@@ -32,7 +38,27 @@
     "personal": "личный",
     "shared": "общий",
     "archived": "архив",
-    "columns": { "name": "Название", "type": "Тип", "owner": "Владелец", "balance": "Баланс" }
+    "columns": { "name": "Название", "type": "Тип", "owner": "Владелец", "balance": "Баланс" },
+    "add": "Добавить счет",
+    "archiveConfirm": "Архивировать счет «{{name}}»? Он останется в истории, но исчезнет из итогов.",
+    "menu": {
+      "edit": "Редактировать",
+      "balance": "Обновить баланс",
+      "archive": "Архивировать"
+    },
+    "dialog": {
+      "createTitle": "Новый счет",
+      "editTitle": "Редактирование счета",
+      "name": "Название",
+      "type": "Тип",
+      "currency": "Валюта",
+      "otherCurrency": "Другая…",
+      "institution": "Банк / брокер",
+      "institutionPlaceholder": "Т-Банк, Сбер…",
+      "ownership": "Принадлежность",
+      "sharedOption": "Общий (семейный)",
+      "personalOption": "Личный — {{name}}"
+    }
   },
   "accountTypes": {
     "brokerage": "брокерский",
