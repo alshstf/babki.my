@@ -12,6 +12,7 @@ import { LoginPage } from "@/routes/login";
 import { SetupPage } from "@/routes/setup";
 import { AppLayout } from "@/routes/app-layout";
 import { AccountsPage } from "@/routes/accounts";
+import { FamilyPage } from "@/routes/family";
 
 function FullScreenLoader() {
   const { t } = useTranslation();
@@ -83,12 +84,6 @@ const indexRoute = createRoute({
   component: () => <Navigate to="/accounts" />,
 });
 
-// Stub pages replaced in Tasks 4 and 7.
-function TodoPage() {
-  const { t } = useTranslation();
-  return <div className="text-muted-foreground">{t("todo.stub")}</div>;
-}
-
 const accountsRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/accounts",
@@ -98,7 +93,7 @@ const accountsRoute = createRoute({
 const familyRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/family",
-  component: TodoPage,
+  component: FamilyPage,
 });
 
 const routeTree = rootRoute.addChildren([
