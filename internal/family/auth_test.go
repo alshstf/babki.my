@@ -69,6 +69,7 @@ func TestSetupValidation(t *testing.T) {
 		{SpaceName: "S", Username: "ab", DisplayName: "X", Password: "12345678"},
 		{SpaceName: "S", Username: "okname", DisplayName: "X", Password: "short"},
 		{SpaceName: "", Username: "okname", DisplayName: "X", Password: "12345678"},
+		{SpaceName: "S", Username: "okname", DisplayName: "", Password: "12345678"},
 	}
 	for i, c := range cases {
 		if _, _, err := svc.Setup(ctx, c); !errors.Is(err, family.ErrValidation) {
@@ -102,5 +103,45 @@ func TestCreateMemberRoles(t *testing.T) {
 	// owner role cannot be granted
 	if _, err := svc.CreateMember(ctx, owner, "boss", "B", "password9", family.RoleOwner); !errors.Is(err, family.ErrValidation) {
 		t.Errorf("grant owner err = %v, want ErrValidation", err)
+	}
+	// empty display name rejected
+	if _, err := svc.CreateMember(ctx, owner, "nodisplay", "", "password9", family.RoleEditor); !errors.Is(err, family.ErrValidation) {
+		t.Errorf("empty displayName err = %v, want ErrValidation", err)
+	}
+	// bad username rejected
+	if _, err := svc.CreateMember(ctx, owner, "Bad Upper", "X", "password9", family.RoleEditor); !errors.Is(err, family.ErrValidation) {
+		t.Errorf("bad username err = %v, want ErrValidation", err)
+	}
+	// short password rejected
+	if _, err := svc.CreateMember(ctx, owner, "shortpw", "X", "short", family.RoleEditor); !errors.Is(err, family.ErrValidation) {
+		t.Errorf("short password err = %v, want ErrValidation", err)
+	}
+}
+
+// TestLoginOrphanedUser covers a user row that exists without any
+// membership (e.g. left behind by a partial failure). Login must translate
+// the underlying pgx.ErrNoRows from MembershipFor into ErrInvalidCredentials
+// rather than leaking the raw store error.
+func TestLoginOrphanedUser(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	store := family.NewStore(pool)
+	svc := family.NewService(store)
+
+	hash, err := svc.HashPassword("secret123")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	// Create the user directly via the store, bypassing Setup/CreateMember,
+	// so it has no space/membership.
+	if _, err := store.CreateUser(ctx, "orphan", "Orphan", hash); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	if _, _, err := svc.Login(ctx, "orphan", "secret123"); !errors.Is(err, family.ErrInvalidCredentials) {
+		t.Errorf("login of orphaned user err = %v, want ErrInvalidCredentials", err)
 	}
 }

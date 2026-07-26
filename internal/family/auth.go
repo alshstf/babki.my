@@ -19,6 +19,13 @@ var (
 
 var usernameRe = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
 
+// dummyHash is a precomputed argon2id hash (params: argon2id.DefaultParams,
+// passphrase "dummy-password-for-timing-safety") used to run a real
+// ComparePasswordAndHash on the unknown-user path in Login. This keeps the
+// unknown-user and wrong-password branches taking comparable time, so
+// response latency can't be used to enumerate valid usernames.
+const dummyHash = "$argon2id$v=19$m=65536,t=1,p=10$uCI9AQQt4/1WJmPclbYXzg$zPMTCrkLSnqn0LFwxFOsmtZzj2IpULcX4CzdpoIRs8k"
+
 // Service implements authentication and member management on top of Store.
 type Service struct{ store *Store }
 
@@ -70,11 +77,7 @@ func (s *Service) Setup(ctx context.Context, p SetupParams) (User, Principal, er
 	if err != nil {
 		return User{}, Principal{}, err
 	}
-	u, err := s.store.CreateUser(ctx, p.Username, p.DisplayName, hash)
-	if err != nil {
-		return User{}, Principal{}, err
-	}
-	sp, err := s.store.CreateSpaceWithOwner(ctx, p.SpaceName, u.ID)
+	u, sp, err := s.store.CreateFirstUserWithSpace(ctx, p.SpaceName, p.Username, p.DisplayName, hash)
 	if err != nil {
 		return User{}, Principal{}, err
 	}
@@ -86,6 +89,10 @@ func (s *Service) Setup(ctx context.Context, p SetupParams) (User, Principal, er
 func (s *Service) Login(ctx context.Context, username, password string) (User, Principal, error) {
 	u, err := s.store.UserByUsername(ctx, username)
 	if errors.Is(err, pgx.ErrNoRows) {
+		// Run a real argon2id comparison against a fixed dummy hash so this
+		// branch takes comparable time to the wrong-password branch below,
+		// closing the username-enumeration timing side-channel.
+		_, _ = argon2id.ComparePasswordAndHash(password, dummyHash)
 		return User{}, Principal{}, ErrInvalidCredentials
 	}
 	if err != nil {
@@ -99,6 +106,11 @@ func (s *Service) Login(ctx context.Context, username, password string) (User, P
 		return User{}, Principal{}, ErrInvalidCredentials
 	}
 	p, err := s.store.MembershipFor(ctx, u.ID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// User exists without a membership (e.g. orphaned by a partial
+		// failure elsewhere). Don't leak that detail to the caller.
+		return User{}, Principal{}, ErrInvalidCredentials
+	}
 	if err != nil {
 		return User{}, Principal{}, err
 	}
@@ -123,11 +135,8 @@ func (s *Service) CreateMember(ctx context.Context, p Principal, username, displ
 	if err != nil {
 		return Member{}, err
 	}
-	u, err := s.store.CreateUser(ctx, username, displayName, hash)
+	u, err := s.store.CreateUserInSpace(ctx, p.SpaceID, username, displayName, hash, role)
 	if err != nil {
-		return Member{}, err
-	}
-	if err := s.store.AddMember(ctx, p.SpaceID, u.ID, role); err != nil {
 		return Member{}, err
 	}
 	return Member{User: u, Role: role}, nil

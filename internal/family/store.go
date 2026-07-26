@@ -66,6 +66,72 @@ func (s *Store) CreateSpaceWithOwner(ctx context.Context, name string, ownerID u
 	return sp, tx.Commit(ctx)
 }
 
+// CreateFirstUserWithSpace creates the first user, the family space and the
+// owner membership in a single transaction, so a mid-way failure can never
+// orphan a user row (which would otherwise permanently wedge SetupNeeded).
+func (s *Store) CreateFirstUserWithSpace(ctx context.Context, spaceName, username, displayName, passwordHash string) (User, Space, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return User{}, Space{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var u User
+	err = tx.QueryRow(ctx, `INSERT INTO users (username, display_name, password_hash)
+		VALUES ($1, $2, $3) RETURNING `+userCols, username, displayName, passwordHash).Scan(
+		&u.ID, &u.Username, &u.DisplayName, &u.PasswordHash, &u.CreatedAt)
+	if err != nil {
+		return User{}, Space{}, fmt.Errorf("insert user: %w", err)
+	}
+
+	var sp Space
+	err = tx.QueryRow(ctx, `INSERT INTO spaces (name) VALUES ($1)
+		RETURNING id, name, created_at`, spaceName).Scan(&sp.ID, &sp.Name, &sp.CreatedAt)
+	if err != nil {
+		return User{}, Space{}, fmt.Errorf("insert space: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `INSERT INTO memberships (space_id, user_id, role)
+		VALUES ($1, $2, 'owner')`, sp.ID, u.ID)
+	if err != nil {
+		return User{}, Space{}, fmt.Errorf("insert owner membership: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return User{}, Space{}, err
+	}
+	return u, sp, nil
+}
+
+// CreateUserInSpace creates a user and its membership in an existing space in
+// a single transaction, so a mid-way failure can never orphan a user row.
+func (s *Store) CreateUserInSpace(ctx context.Context, spaceID uuid.UUID, username, displayName, passwordHash string, role Role) (User, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return User{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var u User
+	err = tx.QueryRow(ctx, `INSERT INTO users (username, display_name, password_hash)
+		VALUES ($1, $2, $3) RETURNING `+userCols, username, displayName, passwordHash).Scan(
+		&u.ID, &u.Username, &u.DisplayName, &u.PasswordHash, &u.CreatedAt)
+	if err != nil {
+		return User{}, fmt.Errorf("insert user: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `INSERT INTO memberships (space_id, user_id, role)
+		VALUES ($1, $2, $3)`, spaceID, u.ID, role)
+	if err != nil {
+		return User{}, fmt.Errorf("insert membership: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return User{}, err
+	}
+	return u, nil
+}
+
 func (s *Store) SpaceByID(ctx context.Context, id uuid.UUID) (Space, error) {
 	var sp Space
 	err := s.pool.QueryRow(ctx, `SELECT id, name, created_at FROM spaces WHERE id = $1`, id).
