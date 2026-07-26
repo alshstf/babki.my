@@ -146,7 +146,7 @@ export function AccountDialog({
                 </Select>
                 {currency === "custom" && (
                   <Input
-                    placeholder="ISO-код, например GBP"
+                    placeholder={t("accounts.dialog.currencyPlaceholder")}
                     value={customCurrency}
                     maxLength={3}
                     onChange={(e) => setCustomCurrency(e.target.value)}

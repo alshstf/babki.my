@@ -53,6 +53,7 @@
       "type": "Тип",
       "currency": "Валюта",
       "otherCurrency": "Другая…",
+      "currencyPlaceholder": "ISO-код, например GBP",
       "institution": "Банк / брокер",
       "institutionPlaceholder": "Т-Банк, Сбер…",
       "ownership": "Принадлежность",
