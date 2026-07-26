@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
+	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/httpserver"
@@ -29,6 +30,7 @@ func mountModules(srv *httpserver.Server, r *rt) {
 	famSM := family.NewSessionManager(r.pool)
 	famAuth := family.NewAuth(famSM, famStore)
 	family.NewHandler(famSvc, famStore, famAuth, famSM).Mount(srv)
+	account.NewHandler(account.NewStore(r.pool), famAuth, famSM).Mount(srv)
 }
 
 // startJobClient wires up the job workers and River client and starts it.
