@@ -11,6 +11,9 @@ docs/superpowers/
 # SDD scratch
 .superpowers/
 
+# Local agent tooling
+.claude/
+
 # Build artifacts
 /babki
 web/dist/
