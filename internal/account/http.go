@@ -41,6 +41,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("PATCH /api/v1/accounts/{accountId}", edit(h.handleUpdate))
 	srv.Mount("DELETE /api/v1/accounts/{accountId}", edit(h.handleArchive))
 	srv.Mount("PUT /api/v1/accounts/{accountId}/balance", edit(h.handleSetBalance))
+	srv.Mount("GET /api/v1/summary", view(h.handleSummary))
 }
 
 func toAPI(a WithBalance) apitypes.AccountWithBalance {
@@ -214,4 +215,21 @@ func (h *Handler) handleSetBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, toAPI(a))
+}
+
+func (h *Handler) handleSummary(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	totals, err := h.store.SummaryByCurrency(r.Context(), p.SpaceID)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	out := apitypes.Summary{Totals: make([]apitypes.CurrencyTotal, 0, len(totals))}
+	for _, t := range totals {
+		out.Totals = append(out.Totals, apitypes.CurrencyTotal{
+			Currency: t.Currency, AssetsMinor: t.AssetsMinor,
+			LiabilitiesMinor: t.LiabilitiesMinor, NetMinor: t.NetMinor,
+		})
+	}
+	httpjson.Write(w, http.StatusOK, out)
 }
