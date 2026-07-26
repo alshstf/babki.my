@@ -17,8 +17,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
-
-	"babki.my/babki/internal/operation"
 )
 
 var (
@@ -47,7 +45,7 @@ type Position struct {
 	lots             []lot
 }
 
-func badOp(o operation.Operation, msg string) error {
+func badOp(o Operation, msg string) error {
 	return fmt.Errorf("%w: %s %s: %s", ErrBadOperation, o.Type, o.OccurredOn.Format("2006-01-02"), msg)
 }
 
@@ -89,9 +87,9 @@ func (p *Position) addLot(qty decimal.Decimal, costMinor int64) {
 }
 
 // Compute folds the journal into positions. See package doc for semantics.
-func Compute(ops []operation.Operation) (map[uuid.UUID]*Position, error) {
+func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 	positions := make(map[uuid.UUID]*Position)
-	get := func(o operation.Operation) *Position {
+	get := func(o Operation) *Position {
 		p, ok := positions[*o.InstrumentID]
 		if !ok {
 			p = &Position{InstrumentID: *o.InstrumentID, Currency: o.Currency}
@@ -108,31 +106,31 @@ func Compute(ops []operation.Operation) (map[uuid.UUID]*Position, error) {
 			continue // cash-level operation: not the engine's business
 		}
 		switch o.Type {
-		case operation.TypeBuy, operation.TypeSell,
-			operation.TypeTransferIn, operation.TypeTransferOut:
+		case TypeBuy, TypeSell,
+			TypeTransferIn, TypeTransferOut:
 			if o.Quantity == nil || !o.Quantity.IsPositive() {
 				return nil, badOp(o, "positive quantity required")
 			}
-		case operation.TypeSplit:
+		case TypeSplit:
 			if o.SplitRatio == nil || !o.SplitRatio.IsPositive() {
 				return nil, badOp(o, "positive split_ratio required")
 			}
 		}
 
 		// Handle conversion ops before get() since they don't mutate positions
-		if o.Type == operation.TypeConversion {
+		if o.Type == TypeConversion {
 			continue
 		}
 
 		p := get(o)
 		switch o.Type {
-		case operation.TypeBuy:
+		case TypeBuy:
 			if o.AmountMinor >= 0 {
 				return nil, badOp(o, "buy amount must be negative")
 			}
 			p.addLot(*o.Quantity, -o.AmountMinor+o.FeeMinor)
 			p.FeesMinor += o.FeeMinor
-		case operation.TypeSell:
+		case TypeSell:
 			if o.AmountMinor <= 0 {
 				return nil, badOp(o, "sell amount must be positive")
 			}
@@ -142,13 +140,13 @@ func Compute(ops []operation.Operation) (map[uuid.UUID]*Position, error) {
 			}
 			p.RealizedPnLMinor += o.AmountMinor - released - o.FeeMinor
 			p.FeesMinor += o.FeeMinor
-		case operation.TypeDividend, operation.TypeCoupon:
+		case TypeDividend, TypeCoupon:
 			p.IncomeMinor += o.AmountMinor
-		case operation.TypeTax:
+		case TypeTax:
 			p.IncomeMinor += o.AmountMinor // negative
-		case operation.TypeFee:
+		case TypeFee:
 			p.FeesMinor += -o.AmountMinor // amount negative → positive fee
-		case operation.TypeAmortization:
+		case TypeAmortization:
 			// return of principal: reduce cost basis, excess is realized gain
 			if o.AmountMinor <= 0 {
 				return nil, badOp(o, "amortization amount must be positive")
@@ -157,19 +155,19 @@ func Compute(ops []operation.Operation) (map[uuid.UUID]*Position, error) {
 			p.CostMinor -= reduce
 			drainLotsCost(p, reduce)
 			p.RealizedPnLMinor += o.AmountMinor - reduce
-		case operation.TypeTransferOut:
+		case TypeTransferOut:
 			if _, err := p.releaseFIFO(*o.Quantity); err != nil {
 				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 			}
 			// released cost intentionally discarded: the pair's transfer_in
 			// carries the basis captured at creation time (see package doc
 			// for the recompute limitation).
-		case operation.TypeTransferIn:
+		case TypeTransferIn:
 			if o.AmountMinor < 0 {
 				return nil, badOp(o, "transfer_in amount (cost basis) must be >= 0")
 			}
 			p.addLot(*o.Quantity, o.AmountMinor)
-		case operation.TypeSplit:
+		case TypeSplit:
 			ratio := *o.SplitRatio
 			for i := range p.lots {
 				p.lots[i].quantity = p.lots[i].quantity.Mul(ratio)
@@ -200,7 +198,7 @@ func drainLotsCost(p *Position, amount int64) {
 // the transfer service to capture the carried basis at creation time. The
 // caller is expected to persist the returned basis on the transfer_in
 // operation to maintain the snapshot semantics described in the package doc.
-func ReleasedCost(ops []operation.Operation, instrumentID uuid.UUID, qty decimal.Decimal) (int64, error) {
+func ReleasedCost(ops []Operation, instrumentID uuid.UUID, qty decimal.Decimal) (int64, error) {
 	positions, err := Compute(ops)
 	if err != nil {
 		return 0, err

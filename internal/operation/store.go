@@ -116,6 +116,13 @@ func (s *Store) ByID(ctx context.Context, spaceID, id uuid.UUID) (Operation, err
 		WHERE space_id = $1 AND id = $2`, spaceID, id))
 }
 
+// ByTransferGroup returns every operation sharing groupID (the two legs of a
+// transfer pair, which live on two different accounts).
+func (s *Store) ByTransferGroup(ctx context.Context, spaceID, groupID uuid.UUID) ([]Operation, error) {
+	return s.list(ctx, `SELECT `+cols+` FROM operations
+		WHERE space_id = $1 AND transfer_group_id = $2`, spaceID, groupID)
+}
+
 // Delete removes the operation; if it belongs to a transfer group, the whole
 // group is removed. Returns the number of deleted rows.
 func (s *Store) Delete(ctx context.Context, spaceID, id uuid.UUID) (int, error) {
