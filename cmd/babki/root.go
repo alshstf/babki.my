@@ -21,6 +21,7 @@ import (
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/jobs"
 	"babki.my/babki/internal/platform/version"
+	"babki.my/babki/internal/portfolio"
 	"babki.my/babki/web"
 )
 
@@ -33,9 +34,11 @@ func mountModules(srv *httpserver.Server, r *rt) {
 	famAuth := family.NewAuth(famSM, famStore)
 	family.NewHandler(famSvc, famStore, famAuth, famSM).Mount(srv)
 	account.NewHandler(account.NewStore(r.pool), famAuth, famSM).Mount(srv)
-	instrument.NewHandler(instrument.NewStore(r.pool), famAuth, famSM).Mount(srv)
+	instStore := instrument.NewStore(r.pool)
+	instrument.NewHandler(instStore, famAuth, famSM).Mount(srv)
 	opStore := operation.NewStore(r.pool)
 	operation.NewHandler(operation.NewService(opStore), opStore, famAuth, famSM).Mount(srv)
+	portfolio.NewHandler(opStore, instStore, famAuth, famSM).Mount(srv)
 }
 
 // startJobClient wires up the job workers and River client and starts it.
