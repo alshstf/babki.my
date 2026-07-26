@@ -83,7 +83,7 @@ export function MemberDialog({
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="member-display">{t("setup.displayName")}</Label>
+            <Label htmlFor="member-display">{t("family.dialog.displayName")}</Label>
             <Input
               id="member-display"
               value={displayName}

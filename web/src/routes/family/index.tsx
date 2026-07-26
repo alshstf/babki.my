@@ -27,7 +27,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useSession } from "@/api/session";
-import { useMembers, useRemoveMember, useUpdateMemberRole, type MemberInfo, type Role } from "@/api/members";
+import {
+  useMembers,
+  useRemoveMember,
+  useUpdateMemberRole,
+  type MemberInfo,
+  type Role,
+} from "@/api/members";
 import { MemberDialog } from "./member-dialog";
 
 const ASSIGNABLE_ROLES: Role[] = ["editor", "viewer"];
@@ -70,6 +76,12 @@ export function FamilyPage() {
         <h1 className="text-2xl font-bold">{t("family.title")}</h1>
         {isOwner && <Button onClick={() => setDialogOpen(true)}>{t("family.add")}</Button>}
       </div>
+
+      {updateRole.isError && (
+        <Alert variant="destructive">
+          <AlertDescription>{t("family.roleChangeError")}</AlertDescription>
+        </Alert>
+      )}
 
       <Table>
         <TableHeader>
