@@ -78,7 +78,15 @@ export function AccountDialog({
   const valid = name.trim() !== "" && /^[A-Z]{3}$/.test(effectiveCurrency);
 
   const submit = () => {
-    const ownerUserId = personal ? (session?.user.id ?? null) : null;
+    // In edit mode, keep the existing owner when the account stays personal —
+    // otherwise editing someone else's personal account would silently
+    // reassign it to whoever happens to be editing it. Only default to the
+    // current user when creating a new personal account.
+    const ownerUserId = personal
+      ? isEdit
+        ? (account?.owner_user_id ?? session?.user.id ?? null)
+        : (session?.user.id ?? null)
+      : null;
     if (isEdit && account) {
       update.mutate(
         {
@@ -174,9 +182,11 @@ export function AccountDialog({
               <SelectContent>
                 <SelectItem value="shared">{t("accounts.dialog.sharedOption")}</SelectItem>
                 <SelectItem value="personal">
-                  {t("accounts.dialog.personalOption", {
-                    name: session?.user.display_name ?? "",
-                  })}
+                  {isEdit
+                    ? t("accounts.personal")
+                    : t("accounts.dialog.personalOption", {
+                        name: session?.user.display_name ?? "",
+                      })}
                 </SelectItem>
               </SelectContent>
             </Select>
