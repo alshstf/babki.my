@@ -1,0 +1,38 @@
+name: babki
+
+services:
+  app:
+    image: babki:local
+    build:
+      context: ../..
+    restart: unless-stopped
+    ports:
+      - "${BABKI_PORT:-8080}:8080"
+    environment:
+      BABKI_DATABASE_URL: postgres://babki:${POSTGRES_PASSWORD}@postgres:5432/babki?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: babki
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: babki
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U babki -d babki"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
