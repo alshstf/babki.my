@@ -11,6 +11,7 @@ import { useSession, useSetupStatus } from "@/api/session";
 import { LoginPage } from "@/routes/login";
 import { SetupPage } from "@/routes/setup";
 import { AppLayout } from "@/routes/app-layout";
+import { AccountsPage } from "@/routes/accounts";
 
 function FullScreenLoader() {
   const { t } = useTranslation();
@@ -91,7 +92,7 @@ function TodoPage() {
 const accountsRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/accounts",
-  component: TodoPage,
+  component: AccountsPage,
 });
 
 const familyRoute = createRoute({
