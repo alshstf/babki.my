@@ -1,9 +1,13 @@
-.PHONY: test lint tidy ui ui-dev build test-all
+.PHONY: test lint tidy ui ui-dev build test-all gen
 
 VERSION ?= dev
 
 test:
 	go test ./...
+
+gen:
+	go tool oapi-codegen -config api/oapi-codegen.yaml api/openapi.yaml
+	cd web && npm run gen:api
 
 lint:
 	golangci-lint run
