@@ -3,6 +3,12 @@
 // (occurred_on, created_at) ascending and returns per-instrument positions.
 // It never touches the database — determinism is the point: the journal is
 // the single source of truth and positions are always recomputable.
+//
+// Transfer cost basis is a snapshot: when a transfer pair is created, the
+// moved FIFO cost is computed once (see ReleasedCost) and stored on the
+// transfer_in operation. Editing the source account's earlier history later
+// does not retroactively adjust an existing transfer's basis — a known and
+// accepted MVP simplification.
 package portfolio
 
 import (
@@ -153,7 +159,7 @@ func Compute(ops []operation.Operation) (map[uuid.UUID]*Position, error) {
 			p.RealizedPnLMinor += o.AmountMinor - reduce
 		case operation.TypeTransferOut:
 			if _, err := p.releaseFIFO(*o.Quantity); err != nil {
-				return nil, fmt.Errorf("%s %s: %w", o.Type, o.OccurredOn.Format("2006-01-02"), err)
+				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 			}
 			// released cost intentionally discarded: the pair's transfer_in
 			// carries the basis captured at creation time (see package doc
@@ -191,7 +197,9 @@ func drainLotsCost(p *Position, amount int64) {
 
 // ReleasedCost computes the FIFO cost basis of qty units of the instrument
 // after folding the given journal, without mutating anything. It is used by
-// the transfer service to capture the carried basis at creation time.
+// the transfer service to capture the carried basis at creation time. The
+// caller is expected to persist the returned basis on the transfer_in
+// operation to maintain the snapshot semantics described in the package doc.
 func ReleasedCost(ops []operation.Operation, instrumentID uuid.UUID, qty decimal.Decimal) (int64, error) {
 	positions, err := Compute(ops)
 	if err != nil {
