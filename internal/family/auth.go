@@ -7,6 +7,7 @@ import (
 	"regexp"
 
 	"github.com/alexedwards/argon2id"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -140,4 +141,50 @@ func (s *Service) CreateMember(ctx context.Context, p Principal, username, displ
 		return Member{}, err
 	}
 	return Member{User: u, Role: role}, nil
+}
+
+// UpdateMemberRole changes a member's role (owner-only; owner is immutable).
+func (s *Service) UpdateMemberRole(ctx context.Context, p Principal, targetID uuid.UUID, role Role) (Member, error) {
+	if p.Role != RoleOwner {
+		return Member{}, ErrForbidden
+	}
+	if role != RoleEditor && role != RoleViewer {
+		return Member{}, fmt.Errorf("%w: role must be editor or viewer", ErrValidation)
+	}
+	target, err := s.store.MembershipFor(ctx, targetID)
+	if err != nil {
+		return Member{}, err
+	}
+	if target.SpaceID != p.SpaceID {
+		return Member{}, pgx.ErrNoRows
+	}
+	if target.Role == RoleOwner {
+		return Member{}, fmt.Errorf("%w: the owner role cannot be changed", ErrValidation)
+	}
+	if err := s.store.UpdateMemberRole(ctx, p.SpaceID, targetID, role); err != nil {
+		return Member{}, err
+	}
+	u, err := s.store.UserByID(ctx, targetID)
+	if err != nil {
+		return Member{}, err
+	}
+	return Member{User: u, Role: role}, nil
+}
+
+// RemoveMember deletes a member (owner-only; the owner cannot be removed).
+func (s *Service) RemoveMember(ctx context.Context, p Principal, targetID uuid.UUID) error {
+	if p.Role != RoleOwner {
+		return ErrForbidden
+	}
+	target, err := s.store.MembershipFor(ctx, targetID)
+	if err != nil {
+		return err
+	}
+	if target.SpaceID != p.SpaceID {
+		return pgx.ErrNoRows
+	}
+	if target.Role == RoleOwner {
+		return fmt.Errorf("%w: the owner cannot be removed", ErrValidation)
+	}
+	return s.store.RemoveMember(ctx, p.SpaceID, targetID)
 }

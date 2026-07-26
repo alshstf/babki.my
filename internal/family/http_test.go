@@ -3,6 +3,7 @@ package family_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
@@ -46,6 +47,8 @@ func postJSON(t *testing.T, c *http.Client, url, body string) *http.Response {
 	}
 	return resp
 }
+
+func jsonBody(s string) io.Reader { return strings.NewReader(s) }
 
 func TestSetupLoginMeLogoutFlow(t *testing.T) {
 	ts, client := newAPI(t)

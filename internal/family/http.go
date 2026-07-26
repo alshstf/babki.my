@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/alexedwards/scs/v2"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"babki.my/babki/internal/platform/apitypes"
@@ -45,11 +46,18 @@ func WriteError(w http.ResponseWriter, err error) {
 // Mount registers all family routes on the server.
 func (h *Handler) Mount(srv *httpserver.Server) {
 	wrap := func(fn http.HandlerFunc) http.Handler { return h.sm.LoadAndSave(fn) }
+	authed := func(fn http.HandlerFunc) http.Handler {
+		return h.sm.LoadAndSave(h.auth.RequireAuth(fn))
+	}
 	srv.Mount("GET /api/v1/setup/status", wrap(h.handleSetupStatus))
 	srv.Mount("POST /api/v1/setup", wrap(h.handleSetup))
 	srv.Mount("POST /api/v1/auth/login", wrap(h.handleLogin))
 	srv.Mount("POST /api/v1/auth/logout", h.sm.LoadAndSave(h.auth.RequireAuth(http.HandlerFunc(h.handleLogout))))
 	srv.Mount("GET /api/v1/auth/me", h.sm.LoadAndSave(h.auth.RequireAuth(http.HandlerFunc(h.handleMe))))
+	srv.Mount("GET /api/v1/members", authed(h.handleListMembers))
+	srv.Mount("POST /api/v1/members", authed(h.handleCreateMember))
+	srv.Mount("PATCH /api/v1/members/{userId}", authed(h.handleUpdateMember))
+	srv.Mount("DELETE /api/v1/members/{userId}", authed(h.handleDeleteMember))
 }
 
 func (h *Handler) sessionInfo(r *http.Request, u User, p Principal) (apitypes.SessionInfo, error) {
@@ -142,4 +150,78 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, info)
+}
+
+func memberInfo(m Member) apitypes.MemberInfo {
+	return apitypes.MemberInfo{
+		Id: m.ID, Username: m.Username, DisplayName: m.DisplayName, Role: apitypes.Role(m.Role),
+	}
+}
+
+func (h *Handler) handleListMembers(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFromContext(r.Context())
+	members, err := h.store.ListMembers(r.Context(), p.SpaceID)
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	out := make([]apitypes.MemberInfo, 0, len(members))
+	for _, m := range members {
+		out = append(out, memberInfo(m))
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleCreateMember(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFromContext(r.Context())
+	var req apitypes.CreateMemberRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	m, err := h.svc.CreateMember(r.Context(), p, req.Username, req.DisplayName, req.Password, Role(req.Role))
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusCreated, memberInfo(m))
+}
+
+func pathUUID(w http.ResponseWriter, r *http.Request, name string) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.PathValue(name))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "invalid "+name)
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func (h *Handler) handleUpdateMember(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFromContext(r.Context())
+	targetID, ok := pathUUID(w, r, "userId")
+	if !ok {
+		return
+	}
+	var req apitypes.UpdateMemberRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	m, err := h.svc.UpdateMemberRole(r.Context(), p, targetID, Role(req.Role))
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, memberInfo(m))
+}
+
+func (h *Handler) handleDeleteMember(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFromContext(r.Context())
+	targetID, ok := pathUUID(w, r, "userId")
+	if !ok {
+		return
+	}
+	if err := h.svc.RemoveMember(r.Context(), p, targetID); err != nil {
+		WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
