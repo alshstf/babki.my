@@ -1,4 +1,4 @@
-.PHONY: test lint tidy ui ui-dev build test-all gen
+.PHONY: test lint tidy ui ui-dev build test-all gen smoke
 
 VERSION ?= dev
 
@@ -28,3 +28,6 @@ build: ui
 
 test-all: test
 	go test -tags embedui ./web/
+
+smoke:
+	./scripts/smoke-api.sh http://localhost:8080
