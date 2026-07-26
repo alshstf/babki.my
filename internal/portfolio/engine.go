@@ -151,11 +151,24 @@ func Compute(ops []operation.Operation) (map[uuid.UUID]*Position, error) {
 			p.CostMinor -= reduce
 			drainLotsCost(p, reduce)
 			p.RealizedPnLMinor += o.AmountMinor - reduce
-		case operation.TypeTransferIn, operation.TypeTransferOut, operation.TypeSplit:
-			// handled in Task 5; until then reject to fail loudly
-			return nil, badOp(o, "type not supported yet")
-		case operation.TypeConversion:
-			// cash-level by design, ignored
+		case operation.TypeTransferOut:
+			if _, err := p.releaseFIFO(*o.Quantity); err != nil {
+				return nil, fmt.Errorf("%s %s: %w", o.Type, o.OccurredOn.Format("2006-01-02"), err)
+			}
+			// released cost intentionally discarded: the pair's transfer_in
+			// carries the basis captured at creation time (see package doc
+			// for the recompute limitation).
+		case operation.TypeTransferIn:
+			if o.AmountMinor < 0 {
+				return nil, badOp(o, "transfer_in amount (cost basis) must be >= 0")
+			}
+			p.addLot(*o.Quantity, o.AmountMinor)
+		case operation.TypeSplit:
+			ratio := *o.SplitRatio
+			for i := range p.lots {
+				p.lots[i].quantity = p.lots[i].quantity.Mul(ratio)
+			}
+			p.Quantity = p.Quantity.Mul(ratio)
 		default:
 			return nil, badOp(o, "type not applicable to instrument operations")
 		}
@@ -174,4 +187,19 @@ func drainLotsCost(p *Position, amount int64) {
 		p.lots[i].costMinor -= take
 		amount -= take
 	}
+}
+
+// ReleasedCost computes the FIFO cost basis of qty units of the instrument
+// after folding the given journal, without mutating anything. It is used by
+// the transfer service to capture the carried basis at creation time.
+func ReleasedCost(ops []operation.Operation, instrumentID uuid.UUID, qty decimal.Decimal) (int64, error) {
+	positions, err := Compute(ops)
+	if err != nil {
+		return 0, err
+	}
+	p, ok := positions[instrumentID]
+	if !ok {
+		return 0, fmt.Errorf("%w: no position", ErrOversell)
+	}
+	return p.releaseFIFO(qty)
 }
