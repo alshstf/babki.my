@@ -6,6 +6,7 @@ package apitypes
 import (
 	"time"
 
+	"github.com/oapi-codegen/nullable"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
@@ -89,15 +90,15 @@ type AccountType string
 
 // AccountWithBalance defines model for AccountWithBalance.
 type AccountWithBalance struct {
-	Balance     *BalancePoint       `json:"balance,omitempty"`
-	CreatedAt   time.Time           `json:"created_at"`
-	Currency    string              `json:"currency"`
-	Id          openapi_types.UUID  `json:"id"`
-	Institution string              `json:"institution"`
-	Name        string              `json:"name"`
-	OwnerUserId *openapi_types.UUID `json:"owner_user_id,omitempty"`
-	Status      AccountStatus       `json:"status"`
-	Type        AccountType         `json:"type"`
+	Balance     *BalancePoint                         `json:"balance,omitempty"`
+	CreatedAt   time.Time                             `json:"created_at"`
+	Currency    string                                `json:"currency"`
+	Id          openapi_types.UUID                    `json:"id"`
+	Institution string                                `json:"institution"`
+	Name        string                                `json:"name"`
+	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
+	Status      AccountStatus                         `json:"status"`
+	Type        AccountType                           `json:"type"`
 }
 
 // BalancePoint defines model for BalancePoint.
@@ -111,11 +112,11 @@ type BalancePoint struct {
 // CreateAccountRequest defines model for CreateAccountRequest.
 type CreateAccountRequest struct {
 	// Currency ISO-4217, e.g. RUB
-	Currency    string              `json:"currency"`
-	Institution *string             `json:"institution,omitempty"`
-	Name        string              `json:"name"`
-	OwnerUserId *openapi_types.UUID `json:"owner_user_id,omitempty"`
-	Type        AccountType         `json:"type"`
+	Currency    string                                `json:"currency"`
+	Institution *string                               `json:"institution,omitempty"`
+	Name        string                                `json:"name"`
+	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
+	Type        AccountType                           `json:"type"`
 }
 
 // CreateMemberRequest defines model for CreateMemberRequest.
@@ -194,10 +195,10 @@ type Summary struct {
 
 // UpdateAccountRequest defines model for UpdateAccountRequest.
 type UpdateAccountRequest struct {
-	Institution *string             `json:"institution,omitempty"`
-	Name        *string             `json:"name,omitempty"`
-	OwnerUserId *openapi_types.UUID `json:"owner_user_id,omitempty"`
-	Status      *AccountStatus      `json:"status,omitempty"`
+	Institution *string                               `json:"institution,omitempty"`
+	Name        *string                               `json:"name,omitempty"`
+	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
+	Status      *AccountStatus                        `json:"status,omitempty"`
 }
 
 // UpdateMemberRequest defines model for UpdateMemberRequest.

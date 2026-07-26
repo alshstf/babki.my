@@ -8,6 +8,7 @@ import (
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/google/uuid"
+	"github.com/oapi-codegen/nullable"
 
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/platform/apitypes"
@@ -43,9 +44,13 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 }
 
 func toAPI(a WithBalance) apitypes.AccountWithBalance {
-	var ownerID *uuid.UUID
+	var ownerID nullable.Nullable[uuid.UUID]
 	if a.OwnerUserID != nil {
-		ownerID = a.OwnerUserID
+		ownerID = nullable.NewNullableWithValue(*a.OwnerUserID)
+	} else {
+		// Explicit null (not omitted) so clients can tell "shared account" apart
+		// from a field the server simply didn't return.
+		ownerID = nullable.NewNullNullable[uuid.UUID]()
 	}
 	out := apitypes.AccountWithBalance{
 		Id:          a.ID,
@@ -71,7 +76,8 @@ func parseAsOf(s string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, fmt.Errorf("as_of must be YYYY-MM-DD")
 	}
-	if d.After(time.Now().UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)) {
+	startOfTodayUTC := time.Now().UTC().Truncate(24 * time.Hour)
+	if d.After(startOfTodayUTC) {
 		return time.Time{}, fmt.Errorf("as_of must not be in the future")
 	}
 	return d, nil
@@ -116,8 +122,9 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		institution = *req.Institution
 	}
 	var ownerID *uuid.UUID
-	if req.OwnerUserId != nil {
-		ownerID = req.OwnerUserId
+	if req.OwnerUserId.IsSpecified() && !req.OwnerUserId.IsNull() {
+		v := req.OwnerUserId.MustGet()
+		ownerID = &v
 	}
 	a, err := h.store.Create(r.Context(), p.SpaceID, ownerID,
 		req.Name, Type(req.Type), req.Currency, institution)
@@ -147,8 +154,15 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		upd.Status = &st
 	}
-	if req.OwnerUserId != nil {
-		upd.OwnerUserID = &req.OwnerUserId
+	if req.OwnerUserId.IsSpecified() {
+		if req.OwnerUserId.IsNull() {
+			var cleared *uuid.UUID
+			upd.OwnerUserID = &cleared
+		} else {
+			v := req.OwnerUserId.MustGet()
+			ptr := &v
+			upd.OwnerUserID = &ptr
+		}
 	}
 	if req.Name != nil && *req.Name == "" {
 		httpjson.Error(w, http.StatusBadRequest, "name must not be empty")

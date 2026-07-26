@@ -3,6 +3,7 @@ package account_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
@@ -113,13 +115,29 @@ func TestAccountsCRUDAndBalance(t *testing.T) {
 	}
 
 	// bad balance payloads
+	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
 	for _, bad := range []string{
 		`{"as_of":"20.07.2026","amount_minor":1}`,
 		`{"as_of":"2099-01-01","amount_minor":1}`,
+		fmt.Sprintf(`{"as_of":%q,"amount_minor":1}`, tomorrow),
 	} {
 		if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+acc.ID+"/balance", bad); resp.StatusCode != 400 {
 			t.Errorf("balance %s = %d, want 400", bad, resp.StatusCode)
 		}
+	}
+
+	// today's date is the inclusive boundary and must be accepted
+	today := time.Now().UTC().Format("2006-01-02")
+	if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+acc.ID+"/balance",
+		fmt.Sprintf(`{"as_of":%q,"amount_minor":1}`, today)); resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Errorf("balance as_of=today = %d, want 200: %s", resp.StatusCode, b)
+	}
+
+	// patch: empty name is rejected
+	if resp = do(t, c, "PATCH", url+"/api/v1/accounts/"+acc.ID,
+		`{"name":""}`); resp.StatusCode != 400 {
+		t.Errorf("patch empty name = %d, want 400", resp.StatusCode)
 	}
 
 	// patch + archive
@@ -148,5 +166,68 @@ func TestAccountsCRUDAndBalance(t *testing.T) {
 	if resp = do(t, vera, "POST", url+"/api/v1/accounts",
 		`{"name":"X","type":"cash","currency":"RUB"}`); resp.StatusCode != 403 {
 		t.Errorf("vera create = %d, want 403", resp.StatusCode)
+	}
+}
+
+// accountOwner captures just the owner_user_id field of an AccountWithBalance
+// response: nil means the JSON value was null, a set pointer means a UUID.
+type accountOwner struct {
+	ID          string  `json:"id"`
+	OwnerUserId *string `json:"owner_user_id"`
+}
+
+// TestAccountOwnerUserIDNullable verifies PATCH can distinguish an absent
+// owner_user_id (leave unchanged) from an explicit null (clear to shared).
+func TestAccountOwnerUserIDNullable(t *testing.T) {
+	url, c := newAPI(t)
+
+	resp := do(t, c, "GET", url+"/api/v1/auth/me", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("me = %d", resp.StatusCode)
+	}
+	var me struct {
+		User struct {
+			ID string `json:"id"`
+		} `json:"user"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&me)
+	if me.User.ID == "" {
+		t.Fatalf("me missing user id")
+	}
+
+	// create with an explicit owner
+	resp = do(t, c, "POST", url+"/api/v1/accounts",
+		fmt.Sprintf(`{"name":"Owned","type":"cash","currency":"RUB","owner_user_id":%q}`, me.User.ID))
+	if resp.StatusCode != 201 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create owned = %d: %s", resp.StatusCode, b)
+	}
+	var created accountOwner
+	_ = json.NewDecoder(resp.Body).Decode(&created)
+	if created.OwnerUserId == nil || *created.OwnerUserId != me.User.ID {
+		t.Fatalf("created owner = %+v, want %s", created.OwnerUserId, me.User.ID)
+	}
+
+	// PATCH without owner_user_id leaves the owner unchanged
+	resp = do(t, c, "PATCH", url+"/api/v1/accounts/"+created.ID, `{"name":"Owned renamed"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("patch rename = %d", resp.StatusCode)
+	}
+	var afterRename accountOwner
+	_ = json.NewDecoder(resp.Body).Decode(&afterRename)
+	if afterRename.OwnerUserId == nil || *afterRename.OwnerUserId != me.User.ID {
+		t.Fatalf("owner after unrelated patch = %+v, want unchanged %s", afterRename.OwnerUserId, me.User.ID)
+	}
+
+	// PATCH with an explicit null clears the owner (account becomes shared)
+	resp = do(t, c, "PATCH", url+"/api/v1/accounts/"+created.ID, `{"owner_user_id":null}`)
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("patch clear owner = %d: %s", resp.StatusCode, b)
+	}
+	var cleared accountOwner
+	_ = json.NewDecoder(resp.Body).Decode(&cleared)
+	if cleared.OwnerUserId != nil {
+		t.Fatalf("owner after clear = %+v, want null", cleared.OwnerUserId)
 	}
 }
