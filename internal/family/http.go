@@ -36,6 +36,8 @@ func WriteError(w http.ResponseWriter, err error) {
 		httpjson.Error(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, ErrAlreadySetUp):
 		httpjson.Error(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrUsernameTaken):
+		httpjson.Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, pgx.ErrNoRows):
 		httpjson.Error(w, http.StatusNotFound, "not found")
 	default:

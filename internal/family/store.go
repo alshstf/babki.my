@@ -2,12 +2,29 @@ package family
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// pgUniqueViolation is the SQLSTATE code Postgres returns for a unique
+// constraint violation.
+const pgUniqueViolation = "23505"
+
+// wrapUsernameConflict maps a unique_violation on users.username to
+// ErrUsernameTaken, so callers get a 409 Conflict instead of an opaque
+// 500 when a chosen username is already in use.
+func wrapUsernameConflict(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation && pgErr.ConstraintName == "users_username_key" {
+		return ErrUsernameTaken
+	}
+	return err
+}
 
 // Store is the data access layer of the family module.
 type Store struct{ pool *pgxpool.Pool }
@@ -81,6 +98,9 @@ func (s *Store) CreateFirstUserWithSpace(ctx context.Context, spaceName, usernam
 		VALUES ($1, $2, $3) RETURNING `+userCols, username, displayName, passwordHash).Scan(
 		&u.ID, &u.Username, &u.DisplayName, &u.PasswordHash, &u.CreatedAt)
 	if err != nil {
+		if wrapped := wrapUsernameConflict(err); wrapped != err {
+			return User{}, Space{}, wrapped
+		}
 		return User{}, Space{}, fmt.Errorf("insert user: %w", err)
 	}
 
@@ -117,6 +137,9 @@ func (s *Store) CreateUserInSpace(ctx context.Context, spaceID uuid.UUID, userna
 		VALUES ($1, $2, $3) RETURNING `+userCols, username, displayName, passwordHash).Scan(
 		&u.ID, &u.Username, &u.DisplayName, &u.PasswordHash, &u.CreatedAt)
 	if err != nil {
+		if wrapped := wrapUsernameConflict(err); wrapped != err {
+			return User{}, wrapped
+		}
 		return User{}, fmt.Errorf("insert user: %w", err)
 	}
 

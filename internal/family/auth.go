@@ -16,6 +16,11 @@ var (
 	ErrInvalidCredentials = errors.New("invalid username or password")
 	ErrForbidden          = errors.New("forbidden")
 	ErrValidation         = errors.New("validation failed")
+	// ErrUsernameTaken is returned when a username collides with an existing
+	// user (unique_violation on users.username). Distinct from ErrValidation
+	// because the input itself is well-formed; the conflict is with existing
+	// state, so it maps to 409 rather than 400.
+	ErrUsernameTaken = errors.New("username already taken")
 )
 
 var usernameRe = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)

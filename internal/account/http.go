@@ -77,8 +77,13 @@ func parseAsOf(s string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, fmt.Errorf("as_of must be YYYY-MM-DD")
 	}
-	startOfTodayUTC := time.Now().UTC().Truncate(24 * time.Hour)
-	if d.After(startOfTodayUTC) {
+	// as_of is a date-only field with no timezone attached. A day of slack
+	// past the UTC "today" boundary is intentional: a user anywhere from
+	// UTC+3 to UTC+12 must be able to record "today" as of their own local
+	// date, and their tomorrow-in-UTC is still today somewhere on Earth.
+	// Anything further out than that is rejected as a genuine future date.
+	maxAllowedUTC := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)
+	if d.After(maxAllowedUTC) {
 		return time.Time{}, fmt.Errorf("as_of must not be in the future")
 	}
 	return d, nil

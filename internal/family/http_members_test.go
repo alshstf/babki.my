@@ -101,3 +101,16 @@ func TestOwnerCannotBeRemovedOrDemoted(t *testing.T) {
 		t.Fatalf("delete owner = %d, want 400", resp.StatusCode)
 	}
 }
+
+// TestCreateMemberDuplicateUsername verifies that creating a member with a
+// username that's already taken (e.g. by the owner from setup) returns 409
+// Conflict, not the 500 that an unmapped unique_violation would produce.
+func TestCreateMemberDuplicateUsername(t *testing.T) {
+	url, owner := setupOwner(t)
+
+	resp := postJSON(t, owner, url+"/api/v1/members",
+		`{"username":"alex","display_name":"Alex Clone","password":"password9","role":"editor"}`)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("create member with taken username = %d, want 409", resp.StatusCode)
+	}
+}

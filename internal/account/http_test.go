@@ -114,12 +114,13 @@ func TestAccountsCRUDAndBalance(t *testing.T) {
 		t.Fatalf("list = %+v", list)
 	}
 
-	// bad balance payloads
-	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
+	// bad balance payloads. Day-after-tomorrow (UTC) is always out of the
+	// +1 day TZ slack, so it's a reliable "too far in the future" case.
+	dayAfterTomorrow := time.Now().UTC().AddDate(0, 0, 2).Format("2006-01-02")
 	for _, bad := range []string{
 		`{"as_of":"20.07.2026","amount_minor":1}`,
 		`{"as_of":"2099-01-01","amount_minor":1}`,
-		fmt.Sprintf(`{"as_of":%q,"amount_minor":1}`, tomorrow),
+		fmt.Sprintf(`{"as_of":%q,"amount_minor":1}`, dayAfterTomorrow),
 	} {
 		if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+acc.ID+"/balance", bad); resp.StatusCode != 400 {
 			t.Errorf("balance %s = %d, want 400", bad, resp.StatusCode)
@@ -132,6 +133,15 @@ func TestAccountsCRUDAndBalance(t *testing.T) {
 		fmt.Sprintf(`{"as_of":%q,"amount_minor":1}`, today)); resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		t.Errorf("balance as_of=today = %d, want 200: %s", resp.StatusCode, b)
+	}
+
+	// tomorrow (UTC) is within the +1 day TZ slack and must be accepted, so
+	// users east of UTC can record "today" in their own timezone.
+	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
+	if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+acc.ID+"/balance",
+		fmt.Sprintf(`{"as_of":%q,"amount_minor":1}`, tomorrow)); resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Errorf("balance as_of=tomorrow = %d, want 200: %s", resp.StatusCode, b)
 	}
 
 	// patch: empty name is rejected
