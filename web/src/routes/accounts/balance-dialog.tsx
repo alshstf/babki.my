@@ -12,9 +12,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { formatMinor, parseToMinor } from "@/lib/money";
+import { localToday } from "@/lib/dates";
 import { useSetBalance, type AccountWithBalance } from "@/api/accounts";
-
-const today = () => new Date().toISOString().slice(0, 10);
 
 export function BalanceDialog({
   open,
@@ -28,12 +27,12 @@ export function BalanceDialog({
   const { t } = useTranslation();
   const setBalance = useSetBalance();
   const [amount, setAmount] = useState("");
-  const [asOf, setAsOf] = useState(today());
+  const [asOf, setAsOf] = useState(localToday());
 
   useEffect(() => {
     if (open) {
       setAmount("");
-      setAsOf(today());
+      setAsOf(localToday());
       setBalance.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -87,7 +86,7 @@ export function BalanceDialog({
               id="bal-date"
               type="date"
               value={asOf}
-              max={today()}
+              max={localToday()}
               onChange={(e) => setAsOf(e.target.value)}
             />
           </div>
