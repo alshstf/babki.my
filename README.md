@@ -28,5 +28,5 @@ babki.my — **fair source** (не open source): [FSL-1.1-ALv2](LICENSE.md).
 
 ## Разработка
 
-См. [CONTRIBUTING.md](CONTRIBUTING.md). Коротко: Go ≥1.25, Node 22, Docker.
+См. [CONTRIBUTING.md](CONTRIBUTING.md). Коротко: Go ≥1.26, Node 22, Docker.
 `make test` — тесты, `make build` — полный бинарь с UI, `make ui-dev` — фронтенд с hot reload.

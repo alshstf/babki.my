@@ -33,8 +33,11 @@ func (s *Server) Mount(pattern string, h http.Handler) {
 }
 
 // Handler returns the root handler with all middleware.
+//
+// Order matters: withRequestLog wraps withRecover so that panics recovered
+// deeper in the chain still produce an access log entry (status, duration).
 func (s *Server) Handler() http.Handler {
-	return withRecover(s.log, withRequestLog(s.log, s.mux))
+	return withRequestLog(s.log, withRecover(s.log, s.mux))
 }
 
 // Run blocks until ctx is cancelled, then performs graceful shutdown (10s).
