@@ -113,6 +113,11 @@ func Compute(ops []operation.Operation) (map[uuid.UUID]*Position, error) {
 			}
 		}
 
+		// Handle conversion ops before get() since they don't mutate positions
+		if o.Type == operation.TypeConversion {
+			continue
+		}
+
 		p := get(o)
 		switch o.Type {
 		case operation.TypeBuy:
@@ -127,7 +132,7 @@ func Compute(ops []operation.Operation) (map[uuid.UUID]*Position, error) {
 			}
 			released, err := p.releaseFIFO(*o.Quantity)
 			if err != nil {
-				return nil, fmt.Errorf("%s %s: %w", o.Type, o.OccurredOn.Format("2006-01-02"), err)
+				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 			}
 			p.RealizedPnLMinor += o.AmountMinor - released - o.FeeMinor
 			p.FeesMinor += o.FeeMinor
@@ -152,7 +157,7 @@ func Compute(ops []operation.Operation) (map[uuid.UUID]*Position, error) {
 		case operation.TypeConversion:
 			// cash-level by design, ignored
 		default:
-			return nil, badOp(o, "unknown type")
+			return nil, badOp(o, "type not applicable to instrument operations")
 		}
 	}
 	return positions, nil

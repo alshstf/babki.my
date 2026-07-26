@@ -2,6 +2,7 @@ package portfolio_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,8 +129,29 @@ func TestOversellRejected(t *testing.T) {
 		op(operation.TypeBuy, 1, &sber, "10", "100", -100_000, 0),
 		op(operation.TypeSell, 2, &sber, "11", "100", 110_000, 0),
 	}
-	if _, err := portfolio.Compute(ops); !errors.Is(err, portfolio.ErrOversell) {
+	_, err := portfolio.Compute(ops)
+	if !errors.Is(err, portfolio.ErrOversell) {
 		t.Fatalf("err = %v, want ErrOversell", err)
+	}
+	// Verify instrument ID is included in error message
+	if !strings.Contains(err.Error(), sber.String()) {
+		t.Errorf("error message missing instrument ID: %v", err)
+	}
+}
+
+func TestConversionWithInstrumentNoGhost(t *testing.T) {
+	// A conversion operation with instrument_id should not create a ghost position
+	ops := []operation.Operation{
+		// Create a conversion op with instrument — it's cash-level and should be ignored,
+		// not creating an empty position in the result map
+		op(operation.TypeConversion, 1, &sber, "", "", 0, 0),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	if len(pos) != 0 {
+		t.Errorf("positions = %d, want 0 (no ghost position)", len(pos))
 	}
 }
 
