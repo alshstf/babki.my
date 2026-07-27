@@ -31,6 +31,14 @@ export function formatMinor(amountMinor: number, currency: string): string {
   return formatWith(amountMinor, currency, 2);
 }
 
+// isPositiveDecimal validates a positive decimal string with up to 10 fraction
+// digits (matches backend NUMERIC(30,10) validation for quantity fields).
+const DECIMAL_RE = /^\d+(\.\d{1,10})?$/;
+
+export function isPositiveDecimal(value: string): boolean {
+  return DECIMAL_RE.test(value) && Number(value) > 0;
+}
+
 export function formatMinorCompact(amountMinor: number, currency: string): string {
   return formatWith(amountMinor, currency, 0);
 }

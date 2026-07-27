@@ -19,18 +19,11 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { localToday } from "@/lib/dates";
+import { isPositiveDecimal } from "@/lib/money";
 import { useAccounts, type AccountWithBalance } from "@/api/accounts";
 import { useCreateTransfer, isConflict } from "@/api/operations";
 import type { Instrument } from "@/api/instruments";
 import { InstrumentPicker } from "./instrument-picker";
-
-// Quantity shares the trade dialog's contract: a positive plain decimal, up
-// to 10 fractional digits.
-const DECIMAL_RE = /^\d+(\.\d{1,10})?$/;
-
-function isPositiveDecimal(value: string): boolean {
-  return DECIMAL_RE.test(value) && Number(value) > 0;
-}
 
 export function TransferDialog({
   open,
@@ -63,11 +56,11 @@ export function TransferDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // A transfer only makes sense between two brokerage accounts (positions
-  // live there); the current account is excluded so the picker can't offer
-  // an obviously-invalid same-account target.
+  // A transfer only makes sense between two active brokerage accounts
+  // (positions live there); the current account is excluded so the picker
+  // can't offer an obviously-invalid same-account target.
   const targetAccounts = (accounts.data ?? []).filter(
-    (a) => a.id !== account.id && a.type === "brokerage",
+    (a) => a.id !== account.id && a.type === "brokerage" && a.status === "active",
   );
 
   const qtyValid = isPositiveDecimal(quantity);
@@ -167,7 +160,7 @@ export function TransferDialog({
             {t("common.cancel")}
           </Button>
           <Button disabled={!valid || createTransfer.isPending} onClick={submit}>
-            {t("transfer.title")}
+            {t("common.save")}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatMinor, formatMinorCompact, multiplyToMinor, parseToMinor } from "./money";
+import { formatMinor, formatMinorCompact, multiplyToMinor, parseToMinor, isPositiveDecimal } from "./money";
 
 // NBSP-insensitive compare: Intl uses non-breaking spaces.
 const norm = (s: string) => s.replace(/[  ]/g, " ");
@@ -47,6 +47,15 @@ describe("parseToMinor", () => {
   });
   it.each([["abc"], [""], ["12,34,56"], ["1.2.3"]])("rejects %s", (input) => {
     expect(parseToMinor(input)).toBeNull();
+  });
+});
+
+describe("isPositiveDecimal", () => {
+  it.each([["1"], ["0.5"], ["1234.1234567890"]])("accepts %s", (input) => {
+    expect(isPositiveDecimal(input)).toBe(true);
+  });
+  it.each([[""], ["0"], ["-1"], ["abc"], ["1.12345678901"]])("rejects %s", (input) => {
+    expect(isPositiveDecimal(input)).toBe(false);
   });
 });
 

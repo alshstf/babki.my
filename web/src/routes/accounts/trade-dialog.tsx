@@ -11,20 +11,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { formatMinor, multiplyToMinor, parseToMinor } from "@/lib/money";
+import { formatMinor, multiplyToMinor, parseToMinor, isPositiveDecimal } from "@/lib/money";
 import { localToday } from "@/lib/dates";
 import { useCreateOperation, isConflict } from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
 import type { Instrument } from "@/api/instruments";
 import { InstrumentPicker } from "./instrument-picker";
-
-// Quantity and price share this shape: a positive plain decimal, up to 10
-// fractional digits (matches the brief's contract for both fields).
-const DECIMAL_RE = /^\d+(\.\d{1,10})?$/;
-
-function isPositiveDecimal(value: string): boolean {
-  return DECIMAL_RE.test(value) && Number(value) > 0;
-}
 
 export function TradeDialog({
   open,
