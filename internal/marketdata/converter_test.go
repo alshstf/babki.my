@@ -1,0 +1,269 @@
+package marketdata_test
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/db"
+	"babki.my/babki/internal/platform/testdb"
+)
+
+// newConverterFixture spins up a fresh, migrated DB and returns a Converter
+// wired to it, plus the underlying Store (to seed rates) and a context.
+// fx_rates has no foreign keys, so — unlike newFixture in store_test.go —
+// no user/space/instrument setup is needed here.
+func newConverterFixture(t *testing.T) (*marketdata.Converter, *marketdata.Store, context.Context) {
+	t.Helper()
+	pool := testdb.New(t)
+	ctx := context.Background()
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	store := marketdata.NewStore(pool)
+	return marketdata.NewConverter(store), store, ctx
+}
+
+func TestConvertSameCurrencyIsIdentity(t *testing.T) {
+	conv, _, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	// No rate seeded at all: from == to must short-circuit before any
+	// lookup, positive and negative alike.
+	for _, amount := range []int64{12345, -12345, 0} {
+		got, err := conv.Convert(ctx, amount, "USD", "USD", on)
+		if err != nil {
+			t.Fatalf("Convert(%d, USD, USD): %v", amount, err)
+		}
+		if got != amount {
+			t.Fatalf("Convert(%d, USD, USD) = %d, want %d unchanged", amount, got, amount)
+		}
+	}
+}
+
+func TestConvertDirectAndInverseRate(t *testing.T) {
+	conv, store, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	err := store.UpsertFxRates(ctx, []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90"), Source: "cbr"},
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Direct: USD -> RUB uses the stored rate as-is.
+	got, err := conv.Convert(ctx, 10000, "USD", "RUB", on) // 100.00 USD
+	if err != nil {
+		t.Fatalf("Convert direct: %v", err)
+	}
+	if got != 900000 { // 9000.00 RUB
+		t.Fatalf("Convert direct USD->RUB = %d, want 900000", got)
+	}
+
+	// Inverse: RUB -> USD has no stored row, so it must fall back to 1/rate.
+	got, err = conv.Convert(ctx, 900000, "RUB", "USD", on) // 9000.00 RUB
+	if err != nil {
+		t.Fatalf("Convert inverse: %v", err)
+	}
+	if got != 10000 { // 100.00 USD
+		t.Fatalf("Convert inverse RUB->USD = %d, want 10000", got)
+	}
+}
+
+func TestConvertBridgesThroughRUB(t *testing.T) {
+	conv, store, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	// Only USD/RUB and EUR/RUB exist (as cbr actually publishes them) — no
+	// direct or inverse USD/EUR row anywhere.
+	err := store.UpsertFxRates(ctx, []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90"), Source: "cbr"},
+		{Base: "EUR", Quote: "RUB", On: on, Rate: dec("100"), Source: "cbr"},
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// USD -> RUB -> EUR: 90 RUB/USD, then 1/100 EUR/RUB => 0.9 EUR/USD.
+	got, err := conv.Convert(ctx, 10000, "USD", "EUR", on) // 100.00 USD
+	if err != nil {
+		t.Fatalf("Convert bridge: %v", err)
+	}
+	if got != 9000 { // 90.00 EUR
+		t.Fatalf("Convert bridge USD->EUR = %d, want 9000", got)
+	}
+}
+
+// TestConvertBridgeMatchesDirectRate checks that bridging through RUB is not
+// just "some" answer but the mathematically correct one: converting a pair
+// that only has a RUB bridge must produce the same minor-unit result as
+// converting a different pair whose direct rate equals the bridge's implied
+// rate (90 RUB/AAA * 1/100 EUR/RUB... = 0.9, matched by a direct 0.9 row).
+func TestConvertBridgeMatchesDirectRate(t *testing.T) {
+	conv, store, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	err := store.UpsertFxRates(ctx, []marketdata.FxRate{
+		// AAA -> BBB has no direct/inverse row; only a RUB bridge exists.
+		{Base: "AAA", Quote: "RUB", On: on, Rate: dec("90"), Source: "test"},
+		{Base: "BBB", Quote: "RUB", On: on, Rate: dec("100"), Source: "test"},
+		// CCC -> DDD has a direct row at the bridge's implied rate (0.9).
+		{Base: "CCC", Quote: "DDD", On: on, Rate: dec("0.9"), Source: "test"},
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	bridged, err := conv.Convert(ctx, 10000, "AAA", "BBB", on)
+	if err != nil {
+		t.Fatalf("Convert bridged: %v", err)
+	}
+	direct, err := conv.Convert(ctx, 10000, "CCC", "DDD", on)
+	if err != nil {
+		t.Fatalf("Convert direct: %v", err)
+	}
+	if bridged != direct {
+		t.Fatalf("bridge result %d != direct result %d for the same effective 0.9 rate", bridged, direct)
+	}
+}
+
+func TestConvertNoRateReturnsSentinel(t *testing.T) {
+	conv, store, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	err := store.UpsertFxRates(ctx, []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90"), Source: "cbr"},
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// GBP and JPY are both unrelated to the only stored pair (USD/RUB): no
+	// direct, no inverse, and no RUB bridge (neither has a RUB leg).
+	_, err = conv.Convert(ctx, 10000, "GBP", "JPY", on)
+	if !errors.Is(err, marketdata.ErrNoRate) {
+		t.Fatalf("Convert unrelated pair: err = %v, want ErrNoRate", err)
+	}
+}
+
+// TestConvertRoundingIsHalfAwayFromZero documents and locks in the rounding
+// decision for exact .5 minor units: symmetric half-away-from-zero, applied
+// once at the end. This matters most for negative amounts (debts): a
+// -150.5 minor-unit result rounds to -151, not -150 — rounding never shrinks
+// the magnitude of a debt.
+func TestConvertRoundingIsHalfAwayFromZero(t *testing.T) {
+	conv, store, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	err := store.UpsertFxRates(ctx, []marketdata.FxRate{
+		{Base: "XXX", Quote: "YYY", On: on, Rate: dec("150.5"), Source: "test"},
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// 1 * 150.5 = 150.5 -> rounds away from zero to 151, not down to 150.
+	got, err := conv.Convert(ctx, 1, "XXX", "YYY", on)
+	if err != nil {
+		t.Fatalf("Convert positive .5: %v", err)
+	}
+	if got != 151 {
+		t.Fatalf("Convert 1 * 150.5 = %d, want 151 (half rounds away from zero)", got)
+	}
+
+	// -1 * 150.5 = -150.5 -> rounds away from zero to -151, not -150.
+	got, err = conv.Convert(ctx, -1, "XXX", "YYY", on)
+	if err != nil {
+		t.Fatalf("Convert negative .5: %v", err)
+	}
+	if got != -151 {
+		t.Fatalf("Convert -1 * 150.5 = %d, want -151 (symmetric half-away-from-zero rounding for debts)", got)
+	}
+}
+
+func TestConvertManySumsAndReportsMissing(t *testing.T) {
+	conv, store, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	err := store.UpsertFxRates(ctx, []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90"), Source: "cbr"},
+		{Base: "EUR", Quote: "RUB", On: on, Rate: dec("100"), Source: "cbr"},
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	amounts := map[string]int64{
+		"USD": 10000, // 100.00 USD -> 9000.00 RUB = 900000
+		"EUR": 5000,  // 50.00 EUR -> 5000.00 RUB = 500000
+		"RUB": 500,   // identity, from == to
+		"GBP": 2000,  // no rate path at all -> missing, not an error
+	}
+	converted, missing, err := conv.ConvertMany(ctx, amounts, "RUB", on)
+	if err != nil {
+		t.Fatalf("ConvertMany: %v", err)
+	}
+	wantConverted := int64(900000 + 500000 + 500)
+	if converted != wantConverted {
+		t.Fatalf("ConvertMany converted = %d, want %d", converted, wantConverted)
+	}
+	if len(missing) != 1 || missing[0] != "GBP" {
+		t.Fatalf("ConvertMany missing = %v, want [GBP]", missing)
+	}
+}
+
+func TestConvertManyEmptyInput(t *testing.T) {
+	conv, _, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	converted, missing, err := conv.ConvertMany(ctx, map[string]int64{}, "RUB", on)
+	if err != nil {
+		t.Fatalf("ConvertMany empty: %v", err)
+	}
+	if converted != 0 || len(missing) != 0 {
+		t.Fatalf("ConvertMany empty = (%d, %v), want (0, empty)", converted, missing)
+	}
+}
+
+func TestConvertManyPropagatesRealErrors(t *testing.T) {
+	conv, store, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	err := store.UpsertFxRates(ctx, []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90"), Source: "cbr"},
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	// A real DB/context failure must surface as err, not be swallowed into
+	// missing like an ordinary "no rate for this currency" case.
+	converted, missing, err := conv.ConvertMany(cctx, map[string]int64{"USD": 100}, "RUB", on)
+	if err == nil {
+		t.Fatalf("ConvertMany with canceled context: err = nil (converted=%d, missing=%v), want a real error", converted, missing)
+	}
+	if errors.Is(err, marketdata.ErrNoRate) {
+		t.Fatalf("ConvertMany with canceled context: got ErrNoRate, want the underlying DB/context error")
+	}
+}
+
+func TestConvertPropagatesRealErrors(t *testing.T) {
+	conv, _, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	_, err := conv.Convert(cctx, 100, "USD", "RUB", on)
+	if err == nil {
+		t.Fatal("Convert with canceled context: err = nil, want a real error")
+	}
+	if errors.Is(err, marketdata.ErrNoRate) {
+		t.Fatal("Convert with canceled context: got ErrNoRate, want the underlying DB/context error")
+	}
+}
