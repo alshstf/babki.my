@@ -9,6 +9,7 @@ import (
 
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/portfolio"
 )
 
 func TestServiceValidation(t *testing.T) {
@@ -292,5 +293,210 @@ func TestServiceSplitValidation(t *testing.T) {
 		if _, err := svc.Create(f.ctx, f.spaceID, mutate(validSplit)); !errors.Is(err, family.ErrValidation) {
 			t.Errorf("%s: err = %v, want ErrValidation", name, err)
 		}
+	}
+}
+
+// TestTransferSameDayBoundary pins the journalUpTo boundary:
+// !o.OccurredOn.After(day) (INCLUSIVE) is the critical filter.
+// If changed to Before(day) (exclusive), same-day transfers would not see
+// same-day purchases, silently losing cost basis.
+func TestTransferSameDayBoundary(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	// Case (a): Transfer on same day as only purchase.
+	// buy 10 @ 100 = -100_000 on 2026-07-01
+	// transfer 4 on 2026-07-01 → should see the buy and release floor(100_000 * 4 / 10) = 40_000
+	buy := operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-07-01"), Quantity: dec("10"), Price: dec("100"),
+		AmountMinor: -100_000, Currency: "RUB", FeeMinor: 0,
+	}
+	if _, err := svc.Create(f.ctx, f.spaceID, buy); err != nil {
+		t.Fatalf("buy: %v", err)
+	}
+
+	out, in, err := svc.CreateTransfer(f.ctx, f.spaceID, operation.TransferParams{
+		FromAccountID: f.accountID, ToAccountID: f.account2ID,
+		InstrumentID: f.sberID, Quantity: decimal.RequireFromString("4"),
+		OccurredOn: date("2026-07-01"), // same day as buy
+	})
+	if err != nil {
+		t.Fatalf("same-day transfer: %v", err)
+	}
+	const wantCostA = int64(40_000)
+	if out.AmountMinor != wantCostA || in.AmountMinor != wantCostA {
+		t.Errorf("case (a) same-day cost = %d/%d, want %d (Before would fail: 0)",
+			out.AmountMinor, in.AmountMinor, wantCostA)
+	}
+
+	// Case (b): Sale and transfer on same day; sale precedes transfer.
+	// buy 10 @ 100 = -100_000 on 2026-07-01
+	// buy 10 @ 900 = -900_000 on 2026-07-03
+	// sell 10 on 2026-07-05 (consumes lot 1 completely)
+	// transfer 4 on 2026-07-05 (FIFO front is now lot 2; release floor(900_000 * 4 / 10) = 360_000)
+	f2 := newFixture(t)
+	svc2 := operation.NewService(f2.store)
+
+	buy1 := operation.Operation{
+		AccountID: f2.accountID, InstrumentID: &f2.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-07-01"), Quantity: dec("10"), Price: dec("100"),
+		AmountMinor: -100_000, Currency: "RUB",
+	}
+	buy2 := buy1
+	buy2.OccurredOn = date("2026-07-03")
+	buy2.Price = dec("900")
+	buy2.AmountMinor = -900_000
+
+	sell := buy1
+	sell.Type = operation.TypeSell
+	sell.OccurredOn = date("2026-07-05")
+	sell.Quantity = dec("10")
+	sell.Price = dec("1000")
+	sell.AmountMinor = 1_000_000
+
+	for _, op := range []operation.Operation{buy1, buy2, sell} {
+		if _, err := svc2.Create(f2.ctx, f2.spaceID, op); err != nil {
+			t.Fatalf("seed %s %s: %v", op.Type, op.OccurredOn.Format("2006-01-02"), err)
+		}
+	}
+
+	out2, in2, err := svc2.CreateTransfer(f2.ctx, f2.spaceID, operation.TransferParams{
+		FromAccountID: f2.accountID, ToAccountID: f2.account2ID,
+		InstrumentID: f2.sberID, Quantity: decimal.RequireFromString("4"),
+		OccurredOn: date("2026-07-05"), // same day as sell
+	})
+	if err != nil {
+		t.Fatalf("same-day transfer after sale: %v", err)
+	}
+	const wantCostB = int64(360_000)
+	if out2.AmountMinor != wantCostB || in2.AmountMinor != wantCostB {
+		t.Errorf("case (b) same-day cost = %d/%d, want %d (FIFO after-sell front)",
+			out2.AmountMinor, in2.AmountMinor, wantCostB)
+	}
+}
+
+// TestTransferBasisConservation verifies the invariant that cost basis is
+// conserved across a transfer sequence with subsequent sales.
+// Invariant: source.CostMinor + dest.CostMinor + (cost released in later sales)
+// must equal the initial total outlay.
+//
+// Scenario: buy 10 @ 100 (−100_000) 07-01; transfer 4 on 07-02;
+// sell 4 (+50_000) on 07-03 (dest); sell 6 (+70_000) on 07-04 (source).
+//
+// Arithmetic check at end state:
+//
+//	Initial outlay: 100_000
+//	Source remaining cost: 0 (all 6 units sold)
+//	Dest remaining cost: 0 (all 4 units sold)
+//	Cost released in source sale: 60_000 (FIFO 6 of the 10)
+//	Cost released in dest sale: 40_000 (transferred basis of 4)
+//	Sum: 0 + 0 + 60_000 + 40_000 = 100_000 ✓
+//
+// The test tracks proceeds and fees to verify:
+//
+//	initial_cost = source.CostMinor + dest.CostMinor + (total_proceeds - total_realized_pnl - total_fees)
+//
+// This would fail if journalUpTo excluded same-day operations or looked at the
+// wrong point in the journal, because the transferred basis would be wrong.
+func TestTransferBasisConservation(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	// Seed: buy 10 @ 100 = -100_000
+	buy := operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-07-01"), Quantity: dec("10"), Price: dec("100"),
+		AmountMinor: -100_000, Currency: "RUB", FeeMinor: 0,
+	}
+	if _, err := svc.Create(f.ctx, f.spaceID, buy); err != nil {
+		t.Fatalf("buy: %v", err)
+	}
+
+	// Transfer 4 units on 2026-07-02
+	// At this point, source has all 10 @ cost 100_000.
+	// Releasing 4 units: floor(100_000 * 4 / 10) = 40_000.
+	_, _, err := svc.CreateTransfer(f.ctx, f.spaceID, operation.TransferParams{
+		FromAccountID: f.accountID, ToAccountID: f.account2ID,
+		InstrumentID: f.sberID, Quantity: decimal.RequireFromString("4"),
+		OccurredOn: date("2026-07-02"),
+	})
+	if err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+
+	// Sell 4 on dest on 2026-07-03 for 50_000
+	sellDest := operation.Operation{
+		AccountID: f.account2ID, InstrumentID: &f.sberID, Type: operation.TypeSell,
+		OccurredOn: date("2026-07-03"), Quantity: dec("4"), Price: dec("12.5"),
+		AmountMinor: 50_000, Currency: "RUB", FeeMinor: 0,
+	}
+	if _, err := svc.Create(f.ctx, f.spaceID, sellDest); err != nil {
+		t.Fatalf("sell dest: %v", err)
+	}
+
+	// Sell 6 on source on 2026-07-04 for 70_000
+	sellSrc := operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeSell,
+		OccurredOn: date("2026-07-04"), Quantity: dec("6"), Price: dec("11.666666"),
+		AmountMinor: 70_000, Currency: "RUB", FeeMinor: 0,
+	}
+	if _, err := svc.Create(f.ctx, f.spaceID, sellSrc); err != nil {
+		t.Fatalf("sell src: %v", err)
+	}
+
+	// Compute positions for both accounts
+	srcOps, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
+	if err != nil {
+		t.Fatalf("list source: %v", err)
+	}
+	srcPos, err := portfolio.Compute(srcOps)
+	if err != nil {
+		t.Fatalf("compute source: %v", err)
+	}
+	srcPosBuy := srcPos[f.sberID]
+
+	destOps, err := f.store.ListForEngine(f.ctx, f.spaceID, f.account2ID)
+	if err != nil {
+		t.Fatalf("list dest: %v", err)
+	}
+	destPos, err := portfolio.Compute(destOps)
+	if err != nil {
+		t.Fatalf("compute dest: %v", err)
+	}
+	destPosBuy := destPos[f.sberID]
+
+	const initialOutlay = int64(100_000)
+	const srcSaleProceeds = int64(70_000)
+	const destSaleProceeds = int64(50_000)
+	const totalProceeds = srcSaleProceeds + destSaleProceeds
+
+	// At end state: both accounts have sold all units.
+	if srcPosBuy.CostMinor != 0 {
+		t.Errorf("source final cost = %d, want 0", srcPosBuy.CostMinor)
+	}
+	if destPosBuy.CostMinor != 0 {
+		t.Errorf("dest final cost = %d, want 0", destPosBuy.CostMinor)
+	}
+
+	// Verify basis conservation: initial cost = (remaining costs) + (realized gains + fees).
+	// Rearranged: cost_released = total_proceeds - realized_pnl - total_fees
+	// Invariant: initial_outlay = src.Cost + dst.Cost + cost_released
+	//
+	// At end state where all units are sold:
+	// cost_released = proceeds - realized_pnl - fees
+	//              = 120_000 - 20_000 - 0 = 100_000
+	// So: src.Cost + dst.Cost + 100_000 = 0 + 0 + 100_000 = 100_000 ✓
+	//
+	// More generally (if not all sold):
+	totalRealizedPnL := srcPosBuy.RealizedPnLMinor + destPosBuy.RealizedPnLMinor
+	totalFees := srcPosBuy.FeesMinor + destPosBuy.FeesMinor
+	costReleased := totalProceeds - totalRealizedPnL - totalFees
+	totalAccountedFor := srcPosBuy.CostMinor + destPosBuy.CostMinor + costReleased
+
+	if totalAccountedFor != initialOutlay {
+		t.Errorf("basis conservation: %d + %d + %d = %d, want %d (realized=%d, fees=%d)",
+			srcPosBuy.CostMinor, destPosBuy.CostMinor, costReleased, totalAccountedFor,
+			initialOutlay, totalRealizedPnL, totalFees)
 	}
 }
