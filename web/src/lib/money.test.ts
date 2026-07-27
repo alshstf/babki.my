@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatMinor, formatMinorCompact, parseToMinor } from "./money";
+import { formatMinor, formatMinorCompact, multiplyToMinor, parseToMinor } from "./money";
 
 // NBSP-insensitive compare: Intl uses non-breaking spaces.
 const norm = (s: string) => s.replace(/[  ]/g, " ");
@@ -47,5 +47,56 @@ describe("parseToMinor", () => {
   });
   it.each([["abc"], [""], ["12,34,56"], ["1.2.3"]])("rejects %s", (input) => {
     expect(parseToMinor(input)).toBeNull();
+  });
+});
+
+describe("multiplyToMinor", () => {
+  it.each([
+    ["10", "305.5", 305_500],
+    ["0.5", "100", 5_000],
+    ["3", "0.01", 3],
+    ["1", "0.001", 0], // sub-kopeck rounds to zero — allowed, documented
+  ])("multiplies %s × %s", (qty, price, want) => {
+    expect(multiplyToMinor(qty, price)).toBe(want);
+  });
+  it.each([["abc", "1"], ["1", ""], ["-1", "10"]])("rejects %s × %s", (q, p) => {
+    expect(multiplyToMinor(q, p)).toBeNull();
+  });
+
+  // Additional edge cases beyond the brief's literal table.
+  it.each([
+    ["0", "305.5", 0],
+    ["10", "0", 0],
+    ["0", "0", 0],
+  ])("treats zero operand %s × %s as 0", (qty, price, want) => {
+    expect(multiplyToMinor(qty, price)).toBe(want);
+  });
+
+  it("truncates many fractional digits instead of rounding", () => {
+    // 1 × 0.129999999999 = 0.129999999999 of a unit → truncates to 12 minor
+    // units, not 13 — confirms truncation semantics hold beyond 2 combined
+    // decimal digits of input.
+    expect(multiplyToMinor("1", "0.129999999999")).toBe(12);
+  });
+
+  it("handles many decimal digits on both operands without precision loss", () => {
+    // Exact BigInt math: 0.123456789 × 0.000000001 = 0.000000000123456789,
+    // far below one minor unit — truncates to 0, not NaN/Infinity as float
+    // multiplication of such small magnitudes might risk.
+    expect(multiplyToMinor("0.123456789", "0.000000001")).toBe(0);
+  });
+
+  it("returns null on overflow past Number.MAX_SAFE_INTEGER", () => {
+    expect(multiplyToMinor("100000000", "100000000")).toBeNull();
+  });
+
+  it("returns null on overflow even with fractional operands", () => {
+    expect(multiplyToMinor("99999999999.99", "99999999999.99")).toBeNull();
+  });
+
+  it("accepts a large-but-safe product", () => {
+    // 90_000 × 100 = 9_000_000 rubles = 900_000_000 minor units, safely
+    // under Number.MAX_SAFE_INTEGER (~9.007e15).
+    expect(multiplyToMinor("90000", "100")).toBe(900_000_000);
   });
 });

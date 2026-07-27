@@ -55,3 +55,53 @@ export function signClass(amountMinor: number): string {
   if (amountMinor < 0) return "text-red-500";
   return "text-muted-foreground";
 }
+
+// Parses a non-negative plain decimal string ("10", "305.5", "0.001") into an
+// exact integer mantissa plus its decimal-digit count. No sign, no exponent,
+// no thousands separators — trade quantity/price fields are validated with
+// their own stricter regex before reaching here; this parser is intentionally
+// a bit more permissive (unbounded decimal digits) so multiplyToMinor stays
+// reusable. Returns null for anything that isn't a bare non-negative decimal.
+function parseDecimalString(input: string): { mantissa: bigint; decimals: number } | null {
+  if (!/^\d+(\.\d+)?$/.test(input)) return null;
+  const [wholePart, fracPart = ""] = input.split(".");
+  return { mantissa: BigInt(wholePart + fracPart), decimals: fracPart.length };
+}
+
+// multiplyToMinor computes qty × price as integer minor units (e.g. kopecks)
+// with no floating-point arithmetic anywhere in the path. Both operands are
+// non-negative decimal strings (trade quantity and price-per-unit); the
+// caller applies the buy/sell sign afterwards.
+//
+// Algorithm: parse each operand into a BigInt mantissa + decimal-digit count,
+// multiply the mantissas as BigInt (exact — no float rounding is possible),
+// then reduce the combined decimal-digit count down to 2 (minor units) by
+// truncating the excess digits. Sub-minor-unit remainders are dropped
+// (truncation, not rounding): e.g. 1 × 0.001 = 0.001 of a unit, which
+// truncates to 0 minor units. Returns null on malformed input or on overflow
+// past Number.MAX_SAFE_INTEGER (BigInt math can't silently lose precision
+// the way float math would, so overflow is detected exactly).
+export function multiplyToMinor(qty: string, price: string): number | null {
+  const q = parseDecimalString(qty);
+  const p = parseDecimalString(price);
+  if (!q || !p) return null;
+
+  const productMantissa = q.mantissa * p.mantissa;
+  const totalDecimals = q.decimals + p.decimals;
+  const MINOR_DECIMALS = 2;
+
+  let minorBig: bigint;
+  if (totalDecimals === MINOR_DECIMALS) {
+    minorBig = productMantissa;
+  } else if (totalDecimals < MINOR_DECIMALS) {
+    minorBig = productMantissa * 10n ** BigInt(MINOR_DECIMALS - totalDecimals);
+  } else {
+    // BigInt division truncates toward zero, which is exactly "truncate the
+    // excess digits" for the non-negative values this function accepts.
+    minorBig = productMantissa / 10n ** BigInt(totalDecimals - MINOR_DECIMALS);
+  }
+
+  if (minorBig > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  const result = Number(minorBig);
+  return Number.isSafeInteger(result) ? result : null;
+}

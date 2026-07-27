@@ -1,13 +1,16 @@
+import { useState } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { useSession } from "@/api/session";
 import { useAccounts } from "@/api/accounts";
 import { usePositions } from "@/api/positions";
 import { formatMinor } from "@/lib/money";
 import { PositionsTable } from "./positions-table";
 import { OperationsTable } from "./operations-table";
+import { TradeDialog } from "./trade-dialog";
 
 export function AccountDetailPage() {
   const { t } = useTranslation();
@@ -17,6 +20,8 @@ export function AccountDetailPage() {
   const account = accounts.data?.find((a) => a.id === accountId);
   const positions = usePositions(accountId, !!account);
   const isViewer = session?.role === "viewer";
+  // undefined = dialog closed; "buy" / "sell" = dialog open with that side.
+  const [tradeSide, setTradeSide] = useState<"buy" | "sell" | undefined>(undefined);
 
   if (accounts.isLoading) {
     return <div className="text-muted-foreground">{t("app.loading")}</div>;
@@ -68,7 +73,19 @@ export function AccountDetailPage() {
       </div>
 
       <div className="grid gap-2">
-        <h2 className="text-lg font-semibold">{t("positions.title")}</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">{t("positions.title")}</h2>
+          {!isViewer && (
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setTradeSide("buy")}>
+                {t("trade.buyTitle")}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setTradeSide("sell")}>
+                {t("trade.sellTitle")}
+              </Button>
+            </div>
+          )}
+        </div>
         {positions.isLoading ? (
           <div className="text-muted-foreground">{t("app.loading")}</div>
         ) : positions.isError ? (
@@ -88,6 +105,15 @@ export function AccountDetailPage() {
         <h2 className="text-lg font-semibold">{t("operations.title")}</h2>
         <OperationsTable accountId={accountId} canDelete={!isViewer} />
       </div>
+
+      {tradeSide && (
+        <TradeDialog
+          open={tradeSide !== undefined}
+          onOpenChange={(open) => !open && setTradeSide(undefined)}
+          account={account}
+          side={tradeSide}
+        />
+      )}
     </div>
   );
 }
