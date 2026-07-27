@@ -23,7 +23,7 @@ import { IncomeDialog } from "./income-dialog";
 import { TransferDialog } from "./transfer-dialog";
 
 // undefined = no dialog open; otherwise the action picked from the
-// "+ Добавить операцию" menu, each mapping to one dialog below.
+// "+ Add operation" menu, each mapping to one dialog below.
 type AddAction = "buy" | "sell" | "cash" | "income" | "transfer";
 
 export function AccountDetailPage() {
