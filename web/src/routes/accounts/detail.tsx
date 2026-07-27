@@ -1,9 +1,16 @@
 import { useState } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
+import { ChevronDown } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useSession } from "@/api/session";
 import { useAccounts } from "@/api/accounts";
 import { usePositions } from "@/api/positions";
@@ -11,6 +18,13 @@ import { formatMinor } from "@/lib/money";
 import { PositionsTable } from "./positions-table";
 import { OperationsTable } from "./operations-table";
 import { TradeDialog } from "./trade-dialog";
+import { CashDialog } from "./cash-dialog";
+import { IncomeDialog } from "./income-dialog";
+import { TransferDialog } from "./transfer-dialog";
+
+// undefined = no dialog open; otherwise the action picked from the
+// "+ Добавить операцию" menu, each mapping to one dialog below.
+type AddAction = "buy" | "sell" | "cash" | "income" | "transfer";
 
 export function AccountDetailPage() {
   const { t } = useTranslation();
@@ -20,8 +34,8 @@ export function AccountDetailPage() {
   const account = accounts.data?.find((a) => a.id === accountId);
   const positions = usePositions(accountId, !!account);
   const isViewer = session?.role === "viewer";
-  // undefined = dialog closed; "buy" / "sell" = dialog open with that side.
-  const [tradeSide, setTradeSide] = useState<"buy" | "sell" | undefined>(undefined);
+  const [action, setAction] = useState<AddAction | undefined>(undefined);
+  const closeAction = () => setAction(undefined);
 
   if (accounts.isLoading) {
     return <div className="text-muted-foreground">{t("app.loading")}</div>;
@@ -76,14 +90,31 @@ export function AccountDetailPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">{t("positions.title")}</h2>
           {!isViewer && (
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => setTradeSide("buy")}>
-                {t("trade.buyTitle")}
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setTradeSide("sell")}>
-                {t("trade.sellTitle")}
-              </Button>
-            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  {t("accounts.addOperation")}
+                  <ChevronDown className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuItem onSelect={() => setAction("buy")}>
+                  {t("trade.buyTitle")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setAction("sell")}>
+                  {t("trade.sellTitle")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setAction("cash")}>
+                  {t("cash.menuItem")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setAction("income")}>
+                  {t("income.menuItem")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setAction("transfer")}>
+                  {t("transfer.title")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
         {positions.isLoading ? (
@@ -106,13 +137,22 @@ export function AccountDetailPage() {
         <OperationsTable accountId={accountId} canDelete={!isViewer} />
       </div>
 
-      {tradeSide && (
+      {(action === "buy" || action === "sell") && (
         <TradeDialog
-          open={tradeSide !== undefined}
-          onOpenChange={(open) => !open && setTradeSide(undefined)}
+          open
+          onOpenChange={(open) => !open && closeAction()}
           account={account}
-          side={tradeSide}
+          side={action}
         />
+      )}
+      {action === "cash" && (
+        <CashDialog open onOpenChange={(open) => !open && closeAction()} account={account} />
+      )}
+      {action === "income" && (
+        <IncomeDialog open onOpenChange={(open) => !open && closeAction()} account={account} />
+      )}
+      {action === "transfer" && (
+        <TransferDialog open onOpenChange={(open) => !open && closeAction()} account={account} />
       )}
     </div>
   );
