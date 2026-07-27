@@ -50,6 +50,26 @@ out=$(req GET /api/v1/summary)
 expect 200 "$(status)" "summary"
 expect 100000000 "$(echo "$out" | jq -r '.totals[0].net_minor')" "summary.net"
 
+# instrument -> buy -> positions -> delete -> positions empty
+out=$(req POST /api/v1/instruments '{"name":"Smoke Instrument","type":"share","currency":"RUB","ticker":"SMOK"}')
+expect 201 "$(status)" "create instrument"
+INST=$(echo "$out" | jq -r .id)
+
+out=$(req POST /api/v1/operations "{\"account_id\":\"$ACC\",\"instrument_id\":\"$INST\",\"type\":\"buy\",\"occurred_on\":\"2026-07-20\",\"quantity\":\"10\",\"price\":\"100\",\"amount_minor\":-100000,\"currency\":\"RUB\"}")
+expect 201 "$(status)" "buy operation"
+OP=$(echo "$out" | jq -r .id)
+
+out=$(req GET "/api/v1/accounts/$ACC/positions")
+expect 200 "$(status)" "positions after buy"
+expect 10 "$(echo "$out" | jq -r '.positions[0].quantity')" "positions.quantity"
+
+req DELETE "/api/v1/operations/$OP" >/dev/null
+expect 204 "$(status)" "delete operation"
+
+out=$(req GET "/api/v1/accounts/$ACC/positions")
+expect 200 "$(status)" "positions after delete"
+expect 0 "$(echo "$out" | jq -r '.positions | length')" "positions.empty"
+
 req POST /api/v1/auth/logout >/dev/null
 expect 204 "$(status)" "logout"
 req GET /api/v1/auth/me >/dev/null

@@ -1,0 +1,142 @@
+package operation
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+type Store struct{ pool *pgxpool.Pool }
+
+func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+
+const cols = `id, space_id, account_id, instrument_id, type, occurred_on,
+	settled_on, quantity, price, amount_minor, currency, fee_minor, note,
+	transfer_group_id, split_ratio, source, external_id, created_at`
+
+func scan(row pgx.Row) (Operation, error) {
+	var o Operation
+	err := row.Scan(&o.ID, &o.SpaceID, &o.AccountID, &o.InstrumentID, &o.Type,
+		&o.OccurredOn, &o.SettledOn, &o.Quantity, &o.Price, &o.AmountMinor,
+		&o.Currency, &o.FeeMinor, &o.Note, &o.TransferGroupID, &o.SplitRatio,
+		&o.Source, &o.ExternalID, &o.CreatedAt)
+	return o, err
+}
+
+// insertSQL guards space ownership of the account in the same statement:
+// zero rows returned means the account is not in the caller's space.
+const insertSQL = `
+	INSERT INTO operations (space_id, account_id, instrument_id, type,
+		occurred_on, settled_on, quantity, price, amount_minor, currency,
+		fee_minor, note, transfer_group_id, split_ratio, source, external_id)
+	SELECT a.space_id, a.id, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+		COALESCE(NULLIF($15, ''), 'manual'), $16
+	FROM accounts a WHERE a.id = $2 AND a.space_id = $1
+	RETURNING ` + cols
+
+func insertOne(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, spaceID uuid.UUID, op Operation,
+) (Operation, error) {
+	created, err := scan(q.QueryRow(ctx, insertSQL,
+		spaceID, op.AccountID, op.InstrumentID, op.Type, op.OccurredOn,
+		op.SettledOn, op.Quantity, op.Price, op.AmountMinor, op.Currency,
+		op.FeeMinor, op.Note, op.TransferGroupID, op.SplitRatio,
+		op.Source, op.ExternalID))
+	if err == pgx.ErrNoRows {
+		return Operation{}, fmt.Errorf("account not found in space: %w", pgx.ErrNoRows)
+	}
+	return created, err
+}
+
+func (s *Store) Create(ctx context.Context, spaceID uuid.UUID, op Operation) (Operation, error) {
+	return insertOne(ctx, s.pool, spaceID, op)
+}
+
+// CreatePair inserts a transfer_out/transfer_in pair atomically with a
+// shared transfer_group_id.
+func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Operation) (Operation, Operation, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Operation{}, Operation{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	group := uuid.New()
+	out.TransferGroupID = &group
+	in.TransferGroupID = &group
+
+	cOut, err := insertOne(ctx, tx, spaceID, out)
+	if err != nil {
+		return Operation{}, Operation{}, fmt.Errorf("transfer out: %w", err)
+	}
+	cIn, err := insertOne(ctx, tx, spaceID, in)
+	if err != nil {
+		return Operation{}, Operation{}, fmt.Errorf("transfer in: %w", err)
+	}
+	return cOut, cIn, tx.Commit(ctx)
+}
+
+func (s *Store) list(ctx context.Context, sql string, args ...any) ([]Operation, error) {
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Operation
+	for rows.Next() {
+		o, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListByAccount(ctx context.Context, spaceID, accountID uuid.UUID, limit, offset int) ([]Operation, error) {
+	return s.list(ctx, `SELECT `+cols+` FROM operations
+		WHERE space_id = $1 AND account_id = $2
+		ORDER BY occurred_on DESC, created_at DESC LIMIT $3 OFFSET $4`,
+		spaceID, accountID, limit, offset)
+}
+
+// ListForEngine returns the account's full journal in engine order.
+func (s *Store) ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]Operation, error) {
+	return s.list(ctx, `SELECT `+cols+` FROM operations
+		WHERE space_id = $1 AND account_id = $2
+		ORDER BY occurred_on ASC, created_at ASC`, spaceID, accountID)
+}
+
+func (s *Store) ByID(ctx context.Context, spaceID, id uuid.UUID) (Operation, error) {
+	return scan(s.pool.QueryRow(ctx, `SELECT `+cols+` FROM operations
+		WHERE space_id = $1 AND id = $2`, spaceID, id))
+}
+
+// ByTransferGroup returns every operation sharing groupID (the two legs of a
+// transfer pair, which live on two different accounts).
+func (s *Store) ByTransferGroup(ctx context.Context, spaceID, groupID uuid.UUID) ([]Operation, error) {
+	return s.list(ctx, `SELECT `+cols+` FROM operations
+		WHERE space_id = $1 AND transfer_group_id = $2`, spaceID, groupID)
+}
+
+// Delete removes the operation; if it belongs to a transfer group, the whole
+// group is removed. Returns the number of deleted rows.
+func (s *Store) Delete(ctx context.Context, spaceID, id uuid.UUID) (int, error) {
+	ct, err := s.pool.Exec(ctx, `
+		DELETE FROM operations
+		WHERE space_id = $1 AND (id = $2 OR transfer_group_id = (
+			SELECT transfer_group_id FROM operations
+			WHERE space_id = $1 AND id = $2 AND transfer_group_id IS NOT NULL
+		))`, spaceID, id)
+	if err != nil {
+		return 0, err
+	}
+	if ct.RowsAffected() == 0 {
+		return 0, pgx.ErrNoRows
+	}
+	return int(ct.RowsAffected()), nil
+}

@@ -200,6 +200,133 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Summary" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/instruments:
+    get:
+      operationId: searchInstruments
+      parameters:
+        - { name: query, in: query, required: false, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200":
+          description: Matching instruments
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Instrument" }
+        "401": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createInstrument
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateInstrumentRequest" }
+      responses:
+        "201":
+          description: Created instrument
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Instrument" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/instruments/{instrumentId}:
+    patch:
+      operationId: updateInstrument
+      parameters:
+        - { name: instrumentId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateInstrumentRequest" }
+      responses:
+        "200":
+          description: Updated instrument
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Instrument" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/operations:
+    get:
+      operationId: listAccountOperations
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: Account operations, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Operation" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/operations:
+    post:
+      operationId: createOperation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateOperationRequest" }
+      responses:
+        "201":
+          description: Created operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Operation" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/operations/transfer:
+    post:
+      operationId: createTransfer
+      description: Creates a linked transfer_out/transfer_in pair moving instrument quantity between accounts with FIFO cost-basis carryover.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TransferRequest" }
+      responses:
+        "201":
+          description: Created pair
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TransferResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/operations/{operationId}:
+    delete:
+      operationId: deleteOperation
+      description: Deletes the operation (whole pair for transfers). Rejected if the remaining journal becomes inconsistent (oversell).
+      parameters:
+        - { name: operationId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Deleted }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/positions:
+    get:
+      operationId: listAccountPositions
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Open positions computed from the journal
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PositionsResponse" }
+        "401": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
 components:
   responses:
     Error:
@@ -333,3 +460,116 @@ components:
         totals:
           type: array
           items: { $ref: "#/components/schemas/CurrencyTotal" }
+    InstrumentType:
+      type: string
+      enum: [share, bond, etf, currency, crypto, metal, custom]
+    Instrument:
+      type: object
+      required: [id, type, name, ticker, isin, figi, currency, frozen]
+      properties:
+        id: { type: string, format: uuid }
+        type: { $ref: "#/components/schemas/InstrumentType" }
+        name: { type: string }
+        ticker: { type: string }
+        isin: { type: string }
+        figi: { type: string }
+        currency: { type: string }
+        face_value_minor: { type: integer, format: int64, nullable: true }
+        face_currency: { type: string, nullable: true }
+        frozen: { type: boolean }
+    CreateInstrumentRequest:
+      type: object
+      required: [type, name, currency]
+      properties:
+        type: { $ref: "#/components/schemas/InstrumentType" }
+        name: { type: string }
+        ticker: { type: string }
+        isin: { type: string }
+        figi: { type: string }
+        currency: { type: string }
+        face_value_minor: { type: integer, format: int64, nullable: true }
+        face_currency: { type: string, nullable: true }
+    UpdateInstrumentRequest:
+      type: object
+      properties:
+        name: { type: string }
+        ticker: { type: string }
+        isin: { type: string }
+        figi: { type: string }
+        frozen: { type: boolean }
+        face_value_minor: { type: integer, format: int64, nullable: true }
+        face_currency: { type: string, nullable: true }
+    OperationType:
+      type: string
+      enum: [buy, sell, deposit, withdrawal, dividend, coupon, amortization, fee, tax, transfer_in, transfer_out, split, interest, conversion]
+    Operation:
+      type: object
+      required: [id, account_id, type, occurred_on, amount_minor, currency, fee_minor, note, source, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        instrument_id: { type: string, format: uuid, nullable: true }
+        type: { $ref: "#/components/schemas/OperationType" }
+        occurred_on: { type: string, description: "Date YYYY-MM-DD" }
+        settled_on: { type: string, nullable: true, description: "Date YYYY-MM-DD" }
+        quantity: { type: string, nullable: true, description: "Decimal as string" }
+        price: { type: string, nullable: true, description: "Decimal as string" }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        fee_minor: { type: integer, format: int64 }
+        note: { type: string }
+        transfer_group_id: { type: string, format: uuid, nullable: true }
+        split_ratio: { type: string, nullable: true, description: "Decimal as string" }
+        source: { type: string }
+        created_at: { type: string, format: date-time }
+    CreateOperationRequest:
+      type: object
+      required: [account_id, type, occurred_on, amount_minor, currency]
+      properties:
+        account_id: { type: string, format: uuid }
+        instrument_id: { type: string, format: uuid, nullable: true }
+        type: { $ref: "#/components/schemas/OperationType" }
+        occurred_on: { type: string, description: "Date YYYY-MM-DD" }
+        settled_on: { type: string, nullable: true }
+        quantity: { type: string, nullable: true, description: "Decimal as string" }
+        price: { type: string, nullable: true, description: "Decimal as string" }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        fee_minor: { type: integer, format: int64 }
+        note: { type: string }
+        split_ratio: { type: string, nullable: true, description: "Decimal as string" }
+    TransferRequest:
+      type: object
+      required: [from_account_id, to_account_id, instrument_id, quantity, occurred_on]
+      properties:
+        from_account_id: { type: string, format: uuid }
+        to_account_id: { type: string, format: uuid }
+        instrument_id: { type: string, format: uuid }
+        quantity: { type: string, description: "Decimal as string" }
+        occurred_on: { type: string, description: "Date YYYY-MM-DD" }
+        cost_minor: { type: integer, format: int64, nullable: true, description: "Cost basis override; default is FIFO carryover from the source account" }
+        note: { type: string }
+    TransferResponse:
+      type: object
+      required: [out, in]
+      properties:
+        out: { $ref: "#/components/schemas/Operation" }
+        in: { $ref: "#/components/schemas/Operation" }
+    Position:
+      type: object
+      required: [instrument, quantity, cost_minor, realized_pnl_minor, income_minor, fees_minor, currency]
+      properties:
+        instrument: { $ref: "#/components/schemas/Instrument" }
+        quantity: { type: string, description: "Decimal as string" }
+        cost_minor: { type: integer, format: int64 }
+        realized_pnl_minor: { type: integer, format: int64 }
+        income_minor: { type: integer, format: int64 }
+        fees_minor: { type: integer, format: int64 }
+        currency: { type: string }
+    PositionsResponse:
+      type: object
+      required: [positions]
+      properties:
+        positions:
+          type: array
+          items: { $ref: "#/components/schemas/Position" }
