@@ -7,10 +7,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 	"github.com/spf13/cobra"
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/operation"
 )
 
 func newSeedCmd() *cobra.Command {
@@ -101,6 +104,7 @@ func seedDemo(ctx context.Context, pool *pgxpool.Pool) error {
 			[3]int64{70_000_00, 70_000_00, 70_000_00},
 		},
 	}
+	accIDs := make(map[string]uuid.UUID, len(seeds))
 	for _, s := range seeds {
 		var personalOwner *uuid.UUID
 		if s.personal {
@@ -110,10 +114,132 @@ func seedDemo(ctx context.Context, pool *pgxpool.Pool) error {
 		if err != nil {
 			return fmt.Errorf("seed account %q: %w", s.name, err)
 		}
+		accIDs[s.name] = a.ID
 		for i, date := range dates {
 			if err := accStore.SetBalance(ctx, owner.SpaceID, a.ID, date, s.balances[i]); err != nil {
 				return fmt.Errorf("seed balance %q %s: %w", s.name, date.Format("2006-01-02"), err)
 			}
+		}
+	}
+
+	if err := seedInstrumentsAndOperations(ctx, pool, owner.SpaceID, accIDs, d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// seedInstrumentsAndOperations populates the global instrument catalog and
+// records a chronological journal of operations against the two brokerage
+// accounts, giving the demo space live positions with realized P&L and
+// income — material the account/position UI (plan 3b) can render. All
+// operations go through operation.Service so seed data is subject to the
+// same validation and journal-consistency checks as user-entered data.
+func seedInstrumentsAndOperations(
+	ctx context.Context, pool *pgxpool.Pool, spaceID uuid.UUID,
+	accIDs map[string]uuid.UUID, d func(string) time.Time,
+) error {
+	instStore := instrument.NewStore(pool)
+
+	faceValue := int64(1_000_00)
+	faceCurrency := "RUB"
+	instSeeds := []struct {
+		key  string
+		inst instrument.Instrument
+	}{
+		{"SBER", instrument.Instrument{Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB"}},
+		{"LKOH", instrument.Instrument{Type: instrument.TypeShare, Name: "Лукойл", Ticker: "LKOH", Currency: "RUB"}},
+		{"OFZ26238", instrument.Instrument{
+			Type: instrument.TypeBond, Name: "ОФЗ 26238", Ticker: "OFZ26238", Currency: "RUB",
+			FaceValueMinor: &faceValue, FaceCurrency: &faceCurrency,
+		}},
+		{"FXUS", instrument.Instrument{Type: instrument.TypeETF, Name: "FinEx FXUS", Ticker: "FXUS", Currency: "USD", Frozen: true}},
+		{"AAPL", instrument.Instrument{Type: instrument.TypeShare, Name: "Apple Inc.", Ticker: "AAPL", Currency: "USD"}},
+	}
+	instIDs := make(map[string]uuid.UUID, len(instSeeds))
+	for _, is := range instSeeds {
+		created, err := instStore.Create(ctx, is.inst)
+		if err != nil {
+			return fmt.Errorf("seed instrument %q: %w", is.key, err)
+		}
+		instIDs[is.key] = created.ID
+	}
+
+	inst := func(key string) *uuid.UUID {
+		id := instIDs[key]
+		return &id
+	}
+	qty := func(s string) *decimal.Decimal {
+		v := decimal.RequireFromString(s)
+		return &v
+	}
+	price := func(s string) *decimal.Decimal {
+		v := decimal.RequireFromString(s)
+		return &v
+	}
+
+	tbank := accIDs["Брокерский Т-Банк"]
+	freedom := accIDs["Freedom KZ"]
+
+	// Chronological order matters: operation.Service.Create replays each
+	// account's journal through the portfolio engine and rejects entries
+	// that would make it inconsistent (e.g. a sell recorded before its buy).
+	ops := []operation.Operation{
+		{
+			AccountID: tbank, Type: operation.TypeDeposit,
+			OccurredOn: d("2026-05-05"), AmountMinor: 1_500_000_00, Currency: "RUB",
+		},
+		{
+			AccountID: freedom, Type: operation.TypeDeposit,
+			OccurredOn: d("2026-05-06"), AmountMinor: 1_000_000, Currency: "USD",
+		},
+		{
+			AccountID: tbank, InstrumentID: inst("SBER"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-05-10"), Quantity: qty("300"), Price: price("305.5"),
+			AmountMinor: -9_165_000, FeeMinor: 9_165, Currency: "RUB",
+		},
+		{
+			AccountID: tbank, InstrumentID: inst("OFZ26238"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-05-12"), Quantity: qty("100"), Price: price("950"),
+			AmountMinor: -9_500_000, FeeMinor: 9_500, Currency: "RUB",
+		},
+		{
+			AccountID: tbank, InstrumentID: inst("FXUS"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-05-20"), Quantity: qty("30"), Price: price("85"),
+			AmountMinor: -255_000, Currency: "USD",
+		},
+		{
+			AccountID: tbank, InstrumentID: inst("LKOH"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-06-03"), Quantity: qty("20"), Price: price("7300"),
+			AmountMinor: -14_600_000, FeeMinor: 14_600, Currency: "RUB",
+		},
+		{
+			AccountID: freedom, InstrumentID: inst("AAPL"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-06-10"), Quantity: qty("20"), Price: price("210.15"),
+			AmountMinor: -420_300, FeeMinor: 420, Currency: "USD",
+		},
+		{
+			AccountID: tbank, InstrumentID: inst("OFZ26238"), Type: operation.TypeCoupon,
+			OccurredOn: d("2026-06-18"), AmountMinor: 354_000, Currency: "RUB",
+		},
+		{
+			AccountID: tbank, InstrumentID: inst("SBER"), Type: operation.TypeDividend,
+			OccurredOn: d("2026-07-08"), AmountMinor: 1_045_200, Currency: "RUB",
+		},
+		{
+			AccountID: tbank, InstrumentID: inst("SBER"), Type: operation.TypeTax,
+			OccurredOn: d("2026-07-08"), AmountMinor: -135_876, Currency: "RUB",
+		},
+		{
+			AccountID: tbank, InstrumentID: inst("LKOH"), Type: operation.TypeSell,
+			OccurredOn: d("2026-07-15"), Quantity: qty("5"), Price: price("7550"),
+			AmountMinor: 3_775_000, FeeMinor: 3_775, Currency: "RUB",
+		},
+	}
+
+	opSvc := operation.NewService(operation.NewStore(pool))
+	for _, op := range ops {
+		if _, err := opSvc.Create(ctx, spaceID, op); err != nil {
+			return fmt.Errorf("seed operation %s %s: %w", op.Type, op.OccurredOn.Format("2006-01-02"), err)
 		}
 	}
 	return nil
