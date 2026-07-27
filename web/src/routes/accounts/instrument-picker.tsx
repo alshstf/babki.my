@@ -118,7 +118,7 @@ export function InstrumentPicker({
         </div>
         {createInstrument.isError && (
           <Alert variant="destructive">
-            <AlertDescription>{createInstrument.error.message}</AlertDescription>
+            <AlertDescription>{t("app.error")}</AlertDescription>
           </Alert>
         )}
         <div className="flex justify-end gap-2">

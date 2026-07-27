@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import { apiError } from "./operations";
 import type { components } from "./schema";
@@ -20,6 +20,10 @@ export function useInstruments(query: string) {
       if (!data) throw apiError(response, error);
       return data;
     },
+    // Keep the previous result list visible while a new query (e.g. each
+    // keystroke in the picker's search box) is in flight, instead of
+    // collapsing to a loading state and flashing the list away.
+    placeholderData: keepPreviousData,
   });
 }
 

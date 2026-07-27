@@ -98,7 +98,7 @@ export function TradeDialog({
   const errorMessage = createOperation.isError
     ? isConflict(createOperation.error)
       ? t("trade.oversell")
-      : createOperation.error.message
+      : t("app.error")
     : null;
 
   return (
@@ -150,6 +150,9 @@ export function TradeDialog({
               value={fee}
               onChange={(e) => setFee(e.target.value)}
             />
+            {fee !== "" && !feeValid && (
+              <p className="text-xs text-red-500">{t("trade.badFee")}</p>
+            )}
           </div>
           <div className="grid gap-2">
             <Label htmlFor="trade-date">{t("trade.date")}</Label>

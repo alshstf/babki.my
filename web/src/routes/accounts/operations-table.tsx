@@ -181,7 +181,7 @@ export function OperationsTable({
               <AlertDescription>
                 {isConflict(deleteOperation.error)
                   ? t("operations.deleteConflict")
-                  : deleteOperation.error.message}
+                  : t("app.error")}
               </AlertDescription>
             </Alert>
           )}

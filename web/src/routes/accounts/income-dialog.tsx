@@ -20,7 +20,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { parseToMinor } from "@/lib/money";
 import { localToday } from "@/lib/dates";
-import { useCreateOperation, type OperationType } from "@/api/operations";
+import { useCreateOperation, isConflict, type OperationType } from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
 import type { Instrument } from "@/api/instruments";
 import { InstrumentPicker } from "./instrument-picker";
@@ -158,7 +158,9 @@ export function IncomeDialog({
           </div>
           {createOperation.isError && (
             <Alert variant="destructive">
-              <AlertDescription>{createOperation.error.message}</AlertDescription>
+              <AlertDescription>
+                {isConflict(createOperation.error) ? t("operations.conflict") : t("app.error")}
+              </AlertDescription>
             </Alert>
           )}
         </div>

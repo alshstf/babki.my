@@ -90,7 +90,7 @@ export function TransferDialog({
   const errorMessage = createTransfer.isError
     ? isConflict(createTransfer.error)
       ? t("transfer.oversell")
-      : createTransfer.error.message
+      : t("app.error")
     : null;
 
   return (
