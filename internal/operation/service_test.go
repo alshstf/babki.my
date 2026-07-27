@@ -300,6 +300,18 @@ func TestServiceSplitValidation(t *testing.T) {
 // !o.OccurredOn.After(day) (INCLUSIVE) is the critical filter.
 // If changed to Before(day) (exclusive), same-day transfers would not see
 // same-day purchases, silently losing cost basis.
+//
+// Note on case (b): its journal has no operation dated AFTER the transfer
+// date at CreateTransfer time (the sell is same-day, not later), so
+// journalUpTo(ops, day) and the unfiltered ops are identical sets for this
+// case — dropping the filter entirely (the C1 bug: folding the whole,
+// possibly-future-inclusive journal) would NOT change case (b)'s result.
+// What case (b) actually pins is that (1) a same-day operation created
+// *before* the transfer is included (inclusive boundary, same as case (a)),
+// and (2) the FIFO front correctly reflects that prior same-day sale (lot 2,
+// not lot 1) — i.e. same-day ordering by created_at, not the "no filter at
+// all" regression. TestTransferBasisConservation below is the test that
+// discriminates the filter being dropped entirely.
 func TestTransferSameDayBoundary(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -335,6 +347,8 @@ func TestTransferSameDayBoundary(t *testing.T) {
 	// buy 10 @ 900 = -900_000 on 2026-07-03
 	// sell 10 on 2026-07-05 (consumes lot 1 completely)
 	// transfer 4 on 2026-07-05 (FIFO front is now lot 2; release floor(900_000 * 4 / 10) = 360_000)
+	// (This pins same-day inclusion + intra-day FIFO ordering, not the
+	// filter-dropped-entirely bug — see the func-level comment above.)
 	f2 := newFixture(t)
 	svc2 := operation.NewService(f2.store)
 
@@ -376,127 +390,170 @@ func TestTransferSameDayBoundary(t *testing.T) {
 	}
 }
 
-// TestTransferBasisConservation verifies the invariant that cost basis is
-// conserved across a transfer sequence with subsequent sales.
-// Invariant: source.CostMinor + dest.CostMinor + (cost released in later sales)
-// must equal the initial total outlay.
+// TestTransferBasisConservation pins the C1 basis-leak fix with a scenario
+// that actually discriminates it. A prior version of this test (commit
+// 7ac995e) did not: it used a single lot, and a "conservation" formula that
+// turned out to be a tautology. Both problems, and why the replacement
+// below fixes them, are documented here.
 //
-// Scenario: buy 10 @ 100 (−100_000) 07-01; transfer 4 on 07-02;
-// sell 4 (+50_000) on 07-03 (dest); sell 6 (+70_000) on 07-04 (source).
+// Problem 1 — non-discriminating scenario: with a single lot, the FIFO
+// front on the transfer's own date and on the whole journal's end state is
+// the same lot, so removing the journalUpTo filter changes nothing. C1 only
+// shows up when the front lot at the transfer date differs from the front
+// lot when the whole journal (including operations dated AFTER the
+// transfer) is folded — i.e. two lots at different prices, plus a
+// later-dated operation that is already sitting in the account's stored
+// journal by the time the transfer is created.
 //
-// Arithmetic check at end state:
+// Problem 2 — self-fulfilling formula: the old check computed
 //
-//	Initial outlay: 100_000
-//	Source remaining cost: 0 (all 6 units sold)
-//	Dest remaining cost: 0 (all 4 units sold)
-//	Cost released in source sale: 60_000 (FIFO 6 of the 10)
-//	Cost released in dest sale: 40_000 (transferred basis of 4)
-//	Sum: 0 + 0 + 60_000 + 40_000 = 100_000 ✓
+//	costReleased := totalProceeds - totalRealizedPnL - totalFees
 //
-// The test tracks proceeds and fees to verify:
+// but the engine computes RealizedPnLMinor as exactly
+// `proceeds - released - fee` (internal/portfolio/engine.go, TypeSell), so
+// algebraically totalProceeds - totalRealizedPnL - totalFees ≡ released,
+// for ANY value the engine used internally as "released" — correct or
+// C1-corrupted. The check was verifying the engine's own bookkeeping is
+// self-consistent, which it always is; it could never fail from a wrong
+// transferred basis.
 //
-//	initial_cost = source.CostMinor + dest.CostMinor + (total_proceeds - total_realized_pnl - total_fees)
+// Why the fix below is a direct check on the recorded value rather than a
+// "purer" conservation formula: a real conservation invariant avoiding the
+// RealizedPnL identity was worked through by hand, and it collapses to the
+// same direct check anyway. transfer_out's own AmountMinor is discarded by
+// the engine on replay (see TypeTransferOut in engine.go: "released cost
+// intentionally discarded" — only *o.Quantity drives releaseFIFO there), so
+// the source account's post-transfer state is IDENTICAL whether the
+// recorded transfer cost is correct or C1-corrupted; only the destination's
+// recorded transfer_in.AmountMinor differs between the two. So there is no
+// conservation law across source+dest+releases that adds discriminating
+// power over directly asserting the recorded value — it is the only place
+// in the whole system where C1 is externally observable. Per the task's own
+// guidance this is treated as an informed fallback, not a shortcut.
 //
-// This would fail if journalUpTo excluded same-day operations or looked at the
-// wrong point in the journal, because the transferred basis would be wrong.
+// Scenario (source account):
+//
+//	buy1: 10 @ 100.00 → -100_000  (07-01, lot1 cost 100_000)
+//	buy2: 10 @ 900.00 → -900_000  (07-03, lot2 cost 900_000)
+//	sell: 10 units    → +200_000  (07-20 — AFTER the transfer's own date,
+//	                                but created BEFORE CreateTransfer runs
+//	                                below, so it is already present in the
+//	                                source's stored journal at that point)
+//	transfer 5 units, backdated to 07-05
+//
+// Correct (journalUpTo, ops with occurred_on <= 07-05 → [buy1, buy2]):
+// FIFO front is lot1, still fully intact: release 5 units →
+// floor(100_000 * 5 / 10) = 50_000.
+//
+// C1-buggy (no filter, full journal folded → [buy1, buy2, sell]): the sell
+// (qty 10) exactly drains lot1 when folded chronologically ahead of the
+// transfer, leaving only lot2 in front: release 5 units →
+// floor(900_000 * 5 / 10) = 450_000.
+//
+// So the correct transfer_in.AmountMinor is 50_000; C1 would record
+// 450_000 — a 400_000 minor-unit basis conjured out of thin air. Verified
+// live: with journalUpTo's filter stubbed out (service.go temporarily
+// passing sourceJournal instead of journalUpTo(sourceJournal, ...)) this
+// test fails with exactly "= 450000, want 50000" on all three assertions
+// below; restoring the filter turns it green again (see the fix commit's
+// message / final-review-3a-fixes.md for the captured failure output).
 func TestTransferBasisConservation(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
 
-	// Seed: buy 10 @ 100 = -100_000
-	buy := operation.Operation{
+	buy1 := operation.Operation{
 		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
 		OccurredOn: date("2026-07-01"), Quantity: dec("10"), Price: dec("100"),
-		AmountMinor: -100_000, Currency: "RUB", FeeMinor: 0,
+		AmountMinor: -100_000, Currency: "RUB",
 	}
-	if _, err := svc.Create(f.ctx, f.spaceID, buy); err != nil {
-		t.Fatalf("buy: %v", err)
+	buy2 := buy1
+	buy2.OccurredOn = date("2026-07-03")
+	buy2.Price = dec("900")
+	buy2.AmountMinor = -900_000
+
+	sell := buy1
+	sell.Type = operation.TypeSell
+	sell.OccurredOn = date("2026-07-20")
+	sell.Quantity = dec("10")
+	sell.Price = dec("20")
+	sell.AmountMinor = 200_000
+
+	for _, op := range []operation.Operation{buy1, buy2, sell} {
+		if _, err := svc.Create(f.ctx, f.spaceID, op); err != nil {
+			t.Fatalf("seed %s %s: %v", op.Type, op.OccurredOn.Format("2006-01-02"), err)
+		}
 	}
 
-	// Transfer 4 units on 2026-07-02
-	// At this point, source has all 10 @ cost 100_000.
-	// Releasing 4 units: floor(100_000 * 4 / 10) = 40_000.
-	_, _, err := svc.CreateTransfer(f.ctx, f.spaceID, operation.TransferParams{
-		FromAccountID: f.accountID, ToAccountID: f.account2ID,
-		InstrumentID: f.sberID, Quantity: decimal.RequireFromString("4"),
-		OccurredOn: date("2026-07-02"),
-	})
-	if err != nil {
-		t.Fatalf("transfer: %v", err)
-	}
-
-	// Sell 4 on dest on 2026-07-03 for 50_000
-	sellDest := operation.Operation{
-		AccountID: f.account2ID, InstrumentID: &f.sberID, Type: operation.TypeSell,
-		OccurredOn: date("2026-07-03"), Quantity: dec("4"), Price: dec("12.5"),
-		AmountMinor: 50_000, Currency: "RUB", FeeMinor: 0,
-	}
-	if _, err := svc.Create(f.ctx, f.spaceID, sellDest); err != nil {
-		t.Fatalf("sell dest: %v", err)
-	}
-
-	// Sell 6 on source on 2026-07-04 for 70_000
-	sellSrc := operation.Operation{
-		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeSell,
-		OccurredOn: date("2026-07-04"), Quantity: dec("6"), Price: dec("11.666666"),
-		AmountMinor: 70_000, Currency: "RUB", FeeMinor: 0,
-	}
-	if _, err := svc.Create(f.ctx, f.spaceID, sellSrc); err != nil {
-		t.Fatalf("sell src: %v", err)
-	}
-
-	// Compute positions for both accounts
+	// Independent oracle: reimplement the *intent* of the journalUpTo filter
+	// locally (occurred_on <= transfer date), not by calling production's
+	// unexported journalUpTo, and run it through portfolio.ReleasedCost
+	// directly. This does not depend on Service.CreateTransfer's internal
+	// wiring at all, so it stays correct even if CreateTransfer regresses to
+	// folding the full, unfiltered journal — the two would then diverge.
 	srcOps, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
 	if err != nil {
 		t.Fatalf("list source: %v", err)
 	}
-	srcPos, err := portfolio.Compute(srcOps)
-	if err != nil {
-		t.Fatalf("compute source: %v", err)
+	transferDate := date("2026-07-05")
+	var truncated []operation.Operation
+	for _, o := range srcOps {
+		if !o.OccurredOn.After(transferDate) {
+			truncated = append(truncated, o)
+		}
 	}
-	srcPosBuy := srcPos[f.sberID]
+	wantCost, err := portfolio.ReleasedCost(truncated, f.sberID, decimal.RequireFromString("5"))
+	if err != nil {
+		t.Fatalf("oracle ReleasedCost: %v", err)
+	}
+	if wantCost != 50_000 {
+		t.Fatalf("oracle sanity: wantCost = %d, want 50000 (see scenario comment)", wantCost)
+	}
 
+	out, in, err := svc.CreateTransfer(f.ctx, f.spaceID, operation.TransferParams{
+		FromAccountID: f.accountID, ToAccountID: f.account2ID,
+		InstrumentID: f.sberID, Quantity: decimal.RequireFromString("5"),
+		OccurredOn: transferDate,
+	})
+	if err != nil {
+		t.Fatalf("backdated transfer: %v", err)
+	}
+	if out.AmountMinor != wantCost {
+		t.Errorf("transfer_out.AmountMinor = %d, want %d (C1 leak would give 450000)", out.AmountMinor, wantCost)
+	}
+	if in.AmountMinor != wantCost {
+		t.Errorf("transfer_in.AmountMinor = %d, want %d (C1 leak would give 450000)", in.AmountMinor, wantCost)
+	}
+
+	// Cross-check the value actually PERSISTED in the store (not just the
+	// in-memory return value), read back the same way the rest of the app
+	// consumes the journal: store.ListForEngine.
 	destOps, err := f.store.ListForEngine(f.ctx, f.spaceID, f.account2ID)
 	if err != nil {
 		t.Fatalf("list dest: %v", err)
 	}
+	var recordedIn *operation.Operation
+	for i := range destOps {
+		if destOps[i].Type == operation.TypeTransferIn {
+			recordedIn = &destOps[i]
+		}
+	}
+	if recordedIn == nil {
+		t.Fatalf("no transfer_in recorded on dest account")
+	}
+	if recordedIn.AmountMinor != wantCost {
+		t.Errorf("recorded transfer_in.AmountMinor = %d, want %d (C1 leak would give 450000)",
+			recordedIn.AmountMinor, wantCost)
+	}
+
+	// Supplementary and NOT discriminating for C1 on its own (it would pass
+	// under the bug too, since it just reflects whatever got recorded): dest's
+	// computed position must match the recorded basis exactly, confirming
+	// Compute() wires the stored transfer_in value straight into the new lot.
 	destPos, err := portfolio.Compute(destOps)
 	if err != nil {
 		t.Fatalf("compute dest: %v", err)
 	}
-	destPosBuy := destPos[f.sberID]
-
-	const initialOutlay = int64(100_000)
-	const srcSaleProceeds = int64(70_000)
-	const destSaleProceeds = int64(50_000)
-	const totalProceeds = srcSaleProceeds + destSaleProceeds
-
-	// At end state: both accounts have sold all units.
-	if srcPosBuy.CostMinor != 0 {
-		t.Errorf("source final cost = %d, want 0", srcPosBuy.CostMinor)
-	}
-	if destPosBuy.CostMinor != 0 {
-		t.Errorf("dest final cost = %d, want 0", destPosBuy.CostMinor)
-	}
-
-	// Verify basis conservation: initial cost = (remaining costs) + (realized gains + fees).
-	// Rearranged: cost_released = total_proceeds - realized_pnl - total_fees
-	// Invariant: initial_outlay = src.Cost + dst.Cost + cost_released
-	//
-	// At end state where all units are sold:
-	// cost_released = proceeds - realized_pnl - fees
-	//              = 120_000 - 20_000 - 0 = 100_000
-	// So: src.Cost + dst.Cost + 100_000 = 0 + 0 + 100_000 = 100_000 ✓
-	//
-	// More generally (if not all sold):
-	totalRealizedPnL := srcPosBuy.RealizedPnLMinor + destPosBuy.RealizedPnLMinor
-	totalFees := srcPosBuy.FeesMinor + destPosBuy.FeesMinor
-	costReleased := totalProceeds - totalRealizedPnL - totalFees
-	totalAccountedFor := srcPosBuy.CostMinor + destPosBuy.CostMinor + costReleased
-
-	if totalAccountedFor != initialOutlay {
-		t.Errorf("basis conservation: %d + %d + %d = %d, want %d (realized=%d, fees=%d)",
-			srcPosBuy.CostMinor, destPosBuy.CostMinor, costReleased, totalAccountedFor,
-			initialOutlay, totalRealizedPnL, totalFees)
+	if destPos[f.sberID].CostMinor != wantCost {
+		t.Errorf("dest position CostMinor = %d, want %d", destPos[f.sberID].CostMinor, wantCost)
 	}
 }
