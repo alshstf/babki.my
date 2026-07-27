@@ -29,6 +29,20 @@ func scanQuote(row pgx.Row) (Quote, error) {
 	return q, err
 }
 
+// runBatch sends batch and checks the result of each of its n queued
+// commands, so a mid-batch failure (e.g. a CHECK violation) is reported
+// instead of silently ignored.
+func runBatch(ctx context.Context, pool *pgxpool.Pool, batch *pgx.Batch, n int) error {
+	br := pool.SendBatch(ctx, batch)
+	for range n {
+		if _, err := br.Exec(); err != nil {
+			_ = br.Close()
+			return err
+		}
+	}
+	return br.Close()
+}
+
 // UpsertFxRates inserts or updates a batch of daily FX rates. A repeat
 // upsert for the same (base, quote, on) replaces the existing row rather
 // than duplicating it.
@@ -45,14 +59,7 @@ func (s *Store) UpsertFxRates(ctx context.Context, rates []FxRate) error {
 				rate = EXCLUDED.rate, source = EXCLUDED.source, updated_at = now()`,
 			r.Base, r.Quote, r.On, r.Rate, r.Source)
 	}
-	br := s.pool.SendBatch(ctx, batch)
-	for range rates {
-		if _, err := br.Exec(); err != nil {
-			_ = br.Close()
-			return err
-		}
-	}
-	return br.Close()
+	return runBatch(ctx, s.pool, batch, len(rates))
 }
 
 // FxRateOn returns the rate for (base, quote) on the exact date, or, if
@@ -103,14 +110,7 @@ func (s *Store) UpsertQuotes(ctx context.Context, quotes []Quote) error {
 				source = EXCLUDED.source, updated_at = now()`,
 			q.InstrumentID, q.On, q.Price, q.Currency, q.Source)
 	}
-	br := s.pool.SendBatch(ctx, batch)
-	for range quotes {
-		if _, err := br.Exec(); err != nil {
-			_ = br.Close()
-			return err
-		}
-	}
-	return br.Close()
+	return runBatch(ctx, s.pool, batch, len(quotes))
 }
 
 // QuoteOn returns the instrument's price on the exact date, or, if missing,
