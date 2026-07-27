@@ -60,7 +60,7 @@ export function OperationsTable({
   const instrumentName = (instrumentId: string | null | undefined) => {
     if (!instrumentId) return "—";
     const found = instruments.data?.find((instrument) => instrument.id === instrumentId);
-    return found ? found.name : `#${instrumentId.slice(0, 8)}`;
+    return found ? found.name : `#${instrumentId.slice(-8)}`;
   };
 
   const confirmDelete = () => {
@@ -71,7 +71,7 @@ export function OperationsTable({
     );
   };
 
-  if (operations.isLoading) {
+  if (operations.isLoading && !operations.data) {
     return <div className="text-muted-foreground">{t("app.loading")}</div>;
   }
   if (operations.isError) {
@@ -151,8 +151,12 @@ export function OperationsTable({
       </Table>
 
       {canLoadMore && (
-        <Button variant="outline" onClick={() => setLimit((current) => current + PAGE_SIZE)}>
-          {t("operations.loadMore")}
+        <Button
+          variant="outline"
+          disabled={operations.isFetching}
+          onClick={() => setLimit((current) => current + PAGE_SIZE)}
+        >
+          {operations.isFetching ? t("app.loading") : t("operations.loadMore")}
         </Button>
       )}
 

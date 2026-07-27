@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type { components } from "./schema";
 
@@ -43,6 +43,9 @@ export function useOperations(accountId: string, limit = 50, offset = 0) {
       if (!data) throw apiError(response, error);
       return data;
     },
+    // Keep showing the previous page's data while loading a larger window, so
+    // the table stays mounted and the user doesn't see a disruptive flash.
+    placeholderData: keepPreviousData,
   });
 }
 
