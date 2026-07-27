@@ -12,6 +12,7 @@ import { LoginPage } from "@/routes/login";
 import { SetupPage } from "@/routes/setup";
 import { AppLayout } from "@/routes/app-layout";
 import { AccountsPage } from "@/routes/accounts";
+import { AccountDetailPage } from "@/routes/accounts/detail";
 import { FamilyPage } from "@/routes/family";
 
 function FullScreenLoader() {
@@ -90,6 +91,12 @@ const accountsRoute = createRoute({
   component: AccountsPage,
 });
 
+const accountDetailRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: "/accounts/$accountId",
+  component: AccountDetailPage,
+});
+
 const familyRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/family",
@@ -99,7 +106,7 @@ const familyRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   loginRoute,
   setupRoute,
-  layoutRoute.addChildren([indexRoute, accountsRoute, familyRoute]),
+  layoutRoute.addChildren([indexRoute, accountsRoute, accountDetailRoute, familyRoute]),
 ]);
 
 export const router = createRouter({ routeTree });
