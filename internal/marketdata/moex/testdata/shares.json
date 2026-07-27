@@ -1,0 +1,10 @@
+{
+  "securities": {
+    "columns": ["SECID", "CURRENCYID", "PREVPRICE"],
+    "data": [
+      ["SBER", "SUR", 305.55],
+      ["GAZP", "SUR", null],
+      ["LKOH", "SUR", 1234.567890123456789]
+    ]
+  }
+}
