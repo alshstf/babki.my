@@ -30,6 +30,13 @@ const (
 
 var currencyRe = regexp.MustCompile(`^[A-Z]{3}$`)
 
+// maxAmountMinor caps |amount_minor| and fee_minor at 10^15 minor units
+// (≈10 trillion roubles) — far above any real portfolio, yet far enough from
+// math.MaxInt64 that summing a whole journal of such values cannot overflow.
+// Without the cap, a single amount_minor = math.MinInt64 poisons the FIFO
+// cost basis and wraps realized P&L.
+const maxAmountMinor int64 = 1_000_000_000_000_000
+
 // Service validates journal entries and guards journal consistency by
 // replaying the account's operations through the portfolio engine.
 type Service struct{ store *Store }
@@ -73,6 +80,14 @@ func validate(o Operation) error {
 	}
 	if o.FeeMinor < 0 {
 		return fmt.Errorf("%w: fee_minor must be >= 0", family.ErrValidation)
+	}
+	// Bounds are checked with explicit comparisons rather than an abs() so
+	// that math.MinInt64 (whose negation overflows) is rejected too.
+	if o.AmountMinor > maxAmountMinor || o.AmountMinor < -maxAmountMinor {
+		return fmt.Errorf("%w: amount_minor must be within ±%d", family.ErrValidation, maxAmountMinor)
+	}
+	if o.FeeMinor > maxAmountMinor {
+		return fmt.Errorf("%w: fee_minor must be <= %d", family.ErrValidation, maxAmountMinor)
 	}
 
 	switch o.Type {
@@ -135,6 +150,13 @@ func (s *Service) checkJournal(ctx context.Context, spaceID, accountID uuid.UUID
 	if err != nil {
 		return err
 	}
+	return checkJournalOps(ops, add, removeIDs)
+}
+
+// checkJournalOps is checkJournal over an already-loaded journal, so a caller
+// that has fetched the account's operations for another reason (see
+// CreateTransfer) does not pay for a second round trip.
+func checkJournalOps(ops []Operation, add []Operation, removeIDs map[uuid.UUID]bool) error {
 	journal := make([]Operation, 0, len(ops)+len(add))
 	for _, o := range ops {
 		if !removeIDs[o.ID] {
@@ -155,6 +177,20 @@ func (s *Service) checkJournal(ctx context.Context, spaceID, accountID uuid.UUID
 		return fmt.Errorf("%w: %v", ErrInconsistent, err)
 	}
 	return nil
+}
+
+// journalUpTo returns the prefix of ops that occurred on or before day —
+// the state of the journal a transfer dated day is replayed against.
+// Same-day operations are kept: within a date the engine orders by
+// created_at, and a newly created operation is the youngest of its date.
+func journalUpTo(ops []Operation, day time.Time) []Operation {
+	out := make([]Operation, 0, len(ops))
+	for _, o := range ops {
+		if !o.OccurredOn.After(day) {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 // mapWriteError translates pgconn constraint violations from Store.Create
@@ -222,8 +258,19 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 	cost := int64(0)
 	if p.CostMinorOverride != nil {
 		cost = *p.CostMinorOverride
+		if cost < 0 || cost > maxAmountMinor {
+			return Operation{}, Operation{}, fmt.Errorf("%w: cost_minor must be within 0..%d", family.ErrValidation, maxAmountMinor)
+		}
 	} else {
-		cost, err = portfolio.ReleasedCost(sourceJournal, p.InstrumentID, p.Quantity)
+		// The basis must come from the journal as it stood on the transfer's
+		// own date, not from the end state: a backdated transfer is replayed
+		// by the engine at its chronological place, where the FIFO front is
+		// different. Folding the whole journal here would capture the basis
+		// of lots bought (or left over after sells) *after* the transfer and
+		// mint cost out of thin air. Same-date operations count as preceding,
+		// matching checkJournalOps, where the candidate sorts last within its
+		// own date.
+		cost, err = portfolio.ReleasedCost(journalUpTo(sourceJournal, p.OccurredOn), p.InstrumentID, p.Quantity)
 		if err != nil {
 			return Operation{}, Operation{}, fmt.Errorf("%w: %v", ErrInconsistent, err)
 		}
@@ -245,7 +292,7 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 	// history), the destination gains a fresh lot (always consistent on its
 	// own, but checked for uniformity and to catch a same-account edge case
 	// earlier logic might have missed).
-	if err := s.checkJournal(ctx, spaceID, p.FromAccountID, []Operation{outOp}, nil); err != nil {
+	if err := checkJournalOps(sourceJournal, []Operation{outOp}, nil); err != nil {
 		return Operation{}, Operation{}, err
 	}
 	if err := s.checkJournal(ctx, spaceID, p.ToAccountID, []Operation{inOp}, nil); err != nil {

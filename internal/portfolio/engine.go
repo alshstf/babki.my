@@ -9,6 +9,19 @@
 // transfer_in operation. Editing the source account's earlier history later
 // does not retroactively adjust an existing transfer's basis — a known and
 // accepted MVP simplification.
+//
+// A position's currency is fixed by the first operation that touches the
+// instrument in that account; every later operation for the same instrument
+// must repeat it. Minor amounts of different currencies are never mixed into
+// one int64.
+//
+// No double counting with account summaries: positions computed here are
+// NOT part of GET /api/v1/summary. Until plan 4, account summaries are built
+// exclusively from manually entered balances (table account_balances), so an
+// instrument's value never lands in the family totals twice — once as a
+// position and once inside a brokerage balance. Switching brokerage accounts
+// over to a computed "positions + cash" valuation is planned together with
+// market quotes; only then do the two views merge.
 package portfolio
 
 import (
@@ -89,13 +102,23 @@ func (p *Position) addLot(qty decimal.Decimal, costMinor int64) {
 // Compute folds the journal into positions. See package doc for semantics.
 func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 	positions := make(map[uuid.UUID]*Position)
-	get := func(o Operation) *Position {
+	// get returns the position for the operation's instrument, creating it on
+	// first sight. The currency of that first operation becomes the position's
+	// currency and every later operation must match it: minor amounts of two
+	// currencies summed into one int64 would be silent corruption, and the
+	// service layer only validates the ISO-4217 shape, not consistency.
+	get := func(o Operation) (*Position, error) {
 		p, ok := positions[*o.InstrumentID]
 		if !ok {
 			p = &Position{InstrumentID: *o.InstrumentID, Currency: o.Currency}
 			positions[*o.InstrumentID] = p
+			return p, nil
 		}
-		return p
+		if o.Currency != p.Currency {
+			return nil, badOp(o, fmt.Sprintf("currency %s does not match position currency %s for instrument %s",
+				o.Currency, p.Currency, o.InstrumentID))
+		}
+		return p, nil
 	}
 
 	for _, o := range ops {
@@ -122,7 +145,10 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			continue
 		}
 
-		p := get(o)
+		p, err := get(o)
+		if err != nil {
+			return nil, err
+		}
 		switch o.Type {
 		case TypeBuy:
 			if o.AmountMinor >= 0 {

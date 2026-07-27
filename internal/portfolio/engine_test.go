@@ -213,6 +213,47 @@ func TestClosedPositionKeptInResult(t *testing.T) {
 	}
 }
 
+// TestCurrencyMismatchRejected pins the per-position currency invariant: the
+// first operation fixes the currency, and mixing another one into the same
+// position would sum unrelated minor units into a single int64.
+func TestCurrencyMismatchRejected(t *testing.T) {
+	inCurrency := func(o portfolio.Operation, cur string) portfolio.Operation {
+		o.Currency = cur
+		return o
+	}
+	buyRUB := op(portfolio.TypeBuy, 1, &sber, "10", "100", -100_000, 0)
+
+	for name, bad := range map[string]portfolio.Operation{
+		"dividend in another currency": inCurrency(op(portfolio.TypeDividend, 2, &sber, "", "", 3_000, 0), "USD"),
+		"sell in another currency":     inCurrency(op(portfolio.TypeSell, 3, &sber, "10", "120", 120_000, 0), "EUR"),
+		"buy in another currency":      inCurrency(op(portfolio.TypeBuy, 4, &sber, "1", "100", -10_000, 0), "USD"),
+		"transfer_in another currency": inCurrency(op(portfolio.TypeTransferIn, 5, &sber, "1", "", 10_000, 0), "USD"),
+	} {
+		_, err := portfolio.Compute([]portfolio.Operation{buyRUB, bad})
+		if !errors.Is(err, portfolio.ErrBadOperation) {
+			t.Errorf("%s: err = %v, want ErrBadOperation", name, err)
+			continue
+		}
+		// The message must name both currencies and the instrument so the
+		// user can find the offending row.
+		for _, want := range []string{"RUB", bad.Currency, sber.String()} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: error %q missing %q", name, err, want)
+			}
+		}
+	}
+
+	// A different instrument may of course carry a different currency.
+	usdBuy := inCurrency(op(portfolio.TypeBuy, 2, &lkoh, "1", "100", -10_000, 0), "USD")
+	pos, err := portfolio.Compute([]portfolio.Operation{buyRUB, usdBuy})
+	if err != nil {
+		t.Fatalf("per-instrument currencies: %v", err)
+	}
+	if pos[sber].Currency != "RUB" || pos[lkoh].Currency != "USD" {
+		t.Errorf("currencies = %s/%s, want RUB/USD", pos[sber].Currency, pos[lkoh].Currency)
+	}
+}
+
 func TestBadOperations(t *testing.T) {
 	for name, bad := range map[string]portfolio.Operation{
 		"buy without qty":      op(portfolio.TypeBuy, 1, &sber, "", "100", -1000, 0),

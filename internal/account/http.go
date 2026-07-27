@@ -222,6 +222,15 @@ func (h *Handler) handleSetBalance(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, toAPI(a))
 }
 
+// handleSummary totals the space's accounts by currency.
+//
+// The totals come exclusively from manually entered balances
+// (account_balances, see Store.SummaryByCurrency). Positions computed by the
+// portfolio engine from the operations journal are deliberately NOT added
+// here: a brokerage account's securities are already reflected in the balance
+// the user records for it, so counting positions on top would double count.
+// Valuing brokerage accounts as "positions + cash" is planned together with
+// market quotes in plan 4; until then the two views stay separate.
 func (h *Handler) handleSummary(w http.ResponseWriter, r *http.Request) {
 	p, _ := family.PrincipalFromContext(r.Context())
 	totals, err := h.store.SummaryByCurrency(r.Context(), p.SpaceID)

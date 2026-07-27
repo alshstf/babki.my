@@ -2,6 +2,7 @@ package operation_test
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -68,6 +69,24 @@ func TestServiceValidation(t *testing.T) {
 		"positive tax amount": func(o operation.Operation) operation.Operation {
 			o.Type = operation.TypeTax
 			o.AmountMinor = 100
+			return o
+		},
+		// Bounds: an unbounded amount_minor poisons the cost basis and wraps
+		// realized P&L on the next addition.
+		"amount_minor at MinInt64": func(o operation.Operation) operation.Operation {
+			o.AmountMinor = math.MinInt64
+			return o
+		},
+		"amount_minor beyond cap": func(o operation.Operation) operation.Operation {
+			o.Type = operation.TypeDeposit
+			o.InstrumentID = nil
+			o.Quantity = nil
+			o.Price = nil
+			o.AmountMinor = 1_000_000_000_000_001
+			return o
+		},
+		"fee_minor beyond cap": func(o operation.Operation) operation.Operation {
+			o.FeeMinor = 1_000_000_000_000_001
 			return o
 		},
 	}
@@ -167,6 +186,56 @@ func TestServiceTransfer(t *testing.T) {
 		OccurredOn: date("2026-07-06"),
 	}); !errors.Is(err, family.ErrValidation) {
 		t.Errorf("same account: %v", err)
+	}
+}
+
+// TestTransferBackdatedUsesChronologicalBasis pins the fix for a basis leak:
+// a transfer dated before existing operations must take its FIFO cost from
+// the journal as of its own date, not from the journal's end state.
+//
+// Source journal: buy 10 @ 100.00 (01.07), buy 10 @ 900.00 (03.07),
+// sell 10 (20.07) — the sell consumes lot 1 entirely.
+// Transferring 5 units backdated to 05.07 must release from lot 1, which is
+// still intact on that date: floor(100000 * 5 / 10) = 50000.
+// Folding the whole journal instead would leave only lot 2 in front and
+// release floor(900000 * 5 / 10) = 450000 — 400000 minor units of cost basis
+// out of thin air.
+func TestTransferBackdatedUsesChronologicalBasis(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	buy1 := operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-07-01"), Quantity: dec("10"), Price: dec("100"),
+		AmountMinor: -100_000, Currency: "RUB",
+	}
+	buy2 := buy1
+	buy2.OccurredOn = date("2026-07-03")
+	buy2.Price = dec("900")
+	buy2.AmountMinor = -900_000
+	sell := buy1
+	sell.Type = operation.TypeSell
+	sell.OccurredOn = date("2026-07-20")
+	sell.Price = dec("1000")
+	sell.AmountMinor = 1_000_000
+	for _, op := range []operation.Operation{buy1, buy2, sell} {
+		if _, err := svc.Create(f.ctx, f.spaceID, op); err != nil {
+			t.Fatalf("seed %s %s: %v", op.Type, op.OccurredOn.Format("2006-01-02"), err)
+		}
+	}
+
+	out, in, err := svc.CreateTransfer(f.ctx, f.spaceID, operation.TransferParams{
+		FromAccountID: f.accountID, ToAccountID: f.account2ID,
+		InstrumentID: f.sberID, Quantity: decimal.RequireFromString("5"),
+		OccurredOn: date("2026-07-05"),
+	})
+	if err != nil {
+		t.Fatalf("backdated transfer: %v", err)
+	}
+	const wantCost = int64(50_000)
+	if out.AmountMinor != wantCost || in.AmountMinor != wantCost {
+		t.Errorf("cost = %d/%d, want %d/%d (end-state basis would be 450000)",
+			out.AmountMinor, in.AmountMinor, wantCost, wantCost)
 	}
 }
 

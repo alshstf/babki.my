@@ -265,7 +265,6 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/Operation" }
         "401": { $ref: "#/components/responses/Error" }
-        "404": { $ref: "#/components/responses/Error" }
   /api/v1/operations:
     post:
       operationId: createOperation
@@ -302,6 +301,7 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/operations/{operationId}:
     delete:
       operationId: deleteOperation
@@ -326,7 +326,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/PositionsResponse" }
         "401": { $ref: "#/components/responses/Error" }
-        "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
 components:
   responses:
