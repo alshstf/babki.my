@@ -2,17 +2,21 @@ import { Link, useParams } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { useSession } from "@/api/session";
 import { useAccounts } from "@/api/accounts";
 import { usePositions } from "@/api/positions";
 import { formatMinor } from "@/lib/money";
 import { PositionsTable } from "./positions-table";
+import { OperationsTable } from "./operations-table";
 
 export function AccountDetailPage() {
   const { t } = useTranslation();
   const { accountId } = useParams({ from: "/app/accounts/$accountId" });
+  const { data: session } = useSession();
   const accounts = useAccounts();
   const account = accounts.data?.find((a) => a.id === accountId);
   const positions = usePositions(accountId, !!account);
+  const isViewer = session?.role === "viewer";
 
   if (accounts.isLoading) {
     return <div className="text-muted-foreground">{t("app.loading")}</div>;
@@ -81,10 +85,8 @@ export function AccountDetailPage() {
       </div>
 
       <div className="grid gap-2">
-        {/* Journal (operations list) is added in Task 3; placeholder for now. */}
-        <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">
-          {t("operations.comingSoon")}
-        </div>
+        <h2 className="text-lg font-semibold">{t("operations.title")}</h2>
+        <OperationsTable accountId={accountId} canDelete={!isViewer} />
       </div>
     </div>
   );

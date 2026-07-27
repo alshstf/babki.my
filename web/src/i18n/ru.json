@@ -94,7 +94,36 @@
     "frozen": "заморожен"
   },
   "operations": {
-    "comingSoon": "Журнал операций появится здесь"
+    "title": "Операции",
+    "empty": "Операций пока нет",
+    "loadMore": "Показать еще",
+    "columns": {
+      "date": "Дата",
+      "type": "Тип",
+      "instrument": "Инструмент",
+      "qty": "Кол-во × Цена",
+      "amount": "Сумма",
+      "fee": "Комиссия"
+    },
+    "delete": "Удалить",
+    "deleteConfirm": "Удалить операцию от {{date}}?",
+    "deleteConflict": "Нельзя удалить: без нее более поздние операции станут некорректными"
+  },
+  "operationTypes": {
+    "buy": "покупка",
+    "sell": "продажа",
+    "deposit": "пополнение",
+    "withdrawal": "вывод",
+    "dividend": "дивиденд",
+    "coupon": "купон",
+    "amortization": "амортизация",
+    "fee": "комиссия",
+    "tax": "налог",
+    "transfer_in": "перевод в",
+    "transfer_out": "перевод из",
+    "split": "сплит",
+    "interest": "проценты",
+    "conversion": "конвертация"
   },
   "family": {
     "title": "Семья",
