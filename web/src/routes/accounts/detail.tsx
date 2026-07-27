@@ -11,7 +11,8 @@ export function AccountDetailPage() {
   const { t } = useTranslation();
   const { accountId } = useParams({ from: "/app/accounts/$accountId" });
   const accounts = useAccounts();
-  const positions = usePositions(accountId);
+  const account = accounts.data?.find((a) => a.id === accountId);
+  const positions = usePositions(accountId, !!account);
 
   if (accounts.isLoading) {
     return <div className="text-muted-foreground">{t("app.loading")}</div>;
@@ -23,8 +24,6 @@ export function AccountDetailPage() {
       </Alert>
     );
   }
-
-  const account = accounts.data?.find((a) => a.id === accountId);
 
   if (!account) {
     return (
@@ -84,7 +83,7 @@ export function AccountDetailPage() {
       <div className="grid gap-2">
         {/* Journal (operations list) is added in Task 3; placeholder for now. */}
         <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">
-          TODO
+          {t("operations.comingSoon")}
         </div>
       </div>
     </div>

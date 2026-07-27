@@ -5,7 +5,7 @@ import type { components } from "./schema";
 
 export type Position = components["schemas"]["Position"];
 
-export function usePositions(accountId: string) {
+export function usePositions(accountId: string, enabled = true) {
   return useQuery({
     queryKey: ["positions", accountId],
     queryFn: async (): Promise<Position[]> => {
@@ -15,5 +15,6 @@ export function usePositions(accountId: string) {
       if (!data) throw apiError(response, error);
       return data.positions;
     },
+    enabled,
   });
 }
