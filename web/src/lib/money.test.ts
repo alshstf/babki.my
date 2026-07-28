@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { formatMinor, formatMinorCompact, multiplyToMinor, parseToMinor, isPositiveDecimal } from "./money";
+import {
+  formatMinor,
+  formatMinorCompact,
+  formatPrice,
+  multiplyToMinor,
+  parseToMinor,
+  isPositiveDecimal,
+} from "./money";
 
 // NBSP-insensitive compare: Intl uses non-breaking spaces.
 const norm = (s: string) => s.replace(/[  ]/g, " ");
@@ -47,6 +54,27 @@ describe("parseToMinor", () => {
   });
   it.each([["abc"], [""], ["12,34,56"], ["1.2.3"]])("rejects %s", (input) => {
     expect(parseToMinor(input)).toBeNull();
+  });
+});
+
+describe("formatPrice", () => {
+  it.each([
+    ["305.567", "305,57"],
+    ["100", "100,00"],
+  ])("formats %s as %s", (input, want) => {
+    expect(norm(formatPrice(input) ?? "")).toBe(want);
+  });
+
+  it.each([[""], ["-5"], ["1e5"], ["abc"], ["1,5"]])("rejects %s", (input) => {
+    expect(formatPrice(input)).toBeNull();
+  });
+
+  // TODO(sub-cent pricing): a price below half a kopeck rounds to "0,00",
+  // silently dropping the value instead of surfacing it. This pins the
+  // CURRENT behavior, not the desired one — a product decision on how to
+  // display sub-cent prices is still open.
+  it("rounds a sub-cent price down to 0,00 (documented, not desired)", () => {
+    expect(norm(formatPrice("0.0001") ?? "")).toBe("0,00");
   });
 });
 

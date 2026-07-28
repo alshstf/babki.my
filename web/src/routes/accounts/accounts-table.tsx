@@ -11,6 +11,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { formatMinor } from "@/lib/money";
+import { formatDate } from "@/lib/dates";
 import type { AccountWithBalance } from "@/api/accounts";
 
 export function AccountsTable({
@@ -80,7 +81,7 @@ export function AccountsTable({
                       {formatMinor(account.balance.amount_minor, account.currency)}
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      {account.balance.as_of}
+                      {formatDate(account.balance.as_of)}
                     </div>
                   </>
                 ) : (
