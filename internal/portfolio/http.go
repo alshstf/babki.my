@@ -2,8 +2,10 @@ package portfolio
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/google/uuid"
@@ -41,17 +43,30 @@ type quoteStore interface {
 	LatestQuotes(ctx context.Context, instrumentIDs []uuid.UUID) (map[uuid.UUID]marketdata.Quote, error)
 }
 
+// converter is the subset of *marketdata.Converter this handler needs: a
+// single fx conversion, used to bring a market valuation denominated in a
+// different currency than the position (see toAPI) into the position's own
+// currency. Local interface (mirroring journalStore/quoteStore) so tests can
+// inject a fake in place of a real *marketdata.Converter to control exactly
+// which currency pairs have a resolvable rate, including forcing
+// marketdata.ErrNoRate — *marketdata.Converter satisfies this structurally,
+// no conversion needed at the call site.
+type converter interface {
+	Convert(ctx context.Context, amountMinor int64, from, to string, on time.Time) (int64, error)
+}
+
 // Handler exposes computed account positions over HTTP.
 type Handler struct {
 	ops         journalStore
 	instruments *instrument.Store
 	quotes      quoteStore
+	conv        converter
 	auth        *family.Auth
 	sm          *scs.SessionManager
 }
 
-func NewHandler(ops journalStore, instruments *instrument.Store, quotes quoteStore, auth *family.Auth, sm *scs.SessionManager) *Handler {
-	return &Handler{ops: ops, instruments: instruments, quotes: quotes, auth: auth, sm: sm}
+func NewHandler(ops journalStore, instruments *instrument.Store, quotes quoteStore, conv converter, auth *family.Auth, sm *scs.SessionManager) *Handler {
+	return &Handler{ops: ops, instruments: instruments, quotes: quotes, conv: conv, auth: auth, sm: sm}
 }
 
 func (h *Handler) Mount(srv *httpserver.Server) {
@@ -141,7 +156,15 @@ func marketValue(instType instrument.Type, faceValueMinor *int64, faceCurrency *
 	}
 }
 
-func toAPI(p *Position, inst instrument.Instrument, quotes map[uuid.UUID]marketdata.Quote) apitypes.Position {
+// toAPI builds one position's API representation, including its market
+// valuation and — when that valuation isn't already in the position's own
+// currency — an fx conversion into it (conv.Convert is only ever called
+// when that conversion is actually needed).
+//
+// err is non-nil only for a genuine conversion failure (a Store/DB error, a
+// canceled context) — never for marketdata.ErrNoRate, which is an expected,
+// handled outcome (see below), not a request failure.
+func toAPI(ctx context.Context, conv converter, p *Position, inst instrument.Instrument, quotes map[uuid.UUID]marketdata.Quote) (apitypes.Position, error) {
 	out := apitypes.Position{
 		Instrument:       instrumentToAPI(inst),
 		Quantity:         p.Quantity.String(),
@@ -151,28 +174,68 @@ func toAPI(p *Position, inst instrument.Instrument, quotes map[uuid.UUID]marketd
 		IncomeMinor:      p.IncomeMinor,
 		FeesMinor:        p.FeesMinor,
 	}
-	if q, found := quotes[p.InstrumentID]; found {
-		if minor, currency, ok := marketValue(inst.Type, inst.FaceValueMinor, inst.FaceCurrency, p.Quantity, q); ok {
-			out.MarketValueMinor = nullable.NewNullableWithValue(minor)
-			out.MarketValueCurrency = nullable.NewNullableWithValue(currency)
-			out.Price = nullable.NewNullableWithValue(q.Price.String())
-			out.PriceOn = nullable.NewNullableWithValue(q.On.Format("2006-01-02"))
-			// Unrealized P&L is only meaningful when the market valuation is
-			// denominated in the position's own currency: for a bond, currency
-			// is market_value_currency's face_currency, which can legitimately
-			// differ from the position's currency (the instrument's own
-			// trading currency, e.g. RUB for an OFZ quoted/settled in RUB but
-			// with a USD face value). Subtracting cost_minor (in currency)
-			// from a market value in a different currency would silently mix
-			// currencies into a meaningless number, so leave it null instead.
-			// Both operands are already integer minor units of one currency
-			// here, so this is exact integer subtraction — no rounding.
-			if currency == p.Currency {
-				out.UnrealizedPnlMinor = nullable.NewNullableWithValue(minor - p.CostMinor)
-			}
+	q, found := quotes[p.InstrumentID]
+	if !found {
+		return out, nil
+	}
+	minor, currency, ok := marketValue(inst.Type, inst.FaceValueMinor, inst.FaceCurrency, p.Quantity, q)
+	if !ok {
+		return out, nil
+	}
+	out.Price = nullable.NewNullableWithValue(q.Price.String())
+	out.PriceOn = nullable.NewNullableWithValue(q.On.Format("2006-01-02"))
+
+	// A raw market valuation can be denominated in a currency other than the
+	// position's own (for a bond, market_value_currency is the face value's
+	// currency — see marketValue's doc comment — which can legitimately
+	// differ from the position's trading/settlement currency, e.g. RUB for
+	// an OFZ with a USD face value). Left as-is, "Cost" and "Рыночная" would
+	// sit in two different currencies in the same row, and subtracting one
+	// from the other for unrealized_pnl_minor would silently mix them into a
+	// meaningless number.
+	//
+	// Rather than leave that valuation unusable, convert it into the
+	// position's own currency (never the space's base currency — the goal is
+	// comparability with cost_minor, which is always in p.Currency, not with
+	// other rows) using today's fx rate (time.Now().UTC(): "today" is the
+	// only sensible answer for "what is this holding worth right now", as
+	// opposed to some historical rate). The original figure is preserved in
+	// market_value_source_currency/_minor purely for transparency (e.g. a UI
+	// tooltip) — it plays no further part in the computation below.
+	if currency != p.Currency {
+		converted, err := conv.Convert(ctx, minor, currency, p.Currency, time.Now().UTC())
+		switch {
+		case err == nil:
+			out.MarketValueSourceCurrency = nullable.NewNullableWithValue(currency)
+			out.MarketValueSourceMinor = nullable.NewNullableWithValue(minor)
+			minor, currency = converted, p.Currency
+		case errors.Is(err, marketdata.ErrNoRate):
+			// No rate to convert with: fall back to publishing the raw,
+			// unconverted figure (as before this change) rather than hiding
+			// it. market_value_source_* stay null — nothing was converted.
+			// unrealized_pnl_minor is left null below, same as any other
+			// currency mismatch.
+		default:
+			// A genuine failure (DB error, canceled context) — not "no rate
+			// available" — must not be silently swallowed into "no
+			// conversion happened", which would misrepresent an outage as a
+			// normal missing-rate case. Propagate it like any other
+			// request-time error (see handleList).
+			return apitypes.Position{}, err
 		}
 	}
-	return out
+
+	out.MarketValueMinor = nullable.NewNullableWithValue(minor)
+	out.MarketValueCurrency = nullable.NewNullableWithValue(currency)
+	// Both operands are now guaranteed to be in the same currency whenever
+	// this fires — either they always agreed (share/etf), or a successful
+	// conversion just brought market_value into p.Currency above — so this
+	// is exact integer subtraction on minor units, never a mix of
+	// currencies and never a rounding operation.
+	if currency == p.Currency {
+		out.UnrealizedPnlMinor = nullable.NewNullableWithValue(minor - p.CostMinor)
+	}
+	return out, nil
 }
 
 // handleList computes an account's positions by replaying its full
@@ -230,7 +293,12 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 			family.WriteError(w, err)
 			return
 		}
-		out = append(out, toAPI(pos, inst, quotes))
+		apiPos, err := toAPI(r.Context(), h.conv, pos, inst, quotes)
+		if err != nil {
+			family.WriteError(w, err)
+			return
+		}
+		out = append(out, apiPos)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Instrument.Name < out[j].Instrument.Name })
 

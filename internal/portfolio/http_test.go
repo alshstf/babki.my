@@ -37,6 +37,16 @@ type quoteStoreLike interface {
 	LatestQuotes(ctx context.Context, instrumentIDs []uuid.UUID) (map[uuid.UUID]marketdata.Quote, error)
 }
 
+// converterLike mirrors portfolio's unexported converter interface, for the
+// same reason quoteStoreLike does: it lets this external test package name
+// setupAPI's parameter type. A real *marketdata.Converter (backed by the
+// same pool as the rest of the fixture, so tests can seed fx_rates directly
+// via mdStore.UpsertFxRates and see them picked up here) satisfies it
+// structurally.
+type converterLike interface {
+	Convert(ctx context.Context, amountMinor int64, from, to string, on time.Time) (int64, error)
+}
+
 // setupAPI wires the full stack: family + account + instrument + operation +
 // portfolio modules, mirroring how cmd/babki/root.go's mountModules
 // assembles them (same fixture shape as operation/http_test.go's newAPI).
@@ -44,7 +54,7 @@ type quoteStoreLike interface {
 // provided by the caller (rather than created here) so tests that need
 // direct DB access for setup, or that just want the default real
 // marketdata.Store, can share the same pool the HTTP stack runs on.
-func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike) (string, *http.Client) {
+func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv converterLike) (string, *http.Client) {
 	t.Helper()
 	if err := db.Migrate(context.Background(), pool); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -63,7 +73,7 @@ func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike) (string, 
 	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(marketdata.NewStore(pool)), auth, sm).Mount(srv)
 	instrument.NewHandler(instStore, auth, sm).Mount(srv)
 	operation.NewHandler(opSvc, opStore, auth, sm).Mount(srv)
-	portfolio.NewHandler(opStore, instStore, quotes, auth, sm).Mount(srv)
+	portfolio.NewHandler(opStore, instStore, quotes, conv, auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -78,13 +88,15 @@ func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike) (string, 
 	return ts.URL, client
 }
 
-// newAPI is setupAPI backed by a real (empty) marketdata.Store, for tests
-// that don't care about market valuation: no quotes ever exist, so all
-// positions come back with null market_value_minor/price/price_on.
+// newAPI is setupAPI backed by a real (empty) marketdata.Store and a real,
+// unseeded Converter, for tests that don't care about market valuation: no
+// quotes ever exist, so all positions come back with null
+// market_value_minor/price/price_on regardless of the converter.
 func newAPI(t *testing.T) (string, *http.Client) {
 	t.Helper()
 	pool := testdb.New(t)
-	return setupAPI(t, pool, marketdata.NewStore(pool))
+	mdStore := marketdata.NewStore(pool)
+	return setupAPI(t, pool, mdStore, marketdata.NewConverter(mdStore))
 }
 
 func do(t *testing.T, c *http.Client, method, url, body string) *http.Response {
@@ -154,18 +166,20 @@ type instrumentResp struct {
 }
 
 type positionResp struct {
-	Instrument          instrumentResp `json:"instrument"`
-	Quantity            string         `json:"quantity"`
-	CostMinor           int64          `json:"cost_minor"`
-	Currency            string         `json:"currency"`
-	RealizedPnlMinor    int64          `json:"realized_pnl_minor"`
-	IncomeMinor         int64          `json:"income_minor"`
-	FeesMinor           int64          `json:"fees_minor"`
-	MarketValueMinor    *int64         `json:"market_value_minor"`
-	MarketValueCurrency *string        `json:"market_value_currency"`
-	Price               *string        `json:"price"`
-	PriceOn             *string        `json:"price_on"`
-	UnrealizedPnlMinor  *int64         `json:"unrealized_pnl_minor"`
+	Instrument                instrumentResp `json:"instrument"`
+	Quantity                  string         `json:"quantity"`
+	CostMinor                 int64          `json:"cost_minor"`
+	Currency                  string         `json:"currency"`
+	RealizedPnlMinor          int64          `json:"realized_pnl_minor"`
+	IncomeMinor               int64          `json:"income_minor"`
+	FeesMinor                 int64          `json:"fees_minor"`
+	MarketValueMinor          *int64         `json:"market_value_minor"`
+	MarketValueCurrency       *string        `json:"market_value_currency"`
+	MarketValueSourceCurrency *string        `json:"market_value_source_currency"`
+	MarketValueSourceMinor    *int64         `json:"market_value_source_minor"`
+	Price                     *string        `json:"price"`
+	PriceOn                   *string        `json:"price_on"`
+	UnrealizedPnlMinor        *int64         `json:"unrealized_pnl_minor"`
 }
 
 type positionsResp struct {
@@ -348,7 +362,14 @@ func (f *fakeQuoteStore) LatestQuotes(_ context.Context, instrumentIDs []uuid.UU
 func TestPositionsMarketValuation(t *testing.T) {
 	pool := testdb.New(t)
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
-	url, c := setupAPI(t, pool, quotes)
+	// No fx_rates seeded on this pool: the bond fixture below deliberately
+	// has a face_currency (USD) that differs from its position currency
+	// (RUB), so its market valuation exercises the no-rate-available
+	// fallback path (see toAPI) — the same null-unrealized/raw-currency
+	// behavior this test already asserted before conversion existed. The
+	// conversion-succeeds path has its own dedicated test,
+	// TestPositionsMarketValueConvertsToPositionCurrency.
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(marketdata.NewStore(pool)))
 
 	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
 
@@ -457,6 +478,15 @@ func TestPositionsMarketValuation(t *testing.T) {
 	if sharePos.UnrealizedPnlMinor == nil || *sharePos.UnrealizedPnlMinor != 1 {
 		t.Errorf("share unrealized_pnl_minor = %v, want 1", sharePos.UnrealizedPnlMinor)
 	}
+	// Regression: market_value_currency already equals the position's own
+	// currency here (RUB == RUB), so no conversion ever happens and the
+	// source fields — which exist purely to disclose a conversion that
+	// occurred — must stay null. Wiring in a converter must not perturb the
+	// already-matching-currency case.
+	if sharePos.MarketValueSourceCurrency != nil || sharePos.MarketValueSourceMinor != nil {
+		t.Errorf("share market_value_source_currency/_minor = %v/%v, want both null (currency already matched, no conversion)",
+			sharePos.MarketValueSourceCurrency, sharePos.MarketValueSourceMinor)
+	}
 
 	bondPos, ok := byID[bond.ID]
 	if !ok {
@@ -487,6 +517,15 @@ func TestPositionsMarketValuation(t *testing.T) {
 	if bondPos.UnrealizedPnlMinor != nil {
 		t.Errorf("bond unrealized_pnl_minor = %v, want null (market_value_currency USD != position currency RUB)", bondPos.UnrealizedPnlMinor)
 	}
+	// No USD->RUB fx_rates row exists on this test's pool, so the currency
+	// mismatch above hits the ErrNoRate fallback (see toAPI): market_value_*
+	// stay in the raw face_currency (USD) and, since no conversion actually
+	// happened, the source fields must stay null too — they are not just "the
+	// raw value repeated", they mean "a conversion occurred".
+	if bondPos.MarketValueSourceCurrency != nil || bondPos.MarketValueSourceMinor != nil {
+		t.Errorf("bond market_value_source_currency/_minor = %v/%v, want both null (no fx rate, nothing converted)",
+			bondPos.MarketValueSourceCurrency, bondPos.MarketValueSourceMinor)
+	}
 
 	noQuotePos, ok := byID[noQuote.ID]
 	if !ok {
@@ -505,6 +544,164 @@ func TestPositionsMarketValuation(t *testing.T) {
 	}
 }
 
+// pastOn returns a date safely before "today" (mirroring
+// account/http_summary_test.go's helper of the same name) so a seeded fx
+// rate is always found by Store.FxRateOn's nearest-earlier-date lookup
+// regardless of when the test actually runs, since production code converts
+// using time.Now().UTC() as the "on" date (see toAPI).
+func pastOn() time.Time {
+	return time.Now().UTC().AddDate(0, -1, 0).Truncate(24 * time.Hour)
+}
+
+// TestPositionsMarketValueConvertsToPositionCurrency is the owner-requested
+// fix at the center of this change: a bond whose raw market valuation
+// (face_currency) differs from its position's own currency must have that
+// valuation converted into the position's currency — via the real
+// marketdata.Converter, exercising an actual fx_rates round trip, not a
+// fake — rather than leaving unrealized_pnl_minor permanently null just
+// because a rate happens to exist.
+//
+// Manual arithmetic, chosen so every step is exact (no rounding to verify
+// separately from marketdata.Converter's own rounding tests):
+//
+//	bond: face_value_minor 100_000 (1_000.00 USD face), face_currency USD,
+//	      quantity 1, quote price 100.00 (=100% of face, i.e. priced at par)
+//	  market_value_source_minor (raw, USD) = 100_000 * (100.00/100) * 1
+//	                                       = 100_000  (= $1_000.00)
+//
+//	fx rate USD->RUB = 90 (RUB per 1 USD)
+//	  market_value_minor (converted, RUB) = 100_000 * 90 = 9_000_000
+//	                                      (= 90_000.00 RUB, i.e. $1_000 * 90)
+//
+//	buy 1 @ (amount_minor -80_000, fee 0) -> cost_minor = 80_000 (800.00 RUB)
+//	  unrealized_pnl_minor = 9_000_000 - 80_000 = 8_920_000 (89_200.00 RUB)
+//
+// If this test is run against a handler that still nulls out
+// market_value/unrealized_pnl on any currency mismatch (the pre-fix
+// behavior), every assertion below fails: market_value_minor would be
+// 100_000/USD instead of 9_000_000/RUB, unrealized_pnl_minor would be null
+// instead of 8_920_000, and the source fields wouldn't exist at all. That
+// was confirmed by hand during development (temporarily reverting toAPI's
+// conversion branch) before this test was finalized.
+func TestPositionsMarketValueConvertsToPositionCurrency(t *testing.T) {
+	pool := testdb.New(t)
+	mdStore := marketdata.NewStore(pool)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(mdStore))
+
+	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: pastOn(), Rate: decimal.RequireFromString("90"), Source: "test"},
+	}); err != nil {
+		t.Fatalf("seed fx rate: %v", err)
+	}
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
+	bond := createInstrument(t, c, url,
+		`{"type":"bond","name":"Облигация с конвертацией","ticker":"BONDFX","currency":"RUB","face_value_minor":100000,"face_currency":"USD"}`)
+	bondID, err := uuid.Parse(bond.ID)
+	if err != nil {
+		t.Fatalf("parse bond id: %v", err)
+	}
+	quotes.byInstrument[bondID] = marketdata.Quote{
+		InstrumentID: bondID, On: mustDate(t, "2026-07-21"),
+		Price: decimal.RequireFromString("100.00"), Currency: "RUB", Source: "test",
+	}
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-01","quantity":"1","price":"800",
+		"amount_minor":-80000,"currency":"RUB"}`, acc.ID, bond.ID))
+
+	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
+	}
+	var got positionsResp
+	decodeJSON(t, resp, &got)
+	if len(got.Positions) != 1 {
+		t.Fatalf("positions = %+v, want exactly 1", got.Positions)
+	}
+	p := got.Positions[0]
+
+	// market_value_minor/currency are now in the POSITION's currency (RUB),
+	// directly comparable to cost_minor — not the raw face_currency (USD).
+	if p.MarketValueMinor == nil || *p.MarketValueMinor != 9000000 {
+		t.Errorf("market_value_minor = %v, want 9000000 (converted to RUB)", p.MarketValueMinor)
+	}
+	if p.MarketValueCurrency == nil || *p.MarketValueCurrency != "RUB" {
+		t.Errorf("market_value_currency = %v, want RUB (the position's own currency, post-conversion)", p.MarketValueCurrency)
+	}
+	// The original, unconverted figure is preserved for transparency.
+	if p.MarketValueSourceCurrency == nil || *p.MarketValueSourceCurrency != "USD" {
+		t.Errorf("market_value_source_currency = %v, want USD (the raw face_currency valuation)", p.MarketValueSourceCurrency)
+	}
+	if p.MarketValueSourceMinor == nil || *p.MarketValueSourceMinor != 100000 {
+		t.Errorf("market_value_source_minor = %v, want 100000 (the raw, unconverted USD valuation)", p.MarketValueSourceMinor)
+	}
+	// unrealized_pnl_minor is now populated — both operands are in RUB.
+	if p.UnrealizedPnlMinor == nil || *p.UnrealizedPnlMinor != 8920000 {
+		t.Errorf("unrealized_pnl_minor = %v, want 8920000 (9000000 - 80000)", p.UnrealizedPnlMinor)
+	}
+}
+
+// TestPositionsMarketValueFallsBackWithoutRate is
+// TestPositionsMarketValueConvertsToPositionCurrency's negative twin: same
+// currency-mismatched bond, but with NO USD->RUB fx_rates row seeded on this
+// test's own pool, so marketdata.Converter.Convert resolves to ErrNoRate.
+// The handler must fall back to exactly the pre-conversion behavior — the
+// raw valuation in its own (face) currency, no unrealized P&L, no source
+// fields — rather than erroring the whole request or fabricating a rate.
+func TestPositionsMarketValueFallsBackWithoutRate(t *testing.T) {
+	pool := testdb.New(t)
+	mdStore := marketdata.NewStore(pool)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(mdStore))
+	// Deliberately no mdStore.UpsertFxRates call: no USD->RUB rate exists.
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
+	bond := createInstrument(t, c, url,
+		`{"type":"bond","name":"Облигация без курса","ticker":"BONDNORATE","currency":"RUB","face_value_minor":100000,"face_currency":"USD"}`)
+	bondID, err := uuid.Parse(bond.ID)
+	if err != nil {
+		t.Fatalf("parse bond id: %v", err)
+	}
+	quotes.byInstrument[bondID] = marketdata.Quote{
+		InstrumentID: bondID, On: mustDate(t, "2026-07-21"),
+		Price: decimal.RequireFromString("100.00"), Currency: "RUB", Source: "test",
+	}
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-01","quantity":"1","price":"800",
+		"amount_minor":-80000,"currency":"RUB"}`, acc.ID, bond.ID))
+
+	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
+	}
+	var got positionsResp
+	decodeJSON(t, resp, &got)
+	if len(got.Positions) != 1 {
+		t.Fatalf("positions = %+v, want exactly 1", got.Positions)
+	}
+	p := got.Positions[0]
+
+	// Same raw figure as market_value_source_minor in the conversion test
+	// above (100000/USD) — but here it's published as market_value_minor
+	// itself, since nothing could be converted.
+	if p.MarketValueMinor == nil || *p.MarketValueMinor != 100000 {
+		t.Errorf("market_value_minor = %v, want 100000 (raw USD valuation, unconverted)", p.MarketValueMinor)
+	}
+	if p.MarketValueCurrency == nil || *p.MarketValueCurrency != "USD" {
+		t.Errorf("market_value_currency = %v, want USD (no rate to convert to RUB)", p.MarketValueCurrency)
+	}
+	if p.MarketValueSourceCurrency != nil || p.MarketValueSourceMinor != nil {
+		t.Errorf("market_value_source_currency/_minor = %v/%v, want both null (no conversion happened)",
+			p.MarketValueSourceCurrency, p.MarketValueSourceMinor)
+	}
+	if p.UnrealizedPnlMinor != nil {
+		t.Errorf("unrealized_pnl_minor = %v, want null (market_value_currency USD != position currency RUB, no rate to bridge them)", p.UnrealizedPnlMinor)
+	}
+}
+
 // TestPositionsBondWithoutFaceCurrencyHasNoValuation covers fix (2)'s edge
 // case: a bond that carries a face_value_minor but no face_currency (only
 // reachable by PATCHing face_currency to null after creation — POST
@@ -518,7 +715,7 @@ func TestPositionsMarketValuation(t *testing.T) {
 func TestPositionsBondWithoutFaceCurrencyHasNoValuation(t *testing.T) {
 	pool := testdb.New(t)
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
-	url, c := setupAPI(t, pool, quotes)
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(marketdata.NewStore(pool)))
 
 	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
 	bond := createInstrument(t, c, url,
@@ -572,7 +769,10 @@ func TestPositionsBondWithoutFaceCurrencyHasNoValuation(t *testing.T) {
 func TestPositionsUnrealizedPnl(t *testing.T) {
 	pool := testdb.New(t)
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
-	url, c := setupAPI(t, pool, quotes)
+	// No fx_rates seeded: the bond fixture below keeps exercising the
+	// no-rate fallback (see TestPositionsMarketValuation's comment) so
+	// unrealized_pnl_minor null on that currency mismatch stays covered.
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(marketdata.NewStore(pool)))
 
 	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
 
