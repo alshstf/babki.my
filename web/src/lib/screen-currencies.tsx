@@ -13,7 +13,7 @@
 // module-level store would leak the previous screen's count until some
 // screen remembered to clear it, which is exactly the class of bug this
 // design avoids by construction.
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 interface ScreenCurrencyCountContextValue {
   count: number;
@@ -24,8 +24,14 @@ const ScreenCurrencyCountContext = createContext<ScreenCurrencyCountContextValue
 
 export function ScreenCurrencyCountProvider({ children }: { children: ReactNode }) {
   const [count, setCount] = useState(0);
+  // Memoized so the context value is referentially stable across renders
+  // where `count` didn't change. Without it every AppLayout re-render hands
+  // consumers a brand-new object, and — because `ctx` is a dependency of
+  // useReportScreenCurrencies' effect — that effect would tear down and
+  // re-run on every such render, transiently setting the count to 0 and back.
+  const value = useMemo(() => ({ count, setCount }), [count]);
   return (
-    <ScreenCurrencyCountContext.Provider value={{ count, setCount }}>
+    <ScreenCurrencyCountContext.Provider value={value}>
       {children}
     </ScreenCurrencyCountContext.Provider>
   );

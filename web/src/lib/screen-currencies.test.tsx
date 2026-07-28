@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { memo, useState } from "react";
+import { act, render, screen } from "@testing-library/react";
 import {
   ScreenCurrencyCountProvider,
   useHasMultipleScreenCurrencies,
@@ -100,5 +101,46 @@ describe("screen-currencies", () => {
   it("is hidden outside of a provider (defensive default, no crash)", () => {
     render(<ToggleProbe />);
     expect(screen.getByTestId("toggle")).toHaveTextContent("hidden");
+  });
+
+  // The provider's context value must be referentially stable while `count`
+  // is unchanged. It isn't a cosmetic detail: `ctx` is a dependency of
+  // useReportScreenCurrencies' effect, so a fresh object on every render
+  // would tear down and re-run that effect (setting the count to 0 and back)
+  // on every unrelated re-render of AppLayout — and would re-render every
+  // consumer of the context along with it. This test pins that with a
+  // memoized consumer, which re-renders only if the context value's identity
+  // actually changed.
+  it("does not re-render consumers on an unrelated parent re-render", async () => {
+    let consumerRenders = 0;
+    const CountingConsumer = memo(function CountingConsumer() {
+      consumerRenders++;
+      useHasMultipleScreenCurrencies();
+      return null;
+    });
+    const MemoReporter = memo(Reporter);
+    const currencies = ["RUB", "USD"];
+
+    function Parent() {
+      // Stands in for any unrelated AppLayout state (e.g. the session query
+      // settling) that re-renders the provider without touching the count.
+      const [unrelated, setUnrelated] = useState(0);
+      return (
+        <ScreenCurrencyCountProvider>
+          <button onClick={() => setUnrelated(unrelated + 1)}>bump</button>
+          <CountingConsumer />
+          <MemoReporter currencies={currencies} />
+        </ScreenCurrencyCountProvider>
+      );
+    }
+
+    render(<Parent />);
+    const rendersBeforeBump = consumerRenders;
+
+    await act(async () => {
+      screen.getByRole("button").click();
+    });
+
+    expect(consumerRenders).toBe(rendersBeforeBump);
   });
 });

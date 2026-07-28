@@ -204,10 +204,10 @@ func toAPI(ctx context.Context, conv converter, p *Position, inst instrument.Ins
 	// position's own (for a bond, market_value_currency is the face value's
 	// currency — see marketValue's doc comment — which can legitimately
 	// differ from the position's trading/settlement currency, e.g. RUB for
-	// an OFZ with a USD face value). Left as-is, "Cost" and "Рыночная" would
-	// sit in two different currencies in the same row, and subtracting one
-	// from the other for unrealized_pnl_minor would silently mix them into a
-	// meaningless number.
+	// an OFZ with a USD face value). Left as-is, the cost and market-value
+	// columns would sit in two different currencies in the same row, and
+	// subtracting one from the other for unrealized_pnl_minor would silently
+	// mix them into a meaningless number.
 	//
 	// Rather than leave that valuation unusable, convert it into the
 	// position's own currency (never the space's base currency — the goal is

@@ -29,7 +29,7 @@ export function AccountsTable({
   // no fx rate" when an account's balance_in_base is null (see
   // resolveDisplayAmount).
   baseCurrency: string;
-  // Row actions menu is added in Task 5; header stays stable.
+  // Optional per-row actions menu (omitted for viewers, who can't mutate).
   onRowAction?: (account: AccountWithBalance) => React.ReactNode;
 }) {
   const { t } = useTranslation();
