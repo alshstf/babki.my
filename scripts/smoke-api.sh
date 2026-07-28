@@ -50,7 +50,9 @@ out=$(req GET /api/v1/setup/status)
 expect 200 "$(status)" "setup/status"
 SETUP_NEEDED="$(echo "$out" | jq -r .setup_needed)"
 
-if [ "$SETUP_NEEDED" = "false" ] && [ "${SMOKE_ALLOW_SEEDED:-}" != "1" ]; then
+# Fail closed: anything other than a literal "true" is treated as "not fresh",
+# so a malformed body can never let the mutating branch run unguarded.
+if [ "$SETUP_NEEDED" != "true" ] && [ "${SMOKE_ALLOW_SEEDED:-}" != "1" ]; then
 	echo "FAIL: instance is not fresh; set SMOKE_ALLOW_SEEDED=1 to run against seeded data"
 	exit 1
 fi
