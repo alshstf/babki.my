@@ -352,6 +352,9 @@ type Position struct {
 	// Quantity Decimal as string
 	Quantity         string `json:"quantity"`
 	RealizedPnlMinor int64  `json:"realized_pnl_minor"`
+
+	// UnrealizedPnlMinor market_value_minor minus cost_minor, i.e. the position's unrealized profit or loss; null when there is no market_value_minor, or when market_value_currency differs from currency (the subtraction would mix currencies)
+	UnrealizedPnlMinor nullable.Nullable[int64] `json:"unrealized_pnl_minor,omitempty"`
 }
 
 // PositionsResponse defines model for PositionsResponse.

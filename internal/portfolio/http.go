@@ -157,6 +157,19 @@ func toAPI(p *Position, inst instrument.Instrument, quotes map[uuid.UUID]marketd
 			out.MarketValueCurrency = nullable.NewNullableWithValue(currency)
 			out.Price = nullable.NewNullableWithValue(q.Price.String())
 			out.PriceOn = nullable.NewNullableWithValue(q.On.Format("2006-01-02"))
+			// Unrealized P&L is only meaningful when the market valuation is
+			// denominated in the position's own currency: for a bond, currency
+			// is market_value_currency's face_currency, which can legitimately
+			// differ from the position's currency (the instrument's own
+			// trading currency, e.g. RUB for an OFZ quoted/settled in RUB but
+			// with a USD face value). Subtracting cost_minor (in currency)
+			// from a market value in a different currency would silently mix
+			// currencies into a meaningless number, so leave it null instead.
+			// Both operands are already integer minor units of one currency
+			// here, so this is exact integer subtraction — no rounding.
+			if currency == p.Currency {
+				out.UnrealizedPnlMinor = nullable.NewNullableWithValue(minor - p.CostMinor)
+			}
 		}
 	}
 	return out

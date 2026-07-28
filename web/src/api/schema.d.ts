@@ -579,6 +579,11 @@ export interface components {
             price?: string | null;
             /** @description Date YYYY-MM-DD of the quote used for the valuation */
             price_on?: string | null;
+            /**
+             * Format: int64
+             * @description market_value_minor minus cost_minor, i.e. the position's unrealized profit or loss; null when there is no market_value_minor, or when market_value_currency differs from currency (the subtraction would mix currencies)
+             */
+            unrealized_pnl_minor?: number | null;
         };
         PositionsResponse: {
             positions: components["schemas"]["Position"][];

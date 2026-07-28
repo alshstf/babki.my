@@ -165,6 +165,7 @@ type positionResp struct {
 	MarketValueCurrency *string        `json:"market_value_currency"`
 	Price               *string        `json:"price"`
 	PriceOn             *string        `json:"price_on"`
+	UnrealizedPnlMinor  *int64         `json:"unrealized_pnl_minor"`
 }
 
 type positionsResp struct {
@@ -256,11 +257,12 @@ func TestPositionsEndpoint(t *testing.T) {
 		t.Errorf("acc1 position currency = %q, want RUB", p.Currency)
 	}
 	// newAPI backs this handler with a real, empty marketdata.Store — no
-	// quote was ever ingested for sber, so all three valuation fields must
-	// come back null (see TestPositionsMarketValuation for the priced
-	// cases).
-	if p.MarketValueMinor != nil || p.Price != nil || p.PriceOn != nil {
-		t.Errorf("acc1 position with no quote = %+v, want market_value_minor/price/price_on all null", p)
+	// quote was ever ingested for sber, so all three valuation fields (plus
+	// the unrealized P&L derived from them) must come back null (see
+	// TestPositionsMarketValuation and TestPositionsUnrealizedPnl for the
+	// priced cases).
+	if p.MarketValueMinor != nil || p.Price != nil || p.PriceOn != nil || p.UnrealizedPnlMinor != nil {
+		t.Errorf("acc1 position with no quote = %+v, want market_value_minor/price/price_on/unrealized_pnl_minor all null", p)
 	}
 
 	// --- acc2: no operations at all -> {"positions":[]}, not null ---
@@ -448,6 +450,13 @@ func TestPositionsMarketValuation(t *testing.T) {
 	if sharePos.PriceOn == nil || *sharePos.PriceOn != "2026-07-20" {
 		t.Errorf("share price_on = %v, want 2026-07-20", sharePos.PriceOn)
 	}
+	// unrealized = market_value_minor(10001) - cost_minor(10000) = 1. Both
+	// currencies are RUB (the quote's currency and the buy operation's
+	// currency agree for a share), so the field must be populated, not null
+	// — see TestPositionsUnrealizedPnl for dedicated profit/loss/null cases.
+	if sharePos.UnrealizedPnlMinor == nil || *sharePos.UnrealizedPnlMinor != 1 {
+		t.Errorf("share unrealized_pnl_minor = %v, want 1", sharePos.UnrealizedPnlMinor)
+	}
 
 	bondPos, ok := byID[bond.ID]
 	if !ok {
@@ -470,21 +479,29 @@ func TestPositionsMarketValuation(t *testing.T) {
 	if bondPos.PriceOn == nil || *bondPos.PriceOn != "2026-07-21" {
 		t.Errorf("bond price_on = %v, want 2026-07-21", bondPos.PriceOn)
 	}
+	// The bond's buy operation (and therefore position.Currency) is RUB, but
+	// market_value_currency is USD (face_currency) — different currencies,
+	// so unrealized_pnl_minor must be null even though market_value_minor
+	// itself is populated. See TestPositionsUnrealizedPnl for the dedicated
+	// case.
+	if bondPos.UnrealizedPnlMinor != nil {
+		t.Errorf("bond unrealized_pnl_minor = %v, want null (market_value_currency USD != position currency RUB)", bondPos.UnrealizedPnlMinor)
+	}
 
 	noQuotePos, ok := byID[noQuote.ID]
 	if !ok {
 		t.Fatalf("no position for noQuote instrument")
 	}
-	if noQuotePos.MarketValueMinor != nil || noQuotePos.MarketValueCurrency != nil || noQuotePos.Price != nil || noQuotePos.PriceOn != nil {
-		t.Errorf("noQuote position = %+v, want market_value_minor/market_value_currency/price/price_on all null", noQuotePos)
+	if noQuotePos.MarketValueMinor != nil || noQuotePos.MarketValueCurrency != nil || noQuotePos.Price != nil || noQuotePos.PriceOn != nil || noQuotePos.UnrealizedPnlMinor != nil {
+		t.Errorf("noQuote position = %+v, want market_value_minor/market_value_currency/price/price_on/unrealized_pnl_minor all null", noQuotePos)
 	}
 
 	customPos, ok := byID[custom.ID]
 	if !ok {
 		t.Fatalf("no position for custom instrument")
 	}
-	if customPos.MarketValueMinor != nil || customPos.MarketValueCurrency != nil || customPos.Price != nil || customPos.PriceOn != nil {
-		t.Errorf("custom position (quote present, unsupported type) = %+v, want market_value_minor/market_value_currency/price/price_on all null", customPos)
+	if customPos.MarketValueMinor != nil || customPos.MarketValueCurrency != nil || customPos.Price != nil || customPos.PriceOn != nil || customPos.UnrealizedPnlMinor != nil {
+		t.Errorf("custom position (quote present, unsupported type) = %+v, want market_value_minor/market_value_currency/price/price_on/unrealized_pnl_minor all null", customPos)
 	}
 }
 
@@ -539,8 +556,168 @@ func TestPositionsBondWithoutFaceCurrencyHasNoValuation(t *testing.T) {
 	}
 
 	p := got.Positions[0]
-	if p.MarketValueMinor != nil || p.MarketValueCurrency != nil || p.Price != nil || p.PriceOn != nil {
-		t.Errorf("bond without face_currency = %+v, want market_value_minor/market_value_currency/price/price_on all null", p)
+	if p.MarketValueMinor != nil || p.MarketValueCurrency != nil || p.Price != nil || p.PriceOn != nil || p.UnrealizedPnlMinor != nil {
+		t.Errorf("bond without face_currency = %+v, want market_value_minor/market_value_currency/price/price_on/unrealized_pnl_minor all null", p)
+	}
+}
+
+// TestPositionsUnrealizedPnl covers unrealized_pnl_minor end to end: a share
+// position in profit, one in a loss (unrealized_pnl_minor negative), a
+// position with no quote at all (null, same as market_value_minor), a bond
+// whose market valuation is denominated in a different currency than the
+// position (market_value_minor present, unrealized_pnl_minor still null),
+// and a fully closed position (quantity/cost both zero) that still has a
+// quote — its unrealized_pnl_minor must come back as the integer 0, not
+// null, since a valid subtraction (0 - 0) did happen.
+func TestPositionsUnrealizedPnl(t *testing.T) {
+	pool := testdb.New(t)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes)
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
+
+	profit := createInstrument(t, c, url, `{"type":"share","name":"В плюсе","ticker":"PROFIT","currency":"RUB"}`)
+	loss := createInstrument(t, c, url, `{"type":"share","name":"В минусе","ticker":"LOSS","currency":"RUB"}`)
+	noQuote := createInstrument(t, c, url, `{"type":"share","name":"Без котировки","ticker":"UPNOQ","currency":"RUB"}`)
+	bond := createInstrument(t, c, url,
+		`{"type":"bond","name":"Валютная облигация","ticker":"UPBOND","currency":"RUB","face_value_minor":100000,"face_currency":"USD"}`)
+	closed := createInstrument(t, c, url, `{"type":"share","name":"Закрыта","ticker":"UPCLOSED","currency":"RUB"}`)
+
+	profitID, err := uuid.Parse(profit.ID)
+	if err != nil {
+		t.Fatalf("parse profit id: %v", err)
+	}
+	lossID, err := uuid.Parse(loss.ID)
+	if err != nil {
+		t.Fatalf("parse loss id: %v", err)
+	}
+	bondID, err := uuid.Parse(bond.ID)
+	if err != nil {
+		t.Fatalf("parse bond id: %v", err)
+	}
+	closedID, err := uuid.Parse(closed.ID)
+	if err != nil {
+		t.Fatalf("parse closed id: %v", err)
+	}
+
+	// profit: buy 10 @ 100.00 (cost_minor = 100_000, no fee), quote 150.00.
+	// market_value_minor = 150.00 * 10 = 1_500.00 major = 150_000 minor.
+	// unrealized_pnl_minor = 150_000 - 100_000 = 50_000 (profit).
+	quotes.byInstrument[profitID] = marketdata.Quote{
+		InstrumentID: profitID, On: mustDate(t, "2026-07-22"),
+		Price: decimal.RequireFromString("150.00"), Currency: "RUB", Source: "test",
+	}
+	// loss: buy 10 @ 100.00 (cost_minor = 100_000, no fee), quote 60.00.
+	// market_value_minor = 60.00 * 10 = 600.00 major = 60_000 minor.
+	// unrealized_pnl_minor = 60_000 - 100_000 = -40_000 (loss, negative).
+	quotes.byInstrument[lossID] = marketdata.Quote{
+		InstrumentID: lossID, On: mustDate(t, "2026-07-22"),
+		Price: decimal.RequireFromString("60.00"), Currency: "RUB", Source: "test",
+	}
+	// bond: buy 100 @ 950.00 (cost_minor = 9_500_000, no fee), quote 95.20%
+	// of face. market_value_minor = 100_000 * 0.952 * 100 = 9_520_000, but
+	// denominated in face_currency USD while the position (from the buy
+	// operation's currency) is RUB — different currencies, so
+	// unrealized_pnl_minor must be null despite market_value_minor existing.
+	quotes.byInstrument[bondID] = marketdata.Quote{
+		InstrumentID: bondID, On: mustDate(t, "2026-07-22"),
+		Price: decimal.RequireFromString("95.20"), Currency: "RUB", Source: "test",
+	}
+	// closed: buy 4 @ 100.00 then sell 4 @ 100.00, fully closing the
+	// position. quantity = 0, cost_minor = 0. A quote still exists (70.00),
+	// so market_value_minor = 70.00 * 0 = 0 (ok=true, not absent). Both
+	// currencies are RUB, so unrealized_pnl_minor = 0 - 0 = 0: a real
+	// integer result, not null — this pins that closed positions still get
+	// a computed (zero) unrealized_pnl_minor rather than one suppressed by
+	// some qty==0 special case.
+	quotes.byInstrument[closedID] = marketdata.Quote{
+		InstrumentID: closedID, On: mustDate(t, "2026-07-22"),
+		Price: decimal.RequireFromString("70.00"), Currency: "RUB", Source: "test",
+	}
+	// noQuote deliberately gets no entry in quotes.byInstrument.
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-01","quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"RUB"}`, acc.ID, profit.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-01","quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"RUB"}`, acc.ID, loss.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-01","quantity":"5","price":"10",
+		"amount_minor":-5000,"currency":"RUB"}`, acc.ID, noQuote.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-01","quantity":"100","price":"950",
+		"amount_minor":-9500000,"currency":"RUB"}`, acc.ID, bond.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-01","quantity":"4","price":"100",
+		"amount_minor":-40000,"currency":"RUB"}`, acc.ID, closed.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
+		"occurred_on":"2026-07-02","quantity":"4","price":"100",
+		"amount_minor":40000,"currency":"RUB"}`, acc.ID, closed.ID))
+
+	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
+	}
+	var got positionsResp
+	decodeJSON(t, resp, &got)
+	if len(got.Positions) != 5 {
+		t.Fatalf("positions = %+v, want exactly 5", got.Positions)
+	}
+
+	byID := make(map[string]positionResp, len(got.Positions))
+	for _, p := range got.Positions {
+		byID[p.Instrument.Id] = p
+	}
+
+	profitPos, ok := byID[profit.ID]
+	if !ok {
+		t.Fatalf("no position for profit instrument")
+	}
+	if profitPos.UnrealizedPnlMinor == nil || *profitPos.UnrealizedPnlMinor != 50000 {
+		t.Errorf("profit unrealized_pnl_minor = %v, want 50000", profitPos.UnrealizedPnlMinor)
+	}
+
+	lossPos, ok := byID[loss.ID]
+	if !ok {
+		t.Fatalf("no position for loss instrument")
+	}
+	if lossPos.UnrealizedPnlMinor == nil || *lossPos.UnrealizedPnlMinor != -40000 {
+		t.Errorf("loss unrealized_pnl_minor = %v, want -40000", lossPos.UnrealizedPnlMinor)
+	}
+
+	noQuotePos, ok := byID[noQuote.ID]
+	if !ok {
+		t.Fatalf("no position for noQuote instrument")
+	}
+	if noQuotePos.MarketValueMinor != nil || noQuotePos.UnrealizedPnlMinor != nil {
+		t.Errorf("noQuote position = %+v, want market_value_minor/unrealized_pnl_minor both null", noQuotePos)
+	}
+
+	bondPos, ok := byID[bond.ID]
+	if !ok {
+		t.Fatalf("no position for bond instrument")
+	}
+	if bondPos.MarketValueMinor == nil || *bondPos.MarketValueMinor != 9520000 {
+		t.Errorf("bond market_value_minor = %v, want 9520000", bondPos.MarketValueMinor)
+	}
+	if bondPos.UnrealizedPnlMinor != nil {
+		t.Errorf("bond unrealized_pnl_minor = %v, want null (market_value_currency USD != position currency RUB)", bondPos.UnrealizedPnlMinor)
+	}
+
+	closedPos, ok := byID[closed.ID]
+	if !ok {
+		t.Fatalf("no position for closed instrument")
+	}
+	if closedPos.Quantity != "0" || closedPos.CostMinor != 0 {
+		t.Fatalf("closed position = %+v, want quantity=0 cost_minor=0", closedPos)
+	}
+	if closedPos.MarketValueMinor == nil || *closedPos.MarketValueMinor != 0 {
+		t.Errorf("closed market_value_minor = %v, want 0 (not null)", closedPos.MarketValueMinor)
+	}
+	if closedPos.UnrealizedPnlMinor == nil || *closedPos.UnrealizedPnlMinor != 0 {
+		t.Errorf("closed unrealized_pnl_minor = %v, want 0 (not null)", closedPos.UnrealizedPnlMinor)
 	}
 }
 
