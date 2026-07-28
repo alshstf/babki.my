@@ -18,7 +18,10 @@ function contextText(
     parts.push(t("summary.unconverted", { currencies: summary.unconverted.join(", ") }));
   }
   if (summary.rates_on && !isRecent(summary.rates_on, localToday())) {
-    parts.push(t("summary.ratesOn", { date: formatDate(summary.rates_on) }));
+    const formattedDate = formatDate(summary.rates_on);
+    if (formattedDate) {
+      parts.push(t("summary.ratesOn", { date: formattedDate }));
+    }
   }
   return parts.join(" · ");
 }

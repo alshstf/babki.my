@@ -71,4 +71,25 @@ describe("SummaryCards", () => {
     expect(screen.queryByTestId("summary-total-amount")).not.toBeInTheDocument();
     expect(screen.queryByText(formatMinorCompact(0, "RUB"))).not.toBeInTheDocument();
   });
+
+  it("renders a zero total amount (0 ₽) when total_in_base_minor is 0", () => {
+    wrap(<SummaryCards summary={makeSummary({ total_in_base_minor: 0 })} />);
+
+    const amount = screen.getByTestId("summary-total-amount");
+    expect(amount).toBeInTheDocument();
+    expect(norm(amount.textContent ?? "")).toBe(norm(formatMinorCompact(0, "RUB")));
+    // Ensure it does NOT show the "no total" explanation
+    expect(screen.queryByText("Нет курсов для пересчета")).not.toBeInTheDocument();
+  });
+
+  it("omits the rates-date fragment when rates_on is unparseable", () => {
+    wrap(
+      <SummaryCards
+        summary={makeSummary({ rates_on: "garbage" })}
+      />,
+    );
+
+    // Ensure the rate date fragment is not present (no "курс от" text)
+    expect(screen.queryByText(/курс от/)).not.toBeInTheDocument();
+  });
 });
