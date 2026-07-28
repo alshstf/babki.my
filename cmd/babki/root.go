@@ -41,7 +41,8 @@ func mountModules(srv *httpserver.Server, r *rt) {
 	instrument.NewHandler(instStore, famAuth, famSM).Mount(srv)
 	opStore := operation.NewStore(r.pool)
 	operation.NewHandler(operation.NewService(opStore), opStore, famAuth, famSM).Mount(srv)
-	portfolio.NewHandler(opStore, instStore, famAuth, famSM).Mount(srv)
+	mdStore := marketdata.NewStore(r.pool)
+	portfolio.NewHandler(opStore, instStore, mdStore, famAuth, famSM).Mount(srv)
 }
 
 // startJobClient wires up the job workers and River client and starts it.

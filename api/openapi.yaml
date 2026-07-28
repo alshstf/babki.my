@@ -590,6 +590,9 @@ components:
         income_minor: { type: integer, format: int64 }
         fees_minor: { type: integer, format: int64 }
         currency: { type: string }
+        market_value_minor: { type: integer, format: int64, nullable: true, description: "Market value in the quote's currency (may differ from currency); null if no usable quote" }
+        price: { type: string, nullable: true, description: "Decimal as string; latest quote price used for the valuation" }
+        price_on: { type: string, nullable: true, description: "Date YYYY-MM-DD of the quote used for the valuation" }
     PositionsResponse:
       type: object
       required: [positions]

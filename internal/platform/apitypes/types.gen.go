@@ -337,6 +337,15 @@ type Position struct {
 	IncomeMinor int64      `json:"income_minor"`
 	Instrument  Instrument `json:"instrument"`
 
+	// MarketValueMinor Market value in the quote's currency (may differ from currency); null if no usable quote
+	MarketValueMinor nullable.Nullable[int64] `json:"market_value_minor,omitempty"`
+
+	// Price Decimal as string; latest quote price used for the valuation
+	Price nullable.Nullable[string] `json:"price,omitempty"`
+
+	// PriceOn Date YYYY-MM-DD of the quote used for the valuation
+	PriceOn nullable.Nullable[string] `json:"price_on,omitempty"`
+
 	// Quantity Decimal as string
 	Quantity         string `json:"quantity"`
 	RealizedPnlMinor int64  `json:"realized_pnl_minor"`

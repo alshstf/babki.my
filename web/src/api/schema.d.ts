@@ -557,6 +557,15 @@ export interface components {
             /** Format: int64 */
             fees_minor: number;
             currency: string;
+            /**
+             * Format: int64
+             * @description Market value in the quote's currency (may differ from currency); null if no usable quote
+             */
+            market_value_minor?: number | null;
+            /** @description Decimal as string; latest quote price used for the valuation */
+            price?: string | null;
+            /** @description Date YYYY-MM-DD of the quote used for the valuation */
+            price_on?: string | null;
         };
         PositionsResponse: {
             positions: components["schemas"]["Position"][];
