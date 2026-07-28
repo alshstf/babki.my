@@ -71,6 +71,12 @@
       "parseError": "Не удалось разобрать сумму"
     }
   },
+  "summary": {
+    "totalTitle": "Итого",
+    "noTotal": "Нет курсов для пересчета",
+    "unconverted": "не учтены: {{currencies}}",
+    "ratesOn": "курс от {{date}}"
+  },
   "accountTypes": {
     "brokerage": "брокерский",
     "checking": "текущий",
