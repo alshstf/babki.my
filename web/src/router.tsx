@@ -14,6 +14,7 @@ import { AppLayout } from "@/routes/app-layout";
 import { AccountsPage } from "@/routes/accounts";
 import { AccountDetailPage } from "@/routes/accounts/detail";
 import { FamilyPage } from "@/routes/family";
+import { SettingsPage } from "@/routes/settings";
 
 function FullScreenLoader() {
   const { t } = useTranslation();
@@ -103,10 +104,22 @@ const familyRoute = createRoute({
   component: FamilyPage,
 });
 
+const settingsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: "/settings",
+  component: SettingsPage,
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   setupRoute,
-  layoutRoute.addChildren([indexRoute, accountsRoute, accountDetailRoute, familyRoute]),
+  layoutRoute.addChildren([
+    indexRoute,
+    accountsRoute,
+    accountDetailRoute,
+    familyRoute,
+    settingsRoute,
+  ]),
 ]);
 
 export const router = createRouter({ routeTree });
