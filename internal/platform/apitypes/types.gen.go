@@ -337,7 +337,10 @@ type Position struct {
 	IncomeMinor int64      `json:"income_minor"`
 	Instrument  Instrument `json:"instrument"`
 
-	// MarketValueMinor Market value in the quote's currency (may differ from currency); null if no usable quote
+	// MarketValueCurrency Currency of market_value_minor: the quote's currency for share/etf, the instrument's face_currency for bond; null exactly when market_value_minor is null
+	MarketValueCurrency nullable.Nullable[string] `json:"market_value_currency,omitempty"`
+
+	// MarketValueMinor Market value in market_value_currency (may differ from currency); for bonds this is the face value's currency, not the quote's; null if no usable quote
 	MarketValueMinor nullable.Nullable[int64] `json:"market_value_minor,omitempty"`
 
 	// Price Decimal as string; latest quote price used for the valuation
@@ -395,7 +398,10 @@ type Summary struct {
 	// BaseCurrency ISO-4217, from the space; e.g. RUB
 	BaseCurrency string `json:"base_currency"`
 
-	// TotalInBaseMinor Sum of totals[].net_minor converted into base_currency at today's rate; null only if none of the currencies could be converted
+	// RatesOn Oldest FX rate date used for the conversion; null if nothing was converted
+	RatesOn nullable.Nullable[string] `json:"rates_on,omitempty"`
+
+	// TotalInBaseMinor Sum of totals[].net_minor converted using the latest FX rate on or before today; null only if none of the currencies could be converted
 	TotalInBaseMinor nullable.Nullable[int64] `json:"total_in_base_minor,omitempty"`
 	Totals           []CurrencyTotal          `json:"totals"`
 

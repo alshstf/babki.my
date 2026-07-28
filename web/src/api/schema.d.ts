@@ -434,11 +434,13 @@ export interface components {
             base_currency: string;
             /**
              * Format: int64
-             * @description Sum of totals[].net_minor converted into base_currency at today's rate; null only if none of the currencies could be converted
+             * @description Sum of totals[].net_minor converted using the latest FX rate on or before today; null only if none of the currencies could be converted
              */
             total_in_base_minor?: number | null;
             /** @description Currencies from totals that had no fx rate available and were excluded from total_in_base_minor; empty if all converted */
             unconverted: string[];
+            /** @description Oldest FX rate date used for the conversion; null if nothing was converted */
+            rates_on?: string | null;
         };
         /** @enum {string} */
         InstrumentType: "share" | "bond" | "etf" | "currency" | "crypto" | "metal" | "custom";
@@ -568,9 +570,11 @@ export interface components {
             currency: string;
             /**
              * Format: int64
-             * @description Market value in the quote's currency (may differ from currency); null if no usable quote
+             * @description Market value in market_value_currency (may differ from currency); for bonds this is the face value's currency, not the quote's; null if no usable quote
              */
             market_value_minor?: number | null;
+            /** @description Currency of market_value_minor: the quote's currency for share/etf, the instrument's face_currency for bond; null exactly when market_value_minor is null */
+            market_value_currency?: string | null;
             /** @description Decimal as string; latest quote price used for the valuation */
             price?: string | null;
             /** @description Date YYYY-MM-DD of the quote used for the valuation */

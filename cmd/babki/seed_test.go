@@ -141,7 +141,7 @@ func TestSeedDemo(t *testing.T) {
 			netByCurrency[ct.Currency] = ct.NetMinor
 		}
 	}
-	converted, missing, err := converter.ConvertMany(ctx, netByCurrency, "RUB", on)
+	converted, missing, ratesOn, err := converter.ConvertMany(ctx, netByCurrency, "RUB", on)
 	if err != nil {
 		t.Fatalf("ConvertMany: %v", err)
 	}
@@ -150,6 +150,12 @@ func TestSeedDemo(t *testing.T) {
 	}
 	if converted == 0 {
 		t.Errorf("ConvertMany total = 0, want nonzero")
+	}
+	// USD is the only non-RUB currency in netByCurrency, seeded with a rate
+	// exactly on 2026-07-20 (== on), so that's the oldest (and only) rate
+	// used.
+	if !ratesOn.Equal(on) {
+		t.Errorf("ConvertMany ratesOn = %v, want %v (seeded USD/RUB rate date)", ratesOn, on)
 	}
 
 	// SBER has a seeded quote, so its position in Т-Банк carries a market

@@ -250,13 +250,20 @@ func (h *Handler) handleSetBalance(w http.ResponseWriter, r *http.Request) {
 // balances only, not full net worth including live market values.
 //
 // total_in_base_minor converts each currency's net_minor into base_currency
-// at today's fx rate (ConvertMany, on time.Now().UTC()) and sums the
-// results. A currency with no resolvable rate is dropped into unconverted
-// rather than failing the request — a partial total beats an error page.
-// total_in_base_minor is null only when there's at least one currency and
-// none of them converted (unconverted covers every currency in totals); an
-// empty space, or a space whose accounts are already all in base_currency,
-// yields 0, not null.
+// using the latest fx rate on or before today (ConvertMany, on
+// time.Now().UTC()) and sums the results. A currency with no resolvable
+// rate is dropped into unconverted rather than failing the request — a
+// partial total beats an error page. total_in_base_minor is null only when
+// there's at least one currency and none of them converted (unconverted
+// covers every currency in totals); an empty space, or a space whose
+// accounts are already all in base_currency, yields 0, not null.
+//
+// rates_on discloses how stale that conversion might be: it's the date of
+// the OLDEST fx rate ConvertMany actually used, which — since FxRateOn
+// falls back to the nearest earlier date — can be well before today (e.g. a
+// weekend or a currency the rate provider hasn't refreshed in a while). It
+// is null only when nothing needed a rate at all (every currency already in
+// base_currency, or every currency ended up unconverted).
 func (h *Handler) handleSummary(w http.ResponseWriter, r *http.Request) {
 	p, _ := family.PrincipalFromContext(r.Context())
 	totals, err := h.store.SummaryByCurrency(r.Context(), p.SpaceID)
@@ -296,7 +303,7 @@ func (h *Handler) handleSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	converted, missing, err := h.converter.ConvertMany(r.Context(), netByCurrency, sp.BaseCurrency, time.Now().UTC())
+	converted, missing, ratesOn, err := h.converter.ConvertMany(r.Context(), netByCurrency, sp.BaseCurrency, time.Now().UTC())
 	if err != nil {
 		family.WriteError(w, err)
 		return
@@ -310,6 +317,12 @@ func (h *Handler) handleSummary(w http.ResponseWriter, r *http.Request) {
 		out.TotalInBaseMinor = nullable.NewNullNullable[int64]()
 	} else {
 		out.TotalInBaseMinor = nullable.NewNullableWithValue(converted)
+	}
+
+	if ratesOn.IsZero() {
+		out.RatesOn = nullable.NewNullNullable[string]()
+	} else {
+		out.RatesOn = nullable.NewNullableWithValue(ratesOn.Format("2006-01-02"))
 	}
 
 	httpjson.Write(w, http.StatusOK, out)

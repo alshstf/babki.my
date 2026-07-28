@@ -101,33 +101,43 @@ func instrumentToAPI(i instrument.Instrument) apitypes.Instrument {
 const centsPerUnit = 2
 
 // marketValue computes a position's market value from the latest quote for
-// its instrument, in the quote's currency, in minor units. ok is false when
-// no valuation applies — the instrument's type isn't priced this way (bond
-// without a face value, or currency/crypto/metal/custom) — in which case
-// the caller must leave market_value_minor/price/price_on null rather than
-// publish a zero or misleading figure.
+// its instrument, in minor units, plus the currency that value is
+// denominated in. ok is false when no valuation applies — the instrument's
+// type isn't priced this way (bond without both a face value and a face
+// currency, or currency/crypto/metal/custom) — in which case the caller
+// must leave market_value_minor/market_value_currency/price/price_on null
+// rather than publish a zero or misleading figure.
 //
-// share/etf: price (per unit, major currency units) × quantity.
+// share/etf: price (per unit, major currency units) × quantity, in the
+// quote's own currency (q.Currency) — price and instrument currency always
+// agree here.
+//
 // bond: price is a percentage of face value (e.g. 95.20 meaning 95.20%), so
 // the value is faceValueMinor × price/100 × quantity — already in minor
-// units since faceValueMinor is.
+// units since faceValueMinor is. Crucially, that value is denominated in the
+// face value's currency (faceCurrency, e.g. RUB for an OFZ), NOT the quote's
+// currency: the quote's "currency" field for a bond is really just the unit
+// the percentage price is quoted in, not a currency the resulting money is
+// ever in. A bond with a face value but no face currency has no way to
+// label that number, so it gets no valuation at all rather than a
+// currency-less (and therefore meaningless) figure.
 //
 // Both branches multiply as decimals throughout and round exactly once at
 // the end, half-away-from-zero (decimal.Decimal.Round's native behavior, the
 // same rounding marketdata.Converter.Convert uses) — never float, never an
 // intermediate round.
-func marketValue(instType instrument.Type, faceValueMinor *int64, quantity decimal.Decimal, q marketdata.Quote) (minor int64, ok bool) {
+func marketValue(instType instrument.Type, faceValueMinor *int64, faceCurrency *string, quantity decimal.Decimal, q marketdata.Quote) (minor int64, currency string, ok bool) {
 	switch instType {
 	case instrument.TypeShare, instrument.TypeETF:
-		return q.Price.Mul(quantity).Shift(centsPerUnit).Round(0).IntPart(), true
+		return q.Price.Mul(quantity).Shift(centsPerUnit).Round(0).IntPart(), q.Currency, true
 	case instrument.TypeBond:
-		if faceValueMinor == nil {
-			return 0, false
+		if faceValueMinor == nil || faceCurrency == nil {
+			return 0, "", false
 		}
-		return decimal.NewFromInt(*faceValueMinor).Mul(q.Price).Shift(-centsPerUnit).Mul(quantity).Round(0).IntPart(), true
+		return decimal.NewFromInt(*faceValueMinor).Mul(q.Price).Shift(-centsPerUnit).Mul(quantity).Round(0).IntPart(), *faceCurrency, true
 	default:
 		// currency, crypto, metal, custom: no defined valuation model yet.
-		return 0, false
+		return 0, "", false
 	}
 }
 
@@ -142,8 +152,9 @@ func toAPI(p *Position, inst instrument.Instrument, quotes map[uuid.UUID]marketd
 		FeesMinor:        p.FeesMinor,
 	}
 	if q, found := quotes[p.InstrumentID]; found {
-		if minor, ok := marketValue(inst.Type, inst.FaceValueMinor, p.Quantity, q); ok {
+		if minor, currency, ok := marketValue(inst.Type, inst.FaceValueMinor, inst.FaceCurrency, p.Quantity, q); ok {
 			out.MarketValueMinor = nullable.NewNullableWithValue(minor)
+			out.MarketValueCurrency = nullable.NewNullableWithValue(currency)
 			out.Price = nullable.NewNullableWithValue(q.Price.String())
 			out.PriceOn = nullable.NewNullableWithValue(q.On.Format("2006-01-02"))
 		}

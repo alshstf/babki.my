@@ -21,6 +21,7 @@ type summaryResponse struct {
 	BaseCurrency     string    `json:"base_currency"`
 	TotalInBaseMinor *int64    `json:"total_in_base_minor"`
 	Unconverted      *[]string `json:"unconverted"`
+	RatesOn          *string   `json:"rates_on"`
 }
 
 func TestSummaryEndpoint(t *testing.T) {
@@ -64,6 +65,12 @@ func TestSummaryEndpoint(t *testing.T) {
 	}
 	if sum.Unconverted == nil || len(*sum.Unconverted) != 0 {
 		t.Fatalf("unconverted = %v, want []", sum.Unconverted)
+	}
+	// Both accounts are already RUB (the base currency): every conversion is
+	// an identity, which resolves no fx rate at all, so rates_on must be
+	// null — not today's date, and not fabricated.
+	if sum.RatesOn != nil {
+		t.Fatalf("rates_on = %v, want null (no cross-currency conversion happened)", *sum.RatesOn)
 	}
 }
 
@@ -128,6 +135,12 @@ func TestSummaryTotalInBaseCurrencyTwoCurrencies(t *testing.T) {
 	if sum.Unconverted == nil || len(*sum.Unconverted) != 0 {
 		t.Fatalf("unconverted = %v, want []", sum.Unconverted)
 	}
+	// Both seeded rates are dated exactly "on" (pastOn(), about a month ago),
+	// so rates_on must surface that date, not today's.
+	wantRatesOn := on.Format("2006-01-02")
+	if sum.RatesOn == nil || *sum.RatesOn != wantRatesOn {
+		t.Fatalf("rates_on = %v, want %q", sum.RatesOn, wantRatesOn)
+	}
 }
 
 // balanceFor returns the amount_minor used for each currency's account in
@@ -191,6 +204,12 @@ func TestSummaryPartialConversionReportsUnconverted(t *testing.T) {
 	if sum.Unconverted == nil || len(*sum.Unconverted) != 1 || (*sum.Unconverted)[0] != "KZT" {
 		t.Fatalf("unconverted = %v, want [KZT]", sum.Unconverted)
 	}
+	// KZT never converted (no rate at all), so it can't affect rates_on: only
+	// the USD leg's rate date should surface.
+	wantRatesOn := on.Format("2006-01-02")
+	if sum.RatesOn == nil || *sum.RatesOn != wantRatesOn {
+		t.Fatalf("rates_on = %v, want %q (USD leg only)", sum.RatesOn, wantRatesOn)
+	}
 }
 
 // TestSummaryNoRatesAtAllYieldsNullTotal covers the total absence of fx
@@ -227,6 +246,11 @@ func TestSummaryNoRatesAtAllYieldsNullTotal(t *testing.T) {
 	if sum.Unconverted == nil || len(*sum.Unconverted) != 1 || (*sum.Unconverted)[0] != "USD" {
 		t.Fatalf("unconverted = %v, want [USD]", sum.Unconverted)
 	}
+	// Nothing converted at all (USD is the only currency and it's
+	// unconverted), so rates_on must be null too, matching total_in_base_minor.
+	if sum.RatesOn != nil {
+		t.Fatalf("rates_on = %v, want null (nothing converted)", *sum.RatesOn)
+	}
 }
 
 // TestSummaryBaseCurrencyComesFromSpace proves base_currency in the response
@@ -257,6 +281,10 @@ func TestSummaryBaseCurrencyComesFromSpace(t *testing.T) {
 	}
 	if sum.Unconverted == nil || len(*sum.Unconverted) != 0 {
 		t.Fatalf("unconverted = %v, want []", sum.Unconverted)
+	}
+	// No accounts at all, so nothing to convert: rates_on must be null.
+	if sum.RatesOn != nil {
+		t.Fatalf("rates_on = %v, want null (empty space)", *sum.RatesOn)
 	}
 }
 
@@ -322,5 +350,59 @@ func TestSummaryZeroBalanceCurrencyIgnored(t *testing.T) {
 	// Totals must still include both currencies
 	if len(sum.Totals) != 2 {
 		t.Fatalf("totals has %d currencies, want 2", len(sum.Totals))
+	}
+	// The only currency actually converted (RUB) is the base currency itself
+	// — an identity conversion, no rate resolved — so rates_on must be null.
+	if sum.RatesOn != nil {
+		t.Fatalf("rates_on = %v, want null (only identity RUB->RUB was converted)", *sum.RatesOn)
+	}
+}
+
+// TestSummaryRatesOnReflectsStaleRateNotToday is fix (1)'s core regression
+// test: a summary must disclose how old the fx rate behind
+// total_in_base_minor actually is, rather than silently implying "today's
+// rate". A USD rate dated two days ago (FxRateOn's nearest-earlier-date
+// fallback, since no rate exists for today) must surface as rates_on's
+// exact date — not today.
+func TestSummaryRatesOnReflectsStaleRateNotToday(t *testing.T) {
+	url, c, mdStore := newAPIWithConverter(t)
+	twoDaysAgo := time.Now().UTC().AddDate(0, 0, -2).Truncate(24 * time.Hour)
+
+	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: twoDaysAgo, Rate: decimal.RequireFromString("90"), Source: "test"},
+	}); err != nil {
+		t.Fatalf("seed fx rates: %v", err)
+	}
+
+	resp := do(t, c, "POST", url+"/api/v1/accounts", `{"name":"US cash","type":"cash","currency":"USD"}`)
+	if resp.StatusCode != 201 {
+		t.Fatalf("create USD account: %d", resp.StatusCode)
+	}
+	var a struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&a)
+	if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+a.ID+"/balance",
+		`{"as_of":"2026-07-20","amount_minor":10000}`); resp.StatusCode != 200 {
+		t.Fatalf("set balance: %d", resp.StatusCode)
+	}
+
+	resp = do(t, c, "GET", url+"/api/v1/summary", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("summary = %d", resp.StatusCode)
+	}
+	var sum summaryResponse
+	_ = json.NewDecoder(resp.Body).Decode(&sum)
+
+	if sum.TotalInBaseMinor == nil || *sum.TotalInBaseMinor != 900000 {
+		t.Fatalf("total_in_base_minor = %v, want 900000", sum.TotalInBaseMinor)
+	}
+	wantRatesOn := twoDaysAgo.Format("2006-01-02")
+	todayStr := time.Now().UTC().Format("2006-01-02")
+	if sum.RatesOn == nil || *sum.RatesOn != wantRatesOn {
+		t.Fatalf("rates_on = %v, want %q (the seeded rate's own date)", sum.RatesOn, wantRatesOn)
+	}
+	if sum.RatesOn != nil && *sum.RatesOn == todayStr {
+		t.Fatalf("rates_on = %q, must not be today's date (%q) for a two-day-old rate", *sum.RatesOn, todayStr)
 	}
 }

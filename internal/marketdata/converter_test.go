@@ -201,7 +201,7 @@ func TestConvertManySumsAndReportsMissing(t *testing.T) {
 		"RUB": 500,   // identity, from == to
 		"GBP": 2000,  // no rate path at all -> missing, not an error
 	}
-	converted, missing, err := conv.ConvertMany(ctx, amounts, "RUB", on)
+	converted, missing, ratesOn, err := conv.ConvertMany(ctx, amounts, "RUB", on)
 	if err != nil {
 		t.Fatalf("ConvertMany: %v", err)
 	}
@@ -212,18 +212,77 @@ func TestConvertManySumsAndReportsMissing(t *testing.T) {
 	if len(missing) != 1 || missing[0] != "GBP" {
 		t.Fatalf("ConvertMany missing = %v, want [GBP]", missing)
 	}
+	if !ratesOn.Equal(on) {
+		t.Fatalf("ConvertMany ratesOn = %v, want %v (both USD and EUR rates are dated exactly on)", ratesOn, on)
+	}
 }
 
 func TestConvertManyEmptyInput(t *testing.T) {
 	conv, _, ctx := newConverterFixture(t)
 	on := date("2026-07-01")
 
-	converted, missing, err := conv.ConvertMany(ctx, map[string]int64{}, "RUB", on)
+	converted, missing, ratesOn, err := conv.ConvertMany(ctx, map[string]int64{}, "RUB", on)
 	if err != nil {
 		t.Fatalf("ConvertMany empty: %v", err)
 	}
 	if converted != 0 || len(missing) != 0 {
 		t.Fatalf("ConvertMany empty = (%d, %v), want (0, empty)", converted, missing)
+	}
+	if !ratesOn.IsZero() {
+		t.Fatalf("ConvertMany empty ratesOn = %v, want zero value (nothing converted)", ratesOn)
+	}
+}
+
+// TestConvertManyRatesOnIsOldestRateUsed is fix (1)'s core regression test:
+// a summary must disclose how stale the fx rate behind it is, not silently
+// imply "today's rate". Two currencies convert here — one against a rate
+// dated exactly "on", the other against a rate two days older (FxRateOn's
+// nearest-earlier-date fallback) — so ratesOn must surface that older date,
+// not on, and not today.
+func TestConvertManyRatesOnIsOldestRateUsed(t *testing.T) {
+	conv, store, ctx := newConverterFixture(t)
+	on := date("2026-07-10")
+	older := date("2026-07-08") // two days before "on"
+
+	err := store.UpsertFxRates(ctx, []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90"), Source: "cbr"},
+		{Base: "EUR", Quote: "RUB", On: older, Rate: dec("100"), Source: "cbr"}, // stale
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	amounts := map[string]int64{"USD": 10000, "EUR": 5000}
+	_, missing, ratesOn, err := conv.ConvertMany(ctx, amounts, "RUB", on)
+	if err != nil {
+		t.Fatalf("ConvertMany: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("ConvertMany missing = %v, want empty", missing)
+	}
+	if !ratesOn.Equal(older) {
+		t.Fatalf("ConvertMany ratesOn = %v, want %v (the older of the two rates actually used, not %v)", ratesOn, older, on)
+	}
+}
+
+// TestConvertManyRatesOnZeroWhenOnlyIdentity covers a base-currency-only
+// summary: every amount is already in the target currency, so no fx rate is
+// ever resolved and ratesOn must stay the zero value (the caller renders
+// that as "null", never as a fabricated date).
+func TestConvertManyRatesOnZeroWhenOnlyIdentity(t *testing.T) {
+	conv, _, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	amounts := map[string]int64{"RUB": 500}
+	converted, missing, ratesOn, err := conv.ConvertMany(ctx, amounts, "RUB", on)
+	if err != nil {
+		t.Fatalf("ConvertMany: %v", err)
+	}
+	if converted != 500 || len(missing) != 0 {
+		t.Fatalf("ConvertMany identity-only = (%d, %v), want (500, empty)", converted, missing)
+	}
+	if !ratesOn.IsZero() {
+		t.Fatalf("ConvertMany identity-only ratesOn = %v, want zero value", ratesOn)
 	}
 }
 
@@ -243,9 +302,12 @@ func TestConvertManyPropagatesRealErrors(t *testing.T) {
 
 	// A real DB/context failure must surface as err, not be swallowed into
 	// missing like an ordinary "no rate for this currency" case.
-	converted, missing, err := conv.ConvertMany(cctx, map[string]int64{"USD": 100}, "RUB", on)
+	converted, missing, ratesOn, err := conv.ConvertMany(cctx, map[string]int64{"USD": 100}, "RUB", on)
 	if err == nil {
-		t.Fatalf("ConvertMany with canceled context: err = nil (converted=%d, missing=%v), want a real error", converted, missing)
+		t.Fatalf("ConvertMany with canceled context: err = nil (converted=%d, missing=%v, ratesOn=%v), want a real error", converted, missing, ratesOn)
+	}
+	if !ratesOn.IsZero() {
+		t.Fatalf("ConvertMany with canceled context: ratesOn = %v, want zero value on error", ratesOn)
 	}
 	if errors.Is(err, marketdata.ErrNoRate) {
 		t.Fatalf("ConvertMany with canceled context: got ErrNoRate, want the underlying DB/context error")

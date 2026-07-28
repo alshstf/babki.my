@@ -5,13 +5,22 @@
 # Works against two kinds of instance, auto-detected via
 # GET /setup/status:
 #   - fresh (setup_needed=true): exercises the onboarding flow itself
-#     (POST /setup) under a throwaway "Smoke" space.
+#     (POST /setup) under a throwaway "Smoke" space. Additionally proves
+#     partial fx conversion (GET /summary's unconverted + total_in_base_minor
+#     contract) purely through the public API, by adding a second account in
+#     a currency (USD) a fresh instance has no rate for.
 #   - pre-seeded via `babki seed` (setup_needed=false): logs in as the demo
 #     user instead, and additionally verifies the market-data-backed
 #     features seed populates — GET /summary's multi-currency
 #     total_in_base_minor (RUB+USD via the seeded fx rate) and GET
 #     .../positions' market_value_minor (via the seeded SBER quote) — which
 #     a fresh instance has no data to exercise.
+#
+# SAFETY: a seeded instance is a real, populated one — possibly someone's
+# live demo. Running against it logs in as "demo" and creates accounts,
+# instruments and operations under that space, which mutates it. That path
+# is opt-in only: set SMOKE_ALLOW_SEEDED=1 to allow it. Without that,
+# smoke-api.sh refuses to run against anything but a fresh instance.
 set -euo pipefail
 BASE="${1:-http://localhost:8080}"
 JAR="$(mktemp)"
@@ -40,6 +49,11 @@ expect() { # expected actual message
 out=$(req GET /api/v1/setup/status)
 expect 200 "$(status)" "setup/status"
 SETUP_NEEDED="$(echo "$out" | jq -r .setup_needed)"
+
+if [ "$SETUP_NEEDED" = "false" ] && [ "${SMOKE_ALLOW_SEEDED:-}" != "1" ]; then
+	echo "FAIL: instance is not fresh; set SMOKE_ALLOW_SEEDED=1 to run against seeded data"
+	exit 1
+fi
 
 if [ "$SETUP_NEEDED" = "true" ]; then
 	req POST /api/v1/setup '{"space_name":"Smoke","username":"smoke","display_name":"Smoke","password":"smoke1234"}' >/dev/null
@@ -75,6 +89,35 @@ if ! [[ "$TOTAL_BASE" =~ ^-?[0-9]+$ ]]; then
 	echo "FAIL: summary.total_in_base_minor not numeric (got $TOTAL_BASE)"; exit 1
 fi
 echo "OK: summary.total_in_base_minor numeric ($TOTAL_BASE)"
+
+if [ "$SETUP_NEEDED" = "true" ]; then
+	# Fresh instance, no fx rates at all: a second account in a currency with
+	# no rate must (a) show up in summary.unconverted and (b) leave
+	# total_in_base_minor exactly where it was with the RUB-only account —
+	# proving ConvertMany's partial-conversion contract end to end through
+	# the public API alone, no seed data required.
+	RUB_ONLY_TOTAL="$TOTAL_BASE"
+
+	out=$(req POST /api/v1/accounts '{"name":"US cash","type":"cash","currency":"USD"}')
+	expect 201 "$(status)" "create USD account (fresh, no rate)"
+	USD_ACC=$(echo "$out" | jq -r .id)
+
+	req PUT "/api/v1/accounts/$USD_ACC/balance" '{"as_of":"2026-07-20","amount_minor":5000}' >/dev/null
+	expect 200 "$(status)" "set USD balance"
+
+	out=$(req GET /api/v1/summary)
+	expect 200 "$(status)" "summary after USD account"
+
+	HAS_USD=$(echo "$out" | jq -r '.unconverted | index("USD") != null')
+	if [ "$HAS_USD" != "true" ]; then
+		echo "FAIL: summary.unconverted does not contain USD (got $(echo "$out" | jq -c .unconverted))"
+		exit 1
+	fi
+	echo "OK: summary.unconverted contains USD (no fx rate on a fresh instance)"
+
+	NEW_TOTAL=$(echo "$out" | jq -r '.total_in_base_minor')
+	expect "$RUB_ONLY_TOTAL" "$NEW_TOTAL" "summary.total_in_base_minor unchanged (USD leg excluded, RUB leg only)"
+fi
 
 if [ "$SETUP_NEEDED" = "false" ]; then
 	# demo's Т-Банк account holds a seeded SBER position with a seeded

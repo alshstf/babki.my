@@ -154,16 +154,17 @@ type instrumentResp struct {
 }
 
 type positionResp struct {
-	Instrument       instrumentResp `json:"instrument"`
-	Quantity         string         `json:"quantity"`
-	CostMinor        int64          `json:"cost_minor"`
-	Currency         string         `json:"currency"`
-	RealizedPnlMinor int64          `json:"realized_pnl_minor"`
-	IncomeMinor      int64          `json:"income_minor"`
-	FeesMinor        int64          `json:"fees_minor"`
-	MarketValueMinor *int64         `json:"market_value_minor"`
-	Price            *string        `json:"price"`
-	PriceOn          *string        `json:"price_on"`
+	Instrument          instrumentResp `json:"instrument"`
+	Quantity            string         `json:"quantity"`
+	CostMinor           int64          `json:"cost_minor"`
+	Currency            string         `json:"currency"`
+	RealizedPnlMinor    int64          `json:"realized_pnl_minor"`
+	IncomeMinor         int64          `json:"income_minor"`
+	FeesMinor           int64          `json:"fees_minor"`
+	MarketValueMinor    *int64         `json:"market_value_minor"`
+	MarketValueCurrency *string        `json:"market_value_currency"`
+	Price               *string        `json:"price"`
+	PriceOn             *string        `json:"price_on"`
 }
 
 type positionsResp struct {
@@ -350,8 +351,13 @@ func TestPositionsMarketValuation(t *testing.T) {
 	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
 
 	share := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"RUB"}`)
+	// face_currency (USD) deliberately differs from the quote's own currency
+	// (RUB, set below): a bond's price is a dimensionless percent-of-face, so
+	// quote.Currency carries no real currency meaning for a bond — fix (2)'s
+	// regression case. If market_value_currency ever regressed to echoing
+	// quote.Currency for bonds, this test would catch it (RUB != USD).
 	bond := createInstrument(t, c, url,
-		`{"type":"bond","name":"Облигация","ticker":"BOND1","currency":"RUB","face_value_minor":100000,"face_currency":"RUB"}`)
+		`{"type":"bond","name":"Облигация","ticker":"BOND1","currency":"RUB","face_value_minor":100000,"face_currency":"USD"}`)
 	noQuote := createInstrument(t, c, url, `{"type":"share","name":"Без Котировки","ticker":"NOQ","currency":"RUB"}`)
 	custom := createInstrument(t, c, url, `{"type":"custom","name":"Прочее","currency":"RUB"}`)
 
@@ -430,6 +436,12 @@ func TestPositionsMarketValuation(t *testing.T) {
 	if sharePos.MarketValueMinor == nil || *sharePos.MarketValueMinor != 10001 {
 		t.Errorf("share market_value_minor = %v, want 10001", sharePos.MarketValueMinor)
 	}
+	// share/etf valuation is in the quote's own currency (RUB here) — see
+	// fix (2): a share's price and instrument currency always agree, so
+	// this is the trivial case, but the field must still be populated.
+	if sharePos.MarketValueCurrency == nil || *sharePos.MarketValueCurrency != "RUB" {
+		t.Errorf("share market_value_currency = %v, want RUB (the quote's currency)", sharePos.MarketValueCurrency)
+	}
 	if sharePos.Price == nil || *sharePos.Price != "100.005" {
 		t.Errorf("share price = %v, want 100.005", sharePos.Price)
 	}
@@ -444,6 +456,12 @@ func TestPositionsMarketValuation(t *testing.T) {
 	if bondPos.MarketValueMinor == nil || *bondPos.MarketValueMinor != 9520000 {
 		t.Errorf("bond market_value_minor = %v, want 9520000", bondPos.MarketValueMinor)
 	}
+	// The valuation is denominated in the instrument's face_currency (USD),
+	// never the quote's currency (RUB) — see fix (2)'s doc comment on
+	// marketValue.
+	if bondPos.MarketValueCurrency == nil || *bondPos.MarketValueCurrency != "USD" {
+		t.Errorf("bond market_value_currency = %v, want USD (face_currency, not the quote's RUB)", bondPos.MarketValueCurrency)
+	}
 	// shopspring/decimal normalizes trailing zeros on parse, so the quote's
 	// price round-trips through Quote.Price.String() as "95.2", not "95.20".
 	if bondPos.Price == nil || *bondPos.Price != "95.2" {
@@ -457,16 +475,72 @@ func TestPositionsMarketValuation(t *testing.T) {
 	if !ok {
 		t.Fatalf("no position for noQuote instrument")
 	}
-	if noQuotePos.MarketValueMinor != nil || noQuotePos.Price != nil || noQuotePos.PriceOn != nil {
-		t.Errorf("noQuote position = %+v, want market_value_minor/price/price_on all null", noQuotePos)
+	if noQuotePos.MarketValueMinor != nil || noQuotePos.MarketValueCurrency != nil || noQuotePos.Price != nil || noQuotePos.PriceOn != nil {
+		t.Errorf("noQuote position = %+v, want market_value_minor/market_value_currency/price/price_on all null", noQuotePos)
 	}
 
 	customPos, ok := byID[custom.ID]
 	if !ok {
 		t.Fatalf("no position for custom instrument")
 	}
-	if customPos.MarketValueMinor != nil || customPos.Price != nil || customPos.PriceOn != nil {
-		t.Errorf("custom position (quote present, unsupported type) = %+v, want market_value_minor/price/price_on all null", customPos)
+	if customPos.MarketValueMinor != nil || customPos.MarketValueCurrency != nil || customPos.Price != nil || customPos.PriceOn != nil {
+		t.Errorf("custom position (quote present, unsupported type) = %+v, want market_value_minor/market_value_currency/price/price_on all null", customPos)
+	}
+}
+
+// TestPositionsBondWithoutFaceCurrencyHasNoValuation covers fix (2)'s edge
+// case: a bond that carries a face_value_minor but no face_currency (only
+// reachable by PATCHing face_currency to null after creation — POST
+// /instruments requires the two fields together, see
+// instrument.handleCreate) has no currency to label its market value with,
+// so it must get NO valuation at all — every one of
+// market_value_minor/market_value_currency/price/price_on stays null, even
+// though a quote exists and face_value_minor is still set. Publishing a
+// bare number with no currency would be actively misleading, worse than
+// publishing nothing.
+func TestPositionsBondWithoutFaceCurrencyHasNoValuation(t *testing.T) {
+	pool := testdb.New(t)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes)
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
+	bond := createInstrument(t, c, url,
+		`{"type":"bond","name":"Облигация без валюты номинала","ticker":"BOND2","currency":"RUB","face_value_minor":100000,"face_currency":"RUB"}`)
+	bondID, err := uuid.Parse(bond.ID)
+	if err != nil {
+		t.Fatalf("parse bond id: %v", err)
+	}
+	quotes.byInstrument[bondID] = marketdata.Quote{
+		InstrumentID: bondID, On: mustDate(t, "2026-07-21"),
+		Price: decimal.RequireFromString("95.20"), Currency: "RUB", Source: "test",
+	}
+
+	// Drift face_currency to null while leaving face_value_minor set — the
+	// only way to reach this state, since creation requires both or neither.
+	resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+bond.ID, `{"face_currency":null}`)
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("PATCH instrument face_currency=null = %d: %s", resp.StatusCode, b)
+	}
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-01","quantity":"100","price":"950",
+		"amount_minor":-9500000,"currency":"RUB"}`, acc.ID, bond.ID))
+
+	resp = do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
+	}
+	var got positionsResp
+	decodeJSON(t, resp, &got)
+	if len(got.Positions) != 1 {
+		t.Fatalf("positions = %+v, want exactly 1", got.Positions)
+	}
+
+	p := got.Positions[0]
+	if p.MarketValueMinor != nil || p.MarketValueCurrency != nil || p.Price != nil || p.PriceOn != nil {
+		t.Errorf("bond without face_currency = %+v, want market_value_minor/market_value_currency/price/price_on all null", p)
 	}
 }
 
