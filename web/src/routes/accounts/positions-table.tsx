@@ -153,7 +153,7 @@ export function PositionsTable({ positions }: { positions: Position[] }) {
                   <span
                     data-testid="position-profit-dash"
                     className="text-muted-foreground"
-                    title={t("positions.noQuote")}
+                    title={t(hasMarketValue ? "positions.currencyMismatch" : "positions.noQuote")}
                   >
                     —
                   </span>

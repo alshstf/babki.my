@@ -145,11 +145,45 @@ describe("PositionsTable", () => {
   });
 
   it("shows a dash with a tooltip for the profit column when unrealized_pnl_minor is null", () => {
-    wrap(<PositionsTable positions={[makePosition({ unrealized_pnl_minor: null })]} />);
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            market_value_minor: null,
+            market_value_currency: null,
+            unrealized_pnl_minor: null,
+          }),
+        ]}
+      />,
+    );
 
     const dash = screen.getByTestId("position-profit-dash");
     expect(dash).toHaveTextContent("—");
     expect(dash).toHaveAttribute("title", "Нет котировки");
+    expect(screen.queryByTestId("position-profit-amount")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("position-profit-percent")).not.toBeInTheDocument();
+  });
+
+  it("shows a dash with currency mismatch tooltip when unrealized_pnl_minor is null but market value exists in different currency", () => {
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            currency: "RUB",
+            market_value_minor: 952_00,
+            market_value_currency: "USD",
+            unrealized_pnl_minor: null,
+          }),
+        ]}
+      />,
+    );
+
+    const marketValue = screen.getByTestId("position-market-value");
+    expect(norm(marketValue.textContent ?? "")).toBe(norm(formatMinor(952_00, "USD")));
+
+    const dash = screen.getByTestId("position-profit-dash");
+    expect(dash).toHaveTextContent("—");
+    expect(dash).toHaveAttribute("title", "Оценка в другой валюте — прибыль не рассчитывается");
     expect(screen.queryByTestId("position-profit-amount")).not.toBeInTheDocument();
     expect(screen.queryByTestId("position-profit-percent")).not.toBeInTheDocument();
   });
