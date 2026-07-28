@@ -93,12 +93,15 @@
       "instrument": "Инструмент",
       "quantity": "Количество",
       "cost": "Стоимость",
+      "market": "Рыночная",
       "realized": "Реализовано",
       "income": "Доход",
       "fees": "Комиссии"
     },
     "closed": "закрыта",
-    "frozen": "заморожен"
+    "frozen": "заморожен",
+    "noQuote": "Нет котировки",
+    "priceOn": "{{price}} · {{date}}"
   },
   "operations": {
     "title": "Операции",
