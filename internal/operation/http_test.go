@@ -15,6 +15,7 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/httpserver"
@@ -39,7 +40,7 @@ func newAPI(t *testing.T) (string, *http.Client) {
 
 	srv := httpserver.New(slog.Default(), pool)
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
-	account.NewHandler(account.NewStore(pool), auth, sm).Mount(srv)
+	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(marketdata.NewStore(pool)), auth, sm).Mount(srv)
 	instrument.NewHandler(instrument.NewStore(pool), auth, sm).Mount(srv)
 	operation.NewHandler(opSvc, opStore, auth, sm).Mount(srv)
 

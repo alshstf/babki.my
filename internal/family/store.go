@@ -71,7 +71,7 @@ func (s *Store) CreateSpaceWithOwner(ctx context.Context, name string, ownerID u
 
 	var sp Space
 	err = tx.QueryRow(ctx, `INSERT INTO spaces (name) VALUES ($1)
-		RETURNING id, name, created_at`, name).Scan(&sp.ID, &sp.Name, &sp.CreatedAt)
+		RETURNING id, name, base_currency, created_at`, name).Scan(&sp.ID, &sp.Name, &sp.BaseCurrency, &sp.CreatedAt)
 	if err != nil {
 		return Space{}, fmt.Errorf("insert space: %w", err)
 	}
@@ -106,7 +106,7 @@ func (s *Store) CreateFirstUserWithSpace(ctx context.Context, spaceName, usernam
 
 	var sp Space
 	err = tx.QueryRow(ctx, `INSERT INTO spaces (name) VALUES ($1)
-		RETURNING id, name, created_at`, spaceName).Scan(&sp.ID, &sp.Name, &sp.CreatedAt)
+		RETURNING id, name, base_currency, created_at`, spaceName).Scan(&sp.ID, &sp.Name, &sp.BaseCurrency, &sp.CreatedAt)
 	if err != nil {
 		return User{}, Space{}, fmt.Errorf("insert space: %w", err)
 	}
@@ -157,9 +157,19 @@ func (s *Store) CreateUserInSpace(ctx context.Context, spaceID uuid.UUID, userna
 
 func (s *Store) SpaceByID(ctx context.Context, id uuid.UUID) (Space, error) {
 	var sp Space
-	err := s.pool.QueryRow(ctx, `SELECT id, name, created_at FROM spaces WHERE id = $1`, id).
-		Scan(&sp.ID, &sp.Name, &sp.CreatedAt)
+	err := s.pool.QueryRow(ctx, `SELECT id, name, base_currency, created_at FROM spaces WHERE id = $1`, id).
+		Scan(&sp.ID, &sp.Name, &sp.BaseCurrency, &sp.CreatedAt)
 	return sp, err
+}
+
+// UpdateBaseCurrency sets the space's base currency. Returns pgx.ErrNoRows
+// if the space doesn't exist.
+func (s *Store) UpdateBaseCurrency(ctx context.Context, spaceID uuid.UUID, currency string) error {
+	ct, err := s.pool.Exec(ctx, `UPDATE spaces SET base_currency = $2 WHERE id = $1`, spaceID, currency)
+	if err == nil && ct.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return err
 }
 
 func (s *Store) AddMember(ctx context.Context, spaceID, userID uuid.UUID, role Role) error {

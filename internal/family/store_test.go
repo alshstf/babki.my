@@ -2,7 +2,11 @@ package family_test
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/platform/db"
@@ -75,6 +79,58 @@ func TestUserAndSpaceLifecycle(t *testing.T) {
 	// duplicate username must fail
 	if _, err := st.CreateUser(ctx, "alex", "Dup", "h"); err == nil {
 		t.Error("duplicate username: want error")
+	}
+}
+
+// TestBaseCurrency verifies the default, that all Space-scanning methods
+// return base_currency, and that UpdateBaseCurrency persists the change and
+// reports pgx.ErrNoRows for a space that doesn't exist.
+func TestBaseCurrency(t *testing.T) {
+	st, ctx := newStore(t)
+
+	u, err := st.CreateUser(ctx, "alex", "Alex", "hash1")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	sp, err := st.CreateSpaceWithOwner(ctx, "Family", u.ID)
+	if err != nil {
+		t.Fatalf("CreateSpaceWithOwner: %v", err)
+	}
+	if sp.BaseCurrency != "RUB" {
+		t.Fatalf("CreateSpaceWithOwner base_currency = %q, want RUB (migration default)", sp.BaseCurrency)
+	}
+
+	got, err := st.SpaceByID(ctx, sp.ID)
+	if err != nil {
+		t.Fatalf("SpaceByID: %v", err)
+	}
+	if got.BaseCurrency != "RUB" {
+		t.Fatalf("SpaceByID base_currency = %q, want RUB", got.BaseCurrency)
+	}
+
+	if err := st.UpdateBaseCurrency(ctx, sp.ID, "USD"); err != nil {
+		t.Fatalf("UpdateBaseCurrency: %v", err)
+	}
+	got, err = st.SpaceByID(ctx, sp.ID)
+	if err != nil {
+		t.Fatalf("SpaceByID after update: %v", err)
+	}
+	if got.BaseCurrency != "USD" {
+		t.Fatalf("base_currency after update = %q, want USD", got.BaseCurrency)
+	}
+
+	// CreateFirstUserWithSpace also scans base_currency.
+	_, sp2, err := st.CreateFirstUserWithSpace(ctx, "Other", "bob", "Bob", "hash2")
+	if err != nil {
+		t.Fatalf("CreateFirstUserWithSpace: %v", err)
+	}
+	if sp2.BaseCurrency != "RUB" {
+		t.Fatalf("CreateFirstUserWithSpace base_currency = %q, want RUB", sp2.BaseCurrency)
+	}
+
+	// Nonexistent space id: ErrNoRows.
+	if err := st.UpdateBaseCurrency(ctx, uuid.New(), "EUR"); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("UpdateBaseCurrency on missing space = %v, want pgx.ErrNoRows", err)
 	}
 }
 

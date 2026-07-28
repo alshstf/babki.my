@@ -23,7 +23,10 @@ var (
 	ErrUsernameTaken = errors.New("username already taken")
 )
 
-var usernameRe = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
+var (
+	usernameRe = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
+	currencyRe = regexp.MustCompile(`^[A-Z]{3}$`)
+)
 
 // dummyHash is a precomputed argon2id hash (params: argon2id.DefaultParams,
 // passphrase "dummy-password-for-timing-safety") used to run a real
@@ -174,6 +177,20 @@ func (s *Service) UpdateMemberRole(ctx context.Context, p Principal, targetID uu
 		return Member{}, err
 	}
 	return Member{User: u, Role: role}, nil
+}
+
+// UpdateBaseCurrency changes the space's base currency (owner-only).
+func (s *Service) UpdateBaseCurrency(ctx context.Context, p Principal, currency string) (Space, error) {
+	if p.Role != RoleOwner {
+		return Space{}, ErrForbidden
+	}
+	if !currencyRe.MatchString(currency) {
+		return Space{}, fmt.Errorf("%w: base_currency must be an uppercase ISO-4217 code (e.g. RUB)", ErrValidation)
+	}
+	if err := s.store.UpdateBaseCurrency(ctx, p.SpaceID, currency); err != nil {
+		return Space{}, err
+	}
+	return s.store.SpaceByID(ctx, p.SpaceID)
 }
 
 // RemoveMember deletes a member (owner-only; the owner cannot be removed).

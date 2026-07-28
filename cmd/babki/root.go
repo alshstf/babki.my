@@ -16,6 +16,9 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/marketdata/cbr"
+	"babki.my/babki/internal/marketdata/moex"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/httpserver"
@@ -33,18 +36,26 @@ func mountModules(srv *httpserver.Server, r *rt) {
 	famSM := family.NewSessionManager(r.pool)
 	famAuth := family.NewAuth(famSM, famStore)
 	family.NewHandler(famSvc, famStore, famAuth, famSM).Mount(srv)
-	account.NewHandler(account.NewStore(r.pool), famAuth, famSM).Mount(srv)
+	mdStore := marketdata.NewStore(r.pool)
+	converter := marketdata.NewConverter(mdStore)
+	account.NewHandler(account.NewStore(r.pool), famStore, converter, famAuth, famSM).Mount(srv)
 	instStore := instrument.NewStore(r.pool)
 	instrument.NewHandler(instStore, famAuth, famSM).Mount(srv)
 	opStore := operation.NewStore(r.pool)
 	operation.NewHandler(operation.NewService(opStore), opStore, famAuth, famSM).Mount(srv)
-	portfolio.NewHandler(opStore, instStore, famAuth, famSM).Mount(srv)
+	portfolio.NewHandler(opStore, instStore, mdStore, famAuth, famSM).Mount(srv)
 }
 
 // startJobClient wires up the job workers and River client and starts it.
-// Shared by the "all" and "worker" roles.
+// Shared by the "all" and "worker" roles. cbr and moex are used with their
+// default base URLs and http.DefaultClient — no configuration knob is
+// exposed for them yet.
 func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
-	workers := jobs.NewWorkers(r.log, r.pool)
+	mdStore := marketdata.NewStore(r.pool)
+	instStore := instrument.NewStore(r.pool)
+	fxProvider := cbr.New(nil, "")
+	quoteProvider := moex.New(nil, "")
+	workers := jobs.NewWorkers(r.log, r.pool, mdStore, instStore, fxProvider, quoteProvider)
 	client, err := jobs.NewClient(r.pool, workers, r.log)
 	if err != nil {
 		return nil, err

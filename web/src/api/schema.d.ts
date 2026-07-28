@@ -84,6 +84,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/space": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Updates the space's base currency (owner-only). */
+        patch: operations["updateSpace"];
+        trace?: never;
+    };
     "/api/v1/members": {
         parameters: {
             query?: never;
@@ -328,6 +345,12 @@ export interface components {
             /** Format: uuid */
             space_id: string;
             space_name: string;
+            /** @description ISO-4217, e.g. RUB */
+            base_currency: string;
+        };
+        UpdateSpaceRequest: {
+            /** @description ISO-4217 uppercase, e.g. RUB */
+            base_currency: string;
         };
         /** @enum {string} */
         Role: "owner" | "editor" | "viewer";
@@ -407,6 +430,17 @@ export interface components {
         };
         Summary: {
             totals: components["schemas"]["CurrencyTotal"][];
+            /** @description ISO-4217, from the space; e.g. RUB */
+            base_currency: string;
+            /**
+             * Format: int64
+             * @description Sum of totals[].net_minor converted using the latest FX rate on or before today; null only if none of the currencies could be converted
+             */
+            total_in_base_minor?: number | null;
+            /** @description Currencies from totals that had no fx rate available and were excluded from total_in_base_minor; empty if all converted */
+            unconverted: string[];
+            /** @description Oldest FX rate date used for the conversion; null if nothing was converted */
+            rates_on?: string | null;
         };
         /** @enum {string} */
         InstrumentType: "share" | "bond" | "etf" | "currency" | "crypto" | "metal" | "custom";
@@ -534,6 +568,17 @@ export interface components {
             /** Format: int64 */
             fees_minor: number;
             currency: string;
+            /**
+             * Format: int64
+             * @description Market value in market_value_currency (may differ from currency); for bonds this is the face value's currency, not the quote's; null if no usable quote
+             */
+            market_value_minor?: number | null;
+            /** @description Currency of market_value_minor: the quote's currency for share/etf, the instrument's face_currency for bond; null exactly when market_value_minor is null */
+            market_value_currency?: string | null;
+            /** @description Decimal as string; latest quote price used for the valuation */
+            price?: string | null;
+            /** @description Date YYYY-MM-DD of the quote used for the valuation */
+            price_on?: string | null;
         };
         PositionsResponse: {
             positions: components["schemas"]["Position"][];
@@ -666,6 +711,33 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+        };
+    };
+    updateSpace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSpaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated session info */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionInfo"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     listMembers: {

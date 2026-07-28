@@ -56,10 +56,21 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("POST /api/v1/auth/login", wrap(h.handleLogin))
 	srv.Mount("POST /api/v1/auth/logout", h.sm.LoadAndSave(h.auth.RequireAuth(http.HandlerFunc(h.handleLogout))))
 	srv.Mount("GET /api/v1/auth/me", h.sm.LoadAndSave(h.auth.RequireAuth(http.HandlerFunc(h.handleMe))))
+	srv.Mount("PATCH /api/v1/space", authed(h.handleUpdateSpace))
 	srv.Mount("GET /api/v1/members", authed(h.handleListMembers))
 	srv.Mount("POST /api/v1/members", authed(h.handleCreateMember))
 	srv.Mount("PATCH /api/v1/members/{userId}", authed(h.handleUpdateMember))
 	srv.Mount("DELETE /api/v1/members/{userId}", authed(h.handleDeleteMember))
+}
+
+func toSessionInfo(u User, p Principal, sp Space) apitypes.SessionInfo {
+	return apitypes.SessionInfo{
+		User:         apitypes.UserInfo{Id: u.ID, Username: u.Username, DisplayName: u.DisplayName},
+		Role:         apitypes.Role(p.Role),
+		SpaceId:      sp.ID,
+		SpaceName:    sp.Name,
+		BaseCurrency: sp.BaseCurrency,
+	}
 }
 
 func (h *Handler) sessionInfo(r *http.Request, u User, p Principal) (apitypes.SessionInfo, error) {
@@ -67,12 +78,7 @@ func (h *Handler) sessionInfo(r *http.Request, u User, p Principal) (apitypes.Se
 	if err != nil {
 		return apitypes.SessionInfo{}, err
 	}
-	return apitypes.SessionInfo{
-		User:      apitypes.UserInfo{Id: u.ID, Username: u.Username, DisplayName: u.DisplayName},
-		Role:      apitypes.Role(p.Role),
-		SpaceId:   sp.ID,
-		SpaceName: sp.Name,
-	}, nil
+	return toSessionInfo(u, p, sp), nil
 }
 
 func (h *Handler) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
@@ -152,6 +158,28 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, info)
+}
+
+// handleUpdateSpace changes the space's base currency (owner-only; role and
+// format checks live in Service.UpdateBaseCurrency, matching how the
+// members routes below delegate their owner-only checks to Service).
+func (h *Handler) handleUpdateSpace(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFromContext(r.Context())
+	var req apitypes.UpdateSpaceRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	sp, err := h.svc.UpdateBaseCurrency(r.Context(), p, req.BaseCurrency)
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	u, err := h.store.UserByID(r.Context(), p.UserID)
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, toSessionInfo(u, p, sp))
 }
 
 func memberInfo(m Member) apitypes.MemberInfo {
