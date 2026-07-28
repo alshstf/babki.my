@@ -283,6 +283,19 @@ func (h *Handler) handleSummary(w http.ResponseWriter, r *http.Request) {
 		netByCurrency[t.Currency] = t.NetMinor
 	}
 
+	// Filter out zero-amount currencies before conversion: zero minor units
+	// convert to zero at any rate, so there's no need for an fx rate at all.
+	// This prevents zero-amount currencies from incorrectly appearing in the
+	// unconverted list when their rate is unavailable. The filtering preserves
+	// the correct semantics: an empty space or all-zero balances yields
+	// total_in_base_minor=0 (not null), while a space with only non-zero
+	// currencies that all lack rates yields null.
+	for currency, amount := range netByCurrency {
+		if amount == 0 {
+			delete(netByCurrency, currency)
+		}
+	}
+
 	converted, missing, err := h.converter.ConvertMany(r.Context(), netByCurrency, sp.BaseCurrency, time.Now().UTC())
 	if err != nil {
 		family.WriteError(w, err)

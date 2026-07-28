@@ -259,3 +259,68 @@ func TestSummaryBaseCurrencyComesFromSpace(t *testing.T) {
 		t.Fatalf("unconverted = %v, want []", sum.Unconverted)
 	}
 }
+
+// TestSummaryZeroBalanceCurrencyIgnored verifies that currencies with zero net
+// minor amounts are excluded from fx rate lookup and do not appear in the
+// unconverted list, even when their rate is unavailable. This covers the
+// regression case: a newly created account in a rare currency without fx rates
+// and with no balance (net_minor=0) should not poison the summary of accounts
+// in base currency or other convertible currencies.
+//
+// Test setup: a KZT account with zero balance (no fx rate for KZT exists) +
+// a RUB account (base currency) with 100 RUB. Expected: total_in_base_minor=100000,
+// unconverted=[], KZT account still shows in totals with net_minor=0.
+func TestSummaryZeroBalanceCurrencyIgnored(t *testing.T) {
+	url, c, _ := newAPIWithConverter(t)
+
+	// Create RUB account (base currency) with a non-zero balance
+	resp := do(t, c, "POST", url+"/api/v1/accounts",
+		`{"name":"Base RUB","type":"cash","currency":"RUB"}`)
+	if resp.StatusCode != 201 {
+		t.Fatalf("create RUB account: %d", resp.StatusCode)
+	}
+	var rubAcc struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&rubAcc)
+	if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+rubAcc.ID+"/balance",
+		`{"as_of":"2026-07-20","amount_minor":100000}`); resp.StatusCode != 200 {
+		t.Fatalf("set RUB balance: %d", resp.StatusCode)
+	}
+
+	// Create KZT account (NOT base currency, NO fx rate) with zero balance
+	resp = do(t, c, "POST", url+"/api/v1/accounts",
+		`{"name":"Zero KZT","type":"cash","currency":"KZT"}`)
+	if resp.StatusCode != 201 {
+		t.Fatalf("create KZT account: %d", resp.StatusCode)
+	}
+	var kztAcc struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&kztAcc)
+	// Note: not setting a balance for KZT account, so it has net_minor=0
+
+	resp = do(t, c, "GET", url+"/api/v1/summary", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("summary = %d", resp.StatusCode)
+	}
+	var sum summaryResponse
+	_ = json.NewDecoder(resp.Body).Decode(&sum)
+
+	if sum.BaseCurrency != "RUB" {
+		t.Fatalf("base_currency = %q, want RUB", sum.BaseCurrency)
+	}
+	// The total should be 100000 (RUB only), not null. The KZT account exists
+	// but has zero balance, so it should not require an fx rate.
+	if sum.TotalInBaseMinor == nil || *sum.TotalInBaseMinor != 100000 {
+		t.Fatalf("total_in_base_minor = %v, want 100000 (RUB leg only)", sum.TotalInBaseMinor)
+	}
+	// unconverted must be empty: KZT has zero balance and doesn't need conversion
+	if sum.Unconverted == nil || len(*sum.Unconverted) != 0 {
+		t.Fatalf("unconverted = %v, want []", sum.Unconverted)
+	}
+	// Totals must still include both currencies
+	if len(sum.Totals) != 2 {
+		t.Fatalf("totals has %d currencies, want 2", len(sum.Totals))
+	}
+}
