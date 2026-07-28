@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/testdb"
@@ -113,6 +116,55 @@ func TestSeedDemo(t *testing.T) {
 		t.Fatal("missing Freedom position AAPL")
 	} else if aapl.Quantity.String() != "20" {
 		t.Errorf("AAPL quantity = %s, want 20", aapl.Quantity.String())
+	}
+
+	// seeded fx rates let the converter bridge 100 USD into RUB at the
+	// seeded rate (78.50): 100 USD = 10000 minor units -> 785000 minor
+	// units = 7850.00 RUB.
+	converter := marketdata.NewConverter(marketdata.NewStore(pool))
+	on := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	got, err := converter.Convert(ctx, 100_00, "USD", "RUB", on)
+	if err != nil {
+		t.Fatalf("Convert(100 USD -> RUB): %v", err)
+	}
+	if got != 785_000 {
+		t.Errorf("Convert(100 USD -> RUB) = %d, want 785000 (7850.00 RUB)", got)
+	}
+
+	// every currency the demo space holds (RUB, USD) now has a seeded rate
+	// into the space's base currency (RUB, the default), so GET /summary's
+	// total_in_base_minor comes out nonzero with nothing left unconverted —
+	// this mirrors handleSummary's own zero-filter + ConvertMany call.
+	netByCurrency := make(map[string]int64, len(totals))
+	for _, ct := range totals {
+		if ct.NetMinor != 0 {
+			netByCurrency[ct.Currency] = ct.NetMinor
+		}
+	}
+	converted, missing, err := converter.ConvertMany(ctx, netByCurrency, "RUB", on)
+	if err != nil {
+		t.Fatalf("ConvertMany: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Errorf("ConvertMany missing = %v, want empty", missing)
+	}
+	if converted == 0 {
+		t.Errorf("ConvertMany total = 0, want nonzero")
+	}
+
+	// SBER has a seeded quote, so its position in Т-Банк carries a market
+	// valuation — the same LatestQuotes + marketValue path GET
+	// .../positions uses (internal/portfolio/http.go).
+	sber, ok := tbankPositions["SBER"]
+	if !ok {
+		t.Fatal("missing Т-Банк position SBER")
+	}
+	sberQuote, err := marketdata.NewStore(pool).QuoteOn(ctx, sber.InstrumentID, on)
+	if err != nil {
+		t.Fatalf("QuoteOn SBER: %v", err)
+	}
+	if want := decimal.RequireFromString("305.50"); !sberQuote.Price.Equal(want) {
+		t.Errorf("SBER quote price = %s, want %s", sberQuote.Price.String(), want.String())
 	}
 
 	// second run refuses (instance not empty)
