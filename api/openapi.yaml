@@ -59,6 +59,24 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SessionInfo" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/space:
+    patch:
+      operationId: updateSpace
+      description: Updates the space's base currency (owner-only).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateSpaceRequest" }
+      responses:
+        "200":
+          description: Updated session info
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionInfo" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /api/v1/members:
     get:
       operationId: listMembers
@@ -368,12 +386,18 @@ components:
         display_name: { type: string }
     SessionInfo:
       type: object
-      required: [user, role, space_id, space_name]
+      required: [user, role, space_id, space_name, base_currency]
       properties:
         user: { $ref: "#/components/schemas/UserInfo" }
         role: { $ref: "#/components/schemas/Role" }
         space_id: { type: string, format: uuid }
         space_name: { type: string }
+        base_currency: { type: string, description: "ISO-4217, e.g. RUB" }
+    UpdateSpaceRequest:
+      type: object
+      required: [base_currency]
+      properties:
+        base_currency: { type: string, description: "ISO-4217 uppercase, e.g. RUB" }
     Role:
       type: string
       enum: [owner, editor, viewer]

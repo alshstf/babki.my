@@ -352,10 +352,12 @@ type Role string
 
 // SessionInfo defines model for SessionInfo.
 type SessionInfo struct {
-	Role      Role               `json:"role"`
-	SpaceId   openapi_types.UUID `json:"space_id"`
-	SpaceName string             `json:"space_name"`
-	User      UserInfo           `json:"user"`
+	// BaseCurrency ISO-4217, e.g. RUB
+	BaseCurrency string             `json:"base_currency"`
+	Role         Role               `json:"role"`
+	SpaceId      openapi_types.UUID `json:"space_id"`
+	SpaceName    string             `json:"space_name"`
+	User         UserInfo           `json:"user"`
 }
 
 // SetBalanceRequest defines model for SetBalanceRequest.
@@ -430,6 +432,12 @@ type UpdateMemberRequest struct {
 	Role Role `json:"role"`
 }
 
+// UpdateSpaceRequest defines model for UpdateSpaceRequest.
+type UpdateSpaceRequest struct {
+	// BaseCurrency ISO-4217 uppercase, e.g. RUB
+	BaseCurrency string `json:"base_currency"`
+}
+
 // UserInfo defines model for UserInfo.
 type UserInfo struct {
 	DisplayName string             `json:"display_name"`
@@ -484,3 +492,6 @@ type CreateTransferJSONRequestBody = TransferRequest
 
 // PerformSetupJSONRequestBody defines body for PerformSetup for application/json ContentType.
 type PerformSetupJSONRequestBody = SetupRequest
+
+// UpdateSpaceJSONRequestBody defines body for UpdateSpace for application/json ContentType.
+type UpdateSpaceJSONRequestBody = UpdateSpaceRequest

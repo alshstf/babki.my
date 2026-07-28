@@ -84,6 +84,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/space": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Updates the space's base currency (owner-only). */
+        patch: operations["updateSpace"];
+        trace?: never;
+    };
     "/api/v1/members": {
         parameters: {
             query?: never;
@@ -328,6 +345,12 @@ export interface components {
             /** Format: uuid */
             space_id: string;
             space_name: string;
+            /** @description ISO-4217, e.g. RUB */
+            base_currency: string;
+        };
+        UpdateSpaceRequest: {
+            /** @description ISO-4217 uppercase, e.g. RUB */
+            base_currency: string;
         };
         /** @enum {string} */
         Role: "owner" | "editor" | "viewer";
@@ -666,6 +689,33 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+        };
+    };
+    updateSpace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSpaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated session info */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionInfo"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     listMembers: {
