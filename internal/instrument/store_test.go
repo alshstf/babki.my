@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/testdb"
@@ -76,6 +78,61 @@ func TestInstrumentLifecycle(t *testing.T) {
 
 	if _, err := st.ByID(ctx, share.ID); err != nil {
 		t.Fatalf("ByID: %v", err)
+	}
+}
+
+func TestListTradable(t *testing.T) {
+	st, ctx := newStore(t)
+
+	share, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("Create share: %v", err)
+	}
+	bond, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeBond, Name: "ОФЗ 26238", Ticker: "SU26238RMFS4", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("Create bond: %v", err)
+	}
+	etf, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeETF, Name: "FinEx USA", Ticker: "FXUS", Currency: "USD",
+	})
+	if err != nil {
+		t.Fatalf("Create etf: %v", err)
+	}
+	// no ticker -> excluded even though the type is tradable.
+	if _, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Без тикера", Currency: "RUB",
+	}); err != nil {
+		t.Fatalf("Create tickerless: %v", err)
+	}
+	// non-tradable type with a ticker -> excluded.
+	if _, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeCurrency, Name: "USD", Ticker: "USD000UTSTOM", Currency: "USD",
+	}); err != nil {
+		t.Fatalf("Create currency: %v", err)
+	}
+
+	got, err := st.ListTradable(ctx)
+	if err != nil {
+		t.Fatalf("ListTradable: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("ListTradable len = %d, want 3: %+v", len(got), got)
+	}
+	ids := map[uuid.UUID]bool{}
+	for _, i := range got {
+		if i.Ticker == "" {
+			t.Fatalf("ListTradable returned tickerless instrument: %+v", i)
+		}
+		ids[i.ID] = true
+	}
+	for _, want := range []uuid.UUID{share.ID, bond.ID, etf.ID} {
+		if !ids[want] {
+			t.Fatalf("ListTradable missing %v", want)
+		}
 	}
 }
 

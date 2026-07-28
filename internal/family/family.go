@@ -33,9 +33,10 @@ type User struct {
 }
 
 type Space struct {
-	ID        uuid.UUID
-	Name      string
-	CreatedAt time.Time
+	ID           uuid.UUID
+	Name         string
+	BaseCurrency string
+	CreatedAt    time.Time
 }
 
 type Member struct {

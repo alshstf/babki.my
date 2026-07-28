@@ -1,6 +1,7 @@
 package account
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"github.com/oapi-codegen/nullable"
 
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
@@ -18,15 +20,27 @@ import (
 
 var currencyRe = regexp.MustCompile(`^[A-Z]{3}$`)
 
-// Handler exposes the account module over HTTP.
-type Handler struct {
-	store *Store
-	auth  *family.Auth
-	sm    *scs.SessionManager
+// spaceStore is the subset of family.Store this handler needs: reading the
+// space's base currency for GET /summary. Local interface (mirroring
+// portfolio's journalStore/quoteStore) so tests can inject a fake or a real
+// *family.Store interchangeably — Go interface assignability is structural,
+// so *family.Store satisfies this with no conversion needed at the call
+// site.
+type spaceStore interface {
+	SpaceByID(ctx context.Context, id uuid.UUID) (family.Space, error)
 }
 
-func NewHandler(store *Store, auth *family.Auth, sm *scs.SessionManager) *Handler {
-	return &Handler{store: store, auth: auth, sm: sm}
+// Handler exposes the account module over HTTP.
+type Handler struct {
+	store     *Store
+	spaces    spaceStore
+	converter *marketdata.Converter
+	auth      *family.Auth
+	sm        *scs.SessionManager
+}
+
+func NewHandler(store *Store, spaces spaceStore, converter *marketdata.Converter, auth *family.Auth, sm *scs.SessionManager) *Handler {
+	return &Handler{store: store, spaces: spaces, converter: converter, auth: auth, sm: sm}
 }
 
 func (h *Handler) Mount(srv *httpserver.Server) {
@@ -222,15 +236,34 @@ func (h *Handler) handleSetBalance(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, toAPI(a))
 }
 
-// handleSummary totals the space's accounts by currency.
+// handleSummary totals the space's accounts by currency, then converts and
+// sums those per-currency totals into the space's base currency.
 //
 // The totals come exclusively from manually entered balances
 // (account_balances, see Store.SummaryByCurrency). Positions computed by the
 // portfolio engine from the operations journal are deliberately NOT added
 // here: a brokerage account's securities are already reflected in the balance
 // the user records for it, so counting positions on top would double count.
-// Valuing brokerage accounts as "positions + cash" is planned together with
-// market quotes in plan 4; until then the two views stay separate.
+// Valuing brokerage accounts as "positions + cash" — and folding that
+// valuation into this summary — is planned for plan 4b; until then the two
+// views stay separate, and total_in_base_minor below is a sum of manual
+// balances only, not full net worth including live market values.
+//
+// total_in_base_minor converts each currency's net_minor into base_currency
+// using the latest fx rate on or before today (ConvertMany, on
+// time.Now().UTC()) and sums the results. A currency with no resolvable
+// rate is dropped into unconverted rather than failing the request — a
+// partial total beats an error page. total_in_base_minor is null only when
+// there's at least one currency and none of them converted (unconverted
+// covers every currency in totals); an empty space, or a space whose
+// accounts are already all in base_currency, yields 0, not null.
+//
+// rates_on discloses how stale that conversion might be: it's the date of
+// the OLDEST fx rate ConvertMany actually used, which — since FxRateOn
+// falls back to the nearest earlier date — can be well before today (e.g. a
+// weekend or a currency the rate provider hasn't refreshed in a while). It
+// is null only when nothing needed a rate at all (every currency already in
+// base_currency, or every currency ended up unconverted).
 func (h *Handler) handleSummary(w http.ResponseWriter, r *http.Request) {
 	p, _ := family.PrincipalFromContext(r.Context())
 	totals, err := h.store.SummaryByCurrency(r.Context(), p.SpaceID)
@@ -238,12 +271,59 @@ func (h *Handler) handleSummary(w http.ResponseWriter, r *http.Request) {
 		family.WriteError(w, err)
 		return
 	}
-	out := apitypes.Summary{Totals: make([]apitypes.CurrencyTotal, 0, len(totals))}
+	sp, err := h.spaces.SpaceByID(r.Context(), p.SpaceID)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+
+	out := apitypes.Summary{
+		Totals:       make([]apitypes.CurrencyTotal, 0, len(totals)),
+		BaseCurrency: sp.BaseCurrency,
+	}
+	netByCurrency := make(map[string]int64, len(totals))
 	for _, t := range totals {
 		out.Totals = append(out.Totals, apitypes.CurrencyTotal{
 			Currency: t.Currency, AssetsMinor: t.AssetsMinor,
 			LiabilitiesMinor: t.LiabilitiesMinor, NetMinor: t.NetMinor,
 		})
+		netByCurrency[t.Currency] = t.NetMinor
 	}
+
+	// Filter out zero-amount currencies before conversion: zero minor units
+	// convert to zero at any rate, so there's no need for an fx rate at all.
+	// This prevents zero-amount currencies from incorrectly appearing in the
+	// unconverted list when their rate is unavailable. The filtering preserves
+	// the correct semantics: an empty space or all-zero balances yields
+	// total_in_base_minor=0 (not null), while a space with only non-zero
+	// currencies that all lack rates yields null.
+	for currency, amount := range netByCurrency {
+		if amount == 0 {
+			delete(netByCurrency, currency)
+		}
+	}
+
+	converted, missing, ratesOn, err := h.converter.ConvertMany(r.Context(), netByCurrency, sp.BaseCurrency, time.Now().UTC())
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	if missing == nil {
+		missing = []string{} // unconverted must serialize as [], never null
+	}
+	out.Unconverted = missing
+
+	if len(netByCurrency) > 0 && len(missing) == len(netByCurrency) {
+		out.TotalInBaseMinor = nullable.NewNullNullable[int64]()
+	} else {
+		out.TotalInBaseMinor = nullable.NewNullableWithValue(converted)
+	}
+
+	if ratesOn.IsZero() {
+		out.RatesOn = nullable.NewNullNullable[string]()
+	} else {
+		out.RatesOn = nullable.NewNullableWithValue(ratesOn.Format("2006-01-02"))
+	}
+
 	httpjson.Write(w, http.StatusOK, out)
 }

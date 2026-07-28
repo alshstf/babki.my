@@ -15,6 +15,7 @@ import (
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
@@ -22,6 +23,15 @@ import (
 
 // newAPI wires the full stack: family + account modules.
 func newAPI(t *testing.T) (string, *http.Client) {
+	url, c, _ := newAPIWithConverter(t)
+	return url, c
+}
+
+// newAPIWithConverter is newAPI plus the *marketdata.Store backing the
+// account handler's fx converter, so summary tests can seed fx_rates
+// (marketdata.Store.UpsertFxRates, as converter_test.go does) without a
+// separate DB fixture.
+func newAPIWithConverter(t *testing.T) (string, *http.Client, *marketdata.Store) {
 	t.Helper()
 	pool := testdb.New(t)
 	if err := db.Migrate(context.Background(), pool); err != nil {
@@ -31,10 +41,12 @@ func newAPI(t *testing.T) (string, *http.Client) {
 	famSvc := family.NewService(famStore)
 	sm := family.NewSessionManager(pool)
 	auth := family.NewAuth(sm, famStore)
+	mdStore := marketdata.NewStore(pool)
+	converter := marketdata.NewConverter(mdStore)
 
 	srv := httpserver.New(slog.Default(), pool)
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
-	account.NewHandler(account.NewStore(pool), auth, sm).Mount(srv)
+	account.NewHandler(account.NewStore(pool), famStore, converter, auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -46,7 +58,7 @@ func newAPI(t *testing.T) (string, *http.Client) {
 	if err != nil || resp.StatusCode != 201 {
 		t.Fatalf("setup: %v %d", err, resp.StatusCode)
 	}
-	return ts.URL, client
+	return ts.URL, client, mdStore
 }
 
 func do(t *testing.T, c *http.Client, method, url, body string) *http.Response {

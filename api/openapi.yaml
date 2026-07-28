@@ -59,6 +59,24 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SessionInfo" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/space:
+    patch:
+      operationId: updateSpace
+      description: Updates the space's base currency (owner-only).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateSpaceRequest" }
+      responses:
+        "200":
+          description: Updated session info
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionInfo" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /api/v1/members:
     get:
       operationId: listMembers
@@ -368,12 +386,18 @@ components:
         display_name: { type: string }
     SessionInfo:
       type: object
-      required: [user, role, space_id, space_name]
+      required: [user, role, space_id, space_name, base_currency]
       properties:
         user: { $ref: "#/components/schemas/UserInfo" }
         role: { $ref: "#/components/schemas/Role" }
         space_id: { type: string, format: uuid }
         space_name: { type: string }
+        base_currency: { type: string, description: "ISO-4217, e.g. RUB" }
+    UpdateSpaceRequest:
+      type: object
+      required: [base_currency]
+      properties:
+        base_currency: { type: string, description: "ISO-4217 uppercase, e.g. RUB" }
     Role:
       type: string
       enum: [owner, editor, viewer]
@@ -455,11 +479,25 @@ components:
         net_minor: { type: integer, format: int64 }
     Summary:
       type: object
-      required: [totals]
+      required: [totals, base_currency, unconverted]
       properties:
         totals:
           type: array
           items: { $ref: "#/components/schemas/CurrencyTotal" }
+        base_currency: { type: string, description: "ISO-4217, from the space; e.g. RUB" }
+        total_in_base_minor:
+          type: integer
+          format: int64
+          nullable: true
+          description: "Sum of totals[].net_minor converted using the latest FX rate on or before today; null only if none of the currencies could be converted"
+        unconverted:
+          type: array
+          items: { type: string }
+          description: "Currencies from totals that had no fx rate available and were excluded from total_in_base_minor; empty if all converted"
+        rates_on:
+          type: string
+          nullable: true
+          description: "Oldest FX rate date used for the conversion; null if nothing was converted"
     InstrumentType:
       type: string
       enum: [share, bond, etf, currency, crypto, metal, custom]
@@ -566,6 +604,10 @@ components:
         income_minor: { type: integer, format: int64 }
         fees_minor: { type: integer, format: int64 }
         currency: { type: string }
+        market_value_minor: { type: integer, format: int64, nullable: true, description: "Market value in market_value_currency (may differ from currency); for bonds this is the face value's currency, not the quote's; null if no usable quote" }
+        market_value_currency: { type: string, nullable: true, description: "Currency of market_value_minor: the quote's currency for share/etf, the instrument's face_currency for bond; null exactly when market_value_minor is null" }
+        price: { type: string, nullable: true, description: "Decimal as string; latest quote price used for the valuation" }
+        price_on: { type: string, nullable: true, description: "Date YYYY-MM-DD of the quote used for the valuation" }
     PositionsResponse:
       type: object
       required: [positions]

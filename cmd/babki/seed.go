@@ -13,6 +13,7 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
 )
 
@@ -241,6 +242,50 @@ func seedInstrumentsAndOperations(
 		if _, err := opSvc.Create(ctx, spaceID, op); err != nil {
 			return fmt.Errorf("seed operation %s %s: %w", op.Type, op.OccurredOn.Format("2006-01-02"), err)
 		}
+	}
+
+	if err := seedMarketData(ctx, pool, instIDs, d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// seedMarketData records the FX rates and instrument quotes the demo
+// space's market valuation depends on: GET /summary's total_in_base_minor
+// (base currency RUB, so USD/KZT need a rate to convert) and GET
+// .../positions' market_value_minor (share/bond positions need a quote to
+// price). Everything is pinned to 2026-07-20 — the same date as the latest
+// seeded account balance — so both features have live data to show on the
+// same "as of" date the rest of the demo data uses.
+//
+// FXUS and AAPL deliberately get no quote: FXUS is Frozen, so its position
+// demonstrates the null-valuation path (a holding the app can't safely
+// price rather than a silent zero); AAPL is a live foreign instrument with
+// no provider yet (cbr/moex only cover the Russian market — plan 4b widens
+// this).
+func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]uuid.UUID, d func(string) time.Time) error {
+	mdStore := marketdata.NewStore(pool)
+	on := d("2026-07-20")
+	rate := decimal.RequireFromString
+
+	rates := []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: rate("78.50"), Source: "seed"},
+		{Base: "EUR", Quote: "RUB", On: on, Rate: rate("92.30"), Source: "seed"},
+		{Base: "KZT", Quote: "RUB", On: on, Rate: rate("0.163"), Source: "seed"},
+	}
+	if err := mdStore.UpsertFxRates(ctx, rates); err != nil {
+		return fmt.Errorf("seed fx rates: %w", err)
+	}
+
+	// OFZ26238's price is a percentage of face value (95.20 meaning 95.20%),
+	// same convention as a real bond quote — see portfolio.marketValue.
+	quotes := []marketdata.Quote{
+		{InstrumentID: instIDs["SBER"], On: on, Price: rate("305.50"), Currency: "RUB", Source: "seed"},
+		{InstrumentID: instIDs["LKOH"], On: on, Price: rate("7550.00"), Currency: "RUB", Source: "seed"},
+		{InstrumentID: instIDs["OFZ26238"], On: on, Price: rate("95.20"), Currency: "RUB", Source: "seed"},
+	}
+	if err := mdStore.UpsertQuotes(ctx, quotes); err != nil {
+		return fmt.Errorf("seed quotes: %w", err)
 	}
 	return nil
 }

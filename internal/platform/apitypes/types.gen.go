@@ -337,6 +337,18 @@ type Position struct {
 	IncomeMinor int64      `json:"income_minor"`
 	Instrument  Instrument `json:"instrument"`
 
+	// MarketValueCurrency Currency of market_value_minor: the quote's currency for share/etf, the instrument's face_currency for bond; null exactly when market_value_minor is null
+	MarketValueCurrency nullable.Nullable[string] `json:"market_value_currency,omitempty"`
+
+	// MarketValueMinor Market value in market_value_currency (may differ from currency); for bonds this is the face value's currency, not the quote's; null if no usable quote
+	MarketValueMinor nullable.Nullable[int64] `json:"market_value_minor,omitempty"`
+
+	// Price Decimal as string; latest quote price used for the valuation
+	Price nullable.Nullable[string] `json:"price,omitempty"`
+
+	// PriceOn Date YYYY-MM-DD of the quote used for the valuation
+	PriceOn nullable.Nullable[string] `json:"price_on,omitempty"`
+
 	// Quantity Decimal as string
 	Quantity         string `json:"quantity"`
 	RealizedPnlMinor int64  `json:"realized_pnl_minor"`
@@ -352,10 +364,12 @@ type Role string
 
 // SessionInfo defines model for SessionInfo.
 type SessionInfo struct {
-	Role      Role               `json:"role"`
-	SpaceId   openapi_types.UUID `json:"space_id"`
-	SpaceName string             `json:"space_name"`
-	User      UserInfo           `json:"user"`
+	// BaseCurrency ISO-4217, e.g. RUB
+	BaseCurrency string             `json:"base_currency"`
+	Role         Role               `json:"role"`
+	SpaceId      openapi_types.UUID `json:"space_id"`
+	SpaceName    string             `json:"space_name"`
+	User         UserInfo           `json:"user"`
 }
 
 // SetBalanceRequest defines model for SetBalanceRequest.
@@ -381,7 +395,18 @@ type SetupStatus struct {
 
 // Summary defines model for Summary.
 type Summary struct {
-	Totals []CurrencyTotal `json:"totals"`
+	// BaseCurrency ISO-4217, from the space; e.g. RUB
+	BaseCurrency string `json:"base_currency"`
+
+	// RatesOn Oldest FX rate date used for the conversion; null if nothing was converted
+	RatesOn nullable.Nullable[string] `json:"rates_on,omitempty"`
+
+	// TotalInBaseMinor Sum of totals[].net_minor converted using the latest FX rate on or before today; null only if none of the currencies could be converted
+	TotalInBaseMinor nullable.Nullable[int64] `json:"total_in_base_minor,omitempty"`
+	Totals           []CurrencyTotal          `json:"totals"`
+
+	// Unconverted Currencies from totals that had no fx rate available and were excluded from total_in_base_minor; empty if all converted
+	Unconverted []string `json:"unconverted"`
 }
 
 // TransferRequest defines model for TransferRequest.
@@ -428,6 +453,12 @@ type UpdateInstrumentRequest struct {
 // UpdateMemberRequest defines model for UpdateMemberRequest.
 type UpdateMemberRequest struct {
 	Role Role `json:"role"`
+}
+
+// UpdateSpaceRequest defines model for UpdateSpaceRequest.
+type UpdateSpaceRequest struct {
+	// BaseCurrency ISO-4217 uppercase, e.g. RUB
+	BaseCurrency string `json:"base_currency"`
 }
 
 // UserInfo defines model for UserInfo.
@@ -484,3 +515,6 @@ type CreateTransferJSONRequestBody = TransferRequest
 
 // PerformSetupJSONRequestBody defines body for PerformSetup for application/json ContentType.
 type PerformSetupJSONRequestBody = SetupRequest
+
+// UpdateSpaceJSONRequestBody defines body for UpdateSpace for application/json ContentType.
+type UpdateSpaceJSONRequestBody = UpdateSpaceRequest

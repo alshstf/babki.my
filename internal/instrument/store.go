@@ -60,6 +60,30 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]Instrume
 	return out, rows.Err()
 }
 
+// ListTradable returns instruments of type share, bond, or etf that carry a
+// non-empty ticker — the subset background market-data jobs can look up on
+// an exchange. Currency/crypto/metal/custom instruments and tickerless rows
+// are excluded: there is no exchange ticker to fetch a quote for.
+func (s *Store) ListTradable(ctx context.Context) ([]Instrument, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+cols+` FROM instruments
+		WHERE type IN ('share', 'bond', 'etf') AND ticker <> ''
+		ORDER BY ticker`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Instrument
+	for rows.Next() {
+		i, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, i)
+	}
+	return out, rows.Err()
+}
+
 func doublePtr[T any](p **T) *T {
 	if p == nil {
 		return nil
