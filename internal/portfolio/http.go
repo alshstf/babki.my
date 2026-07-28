@@ -46,13 +46,27 @@ type quoteStore interface {
 // converter is the subset of *marketdata.Converter this handler needs: a
 // single fx conversion, used to bring a market valuation denominated in a
 // different currency than the position (see toAPI) into the position's own
-// currency. Local interface (mirroring journalStore/quoteStore) so tests can
-// inject a fake in place of a real *marketdata.Converter to control exactly
-// which currency pairs have a resolvable rate, including forcing
-// marketdata.ErrNoRate — *marketdata.Converter satisfies this structurally,
-// no conversion needed at the call site.
+// currency, plus Rate, used to convert a whole position's amounts into the
+// space's base currency (see positionInBase) while resolving the underlying
+// rate at most once per currency per request. Local interface (mirroring
+// journalStore/quoteStore) so tests can inject a fake in place of a real
+// *marketdata.Converter to control exactly which currency pairs have a
+// resolvable rate, including forcing marketdata.ErrNoRate —
+// *marketdata.Converter satisfies this structurally, no conversion needed at
+// the call site.
 type converter interface {
 	Convert(ctx context.Context, amountMinor int64, from, to string, on time.Time) (int64, error)
+	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
+}
+
+// spaceStore is the subset of family.Store this handler needs: reading the
+// space's base currency to convert positions into it (see positionInBase).
+// Local interface (mirroring journalStore/quoteStore, and identical to
+// account's spaceStore) so tests can inject a fake or a real *family.Store
+// interchangeably — Go interface assignability is structural, so
+// *family.Store satisfies this with no conversion needed at the call site.
+type spaceStore interface {
+	SpaceByID(ctx context.Context, id uuid.UUID) (family.Space, error)
 }
 
 // Handler exposes computed account positions over HTTP.
@@ -61,12 +75,13 @@ type Handler struct {
 	instruments *instrument.Store
 	quotes      quoteStore
 	conv        converter
+	spaces      spaceStore
 	auth        *family.Auth
 	sm          *scs.SessionManager
 }
 
-func NewHandler(ops journalStore, instruments *instrument.Store, quotes quoteStore, conv converter, auth *family.Auth, sm *scs.SessionManager) *Handler {
-	return &Handler{ops: ops, instruments: instruments, quotes: quotes, conv: conv, auth: auth, sm: sm}
+func NewHandler(ops journalStore, instruments *instrument.Store, quotes quoteStore, conv converter, spaces spaceStore, auth *family.Auth, sm *scs.SessionManager) *Handler {
+	return &Handler{ops: ops, instruments: instruments, quotes: quotes, conv: conv, spaces: spaces, auth: auth, sm: sm}
 }
 
 func (h *Handler) Mount(srv *httpserver.Server) {
@@ -238,6 +253,105 @@ func toAPI(ctx context.Context, conv converter, p *Position, inst instrument.Ins
 	return out, nil
 }
 
+// nullableInt64 extracts the value from a nullable.Nullable[int64] API
+// field, treating "unspecified" and "explicit null" the same way (nil).
+// toAPI leaves market_value_minor/unrealized_pnl_minor unspecified — rather
+// than explicitly null — whenever there's no usable quote or valuation (see
+// toAPI), so this reads that "no value" state regardless of which of the two
+// wire representations produced it.
+func nullableInt64(n nullable.Nullable[int64]) *int64 {
+	v, err := n.Get()
+	if err != nil {
+		return nil
+	}
+	return &v
+}
+
+// rateLookup memoizes one currency's resolved fx rate (and the date it came
+// from, or the resolution error) so handleList's per-position conversion
+// loop below hits the fx rate store at most once per distinct position
+// currency, not once per position. Mirrors account.Handler's identically
+// named type/pattern exactly (see its doc comment for the full rationale) —
+// there are two copies rather than one shared type because journalStore and
+// converter are already local, unexported interfaces per package, and this
+// type is just as small.
+type rateLookup struct {
+	rate decimal.Decimal
+	date time.Time
+	err  error
+}
+
+// positionInBase converts a position's cost_minor, market_value_minor (when
+// present), unrealized_pnl_minor (when present), and income_minor from the
+// position's own currency (p.Currency) into baseCurrency, using cache to
+// memoize the underlying marketdata.Converter.Rate lookup across positions
+// that share a currency within a single handleList request — see
+// rateLookup. marketValueMinor and unrealizedPnlMinor are the already-computed
+// (and possibly nil) values from the position's top-level API fields (see
+// toAPI/nullableInt64), not recomputed here.
+//
+// Each amount is converted and rounded independently
+// (decimal.Mul(rl.rate).Round(0), the exact step marketdata.Converter.Convert
+// itself uses) rather than derived from one another via a shared sum: cost,
+// market value, unrealized P&L and income are four independent figures, not
+// terms of one total, so rounding a combined sum once would not reproduce
+// this and could drift by a minor unit from converting each figure on its
+// own. fees_minor and realized_pnl_minor are deliberately excluded (owner
+// feedback — not carried into PositionInBase at all, see the API contract).
+//
+// It returns (nil, nil) — render in_base as null, the WHOLE object, never
+// partially populated — in exactly two cases: p.Currency already equals
+// baseCurrency (nothing to convert), or no fx rate could be resolved for the
+// pair (marketdata.ErrNoRate). This differs from marketValueMinor/
+// unrealizedPnlMinor inside the returned object, which are null only when
+// the corresponding input pointer itself is nil (no quote) — a missing quote
+// nulls just that one figure, but a missing rate nulls the entire
+// conversion, since a partially converted position (e.g. cost converted but
+// market value silently left in the wrong currency) is worse than an honest
+// "can't convert this position at all".
+//
+// A non-nil error means a genuine failure (DB error, canceled context) that
+// the caller must surface as a request error — never silently rendered as
+// null, which would misrepresent an outage as "nothing to convert".
+func (h *Handler) positionInBase(ctx context.Context, p *Position, marketValueMinor, unrealizedPnlMinor *int64, baseCurrency string, cache map[string]*rateLookup) (*apitypes.PositionInBase, error) {
+	if p.Currency == baseCurrency {
+		return nil, nil
+	}
+	rl, ok := cache[p.Currency]
+	if !ok {
+		rate, date, err := h.conv.Rate(ctx, p.Currency, baseCurrency, time.Now().UTC())
+		rl = &rateLookup{rate: rate, date: date, err: err}
+		cache[p.Currency] = rl
+	}
+	if rl.err != nil {
+		if errors.Is(rl.err, marketdata.ErrNoRate) {
+			return nil, nil
+		}
+		return nil, rl.err
+	}
+
+	convert := func(minor int64) int64 {
+		return decimal.NewFromInt(minor).Mul(rl.rate).Round(0).IntPart()
+	}
+	out := &apitypes.PositionInBase{
+		CostMinor:   convert(p.CostMinor),
+		IncomeMinor: convert(p.IncomeMinor),
+		Currency:    baseCurrency,
+		RateOn:      rl.date.Format("2006-01-02"),
+	}
+	if marketValueMinor != nil {
+		out.MarketValueMinor = nullable.NewNullableWithValue(convert(*marketValueMinor))
+	} else {
+		out.MarketValueMinor = nullable.NewNullNullable[int64]()
+	}
+	if unrealizedPnlMinor != nil {
+		out.UnrealizedPnlMinor = nullable.NewNullableWithValue(convert(*unrealizedPnlMinor))
+	} else {
+		out.UnrealizedPnlMinor = nullable.NewNullNullable[int64]()
+	}
+	return out, nil
+}
+
 // handleList computes an account's positions by replaying its full
 // operations journal through Compute. Closed positions (quantity zero) are
 // included: realized P&L and income on them remain meaningful history.
@@ -254,6 +368,12 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	p, _ := family.PrincipalFromContext(r.Context())
 	accountID, ok := pathAccountID(w, r)
 	if !ok {
+		return
+	}
+
+	sp, err := h.spaces.SpaceByID(r.Context(), p.SpaceID)
+	if err != nil {
+		family.WriteError(w, err)
 		return
 	}
 
@@ -286,6 +406,8 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Scoped to this request only: see positionInBase/rateLookup.
+	rates := make(map[string]*rateLookup)
 	out := make([]apitypes.Position, 0, len(positions))
 	for _, pos := range positions {
 		inst, err := h.instruments.ByID(r.Context(), pos.InstrumentID)
@@ -298,6 +420,20 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 			family.WriteError(w, err)
 			return
 		}
+
+		inBase, err := h.positionInBase(r.Context(), pos,
+			nullableInt64(apiPos.MarketValueMinor), nullableInt64(apiPos.UnrealizedPnlMinor),
+			sp.BaseCurrency, rates)
+		if err != nil {
+			family.WriteError(w, err)
+			return
+		}
+		if inBase != nil {
+			apiPos.InBase = nullable.NewNullableWithValue(*inBase)
+		} else {
+			apiPos.InBase = nullable.NewNullNullable[apitypes.PositionInBase]()
+		}
+
 		out = append(out, apiPos)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Instrument.Name < out[j].Instrument.Name })

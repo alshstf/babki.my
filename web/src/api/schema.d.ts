@@ -604,6 +604,34 @@ export interface components {
              * @description market_value_minor minus cost_minor, i.e. the position's unrealized profit or loss; both are already in the same currency (market_value_minor is converted into the position's currency when needed, see above), so this is a plain integer subtraction. Null when there is no market_value_minor, or when market_value_currency still differs from currency (a conversion was needed but no fx rate was available).
              */
             unrealized_pnl_minor?: number | null;
+            /** @description cost_minor/market_value_minor/unrealized_pnl_minor/income_minor converted from the position's own `currency` into the space's base currency at today's fx rate, each amount rounded independently (not derived from one another). Null when `currency` already equals the base currency (nothing to convert) or no fx rate could be resolved for the pair — a partially converted position is never published. fees_minor and realized_pnl_minor are intentionally not carried into this object (owner feedback). */
+            in_base?: components["schemas"]["PositionInBase"] | null;
+        };
+        PositionInBase: {
+            /**
+             * Format: int64
+             * @description Position.cost_minor converted into currency
+             */
+            cost_minor: number;
+            /**
+             * Format: int64
+             * @description Position.market_value_minor converted into currency; null exactly when Position.market_value_minor itself is null (no usable quote), never fabricated
+             */
+            market_value_minor?: number | null;
+            /**
+             * Format: int64
+             * @description Position.unrealized_pnl_minor converted into currency; null exactly when Position.unrealized_pnl_minor itself is null
+             */
+            unrealized_pnl_minor?: number | null;
+            /**
+             * Format: int64
+             * @description Position.income_minor converted into currency
+             */
+            income_minor: number;
+            /** @description The space's base currency (ISO-4217), same as Summary.base_currency */
+            currency: string;
+            /** @description Date YYYY-MM-DD of the fx rate actually used for this conversion */
+            rate_on: string;
         };
         PositionsResponse: {
             positions: components["schemas"]["Position"][];

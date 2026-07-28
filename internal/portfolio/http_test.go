@@ -45,6 +45,7 @@ type quoteStoreLike interface {
 // structurally.
 type converterLike interface {
 	Convert(ctx context.Context, amountMinor int64, from, to string, on time.Time) (int64, error)
+	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
 }
 
 // setupAPI wires the full stack: family + account + instrument + operation +
@@ -73,7 +74,7 @@ func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv conv
 	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(marketdata.NewStore(pool)), auth, sm).Mount(srv)
 	instrument.NewHandler(instStore, auth, sm).Mount(srv)
 	operation.NewHandler(opSvc, opStore, auth, sm).Mount(srv)
-	portfolio.NewHandler(opStore, instStore, quotes, conv, auth, sm).Mount(srv)
+	portfolio.NewHandler(opStore, instStore, quotes, conv, famStore, auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -166,20 +167,36 @@ type instrumentResp struct {
 }
 
 type positionResp struct {
-	Instrument                instrumentResp `json:"instrument"`
-	Quantity                  string         `json:"quantity"`
-	CostMinor                 int64          `json:"cost_minor"`
-	Currency                  string         `json:"currency"`
-	RealizedPnlMinor          int64          `json:"realized_pnl_minor"`
-	IncomeMinor               int64          `json:"income_minor"`
-	FeesMinor                 int64          `json:"fees_minor"`
-	MarketValueMinor          *int64         `json:"market_value_minor"`
-	MarketValueCurrency       *string        `json:"market_value_currency"`
-	MarketValueSourceCurrency *string        `json:"market_value_source_currency"`
-	MarketValueSourceMinor    *int64         `json:"market_value_source_minor"`
-	Price                     *string        `json:"price"`
-	PriceOn                   *string        `json:"price_on"`
-	UnrealizedPnlMinor        *int64         `json:"unrealized_pnl_minor"`
+	Instrument                instrumentResp  `json:"instrument"`
+	Quantity                  string          `json:"quantity"`
+	CostMinor                 int64           `json:"cost_minor"`
+	Currency                  string          `json:"currency"`
+	RealizedPnlMinor          int64           `json:"realized_pnl_minor"`
+	IncomeMinor               int64           `json:"income_minor"`
+	FeesMinor                 int64           `json:"fees_minor"`
+	MarketValueMinor          *int64          `json:"market_value_minor"`
+	MarketValueCurrency       *string         `json:"market_value_currency"`
+	MarketValueSourceCurrency *string         `json:"market_value_source_currency"`
+	MarketValueSourceMinor    *int64          `json:"market_value_source_minor"`
+	Price                     *string         `json:"price"`
+	PriceOn                   *string         `json:"price_on"`
+	UnrealizedPnlMinor        *int64          `json:"unrealized_pnl_minor"`
+	InBase                    *positionInBase `json:"in_base"`
+}
+
+// positionInBase mirrors apitypes.PositionInBase for decoding in tests (see
+// http_position_in_base_test.go). A nil *positionInBase on positionResp
+// covers both an omitted key and an explicit JSON null — which is exactly
+// what in_base always is (see the handler's positionInBase: it is always
+// explicitly set to either a value or null, never left unset, mirroring
+// account.Handler.balanceInBase).
+type positionInBase struct {
+	CostMinor          int64  `json:"cost_minor"`
+	MarketValueMinor   *int64 `json:"market_value_minor"`
+	UnrealizedPnlMinor *int64 `json:"unrealized_pnl_minor"`
+	IncomeMinor        int64  `json:"income_minor"`
+	Currency           string `json:"currency"`
+	RateOn             string `json:"rate_on"`
 }
 
 type positionsResp struct {
