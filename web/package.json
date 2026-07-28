@@ -9,7 +9,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "gen:api": "openapi-typescript ../api/openapi.yaml -o src/api/schema.d.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "i18n:check": "node scripts/check-i18n.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { Link } from "@tanstack/react-router";
 import {
   Table,
   TableBody,
@@ -39,7 +40,13 @@ export function AccountsTable({
             <TableRow key={account.id} className={cn(archived && "opacity-50")}>
               <TableCell>
                 <div className="font-medium">
-                  {account.name}
+                  <Link
+                    to="/accounts/$accountId"
+                    params={{ accountId: account.id }}
+                    className="hover:underline"
+                  >
+                    {account.name}
+                  </Link>
                   {archived && (
                     <Badge variant="outline" className="ml-2">
                       {t("accounts.archived")}
