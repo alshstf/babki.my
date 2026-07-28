@@ -40,6 +40,8 @@ describe("SummaryCards", () => {
     );
     expect(screen.queryByText(/не учтены/)).not.toBeInTheDocument();
     expect(screen.queryByText(/курс от/)).not.toBeInTheDocument();
+    // Fresh rates -> no stale-rates indicator icon at all.
+    expect(screen.queryByTestId("summary-rates-stale-icon")).not.toBeInTheDocument();
   });
 
   it("lists unconverted currencies in the context row", () => {
@@ -48,16 +50,19 @@ describe("SummaryCards", () => {
     expect(screen.getByText(/не учтены:.*KZT/)).toBeInTheDocument();
   });
 
-  it("shows the rates date when it is older than yesterday", () => {
+  it("shows the rates date only in the stale-rates icon's tooltip, not as text", () => {
     wrap(<SummaryCards summary={makeSummary({ rates_on: "2026-07-20" })} />);
 
-    expect(screen.getByText(/курс от 20\.07\.2026/)).toBeInTheDocument();
+    expect(screen.queryByText(/курс от/)).not.toBeInTheDocument();
+    const icon = screen.getByTestId("summary-rates-stale-icon");
+    expect(icon).toHaveAttribute("title", "курс от 20.07.2026");
   });
 
-  it("hides the rates date when it is today or yesterday", () => {
+  it("hides the rates date and the stale-rates icon when rates are today or yesterday", () => {
     const today = localToday();
     wrap(<SummaryCards summary={makeSummary({ rates_on: today })} />);
     expect(screen.queryByText(/курс от/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("summary-rates-stale-icon")).not.toBeInTheDocument();
   });
 
   it("shows the no-total explanation instead of a zero amount when nothing could be converted", () => {
@@ -89,7 +94,9 @@ describe("SummaryCards", () => {
       />,
     );
 
-    // Ensure the rate date fragment is not present (no "курс от" text)
+    // Ensure the rate date fragment is not present (no "курс от" text), and
+    // no stale-rates icon either since there's no valid date to show in it.
     expect(screen.queryByText(/курс от/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("summary-rates-stale-icon")).not.toBeInTheDocument();
   });
 });
