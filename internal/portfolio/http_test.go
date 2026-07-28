@@ -60,7 +60,7 @@ func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike) (string, 
 
 	srv := httpserver.New(slog.Default(), pool)
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
-	account.NewHandler(account.NewStore(pool), auth, sm).Mount(srv)
+	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(marketdata.NewStore(pool)), auth, sm).Mount(srv)
 	instrument.NewHandler(instStore, auth, sm).Mount(srv)
 	operation.NewHandler(opSvc, opStore, auth, sm).Mount(srv)
 	portfolio.NewHandler(opStore, instStore, quotes, auth, sm).Mount(srv)

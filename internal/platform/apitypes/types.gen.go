@@ -392,7 +392,15 @@ type SetupStatus struct {
 
 // Summary defines model for Summary.
 type Summary struct {
-	Totals []CurrencyTotal `json:"totals"`
+	// BaseCurrency ISO-4217, from the space; e.g. RUB
+	BaseCurrency string `json:"base_currency"`
+
+	// TotalInBaseMinor Sum of totals[].net_minor converted into base_currency at today's rate; null only if none of the currencies could be converted
+	TotalInBaseMinor nullable.Nullable[int64] `json:"total_in_base_minor,omitempty"`
+	Totals           []CurrencyTotal          `json:"totals"`
+
+	// Unconverted Currencies from totals that had no fx rate available and were excluded from total_in_base_minor; empty if all converted
+	Unconverted []string `json:"unconverted"`
 }
 
 // TransferRequest defines model for TransferRequest.

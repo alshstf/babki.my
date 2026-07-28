@@ -430,6 +430,15 @@ export interface components {
         };
         Summary: {
             totals: components["schemas"]["CurrencyTotal"][];
+            /** @description ISO-4217, from the space; e.g. RUB */
+            base_currency: string;
+            /**
+             * Format: int64
+             * @description Sum of totals[].net_minor converted into base_currency at today's rate; null only if none of the currencies could be converted
+             */
+            total_in_base_minor?: number | null;
+            /** @description Currencies from totals that had no fx rate available and were excluded from total_in_base_minor; empty if all converted */
+            unconverted: string[];
         };
         /** @enum {string} */
         InstrumentType: "share" | "bond" | "etf" | "currency" | "crypto" | "metal" | "custom";
