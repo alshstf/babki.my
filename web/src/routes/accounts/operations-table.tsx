@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { formatMinor, signClass } from "@/lib/money";
+import { formatDate } from "@/lib/dates";
 import {
   useOperations,
   useDeleteOperation,
@@ -110,7 +111,7 @@ export function OperationsTable({
         <TableBody>
           {list.map((operation) => (
             <TableRow key={operation.id}>
-              <TableCell className="whitespace-nowrap">{operation.occurred_on}</TableCell>
+              <TableCell className="whitespace-nowrap">{formatDate(operation.occurred_on)}</TableCell>
               <TableCell>
                 <Badge variant="secondary">{t(`operationTypes.${operation.type}`)}</Badge>
               </TableCell>
@@ -174,7 +175,9 @@ export function OperationsTable({
             <DialogTitle>{t("operations.delete")}</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            {t("operations.deleteConfirm", { date: deleteTarget?.occurred_on ?? "" })}
+            {t("operations.deleteConfirm", {
+              date: deleteTarget ? formatDate(deleteTarget.occurred_on) : "",
+            })}
           </p>
           {deleteOperation.isError && (
             <Alert variant="destructive">
