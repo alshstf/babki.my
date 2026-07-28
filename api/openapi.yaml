@@ -441,12 +441,24 @@ components:
         status: { $ref: "#/components/schemas/AccountStatus" }
         created_at: { type: string, format: date-time }
         balance: { $ref: "#/components/schemas/BalancePoint" }
+        balance_in_base:
+          nullable: true
+          description: "Account's balance converted into the space's base currency at today's fx rate. Null when the account has no balance, its currency already equals base_currency (nothing to convert), or no fx rate could be resolved."
+          allOf:
+            - $ref: "#/components/schemas/MoneyInBase"
     BalancePoint:
       type: object
       required: [as_of, amount_minor]
       properties:
         as_of: { type: string, description: "Date YYYY-MM-DD" }
         amount_minor: { type: integer, format: int64 }
+    MoneyInBase:
+      type: object
+      required: [amount_minor, currency, rate_on]
+      properties:
+        amount_minor: { type: integer, format: int64, description: "Amount in the base currency's minor units" }
+        currency: { type: string, description: "The space's base currency (ISO-4217), same as Summary.base_currency" }
+        rate_on: { type: string, description: "Date YYYY-MM-DD of the fx rate actually used for this conversion" }
     CreateAccountRequest:
       type: object
       required: [name, type, currency]

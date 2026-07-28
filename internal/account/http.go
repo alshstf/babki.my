@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 	"github.com/alexedwards/scs/v2"
 	"github.com/google/uuid"
 	"github.com/oapi-codegen/nullable"
+	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/marketdata"
@@ -112,6 +114,57 @@ func pathAccountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	return id, true
 }
 
+// rateLookup memoizes one currency's resolved fx rate (and the date it came
+// from, or the resolution error) so handleList's per-account conversion
+// loop below hits the fx rate store at most once per distinct source
+// currency, not once per account. See balanceInBase.
+type rateLookup struct {
+	rate decimal.Decimal
+	date time.Time
+	err  error
+}
+
+// balanceInBase converts a's balance into baseCurrency using cache to
+// memoize the underlying marketdata.Converter.Rate lookup across accounts
+// that share a's currency within a single handleList request: N accounts
+// denominated in the same non-base currency resolve that currency's rate
+// once, not N times (cache, keyed by currency, lives for the lifetime of
+// one request — see handleList). Applying the same cached rate to each
+// account's own amountMinor via decimal.Mul(...).Round(0) reproduces
+// exactly what calling Converter.Convert per account would, per Rate's doc.
+//
+// It returns (nil, nil) — render balance_in_base as null — in exactly the
+// three expected cases: the account has no balance at all, its currency
+// already equals baseCurrency (nothing to convert), or no fx rate could be
+// resolved for the pair (marketdata.ErrNoRate, e.g. an obscure currency the
+// rate provider doesn't cover). A non-nil error means a genuine failure (DB
+// error, canceled context) that the caller must surface as a request
+// error — never silently rendered as null, which would misrepresent an
+// outage as "nothing to convert".
+func (h *Handler) balanceInBase(ctx context.Context, a WithBalance, baseCurrency string, cache map[string]*rateLookup) (*apitypes.MoneyInBase, error) {
+	if a.Balance == nil || a.Currency == baseCurrency {
+		return nil, nil
+	}
+	rl, ok := cache[a.Currency]
+	if !ok {
+		rate, date, err := h.converter.Rate(ctx, a.Currency, baseCurrency, time.Now().UTC())
+		rl = &rateLookup{rate: rate, date: date, err: err}
+		cache[a.Currency] = rl
+	}
+	if rl.err != nil {
+		if errors.Is(rl.err, marketdata.ErrNoRate) {
+			return nil, nil
+		}
+		return nil, rl.err
+	}
+	minor := decimal.NewFromInt(a.Balance.AmountMinor).Mul(rl.rate).Round(0).IntPart()
+	return &apitypes.MoneyInBase{
+		AmountMinor: minor,
+		Currency:    baseCurrency,
+		RateOn:      rl.date.Format("2006-01-02"),
+	}, nil
+}
+
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	p, _ := family.PrincipalFromContext(r.Context())
 	accounts, err := h.store.ListWithBalance(r.Context(), p.SpaceID)
@@ -119,9 +172,28 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		family.WriteError(w, err)
 		return
 	}
+	sp, err := h.spaces.SpaceByID(r.Context(), p.SpaceID)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+
+	// Scoped to this request only: see balanceInBase/rateLookup.
+	rates := make(map[string]*rateLookup)
 	out := make([]apitypes.AccountWithBalance, 0, len(accounts))
 	for _, a := range accounts {
-		out = append(out, toAPI(a))
+		api := toAPI(a)
+		inBase, err := h.balanceInBase(r.Context(), a, sp.BaseCurrency, rates)
+		if err != nil {
+			family.WriteError(w, err)
+			return
+		}
+		if inBase != nil {
+			api.BalanceInBase = nullable.NewNullableWithValue(*inBase)
+		} else {
+			api.BalanceInBase = nullable.NewNullNullable[apitypes.MoneyInBase]()
+		}
+		out = append(out, api)
 	}
 	httpjson.Write(w, http.StatusOK, out)
 }

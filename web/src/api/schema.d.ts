@@ -387,12 +387,25 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             balance?: components["schemas"]["BalancePoint"];
+            /** @description Account's balance converted into the space's base currency at today's fx rate. Null when the account has no balance, its currency already equals base_currency (nothing to convert), or no fx rate could be resolved. */
+            balance_in_base?: components["schemas"]["MoneyInBase"] | null;
         };
         BalancePoint: {
             /** @description Date YYYY-MM-DD */
             as_of: string;
             /** Format: int64 */
             amount_minor: number;
+        };
+        MoneyInBase: {
+            /**
+             * Format: int64
+             * @description Amount in the base currency's minor units
+             */
+            amount_minor: number;
+            /** @description The space's base currency (ISO-4217), same as Summary.base_currency */
+            currency: string;
+            /** @description Date YYYY-MM-DD of the fx rate actually used for this conversion */
+            rate_on: string;
         };
         CreateAccountRequest: {
             name: string;

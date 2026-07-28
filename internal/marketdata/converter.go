@@ -119,6 +119,33 @@ func (c *Converter) ConvertMany(ctx context.Context, amounts map[string]int64, t
 	return converted, missing, ratesOn, nil
 }
 
+// Rate resolves the from->to conversion rate ("to units per 1 from unit")
+// in effect on date on, plus the date of the underlying fx_rates row(s) it
+// came from — the same direct/inverse/RUB-bridge resolution Convert uses
+// (see its doc for the full order), just without applying it to any
+// particular amount.
+//
+// It exists for callers that need to convert many different amounts that
+// share the same currency pair and date — e.g. one space's accounts, several
+// of them denominated in the same non-base currency — without paying for
+// the underlying rate lookup once per amount. Convert (and ConvertMany)
+// still do exactly that internally, at one amount per call; Rate lets a
+// caller resolve the rate once, cache it in a local map keyed by currency,
+// and apply it to each amount itself via the identical
+// decimal.Mul(...).Round(0) step convert uses, so the result matches calling
+// Convert per amount bit-for-bit — only the redundant DB round trips are
+// removed.
+//
+// If from == to, rate is 1 and rateDate is the zero time.Time, mirroring
+// Convert's identity short-circuit: no lookup happens for an
+// already-in-target-currency amount.
+func (c *Converter) Rate(ctx context.Context, from, to string, on time.Time) (rate decimal.Decimal, rateDate time.Time, err error) {
+	if from == to {
+		return decimal.NewFromInt(1), time.Time{}, nil
+	}
+	return c.resolveRate(ctx, from, to, on)
+}
+
 // resolveRate finds the from->to conversion rate ("to units per 1 from
 // unit") on date on, plus the date of the underlying fx_rates row(s) it
 // came from. See Convert's doc for the full resolution order and rounding

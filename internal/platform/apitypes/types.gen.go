@@ -177,15 +177,18 @@ type AccountType string
 
 // AccountWithBalance defines model for AccountWithBalance.
 type AccountWithBalance struct {
-	Balance     *BalancePoint                         `json:"balance,omitempty"`
-	CreatedAt   time.Time                             `json:"created_at"`
-	Currency    string                                `json:"currency"`
-	Id          openapi_types.UUID                    `json:"id"`
-	Institution string                                `json:"institution"`
-	Name        string                                `json:"name"`
-	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
-	Status      AccountStatus                         `json:"status"`
-	Type        AccountType                           `json:"type"`
+	Balance *BalancePoint `json:"balance,omitempty"`
+
+	// BalanceInBase Account's balance converted into the space's base currency at today's fx rate. Null when the account has no balance, its currency already equals base_currency (nothing to convert), or no fx rate could be resolved.
+	BalanceInBase nullable.Nullable[MoneyInBase]        `json:"balance_in_base,omitempty"`
+	CreatedAt     time.Time                             `json:"created_at"`
+	Currency      string                                `json:"currency"`
+	Id            openapi_types.UUID                    `json:"id"`
+	Institution   string                                `json:"institution"`
+	Name          string                                `json:"name"`
+	OwnerUserId   nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
+	Status        AccountStatus                         `json:"status"`
+	Type          AccountType                           `json:"type"`
 }
 
 // BalancePoint defines model for BalancePoint.
@@ -294,6 +297,18 @@ type MemberInfo struct {
 	Id          openapi_types.UUID `json:"id"`
 	Role        Role               `json:"role"`
 	Username    string             `json:"username"`
+}
+
+// MoneyInBase defines model for MoneyInBase.
+type MoneyInBase struct {
+	// AmountMinor Amount in the base currency's minor units
+	AmountMinor int64 `json:"amount_minor"`
+
+	// Currency The space's base currency (ISO-4217), same as Summary.base_currency
+	Currency string `json:"currency"`
+
+	// RateOn Date YYYY-MM-DD of the fx rate actually used for this conversion
+	RateOn string `json:"rate_on"`
 }
 
 // Operation defines model for Operation.
