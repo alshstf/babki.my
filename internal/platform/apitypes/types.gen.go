@@ -337,11 +337,17 @@ type Position struct {
 	IncomeMinor int64      `json:"income_minor"`
 	Instrument  Instrument `json:"instrument"`
 
-	// MarketValueCurrency Currency of market_value_minor: the quote's currency for share/etf, the instrument's face_currency for bond; null exactly when market_value_minor is null
+	// MarketValueCurrency Currency of market_value_minor. Equal to `currency` (the position's own currency) whenever a conversion happened; otherwise the raw valuation currency (the quote's currency for share/etf, the instrument's face_currency for bond). Null exactly when market_value_minor is null.
 	MarketValueCurrency nullable.Nullable[string] `json:"market_value_currency,omitempty"`
 
-	// MarketValueMinor Market value in market_value_currency (may differ from currency); for bonds this is the face value's currency, not the quote's; null if no usable quote
+	// MarketValueMinor Market value in market_value_currency; always the same currency as the position's own `currency` when a conversion rate was available, so it's directly comparable to cost_minor. For a bond whose raw valuation is in the face value's currency (not the quote's) and that currency differs from the position's, this is the value converted into the position's currency at today's fx rate; if no rate is available it falls back to the raw (unconverted) value. Null if no usable quote.
 	MarketValueMinor nullable.Nullable[int64] `json:"market_value_minor,omitempty"`
+
+	// MarketValueSourceCurrency Set only when market_value_minor was converted from a different currency (see market_value_minor): the original, unconverted valuation currency (e.g. a bond's face_currency). Null when no conversion happened, including when one was needed but no fx rate was available.
+	MarketValueSourceCurrency nullable.Nullable[string] `json:"market_value_source_currency,omitempty"`
+
+	// MarketValueSourceMinor Set only when market_value_minor was converted from a different currency: the original, unconverted valuation amount in market_value_source_currency, kept for transparency (e.g. shown in a tooltip). Null when no conversion happened.
+	MarketValueSourceMinor nullable.Nullable[int64] `json:"market_value_source_minor,omitempty"`
 
 	// Price Decimal as string; latest quote price used for the valuation
 	Price nullable.Nullable[string] `json:"price,omitempty"`
@@ -352,6 +358,9 @@ type Position struct {
 	// Quantity Decimal as string
 	Quantity         string `json:"quantity"`
 	RealizedPnlMinor int64  `json:"realized_pnl_minor"`
+
+	// UnrealizedPnlMinor market_value_minor minus cost_minor, i.e. the position's unrealized profit or loss; both are already in the same currency (market_value_minor is converted into the position's currency when needed, see above), so this is a plain integer subtraction. Null when there is no market_value_minor, or when market_value_currency still differs from currency (a conversion was needed but no fx rate was available).
+	UnrealizedPnlMinor nullable.Nullable[int64] `json:"unrealized_pnl_minor,omitempty"`
 }
 
 // PositionsResponse defines model for PositionsResponse.

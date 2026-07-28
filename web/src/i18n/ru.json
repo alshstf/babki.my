@@ -94,14 +94,15 @@
       "quantity": "Количество",
       "cost": "Стоимость",
       "market": "Рыночная",
-      "realized": "Реализовано",
-      "income": "Доход",
-      "fees": "Комиссии"
+      "profit": "Прибыль",
+      "income": "Доход"
     },
     "closed": "закрыта",
     "frozen": "заморожен",
     "noQuote": "Нет котировки",
-    "priceOn": "{{price}} · {{date}}"
+    "currencyMismatch": "Оценка в другой валюте — прибыль не рассчитывается",
+    "priceOn": "Цена на {{date}}",
+    "convertedFrom": "Пересчитано из {{amount}}"
   },
   "operations": {
     "title": "Операции",
