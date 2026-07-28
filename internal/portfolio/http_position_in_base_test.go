@@ -259,3 +259,107 @@ func TestPositionInBaseNullMarketValueAndUnrealizedPnlWithoutQuote(t *testing.T)
 		t.Errorf("in_base.currency = %q, want RUB", p.InBase.Currency)
 	}
 }
+
+// TestPositionInBaseNullMarketValueWhenValuationInForeignCurrency covers the
+// case where the position's market valuation is NOT denominated in the
+// position's own currency, because the conversion into it failed for want of
+// an fx rate (toAPI's marketdata.ErrNoRate fallback, which publishes the raw
+// valuation as-is in market_value_currency).
+//
+// in_base converts everything at ONE rate — the position's own currency into
+// the base currency — so it may only carry the market valuation when that
+// valuation is actually in the position's currency. Otherwise the amount
+// would be multiplied by a rate belonging to a different currency pair and
+// published, unlabeled, as a base-currency figure: a silently wrong number,
+// which is worse than no number at all. market_value_minor must therefore be
+// null, and unrealized_pnl_minor with it (it is derived from the valuation),
+// while cost_minor/income_minor — genuinely in the position's currency —
+// still convert normally.
+//
+// Fixture (the reviewer's reproduction):
+//
+//	base currency RUB (space default); account and position in USD
+//	bond face_value_minor 100_000, face_currency EUR, quote price 100.00
+//	  market valuation = 100_000 * 100.00/100 * 1 = 100_000 minor EUR
+//	  no EUR->USD rate exists -> market_value_currency stays EUR (raw)
+//	fx_rates holds only USD->RUB = 90 (no EUR leg at all)
+//	  in_base.cost_minor = 100_000 * 90 = 9_000_000 RUB
+//
+// Without the currency check, in_base.market_value_minor would come out as
+// 100_000 * 90 = 9_000_000 RUB — a EUR amount multiplied by the USD rate,
+// numerically identical to the converted cost, so the row would also read as
+// "profit exactly zero". The real value is 1_000.00 EUR, and no EUR->RUB
+// rate exists to express it in RUB at all.
+func TestPositionInBaseNullMarketValueWhenValuationInForeignCurrency(t *testing.T) {
+	pool := testdb.New(t)
+	mdStore := marketdata.NewStore(pool)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(mdStore))
+
+	on := pastOn()
+	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: decimal.RequireFromString("90"), Source: "test"},
+	}); err != nil {
+		t.Fatalf("seed fx rate: %v", err)
+	}
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	bond := createInstrument(t, c, url,
+		`{"type":"bond","name":"Еврооблигация","ticker":"EUB","currency":"USD","face_value_minor":100000,"face_currency":"EUR"}`)
+	bondID, err := uuid.Parse(bond.ID)
+	if err != nil {
+		t.Fatalf("parse bond id: %v", err)
+	}
+	quotes.byInstrument[bondID] = marketdata.Quote{
+		InstrumentID: bondID, On: mustDate(t, "2026-07-20"),
+		Price: decimal.RequireFromString("100.00"), Currency: "USD", Source: "test",
+	}
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-01","quantity":"1","price":"1000",
+		"amount_minor":-100000,"currency":"USD"}`, acc.ID, bond.ID))
+
+	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
+	}
+	var got positionsResp
+	decodeJSON(t, resp, &got)
+	if len(got.Positions) != 1 {
+		t.Fatalf("positions = %+v, want exactly 1", got.Positions)
+	}
+	p := got.Positions[0]
+
+	// Pin the fixture the assertions below rest on: the valuation really is
+	// published raw, in a currency other than the position's own.
+	if p.MarketValueMinor == nil || *p.MarketValueMinor != 100000 {
+		t.Fatalf("market_value_minor = %v, want 100000 (raw, unconverted)", p.MarketValueMinor)
+	}
+	if p.MarketValueCurrency == nil || *p.MarketValueCurrency != "EUR" {
+		t.Fatalf("market_value_currency = %v, want EUR (face_currency, no EUR->USD rate)", p.MarketValueCurrency)
+	}
+	if p.UnrealizedPnlMinor != nil {
+		t.Fatalf("unrealized_pnl_minor = %v, want null (valuation currency differs)", p.UnrealizedPnlMinor)
+	}
+
+	if p.InBase == nil {
+		t.Fatalf("in_base = nil, want a non-null object (cost_minor/income_minor are still convertible)")
+	}
+	if p.InBase.CostMinor != 9000000 {
+		t.Errorf("in_base.cost_minor = %d, want 9000000 (100000 USD minor * 90)", p.InBase.CostMinor)
+	}
+	if p.InBase.IncomeMinor != 0 {
+		t.Errorf("in_base.income_minor = %d, want 0 (no income operations)", p.InBase.IncomeMinor)
+	}
+	if p.InBase.MarketValueMinor != nil {
+		t.Errorf("in_base.market_value_minor = %v, want null: the valuation is in EUR, and %d RUB is that EUR amount times the USD rate — a silently wrong number",
+			*p.InBase.MarketValueMinor, *p.InBase.MarketValueMinor)
+	}
+	if p.InBase.UnrealizedPnlMinor != nil {
+		t.Errorf("in_base.unrealized_pnl_minor = %v, want null (derived from a valuation that cannot be converted)", p.InBase.UnrealizedPnlMinor)
+	}
+	if p.InBase.Currency != "RUB" {
+		t.Errorf("in_base.currency = %q, want RUB", p.InBase.Currency)
+	}
+}

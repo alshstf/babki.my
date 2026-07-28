@@ -16,6 +16,15 @@ export interface ResolvedAmount {
    * a small indicator (title: displayCurrency.notConverted).
    */
   noRate: boolean;
+  /**
+   * Date (YYYY-MM-DD) of the fx rate behind `amountMinor`, straight from
+   * the backend's in_base.rate_on / balance_in_base.rate_on — non-null
+   * only when the converted figure is what's actually being shown, so a
+   * caller can disclose how stale that conversion is (MoneyCell puts it in
+   * the cell's tooltip). Null whenever the native amount is shown: no
+   * conversion happened, so there is no rate date to name.
+   */
+  rateOn: string | null;
 }
 
 // - "native" mode, or the native currency already equals the base currency
@@ -31,12 +40,32 @@ export function resolveDisplayAmount(
   nativeAmountMinor: number,
   baseCurrency: string,
   baseAmountMinor: number | null | undefined,
+  // The fx rate date that produced baseAmountMinor (in_base.rate_on /
+  // balance_in_base.rate_on). Optional: callers that have no such figure to
+  // show can omit it. It is only ever carried into the result alongside the
+  // converted amount itself — see ResolvedAmount.rateOn.
+  baseRateOn?: string | null,
 ): ResolvedAmount {
   if (mode === "native" || nativeCurrency === baseCurrency) {
-    return { amountMinor: nativeAmountMinor, currency: nativeCurrency, noRate: false };
+    return {
+      amountMinor: nativeAmountMinor,
+      currency: nativeCurrency,
+      noRate: false,
+      rateOn: null,
+    };
   }
   if (baseAmountMinor != null) {
-    return { amountMinor: baseAmountMinor, currency: baseCurrency, noRate: false };
+    return {
+      amountMinor: baseAmountMinor,
+      currency: baseCurrency,
+      noRate: false,
+      rateOn: baseRateOn ?? null,
+    };
   }
-  return { amountMinor: nativeAmountMinor, currency: nativeCurrency, noRate: true };
+  return {
+    amountMinor: nativeAmountMinor,
+    currency: nativeCurrency,
+    noRate: true,
+    rateOn: null,
+  };
 }

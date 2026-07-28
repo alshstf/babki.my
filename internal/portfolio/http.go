@@ -253,13 +253,13 @@ func toAPI(ctx context.Context, conv converter, p *Position, inst instrument.Ins
 	return out, nil
 }
 
-// nullableInt64 extracts the value from a nullable.Nullable[int64] API
-// field, treating "unspecified" and "explicit null" the same way (nil).
-// toAPI leaves market_value_minor/unrealized_pnl_minor unspecified — rather
-// than explicitly null — whenever there's no usable quote or valuation (see
-// toAPI), so this reads that "no value" state regardless of which of the two
-// wire representations produced it.
-func nullableInt64(n nullable.Nullable[int64]) *int64 {
+// nullableValue extracts the value from a nullable.Nullable[T] API field,
+// treating "unspecified" and "explicit null" the same way (nil). toAPI
+// leaves market_value_minor/market_value_currency/unrealized_pnl_minor
+// unspecified — rather than explicitly null — whenever there's no usable
+// quote or valuation (see toAPI), so this reads that "no value" state
+// regardless of which of the two wire representations produced it.
+func nullableValue[T any](n nullable.Nullable[T]) *T {
 	v, err := n.Get()
 	if err != nil {
 		return nil
@@ -282,13 +282,27 @@ type rateLookup struct {
 }
 
 // positionInBase converts a position's cost_minor, market_value_minor (when
-// present), unrealized_pnl_minor (when present), and income_minor from the
-// position's own currency (p.Currency) into baseCurrency, using cache to
-// memoize the underlying marketdata.Converter.Rate lookup across positions
-// that share a currency within a single handleList request — see
-// rateLookup. marketValueMinor and unrealizedPnlMinor are the already-computed
-// (and possibly nil) values from the position's top-level API fields (see
-// toAPI/nullableInt64), not recomputed here.
+// publishable, see below), unrealized_pnl_minor (likewise), and income_minor
+// from the position's own currency (p.Currency) into baseCurrency, using
+// cache to memoize the underlying marketdata.Converter.Rate lookup across
+// positions that share a currency within a single handleList request — see
+// rateLookup. The amounts are read off apiPos, the position's
+// already-computed API representation (see toAPI), never recomputed here.
+//
+// The single rate this function applies converts p.Currency into
+// baseCurrency, so it may only be applied to amounts actually denominated in
+// p.Currency. cost_minor and income_minor always are. The market valuation
+// is not: when no rate was available to bring it into the position's own
+// currency, toAPI publishes it raw, in market_value_currency (a bond's
+// face_currency, say EUR, on a USD position). Multiplying that EUR figure by
+// the USD->RUB rate and labeling the product "RUB" would be a silently wrong
+// number — and, since it equals the converted cost whenever cost and
+// valuation coincide, would read as "profit exactly zero". So
+// market_value_minor is published in_base only when market_value_currency
+// equals p.Currency, and unrealized_pnl_minor follows it (it is that
+// valuation minus cost, and toAPI already leaves it null in exactly this
+// case). Null here is honest: the frontend falls back to showing the raw
+// amount in its own currency with a "not converted" marker.
 //
 // Each amount is converted and rounded independently
 // (decimal.Mul(rl.rate).Round(0), the exact step marketdata.Converter.Convert
@@ -302,18 +316,18 @@ type rateLookup struct {
 // It returns (nil, nil) — render in_base as null, the WHOLE object, never
 // partially populated — in exactly two cases: p.Currency already equals
 // baseCurrency (nothing to convert), or no fx rate could be resolved for the
-// pair (marketdata.ErrNoRate). This differs from marketValueMinor/
-// unrealizedPnlMinor inside the returned object, which are null only when
-// the corresponding input pointer itself is nil (no quote) — a missing quote
-// nulls just that one figure, but a missing rate nulls the entire
-// conversion, since a partially converted position (e.g. cost converted but
-// market value silently left in the wrong currency) is worse than an honest
-// "can't convert this position at all".
+// pair (marketdata.ErrNoRate). This differs from market_value_minor/
+// unrealized_pnl_minor inside the returned object, which are null when there
+// is no usable quote or the valuation isn't in p.Currency — that nulls just
+// those two figures, whereas a missing rate nulls the entire conversion,
+// since a partially converted position (e.g. cost converted but income
+// silently left in the wrong currency) is worse than an honest "can't
+// convert this position at all".
 //
 // A non-nil error means a genuine failure (DB error, canceled context) that
 // the caller must surface as a request error — never silently rendered as
 // null, which would misrepresent an outage as "nothing to convert".
-func (h *Handler) positionInBase(ctx context.Context, p *Position, marketValueMinor, unrealizedPnlMinor *int64, baseCurrency string, cache map[string]*rateLookup) (*apitypes.PositionInBase, error) {
+func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, baseCurrency string, cache map[string]*rateLookup) (*apitypes.PositionInBase, error) {
 	if p.Currency == baseCurrency {
 		return nil, nil
 	}
@@ -328,6 +342,14 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, marketValueMi
 			return nil, nil
 		}
 		return nil, rl.err
+	}
+
+	// Only a valuation denominated in the position's own currency may be
+	// converted with this rate — see the doc comment above.
+	marketValueMinor := nullableValue(apiPos.MarketValueMinor)
+	unrealizedPnlMinor := nullableValue(apiPos.UnrealizedPnlMinor)
+	if c := nullableValue(apiPos.MarketValueCurrency); c == nil || *c != p.Currency {
+		marketValueMinor, unrealizedPnlMinor = nil, nil
 	}
 
 	convert := func(minor int64) int64 {
@@ -421,9 +443,7 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		inBase, err := h.positionInBase(r.Context(), pos,
-			nullableInt64(apiPos.MarketValueMinor), nullableInt64(apiPos.UnrealizedPnlMinor),
-			sp.BaseCurrency, rates)
+		inBase, err := h.positionInBase(r.Context(), pos, apiPos, sp.BaseCurrency, rates)
 		if err != nil {
 			family.WriteError(w, err)
 			return

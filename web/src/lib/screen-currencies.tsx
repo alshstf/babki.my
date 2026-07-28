@@ -14,6 +14,7 @@
 // screen remembered to clear it, which is exactly the class of bug this
 // design avoids by construction.
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useDisplayCurrency, type DisplayCurrencyMode } from "./display-currency";
 
 interface ScreenCurrencyCountContextValue {
   count: number;
@@ -61,4 +62,29 @@ export function useReportScreenCurrencies(currencies: Iterable<string>): void {
 export function useHasMultipleScreenCurrencies(): boolean {
   const ctx = useContext(ScreenCurrencyCountContext);
   return (ctx?.count ?? 0) > 1;
+}
+
+// The display-currency mode a screen must actually render with — as opposed
+// to the mode the user has stored (useDisplayCurrency).
+//
+// Visibility of the header toggle and application of the mode are the same
+// decision and must be read from the same place: a screen with fewer than
+// two currencies hides the toggle, so if it still *applied* "base" the user
+// would be stuck in a mode with no control left to leave it by — with no
+// clue why, since the toggle is simply gone. (Concretely: turn on "base"
+// somewhere multi-currency, come back to a single-currency screen, and the
+// per-currency breakdown cards vanish for good, recoverable only by clearing
+// localStorage.)
+//
+// The stored choice is deliberately left untouched: it's the user's, made
+// deliberately, and it must come back by itself the moment a screen has
+// something to convert again. Only its *application* is suspended.
+//
+// Every screen that renders money must read the mode through this hook, not
+// through useDisplayCurrency. The toggle itself is the one exception — it
+// shows the stored choice, and it only renders when visible anyway.
+export function useEffectiveDisplayCurrencyMode(): DisplayCurrencyMode {
+  const { mode } = useDisplayCurrency();
+  const hasMultiple = useHasMultipleScreenCurrencies();
+  return hasMultiple ? mode : "native";
 }

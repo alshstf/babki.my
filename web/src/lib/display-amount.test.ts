@@ -3,18 +3,45 @@ import { resolveDisplayAmount } from "./display-amount";
 
 describe("resolveDisplayAmount", () => {
   it("shows the native amount unchanged in native mode, even when a base figure is available", () => {
-    const resolved = resolveDisplayAmount("native", "USD", 100_00, "RUB", 950_000);
-    expect(resolved).toEqual({ amountMinor: 100_00, currency: "USD", noRate: false });
+    const resolved = resolveDisplayAmount("native", "USD", 100_00, "RUB", 950_000, "2026-07-20");
+    expect(resolved).toEqual({
+      amountMinor: 100_00,
+      currency: "USD",
+      noRate: false,
+      rateOn: null,
+    });
   });
 
   it("shows the converted amount in base mode when a base figure is available", () => {
     const resolved = resolveDisplayAmount("base", "USD", 100_00, "RUB", 950_000);
-    expect(resolved).toEqual({ amountMinor: 950_000, currency: "RUB", noRate: false });
+    expect(resolved).toEqual({
+      amountMinor: 950_000,
+      currency: "RUB",
+      noRate: false,
+      rateOn: null,
+    });
+  });
+
+  it("carries the fx rate date through when the converted amount is what gets shown", () => {
+    const resolved = resolveDisplayAmount("base", "USD", 100_00, "RUB", 950_000, "2026-07-20");
+    expect(resolved).toEqual({
+      amountMinor: 950_000,
+      currency: "RUB",
+      noRate: false,
+      rateOn: "2026-07-20",
+    });
   });
 
   it("falls back to the native amount with noRate=true in base mode when no base figure is available", () => {
-    const resolved = resolveDisplayAmount("base", "USD", 100_00, "RUB", null);
-    expect(resolved).toEqual({ amountMinor: 100_00, currency: "USD", noRate: true });
+    const resolved = resolveDisplayAmount("base", "USD", 100_00, "RUB", null, "2026-07-20");
+    expect(resolved).toEqual({
+      amountMinor: 100_00,
+      currency: "USD",
+      noRate: true,
+      // No rate date on a figure that was never converted, even if the
+      // caller passed one: it would describe a conversion that didn't happen.
+      rateOn: null,
+    });
   });
 
   it("treats undefined the same as null for the base figure", () => {
@@ -27,16 +54,31 @@ describe("resolveDisplayAmount", () => {
     // base_currency (nothing to convert) — null here does NOT mean "missing
     // rate", so no honesty indicator should appear.
     const resolved = resolveDisplayAmount("base", "RUB", 100_00, "RUB", null);
-    expect(resolved).toEqual({ amountMinor: 100_00, currency: "RUB", noRate: false });
+    expect(resolved).toEqual({
+      amountMinor: 100_00,
+      currency: "RUB",
+      noRate: false,
+      rateOn: null,
+    });
   });
 
   it("prefers the native currency check over a (theoretically impossible) base figure when currencies already match", () => {
-    const resolved = resolveDisplayAmount("base", "RUB", 100_00, "RUB", 999_00);
-    expect(resolved).toEqual({ amountMinor: 100_00, currency: "RUB", noRate: false });
+    const resolved = resolveDisplayAmount("base", "RUB", 100_00, "RUB", 999_00, "2026-07-20");
+    expect(resolved).toEqual({
+      amountMinor: 100_00,
+      currency: "RUB",
+      noRate: false,
+      rateOn: null,
+    });
   });
 
   it("treats a zero base amount as present (not missing)", () => {
-    const resolved = resolveDisplayAmount("base", "USD", 100_00, "RUB", 0);
-    expect(resolved).toEqual({ amountMinor: 0, currency: "RUB", noRate: false });
+    const resolved = resolveDisplayAmount("base", "USD", 100_00, "RUB", 0, "2026-07-20");
+    expect(resolved).toEqual({
+      amountMinor: 0,
+      currency: "RUB",
+      noRate: false,
+      rateOn: "2026-07-20",
+    });
   });
 });

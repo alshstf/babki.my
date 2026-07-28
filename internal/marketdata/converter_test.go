@@ -415,3 +415,39 @@ func TestConvertPropagatesRealErrors(t *testing.T) {
 		t.Fatal("Convert with canceled context: got ErrNoRate, want the underlying DB/context error")
 	}
 }
+
+// TestRatePropagatesRealErrors is Rate's counterpart to
+// TestConvertPropagatesRealErrors / TestConvertManyPropagatesRealErrors: a
+// genuine DB or context failure must come back as itself, never disguised as
+// ErrNoRate.
+//
+// Every caller of Rate branches on errors.Is(err, ErrNoRate) to decide
+// between "this pair simply has no rate — degrade honestly and carry on"
+// and "something is broken — fail the request" (see
+// account.Handler.balanceInBase and portfolio.Handler.positionInBase). If
+// Rate ever collapsed the second case into the first, both handlers would
+// dutifully render an outage as an ordinary missing rate and the user would
+// never learn anything was wrong.
+func TestRatePropagatesRealErrors(t *testing.T) {
+	conv, store, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	// Seed the pair so the failure below can only come from the canceled
+	// context, not from the rate genuinely being absent.
+	if err := store.UpsertFxRates(ctx, []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90"), Source: "cbr"},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	rate, rateDate, err := conv.Rate(cctx, "USD", "RUB", on)
+	if err == nil {
+		t.Fatalf("Rate with canceled context: err = nil (rate=%s, rateDate=%v), want a real error", rate, rateDate)
+	}
+	if errors.Is(err, marketdata.ErrNoRate) {
+		t.Fatalf("Rate with canceled context: got ErrNoRate, want the underlying DB/context error")
+	}
+}

@@ -59,10 +59,6 @@ function setMode(mode: DisplayCurrencyMode): void {
   notify();
 }
 
-function toggle(): void {
-  setMode(currentMode === "native" ? "base" : "native");
-}
-
 // Cross-tab sync. `storage` fires only in tabs other than the one that made
 // the write, so this is purely the "receive" side; the tab that calls
 // setMode() above already notifies its own listeners directly. Guarded for
@@ -98,8 +94,7 @@ function getSnapshot(): DisplayCurrencyMode {
 export function useDisplayCurrency(): {
   mode: DisplayCurrencyMode;
   setMode: (mode: DisplayCurrencyMode) => void;
-  toggle: () => void;
 } {
   const mode = useSyncExternalStore(subscribe, getSnapshot, () => DEFAULT_MODE);
-  return { mode, setMode, toggle };
+  return { mode, setMode };
 }

@@ -1,11 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { memo, useState } from "react";
 import { act, render, screen } from "@testing-library/react";
 import {
   ScreenCurrencyCountProvider,
+  useEffectiveDisplayCurrencyMode,
   useHasMultipleScreenCurrencies,
   useReportScreenCurrencies,
 } from "./screen-currencies";
+import { useDisplayCurrency } from "./display-currency";
 
 // Stand-in for a screen: reports whatever currency set it's given for as
 // long as it stays mounted.
@@ -142,5 +144,80 @@ describe("screen-currencies", () => {
     });
 
     expect(consumerRenders).toBe(rendersBeforeBump);
+  });
+});
+
+// Stand-in for a screen's money cells: shows the mode actually applied to
+// them, plus a button that writes the user's stored choice the way the
+// header toggle does.
+function ModeProbe() {
+  const effective = useEffectiveDisplayCurrencyMode();
+  const { mode, setMode } = useDisplayCurrency();
+  return (
+    <div>
+      <div data-testid="effective">{effective}</div>
+      <div data-testid="stored">{mode}</div>
+      <button onClick={() => setMode("base")}>base</button>
+    </div>
+  );
+}
+
+describe("useEffectiveDisplayCurrencyMode", () => {
+  afterEach(() => {
+    // The display-currency store is module-level and shared across tests in
+    // this file, so put it back the way a fresh page load would find it.
+    window.localStorage.clear();
+  });
+
+  it("applies the stored base mode while the screen has more than one currency", async () => {
+    render(
+      <ScreenCurrencyCountProvider>
+        <ModeProbe />
+        <Reporter currencies={["RUB", "USD"]} />
+      </ScreenCurrencyCountProvider>,
+    );
+
+    await act(async () => screen.getByRole("button").click());
+
+    expect(screen.getByTestId("effective")).toHaveTextContent("base");
+  });
+
+  it("falls back to native when the screen has fewer than two currencies, keeping the stored choice intact", async () => {
+    const { rerender } = render(
+      <ScreenCurrencyCountProvider>
+        <ModeProbe />
+        <Reporter currencies={["RUB", "USD"]} />
+      </ScreenCurrencyCountProvider>,
+    );
+
+    await act(async () => screen.getByRole("button").click());
+    expect(screen.getByTestId("effective")).toHaveTextContent("base");
+
+    // The screen now shows a single currency, so the header hides the
+    // toggle. The mode must stop being applied along with it — otherwise the
+    // user is stuck in a mode they can no longer switch off.
+    rerender(
+      <ScreenCurrencyCountProvider>
+        <ModeProbe />
+        <Reporter currencies={["RUB"]} />
+      </ScreenCurrencyCountProvider>,
+    );
+    expect(screen.getByTestId("effective")).toHaveTextContent("native");
+    // ...but the choice itself is untouched: it is the user's, and it must
+    // come back the moment the toggle does.
+    expect(screen.getByTestId("stored")).toHaveTextContent("base");
+
+    rerender(
+      <ScreenCurrencyCountProvider>
+        <ModeProbe />
+        <Reporter currencies={["RUB", "EUR"]} />
+      </ScreenCurrencyCountProvider>,
+    );
+    expect(screen.getByTestId("effective")).toHaveTextContent("base");
+  });
+
+  it("is native outside a provider, where no screen can report anything", () => {
+    render(<ModeProbe />);
+    expect(screen.getByTestId("effective")).toHaveTextContent("native");
   });
 });

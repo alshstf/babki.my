@@ -32,16 +32,31 @@ type spaceStore interface {
 	SpaceByID(ctx context.Context, id uuid.UUID) (family.Space, error)
 }
 
+// converter is the subset of *marketdata.Converter this handler needs:
+// ConvertMany for GET /summary's per-currency totals, and Rate for
+// converting each account's balance into the base currency at most once per
+// currency per request (see balanceInBase). Local interface (mirroring
+// spaceStore, and portfolio's identically named one) so tests can inject a
+// double in place of a real *marketdata.Converter — in particular one whose
+// lookups fail with a genuine error rather than marketdata.ErrNoRate, which
+// a real, DB-backed Converter cannot be made to do on demand and which the
+// handler must treat completely differently (see balanceInBase).
+// *marketdata.Converter satisfies this structurally, so no call site changes.
+type converter interface {
+	ConvertMany(ctx context.Context, amounts map[string]int64, to string, on time.Time) (converted int64, missing []string, ratesOn time.Time, err error)
+	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
+}
+
 // Handler exposes the account module over HTTP.
 type Handler struct {
 	store     *Store
 	spaces    spaceStore
-	converter *marketdata.Converter
+	converter converter
 	auth      *family.Auth
 	sm        *scs.SessionManager
 }
 
-func NewHandler(store *Store, spaces spaceStore, converter *marketdata.Converter, auth *family.Auth, sm *scs.SessionManager) *Handler {
+func NewHandler(store *Store, spaces spaceStore, converter converter, auth *family.Auth, sm *scs.SessionManager) *Handler {
 	return &Handler{store: store, spaces: spaces, converter: converter, auth: auth, sm: sm}
 }
 

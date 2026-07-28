@@ -32,3 +32,19 @@ if (typeof window !== "undefined") {
     value: createMemoryStorage(),
   });
 }
+
+// jsdom borrows fetch/Request from Node (undici), which — unlike a browser —
+// rejects a relative URL like "/api/v1/accounts": it has no document to
+// resolve it against. The API client builds exactly those (baseUrl "/", see
+// api/client.ts), so any test that exercises a data hook would die on
+// "Failed to parse URL" before reaching the code under test. Restore the
+// browser behavior by resolving relative inputs against the page's origin.
+const NativeRequest = globalThis.Request;
+if (typeof NativeRequest !== "undefined" && typeof window !== "undefined") {
+  class RelativeAwareRequest extends NativeRequest {
+    constructor(input: RequestInfo | URL, init?: RequestInit) {
+      super(typeof input === "string" ? new URL(input, window.location.origin) : input, init);
+    }
+  }
+  globalThis.Request = RelativeAwareRequest as typeof Request;
+}

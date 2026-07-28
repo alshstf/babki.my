@@ -3,6 +3,7 @@ package account_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
@@ -251,5 +254,92 @@ func TestAccountOwnerUserIDNullable(t *testing.T) {
 	_ = json.NewDecoder(resp.Body).Decode(&cleared)
 	if cleared.OwnerUserId != nil {
 		t.Fatalf("owner after clear = %+v, want null", cleared.OwnerUserId)
+	}
+}
+
+// converterLike mirrors the account package's unexported converter
+// interface so this external test package can name the type of the double
+// it passes to account.NewHandler. Assignability is by method set, not by
+// name, so anything satisfying this satisfies the handler's own interface —
+// the same trick portfolio's http_test.go uses for converterLike.
+type converterLike interface {
+	ConvertMany(ctx context.Context, amounts map[string]int64, to string, on time.Time) (int64, []string, time.Time, error)
+	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
+}
+
+// failingConverter is a converter double whose fx lookups always fail with
+// the given error — deliberately NOT marketdata.ErrNoRate, standing in for a
+// genuine outage (a dropped DB connection, a canceled context) rather than
+// the ordinary "this pair has no rate" outcome. A real, Postgres-backed
+// *marketdata.Converter can't be made to fail on demand, so the distinction
+// balanceInBase draws between those two cases is only testable through a
+// double.
+type failingConverter struct{ err error }
+
+func (c failingConverter) ConvertMany(_ context.Context, _ map[string]int64, _ string, _ time.Time) (int64, []string, time.Time, error) {
+	return 0, nil, time.Time{}, c.err
+}
+
+func (c failingConverter) Rate(_ context.Context, _, _ string, _ time.Time) (decimal.Decimal, time.Time, error) {
+	return decimal.Decimal{}, time.Time{}, c.err
+}
+
+// newAPIWithConverterDouble is newAPI with the account handler's fx
+// converter replaced by conv, for tests that need a specific failure mode
+// out of it. Everything else is wired exactly as newAPIWithConverter does.
+func newAPIWithConverterDouble(t *testing.T, conv converterLike) (string, *http.Client) {
+	t.Helper()
+	pool := testdb.New(t)
+	if err := db.Migrate(context.Background(), pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	famStore := family.NewStore(pool)
+	famSvc := family.NewService(famStore)
+	sm := family.NewSessionManager(pool)
+	auth := family.NewAuth(sm, famStore)
+
+	srv := httpserver.New(slog.Default(), pool)
+	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
+	account.NewHandler(account.NewStore(pool), famStore, conv, auth, sm).Mount(srv)
+
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+
+	resp, err := client.Post(ts.URL+"/api/v1/setup", "application/json",
+		strings.NewReader(`{"space_name":"S","username":"alex","display_name":"A","password":"secret123"}`))
+	if err != nil || resp.StatusCode != 201 {
+		t.Fatalf("setup: %v %d", err, resp.StatusCode)
+	}
+	return ts.URL, client
+}
+
+// TestListRealRateErrorFailsRequest pins the distinction the whole
+// balance_in_base contract rests on: a genuine failure while resolving the
+// fx rate (DB down, context canceled) must fail the request, NOT be
+// rendered as balance_in_base: null.
+//
+// Both outcomes look identical on screen otherwise — the frontend shows the
+// account's native balance with a "no rate" marker — so an outage would be
+// presented to the user as ordinary, expected degradation, and nobody would
+// ever learn the database had stopped answering. Only the status code tells
+// them apart, which is why this test asserts on it: without it, deleting
+// balanceInBase's error propagation (returning null instead of the error)
+// breaks nothing visible and no other test notices.
+func TestListRealRateErrorFailsRequest(t *testing.T) {
+	url, c := newAPIWithConverterDouble(t, failingConverter{err: errors.New("connection reset by peer")})
+
+	// USD account in an RUB-based space (the setup default), with a balance:
+	// all three of balanceInBase's early "nothing to convert" exits are
+	// avoided, so the rate lookup really is attempted.
+	id := mkAccount(t, url, c, "US cash", "USD")
+	setBalance(t, url, c, id, 12345)
+
+	resp := do(t, c, "GET", url+"/api/v1/accounts", "")
+	if resp.StatusCode != http.StatusInternalServerError {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET accounts with a failing rate lookup = %d, want 500 — a real outage must not be served as a 200 with balance_in_base: null: %s",
+			resp.StatusCode, b)
 	}
 }

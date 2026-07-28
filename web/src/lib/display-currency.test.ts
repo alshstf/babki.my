@@ -76,7 +76,7 @@ describe("useDisplayCurrency", () => {
     }
   });
 
-  it("toggling notifies other subscribers in the same tab", async () => {
+  it("a mode change notifies other subscribers in the same tab", async () => {
     const { useDisplayCurrency } = await importFreshStore();
     // Two independent hook consumers, standing in for two components that
     // both read the store in the same tab.
@@ -85,12 +85,12 @@ describe("useDisplayCurrency", () => {
     expect(a.current.mode).toBe("native");
     expect(b.current.mode).toBe("native");
 
-    act(() => a.current.toggle());
+    act(() => a.current.setMode("base"));
 
     expect(a.current.mode).toBe("base");
     expect(b.current.mode).toBe("base");
 
-    act(() => b.current.toggle());
+    act(() => b.current.setMode("native"));
 
     expect(a.current.mode).toBe("native");
     expect(b.current.mode).toBe("native");

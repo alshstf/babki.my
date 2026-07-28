@@ -11,8 +11,10 @@ import {
 } from "@/components/ui/dialog";
 import { useSession } from "@/api/session";
 import { useAccounts, useArchiveAccount, useSummary, type AccountWithBalance } from "@/api/accounts";
-import { useDisplayCurrency } from "@/lib/display-currency";
-import { useReportScreenCurrencies } from "@/lib/screen-currencies";
+import {
+  useEffectiveDisplayCurrencyMode,
+  useReportScreenCurrencies,
+} from "@/lib/screen-currencies";
 import { SummaryCards } from "./summary-cards";
 import { AccountsTable } from "./accounts-table";
 import { AccountDialog } from "./account-dialog";
@@ -25,7 +27,9 @@ export function AccountsPage() {
   const accounts = useAccounts();
   const summary = useSummary();
   const archiveAccount = useArchiveAccount();
-  const { mode } = useDisplayCurrency();
+  // Effective, not stored: the mode only applies while the header toggle is
+  // on screen to switch it back off (see useEffectiveDisplayCurrencyMode).
+  const mode = useEffectiveDisplayCurrencyMode();
 
   // undefined = dialog closed, null = create mode, account = edit mode.
   const [dialogAccount, setDialogAccount] = useState<AccountWithBalance | null | undefined>(

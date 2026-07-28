@@ -604,7 +604,7 @@ export interface components {
              * @description market_value_minor minus cost_minor, i.e. the position's unrealized profit or loss; both are already in the same currency (market_value_minor is converted into the position's currency when needed, see above), so this is a plain integer subtraction. Null when there is no market_value_minor, or when market_value_currency still differs from currency (a conversion was needed but no fx rate was available).
              */
             unrealized_pnl_minor?: number | null;
-            /** @description cost_minor/market_value_minor/unrealized_pnl_minor/income_minor converted from the position's own `currency` into the space's base currency at today's fx rate, each amount rounded independently (not derived from one another). Null when `currency` already equals the base currency (nothing to convert) or no fx rate could be resolved for the pair — a partially converted position is never published. fees_minor and realized_pnl_minor are intentionally not carried into this object (owner feedback). */
+            /** @description cost_minor/market_value_minor/unrealized_pnl_minor/income_minor converted from the position's own `currency` into the space's base currency at today's fx rate, each amount rounded independently (not derived from one another). Null when `currency` already equals the base currency (nothing to convert) or no fx rate could be resolved for the pair — a partially converted position is never published. Inside the object, market_value_minor and unrealized_pnl_minor can still be null on their own when the valuation isn't in the position's currency (see their descriptions). fees_minor and realized_pnl_minor are intentionally not carried into this object (owner feedback). */
             in_base?: components["schemas"]["PositionInBase"] | null;
         };
         PositionInBase: {
@@ -615,12 +615,12 @@ export interface components {
             cost_minor: number;
             /**
              * Format: int64
-             * @description Position.market_value_minor converted into currency; null exactly when Position.market_value_minor itself is null (no usable quote), never fabricated
+             * @description Position.market_value_minor converted into currency, never fabricated. Null when Position.market_value_minor itself is null (no usable quote), AND null whenever market_value_currency differs from the position's own currency: the single rate used for this object converts the position's currency into the base currency, so a valuation still denominated in some other currency (a bond's face_currency, when no rate could bring it into the position's currency) cannot be expressed here — publishing it multiplied by the wrong pair's rate would be a silently wrong number
              */
             market_value_minor?: number | null;
             /**
              * Format: int64
-             * @description Position.unrealized_pnl_minor converted into currency; null exactly when Position.unrealized_pnl_minor itself is null
+             * @description Position.unrealized_pnl_minor converted into currency; null exactly when Position.unrealized_pnl_minor itself is null, which covers every case where market_value_minor above is null — the P&L is derived from the valuation and cannot outlive it
              */
             unrealized_pnl_minor?: number | null;
             /**

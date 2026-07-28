@@ -69,6 +69,28 @@ describe("AccountsTable", () => {
     expect(screen.queryByTestId("account-balance-acc-1-not-converted")).not.toBeInTheDocument();
   });
 
+  it("discloses the fx rate date of a converted balance in the cell's tooltip, not as text", async () => {
+    const account = makeAccount({
+      balance_in_base: { amount_minor: 900_000, currency: "RUB", rate_on: "2026-07-19" },
+    });
+    wrap(<AccountsTable accounts={[account]} mode="base" baseCurrency="RUB" />);
+
+    const amount = await screen.findByTestId("account-balance-acc-1");
+    expect(amount).toHaveAttribute("title", "Пересчитано по курсу на 19.07.2026");
+    // The balance row already shows the balance's own as_of date as text;
+    // the rate date must not join it there.
+    expect(amount.textContent).not.toMatch(/19\.07\.2026/);
+  });
+
+  it("shows no rate-date tooltip in native mode — nothing was converted", async () => {
+    const account = makeAccount({
+      balance_in_base: { amount_minor: 900_000, currency: "RUB", rate_on: "2026-07-19" },
+    });
+    wrap(<AccountsTable accounts={[account]} mode="native" baseCurrency="RUB" />);
+
+    expect(await screen.findByTestId("account-balance-acc-1")).not.toHaveAttribute("title");
+  });
+
   it("shows the native balance plus a not-converted indicator in base mode when no rate is available", async () => {
     const account = makeAccount({ currency: "USD", balance_in_base: null });
     wrap(<AccountsTable accounts={[account]} mode="base" baseCurrency="RUB" />);

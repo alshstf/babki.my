@@ -12,12 +12,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useSession } from "@/api/session";
-import { useAccounts, useSummary } from "@/api/accounts";
+import { useAccounts } from "@/api/accounts";
 import { usePositions } from "@/api/positions";
 import { formatDate } from "@/lib/dates";
 import { resolveDisplayAmount } from "@/lib/display-amount";
-import { useDisplayCurrency } from "@/lib/display-currency";
-import { useReportScreenCurrencies } from "@/lib/screen-currencies";
+import {
+  useEffectiveDisplayCurrencyMode,
+  useReportScreenCurrencies,
+} from "@/lib/screen-currencies";
 import { MoneyCell } from "@/components/money-cell";
 import { PositionsTable } from "./positions-table";
 import { OperationsTable } from "./operations-table";
@@ -35,13 +37,20 @@ export function AccountDetailPage() {
   const { accountId } = useParams({ from: "/app/accounts/$accountId" });
   const { data: session } = useSession();
   const accounts = useAccounts();
-  const summary = useSummary();
+  // The space's base currency comes from the session, which is already
+  // loaded app-wide, rather than from GET /api/v1/summary: that endpoint
+  // computes a space-wide total this screen never shows, and gating on it
+  // meant one failing request replaced the whole account — balance,
+  // positions and journal — with an error page.
+  const baseCurrency = session?.base_currency ?? "";
   const account = accounts.data?.find((a) => a.id === accountId);
   const positions = usePositions(accountId, !!account);
   const isViewer = session?.role === "viewer";
   const [action, setAction] = useState<AddAction | undefined>(undefined);
   const closeAction = () => setAction(undefined);
-  const { mode } = useDisplayCurrency();
+  // Effective, not stored: the mode only applies while the header toggle is
+  // on screen to switch it back off (see useEffectiveDisplayCurrencyMode).
+  const mode = useEffectiveDisplayCurrencyMode();
 
   // Reports the currencies in play on this screen so the header's toggle
   // can hide itself when there's nothing to convert (see
@@ -53,13 +62,13 @@ export function AccountDetailPage() {
   useReportScreenCurrencies([
     ...(account ? [account.currency] : []),
     ...(positions.data ?? []).map((p) => p.currency),
-    ...(summary.data ? [summary.data.base_currency] : []),
+    ...(baseCurrency ? [baseCurrency] : []),
   ]);
 
-  if (accounts.isLoading || summary.isLoading) {
+  if (accounts.isLoading) {
     return <div className="text-muted-foreground">{t("app.loading")}</div>;
   }
-  if (accounts.isError || summary.isError) {
+  if (accounts.isError) {
     return (
       <Alert variant="destructive">
         <AlertDescription>{t("app.error")}</AlertDescription>
@@ -79,11 +88,6 @@ export function AccountDetailPage() {
       </div>
     );
   }
-
-  // Defensive fallback only — by this point summary.isLoading/isError has
-  // already gated the render above, so summary.data is expected to be
-  // defined; TS just can't narrow that from those boolean checks alone.
-  const baseCurrency = summary.data?.base_currency ?? "";
 
   return (
     <div className="grid gap-6">
@@ -109,6 +113,7 @@ export function AccountDetailPage() {
                 account.balance.amount_minor,
                 baseCurrency,
                 account.balance_in_base?.amount_minor,
+                account.balance_in_base?.rate_on,
               )}
               className="text-2xl font-bold tabular-nums"
               testId="account-detail-balance"

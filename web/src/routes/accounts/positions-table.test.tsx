@@ -297,7 +297,17 @@ describe("PositionsTable", () => {
         norm(formatMinor(9_100, "RUB")),
       );
       // No "not converted" indicators anywhere — every figure had a rate.
-      expect(screen.queryByText("Нет курса — показано в валюте счёта")).not.toBeInTheDocument();
+      // (Checked by test id, not by text: the marker is an icon whose
+      // wording lives in a title attribute, so a text query can never see it
+      // and would pass vacuously.)
+      for (const testId of [
+        "position-cost",
+        "position-market-value",
+        "position-profit-amount",
+        "position-income",
+      ]) {
+        expect(screen.queryByTestId(`${testId}-not-converted`)).not.toBeInTheDocument();
+      }
     });
 
     it("computes the profit percentage from the converted cost/profit pair, not the native one", () => {
@@ -365,7 +375,7 @@ describe("PositionsTable", () => {
 
       expect(screen.getByTestId("position-cost-not-converted")).toHaveAttribute(
         "title",
-        "Нет курса — показано в валюте счёта",
+        "Нет курса — показано в исходной валюте",
       );
       expect(screen.getByTestId("position-market-value-not-converted")).toBeInTheDocument();
       expect(screen.getByTestId("position-profit-amount-not-converted")).toBeInTheDocument();
@@ -397,6 +407,111 @@ describe("PositionsTable", () => {
       expect(screen.queryByTestId("position-market-value-not-converted")).not.toBeInTheDocument();
       expect(screen.queryByTestId("position-profit-amount-not-converted")).not.toBeInTheDocument();
       expect(screen.queryByTestId("position-income-not-converted")).not.toBeInTheDocument();
+    });
+
+    it("discloses the fx rate date behind every converted cell in its tooltip, not as text", () => {
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "USD",
+              in_base: {
+                cost_minor: 2_275_000,
+                market_value_minor: 2_780_050,
+                unrealized_pnl_minor: 227_500,
+                income_minor: 9_100,
+                currency: "RUB",
+                rate_on: "2026-07-19",
+              },
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      for (const testId of [
+        "position-cost",
+        "position-market-value",
+        "position-profit-amount",
+        "position-income",
+      ]) {
+        expect(screen.getByTestId(testId)).toHaveAttribute(
+          "title",
+          "Пересчитано по курсу на 19.07.2026",
+        );
+      }
+      // Tooltip only — the date never becomes cell text.
+      expect(screen.queryByText(/19\.07\.2026/)).not.toBeInTheDocument();
+    });
+
+    it("names the source currency, not the account's, in the not-converted marker", () => {
+      // A position row's amounts are in the position's / quote's / bond face
+      // value's currency — calling that "the account's currency" would point
+      // the user at the wrong thing.
+      wrap(
+        <PositionsTable
+          positions={[makePosition({ currency: "USD", in_base: null })]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(screen.getByTestId("position-cost-not-converted")).toHaveAttribute(
+        "title",
+        "Нет курса — показано в исходной валюте",
+      );
+    });
+
+    it("shows a valuation in a third currency honestly, in its own currency, when in_base cannot express it", () => {
+      // The backend publishes in_base.market_value_minor only when the
+      // valuation is in the position's own currency: here a bond's EUR face
+      // value on a USD position, with no EUR rate anywhere, so converting it
+      // with the position's USD->RUB rate would be a silently wrong number
+      // (and, equal to the converted cost, would read as "profit exactly
+      // zero"). cost/income still convert normally.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "USD",
+              cost_minor: 100_000,
+              income_minor: 0,
+              market_value_minor: 100_000,
+              market_value_currency: "EUR",
+              unrealized_pnl_minor: null,
+              in_base: {
+                cost_minor: 9_000_000,
+                market_value_minor: null,
+                unrealized_pnl_minor: null,
+                income_minor: 0,
+                currency: "RUB",
+                rate_on: "2026-07-20",
+              },
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      // Cost converted, as usual.
+      expect(norm(screen.getByTestId("position-cost").textContent ?? "")).toBe(
+        norm(formatMinor(9_000_000, "RUB")),
+      );
+      // The valuation stays the real 1 000,00 € with a marker — never
+      // 90 000,00 ₽ (that same figure times the USD rate) passed off as base
+      // currency, and never a dash or a zero.
+      const marketValue = screen.getByTestId("position-market-value");
+      expect(norm(marketValue.textContent ?? "")).toContain(norm(formatMinor(100_000, "EUR")));
+      expect(marketValue.textContent).not.toMatch(/₽/);
+      expect(screen.getByTestId("position-market-value-not-converted")).toHaveAttribute(
+        "title",
+        "Нет курса — показано в исходной валюте",
+      );
+      // Profit is derived from that valuation, so it stays an honest dash.
+      expect(screen.getByTestId("position-profit-dash")).toHaveTextContent("—");
+      expect(screen.queryByTestId("position-profit-amount")).not.toBeInTheDocument();
     });
 
     it("still shows the no-quote / currency-mismatch dashes regardless of mode — unaffected by base conversion", () => {

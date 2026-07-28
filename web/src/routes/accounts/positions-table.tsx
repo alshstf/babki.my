@@ -73,6 +73,11 @@ export function PositionsTable({
   baseCurrency: string;
 }) {
   const { t } = useTranslation();
+  // A position row's money amounts are denominated in the position's own
+  // currency, the quote's, or a bond face value's — never "the account's",
+  // which is what the default MoneyCell wording says. Resolved once here and
+  // handed to every cell rather than per cell.
+  const notConvertedTitle = t("positions.notConverted");
   return (
     <Table>
       <TableHeader>
@@ -110,6 +115,7 @@ export function PositionsTable({
             position.cost_minor,
             baseCurrency,
             position.in_base?.cost_minor,
+            position.in_base?.rate_on,
           );
           const resolvedMarketValue = hasMarketValue
             ? resolveDisplayAmount(
@@ -118,6 +124,7 @@ export function PositionsTable({
                 marketValueMinor,
                 baseCurrency,
                 position.in_base?.market_value_minor,
+                position.in_base?.rate_on,
               )
             : null;
           const resolvedUnrealized = hasUnrealized
@@ -127,6 +134,7 @@ export function PositionsTable({
                 unrealizedMinor,
                 baseCurrency,
                 position.in_base?.unrealized_pnl_minor,
+                position.in_base?.rate_on,
               )
             : null;
           const resolvedIncome = resolveDisplayAmount(
@@ -135,6 +143,7 @@ export function PositionsTable({
             position.income_minor,
             baseCurrency,
             position.in_base?.income_minor,
+            position.in_base?.rate_on,
           );
           const unrealizedPct = resolvedUnrealized
             ? unrealizedPercent(resolvedUnrealized.amountMinor, resolvedCost.amountMinor)
@@ -166,12 +175,20 @@ export function PositionsTable({
                 {position.quantity}
               </TableCell>
               <TableCell className="text-right tabular-nums">
-                <MoneyCell resolved={resolvedCost} testId="position-cost" />
+                <MoneyCell
+                  resolved={resolvedCost}
+                  notConvertedTitle={notConvertedTitle}
+                  testId="position-cost"
+                />
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 {hasMarketValue && resolvedMarketValue ? (
                   <>
-                    <MoneyCell resolved={resolvedMarketValue} testId="position-market-value" />
+                    <MoneyCell
+                      resolved={resolvedMarketValue}
+                      notConvertedTitle={notConvertedTitle}
+                      testId="position-market-value"
+                    />
                     {hint && (
                       <div
                         className="text-xs font-normal text-muted-foreground"
@@ -197,6 +214,7 @@ export function PositionsTable({
                     <MoneyCell
                       resolved={resolvedUnrealized}
                       className={signClass(resolvedUnrealized.amountMinor)}
+                      notConvertedTitle={notConvertedTitle}
                       testId="position-profit-amount"
                     />
                     {unrealizedPct && (
@@ -219,7 +237,11 @@ export function PositionsTable({
                 )}
               </TableCell>
               <TableCell className="text-right tabular-nums">
-                <MoneyCell resolved={resolvedIncome} testId="position-income" />
+                <MoneyCell
+                  resolved={resolvedIncome}
+                  notConvertedTitle={notConvertedTitle}
+                  testId="position-income"
+                />
               </TableCell>
             </TableRow>
           );

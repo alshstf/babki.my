@@ -94,6 +94,7 @@ export function AccountsTable({
                         account.balance.amount_minor,
                         baseCurrency,
                         account.balance_in_base?.amount_minor,
+                        account.balance_in_base?.rate_on,
                       )}
                       className="font-medium tabular-nums"
                       testId={`account-balance-${account.id}`}
