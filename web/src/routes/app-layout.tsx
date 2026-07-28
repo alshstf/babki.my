@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { LogOut, Settings, Users, Wallet } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DisplayCurrencyToggle } from "@/components/display-currency-toggle";
 import { useLogout, useSession } from "@/api/session";
 
 export function AppLayout() {
@@ -45,6 +46,10 @@ export function AppLayout() {
             <>
               <span className="text-sm">{session.user.display_name}</span>
               <Badge variant="secondary">{t(`roles.${session.role}`)}</Badge>
+              {/* TODO(task 4 of plan 4d): visible should reflect "more than
+                  one currency shown on the current screen" — always shown
+                  for now until the screens wire that up. */}
+              <DisplayCurrencyToggle visible={true} />
               <Button
                 variant="ghost"
                 size="icon"
