@@ -406,3 +406,79 @@ func TestSummaryRatesOnReflectsStaleRateNotToday(t *testing.T) {
 		t.Fatalf("rates_on = %q, must not be today's date (%q) for a two-day-old rate", *sum.RatesOn, todayStr)
 	}
 }
+
+// TestSummaryConvertsViaInverseRate closes a gap left by plan 4a's review:
+// every summary test above with a non-base currency has a fx_rates row in
+// the DIRECT direction (currency -> base). This test picks the base
+// currency to be USD (not RUB) and holds a balance in RUB, while fx_rates
+// only ever carries a USD->RUB row — never RUB->USD. Converting the RUB
+// balance to USD therefore has no direct row to use at all; it can only
+// succeed through directOrInverse's inverse branch (1 / (USD->RUB rate)).
+// This is the main owner-facing feature (net worth total) exercised on the
+// less-common but equally load-bearing code path, at the HTTP layer.
+//
+// Manual arithmetic (chosen so the inverse divides out exactly, leaving no
+// rounding ambiguity that could mask a bug in either direction):
+//
+//	fx_rates row: Base=USD, Quote=RUB, rate 78.50 (i.e. 1 USD = 78.50 RUB)
+//	RUB account balance: 7850.00 RUB (amount_minor 785000)
+//	inverse rate (RUB -> USD) = 1 / 78.50
+//	total_in_base_minor = round(785000 * (1 / 78.50)) = round(785000 / 78.50) = 10000
+//	                      (785000 / 78.50 = 10000 exactly: 78.50 * 10000 = 785000)
+//	                      i.e. 100.00 USD
+//
+// If the inverse branch were broken (e.g. resolveRate only ever tried the
+// direct from->to direction), the RUB balance could not convert at all: it
+// would land in unconverted and total_in_base_minor would be nil, not 10000.
+func TestSummaryConvertsViaInverseRate(t *testing.T) {
+	url, c, mdStore := newAPIWithConverter(t)
+	on := pastOn()
+
+	// Only base(USD) -> quote(RUB) is seeded — never RUB -> USD directly —
+	// so the summary can only convert the RUB account via directOrInverse's
+	// inverse leg (1 / rate), not a direct lookup.
+	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: decimal.RequireFromString("78.50"), Source: "test"},
+	}); err != nil {
+		t.Fatalf("seed fx rates: %v", err)
+	}
+
+	resp := do(t, c, "PATCH", url+"/api/v1/space", `{"base_currency":"USD"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("patch space base_currency: %d", resp.StatusCode)
+	}
+
+	resp = do(t, c, "POST", url+"/api/v1/accounts", `{"name":"RUB cash","type":"cash","currency":"RUB"}`)
+	if resp.StatusCode != 201 {
+		t.Fatalf("create RUB account: %d", resp.StatusCode)
+	}
+	var a struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&a)
+	if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+a.ID+"/balance",
+		`{"as_of":"2026-07-20","amount_minor":785000}`); resp.StatusCode != 200 {
+		t.Fatalf("set RUB balance: %d", resp.StatusCode)
+	}
+
+	resp = do(t, c, "GET", url+"/api/v1/summary", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("summary = %d", resp.StatusCode)
+	}
+	var sum summaryResponse
+	_ = json.NewDecoder(resp.Body).Decode(&sum)
+
+	if sum.BaseCurrency != "USD" {
+		t.Fatalf("base_currency = %q, want USD", sum.BaseCurrency)
+	}
+	if sum.TotalInBaseMinor == nil || *sum.TotalInBaseMinor != 10000 {
+		t.Fatalf("total_in_base_minor = %v, want 10000 (785000 RUB minor / 78.50 via inverse rate = 100.00 USD)", sum.TotalInBaseMinor)
+	}
+	if sum.Unconverted == nil || len(*sum.Unconverted) != 0 {
+		t.Fatalf("unconverted = %v, want [] (inverse rate must resolve the RUB->USD conversion)", sum.Unconverted)
+	}
+	wantRatesOn := on.Format("2006-01-02")
+	if sum.RatesOn == nil || *sum.RatesOn != wantRatesOn {
+		t.Fatalf("rates_on = %v, want %q", sum.RatesOn, wantRatesOn)
+	}
+}

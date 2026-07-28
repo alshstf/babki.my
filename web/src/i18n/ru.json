@@ -7,7 +7,7 @@
     "create": "Создать",
     "actions": "Действия"
   },
-  "nav": { "accounts": "Счета", "family": "Семья" },
+  "nav": { "accounts": "Счета", "family": "Семья", "settings": "Настройки" },
   "roles": { "owner": "владелец", "editor": "редактор", "viewer": "наблюдатель" },
   "auth": {
     "loginTitle": "Вход в семейный учёт",
@@ -71,6 +71,12 @@
       "parseError": "Не удалось разобрать сумму"
     }
   },
+  "summary": {
+    "totalTitle": "Итого",
+    "noTotal": "Нет курсов для пересчета",
+    "unconverted": "не учтены: {{currencies}}",
+    "ratesOn": "курс от {{date}}"
+  },
   "accountTypes": {
     "brokerage": "брокерский",
     "checking": "текущий",
@@ -87,12 +93,15 @@
       "instrument": "Инструмент",
       "quantity": "Количество",
       "cost": "Стоимость",
+      "market": "Рыночная",
       "realized": "Реализовано",
       "income": "Доход",
       "fees": "Комиссии"
     },
     "closed": "закрыта",
-    "frozen": "заморожен"
+    "frozen": "заморожен",
+    "noQuote": "Нет котировки",
+    "priceOn": "{{price}} · {{date}}"
   },
   "operations": {
     "title": "Операции",
@@ -207,5 +216,12 @@
       "displayName": "Имя участника",
       "passwordHint": "Минимум 8 символов. Передайте пароль лично — смены пароля пока нет."
     }
+  },
+  "settings": {
+    "title": "Настройки",
+    "baseCurrency": "Базовая валюта",
+    "baseCurrencyHint": "В этой валюте показывается общий итог",
+    "forbidden": "Только владелец может изменить базовую валюту",
+    "ownerOnly": "Настройки доступны только владельцу пространства"
   }
 }

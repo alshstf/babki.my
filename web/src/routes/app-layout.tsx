@@ -1,6 +1,6 @@
 import { Link, Outlet } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { LogOut, Users, Wallet } from "lucide-react";
+import { LogOut, Settings, Users, Wallet } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useLogout, useSession } from "@/api/session";
@@ -29,6 +29,14 @@ export function AppLayout() {
           >
             <Users className="size-4" /> {t("nav.family")}
           </Link>
+          {session?.role === "owner" && (
+            <Link
+              to="/settings"
+              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent [&.active]:bg-accent"
+            >
+              <Settings className="size-4" /> {t("nav.settings")}
+            </Link>
+          )}
         </nav>
       </aside>
       <div className="flex-1 flex flex-col">

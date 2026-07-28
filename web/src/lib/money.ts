@@ -43,6 +43,20 @@ export function formatMinorCompact(amountMinor: number, currency: string): strin
   return formatWith(amountMinor, currency, 0);
 }
 
+// formatPrice renders a raw decimal-string price (a quote, not minor
+// units) as a fixed 2-fraction-digit ru-RU number, e.g. "305.5" -> "305,50".
+// Returns null on unparseable input so callers can skip the hint entirely
+// rather than render garbage — an honest omission over a fake display.
+export function formatPrice(value: string): string | null {
+  if (!/^\d+(\.\d+)?$/.test(value)) return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return new Intl.NumberFormat("ru-RU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(num);
+}
+
 // parseToMinor accepts "1 234,56" / "1234.56" / "-92 000"; returns null on junk.
 export function parseToMinor(input: string): number | null {
   const cleaned = input.replace(/\s/g, "").replace(",", "."); // \s matches NBSP (U+00A0) too

@@ -15,6 +15,7 @@ import { useSession } from "@/api/session";
 import { useAccounts } from "@/api/accounts";
 import { usePositions } from "@/api/positions";
 import { formatMinor } from "@/lib/money";
+import { formatDate } from "@/lib/dates";
 import { PositionsTable } from "./positions-table";
 import { OperationsTable } from "./operations-table";
 import { TradeDialog } from "./trade-dialog";
@@ -81,7 +82,7 @@ export function AccountDetailPage() {
             <div className="text-2xl font-bold tabular-nums">
               {formatMinor(account.balance.amount_minor, account.currency)}
             </div>
-            <div className="text-xs text-muted-foreground">{account.balance.as_of}</div>
+            <div className="text-xs text-muted-foreground">{formatDate(account.balance.as_of)}</div>
           </div>
         )}
       </div>
