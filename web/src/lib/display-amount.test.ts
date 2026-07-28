@@ -1,0 +1,42 @@
+import { describe, expect, it } from "vitest";
+import { resolveDisplayAmount } from "./display-amount";
+
+describe("resolveDisplayAmount", () => {
+  it("shows the native amount unchanged in native mode, even when a base figure is available", () => {
+    const resolved = resolveDisplayAmount("native", "USD", 100_00, "RUB", 950_000);
+    expect(resolved).toEqual({ amountMinor: 100_00, currency: "USD", noRate: false });
+  });
+
+  it("shows the converted amount in base mode when a base figure is available", () => {
+    const resolved = resolveDisplayAmount("base", "USD", 100_00, "RUB", 950_000);
+    expect(resolved).toEqual({ amountMinor: 950_000, currency: "RUB", noRate: false });
+  });
+
+  it("falls back to the native amount with noRate=true in base mode when no base figure is available", () => {
+    const resolved = resolveDisplayAmount("base", "USD", 100_00, "RUB", null);
+    expect(resolved).toEqual({ amountMinor: 100_00, currency: "USD", noRate: true });
+  });
+
+  it("treats undefined the same as null for the base figure", () => {
+    const resolved = resolveDisplayAmount("base", "USD", 100_00, "RUB", undefined);
+    expect(resolved.noRate).toBe(true);
+  });
+
+  it("shows the native amount with no noRate flag when the native currency already equals the base currency, even without a base figure", () => {
+    // The backend never populates in_base/balance_in_base when currency ===
+    // base_currency (nothing to convert) — null here does NOT mean "missing
+    // rate", so no honesty indicator should appear.
+    const resolved = resolveDisplayAmount("base", "RUB", 100_00, "RUB", null);
+    expect(resolved).toEqual({ amountMinor: 100_00, currency: "RUB", noRate: false });
+  });
+
+  it("prefers the native currency check over a (theoretically impossible) base figure when currencies already match", () => {
+    const resolved = resolveDisplayAmount("base", "RUB", 100_00, "RUB", 999_00);
+    expect(resolved).toEqual({ amountMinor: 100_00, currency: "RUB", noRate: false });
+  });
+
+  it("treats a zero base amount as present (not missing)", () => {
+    const resolved = resolveDisplayAmount("base", "USD", 100_00, "RUB", 0);
+    expect(resolved).toEqual({ amountMinor: 0, currency: "RUB", noRate: false });
+  });
+});

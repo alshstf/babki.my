@@ -12,10 +12,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useSession } from "@/api/session";
-import { useAccounts } from "@/api/accounts";
+import { useAccounts, useSummary } from "@/api/accounts";
 import { usePositions } from "@/api/positions";
-import { formatMinor } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
+import { resolveDisplayAmount } from "@/lib/display-amount";
+import { useDisplayCurrency } from "@/lib/display-currency";
+import { useReportScreenCurrencies } from "@/lib/screen-currencies";
+import { MoneyCell } from "@/components/money-cell";
 import { PositionsTable } from "./positions-table";
 import { OperationsTable } from "./operations-table";
 import { TradeDialog } from "./trade-dialog";
@@ -32,16 +35,31 @@ export function AccountDetailPage() {
   const { accountId } = useParams({ from: "/app/accounts/$accountId" });
   const { data: session } = useSession();
   const accounts = useAccounts();
+  const summary = useSummary();
   const account = accounts.data?.find((a) => a.id === accountId);
   const positions = usePositions(accountId, !!account);
   const isViewer = session?.role === "viewer";
   const [action, setAction] = useState<AddAction | undefined>(undefined);
   const closeAction = () => setAction(undefined);
+  const { mode } = useDisplayCurrency();
 
-  if (accounts.isLoading) {
+  // Reports the currencies in play on this screen so the header's toggle
+  // can hide itself when there's nothing to convert (see
+  // lib/screen-currencies.tsx): the account's own currency, every
+  // position's currency, and the space's base currency (the toggle's
+  // conversion target — see the analogous comment in accounts/index.tsx for
+  // why that belongs in the set too). Must run unconditionally, before any
+  // of the early returns below, per the Rules of Hooks.
+  useReportScreenCurrencies([
+    ...(account ? [account.currency] : []),
+    ...(positions.data ?? []).map((p) => p.currency),
+    ...(summary.data ? [summary.data.base_currency] : []),
+  ]);
+
+  if (accounts.isLoading || summary.isLoading) {
     return <div className="text-muted-foreground">{t("app.loading")}</div>;
   }
-  if (accounts.isError) {
+  if (accounts.isError || summary.isError) {
     return (
       <Alert variant="destructive">
         <AlertDescription>{t("app.error")}</AlertDescription>
@@ -62,6 +80,11 @@ export function AccountDetailPage() {
     );
   }
 
+  // Defensive fallback only — by this point summary.isLoading/isError has
+  // already gated the render above, so summary.data is expected to be
+  // defined; TS just can't narrow that from those boolean checks alone.
+  const baseCurrency = summary.data?.base_currency ?? "";
+
   return (
     <div className="grid gap-6">
       <Link to="/accounts" className="text-sm text-muted-foreground hover:underline">
@@ -79,9 +102,17 @@ export function AccountDetailPage() {
         </div>
         {account.balance && (
           <div className="mt-2 grid gap-0.5">
-            <div className="text-2xl font-bold tabular-nums">
-              {formatMinor(account.balance.amount_minor, account.currency)}
-            </div>
+            <MoneyCell
+              resolved={resolveDisplayAmount(
+                mode,
+                account.currency,
+                account.balance.amount_minor,
+                baseCurrency,
+                account.balance_in_base?.amount_minor,
+              )}
+              className="text-2xl font-bold tabular-nums"
+              testId="account-detail-balance"
+            />
             <div className="text-xs text-muted-foreground">{formatDate(account.balance.as_of)}</div>
           </div>
         )}
@@ -125,7 +156,7 @@ export function AccountDetailPage() {
             <AlertDescription>{t("app.error")}</AlertDescription>
           </Alert>
         ) : positions.data && positions.data.length > 0 ? (
-          <PositionsTable positions={positions.data} />
+          <PositionsTable positions={positions.data} mode={mode} baseCurrency={baseCurrency} />
         ) : (
           <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">
             {t("positions.empty")}

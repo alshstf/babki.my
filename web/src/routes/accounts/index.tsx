@@ -11,6 +11,8 @@ import {
 } from "@/components/ui/dialog";
 import { useSession } from "@/api/session";
 import { useAccounts, useArchiveAccount, useSummary, type AccountWithBalance } from "@/api/accounts";
+import { useDisplayCurrency } from "@/lib/display-currency";
+import { useReportScreenCurrencies } from "@/lib/screen-currencies";
 import { SummaryCards } from "./summary-cards";
 import { AccountsTable } from "./accounts-table";
 import { AccountDialog } from "./account-dialog";
@@ -23,6 +25,7 @@ export function AccountsPage() {
   const accounts = useAccounts();
   const summary = useSummary();
   const archiveAccount = useArchiveAccount();
+  const { mode } = useDisplayCurrency();
 
   // undefined = dialog closed, null = create mode, account = edit mode.
   const [dialogAccount, setDialogAccount] = useState<AccountWithBalance | null | undefined>(
@@ -32,6 +35,20 @@ export function AccountsPage() {
   const [balanceTarget, setBalanceTarget] = useState<AccountWithBalance | null>(null);
 
   const isViewer = session?.role === "viewer";
+
+  // Reports the currencies in play on this screen so the header's toggle
+  // can hide itself when there's nothing to convert (see
+  // lib/screen-currencies.tsx). Includes the base currency alongside the
+  // accounts' own currencies: even a screen where every account happens to
+  // share one *foreign* currency still has something meaningful for the
+  // toggle to convert into, so that case must count as 2, not 1. Must run
+  // unconditionally (before the loading/error returns below) per the Rules
+  // of Hooks — accounts.data/summary.data are simply undefined pre-load, so
+  // this naturally reports 0 currencies (toggle hidden) until data arrives.
+  useReportScreenCurrencies([
+    ...(accounts.data ?? []).map((a) => a.currency),
+    ...(summary.data ? [summary.data.base_currency] : []),
+  ]);
 
   if (accounts.isLoading || summary.isLoading) {
     return <div className="text-muted-foreground">{t("app.loading")}</div>;
@@ -45,6 +62,11 @@ export function AccountsPage() {
   }
 
   const list = accounts.data ?? [];
+  // Defensive fallback only — by this point accounts.isLoading/isError and
+  // summary.isLoading/isError have already gated the render above, so
+  // summary.data is expected to be defined; TS just can't narrow that from
+  // those boolean checks alone.
+  const baseCurrency = summary.data?.base_currency ?? "";
 
   const confirmArchive = () => {
     if (!archiveTarget) return;
@@ -61,7 +83,7 @@ export function AccountsPage() {
           <Button onClick={() => setDialogAccount(null)}>{t("accounts.add")}</Button>
         )}
       </div>
-      {summary.data && <SummaryCards summary={summary.data} />}
+      {summary.data && <SummaryCards summary={summary.data} mode={mode} />}
       {list.length === 0 ? (
         <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">
           {t("accounts.empty")}
@@ -69,6 +91,8 @@ export function AccountsPage() {
       ) : (
         <AccountsTable
           accounts={list}
+          mode={mode}
+          baseCurrency={baseCurrency}
           onRowAction={
             isViewer
               ? undefined

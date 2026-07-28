@@ -13,8 +13,10 @@ function wrap(ui: ReactElement) {
 }
 
 // NBSP-insensitive compare: Intl.NumberFormat uses non-breaking spaces
-// (matches the helper in money.test.ts / summary-cards.test.tsx).
-const norm = (s: string) => s.replace(/[  ]/g, " ");
+// (matches the helper in money.test.ts / summary-cards.test.tsx). Written
+// with explicit escapes (rather than the literal characters) so they can't
+// silently get mangled into plain ASCII spaces by an editing tool.
+const norm = (s: string) => s.replace(/[\u00A0\u202F]/g, " ");
 
 function makePosition(overrides: Partial<Position> = {}): Position {
   return {
@@ -48,7 +50,7 @@ function makePosition(overrides: Partial<Position> = {}): Position {
 
 describe("PositionsTable", () => {
   it("shows the market value amount and price, with the quote date only in a tooltip", () => {
-    wrap(<PositionsTable positions={[makePosition()]} />);
+    wrap(<PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />);
 
     expect(norm(screen.getByTestId("position-market-value").textContent ?? "")).toBe(
       norm(formatMinor(305_50, "USD")),
@@ -77,6 +79,8 @@ describe("PositionsTable", () => {
             price_on: null,
           }),
         ]}
+        mode="native"
+        baseCurrency="RUB"
       />,
     );
 
@@ -100,6 +104,8 @@ describe("PositionsTable", () => {
             market_value_currency: "EUR",
           }),
         ]}
+        mode="native"
+        baseCurrency="RUB"
       />,
     );
 
@@ -109,7 +115,7 @@ describe("PositionsTable", () => {
   });
 
   it("does not render the removed realized/fees columns", () => {
-    wrap(<PositionsTable positions={[makePosition()]} />);
+    wrap(<PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />);
 
     expect(screen.queryByText("Реализовано")).not.toBeInTheDocument();
     expect(screen.queryByText("Комиссии")).not.toBeInTheDocument();
@@ -118,13 +124,19 @@ describe("PositionsTable", () => {
 
   it("shows unrealized profit with its percentage of cost", () => {
     // cost 2500,00, unrealized +250,00 -> +10,0 %
-    wrap(<PositionsTable positions={[makePosition({ cost_minor: 250_000, unrealized_pnl_minor: 25_000 })]} />);
+    wrap(
+      <PositionsTable
+        positions={[makePosition({ cost_minor: 250_000, unrealized_pnl_minor: 25_000 })]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
 
     const amount = screen.getByTestId("position-profit-amount");
     expect(norm(amount.textContent ?? "")).toBe(norm(formatMinor(25_000, "USD")));
     expect(amount.className).toContain("text-emerald-500");
     expect(norm(screen.getByTestId("position-profit-percent").textContent ?? "")).toBe(
-      norm("+10,0 %"),
+      norm("+10,0 %"),
     );
   });
 
@@ -133,6 +145,8 @@ describe("PositionsTable", () => {
     wrap(
       <PositionsTable
         positions={[makePosition({ cost_minor: 250_000, unrealized_pnl_minor: -30_000 })]}
+        mode="native"
+        baseCurrency="RUB"
       />,
     );
 
@@ -140,7 +154,7 @@ describe("PositionsTable", () => {
     expect(norm(amount.textContent ?? "")).toBe(norm(formatMinor(-30_000, "USD")));
     expect(amount.className).toContain("text-red-500");
     expect(norm(screen.getByTestId("position-profit-percent").textContent ?? "")).toBe(
-      norm("-12,0 %"),
+      norm("-12,0 %"),
     );
   });
 
@@ -154,6 +168,8 @@ describe("PositionsTable", () => {
             unrealized_pnl_minor: null,
           }),
         ]}
+        mode="native"
+        baseCurrency="RUB"
       />,
     );
 
@@ -175,6 +191,8 @@ describe("PositionsTable", () => {
             unrealized_pnl_minor: null,
           }),
         ]}
+        mode="native"
+        baseCurrency="RUB"
       />,
     );
 
@@ -201,6 +219,8 @@ describe("PositionsTable", () => {
             unrealized_pnl_minor: 25_000,
           }),
         ]}
+        mode="native"
+        baseCurrency="RUB"
       />,
     );
 
@@ -220,7 +240,7 @@ describe("PositionsTable", () => {
   });
 
   it("omits the converted-from tooltip line when the market value has no source currency/amount", () => {
-    wrap(<PositionsTable positions={[makePosition()]} />);
+    wrap(<PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />);
 
     const priceLine = screen.getByText("305,50");
     expect(priceLine.getAttribute("title")).toBe("Цена на 20.07.2026");
@@ -230,11 +250,173 @@ describe("PositionsTable", () => {
     wrap(
       <PositionsTable
         positions={[makePosition({ cost_minor: 0, unrealized_pnl_minor: 1_000 })]}
+        mode="native"
+        baseCurrency="RUB"
       />,
     );
 
     const amount = screen.getByTestId("position-profit-amount");
     expect(norm(amount.textContent ?? "")).toBe(norm(formatMinor(1_000, "USD")));
     expect(screen.queryByTestId("position-profit-percent")).not.toBeInTheDocument();
+  });
+
+  describe("base mode", () => {
+    it("shows cost, market value, profit and income all converted into the base currency when in_base is present", () => {
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "USD",
+              cost_minor: 250_000,
+              income_minor: 1_000,
+              in_base: {
+                cost_minor: 2_275_000,
+                market_value_minor: 2_780_050,
+                unrealized_pnl_minor: 227_500,
+                income_minor: 9_100,
+                currency: "RUB",
+                rate_on: "2026-07-20",
+              },
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(norm(screen.getByTestId("position-cost").textContent ?? "")).toBe(
+        norm(formatMinor(2_275_000, "RUB")),
+      );
+      expect(norm(screen.getByTestId("position-market-value").textContent ?? "")).toBe(
+        norm(formatMinor(2_780_050, "RUB")),
+      );
+      expect(norm(screen.getByTestId("position-profit-amount").textContent ?? "")).toBe(
+        norm(formatMinor(227_500, "RUB")),
+      );
+      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
+        norm(formatMinor(9_100, "RUB")),
+      );
+      // No "not converted" indicators anywhere — every figure had a rate.
+      expect(screen.queryByText("Нет курса — показано в валюте счёта")).not.toBeInTheDocument();
+    });
+
+    it("computes the profit percentage from the converted cost/profit pair, not the native one", () => {
+      // Native: cost 2500,00 / profit 250,00 -> +10,0 %. If the percentage
+      // were computed from a mismatched native/converted pair (e.g. native
+      // cost against converted profit) it would come out wrong even though
+      // the ratio is preserved by a uniform fx conversion.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "USD",
+              cost_minor: 250_000,
+              unrealized_pnl_minor: 25_000,
+              in_base: {
+                cost_minor: 2_000_000,
+                market_value_minor: 2_200_000,
+                unrealized_pnl_minor: 200_000,
+                income_minor: 0,
+                currency: "RUB",
+                rate_on: "2026-07-20",
+              },
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(norm(screen.getByTestId("position-profit-percent").textContent ?? "")).toBe(
+        norm("+10,0 %"),
+      );
+    });
+
+    it("shows the native amounts plus a not-converted indicator on every money cell when in_base is null and the currency differs from base", () => {
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "USD",
+              cost_minor: 250_000,
+              income_minor: 1_000,
+              unrealized_pnl_minor: 25_000,
+              in_base: null,
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      // Honest native fallback everywhere — no dash, no fabricated zero.
+      expect(norm(screen.getByTestId("position-cost").textContent ?? "")).toContain(
+        norm(formatMinor(250_000, "USD")),
+      );
+      expect(norm(screen.getByTestId("position-market-value").textContent ?? "")).toContain(
+        norm(formatMinor(305_50, "USD")),
+      );
+      expect(norm(screen.getByTestId("position-profit-amount").textContent ?? "")).toContain(
+        norm(formatMinor(25_000, "USD")),
+      );
+      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toContain(
+        norm(formatMinor(1_000, "USD")),
+      );
+
+      expect(screen.getByTestId("position-cost-not-converted")).toHaveAttribute(
+        "title",
+        "Нет курса — показано в валюте счёта",
+      );
+      expect(screen.getByTestId("position-market-value-not-converted")).toBeInTheDocument();
+      expect(screen.getByTestId("position-profit-amount-not-converted")).toBeInTheDocument();
+      expect(screen.getByTestId("position-income-not-converted")).toBeInTheDocument();
+    });
+
+    it("shows the plain native amounts with no indicator when the position's currency already is the base currency", () => {
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "RUB",
+              market_value_currency: "RUB",
+              cost_minor: 250_000,
+              income_minor: 1_000,
+              unrealized_pnl_minor: 25_000,
+              in_base: null,
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(norm(screen.getByTestId("position-cost").textContent ?? "")).toBe(
+        norm(formatMinor(250_000, "RUB")),
+      );
+      expect(screen.queryByTestId("position-cost-not-converted")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("position-market-value-not-converted")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("position-profit-amount-not-converted")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("position-income-not-converted")).not.toBeInTheDocument();
+    });
+
+    it("still shows the no-quote / currency-mismatch dashes regardless of mode — unaffected by base conversion", () => {
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              market_value_minor: null,
+              market_value_currency: null,
+              unrealized_pnl_minor: null,
+              in_base: null,
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(screen.getByTestId("position-no-quote")).toHaveTextContent("—");
+      expect(screen.getByTestId("position-profit-dash")).toHaveTextContent("—");
+    });
   });
 });

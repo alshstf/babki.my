@@ -33,7 +33,7 @@ function makeSummary(overrides: Partial<Summary> = {}): Summary {
 describe("SummaryCards", () => {
   it("shows the total with no context row when everything converted and rates are fresh", () => {
     const summary = makeSummary();
-    wrap(<SummaryCards summary={summary} />);
+    wrap(<SummaryCards summary={summary} mode="native" />);
 
     expect(norm(screen.getByTestId("summary-total-amount").textContent ?? "")).toBe(
       norm(formatMinorCompact(summary.total_in_base_minor!, summary.base_currency)),
@@ -45,13 +45,13 @@ describe("SummaryCards", () => {
   });
 
   it("lists unconverted currencies in the context row", () => {
-    wrap(<SummaryCards summary={makeSummary({ unconverted: ["KZT"] })} />);
+    wrap(<SummaryCards summary={makeSummary({ unconverted: ["KZT"] })} mode="native" />);
 
     expect(screen.getByText(/не учтены:.*KZT/)).toBeInTheDocument();
   });
 
   it("shows the rates date only in the stale-rates icon's tooltip, not as text", () => {
-    wrap(<SummaryCards summary={makeSummary({ rates_on: "2026-07-20" })} />);
+    wrap(<SummaryCards summary={makeSummary({ rates_on: "2026-07-20" })} mode="native" />);
 
     expect(screen.queryByText(/курс от/)).not.toBeInTheDocument();
     const icon = screen.getByTestId("summary-rates-stale-icon");
@@ -60,7 +60,7 @@ describe("SummaryCards", () => {
 
   it("hides the rates date and the stale-rates icon when rates are today or yesterday", () => {
     const today = localToday();
-    wrap(<SummaryCards summary={makeSummary({ rates_on: today })} />);
+    wrap(<SummaryCards summary={makeSummary({ rates_on: today })} mode="native" />);
     expect(screen.queryByText(/курс от/)).not.toBeInTheDocument();
     expect(screen.queryByTestId("summary-rates-stale-icon")).not.toBeInTheDocument();
   });
@@ -69,6 +69,7 @@ describe("SummaryCards", () => {
     wrap(
       <SummaryCards
         summary={makeSummary({ total_in_base_minor: null, unconverted: ["RUB"], rates_on: null })}
+        mode="native"
       />,
     );
 
@@ -78,7 +79,7 @@ describe("SummaryCards", () => {
   });
 
   it("renders a zero total amount (0 ₽) when total_in_base_minor is 0", () => {
-    wrap(<SummaryCards summary={makeSummary({ total_in_base_minor: 0 })} />);
+    wrap(<SummaryCards summary={makeSummary({ total_in_base_minor: 0 })} mode="native" />);
 
     const amount = screen.getByTestId("summary-total-amount");
     expect(amount).toBeInTheDocument();
@@ -89,14 +90,29 @@ describe("SummaryCards", () => {
 
   it("omits the rates-date fragment when rates_on is unparseable", () => {
     wrap(
-      <SummaryCards
-        summary={makeSummary({ rates_on: "garbage" })}
-      />,
+      <SummaryCards summary={makeSummary({ rates_on: "garbage" })} mode="native" />,
     );
 
     // Ensure the rate date fragment is not present (no "курс от" text), and
     // no stale-rates icon either since there's no valid date to show in it.
     expect(screen.queryByText(/курс от/)).not.toBeInTheDocument();
     expect(screen.queryByTestId("summary-rates-stale-icon")).not.toBeInTheDocument();
+  });
+
+  it("shows the per-currency cards in native mode", () => {
+    wrap(<SummaryCards summary={makeSummary()} mode="native" />);
+
+    expect(screen.getByText("Итого в RUB")).toBeInTheDocument();
+  });
+
+  it("hides the per-currency cards in base mode, but keeps the total", () => {
+    const summary = makeSummary();
+    wrap(<SummaryCards summary={summary} mode="base" />);
+
+    expect(screen.queryByText("Итого в RUB")).not.toBeInTheDocument();
+    expect(screen.getByTestId("summary-total-amount")).toBeInTheDocument();
+    expect(norm(screen.getByTestId("summary-total-amount").textContent ?? "")).toBe(
+      norm(formatMinorCompact(summary.total_in_base_minor!, summary.base_currency)),
+    );
   });
 });

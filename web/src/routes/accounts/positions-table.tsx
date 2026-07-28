@@ -11,6 +11,9 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { formatMinor, formatPrice, signClass } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
+import { resolveDisplayAmount } from "@/lib/display-amount";
+import type { DisplayCurrencyMode } from "@/lib/display-currency";
+import { MoneyCell } from "@/components/money-cell";
 import type { Position } from "@/api/positions";
 
 // Renders the price shown under the market value amount. The quote date used
@@ -57,7 +60,18 @@ function unrealizedPercent(unrealizedMinor: number, costMinor: number): string |
   }).format(ratio);
 }
 
-export function PositionsTable({ positions }: { positions: Position[] }) {
+export function PositionsTable({
+  positions,
+  mode,
+  baseCurrency,
+}: {
+  positions: Position[];
+  mode: DisplayCurrencyMode;
+  // The space's base currency (Summary.base_currency) — needed to tell
+  // "already in base, nothing to convert" apart from "conversion failed, no
+  // fx rate" when a position's in_base is null (see resolveDisplayAmount).
+  baseCurrency: string;
+}) {
   const { t } = useTranslation();
   return (
     <Table>
@@ -83,8 +97,47 @@ export function PositionsTable({ positions }: { positions: Position[] }) {
           const hint = hasMarketValue ? priceHint(t, position) : null;
           const unrealizedMinor = position.unrealized_pnl_minor;
           const hasUnrealized = unrealizedMinor != null;
-          const unrealizedPct = hasUnrealized
-            ? unrealizedPercent(unrealizedMinor, position.cost_minor)
+          // Cost is resolved unconditionally: it's always present (unlike
+          // market value / unrealized P&L), and the profit percentage below
+          // needs it alongside the resolved profit figure so both numbers
+          // in that ratio are consistently either both native or both
+          // converted (see resolveDisplayAmount — cost and unrealized_pnl
+          // share the same in_base object, so they always resolve the same
+          // way for a given position).
+          const resolvedCost = resolveDisplayAmount(
+            mode,
+            position.currency,
+            position.cost_minor,
+            baseCurrency,
+            position.in_base?.cost_minor,
+          );
+          const resolvedMarketValue = hasMarketValue
+            ? resolveDisplayAmount(
+                mode,
+                marketValueCurrency,
+                marketValueMinor,
+                baseCurrency,
+                position.in_base?.market_value_minor,
+              )
+            : null;
+          const resolvedUnrealized = hasUnrealized
+            ? resolveDisplayAmount(
+                mode,
+                position.currency,
+                unrealizedMinor,
+                baseCurrency,
+                position.in_base?.unrealized_pnl_minor,
+              )
+            : null;
+          const resolvedIncome = resolveDisplayAmount(
+            mode,
+            position.currency,
+            position.income_minor,
+            baseCurrency,
+            position.in_base?.income_minor,
+          );
+          const unrealizedPct = resolvedUnrealized
+            ? unrealizedPercent(resolvedUnrealized.amountMinor, resolvedCost.amountMinor)
             : null;
           return (
             <TableRow
@@ -113,14 +166,12 @@ export function PositionsTable({ positions }: { positions: Position[] }) {
                 {position.quantity}
               </TableCell>
               <TableCell className="text-right tabular-nums">
-                {formatMinor(position.cost_minor, position.currency)}
+                <MoneyCell resolved={resolvedCost} testId="position-cost" />
               </TableCell>
               <TableCell className="text-right tabular-nums">
-                {hasMarketValue ? (
+                {hasMarketValue && resolvedMarketValue ? (
                   <>
-                    <div data-testid="position-market-value">
-                      {formatMinor(marketValueMinor, marketValueCurrency)}
-                    </div>
+                    <MoneyCell resolved={resolvedMarketValue} testId="position-market-value" />
                     {hint && (
                       <div
                         className="text-xs font-normal text-muted-foreground"
@@ -141,14 +192,13 @@ export function PositionsTable({ positions }: { positions: Position[] }) {
                 )}
               </TableCell>
               <TableCell className="text-right tabular-nums">
-                {hasUnrealized ? (
+                {resolvedUnrealized ? (
                   <>
-                    <div
-                      data-testid="position-profit-amount"
-                      className={signClass(unrealizedMinor)}
-                    >
-                      {formatMinor(unrealizedMinor, position.currency)}
-                    </div>
+                    <MoneyCell
+                      resolved={resolvedUnrealized}
+                      className={signClass(resolvedUnrealized.amountMinor)}
+                      testId="position-profit-amount"
+                    />
                     {unrealizedPct && (
                       <div
                         data-testid="position-profit-percent"
@@ -169,7 +219,7 @@ export function PositionsTable({ positions }: { positions: Position[] }) {
                 )}
               </TableCell>
               <TableCell className="text-right tabular-nums">
-                {formatMinor(position.income_minor, position.currency)}
+                <MoneyCell resolved={resolvedIncome} testId="position-income" />
               </TableCell>
             </TableRow>
           );
