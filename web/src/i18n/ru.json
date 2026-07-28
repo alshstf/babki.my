@@ -101,7 +101,8 @@
     "frozen": "заморожен",
     "noQuote": "Нет котировки",
     "currencyMismatch": "Оценка в другой валюте — прибыль не рассчитывается",
-    "priceOn": "Цена на {{date}}"
+    "priceOn": "Цена на {{date}}",
+    "convertedFrom": "Пересчитано из {{amount}}"
   },
   "operations": {
     "title": "Операции",

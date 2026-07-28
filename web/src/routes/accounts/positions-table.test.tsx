@@ -188,6 +188,44 @@ describe("PositionsTable", () => {
     expect(screen.queryByTestId("position-profit-percent")).not.toBeInTheDocument();
   });
 
+  it("adds a tooltip note with the pre-conversion amount when the market value was converted from another currency", () => {
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            currency: "USD",
+            market_value_minor: 305_50,
+            market_value_currency: "USD",
+            market_value_source_currency: "RUB",
+            market_value_source_minor: 2_800_00,
+            unrealized_pnl_minor: 25_000,
+          }),
+        ]}
+      />,
+    );
+
+    // The converted (position-currency) amount is still what's shown in the DOM...
+    const amount = screen.getByTestId("position-market-value");
+    expect(norm(amount.textContent ?? "")).toBe(norm(formatMinor(305_50, "USD")));
+    // ...profit is computed normally (not the currency-mismatch dash)...
+    const profitAmount = screen.getByTestId("position-profit-amount");
+    expect(norm(profitAmount.textContent ?? "")).toBe(norm(formatMinor(25_000, "USD")));
+    // ...and the source amount appears only in the tooltip, never as text.
+    const sourceAmount = formatMinor(2_800_00, "RUB");
+    expect(screen.queryByText(sourceAmount)).not.toBeInTheDocument();
+    const priceLine = screen.getByText("305,50");
+    expect(norm(priceLine.getAttribute("title") ?? "")).toBe(
+      norm(`Цена на 20.07.2026\nПересчитано из ${sourceAmount}`),
+    );
+  });
+
+  it("omits the converted-from tooltip line when the market value has no source currency/amount", () => {
+    wrap(<PositionsTable positions={[makePosition()]} />);
+
+    const priceLine = screen.getByText("305,50");
+    expect(priceLine.getAttribute("title")).toBe("Цена на 20.07.2026");
+  });
+
   it("omits the percentage (but still shows the amount) when cost is 0", () => {
     wrap(
       <PositionsTable
