@@ -10,16 +10,26 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { formatMinor } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
+import { resolveDisplayAmount } from "@/lib/display-amount";
+import type { DisplayCurrencyMode } from "@/lib/display-currency";
+import { MoneyCell } from "@/components/money-cell";
 import type { AccountWithBalance } from "@/api/accounts";
 
 export function AccountsTable({
   accounts,
+  mode,
+  baseCurrency,
   onRowAction,
 }: {
   accounts: AccountWithBalance[];
-  // Row actions menu is added in Task 5; header stays stable.
+  mode: DisplayCurrencyMode;
+  // The space's base currency (Summary.base_currency) — needed to tell
+  // "already in base, nothing to convert" apart from "conversion failed,
+  // no fx rate" when an account's balance_in_base is null (see
+  // resolveDisplayAmount).
+  baseCurrency: string;
+  // Optional per-row actions menu (omitted for viewers, who can't mutate).
   onRowAction?: (account: AccountWithBalance) => React.ReactNode;
 }) {
   const { t } = useTranslation();
@@ -77,9 +87,18 @@ export function AccountsTable({
               <TableCell className="text-right">
                 {account.balance ? (
                   <>
-                    <div className="font-medium tabular-nums">
-                      {formatMinor(account.balance.amount_minor, account.currency)}
-                    </div>
+                    <MoneyCell
+                      resolved={resolveDisplayAmount(
+                        mode,
+                        account.currency,
+                        account.balance.amount_minor,
+                        baseCurrency,
+                        account.balance_in_base?.amount_minor,
+                        account.balance_in_base?.rate_on,
+                      )}
+                      className="font-medium tabular-nums"
+                      testId={`account-balance-${account.id}`}
+                    />
                     <div className="text-xs text-muted-foreground">
                       {formatDate(account.balance.as_of)}
                     </div>

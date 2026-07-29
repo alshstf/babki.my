@@ -14,8 +14,13 @@ import {
 import { useSession } from "@/api/session";
 import { useAccounts } from "@/api/accounts";
 import { usePositions } from "@/api/positions";
-import { formatMinor } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
+import { resolveDisplayAmount } from "@/lib/display-amount";
+import {
+  useEffectiveDisplayCurrencyMode,
+  useReportScreenCurrencies,
+} from "@/lib/screen-currencies";
+import { MoneyCell } from "@/components/money-cell";
 import { PositionsTable } from "./positions-table";
 import { OperationsTable } from "./operations-table";
 import { TradeDialog } from "./trade-dialog";
@@ -32,11 +37,33 @@ export function AccountDetailPage() {
   const { accountId } = useParams({ from: "/app/accounts/$accountId" });
   const { data: session } = useSession();
   const accounts = useAccounts();
+  // The space's base currency comes from the session, which is already
+  // loaded app-wide, rather than from GET /api/v1/summary: that endpoint
+  // computes a space-wide total this screen never shows, and gating on it
+  // meant one failing request replaced the whole account — balance,
+  // positions and journal — with an error page.
+  const baseCurrency = session?.base_currency ?? "";
   const account = accounts.data?.find((a) => a.id === accountId);
   const positions = usePositions(accountId, !!account);
   const isViewer = session?.role === "viewer";
   const [action, setAction] = useState<AddAction | undefined>(undefined);
   const closeAction = () => setAction(undefined);
+  // Effective, not stored: the mode only applies while the header toggle is
+  // on screen to switch it back off (see useEffectiveDisplayCurrencyMode).
+  const mode = useEffectiveDisplayCurrencyMode();
+
+  // Reports the currencies in play on this screen so the header's toggle
+  // can hide itself when there's nothing to convert (see
+  // lib/screen-currencies.tsx): the account's own currency, every
+  // position's currency, and the space's base currency (the toggle's
+  // conversion target — see the analogous comment in accounts/index.tsx for
+  // why that belongs in the set too). Must run unconditionally, before any
+  // of the early returns below, per the Rules of Hooks.
+  useReportScreenCurrencies([
+    ...(account ? [account.currency] : []),
+    ...(positions.data ?? []).map((p) => p.currency),
+    ...(baseCurrency ? [baseCurrency] : []),
+  ]);
 
   if (accounts.isLoading) {
     return <div className="text-muted-foreground">{t("app.loading")}</div>;
@@ -79,9 +106,18 @@ export function AccountDetailPage() {
         </div>
         {account.balance && (
           <div className="mt-2 grid gap-0.5">
-            <div className="text-2xl font-bold tabular-nums">
-              {formatMinor(account.balance.amount_minor, account.currency)}
-            </div>
+            <MoneyCell
+              resolved={resolveDisplayAmount(
+                mode,
+                account.currency,
+                account.balance.amount_minor,
+                baseCurrency,
+                account.balance_in_base?.amount_minor,
+                account.balance_in_base?.rate_on,
+              )}
+              className="text-2xl font-bold tabular-nums"
+              testId="account-detail-balance"
+            />
             <div className="text-xs text-muted-foreground">{formatDate(account.balance.as_of)}</div>
           </div>
         )}
@@ -125,7 +161,7 @@ export function AccountDetailPage() {
             <AlertDescription>{t("app.error")}</AlertDescription>
           </Alert>
         ) : positions.data && positions.data.length > 0 ? (
-          <PositionsTable positions={positions.data} />
+          <PositionsTable positions={positions.data} mode={mode} baseCurrency={baseCurrency} />
         ) : (
           <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">
             {t("positions.empty")}

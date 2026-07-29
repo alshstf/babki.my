@@ -177,15 +177,18 @@ type AccountType string
 
 // AccountWithBalance defines model for AccountWithBalance.
 type AccountWithBalance struct {
-	Balance     *BalancePoint                         `json:"balance,omitempty"`
-	CreatedAt   time.Time                             `json:"created_at"`
-	Currency    string                                `json:"currency"`
-	Id          openapi_types.UUID                    `json:"id"`
-	Institution string                                `json:"institution"`
-	Name        string                                `json:"name"`
-	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
-	Status      AccountStatus                         `json:"status"`
-	Type        AccountType                           `json:"type"`
+	Balance *BalancePoint `json:"balance,omitempty"`
+
+	// BalanceInBase Account's balance converted into the space's base currency at today's fx rate. Null when the account has no balance, its currency already equals base_currency (nothing to convert), or no fx rate could be resolved.
+	BalanceInBase nullable.Nullable[MoneyInBase]        `json:"balance_in_base,omitempty"`
+	CreatedAt     time.Time                             `json:"created_at"`
+	Currency      string                                `json:"currency"`
+	Id            openapi_types.UUID                    `json:"id"`
+	Institution   string                                `json:"institution"`
+	Name          string                                `json:"name"`
+	OwnerUserId   nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
+	Status        AccountStatus                         `json:"status"`
+	Type          AccountType                           `json:"type"`
 }
 
 // BalancePoint defines model for BalancePoint.
@@ -296,6 +299,18 @@ type MemberInfo struct {
 	Username    string             `json:"username"`
 }
 
+// MoneyInBase defines model for MoneyInBase.
+type MoneyInBase struct {
+	// AmountMinor Amount in the base currency's minor units
+	AmountMinor int64 `json:"amount_minor"`
+
+	// Currency The space's base currency (ISO-4217), same as Summary.base_currency
+	Currency string `json:"currency"`
+
+	// RateOn Date YYYY-MM-DD of the fx rate actually used for this conversion
+	RateOn string `json:"rate_on"`
+}
+
 // Operation defines model for Operation.
 type Operation struct {
 	AccountId    openapi_types.UUID                    `json:"account_id"`
@@ -331,11 +346,14 @@ type OperationType string
 
 // Position defines model for Position.
 type Position struct {
-	CostMinor   int64      `json:"cost_minor"`
-	Currency    string     `json:"currency"`
-	FeesMinor   int64      `json:"fees_minor"`
-	IncomeMinor int64      `json:"income_minor"`
-	Instrument  Instrument `json:"instrument"`
+	CostMinor int64  `json:"cost_minor"`
+	Currency  string `json:"currency"`
+	FeesMinor int64  `json:"fees_minor"`
+
+	// InBase cost_minor/market_value_minor/unrealized_pnl_minor/income_minor converted from the position's own `currency` into the space's base currency at today's fx rate, each amount rounded independently (not derived from one another). Null when `currency` already equals the base currency (nothing to convert) or no fx rate could be resolved for the pair — a partially converted position is never published. Inside the object, market_value_minor and unrealized_pnl_minor can still be null on their own when the valuation isn't in the position's currency (see their descriptions). fees_minor and realized_pnl_minor are intentionally not carried into this object (owner feedback).
+	InBase      nullable.Nullable[PositionInBase] `json:"in_base,omitempty"`
+	IncomeMinor int64                             `json:"income_minor"`
+	Instrument  Instrument                        `json:"instrument"`
 
 	// MarketValueCurrency Currency of market_value_minor. Equal to `currency` (the position's own currency) whenever a conversion happened; otherwise the raw valuation currency (the quote's currency for share/etf, the instrument's face_currency for bond). Null exactly when market_value_minor is null.
 	MarketValueCurrency nullable.Nullable[string] `json:"market_value_currency,omitempty"`
@@ -360,6 +378,27 @@ type Position struct {
 	RealizedPnlMinor int64  `json:"realized_pnl_minor"`
 
 	// UnrealizedPnlMinor market_value_minor minus cost_minor, i.e. the position's unrealized profit or loss; both are already in the same currency (market_value_minor is converted into the position's currency when needed, see above), so this is a plain integer subtraction. Null when there is no market_value_minor, or when market_value_currency still differs from currency (a conversion was needed but no fx rate was available).
+	UnrealizedPnlMinor nullable.Nullable[int64] `json:"unrealized_pnl_minor,omitempty"`
+}
+
+// PositionInBase defines model for PositionInBase.
+type PositionInBase struct {
+	// CostMinor Position.cost_minor converted into currency
+	CostMinor int64 `json:"cost_minor"`
+
+	// Currency The space's base currency (ISO-4217), same as Summary.base_currency
+	Currency string `json:"currency"`
+
+	// IncomeMinor Position.income_minor converted into currency
+	IncomeMinor int64 `json:"income_minor"`
+
+	// MarketValueMinor Position.market_value_minor converted into currency, never fabricated. Null when Position.market_value_minor itself is null (no usable quote), AND null whenever market_value_currency differs from the position's own currency: the single rate used for this object converts the position's currency into the base currency, so a valuation still denominated in some other currency (a bond's face_currency, when no rate could bring it into the position's currency) cannot be expressed here — publishing it multiplied by the wrong pair's rate would be a silently wrong number
+	MarketValueMinor nullable.Nullable[int64] `json:"market_value_minor,omitempty"`
+
+	// RateOn Date YYYY-MM-DD of the fx rate actually used for this conversion
+	RateOn string `json:"rate_on"`
+
+	// UnrealizedPnlMinor Position.unrealized_pnl_minor converted into currency; null exactly when Position.unrealized_pnl_minor itself is null, which covers every case where market_value_minor above is null — the P&L is derived from the valuation and cannot outlive it
 	UnrealizedPnlMinor nullable.Nullable[int64] `json:"unrealized_pnl_minor,omitempty"`
 }
 

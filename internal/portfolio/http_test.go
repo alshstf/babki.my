@@ -3,6 +3,7 @@ package portfolio_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -45,6 +46,7 @@ type quoteStoreLike interface {
 // structurally.
 type converterLike interface {
 	Convert(ctx context.Context, amountMinor int64, from, to string, on time.Time) (int64, error)
+	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
 }
 
 // setupAPI wires the full stack: family + account + instrument + operation +
@@ -73,7 +75,7 @@ func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv conv
 	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(marketdata.NewStore(pool)), auth, sm).Mount(srv)
 	instrument.NewHandler(instStore, auth, sm).Mount(srv)
 	operation.NewHandler(opSvc, opStore, auth, sm).Mount(srv)
-	portfolio.NewHandler(opStore, instStore, quotes, conv, auth, sm).Mount(srv)
+	portfolio.NewHandler(opStore, instStore, quotes, conv, famStore, auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -166,20 +168,36 @@ type instrumentResp struct {
 }
 
 type positionResp struct {
-	Instrument                instrumentResp `json:"instrument"`
-	Quantity                  string         `json:"quantity"`
-	CostMinor                 int64          `json:"cost_minor"`
-	Currency                  string         `json:"currency"`
-	RealizedPnlMinor          int64          `json:"realized_pnl_minor"`
-	IncomeMinor               int64          `json:"income_minor"`
-	FeesMinor                 int64          `json:"fees_minor"`
-	MarketValueMinor          *int64         `json:"market_value_minor"`
-	MarketValueCurrency       *string        `json:"market_value_currency"`
-	MarketValueSourceCurrency *string        `json:"market_value_source_currency"`
-	MarketValueSourceMinor    *int64         `json:"market_value_source_minor"`
-	Price                     *string        `json:"price"`
-	PriceOn                   *string        `json:"price_on"`
-	UnrealizedPnlMinor        *int64         `json:"unrealized_pnl_minor"`
+	Instrument                instrumentResp  `json:"instrument"`
+	Quantity                  string          `json:"quantity"`
+	CostMinor                 int64           `json:"cost_minor"`
+	Currency                  string          `json:"currency"`
+	RealizedPnlMinor          int64           `json:"realized_pnl_minor"`
+	IncomeMinor               int64           `json:"income_minor"`
+	FeesMinor                 int64           `json:"fees_minor"`
+	MarketValueMinor          *int64          `json:"market_value_minor"`
+	MarketValueCurrency       *string         `json:"market_value_currency"`
+	MarketValueSourceCurrency *string         `json:"market_value_source_currency"`
+	MarketValueSourceMinor    *int64          `json:"market_value_source_minor"`
+	Price                     *string         `json:"price"`
+	PriceOn                   *string         `json:"price_on"`
+	UnrealizedPnlMinor        *int64          `json:"unrealized_pnl_minor"`
+	InBase                    *positionInBase `json:"in_base"`
+}
+
+// positionInBase mirrors apitypes.PositionInBase for decoding in tests (see
+// http_position_in_base_test.go). A nil *positionInBase on positionResp
+// covers both an omitted key and an explicit JSON null — which is exactly
+// what in_base always is (see the handler's positionInBase: it is always
+// explicitly set to either a value or null, never left unset, mirroring
+// account.Handler.balanceInBase).
+type positionInBase struct {
+	CostMinor          int64  `json:"cost_minor"`
+	MarketValueMinor   *int64 `json:"market_value_minor"`
+	UnrealizedPnlMinor *int64 `json:"unrealized_pnl_minor"`
+	IncomeMinor        int64  `json:"income_minor"`
+	Currency           string `json:"currency"`
+	RateOn             string `json:"rate_on"`
 }
 
 type positionsResp struct {
@@ -930,4 +948,54 @@ func mustDate(t *testing.T, s string) time.Time {
 		t.Fatalf("parse date %q: %v", s, err)
 	}
 	return d
+}
+
+// failingConverter is a converter double whose fx lookups always fail with
+// the given error — deliberately NOT marketdata.ErrNoRate, standing in for a
+// genuine outage (a dropped DB connection, a canceled context) rather than
+// the ordinary "this pair has no rate" outcome. It exists so a test can pin
+// that the handler tells those two apart; a real *marketdata.Converter can't
+// be made to fail on demand.
+type failingConverter struct{ err error }
+
+func (c failingConverter) Convert(_ context.Context, _ int64, _, _ string, _ time.Time) (int64, error) {
+	return 0, c.err
+}
+
+func (c failingConverter) Rate(_ context.Context, _, _ string, _ time.Time) (decimal.Decimal, time.Time, error) {
+	return decimal.Decimal{}, time.Time{}, c.err
+}
+
+// TestPositionsRealRateErrorFailsRequest pins the distinction the whole
+// in_base contract rests on: a genuine failure while resolving the fx rate
+// (DB down, context canceled) must fail the request, NOT be rendered as
+// in_base: null.
+//
+// Both outcomes look identical on screen otherwise — the frontend shows the
+// native amount with a "no rate" marker — so an outage would be presented to
+// the user as ordinary, expected degradation, and nobody would ever learn
+// the database had stopped answering. Only the status code tells them apart,
+// which is why this test asserts on it: without it, deleting positionInBase's
+// error propagation (returning null instead of the error) breaks nothing
+// visible and no other test notices.
+func TestPositionsRealRateErrorFailsRequest(t *testing.T) {
+	pool := testdb.New(t)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes, failingConverter{err: errors.New("connection reset by peer")})
+
+	// USD account in an RUB-based space: the position's currency differs
+	// from the base currency, so in_base conversion is actually attempted
+	// (Rate is called) instead of being short-circuited.
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	share := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-01","quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, acc.ID, share.ID))
+
+	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	if resp.StatusCode != http.StatusInternalServerError {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET positions with a failing rate lookup = %d, want 500 — a real outage must not be served as a 200 with in_base: null: %s",
+			resp.StatusCode, b)
+	}
 }

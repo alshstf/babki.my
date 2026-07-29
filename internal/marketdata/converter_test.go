@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/shopspring/decimal"
+
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/testdb"
@@ -314,6 +316,90 @@ func TestConvertManyPropagatesRealErrors(t *testing.T) {
 	}
 }
 
+// TestRateIdentityIsOneWithZeroDate documents Rate's identity short-circuit,
+// mirroring TestConvertSameCurrencyIsIdentity: from == to must resolve to
+// rate 1 and a zero rateDate without any DB lookup (no rate seeded at all).
+func TestRateIdentityIsOneWithZeroDate(t *testing.T) {
+	conv, _, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	rate, rateDate, err := conv.Rate(ctx, "USD", "USD", on)
+	if err != nil {
+		t.Fatalf("Rate(USD, USD): %v", err)
+	}
+	if !rate.Equal(dec("1")) {
+		t.Fatalf("Rate(USD, USD) = %s, want 1", rate)
+	}
+	if !rateDate.IsZero() {
+		t.Fatalf("Rate(USD, USD) rateDate = %v, want zero value", rateDate)
+	}
+}
+
+// TestRateMatchesConvertResult is Rate's core contract: applying the rate it
+// returns to an amount by hand (decimal.Mul(...).Round(0), the same step
+// convert uses internally) must produce bit-for-bit the same minor-unit
+// result as calling Convert directly, for both a direct/inverse pair and a
+// RUB bridge. This is what lets a caller memoize Rate per currency and apply
+// it to N different amounts instead of calling Convert N times.
+func TestRateMatchesConvertResult(t *testing.T) {
+	conv, store, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	err := store.UpsertFxRates(ctx, []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90"), Source: "cbr"},
+		{Base: "EUR", Quote: "RUB", On: on, Rate: dec("100"), Source: "cbr"},
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	for _, tc := range []struct {
+		from, to string
+		amount   int64
+	}{
+		{"USD", "RUB", 12345},  // direct
+		{"RUB", "USD", 900000}, // inverse
+		{"USD", "EUR", 10000},  // RUB bridge
+	} {
+		wantConverted, err := conv.Convert(ctx, tc.amount, tc.from, tc.to, on)
+		if err != nil {
+			t.Fatalf("Convert(%s->%s): %v", tc.from, tc.to, err)
+		}
+
+		rate, rateDate, err := conv.Rate(ctx, tc.from, tc.to, on)
+		if err != nil {
+			t.Fatalf("Rate(%s->%s): %v", tc.from, tc.to, err)
+		}
+		got := decimal.NewFromInt(tc.amount).Mul(rate).Round(0).IntPart()
+		if got != wantConverted {
+			t.Fatalf("Rate(%s->%s) applied by hand = %d, want %d (Convert's own result)", tc.from, tc.to, got, wantConverted)
+		}
+		if rateDate.IsZero() {
+			t.Fatalf("Rate(%s->%s) rateDate = zero, want a real date", tc.from, tc.to)
+		}
+	}
+}
+
+// TestRateNoRateReturnsSentinel mirrors TestConvertNoRateReturnsSentinel:
+// Rate must surface the same ErrNoRate sentinel Convert does for an
+// unrelated pair, not a bare error or a zero-value rate mistaken for success.
+func TestRateNoRateReturnsSentinel(t *testing.T) {
+	conv, store, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	err := store.UpsertFxRates(ctx, []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90"), Source: "cbr"},
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	_, _, err = conv.Rate(ctx, "GBP", "JPY", on)
+	if !errors.Is(err, marketdata.ErrNoRate) {
+		t.Fatalf("Rate unrelated pair: err = %v, want ErrNoRate", err)
+	}
+}
+
 func TestConvertPropagatesRealErrors(t *testing.T) {
 	conv, _, ctx := newConverterFixture(t)
 	on := date("2026-07-01")
@@ -327,5 +413,41 @@ func TestConvertPropagatesRealErrors(t *testing.T) {
 	}
 	if errors.Is(err, marketdata.ErrNoRate) {
 		t.Fatal("Convert with canceled context: got ErrNoRate, want the underlying DB/context error")
+	}
+}
+
+// TestRatePropagatesRealErrors is Rate's counterpart to
+// TestConvertPropagatesRealErrors / TestConvertManyPropagatesRealErrors: a
+// genuine DB or context failure must come back as itself, never disguised as
+// ErrNoRate.
+//
+// Every caller of Rate branches on errors.Is(err, ErrNoRate) to decide
+// between "this pair simply has no rate — degrade honestly and carry on"
+// and "something is broken — fail the request" (see
+// account.Handler.balanceInBase and portfolio.Handler.positionInBase). If
+// Rate ever collapsed the second case into the first, both handlers would
+// dutifully render an outage as an ordinary missing rate and the user would
+// never learn anything was wrong.
+func TestRatePropagatesRealErrors(t *testing.T) {
+	conv, store, ctx := newConverterFixture(t)
+	on := date("2026-07-01")
+
+	// Seed the pair so the failure below can only come from the canceled
+	// context, not from the rate genuinely being absent.
+	if err := store.UpsertFxRates(ctx, []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90"), Source: "cbr"},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	rate, rateDate, err := conv.Rate(cctx, "USD", "RUB", on)
+	if err == nil {
+		t.Fatalf("Rate with canceled context: err = nil (rate=%s, rateDate=%v), want a real error", rate, rateDate)
+	}
+	if errors.Is(err, marketdata.ErrNoRate) {
+		t.Fatalf("Rate with canceled context: got ErrNoRate, want the underlying DB/context error")
 	}
 }

@@ -5,6 +5,7 @@ import { formatMinorCompact } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { signClass } from "@/lib/money";
 import { formatDate, isRecent, localToday } from "@/lib/dates";
+import type { DisplayCurrencyMode } from "@/lib/display-currency";
 import type { Summary } from "@/api/accounts";
 
 // The "unconverted currencies" warning is an honesty disclosure, not visual
@@ -31,7 +32,13 @@ function staleRatesTitle(
   return t("summary.ratesOn", { date: formattedDate });
 }
 
-export function SummaryCards({ summary }: { summary: Summary }) {
+export function SummaryCards({
+  summary,
+  mode,
+}: {
+  summary: Summary;
+  mode: DisplayCurrencyMode;
+}) {
   const { t } = useTranslation();
   if (summary.totals.length === 0) return null;
   const totalInBase = summary.total_in_base_minor;
@@ -80,33 +87,39 @@ export function SummaryCards({ summary }: { summary: Summary }) {
         </CardContent>
       </Card>
       {/* Per-currency breakdown: compact, secondary — not equal weight to
-          the total above. */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {summary.totals.map((total) => (
-          <Card key={total.currency} size="sm">
-            <CardHeader className="pb-1">
-              <CardTitle className="text-xs font-medium text-muted-foreground">
-                {t("accounts.totalIn", { currency: total.currency })}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-0.5">
-              <div className={cn("text-base font-semibold", signClass(total.net_minor))}>
-                {formatMinorCompact(total.net_minor, total.currency)}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {t("accounts.assets")}: {formatMinorCompact(total.assets_minor, total.currency)}
-                {total.liabilities_minor !== 0 && (
-                  <>
-                    {" · "}
-                    {t("accounts.liabilities")}:{" "}
-                    {formatMinorCompact(total.liabilities_minor, total.currency)}
-                  </>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+          the total above. Hidden in "base" mode: these cards are by
+          definition about each currency's own, unconverted totals, so they
+          have nothing to add once everything is being shown pre-converted
+          into the base currency — only the total above stays, since that's
+          already always in the base currency regardless of mode. */}
+      {mode === "native" && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {summary.totals.map((total) => (
+            <Card key={total.currency} size="sm">
+              <CardHeader className="pb-1">
+                <CardTitle className="text-xs font-medium text-muted-foreground">
+                  {t("accounts.totalIn", { currency: total.currency })}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-0.5">
+                <div className={cn("text-base font-semibold", signClass(total.net_minor))}>
+                  {formatMinorCompact(total.net_minor, total.currency)}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {t("accounts.assets")}: {formatMinorCompact(total.assets_minor, total.currency)}
+                  {total.liabilities_minor !== 0 && (
+                    <>
+                      {" · "}
+                      {t("accounts.liabilities")}:{" "}
+                      {formatMinorCompact(total.liabilities_minor, total.currency)}
+                    </>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
