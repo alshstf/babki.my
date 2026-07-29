@@ -104,11 +104,12 @@ export function PositionsTable({
           const hasUnrealized = unrealizedMinor != null;
           // Cost is resolved unconditionally: it's always present (unlike
           // market value / unrealized P&L), and the profit percentage below
-          // needs it alongside the resolved profit figure so both numbers
-          // in that ratio are consistently either both native or both
-          // converted (see resolveDisplayAmount — cost and unrealized_pnl
-          // share the same in_base object, so they always resolve the same
-          // way for a given position).
+          // needs it alongside the resolved profit figure. Both numbers in
+          // that ratio must live in the same currency, which the percentage
+          // asserts for itself rather than assuming: in_base carries a null
+          // unrealized_pnl_minor whenever the valuation could not be
+          // expressed in the position's currency, so cost and profit do not
+          // always resolve the same way.
           const resolvedCost = resolveDisplayAmount(
             mode,
             position.currency,
@@ -145,9 +146,10 @@ export function PositionsTable({
             position.in_base?.income_minor,
             position.in_base?.rate_on,
           );
-          const unrealizedPct = resolvedUnrealized
-            ? unrealizedPercent(resolvedUnrealized.amountMinor, resolvedCost.amountMinor)
-            : null;
+          const unrealizedPct =
+            resolvedUnrealized && resolvedUnrealized.currency === resolvedCost.currency
+              ? unrealizedPercent(resolvedUnrealized.amountMinor, resolvedCost.amountMinor)
+              : null;
           return (
             <TableRow
               key={position.instrument.id}

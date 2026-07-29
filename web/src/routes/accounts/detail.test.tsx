@@ -26,14 +26,17 @@ const fetchMock = vi.hoisted(() => {
   return fn;
 });
 
-// Serves the given endpoints (matched as URL substrings, longest first so
-// "/positions" wins over the "/api/v1/accounts" prefix it contains) and 404s
-// everything else, so an unexpected request is loud rather than silent.
+// Serves the given endpoints and 404s everything else, so an unexpected
+// request is loud rather than silent. Routes match on the path's *suffix*,
+// not on a substring: "/api/v1/accounts/acc-1/positions" contains
+// "/api/v1/accounts", so substring matching would quietly serve the account
+// body for a positions request and leave the table rendering nothing.
 function serve(routes: Record<string, { status?: number; body?: unknown }>) {
-  const paths = Object.keys(routes).sort((a, b) => b.length - a.length);
+  const paths = Object.keys(routes);
   fetchMock.mockImplementation((input: RequestInfo | URL) => {
     const url = input instanceof Request ? input.url : String(input);
-    const match = paths.find((path) => url.includes(path));
+    const path = new URL(url, "http://localhost").pathname;
+    const match = paths.find((route) => path.endsWith(route));
     const route = match ? routes[match] : undefined;
     return Promise.resolve(
       new Response(JSON.stringify(route?.body ?? null), {

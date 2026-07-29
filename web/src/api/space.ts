@@ -9,8 +9,10 @@ export type UpdateSpaceBody = components["schemas"]["UpdateSpaceRequest"];
 // Updates the space's base currency (owner-only; the server also enforces
 // this and answers with 403 for anyone else). The response is a fresh
 // SessionInfo, so it replaces the session cache directly instead of
-// triggering a refetch, and the summary is invalidated so the total
-// re-converts into the new base currency.
+// triggering a refetch. The summary and the account list are invalidated so
+// every figure converted into the old base currency — the total, and each
+// account's balance_in_base — is refetched instead of being relabelled with
+// the new currency while still holding the old one's arithmetic.
 export function useUpdateBaseCurrency() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -22,6 +24,7 @@ export function useUpdateBaseCurrency() {
     onSuccess: (data) => {
       queryClient.setQueryData(["session"], data);
       void queryClient.invalidateQueries({ queryKey: ["summary"] });
+      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
     },
   });
 }

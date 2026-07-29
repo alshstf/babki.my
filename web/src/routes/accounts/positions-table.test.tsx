@@ -342,6 +342,42 @@ describe("PositionsTable", () => {
       );
     });
 
+    it("omits the percentage when profit stays native while cost converts", () => {
+      // in_base carries a null unrealized_pnl_minor whenever the valuation
+      // could not be expressed in the position's own currency, so cost
+      // resolves to RUB while profit stays in USD. Dividing 250,00 $ by
+      // 225 000,00 ₽ would print +0,1 % for a position that actually gained
+      // +10 %: a wrong number is worse than no number.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "USD",
+              cost_minor: 250_000,
+              unrealized_pnl_minor: 25_000,
+              in_base: {
+                cost_minor: 22_500_000,
+                market_value_minor: null,
+                unrealized_pnl_minor: null,
+                income_minor: 0,
+                currency: "RUB",
+                rate_on: "2026-07-20",
+              },
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      // The amount itself is still shown, honestly, in its own currency.
+      expect(norm(screen.getByTestId("position-profit-amount").textContent ?? "")).toBe(
+        norm(formatMinor(25_000, "USD")),
+      );
+      expect(screen.getByTestId("position-profit-amount-not-converted")).toBeInTheDocument();
+      expect(screen.queryByTestId("position-profit-percent")).not.toBeInTheDocument();
+    });
+
     it("shows the native amounts plus a not-converted indicator on every money cell when in_base is null and the currency differs from base", () => {
       wrap(
         <PositionsTable
