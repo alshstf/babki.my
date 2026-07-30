@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os/signal"
 	"syscall"
 	"time"
@@ -46,15 +47,32 @@ func mountModules(srv *httpserver.Server, r *rt) {
 	portfolio.NewHandler(opStore, instStore, mdStore, converter, famStore, famAuth, famSM).Mount(srv)
 }
 
+// cbrHTTPTimeout bounds every request the cbr.ru client makes. The backfill
+// job's own Timeout is 15 minutes, and a single chunk fires up to 180
+// sequential requests at it: without a bound here, cbr.New would fall back
+// to http.DefaultClient, whose Timeout is 0 (none), so one stalled TCP
+// connection could pin a worker slot for the job's whole 15-minute budget.
+const cbrHTTPTimeout = 15 * time.Second
+
+// newCbrHTTPClient builds the HTTP client used for every request to cbr.ru.
+// Factored out of startJobClient so cbrHTTPTimeout is unit-testable without
+// constructing the rest of startJobClient's dependencies (a live pool, job
+// workers, a River client).
+func newCbrHTTPClient() *http.Client {
+	return &http.Client{Timeout: cbrHTTPTimeout}
+}
+
 // startJobClient wires up the job workers and River client and starts it.
 // Shared by the "all" and "worker" roles. cbr and moex are used with their
-// default base URLs and http.DefaultClient — no configuration knob is
-// exposed for them yet.
+// default base URLs — no configuration knob is exposed for them yet. cbr's
+// HTTP client is bounded by cbrHTTPTimeout (see above); moex isn't, since
+// its jobs make one request per run rather than cbr's up-to-180 sequential
+// ones under a 15-minute job timeout.
 func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	mdStore := marketdata.NewStore(r.pool)
 	instStore := instrument.NewStore(r.pool)
 	opStore := operation.NewStore(r.pool)
-	fxProvider := cbr.New(nil, "")
+	fxProvider := cbr.New(newCbrHTTPClient(), "")
 	quoteProvider := moex.New(nil, "")
 	workers := jobs.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, fxProvider, quoteProvider)
 	client, err := jobs.NewClient(r.pool, workers, r.log)

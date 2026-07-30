@@ -248,6 +248,25 @@ func (p *recordingFxProvider) RatesOn(_ context.Context, on time.Time) ([]market
 
 func (p *recordingFxProvider) Name() string { return "fake-fx" }
 
+// fixedDateFxProvider is a network-free FxProvider stand-in that answers
+// every request with the same On date, no matter what date it was asked
+// about. It models the failure mode the coverage-progress guard in Work
+// exists for: cbr.ru can never answer with a date *later* than the one
+// requested, so a real response can't get stuck like this, but if it ever
+// did, the coverage boundary (MIN(on_date)) would stop moving and every
+// future chunk would re-request the same dates forever.
+type fixedDateFxProvider struct {
+	on    time.Time
+	asked []time.Time
+}
+
+func (p *fixedDateFxProvider) RatesOn(_ context.Context, on time.Time) ([]marketdata.FxRate, error) {
+	p.asked = append(p.asked, on)
+	return []marketdata.FxRate{{Base: "USD", Quote: "RUB", On: p.on, Rate: dec("90.5"), Source: p.Name()}}, nil
+}
+
+func (p *fixedDateFxProvider) Name() string { return "fake-fx" }
+
 // fakeOpStore stands in for the single *operation.Store method the backfill
 // worker uses, so these tests can set a lower bound without building a whole
 // space/account/operation tree.
@@ -281,6 +300,32 @@ func backfillJob() *river.Job[marketdata.BackfillFxArgs] {
 func today() time.Time {
 	n := time.Now().UTC()
 	return time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// riverInsertClient wires up an insert-only River client and returns a
+// context carrying it, the way River itself supplies one to a running
+// worker's job context — for tests where Work needs to reach
+// river.ClientFromContextSafely to enqueue a follow-up job.
+func riverInsertClient(t *testing.T, ctx context.Context, pool *pgxpool.Pool) context.Context {
+	t.Helper()
+	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{Logger: slog.Default()})
+	if err != nil {
+		t.Fatalf("river client: %v", err)
+	}
+	return rivertest.WorkContext(ctx, client)
+}
+
+// queuedBackfillJobs counts the rows in river_job for the backfill_fx job
+// kind: how many follow-up chunks a Work call (or calls) enqueued.
+func queuedBackfillJobs(t *testing.T, ctx context.Context, pool *pgxpool.Pool) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM river_job WHERE kind = $1`,
+		marketdata.BackfillFxArgs{}.Kind()).Scan(&n); err != nil {
+		t.Fatalf("count queued jobs: %v", err)
+	}
+	return n
 }
 
 func weekend(d time.Time) bool {
@@ -585,5 +630,93 @@ func TestBackfillFx_JobTimeoutOutlastsAWholeChunk(t *testing.T) {
 	const chunkPauses = 180 * 250 * time.Millisecond
 	if got := worker.Timeout(backfillJob()); got <= chunkPauses {
 		t.Fatalf("Timeout = %s, want more than one chunk of pauses (%s)", got, chunkPauses)
+	}
+}
+
+// TestBackfillFx_ReachesFloorInOneRunDoesNotEnqueueFollowUp is the mirror of
+// TestBackfillFx_ChunkIsCappedAndEnqueuesAFollowUpJob: when the walk reaches
+// the journal's earliest operation within a single run, no follow-up chunk
+// must be queued at all. Without the early return in Work (right after
+// fetchChunk detects cursor has crossed below floor), enqueueNext would run
+// unconditionally and this would fail with 1 queued job instead of 0.
+func TestBackfillFx_ReachesFloorInOneRunDoesNotEnqueueFollowUp(t *testing.T) {
+	store, pool, ctx := newBackfillFixture(t)
+
+	// Comfortably fewer business days than one chunk, so the walk finishes
+	// within this single run.
+	floor := businessDaysBack(today(), 10)
+	provider := &recordingFxProvider{}
+	worker := marketdata.NewBackfillFxWorkerWithPause(
+		store, fakeOpStore{earliest: floor}, provider, slog.Default(), 0)
+
+	if err := worker.Work(riverInsertClient(t, ctx, pool), backfillJob()); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if got := queuedBackfillJobs(t, ctx, pool); got != 0 {
+		t.Fatalf("queued follow-up jobs = %d, want 0 once the walk reaches the floor in one run", got)
+	}
+}
+
+// TestBackfillFx_StalledCoverageDoesNotEnqueueASecondChunk guards against an
+// unbounded chain of self-enqueued jobs: if the coverage boundary
+// (MIN(on_date) in fx_rates) fails to move between the start and the end of
+// a chunk, Work must not enqueue a follow-up, however far the walk still has
+// left to go. fixedDateFxProvider models this by always answering with the
+// same On date regardless of what was requested — the first run still makes
+// genuine progress (from no coverage to that one date), but the second run's
+// fetch lands on the exact same date again, so coverage doesn't move and a
+// third job must never appear.
+func TestBackfillFx_StalledCoverageDoesNotEnqueueASecondChunk(t *testing.T) {
+	store, pool, ctx := newBackfillFixture(t)
+
+	// Far enough back that, absent the guard, the walk would keep queuing
+	// chunks for many runs.
+	floor := today().AddDate(-5, 0, 0)
+	provider := &fixedDateFxProvider{on: today().AddDate(0, 0, -1000)}
+	worker := marketdata.NewBackfillFxWorkerWithPause(
+		store, fakeOpStore{earliest: floor}, provider, slog.Default(), 0)
+	runCtx := riverInsertClient(t, ctx, pool)
+
+	if err := worker.Work(runCtx, backfillJob()); err != nil {
+		t.Fatalf("first Work: %v", err)
+	}
+	if got := queuedBackfillJobs(t, ctx, pool); got != 1 {
+		t.Fatalf("queued follow-up jobs after the first run = %d, want 1 (coverage genuinely advanced from nothing)", got)
+	}
+
+	if err := worker.Work(runCtx, backfillJob()); err != nil {
+		t.Fatalf("second Work: %v", err)
+	}
+	if got := queuedBackfillJobs(t, ctx, pool); got != 1 {
+		t.Fatalf("queued follow-up jobs after the second run = %d, want still 1: "+
+			"the coverage boundary never moved, so no third job may appear", got)
+	}
+}
+
+// TestBackfillFx_NoCoverageUsesInjectedClockNotWallClock pins the worker's
+// notion of "today" (used as the walk's starting point when there's no
+// coverage yet) far from the real wall clock. If coverageCursor ever reads
+// time.Now() directly instead of the injected clock, the requested dates
+// land nowhere near the ones this test expects, since floor is itself
+// computed relative to the pinned clock.
+func TestBackfillFx_NoCoverageUsesInjectedClockNotWallClock(t *testing.T) {
+	store, _, ctx := newBackfillFixture(t)
+
+	fixedNow := date("2020-06-15") // a Monday, nowhere near the real "today"
+	floor := businessDaysBack(fixedNow, 5)
+	provider := &recordingFxProvider{}
+	worker := marketdata.NewBackfillFxWorkerWithClock(
+		store, fakeOpStore{earliest: floor}, provider, slog.Default(), 0,
+		func() time.Time { return fixedNow })
+
+	if err := worker.Work(ctx, backfillJob()); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	want := businessDaysDesc(floor, fixedNow)
+	if !sameDates(provider.asked, want) {
+		t.Fatalf("asked for [%s], want [%s] (the walk must start at the injected clock's today, not the wall clock's)",
+			showDates(provider.asked), showDates(want))
 	}
 }

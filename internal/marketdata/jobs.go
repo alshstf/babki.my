@@ -196,13 +196,16 @@ type backfillFxWorker struct {
 	provider FxProvider
 	log      *slog.Logger
 	pause    time.Duration
+	// now stands in for time.Now so tests can pin "today" instead of racing
+	// the wall clock; see coverageCursor.
+	now func() time.Time
 }
 
 // NewBackfillFxWorker builds the River worker that backfills historical FX
 // rates via provider and upserts them into store; ops supplies the oldest
 // date the journal needs rates for. Register it with river.AddWorker.
 func NewBackfillFxWorker(store *Store, ops operationDater, provider FxProvider, log *slog.Logger) river.Worker[BackfillFxArgs] {
-	return &backfillFxWorker{store: store, ops: ops, provider: provider, log: log, pause: backfillPause}
+	return &backfillFxWorker{store: store, ops: ops, provider: provider, log: log, pause: backfillPause, now: time.Now}
 }
 
 // Timeout raises River's one-minute default, which a full chunk exceeds on
@@ -228,6 +231,13 @@ func (w *backfillFxWorker) Work(ctx context.Context, _ *river.Job[BackfillFxArgs
 			"provider", w.provider.Name(), "floor", floor.Format(time.DateOnly))
 		return nil
 	}
+	// startBoundary is the coverage boundary this chunk needs to push
+	// earlier. cursor is always "one day below that boundary" at this point
+	// (coverageCursor either returns haveFrom-1, or today when there is no
+	// coverage yet — in which case startBoundary works out to today+1, which
+	// any date this run could possibly fetch is trivially earlier than), so
+	// adding the day back reconstructs it without a second store read.
+	startBoundary := cursor.AddDate(0, 0, 1)
 	cursor, err = w.fetchChunk(ctx, cursor, floor)
 	if err != nil {
 		return err
@@ -237,8 +247,41 @@ func (w *backfillFxWorker) Work(ctx context.Context, _ *river.Job[BackfillFxArgs
 			"provider", w.provider.Name(), "floor", floor.Format(time.DateOnly))
 		return nil
 	}
+	advanced, err := w.coverageAdvanced(ctx, startBoundary)
+	if err != nil {
+		return err
+	}
+	if !advanced {
+		// A provider that answers every request with the same On date (never
+		// later than requested — cbr.ru can't actually do this) would
+		// otherwise make every future run re-request the same dates forever.
+		// That can't happen against the real source, but the cost of trusting
+		// it blindly is an unbounded stream of requests to an external
+		// service, so it gets a guard and a loud log line instead.
+		w.log.Warn("marketdata: fx backfill chunk made no coverage progress, not enqueuing a follow-up (provider stuck?)",
+			"provider", w.provider.Name(), "boundary", startBoundary.Format(time.DateOnly))
+		return nil
+	}
 	w.enqueueNext(ctx, cursor, floor)
 	return nil
+}
+
+// coverageAdvanced reports whether this chunk pushed the stored coverage
+// boundary for w.provider earlier than startBoundary. pgx.ErrNoRows (nothing
+// was actually stored despite the chunk running, e.g. the provider answered
+// every request with an empty rate list) counts as "not advanced" rather
+// than an error, since there is nothing wrong with the job itself.
+func (w *backfillFxWorker) coverageAdvanced(ctx context.Context, startBoundary time.Time) (bool, error) {
+	newBoundary, err := w.store.EarliestFxDate(ctx, w.provider.Name())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		w.log.Error("marketdata: read fx coverage boundary failed",
+			"provider", w.provider.Name(), "err", err)
+		return false, err
+	}
+	return utcDay(newBoundary).Before(startBoundary), nil
 }
 
 // demandFloor is the oldest date the journal needs rates for: the earliest
@@ -273,7 +316,7 @@ func (w *backfillFxWorker) coverageCursor(ctx context.Context) (time.Time, error
 	haveFrom, err := w.store.EarliestFxDate(ctx, w.provider.Name())
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		return utcDay(time.Now().UTC()), nil
+		return utcDay(w.now().UTC()), nil
 	case err != nil:
 		w.log.Error("marketdata: read fx coverage boundary failed",
 			"provider", w.provider.Name(), "err", err)
