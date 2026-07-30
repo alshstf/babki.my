@@ -2,10 +2,12 @@ package operation_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
@@ -152,6 +154,42 @@ func TestTransferPairAtomicity(t *testing.T) {
 	}
 	if list, _ := f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0); len(list) != 0 {
 		t.Fatalf("orphan out op left: %d", len(list))
+	}
+}
+
+func TestEarliestOccurredOn(t *testing.T) {
+	f := newFixture(t)
+
+	old := operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit,
+		OccurredOn: date("2019-03-12"), AmountMinor: 1000, Currency: "RUB",
+	}
+	recent := operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit,
+		OccurredOn: date("2026-07-20"), AmountMinor: 2000, Currency: "RUB",
+	}
+	if _, err := f.store.Create(f.ctx, f.spaceID, recent); err != nil {
+		t.Fatalf("Create recent: %v", err)
+	}
+	if _, err := f.store.Create(f.ctx, f.spaceID, old); err != nil {
+		t.Fatalf("Create old: %v", err)
+	}
+
+	got, err := f.store.EarliestOccurredOn(f.ctx)
+	if err != nil {
+		t.Fatalf("EarliestOccurredOn: %v", err)
+	}
+	if !got.Equal(date("2019-03-12")) {
+		t.Fatalf("EarliestOccurredOn = %v, want 2019-03-12", got)
+	}
+}
+
+func TestEarliestOccurredOnEmpty(t *testing.T) {
+	f := newFixture(t)
+
+	_, err := f.store.EarliestOccurredOn(f.ctx)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("EarliestOccurredOn on empty table: err = %v, want pgx.ErrNoRows", err)
 	}
 }
 
