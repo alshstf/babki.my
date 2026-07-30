@@ -1,6 +1,7 @@
 package operation
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
@@ -27,16 +29,40 @@ const (
 	maxListLimit     = 200
 )
 
-// Handler exposes the operations journal (and transfers) over HTTP.
-type Handler struct {
-	svc   *Service
-	store *Store
-	auth  *family.Auth
-	sm    *scs.SessionManager
+// spaceStore is the subset of family.Store this handler needs: reading the
+// space's base currency to convert each journal entry into it (see
+// operationInBase). Local interface (identical to account's and portfolio's
+// spaceStore) so tests can inject a fake or a real *family.Store
+// interchangeably — Go interface assignability is structural, so
+// *family.Store satisfies this with no conversion needed at the call site.
+type spaceStore interface {
+	SpaceByID(ctx context.Context, id uuid.UUID) (family.Space, error)
 }
 
-func NewHandler(svc *Service, store *Store, auth *family.Auth, sm *scs.SessionManager) *Handler {
-	return &Handler{svc: svc, store: store, auth: auth, sm: sm}
+// converter is the subset of *marketdata.Converter this handler needs: Rate,
+// which resolves a currency pair's rate on a given DATE and reports the date
+// the rate actually came from. Local interface (mirroring account's and
+// portfolio's identically named ones) so tests can inject a double whose
+// lookups fail with a genuine error rather than marketdata.ErrNoRate — a
+// real, DB-backed Converter cannot be made to do that on demand, and the
+// handler must treat the two completely differently (see operationInBase).
+// *marketdata.Converter satisfies this structurally, no call site changes.
+type converter interface {
+	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
+}
+
+// Handler exposes the operations journal (and transfers) over HTTP.
+type Handler struct {
+	svc    *Service
+	store  *Store
+	spaces spaceStore
+	conv   converter
+	auth   *family.Auth
+	sm     *scs.SessionManager
+}
+
+func NewHandler(svc *Service, store *Store, spaces spaceStore, conv converter, auth *family.Auth, sm *scs.SessionManager) *Handler {
+	return &Handler{svc: svc, store: store, spaces: spaces, conv: conv, auth: auth, sm: sm}
 }
 
 func (h *Handler) Mount(srv *httpserver.Server) {
@@ -96,6 +122,98 @@ func toAPI(o Operation) apitypes.Operation {
 		out.TransferGroupId = nullable.NewNullableWithValue(*o.TransferGroupID)
 	}
 	return out
+}
+
+// rateKey identifies one memoized fx rate lookup. Unlike account's and
+// portfolio's caches — which convert everything at today's rate and can
+// therefore key by currency alone — the journal resolves a rate per
+// operation DATE, so the date has to be part of the key. A single page of
+// the journal routinely holds the same currency on a dozen different dates
+// with a dozen different rates; keying by currency alone would silently
+// reuse the first operation's rate for all of them, producing wrong numbers
+// that look entirely plausible on screen.
+//
+// The date is held as its YYYY-MM-DD string rather than a time.Time so the
+// key is a value comparison on the calendar date itself, immune to two
+// otherwise-equal time.Time values differing in monotonic clock reading or
+// *time.Location pointer (which would merely cost extra lookups, but would
+// do so invisibly).
+type rateKey struct {
+	currency string
+	on       string
+}
+
+// rateLookup memoizes one (currency, date) pair's resolved fx rate — the
+// rate itself, the date it actually came from, and the resolution error — so
+// handleListByAccount's per-operation conversion loop hits the fx rate store
+// at most once per distinct pair, not once per operation. Mirrors account's
+// and portfolio's identically named type; only the cache key differs (see
+// rateKey).
+type rateLookup struct {
+	rate decimal.Decimal
+	date time.Time
+	err  error
+}
+
+// operationInBase converts an operation's amount_minor and fee_minor from
+// its own currency into baseCurrency at the fx rate in effect ON THE DAY THE
+// OPERATION HAPPENED — not today's rate. This is the deliberate difference
+// from account.balanceInBase and portfolio.positionInBase, which both
+// convert at time.Now(): those answer "what is this worth now", the journal
+// answers "what did this cost then". A 2019 purchase must keep being
+// reported at its 2019 rate however the ruble moves afterwards.
+//
+// rate_on is the date of the rate ACTUALLY used, which is o.OccurredOn only
+// when a rate exists for that exact day. The CBR publishes nothing on
+// weekends and holidays, so Store.FxRateOn resolves the nearest EARLIER date
+// and Rate reports it back here; publishing o.OccurredOn instead would claim
+// a rate that never existed, and the journal's tooltip reads this field
+// verbatim.
+//
+// Each amount is converted and rounded independently
+// (decimal.Mul(rate).Round(0), the exact step marketdata.Converter.Convert
+// itself uses, so the result matches a per-amount Convert call bit for bit).
+// The fee is a figure of its own, not a term of the amount: converting their
+// sum and splitting it afterwards would round differently. Rounding is
+// half-away-from-zero, so the sign is preserved and a purchase's negative
+// amount never shrinks in magnitude.
+//
+// It returns (nil, nil) — render in_base as null, the WHOLE object, never
+// partially populated — in exactly two cases: the operation is already
+// denominated in baseCurrency (nothing to convert), or no rate could be
+// resolved for its date nor any earlier one (marketdata.ErrNoRate). An
+// operation with a converted amount but an unconverted fee would be worse
+// than an honest "can't convert this one".
+//
+// A non-nil error means a genuine failure (DB error, canceled context) that
+// the caller must surface as a request error — never silently rendered as
+// null, which would misrepresent an outage as "no rate that far back".
+func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency string, cache map[rateKey]*rateLookup) (*apitypes.OperationInBase, error) {
+	if o.Currency == baseCurrency {
+		return nil, nil
+	}
+	key := rateKey{currency: o.Currency, on: o.OccurredOn.Format("2006-01-02")}
+	rl, ok := cache[key]
+	if !ok {
+		rate, date, err := h.conv.Rate(ctx, o.Currency, baseCurrency, o.OccurredOn)
+		rl = &rateLookup{rate: rate, date: date, err: err}
+		cache[key] = rl
+	}
+	if rl.err != nil {
+		if errors.Is(rl.err, marketdata.ErrNoRate) {
+			return nil, nil
+		}
+		return nil, rl.err
+	}
+	convert := func(minor int64) int64 {
+		return decimal.NewFromInt(minor).Mul(rl.rate).Round(0).IntPart()
+	}
+	return &apitypes.OperationInBase{
+		AmountMinor: convert(o.AmountMinor),
+		FeeMinor:    convert(o.FeeMinor),
+		Currency:    baseCurrency,
+		RateOn:      rl.date.Format("2006-01-02"),
+	}, nil
 }
 
 // parseDate parses a YYYY-MM-DD date, matching account.parseAsOf's format.
@@ -245,9 +363,29 @@ func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {
 		family.WriteError(w, err)
 		return
 	}
+
+	sp, err := h.spaces.SpaceByID(r.Context(), p.SpaceID)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+
+	// Scoped to this request only: see operationInBase/rateKey.
+	rates := make(map[rateKey]*rateLookup)
 	out := make([]apitypes.Operation, 0, len(ops))
 	for _, o := range ops {
-		out = append(out, toAPI(o))
+		api := toAPI(o)
+		inBase, err := h.operationInBase(r.Context(), o, sp.BaseCurrency, rates)
+		if err != nil {
+			family.WriteError(w, err)
+			return
+		}
+		if inBase != nil {
+			api.InBase = nullable.NewNullableWithValue(*inBase)
+		} else {
+			api.InBase = nullable.NewNullNullable[apitypes.OperationInBase]()
+		}
+		out = append(out, api)
 	}
 	httpjson.Write(w, http.StatusOK, out)
 }

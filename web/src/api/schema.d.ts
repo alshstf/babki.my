@@ -523,6 +523,24 @@ export interface components {
             source: string;
             /** Format: date-time */
             created_at: string;
+            /** @description amount_minor and fee_minor converted into the space's base currency at the fx rate in effect on occurred_on — the rate of the day the operation happened, NOT today's. This is the deliberate difference from AccountWithBalance.balance_in_base and Position.in_base, which answer "what is this worth now"; the journal answers "what did this cost then". Each amount is converted and rounded independently. Null when `currency` already equals the base currency (nothing to convert), or when no fx rate could be resolved for occurred_on nor any earlier date — a partially converted operation is never published. Computed only for the journal listing (GET /accounts/{accountId}/operations); create and transfer responses leave it null, since those return an operation the client just submitted rather than a journal to read. */
+            in_base?: components["schemas"]["OperationInBase"] | null;
+        };
+        OperationInBase: {
+            /**
+             * Format: int64
+             * @description Operation.amount_minor converted into currency. The sign is preserved — a buy stays negative — and rounding is half-away-from-zero, so converting never shrinks the magnitude of an outflow
+             */
+            amount_minor: number;
+            /**
+             * Format: int64
+             * @description Operation.fee_minor converted into currency, rounded independently of amount_minor: the two are separate figures, not terms of one total
+             */
+            fee_minor: number;
+            /** @description The space's base currency (ISO-4217), same as Summary.base_currency */
+            currency: string;
+            /** @description Date YYYY-MM-DD of the fx rate ACTUALLY used, which is occurred_on itself or the nearest earlier date that has a rate (weekend, holiday, provider gap) — never today's date. For a 2019 operation this is a 2019 date; that is what makes this a historical conversion rather than a current valuation */
+            rate_on: string;
         };
         CreateOperationRequest: {
             /** Format: uuid */

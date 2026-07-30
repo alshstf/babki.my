@@ -74,7 +74,11 @@ func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv conv
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
 	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(marketdata.NewStore(pool)), auth, sm).Mount(srv)
 	instrument.NewHandler(instStore, auth, sm).Mount(srv)
-	operation.NewHandler(opSvc, opStore, auth, sm).Mount(srv)
+	// The operation handler gets its own real converter rather than conv:
+	// these tests substitute conv to control the PORTFOLIO handler's fx
+	// behavior, and the journal's own in_base conversion is covered by
+	// package operation's tests.
+	operation.NewHandler(opSvc, opStore, famStore, marketdata.NewConverter(marketdata.NewStore(pool)), auth, sm).Mount(srv)
 	portfolio.NewHandler(opStore, instStore, quotes, conv, famStore, auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())

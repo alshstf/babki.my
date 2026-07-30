@@ -43,7 +43,7 @@ func mountModules(srv *httpserver.Server, r *rt) {
 	instStore := instrument.NewStore(r.pool)
 	instrument.NewHandler(instStore, famAuth, famSM).Mount(srv)
 	opStore := operation.NewStore(r.pool)
-	operation.NewHandler(operation.NewService(opStore), opStore, famAuth, famSM).Mount(srv)
+	operation.NewHandler(operation.NewService(opStore), opStore, famStore, converter, famAuth, famSM).Mount(srv)
 	portfolio.NewHandler(opStore, instStore, mdStore, converter, famStore, famAuth, famSM).Mount(srv)
 }
 
