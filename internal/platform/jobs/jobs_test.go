@@ -10,6 +10,7 @@ import (
 
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/jobs"
 	"babki.my/babki/internal/platform/testdb"
@@ -47,7 +48,8 @@ func TestHeartbeat(t *testing.T) {
 
 	mdStore := marketdata.NewStore(pool)
 	instStore := instrument.NewStore(pool)
-	workers := jobs.NewWorkers(slog.Default(), pool, mdStore, instStore, stubFxProvider{}, stubQuoteProvider{})
+	opStore := operation.NewStore(pool)
+	workers := jobs.NewWorkers(slog.Default(), pool, mdStore, instStore, opStore, stubFxProvider{}, stubQuoteProvider{})
 	client, err := jobs.NewClient(pool, workers, slog.Default())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)

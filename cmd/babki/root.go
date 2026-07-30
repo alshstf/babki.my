@@ -53,9 +53,10 @@ func mountModules(srv *httpserver.Server, r *rt) {
 func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	mdStore := marketdata.NewStore(r.pool)
 	instStore := instrument.NewStore(r.pool)
+	opStore := operation.NewStore(r.pool)
 	fxProvider := cbr.New(nil, "")
 	quoteProvider := moex.New(nil, "")
-	workers := jobs.NewWorkers(r.log, r.pool, mdStore, instStore, fxProvider, quoteProvider)
+	workers := jobs.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, fxProvider, quoteProvider)
 	client, err := jobs.NewClient(r.pool, workers, r.log)
 	if err != nil {
 		return nil, err
