@@ -177,6 +177,47 @@ func TestListOperationInBaseConvertsAtOperationDate(t *testing.T) {
 	}
 }
 
+// TestListOperationInBaseFeeIsNotDerivedFromTheCombinedTotal pins the fee as
+// a figure converted in its own right, which the case above cannot do: on its
+// fixture, deriving the fee as convert(amount+fee) - convert(amount) happens
+// to land on the same number, so that implementation would pass unnoticed.
+//
+// Manual arithmetic (rate 65.50, chosen so both products land on exactly
+// half a minor unit and therefore round away from zero):
+//
+//	amount_minor 12_345 * 65.50 = 808_597.50 -> 808_598
+//	fee_minor       799 * 65.50 =  52_334.50 ->  52_335
+//	combined     13_144 * 65.50 = 860_932.00 -> 860_932  (nothing to round)
+//
+// Converted independently the fee is 52_335. Derived from the combined
+// total it is 860_932 - 808_598 = 52_334 — one minor unit adrift, because
+// the two half-unit remainders that each round up on their own are gone by
+// the time the sum is rounded once. A dividend (positive amount) is used so
+// both figures share a sign and the divergence is not masked by the way
+// half-away-from-zero treats a negative amount against a positive fee.
+func TestListOperationInBaseFeeIsNotDerivedFromTheCombinedTotal(t *testing.T) {
+	url, c, mdStore := newAPIWithConverter(t)
+	seedFxRate(t, mdStore, "2019-03-12", "65.50")
+
+	acc := mkAccount(t, url, c, "US брокер", "USD")
+	share := mkInstrument(t, url, c,
+		`{"type":"share","name":"Apple","ticker":"AAPL","currency":"USD"}`)
+	div := mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"dividend",
+		"occurred_on":"2019-03-12","amount_minor":12345,"currency":"USD","fee_minor":799}`, acc, share))
+
+	op := findOperation(t, listJournal(t, url, c, acc), div)
+	if op.InBase == nil {
+		t.Fatalf("in_base = null, want a conversion at the 2019-03-12 rate")
+	}
+	if op.InBase.AmountMinor != 808598 {
+		t.Errorf("in_base.amount_minor = %d, want 808598 (12345 * 65.50)", op.InBase.AmountMinor)
+	}
+	if op.InBase.FeeMinor != 52335 {
+		t.Errorf("in_base.fee_minor = %d, want 52335 (799 * 65.50 rounded on its own; "+
+			"52334 means the fee was derived from the combined total)", op.InBase.FeeMinor)
+	}
+}
+
 // TestListOperationInBaseUsesNearestEarlierRateDate is what separates the
 // journal from balances and positions: the CBR publishes nothing on
 // weekends and holidays, so an operation dated 2019-03-17 (a Sunday) has no
