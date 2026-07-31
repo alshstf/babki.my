@@ -222,6 +222,18 @@ func seedInstrumentsAndOperations(
 			AccountID: tbank, InstrumentID: inst("OFZ26238"), Type: operation.TypeCoupon,
 			OccurredOn: d("2026-06-18"), AmountMinor: 354_000, Currency: "RUB",
 		},
+		// A foreign-currency operation on a RUB account, deliberately dated a
+		// Saturday: the CBR publishes no rate on weekends, so the journal has
+		// to convert it at Friday's rate and say so. Together with the FXUS
+		// buy above it also gives this account's journal two USD entries on
+		// two different dates — the display-currency toggle only appears when
+		// a screen actually shows more than one currency, and two dates are
+		// what make "converted at the rate of its own day" visible on screen
+		// rather than merely true in the database.
+		{
+			AccountID: tbank, Type: operation.TypeDeposit,
+			OccurredOn: d("2026-07-04"), AmountMinor: 80_000, Currency: "USD",
+		},
 		{
 			AccountID: tbank, InstrumentID: inst("SBER"), Type: operation.TypeDividend,
 			OccurredOn: d("2026-07-08"), AmountMinor: 1_045_200, Currency: "RUB",
@@ -250,13 +262,52 @@ func seedInstrumentsAndOperations(
 	return nil
 }
 
+// seededUSDRates is the demo instance's USD/RUB history, one plausible rate
+// per date. Each date is there for a reason, and the set as a whole is what
+// the demo screens show:
+//
+//   - 2026-05-20 — the FXUS buy's own date: converted at the exact date's
+//     rate, the ordinary case.
+//   - 2026-06-10 — the AAPL buy's own date, at a visibly different rate:
+//     two operations, two dates, two rates, so the journal cannot be
+//     mistaken for "everything at today's rate".
+//   - 2026-07-03 — the Friday before the Saturday USD deposit, which has no
+//     rate of its own: the entry converts at the nearest earlier date and
+//     the journal discloses that date rather than claiming the operation's
+//     own.
+//   - 2026-07-20 — today's-rate anchor, shared with the quotes and the
+//     latest account balances; also what GET /summary converts at.
+//
+// Nothing is seeded on or before 2026-05-06, the date of the demo's
+// earliest USD operation (the Freedom KZ deposit), and that gap is
+// deliberate: that one entry has no resolvable rate at all and must show
+// its original amount with an explanation instead of a dash or a zero.
+// Seeding a rate for it would hide the honest-degradation path behind
+// unit tests where nobody looks at it. On an instance with internet access
+// the fx backfill job eventually fills that date from cbr.ru and the
+// entry starts converting on its own — which is the point of the job.
+var seededUSDRates = []struct{ on, rate string }{
+	{"2026-05-20", "79.15"},
+	{"2026-06-10", "81.40"},
+	{"2026-07-03", "77.90"},
+	{"2026-07-20", "78.50"},
+}
+
 // seedMarketData records the FX rates and instrument quotes the demo
 // space's market valuation depends on: GET /summary's total_in_base_minor
-// (base currency RUB, so USD/KZT need a rate to convert) and GET
+// (base currency RUB, so USD/KZT need a rate to convert), GET
 // .../positions' market_value_minor (share/bond positions need a quote to
-// price). Everything is pinned to 2026-07-20 — the same date as the latest
-// seeded account balance — so both features have live data to show on the
-// same "as of" date the rest of the demo data uses.
+// price), and the journal's per-operation in_base (each foreign-currency
+// entry converted at the rate of the day it happened).
+//
+// Quotes and the EUR/KZT rates are pinned to 2026-07-20 — the same date as
+// the latest seeded account balance — because both answer "what is this
+// worth now". USD/RUB, in contrast, is seeded as a short HISTORY, with a
+// deliberately different rate per date: the journal converts every entry at
+// its own date's rate, and a single flat rate would make a historical
+// conversion and a today's-rate conversion produce identical numbers,
+// leaving the feature invisible on the demo screens. See seededUSDRates for
+// what each date demonstrates.
 //
 // FXUS and AAPL deliberately get no quote: FXUS is Frozen, so its position
 // demonstrates the null-valuation path (a holding the app can't safely
@@ -269,9 +320,13 @@ func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]
 	rate := decimal.RequireFromString
 
 	rates := []marketdata.FxRate{
-		{Base: "USD", Quote: "RUB", On: on, Rate: rate("78.50"), Source: "seed"},
 		{Base: "EUR", Quote: "RUB", On: on, Rate: rate("92.30"), Source: "seed"},
 		{Base: "KZT", Quote: "RUB", On: on, Rate: rate("0.163"), Source: "seed"},
+	}
+	for _, r := range seededUSDRates {
+		rates = append(rates, marketdata.FxRate{
+			Base: "USD", Quote: "RUB", On: d(r.on), Rate: rate(r.rate), Source: "seed",
+		})
 	}
 	if err := mdStore.UpsertFxRates(ctx, rates); err != nil {
 		return fmt.Errorf("seed fx rates: %w", err)

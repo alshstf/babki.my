@@ -51,8 +51,8 @@ export function MoneyCell({
 }) {
   const { t } = useTranslation();
   // A malformed rate date yields no tooltip at all rather than a broken one
-  // ("Пересчитано по курсу на "), matching how formatDate's empty result is
-  // handled everywhere else.
+  // (the "converted at the rate of ..." wording left dangling with no date),
+  // matching how formatDate's empty result is handled everywhere else.
   const rateDate = resolved.rateOn ? formatDate(resolved.rateOn) : "";
   const convertedTooltip = rateDate
     ? (convertedTitle?.(rateDate) ?? t("displayCurrency.convertedOn", { date: rateDate }))
