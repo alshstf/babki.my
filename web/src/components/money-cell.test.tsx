@@ -86,6 +86,36 @@ describe("MoneyCell", () => {
     );
   });
 
+  it("uses a caller-supplied converted-title wording when the rate is not today's", () => {
+    // The operations journal converts at the rate in effect on the operation's
+    // own date, so the default wording — which describes a current rate —
+    // would misrepresent the number.
+    render(
+      <MoneyCell
+        resolved={{ amountMinor: 655_000, currency: "RUB", noRate: false, rateOn: "2019-03-12" }}
+        convertedTitle={(date) => `Пересчитано по курсу на дату операции — ${date}`}
+        testId="amt"
+      />,
+    );
+
+    expect(screen.getByTestId("amt")).toHaveAttribute(
+      "title",
+      "Пересчитано по курсу на дату операции — 12.03.2019",
+    );
+  });
+
+  it("does not call the caller-supplied converted-title wording when nothing was converted", () => {
+    render(
+      <MoneyCell
+        resolved={{ amountMinor: 100_00, currency: "USD", noRate: true, rateOn: null }}
+        convertedTitle={(date) => `никогда — ${date}`}
+        testId="amt"
+      />,
+    );
+
+    expect(screen.getByTestId("amt")).not.toHaveAttribute("title");
+  });
+
   it("applies the given className to the root element", () => {
     render(
       <MoneyCell

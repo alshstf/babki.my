@@ -105,6 +105,88 @@ describe("screen-currencies", () => {
     expect(screen.getByTestId("toggle")).toHaveTextContent("hidden");
   });
 
+  // One screen can have several independent sections that each know a piece
+  // of the currency picture — the account detail screen has the positions
+  // table (via the screen component) and the operations journal, which owns
+  // its own paginated query and therefore its own currency set. The provider
+  // must merge those sets, not let the last reporter to run win.
+  it("counts the union of two simultaneous reporters, not just the last one", () => {
+    render(
+      <ScreenCurrencyCountProvider>
+        <ToggleProbe />
+        <Reporter currencies={["RUB"]} />
+        <Reporter currencies={["USD"]} />
+      </ScreenCurrencyCountProvider>,
+    );
+    // Neither reporter alone has anything to convert; together they do.
+    expect(screen.getByTestId("toggle")).toHaveTextContent("visible");
+  });
+
+  it("is order-independent: the same two reporters in the other order agree", () => {
+    render(
+      <ScreenCurrencyCountProvider>
+        <ToggleProbe />
+        <Reporter currencies={["USD"]} />
+        <Reporter currencies={["RUB"]} />
+      </ScreenCurrencyCountProvider>,
+    );
+    expect(screen.getByTestId("toggle")).toHaveTextContent("visible");
+  });
+
+  it("keeps a still-mounted reporter's currencies when another reporter unmounts, without blinking", () => {
+    // Records every value the header rendered with, not just the final one:
+    // an implementation that drops everything on unmount and then lets the
+    // surviving reporter re-report would settle on the right answer while
+    // visibly blinking the toggle out and back in on the way there.
+    const rendered: boolean[] = [];
+    function RecordingProbe() {
+      const visible = useHasMultipleScreenCurrencies();
+      rendered.push(visible);
+      return <div data-testid="toggle">{visible ? "visible" : "hidden"}</div>;
+    }
+
+    const { rerender } = render(
+      <ScreenCurrencyCountProvider>
+        <RecordingProbe />
+        <Reporter currencies={["RUB", "USD"]} />
+        <Reporter currencies={["EUR"]} />
+      </ScreenCurrencyCountProvider>,
+    );
+    expect(screen.getByTestId("toggle")).toHaveTextContent("visible");
+
+    // The second section goes away (e.g. an emptied journal renders a
+    // placeholder instead of the table). The first one is still on screen and
+    // still multi-currency, so the toggle must stay — steadily.
+    rendered.length = 0;
+    rerender(
+      <ScreenCurrencyCountProvider>
+        <RecordingProbe />
+        <Reporter currencies={["RUB", "USD"]} />
+      </ScreenCurrencyCountProvider>,
+    );
+    expect(screen.getByTestId("toggle")).toHaveTextContent("visible");
+    expect(rendered).not.toContain(false);
+  });
+
+  it("drops only the unmounted reporter's contribution to the union", () => {
+    const { rerender } = render(
+      <ScreenCurrencyCountProvider>
+        <ToggleProbe />
+        <Reporter currencies={["RUB"]} />
+        <Reporter currencies={["USD"]} />
+      </ScreenCurrencyCountProvider>,
+    );
+    expect(screen.getByTestId("toggle")).toHaveTextContent("visible");
+
+    rerender(
+      <ScreenCurrencyCountProvider>
+        <ToggleProbe />
+        <Reporter currencies={["RUB"]} />
+      </ScreenCurrencyCountProvider>,
+    );
+    expect(screen.getByTestId("toggle")).toHaveTextContent("hidden");
+  });
+
   // The provider's context value must be referentially stable while `count`
   // is unchanged. It isn't a cosmetic detail: `ctx` is a dependency of
   // useReportScreenCurrencies' effect, so a fresh object on every render
