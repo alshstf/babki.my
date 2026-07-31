@@ -313,12 +313,15 @@ type MoneyInBase struct {
 
 // Operation defines model for Operation.
 type Operation struct {
-	AccountId    openapi_types.UUID                    `json:"account_id"`
-	AmountMinor  int64                                 `json:"amount_minor"`
-	CreatedAt    time.Time                             `json:"created_at"`
-	Currency     string                                `json:"currency"`
-	FeeMinor     int64                                 `json:"fee_minor"`
-	Id           openapi_types.UUID                    `json:"id"`
+	AccountId   openapi_types.UUID `json:"account_id"`
+	AmountMinor int64              `json:"amount_minor"`
+	CreatedAt   time.Time          `json:"created_at"`
+	Currency    string             `json:"currency"`
+	FeeMinor    int64              `json:"fee_minor"`
+	Id          openapi_types.UUID `json:"id"`
+
+	// InBase amount_minor and fee_minor converted into the space's base currency at the fx rate in effect on occurred_on — the rate of the day the operation happened, NOT today's. This is the deliberate difference from AccountWithBalance.balance_in_base and Position.in_base, which answer "what is this worth now"; the journal answers "what did this cost then". Each amount is converted and rounded independently. Null when `currency` already equals the base currency (nothing to convert), or when no fx rate could be resolved for occurred_on nor any earlier date — a partially converted operation is never published. Computed only for the journal listing (GET /accounts/{accountId}/operations); create and transfer responses omit the field entirely, since those return an operation the client just submitted rather than a journal to read. An absent field and an explicit null mean the same thing to a reader: there is nothing converted to show.
+	InBase       nullable.Nullable[OperationInBase]    `json:"in_base,omitempty"`
 	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id,omitempty"`
 	Note         string                                `json:"note"`
 
@@ -339,6 +342,21 @@ type Operation struct {
 	SplitRatio      nullable.Nullable[string]             `json:"split_ratio,omitempty"`
 	TransferGroupId nullable.Nullable[openapi_types.UUID] `json:"transfer_group_id,omitempty"`
 	Type            OperationType                         `json:"type"`
+}
+
+// OperationInBase defines model for OperationInBase.
+type OperationInBase struct {
+	// AmountMinor Operation.amount_minor converted into currency. The sign is preserved — a buy stays negative — and rounding is half-away-from-zero, so converting never shrinks the magnitude of an outflow
+	AmountMinor int64 `json:"amount_minor"`
+
+	// Currency The space's base currency (ISO-4217), same as Summary.base_currency
+	Currency string `json:"currency"`
+
+	// FeeMinor Operation.fee_minor converted into currency, rounded independently of amount_minor: the two are separate figures, not terms of one total
+	FeeMinor int64 `json:"fee_minor"`
+
+	// RateOn Date YYYY-MM-DD of the fx rate ACTUALLY used, which is occurred_on itself or the nearest earlier date that has a rate (weekend, holiday, provider gap) — never today's date. For a 2019 operation this is a 2019 date; that is what makes this a historical conversion rather than a current valuation
+	RateOn string `json:"rate_on"`
 }
 
 // OperationType defines model for OperationType.

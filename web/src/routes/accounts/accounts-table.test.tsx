@@ -76,7 +76,7 @@ describe("AccountsTable", () => {
     wrap(<AccountsTable accounts={[account]} mode="base" baseCurrency="RUB" />);
 
     const amount = await screen.findByTestId("account-balance-acc-1");
-    expect(amount).toHaveAttribute("title", "Пересчитано по курсу на 19.07.2026");
+    expect(amount).toHaveAttribute("title", "Пересчитано по текущему курсу (на 19.07.2026)");
     // The balance row already shows the balance's own as_of date as text;
     // the rate date must not join it there.
     expect(amount.textContent).not.toMatch(/19\.07\.2026/);

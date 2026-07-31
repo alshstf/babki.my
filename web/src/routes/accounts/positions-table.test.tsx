@@ -474,7 +474,7 @@ describe("PositionsTable", () => {
       ]) {
         expect(screen.getByTestId(testId)).toHaveAttribute(
           "title",
-          "Пересчитано по курсу на 19.07.2026",
+          "Пересчитано по текущему курсу (на 19.07.2026)",
         );
       }
       // Tooltip only — the date never becomes cell text.

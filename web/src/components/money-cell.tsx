@@ -30,23 +30,38 @@ export function MoneyCell({
   // position rows — their amounts are in the position's, the quote's or a
   // bond face value's currency — so those callers pass their own.
   notConvertedTitle,
+  // Wording for the tooltip that discloses the fx rate date behind a
+  // converted figure, given that date already formatted. Defaults to the
+  // current-rate phrasing, which is right for balances and positions ("what
+  // is this worth now"); the operations journal converts at the rate in
+  // effect on the operation's own date, and re-using the current-rate wording
+  // there would lie about what the number means, so it passes its own.
+  //
+  // A function rather than a ready string so each caller's t() call keeps a
+  // literal key at the call site (scripts/check-i18n.mjs can only verify
+  // those) while the date formatting — and the malformed-date rule below —
+  // stay owned by this component.
+  convertedTitle,
 }: {
   resolved: ResolvedAmount;
   className?: string;
   testId?: string;
   notConvertedTitle?: string;
+  convertedTitle?: (formattedDate: string) => string;
 }) {
   const { t } = useTranslation();
   // A malformed rate date yields no tooltip at all rather than a broken one
-  // ("Пересчитано по курсу на "), matching how formatDate's empty result is
-  // handled everywhere else.
+  // (the "converted at the rate of ..." wording left dangling with no date),
+  // matching how formatDate's empty result is handled everywhere else.
   const rateDate = resolved.rateOn ? formatDate(resolved.rateOn) : "";
-  const convertedTitle = rateDate ? t("displayCurrency.convertedOn", { date: rateDate }) : undefined;
+  const convertedTooltip = rateDate
+    ? (convertedTitle?.(rateDate) ?? t("displayCurrency.convertedOn", { date: rateDate }))
+    : undefined;
   return (
     <span
       className={cn("inline-flex items-center gap-1", className)}
       data-testid={testId}
-      title={convertedTitle}
+      title={convertedTooltip}
     >
       {formatMinor(resolved.amountMinor, resolved.currency)}
       {resolved.noRate && (

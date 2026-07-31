@@ -32,7 +32,7 @@ describe("MoneyCell", () => {
     // The date stays out of the cell text — tooltip only (owner preference).
     expect(el.textContent).toBe(formatMinor(900_000, "RUB"));
     expect(el.textContent).not.toMatch(/20\.07\.2026/);
-    expect(el).toHaveAttribute("title", "Пересчитано по курсу на 20.07.2026");
+    expect(el).toHaveAttribute("title", "Пересчитано по текущему курсу (на 20.07.2026)");
   });
 
   it("omits the tooltip when the rate date is unparseable rather than showing a broken one", () => {
@@ -84,6 +84,36 @@ describe("MoneyCell", () => {
       "title",
       "Нет курса — показано в исходной валюте",
     );
+  });
+
+  it("uses a caller-supplied converted-title wording when the rate is not today's", () => {
+    // The operations journal converts at the rate in effect on the operation's
+    // own date, so the default wording — which describes a current rate —
+    // would misrepresent the number.
+    render(
+      <MoneyCell
+        resolved={{ amountMinor: 655_000, currency: "RUB", noRate: false, rateOn: "2019-03-12" }}
+        convertedTitle={(date) => `Пересчитано по курсу на дату операции — ${date}`}
+        testId="amt"
+      />,
+    );
+
+    expect(screen.getByTestId("amt")).toHaveAttribute(
+      "title",
+      "Пересчитано по курсу на дату операции — 12.03.2019",
+    );
+  });
+
+  it("does not call the caller-supplied converted-title wording when nothing was converted", () => {
+    render(
+      <MoneyCell
+        resolved={{ amountMinor: 100_00, currency: "USD", noRate: true, rateOn: null }}
+        convertedTitle={(date) => `никогда — ${date}`}
+        testId="amt"
+      />,
+    );
+
+    expect(screen.getByTestId("amt")).not.toHaveAttribute("title");
   });
 
   it("applies the given className to the root element", () => {

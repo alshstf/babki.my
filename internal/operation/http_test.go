@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
@@ -22,14 +24,26 @@ import (
 	"babki.my/babki/internal/platform/testdb"
 )
 
-// newAPI wires the full stack: family + account + instrument + operation
-// modules, mirroring how cmd/babki/root.go's mountModules assembles them.
-func newAPI(t *testing.T) (string, *http.Client) {
+// newTestPool spins up a migrated test database and returns it together
+// with a marketdata.Store on it, so a test can seed fx_rates on the very
+// pool the handler under test reads from.
+func newTestPool(t *testing.T) (*pgxpool.Pool, *marketdata.Store) {
 	t.Helper()
 	pool := testdb.New(t)
 	if err := db.Migrate(context.Background(), pool); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	return pool, marketdata.NewStore(pool)
+}
+
+// newAPIOn wires the full stack on an existing pool: family + account +
+// instrument + operation modules, mirroring how cmd/babki/root.go's
+// mountModules assembles them, with the operation handler's fx converter
+// supplied by the caller (conv) so a test can substitute a double for the
+// real, Postgres-backed one. It returns the server URL and a logged-in
+// client for the space created by /api/v1/setup.
+func newAPIOn(t *testing.T, pool *pgxpool.Pool, conv converterLike) (string, *http.Client) {
+	t.Helper()
 	famStore := family.NewStore(pool)
 	famSvc := family.NewService(famStore)
 	sm := family.NewSessionManager(pool)
@@ -42,7 +56,7 @@ func newAPI(t *testing.T) (string, *http.Client) {
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
 	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(marketdata.NewStore(pool)), auth, sm).Mount(srv)
 	instrument.NewHandler(instrument.NewStore(pool), auth, sm).Mount(srv)
-	operation.NewHandler(opSvc, opStore, auth, sm).Mount(srv)
+	operation.NewHandler(opSvc, opStore, famStore, conv, auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -55,6 +69,32 @@ func newAPI(t *testing.T) (string, *http.Client) {
 		t.Fatalf("setup: %v %d", err, resp.StatusCode)
 	}
 	return ts.URL, client
+}
+
+// newAPIWithConverter is the standard fixture: the full stack on a fresh
+// pool with a real, Postgres-backed fx converter, plus the marketdata store
+// behind it so the test can seed the fx rates that converter will resolve.
+func newAPIWithConverter(t *testing.T) (string, *http.Client, *marketdata.Store) {
+	t.Helper()
+	pool, mdStore := newTestPool(t)
+	url, c := newAPIOn(t, pool, marketdata.NewConverter(mdStore))
+	return url, c, mdStore
+}
+
+// newAPIWithConverterDouble is newAPIWithConverter with the operation
+// handler's fx converter replaced by conv, for tests that need a specific
+// failure mode out of it.
+func newAPIWithConverterDouble(t *testing.T, conv converterLike) (string, *http.Client) {
+	t.Helper()
+	pool, _ := newTestPool(t)
+	return newAPIOn(t, pool, conv)
+}
+
+// newAPI is newAPIWithConverter for tests that never touch fx rates.
+func newAPI(t *testing.T) (string, *http.Client) {
+	t.Helper()
+	url, c, _ := newAPIWithConverter(t)
+	return url, c
 }
 
 func do(t *testing.T, c *http.Client, method, url, body string) *http.Response {

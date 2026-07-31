@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -129,6 +130,50 @@ func TestSeedDemo(t *testing.T) {
 	}
 	if got != 785_000 {
 		t.Errorf("Convert(100 USD -> RUB) = %d, want 785000 (7850.00 RUB)", got)
+	}
+
+	// USD/RUB is seeded as a HISTORY, not a single date, and the demo's
+	// screens depend on the shape of that history rather than on any one
+	// number in it: the journal converts every foreign-currency entry at the
+	// rate of its own date. These three cases are exactly what the demo is
+	// supposed to show on screen, so they are pinned here — a future seed
+	// edit that flattens the history would otherwise silently turn the demo
+	// back into "everything at today's rate" with all tests still green.
+	day := func(s string) time.Time {
+		t.Helper()
+		parsed, err := time.Parse(time.DateOnly, s)
+		if err != nil {
+			t.Fatalf("parse %q: %v", s, err)
+		}
+		return parsed
+	}
+	// (a) an operation date with a rate of its own converts at that rate.
+	rateOnBuy, dateOnBuy, err := converter.Rate(ctx, "USD", "RUB", day("2026-05-20"))
+	if err != nil {
+		t.Fatalf("Rate(USD -> RUB, 2026-05-20): %v", err)
+	}
+	if want := decimal.RequireFromString("79.15"); !rateOnBuy.Equal(want) {
+		t.Errorf("USD/RUB on 2026-05-20 = %s, want %s", rateOnBuy, want)
+	}
+	if !dateOnBuy.Equal(day("2026-05-20")) {
+		t.Errorf("USD/RUB rate date for 2026-05-20 = %s, want the same day", dateOnBuy.Format(time.DateOnly))
+	}
+	// (b) a weekend operation date has no rate of its own and falls back to
+	// the preceding business day, which the journal then discloses.
+	rateOnSat, dateOnSat, err := converter.Rate(ctx, "USD", "RUB", day("2026-07-04"))
+	if err != nil {
+		t.Fatalf("Rate(USD -> RUB, 2026-07-04): %v", err)
+	}
+	if want := decimal.RequireFromString("77.90"); !rateOnSat.Equal(want) {
+		t.Errorf("USD/RUB on 2026-07-04 = %s, want %s (Friday's rate)", rateOnSat, want)
+	}
+	if !dateOnSat.Equal(day("2026-07-03")) {
+		t.Errorf("USD/RUB rate date for 2026-07-04 = %s, want 2026-07-03", dateOnSat.Format(time.DateOnly))
+	}
+	// (c) the demo's earliest USD operation predates all seeded rates, so it
+	// has none — the honest-degradation path the owner must be able to see.
+	if _, _, err := converter.Rate(ctx, "USD", "RUB", day("2026-05-06")); !errors.Is(err, marketdata.ErrNoRate) {
+		t.Errorf("Rate(USD -> RUB, 2026-05-06) error = %v, want ErrNoRate", err)
 	}
 
 	// every currency the demo space holds (RUB, USD) now has a seeded rate

@@ -57,8 +57,11 @@ export function AccountDetailPage() {
   // lib/screen-currencies.tsx): the account's own currency, every
   // position's currency, and the space's base currency (the toggle's
   // conversion target — see the analogous comment in accounts/index.tsx for
-  // why that belongs in the set too). Must run unconditionally, before any
-  // of the early returns below, per the Rules of Hooks.
+  // why that belongs in the set too). The operations journal reports its own
+  // currencies separately — it owns its query, including the "show more"
+  // window — and the provider counts the union of both reports. Must run
+  // unconditionally, before any of the early returns below, per the Rules of
+  // Hooks.
   useReportScreenCurrencies([
     ...(account ? [account.currency] : []),
     ...(positions.data ?? []).map((p) => p.currency),
@@ -171,7 +174,12 @@ export function AccountDetailPage() {
 
       <div className="grid gap-2">
         <h2 className="text-lg font-semibold">{t("operations.title")}</h2>
-        <OperationsTable accountId={accountId} canDelete={!isViewer} />
+        <OperationsTable
+          accountId={accountId}
+          canDelete={!isViewer}
+          mode={mode}
+          baseCurrency={baseCurrency}
+        />
       </div>
 
       {(action === "buy" || action === "sell") && (

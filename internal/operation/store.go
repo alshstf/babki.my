@@ -3,6 +3,7 @@ package operation
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -121,6 +122,22 @@ func (s *Store) ByID(ctx context.Context, spaceID, id uuid.UUID) (Operation, err
 func (s *Store) ByTransferGroup(ctx context.Context, spaceID, groupID uuid.UUID) ([]Operation, error) {
 	return s.list(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND transfer_group_id = $2`, spaceID, groupID)
+}
+
+// EarliestOccurredOn returns the earliest occurred_on across all operations
+// in the instance (not scoped to a space: the fx backfill it feeds is
+// shared, not per-space). This is a coverage boundary query, not a decision
+// about what to backfill. pgx.ErrNoRows if there are no operations at all.
+func (s *Store) EarliestOccurredOn(ctx context.Context) (time.Time, error) {
+	var on *time.Time
+	err := s.pool.QueryRow(ctx, `SELECT MIN(occurred_on) FROM operations`).Scan(&on)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if on == nil {
+		return time.Time{}, pgx.ErrNoRows
+	}
+	return *on, nil
 }
 
 // Delete removes the operation; if it belongs to a transfer group, the whole
