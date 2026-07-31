@@ -20,32 +20,48 @@ import (
 // DefaultBaseURL is the Bank of Russia's daily FX rates endpoint.
 const DefaultBaseURL = "https://www.cbr.ru/scripts/XML_daily.asp"
 
+// DefaultDynamicURL is the Bank of Russia's historical ("dynamic") endpoint:
+// one request returns a whole date range of one currency's rates.
+const DefaultDynamicURL = "https://www.cbr.ru/scripts/XML_dynamic.asp"
+
 // sourceName is used both as the provider's Name() and as FxRate.Source for
 // every rate this provider returns.
 const sourceName = "cbr"
 
-// dateLayout is the format cbr.ru uses for both the ?date_req= request
-// parameter and the <ValCurs Date="..."> response attribute.
+// dateLayout is the format cbr.ru uses for the ?date_req= request parameter,
+// the <ValCurs Date="..."> response attribute of the daily document, and the
+// <Record Date="..."> attribute of the historical one.
 const dateLayout = "02.01.2006"
 
-// Client fetches and parses the Bank of Russia's daily FX rate feed.
+// rangeDateLayout is the format XML_dynamic.asp expects for its date_req1 and
+// date_req2 parameters. It is slash-separated, unlike everything else cbr.ru
+// exchanges dates in.
+const rangeDateLayout = "02/01/2006"
+
+// Client fetches and parses the Bank of Russia's FX rate feeds: the daily
+// document (all currencies on one date) and the historical one (one currency
+// over a date range).
 type Client struct {
-	http    *http.Client
-	baseURL string
+	http       *http.Client
+	dailyURL   string
+	dynamicURL string
 }
 
 // New returns a Client. client may be nil, in which case http.DefaultClient
-// is used; baseURL may be empty, in which case DefaultBaseURL is used.
-// baseURL is parameterized (rather than hardcoded) so tests can point it at
-// an httptest.Server instead of the real cbr.ru.
+// is used; baseURL may be empty, in which case the two default endpoint URLs
+// are used. baseURL is parameterized (rather than hardcoded) so tests can
+// point it at an httptest.Server instead of the real cbr.ru: a non-empty
+// baseURL stands in for the whole of cbr.ru and therefore serves both
+// endpoints, which a test server tells apart by query parameters (date_req
+// vs. VAL_NM_RQ) rather than by path.
 func New(client *http.Client, baseURL string) *Client {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	if baseURL == "" {
-		baseURL = DefaultBaseURL
+		return &Client{http: client, dailyURL: DefaultBaseURL, dynamicURL: DefaultDynamicURL}
 	}
-	return &Client{http: client, baseURL: baseURL}
+	return &Client{http: client, dailyURL: baseURL, dynamicURL: baseURL}
 }
 
 // Name implements marketdata.FxProvider.
@@ -73,6 +89,57 @@ type valute struct {
 	Value    string `xml:"Value"`
 }
 
+// valCursRange mirrors the root element of XML_dynamic.asp's response: one
+// currency, one <Record> per day the bank published a rate on. It shares the
+// <ValCurs> element name with the daily document but nothing else — the
+// currency is named only by the bank's internal ID attribute, there is no ISO
+// code anywhere in it, and there are no records at all for days the bank did
+// not publish on.
+type valCursRange struct {
+	XMLName xml.Name     `xml:"ValCurs"`
+	Records []rateRecord `xml:"Record"`
+}
+
+// rateRecord mirrors a single <Record> element. Nominal sits inside every
+// record, not once per document, and does change over a long enough series
+// (the bank re-scales how many units it quotes a currency in), so each
+// record's value must be divided by its own.
+//
+// Value arrives comma-decimal, exactly as in the daily document.
+type rateRecord struct {
+	Date    string `xml:"Date,attr"`
+	Nominal int    `xml:"Nominal"`
+	Value   string `xml:"Value"`
+}
+
+// fetchXML GETs url and decodes the windows-1251 XML body into dst. Shared by
+// every endpoint this client talks to; what counts as an empty-but-valid
+// document differs per endpoint and is left to the callers.
+func (c *Client) fetchXML(ctx context.Context, url string, dst any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("cbr: build request: %w", err)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("cbr: request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("cbr: unexpected status %d", resp.StatusCode)
+	}
+
+	dec := xml.NewDecoder(resp.Body)
+	dec.CharsetReader = charsetReader
+	if err := dec.Decode(dst); err != nil {
+		return fmt.Errorf("cbr: decode xml: %w", err)
+	}
+
+	return nil
+}
+
 // fetchDaily requests and parses the daily rates document for on's date. It
 // is shared by RatesOn and CurrencyIDs, which both start from the same
 // document and both treat a response with zero currencies as an error: an
@@ -80,27 +147,9 @@ type valute struct {
 // instead falls back to the most recent business day), it indicates a
 // malformed or unexpected response.
 func (c *Client) fetchDaily(ctx context.Context, on time.Time) (valCurs, error) {
-	url := c.baseURL + "?date_req=" + on.Format(dateLayout)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return valCurs{}, fmt.Errorf("cbr: build request: %w", err)
-	}
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return valCurs{}, fmt.Errorf("cbr: request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return valCurs{}, fmt.Errorf("cbr: unexpected status %d", resp.StatusCode)
-	}
-
 	var doc valCurs
-	dec := xml.NewDecoder(resp.Body)
-	dec.CharsetReader = charsetReader
-	if err := dec.Decode(&doc); err != nil {
-		return valCurs{}, fmt.Errorf("cbr: decode xml: %w", err)
+	if err := c.fetchXML(ctx, c.dailyURL+"?date_req="+on.Format(dateLayout), &doc); err != nil {
+		return valCurs{}, err
 	}
 
 	if len(doc.Valutes) == 0 {
@@ -128,7 +177,7 @@ func (c *Client) RatesOn(ctx context.Context, on time.Time) ([]marketdata.FxRate
 
 	rates := make([]marketdata.FxRate, 0, len(doc.Valutes))
 	for _, v := range doc.Valutes {
-		rate, err := parseRate(v)
+		rate, err := parseRate(v.Value, v.Nominal, v.CharCode)
 		if err != nil {
 			return nil, err
 		}
@@ -166,15 +215,66 @@ func (c *Client) CurrencyIDs(ctx context.Context) (map[string]string, error) {
 	return ids, nil
 }
 
-// parseRate normalizes v.Value's comma decimal separator into a decimal.Decimal
-// and divides by Nominal, so the result is "RUB per 1 unit of the currency"
-// regardless of whether cbr.ru quotes it per 1, 10, 100, or 1000 units.
-func parseRate(v valute) (decimal.Decimal, error) {
-	value, err := decimal.NewFromString(strings.ReplaceAll(v.Value, ",", "."))
-	if err != nil {
-		return decimal.Decimal{}, fmt.Errorf("cbr: parse value %q for %s: %w", v.Value, v.CharCode, err)
+// RatesRange implements marketdata.FxHistoryProvider: it fetches one
+// currency's whole published series between from and to (both ends included)
+// in a single request, where RatesOn would need one request per day.
+//
+// currencyID is the Bank of Russia's internal identifier from CurrencyIDs;
+// code is the ISO code the same currency is known by. Both are needed because
+// the request accepts only the internal identifier while the response carries
+// neither code, so FxRate.Base can only come from the caller.
+//
+// Each FxRate.On is read from its own record, and each rate is divided by its
+// own record's Nominal — the bank re-scales how many units it quotes a
+// currency in, so one series can span several nominals. Days the bank did not
+// publish on (weekends, holidays) have no record and are left missing rather
+// than carried forward; resolving a date to the nearest earlier rate is the
+// storage layer's job.
+func (c *Client) RatesRange(ctx context.Context, code, currencyID string, from, to time.Time) ([]marketdata.FxRate, error) {
+	url := c.dynamicURL +
+		"?date_req1=" + from.Format(rangeDateLayout) +
+		"&date_req2=" + to.Format(rangeDateLayout) +
+		"&VAL_NM_RQ=" + currencyID
+
+	var doc valCursRange
+	if err := c.fetchXML(ctx, url, &doc); err != nil {
+		return nil, err
 	}
-	nominal := v.Nominal
+
+	// No records is a legitimate answer here, unlike in the daily document:
+	// it means the bank quoted nothing for this currency in this range.
+	rates := make([]marketdata.FxRate, 0, len(doc.Records))
+	for _, rec := range doc.Records {
+		on, err := time.Parse(dateLayout, rec.Date)
+		if err != nil {
+			return nil, fmt.Errorf("cbr: parse record date %q for %s: %w", rec.Date, code, err)
+		}
+		rate, err := parseRate(rec.Value, rec.Nominal, code)
+		if err != nil {
+			return nil, err
+		}
+		rates = append(rates, marketdata.FxRate{
+			Base:   code,
+			Quote:  "RUB",
+			On:     on,
+			Rate:   rate,
+			Source: sourceName,
+		})
+	}
+
+	return rates, nil
+}
+
+// parseRate normalizes raw's comma decimal separator into a decimal.Decimal
+// and divides by nominal, so the result is "RUB per 1 unit of the currency"
+// regardless of whether cbr.ru quotes it per 1, 10, 100, or 1000 units.
+// currency only labels errors. Both feeds carry Value/Nominal pairs in the
+// same shape, so both go through this one function.
+func parseRate(raw string, nominal int, currency string) (decimal.Decimal, error) {
+	value, err := decimal.NewFromString(strings.ReplaceAll(raw, ",", "."))
+	if err != nil {
+		return decimal.Decimal{}, fmt.Errorf("cbr: parse value %q for %s: %w", raw, currency, err)
+	}
 	if nominal == 0 {
 		// Defensive default: every real cbr.ru response sets Nominal, but a
 		// missing element unmarshals to the zero value and would otherwise

@@ -202,3 +202,159 @@ func TestCurrencyIDs_ServerError(t *testing.T) {
 		t.Fatal("CurrencyIDs: want error on HTTP 500, got nil")
 	}
 }
+
+// *cbr.Client must satisfy the history-capable provider interface, not just
+// the daily one: the backfill job depends on the interface, not on this type.
+var _ marketdata.FxHistoryProvider = (*cbr.Client)(nil)
+
+// TestRatesRange_ParsesFixture works from a response captured live from
+// cbr.ru's XML_dynamic.asp for USD (only the <?xml?> declaration was added to
+// the captured body, which a copy-paste of the document cannot carry).
+func TestRatesRange_ParsesFixture(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/dynamic_usd.xml")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	srv, gotQuery := serve(t, http.StatusOK, fixture)
+
+	c := cbr.New(srv.Client(), srv.URL)
+	from := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2025, 12, 5, 0, 0, 0, 0, time.UTC)
+	rates, err := c.RatesRange(context.Background(), "USD", "R01235", from, to)
+	if err != nil {
+		t.Fatalf("RatesRange: %v", err)
+	}
+
+	// The dynamic endpoint takes slash-separated dates in date_req1/date_req2
+	// and identifies the currency by the bank's internal code, never by ISO.
+	if want := "date_req1=01/12/2025&date_req2=05/12/2025&VAL_NM_RQ=R01235"; *gotQuery != want {
+		t.Errorf("request query = %q, want %q", *gotQuery, want)
+	}
+
+	// Four <Record> elements in, four rates out, in document order. The
+	// requested range starts on 01.12.2025 but the series starts on
+	// 02.12.2025: cbr.ru publishes nothing for non-working days, and those
+	// days must stay missing rather than be invented here.
+	want := []struct {
+		on   time.Time
+		rate string
+	}{
+		// Nominal is 1 on every record of this series, so each rate is just
+		// the Value with its comma read as a decimal point: 77,7027 / 1.
+		{time.Date(2025, 12, 2, 0, 0, 0, 0, time.UTC), "77.7027"},
+		{time.Date(2025, 12, 3, 0, 0, 0, 0, time.UTC), "77.4631"},
+		{time.Date(2025, 12, 4, 0, 0, 0, 0, time.UTC), "77.9556"},
+		{time.Date(2025, 12, 5, 0, 0, 0, 0, time.UTC), "76.9708"},
+	}
+	if len(rates) != len(want) {
+		t.Fatalf("len(rates) = %d, want %d: %+v", len(rates), len(want), rates)
+	}
+	for i, w := range want {
+		got := rates[i]
+		if !got.On.Equal(w.on) {
+			t.Errorf("rates[%d].On = %v, want %v (from the record's Date attribute)", i, got.On, w.on)
+		}
+		if wantRate := decimal.RequireFromString(w.rate); !got.Rate.Equal(wantRate) {
+			t.Errorf("rates[%d].Rate = %s, want %s", i, got.Rate, wantRate)
+		}
+		// The response carries no ISO code at all, so Base can only come from
+		// the caller-supplied code.
+		if got.Base != "USD" {
+			t.Errorf("rates[%d].Base = %q, want USD", i, got.Base)
+		}
+		if got.Quote != "RUB" {
+			t.Errorf("rates[%d].Quote = %q, want RUB", i, got.Quote)
+		}
+		if got.Source != "cbr" {
+			t.Errorf("rates[%d].Source = %q, want cbr", i, got.Source)
+		}
+	}
+}
+
+// TestRatesRange_NominalVariesWithinSeries is the discriminating case for
+// per-record nominals: cbr.ru quotes the Turkish lira per 10 units and has
+// changed that multiplier over time, so a series can carry more than one
+// Nominal. An implementation that reads Nominal once per document — whichever
+// record it takes it from — gets at least one of these three rates wrong.
+func TestRatesRange_NominalVariesWithinSeries(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/dynamic_try_nominal_change.xml")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	srv, _ := serve(t, http.StatusOK, fixture)
+
+	c := cbr.New(srv.Client(), srv.URL)
+	from := time.Date(2025, 12, 30, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 1, 6, 0, 0, 0, 0, time.UTC)
+	rates, err := c.RatesRange(context.Background(), "TRY", "R01700J", from, to)
+	if err != nil {
+		t.Fatalf("RatesRange: %v", err)
+	}
+
+	want := []struct {
+		on   time.Time
+		rate string
+	}{
+		// Nominal=10: 18,2377 / 10 = 1.82377.
+		{time.Date(2025, 12, 30, 0, 0, 0, 0, time.UTC), "1.82377"},
+		// Nominal=10: 18,3210 / 10 = 1.83210.
+		{time.Date(2025, 12, 31, 0, 0, 0, 0, time.UTC), "1.83210"},
+		// Nominal=1: 1,8455 / 1 = 1.8455. Dividing this one by the 10 the
+		// earlier records carry would yield 0.18455 — an order of magnitude
+		// off, and the whole point of this test.
+		{time.Date(2026, 1, 6, 0, 0, 0, 0, time.UTC), "1.8455"},
+	}
+	// Three records for an eight-day range: the days in between are holidays
+	// with nothing published. They are not gaps to fill.
+	if len(rates) != len(want) {
+		t.Fatalf("len(rates) = %d, want %d: %+v", len(rates), len(want), rates)
+	}
+	for i, w := range want {
+		got := rates[i]
+		if !got.On.Equal(w.on) {
+			t.Errorf("rates[%d].On = %v, want %v", i, got.On, w.on)
+		}
+		if wantRate := decimal.RequireFromString(w.rate); !got.Rate.Equal(wantRate) {
+			t.Errorf("rates[%d].Rate = %s, want %s (each record divides by its own Nominal)", i, got.Rate, wantRate)
+		}
+	}
+}
+
+// TestRatesRange_EmptySeries pins the difference from the daily document: an
+// empty <ValCurs> there means a broken response and is an error, but here it
+// legitimately means "this currency was not quoted in this range".
+func TestRatesRange_EmptySeries(t *testing.T) {
+	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
+		`<ValCurs ID="R01235" DateRange1="01.01.2014" DateRange2="05.01.2014" name="Foreign Currency Market Dynamic"></ValCurs>`)
+	srv, _ := serve(t, http.StatusOK, body)
+
+	c := cbr.New(srv.Client(), srv.URL)
+	from := time.Date(2014, 1, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2014, 1, 5, 0, 0, 0, 0, time.UTC)
+	rates, err := c.RatesRange(context.Background(), "USD", "R01235", from, to)
+	if err != nil {
+		t.Fatalf("RatesRange: want no error on an empty series, got %v", err)
+	}
+	if len(rates) != 0 {
+		t.Fatalf("len(rates) = %d, want 0: %+v", len(rates), rates)
+	}
+}
+
+// TestRatesRange_ServerError serves a perfectly parseable body under a 500 on
+// purpose: with an empty body the request would fail on the XML decode no
+// matter what, and the test would pass without the status ever being checked.
+func TestRatesRange_ServerError(t *testing.T) {
+	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
+		`<ValCurs ID="R01235" DateRange1="01.12.2025" DateRange2="05.12.2025" name="Foreign Currency Market Dynamic">` +
+		`<Record Date="02.12.2025" Id="R01235"><Nominal>1</Nominal><Value>77,7027</Value></Record>` +
+		`</ValCurs>`)
+	srv, _ := serve(t, http.StatusInternalServerError, body)
+
+	c := cbr.New(srv.Client(), srv.URL)
+	from := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2025, 12, 5, 0, 0, 0, 0, time.UTC)
+	_, err := c.RatesRange(context.Background(), "USD", "R01235", from, to)
+	if err == nil {
+		t.Fatal("RatesRange: want error on HTTP 500, got nil")
+	}
+}
