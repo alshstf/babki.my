@@ -196,8 +196,8 @@ describe("OperationsTable", () => {
 
       const amount = await screen.findByTestId("operation-amount");
       // Journal-specific wording: the rate is the one in effect back then.
-      // The 4d wording ("Пересчитано по курсу на 14.03.2019") describes a
-      // *current* rate and would misrepresent what this number is.
+      // The 4d wording ("Пересчитано по текущему курсу (на 14.03.2019)")
+      // names a *current* rate and would misrepresent what this number is.
       expect(amount).toHaveAttribute(
         "title",
         "Пересчитано по курсу на дату операции — 14.03.2019",

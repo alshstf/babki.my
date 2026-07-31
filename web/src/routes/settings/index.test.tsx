@@ -95,6 +95,40 @@ describe("SettingsPage", () => {
     expect(qc.getQueryState(["summary"])?.isInvalidated).toBe(true);
   });
 
+  it("invalidates cached operations and positions after the base currency changes", async () => {
+    // The account detail screen keeps the journal and the positions table
+    // cached under ["operations", accountId, ...] / ["positions", accountId]
+    // while it's mounted. Both carry figures converted into the *old* base
+    // currency (in_base on operations, the base-converted columns on
+    // positions). Leaving those two caches alone — while ["accounts"] and
+    // ["summary"] do get invalidated — means a background refetch can land
+    // between the currency switch and the account screen re-rendering, and
+    // in that window the row shows an amount computed in the old base
+    // currency under the new base currency's symbol. Same fresh-Response
+    // rationale as the sibling test above.
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify(makeSession({ base_currency: "USD" })), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    const { qc } = wrap(<SettingsPage />, makeSession({ base_currency: "RUB" }));
+    qc.setQueryData(["operations", "acc-1", 50, 0], []);
+    qc.setQueryData(["positions", "acc-1"], []);
+
+    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(screen.getByText("USD"));
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+
+    await waitFor(() => {
+      expect(qc.getQueryState(["operations", "acc-1", 50, 0])?.isInvalidated).toBe(true);
+    });
+    expect(qc.getQueryState(["positions", "acc-1"])?.isInvalidated).toBe(true);
+  });
+
   it("shows an owner-only message and no form for a non-owner", () => {
     wrap(<SettingsPage />, makeSession({ role: "editor" }));
 

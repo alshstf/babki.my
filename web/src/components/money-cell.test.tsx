@@ -32,7 +32,7 @@ describe("MoneyCell", () => {
     // The date stays out of the cell text — tooltip only (owner preference).
     expect(el.textContent).toBe(formatMinor(900_000, "RUB"));
     expect(el.textContent).not.toMatch(/20\.07\.2026/);
-    expect(el).toHaveAttribute("title", "Пересчитано по курсу на 20.07.2026");
+    expect(el).toHaveAttribute("title", "Пересчитано по текущему курсу (на 20.07.2026)");
   });
 
   it("omits the tooltip when the rate date is unparseable rather than showing a broken one", () => {

@@ -154,6 +154,6 @@ describe("AccountDetailPage", () => {
 
     const balance = await screen.findByTestId("account-detail-balance");
     expect(balance.textContent).toMatch(/₽/);
-    expect(balance).toHaveAttribute("title", "Пересчитано по курсу на 19.07.2026");
+    expect(balance).toHaveAttribute("title", "Пересчитано по текущему курсу (на 19.07.2026)");
   });
 });
