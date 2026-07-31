@@ -145,3 +145,60 @@ func TestRatesOn_EmptyValCurs(t *testing.T) {
 		t.Fatal("RatesOn: want error on empty ValCurs (no currencies), got nil")
 	}
 }
+
+func TestCurrencyIDs_ParsesFixture(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/daily_currency_ids.xml")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	srv, _ := serve(t, http.StatusOK, fixture)
+
+	c := cbr.New(srv.Client(), srv.URL)
+	ids, err := c.CurrencyIDs(context.Background())
+	if err != nil {
+		t.Fatalf("CurrencyIDs: %v", err)
+	}
+
+	// USD's internal ID follows the common "R" + digits shape.
+	if got, want := ids["USD"], "R01235"; got != want {
+		t.Errorf(`ids["USD"] = %q, want %q`, got, want)
+	}
+
+	// TRY's internal ID has a trailing letter ("R01700J"), which is the
+	// shape that would break an implementation assuming "R" + digits only.
+	if got, want := ids["TRY"], "R01700J"; got != want {
+		t.Errorf(`ids["TRY"] = %q, want %q`, got, want)
+	}
+
+	// A currency absent from the document must be absent from the map, not
+	// present with a zero value and not an error.
+	if id, ok := ids["GBP"]; ok {
+		t.Errorf(`ids["GBP"] = %q, want absent (cbr.ru does not quote it in this fixture)`, id)
+	}
+
+	if len(ids) != 2 {
+		t.Errorf("len(ids) = %d, want 2: %+v", len(ids), ids)
+	}
+}
+
+func TestCurrencyIDs_EmptyValCurs(t *testing.T) {
+	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
+		`<ValCurs Date="28.07.2026" name="Foreign Currency Market"></ValCurs>`)
+	srv, _ := serve(t, http.StatusOK, body)
+
+	c := cbr.New(srv.Client(), srv.URL)
+	_, err := c.CurrencyIDs(context.Background())
+	if err == nil {
+		t.Fatal("CurrencyIDs: want error on empty ValCurs (no currencies), got nil")
+	}
+}
+
+func TestCurrencyIDs_ServerError(t *testing.T) {
+	srv, _ := serve(t, http.StatusInternalServerError, nil)
+
+	c := cbr.New(srv.Client(), srv.URL)
+	_, err := c.CurrencyIDs(context.Background())
+	if err == nil {
+		t.Fatal("CurrencyIDs: want error on HTTP 500, got nil")
+	}
+}

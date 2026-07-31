@@ -61,10 +61,53 @@ type valCurs struct {
 // valute mirrors a single <Valute> element. Value is left as a raw string
 // here (rather than a decimal) because it arrives comma-decimal ("92,5678")
 // and needs normalizing before it can be parsed.
+//
+// ID is the Bank of Russia's own internal identifier for the currency (e.g.
+// "R01235" for USD). It is opaque: it is not always "R" followed by digits
+// (Turkish lira is "R01700J"), so it must only be looked up, never parsed or
+// reconstructed.
 type valute struct {
+	ID       string `xml:"ID,attr"`
 	CharCode string `xml:"CharCode"`
 	Nominal  int    `xml:"Nominal"`
 	Value    string `xml:"Value"`
+}
+
+// fetchDaily requests and parses the daily rates document for on's date. It
+// is shared by RatesOn and CurrencyIDs, which both start from the same
+// document and both treat a response with zero currencies as an error: an
+// empty <ValCurs> is not a "no rates today" signal from cbr.ru (which
+// instead falls back to the most recent business day), it indicates a
+// malformed or unexpected response.
+func (c *Client) fetchDaily(ctx context.Context, on time.Time) (valCurs, error) {
+	url := c.baseURL + "?date_req=" + on.Format(dateLayout)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return valCurs{}, fmt.Errorf("cbr: build request: %w", err)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return valCurs{}, fmt.Errorf("cbr: request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return valCurs{}, fmt.Errorf("cbr: unexpected status %d", resp.StatusCode)
+	}
+
+	var doc valCurs
+	dec := xml.NewDecoder(resp.Body)
+	dec.CharsetReader = charsetReader
+	if err := dec.Decode(&doc); err != nil {
+		return valCurs{}, fmt.Errorf("cbr: decode xml: %w", err)
+	}
+
+	if len(doc.Valutes) == 0 {
+		return valCurs{}, fmt.Errorf("cbr: response has no currencies")
+	}
+
+	return doc, nil
 }
 
 // RatesOn implements marketdata.FxProvider. It requests the rates for date
@@ -73,31 +116,9 @@ type valute struct {
 // and holidays, and silently returns the most recent business day's data
 // instead.
 func (c *Client) RatesOn(ctx context.Context, on time.Time) ([]marketdata.FxRate, error) {
-	url := c.baseURL + "?date_req=" + on.Format(dateLayout)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	doc, err := c.fetchDaily(ctx, on)
 	if err != nil {
-		return nil, fmt.Errorf("cbr: build request: %w", err)
-	}
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("cbr: request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("cbr: unexpected status %d", resp.StatusCode)
-	}
-
-	var doc valCurs
-	dec := xml.NewDecoder(resp.Body)
-	dec.CharsetReader = charsetReader
-	if err := dec.Decode(&doc); err != nil {
-		return nil, fmt.Errorf("cbr: decode xml: %w", err)
-	}
-
-	if len(doc.Valutes) == 0 {
-		return nil, fmt.Errorf("cbr: response has no currencies")
+		return nil, err
 	}
 
 	respDate, err := time.Parse(dateLayout, doc.Date)
@@ -121,6 +142,28 @@ func (c *Client) RatesOn(ctx context.Context, on time.Time) ([]marketdata.FxRate
 	}
 
 	return rates, nil
+}
+
+// CurrencyIDs returns the mapping from ISO currency code (e.g. "USD") to the
+// Bank of Russia's internal currency identifier (e.g. "R01235"), read from
+// today's daily rates document. It is the identifier XML_dynamic.asp needs
+// to fetch a currency's historical range, since that endpoint identifies
+// currencies by the bank's own code rather than by ISO code.
+//
+// A currency the Bank of Russia does not currently quote is simply absent
+// from the returned map; that is not an error.
+func (c *Client) CurrencyIDs(ctx context.Context) (map[string]string, error) {
+	doc, err := c.fetchDaily(ctx, time.Now())
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make(map[string]string, len(doc.Valutes))
+	for _, v := range doc.Valutes {
+		ids[v.CharCode] = v.ID
+	}
+
+	return ids, nil
 }
 
 // parseRate normalizes v.Value's comma decimal separator into a decimal.Decimal
