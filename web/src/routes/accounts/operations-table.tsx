@@ -75,8 +75,12 @@ export function OperationsTable({
   // own query, and its currencies can be ones nothing else on the screen
   // knows about: a foreign-currency operation on a base-currency account is
   // otherwise invisible to the counter, leaving the user with amounts they
-  // cannot switch. Must run unconditionally, before the early returns below,
-  // per the Rules of Hooks.
+  // cannot switch. Only currencies in the currently loaded window (`list`,
+  // capped by `limit`) are counted — if the sole foreign-currency operation
+  // sits past row 50, the toggle won't appear until "Show more" is clicked.
+  // That's consistent with what the table actually shows, so it's accepted
+  // rather than worked around. Must run unconditionally, before the early
+  // returns below, per the Rules of Hooks.
   useReportScreenCurrencies([
     ...list.map((operation) => operation.currency),
     // The conversion target belongs in the set too, so a journal that is
@@ -91,7 +95,6 @@ export function OperationsTable({
   // balances and positions, these figures use the rate of the day the
   // operation happened, not today's.
   const notConvertedTitle = t("operations.notConverted");
-  const convertedTitle = (date: string) => t("operations.convertedAtDate", { date });
 
   const instrumentName = (instrumentId: string | null | undefined) => {
     if (!instrumentId) return "—";
@@ -163,6 +166,17 @@ export function OperationsTable({
               operation.in_base?.fee_minor,
               operation.in_base?.rate_on,
             );
+            // in_base.rate_on is the nearest rate on or before occurred_on
+            // (see FxRateOn in the backend), not necessarily a rate dated
+            // occurred_on itself — weekends/holidays structurally never get
+            // their own backfilled rate. Claiming "on the operation's date"
+            // when the two dates differ would contradict the Date column
+            // right next to it, so that wording is only used when they
+            // actually match; otherwise the honest fallback wording is used.
+            const convertedTitle =
+              operation.in_base?.rate_on === operation.occurred_on
+                ? (date: string) => t("operations.convertedAtDate", { date })
+                : (date: string) => t("operations.convertedAtEarlierDate", { date });
             return (
               <TableRow key={operation.id}>
                 <TableCell className="whitespace-nowrap">{formatDate(operation.occurred_on)}</TableCell>

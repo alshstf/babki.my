@@ -175,7 +175,7 @@ describe("OperationsTable", () => {
       expect(screen.queryByTestId("operation-fee-not-converted")).not.toBeInTheDocument();
     });
 
-    it("discloses the operation-date rate in the tooltip, worded as historical, never as today's", async () => {
+    it("claims the operation-date rate only when the fx rate actually matches the operation's date", async () => {
       renderTable({
         operations: [
           makeOperation({
@@ -185,8 +185,8 @@ describe("OperationsTable", () => {
               amount_minor: 655_000,
               fee_minor: 32_750,
               currency: "RUB",
-              // The nearest earlier date that had a rate (14.03 was a gap).
-              rate_on: "2019-03-12",
+              // A rate was found exactly on the operation's own date.
+              rate_on: "2019-03-14",
             },
           }),
         ],
@@ -196,15 +196,58 @@ describe("OperationsTable", () => {
 
       const amount = await screen.findByTestId("operation-amount");
       // Journal-specific wording: the rate is the one in effect back then.
-      // The 4d wording ("Пересчитано по курсу на 12.03.2019") describes a
+      // The 4d wording ("Пересчитано по курсу на 14.03.2019") describes a
       // *current* rate and would misrepresent what this number is.
       expect(amount).toHaveAttribute(
         "title",
-        "Пересчитано по курсу на дату операции — 12.03.2019",
+        "Пересчитано по курсу на дату операции — 14.03.2019",
       );
       expect(screen.getByTestId("operation-fee")).toHaveAttribute(
         "title",
-        "Пересчитано по курсу на дату операции — 12.03.2019",
+        "Пересчитано по курсу на дату операции — 14.03.2019",
+      );
+      // The rate date lives in the tooltip only, never baked into the money
+      // cell's own text (14.03.2019 legitimately appears elsewhere, in the
+      // pre-existing Date column — that's not what this assertion is about).
+      expect(norm(amount.textContent ?? "")).toBe(norm(formatMinor(655_000, "RUB")));
+      // And it is emphatically not today's rate.
+      const today = formatDate(localToday());
+      expect(amount.getAttribute("title")).not.toContain(today);
+    });
+
+    it("tells the truth instead of claiming the operation-date rate when the fx rate is from an earlier date", async () => {
+      renderTable({
+        operations: [
+          makeOperation({
+            occurred_on: "2019-03-14",
+            currency: "USD",
+            in_base: {
+              amount_minor: 655_000,
+              fee_minor: 32_750,
+              currency: "RUB",
+              // 2019-03-14 is a gap (e.g. weekend/holiday the backfill never
+              // queries — see internal/marketdata/jobs.go) — FxRateOn falls
+              // back to the nearest earlier date that has a rate. Claiming
+              // "on the operation's date" here would be false, and the Date
+              // column right next to it (14.03.2019) would contradict it.
+              rate_on: "2019-03-12",
+            },
+          }),
+        ],
+        mode: "base",
+        baseCurrency: "RUB",
+      });
+
+      const amount = await screen.findByTestId("operation-amount");
+      // Must never claim the rate is "on the operation's date" — it isn't.
+      expect(amount.getAttribute("title")).not.toContain("на дату операции —");
+      expect(amount).toHaveAttribute(
+        "title",
+        "На дату операции курса нет — пересчитано по ближайшему, на 12.03.2019",
+      );
+      expect(screen.getByTestId("operation-fee")).toHaveAttribute(
+        "title",
+        "На дату операции курса нет — пересчитано по ближайшему, на 12.03.2019",
       );
       // The rate date lives in the tooltip only — never as cell text (the
       // occurred_on date column is a separate, pre-existing thing).
