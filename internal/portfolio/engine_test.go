@@ -254,6 +254,244 @@ func TestCurrencyMismatchRejected(t *testing.T) {
 	}
 }
 
+// lotSums totals the position's remaining lots. The engine must keep these
+// totals exactly equal to the position's own Quantity and CostMinor.
+func lotSums(p *portfolio.Position) (decimal.Decimal, int64) {
+	qty := decimal.Zero
+	var cost int64
+	for _, l := range p.Lots {
+		qty = qty.Add(l.Quantity)
+		cost += l.CostMinor
+	}
+	return qty, cost
+}
+
+func checkLotInvariants(t *testing.T, p *portfolio.Position) {
+	t.Helper()
+	qty, cost := lotSums(p)
+	if !qty.Equal(p.Quantity) {
+		t.Errorf("sum of lot quantities = %s, want position quantity %s", qty, p.Quantity)
+	}
+	if cost != p.CostMinor {
+		t.Errorf("sum of lot costs = %d, want position cost %d", cost, p.CostMinor)
+	}
+	if p.Quantity.IsZero() && len(p.Lots) != 0 {
+		t.Errorf("closed position keeps %d lots, want none", len(p.Lots))
+	}
+}
+
+func TestLotsCarryAcquisitionDates(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 2, &sber, "10", "100", -100_000, 10),
+		op(portfolio.TypeBuy, 9, &sber, "5", "110", -55_000, 5),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	want := []portfolio.Lot{
+		{Quantity: d("10"), CostMinor: 100_010, AcquiredOn: day(2)},
+		{Quantity: d("5"), CostMinor: 55_005, AcquiredOn: day(9)},
+	}
+	if len(p.Lots) != len(want) {
+		t.Fatalf("lots = %d, want %d", len(p.Lots), len(want))
+	}
+	for i, w := range want {
+		got := p.Lots[i]
+		if !got.Quantity.Equal(w.Quantity) || got.CostMinor != w.CostMinor || !got.AcquiredOn.Equal(w.AcquiredOn) {
+			t.Errorf("lot %d = {qty %s cost %d on %s}, want {qty %s cost %d on %s}",
+				i, got.Quantity, got.CostMinor, got.AcquiredOn.Format("2006-01-02"),
+				w.Quantity, w.CostMinor, w.AcquiredOn.Format("2006-01-02"))
+		}
+	}
+	checkLotInvariants(t, p)
+}
+
+func TestSellingWholeLotDropsIt(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 2, &sber, "10", "100", -100_000, 10),
+		op(portfolio.TypeBuy, 9, &sber, "5", "110", -55_000, 5),
+		// exactly the first lot
+		op(portfolio.TypeSell, 12, &sber, "10", "120", 120_000, 0),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	if len(p.Lots) != 1 {
+		t.Fatalf("lots = %d, want 1", len(p.Lots))
+	}
+	if !p.Lots[0].AcquiredOn.Equal(day(9)) {
+		t.Errorf("remaining lot acquired on %s, want %s",
+			p.Lots[0].AcquiredOn.Format("2006-01-02"), day(9).Format("2006-01-02"))
+	}
+	if !p.Lots[0].Quantity.Equal(d("5")) || p.Lots[0].CostMinor != 55_005 {
+		t.Errorf("remaining lot = {qty %s cost %d}, want {5 55005}", p.Lots[0].Quantity, p.Lots[0].CostMinor)
+	}
+	checkLotInvariants(t, p)
+}
+
+// TestPartialSellKeepsLotDate pins the rule that a partial sale only shrinks
+// the lot: what is left over was acquired on the very same day as the part
+// that was sold.
+func TestPartialSellKeepsLotDate(t *testing.T) {
+	ops := []portfolio.Operation{
+		// 3 units for 100.01 total — deliberately not divisible by 3
+		op(portfolio.TypeBuy, 2, &sber, "3", "", -10_001, 0),
+		op(portfolio.TypeSell, 8, &sber, "1", "", 4_000, 0),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	if len(p.Lots) != 1 {
+		t.Fatalf("lots = %d, want 1", len(p.Lots))
+	}
+	l := p.Lots[0]
+	if !l.AcquiredOn.Equal(day(2)) {
+		t.Errorf("lot acquired on %s, want the buy day %s",
+			l.AcquiredOn.Format("2006-01-02"), day(2).Format("2006-01-02"))
+	}
+	if !l.Quantity.Equal(d("2")) {
+		t.Errorf("lot qty = %s, want 2", l.Quantity)
+	}
+	// floor(10001 * 1/3) = 3333 released, so 6668 stays with the lot
+	if l.CostMinor != 6_668 {
+		t.Errorf("lot cost = %d, want 6668", l.CostMinor)
+	}
+	checkLotInvariants(t, p)
+}
+
+func TestClosedPositionHasNoLots(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &lkoh, "5", "7000", -3_500_000, 0),
+		op(portfolio.TypeBuy, 2, &lkoh, "2", "7100", -1_420_000, 0),
+		op(portfolio.TypeSell, 3, &lkoh, "7", "7500", 5_250_000, 0),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[lkoh]
+	if len(p.Lots) != 0 {
+		t.Errorf("closed position lots = %+v, want none", p.Lots)
+	}
+	checkLotInvariants(t, p)
+}
+
+// TestLotsStayExactOverLongSequence is the discriminating one: through a long
+// mix of buys and sells with awkward, non-divisible amounts the lot costs must
+// still sum to the position cost to the last minor unit, and the total money
+// spent on buys must equal what is still held plus what was released on sells.
+// An implementation that loses a minor unit on a partial release fails here.
+func TestLotsStayExactOverLongSequence(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "7", "", -100_003, 7),
+		op(portfolio.TypeBuy, 2, &sber, "3", "", -33_337, 0),
+		op(portfolio.TypeSell, 3, &sber, "5", "", 71_111, 3),
+		op(portfolio.TypeBuy, 4, &sber, "11", "", -77_771, 3),
+		op(portfolio.TypeSell, 5, &sber, "9", "", 91_119, 0),
+		op(portfolio.TypeBuy, 6, &sber, "4", "", -10_007, 1),
+		op(portfolio.TypeSell, 7, &sber, "6", "", 41_113, 7),
+		op(portfolio.TypeSell, 8, &sber, "2", "", 13_337, 0),
+		op(portfolio.TypeBuy, 9, &sber, "5", "", -12_345, 2),
+		op(portfolio.TypeSell, 10, &sber, "2", "", 9_991, 1),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+
+	var boughtMinor, proceedsMinor, sellFeesMinor int64
+	for _, o := range ops {
+		switch o.Type {
+		case portfolio.TypeBuy:
+			boughtMinor += -o.AmountMinor + o.FeeMinor
+		case portfolio.TypeSell:
+			proceedsMinor += o.AmountMinor
+			sellFeesMinor += o.FeeMinor
+		}
+	}
+	// realized = proceeds − released − fees, so released is observable from outside
+	releasedMinor := proceedsMinor - sellFeesMinor - p.RealizedPnLMinor
+	if boughtMinor != p.CostMinor+releasedMinor {
+		t.Errorf("bought %d, but held %d + released %d = %d — %d minor units drifted",
+			boughtMinor, p.CostMinor, releasedMinor, p.CostMinor+releasedMinor,
+			boughtMinor-p.CostMinor-releasedMinor)
+	}
+	checkLotInvariants(t, p)
+
+	// 7+3−5+11−9+4−6−2+5−2 = 6 units left: the tail of the day-6 lot and all of day 9.
+	if !p.Quantity.Equal(d("6")) {
+		t.Fatalf("qty = %s, want 6", p.Quantity)
+	}
+	wantDays := []int{6, 9}
+	if len(p.Lots) != len(wantDays) {
+		t.Fatalf("lots = %d, want %d", len(p.Lots), len(wantDays))
+	}
+	for i, dayN := range wantDays {
+		if !p.Lots[i].AcquiredOn.Equal(day(dayN)) {
+			t.Errorf("lot %d acquired on %s, want %s", i,
+				p.Lots[i].AcquiredOn.Format("2006-01-02"), day(dayN).Format("2006-01-02"))
+		}
+	}
+}
+
+// TestLotInvariantsUnderSplitAndAmortization covers the two operations that
+// rewrite lots without buying or selling: a split scales quantities, an
+// amortization drains cost. Both must leave the totals matching the position.
+func TestLotInvariantsUnderSplitAndAmortization(t *testing.T) {
+	split := op(portfolio.TypeSplit, 4, &ofz, "", "", 0, 0)
+	split.SplitRatio = dp("3")
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &ofz, "7", "", -100_003, 0),
+		op(portfolio.TypeBuy, 2, &ofz, "3", "", -33_337, 0),
+		split,
+		op(portfolio.TypeAmortization, 5, &ofz, "", "", 50_001, 0),
+		op(portfolio.TypeSell, 6, &ofz, "25", "", 40_000, 0),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[ofz]
+	if !p.Quantity.Equal(d("5")) {
+		t.Fatalf("qty = %s, want 5", p.Quantity)
+	}
+	// the split does not change when the shares were acquired
+	if len(p.Lots) != 1 || !p.Lots[0].AcquiredOn.Equal(day(2)) {
+		t.Errorf("lots = %+v, want one acquired on %s", p.Lots, day(2).Format("2006-01-02"))
+	}
+	checkLotInvariants(t, p)
+}
+
+// TestTransferInLotUsesTransferDate documents the one case where the lot date
+// is not a purchase date: a transfer_in carries only a cost snapshot from the
+// source account, not the original acquisition dates, so the transfer's own
+// date is the best available answer.
+func TestTransferInLotUsesTransferDate(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeTransferIn, 5, &sber, "4", "", 40_000, 0),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	if len(p.Lots) != 1 {
+		t.Fatalf("lots = %d, want 1", len(p.Lots))
+	}
+	if !p.Lots[0].AcquiredOn.Equal(day(5)) {
+		t.Errorf("transferred lot acquired on %s, want the transfer day %s",
+			p.Lots[0].AcquiredOn.Format("2006-01-02"), day(5).Format("2006-01-02"))
+	}
+	checkLotInvariants(t, p)
+}
+
 func TestBadOperations(t *testing.T) {
 	for name, bad := range map[string]portfolio.Operation{
 		"buy without qty":      op(portfolio.TypeBuy, 1, &sber, "", "100", -1000, 0),

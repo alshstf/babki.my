@@ -124,14 +124,17 @@ func toAPI(o Operation) apitypes.Operation {
 	return out
 }
 
-// rateKey identifies one memoized fx rate lookup. Unlike account's and
-// portfolio's caches — which convert everything at today's rate and can
-// therefore key by currency alone — the journal resolves a rate per
-// operation DATE, so the date has to be part of the key. A single page of
-// the journal routinely holds the same currency on a dozen different dates
-// with a dozen different rates; keying by currency alone would silently
-// reuse the first operation's rate for all of them, producing wrong numbers
-// that look entirely plausible on screen.
+// rateKey identifies one memoized fx rate lookup. Unlike account's cache —
+// which converts everything at today's rate and can therefore key by
+// currency alone — the journal resolves a rate per operation DATE, so the
+// date has to be part of the key. A single page of the journal routinely
+// holds the same currency on a dozen different dates with a dozen different
+// rates; keying by currency alone would silently reuse the first operation's
+// rate for all of them, producing wrong numbers that look entirely plausible
+// on screen. portfolio's cache (portfolio.rateKey) is keyed the same way and
+// for the same reason: its per-lot and per-income-operation conversions are,
+// like the journal's, valued at each item's own date rather than one rate
+// for everything — only account still converts everything at today's rate.
 //
 // The date is held as its YYYY-MM-DD string rather than a time.Time so the
 // key is a value comparison on the calendar date itself, immune to two
@@ -158,10 +161,21 @@ type rateLookup struct {
 // operationInBase converts an operation's amount_minor and fee_minor from
 // its own currency into baseCurrency at the fx rate in effect ON THE DAY THE
 // OPERATION HAPPENED — not today's rate. This is the deliberate difference
-// from account.balanceInBase and portfolio.positionInBase, which both
-// convert at time.Now(): those answer "what is this worth now", the journal
-// answers "what did this cost then". A 2019 purchase must keep being
-// reported at its 2019 rate however the ruble moves afterwards.
+// from account.balanceInBase, which converts at time.Now(): that answers
+// "what is this worth now", the journal answers "what did this cost then". A
+// 2019 purchase must keep being reported at its 2019 rate however the ruble
+// moves afterwards.
+//
+// portfolio.positionInBase now sits between the two rather than matching
+// either: its cost_minor and income_minor are historical exactly like this
+// function (each lot and each income operation at its own date's rate), but
+// its market_value_minor still converts at time.Now() like
+// account.balanceInBase, because a position — unlike a plain journal entry —
+// has an ongoing market value, and "what is it worth now" is a real question
+// for it. unrealized_pnl_minor is the difference between that today-valued
+// figure and the historical basis, so the position's own currency's
+// appreciation or depreciation since each purchase ends up baked into the
+// base-currency profit.
 //
 // rate_on is the date of the rate ACTUALLY used, which is o.OccurredOn only
 // when a rate exists for that exact day. The CBR publishes nothing on

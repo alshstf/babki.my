@@ -32,10 +32,14 @@ export function MoneyCell({
   notConvertedTitle,
   // Wording for the tooltip that discloses the fx rate date behind a
   // converted figure, given that date already formatted. Defaults to the
-  // current-rate phrasing, which is right for balances and positions ("what
-  // is this worth now"); the operations journal converts at the rate in
-  // effect on the operation's own date, and re-using the current-rate wording
-  // there would lie about what the number means, so it passes its own.
+  // current-rate phrasing, which is right wherever the figure answers "what
+  // is this worth now" — account balances, a position's market value. Callers
+  // whose figure was converted at some other rate pass their own wording,
+  // because re-using the current-rate phrasing would lie about what the
+  // number means: the operations journal converts at the rate in effect on
+  // the operation's own date, and a position's cost/income/profit are built
+  // from the rates on each lot's purchase date and each income operation's
+  // date.
   //
   // A function rather than a ready string so each caller's t() call keeps a
   // literal key at the call site (scripts/check-i18n.mjs can only verify

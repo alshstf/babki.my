@@ -78,6 +78,20 @@ export function PositionsTable({
   // which is what the default MoneyCell wording says. Resolved once here and
   // handed to every cell rather than per cell.
   const notConvertedTitle = t("positions.notConverted");
+  // Only the market value is converted at today's rate, so only it keeps
+  // MoneyCell's default "converted at the current rate (on <date>)" wording.
+  // The ruble basis is built lot by lot at each purchase date's rate and
+  // income operation by operation at each operation date's rate, so those
+  // cells say which historical rates stand behind them instead.
+  //
+  // The date argument MoneyCell offers is deliberately ignored here:
+  // in_base.rate_on is the rate date of the market VALUATION (that is what
+  // the API contract says it is) and describes none of these three figures —
+  // printing it under them would name a date that had no part in the number
+  // above it.
+  const costConvertedTitle = () => t("positions.convertedAtPurchaseRates");
+  const incomeConvertedTitle = () => t("positions.convertedAtIncomeRates");
+  const profitConvertedTitle = () => t("positions.convertedProfitMixed");
   return (
     <Table>
       <TableHeader>
@@ -150,6 +164,21 @@ export function PositionsTable({
             resolvedUnrealized && resolvedUnrealized.currency === resolvedCost.currency
               ? unrealizedPercent(resolvedUnrealized.amountMinor, resolvedCost.amountMinor)
               : null;
+          // A bare "+10,0 %" means a different thing per mode: in the
+          // position's own currency it is the instrument's move alone, in the
+          // base currency it carries the fx move too, so one position can
+          // honestly read +10 % in one mode and -45 % in the other. Naming
+          // the currency is what makes those two answers legible as answers
+          // to different questions rather than as a discrepancy.
+          //
+          // The currency named is the one the ratio was actually computed in
+          // (resolvedCost's — the guard above already proved the profit's
+          // equal to it), not the one the mode asked for: in base mode with
+          // no fx rate both figures stay native, and the label has to follow
+          // the numbers.
+          const unrealizedPctTitle = t("positions.profitPercentIn", {
+            currency: resolvedCost.currency,
+          });
           return (
             <TableRow
               key={position.instrument.id}
@@ -180,6 +209,7 @@ export function PositionsTable({
                 <MoneyCell
                   resolved={resolvedCost}
                   notConvertedTitle={notConvertedTitle}
+                  convertedTitle={costConvertedTitle}
                   testId="position-cost"
                 />
               </TableCell>
@@ -217,12 +247,14 @@ export function PositionsTable({
                       resolved={resolvedUnrealized}
                       className={signClass(resolvedUnrealized.amountMinor)}
                       notConvertedTitle={notConvertedTitle}
+                      convertedTitle={profitConvertedTitle}
                       testId="position-profit-amount"
                     />
                     {unrealizedPct && (
                       <div
                         data-testid="position-profit-percent"
                         className="text-xs font-normal text-muted-foreground"
+                        title={unrealizedPctTitle}
                       >
                         {unrealizedPct}
                       </div>
@@ -242,6 +274,7 @@ export function PositionsTable({
                 <MoneyCell
                   resolved={resolvedIncome}
                   notConvertedTitle={notConvertedTitle}
+                  convertedTitle={incomeConvertedTitle}
                   testId="position-income"
                 />
               </TableCell>

@@ -523,7 +523,7 @@ export interface components {
             source: string;
             /** Format: date-time */
             created_at: string;
-            /** @description amount_minor and fee_minor converted into the space's base currency at the fx rate in effect on occurred_on — the rate of the day the operation happened, NOT today's. This is the deliberate difference from AccountWithBalance.balance_in_base and Position.in_base, which answer "what is this worth now"; the journal answers "what did this cost then". Each amount is converted and rounded independently. Null when `currency` already equals the base currency (nothing to convert), or when no fx rate could be resolved for occurred_on nor any earlier date — a partially converted operation is never published. Computed only for the journal listing (GET /accounts/{accountId}/operations); create and transfer responses omit the field entirely, since those return an operation the client just submitted rather than a journal to read. An absent field and an explicit null mean the same thing to a reader: there is nothing converted to show. */
+            /** @description amount_minor and fee_minor converted into the space's base currency at the fx rate in effect on occurred_on — the rate of the day the operation happened, NOT today's. This is the deliberate difference from AccountWithBalance.balance_in_base, which answers "what is this worth now"; the journal answers "what did this cost then". Position.in_base sits between the two: its cost_minor and income_minor follow the same historical rule as this field (each lot at the rate of its acquisition date, each payment at the rate of its own), while only its market_value_minor is a current valuation. Each amount is converted and rounded independently. Null when `currency` already equals the base currency (nothing to convert), or when no fx rate could be resolved for occurred_on nor any earlier date — a partially converted operation is never published. Computed only for the journal listing (GET /accounts/{accountId}/operations); create and transfer responses omit the field entirely, since those return an operation the client just submitted rather than a journal to read. An absent field and an explicit null mean the same thing to a reader: there is nothing converted to show. */
             in_base?: components["schemas"]["OperationInBase"] | null;
         };
         OperationInBase: {
@@ -622,33 +622,33 @@ export interface components {
              * @description market_value_minor minus cost_minor, i.e. the position's unrealized profit or loss; both are already in the same currency (market_value_minor is converted into the position's currency when needed, see above), so this is a plain integer subtraction. Null when there is no market_value_minor, or when market_value_currency still differs from currency (a conversion was needed but no fx rate was available).
              */
             unrealized_pnl_minor?: number | null;
-            /** @description cost_minor/market_value_minor/unrealized_pnl_minor/income_minor converted from the position's own `currency` into the space's base currency at today's fx rate, each amount rounded independently (not derived from one another). Null when `currency` already equals the base currency (nothing to convert) or no fx rate could be resolved for the pair — a partially converted position is never published. Inside the object, market_value_minor and unrealized_pnl_minor can still be null on their own when the valuation isn't in the position's currency (see their descriptions). fees_minor and realized_pnl_minor are intentionally not carried into this object (owner feedback). */
+            /** @description The position's amounts in the space's base currency, each valued at the fx rate that answers its own question: cost_minor sums the FIFO lots still held, every lot converted at the rate of the day IT was acquired; income_minor sums the income operations, each at the rate of the day it occurred; market_value_minor uses TODAY's rate, because that is what the holding is worth now; unrealized_pnl_minor is the difference of those last two. Base-currency profit therefore INCLUDES the currency's own move against the base currency, and may differ from the position-currency profit in magnitude and even in sign — that is the intended answer, not a rounding artefact. Null when `currency` already equals the base currency (nothing to convert) or any single rate the object needs is missing (today's, one lot's, one income operation's) — a partially converted position is never published. Inside the object, market_value_minor and unrealized_pnl_minor can still be null on their own when the valuation isn't in the position's currency (see their descriptions). fees_minor and realized_pnl_minor are intentionally not carried into this object (owner feedback). */
             in_base?: components["schemas"]["PositionInBase"] | null;
         };
         PositionInBase: {
             /**
              * Format: int64
-             * @description Position.cost_minor converted into currency
+             * @description Remaining cost basis in currency: every FIFO lot still held, converted at the fx rate of ITS OWN acquisition date, summed as decimals and rounded once at the end. Deliberately NOT Position.cost_minor times today's rate — that would price the basis as if everything had been bought today and would strip the currency's move out of unrealized_pnl_minor below
              */
             cost_minor: number;
             /**
              * Format: int64
-             * @description Position.market_value_minor converted into currency, never fabricated. Null when Position.market_value_minor itself is null (no usable quote), AND null whenever market_value_currency differs from the position's own currency: the single rate used for this object converts the position's currency into the base currency, so a valuation still denominated in some other currency (a bond's face_currency, when no rate could bring it into the position's currency) cannot be expressed here — publishing it multiplied by the wrong pair's rate would be a silently wrong number
+             * @description Position.market_value_minor converted into currency at TODAY's fx rate — the one figure in this object that is current rather than historical, since it answers what the holding is worth now. Never fabricated: null when Position.market_value_minor itself is null (no usable quote), AND null whenever market_value_currency differs from the position's own currency, because the rate applied here converts the position's currency into the base currency and a valuation still denominated in some other currency (a bond's face_currency, when no rate could bring it into the position's currency) would then be multiplied by the wrong pair's rate — a silently wrong number
              */
             market_value_minor?: number | null;
             /**
              * Format: int64
-             * @description Position.unrealized_pnl_minor converted into currency; null exactly when Position.unrealized_pnl_minor itself is null, which covers every case where market_value_minor above is null — the P&L is derived from the valuation and cannot outlive it
+             * @description market_value_minor minus cost_minor. Both are already in currency, so this is exact integer subtraction and nothing is rounded a second time. Since the basis is historical and the valuation is current, this INCLUDES the fx revaluation of the position: it is NOT Position.unrealized_pnl_minor times a rate, and a holding can be in profit in its own currency while at a loss in the base currency (or the reverse). Null exactly when market_value_minor above is null — the P&L is derived from the valuation and cannot outlive it
              */
             unrealized_pnl_minor?: number | null;
             /**
              * Format: int64
-             * @description Position.income_minor converted into currency
+             * @description Income in currency: every income operation of the position (dividend, coupon, tax) converted at the fx rate of the date it occurred, summed as decimals and rounded once at the end — not Position.income_minor times today's rate
              */
             income_minor: number;
             /** @description The space's base currency (ISO-4217), same as Summary.base_currency */
             currency: string;
-            /** @description Date YYYY-MM-DD of the fx rate actually used for this conversion */
+            /** @description Date YYYY-MM-DD of the fx rate behind market_value_minor: today's rate, or the nearest earlier date the rate table actually holds. It does NOT describe cost_minor or income_minor — those use one rate per lot and per operation date, so no single date could name them */
             rate_on: string;
         };
         PositionsResponse: {

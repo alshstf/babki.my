@@ -48,7 +48,10 @@ type quoteStore interface {
 // different currency than the position (see toAPI) into the position's own
 // currency, plus Rate, used to convert a whole position's amounts into the
 // space's base currency (see positionInBase) while resolving the underlying
-// rate at most once per currency per request. Local interface (mirroring
+// rate at most once per (currency, date) pair per request — each lot and
+// each income operation is valued at the rate of its own date, so the same
+// currency can need several different rates within one request (see
+// rateKey). Local interface (mirroring
 // journalStore/quoteStore) so tests can inject a fake in place of a real
 // *marketdata.Converter to control exactly which currency pairs have a
 // resolvable rate, including forcing marketdata.ErrNoRate —
@@ -267,110 +270,239 @@ func nullableValue[T any](n nullable.Nullable[T]) *T {
 	return &v
 }
 
-// rateLookup memoizes one currency's resolved fx rate (and the date it came
-// from, or the resolution error) so handleList's per-position conversion
-// loop below hits the fx rate store at most once per distinct position
-// currency, not once per position. Mirrors account.Handler's identically
-// named type/pattern exactly (see its doc comment for the full rationale) —
-// there are two copies rather than one shared type because journalStore and
-// converter are already local, unexported interfaces per package, and this
-// type is just as small.
+// rateKey identifies one memoized fx rate lookup: a currency AND the date its
+// rate must come from. The date belongs in the key because this handler no
+// longer converts everything at today's rate — each lot is valued at the rate
+// of the day it was acquired and each income operation at the rate of the day
+// it occurred (see positionInBase) — so a cache keyed by currency alone would
+// serve the first date's rate for every later date, producing wrong numbers
+// that look entirely plausible on screen. Copied from operation.rateKey,
+// which keys the journal's per-operation conversions the same way and for the
+// same reason.
+//
+// The date is held as its YYYY-MM-DD string rather than a time.Time so the
+// key compares the calendar date itself, immune to two otherwise-equal
+// time.Time values differing in monotonic clock reading or *time.Location
+// pointer (which would merely cost extra lookups, but would do so invisibly).
+//
+// The target currency is not part of the key: one request converts everything
+// into one base currency, and the cache never outlives the request.
+type rateKey struct {
+	currency string
+	on       string
+}
+
+// rateLookup memoizes one (currency, date) pair's resolved fx rate — the rate
+// itself, the date it actually came from, and the resolution error — so a
+// request hits the fx rate store at most once per distinct pair. A position
+// with many lots usually has few distinct purchase dates, and positions
+// sharing a currency share every lookup; "today" is one pair for the whole
+// request. Mirrors account's and operation's identically named type.
 type rateLookup struct {
 	rate decimal.Decimal
 	date time.Time
 	err  error
 }
 
-// positionInBase converts a position's cost_minor, market_value_minor (when
-// publishable, see below), unrealized_pnl_minor (likewise), and income_minor
-// from the position's own currency (p.Currency) into baseCurrency, using
-// cache to memoize the underlying marketdata.Converter.Rate lookup across
-// positions that share a currency within a single handleList request — see
-// rateLookup. The amounts are read off apiPos, the position's
-// already-computed API representation (see toAPI), never recomputed here.
+// datedMinor is one amount denominated in the position's own currency,
+// together with the date whose fx rate values it: a lot's remaining cost with
+// the day that lot was acquired, an income operation's amount with the day it
+// occurred.
+type datedMinor struct {
+	minor int64
+	on    time.Time
+}
+
+// rateFor resolves from->to on date on, memoized in cache for the rest of the
+// request. The returned rateLookup carries the resolution error rather than
+// returning it, because callers must tell marketdata.ErrNoRate (an expected
+// outcome that nulls in_base) apart from a genuine failure (which fails the
+// request) — see positionInBase.
+func (h *Handler) rateFor(ctx context.Context, from, to string, on time.Time, cache map[rateKey]*rateLookup) *rateLookup {
+	key := rateKey{currency: from, on: on.Format("2006-01-02")}
+	rl, ok := cache[key]
+	if !ok {
+		rate, date, err := h.conv.Rate(ctx, from, to, on)
+		rl = &rateLookup{rate: rate, date: date, err: err}
+		cache[key] = rl
+	}
+	return rl
+}
+
+// sumInBase converts every amount at the fx rate of its OWN date and returns
+// the total in currency to. Every amount is multiplied as a decimal and only
+// the total is rounded, once, half-away-from-zero — the same final step
+// marketdata.Converter.Convert applies to a single amount. Rounding each term
+// instead could drift from the true total by a minor unit per term, and the
+// total is the figure actually published.
 //
-// The single rate this function applies converts p.Currency into
-// baseCurrency, so it may only be applied to amounts actually denominated in
-// p.Currency. cost_minor and income_minor always are. The market valuation
-// is not: when no rate was available to bring it into the position's own
-// currency, toAPI publishes it raw, in market_value_currency (a bond's
-// face_currency, say EUR, on a USD position). Multiplying that EUR figure by
-// the USD->RUB rate and labeling the product "RUB" would be a silently wrong
-// number — and, since it equals the converted cost whenever cost and
-// valuation coincide, would read as "profit exactly zero". So
+// ok is false when at least one date has no rate at all
+// (marketdata.ErrNoRate): the caller must then publish nothing rather than a
+// total quietly missing one of its terms. err is reserved for genuine
+// failures (DB error, canceled context), which must fail the request instead.
+func (h *Handler) sumInBase(ctx context.Context, amounts []datedMinor, from, to string, cache map[rateKey]*rateLookup) (minor int64, ok bool, err error) {
+	total := decimal.Zero
+	for _, a := range amounts {
+		rl := h.rateFor(ctx, from, to, a.on, cache)
+		if rl.err != nil {
+			if errors.Is(rl.err, marketdata.ErrNoRate) {
+				return 0, false, nil
+			}
+			return 0, false, rl.err
+		}
+		total = total.Add(decimal.NewFromInt(a.minor).Mul(rl.rate))
+	}
+	return total.Round(0).IntPart(), true, nil
+}
+
+// incomeByInstrument groups the journal's instrument-attributed income
+// operations by instrument, so each position's income can be converted
+// payment by payment at each payment's own rate — Position.IncomeMinor is a
+// single total that has already lost the dates and could only ever be
+// converted at one of them.
+//
+// The type list must stay in lockstep with the engine's own notion of income
+// (Compute: dividend and coupon add to IncomeMinor, tax subtracts from it via
+// its negative amount; entries without an instrument are cash-level and never
+// reach a position). The sum of each group therefore equals that position's
+// IncomeMinor exactly, and TestPositionInBaseIncomeUsesEachOperationsOwnRate
+// exercises all three types, so a list that drifts from the engine's fails
+// there instead of silently publishing a base income smaller than the income
+// the same row reports in its own currency.
+func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
+	out := make(map[uuid.UUID][]Operation)
+	for _, o := range ops {
+		if o.InstrumentID == nil {
+			continue
+		}
+		switch o.Type {
+		case TypeDividend, TypeCoupon, TypeTax:
+			out[*o.InstrumentID] = append(out[*o.InstrumentID], o)
+		}
+	}
+	return out
+}
+
+// positionInBase expresses a position's cost, market value, unrealized P&L
+// and income in baseCurrency. Every amount is valued at the fx rate that
+// answers its own question, which is the whole point of this function:
+//
+//   - cost_minor sums the FIFO lots still held (p.Lots), each converted at the
+//     rate of the day THAT lot was acquired. It is deliberately not
+//     p.CostMinor times today's rate: that would price the basis as if the
+//     whole position had been bought this morning — a question nobody asks —
+//     and, by applying one rate to both sides of the subtraction below, would
+//     cancel the currency's own move straight out of the profit, leaving
+//     base-currency profit as nothing but position-currency profit times a
+//     rate.
+//   - income_minor sums the position's income operations, each at the rate of
+//     the day it occurred (income, unlike the lots, is passed in: see
+//     incomeByInstrument).
+//   - market_value_minor uses TODAY's rate. It is the one current figure here,
+//     because "what is this holding worth" is a question about now.
+//   - unrealized_pnl_minor is that valuation minus that basis, both already in
+//     baseCurrency, so it is exact integer subtraction with no second
+//     rounding. Base-currency profit therefore INCLUDES the currency's
+//     revaluation, and can differ from the position-currency profit in size
+//     and even in sign — the owner's decision (2026-07-29): the two are honest
+//     answers to two different questions, and the interface is what explains
+//     which is which.
+//
+// fees_minor and realized_pnl_minor are deliberately excluded (owner feedback
+// — not carried into PositionInBase at all, see the API contract).
+//
+// Only a valuation denominated in the position's own currency may be
+// converted with the position's own rate. cost and income always are. The
+// market valuation is not: when no rate was available to bring it into the
+// position's currency, toAPI publishes it raw, in market_value_currency (a
+// bond's face_currency, say EUR, on a USD position). Multiplying that EUR
+// figure by the USD->RUB rate and labeling the product "RUB" would be a
+// silently wrong number — and, since it equals the converted cost whenever
+// cost and valuation coincide, would read as "profit exactly zero". So
 // market_value_minor is published in_base only when market_value_currency
-// equals p.Currency, and unrealized_pnl_minor follows it (it is that
-// valuation minus cost, and toAPI already leaves it null in exactly this
-// case). Null here is honest: the frontend falls back to showing the raw
-// amount in its own currency with a "not converted" marker.
-//
-// Each amount is converted and rounded independently
-// (decimal.Mul(rl.rate).Round(0), the exact step marketdata.Converter.Convert
-// itself uses) rather than derived from one another via a shared sum: cost,
-// market value, unrealized P&L and income are four independent figures, not
-// terms of one total, so rounding a combined sum once would not reproduce
-// this and could drift by a minor unit from converting each figure on its
-// own. fees_minor and realized_pnl_minor are deliberately excluded (owner
-// feedback — not carried into PositionInBase at all, see the API contract).
+// equals p.Currency, and unrealized_pnl_minor follows it. Null there is
+// honest: the frontend falls back to showing the raw amount in its own
+// currency with a "not converted" marker.
 //
 // It returns (nil, nil) — render in_base as null, the WHOLE object, never
-// partially populated — in exactly two cases: p.Currency already equals
-// baseCurrency (nothing to convert), or no fx rate could be resolved for the
-// pair (marketdata.ErrNoRate). This differs from market_value_minor/
-// unrealized_pnl_minor inside the returned object, which are null when there
-// is no usable quote or the valuation isn't in p.Currency — that nulls just
-// those two figures, whereas a missing rate nulls the entire conversion,
-// since a partially converted position (e.g. cost converted but income
-// silently left in the wrong currency) is worse than an honest "can't
-// convert this position at all".
+// partially populated — when p.Currency already equals baseCurrency (nothing
+// to convert), or when any single rate the object needs is missing
+// (marketdata.ErrNoRate): today's, one lot's, or one income operation's. A
+// basis summed from only the lots that happened to convert is an invented
+// number, smaller than the truth and indistinguishable from a real one on
+// screen; it would drag the P&L along with it. This differs from
+// market_value_minor/unrealized_pnl_minor inside the returned object, which
+// are null when there is no usable quote or the valuation isn't in
+// p.Currency — that nulls just those two figures.
 //
 // A non-nil error means a genuine failure (DB error, canceled context) that
 // the caller must surface as a request error — never silently rendered as
 // null, which would misrepresent an outage as "nothing to convert".
-func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, baseCurrency string, cache map[string]*rateLookup) (*apitypes.PositionInBase, error) {
+func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, income []Operation, baseCurrency string, cache map[rateKey]*rateLookup) (*apitypes.PositionInBase, error) {
 	if p.Currency == baseCurrency {
 		return nil, nil
 	}
-	rl, ok := cache[p.Currency]
-	if !ok {
-		rate, date, err := h.conv.Rate(ctx, p.Currency, baseCurrency, time.Now().UTC())
-		rl = &rateLookup{rate: rate, date: date, err: err}
-		cache[p.Currency] = rl
-	}
-	if rl.err != nil {
-		if errors.Is(rl.err, marketdata.ErrNoRate) {
+
+	// Today's rate values the market valuation and supplies rate_on, so
+	// without it there is no object to publish at all.
+	today := h.rateFor(ctx, p.Currency, baseCurrency, time.Now().UTC(), cache)
+	if today.err != nil {
+		if errors.Is(today.err, marketdata.ErrNoRate) {
 			return nil, nil
 		}
-		return nil, rl.err
+		return nil, today.err
 	}
 
-	// Only a valuation denominated in the position's own currency may be
-	// converted with this rate — see the doc comment above.
-	marketValueMinor := nullableValue(apiPos.MarketValueMinor)
-	unrealizedPnlMinor := nullableValue(apiPos.UnrealizedPnlMinor)
-	if c := nullableValue(apiPos.MarketValueCurrency); c == nil || *c != p.Currency {
-		marketValueMinor, unrealizedPnlMinor = nil, nil
+	lots := make([]datedMinor, 0, len(p.Lots))
+	for _, l := range p.Lots {
+		lots = append(lots, datedMinor{minor: l.CostMinor, on: l.AcquiredOn})
+	}
+	costMinor, ok, err := h.sumInBase(ctx, lots, p.Currency, baseCurrency, cache)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
 	}
 
-	convert := func(minor int64) int64 {
-		return decimal.NewFromInt(minor).Mul(rl.rate).Round(0).IntPart()
+	payments := make([]datedMinor, 0, len(income))
+	for _, o := range income {
+		payments = append(payments, datedMinor{minor: o.AmountMinor, on: o.OccurredOn})
 	}
+	incomeMinor, ok, err := h.sumInBase(ctx, payments, p.Currency, baseCurrency, cache)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+
 	out := &apitypes.PositionInBase{
-		CostMinor:   convert(p.CostMinor),
-		IncomeMinor: convert(p.IncomeMinor),
+		CostMinor:   costMinor,
+		IncomeMinor: incomeMinor,
 		Currency:    baseCurrency,
-		RateOn:      rl.date.Format("2006-01-02"),
+		// rate_on names the rate behind market_value_minor only: the basis and
+		// the income are each valued at several rates of their own dates, so no
+		// single date could describe them. Today's rate is the one date that is
+		// both unambiguous and worth disclosing — it is how fresh the "what is
+		// it worth now" figure is, and per Store.FxRateOn it can be older than
+		// today whenever the rate table is stale. The historical nature of the
+		// basis is explained in the interface instead (see the API contract).
+		RateOn: today.date.Format("2006-01-02"),
 	}
-	if marketValueMinor != nil {
-		out.MarketValueMinor = nullable.NewNullableWithValue(convert(*marketValueMinor))
-	} else {
+
+	marketValueMinor := nullableValue(apiPos.MarketValueMinor)
+	if c := nullableValue(apiPos.MarketValueCurrency); c == nil || *c != p.Currency {
+		marketValueMinor = nil
+	}
+	if marketValueMinor == nil {
 		out.MarketValueMinor = nullable.NewNullNullable[int64]()
-	}
-	if unrealizedPnlMinor != nil {
-		out.UnrealizedPnlMinor = nullable.NewNullableWithValue(convert(*unrealizedPnlMinor))
-	} else {
 		out.UnrealizedPnlMinor = nullable.NewNullNullable[int64]()
+		return out, nil
 	}
+	valuation := decimal.NewFromInt(*marketValueMinor).Mul(today.rate).Round(0).IntPart()
+	out.MarketValueMinor = nullable.NewNullableWithValue(valuation)
+	out.UnrealizedPnlMinor = nullable.NewNullableWithValue(valuation - costMinor)
 	return out, nil
 }
 
@@ -428,8 +560,11 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Scoped to this request only: see positionInBase/rateLookup.
-	rates := make(map[string]*rateLookup)
+	// Both scoped to this request only: see positionInBase/rateKey and
+	// incomeByInstrument. The journal is already in hand, so grouping its
+	// income entries costs one pass and no extra round trip.
+	rates := make(map[rateKey]*rateLookup)
+	income := incomeByInstrument(ops)
 	out := make([]apitypes.Position, 0, len(positions))
 	for _, pos := range positions {
 		inst, err := h.instruments.ByID(r.Context(), pos.InstrumentID)
@@ -443,7 +578,7 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		inBase, err := h.positionInBase(r.Context(), pos, apiPos, sp.BaseCurrency, rates)
+		inBase, err := h.positionInBase(r.Context(), pos, apiPos, income[pos.InstrumentID], sp.BaseCurrency, rates)
 		if err != nil {
 			family.WriteError(w, err)
 			return
