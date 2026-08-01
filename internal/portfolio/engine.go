@@ -27,6 +27,7 @@ package portfolio
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -39,9 +40,17 @@ var (
 	ErrBadOperation = errors.New("invalid operation")
 )
 
-type lot struct {
-	quantity  decimal.Decimal
-	costMinor int64
+// Lot is one acquisition that is still (partly) held: the quantity left of
+// it, the cost basis still attributed to that quantity, and the day it was
+// acquired. AcquiredOn is what lets a caller value each lot at the exchange
+// rate of its own purchase date instead of one rate for the whole position;
+// for a lot created by a transfer_in it is the transfer's date, because the
+// carried basis is a snapshot that does not preserve the original dates
+// (see the package doc).
+type Lot struct {
+	Quantity   decimal.Decimal
+	CostMinor  int64
+	AcquiredOn time.Time
 }
 
 // Position is the running state of one instrument within one account.
@@ -55,7 +64,10 @@ type Position struct {
 	RealizedPnLMinor int64
 	IncomeMinor      int64 // dividends + coupons − instrument-attributed taxes
 	FeesMinor        int64
-	lots             []lot
+	// Lots are the acquisitions still held, oldest first (FIFO order).
+	// Their quantities sum to Quantity and their costs sum to CostMinor
+	// exactly; a closed position has none.
+	Lots []Lot
 }
 
 func badOp(o Operation, msg string) error {
@@ -73,18 +85,20 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) (int64, error) {
 	var released int64
 	remaining := qty
 	for remaining.IsPositive() {
-		l := &p.lots[0]
-		if l.quantity.LessThanOrEqual(remaining) {
-			released += l.costMinor
-			remaining = remaining.Sub(l.quantity)
-			p.lots = p.lots[1:]
+		l := &p.Lots[0]
+		if l.Quantity.LessThanOrEqual(remaining) {
+			released += l.CostMinor
+			remaining = remaining.Sub(l.Quantity)
+			p.Lots = p.Lots[1:]
 			continue
 		}
-		// partial piece: floor share, remainder stays in the lot
-		share := decimal.NewFromInt(l.costMinor).
-			Mul(remaining).Div(l.quantity).Floor().IntPart()
-		l.costMinor -= share
-		l.quantity = l.quantity.Sub(remaining)
+		// partial piece: floor share, remainder stays in the lot together
+		// with its acquisition date — what is left was bought on the same
+		// day as the part just released.
+		share := decimal.NewFromInt(l.CostMinor).
+			Mul(remaining).Div(l.Quantity).Floor().IntPart()
+		l.CostMinor -= share
+		l.Quantity = l.Quantity.Sub(remaining)
 		released += share
 		remaining = decimal.Zero
 	}
@@ -93,8 +107,8 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) (int64, error) {
 	return released, nil
 }
 
-func (p *Position) addLot(qty decimal.Decimal, costMinor int64) {
-	p.lots = append(p.lots, lot{quantity: qty, costMinor: costMinor})
+func (p *Position) addLot(qty decimal.Decimal, costMinor int64, acquiredOn time.Time) {
+	p.Lots = append(p.Lots, Lot{Quantity: qty, CostMinor: costMinor, AcquiredOn: acquiredOn})
 	p.Quantity = p.Quantity.Add(qty)
 	p.CostMinor += costMinor
 }
@@ -154,7 +168,7 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			if o.AmountMinor >= 0 {
 				return nil, badOp(o, "buy amount must be negative")
 			}
-			p.addLot(*o.Quantity, -o.AmountMinor+o.FeeMinor)
+			p.addLot(*o.Quantity, -o.AmountMinor+o.FeeMinor, o.OccurredOn)
 			p.FeesMinor += o.FeeMinor
 		case TypeSell:
 			if o.AmountMinor <= 0 {
@@ -192,11 +206,15 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			if o.AmountMinor < 0 {
 				return nil, badOp(o, "transfer_in amount (cost basis) must be >= 0")
 			}
-			p.addLot(*o.Quantity, o.AmountMinor)
+			// the carried basis is a snapshot without the source lots'
+			// dates, so the transfer date is the best available answer
+			p.addLot(*o.Quantity, o.AmountMinor, o.OccurredOn)
 		case TypeSplit:
 			ratio := *o.SplitRatio
-			for i := range p.lots {
-				p.lots[i].quantity = p.lots[i].quantity.Mul(ratio)
+			// a split rewrites quantities only: neither the cost basis of a
+			// lot nor the day it was acquired changes
+			for i := range p.Lots {
+				p.Lots[i].Quantity = p.Lots[i].Quantity.Mul(ratio)
 			}
 			p.Quantity = p.Quantity.Mul(ratio)
 		default:
@@ -209,12 +227,12 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 // drainLotsCost subtracts amount from lot costs front-to-back (amortization
 // keeps quantities intact; only the cost basis shrinks).
 func drainLotsCost(p *Position, amount int64) {
-	for i := range p.lots {
+	for i := range p.Lots {
 		if amount == 0 {
 			return
 		}
-		take := min(amount, p.lots[i].costMinor)
-		p.lots[i].costMinor -= take
+		take := min(amount, p.Lots[i].CostMinor)
+		p.Lots[i].CostMinor -= take
 		amount -= take
 	}
 }
