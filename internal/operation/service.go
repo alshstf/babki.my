@@ -256,7 +256,12 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 	}
 
 	cost := int64(0)
+	var lots []ReleasedLot
 	if p.CostMinorOverride != nil {
+		// A basis given by hand is not a release of anything: there are no
+		// source lots behind it and therefore no acquisition dates to carry.
+		// The destination lot keeps the transfer's own date, as before —
+		// inventing pieces here would fabricate history.
 		cost = *p.CostMinorOverride
 		if cost < 0 || cost > maxAmountMinor {
 			return Operation{}, Operation{}, fmt.Errorf("%w: cost_minor must be within 0..%d", family.ErrValidation, maxAmountMinor)
@@ -270,10 +275,16 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 		// mint cost out of thin air. Same-date operations count as preceding,
 		// matching checkJournalOps, where the candidate sorts last within its
 		// own date.
-		cost, err = portfolio.ReleasedCost(journalUpTo(sourceJournal, p.OccurredOn), p.InstrumentID, p.Quantity)
+		//
+		// The pieces are taken, not just their total: the destination needs
+		// the day each one was bought to value it at that day's exchange
+		// rate. The carried basis is then the sum of these very pieces — it
+		// is never computed a second way, so the two cannot drift apart.
+		lots, err = portfolio.ReleasedLots(journalUpTo(sourceJournal, p.OccurredOn), p.InstrumentID, p.Quantity)
 		if err != nil {
 			return Operation{}, Operation{}, fmt.Errorf("%w: %v", ErrInconsistent, err)
 		}
+		cost = portfolio.LotsCost(lots)
 	}
 
 	outOp := Operation{
@@ -285,6 +296,10 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 		AccountID: p.ToAccountID, InstrumentID: &p.InstrumentID, Type: TypeTransferIn,
 		OccurredOn: p.OccurredOn, Quantity: &p.Quantity, AmountMinor: cost,
 		Currency: currency, Note: p.Note,
+		// The breakdown rides on the arriving leg: its account is the one
+		// that would otherwise lose the acquisition dates. CreatePair writes
+		// it in the same transaction as the pair itself.
+		TransferLots: lots,
 	}
 
 	// The two legs touch different accounts' journals, so each is checked

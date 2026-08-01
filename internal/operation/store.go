@@ -57,8 +57,18 @@ func (s *Store) Create(ctx context.Context, spaceID uuid.UUID, op Operation) (Op
 	return insertOne(ctx, s.pool, spaceID, op)
 }
 
+// insertLotSQL writes one piece of a transfer's FIFO breakdown. seq keeps
+// the pieces in the FIFO order they were released in; the table's foreign
+// key removes them with the operation they describe.
+const insertLotSQL = `
+	INSERT INTO operation_transfer_lots (operation_id, seq, quantity, cost_minor, acquired_on)
+	VALUES ($1, $2, $3, $4, $5)`
+
 // CreatePair inserts a transfer_out/transfer_in pair atomically with a
-// shared transfer_group_id.
+// shared transfer_group_id, together with the FIFO breakdown carried on the
+// receiving leg (in.TransferLots). All of it lands in one transaction: a
+// transfer_in that lost its breakdown would silently re-date every moved lot
+// to the transfer day, which is exactly the loss this records against.
 func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Operation) (Operation, Operation, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -78,6 +88,13 @@ func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Opera
 	if err != nil {
 		return Operation{}, Operation{}, fmt.Errorf("transfer in: %w", err)
 	}
+	for i, lot := range in.TransferLots {
+		if _, err := tx.Exec(ctx, insertLotSQL,
+			cIn.ID, i, lot.Quantity, lot.CostMinor, lot.AcquiredOn); err != nil {
+			return Operation{}, Operation{}, fmt.Errorf("transfer lot %d: %w", i, err)
+		}
+	}
+	cIn.TransferLots = in.TransferLots
 	return cOut, cIn, tx.Commit(ctx)
 }
 
@@ -105,11 +122,58 @@ func (s *Store) ListByAccount(ctx context.Context, spaceID, accountID uuid.UUID,
 		spaceID, accountID, limit, offset)
 }
 
-// ListForEngine returns the account's full journal in engine order.
+// ListForEngine returns the account's full journal in engine order, with the
+// FIFO breakdown attached to the transfers that have one. The breakdown is
+// journal data the engine needs (it dates the lots a transfer brought in);
+// the read paths that feed the API deliberately do not carry it.
 func (s *Store) ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]Operation, error) {
-	return s.list(ctx, `SELECT `+cols+` FROM operations
+	ops, err := s.list(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND account_id = $2
 		ORDER BY occurred_on ASC, created_at ASC`, spaceID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.attachTransferLots(ctx, spaceID, accountID, ops); err != nil {
+		return nil, err
+	}
+	return ops, nil
+}
+
+// attachTransferLots fills TransferLots on the account's operations. It is a
+// separate query rather than a join onto the journal so that an operation
+// with several pieces stays a single journal entry. Anything without stored
+// pieces keeps an empty list: every non-transfer, a transfer whose basis was
+// given by hand, and a transfer recorded before the breakdown was kept.
+func (s *Store) attachTransferLots(ctx context.Context, spaceID, accountID uuid.UUID, ops []Operation) error {
+	if len(ops) == 0 {
+		return nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT l.operation_id, l.quantity, l.cost_minor, l.acquired_on
+		FROM operation_transfer_lots l
+		JOIN operations o ON o.id = l.operation_id
+		WHERE o.space_id = $1 AND o.account_id = $2
+		ORDER BY l.operation_id, l.seq`, spaceID, accountID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byOperation := make(map[uuid.UUID][]ReleasedLot)
+	for rows.Next() {
+		var id uuid.UUID
+		var lot ReleasedLot
+		if err := rows.Scan(&id, &lot.Quantity, &lot.CostMinor, &lot.AcquiredOn); err != nil {
+			return err
+		}
+		byOperation[id] = append(byOperation[id], lot)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range ops {
+		ops[i].TransferLots = byOperation[ops[i].ID]
+	}
+	return nil
 }
 
 func (s *Store) ByID(ctx context.Context, spaceID, id uuid.UUID) (Operation, error) {

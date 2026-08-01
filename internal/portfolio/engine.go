@@ -125,9 +125,11 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) ([]ReleasedLot, error) {
 	return pieces, nil
 }
 
-// releasedCost sums the pieces' costs — the one number most callers of
-// releaseFIFO actually need.
-func releasedCost(pieces []ReleasedLot) int64 {
+// LotsCost sums the pieces' costs — the one number most callers of a FIFO
+// release actually need. It is exported so a caller that already holds the
+// breakdown (see ReleasedLots) derives the total from those very pieces
+// instead of computing the same quantity a second, independent way.
+func LotsCost(pieces []ReleasedLot) int64 {
 	var total int64
 	for _, pc := range pieces {
 		total += pc.CostMinor
@@ -206,7 +208,7 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 			}
-			p.RealizedPnLMinor += o.AmountMinor - releasedCost(pieces) - o.FeeMinor
+			p.RealizedPnLMinor += o.AmountMinor - LotsCost(pieces) - o.FeeMinor
 			p.FeesMinor += o.FeeMinor
 		case TypeDividend, TypeCoupon:
 			p.IncomeMinor += o.AmountMinor
@@ -295,5 +297,5 @@ func ReleasedCost(ops []Operation, instrumentID uuid.UUID, qty decimal.Decimal) 
 	if err != nil {
 		return 0, err
 	}
-	return releasedCost(pieces), nil
+	return LotsCost(pieces), nil
 }
