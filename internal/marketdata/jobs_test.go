@@ -294,11 +294,16 @@ func (p *recordingHistoryProvider) codesAsked() []string {
 
 // fakeOpStore stands in for the two *operation.Store methods the backfill
 // worker uses, so these tests can set a lower bound and a currency set
-// without building a whole space/account/operation tree.
+// without building a whole space/account/operation tree. err and
+// currenciesErr are independent so a test can make EarliestOccurredOn
+// succeed while DistinctCurrencies fails (or vice versa) — the two are read
+// at different points in Work, and the read-currencies branch must be
+// reachable without the range-start branch tripping first.
 type fakeOpStore struct {
-	earliest   time.Time
-	err        error
-	currencies []string
+	earliest      time.Time
+	err           error
+	currencies    []string
+	currenciesErr error
 }
 
 func (s fakeOpStore) EarliestOccurredOn(context.Context) (time.Time, error) {
@@ -309,20 +314,35 @@ func (s fakeOpStore) EarliestOccurredOn(context.Context) (time.Time, error) {
 }
 
 func (s fakeOpStore) DistinctCurrencies(context.Context) ([]string, error) {
+	if s.currenciesErr != nil {
+		return nil, s.currenciesErr
+	}
 	return s.currencies, nil
 }
 
 // fakeAccountStore stands in for (*account.Store).DistinctCurrencies.
-type fakeAccountStore struct{ currencies []string }
+type fakeAccountStore struct {
+	currencies []string
+	err        error
+}
 
 func (s fakeAccountStore) DistinctCurrencies(context.Context) ([]string, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
 	return s.currencies, nil
 }
 
 // fakeSpaceStore stands in for (*family.Store).DistinctBaseCurrencies.
-type fakeSpaceStore struct{ base []string }
+type fakeSpaceStore struct {
+	base []string
+	err  error
+}
 
 func (s fakeSpaceStore) DistinctBaseCurrencies(context.Context) ([]string, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
 	return s.base, nil
 }
 
@@ -441,6 +461,33 @@ func TestBackfillFx_NoOperationsSkipsProviderEntirely(t *testing.T) {
 	}
 }
 
+// TestBackfillFx_EarliestOperationLookupErrorFailsTheJob covers the read
+// failure at jobs.go's rangeStart that is distinct from "no rows": unlike
+// pgx.ErrNoRows, which means "nothing to fetch" and must not fail the job,
+// any other error means the store could not be read at all and must fail
+// it — otherwise the job goes green while the database silently sat there
+// unreadable.
+func TestBackfillFx_EarliestOperationLookupErrorFailsTheJob(t *testing.T) {
+	store, _, ctx := newBackfillFixture(t)
+
+	wantErr := errors.New("connection reset")
+	provider := &recordingHistoryProvider{ids: cbrIDs}
+	worker := newBackfillWorker(store,
+		fakeOpStore{err: wantErr, currencies: []string{"USD"}},
+		fakeAccountStore{currencies: []string{"USD"}},
+		fakeSpaceStore{base: []string{"RUB"}},
+		provider, slog.Default())
+
+	err := worker.Work(ctx, backfillJob())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Work err = %v, want %v so River retries the job", err, wantErr)
+	}
+	if provider.idCalls != 0 || len(provider.requests) != 0 {
+		t.Fatalf("provider: %d currency-id calls, requests [%s]; want none when the earliest-operation read fails",
+			provider.idCalls, showRequests(provider.requests))
+	}
+}
+
 func TestBackfillFx_OnlyTheQuoteCurrencyInUseSkipsProviderEntirely(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
@@ -498,6 +545,81 @@ func TestBackfillFx_RequestsEveryCurrencyInUseExceptTheQuoteCurrency(t *testing.
 			t.Fatalf("%s was requested under id %q, want the source's own id %q",
 				r.code, r.currencyID, cbrIDs[r.code])
 		}
+	}
+}
+
+// TestBackfillFx_AccountCurrenciesReadErrorFailsTheJob covers the account
+// currency read in wantedCurrencies. A swallowed error here would let the
+// job report success while silently working from an incomplete (or empty)
+// currency set — rates for currencies only ever held in accounts, never
+// mentioned in an operation or a space base, would quietly stop being
+// fetched.
+func TestBackfillFx_AccountCurrenciesReadErrorFailsTheJob(t *testing.T) {
+	store, _, ctx := newBackfillFixture(t)
+
+	wantErr := errors.New("db unreachable")
+	provider := &recordingHistoryProvider{ids: cbrIDs}
+	worker := newBackfillWorker(store,
+		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"EUR"}},
+		fakeAccountStore{err: wantErr},
+		fakeSpaceStore{base: []string{"RUB"}},
+		provider, slog.Default())
+
+	err := worker.Work(ctx, backfillJob())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Work err = %v, want %v so River retries the job", err, wantErr)
+	}
+	if provider.idCalls != 0 || len(provider.requests) != 0 {
+		t.Fatalf("provider: %d currency-id calls, requests [%s]; want none when the account currency read fails",
+			provider.idCalls, showRequests(provider.requests))
+	}
+}
+
+// TestBackfillFx_OperationCurrenciesReadErrorFailsTheJob covers the
+// operation currency read in wantedCurrencies — a different call than the
+// EarliestOccurredOn read rangeStart makes, so both must fail the job on
+// their own, independently of one another.
+func TestBackfillFx_OperationCurrenciesReadErrorFailsTheJob(t *testing.T) {
+	store, _, ctx := newBackfillFixture(t)
+
+	wantErr := errors.New("db unreachable")
+	provider := &recordingHistoryProvider{ids: cbrIDs}
+	worker := newBackfillWorker(store,
+		fakeOpStore{earliest: date("2024-01-10"), currenciesErr: wantErr},
+		fakeAccountStore{currencies: []string{"USD"}},
+		fakeSpaceStore{base: []string{"RUB"}},
+		provider, slog.Default())
+
+	err := worker.Work(ctx, backfillJob())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Work err = %v, want %v so River retries the job", err, wantErr)
+	}
+	if provider.idCalls != 0 || len(provider.requests) != 0 {
+		t.Fatalf("provider: %d currency-id calls, requests [%s]; want none when the operation currency read fails",
+			provider.idCalls, showRequests(provider.requests))
+	}
+}
+
+// TestBackfillFx_SpaceBaseCurrenciesReadErrorFailsTheJob covers the space
+// base currency read in wantedCurrencies.
+func TestBackfillFx_SpaceBaseCurrenciesReadErrorFailsTheJob(t *testing.T) {
+	store, _, ctx := newBackfillFixture(t)
+
+	wantErr := errors.New("db unreachable")
+	provider := &recordingHistoryProvider{ids: cbrIDs}
+	worker := newBackfillWorker(store,
+		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"EUR"}},
+		fakeAccountStore{currencies: []string{"USD"}},
+		fakeSpaceStore{err: wantErr},
+		provider, slog.Default())
+
+	err := worker.Work(ctx, backfillJob())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Work err = %v, want %v so River retries the job", err, wantErr)
+	}
+	if provider.idCalls != 0 || len(provider.requests) != 0 {
+		t.Fatalf("provider: %d currency-id calls, requests [%s]; want none when the space base currency read fails",
+			provider.idCalls, showRequests(provider.requests))
 	}
 }
 
@@ -656,6 +778,34 @@ func TestBackfillFx_ProviderErrorFailsTheJobAndKeepsWhatWasStored(t *testing.T) 
 	}
 }
 
+// TestBackfillFx_StoreSaveErrorFailsTheJob covers the write side of a run: a
+// series the provider handed over successfully but the store then fails to
+// persist. Swallowing this would be the worst case for "honesty over
+// silence" — the provider call, and therefore the whole run, would report
+// success while nothing landed in the database at all. The pool is closed
+// ahead of the call to force a real Postgres error out of UpsertFxRates,
+// rather than stubbing the store behind an interface it doesn't otherwise
+// need.
+func TestBackfillFx_StoreSaveErrorFailsTheJob(t *testing.T) {
+	store, pool, ctx := newBackfillFixture(t)
+	pool.Close()
+
+	provider := &recordingHistoryProvider{ids: cbrIDs}
+	worker := newBackfillWorker(store,
+		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"USD"}},
+		fakeAccountStore{},
+		fakeSpaceStore{},
+		provider, slog.Default())
+
+	err := worker.Work(ctx, backfillJob())
+	if err == nil {
+		t.Fatal("Work returned nil, want an error: the pool is closed so the save must fail")
+	}
+	if got := provider.codesAsked(); !slices.Equal(got, []string{"USD"}) {
+		t.Fatalf("asked for %v, want [USD]: the provider call itself must still have gone through", got)
+	}
+}
+
 // TestBackfillFx_RepeatRunRefetchesTheRangeWithoutDuplicatingRows pins the
 // deliberate choice behind dropping the old coverage bookkeeping: a re-run
 // asks for the whole range again (which is what heals any hole an outage
@@ -724,6 +874,38 @@ func TestBackfillFx_FutureDatedOperationDoesNotInvertTheRange(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "future") {
 		t.Fatalf("log does not mention the future-dated operation:\n%s", logs.String())
+	}
+}
+
+// TestBackfillFx_FutureDatedOperationWarnsEvenWhenNoCurrencyToFetch covers an
+// instance where every account and operation is in RUB — wantedCurrencies
+// comes back empty and the run skips the provider entirely — while the
+// earliest operation's date is also corrupted into the future. The data
+// problem exists either way, so the warning must fire regardless of whether
+// there happens to be a currency left to fetch; a check order that lets the
+// empty-currency exit skip it would hide the very mistake the warning exists
+// to surface.
+func TestBackfillFx_FutureDatedOperationWarnsEvenWhenNoCurrencyToFetch(t *testing.T) {
+	store, _, ctx := newBackfillFixture(t)
+
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	provider := &recordingHistoryProvider{ids: cbrIDs}
+	worker := newBackfillWorker(store,
+		fakeOpStore{earliest: pinnedToday.AddDate(0, 0, 30), currencies: []string{"RUB"}},
+		fakeAccountStore{currencies: []string{"RUB"}},
+		fakeSpaceStore{base: []string{"RUB"}},
+		provider, log)
+
+	if err := worker.Work(ctx, backfillJob()); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if provider.idCalls != 0 || len(provider.requests) != 0 {
+		t.Fatalf("provider: %d currency-id calls, requests [%s]; want none when only RUB is in use",
+			provider.idCalls, showRequests(provider.requests))
+	}
+	if !strings.Contains(logs.String(), "future") {
+		t.Fatalf("log does not mention the future-dated operation even though nothing needed fetching:\n%s", logs.String())
 	}
 }
 

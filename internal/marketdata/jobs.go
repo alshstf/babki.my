@@ -249,16 +249,11 @@ func (w *backfillFxWorker) Work(ctx context.Context, _ *river.Job[BackfillFxArgs
 	if err != nil || !wanted {
 		return err
 	}
-	codes, err := w.wantedCurrencies(ctx)
-	if err != nil {
-		return err
-	}
-	if len(codes) == 0 {
-		w.log.Debug("marketdata: nothing but the quote currency is in use, skipping fx backfill",
-			"quote", quoteCurrency)
-		return nil
-	}
 
+	// Checked before the currency set, and so before the early exit below:
+	// a future-dated operation is a data problem in its own right, and must
+	// be logged even on an instance where every account and operation is in
+	// RUB and there ends up being nothing left to fetch.
 	to := utcDay(w.now())
 	if from.After(to) {
 		// Only reachable from an operation dated in the future — a typo, most
@@ -268,6 +263,16 @@ func (w *backfillFxWorker) Work(ctx context.Context, _ *river.Job[BackfillFxArgs
 		w.log.Warn("marketdata: earliest operation is in the future, fetching today only",
 			"earliest_operation", from.Format(time.DateOnly), "today", to.Format(time.DateOnly))
 		from = to
+	}
+
+	codes, err := w.wantedCurrencies(ctx)
+	if err != nil {
+		return err
+	}
+	if len(codes) == 0 {
+		w.log.Debug("marketdata: nothing but the quote currency is in use, skipping fx backfill",
+			"quote", quoteCurrency)
+		return nil
 	}
 
 	ids, err := w.provider.CurrencyIDs(ctx)
