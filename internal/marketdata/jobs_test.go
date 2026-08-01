@@ -248,6 +248,8 @@ type rangeRequest struct {
 type recordingHistoryProvider struct {
 	ids      map[string]string // ISO code -> internal id; absent = not quoted by this source
 	idCalls  int
+	idsErr   error  // failure CurrencyIDs returns; nil means it always succeeds
+	emptyFor string // ISO code whose series comes back with no records at all
 	requests []rangeRequest
 	failFor  string // ISO code whose RatesRange fails
 	err      error  // the failure it returns; nil means never fail
@@ -264,6 +266,9 @@ func (p *recordingHistoryProvider) RatesOn(context.Context, time.Time) ([]market
 
 func (p *recordingHistoryProvider) CurrencyIDs(context.Context) (map[string]string, error) {
 	p.idCalls++
+	if p.idsErr != nil {
+		return nil, p.idsErr
+	}
 	return p.ids, nil
 }
 
@@ -275,6 +280,9 @@ func (p *recordingHistoryProvider) RatesRange(
 	p.requests = append(p.requests, rangeRequest{code: code, currencyID: currencyID, from: from, to: to})
 	if p.err != nil && code == p.failFor {
 		return nil, p.err
+	}
+	if code == p.emptyFor {
+		return nil, nil
 	}
 	return []marketdata.FxRate{
 		{Base: code, Quote: "RUB", On: from, Rate: dec("90.5"), Source: p.Name()},
@@ -693,6 +701,78 @@ func TestBackfillFx_AsksForEachSeriesOnceOverTheWholeRange(t *testing.T) {
 	}
 }
 
+// wantWarned asserts that some logged line carries BOTH level=WARN and the
+// given substring. Matching the substring against the whole buffer cannot
+// tell a Warn from a Debug, so demoting one of these messages — which makes
+// it vanish entirely on a production instance, where the default level is
+// info — would leave such a test green while the operator loses the only
+// signal there is.
+func wantWarned(t *testing.T, logs *bytes.Buffer, substr string) {
+	t.Helper()
+	for line := range strings.SplitSeq(logs.String(), "\n") {
+		if strings.Contains(line, "level=WARN") && strings.Contains(line, substr) {
+			return
+		}
+	}
+	t.Fatalf("no WARN line mentioning %q:\n%s", substr, logs.String())
+}
+
+// TestBackfillFx_CurrencyIDsErrorFailsTheJob covers the one remaining way a
+// run can fail before any series is asked for. Swallowing it would be the
+// worst kind of quiet: River would close the job as successful, no retry
+// would follow, no history would be downloaded for any currency at all, and
+// the log would read like an ordinary run.
+func TestBackfillFx_CurrencyIDsErrorFailsTheJob(t *testing.T) {
+	store, _, ctx := newBackfillFixture(t)
+
+	wantErr := errors.New("cbr unreachable")
+	provider := &recordingHistoryProvider{ids: cbrIDs, idsErr: wantErr}
+	worker := newBackfillWorker(store,
+		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"USD"}},
+		fakeAccountStore{currencies: []string{"EUR"}},
+		fakeSpaceStore{base: []string{"RUB"}},
+		provider, slog.Default())
+
+	err := worker.Work(ctx, backfillJob())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Work: %v, want the currency-id failure to fail the job so River retries it", err)
+	}
+	if len(provider.requests) != 0 {
+		t.Fatalf("requests [%s], want none: without the id map there is nothing to ask under",
+			showRequests(provider.requests))
+	}
+}
+
+// TestBackfillFx_EmptySeriesIsWarnedNotReportedAsADownload covers a currency
+// the source has an identifier for yet publishes nothing under, across the
+// whole range — most likely a retired identifier. The user-visible outcome
+// is the same as for a currency the source doesn't quote at all (amounts
+// stay unconverted), so it has to be as visible; an Info line reading
+// "rates=0" looks exactly like a run that worked.
+func TestBackfillFx_EmptySeriesIsWarnedNotReportedAsADownload(t *testing.T) {
+	store, _, ctx := newBackfillFixture(t)
+
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	provider := &recordingHistoryProvider{ids: cbrIDs, emptyFor: "GBP"}
+	worker := newBackfillWorker(store,
+		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"GBP"}},
+		fakeAccountStore{currencies: []string{"USD"}},
+		fakeSpaceStore{base: []string{"RUB"}},
+		provider, log)
+
+	if err := worker.Work(ctx, backfillJob()); err != nil {
+		t.Fatalf("Work: %v, want an empty series to be reported, not to fail the run", err)
+	}
+
+	// The other currency still downloads: one silent series must not cost the
+	// rest of the run.
+	if _, err := store.FxRateOn(ctx, "USD", "RUB", pinnedToday); err != nil {
+		t.Fatalf("USD rates missing after the run: %v", err)
+	}
+	wantWarned(t, &logs, "GBP")
+}
+
 func TestBackfillFx_ClampsAbsurdlyEarlyOperationToTheFloor(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
@@ -716,9 +796,7 @@ func TestBackfillFx_ClampsAbsurdlyEarlyOperationToTheFloor(t *testing.T) {
 	}
 	// The dropped tail must be visible, not silently swallowed.
 	wantDropped := int(floor.Sub(date("1970-01-01")).Hours() / 24)
-	if !strings.Contains(logs.String(), "days_dropped="+strconv.Itoa(wantDropped)) {
-		t.Fatalf("log does not report the %d dropped days:\n%s", wantDropped, logs.String())
-	}
+	wantWarned(t, &logs, "days_dropped="+strconv.Itoa(wantDropped))
 }
 
 func TestBackfillFx_UnquotedCurrencyIsSkippedWithALogAndTheRestStillDownloaded(t *testing.T) {
@@ -745,9 +823,7 @@ func TestBackfillFx_UnquotedCurrencyIsSkippedWithALogAndTheRestStillDownloaded(t
 	if _, err := store.FxRateOn(ctx, "USD", "RUB", pinnedToday); err != nil {
 		t.Fatalf("USD rates missing after the run: %v", err)
 	}
-	if !strings.Contains(logs.String(), "BYN") {
-		t.Fatalf("log does not mention the skipped currency BYN:\n%s", logs.String())
-	}
+	wantWarned(t, &logs, "BYN")
 }
 
 func TestBackfillFx_ProviderErrorFailsTheJobAndKeepsWhatWasStored(t *testing.T) {
@@ -872,9 +948,7 @@ func TestBackfillFx_FutureDatedOperationDoesNotInvertTheRange(t *testing.T) {
 		t.Fatalf("asked for %s..%s: the range runs backwards",
 			r.from.Format(time.DateOnly), r.to.Format(time.DateOnly))
 	}
-	if !strings.Contains(logs.String(), "future") {
-		t.Fatalf("log does not mention the future-dated operation:\n%s", logs.String())
-	}
+	wantWarned(t, &logs, "future")
 }
 
 // TestBackfillFx_FutureDatedOperationWarnsEvenWhenNoCurrencyToFetch covers an
@@ -904,9 +978,7 @@ func TestBackfillFx_FutureDatedOperationWarnsEvenWhenNoCurrencyToFetch(t *testin
 		t.Fatalf("provider: %d currency-id calls, requests [%s]; want none when only RUB is in use",
 			provider.idCalls, showRequests(provider.requests))
 	}
-	if !strings.Contains(logs.String(), "future") {
-		t.Fatalf("log does not mention the future-dated operation even though nothing needed fetching:\n%s", logs.String())
-	}
+	wantWarned(t, &logs, "future")
 }
 
 // TestBackfillFx_ProductionConstructorUsesTheWallClock guards the clock the

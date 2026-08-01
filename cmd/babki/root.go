@@ -51,9 +51,11 @@ func mountModules(srv *httpserver.Server, r *rt) {
 // download fires one request per currency in use under a 15-minute job
 // timeout: without a bound here, cbr.New would fall back to
 // http.DefaultClient, whose Timeout is 0 (none), so one stalled TCP
-// connection could pin a worker slot for the job's whole budget. It is
-// generous because a single answer carries a currency's entire multi-year
-// series, not one day's rates.
+// connection could pin a worker slot for the job's whole budget. 15s is
+// unchanged from when the client only ever fetched one day's document,
+// because it still fits the larger answers with room to spare: a whole
+// thirteen-year series measures ~400KB, which needs only ~27KB/s to arrive
+// in time.
 const cbrHTTPTimeout = 15 * time.Second
 
 // newCbrHTTPClient builds the HTTP client used for every request to cbr.ru.

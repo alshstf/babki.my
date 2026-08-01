@@ -42,9 +42,10 @@ const quoteCurrency = "RUB"
 // backfillTimeout overrides River's one-minute default job timeout. A run
 // makes one request per currency in use — under a dozen in practice, and
 // bounded by the fifty-odd currencies the source quotes at all — but each
-// answer is a whole multi-year series, megabytes of XML to transfer and
-// parse. At the 15s per-request timeout cmd/babki gives the cbr client, this
-// leaves room for far more currencies than any instance will have.
+// answer is a whole multi-year series: measured at ~400KB for thirteen years
+// of one currency, versus ~2KB for a single day's document. At the 15s
+// per-request timeout cmd/babki gives the cbr client, this leaves room for
+// far more currencies than any instance will have.
 const backfillTimeout = 15 * time.Minute
 
 // backfillFloor is the earliest date worth fetching rates for. An operation
@@ -256,10 +257,12 @@ func (w *backfillFxWorker) Work(ctx context.Context, _ *river.Job[BackfillFxArgs
 	// RUB and there ends up being nothing left to fetch.
 	to := utcDay(w.now())
 	if from.After(to) {
-		// Only reachable from an operation dated in the future — a typo, most
-		// likely. Left alone it would make every run ask for a backwards
-		// range, which the source rejects, so the job would fail forever
-		// instead of keeping the rest of the history fresh.
+		// The earliest operation is dated after today. Usually a typo, but not
+		// always: operation validation allows a day of leeway, so an owner
+		// well ahead of UTC entering their local "today" lands here
+		// legitimately. Either way, left alone it would make every run ask for
+		// a backwards range, which the source rejects, so the job would fail
+		// forever instead of keeping the rest of the history fresh.
 		w.log.Warn("marketdata: earliest operation is in the future, fetching today only",
 			"earliest_operation", from.Format(time.DateOnly), "today", to.Format(time.DateOnly))
 		from = to
@@ -302,6 +305,18 @@ func (w *backfillFxWorker) Work(ctx context.Context, _ *river.Job[BackfillFxArgs
 			w.log.Error("marketdata: store fx history failed",
 				"provider", w.provider.Name(), "currency", code, "err", err)
 			return err
+		}
+		if len(rates) == 0 {
+			// The source has an identifier for this currency yet published
+			// nothing across the entire range — its identifier has most
+			// likely been retired and re-issued. The outcome matches a
+			// currency the source doesn't quote at all (amounts stay
+			// unconverted), so it deserves the same visibility rather than
+			// an Info line reading "rates=0" that looks like a normal run.
+			w.log.Warn("marketdata: source published no rates for currency over the whole range (its amounts stay unconverted)",
+				"provider", w.provider.Name(), "currency", code, "id", id,
+				"from", from.Format(time.DateOnly), "to", to.Format(time.DateOnly))
+			continue
 		}
 		w.log.Info("marketdata: downloaded fx history",
 			"provider", w.provider.Name(), "currency", code,
