@@ -183,7 +183,7 @@ func TestTransferInBreakdownMismatchRejected(t *testing.T) {
 		},
 		"piece with zero quantity": {
 			op:   transferIn(20, "15", 155_015, piece("15", 100_010, 2), portfolio.ReleasedLot{Quantity: d("0"), CostMinor: 55_005, AcquiredOn: day(9)}),
-			want: []string{"0"},
+			want: []string{"quantity 0"},
 		},
 		"pieces that cancel out": {
 			op: transferIn(20, "15", 155_015,
@@ -194,6 +194,20 @@ func TestTransferInBreakdownMismatchRejected(t *testing.T) {
 		"piece with negative cost": {
 			op:   transferIn(20, "15", 155_015, piece("10", 200_020, 2), piece("5", -45_005, 9)),
 			want: []string{"-45005"},
+		},
+		// The acquisition date is the only field the table itself does not
+		// constrain, and it is the one the whole breakdown exists to carry:
+		// a missing or impossible date turns into a lot revalued at a rate
+		// from a day it was never held on.
+		"piece with no acquisition date": {
+			op: transferIn(20, "15", 155_015,
+				piece("10", 100_010, 2),
+				portfolio.ReleasedLot{Quantity: d("5"), CostMinor: 55_005}),
+			want: []string{"no acquisition date"},
+		},
+		"piece acquired after the transfer": {
+			op:   transferIn(20, "15", 155_015, piece("10", 100_010, 2), piece("5", 55_005, 25)),
+			want: []string{"after the transfer"},
 		},
 	} {
 		_, err := portfolio.Compute([]portfolio.Operation{tc.op})

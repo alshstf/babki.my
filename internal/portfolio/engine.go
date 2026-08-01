@@ -103,7 +103,9 @@ type ReleasedLot struct {
 }
 
 // releaseFIFO removes qty from the position's lots front-to-back and
-// returns the pieces released, oldest lot first. Partial lot pieces use
+// returns the pieces released, in queue order — which is acquisition order
+// for lots bought on this account, but not necessarily for ones a transfer
+// brought in (see Position.Lots). Partial lot pieces use
 // floor proportioning; the final piece of a lot takes the lot's remaining
 // cost so that the sum of released piece costs always equals the original
 // lot cost exactly.
@@ -312,6 +314,20 @@ func checkTransferLots(o Operation) error {
 		}
 		if pc.CostMinor < 0 {
 			return badOp(o, fmt.Sprintf("transfer lot %d has cost %d: a piece's cost basis cannot be negative", i, pc.CostMinor))
+		}
+		// The acquisition date is the one field this whole mechanism exists to
+		// carry, and until now it was the only one nothing checked: the table
+		// constrains quantity and cost, this function checked their sums, and
+		// the date travelled unguarded. It cannot legitimately be missing, nor
+		// postdate the transfer that moved it — the source lots are resolved
+		// against the journal as it stood on the transfer's own date, so
+		// anything later is damage.
+		if pc.AcquiredOn.IsZero() {
+			return badOp(o, fmt.Sprintf("transfer lot %d has no acquisition date: the date is what a carried lot is for", i))
+		}
+		if pc.AcquiredOn.After(o.OccurredOn) {
+			return badOp(o, fmt.Sprintf("transfer lot %d was acquired on %s, after the transfer on %s: a lot cannot move before it exists",
+				i, pc.AcquiredOn.Format("2006-01-02"), o.OccurredOn.Format("2006-01-02")))
 		}
 		qty = qty.Add(pc.Quantity)
 		cost += pc.CostMinor
