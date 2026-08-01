@@ -469,11 +469,15 @@ func TestLotInvariantsUnderSplitAndAmortization(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestTransferInLotUsesTransferDate documents the one case where the lot date
-// is not a purchase date: a transfer_in carries only a cost snapshot from the
-// source account, not the original acquisition dates, so the transfer's own
-// date is the best available answer.
-func TestTransferInLotUsesTransferDate(t *testing.T) {
+// TestTransferInWithoutBreakdownUsesTransferDate documents the one case where
+// the lot date is not a purchase date: a transfer_in with no stored FIFO
+// breakdown (Operation.TransferLots) carries only a cost snapshot — its basis
+// was typed in by hand, or it was recorded before breakdowns were kept — and
+// no acquisition dates come with such a number. The transfer's own date is
+// then the best available answer, and this behavior must survive the change
+// that rebuilds the lots of transfers that DO carry a breakdown: making one up
+// here would fabricate history.
+func TestTransferInWithoutBreakdownUsesTransferDate(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeTransferIn, 5, &sber, "4", "", 40_000, 0),
 	}
@@ -483,11 +487,14 @@ func TestTransferInLotUsesTransferDate(t *testing.T) {
 	}
 	p := pos[sber]
 	if len(p.Lots) != 1 {
-		t.Fatalf("lots = %d, want 1", len(p.Lots))
+		t.Fatalf("lots = %d, want exactly 1 (one carried number, one lot)", len(p.Lots))
 	}
 	if !p.Lots[0].AcquiredOn.Equal(day(5)) {
 		t.Errorf("transferred lot acquired on %s, want the transfer day %s",
 			p.Lots[0].AcquiredOn.Format("2006-01-02"), day(5).Format("2006-01-02"))
+	}
+	if !p.Lots[0].Quantity.Equal(d("4")) || p.Lots[0].CostMinor != 40_000 {
+		t.Errorf("lot = {qty %s cost %d}, want {4 40000}", p.Lots[0].Quantity, p.Lots[0].CostMinor)
 	}
 	checkLotInvariants(t, p)
 }

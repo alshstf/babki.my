@@ -491,6 +491,96 @@ func TestPositionInBaseCostUsesEachLotsOwnRate(t *testing.T) {
 	}
 }
 
+// transferOn is the day the in-kind transfer below happens: after both
+// purchases and after lateRateOn, so the transfer's own date resolves to the
+// LATE rate while the older of the two purchases resolves to the early one.
+// That gap is what makes "valued at the purchase dates" and "valued at the
+// transfer date" two visibly different numbers.
+const transferOn = "2026-07-20"
+
+func createTransfer(t *testing.T, c *http.Client, url, body string) {
+	t.Helper()
+	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", body)
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create transfer = %d: %s", resp.StatusCode, b)
+	}
+}
+
+// TestPositionInBaseTransferredLotsKeepTheirPurchaseDates is what the whole
+// transfer-breakdown work exists for: a position moved between two of the
+// family's own accounts must be worth, in rubles, exactly what it was worth
+// before it moved. Moving shares from one broker to another is not a purchase,
+// so it cannot change the basis — yet a transfer that carried only a single
+// summed cost re-dated everything to the day of the move, and the destination
+// then valued the whole position at the fx rate of that day.
+//
+// The fixture is TestPositionInBaseCostUsesEachLotsOwnRate's, reached through a
+// transfer: the two lots are bought in the SOURCE account on dates with
+// different rates, and the whole position is then transferred to a second
+// account on a third date. What the destination reports must equal what the
+// source would have reported.
+//
+//	fx USD->RUB: 60 from 2026-02-01, 90 from 2026-07-01
+//	source: buy 10 @ $100.00 on 2026-03-10 -> lot 1: 100_000 minor USD
+//	        buy 10 @ $200.00 on 2026-07-10 -> lot 2: 200_000 minor USD
+//	transfer all 20 units to the second account on 2026-07-20
+//
+//	destination cost_minor (USD) = 300_000 (the basis follows the shares)
+//	in_base.cost_minor           = 100_000*60 + 200_000*90 = 24_000_000
+//	  (the rates of the two PURCHASE days, in the account that now holds them)
+//	the transfer-date answer     = 300_000 * 90            = 27_000_000
+//
+// Both figures are asserted, the wrong one by name: 27_000_000 is what a
+// destination that collapses the arrival into one lot dated 2026-07-20
+// produces, and it is 3_000_000 rubles of profit invented out of the dollar's
+// rise between the first purchase and the day the shares changed brokers.
+func TestPositionInBaseTransferredLotsKeepTheirPurchaseDates(t *testing.T) {
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := twoRateAPI(t, quotes, "60", "90")
+
+	from := createAccount(t, c, url, `{"name":"Старый брокер","type":"brokerage","currency":"USD"}`)
+	to := createAccount(t, c, url, `{"name":"Новый брокер","type":"brokerage","currency":"USD"}`)
+	share := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, from.ID, share.ID, earlyBuyOn))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","price":"200",
+		"amount_minor":-200000,"currency":"USD"}`, from.ID, share.ID, lateBuyOn))
+
+	createTransfer(t, c, url, fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,
+		"quantity":"20","occurred_on":%q}`, from.ID, to.ID, share.ID, transferOn))
+
+	// The source really did give everything up: without this, a transfer that
+	// silently moved nothing would leave the assertions below meaningless.
+	src := onlyPosition(t, c, url, from.ID)
+	if src.Quantity != "0" || src.CostMinor != 0 {
+		t.Fatalf("source position after transferring everything = {qty %q cost %d}, want {\"0\" 0}",
+			src.Quantity, src.CostMinor)
+	}
+
+	p := onlyPosition(t, c, url, to.ID)
+	if p.Quantity != "20" {
+		t.Fatalf("destination quantity = %q, want \"20\"", p.Quantity)
+	}
+	if p.CostMinor != 300000 {
+		t.Fatalf("destination cost_minor = %d, want 300000 (100000 + 200000, in USD — a transfer moves the basis, it does not change it)", p.CostMinor)
+	}
+	if p.InBase == nil {
+		t.Fatalf("in_base = nil, want a converted object")
+	}
+	if p.InBase.CostMinor == 27000000 {
+		t.Fatalf("in_base.cost_minor = 27000000 — that is the whole arrival valued at the rate of the TRANSFER day %s (300000 * 90); moving shares between the family's own accounts must not reprice them, so each lot keeps the rate of the day it was bought",
+			transferOn)
+	}
+	if p.InBase.CostMinor != 24000000 {
+		t.Errorf("in_base.cost_minor = %d, want 24000000 (100000*60 bought %s + 200000*90 bought %s)",
+			p.InBase.CostMinor, earlyBuyOn, lateBuyOn)
+	}
+}
+
 // TestPositionInBaseUnrealizedPnlIncludesCurrencyRevaluation is the second
 // discriminating test: base-currency profit is the current valuation in rubles
 // minus the HISTORICAL ruble basis, so it carries the currency's own move.

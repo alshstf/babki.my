@@ -2,6 +2,7 @@ package portfolio_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"babki.my/babki/internal/portfolio"
@@ -68,6 +69,143 @@ func TestTransferOutOversell(t *testing.T) {
 	}
 	if _, err := portfolio.Compute(ops); !errors.Is(err, portfolio.ErrOversell) {
 		t.Fatalf("err = %v, want ErrOversell", err)
+	}
+}
+
+// piece builds one element of a transfer's stored FIFO breakdown.
+func piece(qty string, cost int64, dayN int) portfolio.ReleasedLot {
+	return portfolio.ReleasedLot{Quantity: d(qty), CostMinor: cost, AcquiredOn: day(dayN)}
+}
+
+// transferIn builds a transfer_in on day dayN carrying the given breakdown.
+func transferIn(dayN int, qty string, amount int64, lots ...portfolio.ReleasedLot) portfolio.Operation {
+	o := op(portfolio.TypeTransferIn, dayN, &sber, qty, "", amount, 0)
+	o.TransferLots = lots
+	return o
+}
+
+// TestTransferInRebuildsLotsFromBreakdown is the core of this change. The
+// arriving leg carries the FIFO breakdown of what the source account released
+// (see Operation.TransferLots), so the destination rebuilds exactly those
+// lots — each with its own quantity, its own cost, and the day it was actually
+// bought — instead of collapsing them into one lot dated on the transfer day.
+// The dates are the point: every lot is later valued at the fx rate of the day
+// it was acquired, so a collapsed lot misprices the whole arrived position.
+func TestTransferInRebuildsLotsFromBreakdown(t *testing.T) {
+	ops := []portfolio.Operation{
+		transferIn(20, "15", 155_015, piece("10", 100_010, 2), piece("5", 55_005, 9)),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	want := []portfolio.Lot{
+		{Quantity: d("10"), CostMinor: 100_010, AcquiredOn: day(2)},
+		{Quantity: d("5"), CostMinor: 55_005, AcquiredOn: day(9)},
+	}
+	if len(p.Lots) != len(want) {
+		t.Fatalf("lots = %+v, want %d — one per piece of the breakdown", p.Lots, len(want))
+	}
+	for i, w := range want {
+		got := p.Lots[i]
+		if !got.Quantity.Equal(w.Quantity) || got.CostMinor != w.CostMinor || !got.AcquiredOn.Equal(w.AcquiredOn) {
+			t.Errorf("lot %d = {qty %s cost %d on %s}, want {qty %s cost %d on %s}",
+				i, got.Quantity, got.CostMinor, got.AcquiredOn.Format("2006-01-02"),
+				w.Quantity, w.CostMinor, w.AcquiredOn.Format("2006-01-02"))
+		}
+		if got.AcquiredOn.Equal(day(20)) {
+			t.Errorf("lot %d is dated on the transfer day %s: the breakdown says it was bought on %s",
+				i, day(20).Format("2006-01-02"), w.AcquiredOn.Format("2006-01-02"))
+		}
+	}
+	checkLotInvariants(t, p)
+}
+
+// TestTransferredLotsReleaseInFIFOOrder pins that the rebuilt lots are real
+// lots and not just a display detail: a later sale in the destination account
+// consumes them front-to-back, taking the oldest piece's cost first and
+// leaving the younger piece — with its own date — behind.
+func TestTransferredLotsReleaseInFIFOOrder(t *testing.T) {
+	ops := []portfolio.Operation{
+		transferIn(20, "15", 155_015, piece("10", 100_010, 2), piece("5", 55_005, 9)),
+		op(portfolio.TypeSell, 25, &sber, "10", "120", 120_000, 0),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	// The whole first piece is released, so realized P&L is measured against
+	// that piece's cost alone — not against a share of one merged lot, which
+	// for this fixture would be floor(155015*10/15) = 103_343 and give 16_657.
+	if p.RealizedPnLMinor == 120_000-103_343 {
+		t.Fatalf("realized = %d — that is a proportional share of ONE merged lot; the sale must consume the first piece of the breakdown whole",
+			p.RealizedPnLMinor)
+	}
+	if p.RealizedPnLMinor != 120_000-100_010 {
+		t.Errorf("realized = %d, want %d (120000 − the first piece's cost 100010)",
+			p.RealizedPnLMinor, 120_000-100_010)
+	}
+	if len(p.Lots) != 1 {
+		t.Fatalf("lots = %+v, want 1 (the younger piece)", p.Lots)
+	}
+	if !p.Lots[0].AcquiredOn.Equal(day(9)) || p.Lots[0].CostMinor != 55_005 {
+		t.Errorf("remaining lot = {cost %d on %s}, want {55005 on %s}",
+			p.Lots[0].CostMinor, p.Lots[0].AcquiredOn.Format("2006-01-02"), day(9).Format("2006-01-02"))
+	}
+	checkLotInvariants(t, p)
+}
+
+// TestTransferInBreakdownMismatchRejected pins the loud refusal. A breakdown
+// that does not add up to the operation it rides on is a corrupted journal:
+// the write path derives the operation's own totals by summing these very
+// pieces, so the two can only disagree if the stored rows were damaged. Both
+// readings are then unreliable, and quietly falling back to a single lot dated
+// on the transfer day would replace corrupt data with a plausible-looking
+// invention that nobody would ever notice.
+func TestTransferInBreakdownMismatchRejected(t *testing.T) {
+	for name, tc := range map[string]struct {
+		op   portfolio.Operation
+		want []string
+	}{
+		"quantity sum too small": {
+			op:   transferIn(20, "15", 155_015, piece("10", 100_010, 2), piece("4", 55_005, 9)),
+			want: []string{"14", "15"},
+		},
+		"quantity sum too large": {
+			op:   transferIn(20, "15", 155_015, piece("10", 100_010, 2), piece("6", 55_005, 9)),
+			want: []string{"16", "15"},
+		},
+		"cost sum differs": {
+			op:   transferIn(20, "15", 155_015, piece("10", 100_010, 2), piece("5", 55_000, 9)),
+			want: []string{"155010", "155015"},
+		},
+		"piece with zero quantity": {
+			op:   transferIn(20, "15", 155_015, piece("15", 100_010, 2), portfolio.ReleasedLot{Quantity: d("0"), CostMinor: 55_005, AcquiredOn: day(9)}),
+			want: []string{"0"},
+		},
+		"pieces that cancel out": {
+			op: transferIn(20, "15", 155_015,
+				piece("20", 100_010, 2),
+				portfolio.ReleasedLot{Quantity: d("-5"), CostMinor: 55_005, AcquiredOn: day(9)}),
+			want: []string{"-5"},
+		},
+		"piece with negative cost": {
+			op:   transferIn(20, "15", 155_015, piece("10", 200_020, 2), piece("5", -45_005, 9)),
+			want: []string{"-45005"},
+		},
+	} {
+		_, err := portfolio.Compute([]portfolio.Operation{tc.op})
+		if !errors.Is(err, portfolio.ErrBadOperation) {
+			t.Errorf("%s: err = %v, want ErrBadOperation — a breakdown that does not add up must not be papered over", name, err)
+			continue
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: error %q does not name %q, so it cannot be acted on", name, err, want)
+			}
+		}
 	}
 }
 

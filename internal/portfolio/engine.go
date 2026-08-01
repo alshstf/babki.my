@@ -11,6 +11,14 @@
 // adjust an existing transfer's basis — a known and accepted MVP
 // simplification.
 //
+// The receiving account rebuilds those very lots (see Compute's transfer_in
+// branch), each keeping the day it was bought: moving shares between the
+// family's own accounts is not a purchase, so it must change neither the basis
+// nor the dates that basis is later valued at. A transfer with no stored
+// breakdown — basis given by hand, or recorded before breakdowns were kept —
+// still produces one lot dated on the transfer day, because for those the
+// original dates do not exist to be restored.
+//
 // A position's currency is fixed by the first operation that touches the
 // instrument in that account; every later operation for the same instrument
 // must repeat it. Minor amounts of different currencies are never mixed into
@@ -47,9 +55,9 @@ var (
 // it, the cost basis still attributed to that quantity, and the day it was
 // acquired. AcquiredOn is what lets a caller value each lot at the exchange
 // rate of its own purchase date instead of one rate for the whole position;
-// for a lot created by a transfer_in it is the transfer's date, because the
-// carried basis is a snapshot that does not preserve the original dates
-// (see the package doc).
+// a transfer_in rebuilds one lot per piece of its stored breakdown, each
+// keeping the day it was bought, and only a transfer WITHOUT a breakdown
+// yields a single lot dated on the transfer itself (see the package doc).
 type Lot struct {
 	Quantity   decimal.Decimal
 	CostMinor  int64
@@ -67,7 +75,12 @@ type Position struct {
 	RealizedPnLMinor int64
 	IncomeMinor      int64 // dividends + coupons − instrument-attributed taxes
 	FeesMinor        int64
-	// Lots are the acquisitions still held, oldest first (FIFO order).
+	// Lots are the acquisitions still held, in the order they entered this
+	// account — which is the order releases consume them (FIFO). That is
+	// usually oldest-purchase-first, but not always: a transfer_in brings in
+	// lots bought before ones this account already holds, and they queue up
+	// behind them rather than being re-sorted, because a release must depend
+	// only on replaying the journal in its own order.
 	// Their quantities sum to Quantity and their costs sum to CostMinor
 	// exactly; a closed position has none.
 	Lots []Lot
@@ -80,9 +93,9 @@ func badOp(o Operation, msg string) error {
 // ReleasedLot is one piece of a FIFO release: the quantity taken from a
 // single source lot, the cost basis attributed to that quantity, and the day
 // the source lot was acquired (see Lot.AcquiredOn — the same rules apply: a
-// partial piece inherits its lot's date, and a transfer-created lot carries
-// the transfer date rather than the original purchase date). A release that
-// spans several lots yields several pieces, oldest lot first.
+// partial piece inherits its lot's date, and a lot that itself arrived by
+// transfer passes on whatever date it carries). A release that spans several
+// lots yields several pieces, in the order the lots are consumed.
 type ReleasedLot struct {
 	Quantity   decimal.Decimal
 	CostMinor  int64
@@ -237,9 +250,28 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			if o.AmountMinor < 0 {
 				return nil, badOp(o, "transfer_in amount (cost basis) must be >= 0")
 			}
-			// the carried basis is a snapshot without the source lots'
-			// dates, so the transfer date is the best available answer
-			p.addLot(*o.Quantity, o.AmountMinor, o.OccurredOn)
+			if len(o.TransferLots) == 0 {
+				// No breakdown: the basis was given by hand (nothing was
+				// released, so there are no source lots behind that number) or
+				// the transfer was recorded before breakdowns were kept. Either
+				// way the original purchase dates do not exist to be restored,
+				// and the transfer's own date is the honest best answer —
+				// inventing dates would be worse than an admittedly rough one.
+				p.addLot(*o.Quantity, o.AmountMinor, o.OccurredOn)
+				break
+			}
+			if err := checkTransferLots(o); err != nil {
+				return nil, err
+			}
+			// Rebuild what the source account released, piece by piece, in the
+			// FIFO order it was released in: each moved lot keeps its own
+			// quantity, its own cost and the day it was actually bought. A
+			// transfer between the family's own accounts is not a purchase, so
+			// it must not reprice anything — and a lot's date is what later
+			// values it at the fx rate of its own purchase day.
+			for _, pc := range o.TransferLots {
+				p.addLot(pc.Quantity, pc.CostMinor, pc.AcquiredOn)
+			}
 		case TypeSplit:
 			ratio := *o.SplitRatio
 			// a split rewrites quantities only: neither the cost basis of a
@@ -253,6 +285,44 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 		}
 	}
 	return positions, nil
+}
+
+// checkTransferLots verifies that a transfer_in's stored FIFO breakdown and
+// the operation carrying it describe the same event: every piece is a real one
+// (positive quantity, non-negative cost), the pieces' quantities sum to the
+// quantity that moved, and their costs sum to the basis that moved.
+//
+// A breakdown that does not add up means a corrupted journal, and the engine
+// refuses the whole computation rather than working around it. The write path
+// derives the operation's own basis by summing these very pieces (see
+// operation.Service.CreateTransfer and LotsCost), so the two can only disagree
+// if the stored rows were damaged afterwards — at which point neither reading
+// is trustworthy: the pieces may be wrong, or the total may be, and nothing
+// here can tell which. The tempting alternative, quietly falling back to a
+// single lot dated on the transfer day, would replace damaged data with a
+// plausible number that looks exactly like a normal old-style transfer, so
+// nobody would ever learn the journal is broken — and the basis behind every
+// figure derived from it would be silently wrong. Loud is the point.
+func checkTransferLots(o Operation) error {
+	qty := decimal.Zero
+	var cost int64
+	for i, pc := range o.TransferLots {
+		if !pc.Quantity.IsPositive() {
+			return badOp(o, fmt.Sprintf("transfer lot %d has quantity %s: every piece must be a positive quantity", i, pc.Quantity))
+		}
+		if pc.CostMinor < 0 {
+			return badOp(o, fmt.Sprintf("transfer lot %d has cost %d: a piece's cost basis cannot be negative", i, pc.CostMinor))
+		}
+		qty = qty.Add(pc.Quantity)
+		cost += pc.CostMinor
+	}
+	if !qty.Equal(*o.Quantity) {
+		return badOp(o, fmt.Sprintf("transfer lots sum to quantity %s, but the operation moves %s", qty, *o.Quantity))
+	}
+	if cost != o.AmountMinor {
+		return badOp(o, fmt.Sprintf("transfer lots sum to cost %d, but the operation carries %d", cost, o.AmountMinor))
+	}
+	return nil
 }
 
 // drainLotsCost subtracts amount from lot costs front-to-back (amortization
