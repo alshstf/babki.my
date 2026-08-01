@@ -5,10 +5,11 @@
 // the single source of truth and positions are always recomputable.
 //
 // Transfer cost basis is a snapshot: when a transfer pair is created, the
-// moved FIFO cost is computed once (see ReleasedCost) and stored on the
-// transfer_in operation. Editing the source account's earlier history later
-// does not retroactively adjust an existing transfer's basis — a known and
-// accepted MVP simplification.
+// lots it consumes are resolved once (see ReleasedLots) and stored alongside
+// the transfer_in operation, their summed cost on the operation itself.
+// Editing the source account's earlier history later does not retroactively
+// adjust an existing transfer's basis — a known and accepted MVP
+// simplification.
 //
 // A position's currency is fixed by the first operation that touches the
 // instrument in that account; every later operation for the same instrument
@@ -270,10 +271,10 @@ func drainLotsCost(p *Position, amount int64) {
 // ReleasedLots computes the FIFO lot breakdown that releasing qty units of
 // the instrument would consume, after folding the given journal, without
 // mutating anything: which source lots, in what quantity/cost pieces, in
-// FIFO order (see ReleasedLot). A future task will use this to carry the
-// consumed lots' own dates onto a transfer's destination account instead of
-// collapsing them into the transfer date, as ReleasedCost's single number
-// forces today.
+// FIFO order (see ReleasedLot). The transfer service stores this breakdown
+// with the destination account's operation, so the moved lots keep their own
+// purchase dates instead of collapsing into the transfer date — which is
+// what a single carried number forces.
 func ReleasedLots(ops []Operation, instrumentID uuid.UUID, qty decimal.Decimal) ([]ReleasedLot, error) {
 	positions, err := Compute(ops)
 	if err != nil {
@@ -287,11 +288,10 @@ func ReleasedLots(ops []Operation, instrumentID uuid.UUID, qty decimal.Decimal) 
 }
 
 // ReleasedCost computes the FIFO cost basis of qty units of the instrument
-// after folding the given journal, without mutating anything. It is used by
-// the transfer service to capture the carried basis at creation time. The
-// caller is expected to persist the returned basis on the transfer_in
-// operation to maintain the snapshot semantics described in the package doc.
-// It is a thin sum over ReleasedLots so the two can never drift apart.
+// after folding the given journal, without mutating anything, for callers
+// that need the total and not the breakdown. The transfer service is not one
+// of them any more: it stores the pieces and sums them itself. Kept as a thin
+// sum over ReleasedLots, so the two can never drift apart.
 func ReleasedCost(ops []Operation, instrumentID uuid.UUID, qty decimal.Decimal) (int64, error) {
 	pieces, err := ReleasedLots(ops, instrumentID, qty)
 	if err != nil {
