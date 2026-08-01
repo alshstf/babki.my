@@ -85,8 +85,14 @@ func seedDemo(ctx context.Context, pool *pgxpool.Pool) error {
 			[3]int64{1_250_000_00, 1_310_000_00, 1_385_000_00},
 		},
 		{
+			// The recorded balance of a brokerage account is taken to already
+			// include the securities sitting in it (see the portfolio package
+			// doc), so it has to exceed what the seeded positions cost: AAPL
+			// and MSFT together run to $16 209,20 here. A balance below that
+			// would put a single position above the whole account it lives in,
+			// right on the screen this data exists to show.
 			"Freedom KZ", account.TypeBrokerage, "USD", "Freedom Finance", false,
-			[3]int64{8_200_00, 8_350_00, 8_500_00},
+			[3]int64{24_000_00, 24_500_00, 25_000_00},
 		},
 		{
 			"Текущий Сбер", account.TypeChecking, "RUB", "Сбер", false,

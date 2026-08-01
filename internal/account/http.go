@@ -332,9 +332,10 @@ func (h *Handler) handleSetBalance(w http.ResponseWriter, r *http.Request) {
 // here: a brokerage account's securities are already reflected in the balance
 // the user records for it, so counting positions on top would double count.
 // Valuing brokerage accounts as "positions + cash" — and folding that
-// valuation into this summary — is planned for plan 4b; until then the two
-// views stay separate, and total_in_base_minor below is a sum of manual
-// balances only, not full net worth including live market values.
+// valuation into this summary — has deliberately not been done: it would
+// silently change what every balance the user has already recorded means.
+// So the two views stay separate, and total_in_base_minor below is a sum of
+// manual balances only, not full net worth including live market values.
 //
 // total_in_base_minor converts each currency's net_minor into base_currency
 // using the latest fx rate on or before today (ConvertMany, on

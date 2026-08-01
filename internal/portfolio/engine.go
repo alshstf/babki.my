@@ -16,12 +16,14 @@
 // one int64.
 //
 // No double counting with account summaries: positions computed here are
-// NOT part of GET /api/v1/summary. Until plan 4, account summaries are built
+// NOT part of GET /api/v1/summary. Account summaries are still built
 // exclusively from manually entered balances (table account_balances), so an
 // instrument's value never lands in the family totals twice — once as a
-// position and once inside a brokerage balance. Switching brokerage accounts
-// over to a computed "positions + cash" valuation is planned together with
-// market quotes; only then do the two views merge.
+// position and once inside a brokerage balance. Market quotes have since
+// arrived, but the two views have deliberately not been merged: switching
+// brokerage accounts over to a computed "positions + cash" valuation would
+// silently change what every recorded balance means, and that is its own
+// piece of work.
 package portfolio
 
 import (

@@ -91,9 +91,12 @@ export function OperationsTable({
   // A journal row's amounts are in the operation's own currency, which is not
   // necessarily the account's (a foreign-currency operation can sit on a
   // base-currency account), so the default MoneyCell wording would name the
-  // wrong thing. The converted-amount wording is journal-specific too: unlike
-  // balances and positions, these figures use the rate of the day the
-  // operation happened, not today's.
+  // wrong thing. The converted-amount wording is journal-specific too: these
+  // figures use the rate of the day the operation happened. Account balances
+  // and a position's market value use today's; a position's cost and income
+  // are historical like these, but describe their own dates (each lot's
+  // purchase, each payout), so they carry their own wording rather than
+  // sharing the journal's.
   const notConvertedTitle = t("operations.notConverted");
 
   const instrumentName = (instrumentId: string | null | undefined) => {
