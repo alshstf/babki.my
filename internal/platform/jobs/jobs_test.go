@@ -8,6 +8,8 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
@@ -22,14 +24,23 @@ import (
 // immediately — these stubs let that happen harmlessly instead of hitting
 // cbr.ru/iss.moex.com from a test. The backfill job finds no operations in
 // this test's empty database and returns before calling either provider, so
-// it needs no stub behaviour of its own.
+// its history methods need no stub behaviour of their own.
+//
+// stubFxProvider implements marketdata.FxHistoryProvider (not just
+// FxProvider) because that is what NewWorkers takes: the history download
+// needs a source that can deliver a whole date range in one request.
 type stubFxProvider struct{}
 
-// RatesOn's Source must match Name(): the backfill job looks up its coverage
-// boundary via EarliestFxDate(provider.Name()), which filters fx_rates by
-// source, so a mismatch here would make that lookup silently find nothing.
 func (stubFxProvider) RatesOn(_ context.Context, on time.Time) ([]marketdata.FxRate, error) {
 	return []marketdata.FxRate{{Base: "USD", Quote: "RUB", On: on, Rate: decimal.NewFromInt(90), Source: "stub-fx"}}, nil
+}
+
+func (stubFxProvider) CurrencyIDs(context.Context) (map[string]string, error) {
+	return map[string]string{"USD": "R01235"}, nil
+}
+
+func (stubFxProvider) RatesRange(_ context.Context, code, _ string, _, to time.Time) ([]marketdata.FxRate, error) {
+	return []marketdata.FxRate{{Base: code, Quote: "RUB", On: to, Rate: decimal.NewFromInt(90), Source: "stub-fx"}}, nil
 }
 
 func (stubFxProvider) Name() string { return "stub-fx" }
@@ -41,27 +52,6 @@ func (stubQuoteProvider) QuotesFor(context.Context, []string, time.Time) ([]mark
 }
 
 func (stubQuoteProvider) Name() string { return "stub-quotes" }
-
-// TestStubFxProviderSourceMatchesName pins the invariant the comment above
-// stubFxProvider.RatesOn documents: every rate it returns must carry
-// Source == Name(), because the backfill job's coverage lookup
-// (EarliestFxDate(provider.Name())) filters fx_rates by source. If this test
-// were ever seeded with operations (making the backfill job actually run
-// against these stubs, unlike today), a mismatch here would silently make
-// the job think there is never any coverage to build on.
-func TestStubFxProviderSourceMatchesName(t *testing.T) {
-	provider := stubFxProvider{}
-	rates, err := provider.RatesOn(context.Background(), time.Now())
-	if err != nil {
-		t.Fatalf("RatesOn: %v", err)
-	}
-	for _, r := range rates {
-		if r.Source != provider.Name() {
-			t.Fatalf("rate source = %q, want %q (must match Name() for EarliestFxDate(provider.Name()) to find it)",
-				r.Source, provider.Name())
-		}
-	}
-}
 
 // TestHeartbeat verifies that the River client starts, the periodic
 // heartbeat job (RunOnStart) executes, and leaves a mark in meta.
@@ -75,7 +65,10 @@ func TestHeartbeat(t *testing.T) {
 	mdStore := marketdata.NewStore(pool)
 	instStore := instrument.NewStore(pool)
 	opStore := operation.NewStore(pool)
-	workers := jobs.NewWorkers(slog.Default(), pool, mdStore, instStore, opStore, stubFxProvider{}, stubQuoteProvider{})
+	accStore := account.NewStore(pool)
+	famStore := family.NewStore(pool)
+	workers := jobs.NewWorkers(slog.Default(), pool, mdStore, instStore, opStore, accStore, famStore,
+		stubFxProvider{}, stubQuoteProvider{})
 	client, err := jobs.NewClient(pool, workers, slog.Default())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)

@@ -3,6 +3,7 @@ package family_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -131,6 +132,50 @@ func TestBaseCurrency(t *testing.T) {
 	// Nonexistent space id: ErrNoRows.
 	if err := st.UpdateBaseCurrency(ctx, uuid.New(), "EUR"); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("UpdateBaseCurrency on missing space = %v, want pgx.ErrNoRows", err)
+	}
+}
+
+// TestDistinctBaseCurrencies covers the whole-instance list the fx backfill
+// job consults: deduplicated, sorted, and an empty slice (not an error) when
+// there are no spaces at all.
+func TestDistinctBaseCurrencies(t *testing.T) {
+	st, ctx := newStore(t)
+
+	got, err := st.DistinctBaseCurrencies(ctx)
+	if err != nil {
+		t.Fatalf("DistinctBaseCurrencies on an instance with no spaces: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("DistinctBaseCurrencies with no spaces = %v, want empty", got)
+	}
+
+	u, err := st.CreateUser(ctx, "alex", "Alex", "hash1")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	// Two spaces on the migration default (RUB) and one switched to USD:
+	// the result must dedupe the two RUB spaces into a single entry.
+	if _, err := st.CreateSpaceWithOwner(ctx, "Family", u.ID); err != nil {
+		t.Fatalf("CreateSpaceWithOwner Family: %v", err)
+	}
+	if _, err := st.CreateSpaceWithOwner(ctx, "Second", u.ID); err != nil {
+		t.Fatalf("CreateSpaceWithOwner Second: %v", err)
+	}
+	usdSpace, err := st.CreateSpaceWithOwner(ctx, "Abroad", u.ID)
+	if err != nil {
+		t.Fatalf("CreateSpaceWithOwner Abroad: %v", err)
+	}
+	if err := st.UpdateBaseCurrency(ctx, usdSpace.ID, "USD"); err != nil {
+		t.Fatalf("UpdateBaseCurrency: %v", err)
+	}
+
+	got, err = st.DistinctBaseCurrencies(ctx)
+	if err != nil {
+		t.Fatalf("DistinctBaseCurrencies: %v", err)
+	}
+	want := []string{"RUB", "USD"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("DistinctBaseCurrencies = %v, want %v (deduplicated and sorted)", got, want)
 	}
 }
 

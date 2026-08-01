@@ -162,6 +162,30 @@ func (s *Store) SpaceByID(ctx context.Context, id uuid.UUID) (Space, error) {
 	return sp, err
 }
 
+// DistinctBaseCurrencies returns the sorted set of base currencies across
+// every space in the instance (not scoped to one space: exchange rates are
+// shared market data, so there is no point fetching them per space). The fx
+// backfill job consults it alongside the account and operation currency
+// lists — a space can be displayed in a currency nothing is actually held or
+// spent in, and its rates are needed just the same. Returns an empty slice,
+// not an error, when there are no spaces yet.
+func (s *Store) DistinctBaseCurrencies(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT base_currency FROM spaces ORDER BY base_currency`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // UpdateBaseCurrency sets the space's base currency. Returns pgx.ErrNoRows
 // if the space doesn't exist.
 func (s *Store) UpdateBaseCurrency(ctx context.Context, spaceID uuid.UUID, currency string) error {
