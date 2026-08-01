@@ -144,9 +144,10 @@ func seedFxRate(t *testing.T, mdStore *marketdata.Store, on, rate string) {
 // — the brief's requirement. rate_on is the rate's own date, 2019-03-12.
 //
 // A much later rate is seeded as well, so an implementation that converted
-// at TODAY's rate (the way balances and positions do) would pick 100 instead
-// of 65.4567 and fail every assertion below — the journal's whole point is
-// that it does not.
+// at TODAY's rate (the way an account balance does, and a position's market
+// valuation — but not a position's basis, which since plan 6 is historical
+// like this) would pick 100 instead of 65.4567 and fail every assertion
+// below — the journal's whole point is that it does not.
 func TestListOperationInBaseConvertsAtOperationDate(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2019-03-12", "65.4567")
@@ -368,8 +369,11 @@ func (c *countingConverter) Rate(ctx context.Context, from, to string, on time.T
 
 // TestListOperationInBaseMemoizesRatePerCurrencyAndDate pins the cache key.
 // A journal page mixes many dates for the same currency — unlike the account
-// list and the position list, which convert everything at today's rate and
-// can therefore key their cache by currency alone. Keying this cache by
+// list, which converts everything at today's rate and can therefore key its
+// cache by currency alone. (The position list mixes dates too, since plan 6:
+// each lot and each income payment is valued at its own date, so
+// portfolio.rateKey carries the date for exactly the reason spelled out
+// here.) Keying this cache by
 // currency only would silently reuse the first operation's rate for every
 // later date, which is invisible in the response shape: the numbers would
 // simply be wrong, in the same currency, with a plausible rate_on.

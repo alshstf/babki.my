@@ -110,13 +110,18 @@ func TestSeedDemo(t *testing.T) {
 	}
 
 	freedomPositions := positionsByTicker(freedomID)
-	if len(freedomPositions) != 1 {
-		t.Fatalf("Freedom positions = %d, want 1: %+v", len(freedomPositions), freedomPositions)
+	if len(freedomPositions) != 2 {
+		t.Fatalf("Freedom positions = %d, want 2 (AAPL, MSFT): %+v", len(freedomPositions), freedomPositions)
 	}
-	if aapl, ok := freedomPositions["AAPL"]; !ok {
+	aapl, ok := freedomPositions["AAPL"]
+	if !ok {
 		t.Fatal("missing Freedom position AAPL")
-	} else if aapl.Quantity.String() != "20" {
-		t.Errorf("AAPL quantity = %s, want 20", aapl.Quantity.String())
+	}
+	if aapl.Quantity.String() != "30" {
+		t.Errorf("AAPL quantity = %s, want 30 (10 + 20, two buys)", aapl.Quantity.String())
+	}
+	if len(aapl.Lots) != 2 {
+		t.Errorf("AAPL lots = %d, want 2 — the two buys must stay two lots with two acquisition dates", len(aapl.Lots))
 	}
 
 	// seeded fx rates let the converter bridge 100 USD into RUB at the
@@ -174,6 +179,86 @@ func TestSeedDemo(t *testing.T) {
 	// has none — the honest-degradation path the owner must be able to see.
 	if _, _, err := converter.Rate(ctx, "USD", "RUB", day("2026-05-06")); !errors.Is(err, marketdata.ErrNoRate) {
 		t.Errorf("Rate(USD -> RUB, 2026-05-06) error = %v, want ErrNoRate", err)
+	}
+	// (d) that same gap swallows one of AAPL's two lots, so the position as a
+	// whole has no ruble figures to publish — the position-level twin of (c),
+	// and the reason the demo can show what "no rate for one lot" looks like
+	// on a real row instead of only in portfolio's unit tests.
+	lotsWithoutRate := 0
+	for _, l := range aapl.Lots {
+		if _, _, err := converter.Rate(ctx, "USD", "RUB", l.AcquiredOn); errors.Is(err, marketdata.ErrNoRate) {
+			lotsWithoutRate++
+		}
+	}
+	if lotsWithoutRate != 1 {
+		t.Errorf("AAPL lots with no fx rate on their acquisition date = %d, want exactly 1 — seeding a rate for the early buy would remove the demo's only position that honestly refuses to convert", lotsWithoutRate)
+	}
+
+	// The demo must contain one position whose unrealized profit has a
+	// DIFFERENT SIGN in its own currency and in rubles. That is the whole
+	// consequence of the owner's decision (2026-07-29) — ruble return carries
+	// the currency's own move, position-currency return does not — and
+	// without such a position in the seed it cannot be seen on demo data at
+	// all, only asserted in portfolio's unit tests.
+	//
+	// The arithmetic is redone here from the seeded ingredients (lot dates,
+	// the rate on each of those dates, today's rate, the quote) rather than
+	// borrowed from the handler, so a seed edit that quietly flattens the
+	// story — a different quote, a lot moved to another date, a rate nudged —
+	// fails here rather than on the owner's screen:
+	//
+	//	cost    1_000_000 minor USD × 81.40 (the lot's own day) = 81_400_000 ₽
+	//	value   1_020_000 minor USD × 78.50 (today)             = 80_070_000 ₽
+	//	USD profit = 1_020_000 − 1_000_000 =    +20_000 (a gain)
+	//	RUB profit = 80_070_000 − 81_400_000 = −1_330_000 (a loss)
+	msft, ok := freedomPositions["MSFT"]
+	if !ok {
+		t.Fatal("missing Freedom position MSFT")
+	}
+	if len(msft.Lots) != 1 {
+		t.Fatalf("MSFT lots = %d, want 1 — the sign flip is stated for a single-lot position", len(msft.Lots))
+	}
+	// "Today" is any date past the newest seeded rate, so this resolves to the
+	// same 78.50 the running instance uses, without depending on the clock.
+	rateToday, dateToday, err := converter.Rate(ctx, "USD", "RUB", day("2099-01-01"))
+	if err != nil {
+		t.Fatalf("Rate(USD -> RUB, today): %v", err)
+	}
+	if !dateToday.Equal(on) {
+		t.Errorf("newest USD/RUB rate is dated %s, want %s — the sign flip below is struck against the last rate in the table", dateToday.Format(time.DateOnly), on.Format(time.DateOnly))
+	}
+	rateOnLot, _, err := converter.Rate(ctx, "USD", "RUB", msft.Lots[0].AcquiredOn)
+	if err != nil {
+		t.Fatalf("Rate(USD -> RUB, MSFT lot date): %v", err)
+	}
+	msftQuote, err := marketdata.NewStore(pool).QuoteOn(ctx, msft.InstrumentID, on)
+	if err != nil {
+		t.Fatalf("QuoteOn MSFT: %v", err)
+	}
+	// Same expression portfolio.marketValue uses for a share: price × quantity,
+	// shifted into minor units.
+	marketUSD := msftQuote.Price.Mul(msft.Quantity).Shift(2).Round(0).IntPart()
+	costRUB := decimal.NewFromInt(msft.CostMinor).Mul(rateOnLot).Round(0).IntPart()
+	marketRUB := decimal.NewFromInt(marketUSD).Mul(rateToday).Round(0).IntPart()
+	profitUSD := marketUSD - msft.CostMinor
+	profitRUB := marketRUB - costRUB
+
+	if msft.CostMinor != 1_000_000 || marketUSD != 1_020_000 {
+		t.Errorf("MSFT cost/value in USD = %d/%d, want 1000000/1020000", msft.CostMinor, marketUSD)
+	}
+	if costRUB != 81_400_000 || marketRUB != 80_070_000 {
+		t.Errorf("MSFT cost/value in RUB = %d/%d, want 81400000 (1000000 × 81.40) / 80070000 (1020000 × 78.50)", costRUB, marketRUB)
+	}
+	if profitUSD != 20_000 || profitRUB != -1_330_000 {
+		t.Errorf("MSFT profit = %d USD / %d RUB, want +20000 / -1330000", profitUSD, profitRUB)
+	}
+	if profitUSD <= 0 || profitRUB >= 0 {
+		t.Errorf("MSFT profit = %d in USD and %d in RUB: the demo must hold one position that is in profit in its own currency and at a loss in rubles at the same moment — that is what a seeded instance has to make visible", profitUSD, profitRUB)
+	}
+	// The number the pre-plan-6 semantics would have shown, named so a
+	// regression to "whole basis at today's rate" is unmistakable here.
+	if oldCostRUB := decimal.NewFromInt(msft.CostMinor).Mul(rateToday).Round(0).IntPart(); marketRUB-oldCostRUB <= 0 {
+		t.Errorf("basis at today's rate = %d gives a ruble profit of %d: the seed no longer distinguishes the historical basis from the current one, and the demo has nothing left to show", oldCostRUB, marketRUB-oldCostRUB)
 	}
 
 	// every currency the demo space holds (RUB, USD) now has a seeded rate

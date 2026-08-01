@@ -155,6 +155,7 @@ func seedInstrumentsAndOperations(
 		}},
 		{"FXUS", instrument.Instrument{Type: instrument.TypeETF, Name: "FinEx FXUS", Ticker: "FXUS", Currency: "USD", Frozen: true}},
 		{"AAPL", instrument.Instrument{Type: instrument.TypeShare, Name: "Apple Inc.", Ticker: "AAPL", Currency: "USD"}},
+		{"MSFT", instrument.Instrument{Type: instrument.TypeShare, Name: "Microsoft", Ticker: "MSFT", Currency: "USD"}},
 	}
 	instIDs := make(map[string]uuid.UUID, len(instSeeds))
 	for _, is := range instSeeds {
@@ -191,7 +192,21 @@ func seedInstrumentsAndOperations(
 		},
 		{
 			AccountID: freedom, Type: operation.TypeDeposit,
-			OccurredOn: d("2026-05-06"), AmountMinor: 1_000_000, Currency: "USD",
+			OccurredOn: d("2026-05-06"), AmountMinor: 2_500_000, Currency: "USD",
+		},
+		// Apple is bought TWICE, and this first buy is deliberately dated
+		// inside the gap before the fx history starts (see seededUSDRates):
+		// one of this position's two lots has no rate on its own day, so the
+		// whole position honestly refuses to be expressed in rubles instead
+		// of publishing a basis summed from only the lot that did convert.
+		// On screen the row therefore stays in dollars with the "not
+		// converted" marker (displayCurrency.notConverted) even in
+		// base-currency mode — the position-level twin of what the same gap
+		// does to a single journal entry (the deposit above).
+		{
+			AccountID: freedom, InstrumentID: inst("AAPL"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-05-08"), Quantity: qty("10"), Price: price("200"),
+			AmountMinor: -200_000, FeeMinor: 200, Currency: "USD",
 		},
 		{
 			AccountID: tbank, InstrumentID: inst("SBER"), Type: operation.TypeBuy,
@@ -217,6 +232,42 @@ func seedInstrumentsAndOperations(
 			AccountID: freedom, InstrumentID: inst("AAPL"), Type: operation.TypeBuy,
 			OccurredOn: d("2026-06-10"), Quantity: qty("20"), Price: price("210.15"),
 			AmountMinor: -420_300, FeeMinor: 420, Currency: "USD",
+		},
+		// The demo's one position whose profit has a DIFFERENT SIGN in its own
+		// currency and in rubles — the consequence of the owner's decision
+		// (2026-07-29) that ruble return includes the currency's own move
+		// while position-currency return does not. Without it that decision
+		// is invisible on demo data and only a unit test knows about it.
+		//
+		// Bought on a day the ruble was weak and valued today at a stronger
+		// ruble, so a gain in dollars is a loss in rubles. Every figure is
+		// meant to be checkable by eye, which is also why this buy carries no
+		// broker fee: cost basis is exactly the amount paid.
+		//
+		//	cost    20 × $500.00 = $10 000.00 =   1_000_000 minor USD
+		//	  in ₽  1_000_000 × 81.40 (2026-06-10, the LOT'S OWN day) = 81_400_000 = 814 000,00 ₽
+		//	value   20 × $510.00 = $10 200.00 =   1_020_000 minor USD
+		//	  in ₽  1_020_000 × 78.50 (today's rate, i.e. 2026-07-20's) = 80_070_000 = 800 700,00 ₽
+		//
+		//	profit in USD =  1_020_000 −  1_000_000 =    +20_000  (+$200.00, +2.0 %)
+		//	profit in RUB = 80_070_000 − 81_400_000 = −1_330_000  (−13 300,00 ₽, −1.6 %)
+		//
+		// The pre-plan-6 semantics converted the whole basis at today's rate —
+		// 1_000_000 × 78.50 = 78_500_000 — and so reported a ruble PROFIT of
+		// 80_070_000 − 78_500_000 = +1_570_000 (+15 700,00 ₽): the dollar
+		// profit times a rate, with the currency's move cancelled out of it.
+		// The two numbers differ in sign, which is the whole point.
+		//
+		// This depends on two seeded facts: 2026-06-10 has a rate of its own
+		// (81.40) and 2026-07-20 is the newest rate in the table, so it is the
+		// one "today" resolves to. On an instance that reaches cbr.ru the
+		// backfill job replaces both with reality and the demo's arithmetic
+		// stops being the arithmetic above — the same caveat the fx gap below
+		// already carries.
+		{
+			AccountID: freedom, InstrumentID: inst("MSFT"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-06-10"), Quantity: qty("20"), Price: price("500"),
+			AmountMinor: -1_000_000, Currency: "USD",
 		},
 		{
 			AccountID: tbank, InstrumentID: inst("OFZ26238"), Type: operation.TypeCoupon,
@@ -268,9 +319,12 @@ func seedInstrumentsAndOperations(
 //
 //   - 2026-05-20 — the FXUS buy's own date: converted at the exact date's
 //     rate, the ordinary case.
-//   - 2026-06-10 — the AAPL buy's own date, at a visibly different rate:
-//     two operations, two dates, two rates, so the journal cannot be
-//     mistaken for "everything at today's rate".
+//   - 2026-06-10 — the AAPL and MSFT buys' own date, at a visibly different
+//     rate: two operations, two dates, two rates, so the journal cannot be
+//     mistaken for "everything at today's rate". It is also the highest rate
+//     in the set, and deliberately so: it is the day the MSFT lot was bought,
+//     and a basis struck at 81.40 against a valuation struck at 78.50 is what
+//     turns that position's dollar profit into a ruble loss (see the MSFT buy).
 //   - 2026-07-03 — the Friday before the Saturday USD deposit, which has no
 //     rate of its own: the entry converts at the nearest earlier date and
 //     the journal discloses that date rather than claiming the operation's
@@ -278,14 +332,21 @@ func seedInstrumentsAndOperations(
 //   - 2026-07-20 — today's-rate anchor, shared with the quotes and the
 //     latest account balances; also what GET /summary converts at.
 //
-// Nothing is seeded on or before 2026-05-06, the date of the demo's
-// earliest USD operation (the Freedom KZ deposit), and that gap is
-// deliberate: that one entry has no resolvable rate at all and must show
-// its original amount with an explanation instead of a dash or a zero.
-// Seeding a rate for it would hide the honest-degradation path behind
-// unit tests where nobody looks at it. On an instance with internet access
-// the fx backfill job eventually fills that date from cbr.ru and the
-// entry starts converting on its own — which is the point of the job.
+// Nothing is seeded on or before 2026-05-08, the dates of the demo's two
+// earliest USD operations (the Freedom KZ deposit and the first AAPL buy),
+// and that gap is deliberate. It buys two demonstrations at once:
+//
+//   - the deposit has no resolvable rate at all, so that journal entry must
+//     show its original amount with an explanation instead of a dash or a
+//     zero;
+//   - the AAPL buy is one of two lots of a live position, so that whole
+//     position must refuse to be shown in rubles rather than publish a basis
+//     built from the one lot that did convert.
+//
+// Seeding a rate for either would hide the honest-degradation paths behind
+// unit tests where nobody looks at them. On an instance with internet access
+// the fx backfill job eventually fills those dates from cbr.ru and both start
+// converting on their own — which is the point of the job.
 var seededUSDRates = []struct{ on, rate string }{
 	{"2026-05-20", "79.15"},
 	{"2026-06-10", "81.40"},
@@ -314,6 +375,14 @@ var seededUSDRates = []struct{ on, rate string }{
 // price rather than a silent zero); AAPL is a live foreign instrument with
 // no provider yet (cbr/moex only cover the Russian market — plan 4b widens
 // this).
+//
+// MSFT is the exception among the foreign instruments, and it is hand-seeded
+// rather than provider-supplied for one reason: a position needs a valuation
+// before its profit can differ in sign between its own currency and rubles,
+// and that difference is the demo's whole reason for existing (see the MSFT
+// buy for the arithmetic). 510.00 against a 500.00 purchase is a 2 % gain in
+// dollars — small on purpose, because the ruble moved 3.7 % the other way
+// over the same weeks and the point is that the smaller move loses.
 func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]uuid.UUID, d func(string) time.Time) error {
 	mdStore := marketdata.NewStore(pool)
 	on := d("2026-07-20")
@@ -338,6 +407,7 @@ func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]
 		{InstrumentID: instIDs["SBER"], On: on, Price: rate("305.50"), Currency: "RUB", Source: "seed"},
 		{InstrumentID: instIDs["LKOH"], On: on, Price: rate("7550.00"), Currency: "RUB", Source: "seed"},
 		{InstrumentID: instIDs["OFZ26238"], On: on, Price: rate("95.20"), Currency: "RUB", Source: "seed"},
+		{InstrumentID: instIDs["MSFT"], On: on, Price: rate("510.00"), Currency: "USD", Source: "seed"},
 	}
 	if err := mdStore.UpsertQuotes(ctx, quotes); err != nil {
 		return fmt.Errorf("seed quotes: %w", err)

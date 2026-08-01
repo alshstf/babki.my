@@ -311,10 +311,14 @@ describe("PositionsTable", () => {
     });
 
     it("computes the profit percentage from the converted cost/profit pair, not the native one", () => {
-      // Native: cost 2500,00 / profit 250,00 -> +10,0 %. If the percentage
-      // were computed from a mismatched native/converted pair (e.g. native
-      // cost against converted profit) it would come out wrong even though
-      // the ratio is preserved by a uniform fx conversion.
+      // Native: cost 2500,00 / profit 250,00 -> +10,0 %. This fixture is
+      // deliberately built so both figures scale by the same factor (8), so
+      // the two currencies agree on +10,0 % and the ONLY way to get a wrong
+      // percentage is to mix a native number with a converted one (e.g.
+      // native cost against converted profit). Real data does not usually
+      // agree like this — the backend's cost is struck at each lot's own
+      // historical rate while the profit carries today's valuation, so the
+      // two percentages normally differ (the test below pins exactly that).
       wrap(
         <PositionsTable
           positions={[

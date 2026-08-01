@@ -293,8 +293,9 @@ func TestPositionInBaseNullMarketValueAndUnrealizedPnlWithoutQuote(t *testing.T)
 // an fx rate (toAPI's marketdata.ErrNoRate fallback, which publishes the raw
 // valuation as-is in market_value_currency).
 //
-// in_base converts everything at ONE rate — the position's own currency into
-// the base currency — so it may only carry the market valuation when that
+// in_base uses many rates (one per lot date, one per income date, today's for
+// the valuation) but always ONE currency pair — the position's own currency
+// into the base currency — so it may only carry the market valuation when that
 // valuation is actually in the position's currency. Otherwise the amount
 // would be multiplied by a rate belonging to a different currency pair and
 // published, unlabeled, as a base-currency figure: a silently wrong number,
@@ -885,5 +886,80 @@ func TestPositionInBaseCostRoundsOnceForTheWholeBasis(t *testing.T) {
 	}
 	if p.InBase.CostMinor != 2234445 {
 		t.Errorf("in_base.cost_minor = %d, want 2234445 (round(12345*90.5 + 12345*90.5))", p.InBase.CostMinor)
+	}
+}
+
+// TestPositionInBaseClosedPositionHasZeroBasis covers the position the whole
+// historical-basis machinery has the least to say about: a fully closed one.
+// It has no lots left, so the basis is a sum over nothing — and a sum over
+// nothing must be a published zero, not a null in_base and not a refusal.
+// The row stays in the list as history (see handleList), and in base-currency
+// mode it has to read as history rather than as a broken row.
+//
+// The income is what makes the test worth having: a closed position can still
+// carry dividends collected while it was open, and those keep being valued at
+// the rate of the day they were paid even though nothing is held any more.
+// The lots are gone; the payments' dates are not.
+//
+//	fx USD->RUB: 60 from 2026-02-01, 90 from 2026-07-01
+//	buy      10 @ $100.00 on 2026-03-10 -> cost 100_000 minor USD
+//	dividend    +$50.00   on 2026-03-10 -> income 5_000 minor USD
+//	sell     10 @ $120.00 on 2026-07-10 -> realized +20_000, no lots left
+//	quote $130.00, quantity 0 -> market_value_minor (USD) = 0
+//
+//	in_base.cost_minor         = (no lots)          =       0
+//	in_base.market_value_minor = 0 * 90             =       0
+//	in_base.unrealized_pnl     = 0 - 0              =       0
+//	in_base.income_minor       = 5_000 * 60         = 300_000
+//	  (at today's rate it would be 5_000 * 90 = 450_000 — the wrong answer,
+//	   asserted by name below)
+func TestPositionInBaseClosedPositionHasZeroBasis(t *testing.T) {
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := twoRateAPI(t, quotes, "60", "90")
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	share := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
+	shareID, err := uuid.Parse(share.ID)
+	if err != nil {
+		t.Fatalf("parse share id: %v", err)
+	}
+	quotes.byInstrument[shareID] = marketdata.Quote{
+		InstrumentID: shareID, On: mustDate(t, "2026-07-20"),
+		Price: decimal.RequireFromString("130.00"), Currency: "USD", Source: "test",
+	}
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, acc.ID, share.ID, earlyBuyOn))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"dividend",
+		"occurred_on":%q,"amount_minor":5000,"currency":"USD"}`, acc.ID, share.ID, earlyBuyOn))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
+		"occurred_on":%q,"quantity":"10","price":"120",
+		"amount_minor":120000,"currency":"USD"}`, acc.ID, share.ID, lateBuyOn))
+
+	p := onlyPosition(t, c, url, acc.ID)
+	if p.Quantity != "0" {
+		t.Fatalf("quantity = %q, want %q (the position is fully closed)", p.Quantity, "0")
+	}
+	if p.CostMinor != 0 {
+		t.Fatalf("cost_minor = %d, want 0 (nothing held)", p.CostMinor)
+	}
+	if p.InBase == nil {
+		t.Fatalf("in_base = nil, want a converted object: a closed position has an empty basis, which is a zero, not a reason to refuse")
+	}
+	if p.InBase.CostMinor != 0 {
+		t.Errorf("in_base.cost_minor = %d, want 0 (a sum over no lots)", p.InBase.CostMinor)
+	}
+	if p.InBase.MarketValueMinor == nil || *p.InBase.MarketValueMinor != 0 {
+		t.Errorf("in_base.market_value_minor = %v, want 0 (quantity 0 at any price)", p.InBase.MarketValueMinor)
+	}
+	if p.InBase.UnrealizedPnlMinor == nil || *p.InBase.UnrealizedPnlMinor != 0 {
+		t.Errorf("in_base.unrealized_pnl_minor = %v, want 0 (nothing held, nothing unrealized)", p.InBase.UnrealizedPnlMinor)
+	}
+	if p.InBase.IncomeMinor == 450000 {
+		t.Fatalf("in_base.income_minor = 450000 — that is the dividend at TODAY's rate; a payment keeps the rate of the day it was paid even after the position is closed")
+	}
+	if p.InBase.IncomeMinor != 300000 {
+		t.Errorf("in_base.income_minor = %d, want 300000 (5000 * 60, the rate on the day the dividend was paid)", p.InBase.IncomeMinor)
 	}
 }
