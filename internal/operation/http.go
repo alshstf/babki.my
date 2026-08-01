@@ -18,6 +18,7 @@ import (
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
+	"babki.my/babki/internal/portfolio"
 )
 
 // defaultListLimit/maxListLimit bound GET .../operations. A limit above
@@ -227,9 +228,30 @@ type datedMinor struct {
 // were kept has lost them. The transfer's own date is all such an operation
 // has, and inventing more would be worse than a rough answer — on both legs
 // alike, since neither has anything better.
-func amountTerms(o Operation) (terms []datedMinor, headline time.Time) {
+//
+// A breakdown that has drifted from the sum it must equal is refused before
+// it becomes a ruble figure at all, via portfolio.CheckTransferLots — the
+// same check portfolio.Compute already runs on the arriving leg while
+// folding the journal into positions (see its TypeTransferIn branch),
+// reused rather than re-implemented, because "does this breakdown describe
+// the operation carrying it" is one invariant regardless of who is asking.
+// It is safe to reuse unmodified for the departing leg too:
+// Service.CreateTransfer writes Quantity, AmountMinor and OccurredOn
+// identically on both legs of a pair, and Store.attachTransferLots reads the
+// very same stored pieces onto both (see its doc), so a departing operation
+// and its arriving twin are, as far as this check can tell, indistinguishable
+// from one another. Before this, the engine's own check covered only the
+// arriving leg's POSITION — a different endpoint answering a different
+// question — and this journal path had no check of its own at all, on
+// either leg: a breakdown that ever drifted from its sum would fail loudly
+// on the receiver's positions screen while silently misleading every reader
+// of the journal, on both accounts, forever.
+func amountTerms(o Operation) (terms []datedMinor, headline time.Time, err error) {
 	if len(o.TransferLots) == 0 {
-		return []datedMinor{{minor: o.AmountMinor, on: o.OccurredOn}}, o.OccurredOn
+		return []datedMinor{{minor: o.AmountMinor, on: o.OccurredOn}}, o.OccurredOn, nil
+	}
+	if err := portfolio.CheckTransferLots(o); err != nil {
+		return nil, time.Time{}, err
 	}
 	terms = make([]datedMinor, 0, len(o.TransferLots))
 	headline = o.TransferLots[0].AcquiredOn
@@ -239,7 +261,7 @@ func amountTerms(o Operation) (terms []datedMinor, headline time.Time) {
 			headline = pc.AcquiredOn
 		}
 	}
-	return terms, headline
+	return terms, headline, nil
 }
 
 // operationInBase converts an operation's amount_minor and fee_minor from
@@ -298,14 +320,21 @@ func amountTerms(o Operation) (terms []datedMinor, headline time.Time) {
 // unconverted fee, or a basis summed from only the pieces that happened to
 // convert, would be worse than an honest "can't convert this one".
 //
-// A non-nil error means a genuine failure (DB error, canceled context) that
-// the caller must surface as a request error — never silently rendered as
-// null, which would misrepresent an outage as "no rate that far back".
+// A non-nil error means a genuine failure — a DB error, a canceled context,
+// or (see amountTerms) a transfer's stored breakdown no longer summing to
+// the operation it describes — that the caller must surface as a request
+// error, never silently rendered as null or, worse, as a wrong number built
+// from a broken breakdown. An outage read as "no rate that far back" and
+// corrupted data read as a plausible ruble figure are the same category of
+// mistake: both hide a genuine failure behind an answer that looks routine.
 func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency string, cache map[rateKey]*rateLookup) (*apitypes.OperationInBase, error) {
 	if o.Currency == baseCurrency {
 		return nil, nil
 	}
-	terms, headline := amountTerms(o)
+	terms, headline, err := amountTerms(o)
+	if err != nil {
+		return nil, err
+	}
 
 	// The headline rate values the fee and supplies rate_on, so without it
 	// there is no object to publish at all.
