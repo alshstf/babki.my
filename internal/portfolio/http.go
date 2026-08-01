@@ -48,7 +48,10 @@ type quoteStore interface {
 // different currency than the position (see toAPI) into the position's own
 // currency, plus Rate, used to convert a whole position's amounts into the
 // space's base currency (see positionInBase) while resolving the underlying
-// rate at most once per currency per request. Local interface (mirroring
+// rate at most once per (currency, date) pair per request — each lot and
+// each income operation is valued at the rate of its own date, so the same
+// currency can need several different rates within one request (see
+// rateKey). Local interface (mirroring
 // journalStore/quoteStore) so tests can inject a fake in place of a real
 // *marketdata.Converter to control exactly which currency pairs have a
 // resolvable rate, including forcing marketdata.ErrNoRate —
