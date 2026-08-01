@@ -56,6 +56,21 @@ type TransferParams struct {
 	Note              string
 }
 
+// quantityScale is how many decimal places the journal keeps for a quantity:
+// operations.quantity, operations.split_ratio and
+// operation_transfer_lots.quantity all keep ten (see the migrations).
+//
+// It is defined by the engine, not here, because it is what a POSITION is
+// bound to as well — see portfolio.QuantityScale for why that is the engine's
+// business. This package's use of it is the other half of the same contract:
+// a number on its way into one of those columns must be brought onto the scale
+// deliberately, by code that can decide where the rounding goes, so that the
+// value the consistency check replays is the value the row will hold. Letting
+// Postgres round it silently is what turned a legitimate transfer into an
+// unreadable account (see quantizeLots) and what let a sell be accepted for one
+// quantity and recorded as another (see normalizeForStorage).
+const quantityScale = portfolio.QuantityScale
+
 // maxOccurredOn mirrors the account package's as_of slack: a day of leeway
 // past the UTC "today" boundary so a user anywhere from UTC+3 to UTC+12 can
 // record "today" in their own local date.
@@ -153,10 +168,11 @@ func (s *Service) checkJournal(ctx context.Context, spaceID, accountID uuid.UUID
 	return checkJournalOps(ops, add, removeIDs)
 }
 
-// checkJournalOps is checkJournal over an already-loaded journal, so a caller
-// that has fetched the account's operations for another reason (see
-// CreateTransfer) does not pay for a second round trip.
-func checkJournalOps(ops []Operation, add []Operation, removeIDs map[uuid.UUID]bool) error {
+// journalWith assembles the journal as it would stand with add appended and
+// removeIDs gone, in the order the engine folds it. Candidates in add get
+// CreatedAt = time.Now(), so within their occurred_on date they sort after any
+// existing operation.
+func journalWith(ops []Operation, add []Operation, removeIDs map[uuid.UUID]bool) []Operation {
 	journal := make([]Operation, 0, len(ops)+len(add))
 	for _, o := range ops {
 		if !removeIDs[o.ID] {
@@ -173,7 +189,14 @@ func checkJournalOps(ops []Operation, add []Operation, removeIDs map[uuid.UUID]b
 		}
 		return journal[i].CreatedAt.Before(journal[j].CreatedAt)
 	})
-	if _, err := portfolio.Compute(journal); err != nil {
+	return journal
+}
+
+// checkJournalOps is checkJournal over an already-loaded journal, so a caller
+// that has fetched the account's operations for another reason (see
+// CreateTransfer) does not pay for a second round trip.
+func checkJournalOps(ops []Operation, add []Operation, removeIDs map[uuid.UUID]bool) error {
+	if _, err := portfolio.Compute(journalWith(ops, add, removeIDs)); err != nil {
 		return fmt.Errorf("%w: %v", ErrInconsistent, err)
 	}
 	return nil
@@ -189,6 +212,79 @@ func journalUpTo(ops []Operation, day time.Time) []Operation {
 		if !o.OccurredOn.After(day) {
 			out = append(out, o)
 		}
+	}
+	return out
+}
+
+// quantizeLots brings every piece of a transfer's FIFO breakdown onto the
+// quantity scale the journal can actually store, so that what the write path
+// computes is what the read path gets back. total is the quantity the transfer
+// moves, itself already on that scale.
+//
+// A piece's quantity is a fraction of a lot, and a lot's quantity used not to
+// be bound to ten decimal places: a split multiplied it by a ratio, and a
+// reverse split by 0.3333333333 turned two whole shares into 1.16666666655
+// apiece. Storing such pieces as they were meant Postgres rounded each one on
+// its own, independently, and two pieces rounding up pushed the stored sum
+// 1e-10 above the stored quantity of the transfer itself. The engine checks
+// that sum on every read (portfolio.CheckTransferLots), so the transfer was
+// accepted and the receiving account's positions screen then failed forever —
+// for data the application wrote itself.
+//
+// Since the engine keeps lots on the journal's scale (portfolio.QuantityScale
+// and Position.applySplit), a release of those lots cannot produce a piece off
+// the scale in the first place, and the arithmetic below normally changes
+// nothing. It stays because the two properties it enforces are not the engine's
+// to promise: that the pieces sum to the quantity the OPERATION claims to move,
+// exactly, and that nothing unstorable reaches the table. Cheap insurance on
+// the one write that both a position and a journal row are later derived from.
+//
+// The allocation is the one releaseFIFO already uses for costs, applied to
+// quantities: truncate the RUNNING TOTAL to the scale and give each piece the
+// difference from the previous piece's running total. Every piece is then
+// exactly representable, no piece can exceed its exact share by more than the
+// last digit, and the final running total is total itself, so the pieces sum
+// to the moved quantity exactly rather than approximately. Truncating each
+// piece on its own instead would leave a remainder unaccounted for.
+//
+// A piece can come out of this with nothing left — either because its share was
+// finer than the scale, or because the lot behind it holds no shares at all,
+// which is what a deep enough reverse split leaves (see portfolio.Lot). Such a
+// piece is dropped rather than stored as a zero — the table rejects zero
+// quantities, and a piece of nothing did not move — but its COST is real money
+// and is carried onto the next surviving piece, whose acquisition date it then
+// shares. Cost is never invented and never lost: the pieces still sum to the
+// same basis, which is why CreateTransfer can go on summing them for the
+// operation's own amount. The last piece always survives (its quantity is total
+// minus everything already placed, total is positive, and a shareless lot is
+// never the last thing a release consumes — the loop only stops when it has
+// taken everything it needs), so there is always somewhere for a carry to land.
+func quantizeLots(pieces []portfolio.ReleasedLot, total decimal.Decimal) []portfolio.ReleasedLot {
+	out := make([]portfolio.ReleasedLot, 0, len(pieces))
+	exact := decimal.Zero  // running total of the pieces as computed
+	placed := decimal.Zero // running total of the pieces as they will be stored
+	var carry int64        // cost of pieces too small to be stored at all
+	for i, pc := range pieces {
+		exact = exact.Add(pc.Quantity)
+		upTo := exact.Truncate(quantityScale)
+		if i == len(pieces)-1 {
+			// The pieces of a release sum to the released quantity exactly, and
+			// that quantity is already on the scale, so this is what truncating
+			// the final running total yields anyway. Saying so outright means a
+			// breakdown that somehow did not add up is caught by the write-time
+			// check as a mismatch instead of being quietly trimmed here.
+			upTo = total
+		}
+		qty := upTo.Sub(placed)
+		if qty.IsZero() {
+			carry += pc.CostMinor
+			continue
+		}
+		placed = upTo
+		out = append(out, portfolio.ReleasedLot{
+			Quantity: qty, CostMinor: pc.CostMinor + carry, AcquiredOn: pc.AcquiredOn,
+		})
+		carry = 0
 	}
 	return out
 }
@@ -209,16 +305,96 @@ func mapWriteError(err error) error {
 	return err
 }
 
+// normalizeForStorage brings the decimal fields the engine replays onto the
+// scale the journal stores them at, BEFORE anything is validated or checked,
+// so that the operation the consistency check folds is bit for bit the row the
+// database will hold.
+//
+// Without it the check and the row are two different operations. A request may
+// carry any number of decimal places; the columns keep ten and Postgres rounds
+// the rest away — to NEAREST, so a quantity can land ABOVE the one that was
+// checked. Selling a whole position of 0.116666666655 was accepted against
+// that exact figure and recorded as 0.1166666667, and from then on every read
+// of the account compared the recorded 0.1166666667 against the position it was
+// supposed to empty and answered "not enough quantity": a 201 followed by a
+// positions screen broken forever, for a row this program wrote itself. The
+// same divergence on split_ratio is subtler and rarer — a ratio rounded up or
+// down changes every later quantity in the position by a factor — but it is the
+// same fault, so both are normalized here.
+//
+// The rounding is DOWN, matching CreateTransfer: rounding a "sell everything I
+// hold" up past the position it empties would answer a perfectly good request
+// with an oversell, which is a loud refusal of healthy data. The response
+// returns the stored row, so the client is always told exactly what was
+// recorded. Down does not always mean "slightly less", though: a split_ratio
+// truncated down shrinks every later quantity in the position, so a release
+// already recorded against the untruncated position can end up larger than
+// what is left and be refused outright. That refusal is loud and the row is
+// recoverable by deleting and re-entering it, which is the trade being made
+// against a rounding that would break the screen instead.
+//
+// Price is deliberately left alone: it is never replayed, never compared
+// against anything, and the row that comes back is the stored one, so a price
+// rounded by the column misstates nothing.
+func normalizeForStorage(op *Operation) error {
+	onScale := func(v *decimal.Decimal, field string) (*decimal.Decimal, error) {
+		if v == nil {
+			return nil, nil
+		}
+		t := v.Truncate(quantityScale)
+		if v.IsPositive() && !t.IsPositive() {
+			return nil, fmt.Errorf("%w: %s is finer than the %d decimal places the journal records",
+				family.ErrValidation, field, quantityScale)
+		}
+		return &t, nil
+	}
+	quantity, err := onScale(op.Quantity, "quantity")
+	if err != nil {
+		return err
+	}
+	splitRatio, err := onScale(op.SplitRatio, "split_ratio")
+	if err != nil {
+		return err
+	}
+	op.Quantity, op.SplitRatio = quantity, splitRatio
+	return nil
+}
+
 // Create validates op, checks that appending it keeps the account's journal
 // consistent under the portfolio engine, and persists it.
+//
+// The journal is read once and folded twice: for the check that decides
+// whether the request is accepted, and — with the row as the database actually
+// stored it — for the confirmation that runs inside the write transaction. That
+// second replay is what makes "what was checked is what was written" a property
+// of the code rather than an argument about rounding: if the two ever diverge
+// again, the write is rolled back on the request that caused it instead of
+// silently breaking every later read by someone else. It is the same guard
+// CreatePair applies to a transfer's breakdown.
 func (s *Service) Create(ctx context.Context, spaceID uuid.UUID, op Operation) (Operation, error) {
+	if err := normalizeForStorage(&op); err != nil {
+		return Operation{}, err
+	}
 	if err := validate(op); err != nil {
 		return Operation{}, err
 	}
-	if err := s.checkJournal(ctx, spaceID, op.AccountID, []Operation{op}, nil); err != nil {
+	journal, err := s.store.ListForEngine(ctx, spaceID, op.AccountID)
+	if err != nil {
 		return Operation{}, err
 	}
-	created, err := s.store.Create(ctx, spaceID, op)
+	if err := checkJournalOps(journal, []Operation{op}, nil); err != nil {
+		return Operation{}, err
+	}
+	created, err := s.store.Create(ctx, spaceID, op, func(stored Operation) error {
+		// Not wrapped in ErrInconsistent: the caller's journal was fine a
+		// moment ago and their request was accepted, so reaching this is a bug
+		// in this program, not something they did. It must read as a server
+		// failure rather than as "your history contradicts itself".
+		if _, err := portfolio.Compute(journalWith(journal, []Operation{stored}, nil)); err != nil {
+			return fmt.Errorf("the operation as stored no longer replays: %v", err)
+		}
+		return nil
+	})
 	if err != nil {
 		return Operation{}, mapWriteError(err)
 	}
@@ -233,6 +409,19 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 	}
 	if !p.Quantity.IsPositive() {
 		return Operation{}, Operation{}, fmt.Errorf("%w: quantity must be positive", family.ErrValidation)
+	}
+	// Work with the quantity the journal can actually hold, from here on and
+	// everywhere: the column keeps ten decimal places, and a request with more
+	// of them would otherwise be released and broken down at full precision
+	// while the row landed rounded — leaving the stored breakdown summing to
+	// something the stored operation does not claim (see quantizeLots).
+	// Rounding DOWN, not to nearest: the alternative can round a "move
+	// everything I hold" up past the position it is emptying and answer a
+	// perfectly good request with an oversell.
+	quantity := p.Quantity.Truncate(quantityScale)
+	if !quantity.IsPositive() {
+		return Operation{}, Operation{}, fmt.Errorf("%w: quantity is finer than the %d decimal places the journal records",
+			family.ErrValidation, quantityScale)
 	}
 	if p.OccurredOn.After(maxOccurredOn()) {
 		return Operation{}, Operation{}, fmt.Errorf("%w: occurred_on must not be in the future", family.ErrValidation)
@@ -256,7 +445,12 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 	}
 
 	cost := int64(0)
+	var lots []ReleasedLot
 	if p.CostMinorOverride != nil {
+		// A basis given by hand is not a release of anything: there are no
+		// source lots behind it and therefore no acquisition dates to carry.
+		// The destination lot keeps the transfer's own date, as before —
+		// inventing pieces here would fabricate history.
 		cost = *p.CostMinorOverride
 		if cost < 0 || cost > maxAmountMinor {
 			return Operation{}, Operation{}, fmt.Errorf("%w: cost_minor must be within 0..%d", family.ErrValidation, maxAmountMinor)
@@ -270,21 +464,35 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 		// mint cost out of thin air. Same-date operations count as preceding,
 		// matching checkJournalOps, where the candidate sorts last within its
 		// own date.
-		cost, err = portfolio.ReleasedCost(journalUpTo(sourceJournal, p.OccurredOn), p.InstrumentID, p.Quantity)
+		//
+		// The pieces are taken, not just their total: the destination needs
+		// the day each one was bought to value it at that day's exchange
+		// rate. The carried basis is then the sum of these very pieces — it
+		// is never computed a second way, so the two cannot drift apart.
+		lots, err = portfolio.ReleasedLots(journalUpTo(sourceJournal, p.OccurredOn), p.InstrumentID, quantity)
 		if err != nil {
 			return Operation{}, Operation{}, fmt.Errorf("%w: %v", ErrInconsistent, err)
 		}
+		// Quantized before the basis is summed, not after: quantizing can merge
+		// a piece too small to store into its neighbour, and the operation's
+		// amount must be the sum of the pieces that are actually written.
+		lots = quantizeLots(lots, quantity)
+		cost = portfolio.LotsCost(lots)
 	}
 
 	outOp := Operation{
 		AccountID: p.FromAccountID, InstrumentID: &p.InstrumentID, Type: TypeTransferOut,
-		OccurredOn: p.OccurredOn, Quantity: &p.Quantity, AmountMinor: cost,
+		OccurredOn: p.OccurredOn, Quantity: &quantity, AmountMinor: cost,
 		Currency: currency, Note: p.Note,
 	}
 	inOp := Operation{
 		AccountID: p.ToAccountID, InstrumentID: &p.InstrumentID, Type: TypeTransferIn,
-		OccurredOn: p.OccurredOn, Quantity: &p.Quantity, AmountMinor: cost,
+		OccurredOn: p.OccurredOn, Quantity: &quantity, AmountMinor: cost,
 		Currency: currency, Note: p.Note,
+		// The breakdown rides on the arriving leg: its account is the one
+		// that would otherwise lose the acquisition dates. CreatePair writes
+		// it in the same transaction as the pair itself.
+		TransferLots: lots,
 	}
 
 	// The two legs touch different accounts' journals, so each is checked

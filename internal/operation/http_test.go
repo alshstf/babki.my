@@ -22,6 +22,7 @@ import (
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
+	"babki.my/babki/internal/portfolio"
 )
 
 // newTestPool spins up a migrated test database and returns it together
@@ -52,11 +53,20 @@ func newAPIOn(t *testing.T, pool *pgxpool.Pool, conv converterLike) (string, *ht
 	opStore := operation.NewStore(pool)
 	opSvc := operation.NewService(opStore)
 
+	mdStore := marketdata.NewStore(pool)
+	instStore := instrument.NewStore(pool)
+
 	srv := httpserver.New(slog.Default(), pool)
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
-	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(marketdata.NewStore(pool)), auth, sm).Mount(srv)
-	instrument.NewHandler(instrument.NewStore(pool), auth, sm).Mount(srv)
+	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(mdStore), auth, sm).Mount(srv)
+	instrument.NewHandler(instStore, auth, sm).Mount(srv)
 	operation.NewHandler(opSvc, opStore, famStore, conv, auth, sm).Mount(srv)
+	// The positions endpoint is mounted here too, with a real converter of its
+	// own rather than the caller's double: a journal row and the position built
+	// from the same purchases must agree on what those purchases cost in the
+	// base currency, and that claim can only be checked by asking both
+	// endpoints of one running stack (see http_transfer_in_base_test.go).
+	portfolio.NewHandler(opStore, instStore, mdStore, marketdata.NewConverter(mdStore), famStore, auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)

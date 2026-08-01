@@ -72,6 +72,17 @@ function makeOperation(overrides: Partial<Operation> = {}): Operation {
   };
 }
 
+// Every in_base object the backend publishes says whether its amount was
+// struck at a single fx rate or assembled from several — see
+// assembled_from_lots in the API contract. Ordinary operations are the single
+// rate case, so that is the default here; the transfer tests below pass it
+// explicitly, because for them it is the whole point.
+type InBase = NonNullable<Operation["in_base"]>;
+const inBase = (fields: Omit<InBase, "assembled_from_lots"> & Partial<InBase>): InBase => ({
+  assembled_from_lots: false,
+  ...fields,
+});
+
 // Stand-in for the header's display-currency toggle: visible only when the
 // provider says more than one currency is in play on this screen.
 function ToggleProbe() {
@@ -113,7 +124,7 @@ describe("OperationsTable", () => {
           currency: "USD",
           amount_minor: 100_00,
           fee_minor: 5_00,
-          in_base: { amount_minor: 655_000, fee_minor: 32_750, currency: "RUB", rate_on: "2019-03-13" },
+          in_base: inBase({ amount_minor: 655_000, fee_minor: 32_750, currency: "RUB", rate_on: "2019-03-13" }),
         }),
       ],
       mode: "native",
@@ -152,12 +163,12 @@ describe("OperationsTable", () => {
             currency: "USD",
             amount_minor: -100_00,
             fee_minor: 5_00,
-            in_base: {
+            in_base: inBase({
               amount_minor: -655_000,
               fee_minor: 32_750,
               currency: "RUB",
               rate_on: "2019-03-13",
-            },
+            }),
           }),
         ],
         mode: "base",
@@ -181,13 +192,13 @@ describe("OperationsTable", () => {
           makeOperation({
             occurred_on: "2019-03-14",
             currency: "USD",
-            in_base: {
+            in_base: inBase({
               amount_minor: 655_000,
               fee_minor: 32_750,
               currency: "RUB",
               // A rate was found exactly on the operation's own date.
               rate_on: "2019-03-14",
-            },
+            }),
           }),
         ],
         mode: "base",
@@ -221,7 +232,7 @@ describe("OperationsTable", () => {
           makeOperation({
             occurred_on: "2019-03-14",
             currency: "USD",
-            in_base: {
+            in_base: inBase({
               amount_minor: 655_000,
               fee_minor: 32_750,
               currency: "RUB",
@@ -231,7 +242,7 @@ describe("OperationsTable", () => {
               // "on the operation's date" here would be false, and the Date
               // column right next to it (14.03.2019) would contradict it.
               rate_on: "2019-03-12",
-            },
+            }),
           }),
         ],
         mode: "base",
@@ -256,6 +267,87 @@ describe("OperationsTable", () => {
       // And it is emphatically not today's rate.
       const today = formatDate(localToday());
       expect(amount.getAttribute("title")).not.toContain(today);
+    });
+
+    // The two tests below are the case the tooltip had no wording for at all,
+    // and they are written the way the demo data actually looks: a transfer of
+    // shares bought on two earlier days, whose ruble figure is assembled from
+    // the rates of those days. rate_on is the newest of them, so a tooltip that
+    // decides its wording by comparing rate_on with occurred_on states
+    // something false whichever way the comparison happens to land — which is
+    // why assembled_from_lots exists and why it must be checked first.
+    it("says a transfer's figure comes from the purchase dates instead of claiming a nearest-earlier rate", async () => {
+      renderTable({
+        operations: [
+          makeOperation({
+            type: "transfer_in",
+            occurred_on: "2026-07-20",
+            currency: "USD",
+            amount_minor: 190_000,
+            fee_minor: 0,
+            in_base: inBase({
+              // 118 000,00 ₽: two purchases, each at the rate of its own day —
+              // never 149 150,00 ₽, which is the same shares priced on the day
+              // they changed brokers.
+              amount_minor: 11_800_000,
+              fee_minor: 0,
+              currency: "RUB",
+              // The newest of the two purchase dates, NOT the transfer's own
+              // date and NOT a fallback for a missing rate: 2026-07-20 has a
+              // rate of its own and it was deliberately not used.
+              rate_on: "2026-06-15",
+              assembled_from_lots: true,
+            }),
+          }),
+        ],
+        mode: "base",
+        baseCurrency: "RUB",
+      });
+
+      const amount = await screen.findByTestId("operation-amount");
+      expect(amount).toHaveAttribute(
+        "title",
+        "Это стоимость покупок, сделанных в другие дни — пересчитана по курсам тех дней, а не по курсу дня перевода. Самый поздний из них — на 15.06.2026",
+      );
+      // The two wordings that would both be lies here: there IS a rate on the
+      // operation's date, and this figure was not converted at one rate at all.
+      expect(amount.getAttribute("title")).not.toContain("курса нет");
+      expect(amount.getAttribute("title")).not.toContain("по ближайшему");
+      expect(amount.getAttribute("title")).not.toContain("на дату операции —");
+    });
+
+    it("keeps saying so when the newest purchase happens to fall on the transfer's own date", async () => {
+      // rate_on === occurred_on here, which is exactly the shape of an ordinary
+      // "converted at the rate of its own day" row. It is still a sum struck at
+      // several rates, so the ordinary wording would be just as false as the
+      // other one — the flag, not the dates, decides.
+      renderTable({
+        operations: [
+          makeOperation({
+            type: "transfer_out",
+            occurred_on: "2026-07-20",
+            currency: "USD",
+            amount_minor: 190_000,
+            fee_minor: 0,
+            in_base: inBase({
+              amount_minor: 12_000_000,
+              fee_minor: 0,
+              currency: "RUB",
+              rate_on: "2026-07-20",
+              assembled_from_lots: true,
+            }),
+          }),
+        ],
+        mode: "base",
+        baseCurrency: "RUB",
+      });
+
+      const amount = await screen.findByTestId("operation-amount");
+      expect(amount).toHaveAttribute(
+        "title",
+        "Это стоимость покупок, сделанных в другие дни — пересчитана по курсам тех дней, а не по курсу дня перевода. Самый поздний из них — на 20.07.2026",
+      );
+      expect(amount.getAttribute("title")).not.toContain("Пересчитано по курсу на дату операции");
     });
 
     it("falls back to the operation's own amount plus a marker when it could not be converted", async () => {
@@ -316,7 +408,7 @@ describe("OperationsTable", () => {
           makeOperation({
             currency: "USD",
             fee_minor: 0,
-            in_base: { amount_minor: 655_000, fee_minor: 0, currency: "RUB", rate_on: "2019-03-13" },
+            in_base: inBase({ amount_minor: 655_000, fee_minor: 0, currency: "RUB", rate_on: "2019-03-13" }),
           }),
         ],
         mode: "base",

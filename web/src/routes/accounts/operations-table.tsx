@@ -169,15 +169,33 @@ export function OperationsTable({
               operation.in_base?.fee_minor,
               operation.in_base?.rate_on,
             );
-            // in_base.rate_on is the nearest rate on or before occurred_on
+            // Three different things a converted amount can be, and the
+            // tooltip has to name the right one — it is read as a statement of
+            // fact about the number beside it.
+            //
+            // A transfer between the family's own accounts carries the cost of
+            // shares bought on other days, so the backend converts it piece by
+            // piece at the rates of those days (in_base.assembled_from_lots)
+            // and rate_on names only the newest of them. That case must be
+            // checked FIRST, because neither of the other two wordings is true
+            // of it and a date comparison cannot tell: rate_on happens to equal
+            // occurred_on whenever the last purchase was made on the transfer
+            // day, and differs from it otherwise, so relying on the dates picks
+            // one false sentence or the other. On the demo data it read "there
+            // is no rate for the operation's date — converted at the nearest,
+            // 15.06.2026" about a figure assembled from two rates, on a day
+            // whose rate exists and was deliberately not used.
+            //
+            // Otherwise rate_on is the nearest rate on or before occurred_on
             // (see FxRateOn in the backend), not necessarily a rate dated
             // occurred_on itself — weekends/holidays structurally never get
             // their own backfilled rate. Claiming "on the operation's date"
             // when the two dates differ would contradict the Date column
             // right next to it, so that wording is only used when they
             // actually match; otherwise the honest fallback wording is used.
-            const convertedTitle =
-              operation.in_base?.rate_on === operation.occurred_on
+            const convertedTitle = operation.in_base?.assembled_from_lots
+              ? (date: string) => t("operations.convertedAtPurchaseDates", { date })
+              : operation.in_base?.rate_on === operation.occurred_on
                 ? (date: string) => t("operations.convertedAtDate", { date })
                 : (date: string) => t("operations.convertedAtEarlierDate", { date });
             return (

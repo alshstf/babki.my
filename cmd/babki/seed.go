@@ -162,6 +162,7 @@ func seedInstrumentsAndOperations(
 		{"FXUS", instrument.Instrument{Type: instrument.TypeETF, Name: "FinEx FXUS", Ticker: "FXUS", Currency: "USD", Frozen: true}},
 		{"AAPL", instrument.Instrument{Type: instrument.TypeShare, Name: "Apple Inc.", Ticker: "AAPL", Currency: "USD"}},
 		{"MSFT", instrument.Instrument{Type: instrument.TypeShare, Name: "Microsoft", Ticker: "MSFT", Currency: "USD"}},
+		{"TSLA", instrument.Instrument{Type: instrument.TypeShare, Name: "Tesla", Ticker: "TSLA", Currency: "USD"}},
 	}
 	instIDs := make(map[string]uuid.UUID, len(instSeeds))
 	for _, is := range instSeeds {
@@ -224,6 +225,24 @@ func seedInstrumentsAndOperations(
 			OccurredOn: d("2026-05-12"), Quantity: qty("100"), Price: price("950"),
 			AmountMinor: -9_500_000, FeeMinor: 9_500, Currency: "RUB",
 		},
+		// TSLA is bought entirely at Т-Банк, in two lots on two dates with two
+		// different fx rates, and later transferred whole to Freedom KZ (see
+		// the transfer call below) — the seed's demonstration of plan 7a: a
+		// transfer between the family's own accounts must carry each lot's
+		// OWN purchase date into the receiving account, not collapse
+		// everything to the day of the move. Both rates (seededUSDRates:
+		// 60.00 on 2026-05-13, 64.00 on 2026-06-15) are deliberately BELOW
+		// every other rate in the table, including the transfer day's own
+		// (78.50) — so a collapse-to-transfer-date bug cannot partially
+		// cancel against a lot that happens to already share that rate (the
+		// way it does, more subtly, for MSFT below) and instead overvalues
+		// the position by a wide, unmistakable margin. See the transfer call
+		// for the full arithmetic.
+		{
+			AccountID: tbank, InstrumentID: inst("TSLA"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-05-13"), Quantity: qty("5"), Price: price("180"),
+			AmountMinor: -90_000, Currency: "USD",
+		},
 		{
 			AccountID: tbank, InstrumentID: inst("FXUS"), Type: operation.TypeBuy,
 			OccurredOn: d("2026-05-20"), Quantity: qty("30"), Price: price("85"),
@@ -275,6 +294,13 @@ func seedInstrumentsAndOperations(
 			OccurredOn: d("2026-06-10"), Quantity: qty("20"), Price: price("500"),
 			AmountMinor: -1_000_000, Currency: "USD",
 		},
+		// TSLA's second lot — see the first lot above for why the rates and
+		// the transfer are shaped the way they are.
+		{
+			AccountID: tbank, InstrumentID: inst("TSLA"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-06-15"), Quantity: qty("5"), Price: price("200"),
+			AmountMinor: -100_000, Currency: "USD",
+		},
 		{
 			AccountID: tbank, InstrumentID: inst("OFZ26238"), Type: operation.TypeCoupon,
 			OccurredOn: d("2026-06-18"), AmountMinor: 354_000, Currency: "RUB",
@@ -313,6 +339,48 @@ func seedInstrumentsAndOperations(
 		}
 	}
 
+	// The transfer plan 7a exists for: all 10 TSLA shares move from Т-Банк to
+	// Freedom KZ on 2026-07-20 — the same date every other "today" figure in
+	// this seed is struck on (the newest row in seededUSDRates). This must go
+	// through CreateTransfer, not Service.Create (which rejects
+	// transfer_in/transfer_out directly — see validate): it is CreateTransfer
+	// that resolves the source FIFO lots and carries their real acquisition
+	// dates onto the receiving leg (operation.Operation.TransferLots).
+	//
+	// Manual arithmetic, every step exact:
+	//
+	//	lot 1: 5 @ $180.00 on 2026-05-13 -> 90_000 minor USD
+	//	  at its OWN day's rate (60.00): 90_000 * 60.00 =  5_400_000 =  54 000,00 ₽
+	//	lot 2: 5 @ $200.00 on 2026-06-15 -> 100_000 minor USD
+	//	  at its OWN day's rate (64.00): 100_000 * 64.00 =  6_400_000 =  64 000,00 ₽
+	//
+	//	destination cost_minor (USD)            =  90_000 + 100_000        =    190_000 (= $1 900.00)
+	//	in_base.cost_minor (correct, per lot)   = 5_400_000 + 6_400_000    = 11_800_000 (= 118 000,00 ₽)
+	//
+	//	what a transfer that collapsed both lots into the TRANSFER day instead
+	//	(2026-07-20, rate 78.50) would report:
+	//	  190_000 * 78.50 = 14_915_000 = 149 150,00 ₽
+	//	  — 31 150,00 ₽ (≈26 %) more than the truth, invented purely by
+	//	  re-dating shares that did not change value the day they changed
+	//	  brokers. Both figures are meant to be checked by eye against a real
+	//	  GET .../positions response on the destination account.
+	//
+	// BOTH JOURNAL ROWS read 118 000,00 ₽ as well — the departure from Т-Банк
+	// and the arrival at Freedom KZ: a transfer's amount is a basis assembled
+	// on other days, so the journal converts it piece by piece at those days'
+	// rates, exactly as the position does (see
+	// operation.Handler.operationInBase). Each fix left the invented
+	// 149 150,00 ₽ standing on one screen fewer — first next to a position
+	// saying 118 000,00 ₽, then on the source account's journal alone, one pair
+	// disagreeing with itself about the same ten shares. It is now nowhere in
+	// the demo, and the arithmetic below is the only place it appears at all.
+	if _, _, err := opSvc.CreateTransfer(ctx, spaceID, operation.TransferParams{
+		FromAccountID: tbank, ToAccountID: freedom, InstrumentID: instIDs["TSLA"],
+		Quantity: decimal.RequireFromString("10"), OccurredOn: d("2026-07-20"),
+	}); err != nil {
+		return fmt.Errorf("seed transfer TSLA: %w", err)
+	}
+
 	if err := seedMarketData(ctx, pool, instIDs, d); err != nil {
 		return err
 	}
@@ -323,6 +391,17 @@ func seedInstrumentsAndOperations(
 // per date. Each date is there for a reason, and the set as a whole is what
 // the demo screens show:
 //
+//   - 2026-05-13 and 2026-06-15 — the two TSLA buys' own dates (see the TSLA
+//     lots in seedInstrumentsAndOperations): TSLA is later transferred whole
+//     from Т-Банк to Freedom KZ, and this pair is the demo's example of plan
+//     7a — a transfer carries each lot's own acquisition date into the
+//     receiving account instead of collapsing the basis onto the transfer
+//     day. Both rates (60.00 and 64.00) sit BELOW everything else in this
+//     table, including the transfer day's own rate (78.50), and in the SAME
+//     direction, so a collapse-to-transfer-date bug cannot partially cancel
+//     against a lot that happens to already share that rate (the way it does,
+//     more subtly, for MSFT below) — it overvalues the position by a wide,
+//     unmistakable margin instead (see the transfer call for the arithmetic).
 //   - 2026-05-20 — the FXUS buy's own date: converted at the exact date's
 //     rate, the ordinary case.
 //   - 2026-06-10 — the AAPL and MSFT buys' own date, at a visibly different
@@ -336,7 +415,8 @@ func seedInstrumentsAndOperations(
 //     the journal discloses that date rather than claiming the operation's
 //     own.
 //   - 2026-07-20 — today's-rate anchor, shared with the quotes and the
-//     latest account balances; also what GET /summary converts at.
+//     latest account balances; also what GET /summary converts at, and the
+//     TSLA transfer's own date.
 //
 // Nothing is seeded on or before 2026-05-08, the dates of the demo's two
 // earliest USD operations (the Freedom KZ deposit and the first AAPL buy),
@@ -354,8 +434,10 @@ func seedInstrumentsAndOperations(
 // the fx backfill job eventually fills those dates from cbr.ru and both start
 // converting on their own — which is the point of the job.
 var seededUSDRates = []struct{ on, rate string }{
+	{"2026-05-13", "60.00"},
 	{"2026-05-20", "79.15"},
 	{"2026-06-10", "81.40"},
+	{"2026-06-15", "64.00"},
 	{"2026-07-03", "77.90"},
 	{"2026-07-20", "78.50"},
 }

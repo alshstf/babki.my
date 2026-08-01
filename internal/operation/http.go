@@ -158,6 +158,90 @@ type rateLookup struct {
 	err  error
 }
 
+// rateFor resolves currency->baseCurrency on date on, memoized in cache for
+// the rest of the request (see rateKey). The resolution error rides along in
+// the returned rateLookup rather than being returned, because callers have to
+// tell marketdata.ErrNoRate — an expected outcome that nulls in_base — apart
+// from a genuine failure, which fails the request. Mirrors portfolio's
+// identically named method.
+func (h *Handler) rateFor(ctx context.Context, currency, baseCurrency string, on time.Time, cache map[rateKey]*rateLookup) *rateLookup {
+	key := rateKey{currency: currency, on: on.Format("2006-01-02")}
+	rl, ok := cache[key]
+	if !ok {
+		rate, date, err := h.conv.Rate(ctx, currency, baseCurrency, on)
+		rl = &rateLookup{rate: rate, date: date, err: err}
+		cache[key] = rl
+	}
+	return rl
+}
+
+// datedMinor is one amount denominated in the operation's own currency,
+// together with the date whose fx rate values it. An ordinary operation is a
+// single such amount dated on the day it happened; a transfer carrying a
+// breakdown is one per piece it moved (see operationInBase). Mirrors
+// portfolio's identically named type, which splits a position's basis the same
+// way and for the same reason.
+type datedMinor struct {
+	minor int64
+	on    time.Time
+}
+
+// amountTerms decides what an operation's amount_minor is a sum OF, for the
+// purpose of expressing it in another currency, and which single date best
+// describes the result.
+//
+// Almost always the answer is trivial: the amount is one figure and it belongs
+// to the day the operation happened. A transfer that carries a FIFO breakdown
+// is the exception, and not a cosmetic one. Its amount_minor is not money that
+// moved on the transfer date at all — it is the cost basis of shares bought on
+// other days, carried across to another account of the same family, and the
+// breakdown is precisely the record of which days those were. Valuing that
+// number at the transfer day's rate prices a 2019 purchase at a 2026 rate and
+// makes the journal print, for the same shares, a figure the positions screen
+// contradicts (the positions screen having converted each lot at its own
+// purchase date's rate all along — see portfolio.Handler.positionInBase).
+//
+// It applies to BOTH legs of a transfer pair. The breakdown is stored once,
+// next to the arriving leg, but it is read onto the departing one as well (see
+// Store.attachTransferLots), because both legs record one parcel: the same
+// shares, the same basis, the same purchases behind it. While only the arriving
+// leg carried it, the source account's journal was the last place in the system
+// still valuing that basis at the rate of the day the shares changed brokers —
+// the very figure README.md and the seed call an invented one — one screen away
+// from a destination journal and a destination position that both said
+// something else about the same shares.
+//
+// The headline date is the newest date among the terms: the single date
+// rate_on can name. For an ordinary operation that is its own date, exactly as
+// before. For a transfer it is the most recent purchase in the parcel — one of
+// the several rates behind the figure rather than a rate that had no part in
+// it. No single date can describe a sum struck at several, and the API
+// contract says so; the alternative, publishing the transfer day, would name
+// the one rate deliberately NOT used. Because such a date reads exactly like an
+// ordinary rate_on and means something else, the published object says which of
+// the two it is (assembled_from_lots — see operationInBase) instead of leaving
+// a reader to infer it from a date comparison that cannot answer the question.
+//
+// Transfers without a breakdown are unchanged and must be: a basis typed in by
+// hand has no purchase dates behind it, and one recorded before breakdowns
+// were kept has lost them. The transfer's own date is all such an operation
+// has, and inventing more would be worse than a rough answer — on both legs
+// alike, since neither has anything better.
+func amountTerms(o Operation) (terms []datedMinor, headline time.Time) {
+	if len(o.TransferLots) == 0 {
+		return []datedMinor{{minor: o.AmountMinor, on: o.OccurredOn}}, o.OccurredOn
+	}
+	terms = make([]datedMinor, 0, len(o.TransferLots))
+	headline = o.TransferLots[0].AcquiredOn
+	for _, pc := range o.TransferLots {
+		terms = append(terms, datedMinor{minor: pc.CostMinor, on: pc.AcquiredOn})
+		if pc.AcquiredOn.After(headline) {
+			headline = pc.AcquiredOn
+		}
+	}
+	return terms, headline
+}
+
 // operationInBase converts an operation's amount_minor and fee_minor from
 // its own currency into baseCurrency at the fx rate in effect ON THE DAY THE
 // OPERATION HAPPENED — not today's rate. This is the deliberate difference
@@ -165,6 +249,13 @@ type rateLookup struct {
 // "what is this worth now", the journal answers "what did this cost then". A
 // 2019 purchase must keep being reported at its 2019 rate however the ruble
 // moves afterwards.
+//
+// "The day the operation happened" is the day its money moved, which for a
+// transfer carrying a breakdown is not the day it is dated: that amount is a
+// basis assembled on other days, and each piece is converted at the rate of
+// the day it was bought. See amountTerms — that is the whole of the
+// difference, and it is what makes this row agree with the position built from
+// the very same pieces.
 //
 // portfolio.positionInBase now sits between the two rather than matching
 // either: its cost_minor and income_minor are historical exactly like this
@@ -177,27 +268,35 @@ type rateLookup struct {
 // appreciation or depreciation since each purchase ends up baked into the
 // base-currency profit.
 //
-// rate_on is the date of the rate ACTUALLY used, which is o.OccurredOn only
+// rate_on is the date of a rate ACTUALLY used, which is o.OccurredOn only
 // when a rate exists for that exact day. The CBR publishes nothing on
 // weekends and holidays, so Store.FxRateOn resolves the nearest EARLIER date
 // and Rate reports it back here; publishing o.OccurredOn instead would claim
 // a rate that never existed, and the journal's tooltip reads this field
-// verbatim.
+// verbatim. For a transfer converted piece by piece it is the newest of the
+// several rates that make up the figure — see amountTerms.
 //
-// Each amount is converted and rounded independently
+// The amount and the fee are converted and rounded independently
 // (decimal.Mul(rate).Round(0), the exact step marketdata.Converter.Convert
 // itself uses, so the result matches a per-amount Convert call bit for bit).
 // The fee is a figure of its own, not a term of the amount: converting their
 // sum and splitting it afterwards would round differently. Rounding is
 // half-away-from-zero, so the sign is preserved and a purchase's negative
-// amount never shrinks in magnitude.
+// amount never shrinks in magnitude. Within the amount, when it has several
+// terms, every term is multiplied as a decimal and only the total is rounded,
+// once — the same single final rounding, and the same rule
+// portfolio.Handler.sumInBase follows for a position's basis, so the two
+// figures land on the same minor unit rather than a unit apart. (The fee
+// follows rate_on's rate; a transfer carries no broker fee, so this term is in
+// practice zero times whatever rate names it.)
 //
 // It returns (nil, nil) — render in_base as null, the WHOLE object, never
 // partially populated — in exactly two cases: the operation is already
 // denominated in baseCurrency (nothing to convert), or no rate could be
-// resolved for its date nor any earlier one (marketdata.ErrNoRate). An
-// operation with a converted amount but an unconverted fee would be worse
-// than an honest "can't convert this one".
+// resolved for one of the dates it needs nor any earlier one
+// (marketdata.ErrNoRate). An operation with a converted amount but an
+// unconverted fee, or a basis summed from only the pieces that happened to
+// convert, would be worse than an honest "can't convert this one".
 //
 // A non-nil error means a genuine failure (DB error, canceled context) that
 // the caller must surface as a request error — never silently rendered as
@@ -206,27 +305,45 @@ func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency
 	if o.Currency == baseCurrency {
 		return nil, nil
 	}
-	key := rateKey{currency: o.Currency, on: o.OccurredOn.Format("2006-01-02")}
-	rl, ok := cache[key]
-	if !ok {
-		rate, date, err := h.conv.Rate(ctx, o.Currency, baseCurrency, o.OccurredOn)
-		rl = &rateLookup{rate: rate, date: date, err: err}
-		cache[key] = rl
-	}
+	terms, headline := amountTerms(o)
+
+	// The headline rate values the fee and supplies rate_on, so without it
+	// there is no object to publish at all.
+	rl := h.rateFor(ctx, o.Currency, baseCurrency, headline, cache)
 	if rl.err != nil {
 		if errors.Is(rl.err, marketdata.ErrNoRate) {
 			return nil, nil
 		}
 		return nil, rl.err
 	}
-	convert := func(minor int64) int64 {
-		return decimal.NewFromInt(minor).Mul(rl.rate).Round(0).IntPart()
+
+	amount := decimal.Zero
+	for _, t := range terms {
+		tr := h.rateFor(ctx, o.Currency, baseCurrency, t.on, cache)
+		if tr.err != nil {
+			if errors.Is(tr.err, marketdata.ErrNoRate) {
+				return nil, nil
+			}
+			return nil, tr.err
+		}
+		amount = amount.Add(decimal.NewFromInt(t.minor).Mul(tr.rate))
 	}
+
 	return &apitypes.OperationInBase{
-		AmountMinor: convert(o.AmountMinor),
-		FeeMinor:    convert(o.FeeMinor),
+		AmountMinor: amount.Round(0).IntPart(),
+		FeeMinor:    decimal.NewFromInt(o.FeeMinor).Mul(rl.rate).Round(0).IntPart(),
 		Currency:    baseCurrency,
 		RateOn:      rl.date.Format("2006-01-02"),
+		// Whether rate_on is THE rate behind the figure or merely the newest of
+		// several. A reader cannot work this out from the dates: rate_on equal
+		// to occurred_on normally means "converted on the operation's own day",
+		// and different from it means "no rate that day, so the nearest earlier
+		// one" — but for a basis assembled from purchases both readings are
+		// false, and either can happen to be the case a date comparison lands
+		// on. The screen that reads this field out loud (the journal's amount
+		// tooltip) would then state something untrue about a perfectly correct
+		// number, which is worse than saying nothing.
+		AssembledFromLots: len(o.TransferLots) > 0,
 	}, nil
 }
 

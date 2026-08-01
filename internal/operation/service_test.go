@@ -240,6 +240,163 @@ func TestTransferBackdatedUsesChronologicalBasis(t *testing.T) {
 	}
 }
 
+// TestTransferCarriesSourceLotDates is the point of the whole change: a
+// transfer that drains one lot and bites into a second must hand the
+// destination both pieces with the days they were actually bought, not one
+// lump sum dated on the transfer day. Their costs must add up to exactly the
+// basis recorded on the pair — that number is the sum of the pieces, so a
+// mismatch means it was computed a second, independent way.
+//
+// Source journal: buy 10 @ 100.00 (01.07, lot cost 100000),
+// buy 10 @ 900.00 (03.07, lot cost 900000). Transferring 15 units on 05.07
+// takes lot 1 whole (10 units, 100000) and 5 units of lot 2
+// (floor(900000 * 5 / 10) = 450000) — 550000 in total.
+func TestTransferCarriesSourceLotDates(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	buy1 := operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-07-01"), Quantity: dec("10"), Price: dec("100"),
+		AmountMinor: -100_000, Currency: "RUB",
+	}
+	buy2 := buy1
+	buy2.OccurredOn = date("2026-07-03")
+	buy2.Price = dec("900")
+	buy2.AmountMinor = -900_000
+	for _, op := range []operation.Operation{buy1, buy2} {
+		if _, err := svc.Create(f.ctx, f.spaceID, op); err != nil {
+			t.Fatalf("seed %s: %v", op.OccurredOn.Format("2006-01-02"), err)
+		}
+	}
+
+	out, in, err := svc.CreateTransfer(f.ctx, f.spaceID, operation.TransferParams{
+		FromAccountID: f.accountID, ToAccountID: f.account2ID,
+		InstrumentID: f.sberID, Quantity: decimal.RequireFromString("15"),
+		OccurredOn: date("2026-07-05"),
+	})
+	if err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+
+	want := []operation.ReleasedLot{
+		{Quantity: decimal.RequireFromString("10"), CostMinor: 100_000, AcquiredOn: date("2026-07-01")},
+		{Quantity: decimal.RequireFromString("5"), CostMinor: 450_000, AcquiredOn: date("2026-07-03")},
+	}
+	checkLots := func(what string, got []operation.ReleasedLot) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("%s lots = %+v, want %d pieces (a single lump would be 1)", what, got, len(want))
+		}
+		for i, w := range want {
+			g := got[i]
+			if !g.Quantity.Equal(w.Quantity) || g.CostMinor != w.CostMinor || !g.AcquiredOn.Equal(w.AcquiredOn) {
+				t.Errorf("%s lot %d = %s/%d/%s, want %s/%d/%s", what, i,
+					g.Quantity, g.CostMinor, g.AcquiredOn.Format("2006-01-02"),
+					w.Quantity, w.CostMinor, w.AcquiredOn.Format("2006-01-02"))
+			}
+		}
+		var sum int64
+		for _, g := range got {
+			sum += g.CostMinor
+		}
+		if sum != in.AmountMinor || sum != out.AmountMinor {
+			t.Errorf("%s: sum of piece costs = %d, but the pair records %d/%d",
+				what, sum, out.AmountMinor, in.AmountMinor)
+		}
+	}
+	checkLots("returned", in.TransferLots)
+	if len(out.TransferLots) != 0 {
+		t.Errorf("transfer_out lots = %+v, want none (the breakdown rides with the arrival)", out.TransferLots)
+	}
+	if in.AmountMinor != 550_000 {
+		t.Errorf("carried basis = %d, want 550000", in.AmountMinor)
+	}
+
+	// and the same read back the way the engine consumes the journal
+	destOps, err := f.store.ListForEngine(f.ctx, f.spaceID, f.account2ID)
+	if err != nil {
+		t.Fatalf("list dest: %v", err)
+	}
+	recorded := findByType(destOps, operation.TypeTransferIn)
+	if recorded == nil {
+		t.Fatalf("no transfer_in recorded on dest account")
+	}
+	checkLots("stored", recorded.TransferLots)
+}
+
+// TestTransferManualCostHasNoLots pins the legitimate empty case: a basis
+// typed in by hand has no source lots behind it, so there is nothing to
+// break down and no dates to attach. Recording invented pieces here would be
+// worse than recording none.
+func TestTransferManualCostHasNoLots(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	buy := operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-07-01"), Quantity: dec("10"), Price: dec("100"),
+		AmountMinor: -100_000, Currency: "RUB",
+	}
+	if _, err := svc.Create(f.ctx, f.spaceID, buy); err != nil {
+		t.Fatalf("buy: %v", err)
+	}
+
+	override := int64(12_345)
+	_, in, err := svc.CreateTransfer(f.ctx, f.spaceID, operation.TransferParams{
+		FromAccountID: f.accountID, ToAccountID: f.account2ID,
+		InstrumentID: f.sberID, Quantity: decimal.RequireFromString("4"),
+		OccurredOn: date("2026-07-05"), CostMinorOverride: &override,
+	})
+	if err != nil {
+		t.Fatalf("transfer with manual cost: %v", err)
+	}
+	if in.AmountMinor != override {
+		t.Errorf("carried basis = %d, want %d", in.AmountMinor, override)
+	}
+	if len(in.TransferLots) != 0 {
+		t.Errorf("returned lots = %+v, want none", in.TransferLots)
+	}
+	if n := f.lotRows(t, in.ID); n != 0 {
+		t.Errorf("stored lot rows = %d, want 0", n)
+	}
+}
+
+// TestServiceDeleteTransferRemovesLots covers the user-facing delete path:
+// removing a transfer must not leave its breakdown behind describing an
+// operation that no longer exists.
+func TestServiceDeleteTransferRemovesLots(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	buy := operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-07-01"), Quantity: dec("10"), Price: dec("100"),
+		AmountMinor: -100_000, Currency: "RUB",
+	}
+	if _, err := svc.Create(f.ctx, f.spaceID, buy); err != nil {
+		t.Fatalf("buy: %v", err)
+	}
+	out, in, err := svc.CreateTransfer(f.ctx, f.spaceID, operation.TransferParams{
+		FromAccountID: f.accountID, ToAccountID: f.account2ID,
+		InstrumentID: f.sberID, Quantity: decimal.RequireFromString("4"),
+		OccurredOn: date("2026-07-05"),
+	})
+	if err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+	if n := f.lotRows(t, in.ID); n != 1 {
+		t.Fatalf("lot rows after transfer = %d, want 1", n)
+	}
+
+	if err := svc.Delete(f.ctx, f.spaceID, out.ID); err != nil {
+		t.Fatalf("delete transfer: %v", err)
+	}
+	if n := f.lotRows(t, in.ID); n != 0 {
+		t.Errorf("lot rows after delete = %d, want 0", n)
+	}
+}
+
 func TestServiceSplitValidation(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
