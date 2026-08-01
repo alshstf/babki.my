@@ -2,6 +2,7 @@ package account_test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -211,6 +212,41 @@ func TestUpdateOwnerTriState(t *testing.T) {
 	wb, _ = st.Update(ctx, spaceID, accountID, upd2)
 	if wb.OwnerUserID != nil {
 		t.Errorf("(c) after clear, OwnerUserID = %v, want nil", wb.OwnerUserID)
+	}
+}
+
+func TestDistinctCurrencies(t *testing.T) {
+	st, spaceID, _, ctx := newStore(t)
+
+	if _, err := st.Create(ctx, spaceID, nil, "A1", account.TypeChecking, "RUB", ""); err != nil {
+		t.Fatalf("create A1: %v", err)
+	}
+	if _, err := st.Create(ctx, spaceID, nil, "A2", account.TypeChecking, "RUB", ""); err != nil {
+		t.Fatalf("create A2: %v", err)
+	}
+	if _, err := st.Create(ctx, spaceID, nil, "A3", account.TypeCash, "EUR", ""); err != nil {
+		t.Fatalf("create A3: %v", err)
+	}
+
+	got, err := st.DistinctCurrencies(ctx)
+	if err != nil {
+		t.Fatalf("DistinctCurrencies: %v", err)
+	}
+	want := []string{"EUR", "RUB"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("DistinctCurrencies = %v, want %v", got, want)
+	}
+}
+
+func TestDistinctCurrenciesEmpty(t *testing.T) {
+	st, _, _, ctx := newStore(t)
+
+	got, err := st.DistinctCurrencies(ctx)
+	if err != nil {
+		t.Fatalf("DistinctCurrencies on empty table: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("DistinctCurrencies on empty table = %v, want empty, got %v", got, got)
 	}
 }
 

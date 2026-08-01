@@ -140,6 +140,33 @@ func (s *Store) EarliestOccurredOn(ctx context.Context) (time.Time, error) {
 	return *on, nil
 }
 
+// DistinctCurrencies returns the sorted set of currencies used by any
+// operation in the instance (not scoped to a space: same rationale as
+// EarliestOccurredOn — fx coverage is shared, not per-space). A currency can
+// appear here without appearing in account.Store's list (e.g. a one-off
+// operation in a currency no account is denominated in), so this queries
+// operations directly rather than reusing account currencies. Deciding what
+// to backfill is not this method's job — that is the fx backfill job's.
+// Returns an empty slice, not an error, when there are no operations: unlike
+// EarliestOccurredOn, "no currencies in use" is itself a meaningful answer,
+// not a missing value.
+func (s *Store) DistinctCurrencies(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT currency FROM operations ORDER BY currency`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // Delete removes the operation; if it belongs to a transfer group, the whole
 // group is removed. Returns the number of deleted rows.
 func (s *Store) Delete(ctx context.Context, spaceID, id uuid.UUID) (int, error) {
