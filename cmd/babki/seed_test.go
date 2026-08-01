@@ -92,8 +92,8 @@ func TestSeedDemo(t *testing.T) {
 	}
 
 	tbankPositions := positionsByTicker(tbankID)
-	if len(tbankPositions) != 4 {
-		t.Fatalf("Т-Банк positions = %d, want 4: %+v", len(tbankPositions), tbankPositions)
+	if len(tbankPositions) != 5 {
+		t.Fatalf("Т-Банк positions = %d, want 5: %+v", len(tbankPositions), tbankPositions)
 	}
 	wantQty := map[string]string{"SBER": "300", "OFZ26238": "100", "FXUS": "30", "LKOH": "15"}
 	for ticker, qty := range wantQty {
@@ -108,10 +108,24 @@ func TestSeedDemo(t *testing.T) {
 	if lkoh := tbankPositions["LKOH"]; lkoh.RealizedPnLMinor <= 0 {
 		t.Errorf("LKOH realized P&L = %d, want > 0", lkoh.RealizedPnLMinor)
 	}
+	// TSLA was bought entirely at Т-Банк and then transferred whole to
+	// Freedom KZ (see the transfer arithmetic below): the source keeps the
+	// position as closed history — zero quantity, zero cost, no lots left —
+	// rather than dropping it, mirroring
+	// TestPositionInBaseTransferredLotsKeepTheirPurchaseDates's own source
+	// check.
+	tsla, ok := tbankPositions["TSLA"]
+	if !ok {
+		t.Fatal("missing Т-Банк position TSLA (closed by the transfer)")
+	}
+	if tsla.Quantity.String() != "0" || tsla.CostMinor != 0 || len(tsla.Lots) != 0 {
+		t.Errorf("Т-Банк TSLA after transferring everything = {qty %s cost %d lots %d}, want {0 0 []}",
+			tsla.Quantity.String(), tsla.CostMinor, len(tsla.Lots))
+	}
 
 	freedomPositions := positionsByTicker(freedomID)
-	if len(freedomPositions) != 2 {
-		t.Fatalf("Freedom positions = %d, want 2 (AAPL, MSFT): %+v", len(freedomPositions), freedomPositions)
+	if len(freedomPositions) != 3 {
+		t.Fatalf("Freedom positions = %d, want 3 (AAPL, MSFT, TSLA): %+v", len(freedomPositions), freedomPositions)
 	}
 	aapl, ok := freedomPositions["AAPL"]
 	if !ok {
@@ -122,6 +136,40 @@ func TestSeedDemo(t *testing.T) {
 	}
 	if len(aapl.Lots) != 2 {
 		t.Errorf("AAPL lots = %d, want 2 — the two buys must stay two lots with two acquisition dates", len(aapl.Lots))
+	}
+
+	// TSLA is this seed's demonstration of plan 7a: the position arrives at
+	// Freedom KZ entirely by transfer, and the two source lots — bought on
+	// different days at different fx rates — must still be two lots here,
+	// each keeping the day it was ACTUALLY bought rather than the day it
+	// changed brokers. The shape is pinned now; the ruble arithmetic (which
+	// needs the fx converter, set up below) is pinned further down, right
+	// after rateToday — see the block near the MSFT arithmetic.
+	tsla, ok = freedomPositions["TSLA"]
+	if !ok {
+		t.Fatal("missing Freedom position TSLA")
+	}
+	if tsla.Quantity.String() != "10" {
+		t.Errorf("TSLA quantity = %s, want 10 (5 + 5, transferred whole)", tsla.Quantity.String())
+	}
+	if tsla.CostMinor != 190_000 {
+		t.Errorf("TSLA cost_minor = %d, want 190000 ($1900.00, transfer moves the basis, does not change it)", tsla.CostMinor)
+	}
+	if len(tsla.Lots) != 2 {
+		t.Fatalf("TSLA lots = %d, want 2 — the transfer must carry over both source lots, not collapse them into one", len(tsla.Lots))
+	}
+	wantLotDates := map[string]bool{"2026-05-13": false, "2026-06-15": false}
+	for _, l := range tsla.Lots {
+		dateStr := l.AcquiredOn.Format(time.DateOnly)
+		if _, known := wantLotDates[dateStr]; !known {
+			t.Fatalf("TSLA lot acquired on unexpected date %s, want one of 2026-05-13 or 2026-06-15", dateStr)
+		}
+		wantLotDates[dateStr] = true
+	}
+	for dateStr, seen := range wantLotDates {
+		if !seen {
+			t.Errorf("TSLA lots missing one acquired on %s — the transfer re-dated it instead of carrying it over", dateStr)
+		}
 	}
 
 	// seeded fx rates let the converter bridge 100 USD into RUB at the
@@ -259,6 +307,37 @@ func TestSeedDemo(t *testing.T) {
 	// regression to "whole basis at today's rate" is unmistakable here.
 	if oldCostRUB := decimal.NewFromInt(msft.CostMinor).Mul(rateToday).Round(0).IntPart(); marketRUB-oldCostRUB <= 0 {
 		t.Errorf("basis at today's rate = %d gives a ruble profit of %d: the seed no longer distinguishes the historical basis from the current one, and the demo has nothing left to show", oldCostRUB, marketRUB-oldCostRUB)
+	}
+
+	// TSLA's ruble arithmetic, plan 7a's own demonstration: the position
+	// arrived at Freedom KZ entirely by transfer, and each of its two lots
+	// must be converted at the rate of the day it was ACTUALLY bought, not
+	// the day it changed brokers (2026-07-20). Redone from the seeded
+	// ingredients the same way MSFT's is above, so a seed edit that quietly
+	// re-dates or re-rates a lot fails here instead of only looking slightly
+	// off on the owner's screen.
+	//
+	//	lot 1: 5 @ $180.00 on 2026-05-13 -> 90_000 minor USD, rate 60.00 -> 5_400_000
+	//	lot 2: 5 @ $200.00 on 2026-06-15 -> 100_000 minor USD, rate 64.00 -> 6_400_000
+	//	correct in_base.cost_minor = 5_400_000 + 6_400_000 = 11_800_000 (118 000,00 ₽)
+	//	transfer-date (2026-07-20, rate 78.50) collapse instead:
+	//	  190_000 * 78.50 = 14_915_000 (149 150,00 ₽) — 31_150,00 ₽ too much
+	var correctBaseCost int64
+	for _, l := range tsla.Lots {
+		rate, _, err := converter.Rate(ctx, "USD", "RUB", l.AcquiredOn)
+		if err != nil {
+			t.Fatalf("Rate(USD -> RUB, TSLA lot date %s): %v", l.AcquiredOn.Format(time.DateOnly), err)
+		}
+		correctBaseCost += decimal.NewFromInt(l.CostMinor).Mul(rate).Round(0).IntPart()
+	}
+	if correctBaseCost != 11_800_000 {
+		t.Errorf("TSLA in_base.cost_minor (per lot's own rate) = %d, want 11800000 (118 000,00 ₽)", correctBaseCost)
+	}
+	if collapsedBaseCost := decimal.NewFromInt(tsla.CostMinor).Mul(rateToday).Round(0).IntPart(); collapsedBaseCost <= correctBaseCost {
+		t.Errorf("whole-basis-at-transfer-date TSLA cost = %d, want > %d (118 000,00 ₽) — the seed's point is that collapsing to the transfer day OVERVALUES this position",
+			collapsedBaseCost, correctBaseCost)
+	} else if collapsedBaseCost != 14_915_000 {
+		t.Errorf("whole-basis-at-transfer-date TSLA cost = %d, want 14915000 (149 150,00 ₽ = 190000 * 78.50)", collapsedBaseCost)
 	}
 
 	// every currency the demo space holds (RUB, USD) now has a seeded rate
