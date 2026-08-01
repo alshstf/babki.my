@@ -445,7 +445,15 @@ describe("PositionsTable", () => {
       expect(screen.queryByTestId("position-income-not-converted")).not.toBeInTheDocument();
     });
 
-    it("discloses the fx rate date behind every converted cell in its tooltip, not as text", () => {
+    it("claims today's rate only for the market value, and names the historical rates behind cost, income and profit", () => {
+      // in_base.rate_on is the rate date behind the market VALUATION and
+      // nothing else. The ruble basis is built lot by lot at each purchase
+      // date's rate, and income operation by operation at each operation
+      // date's rate, so that single date describes exactly one of the four
+      // cells. Letting the default MoneyCell wording ("converted at today's
+      // rate, on <date>") stand under the other three would claim a
+      // conversion that never happened, on a date that has nothing to do
+      // with them.
       wrap(
         <PositionsTable
           positions={[
@@ -466,18 +474,28 @@ describe("PositionsTable", () => {
         />,
       );
 
-      for (const testId of [
-        "position-cost",
-        "position-market-value",
-        "position-profit-amount",
-        "position-income",
-      ]) {
-        expect(screen.getByTestId(testId)).toHaveAttribute(
-          "title",
-          "Пересчитано по текущему курсу (на 19.07.2026)",
-        );
+      expect(screen.getByTestId("position-market-value")).toHaveAttribute(
+        "title",
+        "Пересчитано по текущему курсу (на 19.07.2026)",
+      );
+      expect(screen.getByTestId("position-cost")).toHaveAttribute(
+        "title",
+        "Пересчитано по курсам на даты покупок, а не по текущему",
+      );
+      expect(screen.getByTestId("position-income")).toHaveAttribute(
+        "title",
+        "Пересчитано по курсам на даты выплат, а не по текущему",
+      );
+      expect(screen.getByTestId("position-profit-amount")).toHaveAttribute(
+        "title",
+        "Оценка по текущему курсу минус стоимость по курсам на даты покупок — поэтому включает изменение курса",
+      );
+      // The valuation's rate date must not leak into the three tooltips that
+      // it says nothing about.
+      for (const testId of ["position-cost", "position-income", "position-profit-amount"]) {
+        expect(screen.getByTestId(testId).getAttribute("title")).not.toMatch(/19\.07\.2026/);
       }
-      // Tooltip only — the date never becomes cell text.
+      // Tooltips only — no date ever becomes cell text.
       expect(screen.queryByText(/19\.07\.2026/)).not.toBeInTheDocument();
     });
 
@@ -568,6 +586,97 @@ describe("PositionsTable", () => {
 
       expect(screen.getByTestId("position-no-quote")).toHaveTextContent("—");
       expect(screen.getByTestId("position-profit-dash")).toHaveTextContent("—");
+    });
+
+    it("names the currency the return percentage is measured in, in both modes", () => {
+      // The percentage is a bare "+10,0 %" with no currency anywhere near it,
+      // yet it means two different things in the two modes. Naming the
+      // currency is what lets a reader tell "the share went up 10 %" from
+      // "the holding grew my base currency by 10 %".
+      const position = makePosition({
+        currency: "USD",
+        cost_minor: 250_000,
+        unrealized_pnl_minor: 25_000,
+        in_base: {
+          cost_minor: 2_000_000,
+          market_value_minor: 2_200_000,
+          unrealized_pnl_minor: 200_000,
+          income_minor: 0,
+          currency: "RUB",
+          rate_on: "2026-07-20",
+        },
+      });
+
+      const { rerender } = wrap(
+        <PositionsTable positions={[position]} mode="native" baseCurrency="RUB" />,
+      );
+      expect(screen.getByTestId("position-profit-percent")).toHaveAttribute(
+        "title",
+        "Доходность в USD. В другой валюте ответ другой — вплоть до противоположного знака: это два разных вопроса, а не расхождение",
+      );
+
+      rerender(<PositionsTable positions={[position]} mode="base" baseCurrency="RUB" />);
+      expect(screen.getByTestId("position-profit-percent")).toHaveAttribute(
+        "title",
+        "Доходность в RUB. В другой валюте ответ другой — вплоть до противоположного знака: это два разных вопроса, а не расхождение",
+      );
+    });
+
+    it("flips the profit's sign and colour with the display mode: a gain in the position's currency, a loss in the base one", () => {
+      // THIS IS NOT A BUG — do not "fix" it by making the two agree.
+      //
+      // It is the owner's explicit decision (2026-07-29), and the whole point
+      // of the ruble cost basis: the base-currency return includes the
+      // currency's own move, the position-currency return does not. When the
+      // ruble strengthens hard enough, the two honest answers disagree in
+      // sign, and both must be shown as they are — a version that kept the
+      // signs in step would be hiding the currency loss from its owner.
+      //
+      // Numbers are lifted verbatim from the backend test that pins the same
+      // scenario (TestPositionInBaseProfitInPositionCurrencyLossInBase in
+      // internal/portfolio/http_position_in_base_test.go), so the two
+      // fixtures tell one story: bought 10 @ $100 when USD->RUB was 100,
+      // quoted at $110 today when it is 50.
+      //   USD: 110 000 - 100 000 =    +10 000  (+10,0 %)
+      //   RUB: 5 500 000 - 10 000 000 = -4 500 000 (-45,0 %)
+      const position = makePosition({
+        currency: "USD",
+        cost_minor: 100_000,
+        income_minor: 0,
+        market_value_minor: 110_000,
+        market_value_currency: "USD",
+        price: "110",
+        unrealized_pnl_minor: 10_000,
+        in_base: {
+          cost_minor: 10_000_000,
+          market_value_minor: 5_500_000,
+          unrealized_pnl_minor: -4_500_000,
+          income_minor: 0,
+          currency: "RUB",
+          rate_on: "2026-07-20",
+        },
+      });
+
+      const { rerender } = wrap(
+        <PositionsTable positions={[position]} mode="native" baseCurrency="RUB" />,
+      );
+
+      const nativeAmount = screen.getByTestId("position-profit-amount");
+      expect(norm(nativeAmount.textContent ?? "")).toBe(norm(formatMinor(10_000, "USD")));
+      expect(nativeAmount.className).toContain("text-emerald-500");
+      expect(norm(screen.getByTestId("position-profit-percent").textContent ?? "")).toBe(
+        norm("+10,0 %"),
+      );
+
+      rerender(<PositionsTable positions={[position]} mode="base" baseCurrency="RUB" />);
+
+      const baseAmount = screen.getByTestId("position-profit-amount");
+      expect(norm(baseAmount.textContent ?? "")).toBe(norm(formatMinor(-4_500_000, "RUB")));
+      expect(baseAmount.className).toContain("text-red-500");
+      expect(baseAmount.className).not.toContain("text-emerald-500");
+      expect(norm(screen.getByTestId("position-profit-percent").textContent ?? "")).toBe(
+        norm("-45,0 %"),
+      );
     });
   });
 });
