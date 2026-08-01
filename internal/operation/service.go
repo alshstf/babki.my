@@ -324,9 +324,14 @@ func mapWriteError(err error) error {
 //
 // The rounding is DOWN, matching CreateTransfer: rounding a "sell everything I
 // hold" up past the position it empties would answer a perfectly good request
-// with an oversell, which is a loud refusal of healthy data. Down can only
-// record slightly less than was asked for, and the response returns the stored
-// row, so the client is told exactly what was recorded.
+// with an oversell, which is a loud refusal of healthy data. The response
+// returns the stored row, so the client is always told exactly what was
+// recorded. Down does not always mean "slightly less", though: a split_ratio
+// truncated down shrinks every later quantity in the position, so a release
+// already recorded against the untruncated position can end up larger than
+// what is left and be refused outright. That refusal is loud and the row is
+// recoverable by deleting and re-entering it, which is the trade being made
+// against a rounding that would break the screen instead.
 //
 // Price is deliberately left alone: it is never replayed, never compared
 // against anything, and the row that comes back is the stored one, so a price

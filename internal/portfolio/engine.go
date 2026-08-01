@@ -19,6 +19,19 @@
 // still produces one lot dated on the transfer day, because for those the
 // original dates do not exist to be restored.
 //
+// Quantities are tracked to QuantityScale decimal places, the same scale the
+// journal stores them at, so a split truncates its product rather than letting
+// a position hold a quantity that could never be written down. Two consequences
+// are worth knowing. Truncation does not compose: a reverse split followed by a
+// forward one can land a hair below what the pre-truncation engine computed, so
+// a full-position sell recorded by an older build may no longer fit the
+// position it was meant to empty — the refusal is loud, and deleting and
+// re-entering that operation resolves it. And a deep enough reverse split can
+// leave a lot with no quantity but a live cost basis; it is consumed first by
+// any later release, but if nothing follows it, the position keeps a basis it
+// can no longer sell. Writing that basis off would treat a split as a disposal,
+// which it is not.
+//
 // A position's currency is fixed by the first operation that touches the
 // instrument in that account; every later operation for the same instrument
 // must repeat it. Minor amounts of different currencies are never mixed into
