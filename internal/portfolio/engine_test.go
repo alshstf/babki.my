@@ -492,6 +492,146 @@ func TestTransferInLotUsesTransferDate(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
+// TestReleasedLotsSingleLot pins the simple case: a release that fits
+// entirely inside the oldest lot yields exactly one piece, carrying that
+// lot's own acquisition date.
+func TestReleasedLotsSingleLot(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 2, &sber, "10", "100", -100_000, 10),
+	}
+	lots, err := portfolio.ReleasedLots(ops, sber, d("4"))
+	if err != nil {
+		t.Fatalf("ReleasedLots: %v", err)
+	}
+	if len(lots) != 1 {
+		t.Fatalf("pieces = %d, want 1", len(lots))
+	}
+	l := lots[0]
+	if !l.Quantity.Equal(d("4")) {
+		t.Errorf("qty = %s, want 4", l.Quantity)
+	}
+	if !l.AcquiredOn.Equal(day(2)) {
+		t.Errorf("acquired = %s, want %s", l.AcquiredOn.Format("2006-01-02"), day(2).Format("2006-01-02"))
+	}
+	// floor(100010 * 4/10) = 40004
+	if l.CostMinor != 40_004 {
+		t.Errorf("cost = %d, want 40004", l.CostMinor)
+	}
+}
+
+// TestReleasedLotsCrossesTwoLots pins the multi-lot case: a release larger
+// than the oldest lot must yield one piece per lot it touches, in FIFO
+// order, each with its own cost and acquisition date.
+func TestReleasedLotsCrossesTwoLots(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 2, &sber, "10", "100", -100_000, 10),
+		op(portfolio.TypeBuy, 9, &sber, "5", "110", -55_000, 5),
+	}
+	lots, err := portfolio.ReleasedLots(ops, sber, d("15"))
+	if err != nil {
+		t.Fatalf("ReleasedLots: %v", err)
+	}
+	if len(lots) != 2 {
+		t.Fatalf("pieces = %d, want 2", len(lots))
+	}
+	if !lots[0].Quantity.Equal(d("10")) || lots[0].CostMinor != 100_010 || !lots[0].AcquiredOn.Equal(day(2)) {
+		t.Errorf("piece 0 = %+v, want {qty 10 cost 100010 on %s}", lots[0], day(2).Format("2006-01-02"))
+	}
+	if !lots[1].Quantity.Equal(d("5")) || lots[1].CostMinor != 55_005 || !lots[1].AcquiredOn.Equal(day(9)) {
+		t.Errorf("piece 1 = %+v, want {qty 5 cost 55005 on %s}", lots[1], day(9).Format("2006-01-02"))
+	}
+}
+
+// TestReleasedLotsPartialLot pins the partial-release rule: the piece takes
+// a floored share of the lot's cost and inherits the lot's own acquisition
+// date, exactly like the internal releaseFIFO behavior already pinned by
+// TestPartialSellKeepsLotDate.
+func TestReleasedLotsPartialLot(t *testing.T) {
+	ops := []portfolio.Operation{
+		// 3 units for 100.01 total — deliberately not divisible by 3
+		op(portfolio.TypeBuy, 2, &sber, "3", "", -10_001, 0),
+	}
+	lots, err := portfolio.ReleasedLots(ops, sber, d("1"))
+	if err != nil {
+		t.Fatalf("ReleasedLots: %v", err)
+	}
+	if len(lots) != 1 {
+		t.Fatalf("pieces = %d, want 1", len(lots))
+	}
+	l := lots[0]
+	if !l.Quantity.Equal(d("1")) {
+		t.Errorf("qty = %s, want 1", l.Quantity)
+	}
+	if !l.AcquiredOn.Equal(day(2)) {
+		t.Errorf("acquired = %s, want the buy day %s", l.AcquiredOn.Format("2006-01-02"), day(2).Format("2006-01-02"))
+	}
+	// floor(10001 * 1/3) = 3333
+	if l.CostMinor != 3_333 {
+		t.Errorf("cost = %d, want 3333", l.CostMinor)
+	}
+}
+
+// TestReleasedLotsSumMatchesReleasedCost is the discriminating test: across a
+// long, awkward mix of buys and sells (leftover lots with non-divisible
+// costs) the sum of the pieces ReleasedLots returns must equal, to the last
+// minor unit, what ReleasedCost returns for the very same release. An
+// implementation that computes the pieces separately from the total — and
+// drifts by even one minor unit on a partial piece — fails here. It also
+// checks the pieces' quantities sum back to the requested release quantity.
+func TestReleasedLotsSumMatchesReleasedCost(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "7", "", -100_003, 7),
+		op(portfolio.TypeBuy, 2, &sber, "3", "", -33_337, 0),
+		op(portfolio.TypeSell, 3, &sber, "5", "", 71_111, 3),
+		op(portfolio.TypeBuy, 4, &sber, "11", "", -77_771, 3),
+		op(portfolio.TypeSell, 5, &sber, "9", "", 91_119, 0),
+		op(portfolio.TypeBuy, 6, &sber, "4", "", -10_007, 1),
+		op(portfolio.TypeSell, 7, &sber, "6", "", 41_113, 7),
+		op(portfolio.TypeSell, 8, &sber, "2", "", 13_337, 0),
+		op(portfolio.TypeBuy, 9, &sber, "5", "", -12_345, 2),
+		op(portfolio.TypeSell, 10, &sber, "2", "", 9_991, 1),
+	}
+	// 6 units remain after this sequence (see TestLotsStayExactOverLongSequence):
+	// a 1-unit tail of the day-6 lot plus all 5 units of the day-9 lot. Exercise
+	// release sizes that stay inside the first lot, cross the boundary with a
+	// clean fraction, cross it with an awkward fraction, and drain everything.
+	for _, qty := range []string{"1", "3", "4.5", "6"} {
+		wantCost, err := portfolio.ReleasedCost(ops, sber, d(qty))
+		if err != nil {
+			t.Fatalf("ReleasedCost(%s): %v", qty, err)
+		}
+		pieces, err := portfolio.ReleasedLots(ops, sber, d(qty))
+		if err != nil {
+			t.Fatalf("ReleasedLots(%s): %v", qty, err)
+		}
+		var gotCost int64
+		gotQty := decimal.Zero
+		for _, l := range pieces {
+			gotCost += l.CostMinor
+			gotQty = gotQty.Add(l.Quantity)
+		}
+		if gotCost != wantCost {
+			t.Errorf("qty %s: sum of piece costs = %d, want %d (ReleasedCost)", qty, gotCost, wantCost)
+		}
+		if !gotQty.Equal(d(qty)) {
+			t.Errorf("qty %s: sum of piece quantities = %s, want %s", qty, gotQty, qty)
+		}
+	}
+}
+
+// TestReleasedLotsOversellRejected pins that ReleasedLots fails exactly like
+// the plain-cost ReleasedCost/releaseFIFO path when asked to release more
+// than is held.
+func TestReleasedLotsOversellRejected(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 2, &sber, "10", "100", -100_000, 10),
+	}
+	_, err := portfolio.ReleasedLots(ops, sber, d("11"))
+	if !errors.Is(err, portfolio.ErrOversell) {
+		t.Fatalf("err = %v, want ErrOversell", err)
+	}
+}
+
 func TestBadOperations(t *testing.T) {
 	for name, bad := range map[string]portfolio.Operation{
 		"buy without qty":      op(portfolio.TypeBuy, 1, &sber, "", "100", -1000, 0),

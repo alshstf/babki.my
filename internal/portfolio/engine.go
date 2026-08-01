@@ -76,19 +76,34 @@ func badOp(o Operation, msg string) error {
 	return fmt.Errorf("%w: %s %s: %s", ErrBadOperation, o.Type, o.OccurredOn.Format("2006-01-02"), msg)
 }
 
+// ReleasedLot is one piece of a FIFO release: the quantity taken from a
+// single source lot, the cost basis attributed to that quantity, and the day
+// the source lot was acquired (see Lot.AcquiredOn — the same rules apply: a
+// partial piece inherits its lot's date, and a transfer-created lot carries
+// the transfer date rather than the original purchase date). A release that
+// spans several lots yields several pieces, oldest lot first.
+type ReleasedLot struct {
+	Quantity   decimal.Decimal
+	CostMinor  int64
+	AcquiredOn time.Time
+}
+
 // releaseFIFO removes qty from the position's lots front-to-back and
-// returns the released cost. Partial lot pieces use floor proportioning;
-// the final piece of a lot takes the lot's remaining cost so that the sum
-// of released costs always equals the original lot cost exactly.
-func (p *Position) releaseFIFO(qty decimal.Decimal) (int64, error) {
+// returns the pieces released, oldest lot first. Partial lot pieces use
+// floor proportioning; the final piece of a lot takes the lot's remaining
+// cost so that the sum of released piece costs always equals the original
+// lot cost exactly.
+func (p *Position) releaseFIFO(qty decimal.Decimal) ([]ReleasedLot, error) {
 	if qty.GreaterThan(p.Quantity) {
-		return 0, fmt.Errorf("%w: have %s, need %s", ErrOversell, p.Quantity, qty)
+		return nil, fmt.Errorf("%w: have %s, need %s", ErrOversell, p.Quantity, qty)
 	}
+	var pieces []ReleasedLot
 	var released int64
 	remaining := qty
 	for remaining.IsPositive() {
 		l := &p.Lots[0]
 		if l.Quantity.LessThanOrEqual(remaining) {
+			pieces = append(pieces, ReleasedLot{Quantity: l.Quantity, CostMinor: l.CostMinor, AcquiredOn: l.AcquiredOn})
 			released += l.CostMinor
 			remaining = remaining.Sub(l.Quantity)
 			p.Lots = p.Lots[1:]
@@ -99,6 +114,7 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) (int64, error) {
 		// day as the part just released.
 		share := decimal.NewFromInt(l.CostMinor).
 			Mul(remaining).Div(l.Quantity).Floor().IntPart()
+		pieces = append(pieces, ReleasedLot{Quantity: remaining, CostMinor: share, AcquiredOn: l.AcquiredOn})
 		l.CostMinor -= share
 		l.Quantity = l.Quantity.Sub(remaining)
 		released += share
@@ -106,7 +122,17 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) (int64, error) {
 	}
 	p.Quantity = p.Quantity.Sub(qty)
 	p.CostMinor -= released
-	return released, nil
+	return pieces, nil
+}
+
+// releasedCost sums the pieces' costs — the one number most callers of
+// releaseFIFO actually need.
+func releasedCost(pieces []ReleasedLot) int64 {
+	var total int64
+	for _, pc := range pieces {
+		total += pc.CostMinor
+	}
+	return total
 }
 
 func (p *Position) addLot(qty decimal.Decimal, costMinor int64, acquiredOn time.Time) {
@@ -176,11 +202,11 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			if o.AmountMinor <= 0 {
 				return nil, badOp(o, "sell amount must be positive")
 			}
-			released, err := p.releaseFIFO(*o.Quantity)
+			pieces, err := p.releaseFIFO(*o.Quantity)
 			if err != nil {
 				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 			}
-			p.RealizedPnLMinor += o.AmountMinor - released - o.FeeMinor
+			p.RealizedPnLMinor += o.AmountMinor - releasedCost(pieces) - o.FeeMinor
 			p.FeesMinor += o.FeeMinor
 		case TypeDividend, TypeCoupon:
 			p.IncomeMinor += o.AmountMinor
@@ -239,19 +265,35 @@ func drainLotsCost(p *Position, amount int64) {
 	}
 }
 
+// ReleasedLots computes the FIFO lot breakdown that releasing qty units of
+// the instrument would consume, after folding the given journal, without
+// mutating anything: which source lots, in what quantity/cost pieces, in
+// FIFO order (see ReleasedLot). A future task will use this to carry the
+// consumed lots' own dates onto a transfer's destination account instead of
+// collapsing them into the transfer date, as ReleasedCost's single number
+// forces today.
+func ReleasedLots(ops []Operation, instrumentID uuid.UUID, qty decimal.Decimal) ([]ReleasedLot, error) {
+	positions, err := Compute(ops)
+	if err != nil {
+		return nil, err
+	}
+	p, ok := positions[instrumentID]
+	if !ok {
+		return nil, fmt.Errorf("%w: no position", ErrOversell)
+	}
+	return p.releaseFIFO(qty)
+}
+
 // ReleasedCost computes the FIFO cost basis of qty units of the instrument
 // after folding the given journal, without mutating anything. It is used by
 // the transfer service to capture the carried basis at creation time. The
 // caller is expected to persist the returned basis on the transfer_in
 // operation to maintain the snapshot semantics described in the package doc.
+// It is a thin sum over ReleasedLots so the two can never drift apart.
 func ReleasedCost(ops []Operation, instrumentID uuid.UUID, qty decimal.Decimal) (int64, error) {
-	positions, err := Compute(ops)
+	pieces, err := ReleasedLots(ops, instrumentID, qty)
 	if err != nil {
 		return 0, err
 	}
-	p, ok := positions[instrumentID]
-	if !ok {
-		return 0, fmt.Errorf("%w: no position", ErrOversell)
-	}
-	return p.releaseFIFO(qty)
+	return releasedCost(pieces), nil
 }
