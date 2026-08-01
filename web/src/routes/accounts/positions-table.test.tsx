@@ -622,6 +622,34 @@ describe("PositionsTable", () => {
       );
     });
 
+    it("names the currency the figures are actually in, not the one the mode asked for", () => {
+      // Base mode with no fx rate leaves both cost and profit in the
+      // position's own currency, so the ratio is a USD one no matter what
+      // the mode wanted. A label taken from the mode rather than from the
+      // resolved figures would announce a ruble return over two dollar
+      // numbers — the one case where the two sources disagree, and the
+      // reason the label follows the numbers.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "USD",
+              cost_minor: 250_000,
+              unrealized_pnl_minor: 25_000,
+              in_base: null,
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(screen.getByTestId("position-profit-percent")).toHaveAttribute(
+        "title",
+        "Доходность в USD. В другой валюте ответ другой — вплоть до противоположного знака: это два разных вопроса, а не расхождение",
+      );
+    });
+
     it("flips the profit's sign and colour with the display mode: a gain in the position's currency, a loss in the base one", () => {
       // THIS IS NOT A BUG — do not "fix" it by making the two agree.
       //
