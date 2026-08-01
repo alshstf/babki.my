@@ -262,7 +262,7 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 				p.addLot(*o.Quantity, o.AmountMinor, o.OccurredOn)
 				break
 			}
-			if err := checkTransferLots(o); err != nil {
+			if err := CheckTransferLots(o); err != nil {
 				return nil, err
 			}
 			// Rebuild what the source account released, piece by piece, in the
@@ -289,23 +289,44 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 	return positions, nil
 }
 
-// checkTransferLots verifies that a transfer_in's stored FIFO breakdown and
+// CheckTransferLots verifies that a transfer_in's stored FIFO breakdown and
 // the operation carrying it describe the same event: every piece is a real one
 // (positive quantity, non-negative cost), the pieces' quantities sum to the
 // quantity that moved, and their costs sum to the basis that moved.
 //
 // A breakdown that does not add up means a corrupted journal, and the engine
-// refuses the whole computation rather than working around it. The write path
-// derives the operation's own basis by summing these very pieces (see
-// operation.Service.CreateTransfer and LotsCost), so the two can only disagree
-// if the stored rows were damaged afterwards — at which point neither reading
-// is trustworthy: the pieces may be wrong, or the total may be, and nothing
-// here can tell which. The tempting alternative, quietly falling back to a
-// single lot dated on the transfer day, would replace damaged data with a
-// plausible number that looks exactly like a normal old-style transfer, so
-// nobody would ever learn the journal is broken — and the basis behind every
-// figure derived from it would be silently wrong. Loud is the point.
-func checkTransferLots(o Operation) error {
+// refuses the whole computation rather than working around it. The tempting
+// alternative, quietly falling back to a single lot dated on the transfer day,
+// would replace damaged data with a plausible number that looks exactly like a
+// normal old-style transfer, so nobody would ever learn the journal is broken
+// — and the basis behind every figure derived from it would be silently wrong.
+// Loud is the point.
+//
+// Loud on damage, though, is only defensible if healthy data can never trip
+// it, and getting there took more than summing the pieces. The costs are
+// int64 and the write path derives the operation's basis by summing these very
+// pieces (see operation.Service.CreateTransfer and LotsCost), so that half has
+// always been exact. The QUANTITIES were not: they are stored with ten decimal
+// places, while a piece computed in memory has no such limit — a reverse split
+// multiplies lot quantities by a ratio like 0.3333333333 and lands well past
+// the tenth digit. Each piece was then rounded on its own on the way into the
+// table, and two pieces rounding up put the stored sum a whole 1e-10 above the
+// stored quantity: a perfectly legitimate transfer, accepted with a 201, after
+// which this function failed forever and took the receiving account's entire
+// positions screen down with it. That is fixed where it belongs, on the write
+// path: pieces are quantized to the storage scale as the breakdown is built
+// (operation.quantizeLots), the moved quantity is too, and the store re-reads
+// its own rows and runs them through this very function before committing (see
+// operation.Store.CreatePair). What is written is therefore exactly what is
+// read back, and a mismatch here now genuinely means the rows were damaged
+// after the fact — at which point neither reading is trustworthy: the pieces
+// may be wrong, or the total may be, and nothing here can tell which.
+//
+// An operation with no breakdown at all is not this function's business — see
+// the transfer_in branch in Compute for why that case is legitimate — and
+// callers must not pass one; it would be reported as a mismatch against a
+// non-zero quantity.
+func CheckTransferLots(o Operation) error {
 	qty := decimal.Zero
 	var cost int64
 	for i, pc := range o.TransferLots {
@@ -375,9 +396,18 @@ func ReleasedLots(ops []Operation, instrumentID uuid.UUID, qty decimal.Decimal) 
 
 // ReleasedCost computes the FIFO cost basis of qty units of the instrument
 // after folding the given journal, without mutating anything, for callers
-// that need the total and not the breakdown. The transfer service is not one
-// of them any more: it stores the pieces and sums them itself. Kept as a thin
-// sum over ReleasedLots, so the two can never drift apart.
+// that need the total and not the breakdown.
+//
+// NOTHING IN PRODUCTION CALLS IT any more: the transfer service was its one
+// caller and now stores the pieces and sums them itself (see ReleasedLots and
+// LotsCost). It survives, and stays exported, purely as a test oracle: it is
+// the "what should the whole release cost" side of
+// TestReleasedLotsSumMatchesReleasedCost, which pins that a breakdown never
+// drifts from the total it must add up to. Today it cannot drift, because this
+// is deliberately a thin sum over ReleasedLots; the test earns its keep the
+// day anyone computes either side a second, independent way — exactly the
+// change that would otherwise slip through. Do not mistake it for a live path
+// and do not build one on it.
 func ReleasedCost(ops []Operation, instrumentID uuid.UUID, qty decimal.Decimal) (int64, error) {
 	pieces, err := ReleasedLots(ops, instrumentID, qty)
 	if err != nil {

@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"babki.my/babki/internal/portfolio"
 )
 
 type Store struct{ pool *pgxpool.Pool }
@@ -60,15 +62,32 @@ func (s *Store) Create(ctx context.Context, spaceID uuid.UUID, op Operation) (Op
 // insertLotSQL writes one piece of a transfer's FIFO breakdown. seq keeps
 // the pieces in the FIFO order they were released in; the table's foreign
 // key removes them with the operation they describe.
+//
+// It RETURNS the stored row rather than nothing, because quantity is
+// NUMERIC(30,10) and what goes in is not always what comes out — the column
+// has a scale and the value in memory does not. The caller publishes and
+// checks the row Postgres kept, not the one it sent (see CreatePair).
 const insertLotSQL = `
 	INSERT INTO operation_transfer_lots (operation_id, seq, quantity, cost_minor, acquired_on)
-	VALUES ($1, $2, $3, $4, $5)`
+	VALUES ($1, $2, $3, $4, $5)
+	RETURNING quantity, cost_minor, acquired_on`
 
 // CreatePair inserts a transfer_out/transfer_in pair atomically with a
 // shared transfer_group_id, together with the FIFO breakdown carried on the
 // receiving leg (in.TransferLots). All of it lands in one transaction: a
 // transfer_in that lost its breakdown would silently re-date every moved lot
 // to the transfer day, which is exactly the loss this records against.
+//
+// Everything it returns has been read back out of the database, never handed
+// through from the arguments — both operations come from the INSERT's
+// RETURNING, and so now do the pieces. That is not ceremony: quantities are
+// stored with a fixed scale, so a piece can come back a shade different from
+// the one that went in, and a response describing pieces that are not in the
+// table is a response nobody can act on. The pieces as stored are then run
+// through the engine's own check before the transaction commits, so a pair
+// whose breakdown does not add up in the database is never committed at all
+// — instead of being accepted and failing every later read of the receiving
+// account (see portfolio.CheckTransferLots).
 func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Operation) (Operation, Operation, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -88,13 +107,28 @@ func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Opera
 	if err != nil {
 		return Operation{}, Operation{}, fmt.Errorf("transfer in: %w", err)
 	}
-	for i, lot := range in.TransferLots {
-		if _, err := tx.Exec(ctx, insertLotSQL,
-			cIn.ID, i, lot.Quantity, lot.CostMinor, lot.AcquiredOn); err != nil {
-			return Operation{}, Operation{}, fmt.Errorf("transfer lot %d: %w", i, err)
+	if len(in.TransferLots) > 0 {
+		stored := make([]ReleasedLot, 0, len(in.TransferLots))
+		for i, lot := range in.TransferLots {
+			var back ReleasedLot
+			if err := tx.QueryRow(ctx, insertLotSQL,
+				cIn.ID, i, lot.Quantity, lot.CostMinor, lot.AcquiredOn).
+				Scan(&back.Quantity, &back.CostMinor, &back.AcquiredOn); err != nil {
+				return Operation{}, Operation{}, fmt.Errorf("transfer lot %d: %w", i, err)
+			}
+			stored = append(stored, back)
+		}
+		cIn.TransferLots = stored
+		if err := portfolio.CheckTransferLots(cIn); err != nil {
+			// The rows are already in this transaction, so refusing here rolls
+			// them back. Reaching this means the write path built a breakdown
+			// the storage cannot hold faithfully — a bug in this program, not
+			// something the caller did — so it is not one of the domain errors
+			// and surfaces as a server error, loudly, on the request that
+			// caused it rather than on every future read by someone else.
+			return Operation{}, Operation{}, fmt.Errorf("transfer lots as stored: %w", err)
 		}
 	}
-	cIn.TransferLots = in.TransferLots
 	return cOut, cIn, tx.Commit(ctx)
 }
 
@@ -115,17 +149,33 @@ func (s *Store) list(ctx context.Context, sql string, args ...any) ([]Operation,
 	return out, rows.Err()
 }
 
+// ListByAccount returns one page of the account's journal, newest first, with
+// the FIFO breakdown attached to the transfers that have one. The journal
+// listing needs it for the same reason the engine does: a transfer's amount is
+// a basis assembled from purchases on several days, and expressing it in the
+// space's base currency means converting each piece at the rate of the day it
+// was bought (see Handler.operationInBase). Without the pieces the row would
+// have to be converted at the rate of the day the shares changed brokers,
+// which is exactly the misvaluation this whole mechanism exists to prevent —
+// and the journal would print a different number than the position screen for
+// the same shares.
 func (s *Store) ListByAccount(ctx context.Context, spaceID, accountID uuid.UUID, limit, offset int) ([]Operation, error) {
-	return s.list(ctx, `SELECT `+cols+` FROM operations
+	ops, err := s.list(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND account_id = $2
 		ORDER BY occurred_on DESC, created_at DESC LIMIT $3 OFFSET $4`,
 		spaceID, accountID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.attachTransferLots(ctx, spaceID, ops); err != nil {
+		return nil, err
+	}
+	return ops, nil
 }
 
 // ListForEngine returns the account's full journal in engine order, with the
 // FIFO breakdown attached to the transfers that have one. The breakdown is
-// journal data the engine needs (it dates the lots a transfer brought in);
-// the read paths that feed the API deliberately do not carry it.
+// journal data the engine needs: it dates the lots a transfer brought in.
 func (s *Store) ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]Operation, error) {
 	ops, err := s.list(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND account_id = $2
@@ -133,27 +183,36 @@ func (s *Store) ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.attachTransferLots(ctx, spaceID, accountID, ops); err != nil {
+	if err := s.attachTransferLots(ctx, spaceID, ops); err != nil {
 		return nil, err
 	}
 	return ops, nil
 }
 
-// attachTransferLots fills TransferLots on the account's operations. It is a
+// attachTransferLots fills TransferLots on the given operations. It is a
 // separate query rather than a join onto the journal so that an operation
 // with several pieces stays a single journal entry. Anything without stored
 // pieces keeps an empty list: every non-transfer, a transfer whose basis was
 // given by hand, and a transfer recorded before the breakdown was kept.
-func (s *Store) attachTransferLots(ctx context.Context, spaceID, accountID uuid.UUID, ops []Operation) error {
+//
+// It selects by the operations in hand rather than by their account, so one
+// page of a journal costs one page's worth of pieces rather than every
+// transfer the account has ever received. The join still scopes the read to
+// the caller's space: an id is not by itself proof of ownership.
+func (s *Store) attachTransferLots(ctx context.Context, spaceID uuid.UUID, ops []Operation) error {
 	if len(ops) == 0 {
 		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(ops))
+	for _, o := range ops {
+		ids = append(ids, o.ID)
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT l.operation_id, l.quantity, l.cost_minor, l.acquired_on
 		FROM operation_transfer_lots l
 		JOIN operations o ON o.id = l.operation_id
-		WHERE o.space_id = $1 AND o.account_id = $2
-		ORDER BY l.operation_id, l.seq`, spaceID, accountID)
+		WHERE o.space_id = $1 AND l.operation_id = ANY($2)
+		ORDER BY l.operation_id, l.seq`, spaceID, ids)
 	if err != nil {
 		return err
 	}

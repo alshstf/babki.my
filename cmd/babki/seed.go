@@ -364,6 +364,14 @@ func seedInstrumentsAndOperations(
 	//	  re-dating shares that did not change value the day they changed
 	//	  brokers. Both figures are meant to be checked by eye against a real
 	//	  GET .../positions response on the destination account.
+	//
+	// The arriving JOURNAL ROW on Freedom KZ reads 118 000,00 ₽ as well: a
+	// transfer's amount is a basis assembled on other days, so the journal
+	// converts it piece by piece at those days' rates, exactly as the position
+	// does (see operation.Handler.operationInBase). Until that was fixed this
+	// row showed the invented 149 150,00 ₽ right next to a position saying
+	// 118 000,00 ₽ — two screens of the demo contradicting each other about
+	// the same ten shares.
 	if _, _, err := opSvc.CreateTransfer(ctx, spaceID, operation.TransferParams{
 		FromAccountID: tbank, ToAccountID: freedom, InstrumentID: instIDs["TSLA"],
 		Quantity: decimal.RequireFromString("10"), OccurredOn: d("2026-07-20"),
