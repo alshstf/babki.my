@@ -652,3 +652,125 @@ func TestBadOperations(t *testing.T) {
 		}
 	}
 }
+
+// TestSplitKeepsQuantitiesTheJournalCanRecord is the root fix of the whole
+// "sell everything and break the account forever" family, at the level where
+// the unrecordable number was born.
+//
+// A split is the only thing the engine does that can produce a quantity the
+// journal cannot hold: it multiplies. 0.35 shares by a 1:3 reverse split
+// (0.3333333333, the natural way anyone records one) is 0.116666666655 —
+// eleven decimal places for a lot that arrived with two, in a ledger that keeps
+// ten. A position holding that number is a position nobody can close: "sell all
+// of it" names a quantity the sell row cannot store, so what is checked and
+// what is written are two different quantities, and the write path rounds to
+// NEAREST, which is up here.
+//
+// Every quantity below must therefore be expressible in the journal, and none
+// of them may exceed the exact product — a ledger may lose a ten-billionth of a
+// share to arithmetic it cannot express, but must never invent one.
+func TestSplitKeepsQuantitiesTheJournalCanRecord(t *testing.T) {
+	split := op(portfolio.TypeSplit, 3, &sber, "", "", 0, 0)
+	split.SplitRatio = dp("0.3333333333")
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "0.35", "100", -3_500, 0),
+		op(portfolio.TypeBuy, 2, &sber, "0.35", "200", -7_000, 0),
+		split,
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+
+	// 0.7 × 0.3333333333 = 0.23333333331 exactly; the journal can hold
+	// 0.2333333333 of that and the last ten-billionth of a share is lost, not
+	// rounded up into existence.
+	if want := d("0.2333333333"); !p.Quantity.Equal(want) {
+		t.Errorf("position quantity = %s, want %s", p.Quantity, want)
+	}
+	if exact := d("0.7").Mul(d("0.3333333333")); p.Quantity.GreaterThan(exact) {
+		t.Errorf("position quantity = %s, more than the exact product %s — shares were invented", p.Quantity, exact)
+	}
+	if p.Quantity.Exponent() < -portfolio.QuantityScale {
+		t.Errorf("position quantity = %s, finer than the %d decimal places the journal records — this is the number that cannot be sold",
+			p.Quantity, portfolio.QuantityScale)
+	}
+	for i, l := range p.Lots {
+		if l.Quantity.Exponent() < -portfolio.QuantityScale {
+			t.Errorf("lot %d quantity = %s, finer than the %d decimal places the journal records",
+				i, l.Quantity, portfolio.QuantityScale)
+		}
+	}
+	// The lost ten-billionth comes off ONE lot, not each of them: the running
+	// total is what gets truncated, so the pieces still add up to the position
+	// exactly rather than approximately (checkLotInvariants), and the split
+	// does not silently re-date anything.
+	want := []portfolio.Lot{
+		{Quantity: d("0.1166666666"), CostMinor: 3_500, AcquiredOn: day(1)},
+		{Quantity: d("0.1166666667"), CostMinor: 7_000, AcquiredOn: day(2)},
+	}
+	if len(p.Lots) != len(want) {
+		t.Fatalf("lots = %+v, want %d", p.Lots, len(want))
+	}
+	for i, w := range want {
+		if !p.Lots[i].Quantity.Equal(w.Quantity) || p.Lots[i].CostMinor != w.CostMinor ||
+			!p.Lots[i].AcquiredOn.Equal(w.AcquiredOn) {
+			t.Errorf("lot %d = %s/%d/%s, want %s/%d/%s", i,
+				p.Lots[i].Quantity, p.Lots[i].CostMinor, p.Lots[i].AcquiredOn.Format("2006-01-02"),
+				w.Quantity, w.CostMinor, w.AcquiredOn.Format("2006-01-02"))
+		}
+	}
+	checkLotInvariants(t, p)
+
+	// And the whole position can now be released in one entry the journal can
+	// actually record — the thing that was impossible before.
+	sold := make([]portfolio.Operation, 0, len(ops)+1)
+	sold = append(sold, ops...)
+	sold = append(sold, op(portfolio.TypeSell, 4, &sber, p.Quantity.String(), "", 10_000, 0))
+	after, err := portfolio.Compute(sold)
+	if err != nil {
+		t.Fatalf("selling the whole position: %v", err)
+	}
+	if !after[sber].Quantity.IsZero() {
+		t.Errorf("quantity after selling everything = %s, want 0 — no unsellable dust may be left",
+			after[sber].Quantity)
+	}
+}
+
+// TestSplitThatRoundsALotAwayKeepsItsCost pins the edge the rule above creates:
+// a reverse split deep enough that a lot's entire holding rounds away.
+//
+// The shares are gone — that is what the ledger can express and no rounding
+// rule can conjure them back — but the money spent on them is not, and neither
+// is the day it was spent, which is what values it in another currency. The lot
+// stays, holding no shares and all of its cost, rather than having that cost
+// swept onto some other lot's date.
+func TestSplitThatRoundsALotAwayKeepsItsCost(t *testing.T) {
+	split := op(portfolio.TypeSplit, 2, &sber, "", "", 0, 0)
+	split.SplitRatio = dp("0.0000000001")
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "0.4", "10", -400, 0),
+		split,
+		op(portfolio.TypeBuy, 3, &sber, "5", "100", -50_000, 0),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	if want := d("5"); !p.Quantity.Equal(want) {
+		t.Errorf("position quantity = %s, want %s (0.4 × 1e-10 is below anything the journal can name)", p.Quantity, want)
+	}
+	if p.CostMinor != 50_400 {
+		t.Errorf("position cost = %d, want 50400 — a split is not a disposal, so no money may go missing", p.CostMinor)
+	}
+	if len(p.Lots) != 2 {
+		t.Fatalf("lots = %+v, want 2 (the shareless one still holds its 400)", p.Lots)
+	}
+	if !p.Lots[0].Quantity.IsZero() || p.Lots[0].CostMinor != 400 || !p.Lots[0].AcquiredOn.Equal(day(1)) {
+		t.Errorf("shareless lot = %s/%d/%s, want 0/400/%s", p.Lots[0].Quantity, p.Lots[0].CostMinor,
+			p.Lots[0].AcquiredOn.Format("2006-01-02"), day(1).Format("2006-01-02"))
+	}
+	checkLotInvariants(t, p)
+}

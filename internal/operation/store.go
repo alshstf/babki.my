@@ -55,8 +55,43 @@ func insertOne(ctx context.Context, q interface {
 	return created, err
 }
 
-func (s *Store) Create(ctx context.Context, spaceID uuid.UUID, op Operation) (Operation, error) {
-	return insertOne(ctx, s.pool, spaceID, op)
+// Create inserts one operation and hands the row AS STORED to verify before
+// the transaction commits, so a row the database cannot hold faithfully is
+// rolled back instead of published.
+//
+// The distinction between the two is the whole point: quantity and split_ratio
+// are stored on a fixed scale, so the operation Postgres keeps is not
+// necessarily the one the caller checked, and a quantity that comes back a
+// shade larger than the one validated is an oversell nobody learns about until
+// somebody else's later read (see Service.Create for the fault this caught).
+// Confirming the returned row closes that gap whatever rounding a column
+// applies: the committed journal is always one that replays.
+//
+// verify's error is returned as-is and aborts the write. It describes a
+// disagreement between this program and its own storage, not a bad request, so
+// callers must not dress it up as a domain error. The transfer pair has the
+// same guard for the same reason (see CreatePair).
+//
+// A nil verify means the caller has nothing to confirm — it is a plain insert
+// then, for tests exercising storage itself rather than the journal.
+func (s *Store) Create(ctx context.Context, spaceID uuid.UUID, op Operation, verify func(Operation) error) (Operation, error) {
+	if verify == nil {
+		return insertOne(ctx, s.pool, spaceID, op)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Operation{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	created, err := insertOne(ctx, tx, spaceID, op)
+	if err != nil {
+		return Operation{}, err
+	}
+	if err := verify(created); err != nil {
+		return Operation{}, err
+	}
+	return created, tx.Commit(ctx)
 }
 
 // insertLotSQL writes one piece of a transfer's FIFO breakdown. seq keeps
@@ -195,10 +230,28 @@ func (s *Store) ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID)
 // pieces keeps an empty list: every non-transfer, a transfer whose basis was
 // given by hand, and a transfer recorded before the breakdown was kept.
 //
+// BOTH legs of a transfer pair get the breakdown, though only one of them
+// stores it. The rows are written next to the receiving leg, whose account
+// cannot recover the acquisition dates any other way (see the 0007 migration),
+// but the pieces do not describe an arrival — they describe the parcel, and the
+// departing leg is the same parcel with the opposite sign: same instrument,
+// same quantity, same basis, same purchases behind it. Leaving the sending leg
+// without them meant it was the one row in the system still converting that
+// basis at the rate of the day the shares changed brokers, so the source
+// account's journal printed 149 150 ₽ for the very shares the destination's
+// journal and positions both printed 118 000 ₽ for. One pair, one set of
+// purchases, one answer.
+//
+// Resolving the sibling here rather than duplicating rows keeps the breakdown a
+// single fact with a single owner: nothing can drift, and a transfer recorded
+// before this table still has no pieces on either leg, which is the honest
+// answer for it.
+//
 // It selects by the operations in hand rather than by their account, so one
 // page of a journal costs one page's worth of pieces rather than every
-// transfer the account has ever received. The join still scopes the read to
-// the caller's space: an id is not by itself proof of ownership.
+// transfer the account has ever received. Every join stays scoped to the
+// caller's space: an id is not by itself proof of ownership, and neither is a
+// transfer_group_id.
 func (s *Store) attachTransferLots(ctx context.Context, spaceID uuid.UUID, ops []Operation) error {
 	if len(ops) == 0 {
 		return nil
@@ -208,11 +261,20 @@ func (s *Store) attachTransferLots(ctx context.Context, spaceID uuid.UUID, ops [
 		ids = append(ids, o.ID)
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT l.operation_id, l.quantity, l.cost_minor, l.acquired_on
-		FROM operation_transfer_lots l
-		JOIN operations o ON o.id = l.operation_id
-		WHERE o.space_id = $1 AND l.operation_id = ANY($2)
-		ORDER BY l.operation_id, l.seq`, spaceID, ids)
+		WITH carriers AS (
+			SELECT o.id, COALESCE(peer.id, o.id) AS carrier
+			FROM operations o
+			LEFT JOIN operations peer
+				ON o.type = 'transfer_out'
+				AND peer.space_id = o.space_id
+				AND peer.transfer_group_id = o.transfer_group_id
+				AND peer.type = 'transfer_in'
+			WHERE o.space_id = $1 AND o.id = ANY($2)
+		)
+		SELECT c.id, l.quantity, l.cost_minor, l.acquired_on
+		FROM carriers c
+		JOIN operation_transfer_lots l ON l.operation_id = c.carrier
+		ORDER BY c.id, l.seq`, spaceID, ids)
 	if err != nil {
 		return err
 	}

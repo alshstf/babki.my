@@ -178,3 +178,126 @@ func TestTransferWithoutBreakdownStillConvertsOnItsOwnDate(t *testing.T) {
 		t.Errorf("in_base.rate_on = %q, want 2026-07-20", row.InBase.RateOn)
 	}
 }
+
+// TestBothTransferLegsConvertAtThePurchaseDates is the other half of the same
+// complaint, on the leg the first fix did not reach.
+//
+// The breakdown is stored next to the ARRIVING leg, so while only that leg
+// read it, the departing one went on being converted the old way — at the rate
+// of the day the shares changed brokers. On the demo data the source account's
+// journal printed
+//
+//	transfer_out (Т-Банк):     190 000 × 78.50 = 14 915 000 = 149 150,00 ₽
+//	transfer_in  (Freedom KZ): 5 400 000 + 6 400 000 = 11 800 000 = 118 000,00 ₽
+//
+// for one pair: same instrument, same quantity, same amount_minor, two
+// different ruble figures, and the larger one is the very number README.md and
+// cmd/babki/seed.go call invented. The pieces describe the parcel, not its
+// arrival, so both legs are now converted from them.
+func TestBothTransferLegsConvertAtThePurchaseDates(t *testing.T) {
+	url, c, mdStore := newAPIWithConverter(t)
+	seedFxRate(t, mdStore, "2026-05-13", "60.00")
+	seedFxRate(t, mdStore, "2026-06-15", "64.00")
+	seedFxRate(t, mdStore, "2026-07-20", "78.50")
+
+	from := mkAccount(t, url, c, "Т-Банк", "USD")
+	to := mkAccount(t, url, c, "Freedom KZ", "USD")
+	tsla := mkInstrument(t, url, c,
+		`{"type":"share","name":"Tesla","ticker":"TSLA","currency":"USD"}`)
+
+	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-05-13","quantity":"5","price":"180","amount_minor":-90000,"currency":"USD"}`, from, tsla))
+	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-06-15","quantity":"5","price":"200","amount_minor":-100000,"currency":"USD"}`, from, tsla))
+
+	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20"}`,
+		from, to, tsla))
+	if resp.StatusCode != 201 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
+	}
+	var pair transferResp
+	decodeJSON(t, resp, &pair)
+
+	const wantBase = int64(11_800_000)
+	const collapsed = int64(14_915_000)
+
+	outRow := findOperation(t, listJournal(t, url, c, from), pair.Out.ID)
+	inRow := findOperation(t, listJournal(t, url, c, to), pair.In.ID)
+	if outRow.InBase == nil || inRow.InBase == nil {
+		t.Fatalf("in_base: out = %+v, in = %+v — both legs describe the same purchases, so both convert or neither does",
+			outRow.InBase, inRow.InBase)
+	}
+	if outRow.AmountMinor != inRow.AmountMinor {
+		t.Fatalf("the legs carry %d and %d in USD — the rest of this test assumes one parcel",
+			outRow.AmountMinor, inRow.AmountMinor)
+	}
+	if outRow.InBase.AmountMinor != wantBase {
+		t.Errorf("transfer_out in_base.amount_minor = %d, want %d (118 000,00 ₽, each piece at the rate of the day it was bought); %d is the same shares priced on the day they changed brokers",
+			outRow.InBase.AmountMinor, wantBase, collapsed)
+	}
+	if outRow.InBase.AmountMinor != inRow.InBase.AmountMinor {
+		t.Errorf("the source's journal says %d ₽ and the destination's says %d ₽ about one transfer of the same ten shares",
+			outRow.InBase.AmountMinor, inRow.InBase.AmountMinor)
+	}
+	// Same reasoning, same headline date: the newest purchase in the parcel,
+	// never the transfer's own 2026-07-20.
+	if outRow.InBase.RateOn != "2026-06-15" {
+		t.Errorf("transfer_out in_base.rate_on = %q, want 2026-06-15", outRow.InBase.RateOn)
+	}
+	// And both say out loud that their figure was assembled, so the screen that
+	// reads rate_on aloud cannot mistake it for an ordinary conversion date.
+	if !outRow.InBase.AssembledFromLots || !inRow.InBase.AssembledFromLots {
+		t.Errorf("assembled_from_lots: out = %v, in = %v, want true on both — rate_on here is one of several rates, not the rate",
+			outRow.InBase.AssembledFromLots, inRow.InBase.AssembledFromLots)
+	}
+}
+
+// TestBothTransferLegsGoNullTogetherWhenAPurchaseDateHasNoRate closes the
+// asymmetry the review flagged as its own finding: with only the arriving leg
+// converted from the pieces, a missing rate for one purchase date nulled that
+// leg's in_base entirely while the departing leg carried on happily converting
+// at the transfer day's rate — the screen showing an honest "not converted"
+// marker next to another screen showing a confident, wrong number.
+//
+// Now that both legs are the same sum of the same terms, they answer the same
+// way: publishing a basis built from only the purchases that happened to
+// convert would be smaller than the truth and indistinguishable from it.
+func TestBothTransferLegsGoNullTogetherWhenAPurchaseDateHasNoRate(t *testing.T) {
+	url, c, mdStore := newAPIWithConverter(t)
+	// No rate on or before 2026-05-13, the first purchase's date; the second
+	// purchase and the transfer day both have one.
+	seedFxRate(t, mdStore, "2026-06-15", "64.00")
+	seedFxRate(t, mdStore, "2026-07-20", "78.50")
+
+	from := mkAccount(t, url, c, "Т-Банк", "USD")
+	to := mkAccount(t, url, c, "Freedom KZ", "USD")
+	tsla := mkInstrument(t, url, c,
+		`{"type":"share","name":"Tesla","ticker":"TSLA","currency":"USD"}`)
+
+	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-05-13","quantity":"5","price":"180","amount_minor":-90000,"currency":"USD"}`, from, tsla))
+	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-06-15","quantity":"5","price":"200","amount_minor":-100000,"currency":"USD"}`, from, tsla))
+
+	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20"}`,
+		from, to, tsla))
+	if resp.StatusCode != 201 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
+	}
+	var pair transferResp
+	decodeJSON(t, resp, &pair)
+
+	outRow := findOperation(t, listJournal(t, url, c, from), pair.Out.ID)
+	inRow := findOperation(t, listJournal(t, url, c, to), pair.In.ID)
+	if inRow.InBase != nil {
+		t.Errorf("transfer_in in_base = %+v, want null: one of the purchases behind it has no rate", inRow.InBase)
+	}
+	if outRow.InBase != nil {
+		t.Errorf("transfer_out in_base = %+v, want null for the same reason as its own pair — 14 915 000 here would be a confident wrong number sitting next to the destination's honest \"not converted\"",
+			outRow.InBase)
+	}
+}

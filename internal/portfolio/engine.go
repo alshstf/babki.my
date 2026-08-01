@@ -51,6 +51,24 @@ var (
 	ErrBadOperation = errors.New("invalid operation")
 )
 
+// QuantityScale is how many decimal places the journal keeps for a quantity:
+// operations.quantity and operation_transfer_lots.quantity are both
+// NUMERIC(30,10) (see the migrations).
+//
+// It lives in the engine rather than next to the SQL because it is not merely a
+// column width. It is the precision the ledger itself works at, and a position
+// is nothing but a fold of ledger entries — so a position holding a quantity
+// finer than the ledger can name is a position no entry can ever fully release:
+// "sell everything I hold" cannot be written down, and whatever IS written down
+// is not the number that was checked. Keeping positions on this scale is
+// therefore a property of the journal-to-positions contract, and it is the
+// engine that has to hold it (see Position.applySplit, the only place a
+// quantity can leave the scale).
+//
+// Naming a scale is not knowing about a database: Compute still takes a journal
+// and returns positions, and touches nothing else.
+const QuantityScale = 10
+
 // Lot is one acquisition that is still (partly) held: the quantity left of
 // it, the cost basis still attributed to that quantity, and the day it was
 // acquired. AcquiredOn is what lets a caller value each lot at the exchange
@@ -58,6 +76,11 @@ var (
 // a transfer_in rebuilds one lot per piece of its stored breakdown, each
 // keeping the day it was bought, and only a transfer WITHOUT a breakdown
 // yields a single lot dated on the transfer itself (see the package doc).
+//
+// Quantity is positive for every lot an acquisition creates, but can be zero
+// afterwards: a reverse split deep enough to round a lot's whole holding away
+// leaves it with no shares and its cost basis intact (see applySplit). The lot
+// stays in the queue — the money is real and belongs to the day it was spent.
 type Lot struct {
 	Quantity   decimal.Decimal
 	CostMinor  int64
@@ -82,7 +105,9 @@ type Position struct {
 	// behind them rather than being re-sorted, because a release must depend
 	// only on replaying the journal in its own order.
 	// Their quantities sum to Quantity and their costs sum to CostMinor
-	// exactly; a closed position has none.
+	// exactly. A position closed by selling everything has none; one whose
+	// shares were rounded away by a reverse split keeps the shareless lots that
+	// still hold the money spent on them (see Lot and applySplit).
 	Lots []Lot
 }
 
@@ -151,6 +176,56 @@ func LotsCost(pieces []ReleasedLot) int64 {
 		total += pc.CostMinor
 	}
 	return total
+}
+
+// applySplit multiplies every lot by ratio — a split rewrites quantities and
+// nothing else, neither a lot's cost basis nor the day it was acquired — and
+// brings the results back onto the journal's quantity scale.
+//
+// Multiplying is the one thing the engine does that can carry a quantity off
+// that scale: a reverse split by 0.3333333333 turns 3.5 shares into
+// 1.16666666655, eleven decimal places for a lot that arrived with one. Left
+// there, the extra digit is not a display detail but a trap. The position would
+// hold a quantity no journal entry can name, so "sell all of it" would be
+// checked against the exact number in memory, recorded as the rounded one, and
+// every later read would compare that recorded quantity against the exact
+// position and find an oversell: a 201 followed by a positions screen that
+// answers 422 forever, for rows the application wrote itself. The same fault
+// reached the transfer breakdown first and was patched there
+// (operation.quantizeLots); this is where it comes from, and fixing it here
+// means no quantity anywhere in the system is finer than the ledger — the
+// journal's own entries never are, so nothing else can introduce one.
+//
+// The allocation is the one releaseFIFO already uses for costs: truncate the
+// RUNNING TOTAL to the scale and give each lot the difference from the previous
+// lot's running total, the last lot taking whatever is left of the position's
+// own new quantity. Every lot is then exactly representable, the lots still sum
+// to the position exactly rather than approximately, and the rounding is always
+// DOWN — a ledger may lose a ten-billionth of a share to arithmetic it cannot
+// express, but it must never invent one.
+//
+// A lot whose entire share rounds away is kept, with a quantity of zero, rather
+// than dropped: its COST is real money, and the day it was bought is what
+// values that money in another currency (see Lot.AcquiredOn). Dropping it would
+// have to move that cost onto some other lot's day, which is exactly the
+// re-dating this package exists to prevent. It holds no shares and waits in the
+// queue until a release consumes it.
+func (p *Position) applySplit(ratio decimal.Decimal) {
+	total := p.Quantity.Mul(ratio).Truncate(QuantityScale)
+	exact, placed := decimal.Zero, decimal.Zero
+	for i := range p.Lots {
+		exact = exact.Add(p.Lots[i].Quantity.Mul(ratio))
+		upTo := exact.Truncate(QuantityScale)
+		if i == len(p.Lots)-1 {
+			// The lots sum to the position, so truncating the final running
+			// total yields exactly this anyway. Saying it outright keeps the two
+			// equal by construction instead of by argument.
+			upTo = total
+		}
+		p.Lots[i].Quantity = upTo.Sub(placed)
+		placed = upTo
+	}
+	p.Quantity = total
 }
 
 func (p *Position) addLot(qty decimal.Decimal, costMinor int64, acquiredOn time.Time) {
@@ -248,6 +323,15 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			// released cost intentionally discarded: the pair's transfer_in
 			// carries the basis captured at creation time (see package doc
 			// for the recompute limitation).
+			//
+			// o.TransferLots is deliberately unused here even though this leg
+			// carries it too (see Operation.TransferLots): the departing
+			// account holds the real lots and must release its own, replaying
+			// its own history. The breakdown rides along for readers that need
+			// to know what the moved basis is made of — the journal converts
+			// this row into the base currency piece by piece — and folding it
+			// into the position here would double-count the very lots being
+			// released.
 		case TypeTransferIn:
 			if o.AmountMinor < 0 {
 				return nil, badOp(o, "transfer_in amount (cost basis) must be >= 0")
@@ -275,13 +359,10 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 				p.addLot(pc.Quantity, pc.CostMinor, pc.AcquiredOn)
 			}
 		case TypeSplit:
-			ratio := *o.SplitRatio
-			// a split rewrites quantities only: neither the cost basis of a
-			// lot nor the day it was acquired changes
-			for i := range p.Lots {
-				p.Lots[i].Quantity = p.Lots[i].Quantity.Mul(ratio)
-			}
-			p.Quantity = p.Quantity.Mul(ratio)
+			// A split rewrites quantities only — see applySplit, which also
+			// keeps the rewritten quantities expressible in the journal they
+			// will be compared against.
+			p.applySplit(*o.SplitRatio)
 		default:
 			return nil, badOp(o, "type not applicable to instrument operations")
 		}
@@ -307,20 +388,26 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 // int64 and the write path derives the operation's basis by summing these very
 // pieces (see operation.Service.CreateTransfer and LotsCost), so that half has
 // always been exact. The QUANTITIES were not: they are stored with ten decimal
-// places, while a piece computed in memory has no such limit — a reverse split
-// multiplies lot quantities by a ratio like 0.3333333333 and lands well past
+// places, while a piece computed in memory had no such limit — a reverse split
+// multiplied lot quantities by a ratio like 0.3333333333 and landed well past
 // the tenth digit. Each piece was then rounded on its own on the way into the
 // table, and two pieces rounding up put the stored sum a whole 1e-10 above the
 // stored quantity: a perfectly legitimate transfer, accepted with a 201, after
 // which this function failed forever and took the receiving account's entire
-// positions screen down with it. That is fixed where it belongs, on the write
-// path: pieces are quantized to the storage scale as the breakdown is built
-// (operation.quantizeLots), the moved quantity is too, and the store re-reads
-// its own rows and runs them through this very function before committing (see
-// operation.Store.CreatePair). What is written is therefore exactly what is
-// read back, and a mismatch here now genuinely means the rows were damaged
-// after the fact — at which point neither reading is trustworthy: the pieces
-// may be wrong, or the total may be, and nothing here can tell which.
+// positions screen down with it.
+//
+// That is now closed at the source rather than patched per path: applySplit
+// keeps every lot on the journal's own scale (see QuantityScale), so a release
+// of scale-bound lots yields scale-bound pieces and there is nothing left to
+// round. Three guards remain behind it, each cheap and each a different kind of
+// insurance: the breakdown is quantized as it is built (operation.quantizeLots),
+// the moved quantity is normalized to the scale on the way in, and the store
+// re-reads its own rows and runs them through this very function before
+// committing (see operation.Store.CreatePair). What is written is therefore
+// exactly what is read back, and a mismatch here now genuinely means the rows
+// were damaged after the fact — at which point neither reading is trustworthy:
+// the pieces may be wrong, or the total may be, and nothing here can tell
+// which.
 //
 // An operation with no breakdown at all is not this function's business — see
 // the transfer_in branch in Compute for why that case is legitimate — and

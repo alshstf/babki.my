@@ -365,13 +365,15 @@ func seedInstrumentsAndOperations(
 	//	  brokers. Both figures are meant to be checked by eye against a real
 	//	  GET .../positions response on the destination account.
 	//
-	// The arriving JOURNAL ROW on Freedom KZ reads 118 000,00 ₽ as well: a
-	// transfer's amount is a basis assembled on other days, so the journal
-	// converts it piece by piece at those days' rates, exactly as the position
-	// does (see operation.Handler.operationInBase). Until that was fixed this
-	// row showed the invented 149 150,00 ₽ right next to a position saying
-	// 118 000,00 ₽ — two screens of the demo contradicting each other about
-	// the same ten shares.
+	// BOTH JOURNAL ROWS read 118 000,00 ₽ as well — the departure from Т-Банк
+	// and the arrival at Freedom KZ: a transfer's amount is a basis assembled
+	// on other days, so the journal converts it piece by piece at those days'
+	// rates, exactly as the position does (see
+	// operation.Handler.operationInBase). Each fix left the invented
+	// 149 150,00 ₽ standing on one screen fewer — first next to a position
+	// saying 118 000,00 ₽, then on the source account's journal alone, one pair
+	// disagreeing with itself about the same ten shares. It is now nowhere in
+	// the demo, and the arithmetic below is the only place it appears at all.
 	if _, _, err := opSvc.CreateTransfer(ctx, spaceID, operation.TransferParams{
 		FromAccountID: tbank, ToAccountID: freedom, InstrumentID: instIDs["TSLA"],
 		Quantity: decimal.RequireFromString("10"), OccurredOn: d("2026-07-20"),

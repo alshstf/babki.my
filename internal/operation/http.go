@@ -201,18 +201,32 @@ type datedMinor struct {
 // contradicts (the positions screen having converted each lot at its own
 // purchase date's rate all along — see portfolio.Handler.positionInBase).
 //
+// It applies to BOTH legs of a transfer pair. The breakdown is stored once,
+// next to the arriving leg, but it is read onto the departing one as well (see
+// Store.attachTransferLots), because both legs record one parcel: the same
+// shares, the same basis, the same purchases behind it. While only the arriving
+// leg carried it, the source account's journal was the last place in the system
+// still valuing that basis at the rate of the day the shares changed brokers —
+// the very figure README.md and the seed call an invented one — one screen away
+// from a destination journal and a destination position that both said
+// something else about the same shares.
+//
 // The headline date is the newest date among the terms: the single date
 // rate_on can name. For an ordinary operation that is its own date, exactly as
 // before. For a transfer it is the most recent purchase in the parcel — one of
 // the several rates behind the figure rather than a rate that had no part in
 // it. No single date can describe a sum struck at several, and the API
 // contract says so; the alternative, publishing the transfer day, would name
-// the one rate deliberately NOT used.
+// the one rate deliberately NOT used. Because such a date reads exactly like an
+// ordinary rate_on and means something else, the published object says which of
+// the two it is (assembled_from_lots — see operationInBase) instead of leaving
+// a reader to infer it from a date comparison that cannot answer the question.
 //
 // Transfers without a breakdown are unchanged and must be: a basis typed in by
 // hand has no purchase dates behind it, and one recorded before breakdowns
 // were kept has lost them. The transfer's own date is all such an operation
-// has, and inventing more would be worse than a rough answer.
+// has, and inventing more would be worse than a rough answer — on both legs
+// alike, since neither has anything better.
 func amountTerms(o Operation) (terms []datedMinor, headline time.Time) {
 	if len(o.TransferLots) == 0 {
 		return []datedMinor{{minor: o.AmountMinor, on: o.OccurredOn}}, o.OccurredOn
@@ -320,6 +334,16 @@ func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency
 		FeeMinor:    decimal.NewFromInt(o.FeeMinor).Mul(rl.rate).Round(0).IntPart(),
 		Currency:    baseCurrency,
 		RateOn:      rl.date.Format("2006-01-02"),
+		// Whether rate_on is THE rate behind the figure or merely the newest of
+		// several. A reader cannot work this out from the dates: rate_on equal
+		// to occurred_on normally means "converted on the operation's own day",
+		// and different from it means "no rate that day, so the nearest earlier
+		// one" — but for a basis assembled from purchases both readings are
+		// false, and either can happen to be the case a date comparison lands
+		// on. The screen that reads this field out loud (the journal's amount
+		// tooltip) would then state something untrue about a perfectly correct
+		// number, which is worse than saying nothing.
+		AssembledFromLots: len(o.TransferLots) > 0,
 	}, nil
 }
 

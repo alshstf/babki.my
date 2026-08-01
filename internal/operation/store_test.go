@@ -100,7 +100,7 @@ func TestCreateListDelete(t *testing.T) {
 		OccurredOn: date("2026-07-01"), Quantity: dec("10"), Price: dec("305.5"),
 		AmountMinor: -305_500, Currency: "RUB", FeeMinor: 92,
 	}
-	created, err := f.store.Create(f.ctx, f.spaceID, buy)
+	created, err := f.store.Create(f.ctx, f.spaceID, buy, nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestCreateListDelete(t *testing.T) {
 	}
 
 	// foreign space rejected
-	if _, err := f.store.Create(f.ctx, uuid.New(), buy); err == nil {
+	if _, err := f.store.Create(f.ctx, uuid.New(), buy, nil); err == nil {
 		t.Fatal("foreign space Create: want error")
 	}
 
@@ -118,7 +118,7 @@ func TestCreateListDelete(t *testing.T) {
 		AccountID: f.accountID, Type: operation.TypeDeposit,
 		OccurredOn: date("2026-07-05"), AmountMinor: 100_000_00, Currency: "RUB",
 	}
-	if _, err := f.store.Create(f.ctx, f.spaceID, dep); err != nil {
+	if _, err := f.store.Create(f.ctx, f.spaceID, dep, nil); err != nil {
 		t.Fatalf("Create dep: %v", err)
 	}
 	list, err := f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0)
@@ -186,10 +186,10 @@ func TestEarliestOccurredOn(t *testing.T) {
 		AccountID: f.accountID, Type: operation.TypeDeposit,
 		OccurredOn: date("2026-07-20"), AmountMinor: 2000, Currency: "RUB",
 	}
-	if _, err := f.store.Create(f.ctx, f.spaceID, recent); err != nil {
+	if _, err := f.store.Create(f.ctx, f.spaceID, recent, nil); err != nil {
 		t.Fatalf("Create recent: %v", err)
 	}
-	if _, err := f.store.Create(f.ctx, f.spaceID, old); err != nil {
+	if _, err := f.store.Create(f.ctx, f.spaceID, old, nil); err != nil {
 		t.Fatalf("Create old: %v", err)
 	}
 
@@ -224,10 +224,10 @@ func TestDistinctCurrencies(t *testing.T) {
 		AccountID: f.accountID, Type: operation.TypeDeposit,
 		OccurredOn: date("2026-07-02"), AmountMinor: 2000, Currency: "USD",
 	}
-	if _, err := f.store.Create(f.ctx, f.spaceID, rub); err != nil {
+	if _, err := f.store.Create(f.ctx, f.spaceID, rub, nil); err != nil {
 		t.Fatalf("Create rub: %v", err)
 	}
-	if _, err := f.store.Create(f.ctx, f.spaceID, usd); err != nil {
+	if _, err := f.store.Create(f.ctx, f.spaceID, usd, nil); err != nil {
 		t.Fatalf("Create usd: %v", err)
 	}
 
@@ -329,8 +329,12 @@ func TestTransferLotsRoundTrip(t *testing.T) {
 		}
 	}
 
-	// The breakdown belongs to the arrival: the source leg, whose account
-	// already knows the lots from its own history, carries none.
+	// The rows are stored next to the arrival, but they describe the parcel,
+	// not the arrival — so the departing leg is read with the very same pieces,
+	// in the very same order. Without them it was the last row in the system
+	// converting a basis assembled from old purchases at the rate of the day
+	// the shares changed brokers, contradicting both of the destination's
+	// screens about the same shares.
 	srcOps, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
 	if err != nil {
 		t.Fatalf("ListForEngine source: %v", err)
@@ -339,8 +343,21 @@ func TestTransferLotsRoundTrip(t *testing.T) {
 	if srcLeg == nil {
 		t.Fatalf("no transfer_out in source journal")
 	}
-	if len(srcLeg.TransferLots) != 0 {
-		t.Errorf("transfer_out lots = %+v, want none", srcLeg.TransferLots)
+	if len(srcLeg.TransferLots) != len(want) {
+		t.Fatalf("transfer_out lots = %+v, want the same %d pieces the arriving leg has", srcLeg.TransferLots, len(want))
+	}
+	for i, w := range want {
+		g := srcLeg.TransferLots[i]
+		if !g.Quantity.Equal(w.Quantity) || g.CostMinor != w.CostMinor || !g.AcquiredOn.Equal(w.AcquiredOn) {
+			t.Errorf("transfer_out lot %d = %s/%d/%s, want %s/%d/%s", i,
+				g.Quantity, g.CostMinor, g.AcquiredOn.Format("2006-01-02"),
+				w.Quantity, w.CostMinor, w.AcquiredOn.Format("2006-01-02"))
+		}
+	}
+	// Read, not copied: the pieces still live in exactly one place, attached to
+	// the operation that stores them.
+	if n := f.lotRows(t, srcLeg.ID); n != 0 {
+		t.Errorf("transfer_out has %d rows of its own, want 0 — the breakdown is one fact with one owner", n)
 	}
 }
 
@@ -361,7 +378,7 @@ func TestNonTransferOperationsHaveNoLots(t *testing.T) {
 		OccurredOn: date("2026-07-12"), Quantity: dec("1"), Price: dec("300"),
 		AmountMinor: -30_000, Currency: "RUB",
 	}
-	if _, err := f.store.Create(f.ctx, f.spaceID, buy); err != nil {
+	if _, err := f.store.Create(f.ctx, f.spaceID, buy, nil); err != nil {
 		t.Fatalf("Create buy: %v", err)
 	}
 
@@ -466,10 +483,64 @@ func TestExternalIDDedup(t *testing.T) {
 		OccurredOn: date("2026-07-01"), AmountMinor: 1000, Currency: "RUB",
 		Source: "csv", ExternalID: &ext,
 	}
-	if _, err := f.store.Create(f.ctx, f.spaceID, op); err != nil {
+	if _, err := f.store.Create(f.ctx, f.spaceID, op, nil); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	if _, err := f.store.Create(f.ctx, f.spaceID, op); err == nil {
+	if _, err := f.store.Create(f.ctx, f.spaceID, op, nil); err == nil {
 		t.Fatal("duplicate external_id: want error")
+	}
+}
+
+// TestCreateRollsBackWhatItCannotConfirm pins the guard that stands
+// between the journal and the one thing no amount of care upstream can rule
+// out: that the row Postgres keeps is not the row that was checked.
+//
+// Quantity and split_ratio are stored on a fixed scale, so a value can come
+// back from the INSERT a shade different from the one that went in. The service
+// brings both onto that scale first (operation.normalizeForStorage), which is
+// what makes the two equal today — but "today they are equal" is an argument,
+// and this is the mechanism that makes it a property: the row as stored is
+// replayed before the transaction commits, and a row that fails leaves nothing
+// behind. The same guard protects a transfer's breakdown (see CreatePair).
+func TestCreateRollsBackWhatItCannotConfirm(t *testing.T) {
+	f := newFixture(t)
+
+	buy := operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-07-01"), Quantity: dec("10"), Price: dec("100"),
+		AmountMinor: -100_000, Currency: "RUB",
+	}
+
+	refuse := errors.New("the operation as stored no longer replays")
+	var seen operation.Operation
+	if _, err := f.store.Create(f.ctx, f.spaceID, buy, func(stored operation.Operation) error {
+		seen = stored
+		return refuse
+	}); !errors.Is(err, refuse) {
+		t.Fatalf("Create = %v, want the verifier's own error", err)
+	}
+	// The verifier is handed the row as the database made it — id, created_at
+	// and all — not the argument echoed back, or it could not detect anything
+	// the database did.
+	if seen.ID == uuid.Nil || seen.CreatedAt.IsZero() {
+		t.Errorf("verifier saw %+v, want the row as stored", seen)
+	}
+
+	list, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
+	if err != nil {
+		t.Fatalf("list journal: %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("journal holds %d operations after a refused write, want none — a rolled-back row that survives is the bug this guards", len(list))
+	}
+
+	// And it commits when the verifier is satisfied, or it would be a very
+	// thorough way of never writing anything.
+	created, err := f.store.Create(f.ctx, f.spaceID, buy, func(operation.Operation) error { return nil })
+	if err != nil {
+		t.Fatalf("Create with a satisfied verifier: %v", err)
+	}
+	if list, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID); err != nil || len(list) != 1 || list[0].ID != created.ID {
+		t.Errorf("journal = %+v (%v), want exactly the committed row %s", list, err, created.ID)
 	}
 }

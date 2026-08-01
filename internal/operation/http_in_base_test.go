@@ -21,6 +21,11 @@ type operationInBase struct {
 	FeeMinor    int64  `json:"fee_minor"`
 	Currency    string `json:"currency"`
 	RateOn      string `json:"rate_on"`
+	// AssembledFromLots tells a reader whether rate_on is THE rate behind
+	// amount_minor or merely the newest of several, which is the difference
+	// between the journal's tooltip describing the figure correctly and
+	// describing it wrongly (see the API contract).
+	AssembledFromLots bool `json:"assembled_from_lots"`
 }
 
 // journalItem is the subset of apitypes.Operation these tests care about. A

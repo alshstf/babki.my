@@ -79,13 +79,23 @@ type Operation struct {
 	TransferGroupID *uuid.UUID
 	// TransferLots is the FIFO breakdown of what a transfer moved: the
 	// source lots it consumed, in FIFO order, each with the day it was
-	// acquired (see ReleasedLot). It is recorded on the receiving
-	// (transfer_in) leg, whose account has no other way to know those days.
+	// acquired (see ReleasedLot).
+	//
+	// It is STORED once, next to the receiving (transfer_in) leg, whose
+	// account has no other way to know those days — but it belongs to BOTH
+	// legs and is read onto both (see operation.Store.attachTransferLots).
+	// The pieces describe the parcel, not the arrival: the same instrument,
+	// quantity and basis leave the source that reach the destination, and the
+	// days behind that basis are the same days on either side. Only the engine
+	// treats the two differently — the arriving leg rebuilds these lots, the
+	// departing one releases its own — and that asymmetry is about what a
+	// journal fold does, not about what the pieces mean.
+	//
 	// Empty for every other type, for transfers whose basis was supplied by
 	// hand (no source lots exist behind such a number), and for transfers
 	// recorded before the breakdown was stored at all — for those the
 	// original acquisition dates are simply not knowable, and the transfer
-	// date remains the best available answer.
+	// date remains the best available answer, on both legs alike.
 	TransferLots []ReleasedLot
 	SplitRatio   *decimal.Decimal
 	Source       string

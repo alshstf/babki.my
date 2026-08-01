@@ -340,6 +340,39 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("whole-basis-at-transfer-date TSLA cost = %d, want 14915000 (149 150,00 ₽ = 190000 * 78.50)", collapsedBaseCost)
 	}
 
+	// The same arithmetic has to come out of the SOURCE account's journal row,
+	// not just the destination's position: the departing leg carries the same
+	// breakdown (see operation.Store.attachTransferLots), so the journal at
+	// Т-Банк converts it from the same two purchase dates. While it did not,
+	// this one row was the last place in the demo still showing the invented
+	// 149 150,00 ₽ — the figure README.md and the transfer call above describe
+	// as what a collapse to the transfer day would produce.
+	tbankJournal, err := opStore.ListForEngine(ctx, p.SpaceID, tbankID)
+	if err != nil {
+		t.Fatalf("ListForEngine Т-Банк: %v", err)
+	}
+	var outLeg *operation.Operation
+	for i := range tbankJournal {
+		if tbankJournal[i].Type == operation.TypeTransferOut {
+			outLeg = &tbankJournal[i]
+		}
+	}
+	if outLeg == nil {
+		t.Fatal("no transfer_out in the Т-Банк journal")
+	}
+	var outLegBaseCost int64
+	for _, pc := range outLeg.TransferLots {
+		rate, _, err := converter.Rate(ctx, "USD", "RUB", pc.AcquiredOn)
+		if err != nil {
+			t.Fatalf("Rate(USD -> RUB, transfer_out piece %s): %v", pc.AcquiredOn.Format(time.DateOnly), err)
+		}
+		outLegBaseCost += decimal.NewFromInt(pc.CostMinor).Mul(rate).Round(0).IntPart()
+	}
+	if len(outLeg.TransferLots) != 2 || outLegBaseCost != correctBaseCost {
+		t.Errorf("Т-Банк transfer_out carries %d pieces worth %d ₽, want 2 worth %d — one pair of legs may not disagree about the same ten shares",
+			len(outLeg.TransferLots), outLegBaseCost, correctBaseCost)
+	}
+
 	// every currency the demo space holds (RUB, USD) now has a seeded rate
 	// into the space's base currency (RUB, the default), so GET /summary's
 	// total_in_base_minor comes out nonzero with nothing left unconverted —
