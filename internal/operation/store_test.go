@@ -3,6 +3,7 @@ package operation_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 
 type fixture struct {
 	store      *operation.Store
+	accStore   *account.Store
 	spaceID    uuid.UUID
 	accountID  uuid.UUID
 	account2ID uuid.UUID
@@ -59,7 +61,7 @@ func newFixture(t *testing.T) fixture {
 		t.Fatalf("sber: %v", err)
 	}
 	return fixture{
-		store: operation.NewStore(pool), spaceID: sp.ID,
+		store: operation.NewStore(pool), accStore: acc, spaceID: sp.ID,
 		accountID: a1.ID, account2ID: a2.ID, sberID: sber.ID, ctx: ctx,
 	}
 }
@@ -190,6 +192,60 @@ func TestEarliestOccurredOnEmpty(t *testing.T) {
 	_, err := f.store.EarliestOccurredOn(f.ctx)
 	if !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("EarliestOccurredOn on empty table: err = %v, want pgx.ErrNoRows", err)
+	}
+}
+
+func TestDistinctCurrencies(t *testing.T) {
+	f := newFixture(t)
+
+	// both fixture accounts are RUB; add operations in RUB and in USD, a
+	// currency that does not appear on any account.
+	rub := operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit,
+		OccurredOn: date("2026-07-01"), AmountMinor: 1000, Currency: "RUB",
+	}
+	usd := operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit,
+		OccurredOn: date("2026-07-02"), AmountMinor: 2000, Currency: "USD",
+	}
+	if _, err := f.store.Create(f.ctx, f.spaceID, rub); err != nil {
+		t.Fatalf("Create rub: %v", err)
+	}
+	if _, err := f.store.Create(f.ctx, f.spaceID, usd); err != nil {
+		t.Fatalf("Create usd: %v", err)
+	}
+
+	got, err := f.store.DistinctCurrencies(f.ctx)
+	if err != nil {
+		t.Fatalf("DistinctCurrencies: %v", err)
+	}
+	want := []string{"RUB", "USD"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("operation DistinctCurrencies = %v, want %v", got, want)
+	}
+
+	// USD exists only in operations, not on any account: the two lists
+	// must differ, proving operation.Store queries its own table rather
+	// than delegating to account currencies.
+	accCurrencies, err := f.accStore.DistinctCurrencies(f.ctx)
+	if err != nil {
+		t.Fatalf("account DistinctCurrencies: %v", err)
+	}
+	if !reflect.DeepEqual(accCurrencies, []string{"RUB"}) {
+		t.Fatalf("account DistinctCurrencies = %v, want [RUB]", accCurrencies)
+	}
+}
+
+func TestDistinctCurrenciesEmpty(t *testing.T) {
+	f := newFixture(t)
+	// no operations created
+
+	got, err := f.store.DistinctCurrencies(f.ctx)
+	if err != nil {
+		t.Fatalf("DistinctCurrencies on empty table: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("DistinctCurrencies on empty table = %v, want empty, got %v", got, got)
 	}
 }
 

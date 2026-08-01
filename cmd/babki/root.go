@@ -47,11 +47,15 @@ func mountModules(srv *httpserver.Server, r *rt) {
 	portfolio.NewHandler(opStore, instStore, mdStore, converter, famStore, famAuth, famSM).Mount(srv)
 }
 
-// cbrHTTPTimeout bounds every request the cbr.ru client makes. The backfill
-// job's own Timeout is 15 minutes, and a single chunk fires up to 180
-// sequential requests at it: without a bound here, cbr.New would fall back
-// to http.DefaultClient, whose Timeout is 0 (none), so one stalled TCP
-// connection could pin a worker slot for the job's whole 15-minute budget.
+// cbrHTTPTimeout bounds every request the cbr.ru client makes. The history
+// download fires one request per currency in use under a 15-minute job
+// timeout: without a bound here, cbr.New would fall back to
+// http.DefaultClient, whose Timeout is 0 (none), so one stalled TCP
+// connection could pin a worker slot for the job's whole budget. 15s is
+// unchanged from when the client only ever fetched one day's document,
+// because it still fits the larger answers with room to spare: a whole
+// thirteen-year series measures ~400KB, which needs only ~27KB/s to arrive
+// in time.
 const cbrHTTPTimeout = 15 * time.Second
 
 // newCbrHTTPClient builds the HTTP client used for every request to cbr.ru.
@@ -65,16 +69,19 @@ func newCbrHTTPClient() *http.Client {
 // startJobClient wires up the job workers and River client and starts it.
 // Shared by the "all" and "worker" roles. cbr and moex are used with their
 // default base URLs — no configuration knob is exposed for them yet. cbr's
-// HTTP client is bounded by cbrHTTPTimeout (see above); moex isn't, since
-// its jobs make one request per run rather than cbr's up-to-180 sequential
-// ones under a 15-minute job timeout.
+// HTTP client is bounded by cbrHTTPTimeout (see above); moex isn't, since a
+// quotes run makes a single request while cbr's history run makes one per
+// currency in use, each transferring a whole series.
 func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	mdStore := marketdata.NewStore(r.pool)
 	instStore := instrument.NewStore(r.pool)
 	opStore := operation.NewStore(r.pool)
+	accStore := account.NewStore(r.pool)
+	famStore := family.NewStore(r.pool)
 	fxProvider := cbr.New(newCbrHTTPClient(), "")
 	quoteProvider := moex.New(nil, "")
-	workers := jobs.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, fxProvider, quoteProvider)
+	workers := jobs.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, accStore, famStore,
+		fxProvider, quoteProvider)
 	client, err := jobs.NewClient(r.pool, workers, r.log)
 	if err != nil {
 		return nil, err

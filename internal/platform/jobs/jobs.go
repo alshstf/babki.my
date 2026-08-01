@@ -12,6 +12,8 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 
+	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
@@ -22,10 +24,10 @@ import (
 // at the source (cbr.ru), so a daily refresh is enough; quotes move
 // throughout the trading session, so they refresh more often.
 //
-// backfillFxInterval only sets the pace of *starting* a backfill: once
-// running, each chunk enqueues the next one itself, so the daily tick is a
-// safety net (and the trigger for history newly needed by a backdated
-// operation), not the pace of the backfill.
+// backfillFxInterval paces the history download. A run fetches every
+// currency's whole series in one request each, so it needs no continuation
+// and a daily tick is enough: it picks up history newly needed by a
+// backdated operation, and re-running simply overwrites the same rows.
 const (
 	refreshFxInterval     = 24 * time.Hour
 	refreshQuotesInterval = 30 * time.Minute
@@ -33,23 +35,28 @@ const (
 )
 
 // NewWorkers registers all of the application's workers. mdStore,
-// instruments and operations back the marketdata jobs; fxProvider and
-// quoteProvider are the external sources those jobs pull from (e.g. cbr and
-// moex in production, fakes in tests).
+// instruments, operations, accounts and spaces back the marketdata jobs;
+// fxProvider and quoteProvider are the external sources those jobs pull from
+// (e.g. cbr and moex in production, fakes in tests). fxProvider is an
+// FxHistoryProvider rather than a plain FxProvider because the history
+// download needs a source that can deliver a whole date range at once.
 func NewWorkers(
 	log *slog.Logger,
 	pool *pgxpool.Pool,
 	mdStore *marketdata.Store,
 	instruments *instrument.Store,
 	operations *operation.Store,
-	fxProvider marketdata.FxProvider,
+	accounts *account.Store,
+	spaces *family.Store,
+	fxProvider marketdata.FxHistoryProvider,
 	quoteProvider marketdata.QuoteProvider,
 ) *river.Workers {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &heartbeatWorker{log: log, pool: pool})
 	river.AddWorker(workers, marketdata.NewFxWorker(mdStore, fxProvider, log))
 	river.AddWorker(workers, marketdata.NewQuotesWorker(mdStore, instruments, quoteProvider, log))
-	river.AddWorker(workers, marketdata.NewBackfillFxWorker(mdStore, operations, fxProvider, log))
+	river.AddWorker(workers, marketdata.NewBackfillFxWorker(
+		mdStore, operations, accounts, spaces, fxProvider, log))
 	return workers
 }
 

@@ -132,6 +132,31 @@ func (s *Store) SetBalance(ctx context.Context, spaceID, accountID uuid.UUID, as
 	return nil
 }
 
+// DistinctCurrencies returns the sorted set of currencies used by any
+// account in the instance (not scoped to a space: exchange rates are shared
+// market data, so there is no point fetching them per space). Deciding which
+// currencies to actually backfill rates for is not this method's job — that
+// belongs to the fx backfill job, which also consults operation.Store's
+// currencies. Returns an empty slice, not an error, when there are no
+// accounts: unlike EarliestOccurredOn, "no currencies in use" is itself a
+// meaningful answer, not a missing value.
+func (s *Store) DistinctCurrencies(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT currency FROM accounts ORDER BY currency`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // SummaryByCurrency aggregates latest balances of active accounts per currency.
 func (s *Store) SummaryByCurrency(ctx context.Context, spaceID uuid.UUID) ([]CurrencyTotal, error) {
 	rows, err := s.pool.Query(ctx, `

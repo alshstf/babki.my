@@ -24,10 +24,10 @@ func TestRootHasCommands(t *testing.T) {
 
 // TestNewCbrHTTPClientHasABoundedTimeout guards against startJobClient going
 // back to an unbounded client (cbr.New(nil, "") falls back to
-// http.DefaultClient, whose Timeout is 0): the backfill job fires up to 180
-// sequential requests under a 15-minute job Timeout, so one stalled TCP
-// connection on an unbounded client could pin a worker slot for that whole
-// budget.
+// http.DefaultClient, whose Timeout is 0): the backfill job fires one
+// request per currency in use under a 15-minute job Timeout, so one stalled
+// TCP connection on an unbounded client could pin a worker slot for that
+// whole budget.
 func TestNewCbrHTTPClientHasABoundedTimeout(t *testing.T) {
 	c := newCbrHTTPClient()
 	if c.Timeout != cbrHTTPTimeout {

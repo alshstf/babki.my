@@ -72,23 +72,6 @@ func (s *Store) FxRateOn(ctx context.Context, base, quote string, on time.Time) 
 		ORDER BY on_date DESC LIMIT 1`, base, quote, on))
 }
 
-// EarliestFxDate returns the earliest on_date among rates of the given
-// source (e.g. "cbr"). This is a coverage boundary query: it deliberately
-// filters by source so seed data doesn't get mistaken for real backfilled
-// history. pgx.ErrNoRows if no rate of that source exists.
-func (s *Store) EarliestFxDate(ctx context.Context, source string) (time.Time, error) {
-	var on *time.Time
-	err := s.pool.QueryRow(ctx, `
-		SELECT MIN(on_date) FROM fx_rates WHERE source = $1`, source).Scan(&on)
-	if err != nil {
-		return time.Time{}, err
-	}
-	if on == nil {
-		return time.Time{}, pgx.ErrNoRows
-	}
-	return *on, nil
-}
-
 // LatestFxRates returns the most recent rate for every (base, quote) pair.
 func (s *Store) LatestFxRates(ctx context.Context) ([]FxRate, error) {
 	rows, err := s.pool.Query(ctx, `

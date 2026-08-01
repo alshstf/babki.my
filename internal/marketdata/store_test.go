@@ -146,37 +146,6 @@ func TestLatestFxRates(t *testing.T) {
 	}
 }
 
-func TestEarliestFxDate(t *testing.T) {
-	f := newFixture(t)
-
-	err := f.store.UpsertFxRates(f.ctx, []marketdata.FxRate{
-		{Base: "USD", Quote: "RUB", On: date("2026-07-20"), Rate: dec("90.0"), Source: "cbr"},
-		{Base: "USD", Quote: "RUB", On: date("2026-07-18"), Rate: dec("89.5"), Source: "cbr"},
-		// older seed data must not be mistaken for real cbr coverage.
-		{Base: "USD", Quote: "RUB", On: date("2020-01-01"), Rate: dec("60.0"), Source: "seed"},
-	})
-	if err != nil {
-		t.Fatalf("UpsertFxRates: %v", err)
-	}
-
-	got, err := f.store.EarliestFxDate(f.ctx, "cbr")
-	if err != nil {
-		t.Fatalf("EarliestFxDate: %v", err)
-	}
-	if !got.Equal(date("2026-07-18")) {
-		t.Fatalf("EarliestFxDate(cbr) = %v, want 2026-07-18 (must not leak the older seed row)", got)
-	}
-}
-
-func TestEarliestFxDateEmpty(t *testing.T) {
-	f := newFixture(t)
-
-	_, err := f.store.EarliestFxDate(f.ctx, "cbr")
-	if !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("EarliestFxDate on empty table: err = %v, want pgx.ErrNoRows", err)
-	}
-}
-
 func TestUpsertQuotesAndQuoteOn(t *testing.T) {
 	f := newFixture(t)
 	sber := f.insts[0]
