@@ -1,5 +1,6 @@
-// Package cbr implements marketdata.FxProvider against the Bank of Russia's
-// daily FX rate feed (XML_daily.asp).
+// Package cbr implements marketdata.FxProvider and marketdata.FxHistoryProvider
+// against the Bank of Russia's FX rate feeds: the daily one (XML_daily.asp)
+// and the historical, date-range one (XML_dynamic.asp).
 package cbr
 
 import (
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -95,8 +97,15 @@ type valute struct {
 // currency is named only by the bank's internal ID attribute, there is no ISO
 // code anywhere in it, and there are no records at all for days the bank did
 // not publish on.
+//
+// ID is the bank's internal identifier for the currency this whole series
+// belongs to (e.g. "R01235" for USD) — the only thing in the response that
+// says which currency was actually returned. The daily document has no such
+// attribute on its root element at all, so a response decoded from the wrong
+// endpoint also surfaces here as an empty ID.
 type valCursRange struct {
 	XMLName xml.Name     `xml:"ValCurs"`
+	ID      string       `xml:"ID,attr"`
 	Records []rateRecord `xml:"Record"`
 }
 
@@ -112,11 +121,11 @@ type rateRecord struct {
 	Value   string `xml:"Value"`
 }
 
-// fetchXML GETs url and decodes the windows-1251 XML body into dst. Shared by
-// every endpoint this client talks to; what counts as an empty-but-valid
-// document differs per endpoint and is left to the callers.
-func (c *Client) fetchXML(ctx context.Context, url string, dst any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// fetchXML GETs reqURL and decodes the windows-1251 XML body into dst.
+// Shared by every endpoint this client talks to; what counts as an
+// empty-but-valid document differs per endpoint and is left to the callers.
+func (c *Client) fetchXML(ctx context.Context, reqURL string, dst any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return fmt.Errorf("cbr: build request: %w", err)
 	}
@@ -217,12 +226,18 @@ func (c *Client) CurrencyIDs(ctx context.Context) (map[string]string, error) {
 
 // RatesRange implements marketdata.FxHistoryProvider: it fetches one
 // currency's whole published series between from and to (both ends included)
-// in a single request, where RatesOn would need one request per day.
+// in a single request, where RatesOn would need one request per day. It
+// returns an error if to is before from, rather than silently sending a
+// request cbr.ru would answer with an empty (but valid) series.
 //
 // currencyID is the Bank of Russia's internal identifier from CurrencyIDs;
 // code is the ISO code the same currency is known by. Both are needed because
 // the request accepts only the internal identifier while the response carries
-// neither code, so FxRate.Base can only come from the caller.
+// neither code, so FxRate.Base can only come from the caller. The response's
+// root ID attribute is checked against currencyID, so a series for the wrong
+// currency (or a response from the wrong endpoint) is an error rather than
+// silently accepted; the ISO code itself cannot be cross-checked, since the
+// response never carries one.
 //
 // Each FxRate.On is read from its own record, and each rate is divided by its
 // own record's Nominal — the bank re-scales how many units it quotes a
@@ -231,14 +246,29 @@ func (c *Client) CurrencyIDs(ctx context.Context) (map[string]string, error) {
 // than carried forward; resolving a date to the nearest earlier rate is the
 // storage layer's job.
 func (c *Client) RatesRange(ctx context.Context, code, currencyID string, from, to time.Time) ([]marketdata.FxRate, error) {
-	url := c.dynamicURL +
+	if to.Before(from) {
+		return nil, fmt.Errorf("cbr: invalid range for %s: to (%s) is before from (%s)",
+			code, to.Format(dateLayout), from.Format(dateLayout))
+	}
+
+	reqURL := c.dynamicURL +
 		"?date_req1=" + from.Format(rangeDateLayout) +
 		"&date_req2=" + to.Format(rangeDateLayout) +
-		"&VAL_NM_RQ=" + currencyID
+		"&VAL_NM_RQ=" + url.QueryEscape(currencyID)
 
 	var doc valCursRange
-	if err := c.fetchXML(ctx, url, &doc); err != nil {
+	if err := c.fetchXML(ctx, reqURL, &doc); err != nil {
 		return nil, err
+	}
+
+	// The response's root ID is the only thing that says which currency was
+	// actually returned. If it does not match what was requested — whether
+	// because the bank sent the wrong series or because this request landed
+	// on the daily endpoint instead (whose root carries no ID at all, i.e.
+	// ""), that must be a loud error rather than a silently-accepted series
+	// for the wrong currency.
+	if doc.ID != currencyID {
+		return nil, fmt.Errorf("cbr: response ID %q does not match requested currency %s (%s)", doc.ID, currencyID, code)
 	}
 
 	// No records is a legitimate answer here, unlike in the daily document:
