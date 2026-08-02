@@ -33,11 +33,18 @@ func fxSeedOn(t *testing.T) time.Time {
 	return mustDate(t, "2026-01-01")
 }
 
-// TestPositionInBaseConvertsAllFourValues covers the shape of the whole
-// object: a position in a non-base currency (USD) with a resolvable fx rate
-// must get in_base filled in with all four values — cost_minor,
-// market_value_minor, unrealized_pnl_minor, income_minor — expressed in the
-// space's base currency (RUB, the default), plus the currency and rate_on.
+// TestPositionInBaseConvertsHeldSideValues covers the shape of the object as
+// far as a position that has never sold anything can: a position in a non-base
+// currency (USD) with a resolvable fx rate must get in_base filled in with all
+// four figures about what it HOLDS — cost_minor, market_value_minor,
+// unrealized_pnl_minor, income_minor — expressed in the space's base currency
+// (RUB, the default), plus the currency and rate_on.
+//
+// The object carries a fifth converted figure, realized_pnl_minor, which this
+// fixture has nothing to say about: no disposal has been made, so it is a plain
+// zero here and would pass under any conversion rule at all. It is pinned in
+// http_position_in_base_realized_test.go instead, on fixtures built so that the
+// rate of a sale's own day and the rates of its lots' days disagree.
 //
 // Exactly ONE rate is seeded here, early enough to cover every date in the
 // fixture, so the historical rates behind cost_minor/income_minor and today's
@@ -69,7 +76,7 @@ func fxSeedOn(t *testing.T) time.Time {
 // source value feeds which in_base field (e.g. applying cost_minor's result
 // to income_minor too) would be caught by comparing each field to its own
 // expected number.
-func TestPositionInBaseConvertsAllFourValues(t *testing.T) {
+func TestPositionInBaseConvertsHeldSideValues(t *testing.T) {
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}

@@ -140,8 +140,8 @@ func TestSeedDemo(t *testing.T) {
 	}
 
 	freedomPositions := positionsByTicker(freedomID)
-	if len(freedomPositions) != 4 {
-		t.Fatalf("Freedom positions = %d, want 4 (AAPL, MSFT, NVDA, TSLA): %+v", len(freedomPositions), freedomPositions)
+	if len(freedomPositions) != 5 {
+		t.Fatalf("Freedom positions = %d, want 5 (AAPL, GOOGL, MSFT, NVDA, TSLA): %+v", len(freedomPositions), freedomPositions)
 	}
 	aapl, ok := freedomPositions["AAPL"]
 	if !ok {
@@ -465,6 +465,122 @@ func TestSeedDemo(t *testing.T) {
 	} else if tbankNvda.Quantity.String() != "0" || tbankNvda.CostMinor != 0 {
 		t.Errorf("Т-Банк NVDA after transferring everything = {qty %s cost %d}, want {0 0}",
 			tbankNvda.Quantity.String(), tbankNvda.CostMinor)
+	}
+
+	// realizedInBase redoes, from the engine's own record of WHAT EACH DISPOSAL
+	// WAS MADE OF, the very sum the server publishes as
+	// in_base.realized_pnl_minor: the proceeds and the fee at the rate of the
+	// day the disposal happened, every released parcel of basis at the rate of
+	// the day THAT parcel was bought (НК РФ ст. 210 п. 5), summed as decimals
+	// and rounded once for the position — exactly portfolio's realizedTerms +
+	// sumInBase, rebuilt here from the seeded ingredients rather than borrowed,
+	// so a seed edit that quietly flattens the story fails here instead of on
+	// the owner's screen.
+	//
+	// A position that has never disposed of anything contributes an exact zero
+	// and asks the rate table for nothing at all — which is why AAPL, whose
+	// earliest lot has no rate, is no obstacle to the account total below.
+	realizedInBase := func(pos *portfolio.Position, what string) int64 {
+		total := decimal.Zero
+		term := func(minor int64, on time.Time) {
+			rate, _, err := converter.Rate(ctx, pos.Currency, "RUB", on)
+			if err != nil {
+				t.Fatalf("Rate(%s -> RUB, %s term on %s): %v", pos.Currency, what, on.Format(time.DateOnly), err)
+			}
+			total = total.Add(decimal.NewFromInt(minor).Mul(rate))
+		}
+		for _, e := range pos.Realizations {
+			term(e.ProceedsMinor, e.OccurredOn)
+			term(-e.FeeMinor, e.OccurredOn)
+			for _, rel := range e.Released {
+				term(-rel.CostMinor, mustAcquired(t, rel.AcquiredOn, what+" released parcel"))
+			}
+		}
+		return total.Round(0).IntPart()
+	}
+
+	// Alphabet is plan 7b's own demonstration, and the demo's only CLOSED deal
+	// whose SETTLED result has a different sign in its own currency and in
+	// rubles. MSFT above makes the same point about a holding still open, where
+	// the figure keeps moving; this one is over and will never move again, which
+	// is the whole difference «Зафиксировано» exists to state.
+	//
+	//	buy  50 @ $200.00 on 2026-06-10 -> 1_000_000 minor USD, rate 81.40 -> 81_400_000
+	//	sell 50 @ $210.00 on 2026-06-20 -> 1_050_000 minor USD, rate 65.00 -> 68_250_000
+	//	  in USD: 1_050_000 −  1_000_000 =     +50_000 (+$500.00, a gain)
+	//	  in RUB: 68_250_000 − 81_400_000 = −13_150_000 (−131 500,00 ₽, a loss)
+	//
+	// Converting the dollar result at ANY single rate in this table lands
+	// between +30 000,00 ₽ (60.00, the lowest seeded) and +40 700,00 ₽ (81.40,
+	// the highest) — a profit, for a deal that lost 131 500,00 ₽. That gap is
+	// the demonstration.
+	googl, ok := freedomPositions["GOOGL"]
+	if !ok {
+		t.Fatal("missing Freedom position GOOGL — the seed no longer demonstrates a settled result that flips sign in rubles")
+	}
+	if googl.Quantity.String() != "0" || googl.CostMinor != 0 || len(googl.Lots) != 0 {
+		t.Errorf("GOOGL after selling the whole parcel = {qty %s cost %d lots %d}, want {0 0 []} — an open remainder would add basis to an account whose balance is already close to what it holds",
+			googl.Quantity.String(), googl.CostMinor, len(googl.Lots))
+	}
+	if len(googl.Realizations) != 1 {
+		t.Fatalf("GOOGL realizations = %d, want exactly 1 (the single sale)", len(googl.Realizations))
+	}
+	if googl.RealizedPnLMinor != 50_000 {
+		t.Errorf("GOOGL realized P&L = %d, want 50000 (+$500.00 = 1050000 − 1000000)", googl.RealizedPnLMinor)
+	}
+	googlBase := realizedInBase(googl, "GOOGL")
+	if googlBase != -13_150_000 {
+		t.Errorf("GOOGL realized P&L in RUB = %d, want -13150000 (68 250 000 − 81 400 000 = −131 500,00 ₽)", googlBase)
+	}
+	if googl.RealizedPnLMinor <= 0 || googlBase >= 0 {
+		t.Errorf("GOOGL settled result = %d in USD and %d in RUB: the demo must contain one CLOSED deal that is a profit in the position's currency and a loss in rubles — without it plan 7b's consequence cannot be seen on demo data at all",
+			googl.RealizedPnLMinor, googlBase)
+	}
+	// The answer a single-rate conversion of the dollar result would give,
+	// named by value so a seed edit that makes the two agree is unmistakable.
+	rateOnSale, _, err := converter.Rate(ctx, "USD", "RUB", day("2026-06-20"))
+	if err != nil {
+		t.Fatalf("Rate(USD -> RUB, 2026-06-20): %v", err)
+	}
+	if flat := decimal.NewFromInt(googl.RealizedPnLMinor).Mul(rateOnSale).Round(0).IntPart(); flat != 3_250_000 || flat <= 0 {
+		t.Errorf("GOOGL result converted at the sale day's rate alone = %d, want 3250000 (+32 500,00 ₽, a PROFIT) — the point of this deal is that no single rate reproduces −131 500,00 ₽", flat)
+	}
+
+	// NVDA's own settled result, the other half of the account's line: a
+	// disposal whose ruble figure differs from any single-rate conversion
+	// WITHOUT flipping sign, so the demo shows both shapes.
+	//
+	//	proceeds 200_000 on 2026-07-22 -> the rate table publishes nothing that
+	//	  day, so the ordinary nearest-earlier rule gives 2026-07-20's 78.50
+	//	  -> 15_700_000
+	//	basis    100_000 bought 2026-05-14, rate 60.50 -> 6_050_000
+	//	  in RUB: 15_700_000 − 6_050_000 = +9_650_000 (+96 500,00 ₽)
+	nvdaBase := realizedInBase(nvda, "NVDA")
+	if nvdaBase != 9_650_000 {
+		t.Errorf("NVDA realized P&L in RUB = %d, want 9650000 (15 700 000 − 6 050 000 = +96 500,00 ₽)", nvdaBase)
+	}
+
+	// And the account's «Зафиксировано» line itself — the sum of the rounded
+	// per-position figures, exactly as portfolio.realizedTotals adds them.
+	// It disagrees with itself in SIGN across the display-currency toggle, one
+	// click apart, on real demo data:
+	//
+	//	NVDA     +100_000 USD    +9_650_000 ₽
+	//	GOOGL     +50_000 USD   −13_150_000 ₽
+	//	AAPL, MSFT, TSLA: no disposals, exactly zero in both
+	//	total    +150_000 USD    −3_500_000 ₽
+	//	        (+$1 500.00)     (−35 000,00 ₽)
+	var accountUSD, accountRUB int64
+	for ticker, pos := range freedomPositions {
+		accountUSD += pos.RealizedPnLMinor
+		accountRUB += realizedInBase(pos, ticker)
+	}
+	if accountUSD != 150_000 || accountRUB != -3_500_000 {
+		t.Errorf("Freedom KZ realized total = %d USD / %d RUB, want 150000 (+$1 500.00) / -3500000 (−35 000,00 ₽)", accountUSD, accountRUB)
+	}
+	if accountUSD <= 0 || accountRUB >= 0 {
+		t.Errorf("Freedom KZ realized total = %d USD / %d RUB: the account's own «Зафиксировано» line must come out with opposite signs in the two display modes — that is what makes the plan's consequence visible without opening a single position",
+			accountUSD, accountRUB)
 	}
 
 	// every currency the demo space holds (RUB, USD) now has a seeded rate
