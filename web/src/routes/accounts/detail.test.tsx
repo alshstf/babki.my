@@ -115,14 +115,29 @@ function makePosition({
   };
 }
 
+// The account's realized total as the server publishes it, both forms at once
+// (see RealizedTotal in the API contract). Untyped for the same reason
+// makePosition is: these bodies stand in for the server's JSON.
+function makeRealizedTotal(overrides: Record<string, unknown> = {}) {
+  return {
+    by_currency: [{ currency: "USD", realized_pnl_minor: 0 }],
+    base_currency: "RUB",
+    in_base: 0,
+    in_base_gap: null,
+    ...overrides,
+  };
+}
+
 // One position, enough of one for the table to render a row. The cost basis
 // statement below qualifies exactly these figures, so the tests about it need
-// a row for it to sit next to.
+// a row for it to sit next to. realized_total describes the whole list rather
+// than any one row, so it travels alongside them.
 function makePositionsBody(
   rules: SessionInfo["cost_basis_rules"],
   positions: unknown[] = [makePosition()],
+  realizedTotal: unknown = makeRealizedTotal(),
 ) {
-  return { positions, cost_basis_rules: rules };
+  return { positions, cost_basis_rules: rules, realized_total: realizedTotal };
 }
 
 // Renders AccountDetailPage under the route id it reads its params from
@@ -173,7 +188,12 @@ describe("AccountDetailPage", () => {
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": {
-        body: makePositionsBody(makeSession().cost_basis_rules, []),
+        // An account with no positions: the server's total is empty too —
+        // by_currency has no entries and in_base is the plain zero of no
+        // deals at all.
+        body: makePositionsBody(makeSession().cost_basis_rules, [], makeRealizedTotal({
+          by_currency: [],
+        })),
       },
       "/operations": { body: [] },
       "/api/v1/instruments": { body: { instruments: [] } },
@@ -256,15 +276,21 @@ describe("AccountDetailPage", () => {
   });
 
   it("shows in the header what this account's closed deals have locked in", async () => {
-    // The backend has been computing this figure per position for a while; up
-    // to now it existed only for whoever read the JSON.
+    // The figure arrives added up, from the response that carries the rows it
+    // stands over. This screen renders the server's total and computes none of
+    // its own — the positions below deliberately do NOT add up to it, so a
+    // client that went back to summing them would print 125,00 $ and fail.
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": {
-        body: makePositionsBody(makeSession().cost_basis_rules, [
-          makePosition({ realized_pnl_minor: 10_000 }),
-          makePosition({ instrument_id: "instr-2", realized_pnl_minor: 2_500 }),
-        ]),
+        body: makePositionsBody(
+          makeSession().cost_basis_rules,
+          [
+            makePosition({ realized_pnl_minor: 10_000 }),
+            makePosition({ instrument_id: "instr-2", realized_pnl_minor: 2_500 }),
+          ],
+          makeRealizedTotal({ by_currency: [{ currency: "USD", realized_pnl_minor: 12_600 }] }),
+        ),
       },
       "/operations": { body: [] },
       "/api/v1/instruments": { body: { instruments: [] } },
@@ -274,7 +300,7 @@ describe("AccountDetailPage", () => {
 
     expect(await screen.findByText("Зафиксировано")).toBeInTheDocument();
     const amounts = await screen.findByTestId("realized-total-amounts");
-    expect(norm(amounts.textContent ?? "")).toContain("125,00 $");
+    expect(norm(amounts.textContent ?? "")).toContain("126,00 $");
   });
 
   it("follows the display-currency toggle into the base currency", async () => {
@@ -284,18 +310,14 @@ describe("AccountDetailPage", () => {
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": {
-        body: makePositionsBody(makeSession().cost_basis_rules, [
-          makePosition({
-            realized_pnl_minor: 10_000,
-            in_base: {
-              cost_minor: 20_000_000,
-              income_minor: 0,
-              realized_pnl_minor: 900_000,
-              currency: "RUB",
-              rate_on: "2026-07-20",
-            },
+        body: makePositionsBody(
+          makeSession().cost_basis_rules,
+          [makePosition({ realized_pnl_minor: 10_000 })],
+          makeRealizedTotal({
+            by_currency: [{ currency: "USD", realized_pnl_minor: 10_000 }],
+            in_base: 900_000,
           }),
-        ]),
+        ),
       },
       "/operations": { body: [] },
       "/api/v1/instruments": { body: { instruments: [] } },

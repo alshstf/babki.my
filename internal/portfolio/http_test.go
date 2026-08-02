@@ -209,7 +209,24 @@ type positionInBase struct {
 }
 
 type positionsResp struct {
-	Positions []positionResp `json:"positions"`
+	Positions     []positionResp    `json:"positions"`
+	RealizedTotal realizedTotalResp `json:"realized_total"`
+}
+
+// realizedTotalResp mirrors apitypes.RealizedTotal for decoding in tests (see
+// http_realized_total_test.go). InBase and InBaseGap are pointers so that a
+// test can tell an explicit null — the account has no publishable total, and
+// the gap says why — apart from a figure, which a zero value could not.
+type realizedTotalResp struct {
+	ByCurrency   []realizedCurrencyTotalResp `json:"by_currency"`
+	BaseCurrency string                      `json:"base_currency"`
+	InBase       *int64                      `json:"in_base"`
+	InBaseGap    *string                     `json:"in_base_gap"`
+}
+
+type realizedCurrencyTotalResp struct {
+	Currency         string `json:"currency"`
+	RealizedPnlMinor int64  `json:"realized_pnl_minor"`
 }
 
 // TestPositionsEndpoint covers three scenarios on the GET

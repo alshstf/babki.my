@@ -438,8 +438,30 @@ func realizedTerms(events []Realization) (terms []datedMinor, dated bool) {
 	return terms, true
 }
 
+// baseGap names WHY a base-currency figure could not be struck. The two kinds
+// are not the same news to the person reading the screen — one closes on its
+// own and the other never will — and this type exists so the answer travels
+// from the code that knows it to the payload, instead of being reconstructed
+// downstream from flags that only correlate with it.
+type baseGap uint8
+
+const (
+	// gapNone: nothing was missing; there is a figure.
+	gapNone baseGap = iota
+	// gapNoRate: every date the sum needs is known, but the fx table has no
+	// rate for at least one of them yet. The backfill closes that gap on its
+	// own and the figure appears later.
+	gapNoRate
+	// gapUndated: a parcel of basis does not know when it was bought (see
+	// Lot.AcquiredOn), so there is no date to ask the fx table about and none
+	// will ever be recovered — nobody wrote it down.
+	gapUndated
+)
+
 // realizedInBase is the position's realized result in currency to, or an
-// explicit null when it cannot be struck honestly.
+// explicit null with the kind of gap that stopped it. It answers for both
+// readers of that figure — the position's own in_base block and the account's
+// realized total — so the two can never disagree.
 //
 // ROUNDING HAPPENS ONCE, HERE, FOR THE WHOLE POSITION. The published quantity
 // is one number per position, so that number is what gets rounded: every term
@@ -473,19 +495,118 @@ func realizedTerms(events []Realization) (terms []datedMinor, dated bool) {
 // caller must surface as a request error — never rendered as the null above,
 // which would tell the owner their sale is unconvertible when the truth is that
 // this server is having a bad minute.
-func (h *Handler) realizedInBase(ctx context.Context, p *Position, to string, cache map[rateKey]*rateLookup) (nullable.Nullable[int64], error) {
+func (h *Handler) realizedInBase(ctx context.Context, p *Position, to string, cache map[rateKey]*rateLookup) (nullable.Nullable[int64], baseGap, error) {
+	if p.Currency == to {
+		// Nothing to convert: the position's own realized result already IS
+		// the base-currency one. The published `in_base` object is null for
+		// such a position, but the figure is not unknown, and the account's
+		// total would silently lose a real term if this answered otherwise.
+		return nullable.NewNullableWithValue(p.RealizedPnLMinor), gapNone, nil
+	}
 	terms, dated := realizedTerms(p.Realizations)
 	if !dated {
-		return nullable.NewNullNullable[int64](), nil
+		return nullable.NewNullNullable[int64](), gapUndated, nil
 	}
 	minor, ok, err := h.sumInBase(ctx, terms, p.Currency, to, cache)
 	if err != nil {
-		return nullable.Nullable[int64]{}, err
+		return nullable.Nullable[int64]{}, gapNone, err
 	}
 	if !ok {
-		return nullable.NewNullNullable[int64](), nil
+		return nullable.NewNullNullable[int64](), gapNoRate, nil
 	}
-	return nullable.NewNullableWithValue(minor), nil
+	return nullable.NewNullableWithValue(minor), gapNone, nil
+}
+
+// realizedTotals adds up what an account's closed deals have locked in, folding
+// each position in as it is built.
+//
+// THE SERVER ADDS, THE CLIENT RENDERS. Nothing here converts and nothing here
+// rounds — every term was converted and rounded once already, for its own
+// position — so a client could in principle do this addition itself and get the
+// same integers. It does not, for the same reason the accounts screen's totals
+// are computed here and not there: a figure the interface shows is derived in
+// one place, so the policy behind it (what rounds, which positions count, what
+// a gap suppresses) can change in one place and every reader keeps agreeing on
+// the answer. The single standing exception to that rule is the profit
+// percentage, and it is an exception precisely because a percentage is not
+// money.
+//
+// Two forms, because the screen has two modes and the server cannot know which
+// one is on: by currency (each position in its own, never added across
+// currencies) and in the space's base currency (one figure, or none at all).
+type realizedTotals struct {
+	baseCurrency string
+	byCurrency   map[string]int64
+	inBaseMinor  int64
+	undated      bool
+	noRate       bool
+}
+
+func newRealizedTotals(baseCurrency string) *realizedTotals {
+	return &realizedTotals{baseCurrency: baseCurrency, byCurrency: make(map[string]int64)}
+}
+
+// add folds one position in: nativeMinor is its realized result in its own
+// currency, which the contract publishes unconditionally, and baseMinor the
+// same result in the base currency — null with the gap that stopped it.
+//
+// The base sum keeps accumulating even after a gap is seen: the terms cost
+// nothing to add, and result() drops the partial sum rather than publishing it.
+func (rt *realizedTotals) add(currency string, nativeMinor int64, baseMinor nullable.Nullable[int64], gap baseGap) {
+	rt.byCurrency[currency] += nativeMinor
+	switch gap {
+	case gapUndated:
+		rt.undated = true
+	case gapNoRate:
+		rt.noRate = true
+	default:
+		// gapNone: the figure was struck, so there is one to add.
+		rt.inBaseMinor += baseMinor.MustGet()
+	}
+}
+
+// result is the account's answer as the contract publishes it.
+//
+// Rounding: the per-position figures added here were each rounded once, for
+// their own position, and this total is their exact integer sum. Re-deriving it
+// from the raw disposal terms and rounding once for the whole account would be
+// the more accurate single number — and would put the header a minor unit away
+// from the very rows it stands over, in the same response. See
+// RealizedTotal.in_base in the API contract.
+func (rt *realizedTotals) result() apitypes.RealizedTotal {
+	out := apitypes.RealizedTotal{
+		BaseCurrency: rt.baseCurrency,
+		ByCurrency:   make([]apitypes.RealizedCurrencyTotal, 0, len(rt.byCurrency)),
+	}
+	for currency, minor := range rt.byCurrency {
+		out.ByCurrency = append(out.ByCurrency, apitypes.RealizedCurrencyTotal{
+			Currency:         currency,
+			RealizedPnlMinor: minor,
+		})
+	}
+	sort.Slice(out.ByCurrency, func(i, j int) bool {
+		return out.ByCurrency[i].Currency < out.ByCurrency[j].Currency
+	})
+
+	// A total missing one of its terms is an invented number — smaller or
+	// larger than the truth and indistinguishable from a real one on screen —
+	// so nothing at all is published in its place, and the reason is named
+	// instead of left for the reader to guess from the rows.
+	switch {
+	case rt.undated && rt.noRate:
+		out.InBase = nullable.NewNullNullable[int64]()
+		out.InBaseGap = nullable.NewNullableWithValue(apitypes.Both)
+	case rt.undated:
+		out.InBase = nullable.NewNullNullable[int64]()
+		out.InBaseGap = nullable.NewNullableWithValue(apitypes.Undated)
+	case rt.noRate:
+		out.InBase = nullable.NewNullNullable[int64]()
+		out.InBaseGap = nullable.NewNullableWithValue(apitypes.NoRate)
+	default:
+		out.InBase = nullable.NewNullableWithValue(rt.inBaseMinor)
+		out.InBaseGap = nullable.NewNullNullable[apitypes.RealizedGap]()
+	}
+	return out
 }
 
 // incomeByInstrument groups the journal's instrument-attributed income
@@ -543,10 +664,14 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 //     which is which.
 //   - realized_pnl_minor sums the disposals already made (p.Realizations), each
 //     one's proceeds and fee at the rate of ITS day and each parcel of basis it
-//     retired at the rate of the day THAT parcel was bought (see
-//     realizedInBase). It is the one figure here that is settled: both of its
-//     ends are past events with dates of their own, so unlike the unrealized
-//     figure above it will never move again.
+//     retired at the rate of the day THAT parcel was bought. It is the one
+//     figure here that is settled: both of its ends are past events with dates
+//     of their own, so unlike the unrealized figure above it will never move
+//     again. It is passed IN rather than computed here (see realizedInBase),
+//     because the account's own total needs exactly the same figure whether or
+//     not this object survives — a settled result does not become unknowable
+//     because today's rate is missing — and computing it twice would let the
+//     two answers drift apart.
 //
 // fees_minor is deliberately excluded (owner feedback — not carried into
 // PositionInBase at all, see the API contract).
@@ -591,7 +716,7 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // A non-nil error means a genuine failure (DB error, canceled context) that
 // the caller must surface as a request error — never silently rendered as
 // null, which would misrepresent an outage as "nothing to convert".
-func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, income []Operation, baseCurrency string, cache map[rateKey]*rateLookup) (*apitypes.PositionInBase, error) {
+func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, income []Operation, baseCurrency string, realizedMinor nullable.Nullable[int64], cache map[rateKey]*rateLookup) (*apitypes.PositionInBase, error) {
 	if p.Currency == baseCurrency {
 		return nil, nil
 	}
@@ -649,11 +774,6 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 	// Unlike the two sums above, a realized result that cannot be struck nulls
 	// only itself: its terms are disposals already made, and nothing else in
 	// this object is computed from them (see realizedInBase).
-	realizedMinor, err := h.realizedInBase(ctx, p, baseCurrency, cache)
-	if err != nil {
-		return nil, err
-	}
-
 	out := &apitypes.PositionInBase{
 		CostMinor:        costMinor,
 		IncomeMinor:      incomeMinor,
@@ -743,6 +863,7 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	// income entries costs one pass and no extra round trip.
 	rates := make(map[rateKey]*rateLookup)
 	income := incomeByInstrument(ops)
+	totals := newRealizedTotals(sp.BaseCurrency)
 	out := make([]apitypes.Position, 0, len(positions))
 	for _, pos := range positions {
 		inst, err := h.instruments.ByID(r.Context(), pos.InstrumentID)
@@ -756,7 +877,19 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		inBase, err := h.positionInBase(r.Context(), pos, apiPos, income[pos.InstrumentID], sp.BaseCurrency, rates)
+		// Struck once and used twice: it is this position's
+		// in_base.realized_pnl_minor below and one term of the account's total
+		// beside it. The total takes it even when the in_base object turns out
+		// to be absent — a settled result is not made unknowable by a missing
+		// quote or by a lot still held whose purchase date nobody wrote down.
+		realizedMinor, realizedGap, err := h.realizedInBase(r.Context(), pos, sp.BaseCurrency, rates)
+		if err != nil {
+			family.WriteError(w, err)
+			return
+		}
+		totals.add(apiPos.Currency, apiPos.RealizedPnlMinor, realizedMinor, realizedGap)
+
+		inBase, err := h.positionInBase(r.Context(), pos, apiPos, income[pos.InstrumentID], sp.BaseCurrency, realizedMinor, rates)
 		if err != nil {
 			family.WriteError(w, err)
 			return
@@ -783,5 +916,8 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, apitypes.PositionsResponse{
 		Positions:      out,
 		CostBasisRules: family.CostBasisRulesAPI(sp.CostBasisRules()),
+		// Added here rather than by whoever renders the list: see
+		// realizedTotals, and RealizedTotal in the API contract.
+		RealizedTotal: totals.result(),
 	})
 }

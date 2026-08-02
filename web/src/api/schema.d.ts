@@ -714,10 +714,40 @@ export interface components {
             /** @description Date YYYY-MM-DD of the fx rate behind market_value_minor: today's rate, or the nearest earlier date the rate table actually holds. It does NOT describe cost_minor, income_minor or realized_pnl_minor — those use one rate per lot, per payment and per disposal date, so no single date could name them */
             rate_on: string;
         };
+        /**
+         * @description Why RealizedTotal.in_base could not be struck. Published so that a client never re-derives it from the positions' own flags: the two kinds of gap are not the same news to the person reading the screen, and the server is the only party that knows which one actually stopped the sum. `undated`: at least one position retired a parcel of basis that does not know when it was bought (see Position.has_undated_realizations), so no rate answers for it and no figure will ever appear. `no_rate`: every date the sum needs is known, but the fx table has no rate for at least one of them yet — the backfill closes that gap on its own and the figure shows up later. `both`: different positions were stopped by different gaps, and a screen that named only one of them would promise the whole total is coming when half of it never is.
+         * @enum {string}
+         */
+        RealizedGap: "undated" | "no_rate" | "both";
+        RealizedCurrencyTotal: {
+            /** @description ISO-4217 of the positions this figure adds up — their own currency, not the base one */
+            currency: string;
+            /**
+             * Format: int64
+             * @description Sum of Position.realized_pnl_minor over every position denominated in `currency`. Exact: the terms are int64 minor units of one and the same currency, so nothing is converted and nothing is rounded here
+             */
+            realized_pnl_minor: number;
+        };
+        /** @description What an account's closed deals have locked in, added up over all its positions — the account-level twin of Position.realized_pnl_minor and Position.in_base.realized_pnl_minor. The server adds it rather than the client for the same reason it adds the balances on the accounts screen: a figure the interface shows is computed in one place, so the policy behind it (what rounds, what a gap suppresses, which positions count) can change in one place and every reader agrees on the answer. Both forms are always published, because the client cannot know which one a screen is about to show and the choice is a display preference, not a fact about the money. */
+        RealizedTotal: {
+            /** @description One entry per currency the account's positions are denominated in, ordered by currency code, each one an exact sum within that currency. Amounts in different currencies are never added together: a single integer made of dollars and euros is denominated in nothing. Never has a gap — Position.realized_pnl_minor is published unconditionally, since an unrecorded purchase date costs no money and no shares — so a reader in this mode always has a complete answer. Empty exactly when the account has no positions at all, which is also how a client tells 'nothing to say here' apart from a genuine zero. */
+            by_currency: components["schemas"]["RealizedCurrencyTotal"][];
+            /** @description The space's base currency (ISO-4217), same as Summary.base_currency: the currency of in_base, carried here so a client formatting the total need not go back to the session for it */
+            base_currency: string;
+            /**
+             * Format: int64
+             * @description The same result in the space's base currency: the sum of every position's realized figure in that currency — the converted one (Position.in_base.realized_pnl_minor, each rounded once for its own position) for positions denominated in some other currency, and the position's own realized_pnl_minor for those already in the base currency, which have nothing to convert and would otherwise be silently dropped. THE ROUNDED PER-POSITION FIGURES ARE WHAT IS ADDED, not the raw terms behind them re-summed and rounded once for the account. Rounding once per account would be the more accurate single number and is deliberately not what this is: each position's figure is itself published in this same response, this total is defined as their sum, and a header that disagreed by a minor unit with the rows one field away would be a number nobody could check. The residual is at most half a minor unit per position, and it errs the way НК РФ ст. 210 п. 5 does — a base is struck per disposal and the disposals are summed, not the reverse. Null when at least one position's figure could not be struck; `in_base_gap` then says which kind of gap stopped it. Never a partial sum: a total quietly missing one of its terms reads as a smaller (or larger) result, not as a gap, and is indistinguishable from a real figure on screen. A position contributes here whenever its own realized result could be valued, INCLUDING when its `in_base` object as a whole is absent for reasons that have nothing to do with disposals already made — no quote to value the holding, no rate for today, a lot still HELD that does not know when it was bought. Those null the object this figure would have travelled in; they do not make a settled result unknowable, and suppressing the account's total over them would be silence about something the server knows.
+             */
+            in_base: number | null;
+            /** @description Which kind of gap stopped `in_base`, or null when there is a figure. Both of them can be true of one account at once, hence `both`. */
+            in_base_gap: components["schemas"]["RealizedGap"] | null;
+        };
         PositionsResponse: {
             positions: components["schemas"]["Position"][];
             /** @description Whether the cost basis behind every figure above is the one the owner's country requires (see CostBasisRules). It travels with the numbers rather than only in the session because this is the payload a reader takes the numbers from: a client that renders positions without ever reading the session must still be unable to show cost_minor, unrealized_pnl_minor and realized_pnl_minor as if they were a tax basis when they are not. It describes the whole computation, not one row, so it sits on the response rather than being repeated identically inside every Position. */
             cost_basis_rules: components["schemas"]["CostBasisRules"];
+            /** @description What this account's closed deals have locked in, across all of the positions above. It sits on the response rather than being computed by the reader from `positions`, and rather than living on its own endpoint: it is an aggregate of exactly these rows, arrives with them in the one round trip the screen already makes, and — like cost_basis_rules — describes the whole list rather than any one row. Present even for an account with no positions, where by_currency is empty and in_base is a plain zero. */
+            realized_total: components["schemas"]["RealizedTotal"];
         };
     };
     responses: {

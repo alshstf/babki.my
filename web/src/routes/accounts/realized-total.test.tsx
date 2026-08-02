@@ -1,242 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import "@/i18n";
-import { RealizedTotal, sumRealized } from "./realized-total";
-import type { Position } from "@/api/positions";
+import { RealizedTotal } from "./realized-total";
+import type { RealizedTotal as RealizedTotalPayload } from "@/api/positions";
 
 // NBSP-insensitive compare: Intl.NumberFormat uses non-breaking spaces
 // (matches the helper in positions-table.test.tsx / money.test.ts).
 const norm = (s: string) => s.replace(/[\u00A0\u202F]/g, " ");
 
-function makePosition(overrides: Partial<Position> = {}): Position {
+// The account's total exactly as the server publishes it: both forms at once,
+// because the response cannot know which one the toggle is on (see
+// RealizedTotal in the API contract). This component adds nothing to it — every
+// test here is about which of the server's figures reaches the screen and what
+// is said when there is none.
+function makeTotal(overrides: Partial<RealizedTotalPayload> = {}): RealizedTotalPayload {
   return {
-    instrument: {
-      id: "instr-1",
-      type: "share",
-      name: "Test Corp",
-      ticker: "TEST",
-      isin: "US0000000000",
-      figi: "",
-      currency: "USD",
-      frozen: false,
-    },
-    quantity: "10",
-    cost_minor: 250_000,
-    realized_pnl_minor: 0,
-    income_minor: 0,
-    fees_minor: 0,
-    currency: "USD",
-    // The ordinary case for both gap flags: every lot came from a buy, and a
-    // buy always knows its own date. Tests about the other cases set them.
-    has_undated_lots: false,
-    has_undated_realizations: false,
+    by_currency: [{ currency: "USD", realized_pnl_minor: 12_500 }],
+    base_currency: "RUB",
+    in_base: 1_000_000,
+    in_base_gap: null,
     ...overrides,
   };
 }
-
-// A position's in_base block, with the fields this figure never reads left at
-// values that are irrelevant to it on purpose: the realized total must be
-// stopped by its own terms, not by the valuation's or the basis's.
-function inBase(overrides: Partial<NonNullable<Position["in_base"]>> = {}) {
-  return {
-    cost_minor: 20_000_000,
-    income_minor: 0,
-    realized_pnl_minor: 0,
-    currency: "RUB",
-    rate_on: "2026-07-20",
-    ...overrides,
-  };
-}
-
-describe("sumRealized", () => {
-  it("adds the positions of one currency into a single figure", () => {
-    const result = sumRealized(
-      [
-        makePosition({ realized_pnl_minor: 10_000 }),
-        makePosition({ realized_pnl_minor: 2_500 }),
-      ],
-      "native",
-      "RUB",
-    );
-
-    expect(result).toEqual({ totals: [{ currency: "USD", amountMinor: 12_500 }], gap: null });
-  });
-
-  it("keeps two currencies apart instead of adding them into one number", () => {
-    // Dollars and euros are not addable, and a sum of the two integers would
-    // be a number denominated in nothing at all.
-    const result = sumRealized(
-      [
-        makePosition({ currency: "USD", realized_pnl_minor: 10_000 }),
-        makePosition({ currency: "EUR", realized_pnl_minor: 2_500 }),
-      ],
-      "native",
-      "RUB",
-    );
-
-    expect(result).toEqual({
-      totals: [
-        { currency: "EUR", amountMinor: 2_500 },
-        { currency: "USD", amountMinor: 10_000 },
-      ],
-      gap: null,
-    });
-  });
-
-  it("adds the base-currency figures, not the position-currency ones, in base mode", () => {
-    // The two are different numbers on purpose: the base figure carries the
-    // currency's move between purchase and sale (see PositionInBase in the
-    // API contract), so picking the wrong one is a silently wrong total.
-    const result = sumRealized(
-      [
-        makePosition({
-          realized_pnl_minor: 10_000,
-          in_base: inBase({ realized_pnl_minor: 900_000 }),
-        }),
-        makePosition({
-          realized_pnl_minor: 2_500,
-          in_base: inBase({ realized_pnl_minor: 100_000 }),
-        }),
-      ],
-      "base",
-      "RUB",
-    );
-
-    expect(result).toEqual({ totals: [{ currency: "RUB", amountMinor: 1_000_000 }], gap: null });
-  });
-
-  it("counts a position already in the base currency by its own figure", () => {
-    // Such a position carries no in_base at all (nothing to convert), and
-    // skipping it — or calling it unknown — would under-report the total.
-    const result = sumRealized(
-      [
-        makePosition({ currency: "RUB", realized_pnl_minor: 5_000, in_base: null }),
-        makePosition({
-          currency: "USD",
-          realized_pnl_minor: 10_000,
-          in_base: inBase({ realized_pnl_minor: 900_000 }),
-        }),
-      ],
-      "base",
-      "RUB",
-    );
-
-    expect(result).toEqual({ totals: [{ currency: "RUB", amountMinor: 905_000 }], gap: null });
-  });
-
-  it("refuses the base-currency sum when one position's figure is unknown", () => {
-    // Adding the known ones and calling the result "the total" would publish
-    // a number smaller than the truth and indistinguishable from a real one.
-    const result = sumRealized(
-      [
-        makePosition({ in_base: inBase({ realized_pnl_minor: 900_000 }) }),
-        makePosition({
-          has_undated_realizations: true,
-          in_base: inBase({ realized_pnl_minor: null }),
-        }),
-      ],
-      "base",
-      "RUB",
-    );
-
-    expect(result).toEqual({ totals: [], gap: "undated" });
-  });
-
-  it("blames the missing rate when every purchase date was recorded", () => {
-    const result = sumRealized(
-      [makePosition({ in_base: inBase({ realized_pnl_minor: null }) })],
-      "base",
-      "RUB",
-    );
-
-    expect(result.gap).toBe("no_rate");
-  });
-
-  it("does not blame the held undated lots for a realized figure a missing rate stopped", () => {
-    // has_undated_lots speaks about the lots still HELD; the parcel behind a
-    // realized figure has already been sold and is never among them. Reading
-    // it as the explanation here would name a cause that is not the cause and
-    // promise a figure that will never come.
-    const result = sumRealized(
-      [
-        makePosition({
-          has_undated_lots: true,
-          has_undated_realizations: false,
-          in_base: inBase({ realized_pnl_minor: null }),
-        }),
-      ],
-      "base",
-      "RUB",
-    );
-
-    expect(result.gap).toBe("no_rate");
-  });
-
-  it("blames the unrecorded dates when an undated held lot nulled the whole conversion block", () => {
-    // No in_base at all: the realized figure is unavailable because a date
-    // nobody wrote down stopped the object it lives in, and that never
-    // resolves — "нет курса" would be false about it.
-    const result = sumRealized(
-      [makePosition({ has_undated_lots: true, in_base: null })],
-      "base",
-      "RUB",
-    );
-
-    expect(result.gap).toBe("undated");
-  });
-
-  it("blames the missing rate when the whole conversion block is missing and no date is", () => {
-    const result = sumRealized([makePosition({ in_base: null })], "base", "RUB");
-
-    expect(result.gap).toBe("no_rate");
-  });
-
-  it("names both causes when different positions are stopped by different gaps", () => {
-    const result = sumRealized(
-      [
-        makePosition({ has_undated_realizations: true, in_base: inBase({ realized_pnl_minor: null }) }),
-        makePosition({ in_base: null }),
-      ],
-      "base",
-      "RUB",
-    );
-
-    expect(result.gap).toBe("both");
-  });
-
-  it("has no gaps in the positions' own currency, whatever the conversion is missing", () => {
-    // realized_pnl_minor in the position's own currency is always published
-    // (see the API contract): an unrecorded purchase date costs no money and
-    // no shares, so this mode always has a figure to show.
-    const result = sumRealized(
-      [
-        makePosition({
-          realized_pnl_minor: 7_000,
-          has_undated_realizations: true,
-          has_undated_lots: true,
-          in_base: null,
-        }),
-      ],
-      "native",
-      "RUB",
-    );
-
-    expect(result).toEqual({ totals: [{ currency: "USD", amountMinor: 7_000 }], gap: null });
-  });
-});
 
 describe("RealizedTotal", () => {
-  it("shows the summed figure under its own label", () => {
-    render(
-      <RealizedTotal
-        positions={[
-          makePosition({ realized_pnl_minor: 10_000 }),
-          makePosition({ realized_pnl_minor: 2_500 }),
-        ]}
-        mode="native"
-        baseCurrency="RUB"
-      />,
-    );
+  it("shows the figure under its own label", () => {
+    render(<RealizedTotal total={makeTotal()} mode="native" />);
 
     expect(screen.getByText("Зафиксировано")).toBeInTheDocument();
     expect(norm(screen.getByTestId("realized-total-amounts").textContent ?? "")).toContain(
@@ -248,9 +37,7 @@ describe("RealizedTotal", () => {
     // Which rates stand behind the two ends of the figure is exactly the
     // detail that belongs in a tooltip rather than in the text of a screen
     // full of numbers (the owner's standing rule).
-    render(
-      <RealizedTotal positions={[makePosition()]} mode="native" baseCurrency="RUB" />,
-    );
+    render(<RealizedTotal total={makeTotal()} mode="native" />);
 
     const hint = screen.getByTestId("realized-total-label").getAttribute("title") ?? "";
     expect(hint).toContain("на дни покупок");
@@ -263,82 +50,113 @@ describe("RealizedTotal", () => {
   it("shows each currency's figure separately rather than one meaningless number", () => {
     render(
       <RealizedTotal
-        positions={[
-          makePosition({ currency: "USD", realized_pnl_minor: 10_000 }),
-          makePosition({ currency: "EUR", realized_pnl_minor: 2_500 }),
-        ]}
+        total={makeTotal({
+          by_currency: [
+            { currency: "EUR", realized_pnl_minor: 2_500 },
+            { currency: "USD", realized_pnl_minor: 10_000 },
+          ],
+        })}
         mode="native"
-        baseCurrency="RUB"
       />,
     );
 
     const shown = norm(screen.getByTestId("realized-total-amounts").textContent ?? "");
-    expect(shown).toContain("100,00 $");
     expect(shown).toContain("25,00 €");
+    expect(shown).toContain("100,00 $");
   });
 
-  it("shows no base-currency sum, and says the dates are what stopped it", () => {
+  it("shows the base-currency figure, not the position-currency ones, in base mode", () => {
+    // The two are different numbers on purpose: the base figure carries the
+    // currency's move between purchase and sale (see PositionInBase in the API
+    // contract), so showing the wrong one is a silently wrong total.
     render(
       <RealizedTotal
-        positions={[
-          makePosition({ in_base: inBase({ realized_pnl_minor: 900_000 }) }),
-          makePosition({
-            has_undated_realizations: true,
-            in_base: inBase({ realized_pnl_minor: null }),
-          }),
-        ]}
+        total={makeTotal({
+          by_currency: [{ currency: "USD", realized_pnl_minor: 12_500 }],
+          in_base: 900_000,
+        })}
         mode="base"
-        baseCurrency="RUB"
       />,
+    );
+
+    const shown = norm(screen.getByTestId("realized-total-amounts").textContent ?? "");
+    expect(shown).toContain("9 000,00 ₽");
+    expect(shown).not.toContain("125,00 $");
+  });
+
+  it("shows no base-currency sum, and says what about the deals stopped it", () => {
+    render(
+      <RealizedTotal total={makeTotal({ in_base: null, in_base_gap: "undated" })} mode="base" />,
     );
 
     expect(screen.queryByTestId("realized-total-amounts")).not.toBeInTheDocument();
     const gap = screen.getByTestId("realized-total-gap");
-    expect(gap.textContent).toContain("даты покупок");
+    // A fact about the reader's own deals, and one that says of itself that it
+    // will not fix itself — not the name of a field that was left blank.
+    expect(gap.textContent).toContain("когда была куплена");
+    expect(gap.textContent).toContain("неоткуда");
+    expect(gap.textContent).not.toContain("дат");
     // Saying "нет курса" here would name a cause that will never be the true
     // one and promise a number that is never coming.
     expect(gap.textContent).not.toContain("курс");
     expect(gap.getAttribute("title")).toContain("никогда");
   });
 
-  it("says the rate is what stopped it when no purchase date is missing", () => {
+  it("says the rate is what stopped it when nothing about the deals is unknown", () => {
     render(
-      <RealizedTotal
-        positions={[makePosition({ in_base: inBase({ realized_pnl_minor: null }) })]}
-        mode="base"
-        baseCurrency="RUB"
-      />,
+      <RealizedTotal total={makeTotal({ in_base: null, in_base_gap: "no_rate" })} mode="base" />,
     );
 
     const gap = screen.getByTestId("realized-total-gap");
     expect(gap.textContent).toContain("курс");
-    expect(gap.textContent).not.toContain("даты покупок");
+    expect(gap.textContent).not.toContain("когда была куплена");
     // A rate that has not been fetched yet is a gap that closes on its own.
     expect(gap.getAttribute("title")).toContain("обнов");
   });
 
-  it("names both causes when different positions are stopped by different gaps", () => {
-    render(
-      <RealizedTotal
-        positions={[
-          makePosition({
-            has_undated_realizations: true,
-            in_base: inBase({ realized_pnl_minor: null }),
-          }),
-          makePosition({ in_base: null }),
-        ]}
-        mode="base"
-        baseCurrency="RUB"
-      />,
-    );
+  it("names both causes when different positions were stopped by different gaps", () => {
+    render(<RealizedTotal total={makeTotal({ in_base: null, in_base_gap: "both" })} mode="base" />);
 
     const gap = screen.getByTestId("realized-total-gap");
-    expect(gap.textContent).toContain("даты покупок");
+    expect(gap.textContent).toContain("когда была куплена");
     expect(gap.textContent).toContain("курс");
   });
 
+  it("keeps showing the per-currency figures when only the converted sum is missing", () => {
+    // A gap is a fact about the base-currency sum alone. In the positions' own
+    // currency every figure is published unconditionally, and withholding a
+    // complete answer because another one is incomplete is the silence this
+    // screen exists to remove.
+    render(
+      <RealizedTotal
+        total={makeTotal({ in_base: null, in_base_gap: "undated" })}
+        mode="native"
+      />,
+    );
+
+    expect(screen.queryByTestId("realized-total-gap")).not.toBeInTheDocument();
+    expect(norm(screen.getByTestId("realized-total-amounts").textContent ?? "")).toContain(
+      "125,00 $",
+    );
+  });
+
   it("renders nothing when the account has no positions at all", () => {
-    render(<RealizedTotal positions={[]} mode="native" baseCurrency="RUB" />);
+    // by_currency is empty exactly then, and a "0,00" over an empty account
+    // answers a question nobody asked. The base figure is a real zero here —
+    // the sum of no deals — and it must not be what decides.
+    render(
+      <RealizedTotal total={makeTotal({ by_currency: [], in_base: 0 })} mode="base" />,
+    );
+
+    expect(screen.queryByTestId("realized-total")).not.toBeInTheDocument();
+  });
+
+  it("renders nothing rather than a reason of its own when the server names none", () => {
+    // The contract publishes a figure or a gap, never neither. If that ever
+    // breaks, an unexplained blank is honest and a cause guessed here is not.
+    render(
+      <RealizedTotal total={makeTotal({ in_base: null, in_base_gap: null })} mode="base" />,
+    );
 
     expect(screen.queryByTestId("realized-total")).not.toBeInTheDocument();
   });

@@ -130,15 +130,12 @@ export function AccountDetailPage() {
             the header rather than in the positions table because the owner
             removed the per-row "Реализовано" as visual noise and that decision
             stands: one figure here answers the question without putting it
-            back into every row. Rendered only once the positions have loaded —
-            it is computed from them — and it renders nothing at all for an
-            account that has no positions. */}
+            back into every row. The figure arrives added up from the server,
+            with the positions it stands over (see RealizedTotal in the API
+            contract); it renders nothing at all for an account that has no
+            positions. */}
         {positions.data && (
-          <RealizedTotal
-            positions={positions.data.positions}
-            mode={mode}
-            baseCurrency={baseCurrency}
-          />
+          <RealizedTotal total={positions.data.realized_total} mode={mode} />
         )}
       </div>
 
