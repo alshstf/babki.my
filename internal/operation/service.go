@@ -487,6 +487,14 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 		AccountID: p.FromAccountID, InstrumentID: &p.InstrumentID, Type: TypeTransferOut,
 		OccurredOn: p.OccurredOn, Quantity: &quantity, AmountMinor: cost,
 		Currency: currency, Note: p.Note,
+		// The departing leg carries the breakdown as well, even though only
+		// the arriving one stores it (CreatePair writes in.TransferLots, and
+		// Store.attachTransferLots hands the same rows to both legs at every
+		// later read). It matters here and not merely for symmetry: the engine
+		// releases the lots this breakdown names rather than a fresh FIFO slice
+		// (see portfolio.Position.releaseRecorded), so a candidate without it
+		// is not the row the check below is supposed to be checking.
+		TransferLots: lots,
 	}
 	inOp := Operation{
 		AccountID: p.ToAccountID, InstrumentID: &p.InstrumentID, Type: TypeTransferIn,

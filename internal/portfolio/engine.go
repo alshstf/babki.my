@@ -6,10 +6,22 @@
 //
 // Transfer cost basis is a snapshot: when a transfer pair is created, the
 // lots it consumes are resolved once (see ReleasedLots) and stored alongside
-// the transfer_in operation, their summed cost on the operation itself.
-// Editing the source account's earlier history later does not retroactively
-// adjust an existing transfer's basis — a known and accepted MVP
-// simplification.
+// the transfer_in operation, their summed cost on the operation itself. That
+// breakdown is then THE RECORD OF WHAT LEFT, and BOTH legs are folded from it:
+// the receiving account rebuilds those lots and the departing one gives up
+// those very lots (see Position.releaseRecorded), so a pair is consistent by
+// construction rather than because two independent derivations happen to agree.
+//
+// They did once, and then stopped. The departing leg used to release a FRESH
+// FIFO slice of its own and throw the cost away, which reproduced the stored
+// snapshot only for as long as the queue rule stayed put. It did not: ordering
+// the queue by acquisition rather than by arrival made every already-recorded
+// transfer resolve to DIFFERENT lots than the ones it had frozen, with no edit
+// by anyone — the same parcel could then sit on both accounts at once while
+// another vanished, and the family's basis was overstated by the difference,
+// silently, because the integrity check only ever compared a leg against its
+// own frozen numbers (issue #60). Reading the release off the record instead of
+// re-deriving it makes the pair immune to any future change of that rule.
 //
 // The receiving account rebuilds those very lots (see Compute's transfer_in
 // branch), each keeping the day it was bought: moving shares between the
@@ -227,6 +239,110 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) ([]ReleasedLot, error) {
 	return pieces, nil
 }
 
+// releaseRecorded gives up the lots a transfer's stored breakdown says left
+// this account, instead of deriving a fresh release from the queue as it stands
+// now. The breakdown IS the record of what went (see Operation.TransferLots);
+// re-deriving it means the two legs of one pair are two independent guesses
+// that agree only while nothing about the guessing changes, and the moment the
+// queue rule changed they stopped agreeing for every transfer already written
+// (see the package doc). Reading it off the record instead is what makes a pair
+// consistent by construction.
+//
+// PIECES ARE MATCHED TO LOTS BY THE DAY OF ACQUISITION, and by nothing else.
+// That day is the only durable identity a lot has: quantity and cost are
+// whatever is left of it after the releases and amortizations that came before,
+// so they name no lot on their own, and a lot's POSITION in the queue is
+// exactly the thing that just proved unstable — matching on it would rebuild
+// the bug being fixed here in a new place. The day, by contrast, is the fact
+// the breakdown was created to carry, it is what every later figure is struck
+// at (the ruble basis above all), and it is what decides the queue, so two lots
+// that share it are interchangeable for every purpose this package has.
+//
+// Each piece is taken from the matching lots front-to-back, and only until its
+// QUANTITY is satisfied, so a piece never reaches into a lot a later piece
+// needs. Its cost comes out of those same lots, clamped by what each one still
+// holds; whatever the clamp leaves over is drained from the front of the queue
+// once every piece has been served. The leftover is not an oddity to be
+// tolerated but a case with a name: a lot whose entire holding was rounded away
+// by a reverse split has no quantity and real money still in it, the release
+// that built this breakdown consumed it as a piece of nothing, and
+// operation.quantizeLots — unable to store a piece with no quantity — folded
+// its cost into the next piece along. So a piece can legitimately carry more
+// basis than the lot its date points at, and the money is sitting in a
+// shareless lot ahead of it. Refusing that would refuse a transfer this program
+// itself wrote, which is the one thing a loud check must never do.
+//
+// WHAT CANNOT BE MATCHED IS REFUSED, LOUDLY. A piece whose acquisition day has
+// no shares left behind it means the journal, replayed under today's rules,
+// does not contain the parcel the record says departed — the source's history
+// was edited after the transfer, or the shares were released twice. There is no
+// quiet answer to that: taking the quantity from some other day's lot would
+// re-date shares that are still held and reprice them at a rate from a day they
+// were never bought on, and taking nothing would leave the family holding a
+// basis twice. The account's positions then fail to compute until the transfer
+// is deleted and re-entered, which is the same recovery a quantity that no
+// longer fits already has (see the package doc on truncation).
+//
+// Quantities and costs are conserved exactly: the position loses the pieces'
+// summed quantity and their summed cost, which CheckTransferLots has already
+// established are the operation's own. So whatever the two accounts hold
+// afterwards adds up to what was actually spent, which is the property issue
+// #60 found broken.
+func (p *Position) releaseRecorded(o Operation) error {
+	if o.Quantity.GreaterThan(p.Quantity) {
+		return fmt.Errorf("%s %s %s: %w: have %s, need %s",
+			o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"),
+			ErrOversell, p.Quantity, *o.Quantity)
+	}
+	var carried int64 // recorded cost its own lots could not cover
+	for i, pc := range o.TransferLots {
+		qty, cost := pc.Quantity, pc.CostMinor
+		for j := range p.Lots {
+			l := &p.Lots[j]
+			if !sameAcquisition(l.AcquiredOn, pc.AcquiredOn) {
+				continue
+			}
+			takeQty, takeCost := decimal.Min(l.Quantity, qty), min(l.CostMinor, cost)
+			l.Quantity, l.CostMinor = l.Quantity.Sub(takeQty), l.CostMinor-takeCost
+			p.Quantity, p.CostMinor = p.Quantity.Sub(takeQty), p.CostMinor-takeCost
+			qty, cost = qty.Sub(takeQty), cost-takeCost
+			if qty.IsZero() {
+				break
+			}
+		}
+		if qty.IsPositive() {
+			return badOp(o, fmt.Sprintf(
+				"transfer lot %d moved %s units acquired %s, but replaying this account leaves %s of them with no such lot to come from: its history was edited after the transfer was recorded",
+				i, pc.Quantity, acquisitionText(pc.AcquiredOn), qty))
+		}
+		carried += cost
+	}
+	if carried > 0 {
+		if carried > p.CostMinor {
+			return badOp(o, fmt.Sprintf(
+				"the breakdown moves %d minor more basis than this account still holds (%d): its history was edited after the transfer was recorded",
+				carried, p.CostMinor))
+		}
+		drainLotsCost(p, carried)
+		p.CostMinor -= carried
+	}
+	// A lot with neither shares nor money in it is spent — the same thing
+	// releaseFIFO expresses by dropping a lot it consumed whole. One with a
+	// quantity of zero and a cost still in it is NOT spent and stays (see
+	// applySplit).
+	p.Lots = slices.DeleteFunc(p.Lots, func(l Lot) bool { return l.Quantity.IsZero() && l.CostMinor == 0 })
+	return nil
+}
+
+// acquisitionText renders a lot's acquisition day for an error message,
+// including the case where there is none to render.
+func acquisitionText(t *time.Time) string {
+	if t == nil {
+		return "on an unknown day"
+	}
+	return "on " + t.Format("2006-01-02")
+}
+
 // LotsCost sums the pieces' costs — the one number most callers of a FIFO
 // release actually need. It is exported so a caller that already holds the
 // breakdown (see ReleasedLots) derives the total from those very pieces
@@ -321,6 +437,20 @@ func acquiredBefore(a, b *time.Time) bool {
 	default:
 		return a.Before(*b)
 	}
+}
+
+// sameAcquisition reports whether two lots were acquired on the same day, an
+// unknown day counting as the same as another unknown one — which is what
+// matching a transfer's recorded pieces against the queue needs (see
+// Position.releaseRecorded).
+//
+// It is DERIVED from acquiredBefore rather than written out again, so "equal"
+// and "neither one before the other" cannot drift apart: whatever
+// acquiredBefore treats as one position in the queue, this treats as one
+// acquisition. Spelling out a nil check and a t.Equal here would be the same
+// answer today and a second, forgettable place to keep in step tomorrow.
+func sameAcquisition(a, b *time.Time) bool {
+	return !acquiredBefore(a, b) && !acquiredBefore(b, a)
 }
 
 // addLot puts one acquisition into the queue AT ITS PLACE BY ACQUISITION DATE,
@@ -467,21 +597,32 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			drainLotsCost(p, reduce)
 			p.RealizedPnLMinor += o.AmountMinor - reduce
 		case TypeTransferOut:
-			if _, err := p.releaseFIFO(*o.Quantity); err != nil {
-				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
+			if len(o.TransferLots) == 0 {
+				// Nothing was recorded about which lots left, so there is
+				// nothing to give up but a fresh slice of the queue, and the
+				// released cost is discarded: the pair's transfer_in carries a
+				// basis that was named by hand and has no source lots behind it
+				// (or predates the breakdown entirely). This is the one case
+				// where the two legs are NOT reconciled — the owner said what
+				// the parcel was worth and the journal cannot contradict them —
+				// and it is legitimate rather than a gap to be closed.
+				if _, err := p.releaseFIFO(*o.Quantity); err != nil {
+					return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
+				}
+				break
 			}
-			// released cost intentionally discarded: the pair's transfer_in
-			// carries the basis captured at creation time (see package doc
-			// for the recompute limitation).
-			//
-			// o.TransferLots is deliberately unused here even though this leg
-			// carries it too (see Operation.TransferLots): the departing
-			// account holds the real lots and must release its own, replaying
-			// its own history. The breakdown rides along for readers that need
-			// to know what the moved basis is made of — the journal converts
-			// this row into the base currency piece by piece — and folding it
-			// into the position here would double-count the very lots being
-			// released.
+			// A breakdown exists, so the account gives up exactly what it says
+			// went (see releaseRecorded), not what today's queue rule would
+			// pick. The same guard the arriving leg applies runs first: the two
+			// legs read one set of rows (see Operation.TransferLots), and a set
+			// that no longer sums to the operation carrying it is damage on
+			// both.
+			if err := CheckTransferLots(o); err != nil {
+				return nil, err
+			}
+			if err := p.releaseRecorded(o); err != nil {
+				return nil, err
+			}
 		case TypeTransferIn:
 			if o.AmountMinor < 0 {
 				return nil, badOp(o, "transfer_in amount (cost basis) must be >= 0")

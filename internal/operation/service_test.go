@@ -593,16 +593,24 @@ func TestTransferSameDayBoundary(t *testing.T) {
 // Why the fix below is a direct check on the recorded value rather than a
 // "purer" conservation formula: a real conservation invariant avoiding the
 // RealizedPnL identity was worked through by hand, and it collapses to the
-// same direct check anyway. transfer_out's own AmountMinor is discarded by
-// the engine on replay (see TypeTransferOut in engine.go: "released cost
-// intentionally discarded" — only *o.Quantity drives releaseFIFO there), so
-// the source account's post-transfer state is IDENTICAL whether the
-// recorded transfer cost is correct or C1-corrupted; only the destination's
-// recorded transfer_in.AmountMinor differs between the two. So there is no
-// conservation law across source+dest+releases that adds discriminating
-// power over directly asserting the recorded value — it is the only place
-// in the whole system where C1 is externally observable. Per the task's own
-// guidance this is treated as an informed fallback, not a shortcut.
+// same direct check anyway. When this test was written the source account's
+// post-transfer state was IDENTICAL whether the recorded transfer cost was
+// correct or C1-corrupted — the engine discarded transfer_out's own figures
+// and re-derived a release from the quantity alone — so only the
+// destination's recorded transfer_in.AmountMinor differed between the two,
+// and there was no conservation law across source+dest+releases with any
+// discriminating power over asserting the recorded value directly. Per the
+// task's own guidance that was treated as an informed fallback, not a
+// shortcut.
+//
+// Issue #60 has since changed the premise: the departing leg releases the
+// lots the breakdown records (see portfolio.Position.releaseRecorded), so a
+// wrong basis is now visible on the source account as well, and conservation
+// across the two accounts IS assertable — see
+// TestTransferReleasesTheParcelItRecorded, which asserts exactly that for the
+// fault #60 describes. The direct check below is kept because it is still the
+// sharpest statement of C1 in particular: it names the one number the leak
+// moves, at the moment it is recorded.
 //
 // Scenario (source account):
 //

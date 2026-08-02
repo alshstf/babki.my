@@ -84,6 +84,282 @@ func transferIn(dayN int, qty string, amount int64, lots ...portfolio.ReleasedLo
 	return o
 }
 
+// transferOut builds the departing leg of the same parcel. Both legs of a pair
+// carry one breakdown (see portfolio.Operation.TransferLots), which is why the
+// tests below hand the very same pieces to both.
+func transferOut(dayN int, qty string, amount int64, lots ...portfolio.ReleasedLot) portfolio.Operation {
+	o := op(portfolio.TypeTransferOut, dayN, &sber, qty, "", amount, 0)
+	o.TransferLots = lots
+	return o
+}
+
+// TestTransferOutReleasesTheLotsItRecorded is issue #60, folded.
+//
+// A transfer freezes what it moved: the pieces, their basis, and the day each
+// was bought. The departing leg used to ignore all of that and work out a
+// release of its own from the queue — which reproduced the frozen answer only
+// while the rule building the queue stayed put. Ordering the queue by
+// acquisition instead of by arrival (plan 7c) moved it, and every transfer
+// already in the journal began releasing lots other than the ones it had
+// recorded, with nobody editing anything.
+//
+// The fixture is the smallest account where the two rules disagree: shares
+// bought here on day 20, and shares bought on day 2 that arrived later. The
+// transfer recorded the day-20 parcel as the one that left. Replayed by
+// arrival, that is also what the queue's head held; replayed by acquisition,
+// the head is the day-2 parcel, so the departing leg gave away a parcel the
+// record does not mention while the destination went on holding the one it
+// does — the SAME lot on both accounts, the other one gone, and 200 000 minor
+// units of basis conjured out of nothing (50 % of what the family had spent).
+//
+// The test therefore asserts the family, not just an account: what the two
+// accounts hold together must be what was actually paid.
+func TestTransferOutReleasesTheLotsItRecorded(t *testing.T) {
+	moved := piece("10", 300_000, 20)
+	source := []portfolio.Operation{
+		op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
+		transferIn(21, "10", 100_000, piece("10", 100_000, 2)),
+		transferOut(22, "10", 300_000, moved),
+	}
+	destination := []portfolio.Operation{transferIn(22, "10", 300_000, moved)}
+
+	src, err := portfolio.Compute(source)
+	if err != nil {
+		t.Fatalf("Compute source: %v", err)
+	}
+	dst, err := portfolio.Compute(destination)
+	if err != nil {
+		t.Fatalf("Compute destination: %v", err)
+	}
+	from, to := src[sber], dst[sber]
+
+	if len(from.Lots) != 1 {
+		t.Fatalf("source holds %+v, want the single day-%s parcel the transfer did NOT move", from.Lots, day(2).Format("02"))
+	}
+	if !sameAcquisition(from.Lots[0].AcquiredOn, dayp(2)) || from.Lots[0].CostMinor != 100_000 {
+		t.Errorf("source kept {cost %d on %s}, want {100000 on %s}: the breakdown says the day-%s parcel left, so this is the one that stays",
+			from.Lots[0].CostMinor, acquired(from.Lots[0].AcquiredOn), acquired(dayp(2)), day(20).Format("02"))
+	}
+	if len(to.Lots) != 1 || !sameAcquisition(to.Lots[0].AcquiredOn, dayp(20)) {
+		t.Fatalf("destination holds %+v, want the day-%s parcel", to.Lots, day(20).Format("02"))
+	}
+	if sameAcquisition(from.Lots[0].AcquiredOn, to.Lots[0].AcquiredOn) {
+		t.Errorf("both accounts hold a parcel acquired %s — one parcel cannot be in two places, and the one it displaced has vanished",
+			acquired(to.Lots[0].AcquiredOn))
+	}
+
+	const spent = 400_000 // 300000 bought here + 100000 the arriving parcel cost
+	if held := from.CostMinor + to.CostMinor; held != spent {
+		t.Errorf("the two accounts hold %d of basis between them, want %d — the family cannot hold more than it paid (%+d invented)",
+			held, spent, held-spent)
+	}
+	checkLotInvariants(t, from)
+	checkLotInvariants(t, to)
+}
+
+// TestTransferOutTakesOnlyPartOfTheLotItRecorded is the partial case of the
+// same rule: a breakdown that names half of a lot leaves the other half where
+// it was, dated as it was, while a parcel standing AHEAD of it in the queue is
+// not touched at all. Releasing by the queue instead would empty the head first
+// and never reach the lot the record names.
+func TestTransferOutTakesOnlyPartOfTheLotItRecorded(t *testing.T) {
+	moved := piece("5", 150_000, 20)
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
+		transferIn(21, "20", 200_000, piece("20", 200_000, 2)),
+		transferOut(22, "5", 150_000, moved),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	want := []portfolio.Lot{
+		{Quantity: d("20"), CostMinor: 200_000, AcquiredOn: dayp(2)},
+		{Quantity: d("5"), CostMinor: 150_000, AcquiredOn: dayp(20)},
+	}
+	if len(p.Lots) != len(want) {
+		t.Fatalf("lots = %+v, want %d: the untouched day-%s parcel and the half of the day-%s one that stayed",
+			p.Lots, len(want), day(2).Format("02"), day(20).Format("02"))
+	}
+	for i, w := range want {
+		got := p.Lots[i]
+		if !got.Quantity.Equal(w.Quantity) || got.CostMinor != w.CostMinor || !sameAcquisition(got.AcquiredOn, w.AcquiredOn) {
+			t.Errorf("lot %d = {qty %s cost %d on %s}, want {qty %s cost %d on %s}",
+				i, got.Quantity, got.CostMinor, acquired(got.AcquiredOn),
+				w.Quantity, w.CostMinor, acquired(w.AcquiredOn))
+		}
+	}
+	checkLotInvariants(t, p)
+}
+
+// TestTransferOutWithoutBreakdownReleasesByTheQueue pins the other half of the
+// rule, and it is not a leftover: a transfer whose basis was typed in by hand,
+// or written down before breakdowns were kept, records NOTHING about which lots
+// went. There is nothing to honour for it, so the queue decides — which is a
+// legitimate answer for such a transfer and not a fallback to be closed off.
+//
+// The fixture is the one above with the record removed, so the two tests
+// differ in exactly one thing: with a breakdown the day-20 parcel leaves,
+// without one the head of the queue does.
+func TestTransferOutWithoutBreakdownReleasesByTheQueue(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
+		transferIn(21, "10", 100_000, piece("10", 100_000, 2)),
+		op(portfolio.TypeTransferOut, 22, &sber, "10", "", 100_000, 0),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v — a transfer with no breakdown is legitimate, not corrupt", err)
+	}
+	p := pos[sber]
+	if len(p.Lots) != 1 || !sameAcquisition(p.Lots[0].AcquiredOn, dayp(20)) || p.CostMinor != 300_000 {
+		t.Errorf("source holds %+v (cost %d), want the day-%s parcel alone (300000): with nothing recorded, the head of the acquisition queue is what leaves",
+			p.Lots, p.CostMinor, day(20).Format("02"))
+	}
+	checkLotInvariants(t, p)
+}
+
+// TestTransferOutRefusesAParcelTheAccountDoesNotHold is the loud half of the
+// matching rule. A piece is matched to a lot by the DAY IT WAS ACQUIRED, and
+// when the replayed journal holds no such shares at all, the record and the
+// history contradict each other: the source was edited after the transfer, or
+// the shares were released twice. Every quiet answer is worse than saying so —
+// taking the quantity off some other day's lot re-dates shares that are still
+// held and reprices them at a rate from a day they were never bought on, and
+// taking nothing leaves the family holding one parcel's basis twice.
+func TestTransferOutRefusesAParcelTheAccountDoesNotHold(t *testing.T) {
+	for name, ops := range map[string][]portfolio.Operation{
+		"no lot was ever acquired on that day": {
+			op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
+			transferOut(22, "10", 300_000, piece("10", 300_000, 5)),
+		},
+		// The account holds enough shares overall — so this is not an oversell
+		// and no total would notice — but a sale has since eaten into the very
+		// parcel the record says departed.
+		"the day is right but too little of it is left": {
+			op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
+			op(portfolio.TypeBuy, 21, &sber, "10", "", -100_000, 0),
+			op(portfolio.TypeSell, 22, &sber, "4", "", 150_000, 0),
+			transferOut(23, "10", 300_000, piece("10", 300_000, 20)),
+		},
+		"the piece knows no day and every lot does": {
+			op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
+			transferOut(22, "10", 300_000, portfolio.ReleasedLot{Quantity: d("10"), CostMinor: 300_000}),
+		},
+	} {
+		_, err := portfolio.Compute(ops)
+		if !errors.Is(err, portfolio.ErrBadOperation) {
+			t.Errorf("%s: err = %v, want ErrBadOperation — a record the journal contradicts must not be quietly replaced by a fresh guess", name, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "edited after the transfer") {
+			t.Errorf("%s: error %q does not say what is wrong or what to do about it", name, err)
+		}
+	}
+}
+
+// TestTransferOutRefusesABreakdownThatDoesNotAddUp extends the arriving leg's
+// guard (see TestTransferInBreakdownMismatchRejected) to the departing one.
+// The two legs read ONE set of stored pieces, so pieces that no longer sum to
+// the operation carrying them are damage on both sides; and now that the
+// departing leg releases those pieces, letting them through would take a
+// quantity or a basis out of the source that no operation claims.
+func TestTransferOutRefusesABreakdownThatDoesNotAddUp(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
+		transferOut(22, "10", 300_000, piece("10", 299_999, 20)),
+	}
+	_, err := portfolio.Compute(ops)
+	if !errors.Is(err, portfolio.ErrBadOperation) {
+		t.Fatalf("err = %v, want ErrBadOperation: the pieces sum to 299999, not the 300000 the operation carries", err)
+	}
+	if !strings.Contains(err.Error(), "299999") {
+		t.Errorf("error %q does not name the sum it found", err)
+	}
+}
+
+// TestTransferOutTakesTheBasisOfAShareLessLotItsPieceCarries is the case that
+// decides whether the matching rule may be strict about MONEY the way it is
+// about shares. It may not — and it also decides which lot the difference
+// comes out of.
+//
+// A reverse split deep enough to round a lot's whole holding away leaves it
+// with no shares and its cost intact (see portfolio.Lot). A release consumes
+// such a lot as a piece of nothing, and operation.quantizeLots — the table
+// cannot store a piece with no quantity — folds that piece's cost into the next
+// piece along. So a perfectly healthy breakdown, written by this program, can
+// name a piece carrying MORE basis than the lot its day points at holds, with
+// the remainder sitting in a SHARELESS LOT AHEAD OF IT.
+//
+// The fixture is that, with one lot more: the shareless lot bought on day 1,
+// the lot the piece is dated by on day 2, and a THIRD lot bought on day 2 as
+// well that the transfer never touched. Two ways of getting it wrong are ruled
+// out at once. Refusing the piece because its own lot holds less money than it
+// names would refuse a transfer CreateTransfer itself wrote. And taking the
+// difference off the untouched day-2 lot — the nearest lot that shares the
+// piece's date — would leave the departed shareless lot still sitting there
+// holding 30000 the destination now holds too, while an innocent parcel quietly
+// lost the same amount of its own basis.
+func TestTransferOutTakesTheBasisOfAShareLessLotItsPieceCarries(t *testing.T) {
+	// 3e-11 rounds the day-1 lot's 3 units away entirely and leaves each day-2
+	// lot with 3e-10 — the running-total allocation applySplit uses.
+	split := op(portfolio.TypeSplit, 3, &sber, "", "", 0, 0)
+	split.SplitRatio = dp("0.00000000003")
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "3", "", -30_000, 0),
+		op(portfolio.TypeBuy, 2, &sber, "10", "", -100_000, 0),
+		op(portfolio.TypeBuy, 2, &sber, "10", "", -900_000, 0),
+		split,
+		// What CreateTransfer records for moving the first two lots: one
+		// storable piece, dated by the first lot that still has shares,
+		// carrying the shareless lot's 30000 as well.
+		transferOut(4, "0.0000000003", 130_000, piece("0.0000000003", 130_000, 2)),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v — this breakdown is one CreateTransfer itself writes; refusing it refuses healthy data", err)
+	}
+	p := pos[sber]
+	if len(p.Lots) != 1 {
+		t.Fatalf("source holds %+v, want one lot: the day-%s parcel the transfer never named. A shareless lot still holding money it gave away is that money counted twice",
+			p.Lots, day(2).Format("02"))
+	}
+	if !p.Lots[0].Quantity.Equal(d("0.0000000003")) || p.Lots[0].CostMinor != 900_000 {
+		t.Errorf("remaining lot = {qty %s cost %d}, want {0.0000000003 900000} — the carried 30000 belongs to the shareless lot that departed, not to this one",
+			p.Lots[0].Quantity, p.Lots[0].CostMinor)
+	}
+	if p.CostMinor != 1_030_000-130_000 {
+		t.Errorf("source basis = %d, want %d (1030000 spent − 130000 moved)", p.CostMinor, 1_030_000-130_000)
+	}
+	checkLotInvariants(t, p)
+}
+
+// TestTransferOutMatchesPiecesToLotsOfTheSameDay covers two lots bought on ONE
+// day — the tie the queue breaks by journal order (see addLot). The breakdown
+// then holds two pieces with the same date, and each must find its own lot
+// rather than both draining the first: the account moved 15 of its 20 shares
+// and must be left with 5 and the basis that goes with them.
+func TestTransferOutMatchesPiecesToLotsOfTheSameDay(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 2, &sber, "10", "", -100_000, 0),
+		op(portfolio.TypeBuy, 2, &sber, "10", "", -900_000, 0),
+		transferOut(5, "15", 550_000, piece("10", 100_000, 2), piece("5", 450_000, 2)),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	if len(p.Lots) != 1 {
+		t.Fatalf("lots = %+v, want 1: the half of the second buy that stayed", p.Lots)
+	}
+	if !p.Lots[0].Quantity.Equal(d("5")) || p.Lots[0].CostMinor != 450_000 {
+		t.Errorf("remaining lot = {qty %s cost %d}, want {5 450000}", p.Lots[0].Quantity, p.Lots[0].CostMinor)
+	}
+	checkLotInvariants(t, p)
+}
+
 // TestTransferInRebuildsLotsFromBreakdown is the core of this change. The
 // arriving leg carries the FIFO breakdown of what the source account released
 // (see Operation.TransferLots), so the destination rebuilds exactly those
