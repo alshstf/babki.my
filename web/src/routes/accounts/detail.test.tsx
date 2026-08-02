@@ -81,32 +81,46 @@ function makeAccount(overrides: Partial<AccountWithBalance> = {}): AccountWithBa
   };
 }
 
+// NBSP-insensitive compare: Intl.NumberFormat uses non-breaking spaces
+// (same helper as in positions-table.test.tsx).
+const norm = (s: string) => s.replace(/[\u00A0\u202F]/g, " ");
+
+// One position as the wire sends it — not typed as Position on purpose: these
+// bodies stand in for the server's JSON, and a test that needs a field the
+// generated type doesn't have yet must still be able to send it.
+function makePosition({
+  instrument_id = "instr-1",
+  ...overrides
+}: Record<string, unknown> & { instrument_id?: string } = {}) {
+  return {
+    instrument: {
+      id: instrument_id,
+      type: "share",
+      name: "Test Corp",
+      ticker: "TEST",
+      isin: "",
+      figi: "",
+      currency: "USD",
+      frozen: false,
+    },
+    quantity: "10",
+    cost_minor: 250_000,
+    realized_pnl_minor: 0,
+    income_minor: 0,
+    fees_minor: 0,
+    currency: "USD",
+    has_undated_lots: false,
+    has_undated_realizations: false,
+    ...overrides,
+  };
+}
+
 // One position, enough of one for the table to render a row. The cost basis
 // statement below qualifies exactly these figures, so the tests about it need
 // a row for it to sit next to.
 function makePositionsBody(
   rules: SessionInfo["cost_basis_rules"],
-  positions: unknown[] = [
-    {
-      instrument: {
-        id: "instr-1",
-        type: "share",
-        name: "Test Corp",
-        ticker: "TEST",
-        isin: "",
-        figi: "",
-        currency: "USD",
-        frozen: false,
-      },
-      quantity: "10",
-      cost_minor: 250_000,
-      realized_pnl_minor: 0,
-      income_minor: 0,
-      fees_minor: 0,
-      currency: "USD",
-      has_undated_lots: false,
-    },
-  ],
+  positions: unknown[] = [makePosition()],
 ) {
   return { positions, cost_basis_rules: rules };
 }
@@ -239,6 +253,67 @@ describe("AccountDetailPage", () => {
     expect(notice.getAttribute("title")).toContain("сразу по всем счетам владельца");
     expect(notice.textContent).not.toContain("average");
     expect(notice.textContent).not.toContain("стоимость усредняется");
+  });
+
+  it("shows in the header what this account's closed deals have locked in", async () => {
+    // The backend has been computing this figure per position for a while; up
+    // to now it existed only for whoever read the JSON.
+    serve({
+      "/api/v1/accounts": { body: [makeAccount()] },
+      "/positions": {
+        body: makePositionsBody(makeSession().cost_basis_rules, [
+          makePosition({ realized_pnl_minor: 10_000 }),
+          makePosition({ instrument_id: "instr-2", realized_pnl_minor: 2_500 }),
+        ]),
+      },
+      "/operations": { body: [] },
+      "/api/v1/instruments": { body: { instruments: [] } },
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("Зафиксировано")).toBeInTheDocument();
+    const amounts = await screen.findByTestId("realized-total-amounts");
+    expect(norm(amounts.textContent ?? "")).toContain("125,00 $");
+  });
+
+  it("follows the display-currency toggle into the base currency", async () => {
+    // The header line is not a second, independent opinion about which
+    // currency to speak: it obeys the same toggle every other figure does.
+    storeMode("base");
+    serve({
+      "/api/v1/accounts": { body: [makeAccount()] },
+      "/positions": {
+        body: makePositionsBody(makeSession().cost_basis_rules, [
+          makePosition({
+            realized_pnl_minor: 10_000,
+            in_base: {
+              cost_minor: 20_000_000,
+              income_minor: 0,
+              realized_pnl_minor: 900_000,
+              currency: "RUB",
+              rate_on: "2026-07-20",
+            },
+          }),
+        ]),
+      },
+      "/operations": { body: [] },
+      "/api/v1/instruments": { body: { instruments: [] } },
+    });
+
+    renderPage();
+
+    const amounts = await screen.findByTestId("realized-total-amounts");
+    expect(norm(amounts.textContent ?? "")).toContain("9 000,00 ₽");
+  });
+
+  it("says nothing about locked-in results on an account with no positions", async () => {
+    // The default body served in beforeEach has no positions at all, and a
+    // "0,00" over an empty account answers a question nobody asked.
+    renderPage();
+
+    expect(await screen.findByText("На этом счете пока нет позиций")).toBeInTheDocument();
+    expect(screen.queryByTestId("realized-total")).not.toBeInTheDocument();
   });
 
   it("says nothing about the rules when the computation is the country's own", async () => {
