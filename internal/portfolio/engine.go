@@ -46,10 +46,12 @@
 // a full-position sell recorded by an older build may no longer fit the
 // position it was meant to empty — the refusal is loud, and deleting and
 // re-entering that operation resolves it. And a deep enough reverse split can
-// leave a lot with no quantity but a live cost basis; it is consumed first by
-// any later release, but if nothing follows it, the position keeps a basis it
-// can no longer sell. Writing that basis off would treat a split as a disposal,
-// which it is not.
+// leave a lot with no quantity but a live cost basis; it keeps its place in
+// the ACQUISITION queue exactly as if it still held shares — first only when
+// the lot itself has no acquisition date, otherwise a release still has to
+// work through every lot acquired earlier before reaching it — and if nothing
+// follows it, the position keeps a basis it can no longer sell. Writing that
+// basis off would treat a split as a disposal, which it is not.
 //
 // A position's currency is fixed by the first operation that touches the
 // instrument in that account; every later operation for the same instrument
@@ -332,7 +334,14 @@ func acquiredBefore(a, b *time.Time) bool {
 // queue; the one that forgot would silently fall back to arrival order, which
 // is precisely the bug this replaced. Nothing else here reorders: releaseFIFO
 // takes from the head and shrinks a lot in place, applySplit rewrites
-// quantities in place, drainLotsCost rewrites costs in place.
+// quantities in place, drainLotsCost rewrites costs in place — front-to-back,
+// the same head this queue now hands to releaseFIFO. So an amortization
+// drains whichever lot is oldest by ACQUISITION, not whichever lot the
+// journal happened to mention first (see
+// TestAmortizationDrainsTheOlderTransferredLotFirst) — not because
+// drainLotsCost was taught the new rule, but because it never had a rule of
+// its own: it just walks p.Lots from index 0, so whatever order addLot
+// leaves the queue in is the order amortization drains it in too.
 //
 // TIES KEEP THE ORDER THE LOTS ENTERED THE ACCOUNT. The law names no rule finer
 // than the day — НК РФ ст. 214.1 п. 13 says "по стоимости первых по времени
