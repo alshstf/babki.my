@@ -81,6 +81,36 @@ function makeAccount(overrides: Partial<AccountWithBalance> = {}): AccountWithBa
   };
 }
 
+// One position, enough of one for the table to render a row. The cost basis
+// statement below qualifies exactly these figures, so the tests about it need
+// a row for it to sit next to.
+function makePositionsBody(
+  rules: SessionInfo["cost_basis_rules"],
+  positions: unknown[] = [
+    {
+      instrument: {
+        id: "instr-1",
+        type: "share",
+        name: "Test Corp",
+        ticker: "TEST",
+        isin: "",
+        figi: "",
+        currency: "USD",
+        frozen: false,
+      },
+      quantity: "10",
+      cost_minor: 250_000,
+      realized_pnl_minor: 0,
+      income_minor: 0,
+      fees_minor: 0,
+      currency: "USD",
+      has_undated_lots: false,
+    },
+  ],
+) {
+  return { positions, cost_basis_rules: rules };
+}
+
 // Renders AccountDetailPage under the route id it reads its params from
 // ("/app/accounts/$accountId", see router.tsx), inside the screen-currency
 // provider AppLayout normally supplies.
@@ -128,7 +158,9 @@ describe("AccountDetailPage", () => {
   beforeEach(() => {
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
-      "/positions": { body: { positions: [] } },
+      "/positions": {
+        body: makePositionsBody(makeSession().cost_basis_rules, []),
+      },
       "/operations": { body: [] },
       "/api/v1/instruments": { body: { instruments: [] } },
       // The space-wide summary is deliberately broken in every test here:
@@ -163,5 +195,66 @@ describe("AccountDetailPage", () => {
     const balance = await screen.findByTestId("account-detail-balance");
     expect(balance.textContent).toMatch(/₽/);
     expect(balance).toHaveAttribute("title", "Пересчитано по текущему курсу (на 19.07.2026)");
+  });
+
+  it("says next to the positions that the figures are not this country's cost basis", async () => {
+    // The whole point of the residency work: the response already carries
+    // "these numbers are not what your country's rules produce", and until
+    // this appears on the screen the statement only exists for whoever reads
+    // the JSON. It sits with the positions because that is where the figures
+    // it qualifies are shown.
+    serve({
+      "/api/v1/accounts": { body: [makeAccount()] },
+      "/positions": {
+        body: makePositionsBody({
+          country: "GB",
+          method: "average",
+          perimeter: "owner",
+          supported: false,
+          notices: ["method_mismatch", "perimeter_mismatch"],
+        }),
+      },
+      "/operations": { body: [] },
+      "/api/v1/instruments": { body: { instruments: [] } },
+    });
+
+    renderPage();
+
+    // Both divergences are named, not just the first: Britain differs in the
+    // method AND in the perimeter, and reporting one hides the other.
+    expect(
+      await screen.findByText(/списываются не самые ранние покупки/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/сразу по всем счетам владельца/)).toBeInTheDocument();
+    // The country is named, so "в этой стране" has a referent on a screen
+    // that never mentions the residency otherwise.
+    const notice = screen.getByTestId("cost-basis-notice");
+    expect(notice.textContent).toContain("Великобритания");
+    // The mechanics — what this country's rule actually is — belong in the
+    // tooltip, not in the text of a screen full of figures (the owner's
+    // standing rule about technical detail being visual noise). Translated
+    // there too: "average"/"owner" would be the wire format talking to a
+    // person.
+    expect(notice.getAttribute("title")).toContain("стоимость усредняется");
+    expect(notice.getAttribute("title")).toContain("сразу по всем счетам владельца");
+    expect(notice.textContent).not.toContain("average");
+    expect(notice.textContent).not.toContain("стоимость усредняется");
+  });
+
+  it("says nothing about the rules when the computation is the country's own", async () => {
+    // Russia's rule is exactly what the engine computes. A banner on every
+    // visit for a reader with nothing to be warned about is noise, and noise
+    // is what makes a real warning invisible.
+    serve({
+      "/api/v1/accounts": { body: [makeAccount()] },
+      "/positions": { body: makePositionsBody(makeSession().cost_basis_rules) },
+      "/operations": { body: [] },
+      "/api/v1/instruments": { body: { instruments: [] } },
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("Test Corp")).toBeInTheDocument();
+    expect(screen.queryByTestId("cost-basis-notice")).not.toBeInTheDocument();
   });
 });

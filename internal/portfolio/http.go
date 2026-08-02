@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
 	"time"
 
@@ -174,6 +175,19 @@ func marketValue(instType instrument.Type, faceValueMinor *int64, faceCurrency *
 	}
 }
 
+// hasUndatedLots reports whether any lot still held has no acquisition date
+// (see Lot.AcquiredOn). It is published as a fact about the position rather
+// than left to be inferred from in_base being null, because null has two
+// causes and they are not the same news: a missing fx rate is a gap the
+// backfill job closes on its own, an unrecorded purchase date never resolves.
+// Only the position that HAS one can tell them apart, so it says which.
+//
+// It scans the same slice positionInBase walks and stops at the first hit —
+// the question is whether any exists, not how many.
+func hasUndatedLots(p *Position) bool {
+	return slices.ContainsFunc(p.Lots, func(l Lot) bool { return l.AcquiredOn == nil })
+}
+
 // toAPI builds one position's API representation, including its market
 // valuation and — when that valuation isn't already in the position's own
 // currency — an fx conversion into it (conv.Convert is only ever called
@@ -191,6 +205,7 @@ func toAPI(ctx context.Context, conv converter, p *Position, inst instrument.Ins
 		RealizedPnlMinor: p.RealizedPnLMinor,
 		IncomeMinor:      p.IncomeMinor,
 		FeesMinor:        p.FeesMinor,
+		HasUndatedLots:   hasUndatedLots(p),
 	}
 	q, found := quotes[p.InstrumentID]
 	if !found {

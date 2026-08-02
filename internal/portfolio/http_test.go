@@ -167,8 +167,9 @@ func createOperation(t *testing.T, c *http.Client, url, body string) {
 }
 
 type instrumentResp struct {
-	Id   string `json:"id"`
-	Name string `json:"name"`
+	Id     string `json:"id"`
+	Name   string `json:"name"`
+	Ticker string `json:"ticker"`
 }
 
 type positionResp struct {
@@ -186,6 +187,7 @@ type positionResp struct {
 	Price                     *string         `json:"price"`
 	PriceOn                   *string         `json:"price_on"`
 	UnrealizedPnlMinor        *int64          `json:"unrealized_pnl_minor"`
+	HasUndatedLots            bool            `json:"has_undated_lots"`
 	InBase                    *positionInBase `json:"in_base"`
 }
 

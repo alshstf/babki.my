@@ -2,8 +2,9 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -12,16 +13,22 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useSession } from "@/api/session";
-import { useUpdateBaseCurrency } from "@/api/space";
+import { useUpdateSpace, type UpdateSpaceBody } from "@/api/space";
+import { useTaxResidencies } from "@/api/tax-residencies";
 import { ApiError } from "@/api/operations";
+import { CostBasisNotice } from "@/components/cost-basis-notice";
+import { countryName } from "@/lib/country";
 
 const COMMON_CURRENCIES = ["RUB", "USD", "EUR", "KZT"];
 
 export function SettingsPage() {
   const { t } = useTranslation();
   const { data: session } = useSession();
-  const updateBaseCurrency = useUpdateBaseCurrency();
+  const updateSpace = useUpdateSpace();
   const isOwner = session?.role === "owner";
+  // Only the owner may change either setting, and the list is only ever used
+  // by the form below — nobody else's screen pays for the request.
+  const residencies = useTaxResidencies(isOwner);
 
   // The layout route only renders once a session is loaded, so `session` is
   // already available here — safe to seed local state from it once.
@@ -31,6 +38,7 @@ export function SettingsPage() {
   const [customCurrency, setCustomCurrency] = useState(() =>
     session && !COMMON_CURRENCIES.includes(session.base_currency) ? session.base_currency : "",
   );
+  const [country, setCountry] = useState(() => session?.tax_residency ?? "");
 
   if (!isOwner) {
     return (
@@ -42,30 +50,55 @@ export function SettingsPage() {
 
   const effectiveCurrency = currency === "custom" ? customCurrency.toUpperCase() : currency;
   const validCurrency = /^[A-Z]{3}$/.test(effectiveCurrency);
-  const changed = effectiveCurrency !== session?.base_currency;
-  const canSave = validCurrency && changed && !updateBaseCurrency.isPending;
+  const currencyChanged = effectiveCurrency !== session?.base_currency;
+  const countryChanged = country !== session?.tax_residency;
+  const canSave =
+    (currencyChanged || countryChanged) &&
+    (!currencyChanged || validCurrency) &&
+    !updateSpace.isPending;
 
+  // Only what actually changed is sent: an unchanged field left out of the
+  // body is left alone by the server (the PATCH is a partial update), so
+  // picking a country never rewrites the base currency as a side effect.
   const save = () => {
-    updateBaseCurrency.mutate({ base_currency: effectiveCurrency });
+    const body: UpdateSpaceBody = {};
+    if (currencyChanged) body.base_currency = effectiveCurrency;
+    if (countryChanged) body.tax_residency = country;
+    updateSpace.mutate(body);
   };
+
+  // What the SELECTED country implies for the figures — from the server's own
+  // list, so the answer is visible before saving rather than after. Falls back
+  // to the session's rules for the country already saved, which is what the
+  // list would say anyway and is the only thing available while it loads (or
+  // if a country somehow stored outside this form is not in it at all).
+  const selectedRules =
+    residencies.data?.find((r) => r.country === country) ??
+    (country === session?.tax_residency ? session?.cost_basis_rules : undefined);
+
+  // Sorted by the name actually shown, not by the ISO code the server sorts
+  // by: a person picking their country reads down the Russian names, and
+  // "Великобритания" between "Канада" and "Казахстан" looks like a bug. Which
+  // countries are offered still comes entirely from the server.
+  const countries = [...(residencies.data ?? [])].sort((a, b) =>
+    countryName(a.country).localeCompare(countryName(b.country), "ru"),
+  );
 
   return (
     <div className="grid gap-6">
       <h1 className="text-2xl font-bold">{t("settings.title")}</h1>
       <Card className="max-w-md">
-        <CardHeader>
-          <CardTitle>{t("settings.baseCurrency")}</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-4">
+        <CardContent className="grid gap-6">
           <div className="grid gap-2">
+            <Label htmlFor="base-currency">{t("settings.baseCurrency")}</Label>
             <Select
               value={currency}
               onValueChange={(v) => {
                 setCurrency(v);
-                updateBaseCurrency.reset();
+                updateSpace.reset();
               }}
             >
-              <SelectTrigger>
+              <SelectTrigger id="base-currency">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -84,17 +117,48 @@ export function SettingsPage() {
                 maxLength={3}
                 onChange={(e) => {
                   setCustomCurrency(e.target.value);
-                  updateBaseCurrency.reset();
+                  updateSpace.reset();
                 }}
               />
             )}
+            <p className="text-xs text-muted-foreground">{t("settings.baseCurrencyHint")}</p>
           </div>
-          <p className="text-xs text-muted-foreground">{t("settings.baseCurrencyHint")}</p>
-          {updateBaseCurrency.isError && (
+
+          <div className="grid gap-2">
+            <Label htmlFor="tax-residency">{t("settings.taxResidency")}</Label>
+            {residencies.isError ? (
+              <Alert variant="destructive">
+                <AlertDescription>{t("app.error")}</AlertDescription>
+              </Alert>
+            ) : (
+              <Select
+                value={country}
+                disabled={countries.length === 0}
+                onValueChange={(v) => {
+                  setCountry(v);
+                  updateSpace.reset();
+                }}
+              >
+                <SelectTrigger id="tax-residency">
+                  <SelectValue placeholder={t("app.loading")} />
+                </SelectTrigger>
+                <SelectContent>
+                  {countries.map((rules) => (
+                    <SelectItem key={rules.country} value={rules.country}>
+                      {countryName(rules.country)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            <p className="text-xs text-muted-foreground">{t("settings.taxResidencyHint")}</p>
+            {selectedRules && <CostBasisNotice rules={selectedRules} confirmWhenSupported />}
+          </div>
+
+          {updateSpace.isError && (
             <Alert variant="destructive">
               <AlertDescription>
-                {updateBaseCurrency.error instanceof ApiError &&
-                updateBaseCurrency.error.status === 403
+                {updateSpace.error instanceof ApiError && updateSpace.error.status === 403
                   ? t("settings.forbidden")
                   : t("app.error")}
               </AlertDescription>

@@ -77,7 +77,18 @@ export function PositionsTable({
   // currency, the quote's, or a bond face value's — never "the account's",
   // which is what the default MoneyCell wording says. Resolved once here and
   // handed to every cell rather than per cell.
+  //
+  // Two different conditions leave a row unconverted, and they are not the
+  // same news to the person reading it. A missing fx rate is a gap the
+  // instance's own backfill closes on its own — the ruble figure appears
+  // later. A lot that does not know when it was bought (has_undated_lots,
+  // see the API contract) never converts: the purchase date was never
+  // recorded and nothing can recover it, so there is no rate to ask for.
+  // Saying "нет курса" over the second case names a cause that is not the
+  // cause and promises a number that will never come, so the row says which
+  // one it is. Both are per-row, hence resolved inside the map below.
   const notConvertedTitle = t("positions.notConverted");
+  const undatedLotTitle = t("positions.notConvertedUndatedLot");
   // Only the market value is converted at today's rate, so only it keeps
   // MoneyCell's default "converted at the current rate (on <date>)" wording.
   // The ruble basis is built lot by lot at each purchase date's rate and
@@ -107,6 +118,9 @@ export function PositionsTable({
       <TableBody>
         {positions.map((position) => {
           const closed = position.quantity === "0";
+          const unconvertedTitle = position.has_undated_lots
+            ? undatedLotTitle
+            : notConvertedTitle;
           // Market value's currency can differ from the position's own
           // currency (a bond's face-value currency, for instance), so it is
           // always formatted with market_value_currency, never `currency`.
@@ -208,7 +222,7 @@ export function PositionsTable({
               <TableCell className="text-right tabular-nums">
                 <MoneyCell
                   resolved={resolvedCost}
-                  notConvertedTitle={notConvertedTitle}
+                  notConvertedTitle={unconvertedTitle}
                   convertedTitle={costConvertedTitle}
                   testId="position-cost"
                 />
@@ -218,7 +232,7 @@ export function PositionsTable({
                   <>
                     <MoneyCell
                       resolved={resolvedMarketValue}
-                      notConvertedTitle={notConvertedTitle}
+                      notConvertedTitle={unconvertedTitle}
                       testId="position-market-value"
                     />
                     {hint && (
@@ -246,7 +260,7 @@ export function PositionsTable({
                     <MoneyCell
                       resolved={resolvedUnrealized}
                       className={signClass(resolvedUnrealized.amountMinor)}
-                      notConvertedTitle={notConvertedTitle}
+                      notConvertedTitle={unconvertedTitle}
                       convertedTitle={profitConvertedTitle}
                       testId="position-profit-amount"
                     />
@@ -273,7 +287,7 @@ export function PositionsTable({
               <TableCell className="text-right tabular-nums">
                 <MoneyCell
                   resolved={resolvedIncome}
-                  notConvertedTitle={notConvertedTitle}
+                  notConvertedTitle={unconvertedTitle}
                   convertedTitle={incomeConvertedTitle}
                   testId="position-income"
                 />
