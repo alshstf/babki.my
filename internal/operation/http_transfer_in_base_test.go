@@ -268,11 +268,12 @@ func TestBothTransferLegsConvertAtThePurchaseDates(t *testing.T) {
 	if outRow.InBase.RateOn != "2026-06-15" {
 		t.Errorf("transfer_out in_base.rate_on = %q, want 2026-06-15", outRow.InBase.RateOn)
 	}
-	// And both say out loud that their figure was assembled, so the screen that
-	// reads rate_on aloud cannot mistake it for an ordinary conversion date.
-	if !outRow.InBase.AssembledFromLots || !inRow.InBase.AssembledFromLots {
+	// And both say out loud that their figure was assembled — published on the
+	// operation itself, not inside in_base (#67) — so the screen that reads
+	// rate_on aloud cannot mistake it for an ordinary conversion date.
+	if !outRow.AssembledFromLots || !inRow.AssembledFromLots {
 		t.Errorf("assembled_from_lots: out = %v, in = %v, want true on both — rate_on here is one of several rates, not the rate",
-			outRow.InBase.AssembledFromLots, inRow.InBase.AssembledFromLots)
+			outRow.AssembledFromLots, inRow.AssembledFromLots)
 	}
 }
 

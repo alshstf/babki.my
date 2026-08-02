@@ -8,6 +8,7 @@ describe("resolveDisplayAmount", () => {
       amountMinor: 100_00,
       currency: "USD",
       noRate: false,
+      converted: false,
       rateOn: null,
     });
   });
@@ -18,6 +19,11 @@ describe("resolveDisplayAmount", () => {
       amountMinor: 950_000,
       currency: "RUB",
       noRate: false,
+      // Converted, and said so without a rate date: a converted figure does
+      // not always have one date behind it (a position's cost is struck at
+      // one rate per purchase day), and a caller that inferred "converted"
+      // from the date would stay silent about a conversion that happened.
+      converted: true,
       rateOn: null,
     });
   });
@@ -28,6 +34,7 @@ describe("resolveDisplayAmount", () => {
       amountMinor: 950_000,
       currency: "RUB",
       noRate: false,
+      converted: true,
       rateOn: "2026-07-20",
     });
   });
@@ -38,6 +45,7 @@ describe("resolveDisplayAmount", () => {
       amountMinor: 100_00,
       currency: "USD",
       noRate: true,
+      converted: false,
       // No rate date on a figure that was never converted, even if the
       // caller passed one: it would describe a conversion that didn't happen.
       rateOn: null,
@@ -58,6 +66,7 @@ describe("resolveDisplayAmount", () => {
       amountMinor: 100_00,
       currency: "RUB",
       noRate: false,
+      converted: false,
       rateOn: null,
     });
   });
@@ -68,6 +77,7 @@ describe("resolveDisplayAmount", () => {
       amountMinor: 100_00,
       currency: "RUB",
       noRate: false,
+      converted: false,
       rateOn: null,
     });
   });
@@ -78,6 +88,7 @@ describe("resolveDisplayAmount", () => {
       amountMinor: 0,
       currency: "RUB",
       noRate: false,
+      converted: true,
       rateOn: "2026-07-20",
     });
   });

@@ -11,6 +11,7 @@ import { formatMinor } from "@/lib/money";
 import { formatDate, localToday } from "@/lib/dates";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
 import type { Operation } from "@/api/operations";
+import type { CostBasisRules } from "@/api/tax-residencies";
 
 // The API client captures globalThis.fetch once, when @/api/client is first
 // imported (openapi-fetch: `fetch: baseFetch = globalThis.fetch`), so the
@@ -72,20 +73,17 @@ function makeOperation(overrides: Partial<Operation> = {}): Operation {
     // are no purchase dates for it to be missing — see has_undated_lots in the
     // API contract. Only the transfer tests below set it.
     has_undated_lots: false,
+    // Properties of the OPERATION, not of in_base (see the API contract) —
+    // true only for a transfer whose parcel has a stored breakdown, which is
+    // never the case for these ordinary defaults. The transfer tests below
+    // set it explicitly, because for them it is the whole point.
+    assembled_from_lots: false,
     ...overrides,
   };
 }
 
-// Every in_base object the backend publishes says whether its amount was
-// struck at a single fx rate or assembled from several — see
-// assembled_from_lots in the API contract. Ordinary operations are the single
-// rate case, so that is the default here; the transfer tests below pass it
-// explicitly, because for them it is the whole point.
 type InBase = NonNullable<Operation["in_base"]>;
-const inBase = (fields: Omit<InBase, "assembled_from_lots"> & Partial<InBase>): InBase => ({
-  assembled_from_lots: false,
-  ...fields,
-});
+const inBase = (fields: InBase): InBase => fields;
 
 // Stand-in for the header's display-currency toggle: visible only when the
 // provider says more than one currency is in play on this screen.
@@ -94,14 +92,29 @@ function ToggleProbe() {
   return <div data-testid="toggle">{visible ? "visible" : "hidden"}</div>;
 }
 
+// A country whose rules are not what this application computes, in two
+// separate ways at once — so the caveat, wherever it appears, has two
+// sentences in it and dropping either would be visible.
+const britain: CostBasisRules = {
+  country: "GB",
+  method: "average",
+  perimeter: "owner",
+  supported: false,
+  notices: ["method_mismatch", "perimeter_mismatch"],
+};
+
 function renderTable({
   operations,
   mode = "native",
   baseCurrency = "RUB",
+  costBasisRules,
 }: {
   operations: Operation[];
   mode?: DisplayCurrencyMode;
   baseCurrency?: string;
+  // Omitted by every test that is not about the cost basis caveat, exactly as
+  // the screen omits it while the session is still loading.
+  costBasisRules?: CostBasisRules;
 }) {
   serve({ "/operations": { body: operations }, "/instruments": { body: [] } });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -114,6 +127,7 @@ function renderTable({
           canDelete={false}
           mode={mode}
           baseCurrency={baseCurrency}
+          costBasisRules={costBasisRules}
         />
       </ScreenCurrencyCountProvider>
     </QueryClientProvider>,
@@ -289,6 +303,7 @@ describe("OperationsTable", () => {
             currency: "USD",
             amount_minor: 190_000,
             fee_minor: 0,
+            assembled_from_lots: true,
             in_base: inBase({
               // 118 000,00 ₽: two purchases, each at the rate of its own day —
               // never 149 150,00 ₽, which is the same shares priced on the day
@@ -300,7 +315,6 @@ describe("OperationsTable", () => {
               // date and NOT a fallback for a missing rate: 2026-07-20 has a
               // rate of its own and it was deliberately not used.
               rate_on: "2026-06-15",
-              assembled_from_lots: true,
             }),
           }),
         ],
@@ -333,12 +347,12 @@ describe("OperationsTable", () => {
             currency: "USD",
             amount_minor: 190_000,
             fee_minor: 0,
+            assembled_from_lots: true,
             in_base: inBase({
               amount_minor: 12_000_000,
               fee_minor: 0,
               currency: "RUB",
               rate_on: "2026-07-20",
-              assembled_from_lots: true,
             }),
           }),
         ],
@@ -429,6 +443,39 @@ describe("OperationsTable", () => {
       );
     });
 
+    it("says nothing rather than half a sentence when the rate date does not parse", async () => {
+      // Unreachable through the server — rate_on is a date or the object is
+      // not published — but every journal wording ends in the rate date, and a
+      // wording handed nothing to end with produces "…пересчитано по
+      // ближайшему, на " with the sentence cut off mid-air. The rule was in
+      // MoneyCell until callers began supplying their own wordings, at which
+      // point it quietly stopped applying to them; it now belongs to the
+      // caller, which is the only one that knows whether its sentence needs a
+      // date at all.
+      renderTable({
+        operations: [
+          makeOperation({
+            currency: "USD",
+            in_base: inBase({
+              amount_minor: 655_000,
+              fee_minor: 32_750,
+              currency: "RUB",
+              rate_on: "2019-13-99",
+            }),
+          }),
+        ],
+        mode: "base",
+        baseCurrency: "RUB",
+      });
+
+      const amount = await screen.findByTestId("operation-amount");
+      expect(amount).not.toHaveAttribute("title");
+      expect(screen.getByTestId("operation-fee")).not.toHaveAttribute("title");
+      // The figure itself is published as usual: an unreadable caption is a
+      // reason to drop the caption, not the number.
+      expect(norm(amount.textContent ?? "")).toBe(norm(formatMinor(655_000, "RUB")));
+    });
+
     it("shows a plain amount with no marker when the operation is already in the base currency", async () => {
       renderTable({
         operations: [
@@ -459,6 +506,206 @@ describe("OperationsTable", () => {
 
       await screen.findByTestId("operation-amount");
       expect(screen.queryByTestId("operation-fee")).not.toBeInTheDocument();
+    });
+  });
+
+  // Issues #61 and the review of its first fix. The statement "the queue that
+  // picked this cost basis is not your country's" is true of a transferred
+  // parcel's amount and of nothing else in the journal, so it hangs on those
+  // amounts. It used to be a banner over the whole table, which put it above
+  // every deposit, purchase and dividend in the window as well.
+  describe("the cost basis caveat", () => {
+    // The shape the demo data actually has: a parcel with a recorded, dated
+    // breakdown, so the server converts it piece by piece and says so.
+    const assembledTransfer = (overrides: Partial<Operation> = {}): Operation =>
+      makeOperation({
+        id: "op-transfer",
+        type: "transfer_in",
+        occurred_on: "2026-07-20",
+        currency: "USD",
+        amount_minor: 190_000,
+        fee_minor: 0,
+        assembled_from_lots: true,
+        in_base: inBase({
+          amount_minor: 11_800_000,
+          fee_minor: 0,
+          currency: "RUB",
+          rate_on: "2026-06-15",
+        }),
+        ...overrides,
+      });
+
+    it("hangs the caveat on the arriving leg's own amount, not over the table", async () => {
+      renderTable({
+        operations: [assembledTransfer()],
+        mode: "base",
+        baseCurrency: "RUB",
+        costBasisRules: britain,
+      });
+
+      const caveat = await screen.findByTestId("operation-amount-caveat");
+      const title = caveat.getAttribute("title") ?? "";
+      // Both divergences: reporting one hides the other.
+      expect(title).toContain("не самая ранняя покупка");
+      expect(title).toContain("сразу по всем счетам владельца");
+      // The country, so "в этой стране" has a referent, and what the figure
+      // is, which a tooltip on a single cell has to supply for itself.
+      expect(title).toContain("Великобритания");
+      expect(title).toContain("стоимость бумаг");
+      // Not a block of prose over the table any more.
+      expect(screen.queryByTestId("cost-basis-notice")).not.toBeInTheDocument();
+      // And nothing leaked into the cell's text: the caveat is a tooltip.
+      expect(norm(screen.getByTestId("operation-amount").textContent ?? "")).toBe(
+        norm(formatMinor(11_800_000, "RUB")),
+      );
+    });
+
+    it("hangs it on the departing leg exactly as on the arriving one", async () => {
+      // The contract raises the flag on BOTH legs — they describe one parcel,
+      // one basis, one set of purchases (see Operation.in_base). The departing
+      // leg is where the cost actually leaves the account, and until this test
+      // existed, a rule that recognised only the arriving one broke nothing.
+      renderTable({
+        operations: [assembledTransfer({ id: "op-transfer-out", type: "transfer_out" })],
+        mode: "base",
+        baseCurrency: "RUB",
+        costBasisRules: britain,
+      });
+
+      const title = (await screen.findByTestId("operation-amount-caveat")).getAttribute("title");
+      expect(title).toContain("не самая ранняя покупка");
+      expect(title).toContain("сразу по всем счетам владельца");
+    });
+
+    it("leaves the rows it is not true of unqualified", async () => {
+      // The whole point of moving it off the table header. A deposit and a
+      // dividend are money that moved on the day they are dated; no queue
+      // picked either of them, and a caveat over them is a false statement
+      // about them, not a cautious one.
+      renderTable({
+        operations: [
+          assembledTransfer(),
+          makeOperation({ id: "op-deposit", type: "deposit" }),
+          makeOperation({ id: "op-dividend", type: "dividend" }),
+        ],
+        mode: "base",
+        baseCurrency: "RUB",
+        costBasisRules: britain,
+      });
+
+      await screen.findByTestId("operation-amount-caveat");
+      expect(screen.getAllByTestId("operation-amount-caveat")).toHaveLength(1);
+      // Three rows on screen, one qualified figure.
+      expect(screen.getAllByTestId("operation-amount")).toHaveLength(3);
+      // The fee is never a cost basis either: it is a broker's charge on the
+      // day it was charged. (A real transfer carries none; this row has one so
+      // that there is a fee cell to check at all.)
+      expect(screen.queryByTestId("operation-fee-caveat")).not.toBeInTheDocument();
+    });
+
+    it("asks the server which rows publish a cost basis instead of keeping a list of types", async () => {
+      // assembled_from_lots is set from the presence of a stored breakdown, not
+      // from the operation's type, so a type this screen has never heard of
+      // carries the caveat the day the server starts deriving a basis for it. A
+      // list of types kept here would silently stop matching instead — the
+      // exact failure the caveat exists to prevent, committed by the code that
+      // draws it.
+      renderTable({
+        operations: [assembledTransfer({ id: "op-conversion", type: "conversion" })],
+        mode: "base",
+        baseCurrency: "RUB",
+        costBasisRules: britain,
+      });
+
+      expect(await screen.findByTestId("operation-amount-caveat")).toBeInTheDocument();
+    });
+
+    it("still qualifies a parcel whose purchase dates were never recorded", async () => {
+      // Nothing converts here, so in_base is absent. has_undated_lots — a
+      // property of the operation, not of in_base — says the amount is a
+      // cost basis all the same, on every row whether or not a conversion was
+      // attempted.
+      renderTable({
+        operations: [
+          makeOperation({
+            id: "op-transfer-undated",
+            type: "transfer_out",
+            currency: "USD",
+            in_base: null,
+            has_undated_lots: true,
+          }),
+        ],
+        mode: "base",
+        baseCurrency: "RUB",
+        costBasisRules: britain,
+      });
+
+      expect(await screen.findByTestId("operation-amount-caveat")).toBeInTheDocument();
+      // Two separate statements about one figure, each with its own indicator:
+      // which currency it is shown in, and what the number is.
+      expect(screen.getByTestId("operation-amount-not-converted")).toHaveAttribute(
+        "title",
+        "Даты покупок этой партии не записаны, а её стоимость считается по курсам на дни покупок — поэтому сумма показана в валюте операции",
+      );
+    });
+
+    it("still qualifies a parcel that has a full breakdown but is already in the base currency (#67)", async () => {
+      // The exact hole #67 tracked: the parcel's breakdown is complete and
+      // every purchase date is known (has_undated_lots false), yet in_base is
+      // null for the most ordinary reason there is — currency already equals
+      // baseCurrency, so nothing gets converted and no rate is even asked
+      // for. Before assembled_from_lots moved onto the operation, it lived
+      // only inside in_base and vanished right along with it here, so this
+      // exact row — a RUB transfer in a RUB-based space, the product owner's
+      // own case — published no signal at all that its amount was a cost
+      // basis, and the caveat silently failed to appear.
+      renderTable({
+        operations: [
+          makeOperation({
+            id: "op-transfer-same-currency",
+            type: "transfer_in",
+            currency: "RUB",
+            amount_minor: 11_800_000,
+            fee_minor: 0,
+            in_base: null,
+            has_undated_lots: false,
+            assembled_from_lots: true,
+          }),
+        ],
+        mode: "base",
+        baseCurrency: "RUB",
+        costBasisRules: britain,
+      });
+
+      expect(await screen.findByTestId("operation-amount-caveat")).toBeInTheDocument();
+      // Already in the base currency, so nothing is "not converted" either —
+      // the caveat is the only marker this row carries.
+      expect(screen.queryByTestId("operation-amount-not-converted")).not.toBeInTheDocument();
+    });
+
+    it("says nothing when the queue this application computes is the country's own", async () => {
+      renderTable({
+        operations: [assembledTransfer()],
+        mode: "base",
+        baseCurrency: "RUB",
+        costBasisRules: {
+          country: "RU",
+          method: "fifo",
+          perimeter: "account",
+          supported: true,
+          notices: [],
+        },
+      });
+
+      await screen.findByTestId("operation-amount");
+      expect(screen.queryByTestId("operation-amount-caveat")).not.toBeInTheDocument();
+    });
+
+    it("waits rather than guesses while the session has not arrived", async () => {
+      renderTable({ operations: [assembledTransfer()], mode: "base", baseCurrency: "RUB" });
+
+      await screen.findByTestId("operation-amount");
+      expect(screen.queryByTestId("operation-amount-caveat")).not.toBeInTheDocument();
     });
   });
 

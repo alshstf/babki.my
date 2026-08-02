@@ -23,6 +23,30 @@ import type { CostBasisRules } from "@/api/tax-residencies";
 // application computes. That is the owner's standing rule about dates and
 // internals being visual noise — the reader gets the consequence, and the
 // mechanics only if they ask for them.
+// The same statement CostBasisNotice makes, folded into one tooltip string for
+// a place that has no room for a block of text: a single money cell whose
+// figure the caveat describes. The journal needs exactly that — a transferred
+// parcel's amount is a cost basis and the rows above and below it are not, so
+// the caveat has to travel with the one figure it is true of rather than sit
+// over a table of fifty rows it mostly is not.
+//
+// It opens by saying what the figure is, because unlike the notice it has no
+// heading and no table under it to supply the referent, and closes with the
+// same sentences the notice shows. Returns undefined when the country's rule
+// IS what this application computes — the same silence the notice keeps, so a
+// caller can pass the result straight through without repeating the rule.
+export function costBasisCaveat(
+  t: (key: string, opts?: Record<string, string>) => string,
+  rules: CostBasisRules,
+): string | undefined {
+  if (rules.supported) return undefined;
+  return [
+    t("costBasis.figureIsACostBasis"),
+    t("costBasis.residency", { country: countryName(rules.country) }),
+    ...rules.notices.map((notice) => t(`costBasis.notices.${notice}`)),
+  ].join("\n");
+}
+
 export function CostBasisNotice({
   rules,
   // Whether to name the country above the sentences. The sentences say "в

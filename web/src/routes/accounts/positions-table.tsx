@@ -78,17 +78,35 @@ export function PositionsTable({
   // which is what the default MoneyCell wording says. Resolved once here and
   // handed to every cell rather than per cell.
   //
-  // Two different conditions leave a row unconverted, and they are not the
-  // same news to the person reading it. A missing fx rate is a gap the
-  // instance's own backfill closes on its own — the ruble figure appears
-  // later. A lot that does not know when it was bought (has_undated_lots,
-  // see the API contract) never converts: the purchase date was never
-  // recorded and nothing can recover it, so there is no rate to ask for.
-  // Saying "нет курса" over the second case names a cause that is not the
-  // cause and promises a number that will never come, so the row says which
-  // one it is. Both are per-row, hence resolved inside the map below.
+  // Three different conditions leave a figure unconverted, and they are not
+  // the same news to the person reading it. Each says what is missing and
+  // what is shown instead, in that order — the shape every "this is not in
+  // the base currency" sentence in this application follows.
+  //
+  // A missing fx rate is a gap the instance's own backfill closes on its own
+  // — the ruble figure appears later.
+  //
+  // A lot that does not know when it was bought (has_undated_lots, see the
+  // API contract) never converts: the purchase date was never recorded and
+  // nothing can recover it, so there is no rate to ask for. Saying "нет
+  // курса" over that names a cause that is not the cause and promises a
+  // number that will never come.
+  //
+  // A valuation that came out in a THIRD currency — a bond priced off a face
+  // value denominated in neither the position's currency nor the base one —
+  // is the third, and "нет курса" is wrong about it in a subtler way: a rate
+  // from that currency to the base one may well exist. What is missing is the
+  // link from it to the position's currency, without which the figure cannot
+  // be brought into the base currency at all; multiplying it by the
+  // position's own rate would be a silently wrong number (see
+  // PositionInBase.market_value_minor). The cause is the chain, not the rate,
+  // and only this figure has it — the row's cost and income are in the
+  // position's currency and convert as usual.
+  //
+  // All three are per-row, hence resolved inside the map below.
   const notConvertedTitle = t("positions.notConverted");
   const undatedLotTitle = t("positions.notConvertedUndatedLot");
+  const valuationCurrencyTitle = t("positions.notConvertedValuationCurrency");
   // Only the market value is converted at today's rate, so only it keeps
   // MoneyCell's default "converted at the current rate (on <date>)" wording.
   // The ruble basis is built lot by lot at each purchase date's rate and
@@ -127,6 +145,15 @@ export function PositionsTable({
           const marketValueMinor = position.market_value_minor;
           const marketValueCurrency = position.market_value_currency;
           const hasMarketValue = marketValueMinor != null && marketValueCurrency != null;
+          // The valuation's own reason, which outranks the row's: when it is
+          // denominated in some third currency, no chain reaches the base one
+          // from it, and that stays true whether or not the row also has a
+          // dateless lot or a missing rate of its own. The other cells keep
+          // the row's reason — it is the only one true of them.
+          const valuationUnconvertedTitle =
+            hasMarketValue && marketValueCurrency !== position.currency
+              ? valuationCurrencyTitle
+              : unconvertedTitle;
           const hint = hasMarketValue ? priceHint(t, position) : null;
           const unrealizedMinor = position.unrealized_pnl_minor;
           const hasUnrealized = unrealizedMinor != null;
@@ -232,7 +259,7 @@ export function PositionsTable({
                   <>
                     <MoneyCell
                       resolved={resolvedMarketValue}
-                      notConvertedTitle={unconvertedTitle}
+                      notConvertedTitle={valuationUnconvertedTitle}
                       testId="position-market-value"
                     />
                     {hint && (

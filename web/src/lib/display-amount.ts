@@ -17,12 +17,30 @@ export interface ResolvedAmount {
    */
   noRate: boolean;
   /**
+   * True when `amountMinor` is the backend's converted, base-currency figure
+   * rather than the row's own. False in every other case, and the three are
+   * genuinely different: the mode asks for the native amount, the native
+   * currency already IS the base currency (nothing was converted because
+   * nothing needed to be), or the conversion was unavailable (`noRate`).
+   *
+   * It exists because `rateOn` cannot answer this question. A converted
+   * figure does not always carry a rate date — a position's in_base publishes
+   * `rate_on` only when it holds the market valuation that date belongs to
+   * (see PositionInBase.rate_on in the API contract) — while its cost and
+   * income are converted all the same, at the rates of their own many dates.
+   * A caller keying "was this converted" off `rateOn` therefore drops the
+   * disclosure on figures that WERE converted, which is how the two got
+   * conflated in the first place.
+   */
+  converted: boolean;
+  /**
    * Date (YYYY-MM-DD) of the fx rate behind `amountMinor`, straight from
    * the backend's in_base.rate_on / balance_in_base.rate_on — non-null
    * only when the converted figure is what's actually being shown, so a
    * caller can disclose how stale that conversion is (MoneyCell puts it in
    * the cell's tooltip). Null whenever the native amount is shown: no
-   * conversion happened, so there is no rate date to name.
+   * conversion happened, so there is no rate date to name — and also when a
+   * converted figure has no single rate date to name (see `converted`).
    */
   rateOn: string | null;
 }
@@ -51,6 +69,7 @@ export function resolveDisplayAmount(
       amountMinor: nativeAmountMinor,
       currency: nativeCurrency,
       noRate: false,
+      converted: false,
       rateOn: null,
     };
   }
@@ -59,6 +78,7 @@ export function resolveDisplayAmount(
       amountMinor: baseAmountMinor,
       currency: baseCurrency,
       noRate: false,
+      converted: true,
       rateOn: baseRateOn ?? null,
     };
   }
@@ -66,6 +86,7 @@ export function resolveDisplayAmount(
     amountMinor: nativeAmountMinor,
     currency: nativeCurrency,
     noRate: true,
+    converted: false,
     rateOn: null,
   };
 }

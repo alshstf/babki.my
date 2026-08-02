@@ -202,11 +202,26 @@ export function AccountDetailPage() {
 
       <div className="grid gap-2">
         <h2 className="text-lg font-semibold">{t("operations.title")}</h2>
+        {/* The cost basis statement comes from the session, which this screen
+            has already loaded, and not from the journal response — that one is
+            a bare array and a third copy of one truth is a third place to
+            forget it (see SessionInfo.cost_basis_rules in the API contract).
+            Deliberately NOT positions.data.cost_basis_rules, which is the same
+            statement about the same space but reaches this screen only if the
+            positions request succeeded: the journal renders on its own and
+            must qualify its own figures on its own.
+
+            The table hangs it on the individual amounts that are a cost basis
+            rather than over the whole journal — the caveat has to sit on the
+            figure it describes, and above a table of fifty rows it would
+            describe forty-nine it is not true of. That is also why the notice
+            over the positions above is not repeated here word for word. */}
         <OperationsTable
           accountId={accountId}
           canDelete={!isViewer}
           mode={mode}
           baseCurrency={baseCurrency}
+          costBasisRules={session?.cost_basis_rules}
         />
       </div>
 
