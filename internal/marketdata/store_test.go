@@ -125,14 +125,22 @@ func TestFxRatesOnBatch(t *testing.T) {
 		t.Fatalf("UpsertFxRates: %v", err)
 	}
 
+	// The two keys nothing answers sit FIRST and in the MIDDLE on purpose.
+	// FxRatesOn pairs each row with the key the caller asked with by that
+	// key's POSITION in this slice, and the position is assigned before the
+	// join drops the unanswered ones. Numbering after the join instead —
+	// row_number() over the surviving rows — renumbers across the gaps and
+	// hands every later key its neighbour's rate. With both absent keys at the
+	// tail there is nothing to renumber across, the two implementations agree
+	// exactly, and that mistake ships.
 	keys := []marketdata.FxRateKey{
+		{Base: "GBP", Quote: "RUB", On: date("2026-07-03")}, // unknown pair -> absent
 		{Base: "USD", Quote: "RUB", On: date("2026-07-01")}, // exact match
 		{Base: "USD", Quote: "RUB", On: date("2026-07-01")}, // duplicate of the above -> collapses
+		{Base: "USD", Quote: "RUB", On: date("2026-06-01")}, // earlier than all data -> absent
 		{Base: "USD", Quote: "RUB", On: date("2026-07-02")}, // no row on this day -> nearest earlier (07-01)
 		{Base: "USD", Quote: "RUB", On: date("2026-07-05")}, // later than all rows -> nearest earlier (07-03)
 		{Base: "EUR", Quote: "RUB", On: date("2026-07-03")}, // exact match
-		{Base: "GBP", Quote: "RUB", On: date("2026-07-03")}, // unknown pair -> absent
-		{Base: "USD", Quote: "RUB", On: date("2026-06-01")}, // earlier than all data -> absent
 	}
 
 	// Discriminating check: batching N keys must take exactly one round trip
