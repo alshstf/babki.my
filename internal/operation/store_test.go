@@ -179,7 +179,7 @@ func TestTransferPairAtomicity(t *testing.T) {
 		AccountID: f.account2ID, InstrumentID: &f.sberID, Type: operation.TypeTransferIn,
 		OccurredOn: date("2026-07-10"), Quantity: dec("5"), AmountMinor: 150_000, Currency: "RUB",
 	}
-	cOut, cIn, err := f.store.CreatePair(f.ctx, f.spaceID, out, in)
+	cOut, cIn, err := f.store.CreatePair(f.ctx, f.spaceID, out, in, nil)
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestTransferPairAtomicity(t *testing.T) {
 
 	// pair with a foreign-space destination is fully rejected (atomicity)
 	in.AccountID = uuid.New()
-	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in); err == nil {
+	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in, nil); err == nil {
 		t.Fatal("CreatePair foreign dest: want error")
 	}
 	if list, _ := f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0); len(list) != 0 {
@@ -329,7 +329,7 @@ func TestTransferLotsRoundTrip(t *testing.T) {
 		{Quantity: decimal.RequireFromString("2"), CostMinor: 50_000, AcquiredOn: datep("2025-09-04")},
 	}
 	out, in := f.transferPair(want)
-	_, cIn, err := f.store.CreatePair(f.ctx, f.spaceID, out, in)
+	_, cIn, err := f.store.CreatePair(f.ctx, f.spaceID, out, in, nil)
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestTransferLotWithoutAcquisitionDateRoundTrips(t *testing.T) {
 		{Quantity: decimal.RequireFromString("2"), CostMinor: 50_000, AcquiredOn: datep("2025-09-04")},
 	}
 	out, in := f.transferPair(want)
-	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in); err != nil {
+	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in, nil); err != nil {
 		t.Fatalf("CreatePair: %v — a piece with no acquisition date must be storable", err)
 	}
 
@@ -458,7 +458,7 @@ func TestNonTransferOperationsHaveNoLots(t *testing.T) {
 	out, in := f.transferPair([]operation.ReleasedLot{
 		{Quantity: decimal.RequireFromString("5"), CostMinor: 80_000, AcquiredOn: datep("2024-02-11")},
 	})
-	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in); err != nil {
+	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in, nil); err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
 	buy := operation.Operation{
@@ -491,7 +491,7 @@ func TestTransferWithoutLotsStillReadable(t *testing.T) {
 	f := newFixture(t)
 
 	out, in := f.transferPair(nil)
-	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in); err != nil {
+	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in, nil); err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
 
@@ -522,7 +522,7 @@ func TestTransferLotFailureRollsBackPair(t *testing.T) {
 	out, in := f.transferPair([]operation.ReleasedLot{
 		{Quantity: decimal.RequireFromString("5"), CostMinor: -1, AcquiredOn: datep("2024-02-11")},
 	})
-	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in); err == nil {
+	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in, nil); err == nil {
 		t.Fatal("CreatePair with a rejected lot: want error")
 	}
 	for _, id := range []uuid.UUID{f.accountID, f.account2ID} {
@@ -546,7 +546,7 @@ func TestDeleteTransferRemovesLots(t *testing.T) {
 		{Quantity: decimal.RequireFromString("3"), CostMinor: 30_000, AcquiredOn: datep("2024-02-11")},
 		{Quantity: decimal.RequireFromString("2"), CostMinor: 50_000, AcquiredOn: datep("2025-09-04")},
 	})
-	cOut, cIn, err := f.store.CreatePair(f.ctx, f.spaceID, out, in)
+	cOut, cIn, err := f.store.CreatePair(f.ctx, f.spaceID, out, in, nil)
 	if err != nil {
 		t.Fatalf("CreatePair: %v", err)
 	}
@@ -630,5 +630,59 @@ func TestCreateRollsBackWhatItCannotConfirm(t *testing.T) {
 	}
 	if list, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID); err != nil || len(list) != 1 || list[0].ID != created.ID {
 		t.Errorf("journal = %+v (%v), want exactly the committed row %s", list, err, created.ID)
+	}
+}
+
+// TestCreatePairRollsBackWhatItCannotConfirm is the twin of the test above, for
+// the write the departing leg's release now depends on.
+//
+// Create has always replayed the row AS STORED before committing. CreatePair had
+// no such hook, which was defensible while the transfer_out row was inert — the
+// engine took a fresh FIFO slice for it and read nothing off the row but its
+// quantity. It is not inert any more: the pieces stored in this transaction are
+// the ones the source account gives up at every later read (see
+// portfolio.Position.releaseRecorded), so the row that will be replayed from now
+// on is this one, with whatever the columns rounded to, and not the candidate
+// the service checked in memory. This pins that the caller gets to look at that
+// row, and that refusing it leaves nothing behind — neither leg, and none of the
+// pieces.
+func TestCreatePairRollsBackWhatItCannotConfirm(t *testing.T) {
+	f := newFixture(t)
+
+	out, in := f.transferPair([]operation.ReleasedLot{
+		{Quantity: decimal.RequireFromString("5"), CostMinor: 80_000, AcquiredOn: datep("2026-07-01")},
+	})
+	refuse := errors.New("the transfer as stored no longer replays on the source account")
+	var seen operation.Operation
+	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in, func(storedOut, _ operation.Operation) error {
+		seen = storedOut
+		return refuse
+	}); !errors.Is(err, refuse) {
+		t.Fatalf("CreatePair = %v, want the verifier's own error", err)
+	}
+	// The DEPARTING leg, as stored, breakdown and all: that is the operation the
+	// source account replays, so it is the one worth confirming.
+	if seen.ID == uuid.Nil || seen.Type != operation.TypeTransferOut || len(seen.TransferLots) != 1 {
+		t.Errorf("verifier saw %+v with %d pieces, want the stored transfer_out carrying the parcel's breakdown",
+			seen.Type, len(seen.TransferLots))
+	}
+
+	for _, accountID := range []uuid.UUID{f.accountID, f.account2ID} {
+		list, err := f.store.ListForEngine(f.ctx, f.spaceID, accountID)
+		if err != nil {
+			t.Fatalf("list journal: %v", err)
+		}
+		if len(list) != 0 {
+			t.Errorf("account %s holds %d operations after a refused pair, want none", accountID, len(list))
+		}
+	}
+
+	// And it commits when the verifier is satisfied.
+	_, cIn, err := f.store.CreatePair(f.ctx, f.spaceID, out, in, func(operation.Operation, operation.Operation) error { return nil })
+	if err != nil {
+		t.Fatalf("CreatePair with a satisfied verifier: %v", err)
+	}
+	if n := f.lotRows(t, cIn.ID); n != 1 {
+		t.Errorf("committed pair kept %d breakdown rows, want 1", n)
 	}
 }

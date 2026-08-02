@@ -86,10 +86,14 @@ type Operation struct {
 	// legs and is read onto both (see operation.Store.attachTransferLots).
 	// The pieces describe the parcel, not the arrival: the same instrument,
 	// quantity and basis leave the source that reach the destination, and the
-	// days behind that basis are the same days on either side. Only the engine
-	// treats the two differently — the arriving leg rebuilds these lots, the
-	// departing one releases its own — and that asymmetry is about what a
-	// journal fold does, not about what the pieces mean.
+	// days behind that basis are the same days on either side. Both legs are
+	// folded from them — the arriving account rebuilds these lots, the
+	// departing one gives up these lots (see Position.releaseRecorded) — which
+	// is what keeps a pair from describing two different parcels. It did not
+	// always: the departing leg used to work out a release of its own from the
+	// queue, and the day the queue's rule changed, every transfer already
+	// recorded started releasing lots other than the ones it had frozen (see
+	// the package doc).
 	//
 	// Empty for every other type, for transfers whose basis was supplied by
 	// hand (no source lots exist behind such a number), and for transfers
