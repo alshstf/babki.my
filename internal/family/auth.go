@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/alexedwards/argon2id"
 	"github.com/google/uuid"
@@ -179,15 +180,48 @@ func (s *Service) UpdateMemberRole(ctx context.Context, p Principal, targetID uu
 	return Member{User: u, Role: role}, nil
 }
 
-// UpdateBaseCurrency changes the space's base currency (owner-only).
-func (s *Service) UpdateBaseCurrency(ctx context.Context, p Principal, currency string) (Space, error) {
+// SpaceSettings is a partial update of the space: a nil field is left
+// unchanged. Pointers rather than empty strings, because "" is a value a caller
+// can send by accident and it must be refused, not read as "leave it alone".
+type SpaceSettings struct {
+	BaseCurrency *string
+	TaxResidency *string
+}
+
+// UpdateSpace changes the space's base currency and/or the owner's country of
+// tax residency (owner-only).
+//
+// An empty request is REFUSED rather than answered with an unchanged space: a
+// caller that meant to change something and sent nothing would otherwise get a
+// 200 and a response that looks exactly like success.
+//
+// The country is checked against the rules table, not merely against the ISO
+// shape (see KnownTaxResidency). Accepting "XX" — or "FR", a real country this
+// application has no rules for — and then computing FIFO per account for it
+// would tell the owner their figures follow rules that were never consulted.
+// Refusing is the only answer that stays true: the owner learns immediately
+// that this application cannot speak for that country, instead of learning it
+// from a tax authority.
+func (s *Service) UpdateSpace(ctx context.Context, p Principal, in SpaceSettings) (Space, error) {
 	if p.Role != RoleOwner {
 		return Space{}, ErrForbidden
 	}
-	if !currencyRe.MatchString(currency) {
+	if in.BaseCurrency == nil && in.TaxResidency == nil {
+		return Space{}, fmt.Errorf("%w: nothing to update: give base_currency, tax_residency or both", ErrValidation)
+	}
+	if in.BaseCurrency != nil && !currencyRe.MatchString(*in.BaseCurrency) {
 		return Space{}, fmt.Errorf("%w: base_currency must be an uppercase ISO-4217 code (e.g. RUB)", ErrValidation)
 	}
-	if err := s.store.UpdateBaseCurrency(ctx, p.SpaceID, currency); err != nil {
+	if in.TaxResidency != nil {
+		if !taxResidencyRe.MatchString(*in.TaxResidency) {
+			return Space{}, fmt.Errorf("%w: tax_residency must be an uppercase ISO 3166-1 alpha-2 code (e.g. RU)", ErrValidation)
+		}
+		if !KnownTaxResidency(*in.TaxResidency) {
+			return Space{}, fmt.Errorf("%w: no cost basis rules are known for tax residency %s; this application can only answer for %s",
+				ErrValidation, *in.TaxResidency, strings.Join(taxResidencyCodes(), ", "))
+		}
+	}
+	if err := s.store.UpdateSpaceSettings(ctx, p.SpaceID, in.BaseCurrency, in.TaxResidency); err != nil {
 		return Space{}, err
 	}
 	return s.store.SpaceByID(ctx, p.SpaceID)

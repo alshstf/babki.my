@@ -84,6 +84,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tax-residencies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Every country this application has cost basis rules for, with the rules themselves, sorted by country code. This is the list a client offers the owner to choose from, and it is served rather than hardcoded so the countries and their consequences live in exactly one place — a client that shipped its own copy would eventually offer a country the server rejects, or promise rules the server does not follow. */
+        get: operations["listTaxResidencies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/space": {
         parameters: {
             query?: never;
@@ -97,7 +114,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** @description Updates the space's base currency (owner-only). */
+        /** @description Updates the space's base currency and/or the owner's country of tax residency (owner-only). */
         patch: operations["updateSpace"];
         trace?: never;
     };
@@ -347,10 +364,43 @@ export interface components {
             space_name: string;
             /** @description ISO-4217, e.g. RUB */
             base_currency: string;
+            /** @description The OWNER'S country of tax residency, ISO 3166-1 alpha-2 (e.g. RU). A property of the person, not of an account: a Russian resident declares a foreign broker's account by Russian rules too, so it is set once per space and applies to every account in it. Defaults to RU. */
+            tax_residency: string;
+            /** @description What tax_residency implies for the cost basis figures this application computes. Carried in the session so the settings screen can state the consequence of the country the owner picked; the same object is repeated on PositionsResponse so the screen showing the figures carries the caveat with them. */
+            cost_basis_rules: components["schemas"]["CostBasisRules"];
         };
+        /** @description Partial update of the space. Every field is optional and an omitted field is left unchanged, but at least one must be present — an empty body is rejected rather than silently accepted as a no-op. */
         UpdateSpaceRequest: {
             /** @description ISO-4217 uppercase, e.g. RUB */
-            base_currency: string;
+            base_currency?: string;
+            /** @description ISO 3166-1 alpha-2 uppercase, e.g. RU. Must be one of the countries this application has cost basis rules for (GET /api/v1/tax-residencies lists them); anything else is a 400. An unrecognised code is never accepted and quietly treated as Russia — that silent substitution is the exact failure this field exists to prevent. */
+            tax_residency?: string;
+        };
+        /**
+         * @description How a jurisdiction decides WHICH of the parcels held are the ones a sale disposed of. `fifo`: the earliest acquisitions, in order. `average`: no parcels at all — one pooled average cost per instrument. `specific_lot`: the taxpayer nominates the parcel. `not_applicable`: the country does not tax an individual's capital gains, so nothing has to be matched. `unknown`: the stored country has no rules row in this application (see CostBasisNotice.unknown_country).
+         * @enum {string}
+         */
+        CostBasisMethod: "fifo" | "average" | "specific_lot" | "not_applicable" | "unknown";
+        /**
+         * @description Over WHICH holdings that queue is built. `account`: separately per account/depot. `owner`: across everything the owner holds, wherever it sits — representable here but NOT implemented; a country carrying it is reported as unsupported. `not_applicable`: no queue exists to scope (the taxpayer picks the parcel, or gains are untaxed). `unknown`: no rules row for the stored country.
+         * @enum {string}
+         */
+        CostBasisPerimeter: "account" | "owner" | "not_applicable" | "unknown";
+        /**
+         * @description One way this application's computation fails to answer for the owner's country. Machine-readable on purpose: the wording the owner reads is the interface's to translate, and the server never sends prose. `method_mismatch`: the country matches disposals by a different method, so the figures are NOT a cost basis under its rules. `perimeter_mismatch`: the queue must span more than one account. `not_taxed`: the country does not tax an individual's capital gains at all, so the figures are informational rather than fiscal. `unknown_country`: the stored country has no rules row here, so nothing is claimed about it — the figures are still FIFO within one account, which is what they always are.
+         * @enum {string}
+         */
+        CostBasisNotice: "method_mismatch" | "perimeter_mismatch" | "not_taxed" | "unknown_country";
+        /** @description The cost basis rules of one country, derived from its ISO 3166-1 alpha-2 code through a single table in the server. The figures this application publishes are ALWAYS computed FIFO within one account; this object says whether that is what the country actually requires, and names every way it is not. */
+        CostBasisRules: {
+            /** @description ISO 3166-1 alpha-2 the row was derived from */
+            country: string;
+            method: components["schemas"]["CostBasisMethod"];
+            perimeter: components["schemas"]["CostBasisPerimeter"];
+            /** @description True only when this country's method and perimeter are exactly what the application computes — FIFO within one account — and the country taxes capital gains at all. When false, `notices` is non-empty and says why; the figures are still returned, because a cost basis is also plainly "what I paid", but they must not be presented as this country's tax basis. */
+            supported: boolean;
+            /** @description Empty exactly when `supported` is true. Several can apply at once (Britain pools by average AND across all of the owner's holdings) and all of them are listed: reporting only the first would hide a real divergence behind another one. */
+            notices: components["schemas"]["CostBasisNotice"][];
         };
         /** @enum {string} */
         Role: "owner" | "editor" | "viewer";
@@ -655,6 +705,8 @@ export interface components {
         };
         PositionsResponse: {
             positions: components["schemas"]["Position"][];
+            /** @description Whether the cost basis behind every figure above is the one the owner's country requires (see CostBasisRules). It travels with the numbers rather than only in the session because this is the payload a reader takes the numbers from: a client that renders positions without ever reading the session must still be unable to show cost_minor, unrealized_pnl_minor and realized_pnl_minor as if they were a tax basis when they are not. It describes the whole computation, not one row, so it sits on the response rather than being repeated identically inside every Position. */
+            cost_basis_rules: components["schemas"]["CostBasisRules"];
         };
     };
     responses: {
@@ -781,6 +833,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionInfo"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    listTaxResidencies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Selectable tax residencies and what each implies */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostBasisRules"][];
                 };
             };
             401: components["responses"]["Error"];

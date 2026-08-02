@@ -59,10 +59,29 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SessionInfo" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/tax-residencies:
+    get:
+      operationId: listTaxResidencies
+      description: >-
+        Every country this application has cost basis rules for, with the rules
+        themselves, sorted by country code. This is the list a client offers the
+        owner to choose from, and it is served rather than hardcoded so the
+        countries and their consequences live in exactly one place — a client
+        that shipped its own copy would eventually offer a country the server
+        rejects, or promise rules the server does not follow.
+      responses:
+        "200":
+          description: Selectable tax residencies and what each implies
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CostBasisRules" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/space:
     patch:
       operationId: updateSpace
-      description: Updates the space's base currency (owner-only).
+      description: Updates the space's base currency and/or the owner's country of tax residency (owner-only).
       requestBody:
         required: true
         content:
@@ -386,18 +405,55 @@ components:
         display_name: { type: string }
     SessionInfo:
       type: object
-      required: [user, role, space_id, space_name, base_currency]
+      required: [user, role, space_id, space_name, base_currency, tax_residency, cost_basis_rules]
       properties:
         user: { $ref: "#/components/schemas/UserInfo" }
         role: { $ref: "#/components/schemas/Role" }
         space_id: { type: string, format: uuid }
         space_name: { type: string }
         base_currency: { type: string, description: "ISO-4217, e.g. RUB" }
+        tax_residency:
+          type: string
+          description: "The OWNER'S country of tax residency, ISO 3166-1 alpha-2 (e.g. RU). A property of the person, not of an account: a Russian resident declares a foreign broker's account by Russian rules too, so it is set once per space and applies to every account in it. Defaults to RU."
+        cost_basis_rules:
+          description: "What tax_residency implies for the cost basis figures this application computes. Carried in the session so the settings screen can state the consequence of the country the owner picked; the same object is repeated on PositionsResponse so the screen showing the figures carries the caveat with them."
+          allOf:
+            - $ref: "#/components/schemas/CostBasisRules"
     UpdateSpaceRequest:
       type: object
-      required: [base_currency]
+      description: "Partial update of the space. Every field is optional and an omitted field is left unchanged, but at least one must be present — an empty body is rejected rather than silently accepted as a no-op."
       properties:
         base_currency: { type: string, description: "ISO-4217 uppercase, e.g. RUB" }
+        tax_residency:
+          type: string
+          description: "ISO 3166-1 alpha-2 uppercase, e.g. RU. Must be one of the countries this application has cost basis rules for (GET /api/v1/tax-residencies lists them); anything else is a 400. An unrecognised code is never accepted and quietly treated as Russia — that silent substitution is the exact failure this field exists to prevent."
+    CostBasisMethod:
+      type: string
+      description: "How a jurisdiction decides WHICH of the parcels held are the ones a sale disposed of. `fifo`: the earliest acquisitions, in order. `average`: no parcels at all — one pooled average cost per instrument. `specific_lot`: the taxpayer nominates the parcel. `not_applicable`: the country does not tax an individual's capital gains, so nothing has to be matched. `unknown`: the stored country has no rules row in this application (see CostBasisNotice.unknown_country)."
+      enum: [fifo, average, specific_lot, not_applicable, unknown]
+    CostBasisPerimeter:
+      type: string
+      description: "Over WHICH holdings that queue is built. `account`: separately per account/depot. `owner`: across everything the owner holds, wherever it sits — representable here but NOT implemented; a country carrying it is reported as unsupported. `not_applicable`: no queue exists to scope (the taxpayer picks the parcel, or gains are untaxed). `unknown`: no rules row for the stored country."
+      enum: [account, owner, not_applicable, unknown]
+    CostBasisNotice:
+      type: string
+      description: "One way this application's computation fails to answer for the owner's country. Machine-readable on purpose: the wording the owner reads is the interface's to translate, and the server never sends prose. `method_mismatch`: the country matches disposals by a different method, so the figures are NOT a cost basis under its rules. `perimeter_mismatch`: the queue must span more than one account. `not_taxed`: the country does not tax an individual's capital gains at all, so the figures are informational rather than fiscal. `unknown_country`: the stored country has no rules row here, so nothing is claimed about it — the figures are still FIFO within one account, which is what they always are."
+      enum: [method_mismatch, perimeter_mismatch, not_taxed, unknown_country]
+    CostBasisRules:
+      type: object
+      description: "The cost basis rules of one country, derived from its ISO 3166-1 alpha-2 code through a single table in the server. The figures this application publishes are ALWAYS computed FIFO within one account; this object says whether that is what the country actually requires, and names every way it is not."
+      required: [country, method, perimeter, supported, notices]
+      properties:
+        country: { type: string, description: "ISO 3166-1 alpha-2 the row was derived from" }
+        method: { $ref: "#/components/schemas/CostBasisMethod" }
+        perimeter: { $ref: "#/components/schemas/CostBasisPerimeter" }
+        supported:
+          type: boolean
+          description: "True only when this country's method and perimeter are exactly what the application computes — FIFO within one account — and the country taxes capital gains at all. When false, `notices` is non-empty and says why; the figures are still returned, because a cost basis is also plainly \"what I paid\", but they must not be presented as this country's tax basis."
+        notices:
+          type: array
+          items: { $ref: "#/components/schemas/CostBasisNotice" }
+          description: "Empty exactly when `supported` is true. Several can apply at once (Britain pools by average AND across all of the owner's holdings) and all of them are listed: reporting only the first would hide a real divergence behind another one."
     Role:
       type: string
       enum: [owner, editor, viewer]
@@ -654,8 +710,12 @@ components:
         rate_on: { type: string, description: "Date YYYY-MM-DD of the fx rate behind market_value_minor: today's rate, or the nearest earlier date the rate table actually holds. It does NOT describe cost_minor or income_minor — those use one rate per lot and per operation date, so no single date could name them" }
     PositionsResponse:
       type: object
-      required: [positions]
+      required: [positions, cost_basis_rules]
       properties:
         positions:
           type: array
           items: { $ref: "#/components/schemas/Position" }
+        cost_basis_rules:
+          description: "Whether the cost basis behind every figure above is the one the owner's country requires (see CostBasisRules). It travels with the numbers rather than only in the session because this is the payload a reader takes the numbers from: a client that renders positions without ever reading the session must still be unable to show cost_minor, unrealized_pnl_minor and realized_pnl_minor as if they were a tax basis when they are not. It describes the whole computation, not one row, so it sits on the response rather than being repeated identically inside every Position."
+          allOf:
+            - $ref: "#/components/schemas/CostBasisRules"

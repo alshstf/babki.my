@@ -61,6 +61,81 @@ func (e AccountType) Valid() bool {
 	}
 }
 
+// Defines values for CostBasisMethod.
+const (
+	CostBasisMethodAverage       CostBasisMethod = "average"
+	CostBasisMethodFifo          CostBasisMethod = "fifo"
+	CostBasisMethodNotApplicable CostBasisMethod = "not_applicable"
+	CostBasisMethodSpecificLot   CostBasisMethod = "specific_lot"
+	CostBasisMethodUnknown       CostBasisMethod = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the CostBasisMethod enum.
+func (e CostBasisMethod) Valid() bool {
+	switch e {
+	case CostBasisMethodAverage:
+		return true
+	case CostBasisMethodFifo:
+		return true
+	case CostBasisMethodNotApplicable:
+		return true
+	case CostBasisMethodSpecificLot:
+		return true
+	case CostBasisMethodUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CostBasisNotice.
+const (
+	MethodMismatch    CostBasisNotice = "method_mismatch"
+	NotTaxed          CostBasisNotice = "not_taxed"
+	PerimeterMismatch CostBasisNotice = "perimeter_mismatch"
+	UnknownCountry    CostBasisNotice = "unknown_country"
+)
+
+// Valid indicates whether the value is a known member of the CostBasisNotice enum.
+func (e CostBasisNotice) Valid() bool {
+	switch e {
+	case MethodMismatch:
+		return true
+	case NotTaxed:
+		return true
+	case PerimeterMismatch:
+		return true
+	case UnknownCountry:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CostBasisPerimeter.
+const (
+	CostBasisPerimeterAccount       CostBasisPerimeter = "account"
+	CostBasisPerimeterNotApplicable CostBasisPerimeter = "not_applicable"
+	CostBasisPerimeterOwner         CostBasisPerimeter = "owner"
+	CostBasisPerimeterUnknown       CostBasisPerimeter = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the CostBasisPerimeter enum.
+func (e CostBasisPerimeter) Valid() bool {
+	switch e {
+	case CostBasisPerimeterAccount:
+		return true
+	case CostBasisPerimeterNotApplicable:
+		return true
+	case CostBasisPerimeterOwner:
+		return true
+	case CostBasisPerimeterUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for InstrumentType.
 const (
 	Bond     InstrumentType = "bond"
@@ -150,19 +225,19 @@ func (e OperationType) Valid() bool {
 
 // Defines values for Role.
 const (
-	Editor Role = "editor"
-	Owner  Role = "owner"
-	Viewer Role = "viewer"
+	RoleEditor Role = "editor"
+	RoleOwner  Role = "owner"
+	RoleViewer Role = "viewer"
 )
 
 // Valid indicates whether the value is a known member of the Role enum.
 func (e Role) Valid() bool {
 	switch e {
-	case Editor:
+	case RoleEditor:
 		return true
-	case Owner:
+	case RoleOwner:
 		return true
-	case Viewer:
+	case RoleViewer:
 		return true
 	default:
 		return false
@@ -197,6 +272,33 @@ type BalancePoint struct {
 
 	// AsOf Date YYYY-MM-DD
 	AsOf string `json:"as_of"`
+}
+
+// CostBasisMethod How a jurisdiction decides WHICH of the parcels held are the ones a sale disposed of. `fifo`: the earliest acquisitions, in order. `average`: no parcels at all — one pooled average cost per instrument. `specific_lot`: the taxpayer nominates the parcel. `not_applicable`: the country does not tax an individual's capital gains, so nothing has to be matched. `unknown`: the stored country has no rules row in this application (see CostBasisNotice.unknown_country).
+type CostBasisMethod string
+
+// CostBasisNotice One way this application's computation fails to answer for the owner's country. Machine-readable on purpose: the wording the owner reads is the interface's to translate, and the server never sends prose. `method_mismatch`: the country matches disposals by a different method, so the figures are NOT a cost basis under its rules. `perimeter_mismatch`: the queue must span more than one account. `not_taxed`: the country does not tax an individual's capital gains at all, so the figures are informational rather than fiscal. `unknown_country`: the stored country has no rules row here, so nothing is claimed about it — the figures are still FIFO within one account, which is what they always are.
+type CostBasisNotice string
+
+// CostBasisPerimeter Over WHICH holdings that queue is built. `account`: separately per account/depot. `owner`: across everything the owner holds, wherever it sits — representable here but NOT implemented; a country carrying it is reported as unsupported. `not_applicable`: no queue exists to scope (the taxpayer picks the parcel, or gains are untaxed). `unknown`: no rules row for the stored country.
+type CostBasisPerimeter string
+
+// CostBasisRules The cost basis rules of one country, derived from its ISO 3166-1 alpha-2 code through a single table in the server. The figures this application publishes are ALWAYS computed FIFO within one account; this object says whether that is what the country actually requires, and names every way it is not.
+type CostBasisRules struct {
+	// Country ISO 3166-1 alpha-2 the row was derived from
+	Country string `json:"country"`
+
+	// Method How a jurisdiction decides WHICH of the parcels held are the ones a sale disposed of. `fifo`: the earliest acquisitions, in order. `average`: no parcels at all — one pooled average cost per instrument. `specific_lot`: the taxpayer nominates the parcel. `not_applicable`: the country does not tax an individual's capital gains, so nothing has to be matched. `unknown`: the stored country has no rules row in this application (see CostBasisNotice.unknown_country).
+	Method CostBasisMethod `json:"method"`
+
+	// Notices Empty exactly when `supported` is true. Several can apply at once (Britain pools by average AND across all of the owner's holdings) and all of them are listed: reporting only the first would hide a real divergence behind another one.
+	Notices []CostBasisNotice `json:"notices"`
+
+	// Perimeter Over WHICH holdings that queue is built. `account`: separately per account/depot. `owner`: across everything the owner holds, wherever it sits — representable here but NOT implemented; a country carrying it is reported as unsupported. `not_applicable`: no queue exists to scope (the taxpayer picks the parcel, or gains are untaxed). `unknown`: no rules row for the stored country.
+	Perimeter CostBasisPerimeter `json:"perimeter"`
+
+	// Supported True only when this country's method and perimeter are exactly what the application computes — FIFO within one account — and the country taxes capital gains at all. When false, `notices` is non-empty and says why; the figures are still returned, because a cost basis is also plainly "what I paid", but they must not be presented as this country's tax basis.
+	Supported bool `json:"supported"`
 }
 
 // CreateAccountRequest defines model for CreateAccountRequest.
@@ -425,7 +527,9 @@ type PositionInBase struct {
 
 // PositionsResponse defines model for PositionsResponse.
 type PositionsResponse struct {
-	Positions []Position `json:"positions"`
+	// CostBasisRules Whether the cost basis behind every figure above is the one the owner's country requires (see CostBasisRules). It travels with the numbers rather than only in the session because this is the payload a reader takes the numbers from: a client that renders positions without ever reading the session must still be unable to show cost_minor, unrealized_pnl_minor and realized_pnl_minor as if they were a tax basis when they are not. It describes the whole computation, not one row, so it sits on the response rather than being repeated identically inside every Position.
+	CostBasisRules CostBasisRules `json:"cost_basis_rules"`
+	Positions      []Position     `json:"positions"`
 }
 
 // Role defines model for Role.
@@ -434,11 +538,17 @@ type Role string
 // SessionInfo defines model for SessionInfo.
 type SessionInfo struct {
 	// BaseCurrency ISO-4217, e.g. RUB
-	BaseCurrency string             `json:"base_currency"`
-	Role         Role               `json:"role"`
-	SpaceId      openapi_types.UUID `json:"space_id"`
-	SpaceName    string             `json:"space_name"`
-	User         UserInfo           `json:"user"`
+	BaseCurrency string `json:"base_currency"`
+
+	// CostBasisRules What tax_residency implies for the cost basis figures this application computes. Carried in the session so the settings screen can state the consequence of the country the owner picked; the same object is repeated on PositionsResponse so the screen showing the figures carries the caveat with them.
+	CostBasisRules CostBasisRules     `json:"cost_basis_rules"`
+	Role           Role               `json:"role"`
+	SpaceId        openapi_types.UUID `json:"space_id"`
+	SpaceName      string             `json:"space_name"`
+
+	// TaxResidency The OWNER'S country of tax residency, ISO 3166-1 alpha-2 (e.g. RU). A property of the person, not of an account: a Russian resident declares a foreign broker's account by Russian rules too, so it is set once per space and applies to every account in it. Defaults to RU.
+	TaxResidency string   `json:"tax_residency"`
+	User         UserInfo `json:"user"`
 }
 
 // SetBalanceRequest defines model for SetBalanceRequest.
@@ -524,10 +634,13 @@ type UpdateMemberRequest struct {
 	Role Role `json:"role"`
 }
 
-// UpdateSpaceRequest defines model for UpdateSpaceRequest.
+// UpdateSpaceRequest Partial update of the space. Every field is optional and an omitted field is left unchanged, but at least one must be present — an empty body is rejected rather than silently accepted as a no-op.
 type UpdateSpaceRequest struct {
 	// BaseCurrency ISO-4217 uppercase, e.g. RUB
-	BaseCurrency string `json:"base_currency"`
+	BaseCurrency *string `json:"base_currency,omitempty"`
+
+	// TaxResidency ISO 3166-1 alpha-2 uppercase, e.g. RU. Must be one of the countries this application has cost basis rules for (GET /api/v1/tax-residencies lists them); anything else is a 400. An unrecognised code is never accepted and quietly treated as Russia — that silent substitution is the exact failure this field exists to prevent.
+	TaxResidency *string `json:"tax_residency,omitempty"`
 }
 
 // UserInfo defines model for UserInfo.

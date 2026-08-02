@@ -613,5 +613,17 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Instrument.Name < out[j].Instrument.Name })
 
-	httpjson.Write(w, http.StatusOK, apitypes.PositionsResponse{Positions: out})
+	// Every figure above was computed FIFO within this one account, which is
+	// the only rule this application implements. Whether that is the rule the
+	// owner's country actually applies is a separate fact, and it ships with
+	// the numbers rather than only in the session: this response is where a
+	// reader takes cost_minor, realized_pnl_minor and unrealized_pnl_minor
+	// from, so it is where the statement of what they are — and are not — has
+	// to be available. It describes the computation, not any one row, so it is
+	// attached once to the response and is present even when the account holds
+	// nothing at all.
+	httpjson.Write(w, http.StatusOK, apitypes.PositionsResponse{
+		Positions:      out,
+		CostBasisRules: family.CostBasisRulesAPI(sp.CostBasisRules()),
+	})
 }
