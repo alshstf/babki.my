@@ -581,6 +581,76 @@ func TestPositionInBaseTransferredLotsKeepTheirPurchaseDates(t *testing.T) {
 	}
 }
 
+// TestPositionInBaseNullWhenALotHasNoAcquisitionDate is the position-level
+// consequence of a lot that does not know when it was acquired (see
+// portfolio.Lot.AcquiredOn). There is no date to ask the fx table for a rate
+// on, so that lot's basis cannot be converted at all — and by this handler's
+// standing rule, a basis missing one of its lots is an invented number, so the
+// WHOLE in_base goes null rather than reporting the part that happened to
+// convert.
+//
+// The fixture reproduces a transfer recorded before breakdowns were kept: a
+// real transfer is created, then its stored pieces are deleted, which is
+// exactly the state such a legacy row is in. What arrives is one lot with a
+// basis and no purchase date.
+//
+// The two numbers a wrong implementation would print are named below. The
+// engine used to date this lot on the transfer day, which would convert the
+// whole basis at that day's rate (300_000 * 90 = 27_000_000) — an invented
+// figure that looks entirely ordinary on screen. A handler that instead
+// skipped the undatable lot would publish 0. Both are asserted against, so
+// neither can pass quietly as "some number appeared".
+func TestPositionInBaseNullWhenALotHasNoAcquisitionDate(t *testing.T) {
+	pool := testdb.New(t)
+	mdStore := marketdata.NewStore(pool)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(mdStore))
+	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: mustDate(t, earlyRateOn), Rate: decimal.RequireFromString("60"), Source: "test"},
+		{Base: "USD", Quote: "RUB", On: mustDate(t, lateRateOn), Rate: decimal.RequireFromString("90"), Source: "test"},
+	}); err != nil {
+		t.Fatalf("seed fx rates: %v", err)
+	}
+
+	from := createAccount(t, c, url, `{"name":"Старый брокер","type":"brokerage","currency":"USD"}`)
+	to := createAccount(t, c, url, `{"name":"Новый брокер","type":"brokerage","currency":"USD"}`)
+	share := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, from.ID, share.ID, earlyBuyOn))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","price":"200",
+		"amount_minor":-200000,"currency":"USD"}`, from.ID, share.ID, lateBuyOn))
+	createTransfer(t, c, url, fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,
+		"quantity":"20","occurred_on":%q}`, from.ID, to.ID, share.ID, transferOn))
+
+	// Turn the transfer into one recorded before breakdowns were kept. Its
+	// basis survives on the operation; the dates behind that basis do not.
+	if _, err := pool.Exec(t.Context(), `DELETE FROM operation_transfer_lots`); err != nil {
+		t.Fatalf("drop the stored breakdown: %v", err)
+	}
+
+	p := onlyPosition(t, c, url, to.ID)
+	// The position itself is unaffected: an unknown date costs no money and no
+	// shares, and everything in the position's own currency is still published.
+	if p.Quantity != "20" || p.CostMinor != 300000 {
+		t.Fatalf("destination position = {qty %q cost %d}, want {\"20\" 300000} — an unknown acquisition date must not change the basis",
+			p.Quantity, p.CostMinor)
+	}
+	if p.InBase == nil {
+		return
+	}
+	if p.InBase.CostMinor == 27000000 {
+		t.Fatalf("in_base.cost_minor = 27000000 — the arrival was valued at the rate of the TRANSFER day %s (300000 * 90). Nobody recorded that day as a purchase date; the lot's date is unknown and no rate answers for it",
+			transferOn)
+	}
+	if p.InBase.CostMinor == 0 {
+		t.Fatalf("in_base.cost_minor = 0 — the undatable lot was skipped and the rest summed; a basis missing a lot reads like a real, smaller basis")
+	}
+	t.Fatalf("in_base = %+v, want null: one lot does not know when it was acquired, so the whole object is unpublishable", *p.InBase)
+}
+
 // TestPositionInBaseUnrealizedPnlIncludesCurrencyRevaluation is the second
 // discriminating test: base-currency profit is the current valuation in rubles
 // minus the HISTORICAL ruble basis, so it carries the currency's own move.

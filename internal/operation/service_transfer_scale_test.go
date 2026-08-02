@@ -136,8 +136,8 @@ func TestTransferAfterReverseSplitStaysReadable(t *testing.T) {
 	// same two purchases: the remainder went to the last piece, not into thin
 	// air.
 	want := []operation.ReleasedLot{
-		{Quantity: decimal.RequireFromString("1.1666666665"), CostMinor: 35_000, AcquiredOn: date("2026-07-01")},
-		{Quantity: decimal.RequireFromString("1.1666666666"), CostMinor: 70_000, AcquiredOn: date("2026-07-02")},
+		{Quantity: decimal.RequireFromString("1.1666666665"), CostMinor: 35_000, AcquiredOn: datep("2026-07-01")},
+		{Quantity: decimal.RequireFromString("1.1666666666"), CostMinor: 70_000, AcquiredOn: datep("2026-07-02")},
 	}
 	stored := transferInOf(t, f, f.account2ID).TransferLots
 	if len(stored) != len(want) {
@@ -146,10 +146,10 @@ func TestTransferAfterReverseSplitStaysReadable(t *testing.T) {
 	sum := decimal.Zero
 	for i, w := range want {
 		g := stored[i]
-		if !g.Quantity.Equal(w.Quantity) || g.CostMinor != w.CostMinor || !g.AcquiredOn.Equal(w.AcquiredOn) {
+		if !g.Quantity.Equal(w.Quantity) || g.CostMinor != w.CostMinor || !sameAcquisition(g.AcquiredOn, w.AcquiredOn) {
 			t.Errorf("stored piece %d = %s/%d/%s, want %s/%d/%s", i,
-				g.Quantity, g.CostMinor, g.AcquiredOn.Format("2006-01-02"),
-				w.Quantity, w.CostMinor, w.AcquiredOn.Format("2006-01-02"))
+				g.Quantity, g.CostMinor, acquired(g.AcquiredOn),
+				w.Quantity, w.CostMinor, acquired(w.AcquiredOn))
 		}
 		if g.Quantity.Exponent() < -storageScale {
 			t.Errorf("stored piece %d has quantity %s, finer than the %d decimal places the column keeps",
@@ -238,9 +238,9 @@ func TestTransferQuantityFinerThanStorageIsTruncated(t *testing.T) {
 	if len(stored.TransferLots) != 1 {
 		t.Fatalf("stored pieces = %+v, want exactly one (the 4e-11 tail is not a piece)", stored.TransferLots)
 	}
-	if pc := stored.TransferLots[0]; !pc.Quantity.Equal(one) || pc.CostMinor != 100 || !pc.AcquiredOn.Equal(date("2026-07-01")) {
+	if pc := stored.TransferLots[0]; !pc.Quantity.Equal(one) || pc.CostMinor != 100 || !sameAcquisition(pc.AcquiredOn, datep("2026-07-01")) {
 		t.Errorf("stored piece = %s/%d/%s, want 1/100/2026-07-01",
-			pc.Quantity, pc.CostMinor, pc.AcquiredOn.Format("2006-01-02"))
+			pc.Quantity, pc.CostMinor, acquired(pc.AcquiredOn))
 	}
 
 	if dest := positionsOf(t, f, f.account2ID)[f.sberID]; !dest.Quantity.Equal(one) || dest.CostMinor != 100 {

@@ -74,7 +74,7 @@ func TestTransferOutOversell(t *testing.T) {
 
 // piece builds one element of a transfer's stored FIFO breakdown.
 func piece(qty string, cost int64, dayN int) portfolio.ReleasedLot {
-	return portfolio.ReleasedLot{Quantity: d(qty), CostMinor: cost, AcquiredOn: day(dayN)}
+	return portfolio.ReleasedLot{Quantity: d(qty), CostMinor: cost, AcquiredOn: dayp(dayN)}
 }
 
 // transferIn builds a transfer_in on day dayN carrying the given breakdown.
@@ -101,22 +101,22 @@ func TestTransferInRebuildsLotsFromBreakdown(t *testing.T) {
 	}
 	p := pos[sber]
 	want := []portfolio.Lot{
-		{Quantity: d("10"), CostMinor: 100_010, AcquiredOn: day(2)},
-		{Quantity: d("5"), CostMinor: 55_005, AcquiredOn: day(9)},
+		{Quantity: d("10"), CostMinor: 100_010, AcquiredOn: dayp(2)},
+		{Quantity: d("5"), CostMinor: 55_005, AcquiredOn: dayp(9)},
 	}
 	if len(p.Lots) != len(want) {
 		t.Fatalf("lots = %+v, want %d — one per piece of the breakdown", p.Lots, len(want))
 	}
 	for i, w := range want {
 		got := p.Lots[i]
-		if !got.Quantity.Equal(w.Quantity) || got.CostMinor != w.CostMinor || !got.AcquiredOn.Equal(w.AcquiredOn) {
+		if !got.Quantity.Equal(w.Quantity) || got.CostMinor != w.CostMinor || !sameAcquisition(got.AcquiredOn, w.AcquiredOn) {
 			t.Errorf("lot %d = {qty %s cost %d on %s}, want {qty %s cost %d on %s}",
-				i, got.Quantity, got.CostMinor, got.AcquiredOn.Format("2006-01-02"),
-				w.Quantity, w.CostMinor, w.AcquiredOn.Format("2006-01-02"))
+				i, got.Quantity, got.CostMinor, acquired(got.AcquiredOn),
+				w.Quantity, w.CostMinor, acquired(w.AcquiredOn))
 		}
-		if got.AcquiredOn.Equal(day(20)) {
+		if sameAcquisition(got.AcquiredOn, dayp(20)) {
 			t.Errorf("lot %d is dated on the transfer day %s: the breakdown says it was bought on %s",
-				i, day(20).Format("2006-01-02"), w.AcquiredOn.Format("2006-01-02"))
+				i, day(20).Format("2006-01-02"), acquired(w.AcquiredOn))
 		}
 	}
 	checkLotInvariants(t, p)
@@ -150,9 +150,9 @@ func TestTransferredLotsReleaseInFIFOOrder(t *testing.T) {
 	if len(p.Lots) != 1 {
 		t.Fatalf("lots = %+v, want 1 (the younger piece)", p.Lots)
 	}
-	if !p.Lots[0].AcquiredOn.Equal(day(9)) || p.Lots[0].CostMinor != 55_005 {
+	if !sameAcquisition(p.Lots[0].AcquiredOn, dayp(9)) || p.Lots[0].CostMinor != 55_005 {
 		t.Errorf("remaining lot = {cost %d on %s}, want {55005 on %s}",
-			p.Lots[0].CostMinor, p.Lots[0].AcquiredOn.Format("2006-01-02"), day(9).Format("2006-01-02"))
+			p.Lots[0].CostMinor, acquired(p.Lots[0].AcquiredOn), day(9).Format("2006-01-02"))
 	}
 	checkLotInvariants(t, p)
 }
@@ -182,13 +182,13 @@ func TestTransferInBreakdownMismatchRejected(t *testing.T) {
 			want: []string{"155010", "155015"},
 		},
 		"piece with zero quantity": {
-			op:   transferIn(20, "15", 155_015, piece("15", 100_010, 2), portfolio.ReleasedLot{Quantity: d("0"), CostMinor: 55_005, AcquiredOn: day(9)}),
+			op:   transferIn(20, "15", 155_015, piece("15", 100_010, 2), portfolio.ReleasedLot{Quantity: d("0"), CostMinor: 55_005, AcquiredOn: dayp(9)}),
 			want: []string{"quantity 0"},
 		},
 		"pieces that cancel out": {
 			op: transferIn(20, "15", 155_015,
 				piece("20", 100_010, 2),
-				portfolio.ReleasedLot{Quantity: d("-5"), CostMinor: 55_005, AcquiredOn: day(9)}),
+				portfolio.ReleasedLot{Quantity: d("-5"), CostMinor: 55_005, AcquiredOn: dayp(9)}),
 			want: []string{"-5"},
 		},
 		"piece with negative cost": {
@@ -196,15 +196,11 @@ func TestTransferInBreakdownMismatchRejected(t *testing.T) {
 			want: []string{"-45005"},
 		},
 		// The acquisition date is the only field the table itself does not
-		// constrain, and it is the one the whole breakdown exists to carry:
-		// a missing or impossible date turns into a lot revalued at a rate
-		// from a day it was never held on.
-		"piece with no acquisition date": {
-			op: transferIn(20, "15", 155_015,
-				piece("10", 100_010, 2),
-				portfolio.ReleasedLot{Quantity: d("5"), CostMinor: 55_005}),
-			want: []string{"no acquisition date"},
-		},
+		// constrain, and it is the one the whole breakdown exists to carry: an
+		// IMPOSSIBLE date turns into a lot revalued at a rate from a day it was
+		// never held on. A date that is simply absent is a different thing
+		// entirely and is accepted — see
+		// TestTransferInAcceptsPieceWithoutAcquisitionDate.
 		"piece acquired after the transfer": {
 			op:   transferIn(20, "15", 155_015, piece("10", 100_010, 2), piece("5", 55_005, 25)),
 			want: []string{"after the transfer"},
@@ -220,6 +216,67 @@ func TestTransferInBreakdownMismatchRejected(t *testing.T) {
 				t.Errorf("%s: error %q does not name %q, so it cannot be acted on", name, err, want)
 			}
 		}
+	}
+}
+
+// TestTransferInAcceptsPieceWithoutAcquisitionDate is the rule this task
+// reverses. CheckTransferLots used to refuse a piece with no acquisition date
+// outright, on the grounds that "the date is what a carried lot is for". That
+// refusal quietly required every piece to name a day — and for shares whose
+// purchase day is not knowable, the only day on hand is the transfer's own,
+// which is precisely the invention the breakdown exists to prevent.
+//
+// Such pieces are real. They arise the moment a parcel that arrived without
+// dates (a hand-entered basis, or a transfer written down before breakdowns
+// were kept) is moved on again: the release yields pieces with nothing to
+// date them by, mixed in with pieces that do know their day. The breakdown
+// must carry that mixture faithfully, and the lots it rebuilds must too.
+func TestTransferInAcceptsPieceWithoutAcquisitionDate(t *testing.T) {
+	undated := portfolio.ReleasedLot{Quantity: d("5"), CostMinor: 55_005}
+	ops := []portfolio.Operation{
+		transferIn(20, "15", 155_015, piece("10", 100_010, 2), undated),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v — a piece with no acquisition date is a legitimate breakdown, not a corrupt one", err)
+	}
+	p := pos[sber]
+	if len(p.Lots) != 2 {
+		t.Fatalf("lots = %+v, want 2 — one per piece, the undated one included", p.Lots)
+	}
+	if !sameAcquisition(p.Lots[0].AcquiredOn, dayp(2)) {
+		t.Errorf("lot 0 acquired on %s, want %s", acquired(p.Lots[0].AcquiredOn), acquired(dayp(2)))
+	}
+	if p.Lots[1].AcquiredOn != nil {
+		t.Errorf("lot 1 acquired on %s, want unknown — the piece carried no date and the engine must not supply one",
+			acquired(p.Lots[1].AcquiredOn))
+	}
+	if sameAcquisition(p.Lots[1].AcquiredOn, dayp(20)) {
+		t.Errorf("lot 1 was dated on the transfer day %s: the breakdown said nothing about when it was bought", acquired(dayp(20)))
+	}
+	if p.CostMinor != 155_015 {
+		t.Errorf("cost = %d, want 155015 — an unknown date changes no money", p.CostMinor)
+	}
+	checkLotInvariants(t, p)
+}
+
+// TestUndatedPieceStillCheckedForSums pins that accepting a dateless piece
+// relaxes ONLY the date rule. Everything else CheckTransferLots guards — the
+// pieces summing to the quantity that moved and to the basis that moved — is
+// unchanged for such a piece, so a breakdown cannot smuggle a mismatch through
+// by omitting a date.
+func TestUndatedPieceStillCheckedForSums(t *testing.T) {
+	ops := []portfolio.Operation{
+		transferIn(20, "15", 155_015,
+			piece("10", 100_010, 2),
+			portfolio.ReleasedLot{Quantity: d("5"), CostMinor: 55_000}),
+	}
+	_, err := portfolio.Compute(ops)
+	if !errors.Is(err, portfolio.ErrBadOperation) {
+		t.Fatalf("err = %v, want ErrBadOperation: the costs sum to 155010, not the 155015 the operation carries", err)
+	}
+	if !strings.Contains(err.Error(), "155010") {
+		t.Errorf("error %q does not name the sum it found", err)
 	}
 }
 

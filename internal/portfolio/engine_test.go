@@ -28,6 +28,37 @@ func day(n int) time.Time {
 	return time.Date(2026, 7, n, 0, 0, 0, 0, time.UTC)
 }
 
+// dayp is day as an acquisition date a lot actually knows (portfolio.Lot and
+// portfolio.ReleasedLot hold it as a pointer, nil meaning "not knowable" —
+// see Lot.AcquiredOn).
+func dayp(n int) *time.Time {
+	t := day(n)
+	return &t
+}
+
+// acquired renders an acquisition date for a failure message, naming the
+// unknown case rather than printing a stand-in date for it. Every assertion
+// below reports through this, so a test that fails because a date went missing
+// says so instead of showing 0001-01-01 or a nil pointer.
+func acquired(t *time.Time) string {
+	if t == nil {
+		return "unknown"
+	}
+	return t.Format("2006-01-02")
+}
+
+// sameAcquisition compares two acquisition dates including the unknown case:
+// two unknowns match, and an unknown never matches a date. Assertions must go
+// through it rather than calling Equal on a pointer, which panics on an
+// unknown date and would turn "the lot lost its date" into a crash in the
+// test's own reporting code.
+func sameAcquisition(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
+}
+
 func op(typ portfolio.Type, dayN int, inst *uuid.UUID, qty, price string, amount, fee int64) portfolio.Operation {
 	o := portfolio.Operation{
 		Type: typ, OccurredOn: day(dayN), AmountMinor: amount,
@@ -291,18 +322,18 @@ func TestLotsCarryAcquisitionDates(t *testing.T) {
 	}
 	p := pos[sber]
 	want := []portfolio.Lot{
-		{Quantity: d("10"), CostMinor: 100_010, AcquiredOn: day(2)},
-		{Quantity: d("5"), CostMinor: 55_005, AcquiredOn: day(9)},
+		{Quantity: d("10"), CostMinor: 100_010, AcquiredOn: dayp(2)},
+		{Quantity: d("5"), CostMinor: 55_005, AcquiredOn: dayp(9)},
 	}
 	if len(p.Lots) != len(want) {
 		t.Fatalf("lots = %d, want %d", len(p.Lots), len(want))
 	}
 	for i, w := range want {
 		got := p.Lots[i]
-		if !got.Quantity.Equal(w.Quantity) || got.CostMinor != w.CostMinor || !got.AcquiredOn.Equal(w.AcquiredOn) {
+		if !got.Quantity.Equal(w.Quantity) || got.CostMinor != w.CostMinor || !sameAcquisition(got.AcquiredOn, w.AcquiredOn) {
 			t.Errorf("lot %d = {qty %s cost %d on %s}, want {qty %s cost %d on %s}",
-				i, got.Quantity, got.CostMinor, got.AcquiredOn.Format("2006-01-02"),
-				w.Quantity, w.CostMinor, w.AcquiredOn.Format("2006-01-02"))
+				i, got.Quantity, got.CostMinor, acquired(got.AcquiredOn),
+				w.Quantity, w.CostMinor, acquired(w.AcquiredOn))
 		}
 	}
 	checkLotInvariants(t, p)
@@ -323,9 +354,9 @@ func TestSellingWholeLotDropsIt(t *testing.T) {
 	if len(p.Lots) != 1 {
 		t.Fatalf("lots = %d, want 1", len(p.Lots))
 	}
-	if !p.Lots[0].AcquiredOn.Equal(day(9)) {
+	if !sameAcquisition(p.Lots[0].AcquiredOn, dayp(9)) {
 		t.Errorf("remaining lot acquired on %s, want %s",
-			p.Lots[0].AcquiredOn.Format("2006-01-02"), day(9).Format("2006-01-02"))
+			acquired(p.Lots[0].AcquiredOn), day(9).Format("2006-01-02"))
 	}
 	if !p.Lots[0].Quantity.Equal(d("5")) || p.Lots[0].CostMinor != 55_005 {
 		t.Errorf("remaining lot = {qty %s cost %d}, want {5 55005}", p.Lots[0].Quantity, p.Lots[0].CostMinor)
@@ -351,9 +382,9 @@ func TestPartialSellKeepsLotDate(t *testing.T) {
 		t.Fatalf("lots = %d, want 1", len(p.Lots))
 	}
 	l := p.Lots[0]
-	if !l.AcquiredOn.Equal(day(2)) {
+	if !sameAcquisition(l.AcquiredOn, dayp(2)) {
 		t.Errorf("lot acquired on %s, want the buy day %s",
-			l.AcquiredOn.Format("2006-01-02"), day(2).Format("2006-01-02"))
+			acquired(l.AcquiredOn), day(2).Format("2006-01-02"))
 	}
 	if !l.Quantity.Equal(d("2")) {
 		t.Errorf("lot qty = %s, want 2", l.Quantity)
@@ -436,7 +467,7 @@ func TestLotsStayExactOverLongSequence(t *testing.T) {
 	for i, dayN := range wantDays {
 		if !p.Lots[i].AcquiredOn.Equal(day(dayN)) {
 			t.Errorf("lot %d acquired on %s, want %s", i,
-				p.Lots[i].AcquiredOn.Format("2006-01-02"), day(dayN).Format("2006-01-02"))
+				acquired(p.Lots[i].AcquiredOn), day(dayN).Format("2006-01-02"))
 		}
 	}
 }
@@ -463,21 +494,30 @@ func TestLotInvariantsUnderSplitAndAmortization(t *testing.T) {
 		t.Fatalf("qty = %s, want 5", p.Quantity)
 	}
 	// the split does not change when the shares were acquired
-	if len(p.Lots) != 1 || !p.Lots[0].AcquiredOn.Equal(day(2)) {
+	if len(p.Lots) != 1 || !sameAcquisition(p.Lots[0].AcquiredOn, dayp(2)) {
 		t.Errorf("lots = %+v, want one acquired on %s", p.Lots, day(2).Format("2006-01-02"))
 	}
 	checkLotInvariants(t, p)
 }
 
-// TestTransferInWithoutBreakdownUsesTransferDate documents the one case where
-// the lot date is not a purchase date: a transfer_in with no stored FIFO
-// breakdown (Operation.TransferLots) carries only a cost snapshot — its basis
-// was typed in by hand, or it was recorded before breakdowns were kept — and
-// no acquisition dates come with such a number. The transfer's own date is
-// then the best available answer, and this behavior must survive the change
-// that rebuilds the lots of transfers that DO carry a breakdown: making one up
-// here would fabricate history.
-func TestTransferInWithoutBreakdownUsesTransferDate(t *testing.T) {
+// TestTransferInWithoutBreakdownHasNoAcquisitionDate is the behavioural change
+// this file exists to pin. A transfer_in with no stored FIFO breakdown
+// (Operation.TransferLots) carries only a cost snapshot — its basis was typed
+// in by hand, or it was recorded before breakdowns were kept — and no
+// acquisition dates come with such a number.
+//
+// The engine used to date that lot on the transfer itself and call it "the
+// best available answer". It is not an answer to the question the field asks.
+// The field says when the shares were BOUGHT; the transfer day is when they
+// changed brokers, which is a fact about paperwork. Written into the same slot
+// as a real purchase date, in the same format, it became a fact: the ruble
+// basis converted it at that day's fx rate and published the product, and
+// nothing downstream could tell it from a date somebody actually recorded.
+//
+// So the lot now knows nothing about its date, and says so. The transfer day
+// is asserted by name below, because it is the one wrong value this code has
+// ever produced and the one a regression would produce again.
+func TestTransferInWithoutBreakdownHasNoAcquisitionDate(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeTransferIn, 5, &sber, "4", "", 40_000, 0),
 	}
@@ -489,14 +529,89 @@ func TestTransferInWithoutBreakdownUsesTransferDate(t *testing.T) {
 	if len(p.Lots) != 1 {
 		t.Fatalf("lots = %d, want exactly 1 (one carried number, one lot)", len(p.Lots))
 	}
-	if !p.Lots[0].AcquiredOn.Equal(day(5)) {
-		t.Errorf("transferred lot acquired on %s, want the transfer day %s",
-			p.Lots[0].AcquiredOn.Format("2006-01-02"), day(5).Format("2006-01-02"))
+	if sameAcquisition(p.Lots[0].AcquiredOn, dayp(5)) {
+		t.Fatalf("transferred lot acquired on %s — that is the transfer's own date, the day the shares changed brokers; nobody recorded it as a purchase date and the engine must not either",
+			acquired(p.Lots[0].AcquiredOn))
 	}
+	if p.Lots[0].AcquiredOn != nil {
+		t.Errorf("transferred lot acquired on %s, want unknown: a transfer with no breakdown has no purchase dates behind it, and any date here is invented",
+			acquired(p.Lots[0].AcquiredOn))
+	}
+	// The rest of the lot is untouched: only the date is unknown, the money and
+	// the shares are as real as any other lot's.
 	if !p.Lots[0].Quantity.Equal(d("4")) || p.Lots[0].CostMinor != 40_000 {
 		t.Errorf("lot = {qty %s cost %d}, want {4 40000}", p.Lots[0].Quantity, p.Lots[0].CostMinor)
 	}
 	checkLotInvariants(t, p)
+}
+
+// TestUndatedLotBehavesLikeAnyOtherLot pins that "no date" is a missing date
+// and nothing more: the lot is a full member of the FIFO queue. It is released
+// in its turn, a partial release splits its cost the usual way and leaves the
+// remainder still undated, and a split rescales it. A representation that
+// treated the absence as a special kind of lot — dropped, floated to the end,
+// merged into a neighbour — would change what the position is worth, which no
+// missing date should ever do.
+func TestUndatedLotBehavesLikeAnyOtherLot(t *testing.T) {
+	split := op(portfolio.TypeSplit, 8, &sber, "", "", 0, 0)
+	split.SplitRatio = dp("2")
+	ops := []portfolio.Operation{
+		// 3 units for 100.01 total, undated — deliberately not divisible by 3
+		op(portfolio.TypeTransferIn, 5, &sber, "3", "", 10_001, 0),
+		op(portfolio.TypeBuy, 6, &sber, "2", "", -20_000, 0),
+		op(portfolio.TypeSell, 7, &sber, "1", "", 4_000, 0),
+		split,
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	if len(p.Lots) != 2 {
+		t.Fatalf("lots = %+v, want 2 (the undated remainder, then the buy)", p.Lots)
+	}
+	// The sale took its share of the UNDATED lot, first in the queue, not of
+	// the dated buy behind it: floor(10001 * 1/3) = 3333 released, 6668 left.
+	if p.Lots[0].AcquiredOn != nil {
+		t.Errorf("first lot acquired on %s, want unknown — a release must not date what it leaves behind", acquired(p.Lots[0].AcquiredOn))
+	}
+	if p.Lots[0].CostMinor != 6_668 {
+		t.Errorf("undated lot cost = %d, want 6668 (10001 − floor(10001/3))", p.Lots[0].CostMinor)
+	}
+	if p.RealizedPnLMinor != 4_000-3_333 {
+		t.Errorf("realized = %d, want %d — the sale must consume the undated lot at ITS cost, not the buy's",
+			p.RealizedPnLMinor, 4_000-3_333)
+	}
+	// 2 units left of the undated lot and 2 bought, both doubled by the split.
+	if !sameAcquisition(p.Lots[1].AcquiredOn, dayp(6)) {
+		t.Errorf("second lot acquired on %s, want %s — the dated lot keeps its date", acquired(p.Lots[1].AcquiredOn), acquired(dayp(6)))
+	}
+	if !p.Lots[0].Quantity.Equal(d("4")) || !p.Lots[1].Quantity.Equal(d("4")) {
+		t.Errorf("quantities after the split = %s and %s, want 4 and 4 — a split rescales an undated lot like any other",
+			p.Lots[0].Quantity, p.Lots[1].Quantity)
+	}
+	checkLotInvariants(t, p)
+}
+
+// TestBuyIsAlwaysDated is the other half of the rule: absence is reserved for
+// what genuinely cannot be known. A purchase is recorded with the day it
+// happened, so its lot always carries that day and a nil here would mean the
+// engine had stopped distinguishing "not knowable" from "not bothered".
+func TestBuyIsAlwaysDated(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 3, &sber, "10", "100", -100_000, 10),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	l := pos[sber].Lots[0]
+	if l.AcquiredOn == nil {
+		t.Fatalf("a buy produced a lot with an unknown acquisition date; the operation's own date %s is that date", day(3).Format("2006-01-02"))
+	}
+	if !sameAcquisition(l.AcquiredOn, dayp(3)) {
+		t.Errorf("lot acquired on %s, want the buy's own day %s", acquired(l.AcquiredOn), acquired(dayp(3)))
+	}
 }
 
 // TestReleasedLotsSingleLot pins the simple case: a release that fits
@@ -517,8 +632,8 @@ func TestReleasedLotsSingleLot(t *testing.T) {
 	if !l.Quantity.Equal(d("4")) {
 		t.Errorf("qty = %s, want 4", l.Quantity)
 	}
-	if !l.AcquiredOn.Equal(day(2)) {
-		t.Errorf("acquired = %s, want %s", l.AcquiredOn.Format("2006-01-02"), day(2).Format("2006-01-02"))
+	if !sameAcquisition(l.AcquiredOn, dayp(2)) {
+		t.Errorf("acquired = %s, want %s", acquired(l.AcquiredOn), day(2).Format("2006-01-02"))
 	}
 	// floor(100010 * 4/10) = 40004
 	if l.CostMinor != 40_004 {
@@ -541,10 +656,10 @@ func TestReleasedLotsCrossesTwoLots(t *testing.T) {
 	if len(lots) != 2 {
 		t.Fatalf("pieces = %d, want 2", len(lots))
 	}
-	if !lots[0].Quantity.Equal(d("10")) || lots[0].CostMinor != 100_010 || !lots[0].AcquiredOn.Equal(day(2)) {
+	if !lots[0].Quantity.Equal(d("10")) || lots[0].CostMinor != 100_010 || !sameAcquisition(lots[0].AcquiredOn, dayp(2)) {
 		t.Errorf("piece 0 = %+v, want {qty 10 cost 100010 on %s}", lots[0], day(2).Format("2006-01-02"))
 	}
-	if !lots[1].Quantity.Equal(d("5")) || lots[1].CostMinor != 55_005 || !lots[1].AcquiredOn.Equal(day(9)) {
+	if !lots[1].Quantity.Equal(d("5")) || lots[1].CostMinor != 55_005 || !sameAcquisition(lots[1].AcquiredOn, dayp(9)) {
 		t.Errorf("piece 1 = %+v, want {qty 5 cost 55005 on %s}", lots[1], day(9).Format("2006-01-02"))
 	}
 }
@@ -569,8 +684,8 @@ func TestReleasedLotsPartialLot(t *testing.T) {
 	if !l.Quantity.Equal(d("1")) {
 		t.Errorf("qty = %s, want 1", l.Quantity)
 	}
-	if !l.AcquiredOn.Equal(day(2)) {
-		t.Errorf("acquired = %s, want the buy day %s", l.AcquiredOn.Format("2006-01-02"), day(2).Format("2006-01-02"))
+	if !sameAcquisition(l.AcquiredOn, dayp(2)) {
+		t.Errorf("acquired = %s, want the buy day %s", acquired(l.AcquiredOn), day(2).Format("2006-01-02"))
 	}
 	// floor(10001 * 1/3) = 3333
 	if l.CostMinor != 3_333 {
@@ -707,18 +822,18 @@ func TestSplitKeepsQuantitiesTheJournalCanRecord(t *testing.T) {
 	// exactly rather than approximately (checkLotInvariants), and the split
 	// does not silently re-date anything.
 	want := []portfolio.Lot{
-		{Quantity: d("0.1166666666"), CostMinor: 3_500, AcquiredOn: day(1)},
-		{Quantity: d("0.1166666667"), CostMinor: 7_000, AcquiredOn: day(2)},
+		{Quantity: d("0.1166666666"), CostMinor: 3_500, AcquiredOn: dayp(1)},
+		{Quantity: d("0.1166666667"), CostMinor: 7_000, AcquiredOn: dayp(2)},
 	}
 	if len(p.Lots) != len(want) {
 		t.Fatalf("lots = %+v, want %d", p.Lots, len(want))
 	}
 	for i, w := range want {
 		if !p.Lots[i].Quantity.Equal(w.Quantity) || p.Lots[i].CostMinor != w.CostMinor ||
-			!p.Lots[i].AcquiredOn.Equal(w.AcquiredOn) {
+			!sameAcquisition(p.Lots[i].AcquiredOn, w.AcquiredOn) {
 			t.Errorf("lot %d = %s/%d/%s, want %s/%d/%s", i,
-				p.Lots[i].Quantity, p.Lots[i].CostMinor, p.Lots[i].AcquiredOn.Format("2006-01-02"),
-				w.Quantity, w.CostMinor, w.AcquiredOn.Format("2006-01-02"))
+				p.Lots[i].Quantity, p.Lots[i].CostMinor, acquired(p.Lots[i].AcquiredOn),
+				w.Quantity, w.CostMinor, acquired(w.AcquiredOn))
 		}
 	}
 	checkLotInvariants(t, p)
@@ -768,9 +883,9 @@ func TestSplitThatRoundsALotAwayKeepsItsCost(t *testing.T) {
 	if len(p.Lots) != 2 {
 		t.Fatalf("lots = %+v, want 2 (the shareless one still holds its 400)", p.Lots)
 	}
-	if !p.Lots[0].Quantity.IsZero() || p.Lots[0].CostMinor != 400 || !p.Lots[0].AcquiredOn.Equal(day(1)) {
+	if !p.Lots[0].Quantity.IsZero() || p.Lots[0].CostMinor != 400 || !sameAcquisition(p.Lots[0].AcquiredOn, dayp(1)) {
 		t.Errorf("shareless lot = %s/%d/%s, want 0/400/%s", p.Lots[0].Quantity, p.Lots[0].CostMinor,
-			p.Lots[0].AcquiredOn.Format("2006-01-02"), day(1).Format("2006-01-02"))
+			acquired(p.Lots[0].AcquiredOn), day(1).Format("2006-01-02"))
 	}
 	checkLotInvariants(t, p)
 }

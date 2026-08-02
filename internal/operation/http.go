@@ -223,11 +223,23 @@ type datedMinor struct {
 // the two it is (assembled_from_lots — see operationInBase) instead of leaving
 // a reader to infer it from a date comparison that cannot answer the question.
 //
-// Transfers without a breakdown are unchanged and must be: a basis typed in by
-// hand has no purchase dates behind it, and one recorded before breakdowns
-// were kept has lost them. The transfer's own date is all such an operation
-// has, and inventing more would be worse than a rough answer — on both legs
-// alike, since neither has anything better.
+// Transfers without a breakdown are unchanged: a basis typed in by hand has no
+// purchase dates behind it, and one recorded before breakdowns were kept has
+// lost them. There is one figure and one date on the row, so the row's own date
+// is what values it — on both legs alike, since neither has anything else.
+// That is not a claim about when the shares were bought; it is the only date
+// the operation contains. (The POSITION such a transfer creates makes the
+// opposite choice and holds no date at all, because a lot's date IS a claim
+// about a purchase — see portfolio.Lot.AcquiredOn.)
+//
+// A breakdown WITH a dateless piece is the third case, and the one this
+// function cannot answer at all: ok is false and the caller publishes nothing.
+// It arises when a parcel contains shares that arrived by an earlier
+// date-less transfer and are then moved on again, so some pieces name a
+// purchase day and others cannot. Converting the datable pieces alone would
+// understate the basis; converting the rest at the transfer's date would
+// reintroduce exactly the invented figure this mechanism removed. See
+// amountTerms' body for why the whole row goes null instead.
 //
 // A breakdown that has drifted from the sum it must equal is refused before
 // it becomes a ruble figure at all, via portfolio.CheckTransferLots — the
@@ -246,22 +258,37 @@ type datedMinor struct {
 // either leg: a breakdown that ever drifted from its sum would fail loudly
 // on the receiver's positions screen while silently misleading every reader
 // of the journal, on both accounts, forever.
-func amountTerms(o Operation) (terms []datedMinor, headline time.Time, err error) {
+func amountTerms(o Operation) (terms []datedMinor, headline time.Time, ok bool, err error) {
 	if len(o.TransferLots) == 0 {
-		return []datedMinor{{minor: o.AmountMinor, on: o.OccurredOn}}, o.OccurredOn, nil
+		return []datedMinor{{minor: o.AmountMinor, on: o.OccurredOn}}, o.OccurredOn, true, nil
 	}
 	if err := portfolio.CheckTransferLots(o); err != nil {
-		return nil, time.Time{}, err
+		return nil, time.Time{}, false, err
 	}
 	terms = make([]datedMinor, 0, len(o.TransferLots))
-	headline = o.TransferLots[0].AcquiredOn
 	for _, pc := range o.TransferLots {
-		terms = append(terms, datedMinor{minor: pc.CostMinor, on: pc.AcquiredOn})
-		if pc.AcquiredOn.After(headline) {
-			headline = pc.AcquiredOn
+		if pc.AcquiredOn == nil {
+			// One piece of this parcel does not know when it was bought (see
+			// portfolio.Lot.AcquiredOn): the shares behind it arrived by an
+			// earlier transfer that carried no dates, and this move cannot
+			// invent what that one already lacked.
+			//
+			// ok is false, so the row publishes no base-currency figure at all
+			// — not the transfer date's rate applied to the undatable piece,
+			// and not a total assembled from the pieces that happen to have
+			// dates. Both would print a ruble amount that looks exactly like
+			// the correct ones on the rows above it. The position built from
+			// these same pieces goes null for the identical reason (see
+			// portfolio.Handler.positionInBase), so the two screens agree about
+			// what they do not know.
+			return nil, time.Time{}, false, nil
+		}
+		terms = append(terms, datedMinor{minor: pc.CostMinor, on: *pc.AcquiredOn})
+		if len(terms) == 1 || pc.AcquiredOn.After(headline) {
+			headline = *pc.AcquiredOn
 		}
 	}
-	return terms, headline, nil
+	return terms, headline, true, nil
 }
 
 // operationInBase converts an operation's amount_minor and fee_minor from
@@ -313,12 +340,14 @@ func amountTerms(o Operation) (terms []datedMinor, headline time.Time, err error
 // practice zero times whatever rate names it.)
 //
 // It returns (nil, nil) — render in_base as null, the WHOLE object, never
-// partially populated — in exactly two cases: the operation is already
-// denominated in baseCurrency (nothing to convert), or no rate could be
-// resolved for one of the dates it needs nor any earlier one
-// (marketdata.ErrNoRate). An operation with a converted amount but an
-// unconverted fee, or a basis summed from only the pieces that happened to
-// convert, would be worse than an honest "can't convert this one".
+// partially populated — in exactly three cases: the operation is already
+// denominated in baseCurrency (nothing to convert), no rate could be resolved
+// for one of the dates it needs nor any earlier one (marketdata.ErrNoRate), or
+// the amount cannot be split into dated terms at all because a piece of the
+// parcel does not know when it was bought (see amountTerms). An operation with
+// a converted amount but an unconverted fee, or a basis summed from only the
+// pieces that happened to convert, would be worse than an honest "can't
+// convert this one".
 //
 // A non-nil error means a genuine failure — a DB error, a canceled context,
 // or (see amountTerms) a transfer's stored breakdown no longer summing to
@@ -331,9 +360,14 @@ func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency
 	if o.Currency == baseCurrency {
 		return nil, nil
 	}
-	terms, headline, err := amountTerms(o)
+	terms, headline, ok, err := amountTerms(o)
 	if err != nil {
 		return nil, err
+	}
+	if !ok {
+		// The amount cannot be broken into terms that all carry a date, so
+		// there is no honest set of rates to strike it at (see amountTerms).
+		return nil, nil
 	}
 
 	// The headline rate values the fee and supplies rate_on, so without it

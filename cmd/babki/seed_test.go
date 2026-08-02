@@ -19,6 +19,22 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
+// mustAcquired asserts that a lot (or a piece of a transfer's breakdown) knows
+// when it was acquired, and returns that date. Nil is a legitimate value in
+// general — a transfer with no recoverable purchase dates produces lots that
+// carry none (see portfolio.Lot.AcquiredOn) — but not anywhere in this seed:
+// every lot here comes from a real buy or from the TSLA transfer that carries
+// those buys' own dates across, and that survival is exactly what the demo
+// exists to show. An unknown date here means the seed has stopped demonstrating
+// it, so this fails rather than skipping the arithmetic.
+func mustAcquired(t *testing.T, on *time.Time, what string) time.Time {
+	t.Helper()
+	if on == nil {
+		t.Fatalf("%s has an unknown acquisition date, want a real one: this seed's dates all come from actual purchases", what)
+	}
+	return *on
+}
+
 func TestSeedDemo(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -160,7 +176,7 @@ func TestSeedDemo(t *testing.T) {
 	}
 	wantLotDates := map[string]bool{"2026-05-13": false, "2026-06-15": false}
 	for _, l := range tsla.Lots {
-		dateStr := l.AcquiredOn.Format(time.DateOnly)
+		dateStr := mustAcquired(t, l.AcquiredOn, "a TSLA lot").Format(time.DateOnly)
 		if _, known := wantLotDates[dateStr]; !known {
 			t.Fatalf("TSLA lot acquired on unexpected date %s, want one of 2026-05-13 or 2026-06-15", dateStr)
 		}
@@ -234,7 +250,7 @@ func TestSeedDemo(t *testing.T) {
 	// on a real row instead of only in portfolio's unit tests.
 	lotsWithoutRate := 0
 	for _, l := range aapl.Lots {
-		if _, _, err := converter.Rate(ctx, "USD", "RUB", l.AcquiredOn); errors.Is(err, marketdata.ErrNoRate) {
+		if _, _, err := converter.Rate(ctx, "USD", "RUB", mustAcquired(t, l.AcquiredOn, "an AAPL lot")); errors.Is(err, marketdata.ErrNoRate) {
 			lotsWithoutRate++
 		}
 	}
@@ -275,7 +291,7 @@ func TestSeedDemo(t *testing.T) {
 	if !dateToday.Equal(on) {
 		t.Errorf("newest USD/RUB rate is dated %s, want %s — the sign flip below is struck against the last rate in the table", dateToday.Format(time.DateOnly), on.Format(time.DateOnly))
 	}
-	rateOnLot, _, err := converter.Rate(ctx, "USD", "RUB", msft.Lots[0].AcquiredOn)
+	rateOnLot, _, err := converter.Rate(ctx, "USD", "RUB", mustAcquired(t, msft.Lots[0].AcquiredOn, "the MSFT lot"))
 	if err != nil {
 		t.Fatalf("Rate(USD -> RUB, MSFT lot date): %v", err)
 	}
@@ -324,9 +340,10 @@ func TestSeedDemo(t *testing.T) {
 	//	  190_000 * 78.50 = 14_915_000 (149 150,00 ₽) — 31_150,00 ₽ too much
 	var correctBaseCost int64
 	for _, l := range tsla.Lots {
-		rate, _, err := converter.Rate(ctx, "USD", "RUB", l.AcquiredOn)
+		lotOn := mustAcquired(t, l.AcquiredOn, "a TSLA lot")
+		rate, _, err := converter.Rate(ctx, "USD", "RUB", lotOn)
 		if err != nil {
-			t.Fatalf("Rate(USD -> RUB, TSLA lot date %s): %v", l.AcquiredOn.Format(time.DateOnly), err)
+			t.Fatalf("Rate(USD -> RUB, TSLA lot date %s): %v", lotOn.Format(time.DateOnly), err)
 		}
 		correctBaseCost += decimal.NewFromInt(l.CostMinor).Mul(rate).Round(0).IntPart()
 	}
@@ -362,9 +379,10 @@ func TestSeedDemo(t *testing.T) {
 	}
 	var outLegBaseCost int64
 	for _, pc := range outLeg.TransferLots {
-		rate, _, err := converter.Rate(ctx, "USD", "RUB", pc.AcquiredOn)
+		pieceOn := mustAcquired(t, pc.AcquiredOn, "a transfer_out piece")
+		rate, _, err := converter.Rate(ctx, "USD", "RUB", pieceOn)
 		if err != nil {
-			t.Fatalf("Rate(USD -> RUB, transfer_out piece %s): %v", pc.AcquiredOn.Format(time.DateOnly), err)
+			t.Fatalf("Rate(USD -> RUB, transfer_out piece %s): %v", pieceOn.Format(time.DateOnly), err)
 		}
 		outLegBaseCost += decimal.NewFromInt(pc.CostMinor).Mul(rate).Round(0).IntPart()
 	}

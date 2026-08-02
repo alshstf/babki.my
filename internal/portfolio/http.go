@@ -426,11 +426,15 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 //
 // It returns (nil, nil) — render in_base as null, the WHOLE object, never
 // partially populated — when p.Currency already equals baseCurrency (nothing
-// to convert), or when any single rate the object needs is missing
-// (marketdata.ErrNoRate): today's, one lot's, or one income operation's. A
-// basis summed from only the lots that happened to convert is an invented
-// number, smaller than the truth and indistinguishable from a real one on
-// screen; it would drag the P&L along with it. This differs from
+// to convert), when any single rate the object needs is missing
+// (marketdata.ErrNoRate): today's, one lot's, or one income operation's, or
+// when a single lot does not know WHEN it was acquired (Lot.AcquiredOn nil),
+// which leaves no date to ask for a rate in the first place. A basis summed
+// from only the lots that happened to convert is an invented number, smaller
+// than the truth and indistinguishable from a real one on screen; it would
+// drag the P&L along with it. The two causes are one rule — a term that cannot
+// be valued voids the whole sum — and differ only in whether the date is
+// missing or the rate for it is. This differs from
 // market_value_minor/unrealized_pnl_minor inside the returned object, which
 // are null when there is no usable quote or the valuation isn't in
 // p.Currency — that nulls just those two figures.
@@ -455,7 +459,23 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 
 	lots := make([]datedMinor, 0, len(p.Lots))
 	for _, l := range p.Lots {
-		lots = append(lots, datedMinor{minor: l.CostMinor, on: l.AcquiredOn})
+		if l.AcquiredOn == nil {
+			// This lot does not know when it was acquired (see
+			// portfolio.Lot.AcquiredOn): it arrived by a transfer whose
+			// purchase dates were never recorded. Its basis is real money, but
+			// there is no date to value it at, and every candidate date — the
+			// transfer's, another lot's, today's — would be a number this
+			// handler made up.
+			//
+			// So the whole object goes, exactly as it does when one lot's date
+			// has no fx rate: a basis summed from only the lots that could be
+			// converted is smaller than the truth, looks like an ordinary
+			// figure on screen, and drags the profit down with it. Nothing is
+			// published rather than something wrong, and the position still
+			// shows every figure it has in its own currency.
+			return nil, nil
+		}
+		lots = append(lots, datedMinor{minor: l.CostMinor, on: *l.AcquiredOn})
 	}
 	costMinor, ok, err := h.sumInBase(ctx, lots, p.Currency, baseCurrency, cache)
 	if err != nil {

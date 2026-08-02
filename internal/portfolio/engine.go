@@ -16,8 +16,14 @@
 // family's own accounts is not a purchase, so it must change neither the basis
 // nor the dates that basis is later valued at. A transfer with no stored
 // breakdown — basis given by hand, or recorded before breakdowns were kept —
-// still produces one lot dated on the transfer day, because for those the
-// original dates do not exist to be restored.
+// produces one lot that DOES NOT KNOW when it was acquired: the original dates
+// do not exist to be restored, and the transfer's own date is not one of them.
+// Dating such a lot on the day the shares changed brokers would state, in the
+// same field and the same format as a real purchase date, something nobody
+// ever recorded — and every figure struck at that date afterwards (the ruble
+// basis, above all) would be an invention indistinguishable from a fact. An
+// unknown date is therefore carried as unknown, all the way through (see
+// Lot.AcquiredOn).
 //
 // Quantities are tracked to QuantityScale decimal places, the same scale the
 // journal stores them at, so a split truncates its product rather than letting
@@ -87,8 +93,26 @@ const QuantityScale = 10
 // acquired. AcquiredOn is what lets a caller value each lot at the exchange
 // rate of its own purchase date instead of one rate for the whole position;
 // a transfer_in rebuilds one lot per piece of its stored breakdown, each
-// keeping the day it was bought, and only a transfer WITHOUT a breakdown
-// yields a single lot dated on the transfer itself (see the package doc).
+// keeping the day it was bought.
+//
+// AcquiredOn IS NIL WHEN THE DATE IS NOT KNOWN, which is a real and permanent
+// state, not a temporary gap: a transfer with no stored breakdown carries a
+// basis whose purchase dates were never recorded (see the package doc), and
+// nothing can recover them later. A buy always knows its date, so nil never
+// means "not filled in yet".
+//
+// The absence is a pointer rather than a zero time.Time on purpose. A zero
+// time.Time is a perfectly usable date — the first of January, year 1 — so
+// every date operation accepts it and answers confidently: it sorts before
+// every real purchase, formats as a plausible-looking string, and asks the fx
+// tables for a rate as if year 1 were a Tuesday. "Unknown" would then travel
+// disguised as "very long ago", and each place that forgot to check would be
+// silently, unfalsifiably wrong. A nil pointer cannot be quietly mistaken for
+// a date: code that ignores the case panics on the spot, at the line that
+// ignored it, instead of publishing a number nobody can tell apart from a
+// correct one. Every caller must decide what an unknown date means for it, and
+// the answer is never a substitute date (see Handler.positionInBase, which
+// publishes nothing rather than a partial basis).
 //
 // Quantity is positive for every lot an acquisition creates, but can be zero
 // afterwards: a reverse split deep enough to round a lot's whole holding away
@@ -97,7 +121,7 @@ const QuantityScale = 10
 type Lot struct {
 	Quantity   decimal.Decimal
 	CostMinor  int64
-	AcquiredOn time.Time
+	AcquiredOn *time.Time
 }
 
 // Position is the running state of one instrument within one account.
@@ -131,13 +155,15 @@ func badOp(o Operation, msg string) error {
 // ReleasedLot is one piece of a FIFO release: the quantity taken from a
 // single source lot, the cost basis attributed to that quantity, and the day
 // the source lot was acquired (see Lot.AcquiredOn — the same rules apply: a
-// partial piece inherits its lot's date, and a lot that itself arrived by
-// transfer passes on whatever date it carries). A release that spans several
-// lots yields several pieces, in the order the lots are consumed.
+// partial piece inherits its lot's date, a lot that itself arrived by transfer
+// passes on whatever date it carries, and nil means the source lot does not
+// know when it was acquired, which a release copies rather than resolves). A
+// release that spans several lots yields several pieces, in the order the lots
+// are consumed.
 type ReleasedLot struct {
 	Quantity   decimal.Decimal
 	CostMinor  int64
-	AcquiredOn time.Time
+	AcquiredOn *time.Time
 }
 
 // releaseFIFO removes qty from the position's lots front-to-back and
@@ -241,7 +267,10 @@ func (p *Position) applySplit(ratio decimal.Decimal) {
 	p.Quantity = total
 }
 
-func (p *Position) addLot(qty decimal.Decimal, costMinor int64, acquiredOn time.Time) {
+// addLot appends one acquisition to the queue. A nil acquiredOn is not a
+// missing argument but an answer: this lot's acquisition date is not knowable
+// (see Lot.AcquiredOn).
+func (p *Position) addLot(qty decimal.Decimal, costMinor int64, acquiredOn *time.Time) {
 	p.Lots = append(p.Lots, Lot{Quantity: qty, CostMinor: costMinor, AcquiredOn: acquiredOn})
 	p.Quantity = p.Quantity.Add(qty)
 	p.CostMinor += costMinor
@@ -302,7 +331,11 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			if o.AmountMinor >= 0 {
 				return nil, badOp(o, "buy amount must be negative")
 			}
-			p.addLot(*o.Quantity, -o.AmountMinor+o.FeeMinor, o.OccurredOn)
+			// A purchase always knows its date: it is the day the operation
+			// itself records. The local copy is what the lot points at, so the
+			// lot never aliases the journal entry it came from.
+			boughtOn := o.OccurredOn
+			p.addLot(*o.Quantity, -o.AmountMinor+o.FeeMinor, &boughtOn)
 			p.FeesMinor += o.FeeMinor
 		case TypeSell:
 			if o.AmountMinor <= 0 {
@@ -354,9 +387,18 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 				// released, so there are no source lots behind that number) or
 				// the transfer was recorded before breakdowns were kept. Either
 				// way the original purchase dates do not exist to be restored,
-				// and the transfer's own date is the honest best answer —
-				// inventing dates would be worse than an admittedly rough one.
-				p.addLot(*o.Quantity, o.AmountMinor, o.OccurredOn)
+				// so the lot is created WITHOUT one.
+				//
+				// The transfer's own date used to be put here as "the honest
+				// best answer". It is not an answer at all: shares that changed
+				// brokers on that day were not bought on it, and the field says
+				// bought. Written down, that guess became indistinguishable from
+				// the real dates beside it — the ruble basis converted it at the
+				// transfer day's fx rate and published the product as fact, and
+				// the release queue sorted the parcel by a day that describes
+				// paperwork rather than a purchase. Absence is the only truthful
+				// value here, and everything downstream now has to face it.
+				p.addLot(*o.Quantity, o.AmountMinor, nil)
 				break
 			}
 			if err := CheckTransferLots(o); err != nil {
@@ -437,16 +479,26 @@ func CheckTransferLots(o Operation) error {
 			return badOp(o, fmt.Sprintf("transfer lot %d has cost %d: a piece's cost basis cannot be negative", i, pc.CostMinor))
 		}
 		// The acquisition date is the one field this whole mechanism exists to
-		// carry, and until now it was the only one nothing checked: the table
-		// constrains quantity and cost, this function checked their sums, and
-		// the date travelled unguarded. It cannot legitimately be missing, nor
-		// postdate the transfer that moved it — the source lots are resolved
-		// against the journal as it stood on the transfer's own date, so
-		// anything later is damage.
-		if pc.AcquiredOn.IsZero() {
-			return badOp(o, fmt.Sprintf("transfer lot %d has no acquisition date: the date is what a carried lot is for", i))
-		}
-		if pc.AcquiredOn.After(o.OccurredOn) {
+		// carry, and it is the only one the table does not constrain: the
+		// columns bound quantity and cost, this function checks their sums, and
+		// the date travels guarded only from here.
+		//
+		// A piece with NO date is legitimate and must pass. It says the source
+		// lot did not know when it was acquired — which happens whenever the
+		// parcel contains shares that themselves arrived by a transfer with no
+		// recoverable dates (see the transfer_in branch in Compute), and moving
+		// them on a second time cannot conjure the dates the first move already
+		// lacked. Refusing it, as this function once did, would have forced the
+		// write path to supply some date for such a piece, and the only date on
+		// hand is the transfer's own — the very invention the absence exists to
+		// avoid.
+		//
+		// A date that IS given may not postdate the transfer that moved it: the
+		// source lots are resolved against the journal as it stood on the
+		// transfer's own date, so anything later is damage. Unknown is not
+		// "later" and not "earlier"; it is simply outside what this check can
+		// speak about.
+		if pc.AcquiredOn != nil && pc.AcquiredOn.After(o.OccurredOn) {
 			return badOp(o, fmt.Sprintf("transfer lot %d was acquired on %s, after the transfer on %s: a lot cannot move before it exists",
 				i, pc.AcquiredOn.Format("2006-01-02"), o.OccurredOn.Format("2006-01-02")))
 		}

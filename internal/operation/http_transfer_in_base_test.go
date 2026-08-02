@@ -5,6 +5,10 @@ import (
 	"io"
 	"net/http"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"babki.my/babki/internal/marketdata"
 )
 
 // positionInBase mirrors the part of apitypes.PositionInBase these tests read.
@@ -299,5 +303,102 @@ func TestBothTransferLegsGoNullTogetherWhenAPurchaseDateHasNoRate(t *testing.T) 
 	if outRow.InBase != nil {
 		t.Errorf("transfer_out in_base = %+v, want null for the same reason as its own pair — 14 915 000 here would be a confident wrong number sitting next to the destination's honest \"not converted\"",
 			outRow.InBase)
+	}
+}
+
+// TestBothTransferLegsGoNullTogetherWhenAPieceHasNoAcquisitionDate is the
+// undated twin of the test above, and the journal's share of the change that
+// lets a lot not know when it was acquired.
+//
+// A piece with no date is not damage and must not fail the request: it is what
+// a parcel looks like once it contains shares that arrived by an earlier
+// transfer carrying no dates, and are then moved on again. But there is no day
+// to strike a rate on for that piece, so the amount cannot be assembled — and
+// the alternatives are exactly the two figures this whole mechanism removed:
+// converting the undatable piece at the transfer day's rate, or summing only
+// the pieces that do have dates and publishing a basis smaller than the truth.
+// Both legs therefore publish nothing, together, like any other term that
+// cannot be valued.
+//
+//	lot 1: 5 @ $180.00 on 2026-05-13 →  90_000 minor USD — date erased below
+//	lot 2: 5 @ $200.00 on 2026-06-15 → 100_000 minor USD, rate 64.00
+//	transfer of all 10 on 2026-07-20 (rate 78.50)
+//
+// The two wrong answers are named in the failure messages: 14_915_000 (the
+// whole 190_000 at the transfer day's rate) and 6_400_000 (the datable piece
+// alone).
+func TestBothTransferLegsGoNullTogetherWhenAPieceHasNoAcquisitionDate(t *testing.T) {
+	pool, mdStore := newTestPool(t)
+	url, c := newAPIOn(t, pool, marketdata.NewConverter(mdStore))
+	seedFxRate(t, mdStore, "2026-05-13", "60.00")
+	seedFxRate(t, mdStore, "2026-06-15", "64.00")
+	seedFxRate(t, mdStore, "2026-07-20", "78.50")
+
+	from := mkAccount(t, url, c, "Т-Банк", "USD")
+	to := mkAccount(t, url, c, "Freedom KZ", "USD")
+	tsla := mkInstrument(t, url, c,
+		`{"type":"share","name":"Tesla","ticker":"TSLA","currency":"USD"}`)
+
+	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-05-13","quantity":"5","price":"180","amount_minor":-90000,"currency":"USD"}`, from, tsla))
+	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-06-15","quantity":"5","price":"200","amount_minor":-100000,"currency":"USD"}`, from, tsla))
+
+	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20"}`,
+		from, to, tsla))
+	if resp.StatusCode != 201 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
+	}
+	var pair transferResp
+	decodeJSON(t, resp, &pair)
+	inID, err := uuid.Parse(pair.In.ID)
+	if err != nil {
+		t.Fatalf("parse transfer_in id: %v", err)
+	}
+
+	// Both legs convert before the date is removed, so a null below can only
+	// come from the missing date and not from some unrelated setup mistake.
+	if row := findOperation(t, listJournal(t, url, c, from), pair.Out.ID); row.InBase == nil {
+		t.Fatalf("fully dated transfer_out in_base = null, want a conversion before erasing anything")
+	}
+
+	// Take the first piece's acquisition date away — the state a piece is in
+	// when the shares behind it arrived without one.
+	ct, err := pool.Exec(t.Context(),
+		`UPDATE operation_transfer_lots SET acquired_on = NULL
+		 WHERE operation_id = $1 AND seq = 0`, inID)
+	if err != nil {
+		t.Fatalf("erase the piece's acquisition date: %v", err)
+	}
+	if ct.RowsAffected() != 1 {
+		t.Fatalf("erasing the date affected %d rows, want 1", ct.RowsAffected())
+	}
+
+	// The request still succeeds: an undated piece is legitimate journal data,
+	// unlike a breakdown that no longer sums (see
+	// TestJournalRefusesTransferWithCorruptedBreakdown, which must 5xx).
+	outRow := findOperation(t, listJournal(t, url, c, from), pair.Out.ID)
+	inRow := findOperation(t, listJournal(t, url, c, to), pair.In.ID)
+
+	for _, tc := range []struct {
+		name string
+		row  journalItem
+	}{
+		{"transfer_in", inRow},
+		{"transfer_out", outRow},
+	} {
+		if tc.row.InBase == nil {
+			continue
+		}
+		switch tc.row.InBase.AmountMinor {
+		case 14_915_000:
+			t.Errorf("%s in_base.amount_minor = 14915000 — the whole basis at the TRANSFER day's rate (190000 × 78.50), the invented figure the breakdown exists to replace", tc.name)
+		case 6_400_000:
+			t.Errorf("%s in_base.amount_minor = 6400000 — only the piece that still has a date (100000 × 64.00); a basis missing one of its pieces reads exactly like a smaller real one", tc.name)
+		default:
+			t.Errorf("%s in_base = %+v, want null: one piece of this parcel does not know when it was bought, so no set of rates answers for the amount", tc.name, *tc.row.InBase)
+		}
 	}
 }

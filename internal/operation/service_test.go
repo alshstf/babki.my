@@ -280,8 +280,8 @@ func TestTransferCarriesSourceLotDates(t *testing.T) {
 	}
 
 	want := []operation.ReleasedLot{
-		{Quantity: decimal.RequireFromString("10"), CostMinor: 100_000, AcquiredOn: date("2026-07-01")},
-		{Quantity: decimal.RequireFromString("5"), CostMinor: 450_000, AcquiredOn: date("2026-07-03")},
+		{Quantity: decimal.RequireFromString("10"), CostMinor: 100_000, AcquiredOn: datep("2026-07-01")},
+		{Quantity: decimal.RequireFromString("5"), CostMinor: 450_000, AcquiredOn: datep("2026-07-03")},
 	}
 	checkLots := func(what string, got []operation.ReleasedLot) {
 		t.Helper()
@@ -290,10 +290,10 @@ func TestTransferCarriesSourceLotDates(t *testing.T) {
 		}
 		for i, w := range want {
 			g := got[i]
-			if !g.Quantity.Equal(w.Quantity) || g.CostMinor != w.CostMinor || !g.AcquiredOn.Equal(w.AcquiredOn) {
+			if !g.Quantity.Equal(w.Quantity) || g.CostMinor != w.CostMinor || !sameAcquisition(g.AcquiredOn, w.AcquiredOn) {
 				t.Errorf("%s lot %d = %s/%d/%s, want %s/%d/%s", what, i,
-					g.Quantity, g.CostMinor, g.AcquiredOn.Format("2006-01-02"),
-					w.Quantity, w.CostMinor, w.AcquiredOn.Format("2006-01-02"))
+					g.Quantity, g.CostMinor, acquired(g.AcquiredOn),
+					w.Quantity, w.CostMinor, acquired(w.AcquiredOn))
 			}
 		}
 		var sum int64

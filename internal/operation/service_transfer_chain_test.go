@@ -36,9 +36,9 @@ func checkLots(t *testing.T, f fixture, accountID uuid.UUID, want []lotSummary) 
 		g := pos.Lots[i]
 		if !g.Quantity.Equal(decimal.RequireFromString(w.quantity)) ||
 			g.CostMinor != w.costMinor ||
-			!g.AcquiredOn.Equal(date(w.acquiredOn)) {
+			!sameAcquisition(g.AcquiredOn, datep(w.acquiredOn)) {
 			t.Errorf("account %s lot %d = %s/%d/%s, want %s/%d/%s", accountID, i,
-				g.Quantity, g.CostMinor, g.AcquiredOn.Format("2006-01-02"),
+				g.Quantity, g.CostMinor, acquired(g.AcquiredOn),
 				w.quantity, w.costMinor, w.acquiredOn)
 		}
 	}
@@ -113,9 +113,9 @@ func TestTransferChainKeepsOriginalPurchaseDates(t *testing.T) {
 		t.Fatalf("B → C breakdown = %+v, want %d pieces", pieces, len(want))
 	}
 	for i, w := range want {
-		if !pieces[i].AcquiredOn.Equal(date(w.acquiredOn)) {
+		if !sameAcquisition(pieces[i].AcquiredOn, datep(w.acquiredOn)) {
 			t.Errorf("B → C piece %d dated %s, want %s (B only ever knew this from A's pieces)",
-				i, pieces[i].AcquiredOn.Format("2006-01-02"), w.acquiredOn)
+				i, acquired(pieces[i].AcquiredOn), w.acquiredOn)
 		}
 	}
 
@@ -255,13 +255,13 @@ func TestTransferAfterAmortizationCarriesTheReducedBasis(t *testing.T) {
 	if len(in.TransferLots) != 1 {
 		t.Fatalf("breakdown = %+v, want one piece", in.TransferLots)
 	}
-	if pc := in.TransferLots[0]; pc.CostMinor != 35_000 || !pc.AcquiredOn.Equal(date("2026-07-01")) {
+	if pc := in.TransferLots[0]; pc.CostMinor != 35_000 || !sameAcquisition(pc.AcquiredOn, datep("2026-07-01")) {
 		t.Errorf("piece = %d/%s, want 35000/2026-07-01 (amortization drains cost, it does not re-date anything)",
-			pc.CostMinor, pc.AcquiredOn.Format("2006-01-02"))
+			pc.CostMinor, acquired(pc.AcquiredOn))
 	}
 
 	dest := positionsOf(t, f, f.account2ID)[bond.ID]
-	if dest.CostMinor != 35_000 || len(dest.Lots) != 1 || !dest.Lots[0].AcquiredOn.Equal(date("2026-07-01")) {
+	if dest.CostMinor != 35_000 || len(dest.Lots) != 1 || !sameAcquisition(dest.Lots[0].AcquiredOn, datep("2026-07-01")) {
 		t.Errorf("received position = %d/%+v, want 35000 in one lot dated 2026-07-01", dest.CostMinor, dest.Lots)
 	}
 	if src := positionsOf(t, f, f.accountID)[bond.ID]; src.CostMinor != 35_000 {

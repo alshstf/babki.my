@@ -110,8 +110,10 @@ const insertLotSQL = `
 // CreatePair inserts a transfer_out/transfer_in pair atomically with a
 // shared transfer_group_id, together with the FIFO breakdown carried on the
 // receiving leg (in.TransferLots). All of it lands in one transaction: a
-// transfer_in that lost its breakdown would silently re-date every moved lot
-// to the transfer day, which is exactly the loss this records against.
+// transfer_in that lost its breakdown would arrive as a single lot that knows
+// nothing about when it was bought (see portfolio.Lot.AcquiredOn), and the
+// destination's whole ruble basis with it — dates that were resolvable at
+// write time and are not resolvable ever again.
 //
 // Everything it returns has been read back out of the database, never handed
 // through from the arguments — both operations come from the INSERT's
