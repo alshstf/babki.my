@@ -23,6 +23,7 @@ import {
 import { MoneyCell } from "@/components/money-cell";
 import { CostBasisNotice } from "@/components/cost-basis-notice";
 import { PositionsTable } from "./positions-table";
+import { RealizedTotal } from "./realized-total";
 import { OperationsTable } from "./operations-table";
 import { TradeDialog } from "./trade-dialog";
 import { CashDialog } from "./cash-dialog";
@@ -124,6 +125,17 @@ export function AccountDetailPage() {
             />
             <div className="text-xs text-muted-foreground">{formatDate(account.balance.as_of)}</div>
           </div>
+        )}
+        {/* What the account's closed deals have actually locked in. It sits in
+            the header rather than in the positions table because the owner
+            removed the per-row "Реализовано" as visual noise and that decision
+            stands: one figure here answers the question without putting it
+            back into every row. The figure arrives added up from the server,
+            with the positions it stands over (see RealizedTotal in the API
+            contract); it renders nothing at all for an account that has no
+            positions. */}
+        {positions.data && (
+          <RealizedTotal total={positions.data.realized_total} mode={mode} />
         )}
       </div>
 

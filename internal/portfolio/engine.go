@@ -180,6 +180,36 @@ type Position struct {
 	// shares were rounded away by a reverse split keeps the shareless lots that
 	// still hold the money spent on them (see Lot and applySplit).
 	Lots []Lot
+	// Realizations are the disposals that PRODUCED RealizedPnLMinor, each
+	// recorded as what it was made of (see Realization), in journal order.
+	//
+	// Their results sum to RealizedPnLMinor exactly, and by construction rather
+	// than by two derivations that happen to agree: realize is the only thing
+	// that moves the total and it moves it by the event's own figure, so a
+	// branch wanting to realize something without saying what it was made of
+	// would have to go round that one method. This package has been bitten
+	// before by a number and its breakdown maintained separately (see the
+	// package doc on issue #60), and the lesson is the same one — the moment
+	// they can disagree, they eventually do, silently.
+	//
+	// A TRANSFER OUT PRODUCES NONE. Moving shares between the family's own
+	// accounts is a disposal in none of the jurisdictions this was researched
+	// against, and the departing leg has no proceeds to record: its AmountMinor
+	// is the basis that travelled, not money received. Nor is anything left
+	// unaccounted for by leaving it out — that leg has never added to
+	// RealizedPnLMinor either (see the transfer_out branch in Compute), so
+	// there is no term to remove and the sum above is untouched by the
+	// decision.
+	Realizations []Realization
+}
+
+// realize records one disposal and moves the running total by that very event's
+// result. Doing both here, and only here, is what makes RealizedPnLMinor a
+// CONSEQUENCE of the events instead of a second number kept alongside them —
+// see Position.Realizations for why this package will not keep two.
+func (p *Position) realize(r Realization) {
+	p.Realizations = append(p.Realizations, r)
+	p.RealizedPnLMinor += r.PnLMinor()
 }
 
 func badOp(o Operation, msg string) error {
@@ -200,6 +230,61 @@ type ReleasedLot struct {
 	AcquiredOn *time.Time
 }
 
+// Realization is one disposal recorded as WHAT IT WAS MADE OF rather than as
+// the single number it contributes to Position.RealizedPnLMinor.
+//
+// In the position's own currency the two carry the same information and the
+// number is enough. In rubles they do not. A settled result is converted at the
+// rates of the days it actually happened on — the proceeds and the fee at the
+// day of the disposal, each released parcel of basis at the day THAT parcel was
+// bought (НК РФ ст. 210 п. 5) — so an accumulated figure in dollars cannot be
+// converted at all: it has no one date, and the gap between those rates is part
+// of the result rather than a rounding of it. What has to survive the fold is
+// therefore the breakdown, one record per disposal: when it happened, what came
+// in, what it cost in fees, and which parcels of basis went out under which
+// purchase dates.
+//
+// This is also why a realization is FINAL in a way an unrealized gain never is.
+// Both of its ends are past events with dates of their own, so the ruble figure
+// struck from it will never move again; an open position's two ends both float
+// with today's quote and today's rate, and "in rubles" there can only ever mean
+// "valued today".
+//
+// Released may be EMPTY — an amortization arriving after the basis is spent
+// returns principal that is pure gain — and a piece in it may not know when it
+// was acquired, because a parcel that reached this account through a transfer
+// with no recoverable dates keeps that absence through every later disposal
+// (see Lot.AcquiredOn). Both are legitimate and are recorded as they are. No
+// ruble expense can be struck for an undated piece, and deciding what to
+// publish then belongs to the caller: substituting the disposal's own date here
+// would produce a figure nothing downstream could tell from a real one, which
+// is the invention this package exists to refuse.
+type Realization struct {
+	// OccurredOn is the day of the disposal. It dates the proceeds and the fee,
+	// and it dates NONE of the released basis — those days are the pieces' own.
+	OccurredOn time.Time
+	// ProceedsMinor is what came in: a sale's amount, an amortization's returned
+	// principal. Positive, in the position's currency.
+	ProceedsMinor int64
+	// FeeMinor is what this disposal cost to make, valued at the same day as
+	// the proceeds. Zero for an amortization: the engine attributes no fee to
+	// one anywhere (see the amortization branch in Compute).
+	FeeMinor int64
+	// Released is the basis given up, one piece per source lot, in the order
+	// the queue gave them up (see ReleasedLot). An amortization's pieces carry
+	// no quantity — it returns principal without moving a single share.
+	Released []ReleasedLot
+}
+
+// PnLMinor is this one event's settled result in the position's currency.
+//
+// It is the ONLY definition of that number anywhere: Position.realize moves the
+// running total by exactly this, so the total cannot come to say something the
+// events do not (see Position.Realizations).
+func (r Realization) PnLMinor() int64 {
+	return r.ProceedsMinor - r.FeeMinor - LotsCost(r.Released)
+}
+
 // releaseFIFO removes qty from the position's lots front-to-back and returns
 // the pieces released, in queue order — which is acquisition order, oldest
 // first, undated lots ahead of all of them (see Position.Lots; addLot is what
@@ -217,6 +302,37 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) ([]ReleasedLot, error) {
 	for remaining.IsPositive() {
 		l := &p.Lots[0]
 		if l.Quantity.LessThanOrEqual(remaining) {
+			// A lot that is entirely consumed here produces a piece EVEN WHEN
+			// its CostMinor is 0 — unlike drainLotsCost, which skips a lot
+			// that gives up nothing (see drainLotsCost). The two look like
+			// they should agree, and they deliberately do not.
+			//
+			// drainLotsCost's pieces never carry a quantity — an amortization
+			// moves no shares, see its own doc — so a zero-cost piece there is
+			// empty on both axes and skipping it discards nothing. A piece
+			// here always carries the REAL quantity taken from the lot,
+			// because these pieces are not only a sale's own record
+			// (Realization.Released) but, via ReleasedLots, the very rows a
+			// transfer stores as its FIFO breakdown (Operation.TransferLots) —
+			// and CheckTransferLots later reconstructs the operation's
+			// quantity by summing exactly those rows. Dropping a whole
+			// zero-cost lot's piece would leave its quantity unaccounted for,
+			// and a transfer moving nothing but such a lot would then read as
+			// journal corruption ("transfer lots sum to quantity 0, but the
+			// operation moves N") for a perfectly legitimate, zero-basis
+			// parcel — confirmed by temporarily mirroring the guard here and
+			// watching CheckTransferLots reject exactly that transfer.
+			//
+			// The cost of keeping it: a sale (or transfer) that empties an
+			// undated zero-cost lot puts an undated, zero-cost piece into
+			// Realization.Released, and realizedTerms (see http.go) will then
+			// decline to strike a ruble figure for the whole disposal — even
+			// though a zero-cost term needs no fx rate to be valued at all.
+			// That reads as a silence the number did not have to pay, but the
+			// piece is not a lie the way an empty drainLotsCost piece would
+			// have been: real shares, from a real lot, really left, and the
+			// lot really has no date. Suppressing it here to avoid that
+			// silence would trade an honest gap for a corrupted transfer.
 			pieces = append(pieces, ReleasedLot{Quantity: l.Quantity, CostMinor: l.CostMinor, AcquiredOn: l.AcquiredOn})
 			released += l.CostMinor
 			remaining = remaining.Sub(l.Quantity)
@@ -655,7 +771,12 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 			}
-			p.RealizedPnLMinor += o.AmountMinor - LotsCost(pieces) - o.FeeMinor
+			p.realize(Realization{
+				OccurredOn:    o.OccurredOn,
+				ProceedsMinor: o.AmountMinor,
+				FeeMinor:      o.FeeMinor,
+				Released:      pieces,
+			})
 			p.FeesMinor += o.FeeMinor
 		case TypeDividend, TypeCoupon:
 			p.IncomeMinor += o.AmountMinor
@@ -664,14 +785,32 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 		case TypeFee:
 			p.FeesMinor += -o.AmountMinor // amount negative → positive fee
 		case TypeAmortization:
-			// return of principal: reduce cost basis, excess is realized gain
+			// Return of principal: it retires cost basis, and in THIS currency
+			// only the excess over what is left of that basis is a result.
+			//
+			// It is nonetheless a disposal and is recorded as one, even when
+			// that result is zero, because in rubles the covered part is not
+			// neutral: the principal comes back at the rate of the day it was
+			// paid while the basis it retires was struck at the rates of the
+			// days those lots were bought, and that difference is as much of a
+			// result as any sale's (see Realization). Its released pieces are
+			// the lot costs the drain took, which carry dates and cost but no
+			// quantity — nothing was sold.
+			//
+			// No fee is attributed, here or to FeesMinor: the engine has never
+			// modelled a fee on an amortization, and inventing one on the event
+			// alone would put a number in it that the running total does not
+			// contain.
 			if o.AmountMinor <= 0 {
 				return nil, badOp(o, "amortization amount must be positive")
 			}
 			reduce := min(o.AmountMinor, p.CostMinor)
 			p.CostMinor -= reduce
-			drainLotsCost(p, reduce)
-			p.RealizedPnLMinor += o.AmountMinor - reduce
+			p.realize(Realization{
+				OccurredOn:    o.OccurredOn,
+				ProceedsMinor: o.AmountMinor,
+				Released:      drainLotsCost(p, reduce),
+			})
 		case TypeTransferOut:
 			if len(o.TransferLots) == 0 {
 				// Nothing was recorded about which lots left, so there is
@@ -836,16 +975,41 @@ func CheckTransferLots(o Operation) error {
 }
 
 // drainLotsCost subtracts amount from lot costs front-to-back (amortization
-// keeps quantities intact; only the cost basis shrinks).
-func drainLotsCost(p *Position, amount int64) {
+// keeps quantities intact; only the cost basis shrinks) and REPORTS which lots
+// gave up which part of it, in queue order.
+//
+// The report is what lets a return of principal be valued in another currency
+// at all: the money retired belongs to the day each lot was bought, exactly as
+// a sale's released basis does, and a caller that only learned the total would
+// have no date to convert it at (see Realization). The pieces carry NO
+// quantity, which is not an omission — an amortization moves no shares, and
+// writing the lot's remaining quantity there would claim it did.
+//
+// A lot with nothing left to give produces no piece at all: an empty piece
+// would record a lot as having taken part in an event it took no part in, and
+// every reader would then have to know to discount it.
+//
+// The caller that ignores the report is releaseRecorded, which drains basis a
+// transfer's breakdown carried beyond its own lots. That is not a realization
+// of anything — see Position.Realizations — so it has nothing to do with the
+// pieces.
+func drainLotsCost(p *Position, amount int64) []ReleasedLot {
+	var pieces []ReleasedLot
 	for i := range p.Lots {
 		if amount == 0 {
-			return
+			break
 		}
 		take := min(amount, p.Lots[i].CostMinor)
+		if take == 0 {
+			continue
+		}
 		p.Lots[i].CostMinor -= take
 		amount -= take
+		pieces = append(pieces, ReleasedLot{
+			Quantity: decimal.Zero, CostMinor: take, AcquiredOn: p.Lots[i].AcquiredOn,
+		})
 	}
+	return pieces
 }
 
 // ReleasedLots computes the FIFO lot breakdown that releasing qty units of

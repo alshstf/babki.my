@@ -2,6 +2,7 @@ package portfolio_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -764,6 +765,61 @@ func TestAmortizationDrainsTheOlderTransferredLotFirst(t *testing.T) {
 	}
 }
 
+// TestAmortizationSkipsAnEmptyUndatedLot pins the safeguard in drainLotsCost
+// that treats a lot with nothing left to give (CostMinor == 0) as producing NO
+// piece at all — see drainLotsCost's own doc for why an empty piece would
+// misreport a lot as having taken part in an event it took no part in.
+//
+// The safeguard is not cosmetic. A zero-basis parcel that arrived by transfer
+// with no breakdown is undated (see TestUndatedLotLeavesTheQueueFirst) AND
+// sits at the very head of the queue, ahead of every dated lot. Without the
+// guard, an amortization that has to walk past such a lot to reach real cost
+// would emit an empty piece carrying that lot's own (missing) acquisition
+// date — and realizedTerms (see http.go) bails out the instant ANY released
+// piece has no date, even though an expense of exactly zero needs no fx rate
+// to be valued at all. The position's ruble realized figure, and the account
+// total riding on it, would go silently and permanently null — not because
+// anything is actually unknown, but because an empty piece pretended to be
+// one.
+func TestAmortizationSkipsAnEmptyUndatedLot(t *testing.T) {
+	ops := []portfolio.Operation{
+		// Zero-basis parcel, no breakdown: undated, gives up nothing, and
+		// stands ahead of the dated purchase below.
+		op(portfolio.TypeTransferIn, 1, &sber, "5", "", 0, 0),
+		// A real, dated purchase.
+		op(portfolio.TypeBuy, 20, &sber, "10", "300", -300_000, 0),
+		// Amortization that has to walk past the empty lot to find real cost.
+		op(portfolio.TypeAmortization, 30, &sber, "", "", 40_000, 0),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	if len(p.Realizations) != 1 {
+		t.Fatalf("realizations = %d, want 1", len(p.Realizations))
+	}
+	released := p.Realizations[0].Released
+	if len(released) != 1 {
+		t.Fatalf("released pieces = %+v, want exactly 1 — the empty undated lot must not appear in the amortization's breakdown", released)
+	}
+	r := released[0]
+	if r.AcquiredOn == nil {
+		t.Fatalf("released piece has no acquisition date — the empty undated lot leaked into the breakdown, which is exactly what silences the ruble realized figure (see realizedTerms in http.go)")
+	}
+	if !sameAcquisition(r.AcquiredOn, dayp(20)) || r.CostMinor != 40_000 {
+		t.Errorf("released piece = {cost %d on %s}, want {cost 40000 on %s}",
+			r.CostMinor, acquired(r.AcquiredOn), day(20).Format("2006-01-02"))
+	}
+	if len(p.Lots) != 2 {
+		t.Fatalf("lots = %+v, want 2", p.Lots)
+	}
+	if p.Lots[0].CostMinor != 0 || p.Lots[0].AcquiredOn != nil {
+		t.Errorf("undated lot = %+v, want untouched at {cost 0, no date}", p.Lots[0])
+	}
+	checkLotInvariants(t, p)
+}
+
 // TestUndatedLotLeavesTheQueueFirst pins the second half of the ordering rule:
 // a lot that does not know when it was acquired goes out BEFORE every dated
 // one, however old the dated ones are.
@@ -1257,4 +1313,368 @@ func TestSplitLeavesTheDateCostMapUnchangedOverAReorderedQueue(t *testing.T) {
 		t.Errorf("cost = %d, want 400000 — unchanged by the split", p.CostMinor)
 	}
 	checkLotInvariants(t, p)
+}
+
+// --- What each realized result was made of -------------------------------
+
+// releasedText renders a realization's released pieces for a failure message,
+// naming the unknown acquisition date rather than printing a stand-in for it
+// (see acquired).
+func releasedText(pieces []portfolio.ReleasedLot) string {
+	parts := make([]string, 0, len(pieces))
+	for _, pc := range pieces {
+		parts = append(parts, fmt.Sprintf("%s units/%d minor acquired %s", pc.Quantity, pc.CostMinor, acquired(pc.AcquiredOn)))
+	}
+	return "[" + strings.Join(parts, "; ") + "]"
+}
+
+// checkReleased compares a realization's pieces against what they must be,
+// reporting the whole breakdown on any mismatch so a failure says which piece
+// moved rather than only that something did.
+func checkReleased(t *testing.T, got, want []portfolio.ReleasedLot) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("released %d pieces %s, want %d %s", len(got), releasedText(got), len(want), releasedText(want))
+	}
+	for i := range want {
+		if !got[i].Quantity.Equal(want[i].Quantity) || got[i].CostMinor != want[i].CostMinor ||
+			!sameAcquisition(got[i].AcquiredOn, want[i].AcquiredOn) {
+			t.Errorf("released piece %d = %s, want %s", i, releasedText(got[i:i+1]), releasedText(want[i:i+1]))
+		}
+	}
+}
+
+// checkRealizationsSumToTotal is the invariant every realization test ends
+// with: the events must account for the running total to the last minor unit.
+// A total larger than the events means something was realized without saying
+// what it was made of — a figure the ruble layer cannot convert and cannot even
+// see it is missing; a total smaller means an event was recorded twice or
+// carries basis the position never gave up.
+func checkRealizationsSumToTotal(t *testing.T, p *portfolio.Position) {
+	t.Helper()
+	var sum int64
+	for _, r := range p.Realizations {
+		sum += r.PnLMinor()
+	}
+	if sum != p.RealizedPnLMinor {
+		t.Errorf("realizations sum to %d, but the position realized %d (off by %d) — every minor unit of the total must be accounted for by an event",
+			sum, p.RealizedPnLMinor, sum-p.RealizedPnLMinor)
+		for i, r := range p.Realizations {
+			t.Logf("  event %d on %s: proceeds %d, fee %d, released %s → %d",
+				i, r.OccurredOn.Format("2006-01-02"), r.ProceedsMinor, r.FeeMinor, releasedText(r.Released), r.PnLMinor())
+		}
+	}
+}
+
+// TestSaleRecordsWhatItWasMadeOf is the change this section exists for.
+//
+// A single accumulated number in the position's currency cannot be turned into
+// rubles: the proceeds belong to the day of the sale and each parcel of basis
+// belongs to the day THAT parcel was bought (НК РФ ст. 210 п. 5), so the fold
+// has to keep the parts rather than only their difference. Here one sale
+// crosses a lot boundary — 15 shares out of a lot of 10 bought on day 2 and a
+// lot of 10 bought on day 3 — and the event must carry both pieces with their
+// own dates, not one piece dated on the sale.
+func TestSaleRecordsWhatItWasMadeOf(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 2, &sber, "10", "100", -100_000, 10),
+		op(portfolio.TypeBuy, 3, &sber, "10", "110", -110_000, 11),
+		op(portfolio.TypeSell, 4, &sber, "15", "120", 180_000, 18),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	if len(p.Realizations) != 1 {
+		t.Fatalf("realizations = %d, want 1 (one sale, one event)", len(p.Realizations))
+	}
+	r := p.Realizations[0]
+	if !r.OccurredOn.Equal(day(4)) {
+		t.Errorf("event dated %s, want %s — the proceeds belong to the day of the sale",
+			r.OccurredOn.Format("2006-01-02"), day(4).Format("2006-01-02"))
+	}
+	if r.ProceedsMinor != 180_000 || r.FeeMinor != 18 {
+		t.Errorf("proceeds/fee = %d/%d, want 180000/18", r.ProceedsMinor, r.FeeMinor)
+	}
+	// The whole day-2 lot (100 000 + 10 fee capitalized) and half of the day-3
+	// lot (floor(110 011 / 2) = 55 005), each keeping its own purchase day.
+	checkReleased(t, r.Released, []portfolio.ReleasedLot{
+		{Quantity: d("10"), CostMinor: 100_010, AcquiredOn: dayp(2)},
+		{Quantity: d("5"), CostMinor: 55_005, AcquiredOn: dayp(3)},
+	})
+	if want := int64(180_000 - 18 - 155_015); r.PnLMinor() != want {
+		t.Errorf("event result = %d, want %d", r.PnLMinor(), want)
+	}
+	checkRealizationsSumToTotal(t, p)
+}
+
+// TestEachDisposalGetsItsOwnRealization pins that the events are a series and
+// not a running summary: three sales of the same lot on three days produce
+// three records, in journal order, each carrying its own day and its own
+// proceeds. Merging them would lose the dates the ruble conversion is struck
+// at, which is the whole reason the breakdown is kept.
+func TestEachDisposalGetsItsOwnRealization(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "9", "100", -90_000, 0),
+		op(portfolio.TypeSell, 2, &sber, "3", "110", 33_000, 5),
+		op(portfolio.TypeSell, 5, &sber, "3", "120", 36_000, 6),
+		op(portfolio.TypeSell, 9, &sber, "3", "90", 27_000, 7),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	if len(p.Realizations) != 3 {
+		t.Fatalf("realizations = %d, want 3 (three sales, three events)", len(p.Realizations))
+	}
+	wantDay := []int{2, 5, 9}
+	wantProceeds := []int64{33_000, 36_000, 27_000}
+	wantFee := []int64{5, 6, 7}
+	for i, r := range p.Realizations {
+		if !r.OccurredOn.Equal(day(wantDay[i])) {
+			t.Errorf("event %d dated %s, want %s", i, r.OccurredOn.Format("2006-01-02"), day(wantDay[i]).Format("2006-01-02"))
+		}
+		if r.ProceedsMinor != wantProceeds[i] || r.FeeMinor != wantFee[i] {
+			t.Errorf("event %d proceeds/fee = %d/%d, want %d/%d", i, r.ProceedsMinor, r.FeeMinor, wantProceeds[i], wantFee[i])
+		}
+		// Each third of a 9-share lot costing 90 000 releases exactly 30 000,
+		// and every piece keeps the one day the shares were bought.
+		checkReleased(t, r.Released, []portfolio.ReleasedLot{{Quantity: d("3"), CostMinor: 30_000, AcquiredOn: dayp(1)}})
+	}
+	checkRealizationsSumToTotal(t, p)
+}
+
+// TestTransferOutRecordsNoRealization pins the decision, rather than leaving it
+// to a comment: the departing leg of a transfer produces NO event.
+//
+// Moving shares between the family's own accounts is a disposal in none of the
+// seven jurisdictions this series was researched against, and the leg has no
+// proceeds to record — its AmountMinor is the basis that travelled, not money
+// received. It also adds nothing to RealizedPnLMinor and never has, so leaving
+// it out costs the events-sum-to-the-total invariant nothing.
+//
+// Both shapes are covered, because they take different branches: a transfer
+// with a stored breakdown gives up the lots it recorded, one without gives up a
+// fresh slice of the queue.
+func TestTransferOutRecordsNoRealization(t *testing.T) {
+	for name, ops := range map[string][]portfolio.Operation{
+		"with a recorded breakdown": {
+			op(portfolio.TypeBuy, 1, &sber, "10", "100", -100_000, 0),
+			transferOut(5, "4", 40_000, piece("4", 40_000, 1)),
+		},
+		"without one": {
+			op(portfolio.TypeBuy, 1, &sber, "10", "100", -100_000, 0),
+			op(portfolio.TypeTransferOut, 5, &sber, "4", "", 40_000, 0),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pos, err := portfolio.Compute(ops)
+			if err != nil {
+				t.Fatalf("Compute: %v", err)
+			}
+			p := pos[sber]
+			if len(p.Realizations) != 0 {
+				t.Errorf("realizations = %d %+v, want 0 — a transfer between one's own accounts realizes nothing",
+					len(p.Realizations), p.Realizations)
+			}
+			if p.RealizedPnLMinor != 0 {
+				t.Errorf("realized = %d, want 0", p.RealizedPnLMinor)
+			}
+			checkRealizationsSumToTotal(t, p)
+		})
+	}
+}
+
+// TestAmortizationRecordsARealization covers the OTHER place the running total
+// grows, and the reason it must produce an event even when it adds nothing to
+// that total.
+//
+// A return of principal retires cost basis, and in the position's own currency
+// only the excess over what is left of that basis is a result. In rubles the
+// covered part is not neutral either: the principal comes back at the rate of
+// the day it was paid, the basis it retires was struck at the rates of the days
+// those lots were bought, and that difference is as much of a taxable result as
+// any sale's. So the covered amortization below has a result of zero here and
+// still has to say what it was made of.
+func TestAmortizationRecordsARealization(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &ofz, "10", "950", -950_000, 0),
+		op(portfolio.TypeAmortization, 10, &ofz, "", "", 250_000, 0),
+		op(portfolio.TypeAmortization, 20, &ofz, "", "", 800_000, 0),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[ofz]
+	if len(p.Realizations) != 2 {
+		t.Fatalf("realizations = %d, want 2 (two amortizations, two events)", len(p.Realizations))
+	}
+	// Fully covered by the basis: nothing realized in this currency, and the
+	// 250 000 retired belongs to the day the bond was bought. The pieces carry
+	// NO quantity — an amortization returns principal without moving a share.
+	first := p.Realizations[0]
+	if !first.OccurredOn.Equal(day(10)) || first.ProceedsMinor != 250_000 || first.FeeMinor != 0 {
+		t.Errorf("first event = %s/%d/%d, want %s/250000/0",
+			first.OccurredOn.Format("2006-01-02"), first.ProceedsMinor, first.FeeMinor, day(10).Format("2006-01-02"))
+	}
+	checkReleased(t, first.Released, []portfolio.ReleasedLot{{Quantity: d("0"), CostMinor: 250_000, AcquiredOn: dayp(1)}})
+	if first.PnLMinor() != 0 {
+		t.Errorf("first event result = %d, want 0", first.PnLMinor())
+	}
+	// Beyond what the basis can cover: 700 000 left retires, the remaining
+	// 100 000 is realized.
+	second := p.Realizations[1]
+	if !second.OccurredOn.Equal(day(20)) || second.ProceedsMinor != 800_000 {
+		t.Errorf("second event = %s/%d, want %s/800000",
+			second.OccurredOn.Format("2006-01-02"), second.ProceedsMinor, day(20).Format("2006-01-02"))
+	}
+	checkReleased(t, second.Released, []portfolio.ReleasedLot{{Quantity: d("0"), CostMinor: 700_000, AcquiredOn: dayp(1)}})
+	if second.PnLMinor() != 100_000 {
+		t.Errorf("second event result = %d, want 100000", second.PnLMinor())
+	}
+	if p.RealizedPnLMinor != 100_000 {
+		t.Errorf("realized = %d, want 100000 — unchanged by recording what it was made of", p.RealizedPnLMinor)
+	}
+	checkRealizationsSumToTotal(t, p)
+}
+
+// TestRealizationMayNotKnowWhenItsBasisWasAcquired pins that an event whose
+// basis has no purchase date behind it is LEGITIMATE and recorded as it is.
+//
+// A transfer with no stored breakdown creates a lot that does not know when it
+// was bought (see Lot.AcquiredOn), such a lot leads the release queue, and
+// selling it produces an event whose expense side cannot be converted into
+// rubles at all. That is a fact about the journal, not damage: the engine must
+// carry the absence through instead of substituting the transfer day or the
+// sale day, and what to publish for such an event is the caller's decision.
+func TestRealizationMayNotKnowWhenItsBasisWasAcquired(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeTransferIn, 1, &sber, "10", "", 100_000, 0),
+		op(portfolio.TypeBuy, 2, &sber, "10", "150", -150_000, 0),
+		op(portfolio.TypeSell, 3, &sber, "15", "200", 300_000, 20),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	if len(p.Realizations) != 1 {
+		t.Fatalf("realizations = %d, want 1", len(p.Realizations))
+	}
+	// The undated parcel leads the queue and goes whole; the rest comes out of
+	// the day-2 purchase, floor(150 000 × 5 / 10) = 75 000.
+	checkReleased(t, p.Realizations[0].Released, []portfolio.ReleasedLot{
+		{Quantity: d("10"), CostMinor: 100_000, AcquiredOn: nil},
+		{Quantity: d("5"), CostMinor: 75_000, AcquiredOn: dayp(2)},
+	})
+	if want := int64(300_000 - 20 - 175_000); p.Realizations[0].PnLMinor() != want {
+		t.Errorf("event result = %d, want %d", p.Realizations[0].PnLMinor(), want)
+	}
+	checkRealizationsSumToTotal(t, p)
+}
+
+// TestRealizationsSumToRealizedPnL is the discriminating one.
+//
+// The invariant is not "the events roughly explain the total" but "the events
+// ARE the total": a ruble figure is built by converting each event and adding
+// them up, so a single minor unit realized outside an event is a unit that
+// silently never reaches rubles, and one counted twice is money the family
+// never made. It has to hold through everything the journal can do, not through
+// sales alone — splits rewrite the quantities the pieces are proportioned from,
+// transfers move lots in and out and reorder the queue by acquisition date, an
+// undated parcel leads that queue, and amortization drains basis without moving
+// a share.
+//
+// So the sequence below mixes all of them, with awkward, non-divisible amounts
+// so that every floor division has a remainder to lose. The transfer out
+// resolves its own breakdown from the journal exactly as the write path does
+// (portfolio.ReleasedLots), rather than being written by hand into agreement.
+//
+// Both totals are pinned as well as their equality. Equality alone would
+// survive a change that broke the events and the total the same way; the
+// numbers below were derived by hand from the sequence:
+//
+//	day  3 sell:  12 345 − 30 011 −  11 =  −17 677
+//	day  7 sell: 130 007 − 36 680 −  13 =   93 314
+//	day  9 amrt:   5 000 −  5 000       =        0
+//	day 11 sell:  60 001 − 46 119 −   9 =   13 873
+//	day 13 sell:  40 000 − 25 000 −   7 =   14 993
+//	day 14 amrt: 900 000 − 155 010      =  744 990
+//	day 15 sell: 200 000 −      0 −   3 =  199 997
+//	                                      ─────────
+//	                                      1 049 490
+//
+// Seven events for five sales and two amortizations — and none for the
+// transfers, which is the count that pins the decision that a transfer out
+// realizes nothing.
+func TestRealizationsSumToRealizedPnL(t *testing.T) {
+	var ops []portfolio.Operation
+	add := func(o portfolio.Operation) { ops = append(ops, o) }
+	split := func(dayN int, ratio string) portfolio.Operation {
+		o := op(portfolio.TypeSplit, dayN, &sber, "", "", 0, 0)
+		o.SplitRatio = dp(ratio)
+		return o
+	}
+	// moveOut is a departing leg whose breakdown is resolved against the
+	// journal so far, the way the transfer service resolves it.
+	moveOut := func(dayN int, qty string) portfolio.Operation {
+		pieces, err := portfolio.ReleasedLots(ops, sber, d(qty))
+		if err != nil {
+			t.Fatalf("resolving the parcel leaving on day %d: %v", dayN, err)
+		}
+		return transferOut(dayN, qty, portfolio.LotsCost(pieces), pieces...)
+	}
+
+	add(op(portfolio.TypeBuy, 1, &sber, "10", "", -100_030, 7))
+	add(op(portfolio.TypeBuy, 2, &sber, "7", "", -23_331, 3))
+	add(op(portfolio.TypeSell, 3, &sber, "3", "", 12_345, 11))
+	add(split(4, "3"))
+	add(op(portfolio.TypeBuy, 5, &sber, "5", "", -77_777, 5))
+	// A transfer in carrying shares older than some of what is already held, so
+	// the queue is reordered by acquisition rather than by arrival.
+	add(transferIn(6, "9", 90_009, piece("4", 40_004, 1), piece("5", 50_005, 4)))
+	add(op(portfolio.TypeSell, 7, &sber, "11", "", 130_007, 13))
+	add(moveOut(8, "7"))
+	add(op(portfolio.TypeAmortization, 9, &sber, "", "", 5_000, 0))
+	add(split(10, "0.5"))
+	add(op(portfolio.TypeSell, 11, &sber, "4", "", 60_001, 9))
+	// A transfer whose basis was typed in by hand: the lot it creates knows no
+	// purchase date, leads the queue, and is sold into on day 13.
+	add(op(portfolio.TypeTransferIn, 12, &sber, "6", "", 30_000, 0))
+	add(op(portfolio.TypeSell, 13, &sber, "5", "", 40_000, 7))
+	// More principal returned than the basis can cover: the excess is realized.
+	add(op(portfolio.TypeAmortization, 14, &sber, "", "", 900_000, 0))
+	// Everything that is left, now carrying no basis at all.
+	add(op(portfolio.TypeSell, 15, &sber, "16", "", 200_000, 3))
+
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	checkLotInvariants(t, p)
+	checkRealizationsSumToTotal(t, p)
+	if p.RealizedPnLMinor != 1_049_490 {
+		t.Errorf("realized = %d, want 1049490 (see the derivation above)", p.RealizedPnLMinor)
+	}
+	if len(p.Realizations) != 7 {
+		t.Fatalf("realizations = %d, want 7 — five sales and two amortizations, and nothing for either transfer", len(p.Realizations))
+	}
+	// The mix really did carry a parcel whose purchase day nobody recorded all
+	// the way into an event: without this the invariant above could be holding
+	// over a sequence where the hard case never arose.
+	var undated int
+	for _, r := range p.Realizations {
+		for _, pc := range r.Released {
+			if pc.AcquiredOn == nil {
+				undated++
+			}
+		}
+	}
+	if undated == 0 {
+		t.Error("no released piece came out undated — the fixture no longer exercises basis with no known purchase date")
+	}
 }

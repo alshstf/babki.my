@@ -5,6 +5,12 @@ import type { components } from "./schema";
 
 export type Position = components["schemas"]["Position"];
 export type PositionsResponse = components["schemas"]["PositionsResponse"];
+// What the account's closed deals locked in, already added up by the server —
+// by currency and in the base currency, with the reason when the base one
+// could not be struck. The client renders it and adds nothing (see
+// RealizedTotal in the API contract).
+export type RealizedTotal = components["schemas"]["RealizedTotal"];
+export type RealizedGap = components["schemas"]["RealizedGap"];
 
 // Returns the WHOLE response, not just the positions array: cost_basis_rules
 // travels with these figures on purpose (see the API contract) — it says

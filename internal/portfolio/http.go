@@ -188,6 +188,33 @@ func hasUndatedLots(p *Position) bool {
 	return slices.ContainsFunc(p.Lots, func(l Lot) bool { return l.AcquiredOn == nil })
 }
 
+// hasUndatedRealizations reports whether any disposal already made (a sale or
+// a covered amortization — see Position.Realizations) retired a piece of
+// basis with no acquisition date (see ReleasedLot.AcquiredOn). It is
+// hasUndatedLots' twin for the realized side, published for the identical
+// reason: in_base.realized_pnl_minor being null has two causes — no fx rate
+// for one of its dates, or no purchase date for a parcel it retired — and
+// they are not the same news to a reader.
+//
+// hasUndatedLots cannot stand in for it: that flag scans p.Lots, the lots
+// still HELD, and a piece that stopped realized_pnl_minor has by definition
+// already been sold — it is never among them. A position can therefore show
+// has_undated_lots=false and has_undated_realizations=true in the very same
+// response (see TestPositionInBaseRealizedNullWhenAReleasedParcelHasNoAcquisitionDate),
+// which is exactly the case the old single flag could not describe.
+//
+// It scans every Realization rather than stopping at the first one with any
+// Released piece, but the question is still only whether any undated piece
+// exists anywhere, not how many or in which disposal.
+func hasUndatedRealizations(p *Position) bool {
+	for _, r := range p.Realizations {
+		if slices.ContainsFunc(r.Released, func(rl ReleasedLot) bool { return rl.AcquiredOn == nil }) {
+			return true
+		}
+	}
+	return false
+}
+
 // toAPI builds one position's API representation, including its market
 // valuation and — when that valuation isn't already in the position's own
 // currency — an fx conversion into it (conv.Convert is only ever called
@@ -198,14 +225,15 @@ func hasUndatedLots(p *Position) bool {
 // handled outcome (see below), not a request failure.
 func toAPI(ctx context.Context, conv converter, p *Position, inst instrument.Instrument, quotes map[uuid.UUID]marketdata.Quote) (apitypes.Position, error) {
 	out := apitypes.Position{
-		Instrument:       instrumentToAPI(inst),
-		Quantity:         p.Quantity.String(),
-		CostMinor:        p.CostMinor,
-		Currency:         p.Currency,
-		RealizedPnlMinor: p.RealizedPnLMinor,
-		IncomeMinor:      p.IncomeMinor,
-		FeesMinor:        p.FeesMinor,
-		HasUndatedLots:   hasUndatedLots(p),
+		Instrument:             instrumentToAPI(inst),
+		Quantity:               p.Quantity.String(),
+		CostMinor:              p.CostMinor,
+		Currency:               p.Currency,
+		RealizedPnlMinor:       p.RealizedPnLMinor,
+		IncomeMinor:            p.IncomeMinor,
+		FeesMinor:              p.FeesMinor,
+		HasUndatedLots:         hasUndatedLots(p),
+		HasUndatedRealizations: hasUndatedRealizations(p),
 	}
 	q, found := quotes[p.InstrumentID]
 	if !found {
@@ -370,6 +398,217 @@ func (h *Handler) sumInBase(ctx context.Context, amounts []datedMinor, from, to 
 	return total.Round(0).IntPart(), true, nil
 }
 
+// realizedTerms flattens every disposal a position has made into the terms of
+// ONE sum — the position's realized result — each term carrying the date whose
+// fx rate values it.
+//
+// A disposal contributes three kinds of term, and the dates are the whole
+// point: the proceeds and the fee happened on the day of the disposal, while
+// each parcel of basis it retired was paid for on the day THAT parcel was
+// bought (НК РФ ст. 210 п. 5). Converting the event's own net result at one
+// rate — even the correct rate for its own day — would price the expense on a
+// day it was not incurred and quietly cancel the currency's move between
+// purchase and sale out of the answer, which is a real part of the result and
+// not a rounding of it.
+//
+// The engine records amortizations as disposals alongside sales, and transfers
+// as none (see Realization), so which events reach this function is settled
+// there rather than re-decided here.
+//
+// dated is false as soon as one retired parcel does not know when it was
+// bought (see Lot.AcquiredOn): there is no date to ask the fx table about, and
+// every candidate — the disposal's own day, another parcel's, today's — would
+// be a number this handler made up. The caller publishes nothing for the
+// realized figure then; it does NOT drop the terms it could value, since a
+// result missing part of its expense reads as a larger profit, not as a gap.
+func realizedTerms(events []Realization) (terms []datedMinor, dated bool) {
+	terms = make([]datedMinor, 0, len(events)*2)
+	for _, e := range events {
+		terms = append(terms,
+			datedMinor{minor: e.ProceedsMinor, on: e.OccurredOn},
+			datedMinor{minor: -e.FeeMinor, on: e.OccurredOn},
+		)
+		for _, r := range e.Released {
+			if r.AcquiredOn == nil {
+				return nil, false
+			}
+			terms = append(terms, datedMinor{minor: -r.CostMinor, on: *r.AcquiredOn})
+		}
+	}
+	return terms, true
+}
+
+// baseGap names WHY a base-currency figure could not be struck. The two kinds
+// are not the same news to the person reading the screen — one closes on its
+// own and the other never will — and this type exists so the answer travels
+// from the code that knows it to the payload, instead of being reconstructed
+// downstream from flags that only correlate with it.
+type baseGap uint8
+
+const (
+	// gapNone: nothing was missing; there is a figure.
+	gapNone baseGap = iota
+	// gapNoRate: every date the sum needs is known, but the fx table has no
+	// rate for at least one of them yet. The backfill closes that gap on its
+	// own and the figure appears later.
+	gapNoRate
+	// gapUndated: a parcel of basis does not know when it was bought (see
+	// Lot.AcquiredOn), so there is no date to ask the fx table about and none
+	// will ever be recovered — nobody wrote it down.
+	gapUndated
+)
+
+// realizedInBase is the position's realized result in currency to, or an
+// explicit null with the kind of gap that stopped it. It answers for both
+// readers of that figure — the position's own in_base block and the account's
+// realized total — so the two can never disagree.
+//
+// ROUNDING HAPPENS ONCE, HERE, FOR THE WHOLE POSITION. The published quantity
+// is one number per position, so that number is what gets rounded: every term
+// of every disposal is multiplied as a decimal and only the total is rounded,
+// half-away-from-zero, exactly as cost_minor and income_minor already are (see
+// sumInBase). Rounding each disposal's own result first is the tempting shape —
+// it reads like "convert each deal" — and it drifts from the true total by up to
+// half a minor unit per disposal, in a figure the owner may well reconcile
+// against a broker's report by hand. Nothing per-disposal is published, so
+// nothing is made to agree by rounding earlier; the day a per-disposal
+// breakdown IS published, each of those figures becomes a published quantity in
+// its own right, is rounded once itself, and the contract will have to say that
+// their sum can differ from this total by a unit — which is a statement about
+// two roundings of the same money, not a defect in either. That per-disposal
+// total, not this one, will be the legally correct figure to report on such a
+// line-item breakdown: a tax authority computes the base per trade and sums
+// the trades, not the reverse (НК РФ ст. 210 п. 5 taxes each disposal on its
+// own), so the sum-of-rounded-rows answer is the one the law asks for even
+// though this field will keep publishing the single round-once-per-position
+// total for the reasons above.
+//
+// Null (rather than an error) covers the two ways a term can fail to be valued:
+// no fx rate for a date the sum needs, and no purchase date for a parcel it
+// retired. Both leave the sum one term short, and a total quietly missing a term
+// is an invented number that looks exactly like a real one on screen. Neither
+// touches the rest of the object: cost, income and the valuation are answers to
+// their own questions, struck from their own dates, and none of them depends on
+// a parcel that has already been sold.
+//
+// A non-nil error is a genuine failure (DB error, canceled context) that the
+// caller must surface as a request error — never rendered as the null above,
+// which would tell the owner their sale is unconvertible when the truth is that
+// this server is having a bad minute.
+func (h *Handler) realizedInBase(ctx context.Context, p *Position, to string, cache map[rateKey]*rateLookup) (nullable.Nullable[int64], baseGap, error) {
+	if p.Currency == to {
+		// Nothing to convert: the position's own realized result already IS
+		// the base-currency one. The published `in_base` object is null for
+		// such a position, but the figure is not unknown, and the account's
+		// total would silently lose a real term if this answered otherwise.
+		return nullable.NewNullableWithValue(p.RealizedPnLMinor), gapNone, nil
+	}
+	terms, dated := realizedTerms(p.Realizations)
+	if !dated {
+		return nullable.NewNullNullable[int64](), gapUndated, nil
+	}
+	minor, ok, err := h.sumInBase(ctx, terms, p.Currency, to, cache)
+	if err != nil {
+		return nullable.Nullable[int64]{}, gapNone, err
+	}
+	if !ok {
+		return nullable.NewNullNullable[int64](), gapNoRate, nil
+	}
+	return nullable.NewNullableWithValue(minor), gapNone, nil
+}
+
+// realizedTotals adds up what an account's closed deals have locked in, folding
+// each position in as it is built.
+//
+// THE SERVER ADDS, THE CLIENT RENDERS. Nothing here converts and nothing here
+// rounds — every term was converted and rounded once already, for its own
+// position — so a client could in principle do this addition itself and get the
+// same integers. It does not, for the same reason the accounts screen's totals
+// are computed here and not there: a figure the interface shows is derived in
+// one place, so the policy behind it (what rounds, which positions count, what
+// a gap suppresses) can change in one place and every reader keeps agreeing on
+// the answer. The single standing exception to that rule is the profit
+// percentage, and it is an exception precisely because a percentage is not
+// money.
+//
+// Two forms, because the screen has two modes and the server cannot know which
+// one is on: by currency (each position in its own, never added across
+// currencies) and in the space's base currency (one figure, or none at all).
+type realizedTotals struct {
+	baseCurrency string
+	byCurrency   map[string]int64
+	inBaseMinor  int64
+	undated      bool
+	noRate       bool
+}
+
+func newRealizedTotals(baseCurrency string) *realizedTotals {
+	return &realizedTotals{baseCurrency: baseCurrency, byCurrency: make(map[string]int64)}
+}
+
+// add folds one position in: nativeMinor is its realized result in its own
+// currency, which the contract publishes unconditionally, and baseMinor the
+// same result in the base currency — null with the gap that stopped it.
+//
+// The base sum keeps accumulating even after a gap is seen: the terms cost
+// nothing to add, and result() drops the partial sum rather than publishing it.
+func (rt *realizedTotals) add(currency string, nativeMinor int64, baseMinor nullable.Nullable[int64], gap baseGap) {
+	rt.byCurrency[currency] += nativeMinor
+	switch gap {
+	case gapUndated:
+		rt.undated = true
+	case gapNoRate:
+		rt.noRate = true
+	default:
+		// gapNone: the figure was struck, so there is one to add.
+		rt.inBaseMinor += baseMinor.MustGet()
+	}
+}
+
+// result is the account's answer as the contract publishes it.
+//
+// Rounding: the per-position figures added here were each rounded once, for
+// their own position, and this total is their exact integer sum. Re-deriving it
+// from the raw disposal terms and rounding once for the whole account would be
+// the more accurate single number — and would put the header a minor unit away
+// from the very rows it stands over, in the same response. See
+// RealizedTotal.in_base in the API contract.
+func (rt *realizedTotals) result() apitypes.RealizedTotal {
+	out := apitypes.RealizedTotal{
+		BaseCurrency: rt.baseCurrency,
+		ByCurrency:   make([]apitypes.RealizedCurrencyTotal, 0, len(rt.byCurrency)),
+	}
+	for currency, minor := range rt.byCurrency {
+		out.ByCurrency = append(out.ByCurrency, apitypes.RealizedCurrencyTotal{
+			Currency:         currency,
+			RealizedPnlMinor: minor,
+		})
+	}
+	sort.Slice(out.ByCurrency, func(i, j int) bool {
+		return out.ByCurrency[i].Currency < out.ByCurrency[j].Currency
+	})
+
+	// A total missing one of its terms is an invented number — smaller or
+	// larger than the truth and indistinguishable from a real one on screen —
+	// so nothing at all is published in its place, and the reason is named
+	// instead of left for the reader to guess from the rows.
+	switch {
+	case rt.undated && rt.noRate:
+		out.InBase = nullable.NewNullNullable[int64]()
+		out.InBaseGap = nullable.NewNullableWithValue(apitypes.Both)
+	case rt.undated:
+		out.InBase = nullable.NewNullNullable[int64]()
+		out.InBaseGap = nullable.NewNullableWithValue(apitypes.Undated)
+	case rt.noRate:
+		out.InBase = nullable.NewNullNullable[int64]()
+		out.InBaseGap = nullable.NewNullableWithValue(apitypes.NoRate)
+	default:
+		out.InBase = nullable.NewNullableWithValue(rt.inBaseMinor)
+		out.InBaseGap = nullable.NewNullNullable[apitypes.RealizedGap]()
+	}
+	return out
+}
+
 // incomeByInstrument groups the journal's instrument-attributed income
 // operations by instrument, so each position's income can be converted
 // payment by payment at each payment's own rate — Position.IncomeMinor is a
@@ -398,9 +637,10 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 	return out
 }
 
-// positionInBase expresses a position's cost, market value, unrealized P&L
-// and income in baseCurrency. Every amount is valued at the fx rate that
-// answers its own question, which is the whole point of this function:
+// positionInBase expresses a position's cost, market value, unrealized P&L,
+// income and realized P&L in baseCurrency. Every amount is valued at the fx
+// rate that answers its own question, which is the whole point of this
+// function:
 //
 //   - cost_minor sums the FIFO lots still held (p.Lots), each converted at the
 //     rate of the day THAT lot was acquired. It is deliberately not
@@ -422,9 +662,19 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 //     and even in sign — the owner's decision (2026-07-29): the two are honest
 //     answers to two different questions, and the interface is what explains
 //     which is which.
+//   - realized_pnl_minor sums the disposals already made (p.Realizations), each
+//     one's proceeds and fee at the rate of ITS day and each parcel of basis it
+//     retired at the rate of the day THAT parcel was bought. It is the one
+//     figure here that is settled: both of its ends are past events with dates
+//     of their own, so unlike the unrealized figure above it will never move
+//     again. It is passed IN rather than computed here (see realizedInBase),
+//     because the account's own total needs exactly the same figure whether or
+//     not this object survives — a settled result does not become unknowable
+//     because today's rate is missing — and computing it twice would let the
+//     two answers drift apart.
 //
-// fees_minor and realized_pnl_minor are deliberately excluded (owner feedback
-// — not carried into PositionInBase at all, see the API contract).
+// fees_minor is deliberately excluded (owner feedback — not carried into
+// PositionInBase at all, see the API contract).
 //
 // Only a valuation denominated in the position's own currency may be
 // converted with the position's own rate. cost and income always are. The
@@ -452,12 +702,21 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // missing or the rate for it is. This differs from
 // market_value_minor/unrealized_pnl_minor inside the returned object, which
 // are null when there is no usable quote or the valuation isn't in
-// p.Currency — that nulls just those two figures.
+// p.Currency, and from realized_pnl_minor, which is null when a disposal's own
+// day has no rate or a parcel it retired has no purchase date — those nulls are
+// confined to the figures that could not be struck.
+//
+// What decides between the two is whether the unvaluable term belongs to the
+// object as a whole or to one figure in it. A lot still held sits inside
+// cost_minor's sum, and cost_minor is what unrealized_pnl_minor is measured
+// against, so its failure travels; a parcel sold last year sits inside nothing
+// but the realized sum, and taking the rest of the position down with it would
+// hide a basis and a valuation that are perfectly well known.
 //
 // A non-nil error means a genuine failure (DB error, canceled context) that
 // the caller must surface as a request error — never silently rendered as
 // null, which would misrepresent an outage as "nothing to convert".
-func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, income []Operation, baseCurrency string, cache map[rateKey]*rateLookup) (*apitypes.PositionInBase, error) {
+func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, income []Operation, baseCurrency string, realizedMinor nullable.Nullable[int64], cache map[rateKey]*rateLookup) (*apitypes.PositionInBase, error) {
 	if p.Currency == baseCurrency {
 		return nil, nil
 	}
@@ -512,10 +771,14 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		return nil, nil
 	}
 
+	// Unlike the two sums above, a realized result that cannot be struck nulls
+	// only itself: its terms are disposals already made, and nothing else in
+	// this object is computed from them (see realizedInBase).
 	out := &apitypes.PositionInBase{
-		CostMinor:   costMinor,
-		IncomeMinor: incomeMinor,
-		Currency:    baseCurrency,
+		CostMinor:        costMinor,
+		IncomeMinor:      incomeMinor,
+		RealizedPnlMinor: realizedMinor,
+		Currency:         baseCurrency,
 		// rate_on names the rate behind market_value_minor only: the basis and
 		// the income are each valued at several rates of their own dates, so no
 		// single date could describe them. Today's rate is the one date that is
@@ -600,6 +863,7 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	// income entries costs one pass and no extra round trip.
 	rates := make(map[rateKey]*rateLookup)
 	income := incomeByInstrument(ops)
+	totals := newRealizedTotals(sp.BaseCurrency)
 	out := make([]apitypes.Position, 0, len(positions))
 	for _, pos := range positions {
 		inst, err := h.instruments.ByID(r.Context(), pos.InstrumentID)
@@ -613,7 +877,19 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		inBase, err := h.positionInBase(r.Context(), pos, apiPos, income[pos.InstrumentID], sp.BaseCurrency, rates)
+		// Struck once and used twice: it is this position's
+		// in_base.realized_pnl_minor below and one term of the account's total
+		// beside it. The total takes it even when the in_base object turns out
+		// to be absent — a settled result is not made unknowable by a missing
+		// quote or by a lot still held whose purchase date nobody wrote down.
+		realizedMinor, realizedGap, err := h.realizedInBase(r.Context(), pos, sp.BaseCurrency, rates)
+		if err != nil {
+			family.WriteError(w, err)
+			return
+		}
+		totals.add(apiPos.Currency, apiPos.RealizedPnlMinor, realizedMinor, realizedGap)
+
+		inBase, err := h.positionInBase(r.Context(), pos, apiPos, income[pos.InstrumentID], sp.BaseCurrency, realizedMinor, rates)
 		if err != nil {
 			family.WriteError(w, err)
 			return
@@ -640,5 +916,8 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, apitypes.PositionsResponse{
 		Positions:      out,
 		CostBasisRules: family.CostBasisRulesAPI(sp.CostBasisRules()),
+		// Added here rather than by whoever renders the list: see
+		// realizedTotals, and RealizedTotal in the API contract.
+		RealizedTotal: totals.result(),
 	})
 }

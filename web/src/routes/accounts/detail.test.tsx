@@ -81,34 +81,63 @@ function makeAccount(overrides: Partial<AccountWithBalance> = {}): AccountWithBa
   };
 }
 
+// NBSP-insensitive compare: Intl.NumberFormat uses non-breaking spaces
+// (same helper as in positions-table.test.tsx).
+const norm = (s: string) => s.replace(/[\u00A0\u202F]/g, " ");
+
+// One position as the wire sends it — not typed as Position on purpose: these
+// bodies stand in for the server's JSON, and a test that needs a field the
+// generated type doesn't have yet must still be able to send it.
+function makePosition({
+  instrument_id = "instr-1",
+  ...overrides
+}: Record<string, unknown> & { instrument_id?: string } = {}) {
+  return {
+    instrument: {
+      id: instrument_id,
+      type: "share",
+      name: "Test Corp",
+      ticker: "TEST",
+      isin: "",
+      figi: "",
+      currency: "USD",
+      frozen: false,
+    },
+    quantity: "10",
+    cost_minor: 250_000,
+    realized_pnl_minor: 0,
+    income_minor: 0,
+    fees_minor: 0,
+    currency: "USD",
+    has_undated_lots: false,
+    has_undated_realizations: false,
+    ...overrides,
+  };
+}
+
+// The account's realized total as the server publishes it, both forms at once
+// (see RealizedTotal in the API contract). Untyped for the same reason
+// makePosition is: these bodies stand in for the server's JSON.
+function makeRealizedTotal(overrides: Record<string, unknown> = {}) {
+  return {
+    by_currency: [{ currency: "USD", realized_pnl_minor: 0 }],
+    base_currency: "RUB",
+    in_base: 0,
+    in_base_gap: null,
+    ...overrides,
+  };
+}
+
 // One position, enough of one for the table to render a row. The cost basis
 // statement below qualifies exactly these figures, so the tests about it need
-// a row for it to sit next to.
+// a row for it to sit next to. realized_total describes the whole list rather
+// than any one row, so it travels alongside them.
 function makePositionsBody(
   rules: SessionInfo["cost_basis_rules"],
-  positions: unknown[] = [
-    {
-      instrument: {
-        id: "instr-1",
-        type: "share",
-        name: "Test Corp",
-        ticker: "TEST",
-        isin: "",
-        figi: "",
-        currency: "USD",
-        frozen: false,
-      },
-      quantity: "10",
-      cost_minor: 250_000,
-      realized_pnl_minor: 0,
-      income_minor: 0,
-      fees_minor: 0,
-      currency: "USD",
-      has_undated_lots: false,
-    },
-  ],
+  positions: unknown[] = [makePosition()],
+  realizedTotal: unknown = makeRealizedTotal(),
 ) {
-  return { positions, cost_basis_rules: rules };
+  return { positions, cost_basis_rules: rules, realized_total: realizedTotal };
 }
 
 // Renders AccountDetailPage under the route id it reads its params from
@@ -159,7 +188,12 @@ describe("AccountDetailPage", () => {
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": {
-        body: makePositionsBody(makeSession().cost_basis_rules, []),
+        // An account with no positions: the server's total is empty too —
+        // by_currency has no entries and in_base is the plain zero of no
+        // deals at all.
+        body: makePositionsBody(makeSession().cost_basis_rules, [], makeRealizedTotal({
+          by_currency: [],
+        })),
       },
       "/operations": { body: [] },
       "/api/v1/instruments": { body: { instruments: [] } },
@@ -239,6 +273,69 @@ describe("AccountDetailPage", () => {
     expect(notice.getAttribute("title")).toContain("сразу по всем счетам владельца");
     expect(notice.textContent).not.toContain("average");
     expect(notice.textContent).not.toContain("стоимость усредняется");
+  });
+
+  it("shows in the header what this account's closed deals have locked in", async () => {
+    // The figure arrives added up, from the response that carries the rows it
+    // stands over. This screen renders the server's total and computes none of
+    // its own — the positions below deliberately do NOT add up to it, so a
+    // client that went back to summing them would print 125,00 $ and fail.
+    serve({
+      "/api/v1/accounts": { body: [makeAccount()] },
+      "/positions": {
+        body: makePositionsBody(
+          makeSession().cost_basis_rules,
+          [
+            makePosition({ realized_pnl_minor: 10_000 }),
+            makePosition({ instrument_id: "instr-2", realized_pnl_minor: 2_500 }),
+          ],
+          makeRealizedTotal({ by_currency: [{ currency: "USD", realized_pnl_minor: 12_600 }] }),
+        ),
+      },
+      "/operations": { body: [] },
+      "/api/v1/instruments": { body: { instruments: [] } },
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("Зафиксировано")).toBeInTheDocument();
+    const amounts = await screen.findByTestId("realized-total-amounts");
+    expect(norm(amounts.textContent ?? "")).toContain("126,00 $");
+  });
+
+  it("follows the display-currency toggle into the base currency", async () => {
+    // The header line is not a second, independent opinion about which
+    // currency to speak: it obeys the same toggle every other figure does.
+    storeMode("base");
+    serve({
+      "/api/v1/accounts": { body: [makeAccount()] },
+      "/positions": {
+        body: makePositionsBody(
+          makeSession().cost_basis_rules,
+          [makePosition({ realized_pnl_minor: 10_000 })],
+          makeRealizedTotal({
+            by_currency: [{ currency: "USD", realized_pnl_minor: 10_000 }],
+            in_base: 900_000,
+          }),
+        ),
+      },
+      "/operations": { body: [] },
+      "/api/v1/instruments": { body: { instruments: [] } },
+    });
+
+    renderPage();
+
+    const amounts = await screen.findByTestId("realized-total-amounts");
+    expect(norm(amounts.textContent ?? "")).toContain("9 000,00 ₽");
+  });
+
+  it("says nothing about locked-in results on an account with no positions", async () => {
+    // The default body served in beforeEach has no positions at all, and a
+    // "0,00" over an empty account answers a question nobody asked.
+    renderPage();
+
+    expect(await screen.findByText("На этом счете пока нет позиций")).toBeInTheDocument();
+    expect(screen.queryByTestId("realized-total")).not.toBeInTheDocument();
   });
 
   it("says nothing about the rules when the computation is the country's own", async () => {

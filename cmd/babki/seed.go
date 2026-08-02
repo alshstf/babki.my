@@ -92,6 +92,10 @@ func seedDemo(ctx context.Context, pool *pgxpool.Pool) error {
 			// and what is left of NVDA ($1 500,00) run to $19 609,20 here. A
 			// balance below that would put a single position above the whole
 			// account it lives in, right on the screen this data exists to show.
+			// Alphabet is absent from that sum on purpose: its parcel was bought
+			// and sold in full inside the period, so it holds nothing today and
+			// weighs nothing against this balance — only its settled result
+			// survives, in the account's «Зафиксировано» line.
 			"Freedom KZ", account.TypeBrokerage, "USD", "Freedom Finance", false,
 			[3]int64{24_000_00, 24_500_00, 25_000_00},
 		},
@@ -165,6 +169,7 @@ func seedInstrumentsAndOperations(
 		{"MSFT", instrument.Instrument{Type: instrument.TypeShare, Name: "Microsoft", Ticker: "MSFT", Currency: "USD"}},
 		{"TSLA", instrument.Instrument{Type: instrument.TypeShare, Name: "Tesla", Ticker: "TSLA", Currency: "USD"}},
 		{"NVDA", instrument.Instrument{Type: instrument.TypeShare, Name: "NVIDIA", Ticker: "NVDA", Currency: "USD"}},
+		{"GOOGL", instrument.Instrument{Type: instrument.TypeShare, Name: "Alphabet", Ticker: "GOOGL", Currency: "USD"}},
 	}
 	instIDs := make(map[string]uuid.UUID, len(instSeeds))
 	for _, is := range instSeeds {
@@ -309,6 +314,66 @@ func seedInstrumentsAndOperations(
 			OccurredOn: d("2026-06-10"), Quantity: qty("20"), Price: price("500"),
 			AmountMinor: -1_000_000, Currency: "USD",
 		},
+		// Alphabet is the demo's CLOSED deal whose settled result has a
+		// DIFFERENT SIGN in dollars and in rubles — plan 7b's whole point made
+		// visible on demo data instead of only in a unit test. MSFT above is its
+		// paper twin: same disagreement, but on a holding still open, so that
+		// figure still moves with every quote and every day's rate. This one is
+		// over. Both ends are past events with dates of their own, so the ruble
+		// result below is final and will never change again.
+		//
+		// Bought on the day the ruble was WEAKEST in the seeded history (81.40,
+		// see seededUSDRates) and sold ten days later when it had strengthened to
+		// 65.00. The expense is taken at the rate of the day the shares were
+		// bought and the proceeds at the rate of the day they were sold (НК РФ
+		// ст. 210 п. 5), so the currency's own move between those two days is
+		// part of the result — and here it is far larger than the deal itself.
+		// No broker fee on either leg, so every figure is checkable by eye:
+		//
+		//	buy   50 × $200.00 = $10 000.00 =  1_000_000 minor USD, 2026-06-10
+		//	  in ₽  1_000_000 × 81.40 (the PURCHASE day) = 81_400_000 = 814 000,00 ₽
+		//	sell  50 × $210.00 = $10 500.00 =  1_050_000 minor USD, 2026-06-20
+		//	  in ₽  1_050_000 × 65.00 (the SALE day)     = 68_250_000 = 682 500,00 ₽
+		//
+		//	result in USD =  1_050_000 −  1_000_000 =     +50_000  (+$500.00)
+		//	result in RUB = 68_250_000 − 81_400_000 = −13_150_000  (−131 500,00 ₽)
+		//
+		// Converting the dollar result at any single rate — today's, the sale
+		// day's, the purchase day's — would land somewhere between +32 500,00 ₽
+		// and +40 700,00 ₽: a profit, in a deal that lost 131 500,00 ₽. That is
+		// the difference this position exists to put on screen.
+		//
+		// It also decides the ACCOUNT's «Зафиксировано» line, which is where a
+		// reader actually meets it (the per-row realized column was removed as
+		// visual noise in the owner's 4c feedback and stays removed):
+		//
+		//	NVDA, sold 2026-07-22   +100_000 USD    +9_650_000 ₽
+		//	  = 200_000 × 78.50 − 100_000 × 60.50, the sale day resolving to
+		//	    2026-07-20's rate (nothing is published on 07-22, the ordinary
+		//	    nearest-earlier rule) and the basis to its own 2026-05-14
+		//	Alphabet, sold 2026-06-20  +50_000 USD  −13_150_000 ₽
+		//	account total             +150_000 USD   −3_500_000 ₽
+		//	                        (+$1 500.00)     (−35 000,00 ₽)
+		//
+		// So the account's own total disagrees in sign with itself across the
+		// display-currency toggle, on real demo data, one click apart. The other
+		// three positions at Freedom KZ contribute exactly zero: none of them has
+		// ever disposed of anything, and a transfer is not a disposal.
+		//
+		// The whole parcel is sold, so this leaves NO holding — deliberately.
+		// A position that survived the sale would add its basis to an account
+		// whose recorded balance is already close to what it holds (see the
+		// Freedom KZ balances), and the sign flip needs no open shares to show.
+		//
+		// Like every other figure here, this depends on the seeded rates staying
+		// put: an instance that reaches cbr.ru backfills 2026-06-10 and
+		// 2026-06-20 with reality and the arithmetic above stops being the
+		// arithmetic on screen.
+		{
+			AccountID: freedom, InstrumentID: inst("GOOGL"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-06-10"), Quantity: qty("50"), Price: price("200"),
+			AmountMinor: -1_000_000, Currency: "USD",
+		},
 		// TSLA's second lot — see the first lot above for why the rates and
 		// the transfer are shaped the way they are.
 		{
@@ -329,6 +394,14 @@ func seedInstrumentsAndOperations(
 			AccountID: freedom, InstrumentID: inst("NVDA"), Type: operation.TypeBuy,
 			OccurredOn: d("2026-06-20"), Quantity: qty("10"), Price: price("150"),
 			AmountMinor: -150_000, Currency: "USD",
+		},
+		// The sale that closes the Alphabet parcel and settles its result for
+		// good — see the buy on 2026-06-10 for the arithmetic and for why this
+		// deal exists.
+		{
+			AccountID: freedom, InstrumentID: inst("GOOGL"), Type: operation.TypeSell,
+			OccurredOn: d("2026-06-20"), Quantity: qty("50"), Price: price("210"),
+			AmountMinor: 1_050_000, Currency: "USD",
 		},
 		// A foreign-currency operation on a RUB account, deliberately dated a
 		// Saturday: the CBR publishes no rate on weekends, so the journal has
@@ -483,15 +556,21 @@ func seedInstrumentsAndOperations(
 //     last, and the two rates (60.50 and 65.00) are what make that visible in
 //     rubles as well as in dollars — the surviving parcel's ruble basis is
 //     97 500,00 ₽ where arrival order would have left 60 500,00 ₽. See the
-//     NVDA transfer call for the full arithmetic.
+//     NVDA transfer call for the full arithmetic. 2026-06-20 does double duty
+//     as the day the Alphabet parcel is SOLD, which is what values that
+//     deal's proceeds (plan 7b — see the Alphabet buy): 65.00 against the
+//     81.40 its expense was struck at is the whole reason a dollar profit
+//     settles as a ruble loss there.
 //   - 2026-05-20 — the FXUS buy's own date: converted at the exact date's
 //     rate, the ordinary case.
-//   - 2026-06-10 — the AAPL and MSFT buys' own date, at a visibly different
-//     rate: two operations, two dates, two rates, so the journal cannot be
-//     mistaken for "everything at today's rate". It is also the highest rate
-//     in the set, and deliberately so: it is the day the MSFT lot was bought,
-//     and a basis struck at 81.40 against a valuation struck at 78.50 is what
-//     turns that position's dollar profit into a ruble loss (see the MSFT buy).
+//   - 2026-06-10 — the AAPL, MSFT and Alphabet buys' own date, at a visibly
+//     different rate: two operations, two dates, two rates, so the journal
+//     cannot be mistaken for "everything at today's rate". It is also the
+//     highest rate in the set, and deliberately so: it is the day the MSFT lot
+//     and the Alphabet parcel were bought, and an expense struck at 81.40
+//     against proceeds struck lower is what turns a dollar profit into a ruble
+//     loss — on paper for MSFT, valued at today's 78.50 (see the MSFT buy),
+//     and for good for Alphabet, sold at 65.00 (see the Alphabet buy).
 //   - 2026-07-03 — the Friday before the Saturday USD deposit, which has no
 //     rate of its own: the entry converts at the nearest earlier date and
 //     the journal discloses that date rather than claiming the operation's
@@ -582,8 +661,11 @@ func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]
 		{InstrumentID: instIDs["MSFT"], On: on, Price: rate("510.00"), Currency: "USD", Source: "seed"},
 		// NVDA is quoted at exactly the price the 2026-07-22 sale went off at,
 		// so the surviving parcel is valued at $2 000.00 against a $1 500.00
-		// basis: +$500.00 unrealized beside +$1 000.00 realized, both round and
-		// both readable off the row without a calculator.
+		// basis: +$500.00 unrealized on the row itself, beside the +$1 000.00
+		// that sale locked in — which reaches the screen through the account's
+		// «Зафиксировано» line rather than the row, since the per-position
+		// realized column was removed as visual noise (owner feedback, 4c).
+		// Both figures are round and checkable without a calculator.
 		{InstrumentID: instIDs["NVDA"], On: on, Price: rate("200.00"), Currency: "USD", Source: "seed"},
 	}
 	if err := mdStore.UpsertQuotes(ctx, quotes); err != nil {

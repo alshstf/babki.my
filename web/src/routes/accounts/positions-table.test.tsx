@@ -47,6 +47,11 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     // The ordinary case: every lot came from a buy, and a buy always knows
     // its own date. Tests about the other case set it explicitly.
     has_undated_lots: false,
+    // Same default for the realized-side twin: no test in this file exercises
+    // it yet, because PositionsTable does not read it — nothing in this
+    // component surfaces a per-position realized-undated indicator, so the
+    // field stays at its honest default rather than an untested guess.
+    has_undated_realizations: false,
     ...overrides,
   };
 }
