@@ -413,7 +413,12 @@ type rateLookup struct {
 // call Convert and now shares the memo like everything else) and that
 // valuation carried on into the base currency (positionInBase). One statement
 // of how a rate becomes money, so the two cannot round differently from each
-// other or from Convert. Amounts summed from many rates do not come through
+// other. It is deliberately the same step marketdata.Converter.Convert applies
+// — but that is two statements of one rule, not one, and only tests hold them
+// together (Convert has no production caller left in this package). If
+// Convert's scale handling ever changes, for zero-decimal currencies or
+// anything else, this has to be changed with it. Amounts summed from many
+// rates do not come through
 // here — they must round once for the whole sum, not once per term (see
 // sumInBase).
 func (rl *rateLookup) applyTo(amountMinor int64) int64 {
@@ -950,15 +955,22 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 // a hundred days between them costs one round trip for the lot, instead of one
 // per distinct date per position (#40, #53).
 //
-// IT IS DERIVED FROM THE CODE THAT CONSUMES THE RATES, NEVER WRITTEN BESIDE
-// IT. Every date here comes out of lotTerms, incomeTerms or realizedTerms —
-// the same three functions the sums themselves are built from — and the one
-// pair whose target is not the base currency comes out of marketValue, the
-// same function toAPI values the position with. There is no second list of
-// dates to keep in step with the first, because there is no second list: this
-// codebase has been bitten more than once by two computations of one value
-// drifting apart, and a prefetch is the worst place for it, since the two
-// disagree in silence.
+// IT IS DERIVED FROM THE CODE THAT CONSUMES THE RATES WHEREVER THAT IS
+// POSSIBLE, RATHER THAN WRITTEN BESIDE IT. Every historical date here comes
+// out of lotTerms, incomeTerms or realizedTerms — the same three functions the
+// sums themselves are built from — and the one pair whose target is not the
+// base currency comes out of marketValue, the same function toAPI values the
+// position with. That leaves no list of DATES to keep in step with a second
+// list of dates, which is where this codebase has been bitten before: two
+// computations of one value drift apart, and a prefetch is the worst place for
+// it, since the two disagree in silence.
+//
+// ONE query is not derived: the position's own currency against the base ON
+// TODAY, below. positionInBase picks today's rate for the valuation as a flat
+// decision rather than by building terms, so there is nothing here to call,
+// and this restates that choice. If the valuation ever stops being struck at
+// today's rate, this line has to follow — and nothing will make it, because
+// the consequence is a missed prefetch, not a wrong figure (see below).
 //
 // Completeness is an optimization, not a correctness condition, and the
 // asymmetry is deliberate. Asking for a rate the loop turns out not to need
@@ -1082,12 +1094,18 @@ func dedupeQueries(queries []marketdata.RateQuery) []marketdata.RateQuery {
 // speed, not truth: every figure below is struck by rateFor, which resolves
 // whatever it does not find in the memo. A batch that fails leaves the memo
 // empty and the screen is computed exactly as it was before any prefetch
-// existed — including the failure itself, which the very next lookup meets
-// again and reports from the code that knows which figure it was resolving and
-// can tell a missing rate (a gap on the screen) from an outage (a 500). Failing
-// here would move that judgement to a place that cannot make it, and would
-// turn into an error page every request the fallback could have served
-// correctly.
+// existed. An outage is met again by the very next lookup and reported from the
+// code that knows which figure it was resolving and can tell a missing rate (a
+// gap on the screen) from an outage (a 500). Failing here would move that
+// judgement to a place that cannot make it, and would turn into an error page
+// every request the fallback could have served correctly.
+//
+// KNOWN BLIND SPOT: a failure specific to the BATCH statement — a timeout on
+// the one large query, say — is met by nothing, because the per-pair fallback
+// then succeeds. The page is correct and slow, and no one is told the
+// optimization stopped working. No handler in this codebase holds a logger, so
+// closing this is a change of shape rather than a line, and it is filed rather
+// than done here.
 func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQuery, cache map[rateKey]*rateLookup) {
 	if len(queries) == 0 {
 		return

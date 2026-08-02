@@ -617,12 +617,17 @@ func rateQueries(ops []Operation, baseCurrency string) []marketdata.RateQuery {
 // speed, not truth: every figure on the page is struck by rateFor, which
 // resolves whatever it does not find in the memo. A batch that fails leaves the
 // memo empty and the page is computed exactly as it was before any prefetch
-// existed — including the failure itself, which the very next lookup meets
-// again and reports from the code that knows which figure it was resolving and
-// can tell a missing rate (a gap in the journal) from an outage (a 500).
-// Failing here would move that judgement to a place that cannot make it, and
-// would turn into an error page every request the fallback could have served
-// correctly.
+// existed. An outage is met again by the very next lookup and reported from the
+// code that knows which figure it was resolving and can tell a missing rate (a
+// gap in the journal) from an outage (a 500). Failing here would move that
+// judgement to a place that cannot make it, and would turn into an error page
+// every request the fallback could have served correctly.
+//
+// KNOWN BLIND SPOT, the same one portfolio.Handler.prewarmRates carries: a
+// failure specific to the BATCH statement is met by nothing, because the
+// per-pair fallback then succeeds. The page is correct and slow, and no one is
+// told the optimization stopped working. No handler here holds a logger, so
+// closing it is a change of shape rather than a line, and it is filed.
 func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQuery, cache map[rateKey]*rateLookup) {
 	if len(queries) == 0 {
 		return
