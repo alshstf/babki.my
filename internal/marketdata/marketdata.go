@@ -21,6 +21,17 @@ type FxRate struct {
 	Source string
 }
 
+// FxRateKey names a single rate lookup — the (Base, Quote) pair and the date
+// it should be resolved as of, following FxRateOn's semantics (exact date, or
+// the nearest earlier one). It is also the map key Store.FxRatesOn returns
+// results under, so a caller doing many lookups can index back into the
+// result by the same key it asked with.
+type FxRateKey struct {
+	Base  string
+	Quote string
+	On    time.Time
+}
+
 // Quote is the price of an instrument, in Currency, on date On.
 type Quote struct {
 	InstrumentID uuid.UUID

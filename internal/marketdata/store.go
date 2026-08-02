@@ -72,6 +72,65 @@ func (s *Store) FxRateOn(ctx context.Context, base, quote string, on time.Time) 
 		ORDER BY on_date DESC LIMIT 1`, base, quote, on))
 }
 
+// FxRatesOn resolves many (base, quote, date) lookups in a single round
+// trip, one FxRateOn call each would otherwise need. Each key's outcome is
+// exactly what FxRateOn would return for it individually: the exact date, or
+// the nearest earlier one. A key with nothing on or before its date is
+// absent from the result map, not zero-valued — the same convention
+// LatestQuotes uses for instruments without quotes. The returned FxRate
+// carries the resolved row's own date (on_date), not the requested one,
+// because "how stale is this rate" is exactly what callers use that date
+// for.
+//
+// The lookup is expressed as unnest of the three key columns joined
+// LATERAL against fx_rates, so the row-per-key "nearest earlier date" search
+// runs inside a single query regardless of how many keys are passed — the
+// same shape LatestQuotes uses for a set of instrument ids, generalized to a
+// three-column key with its own per-row ORDER BY ... LIMIT 1 instead of a
+// flat ANY($1).
+func (s *Store) FxRatesOn(ctx context.Context, keys []FxRateKey) (map[FxRateKey]FxRate, error) {
+	out := make(map[FxRateKey]FxRate, len(keys))
+	if len(keys) == 0 {
+		return out, nil
+	}
+
+	bases := make([]string, len(keys))
+	quotes := make([]string, len(keys))
+	dates := make([]time.Time, len(keys))
+	for i, k := range keys {
+		bases[i] = k.Base
+		quotes[i] = k.Quote
+		dates[i] = k.On
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT k.base, k.quote, k.on_date, r.on_date, r.rate, r.source
+		FROM unnest($1::text[], $2::text[], $3::date[]) AS k(base, quote, on_date)
+		JOIN LATERAL (
+			SELECT fx_rates.on_date, fx_rates.rate, fx_rates.source
+			FROM fx_rates
+			WHERE fx_rates.base = k.base
+			  AND fx_rates.quote = k.quote
+			  AND fx_rates.on_date <= k.on_date
+			ORDER BY fx_rates.on_date DESC
+			LIMIT 1
+		) r ON true`, bases, quotes, dates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key FxRateKey
+		var r FxRate
+		if err := rows.Scan(&key.Base, &key.Quote, &key.On, &r.On, &r.Rate, &r.Source); err != nil {
+			return nil, err
+		}
+		r.Base, r.Quote = key.Base, key.Quote
+		out[key] = r
+	}
+	return out, rows.Err()
+}
+
 // LatestFxRates returns the most recent rate for every (base, quote) pair.
 func (s *Store) LatestFxRates(ctx context.Context) ([]FxRate, error) {
 	rows, err := s.pool.Query(ctx, `
