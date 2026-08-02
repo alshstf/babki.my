@@ -136,19 +136,33 @@ func TestTransferInBaseMatchesThePositionItProduces(t *testing.T) {
 	}
 }
 
-// TestTransferWithoutBreakdownStillConvertsOnItsOwnDate pins the case that
-// must NOT change: a transfer whose basis was typed in by hand has no
-// purchase dates behind it — no lots were released to produce that number —
-// so the transfer's own date remains the only date it has, and the journal
-// keeps converting it there. Inventing dates for it would be worse than a
-// rough answer.
+// TestTransferWithoutBreakdownHasNoRubleEquivalentEither replaces
+// TestTransferWithoutBreakdownStillConvertsOnItsOwnDate, which pinned the
+// opposite rule: it asserted that a hand-typed basis keeps converting on the
+// transfer's own date, on the reasoning that it is the only date the row
+// has. Plan 7c's task-1 review (IMPORTANT 1) overturned that reasoning: the
+// LOT this very transfer creates has never made that claim (see
+// portfolio.Lot.AcquiredOn and Compute's TypeTransferIn branch) — it carries
+// no acquisition date at all, because nobody recorded when these shares were
+// actually bought. Converting the row anyway published a ruble figure the
+// position built from that identical lot refused to publish
+// (TestPositionInBaseNullWhenALotHasNoAcquisitionDate, in package
+// portfolio_test), so the journal and the position disagreed about the same
+// undated parcel — the exact defect plan 7a's cross-screen invariant exists
+// to catch. The fix treats "no breakdown" as "every piece of the parcel is
+// dateless" and nulls the row for it, on both legs, the same way a breakdown
+// with a dateless piece already did.
 //
 //	basis 190_000 minor USD given by hand, moved on 2026-07-20 (rate 78.50)
-//	  → 190_000 × 78.50 = 14_915_000
+//	  the number this test used to assert:
+//	  190_000 × 78.50 = 14_915_000 — invented, since no purchase date exists
 //
-// It is the same 14_915_000 the case above rejects, and that is the point:
-// the number is wrong only when better dates exist. Here they do not.
-func TestTransferWithoutBreakdownStillConvertsOnItsOwnDate(t *testing.T) {
+// Both legs are checked: the breakdown (or the absence of one) is read onto
+// both (see Store.attachTransferLots), so a fix landing on only the arriving
+// leg would leave the departing one still printing the invented figure —
+// exactly the asymmetry TestBothTransferLegsConvertAtThePurchaseDates exists
+// to rule out for the dated case.
+func TestTransferWithoutBreakdownHasNoRubleEquivalentEither(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2026-05-13", "60.00")
 	seedFxRate(t, mdStore, "2026-07-20", "78.50")
@@ -170,16 +184,20 @@ func TestTransferWithoutBreakdownStillConvertsOnItsOwnDate(t *testing.T) {
 	var pair transferResp
 	decodeJSON(t, resp, &pair)
 
-	row := findOperation(t, listJournal(t, url, c, to), pair.In.ID)
-	if row.InBase == nil {
-		t.Fatalf("transfer_in in_base = null, want a conversion on the transfer's own date")
+	outRow := findOperation(t, listJournal(t, url, c, from), pair.Out.ID)
+	inRow := findOperation(t, listJournal(t, url, c, to), pair.In.ID)
+
+	if inRow.InBase != nil {
+		if inRow.InBase.AmountMinor == 14_915_000 {
+			t.Fatalf("transfer_in in_base.amount_minor = 14915000 — the basis at the TRANSFER day's rate (190000 × 78.50); nobody recorded that day as a purchase date, so no rate honestly answers for this basis, exactly like the position built from the same lot")
+		}
+		t.Fatalf("transfer_in in_base = %+v, want null: a hand-typed basis has no purchase date behind it", *inRow.InBase)
 	}
-	if row.InBase.AmountMinor != 14_915_000 {
-		t.Errorf("in_base.amount_minor = %d, want 14915000 (190000 × 78.50, the transfer's own date — there are no purchase dates behind a hand-typed basis)",
-			row.InBase.AmountMinor)
-	}
-	if row.InBase.RateOn != "2026-07-20" {
-		t.Errorf("in_base.rate_on = %q, want 2026-07-20", row.InBase.RateOn)
+	if outRow.InBase != nil {
+		if outRow.InBase.AmountMinor == 14_915_000 {
+			t.Fatalf("transfer_out in_base.amount_minor = 14915000 — the same invented figure on the departing leg; both legs describe one undated parcel")
+		}
+		t.Fatalf("transfer_out in_base = %+v, want null: both legs describe the same undated basis", *outRow.InBase)
 	}
 }
 
@@ -399,6 +417,92 @@ func TestBothTransferLegsGoNullTogetherWhenAPieceHasNoAcquisitionDate(t *testing
 			t.Errorf("%s in_base.amount_minor = 6400000 — only the piece that still has a date (100000 × 64.00); a basis missing one of its pieces reads exactly like a smaller real one", tc.name)
 		default:
 			t.Errorf("%s in_base = %+v, want null: one piece of this parcel does not know when it was bought, so no set of rates answers for the amount", tc.name, *tc.row.InBase)
+		}
+	}
+}
+
+// TestMixedBreakdownReachedThroughTheAPIGoesNullOnBothLegs is the same rule
+// as the test above, but the mixed breakdown is built entirely through
+// ordinary transfer calls rather than by erasing a stored date directly in
+// the database. The plan-7c task-1 review confirmed this state is not a
+// synthetic edge case: it is exactly what happens when an account holding an
+// undated lot — the residue of an earlier hand-typed or legacy transfer —
+// later transfers on more than that undated lot alone.
+//
+//	account A: buy 5 TSLA on 2026-01-01 (only feeds the manual transfer below;
+//	  its own date and rate play no part in the assertions)
+//	account B: buy 5 TSLA @ $100.00 on 2026-03-01 -> a dated lot, cost 50_000
+//	transfer A -> B, 5 shares, occurred_on 2026-04-01, cost_minor 70_000 given
+//	  by hand -> B's second lot, undated, cost 70_000 (Service.CreateTransfer's
+//	  CostMinorOverride branch — no source lots released, so no dates carried)
+//	transfer B -> C, all 10 shares, occurred_on 2026-07-20 -> FIFO releases the
+//	  dated lot first (it entered B's queue on the earlier date), then the
+//	  undated one: TransferLots = [dated 5 @ 50_000, undated 5 @ 70_000], a
+//	  genuine mix produced without a single direct database write.
+//
+// Both legs of the SECOND transfer must go null together, for the same
+// reason a wholly undated parcel does: one piece of it has no purchase date,
+// so no honest set of rates answers for the sum. The two numbers a wrong
+// implementation would print are named below, mirroring the sibling test.
+func TestMixedBreakdownReachedThroughTheAPIGoesNullOnBothLegs(t *testing.T) {
+	url, c, mdStore := newAPIWithConverter(t)
+	seedFxRate(t, mdStore, "2026-03-01", "60.00")
+	seedFxRate(t, mdStore, "2026-07-20", "90.00")
+
+	a := mkAccount(t, url, c, "A", "USD")
+	b := mkAccount(t, url, c, "B", "USD")
+	dest := mkAccount(t, url, c, "C", "USD")
+	tsla := mkInstrument(t, url, c,
+		`{"type":"share","name":"Tesla","ticker":"TSLA","currency":"USD"}`)
+
+	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-01-01","quantity":"5","price":"100","amount_minor":-50000,"currency":"USD"}`, a, tsla))
+	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-03-01","quantity":"5","price":"100","amount_minor":-50000,"currency":"USD"}`, b, tsla))
+
+	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"5","occurred_on":"2026-04-01","cost_minor":70000}`,
+		a, b, tsla))
+	if resp.StatusCode != 201 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("transfer A->B with a manual basis = %d: %s", resp.StatusCode, body)
+	}
+
+	resp2 := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20"}`,
+		b, dest, tsla))
+	if resp2.StatusCode != 201 {
+		body, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("transfer B->C of the mixed parcel = %d: %s", resp2.StatusCode, body)
+	}
+	var pair transferResp
+	decodeJSON(t, resp2, &pair)
+
+	if pair.Out.AmountMinor != 120_000 {
+		t.Fatalf("transfer_out amount_minor = %d, want 120000 (50000 dated + 70000 undated) — the fixture assumption the rest of this test rests on",
+			pair.Out.AmountMinor)
+	}
+
+	outRow := findOperation(t, listJournal(t, url, c, b), pair.Out.ID)
+	inRow := findOperation(t, listJournal(t, url, c, dest), pair.In.ID)
+
+	for _, tc := range []struct {
+		name string
+		row  journalItem
+	}{
+		{"transfer_out", outRow},
+		{"transfer_in", inRow},
+	} {
+		if tc.row.InBase == nil {
+			continue
+		}
+		switch tc.row.InBase.AmountMinor {
+		case 10_800_000:
+			t.Errorf("%s in_base.amount_minor = 10800000 — the whole basis at the TRANSFER day's rate (120000 × 90.00), the invented figure the breakdown exists to replace", tc.name)
+		case 3_000_000:
+			t.Errorf("%s in_base.amount_minor = 3000000 — only the piece that has a date (50000 × 60.00); a basis missing one of its pieces reads exactly like a smaller real one", tc.name)
+		default:
+			t.Errorf("%s in_base = %+v, want null: this parcel mixes a dated piece with an undated one, reached through ordinary transfer calls and no database manipulation", tc.name, *tc.row.InBase)
 		}
 	}
 }

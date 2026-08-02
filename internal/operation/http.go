@@ -223,23 +223,28 @@ type datedMinor struct {
 // the two it is (assembled_from_lots — see operationInBase) instead of leaving
 // a reader to infer it from a date comparison that cannot answer the question.
 //
-// Transfers without a breakdown are unchanged: a basis typed in by hand has no
-// purchase dates behind it, and one recorded before breakdowns were kept has
-// lost them. There is one figure and one date on the row, so the row's own date
-// is what values it — on both legs alike, since neither has anything else.
-// That is not a claim about when the shares were bought; it is the only date
-// the operation contains. (The POSITION such a transfer creates makes the
-// opposite choice and holds no date at all, because a lot's date IS a claim
-// about a purchase — see portfolio.Lot.AcquiredOn.)
+// A transfer with NO breakdown at all — a basis typed in by hand, or one
+// recorded before breakdowns were kept — used to fall back to o.OccurredOn,
+// on the reasoning that it is the only date the row contains. That reasoning
+// does not survive contact with the POSITION the same transfer produces: the
+// LOT it creates has never claimed a purchase date (see
+// portfolio.Lot.AcquiredOn and Compute's TypeTransferIn branch) — a lot's date
+// says when its shares were bought, and here nobody recorded that. Converting
+// the row on the transfer's own date published a ruble figure the position
+// built from that very basis refused to publish, so the journal and the
+// position disagreed about one undated parcel. A missing breakdown is now
+// treated as what it is — every piece of the parcel is dateless — the
+// smallest instance of the case below, and this function answers it the same
+// way: ok is false, on both legs alike.
 //
-// A breakdown WITH a dateless piece is the third case, and the one this
-// function cannot answer at all: ok is false and the caller publishes nothing.
-// It arises when a parcel contains shares that arrived by an earlier
-// date-less transfer and are then moved on again, so some pieces name a
-// purchase day and others cannot. Converting the datable pieces alone would
-// understate the basis; converting the rest at the transfer's date would
-// reintroduce exactly the invented figure this mechanism removed. See
-// amountTerms' body for why the whole row goes null instead.
+// A dateless piece is the general case this function cannot answer at all:
+// ok is false and the caller publishes nothing. It covers a breakdown with no
+// pieces (the case just above) and a breakdown that mixes dated pieces with
+// dateless ones, which arises when a parcel already containing shares from an
+// earlier date-less transfer is moved on again. Converting the datable pieces
+// alone would understate the basis; converting the rest at the transfer's own
+// date would reintroduce exactly the invented figure this mechanism removed.
+// See amountTerms' body for where the whole row goes null instead.
 //
 // A breakdown that has drifted from the sum it must equal is refused before
 // it becomes a ruble figure at all, via portfolio.CheckTransferLots — the
@@ -260,6 +265,18 @@ type datedMinor struct {
 // of the journal, on both accounts, forever.
 func amountTerms(o Operation) (terms []datedMinor, headline time.Time, ok bool, err error) {
 	if len(o.TransferLots) == 0 {
+		if o.Type == TypeTransferIn || o.Type == TypeTransferOut {
+			// No breakdown at all: the basis was given by hand, or the
+			// transfer predates breakdowns being kept. Either way there is no
+			// purchase date behind this figure — o.OccurredOn is the day the
+			// paperwork moved, not a claim about when the shares were bought
+			// — and the lot this transfer creates already says so (nil
+			// AcquiredOn, see portfolio's TypeTransferIn branch). Falling back
+			// to o.OccurredOn here would value that same undated basis at a
+			// rate the position built from it refuses to use. ok is false, on
+			// both legs, for the same reason a dateless piece below is false.
+			return nil, time.Time{}, false, nil
+		}
 		return []datedMinor{{minor: o.AmountMinor, on: o.OccurredOn}}, o.OccurredOn, true, nil
 	}
 	if err := portfolio.CheckTransferLots(o); err != nil {
@@ -343,11 +360,11 @@ func amountTerms(o Operation) (terms []datedMinor, headline time.Time, ok bool, 
 // partially populated — in exactly three cases: the operation is already
 // denominated in baseCurrency (nothing to convert), no rate could be resolved
 // for one of the dates it needs nor any earlier one (marketdata.ErrNoRate), or
-// the amount cannot be split into dated terms at all because a piece of the
-// parcel does not know when it was bought (see amountTerms). An operation with
-// a converted amount but an unconverted fee, or a basis summed from only the
-// pieces that happened to convert, would be worse than an honest "can't
-// convert this one".
+// the amount cannot be split into dated terms at all because the parcel — or
+// a piece of it — does not know when it was bought (see amountTerms). An
+// operation with a converted amount but an unconverted fee, or a basis summed
+// from only the pieces that happened to convert, would be worse than an
+// honest "can't convert this one".
 //
 // A non-nil error means a genuine failure — a DB error, a canceled context,
 // or (see amountTerms) a transfer's stored breakdown no longer summing to

@@ -465,7 +465,7 @@ func TestLotsStayExactOverLongSequence(t *testing.T) {
 		t.Fatalf("lots = %d, want %d", len(p.Lots), len(wantDays))
 	}
 	for i, dayN := range wantDays {
-		if !p.Lots[i].AcquiredOn.Equal(day(dayN)) {
+		if !sameAcquisition(p.Lots[i].AcquiredOn, dayp(dayN)) {
 			t.Errorf("lot %d acquired on %s, want %s", i,
 				acquired(p.Lots[i].AcquiredOn), day(dayN).Format("2006-01-02"))
 		}
