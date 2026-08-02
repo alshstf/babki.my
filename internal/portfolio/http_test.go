@@ -188,6 +188,7 @@ type positionResp struct {
 	PriceOn                   *string         `json:"price_on"`
 	UnrealizedPnlMinor        *int64          `json:"unrealized_pnl_minor"`
 	HasUndatedLots            bool            `json:"has_undated_lots"`
+	HasUndatedRealizations    bool            `json:"has_undated_realizations"`
 	InBase                    *positionInBase `json:"in_base"`
 }
 

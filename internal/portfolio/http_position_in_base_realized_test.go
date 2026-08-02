@@ -373,6 +373,14 @@ func TestPositionInBaseRealizedNullWhenAReleasedParcelHasNoAcquisitionDate(t *te
 	if p.HasUndatedLots {
 		t.Fatalf("has_undated_lots = true, want false: the undated lot has been sold and is not among the lots still held — which is exactly why it cannot be the thing that explains the null below")
 	}
+	// has_undated_lots being false while realized_pnl_minor is null is exactly
+	// the gap has_undated_realizations exists to close: the parcel that
+	// stopped the sum has already been sold, so no flag about HELD lots can
+	// name it, and a reader is left to guess "no rate" about a date that will
+	// never arrive. This is the "raised" half of that flag's coverage.
+	if !p.HasUndatedRealizations {
+		t.Errorf("has_undated_realizations = false, want true: the sale above retired the undated parcel — a piece of basis whose acquisition date was never recorded — and that is exactly the condition this flag exists to report")
+	}
 
 	if p.InBase == nil {
 		t.Fatalf("in_base = nil, want the object: only the realized figure is unstrikeable, and the basis, the income and the valuation never depended on a parcel that is already gone")
@@ -481,6 +489,15 @@ func TestPositionInBaseRealizedNullWhenTheDisposalDateHasNoRate(t *testing.T) {
 	if p.RealizedPnlMinor != 20000 {
 		t.Fatalf("realized_pnl_minor = %d, want 20000 (120000 - 100000, in USD)", p.RealizedPnlMinor)
 	}
+	// Every parcel here — the one retired and the one still held — has a
+	// recorded purchase date; only a fx rate is missing, and that is a gap
+	// the backfill job closes on its own. has_undated_realizations must stay
+	// false here, or a reader would be told a permanent, unrecoverable gap
+	// where the true story is "the number will appear later" — the "lowered"
+	// half of this flag's coverage, the mirror of the raised case above.
+	if p.HasUndatedRealizations {
+		t.Errorf("has_undated_realizations = true, want false: every parcel this position ever held or retired has a recorded acquisition date — only the fx rate for the day of the sale is missing")
+	}
 	if p.InBase == nil {
 		t.Fatalf("in_base = nil, want the object: only the sale's own day lacks a rate, and the basis still held was bought on a day that has one")
 	}
@@ -492,6 +509,78 @@ func TestPositionInBaseRealizedNullWhenTheDisposalDateHasNoRate(t *testing.T) {
 	}
 	if p.InBase.CostMinor != 9_000_000 {
 		t.Errorf("in_base.cost_minor = %d, want 9000000 (100000 * 90) — the basis is computed from its own dates and must survive a hole under the sale", p.InBase.CostMinor)
+	}
+}
+
+// TestPositionInBaseRealizedNullWhenThePurchaseDateHasNoRate is the mirror of
+// the test above: the missing rate sits under the day a retired parcel was
+// BOUGHT instead of the day it was SOLD. The honesty rule treats the two
+// identically — a term the sum needs has no rate, so the sum is not
+// strikeable — and it is the same code path either way (sumInBase walks every
+// term the same way regardless of which date it carries). What differs is how
+// the hole is reached: a hole under the SALE day needs oneDateConverter,
+// because a real Converter's Store.FxRateOn falls back to the nearest EARLIER
+// date and a sale is by construction later than the purchase whose basis it
+// retires (see oneDateConverter's doc comment) — but a hole under the
+// PURCHASE day needs no double at all. Buying before every rate the fixture
+// seeds leaves Store.FxRateOn nothing earlier to fall back to, so the same
+// real converter used everywhere else in this file already produces exactly
+// this gap.
+//
+//	fx USD->RUB: one rate, 80 from 2026-05-01
+//	buy  10 @ $100.00 on 2026-01-05 (before the only seeded rate) -> lot cost
+//	  100_000 minor USD; no rate resolves for this date at all
+//	sell 10 @ $200.00 on 2026-05-10 (after the seeded rate) -> proceeds
+//	  200_000, releasing the whole lot above; the sale's OWN day resolves fine
+//	buy   3 @ $40.00  on 2026-07-25 (after the sale, untouched by it) -> lot
+//	  12_000 minor USD, held, dated and rated same as the sibling fixture in
+//	  TestPositionInBaseRealizedNullWhenAReleasedParcelHasNoAcquisitionDate
+//
+//	realized_pnl_minor (USD)   = 200_000 - 100_000 = 100_000
+//	in_base.realized_pnl_minor = null (the retired parcel's OWN day has no rate)
+//	in_base.cost_minor         = 12_000 * 80       = 960_000 (the held lot,
+//	                                                  unaffected — its own day
+//	                                                  resolves fine)
+func TestPositionInBaseRealizedNullWhenThePurchaseDateHasNoRate(t *testing.T) {
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := fxRateAPI(t, quotes, datedRate{midRateOn, "80"})
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	share := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-01-05","quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, acc.ID, share.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
+		"occurred_on":%q,"quantity":"10","price":"200",
+		"amount_minor":200000,"currency":"USD"}`, acc.ID, share.ID, sellOn))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-25","quantity":"3","price":"40",
+		"amount_minor":-12000,"currency":"USD"}`, acc.ID, share.ID))
+
+	p := onlyPosition(t, c, url, acc.ID)
+
+	if p.RealizedPnlMinor != 100000 {
+		t.Fatalf("realized_pnl_minor = %d, want 100000 (200000 - 100000, in USD)", p.RealizedPnlMinor)
+	}
+	// The retired parcel's purchase date IS on record (2026-01-05); only its
+	// fx rate is missing. has_undated_realizations reports an unrecorded
+	// DATE, not a missing rate, and must stay false here — a missing rate is
+	// a gap the backfill job closes on its own.
+	if p.HasUndatedRealizations {
+		t.Errorf("has_undated_realizations = true, want false: the retired parcel's purchase date is recorded (2026-01-05) — only its fx rate is missing, which is not the condition this flag reports")
+	}
+	if p.InBase == nil {
+		t.Fatalf("in_base = nil, want the object: only the retired parcel's own day lacks a rate, and the lot still held was bought on a day that has one")
+	}
+	if p.InBase.RealizedPnlMinor != nil {
+		if *p.InBase.RealizedPnlMinor == 8_000_000 {
+			t.Fatalf("in_base.realized_pnl_minor = 8000000 — that is the USD result times the one rate that DID resolve (100000 * 80); the day the shares were bought has no rate at all and the figure is not strikeable")
+		}
+		t.Fatalf("in_base.realized_pnl_minor = %d, want null: the day the retired parcel was bought has no fx rate", *p.InBase.RealizedPnlMinor)
+	}
+	if p.InBase.CostMinor != 960_000 {
+		t.Errorf("in_base.cost_minor = %d, want 960000 (12000 * 80) — the basis still held is computed from its own date and must survive a hole under a parcel already sold", p.InBase.CostMinor)
 	}
 }
 

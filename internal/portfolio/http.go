@@ -188,6 +188,33 @@ func hasUndatedLots(p *Position) bool {
 	return slices.ContainsFunc(p.Lots, func(l Lot) bool { return l.AcquiredOn == nil })
 }
 
+// hasUndatedRealizations reports whether any disposal already made (a sale or
+// a covered amortization — see Position.Realizations) retired a piece of
+// basis with no acquisition date (see ReleasedLot.AcquiredOn). It is
+// hasUndatedLots' twin for the realized side, published for the identical
+// reason: in_base.realized_pnl_minor being null has two causes — no fx rate
+// for one of its dates, or no purchase date for a parcel it retired — and
+// they are not the same news to a reader.
+//
+// hasUndatedLots cannot stand in for it: that flag scans p.Lots, the lots
+// still HELD, and a piece that stopped realized_pnl_minor has by definition
+// already been sold — it is never among them. A position can therefore show
+// has_undated_lots=false and has_undated_realizations=true in the very same
+// response (see TestPositionInBaseRealizedNullWhenAReleasedParcelHasNoAcquisitionDate),
+// which is exactly the case the old single flag could not describe.
+//
+// It scans every Realization rather than stopping at the first one with any
+// Released piece, but the question is still only whether any undated piece
+// exists anywhere, not how many or in which disposal.
+func hasUndatedRealizations(p *Position) bool {
+	for _, r := range p.Realizations {
+		if slices.ContainsFunc(r.Released, func(rl ReleasedLot) bool { return rl.AcquiredOn == nil }) {
+			return true
+		}
+	}
+	return false
+}
+
 // toAPI builds one position's API representation, including its market
 // valuation and — when that valuation isn't already in the position's own
 // currency — an fx conversion into it (conv.Convert is only ever called
@@ -198,14 +225,15 @@ func hasUndatedLots(p *Position) bool {
 // handled outcome (see below), not a request failure.
 func toAPI(ctx context.Context, conv converter, p *Position, inst instrument.Instrument, quotes map[uuid.UUID]marketdata.Quote) (apitypes.Position, error) {
 	out := apitypes.Position{
-		Instrument:       instrumentToAPI(inst),
-		Quantity:         p.Quantity.String(),
-		CostMinor:        p.CostMinor,
-		Currency:         p.Currency,
-		RealizedPnlMinor: p.RealizedPnLMinor,
-		IncomeMinor:      p.IncomeMinor,
-		FeesMinor:        p.FeesMinor,
-		HasUndatedLots:   hasUndatedLots(p),
+		Instrument:             instrumentToAPI(inst),
+		Quantity:               p.Quantity.String(),
+		CostMinor:              p.CostMinor,
+		Currency:               p.Currency,
+		RealizedPnlMinor:       p.RealizedPnLMinor,
+		IncomeMinor:            p.IncomeMinor,
+		FeesMinor:              p.FeesMinor,
+		HasUndatedLots:         hasUndatedLots(p),
+		HasUndatedRealizations: hasUndatedRealizations(p),
 	}
 	q, found := quotes[p.InstrumentID]
 	if !found {
@@ -425,7 +453,13 @@ func realizedTerms(events []Realization) (terms []datedMinor, dated bool) {
 // breakdown IS published, each of those figures becomes a published quantity in
 // its own right, is rounded once itself, and the contract will have to say that
 // their sum can differ from this total by a unit — which is a statement about
-// two roundings of the same money, not a defect in either.
+// two roundings of the same money, not a defect in either. That per-disposal
+// total, not this one, will be the legally correct figure to report on such a
+// line-item breakdown: a tax authority computes the base per trade and sums
+// the trades, not the reverse (НК РФ ст. 210 п. 5 taxes each disposal on its
+// own), so the sum-of-rounded-rows answer is the one the law asks for even
+// though this field will keep publishing the single round-once-per-position
+// total for the reasons above.
 //
 // Null (rather than an error) covers the two ways a term can fail to be valued:
 // no fx rate for a date the sum needs, and no purchase date for a parcel it

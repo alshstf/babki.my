@@ -47,6 +47,10 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     // The ordinary case: every lot came from a buy, and a buy always knows
     // its own date. Tests about the other case set it explicitly.
     has_undated_lots: false,
+    // Same default for the realized-side twin: no test in this file exercises
+    // it yet (the interface doesn't read it — see the API contract's note
+    // that showing it is a later task), so it stays at its honest default.
+    has_undated_realizations: false,
     ...overrides,
   };
 }
