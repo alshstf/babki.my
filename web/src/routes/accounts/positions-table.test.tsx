@@ -687,6 +687,48 @@ describe("PositionsTable", () => {
       );
     });
 
+    it("never calls the base currency a third one, even on a position denominated in another", () => {
+      // The chain wording is chosen by comparing the valuation's currency with
+      // the POSITION's, which on its own would also be true of a valuation that
+      // came out in the base currency — where "третья валюта" would be plainly
+      // false, since the base currency is the second one and the figure needs
+      // no chain to reach it. The condition holds anyway, and this pins WHY:
+      // the marker the wording rides on appears only when a figure could not be
+      // converted, and a figure already denominated in the base currency has
+      // nothing to convert. The invariant was left to be inferred; here it is
+      // stated, so a later change to either half fails instead of producing a
+      // sentence about a currency that is not third and not missing a rate.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "USD",
+              cost_minor: 100_000,
+              market_value_minor: 9_000_000,
+              // A bond priced off a face value denominated in the base
+              // currency, held on a dollar position.
+              market_value_currency: "RUB",
+              unrealized_pnl_minor: null,
+              in_base: null,
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const marketValue = screen.getByTestId("position-market-value");
+      expect(norm(marketValue.textContent ?? "")).toContain(norm(formatMinor(9_000_000, "RUB")));
+      expect(screen.queryByTestId("position-market-value-not-converted")).not.toBeInTheDocument();
+      expect(screen.queryByTitle(/в третьей валюте/)).not.toBeInTheDocument();
+      // The cells that ARE in the position's currency keep the row's own
+      // reason, which here is a missing rate and nothing to do with chains.
+      expect(screen.getByTestId("position-cost-not-converted")).toHaveAttribute(
+        "title",
+        "Нет курса — показано в исходной валюте",
+      );
+    });
+
     it("still shows the no-quote / currency-mismatch dashes regardless of mode — unaffected by base conversion", () => {
       wrap(
         <PositionsTable

@@ -25,7 +25,7 @@ import { resolveDisplayAmount } from "@/lib/display-amount";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
 import { useReportScreenCurrencies } from "@/lib/screen-currencies";
 import { MoneyCell } from "@/components/money-cell";
-import { CostBasisNotice } from "@/components/cost-basis-notice";
+import { costBasisCaveat } from "@/components/cost-basis-notice";
 import {
   useOperations,
   useDeleteOperation,
@@ -37,14 +37,44 @@ import type { CostBasisRules } from "@/api/tax-residencies";
 
 const PAGE_SIZE = 50;
 
-// The journal rows whose amount is not money that moved but a cost basis
-// picked by a rule. Only a transfer between the family's own accounts is one:
-// its amount_minor is the basis of the shares it carried, taken from the
-// source account by the same earliest-purchases-first queue that produces a
-// position's cost (see Operation.amount_minor in the API contract). Every
-// other row's amount belongs to the day it is dated and no cost basis rule
-// has any part in it.
-const COST_BASIS_TYPES: ReadonlySet<Operation["type"]> = new Set(["transfer_in", "transfer_out"]);
+// Whether this row's amount is not money that moved on the day it is dated but
+// a cost basis some rule picked out of earlier purchases — the only kind of
+// figure the cost basis caveat is true of.
+//
+// The answer is the server's, taken from what it publishes ABOUT THIS ROW, and
+// deliberately not from a list of operation types kept here. Such a list is a
+// copy of a server rule with nothing tying it to the contract: the day the
+// server derives a cost basis for one more type, the copy stops matching and
+// the caveat disappears from the figure without a word — which is the exact
+// bug this whole caveat exists to prevent, reintroduced by the code that
+// renders it.
+//
+// Two published fields answer, and they are complementary rather than
+// redundant (see Operation.has_undated_lots and OperationInBase.
+// assembled_from_lots in the API contract):
+//
+//   - assembled_from_lots says the ruble figure was built piece by piece out
+//     of the purchases behind the amount, each at its own day's rate. The
+//     server sets it from the presence of a stored breakdown, not from the
+//     row's type, so a new type that carries one is covered the day it appears.
+//     It lives INSIDE in_base, so it is absent whenever the conversion block
+//     is — and absence there is not a "no": nothing was evaluated at all.
+//   - has_undated_lots is published on every row, conversion or not, and says
+//     this amount is a cost basis whose purchase dates are not all known. It
+//     is precisely the largest slice of the in_base-is-null space: a parcel
+//     with no breakdown, or one with a dateless piece, never converts.
+//
+// What the two together still cannot answer is a parcel with a full, dated
+// breakdown whose in_base is null for one of the other two reasons — the row
+// is already in the base currency, or a rate is missing. There the server
+// states nothing, and the caveat stays off. That is a gap in the wire, not a
+// judgement about the row; closing it needs the statement moved out of the
+// conversion block, which is a contract change (see the report). Guessing
+// instead would mean marking every unconverted deposit as a cost basis, which
+// is a false statement about far more rows than it would rescue.
+function publishesACostBasis(operation: Operation): boolean {
+  return operation.has_undated_lots || operation.in_base?.assembled_from_lots === true;
+}
 
 export function OperationsTable({
   accountId,
@@ -67,7 +97,7 @@ export function OperationsTable({
   // which has the session already, rather than being fetched here or shipped
   // a third time inside this listing: the statement belongs to the space, and
   // the journal response is a bare array with nowhere to carry it (see the
-  // API contract). Undefined while the session is still loading — the notice
+  // API contract). Undefined while the session is still loading — the caveat
   // simply waits rather than guessing.
   costBasisRules?: CostBasisRules;
 }) {
@@ -131,6 +161,15 @@ export function OperationsTable({
   // inside the map below.
   const notConvertedTitle = t("operations.notConverted");
   const undatedLotsTitle = t("operations.notConvertedUndatedLots");
+  // The caveat that a cost basis here was picked by a queue that is not the
+  // owner's country's. It hangs on the amount cells whose figure actually IS
+  // one, and nowhere else. It used to be a banner over the whole table, which
+  // put "computed by a rule that is not your country's" above fifty deposits,
+  // purchases and dividends it says nothing about, and — since the positions
+  // above render the same banner — printed the identical paragraph twice on
+  // one screen. Undefined when the session is still loading or when the
+  // country's rule IS what is computed (see costBasisCaveat).
+  const costBasisTitle = costBasisRules ? costBasisCaveat(t, costBasisRules) : undefined;
 
   const instrumentName = (instrumentId: string | null | undefined) => {
     if (!instrumentId) return "—";
@@ -166,28 +205,9 @@ export function OperationsTable({
   }
 
   const canLoadMore = list.length === limit;
-  // Whether anything in the window actually shown is a cost basis. A journal
-  // of purchases, sales and dividends contains none, and a caveat about the
-  // cost basis rule over such a table would be a caveat about nothing — the
-  // same rule the positions screen follows by rendering its notice only over
-  // a non-empty table.
-  const showsACostBasis = list.some((operation) => COST_BASIS_TYPES.has(operation.type));
 
   return (
     <div className="grid gap-3">
-      {/* A transferred parcel's amount is a cost basis, so the statement of
-          whether this application's queue is the owner's country's applies to
-          it exactly as it applies to the positions above — and until now the
-          journal published the figure with nothing said about it, so a client
-          that faithfully read the caveat in both places the server offers it
-          still showed an unqualified number here. It reads from the session
-          rather than from a third copy on this response: one truth, one
-          publisher (see SessionInfo.cost_basis_rules in the API contract). Like
-          every other use of this component it stays silent when the country's
-          rule IS what is computed. */}
-      {costBasisRules && showsACostBasis && (
-        <CostBasisNotice rules={costBasisRules} namesCountry />
-      )}
       <Table>
         <TableHeader>
           <TableRow>
@@ -245,11 +265,22 @@ export function OperationsTable({
             // when the two dates differ would contradict the Date column
             // right next to it, so that wording is only used when they
             // actually match; otherwise the honest fallback wording is used.
-            const convertedTitle = operation.in_base?.assembled_from_lots
-              ? (date: string) => t("operations.convertedAtPurchaseDates", { date })
-              : operation.in_base?.rate_on === operation.occurred_on
-                ? (date: string) => t("operations.convertedAtDate", { date })
-                : (date: string) => t("operations.convertedAtEarlierDate", { date });
+            //
+            // All three name the rate date, so all three answer a date they
+            // cannot render — null, whether because none came or because it
+            // did not parse — with no tooltip at all: half a sentence ending
+            // in a dash claims less than nothing. MoneyCell hands the decision
+            // over rather than making it, because the neighbouring screen's
+            // wordings do not mention a date and must survive its absence.
+            const convertedTitle = (date: string | null) => {
+              if (!date) return undefined;
+              if (operation.in_base?.assembled_from_lots) {
+                return t("operations.convertedAtPurchaseDates", { date });
+              }
+              return operation.in_base?.rate_on === operation.occurred_on
+                ? t("operations.convertedAtDate", { date })
+                : t("operations.convertedAtEarlierDate", { date });
+            };
             const unconvertedTitle = operation.has_undated_lots
               ? undatedLotsTitle
               : notConvertedTitle;
@@ -271,6 +302,11 @@ export function OperationsTable({
                     className={signClass(resolvedAmount.amountMinor)}
                     notConvertedTitle={unconvertedTitle}
                     convertedTitle={convertedTitle}
+                    // Only the amount, and only on the rows whose amount is a
+                    // cost basis. The fee below is a broker's charge on the
+                    // day it was charged, no rule picked it out of anything,
+                    // and the rows around this one are money that moved.
+                    caveatTitle={publishesACostBasis(operation) ? costBasisTitle : undefined}
                     testId="operation-amount"
                   />
                 </TableCell>

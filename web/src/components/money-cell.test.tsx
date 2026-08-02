@@ -140,6 +140,64 @@ describe("MoneyCell", () => {
     expect(screen.getByTestId("amt")).not.toHaveAttribute("title");
   });
 
+  it("hands the caller a null date, not an empty string, when the rate date does not parse", () => {
+    // The caller decides what an unusable date means for ITS wording: one that
+    // interpolates the date has to withhold the whole sentence, one that never
+    // mentions a date carries on. Only a value it can actually test lets it
+    // choose — an empty string reads as a date that formatted to nothing, and
+    // the wordings that must stay silent are exactly the ones that would
+    // otherwise print a dangling dash.
+    const seen: (string | null)[] = [];
+    render(
+      <MoneyCell
+        resolved={{ amountMinor: 655_000, currency: "RUB", noRate: false, converted: true, rateOn: "2019-13-99" }}
+        convertedTitle={(date) => {
+          seen.push(date);
+          return date ? `на ${date}` : undefined;
+        }}
+        testId="amt"
+      />,
+    );
+
+    expect(seen).toEqual([null]);
+    expect(screen.getByTestId("amt")).not.toHaveAttribute("title");
+  });
+
+  it("shows a caveat about what the figure is alongside the one about its currency", () => {
+    // Two statements about one number — "this is in dollars because no rate was
+    // found" and "this is a cost basis your country's rules would have picked
+    // differently" — each with its own indicator. Merging them into one tooltip
+    // would be the same conflation this component avoids elsewhere.
+    render(
+      <MoneyCell
+        resolved={{ amountMinor: 190_000, currency: "USD", noRate: true, converted: false, rateOn: null }}
+        notConvertedTitle="Нет курса на дату операции — показано в валюте операции"
+        caveatTitle="Это стоимость бумаг — её выбрало правило очереди"
+        testId="amt"
+      />,
+    );
+
+    expect(screen.getByTestId("amt-not-converted")).toHaveAttribute(
+      "title",
+      "Нет курса на дату операции — показано в валюте операции",
+    );
+    expect(screen.getByTestId("amt-caveat")).toHaveAttribute(
+      "title",
+      "Это стоимость бумаг — её выбрало правило очереди",
+    );
+  });
+
+  it("renders no caveat indicator when the caller has nothing to qualify", () => {
+    render(
+      <MoneyCell
+        resolved={{ amountMinor: 100_00, currency: "USD", noRate: false, converted: false, rateOn: null }}
+        testId="amt"
+      />,
+    );
+
+    expect(screen.queryByTestId("amt-caveat")).not.toBeInTheDocument();
+  });
+
   it("does not call the caller-supplied converted-title wording when nothing was converted", () => {
     render(
       <MoneyCell

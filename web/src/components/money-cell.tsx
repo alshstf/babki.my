@@ -1,4 +1,4 @@
-import { Info } from "lucide-react";
+import { Info, Scale } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { formatMinor } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
@@ -21,6 +21,15 @@ import type { ResolvedAmount } from "@/lib/display-amount";
 // stale-rates icon in summary-cards.tsx). The two states are mutually
 // exclusive by construction: a converted amount carries a rate date and no
 // indicator, an unconverted one carries the indicator and no rate date.
+//
+// A third, independent thing a cell can carry is a caveat about WHAT the
+// number is rather than about which currency it is in (`caveatTitle`). The
+// two travel together on the same figure often enough that they need separate
+// indicators: "this is shown in dollars because no rate was found" and "this
+// is a cost basis your country's rules would have picked differently" are two
+// statements, and folding them into one tooltip would be the same conflation
+// this component already avoids between "was it converted" and "what date is
+// it captioned with".
 export function MoneyCell({
   resolved,
   className,
@@ -43,15 +52,33 @@ export function MoneyCell({
   //
   // A function rather than a ready string so each caller's t() call keeps a
   // literal key at the call site (scripts/check-i18n.mjs can only verify
-  // those) while the date formatting — and the malformed-date rule below —
-  // stay owned by this component.
+  // those) while the date formatting stays owned by this component.
+  //
+  // It is handed null — not an empty string — when there is no rate date, or
+  // when formatDate rejects a malformed one. A wording that interpolates the
+  // date has nowhere to put it and must answer with undefined, which withholds
+  // the tooltip: a dangling "— " reads worse than silence. A wording that says
+  // nothing about a date ignores the argument and is shown as usual. Which of
+  // the two a wording is, only the caller knows, so only the caller can decide
+  // — this component used to decide for it by suppressing the tooltip whenever
+  // the date was unusable, which silently withheld datelessly-worded
+  // disclosures too.
   convertedTitle,
+  // A caveat about what this figure IS, shown as its own tooltipped indicator
+  // beside the number. Unlike notConvertedTitle it is not about the currency
+  // and does not depend on any conversion having happened or failed: the
+  // journal uses it to say that a transferred parcel's amount is a cost basis
+  // picked by a queue that is not the owner's country's, which is true of the
+  // figure whichever currency it ends up displayed in. Absent by default —
+  // most cells have nothing of the kind to say.
+  caveatTitle,
 }: {
   resolved: ResolvedAmount;
   className?: string;
   testId?: string;
   notConvertedTitle?: string;
-  convertedTitle?: (formattedDate: string) => string;
+  convertedTitle?: (formattedDate: string | null) => string | undefined;
+  caveatTitle?: string;
 }) {
   const { t } = useTranslation();
   // Whether to disclose anything at all is decided by `converted` — did this
@@ -66,15 +93,13 @@ export function MoneyCell({
   // The DEFAULT wording is the one that needs the date ("converted at the
   // current rate, on <date>"), so it is skipped when there is none, or when
   // formatDate rejects a malformed one — a dangling "on " reads worse than
-  // silence. A caller that supplies its own wording gets it whenever a
-  // conversion happened; a wording that interpolates the date is only passed
-  // where the contract guarantees one (the journal's every in_base has a
-  // rate_on; a position's market value has one exactly when it has a value).
+  // silence. A caller that supplies its own wording is handed the same
+  // distinction as a null date and answers it itself (see convertedTitle).
   const rateDate = resolved.rateOn ? formatDate(resolved.rateOn) : "";
   const convertedTooltip = !resolved.converted
     ? undefined
     : convertedTitle
-      ? convertedTitle(rateDate)
+      ? convertedTitle(rateDate || null)
       : rateDate
         ? t("displayCurrency.convertedOn", { date: rateDate })
         : undefined;
@@ -92,6 +117,18 @@ export function MoneyCell({
           title={notConvertedTitle ?? t("displayCurrency.notConverted")}
         >
           <Info size={14} />
+        </span>
+      )}
+      {caveatTitle && (
+        // A different glyph from the one above on purpose: both can sit on one
+        // figure at once, and two identical icons side by side would read as
+        // one thing said twice rather than as two different things said once.
+        <span
+          data-testid={testId ? `${testId}-caveat` : undefined}
+          className="inline-flex shrink-0 text-muted-foreground"
+          title={caveatTitle}
+        >
+          <Scale size={14} />
         </span>
       )}
     </span>

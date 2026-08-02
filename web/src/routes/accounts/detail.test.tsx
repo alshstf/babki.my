@@ -165,6 +165,22 @@ const britain: SessionInfo["cost_basis_rules"] = {
   notices: ["method_mismatch", "perimeter_mismatch"],
 };
 
+// The other answer entirely: this application's queue IS this country's rule,
+// so nothing is said about the figures at all. It exists so the two publishers
+// of this statement can be told apart. The session and the positions response
+// carry it independently (see SessionInfo.cost_basis_rules and
+// PositionsResponse.cost_basis_rules in the API contract), and a fixture that
+// hands both of them one object cannot tell which one a screen actually read —
+// the assertion passes either way and the contract goes untested. Wherever a
+// test is about the SOURCE, one publisher gets britain and the other gets this.
+const russia: SessionInfo["cost_basis_rules"] = {
+  country: "RU",
+  method: "fifo",
+  perimeter: "account",
+  supported: true,
+  notices: [],
+};
+
 // One position, enough of one for the table to render a row. The cost basis
 // statement below qualifies exactly these figures, so the tests about it need
 // a row for it to sit next to. realized_total describes the whole list rather
@@ -375,7 +391,7 @@ describe("AccountDetailPage", () => {
     expect(screen.queryByTestId("realized-total")).not.toBeInTheDocument();
   });
 
-  it("says next to the journal that a transferred amount is not this country's cost basis", async () => {
+  it("takes the journal's cost basis caveat from the session, not from the positions response", async () => {
     // Issue #61. A transfer's amount is the cost basis of the shares it moved,
     // picked by the same earliest-purchases-first queue the positions screen
     // uses — so the statement "that queue is not your country's" describes it
@@ -385,37 +401,58 @@ describe("AccountDetailPage", () => {
     // client that faithfully read the caveat in both places the server offers
     // it still showed this figure with nothing said about it.
     //
-    // The account deliberately has NO positions: the notice that appears can
-    // then only be the journal's own, not the positions table's leaking down
-    // the page.
+    // The two publishers are given OPPOSITE answers here on purpose: the
+    // session says the queue is not this country's, the positions response says
+    // it is. A journal that read the wrong one would fall silent, so this
+    // asserts the source and not merely that something appeared. The account
+    // also has no positions at all, so nothing above can leak down the page.
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
-      "/positions": { body: makePositionsBody(britain, [], makeRealizedTotal({ by_currency: [] })) },
-      "/operations": { body: [makeOperation({ id: "op-transfer", type: "transfer_in" })] },
+      "/positions": { body: makePositionsBody(russia, [], makeRealizedTotal({ by_currency: [] })) },
+      "/operations": {
+        body: [
+          makeOperation({
+            id: "op-transfer",
+            type: "transfer_in",
+            in_base: {
+              amount_minor: 900_000,
+              fee_minor: 0,
+              currency: "RUB",
+              rate_on: "2026-06-15",
+              // The server's own statement that this amount was assembled out
+              // of the purchases behind it — what makes the row a cost basis.
+              assembled_from_lots: true,
+            },
+          }),
+        ],
+      },
       "/api/v1/instruments": { body: [] },
     });
 
     renderPage(makeSession({ tax_residency: "GB", cost_basis_rules: britain }));
 
-    // The journal really is the only thing on screen that could be qualified.
-    expect(await screen.findByText("На этом счете пока нет позиций")).toBeInTheDocument();
-    const notice = await screen.findByTestId("cost-basis-notice");
-    expect(notice.textContent).toContain("Великобритания");
+    // The caveat sits ON the figure it describes, not over the table.
+    const caveat = await screen.findByTestId("operation-amount-caveat");
+    const title = caveat.getAttribute("title") ?? "";
+    expect(title).toContain("Великобритания");
     // Both divergences, exactly as beside the positions: reporting one hides
     // the other.
-    expect(screen.getByText(/не самая ранняя покупка/)).toBeInTheDocument();
-    expect(screen.getByText(/сразу по всем счетам владельца/)).toBeInTheDocument();
+    expect(title).toContain("не самая ранняя покупка");
+    expect(title).toContain("сразу по всем счетам владельца");
+    // And it says what the figure is, which the banner used to get from the
+    // table it stood over and a cell tooltip has to say for itself.
+    expect(title).toContain("стоимость бумаг");
   });
 
-  it("says nothing about the rules over a journal that publishes no cost basis", async () => {
+  it("says nothing about the rules over a journal row that publishes no cost basis", async () => {
     // A deposit's amount is money that moved on the day the row is dated; no
-    // queue picked it and no cost basis rule has any part in it. A caveat over
-    // such a table is a caveat about nothing, and noise is what makes a real
+    // queue picked it and no cost basis rule has any part in it. A caveat on
+    // such a figure is a caveat about nothing, and noise is what makes a real
     // warning invisible — the same reason the positions notice stays away from
     // an empty table.
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
-      "/positions": { body: makePositionsBody(britain, [], makeRealizedTotal({ by_currency: [] })) },
+      "/positions": { body: makePositionsBody(russia, [], makeRealizedTotal({ by_currency: [] })) },
       "/operations": { body: [makeOperation()] },
       "/api/v1/instruments": { body: [] },
     });
@@ -423,7 +460,40 @@ describe("AccountDetailPage", () => {
     renderPage(makeSession({ tax_residency: "GB", cost_basis_rules: britain }));
 
     expect(await screen.findByText("пополнение")).toBeInTheDocument();
+    expect(screen.queryByTestId("operation-amount-caveat")).not.toBeInTheDocument();
     expect(screen.queryByTestId("cost-basis-notice")).not.toBeInTheDocument();
+  });
+
+  it("states the cost basis rules once on a screen that shows both positions and a transfer", async () => {
+    // The banner over the journal was the same paragraph the positions above
+    // already carry, character for character, on the one screen that renders
+    // both. Two identical warnings one section apart do not warn twice; they
+    // teach the reader to scroll past the first one.
+    serve({
+      "/api/v1/accounts": { body: [makeAccount()] },
+      "/positions": { body: makePositionsBody(britain) },
+      "/operations": {
+        body: [
+          makeOperation({
+            id: "op-transfer",
+            type: "transfer_out",
+            // No breakdown was ever recorded for this parcel, so nothing
+            // converts and in_base is null — the row still publishes a cost
+            // basis and the server still says so (has_undated_lots).
+            has_undated_lots: true,
+          }),
+        ],
+      },
+      "/api/v1/instruments": { body: [] },
+    });
+
+    renderPage(makeSession({ tax_residency: "GB", cost_basis_rules: britain }));
+
+    // Exactly one block of prose about the rules, and it is the positions'.
+    expect(await screen.findByText("Test Corp")).toBeInTheDocument();
+    expect(screen.getAllByTestId("cost-basis-notice")).toHaveLength(1);
+    // The journal's own figure is still qualified — on the figure itself.
+    expect(screen.getByTestId("operation-amount-caveat")).toBeInTheDocument();
   });
 
   it("says nothing about the rules when the computation is the country's own", async () => {
