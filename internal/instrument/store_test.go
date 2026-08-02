@@ -2,6 +2,7 @@ package instrument_test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -129,6 +130,82 @@ func TestListTradable(t *testing.T) {
 		if !ids[want] {
 			t.Fatalf("ListTradable missing %v", want)
 		}
+	}
+}
+
+// TestByIDs pins the batched read the positions screen uses in place of one
+// ByID per position: every id that has a row comes back with its full record,
+// an id that has none is simply ABSENT — never a zero-valued Instrument, which
+// would carry an empty name and an invalid type and read exactly like a real
+// catalog row to a caller that skipped the comma-ok — and an empty request is
+// answered without asking the database anything.
+func TestByIDs(t *testing.T) {
+	st, ctx := newStore(t)
+
+	face := int64(1_000_00)
+	faceCur := "USD"
+	bond, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeBond, Name: "ОФЗ 26238", Ticker: "SU26238RMFS4",
+		Currency: "RUB", FaceValueMinor: &face, FaceCurrency: &faceCur,
+	})
+	if err != nil {
+		t.Fatalf("Create bond: %v", err)
+	}
+	share, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("Create share: %v", err)
+	}
+	// Created but not asked for: a batch must answer the ids it was given and
+	// nothing else, or a caller indexing by id would silently carry rows it
+	// never requested.
+	if _, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Лукойл", Ticker: "LKOH", Currency: "RUB",
+	}); err != nil {
+		t.Fatalf("Create unrelated share: %v", err)
+	}
+
+	absent := uuid.New()
+	got, err := st.ByIDs(ctx, []uuid.UUID{bond.ID, share.ID, absent})
+	if err != nil {
+		t.Fatalf("ByIDs: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ByIDs len = %d, want 2 (the two ids that have rows): %+v", len(got), got)
+	}
+	if _, found := got[absent]; found {
+		t.Errorf("ByIDs answered for an id with no row: %+v", got[absent])
+	}
+
+	// The whole record, not just the id: the positions screen reads type,
+	// face value and face currency off these rows to value a bond, so a
+	// batch that returned a thinner instrument than ByID would change the
+	// numbers on the page rather than only their cost.
+	gotBond, found := got[bond.ID]
+	if !found {
+		t.Fatalf("ByIDs missing the bond")
+	}
+	byID, err := st.ByID(ctx, bond.ID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	// DeepEqual rather than ==: the face value and face currency are
+	// pointers, and two reads of one row hold equal values behind different
+	// addresses.
+	if !reflect.DeepEqual(gotBond, byID) {
+		t.Errorf("ByIDs bond = %+v, ByID bond = %+v — the two reads must return the identical row", gotBond, byID)
+	}
+	if got[share.ID].Name != "Сбербанк" {
+		t.Errorf("ByIDs share = %+v, want Сбербанк", got[share.ID])
+	}
+
+	empty, err := st.ByIDs(ctx, nil)
+	if err != nil {
+		t.Fatalf("ByIDs(nil): %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("ByIDs(nil) = %+v, want an empty map", empty)
 	}
 }
 

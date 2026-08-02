@@ -38,6 +38,40 @@ func (s *Store) ByID(ctx context.Context, id uuid.UUID) (Instrument, error) {
 		`SELECT `+cols+` FROM instruments WHERE id = $1`, id))
 }
 
+// ByIDs returns the instruments behind a whole set of ids in a single round
+// trip. Ids with no row are simply absent from the map — never zero-valued,
+// which would hand a caller an instrument with an empty name and an invalid
+// type that reads exactly like a real catalog row. Modelled on
+// marketdata.Store.LatestQuotes, which answers a set of instrument ids the
+// same way and for the same reason.
+//
+// It exists for the screens that hold many positions at once (see
+// portfolio.Handler.handleList): one query for the catalog rows behind the
+// whole page instead of one per row. ByID stays for the single-instrument
+// reads, where a missing row is an ordinary pgx.ErrNoRows the caller renders
+// as a 404 — a batch cannot say that about one id out of thirty, so absence
+// is what it says instead, and the caller decides.
+func (s *Store) ByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]Instrument, error) {
+	out := make(map[uuid.UUID]Instrument, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+cols+` FROM instruments WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		i, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[i.ID] = i
+	}
+	return out, rows.Err()
+}
+
 // Search finds instruments by name/ticker/isin fragment (case-insensitive).
 // Empty query lists the whole catalog ordered by name.
 func (s *Store) Search(ctx context.Context, query string, limit int) ([]Instrument, error) {
