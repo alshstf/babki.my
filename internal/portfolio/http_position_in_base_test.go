@@ -154,8 +154,8 @@ func TestPositionInBaseConvertsHeldSideValues(t *testing.T) {
 		t.Errorf("in_base.currency = %q, want RUB", p.InBase.Currency)
 	}
 	wantRateOn := on.Format("2006-01-02")
-	if p.InBase.RateOn != wantRateOn {
-		t.Errorf("in_base.rate_on = %q, want %q", p.InBase.RateOn, wantRateOn)
+	if p.InBase.RateOn == nil || *p.InBase.RateOn != wantRateOn {
+		t.Errorf("in_base.rate_on = %v, want %q", p.InBase.RateOn, wantRateOn)
 	}
 }
 
@@ -294,6 +294,121 @@ func TestPositionInBaseNullMarketValueAndUnrealizedPnlWithoutQuote(t *testing.T)
 	}
 }
 
+// TestPositionInBaseRateOnNullWithoutAValuation is the whole of issue #52. The
+// contract defines rate_on as the date of the fx rate BEHIND
+// market_value_minor. When there is no quote there is no market_value_minor,
+// and the object used to publish a date all the same — naming the day of a
+// value it does not contain. Nothing was numerically wrong about it (the
+// figures it does carry are struck from their own dates and were always
+// right), which is precisely why it needed a test rather than a bug report:
+// the only thing at fault was the label, and a label nobody checks drifts.
+//
+// It is the same fixture as
+// TestPositionInBaseNullMarketValueAndUnrealizedPnlWithoutQuote, asked the one
+// question that test did not ask, and it is asserted alongside the figures that
+// must NOT go null with it: a missing valuation says nothing about a basis and
+// an income the object knows perfectly well.
+//
+//	fx USD->RUB = 90, seeded early enough to cover every date here
+//	buy 5 @ $10.00 -> cost_minor (USD) 5_000 -> in_base 450_000
+//	dividend $2.00 -> income_minor (USD) 200 -> in_base  18_000
+//	no quote for the instrument at all
+func TestPositionInBaseRateOnNullWithoutAValuation(t *testing.T) {
+	pool := testdb.New(t)
+	mdStore := marketdata.NewStore(pool)
+	// No quotes seeded for any instrument — the point of the fixture.
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(mdStore))
+
+	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: fxSeedOn(t), Rate: decimal.RequireFromString("90"), Source: "test"},
+	}); err != nil {
+		t.Fatalf("seed fx rate: %v", err)
+	}
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	share := createInstrument(t, c, url, `{"type":"share","name":"Без Котировки","ticker":"NOQ","currency":"USD"}`)
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-01","quantity":"5","price":"10",
+		"amount_minor":-5000,"currency":"USD"}`, acc.ID, share.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"dividend",
+		"occurred_on":"2026-07-05","amount_minor":200,"currency":"USD"}`, acc.ID, share.ID))
+
+	p := onlyPosition(t, c, url, acc.ID)
+
+	if p.InBase == nil {
+		t.Fatalf("in_base = nil, want the object: the basis and the income are convertible whether or not a quote exists")
+	}
+	if p.InBase.MarketValueMinor != nil {
+		t.Fatalf("in_base.market_value_minor = %d, want null — the fixture seeds no quote, so this test is not testing what it means to", *p.InBase.MarketValueMinor)
+	}
+	if p.InBase.RateOn != nil {
+		t.Errorf("in_base.rate_on = %q, want null: the contract defines it as the date of the rate behind market_value_minor, and there is no market_value_minor here — a date published here names the day of a value the object does not contain", *p.InBase.RateOn)
+	}
+	// The null is confined to the label. Everything struck from its own dates
+	// stands exactly as it did.
+	if p.InBase.CostMinor != 450000 {
+		t.Errorf("in_base.cost_minor = %d, want 450000 (5000 * 90) — a null rate_on must take nothing else with it", p.InBase.CostMinor)
+	}
+	if p.InBase.IncomeMinor != 18000 {
+		t.Errorf("in_base.income_minor = %d, want 18000 (200 * 90) — a null rate_on must take nothing else with it", p.InBase.IncomeMinor)
+	}
+}
+
+// TestPositionInBasePublishedWithoutTodaysRateWhenThereIsNoQuote pins the side
+// finding of issue #52: today's rate is required by exactly the figures that
+// use it, and by nothing else.
+//
+// The handler used to resolve today's rate FIRST and abandon the whole object
+// when it was missing — including for a position with no quote, whose answer
+// today's rate has no part in. On real data that never showed: Store.FxRateOn
+// resolves the nearest date on or BEFORE the one asked for, so a table holding
+// a rate for any lot's purchase day necessarily holds one for today as well,
+// and the two conditions could not come apart. The behaviour was therefore
+// correct by coincidence, and a coincidence is not a rule — nothing anywhere
+// said the object may be published without today's rate, and nothing would
+// have noticed when it stopped being true.
+//
+// oneDateConverter is what separates them: it answers every lookup at 90
+// except on today's calendar date, where it answers marketdata.ErrNoRate. No
+// real converter can produce that hole, which is exactly why the relationship
+// needed a double to be stated at all.
+//
+//	buy 10 @ $100.00 on 2026-03-10 -> cost_minor (USD) 100_000
+//	every date resolves at 90 except today, which has no rate
+//	no quote -> no valuation -> today's rate is never asked for
+//	in_base.cost_minor = 100_000 * 90 = 9_000_000, rate_on = null
+func TestPositionInBasePublishedWithoutTodaysRateWhenThereIsNoQuote(t *testing.T) {
+	pool := testdb.New(t)
+	// No quotes seeded: the position has nothing for today's rate to value.
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes, oneDateConverter{
+		rate:   decimal.RequireFromString("90"),
+		rateOn: mustDate(t, lateRateOn),
+		on:     time.Now().UTC().Format("2006-01-02"),
+		err:    fmt.Errorf("%w: USD -> RUB today", marketdata.ErrNoRate),
+	})
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	share := createInstrument(t, c, url, `{"type":"share","name":"Без Котировки","ticker":"NOQ","currency":"USD"}`)
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, acc.ID, share.ID, earlyBuyOn))
+
+	p := onlyPosition(t, c, url, acc.ID)
+
+	if p.InBase == nil {
+		t.Fatalf("in_base = nil, want the object: the only rate missing is today's, and this position has no valuation for today's rate to convert — refusing the basis over it is silence about something the server knows")
+	}
+	if p.InBase.CostMinor != 9000000 {
+		t.Errorf("in_base.cost_minor = %d, want 9000000 (100000 * 90, at the rate of the purchase day)", p.InBase.CostMinor)
+	}
+	if p.InBase.RateOn != nil {
+		t.Errorf("in_base.rate_on = %q, want null: there is no valuation here, and no rate for today was resolved to name", *p.InBase.RateOn)
+	}
+}
+
 // TestPositionInBaseNullMarketValueWhenValuationInForeignCurrency covers the
 // case where the position's market valuation is NOT denominated in the
 // position's own currency, because the conversion into it failed for want of
@@ -392,6 +507,12 @@ func TestPositionInBaseNullMarketValueWhenValuationInForeignCurrency(t *testing.
 	}
 	if p.InBase.UnrealizedPnlMinor != nil {
 		t.Errorf("in_base.unrealized_pnl_minor = %v, want null (derived from a valuation that cannot be converted)", p.InBase.UnrealizedPnlMinor)
+	}
+	// rate_on is the date OF market_value_minor, so it goes null with it: the
+	// object holds no figure struck at a single rate, and a date beside the
+	// basis and the income would name the day of a value that is not here.
+	if p.InBase.RateOn != nil {
+		t.Errorf("in_base.rate_on = %q, want null: market_value_minor is null, so no rate stands behind anything in this object", *p.InBase.RateOn)
 	}
 	if p.InBase.Currency != "RUB" {
 		t.Errorf("in_base.currency = %q, want RUB", p.InBase.Currency)
@@ -510,11 +631,15 @@ func TestPositionInBaseCostUsesEachLotsOwnRate(t *testing.T) {
 		t.Errorf("in_base.cost_minor = %d, want 24000000 (100000*60 bought %s + 200000*90 bought %s)",
 			p.InBase.CostMinor, earlyBuyOn, lateBuyOn)
 	}
-	// rate_on names the rate behind the "what is it worth now" figure, which
-	// is today's — the historical rates behind the basis have no single date
-	// to report (see the handler's positionInBase).
-	if p.InBase.RateOn != lateRateOn {
-		t.Errorf("in_base.rate_on = %q, want %q (today's rate, i.e. the newest row in the table)", p.InBase.RateOn, lateRateOn)
+	// rate_on names the rate behind the "what is it worth now" figure, and
+	// this fixture seeds no quote at all, so there is no such figure here and
+	// no date to name: the historical rates behind the basis are one per
+	// purchase day and no single date could report them (see the handler's
+	// positionInBase). It used to publish today's date anyway — lateRateOn,
+	// the newest row in the table — which named the day of a value the object
+	// did not contain.
+	if p.InBase.RateOn != nil {
+		t.Errorf("in_base.rate_on = %q, want null: this position has no quote, so the object holds no market valuation for a single rate to be behind", *p.InBase.RateOn)
 	}
 }
 

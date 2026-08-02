@@ -25,6 +25,7 @@ import { resolveDisplayAmount } from "@/lib/display-amount";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
 import { useReportScreenCurrencies } from "@/lib/screen-currencies";
 import { MoneyCell } from "@/components/money-cell";
+import { CostBasisNotice } from "@/components/cost-basis-notice";
 import {
   useOperations,
   useDeleteOperation,
@@ -32,14 +33,25 @@ import {
   type Operation,
 } from "@/api/operations";
 import { useInstruments } from "@/api/instruments";
+import type { CostBasisRules } from "@/api/tax-residencies";
 
 const PAGE_SIZE = 50;
+
+// The journal rows whose amount is not money that moved but a cost basis
+// picked by a rule. Only a transfer between the family's own accounts is one:
+// its amount_minor is the basis of the shares it carried, taken from the
+// source account by the same earliest-purchases-first queue that produces a
+// position's cost (see Operation.amount_minor in the API contract). Every
+// other row's amount belongs to the day it is dated and no cost basis rule
+// has any part in it.
+const COST_BASIS_TYPES: ReadonlySet<Operation["type"]> = new Set(["transfer_in", "transfer_out"]);
 
 export function OperationsTable({
   accountId,
   canDelete,
   mode,
   baseCurrency,
+  costBasisRules,
 }: {
   accountId: string;
   // Delete action is editor+ (owner/editor); viewers never see it.
@@ -49,6 +61,15 @@ export function OperationsTable({
   // "already in base, nothing to convert" apart from "no fx rate for that
   // date" when an operation's in_base is null (see resolveDisplayAmount).
   baseCurrency: string;
+  // Whether the earliest-purchases-first queue behind a transferred parcel's
+  // amount is the queue the owner's country requires
+  // (SessionInfo.cost_basis_rules). It arrives as a prop from the screen,
+  // which has the session already, rather than being fetched here or shipped
+  // a third time inside this listing: the statement belongs to the space, and
+  // the journal response is a bare array with nowhere to carry it (see the
+  // API contract). Undefined while the session is still loading — the notice
+  // simply waits rather than guessing.
+  costBasisRules?: CostBasisRules;
 }) {
   const { t } = useTranslation();
   // "Show more" grows the fetch window (limit += 50, offset stays 0) instead
@@ -145,9 +166,28 @@ export function OperationsTable({
   }
 
   const canLoadMore = list.length === limit;
+  // Whether anything in the window actually shown is a cost basis. A journal
+  // of purchases, sales and dividends contains none, and a caveat about the
+  // cost basis rule over such a table would be a caveat about nothing — the
+  // same rule the positions screen follows by rendering its notice only over
+  // a non-empty table.
+  const showsACostBasis = list.some((operation) => COST_BASIS_TYPES.has(operation.type));
 
   return (
     <div className="grid gap-3">
+      {/* A transferred parcel's amount is a cost basis, so the statement of
+          whether this application's queue is the owner's country's applies to
+          it exactly as it applies to the positions above — and until now the
+          journal published the figure with nothing said about it, so a client
+          that faithfully read the caveat in both places the server offers it
+          still showed an unqualified number here. It reads from the session
+          rather than from a third copy on this response: one truth, one
+          publisher (see SessionInfo.cost_basis_rules in the API contract). Like
+          every other use of this component it stays silent when the country's
+          rule IS what is computed. */}
+      {costBasisRules && showsACostBasis && (
+        <CostBasisNotice rules={costBasisRules} namesCountry />
+      )}
       <Table>
         <TableHeader>
           <TableRow>

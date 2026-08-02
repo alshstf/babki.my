@@ -604,7 +604,10 @@ describe("PositionsTable", () => {
                 unrealized_pnl_minor: null,
                 income_minor: 0,
                 currency: "RUB",
-                rate_on: "2026-07-20",
+                // Null with the valuation it is the date of: this object holds
+                // no figure struck at a single rate (see PositionInBase.rate_on
+                // in the API contract).
+                rate_on: null,
               },
             }),
           ]}
@@ -613,9 +616,15 @@ describe("PositionsTable", () => {
         />,
       );
 
-      // Cost converted, as usual.
+      // Cost converted, as usual — and still saying so: its wording names the
+      // purchase-day rates, which do not depend on a rate_on the object no
+      // longer carries.
       expect(norm(screen.getByTestId("position-cost").textContent ?? "")).toBe(
         norm(formatMinor(9_000_000, "RUB")),
+      );
+      expect(screen.getByTestId("position-cost")).toHaveAttribute(
+        "title",
+        "Пересчитано по курсам на даты покупок, а не по текущему",
       );
       // The valuation stays the real 1 000,00 € with a marker — never
       // 90 000,00 ₽ (that same figure times the USD rate) passed off as base
@@ -623,13 +632,59 @@ describe("PositionsTable", () => {
       const marketValue = screen.getByTestId("position-market-value");
       expect(norm(marketValue.textContent ?? "")).toContain(norm(formatMinor(100_000, "EUR")));
       expect(marketValue.textContent).not.toMatch(/₽/);
-      expect(screen.getByTestId("position-market-value-not-converted")).toHaveAttribute(
+      // Issue #42: the marker must name the cause that IS the cause. A EUR->RUB
+      // rate may well exist — what is missing is the link from EUR to the
+      // position's USD, without which nothing can carry the figure into rubles.
+      // "Нет курса" states something the screen does not know and points the
+      // reader at a gap that may not be there at all.
+      const valuationMarker = screen.getByTestId("position-market-value-not-converted");
+      expect(valuationMarker).toHaveAttribute(
         "title",
+        "Оценка получилась в третьей валюте — не в валюте позиции и не в базовой, — а курса от неё до валюты позиции нет: курсом самой позиции её пересчитывать нельзя, это другая пара. Поэтому показана в исходной валюте",
+      );
+      expect(valuationMarker.getAttribute("title")).not.toBe(
         "Нет курса — показано в исходной валюте",
       );
       // Profit is derived from that valuation, so it stays an honest dash.
       expect(screen.getByTestId("position-profit-dash")).toHaveTextContent("—");
       expect(screen.queryByTestId("position-profit-amount")).not.toBeInTheDocument();
+    });
+
+    it("keeps the row's own reason on the cells the valuation's reason is not true of", () => {
+      // The twin of the test above. A third-currency valuation is a fact about
+      // ONE figure: the cost and the income are denominated in the position's
+      // own currency and convert exactly as they always do. Here the row also
+      // has no fx rate at all, so its other cells fall back natively — and they
+      // must say "нет курса", not repeat the valuation's chain story, which is
+      // not true of them.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "USD",
+              market_value_minor: 100_000,
+              market_value_currency: "EUR",
+              unrealized_pnl_minor: null,
+              in_base: null,
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(screen.getByTestId("position-market-value-not-converted")).toHaveAttribute(
+        "title",
+        expect.stringContaining("в третьей валюте"),
+      );
+      expect(screen.getByTestId("position-cost-not-converted")).toHaveAttribute(
+        "title",
+        "Нет курса — показано в исходной валюте",
+      );
+      expect(screen.getByTestId("position-income-not-converted")).toHaveAttribute(
+        "title",
+        "Нет курса — показано в исходной валюте",
+      );
     });
 
     it("still shows the no-quote / currency-mismatch dashes regardless of mode — unaffected by base conversion", () => {

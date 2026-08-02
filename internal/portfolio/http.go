@@ -692,8 +692,12 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // It returns (nil, nil) — render in_base as null, the WHOLE object, never
 // partially populated — when p.Currency already equals baseCurrency (nothing
 // to convert), when any single rate the object needs is missing
-// (marketdata.ErrNoRate): today's, one lot's, or one income operation's, or
-// when a single lot does not know WHEN it was acquired (Lot.AcquiredOn nil),
+// (marketdata.ErrNoRate): one lot's, one income operation's, or today's — and
+// today's is needed only when there is a valuation for it to convert, so a
+// position with no usable quote publishes its basis and its income without
+// ever asking for a rate for today (rate_on is then null, saying exactly
+// that) — or when a single lot does not know WHEN it was acquired
+// (Lot.AcquiredOn nil),
 // which leaves no date to ask for a rate in the first place. A basis summed
 // from only the lots that happened to convert is an invented number, smaller
 // than the truth and indistinguishable from a real one on screen; it would
@@ -719,16 +723,6 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, income []Operation, baseCurrency string, realizedMinor nullable.Nullable[int64], cache map[rateKey]*rateLookup) (*apitypes.PositionInBase, error) {
 	if p.Currency == baseCurrency {
 		return nil, nil
-	}
-
-	// Today's rate values the market valuation and supplies rate_on, so
-	// without it there is no object to publish at all.
-	today := h.rateFor(ctx, p.Currency, baseCurrency, time.Now().UTC(), cache)
-	if today.err != nil {
-		if errors.Is(today.err, marketdata.ErrNoRate) {
-			return nil, nil
-		}
-		return nil, today.err
 	}
 
 	lots := make([]datedMinor, 0, len(p.Lots))
@@ -779,14 +773,6 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		IncomeMinor:      incomeMinor,
 		RealizedPnlMinor: realizedMinor,
 		Currency:         baseCurrency,
-		// rate_on names the rate behind market_value_minor only: the basis and
-		// the income are each valued at several rates of their own dates, so no
-		// single date could describe them. Today's rate is the one date that is
-		// both unambiguous and worth disclosing — it is how fresh the "what is
-		// it worth now" figure is, and per Store.FxRateOn it can be older than
-		// today whenever the rate table is stale. The historical nature of the
-		// basis is explained in the interface instead (see the API contract).
-		RateOn: today.date.Format("2006-01-02"),
 	}
 
 	marketValueMinor := nullableValue(apiPos.MarketValueMinor)
@@ -794,13 +780,50 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		marketValueMinor = nil
 	}
 	if marketValueMinor == nil {
+		// No valuation this object may convert — no usable quote, or one
+		// denominated in a currency this rate cannot bring into the base one.
+		// rate_on goes with it, because rate_on is the DATE OF that figure and
+		// of nothing else here: the basis and the income are struck at the
+		// rates of their own many dates, and a date published beside them
+		// would be naming the day of a value this object does not contain (the
+		// one place in this payload where the label claimed slightly more than
+		// the object held — see PositionInBase.rate_on in the contract).
+		//
+		// Today's rate is not asked for at all in this branch, and that is the
+		// point rather than an optimization: it is required by exactly the
+		// figures it values, so a position with no quote publishes the cost and
+		// the income it does know instead of going null over a rate that would
+		// have appeared nowhere in the answer. Before, the object was refused
+		// whenever today's rate was missing, and stayed correct only by
+		// coincidence — Store.FxRateOn resolves the nearest EARLIER date, so a
+		// table holding any lot's rate holds one for today too, and the two
+		// conditions happened to fire together on real data. Coincidence is not
+		// a rule, and TestPositionInBasePublishedWithoutTodaysRateWhenThereIsNoQuote
+		// pins the rule.
 		out.MarketValueMinor = nullable.NewNullNullable[int64]()
 		out.UnrealizedPnlMinor = nullable.NewNullNullable[int64]()
+		out.RateOn = nullable.NewNullNullable[string]()
 		return out, nil
+	}
+
+	// Today's rate values the market valuation and supplies rate_on — the one
+	// date in this object that is both unambiguous and worth disclosing, since
+	// it is how fresh the "what is it worth now" figure is, and per
+	// Store.FxRateOn it can be older than today whenever the rate table is
+	// stale. Without it the valuation cannot be struck, and since the profit
+	// below is measured against a basis that would then be published beside a
+	// valuation that is not, the whole object goes rather than half of it.
+	today := h.rateFor(ctx, p.Currency, baseCurrency, time.Now().UTC(), cache)
+	if today.err != nil {
+		if errors.Is(today.err, marketdata.ErrNoRate) {
+			return nil, nil
+		}
+		return nil, today.err
 	}
 	valuation := decimal.NewFromInt(*marketValueMinor).Mul(today.rate).Round(0).IntPart()
 	out.MarketValueMinor = nullable.NewNullableWithValue(valuation)
 	out.UnrealizedPnlMinor = nullable.NewNullableWithValue(valuation - costMinor)
+	out.RateOn = nullable.NewNullableWithValue(today.date.Format("2006-01-02"))
 	return out, nil
 }
 

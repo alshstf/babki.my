@@ -202,11 +202,19 @@ export function AccountDetailPage() {
 
       <div className="grid gap-2">
         <h2 className="text-lg font-semibold">{t("operations.title")}</h2>
+        {/* The cost basis statement comes from the session, which this screen
+            has already loaded, and not from the journal response — that one is
+            a bare array and a third copy of one truth is a third place to
+            forget it (see SessionInfo.cost_basis_rules in the API contract).
+            The table decides whether to show it at all: only a transferred
+            parcel's amount is a cost basis, so a journal without transfers has
+            nothing for the caveat to qualify. */}
         <OperationsTable
           accountId={accountId}
           canDelete={!isViewer}
           mode={mode}
           baseCurrency={baseCurrency}
+          costBasisRules={session?.cost_basis_rules}
         />
       </div>
 

@@ -128,6 +128,43 @@ function makeRealizedTotal(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// One journal row as the wire sends it. Untyped for the same reason
+// makePosition is: these bodies stand in for the server's JSON.
+function makeOperation(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "op-1",
+    account_id: "acc-1",
+    instrument_id: null,
+    type: "deposit",
+    occurred_on: "2026-07-20",
+    settled_on: null,
+    quantity: null,
+    price: null,
+    amount_minor: 100_000,
+    currency: "USD",
+    fee_minor: 0,
+    note: "",
+    transfer_group_id: null,
+    split_ratio: null,
+    source: "manual",
+    created_at: "2026-07-20T00:00:00Z",
+    has_undated_lots: false,
+    in_base: null,
+    ...overrides,
+  };
+}
+
+// A country whose rules are not what this application computes, in two
+// separate ways at once. Shared by the tests below so the statement they look
+// for is the same statement wherever it is shown.
+const britain: SessionInfo["cost_basis_rules"] = {
+  country: "GB",
+  method: "average",
+  perimeter: "owner",
+  supported: false,
+  notices: ["method_mismatch", "perimeter_mismatch"],
+};
+
 // One position, enough of one for the table to render a row. The cost basis
 // statement below qualifies exactly these figures, so the tests about it need
 // a row for it to sit next to. realized_total describes the whole list rather
@@ -336,6 +373,57 @@ describe("AccountDetailPage", () => {
 
     expect(await screen.findByText("На этом счете пока нет позиций")).toBeInTheDocument();
     expect(screen.queryByTestId("realized-total")).not.toBeInTheDocument();
+  });
+
+  it("says next to the journal that a transferred amount is not this country's cost basis", async () => {
+    // Issue #61. A transfer's amount is the cost basis of the shares it moved,
+    // picked by the same earliest-purchases-first queue the positions screen
+    // uses — so the statement "that queue is not your country's" describes it
+    // too. The journal response does not carry the statement (one truth, one
+    // publisher — see SessionInfo.cost_basis_rules in the API contract), so the
+    // screen takes it from the session it has already loaded. Until it did, a
+    // client that faithfully read the caveat in both places the server offers
+    // it still showed this figure with nothing said about it.
+    //
+    // The account deliberately has NO positions: the notice that appears can
+    // then only be the journal's own, not the positions table's leaking down
+    // the page.
+    serve({
+      "/api/v1/accounts": { body: [makeAccount()] },
+      "/positions": { body: makePositionsBody(britain, [], makeRealizedTotal({ by_currency: [] })) },
+      "/operations": { body: [makeOperation({ id: "op-transfer", type: "transfer_in" })] },
+      "/api/v1/instruments": { body: [] },
+    });
+
+    renderPage(makeSession({ tax_residency: "GB", cost_basis_rules: britain }));
+
+    // The journal really is the only thing on screen that could be qualified.
+    expect(await screen.findByText("На этом счете пока нет позиций")).toBeInTheDocument();
+    const notice = await screen.findByTestId("cost-basis-notice");
+    expect(notice.textContent).toContain("Великобритания");
+    // Both divergences, exactly as beside the positions: reporting one hides
+    // the other.
+    expect(screen.getByText(/не самая ранняя покупка/)).toBeInTheDocument();
+    expect(screen.getByText(/сразу по всем счетам владельца/)).toBeInTheDocument();
+  });
+
+  it("says nothing about the rules over a journal that publishes no cost basis", async () => {
+    // A deposit's amount is money that moved on the day the row is dated; no
+    // queue picked it and no cost basis rule has any part in it. A caveat over
+    // such a table is a caveat about nothing, and noise is what makes a real
+    // warning invisible — the same reason the positions notice stays away from
+    // an empty table.
+    serve({
+      "/api/v1/accounts": { body: [makeAccount()] },
+      "/positions": { body: makePositionsBody(britain, [], makeRealizedTotal({ by_currency: [] })) },
+      "/operations": { body: [makeOperation()] },
+      "/api/v1/instruments": { body: [] },
+    });
+
+    renderPage(makeSession({ tax_residency: "GB", cost_basis_rules: britain }));
+
+    expect(await screen.findByText("пополнение")).toBeInTheDocument();
+    expect(screen.queryByTestId("cost-basis-notice")).not.toBeInTheDocument();
   });
 
   it("says nothing about the rules when the computation is the country's own", async () => {

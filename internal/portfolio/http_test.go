@@ -201,7 +201,10 @@ type positionInBase struct {
 	IncomeMinor        int64  `json:"income_minor"`
 	RealizedPnlMinor   *int64 `json:"realized_pnl_minor"`
 	Currency           string `json:"currency"`
-	RateOn             string `json:"rate_on"`
+	// RateOn is a pointer so a test can tell an explicit null — this object
+	// carries no figure struck at a single date, because it carries no market
+	// valuation — apart from a date, which the zero string could not.
+	RateOn *string `json:"rate_on"`
 }
 
 type positionsResp struct {

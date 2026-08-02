@@ -54,13 +54,30 @@ export function MoneyCell({
   convertedTitle?: (formattedDate: string) => string;
 }) {
   const { t } = useTranslation();
-  // A malformed rate date yields no tooltip at all rather than a broken one
-  // (the "converted at the rate of ..." wording left dangling with no date),
-  // matching how formatDate's empty result is handled everywhere else.
+  // Whether to disclose anything at all is decided by `converted` — did this
+  // cell get the backend's base-currency figure or the row's own — and not by
+  // whether a rate date came with it. The two are not the same question: a
+  // position's cost and income are converted at the rates of their own many
+  // dates and carry no single date to name, and keying off the date silently
+  // dropped their disclosure whenever the row had nothing else to date (a
+  // position with no quote publishes a null rate_on — see PositionInBase in
+  // the API contract).
+  //
+  // The DEFAULT wording is the one that needs the date ("converted at the
+  // current rate, on <date>"), so it is skipped when there is none, or when
+  // formatDate rejects a malformed one — a dangling "on " reads worse than
+  // silence. A caller that supplies its own wording gets it whenever a
+  // conversion happened; a wording that interpolates the date is only passed
+  // where the contract guarantees one (the journal's every in_base has a
+  // rate_on; a position's market value has one exactly when it has a value).
   const rateDate = resolved.rateOn ? formatDate(resolved.rateOn) : "";
-  const convertedTooltip = rateDate
-    ? (convertedTitle?.(rateDate) ?? t("displayCurrency.convertedOn", { date: rateDate }))
-    : undefined;
+  const convertedTooltip = !resolved.converted
+    ? undefined
+    : convertedTitle
+      ? convertedTitle(rateDate)
+      : rateDate
+        ? t("displayCurrency.convertedOn", { date: rateDate })
+        : undefined;
   return (
     <span
       className={cn("inline-flex items-center gap-1", className)}
