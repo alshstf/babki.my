@@ -312,6 +312,7 @@ func TestListOperationInBaseNullWhenNoRateOnOrBeforeDate(t *testing.T) {
 // the same trick account's and portfolio's http_test.go use.
 type converterLike interface {
 	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
+	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
 }
 
 // failingConverter is a converter double whose fx lookups always fail with
@@ -325,6 +326,50 @@ type failingConverter struct{ err error }
 
 func (c failingConverter) Rate(_ context.Context, _, _ string, _ time.Time) (decimal.Decimal, time.Time, error) {
 	return decimal.Decimal{}, time.Time{}, c.err
+}
+
+func (c failingConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
+	return ratesFromRate(ctx, c, queries)
+}
+
+// rateResolver is the one-pair half of converterLike, which is all
+// ratesFromRate needs of a double.
+type rateResolver interface {
+	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
+}
+
+// ratesFromRate answers a whole batch by asking the double's OWN Rate once per
+// query. It exists so no test double can answer the batch differently from the
+// pair: marketdata.Converter guarantees the two agree ("no number it produces
+// differs from Rate's" — see RatesOn), and a fake that had to state its
+// behavior twice would eventually state it twice differently, leaving a test
+// that pins a rule the production converter does not follow. Here the batch is
+// derived from the pair, so whatever a test makes Rate say — a rate, a missing
+// rate, an outage — the prewarm says exactly the same.
+//
+// The two kinds of failure are sorted the way RatesOn sorts them:
+// marketdata.ErrNoRate is that one query's answer and the rest of the page
+// stands, anything else voids the whole batch.
+//
+// It is a deliberate twin of portfolio's identically named test helper rather
+// than something shared with it: both are glue for a package's own doubles,
+// and a test fixture shared between two packages' fakes would tie each
+// package's next fake to the other package's needs. There is no production
+// code here to drift.
+func ratesFromRate(ctx context.Context, r rateResolver, queries []marketdata.RateQuery) (marketdata.Rates, error) {
+	out := make(map[marketdata.RateQuery]marketdata.RateResult, len(queries))
+	for _, q := range queries {
+		rate, on, err := r.Rate(ctx, q.From, q.To, q.On)
+		switch {
+		case err == nil:
+			out[q] = marketdata.RateResult{Rate: rate, RateDate: on}
+		case errors.Is(err, marketdata.ErrNoRate):
+			out[q] = marketdata.RateResult{Err: err}
+		default:
+			return marketdata.Rates{}, err
+		}
+	}
+	return marketdata.NewRates(out), nil
 }
 
 // TestListOperationInBaseRealRateErrorFailsRequest pins the distinction the
@@ -358,21 +403,57 @@ func TestListOperationInBaseRealRateErrorFailsRequest(t *testing.T) {
 	}
 }
 
-// countingConverter wraps a real *marketdata.Converter and counts how many
-// times the handler actually asks for a rate. It is a counter, not a stub:
-// every call is delegated, so the amounts the handler publishes are the real
-// ones and the memoization assertion can sit next to correctness assertions
-// in the same test. The count is atomic because the increments happen on the
-// http.Server's handler goroutine while the assertion reads it on the test's
+// countingConverter wraps a real *marketdata.Converter and counts what one
+// request ASKS of the fx layer. It is a counter, not a stub: every call is
+// delegated, so the amounts the handler publishes are the real ones and the
+// memoization assertion can sit next to correctness assertions in the same
+// test. The counts are atomic because the increments happen on the
+// http.Server's handler goroutine while the assertions read them on the test's
 // own goroutine.
+//
+// NONE OF THESE IS A COUNT OF DATABASE ROUND TRIPS, and reading them as one is
+// the defect issue #45 names: a single Rate is between one and six statements
+// depending on whether the pair resolves directly, by inversion or through a
+// RUB bridge, and a batch is one statement however many queries it carries —
+// unless it loops internally, which from up here looks identical. What the
+// page costs the database is measured below the converter instead, by
+// journalCost.trips (see http_round_trips_test.go). What these say is what the
+// handler asked for, which is the right question when the memo key or the
+// enumeration is what is under test.
+//
+// keep, when set, filters the batch down to the queries it accepts before
+// passing them on — an enumeration with a hole in it, which is what
+// TestJournalIncompletePrewarmCostsTripsNotNumbers needs and no real converter
+// would ever do.
 type countingConverter struct {
 	inner *marketdata.Converter
-	calls atomic.Int64
+	keep  func(marketdata.RateQuery) bool
+	// rate counts one-pair lookups (the fallback), batch counts calls to the
+	// batched resolution, and queries counts the individual rates handed to
+	// those batches — as the handler asked for them, before keep drops any.
+	rate    atomic.Int64
+	batch   atomic.Int64
+	queries atomic.Int64
 }
 
 func (c *countingConverter) Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error) {
-	c.calls.Add(1)
+	c.rate.Add(1)
 	return c.inner.Rate(ctx, from, to, on)
+}
+
+func (c *countingConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
+	c.batch.Add(1)
+	c.queries.Add(int64(len(queries)))
+	if c.keep == nil {
+		return c.inner.RatesOn(ctx, queries)
+	}
+	kept := make([]marketdata.RateQuery, 0, len(queries))
+	for _, q := range queries {
+		if c.keep(q) {
+			kept = append(kept, q)
+		}
+	}
+	return c.inner.RatesOn(ctx, kept)
 }
 
 // TestListOperationInBaseMemoizesRatePerCurrencyAndDate pins the cache key.
@@ -417,7 +498,10 @@ func TestListOperationInBaseMemoizesRatePerCurrencyAndDate(t *testing.T) {
 	april := mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"type":"withdrawal",
 		"occurred_on":"2019-04-12","amount_minor":-10000,"currency":"USD"}`, acc))
 
-	conv.calls.Store(0) // only the listing below is under measurement
+	// Only the listing below is under measurement.
+	conv.rate.Store(0)
+	conv.batch.Store(0)
+	conv.queries.Store(0)
 	list := listJournal(t, url, c, acc)
 
 	for _, tc := range []struct {
@@ -443,7 +527,24 @@ func TestListOperationInBaseMemoizesRatePerCurrencyAndDate(t *testing.T) {
 		}
 	}
 
-	if got := conv.calls.Load(); got != 2 {
-		t.Errorf("rate lookups = %d, want 2 — one per distinct (currency, date), so the two 2019-03-12 operations share a single lookup", got)
+	// One rate per distinct (currency, date) — the two 2019-03-12 operations
+	// share a single one — asked for in a single batch, with nothing left over
+	// for the per-pair fallback to resolve.
+	//
+	// This used to count calls to Converter.Rate and nothing else, which is
+	// what issue #45 objects to: it pinned how often the handler asked, never
+	// what the asking cost, so an implementation resolving one rate per
+	// statement passed it unchanged. The cost is now pinned where it can be
+	// seen, below the converter, by TestJournalRoundTripsDoNotGrowWithTheData;
+	// what remains here is the question this test is actually about — which
+	// distinct rates a page of three operations on two dates asks for.
+	if got := conv.queries.Load(); got != 2 {
+		t.Errorf("rates asked for = %d, want 2 — one per distinct (currency, date), so the two 2019-03-12 operations share a single one", got)
+	}
+	if got := conv.batch.Load(); got != 1 {
+		t.Errorf("batched resolutions = %d, want 1 — the whole page's rates are resolved in one go", got)
+	}
+	if got := conv.rate.Load(); got != 0 {
+		t.Errorf("one-pair fallback lookups = %d, want 0 — every date this page needs was enumerated and prewarmed", got)
 	}
 }
