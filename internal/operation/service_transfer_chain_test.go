@@ -129,10 +129,12 @@ func TestTransferChainKeepsOriginalPurchaseDates(t *testing.T) {
 // were bought, not the day either move happened — a position that has been
 // away and returned is not a position bought this morning.
 //
-// They also come back at the END of the queue rather than at their old place
-// in it. Nothing here was sold in between, so the FIFO order is not observable
-// in this test; it is the owner's separate decision (restored lots queue where
-// they arrive) and this test deliberately does not pin it either way.
+// They also come back to their old PLACE in the queue, since the queue is
+// ordered by the day each lot was acquired and neither move touched that day
+// (see portfolio.Position.Lots). Nothing here was sold in between and the
+// account was emptied by the first move, so this test cannot observe the order
+// and does not pin it; portfolio.TestTransferredLotBoughtEarlierIsSoldFirst is
+// where that rule is held.
 func TestTransferBackToTheAccountItCameFrom(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)

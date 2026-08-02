@@ -436,9 +436,12 @@ func TestBothTransferLegsGoNullTogetherWhenAPieceHasNoAcquisitionDate(t *testing
 //	  by hand -> B's second lot, undated, cost 70_000 (Service.CreateTransfer's
 //	  CostMinorOverride branch — no source lots released, so no dates carried)
 //	transfer B -> C, all 10 shares, occurred_on 2026-07-20 -> FIFO releases the
-//	  dated lot first (it entered B's queue on the earlier date), then the
-//	  undated one: TransferLots = [dated 5 @ 50_000, undated 5 @ 70_000], a
-//	  genuine mix produced without a single direct database write.
+//	  undated lot first (a lot that does not know when it was acquired leads the
+//	  queue, see portfolio.addLot), then the dated one: TransferLots =
+//	  [undated 5 @ 70_000, dated 5 @ 50_000], a genuine mix produced without a
+//	  single direct database write. Which piece comes first changes nothing
+//	  here: both legs must go null because ONE of them has no date, and the sum
+//	  is the same either way.
 //
 // Both legs of the SECOND transfer must go null together, for the same
 // reason a wholly undated parcel does: one piece of it has no purchase date,

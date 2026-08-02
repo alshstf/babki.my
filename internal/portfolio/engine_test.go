@@ -545,13 +545,19 @@ func TestTransferInWithoutBreakdownHasNoAcquisitionDate(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestUndatedLotBehavesLikeAnyOtherLot pins that "no date" is a missing date
-// and nothing more: the lot is a full member of the FIFO queue. It is released
-// in its turn, a partial release splits its cost the usual way and leaves the
+// TestUndatedLotBehavesLikeAnyOtherLot pins that "no date" costs the lot
+// nothing but the date: it is a full member of the FIFO queue, released in its
+// turn, a partial release splits its cost the usual way and leaves the
 // remainder still undated, and a split rescales it. A representation that
-// treated the absence as a special kind of lot — dropped, floated to the end,
-// merged into a neighbour — would change what the position is worth, which no
-// missing date should ever do.
+// treated the absence as a lesser kind of lot — dropped, merged into a
+// neighbour, held back from a release — would change what the position is
+// worth, which no missing date should ever do.
+//
+// Its PLACE in the queue is the one thing an unknown date does decide, and it
+// decides it in the direction this fixture already had: the undated lot leads
+// (see TestUndatedLotLeavesTheQueueFirst). Here it entered first as well, so
+// nothing below distinguishes the two reasons — that is deliberate, this test
+// is about the arithmetic and not about the ordering.
 func TestUndatedLotBehavesLikeAnyOtherLot(t *testing.T) {
 	split := op(portfolio.TypeSplit, 8, &sber, "", "", 0, 0)
 	split.SplitRatio = dp("2")
@@ -589,6 +595,230 @@ func TestUndatedLotBehavesLikeAnyOtherLot(t *testing.T) {
 	if !p.Lots[0].Quantity.Equal(d("4")) || !p.Lots[1].Quantity.Equal(d("4")) {
 		t.Errorf("quantities after the split = %s and %s, want 4 and 4 — a split rescales an undated lot like any other",
 			p.Lots[0].Quantity, p.Lots[1].Quantity)
+	}
+	checkLotInvariants(t, p)
+}
+
+// TestTransferredLotBoughtEarlierIsSoldFirst is the case this change exists
+// for, and the one the old engine got wrong.
+//
+// The queue is built from the day each lot was ACQUIRED, not from the order the
+// journal happened to mention it. Every jurisdiction the owner files in says so
+// in the same words: НК РФ ст. 214.1 п. 13 releases "по стоимости первых по
+// времени ПРИОБРЕТЕНИЙ" — the word "зачисление" does not appear in the norm —
+// and 26 CFR 1.1012-1(c)(1)(i) names "the earliest lot the taxpayer purchased
+// or acquired". Moving shares between one's own accounts is nowhere a sale and
+// nowhere resets that day.
+//
+// Here the account holds 10 shares bought on day 20 for $3 000,00 when a
+// transfer arrives on day 25 carrying 10 shares bought on day 2 for $1 000,00 —
+// older than anything on this account. Ten shares are then sold for $4 000,00.
+//
+//	arrival order (what the engine used to do): the day-20 lot is released
+//	  realized 400 000 − 300 000 = 100 000; what stays is the day-2 parcel, 100 000
+//	acquisition order (the law): the day-2 parcel is released
+//	  realized 400 000 − 100 000 = 300 000; what stays is the day-20 lot, 300 000
+//
+// Three times the realized profit and three times the remaining basis, and the
+// remainder is now dated on a different day — which is what picks the fx rate
+// that turns it into rubles (see Handler.positionInBase). At 60,00 ₽/$ on day 2
+// and 90,00 ₽/$ on day 20 the ruble basis left on the books moves from
+// 60 000,00 ₽ to 270 000,00 ₽, four and a half times, on the same shares and
+// the same money.
+func TestTransferredLotBoughtEarlierIsSoldFirst(t *testing.T) {
+	inUSD := func(o portfolio.Operation) portfolio.Operation {
+		o.Currency = "USD"
+		return o
+	}
+	ops := []portfolio.Operation{
+		inUSD(op(portfolio.TypeBuy, 20, &sber, "10", "300", -300_000, 0)),
+		inUSD(transferIn(25, "10", 100_000, piece("10", 100_000, 2))),
+		inUSD(op(portfolio.TypeSell, 26, &sber, "10", "400", 400_000, 0)),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+
+	if p.RealizedPnLMinor == 400_000-300_000 {
+		t.Fatalf("realized = %d — the day-%d purchase was released because the journal mentions it first; the parcel bought on day %d is the earlier ACQUISITION and the queue is built from that",
+			p.RealizedPnLMinor, 20, 2)
+	}
+	if p.RealizedPnLMinor != 400_000-100_000 {
+		t.Errorf("realized = %d, want %d (400000 − the day-2 parcel's cost 100000)",
+			p.RealizedPnLMinor, 400_000-100_000)
+	}
+	if !p.Quantity.Equal(d("10")) {
+		t.Fatalf("qty = %s, want 10", p.Quantity)
+	}
+	if len(p.Lots) != 1 {
+		t.Fatalf("lots = %+v, want 1 (the day-20 purchase, which nothing older was ahead of)", p.Lots)
+	}
+	left := p.Lots[0]
+	if !sameAcquisition(left.AcquiredOn, dayp(20)) || left.CostMinor != 300_000 {
+		t.Fatalf("remaining lot = {cost %d on %s}, want {300000 on %s}: the transferred parcel was the older one and has gone",
+			left.CostMinor, acquired(left.AcquiredOn), day(20).Format("2006-01-02"))
+	}
+	checkLotInvariants(t, p)
+
+	// And the remainder in rubles, which is the number that reaches a tax
+	// return. The engine knows nothing about rates — it only says which lot is
+	// left and when it was bought, and that day is what selects the rate. The
+	// table below is the arithmetic Handler.positionInBase performs:
+	//   before: $1 000,00 (100000) × 60,00 =  60 000,00 ₽ (6000000)
+	//   now:    $3 000,00 (300000) × 90,00 = 270 000,00 ₽ (27000000)
+	rubPerUSD := map[int]decimal.Decimal{2: d("60"), 20: d("90")}
+	rate, ok := rubPerUSD[left.AcquiredOn.Day()]
+	if !ok {
+		t.Fatalf("remaining lot dated %s, which is neither of the two days this fixture uses", acquired(left.AcquiredOn))
+	}
+	inRubles := decimal.NewFromInt(left.CostMinor).Mul(rate)
+	if inRubles.Equal(d("6000000")) {
+		t.Fatalf("ruble basis left on the books = %s — the day-2 parcel at the day-2 rate; that parcel was sold", inRubles)
+	}
+	if want := d("27000000"); !inRubles.Equal(want) {
+		t.Errorf("ruble basis left on the books = %s, want %s", inRubles, want)
+	}
+}
+
+// TestUndatedLotLeavesTheQueueFirst pins the second half of the ordering rule:
+// a lot that does not know when it was acquired goes out BEFORE every dated
+// one, however old the dated ones are.
+//
+// This is not an invention of ours. 26 CFR 1.6045A-1(b)(10) settles exactly
+// this situation for transferred securities whose acquisition date did not come
+// with them: such lots are treated as sold first, ahead of every lot with a
+// known date. It is also the only answer that does not require making a date
+// up: any other placement in the queue has to compare the unknown against real
+// days, which means silently choosing a day for it.
+//
+// Here the account holds a purchase from day 1 — earlier than anything else in
+// this file — and then receives a parcel with no breakdown at all, whose basis
+// was typed in by hand and whose purchase dates were never recorded.
+func TestUndatedLotLeavesTheQueueFirst(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "10", "10", -10_000, 0),
+		op(portfolio.TypeTransferIn, 5, &sber, "10", "", 90_000, 0),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	if len(p.Lots) != 2 {
+		t.Fatalf("lots = %+v, want 2", p.Lots)
+	}
+	if p.Lots[0].AcquiredOn != nil {
+		t.Fatalf("head of the queue is dated %s; the lot with no date at all must stand ahead of every dated one, including a purchase from day %d",
+			acquired(p.Lots[0].AcquiredOn), 1)
+	}
+	if p.Lots[0].CostMinor != 90_000 {
+		t.Errorf("head lot cost = %d, want 90000 (the undated parcel)", p.Lots[0].CostMinor)
+	}
+	if !sameAcquisition(p.Lots[1].AcquiredOn, dayp(1)) || p.Lots[1].CostMinor != 10_000 {
+		t.Errorf("second lot = {cost %d on %s}, want {10000 on %s}",
+			p.Lots[1].CostMinor, acquired(p.Lots[1].AcquiredOn), day(1).Format("2006-01-02"))
+	}
+	checkLotInvariants(t, p)
+
+	// The queue is not decoration: a sale of ten units takes the undated
+	// parcel whole and leaves the old purchase untouched. Nine times the
+	// realized profit separates the two answers.
+	sold := append(append([]portfolio.Operation{}, ops...),
+		op(portfolio.TypeSell, 6, &sber, "10", "", 100_000, 0))
+	after, err := portfolio.Compute(sold)
+	if err != nil {
+		t.Fatalf("Compute after the sale: %v", err)
+	}
+	q := after[sber]
+	if q.RealizedPnLMinor == 100_000-10_000 {
+		t.Fatalf("realized = %d — the day-1 purchase was released; a lot whose acquisition is unknown leaves first", q.RealizedPnLMinor)
+	}
+	if q.RealizedPnLMinor != 100_000-90_000 {
+		t.Errorf("realized = %d, want %d (100000 − the undated parcel's 90000)",
+			q.RealizedPnLMinor, 100_000-90_000)
+	}
+	// A welcome consequence: selling drains the unknown out of the account
+	// first, so what is left can be valued again (see Handler.positionInBase,
+	// which publishes nothing at all while one lot has no date).
+	if len(q.Lots) != 1 || !sameAcquisition(q.Lots[0].AcquiredOn, dayp(1)) {
+		t.Errorf("lots after the sale = %+v, want only the day-%d purchase", q.Lots, 1)
+	}
+	checkLotInvariants(t, q)
+}
+
+// TestQueueOrderIsStableUnderTies pins the tie-break, which matters more than
+// it looks: these numbers go into a tax return, so two runs must agree, and
+// "two runs" includes two builds of the engine that resolve ties differently.
+// The law names no rule finer than the day — НК РФ ст. 214.1 п. 13 and 26 CFR
+// 1.1012-1(c)(1)(i) both stop at "first by time of acquisition" — so the
+// tie-break is ours to choose, and the choice is the order the lots entered the
+// account, which is the journal's own order: it is total, it is recorded rather
+// than derived, and it is what the queue already did before dates entered the
+// picture.
+//
+// The fixture is built to catch the failure that a three-lot example cannot.
+// Two purchases open the account, on day 2 and day 4; then seven transfers
+// arrive, each carrying three pieces at once — one with no date, one bought on
+// day 2, one bought on day 4 — so lots keep being inserted into the MIDDLE of
+// the queue, alternating between three groups. Sorting such an arrangement with
+// Go's sort.Slice, which is not stable, visibly permutes the ties; a stable
+// order does not. Every cost below is distinct, so any permutation is named in
+// the failure.
+func TestQueueOrderIsStableUnderTies(t *testing.T) {
+	const parcels = 7
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 2, &sber, "1", "", -1_000, 0),
+		op(portfolio.TypeBuy, 4, &sber, "1", "", -2_000, 0),
+	}
+	// wantUndated/wantEarly/wantLate accumulate the costs in the order the lots
+	// entered the account; the queue must be the three lists concatenated.
+	wantUndated := []int64{}
+	wantEarly := []int64{1_000}
+	wantLate := []int64{2_000}
+	for i := 0; i < parcels; i++ {
+		undated := int64(100_000 + i)
+		early := int64(200_000 + i)
+		late := int64(300_000 + i)
+		ops = append(ops, transferIn(10+i, "3", undated+early+late,
+			portfolio.ReleasedLot{Quantity: d("1"), CostMinor: undated},
+			piece("1", early, 2),
+			piece("1", late, 4)))
+		wantUndated = append(wantUndated, undated)
+		wantEarly = append(wantEarly, early)
+		wantLate = append(wantLate, late)
+	}
+
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+
+	type want struct {
+		cost int64
+		on   *time.Time
+	}
+	queue := make([]want, 0, len(p.Lots))
+	for _, c := range wantUndated {
+		queue = append(queue, want{c, nil})
+	}
+	for _, c := range wantEarly {
+		queue = append(queue, want{c, dayp(2)})
+	}
+	for _, c := range wantLate {
+		queue = append(queue, want{c, dayp(4)})
+	}
+	if len(p.Lots) != len(queue) {
+		t.Fatalf("lots = %d, want %d", len(p.Lots), len(queue))
+	}
+	for i, w := range queue {
+		got := p.Lots[i]
+		if got.CostMinor != w.cost || !sameAcquisition(got.AcquiredOn, w.on) {
+			t.Errorf("lot %d = {cost %d on %s}, want {cost %d on %s} — ties must keep the order the lots entered the account",
+				i, got.CostMinor, acquired(got.AcquiredOn), w.cost, acquired(w.on))
+		}
 	}
 	checkLotInvariants(t, p)
 }

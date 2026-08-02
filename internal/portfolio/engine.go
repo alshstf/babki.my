@@ -25,6 +25,19 @@
 // unknown date is therefore carried as unknown, all the way through (see
 // Lot.AcquiredOn).
 //
+// FIFO here means first by ACQUISITION, not first by arrival. The release queue
+// is ordered by the day each lot was bought, wherever in the journal that lot
+// is mentioned, so a transfer carrying older shares takes its place among the
+// ones already held instead of queuing behind them. This is what every
+// jurisdiction the owner files in actually says — НК РФ ст. 214.1 п. 13
+// releases "по стоимости первых по времени приобретений", 26 CFR
+// 1.1012-1(c)(1)(i) names "the earliest lot the taxpayer purchased or
+// acquired" — and it follows from the paragraph above: if moving shares between
+// one's own accounts is not a purchase, it cannot decide what is sold first
+// either. Lots whose acquisition is unknown lead the queue, and lots acquired
+// on the same day keep the order they entered the account (see addLot for both
+// rules and for why the tie-break is spelled out at all).
+//
 // Quantities are tracked to QuantityScale decimal places, the same scale the
 // journal stores them at, so a split truncates its product rather than letting
 // a position hold a quantity that could never be written down. Two consequences
@@ -57,6 +70,7 @@ package portfolio
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -99,7 +113,8 @@ const QuantityScale = 10
 // state, not a temporary gap: a transfer with no stored breakdown carries a
 // basis whose purchase dates were never recorded (see the package doc), and
 // nothing can recover them later. A buy always knows its date, so nil never
-// means "not filled in yet".
+// means "not filled in yet". It is also what places the lot in the release
+// queue, and an unknown date places it at the head — see addLot.
 //
 // The absence is a pointer rather than a zero time.Time on purpose. A zero
 // time.Time is a perfectly usable date — the first of January, year 1 — so
@@ -135,12 +150,17 @@ type Position struct {
 	RealizedPnLMinor int64
 	IncomeMinor      int64 // dividends + coupons − instrument-attributed taxes
 	FeesMinor        int64
-	// Lots are the acquisitions still held, in the order they entered this
-	// account — which is the order releases consume them (FIFO). That is
-	// usually oldest-purchase-first, but not always: a transfer_in brings in
-	// lots bought before ones this account already holds, and they queue up
-	// behind them rather than being re-sorted, because a release must depend
-	// only on replaying the journal in its own order.
+	// Lots are the acquisitions still held, ordered by the day each was
+	// ACQUIRED — oldest first — which is the order releases consume them
+	// (FIFO). Not by the order they entered this account: a transfer_in brings
+	// in lots bought before ones already held, and they take their place among
+	// them. Moving shares between one's own accounts is not a purchase and does
+	// not restart anything, so the queue must not be built out of when the
+	// paperwork happened (see addLot, which maintains this order, for the rule
+	// and for the law behind it). Lots that do not know when they were acquired
+	// stand at the head, ahead of every dated one; ties keep the order the lots
+	// entered the account.
+	//
 	// Their quantities sum to Quantity and their costs sum to CostMinor
 	// exactly. A position closed by selling everything has none; one whose
 	// shares were rounded away by a reverse split keeps the shareless lots that
@@ -166,13 +186,13 @@ type ReleasedLot struct {
 	AcquiredOn *time.Time
 }
 
-// releaseFIFO removes qty from the position's lots front-to-back and
-// returns the pieces released, in queue order — which is acquisition order
-// for lots bought on this account, but not necessarily for ones a transfer
-// brought in (see Position.Lots). Partial lot pieces use
-// floor proportioning; the final piece of a lot takes the lot's remaining
-// cost so that the sum of released piece costs always equals the original
-// lot cost exactly.
+// releaseFIFO removes qty from the position's lots front-to-back and returns
+// the pieces released, in queue order — which is acquisition order, oldest
+// first, undated lots ahead of all of them (see Position.Lots; addLot is what
+// keeps the queue in that order, so nothing has to be sorted here). Partial lot
+// pieces use floor proportioning; the final piece of a lot takes the lot's
+// remaining cost so that the sum of released piece costs always equals the
+// original lot cost exactly.
 func (p *Position) releaseFIFO(qty decimal.Decimal) ([]ReleasedLot, error) {
 	if qty.GreaterThan(p.Quantity) {
 		return nil, fmt.Errorf("%w: have %s, need %s", ErrOversell, p.Quantity, qty)
@@ -267,11 +287,81 @@ func (p *Position) applySplit(ratio decimal.Decimal) {
 	p.Quantity = total
 }
 
-// addLot appends one acquisition to the queue. A nil acquiredOn is not a
-// missing argument but an answer: this lot's acquisition date is not knowable
-// (see Lot.AcquiredOn).
+// acquiredBefore reports whether a lot acquired on a must leave the queue
+// ahead of one acquired on b, for two dates that are not equal.
+//
+// An UNKNOWN acquisition comes before every known one. That is not a
+// convenience: it is the rule 26 CFR 1.6045A-1(b)(10) settles for exactly this
+// case — transferred securities that arrived without their acquisition dates
+// are treated as disposed of first, ahead of every dated lot. It is also the
+// only placement that does not require inventing a date. Anywhere else in the
+// queue is defined by comparing the unknown against real days, which means
+// quietly choosing a day for it — the very thing Lot.AcquiredOn exists to
+// refuse. And it has a practical edge: sales drain the undated lots out of an
+// account first, after which the position can be valued in another currency
+// again (Handler.positionInBase publishes nothing while a single lot is
+// undated).
+//
+// Dates are calendar days at UTC midnight — occurred_on and acquired_on are
+// both DATE columns — so comparing instants compares days, as CheckTransferLots
+// already does.
+func acquiredBefore(a, b *time.Time) bool {
+	switch {
+	case a == nil:
+		return b != nil
+	case b == nil:
+		return false
+	default:
+		return a.Before(*b)
+	}
+}
+
+// addLot puts one acquisition into the queue AT ITS PLACE BY ACQUISITION DATE,
+// which is what makes the queue a FIFO over purchases rather than over
+// paperwork (see Position.Lots). A nil acquiredOn is not a missing argument but
+// an answer: this lot's acquisition date is not knowable (see Lot.AcquiredOn),
+// and such a lot goes to the head (see acquiredBefore).
+//
+// The order is maintained here, as an invariant of the queue, rather than
+// established by sorting somewhere later. addLot is the only door a lot can
+// enter a position through — a buy and both branches of a transfer_in all come
+// through it — so making it the place the order is decided means no caller can
+// build an out-of-order queue, and no future caller can forget to. Sorting at
+// release time instead would have to be repeated in releaseFIFO, in
+// ReleasedLots and in every path a later reader adds that takes the head of the
+// queue; the one that forgot would silently fall back to arrival order, which
+// is precisely the bug this replaced. Nothing else here reorders: releaseFIFO
+// takes from the head and shrinks a lot in place, applySplit rewrites
+// quantities in place, drainLotsCost rewrites costs in place.
+//
+// TIES KEEP THE ORDER THE LOTS ENTERED THE ACCOUNT. The law names no rule finer
+// than the day — НК РФ ст. 214.1 п. 13 says "по стоимости первых по времени
+// приобретений", 26 CFR 1.1012-1(c)(1)(i) says "the earliest lot the taxpayer
+// purchased or acquired", and neither says anything about two lots bought on
+// one day — so the tie-break is ours to pick, and it must be picked explicitly:
+// these figures go into a tax return, and a number that depends on which
+// sorting algorithm the build happened to use is not a number anybody can
+// defend. Journal order is the choice because it is total and already recorded
+// rather than derived — Compute is fed operations ordered by (occurred_on,
+// created_at), both facts in the table — and because it is what the queue did
+// before dates entered it, so this change moves exactly the lots the
+// acquisition rule requires to move and no others.
+//
+// The insertion point is found by walking back from the tail while the lot
+// behind is strictly later, so the new lot lands AFTER every lot acquired no
+// later than itself. That is exactly where a STABLE sort by acquisition date
+// would put it, which means the invariant and "stable sort of the arrival
+// sequence" are the same order, reached two ways. The walk costs nothing in the
+// ordinary case: the journal arrives in date order, so a purchase stops at the
+// first comparison and appends. Only a lot that arrives out of order — a
+// transfer carrying older shares, the case this exists for — walks, and only as
+// far as it must.
 func (p *Position) addLot(qty decimal.Decimal, costMinor int64, acquiredOn *time.Time) {
-	p.Lots = append(p.Lots, Lot{Quantity: qty, CostMinor: costMinor, AcquiredOn: acquiredOn})
+	at := len(p.Lots)
+	for at > 0 && acquiredBefore(acquiredOn, p.Lots[at-1].AcquiredOn) {
+		at--
+	}
+	p.Lots = slices.Insert(p.Lots, at, Lot{Quantity: qty, CostMinor: costMinor, AcquiredOn: acquiredOn})
 	p.Quantity = p.Quantity.Add(qty)
 	p.CostMinor += costMinor
 }

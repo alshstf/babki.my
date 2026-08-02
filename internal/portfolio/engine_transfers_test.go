@@ -231,6 +231,15 @@ func TestTransferInBreakdownMismatchRejected(t *testing.T) {
 // were kept) is moved on again: the release yields pieces with nothing to
 // date them by, mixed in with pieces that do know their day. The breakdown
 // must carry that mixture faithfully, and the lots it rebuilds must too.
+//
+// The rebuilt lots are asserted in QUEUE order, and the queue is ordered by
+// acquisition (see Position.Lots and addLot), so the undated lot stands at the
+// head even though its piece is the second one in the breakdown. That is the
+// only part of this test the acquisition-ordering change moved: it used to read
+// the pieces off in the order they were listed, because the queue used to be
+// arrival order. What the test is here to pin is unchanged and still asserted —
+// a dateless piece is accepted rather than refused, it becomes a lot of its
+// own, and no date is invented for it, least of all the transfer's own.
 func TestTransferInAcceptsPieceWithoutAcquisitionDate(t *testing.T) {
 	undated := portfolio.ReleasedLot{Quantity: d("5"), CostMinor: 55_005}
 	ops := []portfolio.Operation{
@@ -244,15 +253,19 @@ func TestTransferInAcceptsPieceWithoutAcquisitionDate(t *testing.T) {
 	if len(p.Lots) != 2 {
 		t.Fatalf("lots = %+v, want 2 — one per piece, the undated one included", p.Lots)
 	}
-	if !sameAcquisition(p.Lots[0].AcquiredOn, dayp(2)) {
-		t.Errorf("lot 0 acquired on %s, want %s", acquired(p.Lots[0].AcquiredOn), acquired(dayp(2)))
+	if p.Lots[0].AcquiredOn != nil {
+		t.Errorf("lot 0 acquired on %s, want unknown — the piece carried no date, the engine must not supply one, and a lot with no date leads the queue",
+			acquired(p.Lots[0].AcquiredOn))
 	}
-	if p.Lots[1].AcquiredOn != nil {
-		t.Errorf("lot 1 acquired on %s, want unknown — the piece carried no date and the engine must not supply one",
-			acquired(p.Lots[1].AcquiredOn))
+	if sameAcquisition(p.Lots[0].AcquiredOn, dayp(20)) {
+		t.Errorf("lot 0 was dated on the transfer day %s: the breakdown said nothing about when it was bought", acquired(dayp(20)))
 	}
-	if sameAcquisition(p.Lots[1].AcquiredOn, dayp(20)) {
-		t.Errorf("lot 1 was dated on the transfer day %s: the breakdown said nothing about when it was bought", acquired(dayp(20)))
+	if p.Lots[0].CostMinor != 55_005 {
+		t.Errorf("lot 0 cost = %d, want 55005 (the undated piece)", p.Lots[0].CostMinor)
+	}
+	if !sameAcquisition(p.Lots[1].AcquiredOn, dayp(2)) || p.Lots[1].CostMinor != 100_010 {
+		t.Errorf("lot 1 = {cost %d on %s}, want {100010 on %s} — the dated piece keeps its own day and queues behind the undated one",
+			p.Lots[1].CostMinor, acquired(p.Lots[1].AcquiredOn), acquired(dayp(2)))
 	}
 	if p.CostMinor != 155_015 {
 		t.Errorf("cost = %d, want 155015 — an unknown date changes no money", p.CostMinor)
