@@ -136,6 +136,10 @@ func (c *Converter) ConvertMany(ctx context.Context, amounts map[string]int64, t
 // Convert per amount bit-for-bit — only the redundant DB round trips are
 // removed.
 //
+// That memoization only helps while the pair and the date repeat. When they
+// vary from row to row — a page of the journal, a list of positions — RatesOn
+// resolves the whole set in one round trip and gives the same answers.
+//
 // If from == to, rate is 1 and rateDate is the zero time.Time, mirroring
 // Convert's identity short-circuit: no lookup happens for an
 // already-in-target-currency amount.

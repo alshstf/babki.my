@@ -747,3 +747,58 @@ func TestRatesOnPropagatesRealErrors(t *testing.T) {
 		t.Fatalf("RatesOn with canceled context: map = %+v, want nil", got)
 	}
 }
+
+// TestDirectRowWinsOverTheInverseOfAReverseRow pins the first rule of
+// resolution: when both directions are stored, the direct row is the answer
+// and the reverse row is not consulted at all. The two disagree here on
+// purpose — 1/0.02 is 50, not the 90 the direct row says — because a published
+// pair of rates does not have to be each other's exact reciprocal, and taking
+// the wrong one produces a number that looks entirely plausible.
+//
+// Checked on Rate and RatesOn alike: they share the rule, so a mutation moves
+// both and no test that compares them to each other would notice.
+func TestDirectRowWinsOverTheInverseOfAReverseRow(t *testing.T) {
+	conv, store, _, ctx := newConverterFixtureWithPool(t)
+	on := date("2026-07-03")
+
+	err := store.UpsertFxRates(ctx, []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90"), Source: "test"},
+		{Base: "RUB", Quote: "USD", On: on, Rate: dec("0.02"), Source: "test"},
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	forward := marketdata.RateQuery{From: "USD", To: "RUB", On: on}
+	backward := marketdata.RateQuery{From: "RUB", To: "USD", On: on}
+
+	got, err := conv.RatesOn(ctx, []marketdata.RateQuery{forward, backward})
+	if err != nil {
+		t.Fatalf("RatesOn: %v", err)
+	}
+
+	for _, tc := range []struct {
+		query    marketdata.RateQuery
+		wantRate decimal.Decimal
+	}{
+		{forward, dec("90")},    // its own row, not 1/0.02 = 50
+		{backward, dec("0.02")}, // its own row, not 1/90
+	} {
+		res, ok := got[tc.query]
+		if !ok || res.Err != nil {
+			t.Fatalf("RatesOn[%s->%s] = %+v, ok=%v, want the stored direct rate", tc.query.From, tc.query.To, res, ok)
+		}
+		if !res.Rate.Equal(tc.wantRate) {
+			t.Fatalf("RatesOn[%s->%s].Rate = %s, want %s (the direct row, not the inverse of the reverse one)",
+				tc.query.From, tc.query.To, res.Rate, tc.wantRate)
+		}
+		rate, _, err := conv.Rate(ctx, tc.query.From, tc.query.To, tc.query.On)
+		if err != nil {
+			t.Fatalf("Rate(%s->%s): %v", tc.query.From, tc.query.To, err)
+		}
+		if !rate.Equal(tc.wantRate) {
+			t.Fatalf("Rate(%s->%s) = %s, want %s (the direct row, not the inverse of the reverse one)",
+				tc.query.From, tc.query.To, rate, tc.wantRate)
+		}
+	}
+}
