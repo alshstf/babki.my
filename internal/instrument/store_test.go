@@ -6,20 +6,25 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/platform/testdb"
 )
 
-func newStore(t *testing.T) (*instrument.Store, context.Context) {
+// newStore also hands back the pool, unused by most tests but needed by
+// TestByIDs to inspect Stat().AcquireCount() around the batched read — the
+// same technique marketdata.Store's own batch test (FxRatesOn) uses to pin
+// its round-trip count.
+func newStore(t *testing.T) (*instrument.Store, context.Context, *pgxpool.Pool) {
 	t.Helper()
 	pool := testdb.New(t)
 	ctx := context.Background()
-	return instrument.NewStore(pool), ctx
+	return instrument.NewStore(pool), ctx, pool
 }
 
 func TestInstrumentLifecycle(t *testing.T) {
-	st, ctx := newStore(t)
+	st, ctx, _ := newStore(t)
 
 	face := int64(1_000_00)
 	faceCur := "RUB"
@@ -79,7 +84,7 @@ func TestInstrumentLifecycle(t *testing.T) {
 }
 
 func TestListTradable(t *testing.T) {
-	st, ctx := newStore(t)
+	st, ctx, _ := newStore(t)
 
 	share, err := st.Create(ctx, instrument.Instrument{
 		Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
@@ -137,10 +142,11 @@ func TestListTradable(t *testing.T) {
 // ByID per position: every id that has a row comes back with its full record,
 // an id that has none is simply ABSENT — never a zero-valued Instrument, which
 // would carry an empty name and an invalid type and read exactly like a real
-// catalog row to a caller that skipped the comma-ok — and an empty request is
-// answered without asking the database anything.
+// catalog row to a caller that skipped the comma-ok — the read costs exactly
+// one round trip for the whole set, and an empty request is answered without
+// asking the database anything.
 func TestByIDs(t *testing.T) {
-	st, ctx := newStore(t)
+	st, ctx, pool := newStore(t)
 
 	face := int64(1_000_00)
 	faceCur := "USD"
@@ -167,9 +173,20 @@ func TestByIDs(t *testing.T) {
 	}
 
 	absent := uuid.New()
+	// Discriminating check: fetching a set of ids must take exactly one round
+	// trip to the database, not one per id — that is the entire reason ByIDs
+	// exists instead of a loop of ByID calls (see marketdata.Store.FxRatesOn's
+	// identical AcquireCount check for the sibling batch primitive this one is
+	// modelled on). AcquireCount is a lifetime counter on the pool, so
+	// comparing before and after catches an implementation that compiles and
+	// returns the right instruments while quietly issuing one query per id.
+	before := pool.Stat().AcquireCount()
 	got, err := st.ByIDs(ctx, []uuid.UUID{bond.ID, share.ID, absent})
 	if err != nil {
 		t.Fatalf("ByIDs: %v", err)
+	}
+	if after := pool.Stat().AcquireCount(); after-before != 1 {
+		t.Fatalf("ByIDs(3 ids) acquired %d connections, want exactly 1", after-before)
 	}
 	if len(got) != 2 {
 		t.Fatalf("ByIDs len = %d, want 2 (the two ids that have rows): %+v", len(got), got)
@@ -200,9 +217,18 @@ func TestByIDs(t *testing.T) {
 		t.Errorf("ByIDs share = %+v, want Сбербанк", got[share.ID])
 	}
 
+	// Empty input -> empty map and not a single round trip to the database.
+	// AcquireCount is a lifetime counter on the pool, so comparing before and
+	// after catches an implementation that dropped the len(ids)==0
+	// short-circuit and queried the database with an empty array instead
+	// (see marketdata.Store.FxRatesOn's identical check for the same claim).
+	beforeEmpty := pool.Stat().AcquireCount()
 	empty, err := st.ByIDs(ctx, nil)
 	if err != nil {
 		t.Fatalf("ByIDs(nil): %v", err)
+	}
+	if afterEmpty := pool.Stat().AcquireCount(); afterEmpty != beforeEmpty {
+		t.Errorf("ByIDs(nil) acquired a connection (before=%d after=%d), want zero round trips for empty input", beforeEmpty, afterEmpty)
 	}
 	if len(empty) != 0 {
 		t.Errorf("ByIDs(nil) = %+v, want an empty map", empty)

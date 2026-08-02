@@ -728,11 +728,12 @@ func TestPositionsMarketValueConvertsToPositionCurrency(t *testing.T) {
 }
 
 // TestPositionsConvertedValuationRoundsHalfAwayFromZero pins the rounding of
-// the two figures this handler strikes from a single fx rate: a valuation
-// brought into the position's currency (toAPI) and that valuation carried on
-// into the base currency (positionInBase). Both go through rateLookup.applyTo,
-// and both must round exactly as marketdata.Converter.Convert does — once, at
-// the end, half-away-from-zero.
+// three figures this handler strikes, each from its own single multiplication:
+// a bond's raw valuation (marketValue itself), that valuation brought into the
+// position's currency (toAPI), and that converted valuation carried on into
+// the base currency (positionInBase). The latter two go through
+// rateLookup.applyTo; marketValue rounds inline. All three must round exactly
+// as marketdata.Converter.Convert does — once, at the end, half-away-from-zero.
 //
 // It exists because that arithmetic used to BE Convert's, covered by
 // marketdata's own tests, and now lives here: without this, replacing the
@@ -740,16 +741,22 @@ func TestPositionsMarketValueConvertsToPositionCurrency(t *testing.T) {
 // this package notices (confirmed by hand — Round -> Truncate passed the whole
 // suite before this test was written).
 //
-// Both rates are chosen to land the product exactly on the half-unit boundary,
-// which is the only place the two rules differ:
+// The bond's own price and both rates are chosen to land every one of the
+// three products exactly on the half-unit boundary, which is the only place
+// Round and Truncate differ:
 //
-//	bond: face 1 000,00 USD, quoted at par, quantity 1
-//	  raw valuation                  = 100 000 minor USD
-//	  USD -> EUR 0,900005            =  90 000,5 -> 90 001  (truncation: 90 000)
-//	  in_base, EUR -> RUB 0,5        =  45 000,5 -> 45 001  (truncation: 45 000)
+//	bond: face 1 000,00 USD, quantity 1, quoted at 99,9995% of face (not par)
+//	  raw valuation (marketValue)    =  99 999,5 -> 100 000 minor USD (truncation: 99 999)
+//	  USD -> EUR 0,900005            = 100 000 * 0,900005 = 90 000,5 -> 90 001  (truncation: 90 000)
+//	  in_base, EUR -> RUB 0,5        =  90 001 * 0,5      = 45 000,5 -> 45 001  (truncation: 45 000)
 //
-// The second rate is deliberately not a plausible market rate; it is a
-// boundary, and the arithmetic is what is under test.
+// The price is deliberately not a round number either: at an exact par quote
+// the raw valuation is already an integer number of minor units (100000 *
+// 100.00 / 100 = 100000,00 exactly), so marketValue's own Round(0) has nothing
+// to round and Round -> Truncate there passes unnoticed even though the two
+// downstream conversions still catch a mutation of their own roundings. Both
+// the price and the second rate are chosen purely to sit on a boundary; the
+// arithmetic is what is under test, not a plausible market quote.
 func TestPositionsConvertedValuationRoundsHalfAwayFromZero(t *testing.T) {
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
@@ -772,7 +779,9 @@ func TestPositionsConvertedValuationRoundsHalfAwayFromZero(t *testing.T) {
 	}
 	quotes.byInstrument[bondID] = marketdata.Quote{
 		InstrumentID: bondID, On: mustDate(t, "2026-07-21"),
-		Price: decimal.RequireFromString("100.00"), Currency: "EUR", Source: "test",
+		// 99.9995, not par: see the doc comment above for why the raw
+		// valuation itself must land on a half-unit boundary too.
+		Price: decimal.RequireFromString("99.9995"), Currency: "EUR", Source: "test",
 	}
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-07-01","quantity":"1","price":"800",

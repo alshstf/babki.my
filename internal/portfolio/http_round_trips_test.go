@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -17,6 +18,19 @@ import (
 	"babki.my/babki/internal/platform/testdb"
 	"babki.my/babki/internal/portfolio"
 )
+
+// formatMinor renders a *int64 API field for a failure message: the decimal
+// value when present, "<nil>" when not. Passing the pointer itself to %v
+// would print its address once it is non-nil — int64 is not one of the
+// compound types fmt's default verb dereferences — so a genuine failure would
+// read as "market_value_minor = 0x743c2bdf50b8" instead of the number the
+// message is trying to show.
+func formatMinor(p *int64) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return strconv.FormatInt(*p, 10)
+}
 
 // countingConverter counts what one screen asks of the fx layer while
 // delegating every answer to a real *marketdata.Converter, so the figures on
@@ -463,8 +477,8 @@ func TestPositionsSharedRateMemoKeepsTargetsApart(t *testing.T) {
 		t.Fatalf("bond market_value_currency = %v, want EUR (the position's own currency)", bondPos.MarketValueCurrency)
 	}
 	if bondPos.MarketValueMinor == nil || *bondPos.MarketValueMinor != 90000 {
-		t.Errorf("bond market_value_minor = %v, want 90000 (100000 USD at USD->EUR 0,9) — 9000000 would be the USD->RUB rate answering a USD->EUR question",
-			bondPos.MarketValueMinor)
+		t.Errorf("bond market_value_minor = %s, want 90000 (100000 USD at USD->EUR 0,9) — 9000000 would be the USD->RUB rate answering a USD->EUR question",
+			formatMinor(bondPos.MarketValueMinor))
 	}
 	if got := inBaseMarketValue(t, bondPos); got != 9_000_000 {
 		t.Errorf("bond in_base.market_value_minor = %d, want 9000000 (90000 EUR at EUR->RUB 100)", got)
@@ -475,7 +489,7 @@ func TestPositionsSharedRateMemoKeepsTargetsApart(t *testing.T) {
 		t.Fatalf("no position for the share: %+v", got.Positions)
 	}
 	if sharePos.MarketValueMinor == nil || *sharePos.MarketValueMinor != 110000 {
-		t.Fatalf("share market_value_minor = %v, want 110000 (already in the position's currency, nothing converted)", sharePos.MarketValueMinor)
+		t.Fatalf("share market_value_minor = %s, want 110000 (already in the position's currency, nothing converted)", formatMinor(sharePos.MarketValueMinor))
 	}
 	if got := inBaseMarketValue(t, sharePos); got != 9_900_000 {
 		t.Errorf("share in_base.market_value_minor = %d, want 9900000 (110000 USD at USD->RUB 90) — 99000 is the USD->EUR rate answering a USD->RUB question, which is what a memo that lost the target currency returns when the bond is valued first",

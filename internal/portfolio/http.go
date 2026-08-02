@@ -367,11 +367,15 @@ func nullableValue[T any](n nullable.Nullable[T]) *T {
 // Almost everything here converts into the space's base currency, but a bond
 // whose valuation is denominated in its face currency is brought into the
 // POSITION's currency instead — that is the whole point of that conversion,
-// comparability with cost_minor (see toAPI) — so one request legitimately asks
-// for EUR->USD and USD->RUB at once. A key naming only the source would answer
-// the first with the second: the same silently-plausible wrong number the date
-// is in the key to prevent. operation.rateKey has one target and says so; this
-// one cannot.
+// comparability with cost_minor (see toAPI) — so one request can legitimately
+// ask for the SAME source currency under two different targets: a bond with a
+// USD face value held in a EUR position needs USD->EUR today, while a plain
+// USD position on the same screen needs USD->RUB today — both "USD, today"
+// (see TestPositionsSharedRateMemoKeepsTargetsApart, which is exactly this
+// pair of positions). A key naming only the source would collide the two,
+// filing one position's rate where the other looks for its own: the same
+// silently-plausible wrong number the date is in the key to prevent.
+// operation.rateKey has one target and says so; this one cannot.
 type rateKey struct {
 	from string
 	to   string
@@ -944,7 +948,7 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 // for, so one RatesOn call can resolve them all and every rateFor below finds
 // its answer already in the memo. A screen holding thirty positions bought on
 // a hundred days between them costs one round trip for the lot, instead of one
-// per distinct date per position (#40, #45, #53).
+// per distinct date per position (#40, #53).
 //
 // IT IS DERIVED FROM THE CODE THAT CONSUMES THE RATES, NEVER WRITTEN BESIDE
 // IT. Every date here comes out of lotTerms, incomeTerms or realizedTerms —
@@ -966,6 +970,19 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 // that cannot happen, because the memo is keyed by the pair and the day
 // themselves (see rateKey), so a mis-enumerated rate is filed where nothing
 // looks for it.
+//
+// The slice this builds names one query per TERM before it is returned —
+// appendTermQueries asks once per lot, per income operation, per released
+// parcel — so a position with many lots landing on a handful of purchase
+// dates repeats the same (pair, day) many times over. That costs nothing at
+// the database (RatesOn collapses duplicates before it ever queries the
+// store), but it is not free: prewarmRates below walks this same slice again
+// to file each answer in the memo, and RatesOn's own resolution walks it once
+// more to build its result. Both of those passes are O(terms) unless this one
+// hands them O(distinct queries) instead, so the return statement collapses
+// the slice through dedupeQueries before handing it back — keyed with rateKey,
+// the same identity the memo itself uses, rather than a second answer to what
+// makes two queries "the same".
 func rateQueries(
 	positions map[uuid.UUID]*Position,
 	instruments map[uuid.UUID]instrument.Instrument,
@@ -1012,7 +1029,7 @@ func rateQueries(
 			out = appendTermQueries(out, realized, p.Currency, baseCurrency)
 		}
 	}
-	return out
+	return dedupeQueries(out)
 }
 
 // appendTermQueries asks for the rate of every term's own date — which is what
@@ -1022,6 +1039,40 @@ func appendTermQueries(dst []marketdata.RateQuery, terms []datedMinor, from, to 
 		dst = append(dst, marketdata.RateQuery{From: from, To: to, On: t.on})
 	}
 	return dst
+}
+
+// dedupeQueries collapses queries onto one entry per distinct (pair, day),
+// keeping the first occurrence's own On value. It exists because
+// appendTermQueries asks once per TERM rather than once per distinct date:
+// 500 lots settling on 5 purchase dates produce 500 queries for 5 answers,
+// and every one of the three passes rateQueries and its callers make over
+// this slice — this function's own accumulation aside — pays for every
+// repeat, not just the distinct ones the store ends up billed for.
+//
+// Filters in place (out := queries[:0]) rather than allocating a second
+// slice: the read index is always at or ahead of the write index, so
+// overwriting queries as it is walked never clobbers an element still to be
+// read.
+//
+// Keyed with rateKey/newRateKey — the same identity the request's rate memo
+// itself uses (see rateFor) — rather than a second, independent notion of
+// "same query" that could disagree with it. That also sidesteps the usual
+// time.Time hazard for free: two dates naming the same calendar day but
+// differing in *time.Location or monotonic reading collapse here exactly as
+// they already collapse in the memo, because newRateKey reduces both to the
+// same YYYY-MM-DD string.
+func dedupeQueries(queries []marketdata.RateQuery) []marketdata.RateQuery {
+	seen := make(map[rateKey]bool, len(queries))
+	out := queries[:0]
+	for _, q := range queries {
+		k := newRateKey(q.From, q.To, q.On)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, q)
+	}
+	return out
 }
 
 // prewarmRates resolves queries in one round trip and files each answer in the
