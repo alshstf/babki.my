@@ -632,18 +632,17 @@ describe("PositionsTable", () => {
       const marketValue = screen.getByTestId("position-market-value");
       expect(norm(marketValue.textContent ?? "")).toContain(norm(formatMinor(100_000, "EUR")));
       expect(marketValue.textContent).not.toMatch(/₽/);
-      // Issue #42: the marker must name the cause that IS the cause. A EUR->RUB
-      // rate may well exist — and since #39 the backend converts a valuation
-      // out of its own currency, so that rate is the very one it would use.
-      // What is missing is the link from EUR to the position's USD, without
+      // Issue #42: the marker must name the cause that IS the cause. The rate
+      // that is missing is the link from EUR to the position's USD, without
       // which the row has nothing to compare the valuation against, and the
-      // backend withholds the base-currency figure with it. "Нет курса" states
-      // something the screen does not know and points the reader at a gap that
-      // may not be there at all.
+      // backend withholds the base-currency figure with it. It is missing for
+      // this ONE figure: the cost in the very same row converted into rubles
+      // above. "Нет курса" is the row's marker and would say the row could not
+      // be converted at all, which the cell beside it disproves.
       const valuationMarker = screen.getByTestId("position-market-value-not-converted");
       expect(valuationMarker).toHaveAttribute(
         "title",
-        "Оценка получилась в третьей валюте — не в валюте позиции и не в базовой, — а курса от неё до валюты позиции нет: сравнить её со стоимостью позиции не с чем. Пока оценка не выражена в валюте позиции, программа не показывает её и в базовой. Поэтому показана в исходной валюте",
+        "Оценка получилась в третьей валюте — не в валюте позиции и не в базовой, — а курса от неё до валюты позиции нет: сравнить её со стоимостью позиции нельзя. Пока оценка не выражена в валюте позиции, программа не показывает её и в базовой. Поэтому показана в исходной валюте",
       );
       expect(valuationMarker.getAttribute("title")).not.toBe(
         "Нет курса — показано в исходной валюте",
@@ -658,7 +657,7 @@ describe("PositionsTable", () => {
       // ONE figure: the cost and the income are denominated in the position's
       // own currency and convert exactly as they always do. Here the row also
       // has no fx rate at all, so its other cells fall back natively — and they
-      // must say "нет курса", not repeat the valuation's chain story, which is
+      // must say "нет курса", not repeat the valuation's own reason, which is
       // not true of them.
       wrap(
         <PositionsTable

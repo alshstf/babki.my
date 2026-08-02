@@ -883,15 +883,45 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // tooltip saying it had been converted from euros (#39). It had not been.
 //
 // market_value_minor is still published in_base ONLY when market_value_currency
-// equals p.Currency, and unrealized_pnl_minor follows it. That rule is now a
-// boundary rather than an impossibility, and the difference matters to anyone
-// reading it: the arithmetic could be done — a valuation stuck in EUR could be
-// carried into RUB by the EUR->RUB rate exactly as it is above, without ever
-// touching the position's currency — and it deliberately is not. A holding is
-// valued in both currencies or in neither, so the display-currency switch can
-// never turn a row that shows no profit at all into a row that shows one. Null
-// there is honest either way: the frontend falls back to showing the raw amount
-// in its own currency with a "not converted" marker.
+// equals p.Currency, and unrealized_pnl_minor follows it. THAT RULE WITHHOLDS
+// NOTHING THAT COULD BE COMPUTED, and the reason is checkable rather than a
+// principle. Every fx row this program stores is quoted in RUB: the seed writes
+// <currency>/RUB rows (cmd/babki/seed.go) and the only provider behind the
+// refresh jobs is the CBR one, which publishes nothing else (marketdata/cbr).
+// marketdata.resolveRate reaches a pair only as a direct row, as the inverse of
+// one, or as a bridge X->RUB->Y. So for a valuation denominated in F on a
+// position in P: this rule fires only after the F->P conversion in toAPI
+// failed, which in a RUB-quoted table means F->RUB is missing or P->RUB is. A
+// pair the table cannot resolve today it cannot resolve for any earlier day
+// either (Store.FxRateOn takes the nearest EARLIER row), so a missing P->RUB
+// has already taken cost_minor or income_minor down with it and this function
+// returned nil far above, before the rule was reached at all. What is left is a
+// missing F->RUB — and then F->baseCurrency has no route either, whatever the
+// base currency is. The figure is absent because there is none, not because one
+// is being kept back.
+//
+// The rule is nevertheless written out rather than left to that argument,
+// because the argument is about the rate TABLE rather than about this function.
+// The day one non-RUB-quoted row exists — a direct GBP/USD, say, which nothing
+// in this codebase can currently create — a valuation stuck in GBP on a USD
+// position becomes expressible in RUB, and withholding it turns into a real
+// choice that would have to be argued for here instead of merely explained.
+//
+// Two rows slip through the argument as it stands, and the written-out rule
+// covers them too. A position holding no lot and having received no income sums
+// nothing, needs no rate to do it, and so survives a missing P->RUB — but it
+// holds nothing either, and the valuation the rule withholds from it is the
+// zero of a closed row. And nothing rejects an operation dated in the future, so
+// a lot dated past every fx row could be valued off a row dated after today,
+// which is the one way a missing P->RUB for TODAY stops meaning that cost_minor
+// was unstrikable.
+//
+// Asymmetry between this object and the position's own figures is ordinary, not
+// something this rule prevents: realized_pnl_minor goes null here while
+// Position.realized_pnl_minor is published either way, and one undated lot nulls
+// this whole object while every native figure stays. Null here is honest in all
+// of those cases: the frontend falls back to showing the raw amount in its own
+// currency with a "not converted" marker.
 //
 // It returns (nil, nil) — render in_base as null, the WHOLE object, never
 // partially populated — when p.Currency already equals baseCurrency (nothing
@@ -900,7 +930,14 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // today's is needed only when there is a valuation for it to convert, so a
 // position with no usable quote publishes its basis and its income without
 // ever asking for a rate for today (rate_on is then null, saying exactly
-// that) — or when a single lot does not know WHEN it was acquired
+// that). Today's is now asked for the VALUATION's currency against the base
+// one, not the position's, so on a bond priced off a foreign face value a
+// missing rate there takes cost_minor and income_minor down with it as well —
+// unreachable in a RUB-quoted table, by the same kind of argument as the rule
+// above and spelled out at the today's-rate block below, and stated here
+// because it is a fact about the whole object rather than about the valuation
+// alone. It also returns
+// (nil, nil) when a single lot does not know WHEN it was acquired
 // (Lot.AcquiredOn nil),
 // which leaves no date to ask for a rate in the first place. A basis summed
 // from only the lots that happened to convert is an invented number, smaller
@@ -972,9 +1009,9 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 
 	// Which figure this object converts, and out of which currency. The GUARD
 	// comes first and is unchanged: a valuation that never reached the
-	// position's currency is not carried into the base one (see this
-	// function's doc comment for why that is a boundary and not an
-	// impossibility).
+	// position's currency is not carried into the base one (see this function's
+	// doc comment — in a table where every rate is quoted in RUB, there is no
+	// base-currency figure to carry).
 	marketValueMinor := nullableValue(apiPos.MarketValueMinor)
 	valuationCurrency := p.Currency
 	if c := nullableValue(apiPos.MarketValueCurrency); c == nil || *c != p.Currency {
@@ -982,17 +1019,25 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 	}
 	// Only then is the converted figure swapped back for the original it was
 	// converted FROM, so the base-currency answer is struck in one step.
-	// toAPI sets these two only when that conversion succeeded, so this can
-	// never smuggle past the guard above — but the guard is what states the
-	// rule, and this must not become a second, quieter statement of it.
+	//
+	// `marketValueMinor != nil` here is UNREACHABLE INSURANCE, not part of the
+	// rule: toAPI sets the two source fields only after a conversion that
+	// succeeded, and such a position has market_value_currency == p.Currency, so
+	// the guard above never struck the figure this would put back. Removing the
+	// conjunct leaves the whole suite green, and it is kept anyway — not as a
+	// second, quieter statement of the rule (the guard states it), but so that a
+	// future toAPI which set the source fields on a path that did NOT convert
+	// could not resurrect, here, a valuation the guard has just withheld. What no
+	// test can pin, a comment has to say.
 	if src, srcCurrency := nullableValue(apiPos.MarketValueSourceMinor), nullableValue(apiPos.MarketValueSourceCurrency); marketValueMinor != nil && src != nil && srcCurrency != nil {
 		marketValueMinor, valuationCurrency = src, *srcCurrency
 	}
 	if marketValueMinor == nil {
 		// No valuation this object may convert — no usable quote, or one the
 		// guard above withheld because it never reached the position's own
-		// currency (not because no rate could carry it: it is converted out of
-		// its own currency now, and that rate may well exist).
+		// currency. Nothing is being kept back in that second case: the
+		// conversion out of its own currency needs the very rate whose absence
+		// stopped it from reaching p.Currency (see the doc comment).
 		// rate_on goes with it, because rate_on is the DATE OF that figure and
 		// of nothing else here: the basis and the income are struck at the
 		// rates of their own many dates, and a date published beside them
@@ -1031,6 +1076,23 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 	// the whole point (see the doc comment): one screen can therefore ask
 	// about EUR->RUB for a row whose every other figure is USD->RUB, and
 	// rateQueries enumerates it from the same marketValue call that decides it.
+	//
+	// It also widens what the ErrNoRate below can take down. Before, only the
+	// POSITION currency's today-rate could null this object; now a missing rate
+	// for a bond's FACE currency nulls cost_minor and income_minor too, though
+	// neither is converted through it. Nothing reaches that today: this line
+	// runs only when the valuation did arrive in p.Currency, so toAPI resolved
+	// F->p.Currency, so — every rate this program stores being quoted in RUB —
+	// the table holds F->RUB; and cost_minor was struck through
+	// p.Currency->baseCurrency at each lot's own date, so RUB->baseCurrency sits
+	// there on a day no later than today, which by Store.FxRateOn's
+	// nearest-earlier rule answers for today as well; F->baseCurrency is the two
+	// of them bridged. (A position holding no lot strikes its basis without any
+	// rate at all and escapes the second half of that — it has nothing but zeros
+	// to lose here.) It is written down because what changed is the SHAPE of the
+	// failure rather than anything reachable: the day a non-RUB-quoted row
+	// exists, this refusal becomes reachable, and it refuses figures that have
+	// nothing to do with the valuation.
 	today := h.rateFor(ctx, valuationCurrency, baseCurrency, now, cache)
 	if today.err != nil {
 		if errors.Is(today.err, marketdata.ErrNoRate) {
@@ -1081,12 +1143,16 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 // computations of one value drift apart, and a prefetch is the worst place for
 // it, since the two disagree in silence.
 //
-// ONE query is not derived: the position's own currency against the base ON
-// TODAY, below. positionInBase picks today's rate for the valuation as a flat
-// decision rather than by building terms, so there is nothing here to call,
-// and this restates that choice. If the valuation ever stops being struck at
-// today's rate, this line has to follow — and nothing will make it, because
-// the consequence is a missed prefetch, not a wrong figure (see below).
+// ONE thing is not derived, and it is a DATE rather than a pair: the two
+// valuation queries below are written `now` by hand. toAPI and positionInBase
+// both value a holding at today's rate as a flat decision rather than by
+// building terms, so there is nothing here to call for it and these two lines
+// restate that choice. Their PAIRS are derived like everything else — both come
+// out of the one marketValue call in the loop, so neither restates which
+// currency a bond's valuation is really in. If the valuation ever stops being
+// struck at today's rate, these two dates have to follow — and nothing will
+// make them, because the consequence is a missed prefetch, not a wrong figure
+// (see below).
 //
 // Completeness is an optimization, not a correctness condition, and the
 // asymmetry is deliberate. Asking for a rate the loop turns out not to need

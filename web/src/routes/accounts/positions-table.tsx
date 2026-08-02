@@ -94,17 +94,20 @@ export function PositionsTable({
   //
   // A valuation that came out in a THIRD currency — a bond priced off a face
   // value denominated in neither the position's currency nor the base one —
-  // is the third, and "нет курса" is wrong about it in a subtler way: a rate
-  // from that currency to the base one may well exist, and the backend would
-  // use exactly that one if it published this figure at all (it converts a
-  // valuation out of its own currency, not the position's — see
-  // PositionInBase.market_value_minor). What is missing is the link to the
-  // position's currency, without which the row has nothing to compare the
-  // valuation against; the backend then withholds the base-currency figure too,
-  // so that a holding is valued in both currencies or in neither. The cause is
-  // that missing link, not a missing rate to the base currency, and only this
-  // figure has it — the row's cost and income are in the position's currency
-  // and convert as usual.
+  // is the third, and "нет курса" is wrong about it in a subtler way: the rate
+  // that is missing is the one from that currency to the POSITION's, which is
+  // what the row would have needed to compare the valuation with its cost, and
+  // it is missing for this figure alone — the row's cost and income are in the
+  // position's currency and convert as usual. The backend publishes no
+  // base-currency valuation for such a row either
+  // (PositionInBase.market_value_minor), and nothing computable is being held
+  // back by that: every fx rate the backend stores is quoted in RUB, so a
+  // valuation that cannot reach the position's currency either has no rate of
+  // its own — and then no route to the base currency either — or it is the
+  // position's currency that has none, in which case in_base is null outright
+  // and the row shows no converted figure anywhere (a closed row holding
+  // nothing is the exception: it sums an empty basis, so in_base survives with
+  // zeros).
   //
   // All three are per-row, hence resolved inside the map below.
   const notConvertedTitle = t("positions.notConverted");

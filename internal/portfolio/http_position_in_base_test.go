@@ -415,16 +415,19 @@ func TestPositionInBasePublishedWithoutTodaysRateWhenThereIsNoQuote(t *testing.T
 // an fx rate (toAPI's marketdata.ErrNoRate fallback, which publishes the raw
 // valuation as-is in market_value_currency).
 //
-// in_base uses many rates (one per lot date, one per income date, today's for
-// the valuation) but always ONE currency pair — the position's own currency
-// into the base currency — so it may only carry the market valuation when that
-// valuation is actually in the position's currency. Otherwise the amount
-// would be multiplied by a rate belonging to a different currency pair and
-// published, unlabeled, as a base-currency figure: a silently wrong number,
-// which is worse than no number at all. market_value_minor must therefore be
-// null, and unrealized_pnl_minor with it (it is derived from the valuation),
-// while cost_minor/income_minor — genuinely in the position's currency —
-// still convert normally.
+// Since #39 in_base converts the valuation out of the currency it is really in
+// (the face currency, at that currency's own rate — see
+// TestPositionInBaseValuationIsConvertedOnceFromItsOwnCurrency), so the rule
+// pinned here is no longer "in_base knows only one pair". It is that a
+// valuation which never reached the position's currency carries no
+// base-currency figure — and in a table where every rate is quoted in RUB there
+// is none to carry, which this fixture is a case of: without a EUR->RUB row,
+// EUR->USD cannot resolve and neither can EUR->RUB itself. market_value_minor
+// is therefore null, and unrealized_pnl_minor with it (it is derived from the
+// valuation), while cost_minor/income_minor — genuinely in the position's
+// currency — still convert normally. What must never appear is the EUR amount
+// multiplied by the USD rate and published, unlabeled, as a base-currency
+// figure: a silently wrong number, which is worse than no number at all.
 //
 // Fixture (the reviewer's reproduction):
 //
