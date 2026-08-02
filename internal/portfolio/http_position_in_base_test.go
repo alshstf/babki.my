@@ -406,22 +406,42 @@ const (
 	lateBuyOn   = "2026-07-10"
 )
 
+// datedRate is one USD->RUB row of a test's fx table: the day it takes
+// effect (YYYY-MM-DD) and the rate itself, both as strings so a fixture reads
+// as the table it is.
+type datedRate struct{ on, rate string }
+
+// fxRateAPI wires an RUB-based space (setupAPI's default) whose fx table holds
+// exactly the given USD->RUB rows and nothing else. Every date a test touches
+// resolves through Store.FxRateOn's nearest-earlier-date lookup, so "today"
+// always lands on the newest row given — which is what lets the fixtures write
+// today's rate down as a fixed number. The caller creates its own USD account
+// and instruments.
+func fxRateAPI(t *testing.T, quotes quoteStoreLike, rates ...datedRate) (string, *http.Client) {
+	t.Helper()
+	pool := testdb.New(t)
+	mdStore := marketdata.NewStore(pool)
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(mdStore))
+	rows := make([]marketdata.FxRate, 0, len(rates))
+	for _, r := range rates {
+		rows = append(rows, marketdata.FxRate{
+			Base: "USD", Quote: "RUB", On: mustDate(t, r.on),
+			Rate: decimal.RequireFromString(r.rate), Source: "test",
+		})
+	}
+	if err := mdStore.UpsertFxRates(t.Context(), rows); err != nil {
+		t.Fatalf("seed fx rates: %v", err)
+	}
+	return url, c
+}
+
 // twoRateAPI wires the fixture the historical-basis tests share: an
 // RUB-based space (setupAPI's default) whose fx table holds exactly two
 // USD->RUB rates, early on earlyRateOn and late on lateRateOn. The caller
 // creates its own USD account and instruments.
 func twoRateAPI(t *testing.T, quotes quoteStoreLike, early, late string) (string, *http.Client) {
 	t.Helper()
-	pool := testdb.New(t)
-	mdStore := marketdata.NewStore(pool)
-	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(mdStore))
-	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
-		{Base: "USD", Quote: "RUB", On: mustDate(t, earlyRateOn), Rate: decimal.RequireFromString(early), Source: "test"},
-		{Base: "USD", Quote: "RUB", On: mustDate(t, lateRateOn), Rate: decimal.RequireFromString(late), Source: "test"},
-	}); err != nil {
-		t.Fatalf("seed fx rates: %v", err)
-	}
-	return url, c
+	return fxRateAPI(t, quotes, datedRate{earlyRateOn, early}, datedRate{lateRateOn, late})
 }
 
 // TestPositionInBaseCostUsesEachLotsOwnRate is the core of this change: the

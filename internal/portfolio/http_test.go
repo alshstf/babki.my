@@ -202,6 +202,7 @@ type positionInBase struct {
 	MarketValueMinor   *int64 `json:"market_value_minor"`
 	UnrealizedPnlMinor *int64 `json:"unrealized_pnl_minor"`
 	IncomeMinor        int64  `json:"income_minor"`
+	RealizedPnlMinor   *int64 `json:"realized_pnl_minor"`
 	Currency           string `json:"currency"`
 	RateOn             string `json:"rate_on"`
 }
