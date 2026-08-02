@@ -1,0 +1,44 @@
+-- +goose Up
+-- The transfer group is read by group, never scanned by it. Two places do it,
+-- and both were reading the whole table to find two rows.
+--
+-- The first runs on EVERY journal read: attaching a transfer's FIFO breakdown
+-- joins operations to itself on peer.transfer_group_id = o.transfer_group_id to
+-- find the other leg of the pair (see operation.Store.attachTransferLots). The
+-- second is operation.Store.Delete, which removes both legs of a pair by their
+-- shared group. Without an index the pair costs a sequential scan of every
+-- operation in the instance; measured on 60 400 rows, a fifty-row journal page
+-- went from 3.0 ms and 1 149 buffers to 0.44 ms and 172, and deleting one leg
+-- of a pair from 4.9 ms and 1 005 buffers to 0.16 ms and 15.
+--
+-- PARTIAL, because the column is NULL on the vast majority of rows and a
+-- B-tree indexes NULLs like any other value. On the same data the plain index
+-- held 60 400 entries in 448 kB against this one's 1 414 in 56 kB, and produced
+-- the same plans with the same timings — so the eighth of the space is bought
+-- with nothing, and every ordinary operation (a buy, a dividend, a fee: 97.7%
+-- of the rows here) is inserted without touching this index at all. Nothing is
+-- given up: both readers only ever compare the column for equality, which is
+-- strict, so Postgres proves the predicate holds and the index is eligible.
+-- A query that wanted "the operations with no group" would not be served by it
+-- — no such query exists, and finding rows by the ABSENCE of a group is not a
+-- thing this schema means to support.
+--
+-- ONE COLUMN, no space_id. The tempting version is (space_id,
+-- transfer_group_id), since both readers do filter by space. It buys nothing:
+-- the group id is generated per pair (see operation.Store.CreatePair), so it
+-- already identifies exactly two rows, and no additional key column can narrow
+-- two rows further. Measured, the two-column variant produced the same plans
+-- with the same buffer counts and timings, at 14% more space. Space is still
+-- checked on every one of these reads — the queries carry it as a filter, and
+-- an index is not where ownership is enforced.
+--
+-- Plain CREATE INDEX, not CONCURRENTLY: this is a selfhosted single-instance
+-- application whose migrations run at startup before it serves anything, so
+-- the brief exclusive lock costs nobody a request, and CONCURRENTLY cannot run
+-- inside goose's transaction anyway. Existing rows need no backfill; building
+-- the index reads them.
+CREATE INDEX operations_transfer_group_idx ON operations (transfer_group_id)
+    WHERE transfer_group_id IS NOT NULL;
+
+-- +goose Down
+DROP INDEX operations_transfer_group_idx;
