@@ -73,20 +73,17 @@ function makeOperation(overrides: Partial<Operation> = {}): Operation {
     // are no purchase dates for it to be missing — see has_undated_lots in the
     // API contract. Only the transfer tests below set it.
     has_undated_lots: false,
+    // Properties of the OPERATION, not of in_base (see the API contract) —
+    // true only for a transfer whose parcel has a stored breakdown, which is
+    // never the case for these ordinary defaults. The transfer tests below
+    // set it explicitly, because for them it is the whole point.
+    assembled_from_lots: false,
     ...overrides,
   };
 }
 
-// Every in_base object the backend publishes says whether its amount was
-// struck at a single fx rate or assembled from several — see
-// assembled_from_lots in the API contract. Ordinary operations are the single
-// rate case, so that is the default here; the transfer tests below pass it
-// explicitly, because for them it is the whole point.
 type InBase = NonNullable<Operation["in_base"]>;
-const inBase = (fields: Omit<InBase, "assembled_from_lots"> & Partial<InBase>): InBase => ({
-  assembled_from_lots: false,
-  ...fields,
-});
+const inBase = (fields: InBase): InBase => fields;
 
 // Stand-in for the header's display-currency toggle: visible only when the
 // provider says more than one currency is in play on this screen.
@@ -306,6 +303,7 @@ describe("OperationsTable", () => {
             currency: "USD",
             amount_minor: 190_000,
             fee_minor: 0,
+            assembled_from_lots: true,
             in_base: inBase({
               // 118 000,00 ₽: two purchases, each at the rate of its own day —
               // never 149 150,00 ₽, which is the same shares priced on the day
@@ -317,7 +315,6 @@ describe("OperationsTable", () => {
               // date and NOT a fallback for a missing rate: 2026-07-20 has a
               // rate of its own and it was deliberately not used.
               rate_on: "2026-06-15",
-              assembled_from_lots: true,
             }),
           }),
         ],
@@ -350,12 +347,12 @@ describe("OperationsTable", () => {
             currency: "USD",
             amount_minor: 190_000,
             fee_minor: 0,
+            assembled_from_lots: true,
             in_base: inBase({
               amount_minor: 12_000_000,
               fee_minor: 0,
               currency: "RUB",
               rate_on: "2026-07-20",
-              assembled_from_lots: true,
             }),
           }),
         ],
@@ -528,12 +525,12 @@ describe("OperationsTable", () => {
         currency: "USD",
         amount_minor: 190_000,
         fee_minor: 0,
+        assembled_from_lots: true,
         in_base: inBase({
           amount_minor: 11_800_000,
           fee_minor: 0,
           currency: "RUB",
           rate_on: "2026-06-15",
-          assembled_from_lots: true,
         }),
         ...overrides,
       });
@@ -624,10 +621,10 @@ describe("OperationsTable", () => {
     });
 
     it("still qualifies a parcel whose purchase dates were never recorded", async () => {
-      // Nothing converts here, so the whole in_base block — and with it
-      // assembled_from_lots — is absent. The row-level has_undated_lots says
-      // the amount is a cost basis all the same, and it says so on every row
-      // whether or not a conversion was attempted.
+      // Nothing converts here, so in_base is absent. has_undated_lots — a
+      // property of the operation, not of in_base — says the amount is a
+      // cost basis all the same, on every row whether or not a conversion was
+      // attempted.
       renderTable({
         operations: [
           makeOperation({
@@ -650,6 +647,40 @@ describe("OperationsTable", () => {
         "title",
         "Даты покупок этой партии не записаны, а её стоимость считается по курсам на дни покупок — поэтому сумма показана в валюте операции",
       );
+    });
+
+    it("still qualifies a parcel that has a full breakdown but is already in the base currency (#67)", async () => {
+      // The exact hole #67 tracked: the parcel's breakdown is complete and
+      // every purchase date is known (has_undated_lots false), yet in_base is
+      // null for the most ordinary reason there is — currency already equals
+      // baseCurrency, so nothing gets converted and no rate is even asked
+      // for. Before assembled_from_lots moved onto the operation, it lived
+      // only inside in_base and vanished right along with it here, so this
+      // exact row — a RUB transfer in a RUB-based space, the product owner's
+      // own case — published no signal at all that its amount was a cost
+      // basis, and the caveat silently failed to appear.
+      renderTable({
+        operations: [
+          makeOperation({
+            id: "op-transfer-same-currency",
+            type: "transfer_in",
+            currency: "RUB",
+            amount_minor: 11_800_000,
+            fee_minor: 0,
+            in_base: null,
+            has_undated_lots: false,
+            assembled_from_lots: true,
+          }),
+        ],
+        mode: "base",
+        baseCurrency: "RUB",
+        costBasisRules: britain,
+      });
+
+      expect(await screen.findByTestId("operation-amount-caveat")).toBeInTheDocument();
+      // Already in the base currency, so nothing is "not converted" either —
+      // the caveat is the only marker this row carries.
+      expect(screen.queryByTestId("operation-amount-not-converted")).not.toBeInTheDocument();
     });
 
     it("says nothing when the queue this application computes is the country's own", async () => {

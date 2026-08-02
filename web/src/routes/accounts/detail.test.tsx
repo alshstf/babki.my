@@ -149,6 +149,7 @@ function makeOperation(overrides: Record<string, unknown> = {}) {
     source: "manual",
     created_at: "2026-07-20T00:00:00Z",
     has_undated_lots: false,
+    assembled_from_lots: false,
     in_base: null,
     ...overrides,
   };
@@ -414,14 +415,16 @@ describe("AccountDetailPage", () => {
           makeOperation({
             id: "op-transfer",
             type: "transfer_in",
+            // The server's own statement that this amount was assembled out
+            // of the purchases behind it — what makes the row a cost basis.
+            // A property of the operation itself (see the API contract), not
+            // of in_base, though this fixture also converts.
+            assembled_from_lots: true,
             in_base: {
               amount_minor: 900_000,
               fee_minor: 0,
               currency: "RUB",
               rate_on: "2026-06-15",
-              // The server's own statement that this amount was assembled out
-              // of the purchases behind it — what makes the row a cost basis.
-              assembled_from_lots: true,
             },
           }),
         ],

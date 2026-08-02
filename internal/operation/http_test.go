@@ -142,6 +142,11 @@ type opResp struct {
 	// identically, which is what TestTransferPairAnswersUndatedTheSameOnBothLegs
 	// reads it here for.
 	HasUndatedLots bool `json:"has_undated_lots"`
+	// AssembledFromLots, like HasUndatedLots, is a property of the operation
+	// and travels on this response too — unlike in_base, which this response
+	// omits entirely (see the API contract) and which AssembledFromLots used
+	// to live inside before #67 moved it up.
+	AssembledFromLots bool `json:"assembled_from_lots"`
 }
 
 type transferResp struct {

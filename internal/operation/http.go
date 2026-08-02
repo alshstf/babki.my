@@ -120,19 +120,49 @@ func hasUndatedLots(o Operation) bool {
 	return slices.ContainsFunc(o.TransferLots, func(l ReleasedLot) bool { return l.AcquiredOn == nil })
 }
 
+// assembledFromLots reports whether amount_minor is a cost basis assembled
+// piece by piece from the purchases behind it, rather than money that moved
+// on occurred_on itself — a fact about how the FIGURE was arrived at, read
+// straight off the stored breakdown, and answered the same regardless of
+// whether that breakdown could be converted into the base currency.
+//
+// It used to be computed only inside operationInBase and published solely on
+// OperationInBase.AssembledFromLots, which meant it vanished exactly when
+// in_base did: a transfer already in the base currency, or one whose newest
+// purchase has no fx rate yet, has a perfectly good breakdown sitting in
+// o.TransferLots that operationInBase never gets asked about, because it
+// short-circuits before amountTerms is even called. The breakdown's presence
+// is a property of the operation, not of the conversion attempt, so this is
+// now computed here — from the same o.TransferLots amountTerms and
+// hasUndatedLots read — and published on every Operation, in_base present or
+// not (#67).
+//
+// True whenever a breakdown exists at all, whether or not every piece in it
+// carries a purchase date: a dateless piece makes hasUndatedLots true as
+// well, and the two are not mutually exclusive — a parcel that mixes dated
+// and undated pieces answers both questions "yes". False for a transfer with
+// no breakdown (a hand-typed basis, or one recorded before breakdowns were
+// kept): there is nothing to have been assembled from, and hasUndatedLots is
+// what answers for that parcel instead. Always false for a non-transfer,
+// which never carries TransferLots.
+func assembledFromLots(o Operation) bool {
+	return len(o.TransferLots) > 0
+}
+
 func toAPI(o Operation) apitypes.Operation {
 	out := apitypes.Operation{
-		Id:             o.ID,
-		AccountId:      o.AccountID,
-		Type:           apitypes.OperationType(o.Type),
-		OccurredOn:     o.OccurredOn.Format("2006-01-02"),
-		AmountMinor:    o.AmountMinor,
-		Currency:       o.Currency,
-		FeeMinor:       o.FeeMinor,
-		Note:           o.Note,
-		Source:         o.Source,
-		CreatedAt:      o.CreatedAt,
-		HasUndatedLots: hasUndatedLots(o),
+		Id:                o.ID,
+		AccountId:         o.AccountID,
+		Type:              apitypes.OperationType(o.Type),
+		OccurredOn:        o.OccurredOn.Format("2006-01-02"),
+		AmountMinor:       o.AmountMinor,
+		Currency:          o.Currency,
+		FeeMinor:          o.FeeMinor,
+		Note:              o.Note,
+		Source:            o.Source,
+		CreatedAt:         o.CreatedAt,
+		HasUndatedLots:    hasUndatedLots(o),
+		AssembledFromLots: assembledFromLots(o),
 	}
 	if o.InstrumentID != nil {
 		out.InstrumentId = nullable.NewNullableWithValue(*o.InstrumentID)
@@ -249,9 +279,9 @@ type datedMinor struct {
 // it. No single date can describe a sum struck at several, and the API
 // contract says so; the alternative, publishing the transfer day, would name
 // the one rate deliberately NOT used. Because such a date reads exactly like an
-// ordinary rate_on and means something else, the published object says which of
-// the two it is (assembled_from_lots — see operationInBase) instead of leaving
-// a reader to infer it from a date comparison that cannot answer the question.
+// ordinary rate_on and means something else, the operation says which of the
+// two it is (AssembledFromLots — see assembledFromLots) instead of leaving a
+// reader to infer it from a date comparison that cannot answer the question.
 //
 // A transfer with NO breakdown at all — a basis typed in by hand, or one
 // recorded before breakdowns were kept — used to fall back to o.OccurredOn,
@@ -439,21 +469,18 @@ func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency
 		amount = amount.Add(decimal.NewFromInt(t.minor).Mul(tr.rate))
 	}
 
+	// rate_on alone cannot be read honestly without knowing whether it is THE
+	// rate behind the figure or merely the newest of several — that is
+	// assembledFromLots(o), published on the Operation this object sits
+	// inside of (Operation.AssembledFromLots), not repeated here: it is a fact
+	// about o.TransferLots, unchanged by whatever this function just computed,
+	// so duplicating it on this object would only be two places to keep in
+	// sync for a single answer that is the same at both (#67).
 	return &apitypes.OperationInBase{
 		AmountMinor: amount.Round(0).IntPart(),
 		FeeMinor:    decimal.NewFromInt(o.FeeMinor).Mul(rl.rate).Round(0).IntPart(),
 		Currency:    baseCurrency,
 		RateOn:      rl.date.Format("2006-01-02"),
-		// Whether rate_on is THE rate behind the figure or merely the newest of
-		// several. A reader cannot work this out from the dates: rate_on equal
-		// to occurred_on normally means "converted on the operation's own day",
-		// and different from it means "no rate that day, so the nearest earlier
-		// one" — but for a basis assembled from purchases both readings are
-		// false, and either can happen to be the case a date comparison lands
-		// on. The screen that reads this field out loud (the journal's amount
-		// tooltip) would then state something untrue about a perfectly correct
-		// number, which is worse than saying nothing.
-		AssembledFromLots: len(o.TransferLots) > 0,
 	}, nil
 }
 

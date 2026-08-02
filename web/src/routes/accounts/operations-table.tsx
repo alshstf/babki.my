@@ -49,31 +49,33 @@ const PAGE_SIZE = 50;
 // bug this whole caveat exists to prevent, reintroduced by the code that
 // renders it.
 //
-// Two published fields answer, and they are complementary rather than
-// redundant (see Operation.has_undated_lots and OperationInBase.
-// assembled_from_lots in the API contract):
+// Two published fields answer, both properties of the OPERATION itself and
+// both present whether or not in_base is (see Operation.has_undated_lots and
+// Operation.assembled_from_lots in the API contract):
 //
-//   - assembled_from_lots says the ruble figure was built piece by piece out
-//     of the purchases behind the amount, each at its own day's rate. The
-//     server sets it from the presence of a stored breakdown, not from the
-//     row's type, so a new type that carries one is covered the day it appears.
-//     It lives INSIDE in_base, so it is absent whenever the conversion block
-//     is — and absence there is not a "no": nothing was evaluated at all.
-//   - has_undated_lots is published on every row, conversion or not, and says
-//     this amount is a cost basis whose purchase dates are not all known. It
-//     is precisely the largest slice of the in_base-is-null space: a parcel
-//     with no breakdown, or one with a dateless piece, never converts.
+//   - assembled_from_lots says the amount was built piece by piece out of the
+//     purchases behind it, each at its own day's rate. The server sets it
+//     from the presence of a stored breakdown, not from the row's type, so a
+//     new type that carries one is covered the day it appears.
+//   - has_undated_lots says this amount is a cost basis whose purchase dates
+//     are not all known — a missing or partial breakdown.
 //
-// What the two together still cannot answer is a parcel with a full, dated
-// breakdown whose in_base is null for one of the other two reasons — the row
-// is already in the base currency, or a rate is missing. There the server
-// states nothing, and the caveat stays off. That is a gap in the wire, not a
-// judgement about the row; closing it needs the statement moved out of the
-// conversion block, which is a contract change (see the report). Guessing
-// instead would mean marking every unconverted deposit as a cost basis, which
-// is a false statement about far more rows than it would rescue.
+// Together they are exhaustive: every transfer_in/transfer_out has EITHER a
+// stored breakdown (assembled_from_lots true) OR none/a partial one
+// (has_undated_lots true) — a breakdown with one dateless piece among dated
+// ones makes both true at once, which is fine, since either alone is enough
+// to show the caveat. Neither ordinary operation ever sets either field.
+//
+// Until #67, assembled_from_lots lived INSIDE in_base and vanished the moment
+// the conversion block did — including for the most ordinary reason a
+// conversion block can be absent, `currency` already equalling the base
+// currency. A transferred parcel of RUB shares in a RUB-based space (the
+// product owner's own case) has a complete, dated breakdown and nothing to
+// convert, so it used to publish nothing about being a cost basis at all: not
+// a missing rate, not a missing date, just silence. Moving the field onto the
+// operation removed that hole without adding a client-side list of types.
 function publishesACostBasis(operation: Operation): boolean {
-  return operation.has_undated_lots || operation.in_base?.assembled_from_lots === true;
+  return operation.has_undated_lots || operation.assembled_from_lots;
 }
 
 export function OperationsTable({
@@ -247,7 +249,7 @@ export function OperationsTable({
             //
             // A transfer between the family's own accounts carries the cost of
             // shares bought on other days, so the backend converts it piece by
-            // piece at the rates of those days (in_base.assembled_from_lots)
+            // piece at the rates of those days (operation.assembled_from_lots)
             // and rate_on names only the newest of them. That case must be
             // checked FIRST, because neither of the other two wordings is true
             // of it and a date comparison cannot tell: rate_on happens to equal
@@ -274,7 +276,7 @@ export function OperationsTable({
             // wordings do not mention a date and must survive its absence.
             const convertedTitle = (date: string | null) => {
               if (!date) return undefined;
-              if (operation.in_base?.assembled_from_lots) {
+              if (operation.assembled_from_lots) {
                 return t("operations.convertedAtPurchaseDates", { date });
               }
               return operation.in_base?.rate_on === operation.occurred_on
