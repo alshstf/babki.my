@@ -53,6 +53,14 @@ function makeSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
     space_id: "space-1",
     space_name: "Family",
     base_currency: "RUB",
+    tax_residency: "RU",
+    cost_basis_rules: {
+      country: "RU",
+      method: "fifo",
+      perimeter: "account",
+      supported: true,
+      notices: [],
+    },
     ...overrides,
   };
 }

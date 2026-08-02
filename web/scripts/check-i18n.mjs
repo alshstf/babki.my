@@ -53,6 +53,19 @@ const ENUM_NAMESPACE_TO_TYPE = {
   operationTypes: "OperationType",
   instrumentTypes: "InstrumentType",
   roles: "Role",
+  // The ways this application's cost basis computation can fail to answer for
+  // the owner's country. The server defines the set (one row per country in
+  // internal/family/taxresidency.go) and sends codes, never prose; the
+  // frontend must have Russian wording for every one of them or a country
+  // will show a divergence with no explanation next to it. Cross-checking
+  // against the generated enum is what makes adding a notice on the server a
+  // build failure here rather than a silent blank.
+  "costBasis.notices": "CostBasisNotice",
+  // The country's own method and queue perimeter, shown in the notice's
+  // tooltip. Same rule as the notices above: the server owns the set of
+  // values, so every one of them has to have Russian wording here.
+  "costBasis.methods": "CostBasisMethod",
+  "costBasis.perimeters": "CostBasisPerimeter",
 };
 
 function extractEnumMembers(schemaSrc, typeName) {

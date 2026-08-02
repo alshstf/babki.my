@@ -280,8 +280,8 @@ func TestTransferCarriesSourceLotDates(t *testing.T) {
 	}
 
 	want := []operation.ReleasedLot{
-		{Quantity: decimal.RequireFromString("10"), CostMinor: 100_000, AcquiredOn: date("2026-07-01")},
-		{Quantity: decimal.RequireFromString("5"), CostMinor: 450_000, AcquiredOn: date("2026-07-03")},
+		{Quantity: decimal.RequireFromString("10"), CostMinor: 100_000, AcquiredOn: datep("2026-07-01")},
+		{Quantity: decimal.RequireFromString("5"), CostMinor: 450_000, AcquiredOn: datep("2026-07-03")},
 	}
 	checkLots := func(what string, got []operation.ReleasedLot) {
 		t.Helper()
@@ -290,10 +290,10 @@ func TestTransferCarriesSourceLotDates(t *testing.T) {
 		}
 		for i, w := range want {
 			g := got[i]
-			if !g.Quantity.Equal(w.Quantity) || g.CostMinor != w.CostMinor || !g.AcquiredOn.Equal(w.AcquiredOn) {
+			if !g.Quantity.Equal(w.Quantity) || g.CostMinor != w.CostMinor || !sameAcquisition(g.AcquiredOn, w.AcquiredOn) {
 				t.Errorf("%s lot %d = %s/%d/%s, want %s/%d/%s", what, i,
-					g.Quantity, g.CostMinor, g.AcquiredOn.Format("2006-01-02"),
-					w.Quantity, w.CostMinor, w.AcquiredOn.Format("2006-01-02"))
+					g.Quantity, g.CostMinor, acquired(g.AcquiredOn),
+					w.Quantity, w.CostMinor, acquired(w.AcquiredOn))
 			}
 		}
 		var sum int64
@@ -306,8 +306,24 @@ func TestTransferCarriesSourceLotDates(t *testing.T) {
 		}
 	}
 	checkLots("returned", in.TransferLots)
-	if len(out.TransferLots) != 0 {
-		t.Errorf("transfer_out lots = %+v, want none (the breakdown rides with the arrival)", out.TransferLots)
+	// The departing leg comes back describing the same parcel, piece for piece.
+	// Both legs record ONE parcel — same shares, same basis, same purchases —
+	// and Store.attachTransferLots has handed the pieces to both on every later
+	// read since plan 7b; the create path returning them on one leg only left
+	// the pair contradicting itself inside a single response, once whether a
+	// transfer knows its purchase dates became something published per
+	// operation (has_undated_lots — see the API contract and
+	// TestTransferPairAnswersUndatedTheSameOnBothLegs).
+	checkLots("returned transfer_out", out.TransferLots)
+	// Carried on both, STORED once: the rows live next to the arrival, whose
+	// account is the one that cannot recover the dates any other way. This is
+	// the layout the assertion above used to stand in for, pinned where it
+	// actually holds rather than through an in-memory struct.
+	if n := f.lotRows(t, out.ID); n != 0 {
+		t.Errorf("stored lot rows on the departing leg = %d, want 0 — the breakdown is stored with the arrival and resolved onto its sibling at read time", n)
+	}
+	if n := f.lotRows(t, in.ID); n != len(want) {
+		t.Errorf("stored lot rows on the arriving leg = %d, want %d", n, len(want))
 	}
 	if in.AmountMinor != 550_000 {
 		t.Errorf("carried basis = %d, want 550000", in.AmountMinor)

@@ -110,8 +110,14 @@ const insertLotSQL = `
 // CreatePair inserts a transfer_out/transfer_in pair atomically with a
 // shared transfer_group_id, together with the FIFO breakdown carried on the
 // receiving leg (in.TransferLots). All of it lands in one transaction: a
-// transfer_in that lost its breakdown would silently re-date every moved lot
-// to the transfer day, which is exactly the loss this records against.
+// transfer_in that lost its breakdown would arrive as a single lot that knows
+// nothing about when it was bought (see portfolio.Lot.AcquiredOn), and the
+// destination's whole ruble basis with it — dates that were resolvable at
+// write time and are not resolvable ever again.
+//
+// Both returned legs carry that breakdown, though only one of them stores it,
+// for the reason attachTransferLots gives at every later read: the pieces
+// describe one parcel and the departing leg is that same parcel leaving.
 //
 // Everything it returns has been read back out of the database, never handed
 // through from the arguments — both operations come from the INSERT's
@@ -154,6 +160,16 @@ func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Opera
 			stored = append(stored, back)
 		}
 		cIn.TransferLots = stored
+		// The departing leg gets them too. The rows are stored next to the
+		// arriving leg only, but they describe THE PARCEL, and the pair is one
+		// parcel with the opposite sign — which is exactly what
+		// attachTransferLots decided for every later read (see its doc). Handing
+		// back an out leg with an empty breakdown made the pair contradict itself
+		// within a single response: whether a transfer knows when its shares were
+		// bought is published per operation (Operation.has_undated_lots, see the
+		// API contract), and the departing leg would have answered "no" about a
+		// parcel whose dates are sitting in the same transaction.
+		cOut.TransferLots = stored
 		if err := portfolio.CheckTransferLots(cIn); err != nil {
 			// The rows are already in this transaction, so refusing here rolls
 			// them back. Reaching this means the write path built a breakdown

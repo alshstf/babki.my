@@ -45,6 +45,19 @@ func scanUser(row pgx.Row) (User, error) {
 	return u, err
 }
 
+// spaceCols and scanSpace exist so every place that reads a space reads the
+// same columns into the same fields. Before tax_residency there were three
+// hand-written copies of the list; a fourth column would have had to be added
+// to each of them, and the one that was forgotten would have failed at run time
+// on a scan mismatch rather than at compile time.
+const spaceCols = `id, name, base_currency, tax_residency, created_at`
+
+func scanSpace(row pgx.Row) (Space, error) {
+	var sp Space
+	err := row.Scan(&sp.ID, &sp.Name, &sp.BaseCurrency, &sp.TaxResidency, &sp.CreatedAt)
+	return sp, err
+}
+
 func (s *Store) CreateUser(ctx context.Context, username, displayName, passwordHash string) (User, error) {
 	return scanUser(s.pool.QueryRow(ctx, `
 		INSERT INTO users (username, display_name, password_hash)
@@ -69,9 +82,8 @@ func (s *Store) CreateSpaceWithOwner(ctx context.Context, name string, ownerID u
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var sp Space
-	err = tx.QueryRow(ctx, `INSERT INTO spaces (name) VALUES ($1)
-		RETURNING id, name, base_currency, created_at`, name).Scan(&sp.ID, &sp.Name, &sp.BaseCurrency, &sp.CreatedAt)
+	sp, err := scanSpace(tx.QueryRow(ctx, `INSERT INTO spaces (name) VALUES ($1)
+		RETURNING `+spaceCols, name))
 	if err != nil {
 		return Space{}, fmt.Errorf("insert space: %w", err)
 	}
@@ -104,9 +116,8 @@ func (s *Store) CreateFirstUserWithSpace(ctx context.Context, spaceName, usernam
 		return User{}, Space{}, fmt.Errorf("insert user: %w", err)
 	}
 
-	var sp Space
-	err = tx.QueryRow(ctx, `INSERT INTO spaces (name) VALUES ($1)
-		RETURNING id, name, base_currency, created_at`, spaceName).Scan(&sp.ID, &sp.Name, &sp.BaseCurrency, &sp.CreatedAt)
+	sp, err := scanSpace(tx.QueryRow(ctx, `INSERT INTO spaces (name) VALUES ($1)
+		RETURNING `+spaceCols, spaceName))
 	if err != nil {
 		return User{}, Space{}, fmt.Errorf("insert space: %w", err)
 	}
@@ -156,10 +167,7 @@ func (s *Store) CreateUserInSpace(ctx context.Context, spaceID uuid.UUID, userna
 }
 
 func (s *Store) SpaceByID(ctx context.Context, id uuid.UUID) (Space, error) {
-	var sp Space
-	err := s.pool.QueryRow(ctx, `SELECT id, name, base_currency, created_at FROM spaces WHERE id = $1`, id).
-		Scan(&sp.ID, &sp.Name, &sp.BaseCurrency, &sp.CreatedAt)
-	return sp, err
+	return scanSpace(s.pool.QueryRow(ctx, `SELECT `+spaceCols+` FROM spaces WHERE id = $1`, id))
 }
 
 // DistinctBaseCurrencies returns the sorted set of base currencies across
@@ -186,10 +194,19 @@ func (s *Store) DistinctBaseCurrencies(ctx context.Context) ([]string, error) {
 	return out, rows.Err()
 }
 
-// UpdateBaseCurrency sets the space's base currency. Returns pgx.ErrNoRows
-// if the space doesn't exist.
-func (s *Store) UpdateBaseCurrency(ctx context.Context, spaceID uuid.UUID, currency string) error {
-	ct, err := s.pool.Exec(ctx, `UPDATE spaces SET base_currency = $2 WHERE id = $1`, spaceID, currency)
+// UpdateSpaceSettings applies a partial update to the space's settings: a nil
+// argument leaves that column alone. Both are written in one statement, so a
+// request that changes the base currency and the tax residency together can
+// never leave one applied and the other not.
+//
+// The store takes the values as given; whether a currency or a country is
+// acceptable is decided in Service.UpdateSpace, alongside the role check.
+// Returns pgx.ErrNoRows if the space doesn't exist.
+func (s *Store) UpdateSpaceSettings(ctx context.Context, spaceID uuid.UUID, baseCurrency, taxResidency *string) error {
+	ct, err := s.pool.Exec(ctx, `UPDATE spaces
+		SET base_currency = COALESCE($2, base_currency),
+		    tax_residency = COALESCE($3, tax_residency)
+		WHERE id = $1`, spaceID, baseCurrency, taxResidency)
 	if err == nil && ct.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}

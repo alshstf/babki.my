@@ -88,9 +88,10 @@ func seedDemo(ctx context.Context, pool *pgxpool.Pool) error {
 			// The recorded balance of a brokerage account is taken to already
 			// include the securities sitting in it (see the portfolio package
 			// doc), so it has to exceed what the seeded positions cost: AAPL
-			// and MSFT together run to $16 209,20 here. A balance below that
-			// would put a single position above the whole account it lives in,
-			// right on the screen this data exists to show.
+			// ($6 209,20), MSFT ($10 000,00), the transferred TSLA ($1 900,00)
+			// and what is left of NVDA ($1 500,00) run to $19 609,20 here. A
+			// balance below that would put a single position above the whole
+			// account it lives in, right on the screen this data exists to show.
 			"Freedom KZ", account.TypeBrokerage, "USD", "Freedom Finance", false,
 			[3]int64{24_000_00, 24_500_00, 25_000_00},
 		},
@@ -163,6 +164,7 @@ func seedInstrumentsAndOperations(
 		{"AAPL", instrument.Instrument{Type: instrument.TypeShare, Name: "Apple Inc.", Ticker: "AAPL", Currency: "USD"}},
 		{"MSFT", instrument.Instrument{Type: instrument.TypeShare, Name: "Microsoft", Ticker: "MSFT", Currency: "USD"}},
 		{"TSLA", instrument.Instrument{Type: instrument.TypeShare, Name: "Tesla", Ticker: "TSLA", Currency: "USD"}},
+		{"NVDA", instrument.Instrument{Type: instrument.TypeShare, Name: "NVIDIA", Ticker: "NVDA", Currency: "USD"}},
 	}
 	instIDs := make(map[string]uuid.UUID, len(instSeeds))
 	for _, is := range instSeeds {
@@ -243,6 +245,19 @@ func seedInstrumentsAndOperations(
 			OccurredOn: d("2026-05-13"), Quantity: qty("5"), Price: price("180"),
 			AmountMinor: -90_000, Currency: "USD",
 		},
+		// NVDA is plan 7c's demonstration and needs THREE parcels' worth of
+		// history to make its point: this one, bought at Т-Банк and later
+		// transferred, is the EARLIEST acquisition of the three, and the
+		// account it is transferred INTO already holds a later one (see the
+		// 2026-06-20 buy below). When part of the holding is sold there, this
+		// parcel is the one that leaves — because the queue is ordered by the
+		// day shares were bought, not by the day they arrived. See the
+		// transfer call for the whole arithmetic.
+		{
+			AccountID: tbank, InstrumentID: inst("NVDA"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-05-14"), Quantity: qty("10"), Price: price("100"),
+			AmountMinor: -100_000, Currency: "USD",
+		},
 		{
 			AccountID: tbank, InstrumentID: inst("FXUS"), Type: operation.TypeBuy,
 			OccurredOn: d("2026-05-20"), Quantity: qty("30"), Price: price("85"),
@@ -304,6 +319,16 @@ func seedInstrumentsAndOperations(
 		{
 			AccountID: tbank, InstrumentID: inst("OFZ26238"), Type: operation.TypeCoupon,
 			OccurredOn: d("2026-06-18"), AmountMinor: 354_000, Currency: "RUB",
+		},
+		// NVDA's second parcel, bought at Freedom KZ itself — a month AFTER
+		// the one at Т-Банк and a month BEFORE that one is transferred here.
+		// It is therefore first by arrival and second by acquisition, which is
+		// the whole disagreement plan 7c settles: the sale below consumes the
+		// transferred parcel and leaves this one.
+		{
+			AccountID: freedom, InstrumentID: inst("NVDA"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-06-20"), Quantity: qty("10"), Price: price("150"),
+			AmountMinor: -150_000, Currency: "USD",
 		},
 		// A foreign-currency operation on a RUB account, deliberately dated a
 		// Saturday: the CBR publishes no rate on weekends, so the journal has
@@ -381,6 +406,55 @@ func seedInstrumentsAndOperations(
 		return fmt.Errorf("seed transfer TSLA: %w", err)
 	}
 
+	// The transfer plan 7c exists for. All 10 NVDA move from Т-Банк to Freedom
+	// KZ on the same day TSLA does — but unlike TSLA, the destination ALREADY
+	// HOLDS a parcel of this instrument, bought there later than the one
+	// arriving. Two days after, half the holding is sold, and which parcel that
+	// sale consumes is the whole question.
+	//
+	// Manual arithmetic, every step exact:
+	//
+	//	arriving parcel: 10 @ $100.00 bought 2026-05-14 at Т-Банк  -> 100_000 minor USD
+	//	parcel already here: 10 @ $150.00 bought 2026-06-20        -> 150_000
+	//	sale: 10 @ $200.00 on 2026-07-22                           -> 200_000
+	//
+	//	BY ACQUISITION (what this application does): the 2026-05-14 parcel is
+	//	the earliest purchase anywhere in this account, so it leaves first —
+	//	moving shares between the family's own accounts is not a purchase and
+	//	cannot decide what is sold (НК РФ ст. 214.1 п. 13 «первых по времени
+	//	приобретений»; 26 CFR 1.1012-1(c)(1)(i) "the earliest lot the taxpayer
+	//	purchased or acquired").
+	//	  realized P&L  = 200_000 − 100_000 = +100_000 (+$1 000.00)
+	//	  cost_minor    = 150_000 ($1 500.00), one lot, dated 2026-06-20
+	//	  in_base       = 150_000 × 65.00 (that lot's OWN day) = 9_750_000 (97 500,00 ₽)
+	//
+	//	BY ARRIVAL (what it did before plan 7c — the parcel already sitting
+	//	here would have gone first):
+	//	  realized P&L  = 200_000 − 150_000 =  +50_000 (+$500.00) — HALF
+	//	  cost_minor    = 100_000 ($1 000.00), dated 2026-05-14
+	//	  in_base       = 100_000 × 60.50 = 6_050_000 (60 500,00 ₽) — 37 000,00 ₽ less
+	//
+	// The numbers are deliberately round and far apart: the profit doubles and
+	// the remaining ruble basis moves by more than a third, so the difference
+	// is visible by eye on the account screen rather than only in a test.
+	if _, _, err := opSvc.CreateTransfer(ctx, spaceID, operation.TransferParams{
+		FromAccountID: tbank, ToAccountID: freedom, InstrumentID: instIDs["NVDA"],
+		Quantity: decimal.RequireFromString("10"), OccurredOn: d("2026-07-20"),
+	}); err != nil {
+		return fmt.Errorf("seed transfer NVDA: %w", err)
+	}
+
+	// Recorded after the transfer on purpose: Service.Create replays the
+	// journal, and the parcel this sale is meant to consume only exists in
+	// this account once the transfer above has been written.
+	if _, err := opSvc.Create(ctx, spaceID, operation.Operation{
+		AccountID: freedom, InstrumentID: inst("NVDA"), Type: operation.TypeSell,
+		OccurredOn: d("2026-07-22"), Quantity: qty("10"), Price: price("200"),
+		AmountMinor: 200_000, Currency: "USD",
+	}); err != nil {
+		return fmt.Errorf("seed operation sell NVDA: %w", err)
+	}
+
 	if err := seedMarketData(ctx, pool, instIDs, d); err != nil {
 		return err
 	}
@@ -402,6 +476,14 @@ func seedInstrumentsAndOperations(
 //     against a lot that happens to already share that rate (the way it does,
 //     more subtly, for MSFT below) — it overvalues the position by a wide,
 //     unmistakable margin instead (see the transfer call for the arithmetic).
+//   - 2026-05-14 and 2026-06-20 — the two NVDA buys' own dates, and plan 7c's
+//     pair: the first is the parcel bought at Т-Банк and later transferred to
+//     Freedom KZ, the second the parcel bought at Freedom KZ itself in
+//     between. A sale there consumes the EARLIER one even though it arrived
+//     last, and the two rates (60.50 and 65.00) are what make that visible in
+//     rubles as well as in dollars — the surviving parcel's ruble basis is
+//     97 500,00 ₽ where arrival order would have left 60 500,00 ₽. See the
+//     NVDA transfer call for the full arithmetic.
 //   - 2026-05-20 — the FXUS buy's own date: converted at the exact date's
 //     rate, the ordinary case.
 //   - 2026-06-10 — the AAPL and MSFT buys' own date, at a visibly different
@@ -435,9 +517,11 @@ func seedInstrumentsAndOperations(
 // converting on their own — which is the point of the job.
 var seededUSDRates = []struct{ on, rate string }{
 	{"2026-05-13", "60.00"},
+	{"2026-05-14", "60.50"},
 	{"2026-05-20", "79.15"},
 	{"2026-06-10", "81.40"},
 	{"2026-06-15", "64.00"},
+	{"2026-06-20", "65.00"},
 	{"2026-07-03", "77.90"},
 	{"2026-07-20", "78.50"},
 }
@@ -496,6 +580,11 @@ func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]
 		{InstrumentID: instIDs["LKOH"], On: on, Price: rate("7550.00"), Currency: "RUB", Source: "seed"},
 		{InstrumentID: instIDs["OFZ26238"], On: on, Price: rate("95.20"), Currency: "RUB", Source: "seed"},
 		{InstrumentID: instIDs["MSFT"], On: on, Price: rate("510.00"), Currency: "USD", Source: "seed"},
+		// NVDA is quoted at exactly the price the 2026-07-22 sale went off at,
+		// so the surviving parcel is valued at $2 000.00 against a $1 500.00
+		// basis: +$500.00 unrealized beside +$1 000.00 realized, both round and
+		// both readable off the row without a calculator.
+		{InstrumentID: instIDs["NVDA"], On: on, Price: rate("200.00"), Currency: "USD", Source: "seed"},
 	}
 	if err := mdStore.UpsertQuotes(ctx, quotes); err != nil {
 		return fmt.Errorf("seed quotes: %w", err)

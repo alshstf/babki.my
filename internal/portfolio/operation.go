@@ -93,9 +93,19 @@ type Operation struct {
 	//
 	// Empty for every other type, for transfers whose basis was supplied by
 	// hand (no source lots exist behind such a number), and for transfers
-	// recorded before the breakdown was stored at all — for those the
-	// original acquisition dates are simply not knowable, and the transfer
-	// date remains the best available answer, on both legs alike.
+	// recorded before the breakdown was stored at all. For those the original
+	// acquisition dates are simply not knowable, and both things derived from
+	// the row agree about it: the LOT such a transfer creates carries no date
+	// at all, because a lot's date claims to say when the shares were bought
+	// and nobody knows (see Lot.AcquiredOn) — and the ROW's ruble equivalent
+	// (operation.amountTerms) is null for the same reason, on both legs alike,
+	// rather than converting on the transfer's own date as it once did. A
+	// figure struck at that date would be exactly the invented number this
+	// whole mechanism exists to remove: the shares were not bought on it.
+	//
+	// A piece INSIDE a breakdown can likewise carry no date, once a parcel
+	// that arrived undated is moved on again. The breakdown then records the
+	// mixture as it is, and nothing invents the missing half.
 	TransferLots []ReleasedLot
 	SplitRatio   *decimal.Decimal
 	Source       string

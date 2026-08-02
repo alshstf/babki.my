@@ -19,6 +19,22 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
+// mustAcquired asserts that a lot (or a piece of a transfer's breakdown) knows
+// when it was acquired, and returns that date. Nil is a legitimate value in
+// general — a transfer with no recoverable purchase dates produces lots that
+// carry none (see portfolio.Lot.AcquiredOn) — but not anywhere in this seed:
+// every lot here comes from a real buy or from the TSLA transfer that carries
+// those buys' own dates across, and that survival is exactly what the demo
+// exists to show. An unknown date here means the seed has stopped demonstrating
+// it, so this fails rather than skipping the arithmetic.
+func mustAcquired(t *testing.T, on *time.Time, what string) time.Time {
+	t.Helper()
+	if on == nil {
+		t.Fatalf("%s has an unknown acquisition date, want a real one: this seed's dates all come from actual purchases", what)
+	}
+	return *on
+}
+
 func TestSeedDemo(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -92,8 +108,8 @@ func TestSeedDemo(t *testing.T) {
 	}
 
 	tbankPositions := positionsByTicker(tbankID)
-	if len(tbankPositions) != 5 {
-		t.Fatalf("Т-Банк positions = %d, want 5: %+v", len(tbankPositions), tbankPositions)
+	if len(tbankPositions) != 6 {
+		t.Fatalf("Т-Банк positions = %d, want 6: %+v", len(tbankPositions), tbankPositions)
 	}
 	wantQty := map[string]string{"SBER": "300", "OFZ26238": "100", "FXUS": "30", "LKOH": "15"}
 	for ticker, qty := range wantQty {
@@ -124,8 +140,8 @@ func TestSeedDemo(t *testing.T) {
 	}
 
 	freedomPositions := positionsByTicker(freedomID)
-	if len(freedomPositions) != 3 {
-		t.Fatalf("Freedom positions = %d, want 3 (AAPL, MSFT, TSLA): %+v", len(freedomPositions), freedomPositions)
+	if len(freedomPositions) != 4 {
+		t.Fatalf("Freedom positions = %d, want 4 (AAPL, MSFT, NVDA, TSLA): %+v", len(freedomPositions), freedomPositions)
 	}
 	aapl, ok := freedomPositions["AAPL"]
 	if !ok {
@@ -160,7 +176,7 @@ func TestSeedDemo(t *testing.T) {
 	}
 	wantLotDates := map[string]bool{"2026-05-13": false, "2026-06-15": false}
 	for _, l := range tsla.Lots {
-		dateStr := l.AcquiredOn.Format(time.DateOnly)
+		dateStr := mustAcquired(t, l.AcquiredOn, "a TSLA lot").Format(time.DateOnly)
 		if _, known := wantLotDates[dateStr]; !known {
 			t.Fatalf("TSLA lot acquired on unexpected date %s, want one of 2026-05-13 or 2026-06-15", dateStr)
 		}
@@ -234,7 +250,7 @@ func TestSeedDemo(t *testing.T) {
 	// on a real row instead of only in portfolio's unit tests.
 	lotsWithoutRate := 0
 	for _, l := range aapl.Lots {
-		if _, _, err := converter.Rate(ctx, "USD", "RUB", l.AcquiredOn); errors.Is(err, marketdata.ErrNoRate) {
+		if _, _, err := converter.Rate(ctx, "USD", "RUB", mustAcquired(t, l.AcquiredOn, "an AAPL lot")); errors.Is(err, marketdata.ErrNoRate) {
 			lotsWithoutRate++
 		}
 	}
@@ -275,7 +291,7 @@ func TestSeedDemo(t *testing.T) {
 	if !dateToday.Equal(on) {
 		t.Errorf("newest USD/RUB rate is dated %s, want %s — the sign flip below is struck against the last rate in the table", dateToday.Format(time.DateOnly), on.Format(time.DateOnly))
 	}
-	rateOnLot, _, err := converter.Rate(ctx, "USD", "RUB", msft.Lots[0].AcquiredOn)
+	rateOnLot, _, err := converter.Rate(ctx, "USD", "RUB", mustAcquired(t, msft.Lots[0].AcquiredOn, "the MSFT lot"))
 	if err != nil {
 		t.Fatalf("Rate(USD -> RUB, MSFT lot date): %v", err)
 	}
@@ -324,9 +340,10 @@ func TestSeedDemo(t *testing.T) {
 	//	  190_000 * 78.50 = 14_915_000 (149 150,00 ₽) — 31_150,00 ₽ too much
 	var correctBaseCost int64
 	for _, l := range tsla.Lots {
-		rate, _, err := converter.Rate(ctx, "USD", "RUB", l.AcquiredOn)
+		lotOn := mustAcquired(t, l.AcquiredOn, "a TSLA lot")
+		rate, _, err := converter.Rate(ctx, "USD", "RUB", lotOn)
 		if err != nil {
-			t.Fatalf("Rate(USD -> RUB, TSLA lot date %s): %v", l.AcquiredOn.Format(time.DateOnly), err)
+			t.Fatalf("Rate(USD -> RUB, TSLA lot date %s): %v", lotOn.Format(time.DateOnly), err)
 		}
 		correctBaseCost += decimal.NewFromInt(l.CostMinor).Mul(rate).Round(0).IntPart()
 	}
@@ -351,26 +368,103 @@ func TestSeedDemo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListForEngine Т-Банк: %v", err)
 	}
+	// TSLA's leg specifically: the account also sends NVDA away on the same
+	// day (see the NVDA block below), and a scan that took whichever
+	// transfer_out came last would silently start checking the other one's
+	// arithmetic against TSLA's expected figures.
 	var outLeg *operation.Operation
 	for i := range tbankJournal {
-		if tbankJournal[i].Type == operation.TypeTransferOut {
-			outLeg = &tbankJournal[i]
+		op := &tbankJournal[i]
+		if op.Type == operation.TypeTransferOut && op.InstrumentID != nil && *op.InstrumentID == tsla.InstrumentID {
+			outLeg = op
 		}
 	}
 	if outLeg == nil {
-		t.Fatal("no transfer_out in the Т-Банк journal")
+		t.Fatal("no TSLA transfer_out in the Т-Банк journal")
 	}
 	var outLegBaseCost int64
 	for _, pc := range outLeg.TransferLots {
-		rate, _, err := converter.Rate(ctx, "USD", "RUB", pc.AcquiredOn)
+		pieceOn := mustAcquired(t, pc.AcquiredOn, "a transfer_out piece")
+		rate, _, err := converter.Rate(ctx, "USD", "RUB", pieceOn)
 		if err != nil {
-			t.Fatalf("Rate(USD -> RUB, transfer_out piece %s): %v", pc.AcquiredOn.Format(time.DateOnly), err)
+			t.Fatalf("Rate(USD -> RUB, transfer_out piece %s): %v", pieceOn.Format(time.DateOnly), err)
 		}
 		outLegBaseCost += decimal.NewFromInt(pc.CostMinor).Mul(rate).Round(0).IntPart()
 	}
 	if len(outLeg.TransferLots) != 2 || outLegBaseCost != correctBaseCost {
 		t.Errorf("Т-Банк transfer_out carries %d pieces worth %d ₽, want 2 worth %d — one pair of legs may not disagree about the same ten shares",
 			len(outLeg.TransferLots), outLegBaseCost, correctBaseCost)
+	}
+
+	// NVDA is plan 7c's own demonstration, and the one thing in this seed that
+	// only became true with it: a parcel that ARRIVED BY TRANSFER but was
+	// BOUGHT EARLIER than the one already sitting in the account leaves the
+	// queue first. Moving shares between one's own accounts is not a purchase
+	// (НК РФ ст. 214.1 п. 13 releases "первых по времени приобретений";
+	// 26 CFR 1.1012-1(c)(1)(i) names "the earliest lot the taxpayer purchased
+	// or acquired"), so it cannot decide what is sold first either.
+	//
+	//	transferred parcel: 10 @ $100.00 bought 2026-05-14 at Т-Банк -> 100_000 minor USD
+	//	parcel already there: 10 @ $150.00 bought 2026-06-20 at Freedom -> 150_000
+	//	sale: 10 @ $200.00 on 2026-07-22 -> 200_000
+	//
+	//	by ACQUISITION (what this application now does) the 2026-05-14 parcel goes:
+	//	  realized = 200_000 − 100_000 = +100_000 (+$1 000.00)
+	//	  left      = the 2026-06-20 parcel, cost 150_000 ($1 500.00)
+	//	    in rubles 150_000 × 65.00 (ITS own day) = 9_750_000 (97 500,00 ₽)
+	//	by ARRIVAL (what it did before this plan) the parcel already in the
+	//	account would have gone instead:
+	//	  realized =  200_000 − 150_000 = +50_000 (+$500.00) — half as much
+	//	  left      = the transferred parcel, cost 100_000 ($1 000.00)
+	//	    in rubles 100_000 × 60.50 = 6_050_000 (60 500,00 ₽) — 37 000,00 ₽ less
+	//
+	// Every one of those four figures is named below, the wrong ones by value,
+	// so a regression to arrival order fails here rather than quietly halving
+	// the profit on the owner's screen.
+	nvda, ok := freedomPositions["NVDA"]
+	if !ok {
+		t.Fatal("missing Freedom position NVDA — the seed no longer demonstrates the acquisition-ordered queue")
+	}
+	if nvda.Quantity.String() != "10" {
+		t.Errorf("NVDA quantity = %s, want 10 (10 transferred + 10 bought there − 10 sold)", nvda.Quantity.String())
+	}
+	switch nvda.CostMinor {
+	case 150_000:
+		// The parcel bought at Freedom on 2026-06-20 is what is left.
+	case 100_000:
+		t.Errorf("NVDA cost_minor = 100000: the sale consumed the parcel that was ALREADY in the account and left the transferred one — that is arrival order, the exact behaviour this plan removed")
+	default:
+		t.Errorf("NVDA cost_minor = %d, want 150000 ($1 500.00)", nvda.CostMinor)
+	}
+	switch nvda.RealizedPnLMinor {
+	case 100_000:
+		// 200_000 − 100_000: the earliest acquisition was released.
+	case 50_000:
+		t.Errorf("NVDA realized P&L = 50000 (+$500.00): the sale was matched against the later, dearer parcel — arrival order again")
+	default:
+		t.Errorf("NVDA realized P&L = %d, want 100000 (+$1 000.00)", nvda.RealizedPnLMinor)
+	}
+	if len(nvda.Lots) != 1 {
+		t.Fatalf("NVDA lots = %d, want exactly 1 left after the sale", len(nvda.Lots))
+	}
+	nvdaLotOn := mustAcquired(t, nvda.Lots[0].AcquiredOn, "the surviving NVDA lot")
+	if !nvdaLotOn.Equal(day("2026-06-20")) {
+		t.Errorf("surviving NVDA lot acquired on %s, want 2026-06-20 — the transferred parcel (2026-05-14) is the one that should have gone",
+			nvdaLotOn.Format(time.DateOnly))
+	}
+	nvdaRate, _, err := converter.Rate(ctx, "USD", "RUB", nvdaLotOn)
+	if err != nil {
+		t.Fatalf("Rate(USD -> RUB, NVDA lot date): %v", err)
+	}
+	if got := decimal.NewFromInt(nvda.CostMinor).Mul(nvdaRate).Round(0).IntPart(); got != 9_750_000 {
+		t.Errorf("NVDA in_base.cost_minor = %d, want 9750000 (97 500,00 ₽ = 150000 × 65.00); the arrival-order answer is 6050000 (60 500,00 ₽ = 100000 × 60.50)", got)
+	}
+	// The source account keeps NVDA as closed history, exactly like TSLA.
+	if tbankNvda, ok := tbankPositions["NVDA"]; !ok {
+		t.Error("missing Т-Банк position NVDA (closed by the transfer)")
+	} else if tbankNvda.Quantity.String() != "0" || tbankNvda.CostMinor != 0 {
+		t.Errorf("Т-Банк NVDA after transferring everything = {qty %s cost %d}, want {0 0}",
+			tbankNvda.Quantity.String(), tbankNvda.CostMinor)
 	}
 
 	// every currency the demo space holds (RUB, USD) now has a seeded rate

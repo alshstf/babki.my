@@ -167,8 +167,9 @@ func createOperation(t *testing.T, c *http.Client, url, body string) {
 }
 
 type instrumentResp struct {
-	Id   string `json:"id"`
-	Name string `json:"name"`
+	Id     string `json:"id"`
+	Name   string `json:"name"`
+	Ticker string `json:"ticker"`
 }
 
 type positionResp struct {
@@ -186,6 +187,7 @@ type positionResp struct {
 	Price                     *string         `json:"price"`
 	PriceOn                   *string         `json:"price_on"`
 	UnrealizedPnlMinor        *int64          `json:"unrealized_pnl_minor"`
+	HasUndatedLots            bool            `json:"has_undated_lots"`
 	InBase                    *positionInBase `json:"in_base"`
 }
 
@@ -301,14 +303,17 @@ func TestPositionsEndpoint(t *testing.T) {
 		t.Errorf("acc1 position with no quote = %+v, want market_value_minor/price/price_on/unrealized_pnl_minor all null", p)
 	}
 
-	// --- acc2: no operations at all -> {"positions":[]}, not null ---
+	// --- acc2: no operations at all -> positions is [], not null. The
+	// cost_basis_rules declaration rides along even here (see
+	// TestAnEmptyAccountStillDeclaresTheRules), so the assertion is on the
+	// positions key rather than on the whole body. ---
 	resp = do(t, c, "GET", url+"/api/v1/accounts/"+acc2.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET positions acc2 = %d", resp.StatusCode)
 	}
 	body, _ = io.ReadAll(resp.Body)
-	if strings.TrimSpace(string(body)) != `{"positions":[]}` {
-		t.Errorf("acc2 positions body = %s, want {\"positions\":[]}", body)
+	if !strings.Contains(string(body), `"positions":[]`) {
+		t.Errorf("acc2 positions body = %s, want an empty positions array (not null)", body)
 	}
 
 	// --- acc3: buy then sell the full quantity -> closed position (qty 0)

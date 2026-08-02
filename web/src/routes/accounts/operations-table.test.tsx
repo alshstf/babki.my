@@ -68,6 +68,10 @@ function makeOperation(overrides: Partial<Operation> = {}): Operation {
     split_ratio: null,
     source: "manual",
     created_at: "2019-03-14T00:00:00Z",
+    // An ordinary operation's amount belongs to the day it happened, so there
+    // are no purchase dates for it to be missing — see has_undated_lots in the
+    // API contract. Only the transfer tests below set it.
+    has_undated_lots: false,
     ...overrides,
   };
 }
@@ -385,6 +389,44 @@ describe("OperationsTable", () => {
       expect(screen.getByTestId("operation-fee-not-converted")).toBeInTheDocument();
       // No conversion happened, so no rate date may be claimed.
       expect(amount).not.toHaveAttribute("title");
+    });
+
+    it("blames the missing purchase dates, not a missing rate, on a transfer that has none", async () => {
+      // The twin of the test above, and the reason has_undated_lots exists on
+      // an operation at all. Both rows are unconverted; only one of them is
+      // unconverted because no rate has been fetched yet. A transfer whose
+      // parcel was never broken down carries a cost basis assembled on days
+      // nobody recorded — and the transfer's OWN date usually does have a rate
+      // (the demo instance has one for 2026-07-20, the day this fixture is
+      // dated), so "нет курса на дату операции" here is not a vague
+      // explanation but a false one, promising a figure that will never
+      // arrive. The positions screen was taught to tell these two apart in the
+      // previous commit; the journal says it about the very same shares.
+      renderTable({
+        operations: [
+          makeOperation({
+            id: "op-transfer-out",
+            type: "transfer_out",
+            occurred_on: "2026-07-20",
+            currency: "USD",
+            amount_minor: 190_00,
+            fee_minor: 0,
+            in_base: null,
+            has_undated_lots: true,
+          }),
+        ],
+        mode: "base",
+        baseCurrency: "RUB",
+      });
+
+      expect(await screen.findByTestId("operation-amount-not-converted")).toHaveAttribute(
+        "title",
+        "Даты покупок этой партии не записаны, а её стоимость считается по курсам на дни покупок — поэтому сумма показана в валюте операции",
+      );
+      // The figure itself is untouched: an unknown date costs no money.
+      expect(norm(screen.getByTestId("operation-amount").textContent ?? "")).toContain(
+        norm(formatMinor(190_00, "USD")),
+      );
     });
 
     it("shows a plain amount with no marker when the operation is already in the base currency", async () => {

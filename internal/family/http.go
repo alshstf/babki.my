@@ -56,6 +56,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("POST /api/v1/auth/login", wrap(h.handleLogin))
 	srv.Mount("POST /api/v1/auth/logout", h.sm.LoadAndSave(h.auth.RequireAuth(http.HandlerFunc(h.handleLogout))))
 	srv.Mount("GET /api/v1/auth/me", h.sm.LoadAndSave(h.auth.RequireAuth(http.HandlerFunc(h.handleMe))))
+	srv.Mount("GET /api/v1/tax-residencies", authed(h.handleListTaxResidencies))
 	srv.Mount("PATCH /api/v1/space", authed(h.handleUpdateSpace))
 	srv.Mount("GET /api/v1/members", authed(h.handleListMembers))
 	srv.Mount("POST /api/v1/members", authed(h.handleCreateMember))
@@ -63,13 +64,37 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("DELETE /api/v1/members/{userId}", authed(h.handleDeleteMember))
 }
 
+// CostBasisRulesAPI renders one country's cost basis rules for the wire. It is
+// exported because the positions response carries the same object (see
+// portfolio.Handler.handleList): the figures and the statement of whose rules
+// they follow must be built from one mapping, or the two payloads could
+// eventually disagree about the same country.
+//
+// Notices never becomes null on the wire — TaxRules.Notices always returns a
+// slice — so a reader can tell "nothing is wrong" from "the field is missing".
+func CostBasisRulesAPI(r TaxRules) apitypes.CostBasisRules {
+	out := apitypes.CostBasisRules{
+		Country:   r.Country,
+		Method:    apitypes.CostBasisMethod(r.Method),
+		Perimeter: apitypes.CostBasisPerimeter(r.Perimeter),
+		Supported: r.Supported(),
+		Notices:   make([]apitypes.CostBasisNotice, 0, len(r.Notices())),
+	}
+	for _, n := range r.Notices() {
+		out.Notices = append(out.Notices, apitypes.CostBasisNotice(n))
+	}
+	return out
+}
+
 func toSessionInfo(u User, p Principal, sp Space) apitypes.SessionInfo {
 	return apitypes.SessionInfo{
-		User:         apitypes.UserInfo{Id: u.ID, Username: u.Username, DisplayName: u.DisplayName},
-		Role:         apitypes.Role(p.Role),
-		SpaceId:      sp.ID,
-		SpaceName:    sp.Name,
-		BaseCurrency: sp.BaseCurrency,
+		User:           apitypes.UserInfo{Id: u.ID, Username: u.Username, DisplayName: u.DisplayName},
+		Role:           apitypes.Role(p.Role),
+		SpaceId:        sp.ID,
+		SpaceName:      sp.Name,
+		BaseCurrency:   sp.BaseCurrency,
+		TaxResidency:   sp.TaxResidency,
+		CostBasisRules: CostBasisRulesAPI(sp.CostBasisRules()),
 	}
 }
 
@@ -160,16 +185,31 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, info)
 }
 
-// handleUpdateSpace changes the space's base currency (owner-only; role and
-// format checks live in Service.UpdateBaseCurrency, matching how the
-// members routes below delegate their owner-only checks to Service).
+// handleListTaxResidencies publishes the countries this application has cost
+// basis rules for, so a client offers exactly what the server will accept
+// rather than a list of its own that drifts from it.
+func (h *Handler) handleListTaxResidencies(w http.ResponseWriter, r *http.Request) {
+	all := TaxResidencies()
+	out := make([]apitypes.CostBasisRules, 0, len(all))
+	for _, rules := range all {
+		out = append(out, CostBasisRulesAPI(rules))
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+// handleUpdateSpace changes the space's base currency and/or the owner's
+// country of tax residency (owner-only; role, format and known-country checks
+// live in Service.UpdateSpace, matching how the members routes below delegate
+// their owner-only checks to Service).
 func (h *Handler) handleUpdateSpace(w http.ResponseWriter, r *http.Request) {
 	p, _ := PrincipalFromContext(r.Context())
 	var req apitypes.UpdateSpaceRequest
 	if httpjson.Decode(w, r, &req) != nil {
 		return
 	}
-	sp, err := h.svc.UpdateBaseCurrency(r.Context(), p, req.BaseCurrency)
+	sp, err := h.svc.UpdateSpace(r.Context(), p, SpaceSettings{
+		BaseCurrency: req.BaseCurrency, TaxResidency: req.TaxResidency,
+	})
 	if err != nil {
 		WriteError(w, err)
 		return

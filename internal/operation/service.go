@@ -449,8 +449,11 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 	if p.CostMinorOverride != nil {
 		// A basis given by hand is not a release of anything: there are no
 		// source lots behind it and therefore no acquisition dates to carry.
-		// The destination lot keeps the transfer's own date, as before —
-		// inventing pieces here would fabricate history.
+		// The destination lot gets no date at all — not the transfer's own —
+		// because a lot's date claims to say when its shares were bought, and
+		// nobody recorded that here (see portfolio.Lot.AcquiredOn and
+		// Compute's TypeTransferIn branch, which is where that lot is actually
+		// built). Inventing pieces, or a date, here would fabricate history.
 		cost = *p.CostMinorOverride
 		if cost < 0 || cost > maxAmountMinor {
 			return Operation{}, Operation{}, fmt.Errorf("%w: cost_minor must be within 0..%d", family.ErrValidation, maxAmountMinor)

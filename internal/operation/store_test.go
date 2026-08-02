@@ -87,6 +87,34 @@ func date(s string) time.Time {
 	return d
 }
 
+// datep is date as an acquisition date a lot actually knows: portfolio.Lot and
+// portfolio.ReleasedLot hold that date as a pointer, nil meaning the lot does
+// not know when it was acquired (see portfolio.Lot.AcquiredOn).
+func datep(s string) *time.Time {
+	d := date(s)
+	return &d
+}
+
+// acquired renders an acquisition date for a failure message, naming the
+// unknown case instead of printing a stand-in date for it.
+func acquired(t *time.Time) string {
+	if t == nil {
+		return "unknown"
+	}
+	return t.Format("2006-01-02")
+}
+
+// sameAcquisition compares two acquisition dates including the unknown case:
+// two unknowns match, an unknown never matches a date. Assertions go through
+// it rather than calling Equal on a pointer, which panics on an unknown date
+// and would turn a lost date into a crash in the test's own reporting.
+func sameAcquisition(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
+}
+
 func dec(s string) *decimal.Decimal {
 	d := decimal.RequireFromString(s)
 	return &d
@@ -297,8 +325,8 @@ func TestTransferLotsRoundTrip(t *testing.T) {
 	f := newFixture(t)
 
 	want := []operation.ReleasedLot{
-		{Quantity: decimal.RequireFromString("3"), CostMinor: 30_000, AcquiredOn: date("2024-02-11")},
-		{Quantity: decimal.RequireFromString("2"), CostMinor: 50_000, AcquiredOn: date("2025-09-04")},
+		{Quantity: decimal.RequireFromString("3"), CostMinor: 30_000, AcquiredOn: datep("2024-02-11")},
+		{Quantity: decimal.RequireFromString("2"), CostMinor: 50_000, AcquiredOn: datep("2025-09-04")},
 	}
 	out, in := f.transferPair(want)
 	_, cIn, err := f.store.CreatePair(f.ctx, f.spaceID, out, in)
@@ -322,10 +350,10 @@ func TestTransferLotsRoundTrip(t *testing.T) {
 	}
 	for i, w := range want {
 		g := got.TransferLots[i]
-		if !g.Quantity.Equal(w.Quantity) || g.CostMinor != w.CostMinor || !g.AcquiredOn.Equal(w.AcquiredOn) {
+		if !g.Quantity.Equal(w.Quantity) || g.CostMinor != w.CostMinor || !sameAcquisition(g.AcquiredOn, w.AcquiredOn) {
 			t.Errorf("lot %d = %s/%d/%s, want %s/%d/%s", i,
-				g.Quantity, g.CostMinor, g.AcquiredOn.Format("2006-01-02"),
-				w.Quantity, w.CostMinor, w.AcquiredOn.Format("2006-01-02"))
+				g.Quantity, g.CostMinor, acquired(g.AcquiredOn),
+				w.Quantity, w.CostMinor, acquired(w.AcquiredOn))
 		}
 	}
 
@@ -348,16 +376,76 @@ func TestTransferLotsRoundTrip(t *testing.T) {
 	}
 	for i, w := range want {
 		g := srcLeg.TransferLots[i]
-		if !g.Quantity.Equal(w.Quantity) || g.CostMinor != w.CostMinor || !g.AcquiredOn.Equal(w.AcquiredOn) {
+		if !g.Quantity.Equal(w.Quantity) || g.CostMinor != w.CostMinor || !sameAcquisition(g.AcquiredOn, w.AcquiredOn) {
 			t.Errorf("transfer_out lot %d = %s/%d/%s, want %s/%d/%s", i,
-				g.Quantity, g.CostMinor, g.AcquiredOn.Format("2006-01-02"),
-				w.Quantity, w.CostMinor, w.AcquiredOn.Format("2006-01-02"))
+				g.Quantity, g.CostMinor, acquired(g.AcquiredOn),
+				w.Quantity, w.CostMinor, acquired(w.AcquiredOn))
 		}
 	}
 	// Read, not copied: the pieces still live in exactly one place, attached to
 	// the operation that stores them.
 	if n := f.lotRows(t, srcLeg.ID); n != 0 {
 		t.Errorf("transfer_out has %d rows of its own, want 0 — the breakdown is one fact with one owner", n)
+	}
+}
+
+// TestTransferLotWithoutAcquisitionDateRoundTrips pins that the absence of a
+// date survives storage as an absence. The column was NOT NULL until migration
+// 0008, which meant a piece whose source lot did not know its purchase day
+// could not be written at all unless some day was made up for it. Now the row
+// holds NULL and reads back as "unknown".
+//
+// The mixed breakdown below is the realistic shape, not a contrived one: a
+// parcel is moved on a second time and part of it came from an earlier
+// transfer that carried no dates. The dated piece beside it is what makes the
+// test discriminating — a storage layer that lost the distinction by
+// substituting a date, or by dropping the undated piece, changes one of these
+// two rows and not the other.
+func TestTransferLotWithoutAcquisitionDateRoundTrips(t *testing.T) {
+	f := newFixture(t)
+
+	want := []operation.ReleasedLot{
+		{Quantity: decimal.RequireFromString("3"), CostMinor: 30_000, AcquiredOn: nil},
+		{Quantity: decimal.RequireFromString("2"), CostMinor: 50_000, AcquiredOn: datep("2025-09-04")},
+	}
+	out, in := f.transferPair(want)
+	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in); err != nil {
+		t.Fatalf("CreatePair: %v — a piece with no acquisition date must be storable", err)
+	}
+
+	ops, err := f.store.ListForEngine(f.ctx, f.spaceID, f.account2ID)
+	if err != nil {
+		t.Fatalf("ListForEngine: %v", err)
+	}
+	got := findByType(ops, operation.TypeTransferIn)
+	if got == nil {
+		t.Fatalf("no transfer_in in dest journal")
+	}
+	if len(got.TransferLots) != len(want) {
+		t.Fatalf("stored lots = %+v, want %d pieces — an undated piece is a piece", got.TransferLots, len(want))
+	}
+	for i, w := range want {
+		g := got.TransferLots[i]
+		if !g.Quantity.Equal(w.Quantity) || g.CostMinor != w.CostMinor || !sameAcquisition(g.AcquiredOn, w.AcquiredOn) {
+			t.Errorf("lot %d = %s/%d/%s, want %s/%d/%s", i,
+				g.Quantity, g.CostMinor, acquired(g.AcquiredOn),
+				w.Quantity, w.CostMinor, acquired(w.AcquiredOn))
+		}
+	}
+	// Said outright: the unknown must not come back as the transfer's own date,
+	// which is the value this whole change removed from the write path.
+	if got.TransferLots[0].AcquiredOn != nil {
+		t.Errorf("the undated piece read back dated %s, want unknown", acquired(got.TransferLots[0].AcquiredOn))
+	}
+	// And the column really holds NULL, rather than the read papering over some
+	// substitute value the write put there.
+	var nulls int
+	if err := f.pool.QueryRow(f.ctx,
+		`SELECT count(*) FROM operation_transfer_lots WHERE acquired_on IS NULL`).Scan(&nulls); err != nil {
+		t.Fatalf("count null acquired_on: %v", err)
+	}
+	if nulls != 1 {
+		t.Errorf("rows with acquired_on IS NULL = %d, want 1", nulls)
 	}
 }
 
@@ -368,7 +456,7 @@ func TestNonTransferOperationsHaveNoLots(t *testing.T) {
 	f := newFixture(t)
 
 	out, in := f.transferPair([]operation.ReleasedLot{
-		{Quantity: decimal.RequireFromString("5"), CostMinor: 80_000, AcquiredOn: date("2024-02-11")},
+		{Quantity: decimal.RequireFromString("5"), CostMinor: 80_000, AcquiredOn: datep("2024-02-11")},
 	})
 	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in); err != nil {
 		t.Fatalf("CreatePair: %v", err)
@@ -432,7 +520,7 @@ func TestTransferLotFailureRollsBackPair(t *testing.T) {
 	f := newFixture(t)
 
 	out, in := f.transferPair([]operation.ReleasedLot{
-		{Quantity: decimal.RequireFromString("5"), CostMinor: -1, AcquiredOn: date("2024-02-11")},
+		{Quantity: decimal.RequireFromString("5"), CostMinor: -1, AcquiredOn: datep("2024-02-11")},
 	})
 	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in); err == nil {
 		t.Fatal("CreatePair with a rejected lot: want error")
@@ -455,8 +543,8 @@ func TestDeleteTransferRemovesLots(t *testing.T) {
 	f := newFixture(t)
 
 	out, in := f.transferPair([]operation.ReleasedLot{
-		{Quantity: decimal.RequireFromString("3"), CostMinor: 30_000, AcquiredOn: date("2024-02-11")},
-		{Quantity: decimal.RequireFromString("2"), CostMinor: 50_000, AcquiredOn: date("2025-09-04")},
+		{Quantity: decimal.RequireFromString("3"), CostMinor: 30_000, AcquiredOn: datep("2024-02-11")},
+		{Quantity: decimal.RequireFromString("2"), CostMinor: 50_000, AcquiredOn: datep("2025-09-04")},
 	})
 	cOut, cIn, err := f.store.CreatePair(f.ctx, f.spaceID, out, in)
 	if err != nil {

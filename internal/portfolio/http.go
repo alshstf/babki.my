@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
 	"time"
 
@@ -174,6 +175,19 @@ func marketValue(instType instrument.Type, faceValueMinor *int64, faceCurrency *
 	}
 }
 
+// hasUndatedLots reports whether any lot still held has no acquisition date
+// (see Lot.AcquiredOn). It is published as a fact about the position rather
+// than left to be inferred from in_base being null, because null has two
+// causes and they are not the same news: a missing fx rate is a gap the
+// backfill job closes on its own, an unrecorded purchase date never resolves.
+// Only the position that HAS one can tell them apart, so it says which.
+//
+// It scans the same slice positionInBase walks and stops at the first hit —
+// the question is whether any exists, not how many.
+func hasUndatedLots(p *Position) bool {
+	return slices.ContainsFunc(p.Lots, func(l Lot) bool { return l.AcquiredOn == nil })
+}
+
 // toAPI builds one position's API representation, including its market
 // valuation and — when that valuation isn't already in the position's own
 // currency — an fx conversion into it (conv.Convert is only ever called
@@ -191,6 +205,7 @@ func toAPI(ctx context.Context, conv converter, p *Position, inst instrument.Ins
 		RealizedPnlMinor: p.RealizedPnLMinor,
 		IncomeMinor:      p.IncomeMinor,
 		FeesMinor:        p.FeesMinor,
+		HasUndatedLots:   hasUndatedLots(p),
 	}
 	q, found := quotes[p.InstrumentID]
 	if !found {
@@ -426,11 +441,15 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 //
 // It returns (nil, nil) — render in_base as null, the WHOLE object, never
 // partially populated — when p.Currency already equals baseCurrency (nothing
-// to convert), or when any single rate the object needs is missing
-// (marketdata.ErrNoRate): today's, one lot's, or one income operation's. A
-// basis summed from only the lots that happened to convert is an invented
-// number, smaller than the truth and indistinguishable from a real one on
-// screen; it would drag the P&L along with it. This differs from
+// to convert), when any single rate the object needs is missing
+// (marketdata.ErrNoRate): today's, one lot's, or one income operation's, or
+// when a single lot does not know WHEN it was acquired (Lot.AcquiredOn nil),
+// which leaves no date to ask for a rate in the first place. A basis summed
+// from only the lots that happened to convert is an invented number, smaller
+// than the truth and indistinguishable from a real one on screen; it would
+// drag the P&L along with it. The two causes are one rule — a term that cannot
+// be valued voids the whole sum — and differ only in whether the date is
+// missing or the rate for it is. This differs from
 // market_value_minor/unrealized_pnl_minor inside the returned object, which
 // are null when there is no usable quote or the valuation isn't in
 // p.Currency — that nulls just those two figures.
@@ -455,7 +474,23 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 
 	lots := make([]datedMinor, 0, len(p.Lots))
 	for _, l := range p.Lots {
-		lots = append(lots, datedMinor{minor: l.CostMinor, on: l.AcquiredOn})
+		if l.AcquiredOn == nil {
+			// This lot does not know when it was acquired (see
+			// portfolio.Lot.AcquiredOn): it arrived by a transfer whose
+			// purchase dates were never recorded. Its basis is real money, but
+			// there is no date to value it at, and every candidate date — the
+			// transfer's, another lot's, today's — would be a number this
+			// handler made up.
+			//
+			// So the whole object goes, exactly as it does when one lot's date
+			// has no fx rate: a basis summed from only the lots that could be
+			// converted is smaller than the truth, looks like an ordinary
+			// figure on screen, and drags the profit down with it. Nothing is
+			// published rather than something wrong, and the position still
+			// shows every figure it has in its own currency.
+			return nil, nil
+		}
+		lots = append(lots, datedMinor{minor: l.CostMinor, on: *l.AcquiredOn})
 	}
 	costMinor, ok, err := h.sumInBase(ctx, lots, p.Currency, baseCurrency, cache)
 	if err != nil {
@@ -593,5 +628,17 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Instrument.Name < out[j].Instrument.Name })
 
-	httpjson.Write(w, http.StatusOK, apitypes.PositionsResponse{Positions: out})
+	// Every figure above was computed FIFO within this one account, which is
+	// the only rule this application implements. Whether that is the rule the
+	// owner's country actually applies is a separate fact, and it ships with
+	// the numbers rather than only in the session: this response is where a
+	// reader takes cost_minor, realized_pnl_minor and unrealized_pnl_minor
+	// from, so it is where the statement of what they are — and are not — has
+	// to be available. It describes the computation, not any one row, so it is
+	// attached once to the response and is present even when the account holds
+	// nothing at all.
+	httpjson.Write(w, http.StatusOK, apitypes.PositionsResponse{
+		Positions:      out,
+		CostBasisRules: family.CostBasisRulesAPI(sp.CostBasisRules()),
+	})
 }

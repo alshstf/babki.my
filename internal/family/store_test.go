@@ -83,8 +83,12 @@ func TestUserAndSpaceLifecycle(t *testing.T) {
 	}
 }
 
+// strp is the address of a string literal, for the partial-update arguments of
+// UpdateSpaceSettings, where nil means "leave this column alone".
+func strp(s string) *string { return &s }
+
 // TestBaseCurrency verifies the default, that all Space-scanning methods
-// return base_currency, and that UpdateBaseCurrency persists the change and
+// return base_currency, and that UpdateSpaceSettings persists the change and
 // reports pgx.ErrNoRows for a space that doesn't exist.
 func TestBaseCurrency(t *testing.T) {
 	st, ctx := newStore(t)
@@ -109,8 +113,8 @@ func TestBaseCurrency(t *testing.T) {
 		t.Fatalf("SpaceByID base_currency = %q, want RUB", got.BaseCurrency)
 	}
 
-	if err := st.UpdateBaseCurrency(ctx, sp.ID, "USD"); err != nil {
-		t.Fatalf("UpdateBaseCurrency: %v", err)
+	if err := st.UpdateSpaceSettings(ctx, sp.ID, strp("USD"), nil); err != nil {
+		t.Fatalf("UpdateSpaceSettings: %v", err)
 	}
 	got, err = st.SpaceByID(ctx, sp.ID)
 	if err != nil {
@@ -130,8 +134,59 @@ func TestBaseCurrency(t *testing.T) {
 	}
 
 	// Nonexistent space id: ErrNoRows.
-	if err := st.UpdateBaseCurrency(ctx, uuid.New(), "EUR"); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("UpdateBaseCurrency on missing space = %v, want pgx.ErrNoRows", err)
+	if err := st.UpdateSpaceSettings(ctx, uuid.New(), strp("EUR"), nil); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("UpdateSpaceSettings on missing space = %v, want pgx.ErrNoRows", err)
+	}
+}
+
+// TestTaxResidencyColumn covers the migration's promise and the partial update.
+// Every space that existed before the column did was given RU, and every
+// Space-scanning method has to return it — a method that forgot would hand its
+// caller an empty country, which resolves to "unknown" and would make the
+// application announce that it knows nothing about a space it knows everything
+// about.
+func TestTaxResidencyColumn(t *testing.T) {
+	st, ctx := newStore(t)
+
+	u, err := st.CreateUser(ctx, "alex", "Alex", "hash1")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	sp, err := st.CreateSpaceWithOwner(ctx, "Family", u.ID)
+	if err != nil {
+		t.Fatalf("CreateSpaceWithOwner: %v", err)
+	}
+	if sp.TaxResidency != family.DefaultTaxResidency {
+		t.Fatalf("CreateSpaceWithOwner tax_residency = %q, want %s (migration default)", sp.TaxResidency, family.DefaultTaxResidency)
+	}
+	_, sp2, err := st.CreateFirstUserWithSpace(ctx, "Other", "bob", "Bob", "hash2")
+	if err != nil {
+		t.Fatalf("CreateFirstUserWithSpace: %v", err)
+	}
+	if sp2.TaxResidency != family.DefaultTaxResidency {
+		t.Fatalf("CreateFirstUserWithSpace tax_residency = %q, want %s", sp2.TaxResidency, family.DefaultTaxResidency)
+	}
+
+	// A residency-only update leaves the currency alone, and the other way
+	// round: a nil argument is "unchanged", never "".
+	if err := st.UpdateSpaceSettings(ctx, sp.ID, nil, strp("DE")); err != nil {
+		t.Fatalf("UpdateSpaceSettings: %v", err)
+	}
+	got, err := st.SpaceByID(ctx, sp.ID)
+	if err != nil {
+		t.Fatalf("SpaceByID: %v", err)
+	}
+	if got.TaxResidency != "DE" || got.BaseCurrency != "RUB" {
+		t.Fatalf("after residency-only update = %s/%s, want DE/RUB", got.TaxResidency, got.BaseCurrency)
+	}
+	if err := st.UpdateSpaceSettings(ctx, sp.ID, strp("EUR"), nil); err != nil {
+		t.Fatalf("UpdateSpaceSettings: %v", err)
+	}
+	if got, err = st.SpaceByID(ctx, sp.ID); err != nil {
+		t.Fatalf("SpaceByID: %v", err)
+	}
+	if got.TaxResidency != "DE" || got.BaseCurrency != "EUR" {
+		t.Fatalf("after currency-only update = %s/%s, want DE/EUR", got.TaxResidency, got.BaseCurrency)
 	}
 }
 
@@ -165,8 +220,8 @@ func TestDistinctBaseCurrencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSpaceWithOwner Abroad: %v", err)
 	}
-	if err := st.UpdateBaseCurrency(ctx, usdSpace.ID, "USD"); err != nil {
-		t.Fatalf("UpdateBaseCurrency: %v", err)
+	if err := st.UpdateSpaceSettings(ctx, usdSpace.ID, strp("USD"), nil); err != nil {
+		t.Fatalf("UpdateSpaceSettings: %v", err)
 	}
 
 	got, err = st.DistinctBaseCurrencies(ctx)

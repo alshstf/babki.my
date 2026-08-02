@@ -21,6 +21,7 @@ import {
   useReportScreenCurrencies,
 } from "@/lib/screen-currencies";
 import { MoneyCell } from "@/components/money-cell";
+import { CostBasisNotice } from "@/components/cost-basis-notice";
 import { PositionsTable } from "./positions-table";
 import { OperationsTable } from "./operations-table";
 import { TradeDialog } from "./trade-dialog";
@@ -64,7 +65,7 @@ export function AccountDetailPage() {
   // Hooks.
   useReportScreenCurrencies([
     ...(account ? [account.currency] : []),
-    ...(positions.data ?? []).map((p) => p.currency),
+    ...(positions.data?.positions ?? []).map((p) => p.currency),
     ...(baseCurrency ? [baseCurrency] : []),
   ]);
 
@@ -163,8 +164,23 @@ export function AccountDetailPage() {
           <Alert variant="destructive">
             <AlertDescription>{t("app.error")}</AlertDescription>
           </Alert>
-        ) : positions.data && positions.data.length > 0 ? (
-          <PositionsTable positions={positions.data} mode={mode} baseCurrency={baseCurrency} />
+        ) : positions.data && positions.data.positions.length > 0 ? (
+          <>
+            {/* Whether the cost and profit in the table below are the ones
+                the owner's country's rules produce. It sits ABOVE the table
+                rather than in the session-wide header because it qualifies
+                these figures specifically, and it is rendered only when
+                there are figures to qualify: over an empty table it would be
+                a caveat about nothing. The response carries the statement
+                even for an empty account (see the API contract) so that a
+                client which needs it earlier still has it. */}
+            <CostBasisNotice rules={positions.data.cost_basis_rules} namesCountry />
+            <PositionsTable
+              positions={positions.data.positions}
+              mode={mode}
+              baseCurrency={baseCurrency}
+            />
+          </>
         ) : (
           <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">
             {t("positions.empty")}

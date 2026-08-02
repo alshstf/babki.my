@@ -84,6 +84,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tax-residencies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Every country this application has cost basis rules for, with the rules themselves, sorted by country code. This is the list a client offers the owner to choose from, and it is served rather than hardcoded so the countries and their consequences live in exactly one place — a client that shipped its own copy would eventually offer a country the server rejects, or promise rules the server does not follow. */
+        get: operations["listTaxResidencies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/space": {
         parameters: {
             query?: never;
@@ -97,7 +114,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** @description Updates the space's base currency (owner-only). */
+        /** @description Updates the space's base currency and/or the owner's country of tax residency (owner-only). */
         patch: operations["updateSpace"];
         trace?: never;
     };
@@ -347,10 +364,43 @@ export interface components {
             space_name: string;
             /** @description ISO-4217, e.g. RUB */
             base_currency: string;
+            /** @description The OWNER'S country of tax residency, ISO 3166-1 alpha-2 (e.g. RU). A property of the person, not of an account: a Russian resident declares a foreign broker's account by Russian rules too, so it is set once per space and applies to every account in it. Defaults to RU. */
+            tax_residency: string;
+            /** @description What tax_residency implies for the cost basis figures this application computes. Carried in the session so the settings screen can state the consequence of the country the owner picked; the same object is repeated on PositionsResponse so the screen showing the figures carries the caveat with them. */
+            cost_basis_rules: components["schemas"]["CostBasisRules"];
         };
+        /** @description Partial update of the space. Every field is optional and an omitted field is left unchanged, but at least one must be present — an empty body is rejected rather than silently accepted as a no-op. minProperties enforces that in the schema itself, not only in this description, so a schema-aware client can reject an empty body without a round trip. */
         UpdateSpaceRequest: {
             /** @description ISO-4217 uppercase, e.g. RUB */
-            base_currency: string;
+            base_currency?: string;
+            /** @description ISO 3166-1 alpha-2 uppercase, e.g. RU. Must be one of the countries this application has cost basis rules for (GET /api/v1/tax-residencies lists them); anything else is a 400. An unrecognised code is never accepted and quietly treated as Russia — that silent substitution is the exact failure this field exists to prevent. */
+            tax_residency?: string;
+        };
+        /**
+         * @description How a jurisdiction decides WHICH of the parcels held are the ones a sale disposed of. `fifo`: the earliest acquisitions, in order. `average`: no parcels at all — one pooled average cost per instrument. `specific_lot`: the taxpayer nominates the parcel. `not_applicable`: the country does not tax an individual's capital gains, so nothing has to be matched. `unknown`: the stored country has no rules row in this application (see CostBasisNotice.unknown_country).
+         * @enum {string}
+         */
+        CostBasisMethod: "fifo" | "average" | "specific_lot" | "not_applicable" | "unknown";
+        /**
+         * @description Over WHICH holdings that queue is built. `account`: separately per account/depot. `owner`: across everything the owner holds, wherever it sits — representable here but NOT implemented; a country carrying it is reported as unsupported. `not_applicable`: no queue exists to scope (the taxpayer picks the parcel, or gains are untaxed). `unknown`: no rules row for the stored country.
+         * @enum {string}
+         */
+        CostBasisPerimeter: "account" | "owner" | "not_applicable" | "unknown";
+        /**
+         * @description One way this application's computation fails to answer for the owner's country. Machine-readable on purpose: the wording the owner reads is the interface's to translate, and the server never sends prose. `method_mismatch`: the country matches disposals by a different method, so the figures are NOT a cost basis under its rules. `perimeter_mismatch`: the queue must span more than one account. `not_taxed`: the country does not tax an individual's capital gains at all, so the figures are informational rather than fiscal. `unknown_country`: the stored country has no rules row here, so nothing is claimed about it — the figures are still FIFO within one account, which is what they always are. `unverified_rule`: the row's method and perimeter were not traced to an established norm during jurisdiction research — they are an assumption by analogy, not a checked rule, even when they happen to read fifo/account.
+         * @enum {string}
+         */
+        CostBasisNotice: "method_mismatch" | "perimeter_mismatch" | "not_taxed" | "unknown_country" | "unverified_rule";
+        /** @description The cost basis rules of one country, derived from its ISO 3166-1 alpha-2 code through a single table in the server. The figures this application publishes are ALWAYS computed FIFO within one account; this object says whether that is what the country actually requires, and names every way it is not. */
+        CostBasisRules: {
+            /** @description ISO 3166-1 alpha-2 the row was derived from */
+            country: string;
+            method: components["schemas"]["CostBasisMethod"];
+            perimeter: components["schemas"]["CostBasisPerimeter"];
+            /** @description True only when this country's method and perimeter are exactly what the application computes — FIFO within one account — and the country taxes capital gains at all. When false, `notices` is non-empty and says why; the figures are still returned, because a cost basis is also plainly "what I paid", but they must not be presented as this country's tax basis. */
+            supported: boolean;
+            /** @description Empty exactly when `supported` is true. Several can apply at once (Britain pools by average AND across all of the owner's holdings) and all of them are listed: reporting only the first would hide a real divergence behind another one. */
+            notices: components["schemas"]["CostBasisNotice"][];
         };
         /** @enum {string} */
         Role: "owner" | "editor" | "viewer";
@@ -523,7 +573,9 @@ export interface components {
             source: string;
             /** Format: date-time */
             created_at: string;
-            /** @description amount_minor and fee_minor converted into the space's base currency at the fx rate in effect on occurred_on — the rate of the day the operation happened, NOT today's. This is the deliberate difference from AccountWithBalance.balance_in_base, which answers "what is this worth now"; the journal answers "what did this cost then". Position.in_base sits between the two: its cost_minor and income_minor follow the same historical rule as this field (each lot at the rate of its acquisition date, each payment at the rate of its own), while only its market_value_minor is a current valuation. Each amount is converted and rounded independently. One exception, and it is the whole point of the rule rather than a break from it: an in-kind transfer between two accounts of the same family carries a cost basis assembled from purchases made on other days, so its amount_minor is converted piece by piece at the rate of the day each piece was bought, and the whole is rounded once (in_base.assembled_from_lots says when this happened). BOTH legs of the pair are converted that way — the departing transfer_out and the arriving transfer_in describe one parcel with one set of purchases behind it, so they publish the same figure and, for the same reason, both fall back to null together when any one of those purchase dates has no rate. Converting either on the transfer's own date would price old shares at the rate of the day they changed brokers and make that row contradict the position built from the very same purchases; transfers with no such breakdown (a basis entered by hand, or one recorded before breakdowns were kept) have no other dates to use and keep converting on occurred_on, again on both legs alike. Null when `currency` already equals the base currency (nothing to convert), or when no fx rate could be resolved for one of the dates it needs nor any earlier one — a partially converted operation is never published. Computed only for the journal listing (GET /accounts/{accountId}/operations); create and transfer responses omit the field entirely, since those return an operation the client just submitted rather than a journal to read. An absent field and an explicit null mean the same thing to a reader: there is nothing converted to show. */
+            /** @description True when this operation's amount_minor is a cost basis whose purchase dates are not all known: an in-kind transfer whose per-lot breakdown was never recorded (a basis given by hand, or one predating breakdowns), or one whose breakdown contains at least one dateless piece — shares that reached it through an earlier undated transfer. Both legs of such a pair answer the same way; they describe one parcel. False for every ordinary operation, whose amount belongs to the day it happened and needs no purchase date at all. This is the journal's twin of Position.has_undated_lots and exists for the identical reason: in_base being null has two causes, and they are not the same news to the person reading the row. A missing fx rate is a gap the backfill job closes on its own and the figure appears later; an unrecorded purchase date never resolves, because nobody wrote it down and nothing can recover it. Here the distinction is sharper still than on a position: a transfer's own date usually DOES have a rate — the demo instance has one for every transfer it records — so a client saying "no rate for this date" about such a row does not merely fail to explain it, it states something false, and promises a figure that will never arrive. Always present, never inferred by the reader from in_base being null. It changes nothing about the figures: an unknown purchase date costs no money and no shares, and amount_minor and fee_minor are published in the operation's own currency exactly as usual. */
+            has_undated_lots: boolean;
+            /** @description amount_minor and fee_minor converted into the space's base currency at the fx rate in effect on occurred_on — the rate of the day the operation happened, NOT today's. This is the deliberate difference from AccountWithBalance.balance_in_base, which answers "what is this worth now"; the journal answers "what did this cost then". Position.in_base sits between the two: its cost_minor and income_minor follow the same historical rule as this field (each lot at the rate of its acquisition date, each payment at the rate of its own), while only its market_value_minor is a current valuation. Each amount is converted and rounded independently. One exception, and it is the whole point of the rule rather than a break from it: an in-kind transfer between two accounts of the same family carries a cost basis assembled from purchases made on other days, so its amount_minor is converted piece by piece at the rate of the day each piece was bought, and the whole is rounded once (in_base.assembled_from_lots says when this happened). BOTH legs of the pair are converted that way — the departing transfer_out and the arriving transfer_in describe one parcel with one set of purchases behind it, so they publish the same figure and, for the same reason, both fall back to null together when any one of those purchase dates has no rate. Converting either on the transfer's own date would price old shares at the rate of the day they changed brokers and make that row contradict the position built from the very same purchases. Null when `currency` already equals the base currency (nothing to convert), when no fx rate could be resolved for one of the dates it needs nor any earlier one, or when the transfer's parcel — or a piece of it — does not know when it was bought: a basis entered by hand, one recorded before breakdowns were kept, or a breakdown that mixes dated pieces with pieces carried over from an earlier undated transfer, all leave at least one purchase date unknown, and no rate answers for a date nobody recorded (both legs fall back to null together here too, for the identical reason Position.in_base does — see its description). `has_undated_lots` says which of those two a null is, exactly as it does on a position: a rate that has not been fetched yet and a date nobody ever wrote down must not be explained to a reader with the same sentence. A partially converted operation is never published. Computed only for the journal listing (GET /accounts/{accountId}/operations); create and transfer responses omit the field entirely, since those return an operation the client just submitted rather than a journal to read. An absent field and an explicit null mean the same thing to a reader: there is nothing converted to show. */
             in_base?: components["schemas"]["OperationInBase"] | null;
         };
         OperationInBase: {
@@ -541,7 +593,7 @@ export interface components {
             currency: string;
             /** @description Date YYYY-MM-DD of an fx rate ACTUALLY used, which is occurred_on itself or the nearest earlier date that has a rate (weekend, holiday, provider gap) — never today's date. For a 2019 operation this is a 2019 date; that is what makes this a historical conversion rather than a current valuation. For a transfer converted piece by piece (assembled_from_lots = true) the figure is struck at several rates and no single date describes it: this then names the newest of them, the rate of the most recent purchase in the parcel, and never the transfer's own date — that is the one rate deliberately not used */
             rate_on: string;
-            /** @description True when amount_minor was NOT converted at one rate on occurred_on but assembled piece by piece from the purchases behind it, each at the rate of the day it was bought — the case described in Operation.in_base, and true on both legs of such a transfer. It exists because rate_on alone cannot be read honestly without it: when this is true, rate_on names one of several rates that made the figure rather than the single rate behind it, and it is neither "the operation's own date" nor "the nearest earlier date with a rate" — comparing rate_on with occurred_on therefore proves nothing and a reader that does so will describe the number wrongly whichever way the comparison lands. False for every ordinary operation and for a transfer with no breakdown, where rate_on does mean exactly what it says */
+            /** @description True when amount_minor was NOT converted at one rate on occurred_on but assembled piece by piece from the purchases behind it, each at the rate of the day it was bought — the case described in Operation.in_base, and true on both legs of such a transfer. It exists because rate_on alone cannot be read honestly without it: when this is true, rate_on names one of several rates that made the figure rather than the single rate behind it, and it is neither "the operation's own date" nor "the nearest earlier date with a rate" — comparing rate_on with occurred_on therefore proves nothing and a reader that does so will describe the number wrongly whichever way the comparison lands. False for every ordinary operation, where rate_on does mean exactly what it says; a transfer whose parcel does not know when it was bought, wholly or in part, has no in_base to carry this field at all (see Operation.in_base) */
             assembled_from_lots: boolean;
         };
         CreateOperationRequest: {
@@ -624,7 +676,9 @@ export interface components {
              * @description market_value_minor minus cost_minor, i.e. the position's unrealized profit or loss; both are already in the same currency (market_value_minor is converted into the position's currency when needed, see above), so this is a plain integer subtraction. Null when there is no market_value_minor, or when market_value_currency still differs from currency (a conversion was needed but no fx rate was available).
              */
             unrealized_pnl_minor?: number | null;
-            /** @description The position's amounts in the space's base currency, each valued at the fx rate that answers its own question: cost_minor sums the FIFO lots still held, every lot converted at the rate of the day IT was acquired; income_minor sums the income operations, each at the rate of the day it occurred; market_value_minor uses TODAY's rate, because that is what the holding is worth now; unrealized_pnl_minor is the difference of those last two. Base-currency profit therefore INCLUDES the currency's own move against the base currency, and may differ from the position-currency profit in magnitude and even in sign — that is the intended answer, not a rounding artefact. Null when `currency` already equals the base currency (nothing to convert) or any single rate the object needs is missing (today's, one lot's, one income operation's) — a partially converted position is never published. Inside the object, market_value_minor and unrealized_pnl_minor can still be null on their own when the valuation isn't in the position's currency (see their descriptions). fees_minor and realized_pnl_minor are intentionally not carried into this object (owner feedback). */
+            /** @description True when at least one of the lots still held does not know when it was acquired — it arrived by a transfer whose per-lot breakdown was never recorded (a basis given by hand, or a transfer predating breakdowns), so no purchase date exists for it anywhere. Always present, never inferred by the reader from `in_base` being null: both an undated lot and a missing fx rate null the whole in_base object, but they are not the same condition and must not be explained to a person the same way. A missing rate is a gap the fx backfill closes on its own and the figure appears later; an unrecorded purchase date never resolves, because nobody wrote it down and nothing can recover it. A client that says "no rate" over the second case states something false about a permanent condition. False changes nothing about the figures: an unknown date costs no money and no shares, and every amount in the position's own currency is published exactly as usual either way. */
+            has_undated_lots: boolean;
+            /** @description The position's amounts in the space's base currency, each valued at the fx rate that answers its own question: cost_minor sums the FIFO lots still held, every lot converted at the rate of the day IT was acquired; income_minor sums the income operations, each at the rate of the day it occurred; market_value_minor uses TODAY's rate, because that is what the holding is worth now; unrealized_pnl_minor is the difference of those last two. Base-currency profit therefore INCLUDES the currency's own move against the base currency, and may differ from the position-currency profit in magnitude and even in sign — that is the intended answer, not a rounding artefact. Null when `currency` already equals the base currency (nothing to convert), any single rate the object needs is missing (today's, one lot's, one income operation's), or one of the FIFO lots still held does not know when it was acquired — a transfer's basis given by hand, or one recorded before breakdowns were kept, produces a lot with no purchase date, and no rate answers for a date nobody recorded. A partially converted position is never published, whether the missing piece is a rate or a date; `has_undated_lots` says which of the two it was, since the interface has to explain them differently. Inside the object, market_value_minor and unrealized_pnl_minor can still be null on their own when the valuation isn't in the position's currency (see their descriptions). fees_minor and realized_pnl_minor are intentionally not carried into this object (owner feedback). */
             in_base?: components["schemas"]["PositionInBase"] | null;
         };
         PositionInBase: {
@@ -655,6 +709,8 @@ export interface components {
         };
         PositionsResponse: {
             positions: components["schemas"]["Position"][];
+            /** @description Whether the cost basis behind every figure above is the one the owner's country requires (see CostBasisRules). It travels with the numbers rather than only in the session because this is the payload a reader takes the numbers from: a client that renders positions without ever reading the session must still be unable to show cost_minor, unrealized_pnl_minor and realized_pnl_minor as if they were a tax basis when they are not. It describes the whole computation, not one row, so it sits on the response rather than being repeated identically inside every Position. */
+            cost_basis_rules: components["schemas"]["CostBasisRules"];
         };
     };
     responses: {
@@ -781,6 +837,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionInfo"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    listTaxResidencies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Selectable tax residencies and what each implies */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostBasisRules"][];
                 };
             };
             401: components["responses"]["Error"];

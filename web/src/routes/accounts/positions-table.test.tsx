@@ -44,6 +44,9 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     // non-zero default so tests that don't care about the profit column
     // still exercise it rather than accidentally hitting the null branch.
     unrealized_pnl_minor: 25_000,
+    // The ordinary case: every lot came from a buy, and a buy always knows
+    // its own date. Tests about the other case set it explicitly.
+    has_undated_lots: false,
     ...overrides,
   };
 }
@@ -420,6 +423,58 @@ describe("PositionsTable", () => {
       expect(screen.getByTestId("position-market-value-not-converted")).toBeInTheDocument();
       expect(screen.getByTestId("position-profit-amount-not-converted")).toBeInTheDocument();
       expect(screen.getByTestId("position-income-not-converted")).toBeInTheDocument();
+    });
+
+    it("explains an undated lot as an undated lot, not as a missing rate", () => {
+      // Both conditions null in_base, and a reader told "нет курса" over the
+      // second one is told something false: a missing rate is a gap the fx
+      // backfill closes on its own, an unrecorded purchase date never
+      // resolves — nobody wrote it down (see has_undated_lots in the API
+      // contract). The marker has to name the cause it was given.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "USD",
+              has_undated_lots: true,
+              in_base: null,
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const marker = screen.getByTestId("position-cost-not-converted");
+      expect(marker).toHaveAttribute(
+        "title",
+        "У одной из партий не записана дата покупки, а стоимость считается по курсу на день покупки — поэтому вся позиция показана в исходной валюте",
+      );
+      // Every cell of the row is qualified the same way: the position is
+      // unconvertible as a whole, not just its cost.
+      expect(screen.getByTestId("position-income-not-converted")).toHaveAttribute(
+        "title",
+        expect.stringContaining("не записана дата покупки"),
+      );
+    });
+
+    it("keeps the missing-rate wording for a position whose lots are all dated", () => {
+      // The twin of the test above: has_undated_lots false must not inherit
+      // the undated-lot explanation just because in_base is null.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({ currency: "USD", has_undated_lots: false, in_base: null }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(screen.getByTestId("position-cost-not-converted")).toHaveAttribute(
+        "title",
+        "Нет курса — показано в исходной валюте",
+      );
     });
 
     it("shows the plain native amounts with no indicator when the position's currency already is the base currency", () => {
