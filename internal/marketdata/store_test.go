@@ -135,9 +135,19 @@ func TestFxRatesOnBatch(t *testing.T) {
 		{Base: "USD", Quote: "RUB", On: date("2026-06-01")}, // earlier than all data -> absent
 	}
 
+	// Discriminating check: batching N keys must take exactly one round trip
+	// to the database, not N — that is the entire reason FxRatesOn exists
+	// instead of a loop of FxRateOn calls. AcquireCount is a lifetime
+	// counter on the pool (same technique the empty-input check below uses),
+	// so comparing before and after catches an implementation that compiles
+	// and returns correct rates while quietly issuing one query per key.
+	beforeBatch := f.pool.Stat().AcquireCount()
 	got, err := f.store.FxRatesOn(f.ctx, keys)
 	if err != nil {
 		t.Fatalf("FxRatesOn: %v", err)
+	}
+	if afterBatch := f.pool.Stat().AcquireCount(); afterBatch-beforeBatch != 1 {
+		t.Fatalf("FxRatesOn(%d keys) acquired %d connections, want exactly 1", len(keys), afterBatch-beforeBatch)
 	}
 
 	// Discriminating check: every key's outcome must agree with what FxRateOn

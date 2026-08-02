@@ -75,12 +75,15 @@ func (s *Store) FxRateOn(ctx context.Context, base, quote string, on time.Time) 
 // FxRatesOn resolves many (base, quote, date) lookups in a single round
 // trip, one FxRateOn call each would otherwise need. Each key's outcome is
 // exactly what FxRateOn would return for it individually: the exact date, or
-// the nearest earlier one. A key with nothing on or before its date is
-// absent from the result map, not zero-valued — the same convention
-// LatestQuotes uses for instruments without quotes. The returned FxRate
-// carries the resolved row's own date (on_date), not the requested one,
-// because "how stale is this rate" is exactly what callers use that date
-// for.
+// the nearest earlier one — the two statements of that rule are held
+// together only by the differential test against FxRateOn in
+// store_test.go (TestFxRatesOnBatch), because there is no good way to share
+// the SQL fragment itself; change one only through that test. A key with
+// nothing on or before its date is absent from the result map, not
+// zero-valued — the same convention LatestQuotes uses for instruments
+// without quotes. The returned FxRate carries the resolved row's own date
+// (on_date), not the requested one, because "how stale is this rate" is
+// exactly what callers use that date for.
 //
 // The lookup is expressed as unnest of the three key columns joined
 // LATERAL against fx_rates, so the row-per-key "nearest earlier date" search
@@ -88,6 +91,17 @@ func (s *Store) FxRateOn(ctx context.Context, base, quote string, on time.Time) 
 // same shape LatestQuotes uses for a set of instrument ids, generalized to a
 // three-column key with its own per-row ORDER BY ... LIMIT 1 instead of a
 // flat ANY($1).
+//
+// The unnest is WITH ORDINALITY, and what comes back per row is that
+// ordinal, not the base/quote/on_date columns themselves. base and quote
+// round-trip byte-identical, but on_date does not: it goes out as `date`
+// and pgx reads dates back as midnight UTC, so a key rebuilt from the
+// returned column would only match a caller's key that already happened to
+// be exactly midnight in time.UTC — missing, for instance, every
+// time.Now().UTC() caller in this codebase. Indexing the caller's own keys
+// slice by ordinal instead makes the returned map key the caller's own
+// value by construction, so that mismatch cannot recur. See FxRateKey's
+// doc comment for the same reasoning from the caller's side.
 func (s *Store) FxRatesOn(ctx context.Context, keys []FxRateKey) (map[FxRateKey]FxRate, error) {
 	out := make(map[FxRateKey]FxRate, len(keys))
 	if len(keys) == 0 {
@@ -104,8 +118,8 @@ func (s *Store) FxRatesOn(ctx context.Context, keys []FxRateKey) (map[FxRateKey]
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT k.base, k.quote, k.on_date, r.on_date, r.rate, r.source
-		FROM unnest($1::text[], $2::text[], $3::date[]) AS k(base, quote, on_date)
+		SELECT k.ord, r.on_date, r.rate, r.source
+		FROM unnest($1::text[], $2::text[], $3::date[]) WITH ORDINALITY AS k(base, quote, on_date, ord)
 		JOIN LATERAL (
 			SELECT fx_rates.on_date, fx_rates.rate, fx_rates.source
 			FROM fx_rates
@@ -120,11 +134,12 @@ func (s *Store) FxRatesOn(ctx context.Context, keys []FxRateKey) (map[FxRateKey]
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var key FxRateKey
+		var ord int64
 		var r FxRate
-		if err := rows.Scan(&key.Base, &key.Quote, &key.On, &r.On, &r.Rate, &r.Source); err != nil {
+		if err := rows.Scan(&ord, &r.On, &r.Rate, &r.Source); err != nil {
 			return nil, err
 		}
+		key := keys[ord-1] // WITH ORDINALITY is 1-based
 		r.Base, r.Quote = key.Base, key.Quote
 		out[key] = r
 	}

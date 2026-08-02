@@ -25,7 +25,14 @@ type FxRate struct {
 // it should be resolved as of, following FxRateOn's semantics (exact date, or
 // the nearest earlier one). It is also the map key Store.FxRatesOn returns
 // results under, so a caller doing many lookups can index back into the
-// result by the same key it asked with.
+// result by the same key it asked with. FxRatesOn hands back the caller's
+// own key value (via ordinal position in the slice the caller passed in),
+// not a key rebuilt from the columns Postgres returns — On does not
+// round-trip byte-identical through the database (it goes out as `date`,
+// comes back as midnight UTC), so rebuilding it from the wire would only
+// match a caller whose On already happened to be exactly midnight in
+// time.UTC. Keep it that way: re-reading On off the result row is the
+// "simplification" that reintroduces the bug.
 type FxRateKey struct {
 	Base  string
 	Quote string
