@@ -21,7 +21,6 @@ import (
 
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
-	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -65,9 +64,6 @@ func newJobsFixture(t *testing.T) (*marketdata.Store, *instrument.Store, context
 	t.Helper()
 	pool := testdb.New(t)
 	ctx := context.Background()
-	if err := db.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	return marketdata.NewStore(pool), instrument.NewStore(pool), ctx
 }
 
@@ -364,9 +360,6 @@ func newBackfillFixture(t *testing.T) (*marketdata.Store, *pgxpool.Pool, context
 	t.Helper()
 	pool := testdb.New(t)
 	ctx := context.Background()
-	if err := db.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	return marketdata.NewStore(pool), pool, ctx
 }
 

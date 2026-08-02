@@ -19,7 +19,6 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/marketdata"
-	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 )
@@ -37,9 +36,6 @@ func newAPI(t *testing.T) (string, *http.Client) {
 func newAPIWithConverter(t *testing.T) (string, *http.Client, *marketdata.Store) {
 	t.Helper()
 	pool := testdb.New(t)
-	if err := db.Migrate(context.Background(), pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	famStore := family.NewStore(pool)
 	famSvc := family.NewService(famStore)
 	sm := family.NewSessionManager(pool)
@@ -290,9 +286,6 @@ func (c failingConverter) Rate(_ context.Context, _, _ string, _ time.Time) (dec
 func newAPIWithConverterDouble(t *testing.T, conv converterLike) (string, *http.Client) {
 	t.Helper()
 	pool := testdb.New(t)
-	if err := db.Migrate(context.Background(), pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	famStore := family.NewStore(pool)
 	famSvc := family.NewService(famStore)
 	sm := family.NewSessionManager(pool)

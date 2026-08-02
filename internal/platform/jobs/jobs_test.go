@@ -13,7 +13,6 @@ import (
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
-	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/jobs"
 	"babki.my/babki/internal/platform/testdb"
 )
@@ -58,9 +57,6 @@ func (stubQuoteProvider) Name() string { return "stub-quotes" }
 func TestHeartbeat(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
-	if err := db.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 
 	mdStore := marketdata.NewStore(pool)
 	instStore := instrument.NewStore(pool)

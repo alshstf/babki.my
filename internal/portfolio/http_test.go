@@ -23,7 +23,6 @@ import (
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
-	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 	"babki.my/babki/internal/portfolio"
@@ -58,9 +57,6 @@ type converterLike interface {
 // marketdata.Store, can share the same pool the HTTP stack runs on.
 func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv converterLike) (string, *http.Client) {
 	t.Helper()
-	if err := db.Migrate(context.Background(), pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	famStore := family.NewStore(pool)
 	famSvc := family.NewService(famStore)
 	sm := family.NewSessionManager(pool)

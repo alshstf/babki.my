@@ -1,7 +1,6 @@
 package operation_test
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,7 +18,6 @@ import (
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
-	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 	"babki.my/babki/internal/portfolio"
@@ -31,9 +29,6 @@ import (
 func newTestPool(t *testing.T) (*pgxpool.Pool, *marketdata.Store) {
 	t.Helper()
 	pool := testdb.New(t)
-	if err := db.Migrate(context.Background(), pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	return pool, marketdata.NewStore(pool)
 }
 
