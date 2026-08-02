@@ -795,8 +795,9 @@ func TestRatesOnWithoutLookupsNeverTouchesTheStore(t *testing.T) {
 
 // TestRatesOnPropagatesRealErrors is RatesOn's counterpart to
 // TestRatePropagatesRealErrors: a DB or context failure fails the whole call
-// (the map is unusable, exactly as ConvertMany's total is), and must never be
-// disguised as the per-query ErrNoRate that callers render as "not converted".
+// (the returned Rates is the zero value and unusable, exactly as
+// ConvertMany's total is), and must never be disguised as the per-query
+// ErrNoRate that callers render as "not converted".
 func TestRatesOnPropagatesRealErrors(t *testing.T) {
 	conv, store, _, ctx := newConverterFixtureWithPool(t)
 	seedRatesOnFixture(t, store, ctx)
@@ -880,7 +881,7 @@ func TestRatesForKeysByCalendarDayNotTimeValue(t *testing.T) {
 	// real difference, so it is checked here rather than assumed.
 	sameDay := []marketdata.RateQuery{
 		{From: "USD", To: "RUB", On: asked},
-		{From: "USD", To: "RUB", On: time.Date(2026, 7, 3, 18, 30, 0, 0, msk)},
+		{From: "USD", To: "RUB", On: time.Date(2026, 7, 3, 0, 0, 0, 0, msk)},
 	}
 	collapsed, err := conv.RatesOn(ctx, sameDay)
 	if err != nil {
@@ -954,6 +955,121 @@ func TestRatesForRefusesATripleNobodyAsked(t *testing.T) {
 		if errors.Is(lookupErr, marketdata.ErrNoRate) {
 			t.Fatalf("For(%s): err = %v, want ErrNotRequested and NOT ErrNoRate — those mean different things to the user", tc.name, lookupErr)
 		}
+	}
+}
+
+// TestRatesForMissCarriesErrEvenIfDiscarded pins the hardening of For's miss
+// path: a caller that discards the second return value entirely
+// (res, _ := rates.For(...)) — the exact pattern every caller uses for the
+// non-miss case, since the ordinary outcome lives in res.Err, not in the
+// method's own error — must still be able to tell a miss from a pair that
+// genuinely resolved to zero. Before this fix, the miss branch returned
+// RateResult{} alongside its error: rate zero, RateDate zero, Err nil, so
+// discarding the error handed back exactly the fabricated-zero shape this
+// whole type exists to make impossible.
+func TestRatesForMissCarriesErrEvenIfDiscarded(t *testing.T) {
+	conv, store, _, ctx := newConverterFixtureWithPool(t)
+	seedRatesOnFixture(t, store, ctx)
+	on := date("2026-07-03")
+
+	got, err := conv.RatesOn(ctx, []marketdata.RateQuery{{From: "USD", To: "RUB", On: on}})
+	if err != nil {
+		t.Fatalf("RatesOn: %v", err)
+	}
+
+	res, _ := got.For("EUR", "RUB", on) // the method's own error, deliberately discarded
+	if res.Err == nil {
+		t.Fatalf("For(unasked triple) with the error return discarded: res.Err = nil, want ErrNotRequested — a caller checking only res.Err must still see the miss")
+	}
+	if !errors.Is(res.Err, marketdata.ErrNotRequested) {
+		t.Fatalf("For(unasked triple).Err = %v, want ErrNotRequested", res.Err)
+	}
+	if !res.Rate.IsZero() || !res.RateDate.IsZero() {
+		t.Fatalf("For(unasked triple) = rate %s date %v, want both zero-valued alongside the error", res.Rate, res.RateDate)
+	}
+}
+
+// TestNewRatesMatchesRatesOn is finding (2)'s pin: a Rates built by hand
+// through NewRates must answer For exactly as one RatesOn produced, because
+// NewRates exists specifically so that code outside this package — chiefly
+// the test fakes standing in for the converter interface the position and
+// journal handlers hide behind — can construct one to inject. If NewRates
+// keyed its entries any differently than RatesOn does, a fake built on it
+// would behave differently than the real thing it replaces, in whatever way
+// nobody happened to test.
+func TestNewRatesMatchesRatesOn(t *testing.T) {
+	conv, store, _, ctx := newConverterFixtureWithPool(t)
+	seedRatesOnFixture(t, store, ctx)
+
+	direct := marketdata.RateQuery{From: "USD", To: "RUB", On: date("2026-07-03")}
+	bridge := marketdata.RateQuery{From: "USD", To: "EUR", On: date("2026-07-03")}
+	miss := marketdata.RateQuery{From: "GBP", To: "JPY", On: date("2026-07-03")}
+	queries := []marketdata.RateQuery{direct, bridge, miss}
+
+	want, err := conv.RatesOn(ctx, queries)
+	if err != nil {
+		t.Fatalf("RatesOn: %v", err)
+	}
+
+	// Round-trip RatesOn's own answers through NewRates: this is what a fake
+	// wrapping a real Converter (or hand-picking values, as a fake forcing a
+	// specific failure does) would do.
+	results := make(map[marketdata.RateQuery]marketdata.RateResult, len(queries))
+	for _, q := range queries {
+		res, forErr := want.For(q.From, q.To, q.On)
+		if forErr != nil {
+			t.Fatalf("want.For(%+v): %v", q, forErr)
+		}
+		results[q] = res
+	}
+	got := marketdata.NewRates(results)
+
+	if got.Len() != want.Len() {
+		t.Fatalf("NewRates(...).Len() = %d, want %d (RatesOn's own)", got.Len(), want.Len())
+	}
+	for _, q := range queries {
+		wantRes, _ := want.For(q.From, q.To, q.On)
+		gotRes, forErr := got.For(q.From, q.To, q.On)
+		if forErr != nil {
+			t.Fatalf("NewRates(...).For(%+v): %v, want the entry RatesOn resolved", q, forErr)
+		}
+		if gotRes.Rate.String() != wantRes.Rate.String() || !gotRes.RateDate.Equal(wantRes.RateDate) {
+			t.Fatalf("NewRates(...).For(%+v) = %+v, want %+v (RatesOn's own)", q, gotRes, wantRes)
+		}
+		if errors.Is(wantRes.Err, marketdata.ErrNoRate) != errors.Is(gotRes.Err, marketdata.ErrNoRate) {
+			t.Fatalf("NewRates(...).For(%+v).Err = %v, want the same class as RatesOn's %v", q, gotRes.Err, wantRes.Err)
+		}
+	}
+
+	// The calendar-day collapse: two different time.Time spellings of one day
+	// in the input map land on the same lookupKey and so on the same entry —
+	// exactly as RatesOn's own resolveQueries collapses them (see
+	// TestRatesForKeysByCalendarDayNotTimeValue). Both spellings carry the
+	// identical RateResult here, so which one the map iteration happens to
+	// keep does not matter to the assertion.
+	msk := time.FixedZone("UTC+3", 3*60*60)
+	sharedResult := marketdata.RateResult{Rate: dec("91.2"), RateDate: date("2026-07-03")}
+	collapsed := marketdata.NewRates(map[marketdata.RateQuery]marketdata.RateResult{
+		{From: "USD", To: "RUB", On: date("2026-07-03")}:                       sharedResult,
+		{From: "USD", To: "RUB", On: time.Date(2026, 7, 3, 18, 30, 0, 0, msk)}: sharedResult,
+	})
+	if collapsed.Len() != 1 {
+		t.Fatalf("NewRates with two spellings of one day: Len() = %d, want 1", collapsed.Len())
+	}
+	for _, on := range []time.Time{date("2026-07-03"), time.Date(2026, 7, 3, 18, 30, 0, 0, msk)} {
+		res, forErr := collapsed.For("USD", "RUB", on)
+		if forErr != nil {
+			t.Fatalf("collapsed.For(USD, RUB, %v): %v", on, forErr)
+		}
+		if !res.Rate.Equal(dec("91.2")) {
+			t.Fatalf("collapsed.For(USD, RUB, %v).Rate = %s, want 91.2", on, res.Rate)
+		}
+	}
+
+	// And a triple nobody supplied refuses exactly as RatesOn's own Rates
+	// does: ErrNotRequested, not a silent zero.
+	if _, forErr := collapsed.For("EUR", "RUB", date("2026-07-03")); !errors.Is(forErr, marketdata.ErrNotRequested) {
+		t.Fatalf("collapsed.For(unasked triple): err = %v, want ErrNotRequested", forErr)
 	}
 }
 

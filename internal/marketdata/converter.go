@@ -383,10 +383,20 @@ type rateLookupKey struct {
 	on       string // YYYY-MM-DD
 }
 
-// lookupKey is the ONLY place a query date becomes a key. The value stored on
-// the way in and the value searched for on the way out are therefore
-// normalized by one statement and cannot drift apart — the whole point of
-// keying by the day rather than by the time.Time.
+// lookupKey is the only place a query date becomes a Rates key — not the only
+// place a query date becomes a key at all: recordingRows.rateOn and
+// prefetchedRows.rateOn each build an FxRateKey holding the raw time.Time
+// too. That use is safe for a narrower reason, not the same one: both passes
+// of RatesOn key off the identical value (the caller's own time.Time, carried
+// unchanged from candidates.keys into the prefetch — see recordingRows' doc),
+// so there is no second spelling of the day for it to drift against. The
+// day-vs-time.Time hazard this key exists to close is specifically about a
+// caller building a query one way and looking it up another, which is a
+// question only Rates.For answers.
+//
+// The value stored on the way in and the value searched for on the way out
+// are therefore normalized by one statement and cannot drift apart — the
+// whole point of keying by the day rather than by the time.Time.
 func (q RateQuery) lookupKey() rateLookupKey {
 	return rateLookupKey{from: q.From, to: q.To, on: q.On.Format("2006-01-02")}
 }
@@ -401,13 +411,46 @@ func (q RateQuery) lookupKey() rateLookupKey {
 // every row of a page as 0,00 with no gap marker and no error — a fabricated
 // number under a confident caption, which is the worst failure this codebase
 // has (four times now, and every time the number was wrong while the caption
-// said it was fine). For makes the miss impossible to ignore.
+// said it was fine). For makes the miss impossible to ignore even for a
+// caller that discards its error return: the same error rides along in the
+// returned RateResult's Err field, which every RateResult miss already
+// requires checking (see RateResult's doc).
 //
 // The zero Rates is not "empty but usable": it answers every For with
 // ErrNotRequested, which is the right treatment for a caller that ignored the
 // error RatesOn returned alongside it.
 type Rates struct {
 	byKey map[rateLookupKey]RateResult
+}
+
+// NewRates builds a Rates from caller-supplied results, exactly as RatesOn
+// would have keyed them — every entry routed through the same lookupKey()
+// normalization RatesOn itself uses, in one statement, so a Rates built here
+// cannot key its entries any differently than one RatesOn produced. Two
+// results whose RateQuery keys name the same calendar day by different
+// time.Time spellings collapse onto one entry here exactly as they do inside
+// RatesOn (see rateLookupKey); which of the two survives is whichever the map
+// iteration writes last, so callers should not supply two different results
+// for what is, to this type, one query.
+//
+// It exists for code outside this package that needs to hand a Rates to
+// something expecting one without going through a real RatesOn call — chiefly
+// test fakes standing in for the small structural interface the position and
+// journal HTTP handlers hide *Converter behind, so tests can inject a fake
+// converter that forces ErrNoRate for one pair, fails one date, or counts
+// lookups (see portfolio.converter and its fakes failingConverter,
+// historicalFailingConverter, oneDateConverter, and
+// operation.countingConverter). Once RatesOn joins that interface, every one
+// of those fakes must return a Rates from its own method, and outside this
+// package the only otherwise-obtainable Rates is the zero value, which
+// answers every For with ErrNotRequested no matter what the fake means to
+// simulate — this constructor is what makes a fake able to say anything else.
+func NewRates(results map[RateQuery]RateResult) Rates {
+	byKey := make(map[rateLookupKey]RateResult, len(results))
+	for q, res := range results {
+		byKey[q.lookupKey()] = res
+	}
+	return Rates{byKey: byKey}
 }
 
 // For returns what RatesOn resolved for this triple.
@@ -422,7 +465,14 @@ func (r Rates) For(from, to string, on time.Time) (RateResult, error) {
 	q := RateQuery{From: from, To: to, On: on}
 	res, ok := r.byKey[q.lookupKey()]
 	if !ok {
-		return RateResult{}, fmt.Errorf("%w: %s -> %s on %s", ErrNotRequested, from, to, on.Format("2006-01-02"))
+		// The error is built once and placed in BOTH return slots: a caller
+		// that discards the second one (res, _ := rates.For(...)) still finds
+		// it in res.Err, the same field every RateResult miss must already be
+		// checked through. Returning RateResult{} here would hand that caller
+		// rate zero, Err nil — the exact fabricated-zero shape this type
+		// exists to make impossible.
+		err := fmt.Errorf("%w: %s -> %s on %s", ErrNotRequested, from, to, on.Format("2006-01-02"))
+		return RateResult{Err: err}, err
 	}
 	return res, nil
 }
@@ -462,12 +512,20 @@ type RateResult struct {
 // ignored, as ConvertMany's total is. (Ignoring it is not silently
 // survivable: the zero Rates answers every For with ErrNotRequested.)
 //
-// Queries may repeat: duplicates collapse onto one entry, and no row is
-// fetched twice however many queries need it. Two queries naming one calendar
-// day by differently built time.Time values are duplicates too — see
-// rateLookupKey. from == to short-circuits as it does in Rate — rate 1, zero
-// date, no lookup — so a call holding nothing but identity queries never
-// reaches the store at all.
+// Queries may repeat: duplicates collapse onto one entry, however many
+// queries name them — an exact repeat and two differently built time.Time
+// values naming the same calendar day are duplicates in exactly this sense
+// (see rateLookupKey). That collapse is at the ENTRY, not at the fetch. An
+// exact repeat costs nothing extra there either, because the first pass
+// (recordingRows) records each distinct key once. But two spellings of one
+// day are not one key to that first pass — candidates.keys still holds the
+// caller's raw time.Time (see recordingRows' doc) — so each spelling earns
+// its own prefetch key and its own row, fetched under the identical on_date
+// and so answering identically. That is a cost, not a correctness gap: the
+// same rows can be fetched twice this way, and the entry both spellings
+// collapse onto is right regardless. from == to short-circuits as it does in
+// Rate — rate 1, zero date, no lookup — so a call holding nothing but
+// identity queries never reaches the store at all.
 func (c *Converter) RatesOn(ctx context.Context, queries []RateQuery) (Rates, error) {
 	// First pass: let the rules say for themselves which rows they will want.
 	// Every resolution here ends in ErrNoRate by construction — recordingRows
