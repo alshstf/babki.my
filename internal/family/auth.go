@@ -217,7 +217,8 @@ func (s *Service) UpdateSpace(ctx context.Context, p Principal, in SpaceSettings
 			return Space{}, fmt.Errorf("%w: tax_residency must be an uppercase ISO 3166-1 alpha-2 code (e.g. RU)", ErrValidation)
 		}
 		if !KnownTaxResidency(*in.TaxResidency) {
-			return Space{}, fmt.Errorf("%w: no cost basis rules are known for tax residency %s; this application can only answer for %s",
+			return Space{}, fmt.Errorf("%w: no cost basis rules are known for tax residency %s; this application knows the rules of %s only "+
+				"(knowing a country's rules is not the same as its FIFO/account computation matching them — see GET /api/v1/tax-residencies for which of them it does)",
 				ErrValidation, *in.TaxResidency, strings.Join(taxResidencyCodes(), ", "))
 		}
 	}

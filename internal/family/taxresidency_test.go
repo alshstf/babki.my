@@ -21,12 +21,16 @@ func notices(r family.TaxRules) []string {
 }
 
 // TestFIFOWithinOneAccountIsExactlyTheseCountries pins the countries whose rules
-// the engine already implements: first-in-first-out, queued per account. These
-// must come back supported and SILENT — a notice on any of them would tell the
-// owner their own figures are wrong when they are not, which is as damaging as
-// the silence this whole change removes.
+// the engine already implements AND whose norm behind fifo/account is a
+// checked one: first-in-first-out, queued per account. These must come back
+// supported and SILENT — a notice on any of them would tell the owner their
+// own figures are wrong when they are not, which is as damaging as the
+// silence this whole change removes.
+//
+// KZ is deliberately not in this list even though it reads fifo/account too:
+// see TestKazakhstanNormIsUnverifiedSoItIsNotSilentlyAffirmed.
 func TestFIFOWithinOneAccountIsExactlyTheseCountries(t *testing.T) {
-	for _, country := range []string{"RU", "DE", "KZ", "US"} {
+	for _, country := range []string{"RU", "DE", "US"} {
 		r := family.TaxRulesFor(country)
 		if r.Method != family.MethodFIFO || r.Perimeter != family.PerimeterAccount {
 			t.Errorf("%s = %s/%s, want fifo/account", country, r.Method, r.Perimeter)
@@ -37,6 +41,29 @@ func TestFIFOWithinOneAccountIsExactlyTheseCountries(t *testing.T) {
 		if got := notices(r); len(got) != 0 {
 			t.Errorf("%s: notices = %v, want none", country, got)
 		}
+	}
+}
+
+// TestKazakhstanNormIsUnverifiedSoItIsNotSilentlyAffirmed is IMPORTANT finding
+// 1 from the task-3 review: KZ reads fifo/account — the same values as RU, DE
+// and US — but jurisdiction research never established a mandatory cost basis
+// method for individuals there, so that row is an assumption by analogy, not
+// a checked rule. Matching the implemented computation must NOT be enough to
+// mark a country supported: it also has to say the norm behind the match was
+// confirmed, and for KZ it was not.
+func TestKazakhstanNormIsUnverifiedSoItIsNotSilentlyAffirmed(t *testing.T) {
+	r := family.TaxRulesFor("KZ")
+	if r.Method != family.MethodFIFO || r.Perimeter != family.PerimeterAccount {
+		t.Errorf("KZ = %s/%s, want fifo/account", r.Method, r.Perimeter)
+	}
+	if !r.NormUnverified {
+		t.Error("KZ: NormUnverified = false, want true")
+	}
+	if r.Supported() {
+		t.Error("KZ: Supported() = true, want false — the norm behind fifo/account was never established")
+	}
+	if got := notices(r); !slices.Equal(got, []string{"unverified_rule"}) {
+		t.Errorf("KZ: notices = %v, want exactly [unverified_rule]", got)
 	}
 }
 

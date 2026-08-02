@@ -3,6 +3,7 @@ package family_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"babki.my/babki/internal/family"
@@ -143,5 +144,36 @@ func TestLoginOrphanedUser(t *testing.T) {
 
 	if _, _, err := svc.Login(ctx, "orphan", "secret123"); !errors.Is(err, family.ErrInvalidCredentials) {
 		t.Errorf("login of orphaned user err = %v, want ErrInvalidCredentials", err)
+	}
+}
+
+// TestUnknownCountryRejectionNamesWhatItKnowsNotWhatItAnswersFor is IMPORTANT
+// finding 2 from the task-3 review: the rejection for a well-formed but
+// unlisted tax residency named its list of countries as ones "this
+// application can only answer for". That overclaims — five of those nine
+// rows (GB, CA, AU, NL, CH) carry a mismatch notice, so the application
+// cannot answer for them either; it can only say, honestly, that it cannot.
+// The list must be named for what it actually is: countries whose rules this
+// application knows.
+func TestUnknownCountryRejectionNamesWhatItKnowsNotWhatItAnswersFor(t *testing.T) {
+	svc, ctx := newService(t)
+	_, owner, err := svc.Setup(ctx, family.SetupParams{
+		SpaceName: "S", Username: "alex", DisplayName: "A", Password: "secret123",
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	fr := "FR"
+	_, err = svc.UpdateSpace(ctx, owner, family.SpaceSettings{TaxResidency: &fr})
+	if !errors.Is(err, family.ErrValidation) {
+		t.Fatalf("UpdateSpace(FR) err = %v, want ErrValidation", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "knows the rules of") {
+		t.Errorf("error = %q, want it to name the list as countries this application KNOWS THE RULES OF", msg)
+	}
+	if strings.Contains(msg, "can only answer for") {
+		t.Errorf("error = %q, still claims the application can answer for every listed country — five of them carry a mismatch notice", msg)
 	}
 }

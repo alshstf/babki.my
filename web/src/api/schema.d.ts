@@ -369,7 +369,7 @@ export interface components {
             /** @description What tax_residency implies for the cost basis figures this application computes. Carried in the session so the settings screen can state the consequence of the country the owner picked; the same object is repeated on PositionsResponse so the screen showing the figures carries the caveat with them. */
             cost_basis_rules: components["schemas"]["CostBasisRules"];
         };
-        /** @description Partial update of the space. Every field is optional and an omitted field is left unchanged, but at least one must be present — an empty body is rejected rather than silently accepted as a no-op. */
+        /** @description Partial update of the space. Every field is optional and an omitted field is left unchanged, but at least one must be present — an empty body is rejected rather than silently accepted as a no-op. minProperties enforces that in the schema itself, not only in this description, so a schema-aware client can reject an empty body without a round trip. */
         UpdateSpaceRequest: {
             /** @description ISO-4217 uppercase, e.g. RUB */
             base_currency?: string;
@@ -387,10 +387,10 @@ export interface components {
          */
         CostBasisPerimeter: "account" | "owner" | "not_applicable" | "unknown";
         /**
-         * @description One way this application's computation fails to answer for the owner's country. Machine-readable on purpose: the wording the owner reads is the interface's to translate, and the server never sends prose. `method_mismatch`: the country matches disposals by a different method, so the figures are NOT a cost basis under its rules. `perimeter_mismatch`: the queue must span more than one account. `not_taxed`: the country does not tax an individual's capital gains at all, so the figures are informational rather than fiscal. `unknown_country`: the stored country has no rules row here, so nothing is claimed about it — the figures are still FIFO within one account, which is what they always are.
+         * @description One way this application's computation fails to answer for the owner's country. Machine-readable on purpose: the wording the owner reads is the interface's to translate, and the server never sends prose. `method_mismatch`: the country matches disposals by a different method, so the figures are NOT a cost basis under its rules. `perimeter_mismatch`: the queue must span more than one account. `not_taxed`: the country does not tax an individual's capital gains at all, so the figures are informational rather than fiscal. `unknown_country`: the stored country has no rules row here, so nothing is claimed about it — the figures are still FIFO within one account, which is what they always are. `unverified_rule`: the row's method and perimeter were not traced to an established norm during jurisdiction research — they are an assumption by analogy, not a checked rule, even when they happen to read fifo/account.
          * @enum {string}
          */
-        CostBasisNotice: "method_mismatch" | "perimeter_mismatch" | "not_taxed" | "unknown_country";
+        CostBasisNotice: "method_mismatch" | "perimeter_mismatch" | "not_taxed" | "unknown_country" | "unverified_rule";
         /** @description The cost basis rules of one country, derived from its ISO 3166-1 alpha-2 code through a single table in the server. The figures this application publishes are ALWAYS computed FIFO within one account; this object says whether that is what the country actually requires, and names every way it is not. */
         CostBasisRules: {
             /** @description ISO 3166-1 alpha-2 the row was derived from */

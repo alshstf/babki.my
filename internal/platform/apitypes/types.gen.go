@@ -94,6 +94,7 @@ const (
 	NotTaxed          CostBasisNotice = "not_taxed"
 	PerimeterMismatch CostBasisNotice = "perimeter_mismatch"
 	UnknownCountry    CostBasisNotice = "unknown_country"
+	UnverifiedRule    CostBasisNotice = "unverified_rule"
 )
 
 // Valid indicates whether the value is a known member of the CostBasisNotice enum.
@@ -106,6 +107,8 @@ func (e CostBasisNotice) Valid() bool {
 	case PerimeterMismatch:
 		return true
 	case UnknownCountry:
+		return true
+	case UnverifiedRule:
 		return true
 	default:
 		return false
@@ -277,7 +280,7 @@ type BalancePoint struct {
 // CostBasisMethod How a jurisdiction decides WHICH of the parcels held are the ones a sale disposed of. `fifo`: the earliest acquisitions, in order. `average`: no parcels at all — one pooled average cost per instrument. `specific_lot`: the taxpayer nominates the parcel. `not_applicable`: the country does not tax an individual's capital gains, so nothing has to be matched. `unknown`: the stored country has no rules row in this application (see CostBasisNotice.unknown_country).
 type CostBasisMethod string
 
-// CostBasisNotice One way this application's computation fails to answer for the owner's country. Machine-readable on purpose: the wording the owner reads is the interface's to translate, and the server never sends prose. `method_mismatch`: the country matches disposals by a different method, so the figures are NOT a cost basis under its rules. `perimeter_mismatch`: the queue must span more than one account. `not_taxed`: the country does not tax an individual's capital gains at all, so the figures are informational rather than fiscal. `unknown_country`: the stored country has no rules row here, so nothing is claimed about it — the figures are still FIFO within one account, which is what they always are.
+// CostBasisNotice One way this application's computation fails to answer for the owner's country. Machine-readable on purpose: the wording the owner reads is the interface's to translate, and the server never sends prose. `method_mismatch`: the country matches disposals by a different method, so the figures are NOT a cost basis under its rules. `perimeter_mismatch`: the queue must span more than one account. `not_taxed`: the country does not tax an individual's capital gains at all, so the figures are informational rather than fiscal. `unknown_country`: the stored country has no rules row here, so nothing is claimed about it — the figures are still FIFO within one account, which is what they always are. `unverified_rule`: the row's method and perimeter were not traced to an established norm during jurisdiction research — they are an assumption by analogy, not a checked rule, even when they happen to read fifo/account.
 type CostBasisNotice string
 
 // CostBasisPerimeter Over WHICH holdings that queue is built. `account`: separately per account/depot. `owner`: across everything the owner holds, wherever it sits — representable here but NOT implemented; a country carrying it is reported as unsupported. `not_applicable`: no queue exists to scope (the taxpayer picks the parcel, or gains are untaxed). `unknown`: no rules row for the stored country.
@@ -634,7 +637,7 @@ type UpdateMemberRequest struct {
 	Role Role `json:"role"`
 }
 
-// UpdateSpaceRequest Partial update of the space. Every field is optional and an omitted field is left unchanged, but at least one must be present — an empty body is rejected rather than silently accepted as a no-op.
+// UpdateSpaceRequest Partial update of the space. Every field is optional and an omitted field is left unchanged, but at least one must be present — an empty body is rejected rather than silently accepted as a no-op. minProperties enforces that in the schema itself, not only in this description, so a schema-aware client can reject an empty body without a round trip.
 type UpdateSpaceRequest struct {
 	// BaseCurrency ISO-4217 uppercase, e.g. RUB
 	BaseCurrency *string `json:"base_currency,omitempty"`

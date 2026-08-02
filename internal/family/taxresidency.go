@@ -97,6 +97,14 @@ const (
 	// they always are — but this application does not know whether that is
 	// right there.
 	NoticeUnknownCountry CostBasisNotice = "unknown_country"
+	// NoticeUnverifiedRule: this row HAS a method and perimeter, but jurisdiction
+	// research never turned up an established norm behind them — the values are
+	// this application's assumption by analogy, not a rule anyone checked. A row
+	// carrying it can still read fifo/account (see KZ) and still must not be
+	// affirmed as supported: "we assume this is right" is a different claim from
+	// "we checked, and it is", and the second one is the only one Supported()
+	// may make.
+	NoticeUnverifiedRule CostBasisNotice = "unverified_rule"
 )
 
 // TaxRules is one country's row. Comparable on purpose: two rows are equal when
@@ -114,6 +122,15 @@ type TaxRules struct {
 	// directly: it would have to be a third state for an unknown country, and a
 	// boolean that is sometimes meaningless is worse than the notice it feeds.
 	CapitalGainsTaxed bool
+	// NormUnverified marks a row whose Method/Perimeter were not traced to an
+	// established rule during jurisdiction research — they are this
+	// application's best guess by analogy rather than a cited norm. It is
+	// independent of Method/Perimeter matching FIFO/account: a row can be both
+	// "computed the way we implement" and "not actually confirmed to be this
+	// country's rule", and that combination is exactly the one case (KZ) this
+	// field exists to keep from reading as a checked answer. See
+	// NoticeUnverifiedRule.
+	NormUnverified bool
 }
 
 // DefaultTaxResidency is what a space has unless its owner says otherwise, and
@@ -133,8 +150,10 @@ var taxResidencyRe = regexp.MustCompile(`^[A-Z]{2}$`)
 // line here and nothing else.
 //
 // The four rows that say fifo/account are the ones this application actually
-// implements; every other row exists so the application can say what it does
+// computes; every other row exists so the application can say what it does
 // NOT do rather than compute something and let the figure speak for itself.
+// Matching fifo/account is not itself proof the row is a checked answer,
+// though — see NormUnverified on KZ, the one row where it isn't yet.
 var taxRules = map[string]TaxRules{
 	// Russia. НК РФ ст. 214.1 п. 13: disposals are valued "по стоимости первых
 	// по времени приобретений" — FIFO, mandatory, no election. Perimeter: ФЗ
@@ -148,26 +167,43 @@ var taxRules = map[string]TaxRules{
 	// at two banks form two queues.
 	"DE": {Country: "DE", Method: MethodFIFO, Perimeter: PerimeterAccount, CapitalGainsTaxed: true},
 
-	// Kazakhstan. FIFO is mandatory (jurisdiction research, 2026-07). NO ARTICLE
-	// IS CITED HERE BECAUSE NONE WAS ESTABLISHED — inventing a plausible-looking
-	// reference in a table whose whole purpose is to be checkable against the
-	// law would be the same class of error as inventing a number.
-	"KZ": {Country: "KZ", Method: MethodFIFO, Perimeter: PerimeterAccount, CapitalGainsTaxed: true},
+	// Kazakhstan. An individual's gain on securities is taxed as имущественный
+	// доход at 10%, with relief for instruments on the exchange's official list
+	// and for a three-year holding period (jurisdiction research, 2026-07) — but
+	// NO MANDATORY COST BASIS METHOD WAS FOUND for individuals in that research,
+	// and a second look for this review did not find one either. Method/
+	// Perimeter below are fifo/account BY ANALOGY with the neighbouring rows,
+	// not a cited rule, and NO ARTICLE IS CITED HERE BECAUSE NONE WAS
+	// ESTABLISHED — inventing a plausible-looking reference in a table whose
+	// whole purpose is to be checkable against the law would be the same class
+	// of error as inventing a number. NormUnverified records that gap so the
+	// country reads as unsupported (NoticeUnverifiedRule) instead of a checked
+	// "yes". Replace with a cited method the moment one is found.
+	"KZ": {Country: "KZ", Method: MethodFIFO, Perimeter: PerimeterAccount, CapitalGainsTaxed: true, NormUnverified: true},
 
 	// United States. 26 CFR 1.1012-1(c)(1)(i): FIFO by default — "the earliest
 	// lot the taxpayer purchased or acquired" — with specific identification
 	// permitted, and averaging permitted for regulated investment company
 	// shares. The row records the DEFAULT, which is what an application that
 	// does not ask the owner to nominate parcels actually computes. Perimeter:
-	// the IRS declined in 2010 to write "per account" into the regulation, but
-	// brokers compute and report exactly that way, so per account is what a US
-	// resident's statements will agree with.
+	// the IRS declined in 2010 to write "per account" into the regulation
+	// itself, but subsequent IRS guidance on that same regulation's adequate-
+	// identification and average-basis procedures describes lot-relief methods
+	// — FIFO included — as applied on a per-account basis, so this is not resting
+	// on broker convention alone; brokers computing and reporting per account
+	// is also what a US resident's statements will agree with.
 	"US": {Country: "US", Method: MethodFIFO, Perimeter: PerimeterAccount, CapitalGainsTaxed: true},
 
-	// United Kingdom. TCGA 1992 s.104: identical securities form a single pooled
-	// holding with one averaged cost, so there are no dated parcels to queue at
-	// all — the disagreement with FIFO is total, not a matter of ordering. The
-	// pool spans everything the owner holds, across brokers.
+	// United Kingdom. TCGA 1992 s.104 pools identical securities into a single
+	// averaged cost — but the pool is only what is left after two matching
+	// rules run first: a disposal is matched against acquisitions on the SAME
+	// DAY, then against acquisitions in the FOLLOWING 30 days (the "bed and
+	// breakfasting" rule), and only the remainder is drawn from the s.104 pool.
+	// So acquisition dates are not irrelevant everywhere — they decide same-day
+	// and 30-day matches — it is that once a disposal reaches the pool itself,
+	// the parcels inside it no longer carry individual dates or costs to queue
+	// by, which is the disagreement with FIFO this row records. The pool spans
+	// everything the owner holds, across brokers.
 	"GB": {Country: "GB", Method: MethodAverage, Perimeter: PerimeterOwner, CapitalGainsTaxed: true},
 
 	// Canada. ITA s.47: identical properties are averaged into one adjusted cost
@@ -175,8 +211,17 @@ var taxRules = map[string]TaxRules{
 	"CA": {Country: "CA", Method: MethodAverage, Perimeter: PerimeterOwner, CapitalGainsTaxed: true},
 
 	// Australia. ATO TD 33: the taxpayer may nominate which parcel was disposed
-	// of. There is therefore no queue to scope — the perimeter is not "unknown",
-	// it does not exist: a free choice has no ordering to be bounded.
+	// of; where the parcels are indistinguishable and the taxpayer records no
+	// choice, the SAME ruling accepts FIFO as the answer. This row still names
+	// specific_lot (the taxpayer's election, where one exists, always overrides
+	// FIFO) and still carries method_mismatch — that notice over-warns in the
+	// no-election case, where this application's FIFO figure is in fact what
+	// TD 33 allows, but resolving which of the two cases applies to a given
+	// disposal is not something this table can know. Do not "correct" this row
+	// to fifo/account on the strength of the second half of the ruling alone.
+	// There is no queue to scope either way — the perimeter is not "unknown", it
+	// does not exist: a choice (or a fallback to FIFO) has no ordering to be
+	// bounded by.
 	"AU": {Country: "AU", Method: MethodSpecificLot, Perimeter: PerimeterNotApplicable, CapitalGainsTaxed: true},
 
 	// Netherlands. An individual's capital gain on securities is not taxed as
@@ -225,8 +270,12 @@ func TaxResidencies() []TaxRules {
 	return out
 }
 
-// taxResidencyCodes is the same list as country codes only, for naming what
-// this application can answer for in a validation error the owner will read.
+// taxResidencyCodes is the same list as country codes only, for naming the
+// countries this application KNOWS THE RULES OF in a validation error the
+// owner will read. That is deliberately not "can answer for": five of these
+// nine rows carry a mismatch notice, so knowing a country's rules and this
+// application's figures actually being that country's cost basis are two
+// different claims, and the error must not conflate them.
 func taxResidencyCodes() []string {
 	out := make([]string, 0, len(taxRules))
 	for code := range taxRules {
@@ -254,7 +303,10 @@ func (r TaxRules) Supported() bool { return len(r.Notices()) == 0 }
 // early returns are not shortcuts but statements — for an unknown country
 // nothing at all is claimed, and for an untaxed one there is no method to
 // diverge from, so adding "method_mismatch" would be a second falsehood on top
-// of an already unnecessary one.
+// of an already unnecessary one. NormUnverified is checked independently of
+// both: a row can match fifo/account exactly (KZ does) and still owe the
+// reader NoticeUnverifiedRule, because matching the implemented computation is
+// not the same claim as the norm behind it having been confirmed.
 //
 // It never returns nil, so a caller can hand the result straight to a JSON
 // encoder and get [] rather than null: "no notices" and "the field is missing"
@@ -280,6 +332,9 @@ func (r TaxRules) Notices() []CostBasisNotice {
 		// would report a single difference twice, which reads as two.
 	default:
 		out = append(out, NoticePerimeterMismatch)
+	}
+	if r.NormUnverified {
+		out = append(out, NoticeUnverifiedRule)
 	}
 	return out
 }
