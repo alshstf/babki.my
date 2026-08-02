@@ -483,9 +483,10 @@ func seedRatesOnFixture(t *testing.T, store *marketdata.Store, ctx context.Conte
 // stays invisible to the differential test below. Here the expected rates are
 // spelled out independently of either method.
 //
-// It also pins the whole point of the batch: five queries whose resolution
-// consults up to eleven distinct (base, quote, date) rows must cost exactly
-// one round trip.
+// It also pins the whole point of the batch: five queries whose enumeration
+// names thirteen distinct (base, quote, date) rows — USD/RUB, RUB/USD,
+// RUB/RUB, USD/EUR, EUR/USD, RUB/EUR, EUR/RUB, GBP/JPY, JPY/GBP, GBP/RUB,
+// RUB/GBP, RUB/JPY, JPY/RUB — must cost exactly one round trip.
 func TestRatesOnResolvesEveryPathInOneCall(t *testing.T) {
 	conv, store, pool, ctx := newConverterFixtureWithPool(t)
 	seedRatesOnFixture(t, store, ctx)
@@ -506,8 +507,8 @@ func TestRatesOnResolvesEveryPathInOneCall(t *testing.T) {
 	if after := pool.Stat().AcquireCount(); after-before != 1 {
 		t.Fatalf("RatesOn(%d queries) acquired %d connections, want exactly 1", len(queries), after-before)
 	}
-	if len(got) != len(queries) {
-		t.Fatalf("RatesOn returned %d results, want %d: %+v", len(got), len(queries), got)
+	if got.Len() != len(queries) {
+		t.Fatalf("RatesOn returned %d results, want %d", got.Len(), len(queries))
 	}
 
 	for _, tc := range []struct {
@@ -525,9 +526,9 @@ func TestRatesOnResolvesEveryPathInOneCall(t *testing.T) {
 		// Identity resolves nothing at all: rate 1, zero date.
 		{"identity", identity, decimal.NewFromInt(1), time.Time{}},
 	} {
-		res, ok := got[tc.query]
-		if !ok {
-			t.Fatalf("RatesOn[%s] missing from the result map", tc.name)
+		res, err := got.For(tc.query.From, tc.query.To, tc.query.On)
+		if err != nil {
+			t.Fatalf("RatesOn[%s]: For returned %v, want the resolved entry", tc.name, err)
 		}
 		if res.Err != nil {
 			t.Fatalf("RatesOn[%s].Err = %v, want nil", tc.name, res.Err)
@@ -541,11 +542,11 @@ func TestRatesOnResolvesEveryPathInOneCall(t *testing.T) {
 	}
 
 	// The one pair nothing connects fails on its own line only: its four
-	// neighbours above are all resolved in the very same map. One exotic
+	// neighbours above are all resolved in the very same batch. One exotic
 	// holding must not blank out a page.
-	res, ok := got[unresolvable]
-	if !ok {
-		t.Fatalf("RatesOn[GBP->JPY] missing from the result map")
+	res, err := got.For(unresolvable.From, unresolvable.To, unresolvable.On)
+	if err != nil {
+		t.Fatalf("RatesOn[GBP->JPY]: For returned %v, want the entry carrying ErrNoRate", err)
 	}
 	if !errors.Is(res.Err, marketdata.ErrNoRate) {
 		t.Fatalf("RatesOn[GBP->JPY].Err = %v, want ErrNoRate", res.Err)
@@ -559,6 +560,20 @@ func TestRatesOnResolvesEveryPathInOneCall(t *testing.T) {
 // representation, the resolved row's date and the error text. The two paths
 // share one implementation of the rules precisely so this test can never
 // find anything; it exists to notice the day someone forks them.
+//
+// Read what it does NOT cover, because the shape invites over-trusting it: a
+// DIFFERENTIAL TEST BETWEEN TWO PATHS CANNOT POLICE ANY RULE THAT LIVES IN THE
+// CODE THEY SHARE. Break the direct/inverse order, the 1/rate inversion, the
+// bridge's insistence on both legs — the rule sits in resolveRate, both paths
+// move together, and every comparison below still passes while every number is
+// wrong. A reviewer confirmed exactly that: turning resolveRate's `ok1 && ok2`
+// into `ok1 || ok2` left this whole package green. Every rule therefore needs a
+// VALUE assertion somewhere that names its expected answer out loud, with no
+// reference to the other path — TestRatesOnResolvesEveryPathInOneCall for the
+// direct/inverse/bridge rates, TestOneRubLegAloneIsNoRate for the both-legs
+// rule, TestBridgeRateDateIsOlderLeg for the bridge's date,
+// TestDirectRowWinsOverTheInverseOfAReverseRow for the precedence. This test
+// covers agreement, and only agreement.
 func TestRatesOnMatchesRate(t *testing.T) {
 	conv, store, _, ctx := newConverterFixtureWithPool(t)
 	seedRatesOnFixture(t, store, ctx)
@@ -584,9 +599,9 @@ func TestRatesOnMatchesRate(t *testing.T) {
 
 	for _, q := range queries {
 		wantRate, wantDate, wantErr := conv.Rate(ctx, q.From, q.To, q.On)
-		res, ok := got[q]
-		if !ok {
-			t.Fatalf("RatesOn[%+v] missing from the result map", q)
+		res, lookupErr := got.For(q.From, q.To, q.On)
+		if lookupErr != nil {
+			t.Fatalf("RatesOn[%+v]: For returned %v, want the resolved entry", q, lookupErr)
 		}
 		switch {
 		case wantErr == nil && res.Err != nil:
@@ -612,8 +627,61 @@ func TestRatesOnMatchesRate(t *testing.T) {
 	}
 
 	// The duplicate query collapses onto its twin: 11 queries, 10 distinct.
-	if len(got) != 10 {
-		t.Fatalf("RatesOn returned %d results for 11 queries (one an exact duplicate), want 10: %+v", len(got), got)
+	if got.Len() != 10 {
+		t.Fatalf("RatesOn returned %d results for 11 queries (one an exact duplicate), want 10", got.Len())
+	}
+}
+
+// TestOneRubLegAloneIsNoRate is the both-legs rule stated as a value, not as
+// agreement between the two paths: a bridge needs BOTH its legs, and a pair
+// that has exactly one of them is ErrNoRate, never a rate.
+//
+// This is finding (2). Mutating resolveRate's `ok1 && ok2` into `ok1 || ok2`
+// used to leave the entire package green, because the only test that exercised
+// USD->JPY was the differential one above and the rule lives in the code both
+// paths share (see that test's doc). What the mutation actually produced was
+// rate 0 on a zero date with a nil error — a currency that merely lacks its RUB
+// leg converting every amount to nothing, under a caption saying the number is
+// good. Hence a hard-coded expectation here, on Rate and RatesOn alike.
+//
+// USD has a RUB leg in the shared fixture and JPY has none, so USD->JPY is the
+// (ok1, !ok2) case and JPY->USD the (!ok1, ok2) one: neither ordering of the
+// missing leg may resolve.
+func TestOneRubLegAloneIsNoRate(t *testing.T) {
+	conv, store, _, ctx := newConverterFixtureWithPool(t)
+	seedRatesOnFixture(t, store, ctx)
+	on := date("2026-07-03")
+
+	fromLegOnly := marketdata.RateQuery{From: "USD", To: "JPY", On: on} // from->RUB exists, RUB->to does not
+	toLegOnly := marketdata.RateQuery{From: "JPY", To: "USD", On: on}   // the other way round
+
+	got, err := conv.RatesOn(ctx, []marketdata.RateQuery{fromLegOnly, toLegOnly})
+	if err != nil {
+		t.Fatalf("RatesOn: %v", err)
+	}
+
+	for _, q := range []marketdata.RateQuery{fromLegOnly, toLegOnly} {
+		res, lookupErr := got.For(q.From, q.To, q.On)
+		if lookupErr != nil {
+			t.Fatalf("RatesOn[%s->%s]: For returned %v, want the entry", q.From, q.To, lookupErr)
+		}
+		if !errors.Is(res.Err, marketdata.ErrNoRate) {
+			t.Fatalf("RatesOn[%s->%s].Err = %v, want ErrNoRate: one RUB leg is not a bridge (rate=%s, date=%v)",
+				q.From, q.To, res.Err, res.Rate, res.RateDate)
+		}
+		// Spelled out because this is precisely what the broken version
+		// returned, and a caller reading Rate without checking Err would have
+		// shown it as a real conversion.
+		if !res.Rate.IsZero() || !res.RateDate.IsZero() {
+			t.Fatalf("RatesOn[%s->%s] failed but carries rate=%s date=%v, want both zero-valued",
+				q.From, q.To, res.Rate, res.RateDate)
+		}
+
+		rate, rateDate, err := conv.Rate(ctx, q.From, q.To, q.On)
+		if !errors.Is(err, marketdata.ErrNoRate) {
+			t.Fatalf("Rate(%s->%s) = %s on %v, err = %v, want ErrNoRate: one RUB leg is not a bridge",
+				q.From, q.To, rate, rateDate, err)
+		}
 	}
 }
 
@@ -641,9 +709,9 @@ func TestBridgeRateDateIsOlderLeg(t *testing.T) {
 	}
 
 	for _, q := range []marketdata.RateQuery{forward, backward} {
-		res, ok := got[q]
-		if !ok || res.Err != nil {
-			t.Fatalf("RatesOn[%s->%s] = %+v, ok=%v, want a resolved bridge", q.From, q.To, res, ok)
+		res, lookupErr := got.For(q.From, q.To, q.On)
+		if lookupErr != nil || res.Err != nil {
+			t.Fatalf("RatesOn[%s->%s] = %+v, For err=%v, want a resolved bridge", q.From, q.To, res, lookupErr)
 		}
 		if !res.RateDate.Equal(older) {
 			t.Fatalf("RatesOn[%s->%s].RateDate = %v, want %v (the older of the two legs, not %v)",
@@ -701,8 +769,8 @@ func TestRatesOnWithoutLookupsNeverTouchesTheStore(t *testing.T) {
 
 	before := pool.Stat().AcquireCount()
 	empty, err := conv.RatesOn(ctx, nil)
-	if err != nil || len(empty) != 0 {
-		t.Fatalf("RatesOn(nil) = %+v, %v, want an empty map and no error", empty, err)
+	if err != nil || empty.Len() != 0 {
+		t.Fatalf("RatesOn(nil) resolved %d entries, err = %v, want none and no error", empty.Len(), err)
 	}
 
 	identities := []marketdata.RateQuery{
@@ -718,9 +786,9 @@ func TestRatesOnWithoutLookupsNeverTouchesTheStore(t *testing.T) {
 			after-before, before, after)
 	}
 	for _, q := range identities {
-		res, ok := got[q]
-		if !ok || res.Err != nil || !res.Rate.Equal(decimal.NewFromInt(1)) || !res.RateDate.IsZero() {
-			t.Fatalf("RatesOn[%s->%s] = %+v, ok=%v, want rate 1 with a zero date and no error", q.From, q.To, res, ok)
+		res, lookupErr := got.For(q.From, q.To, q.On)
+		if lookupErr != nil || res.Err != nil || !res.Rate.Equal(decimal.NewFromInt(1)) || !res.RateDate.IsZero() {
+			t.Fatalf("RatesOn[%s->%s] = %+v, For err=%v, want rate 1 with a zero date and no error", q.From, q.To, res, lookupErr)
 		}
 	}
 }
@@ -736,15 +804,156 @@ func TestRatesOnPropagatesRealErrors(t *testing.T) {
 	cctx, cancel := context.WithCancel(ctx)
 	cancel()
 
-	got, err := conv.RatesOn(cctx, []marketdata.RateQuery{{From: "USD", To: "RUB", On: date("2026-07-03")}})
+	on := date("2026-07-03")
+	got, err := conv.RatesOn(cctx, []marketdata.RateQuery{{From: "USD", To: "RUB", On: on}})
 	if err == nil {
-		t.Fatalf("RatesOn with canceled context: err = nil (got %+v), want a real error", got)
+		t.Fatalf("RatesOn with canceled context: err = nil (got %d entries), want a real error", got.Len())
 	}
 	if errors.Is(err, marketdata.ErrNoRate) {
 		t.Fatalf("RatesOn with canceled context: got ErrNoRate, want the underlying DB/context error")
 	}
-	if got != nil {
-		t.Fatalf("RatesOn with canceled context: map = %+v, want nil", got)
+	if got.Len() != 0 {
+		t.Fatalf("RatesOn with canceled context: %d entries resolved, want none", got.Len())
+	}
+	// And the voided batch stays unreadable: a caller that ignored err above
+	// gets an error out of For, not a zero rate it would render as 0,00.
+	if _, lookupErr := got.For("USD", "RUB", on); !errors.Is(lookupErr, marketdata.ErrNotRequested) {
+		t.Fatalf("For on the voided batch: err = %v, want ErrNotRequested", lookupErr)
+	}
+}
+
+// TestRatesForKeysByCalendarDayNotTimeValue is finding (1)'s regression test.
+//
+// RatesOn used to hand back a map[RateQuery]RateResult, and RateQuery holds a
+// time.Time. Two time.Time values that name the same day but differ in
+// *time.Location or in monotonic reading are DIFFERENT map keys, so a caller
+// that built its query one way and indexed with another — time.Now().UTC()
+// evaluated twice, a date passed through .In() or .Truncate() on only one of
+// the two paths — got Go's zero RateResult back: rate zero, Err nil. Without
+// the comma-ok that is indistinguishable from a pair that resolved to zero,
+// and the handlers this batch exists for would have rendered every row's
+// base-currency amount as 0,00 with no gap marker and no error at all.
+//
+// So the day is the key, and every spelling of one day finds the same entry.
+// Under the old shape each case below except the first returned a silent zero;
+// now each must return the rate that was actually resolved.
+func TestRatesForKeysByCalendarDayNotTimeValue(t *testing.T) {
+	conv, store, _, ctx := newConverterFixtureWithPool(t)
+	seedRatesOnFixture(t, store, ctx)
+
+	// Asked for at midnight UTC, the way date() builds it.
+	asked := date("2026-07-03")
+	got, err := conv.RatesOn(ctx, []marketdata.RateQuery{{From: "USD", To: "RUB", On: asked}})
+	if err != nil {
+		t.Fatalf("RatesOn: %v", err)
+	}
+
+	msk := time.FixedZone("UTC+3", 3*60*60)
+	for _, tc := range []struct {
+		name string
+		on   time.Time
+	}{
+		{"the value the query was built from", asked},
+		{"the same instant in another location", asked.In(msk)},
+		{"the same wall clock in another location", time.Date(2026, 7, 3, 0, 0, 0, 0, msk)},
+		{"the same day with a time of day on it", time.Date(2026, 7, 3, 15, 4, 5, 0, time.UTC)},
+		{"the same day just before midnight", time.Date(2026, 7, 3, 23, 59, 59, 999999999, time.UTC)},
+	} {
+		res, lookupErr := got.For("USD", "RUB", tc.on)
+		if lookupErr != nil {
+			t.Fatalf("For(USD, RUB, %s): %v — same calendar day as the query, must find its entry", tc.name, lookupErr)
+		}
+		if res.Err != nil {
+			t.Fatalf("For(USD, RUB, %s).Err = %v, want nil", tc.name, res.Err)
+		}
+		if !res.Rate.Equal(dec("91.2")) {
+			t.Fatalf("For(USD, RUB, %s).Rate = %s, want 91.2 (a zero here is the exact bug this test exists for)", tc.name, res.Rate)
+		}
+	}
+
+	// The other side of keying by the day: two spellings of one day in the
+	// SAME call are one query, not two. They collapse onto a single entry, and
+	// that entry is right for both — which holds only because the database is
+	// asked for a `date` and pgx encodes one from the value's own wall-clock
+	// Y/M/D, so a location or a time of day never moves the row that comes
+	// back. If that ever stopped being true, the collapse would start hiding a
+	// real difference, so it is checked here rather than assumed.
+	sameDay := []marketdata.RateQuery{
+		{From: "USD", To: "RUB", On: asked},
+		{From: "USD", To: "RUB", On: time.Date(2026, 7, 3, 18, 30, 0, 0, msk)},
+	}
+	collapsed, err := conv.RatesOn(ctx, sameDay)
+	if err != nil {
+		t.Fatalf("RatesOn(two spellings of one day): %v", err)
+	}
+	if collapsed.Len() != 1 {
+		t.Fatalf("RatesOn(two spellings of one day) resolved %d entries, want 1", collapsed.Len())
+	}
+	for _, q := range sameDay {
+		res, lookupErr := collapsed.For(q.From, q.To, q.On)
+		if lookupErr != nil || res.Err != nil {
+			t.Fatalf("For(%v) = %+v, err=%v, want the shared entry", q.On, res, lookupErr)
+		}
+		if !res.Rate.Equal(dec("91.2")) || !res.RateDate.Equal(date("2026-07-03")) {
+			t.Fatalf("For(%v) = rate %s on %v, want 91.2 on 2026-07-03 — the collapsed entry must be right for both spellings",
+				q.On, res.Rate, res.RateDate)
+		}
+	}
+
+	// The monotonic reading is the same hazard from the other direction, and
+	// only time.Now() carries one. Same instant, same wall clock, same
+	// location; the two values differ solely in that reading, which is enough
+	// to make them different map keys and was enough to lose the lookup.
+	now := time.Now()
+	got, err = conv.RatesOn(ctx, []marketdata.RateQuery{{From: "USD", To: "RUB", On: now}})
+	if err != nil {
+		t.Fatalf("RatesOn(time.Now()): %v", err)
+	}
+	if _, lookupErr := got.For("USD", "RUB", now.Round(0)); lookupErr != nil {
+		t.Fatalf("For with the monotonic reading stripped: %v, want the same entry", lookupErr)
+	}
+}
+
+// TestRatesForRefusesATripleNobodyAsked closes the other half of finding (1):
+// a lookup the batch was never given must be a LOUD error, not a zero result.
+//
+// It is the caller-side counterpart of errNotPrefetched, and the distinction
+// matters for the same reason: "nobody worked this out" and "this pair has no
+// rate" are different statements, and only the second is safe to show the user
+// as a gap. A near miss is the realistic case — the right pair on the wrong
+// day, the pair reversed — which is why those are the cases here.
+func TestRatesForRefusesATripleNobodyAsked(t *testing.T) {
+	conv, store, _, ctx := newConverterFixtureWithPool(t)
+	seedRatesOnFixture(t, store, ctx)
+	on := date("2026-07-03")
+
+	got, err := conv.RatesOn(ctx, []marketdata.RateQuery{{From: "USD", To: "RUB", On: on}})
+	if err != nil {
+		t.Fatalf("RatesOn: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		from, to string
+		on       time.Time
+	}{
+		{"a pair nobody asked about", "EUR", "RUB", on},
+		{"the asked pair reversed", "RUB", "USD", on},
+		{"the asked pair on another day", "USD", "RUB", date("2026-07-01")},
+		{"the asked pair the day before", "USD", "RUB", date("2026-07-02")},
+	} {
+		res, lookupErr := got.For(tc.from, tc.to, tc.on)
+		if lookupErr == nil {
+			t.Fatalf("For(%s) returned %+v with no error — an unasked triple must never read as an answer", tc.name, res)
+		}
+		if !errors.Is(lookupErr, marketdata.ErrNotRequested) {
+			t.Fatalf("For(%s): err = %v, want ErrNotRequested", tc.name, lookupErr)
+		}
+		// ErrNoRate is what a caller renders as an honest gap; a bug must not
+		// borrow that costume.
+		if errors.Is(lookupErr, marketdata.ErrNoRate) {
+			t.Fatalf("For(%s): err = %v, want ErrNotRequested and NOT ErrNoRate — those mean different things to the user", tc.name, lookupErr)
+		}
 	}
 }
 
@@ -784,9 +993,9 @@ func TestDirectRowWinsOverTheInverseOfAReverseRow(t *testing.T) {
 		{forward, dec("90")},    // its own row, not 1/0.02 = 50
 		{backward, dec("0.02")}, // its own row, not 1/90
 	} {
-		res, ok := got[tc.query]
-		if !ok || res.Err != nil {
-			t.Fatalf("RatesOn[%s->%s] = %+v, ok=%v, want the stored direct rate", tc.query.From, tc.query.To, res, ok)
+		res, lookupErr := got.For(tc.query.From, tc.query.To, tc.query.On)
+		if lookupErr != nil || res.Err != nil {
+			t.Fatalf("RatesOn[%s->%s] = %+v, For err=%v, want the stored direct rate", tc.query.From, tc.query.To, res, lookupErr)
 		}
 		if !res.Rate.Equal(tc.wantRate) {
 			t.Fatalf("RatesOn[%s->%s].Rate = %s, want %s (the direct row, not the inverse of the reverse one)",

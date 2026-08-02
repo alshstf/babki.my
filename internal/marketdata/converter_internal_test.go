@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// TestPrefetchEnumeratesExactlyWhatResolutionConsults guards the one way the
-// batched path can silently lie. Prefetching is a promise that every row
+// TestPrefetchEnumeratesExactlyWhatTheAllAbsentWalkConsults guards the one way
+// the batched path can silently lie. Prefetching is a promise that every row
 // resolution will ask for is already in hand; if the promise is broken, the
 // missing row must not read as "this pair has no rate" — that is a real
 // answer here, shown to the user as an honest gap, and a bug wearing it would
@@ -20,9 +20,17 @@ import (
 // candidate is enumerated "just in case" while resolution ignores it, and
 // none is consulted without having been enumerated).
 //
+// "Exactly" is a claim about THIS walk only, which is why the name says so.
+// The all-absent walk is the one where enumeration and resolution consult the
+// identical set: prefetchedRows here finds nothing, so resolution takes every
+// branch, just as recordingRows did. Once real rows exist, a direct hit prunes
+// the branches below it and the prefetch is legitimately a superset of what
+// resolution ends up asking for — which is the safe direction, and the one
+// errNotPrefetched exists to keep it in.
+//
 // No database here on purpose: this is about the two in-memory halves
 // agreeing with each other, and nothing else.
-func TestPrefetchEnumeratesExactlyWhatResolutionConsults(t *testing.T) {
+func TestPrefetchEnumeratesExactlyWhatTheAllAbsentWalkConsults(t *testing.T) {
 	ctx := context.Background()
 	on := time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)
 
@@ -105,10 +113,18 @@ func TestIncompletePrefetchVoidsTheWholeCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveQueries over a complete prefetch: err = %v, want nil", err)
 	}
-	if res := got[queries[0]]; !errors.Is(res.Err, ErrNoRate) {
+	res, lookupErr := got.For(queries[0].From, queries[0].To, queries[0].On)
+	if lookupErr != nil {
+		t.Fatalf("USD->EUR: For returned %v, want the entry itself", lookupErr)
+	}
+	if !errors.Is(res.Err, ErrNoRate) {
 		t.Fatalf("USD->EUR with nothing prefetched for it: Err = %v, want ErrNoRate in the result", res.Err)
 	}
-	if res := got[queries[1]]; res.Err != nil {
+	res, lookupErr = got.For(queries[1].From, queries[1].To, queries[1].On)
+	if lookupErr != nil {
+		t.Fatalf("the identity query alongside it: For returned %v, want the entry itself", lookupErr)
+	}
+	if res.Err != nil {
 		t.Fatalf("the identity query alongside it: Err = %v, want nil — one unresolvable pair must not spoil its neighbours", res.Err)
 	}
 
@@ -117,7 +133,13 @@ func TestIncompletePrefetchVoidsTheWholeCall(t *testing.T) {
 	if err == nil || errors.Is(err, ErrNoRate) {
 		t.Fatalf("resolveQueries over an empty prefetch: err = %v, want a loud error that is not ErrNoRate", err)
 	}
-	if got != nil {
-		t.Fatalf("resolveQueries over an empty prefetch returned %+v, want a nil map", got)
+	// The voided batch is the zero Rates, and the zero Rates refuses to answer
+	// rather than handing back a zero-valued result: a caller that dropped err
+	// on the floor still cannot read a fabricated rate out of it.
+	if got.Len() != 0 {
+		t.Fatalf("resolveQueries over an empty prefetch returned %d entries, want none", got.Len())
+	}
+	if _, lookupErr := got.For(queries[0].From, queries[0].To, queries[0].On); !errors.Is(lookupErr, ErrNotRequested) {
+		t.Fatalf("For on the voided batch: err = %v, want ErrNotRequested", lookupErr)
 	}
 }

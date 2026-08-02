@@ -16,6 +16,17 @@ import (
 // rate, and no bridge through RUB.
 var ErrNoRate = errors.New("marketdata: no fx rate available")
 
+// ErrNotRequested is returned by Rates.For when the triple asked for was not
+// among the queries RatesOn was given.
+//
+// It is the caller-facing twin of errNotPrefetched: both say "nobody ever
+// worked this answer out", and both refuse to let that pass for "this pair has
+// no rate", which is an entirely different statement and one the user is shown
+// as an honest gap. A batch that answered an unasked triple with a zero-valued
+// result would put a confident 0,00 on the screen instead — the failure class
+// this codebase treats as worse than an error page.
+var ErrNotRequested = errors.New("marketdata: rate was not among the resolved queries")
+
 // rubCode is the hub currency for bridging. cbr (the only FxProvider today)
 // only ever publishes <currency>/RUB rates, so any two non-RUB currencies
 // are connected only via their shared RUB leg — see resolveRate.
@@ -152,8 +163,16 @@ func (c *Converter) Rate(ctx context.Context, from, to string, on time.Time) (ra
 // Rate goes through it a pair at a time against the store; RatesOn goes
 // through it twice per query against, in turn, the source that records what
 // resolution consults and the source that answers from the prefetch. Nothing
-// resolves a rate any other way, so there is exactly one statement of the
-// rules to keep right.
+// reaches for a direct row, an inverse or a RUB bridge any other way, so that
+// order has exactly one statement to keep right.
+//
+// The identity rule is the one exception, and a deliberate one: convert
+// short-circuits from == to before it ever calls rateVia, so an amount already
+// in the target currency is returned untouched rather than multiplied by a
+// decimal 1 and rounded (see convert's doc). That is a second statement of the
+// same rule, and the two are held together only by pinning both copies —
+// TestConvertSameCurrencyIsIdentity for convert's, TestRateIdentityIsOneWithZeroDate
+// for this one.
 //
 // from == to is rate 1 on a zero date, resolved without consulting anything:
 // an amount already in the target currency needs no rate, and inventing a
@@ -334,17 +353,84 @@ func (r *recordingRows) rateOn(_ context.Context, base, quote string, on time.Ti
 // RateQuery names one rate resolution for RatesOn: the same pair and date
 // Rate takes as arguments.
 //
-// It is also the key of the map RatesOn returns, so a caller indexes the
-// result with the very value it asked with. Build the date the same way for
-// every query (as the rest of this codebase does — one value per calendar
-// day): two time.Time values that print alike but differ in *time.Location or
-// monotonic reading are two different map keys, which costs a caller its
-// lookup, not its correctness.
+// Only the CALENDAR DAY of On matters. Two time.Time values naming the same
+// day are the same query however each was built — a different *time.Location,
+// a time of day, a monotonic reading picked up from time.Now() — because
+// Rates keys by the day itself (see rateLookupKey), and because the day is
+// also all the database is asked for: a `date` column carries no clock and no
+// zone.
 type RateQuery struct {
 	From string
 	To   string
 	On   time.Time
 }
+
+// rateLookupKey is what Rates indexes by: the pair, plus the query date
+// reduced to its YYYY-MM-DD calendar day instead of kept as a time.Time.
+//
+// A time.Time makes a treacherous map key. Two values that print alike and
+// answer true to Equal are still DIFFERENT keys when they differ in
+// *time.Location or in monotonic reading, so a caller that builds a query one
+// way and looks it up another — time.Now().UTC() evaluated twice, a date that
+// passed through .In() or .Truncate() on only one of the two paths — misses.
+// operation.rateKey (internal/operation/http.go) and portfolio.rateKey
+// (internal/portfolio/http.go) already hold their dates as YYYY-MM-DD strings
+// for exactly this hazard; there a miss costs a redundant query and nothing
+// else, here it would decide what number reaches the screen, so the same
+// normalization stops being an optimization and becomes the contract.
+type rateLookupKey struct {
+	from, to string
+	on       string // YYYY-MM-DD
+}
+
+// lookupKey is the ONLY place a query date becomes a key. The value stored on
+// the way in and the value searched for on the way out are therefore
+// normalized by one statement and cannot drift apart — the whole point of
+// keying by the day rather than by the time.Time.
+func (q RateQuery) lookupKey() rateLookupKey {
+	return rateLookupKey{from: q.From, to: q.To, on: q.On.Format("2006-01-02")}
+}
+
+// Rates holds everything RatesOn resolved, one entry per distinct query, and
+// is reached only through For.
+//
+// It is a value with an accessor rather than the plain map it used to be
+// because a map answers a miss with the zero RateResult: rate zero, date zero,
+// error nil. A caller writing rates[q].Rate without the comma-ok cannot tell
+// that apart from a pair that genuinely resolved to zero, and would render
+// every row of a page as 0,00 with no gap marker and no error — a fabricated
+// number under a confident caption, which is the worst failure this codebase
+// has (four times now, and every time the number was wrong while the caption
+// said it was fine). For makes the miss impossible to ignore.
+//
+// The zero Rates is not "empty but usable": it answers every For with
+// ErrNotRequested, which is the right treatment for a caller that ignored the
+// error RatesOn returned alongside it.
+type Rates struct {
+	byKey map[rateLookupKey]RateResult
+}
+
+// For returns what RatesOn resolved for this triple.
+//
+// The returned error is not the resolution's — it says the triple was never
+// among the queries (ErrNotRequested), which is a bug in the calling code. A
+// pair that simply HAS no rate comes back as a RateResult carrying ErrNoRate
+// in Err with err nil: an ordinary outcome, shown to the user as a gap. That
+// is the same line errNotPrefetched draws inside RatesOn, drawn again at the
+// boundary the caller stands on.
+func (r Rates) For(from, to string, on time.Time) (RateResult, error) {
+	q := RateQuery{From: from, To: to, On: on}
+	res, ok := r.byKey[q.lookupKey()]
+	if !ok {
+		return RateResult{}, fmt.Errorf("%w: %s -> %s on %s", ErrNotRequested, from, to, on.Format("2006-01-02"))
+	}
+	return res, nil
+}
+
+// Len is how many distinct queries were resolved — distinct after the calendar
+// day normalization, so an exact duplicate and two spellings of one day each
+// count once.
+func (r Rates) Len() int { return len(r.byKey) }
 
 // RateResult is what Rate would have returned for one RateQuery: the rate,
 // the date of the fx_rates row(s) behind it, and the resolution error.
@@ -371,15 +457,18 @@ type RateResult struct {
 //
 // A pair nothing connects fails on its own line, as that query's ErrNoRate:
 // one exotic ticker must not blank out a page. err is reserved for failures
-// that make the whole map untrustworthy — a DB error, a canceled context —
-// and when it is non-nil the map is nil and must be ignored, as ConvertMany's
-// total is.
+// that make the whole batch untrustworthy — a DB error, a canceled context —
+// and when it is non-nil the returned Rates is the zero value and must be
+// ignored, as ConvertMany's total is. (Ignoring it is not silently
+// survivable: the zero Rates answers every For with ErrNotRequested.)
 //
 // Queries may repeat: duplicates collapse onto one entry, and no row is
-// fetched twice however many queries need it. from == to short-circuits as it
-// does in Rate — rate 1, zero date, no lookup — so a call holding nothing but
-// identity queries never reaches the store at all.
-func (c *Converter) RatesOn(ctx context.Context, queries []RateQuery) (map[RateQuery]RateResult, error) {
+// fetched twice however many queries need it. Two queries naming one calendar
+// day by differently built time.Time values are duplicates too — see
+// rateLookupKey. from == to short-circuits as it does in Rate — rate 1, zero
+// date, no lookup — so a call holding nothing but identity queries never
+// reaches the store at all.
+func (c *Converter) RatesOn(ctx context.Context, queries []RateQuery) (Rates, error) {
 	// First pass: let the rules say for themselves which rows they will want.
 	// Every resolution here ends in ErrNoRate by construction — recordingRows
 	// finds nothing, ever — and the errors are discarded because the pass is
@@ -391,7 +480,7 @@ func (c *Converter) RatesOn(ctx context.Context, queries []RateQuery) (map[RateQ
 
 	rows, err := c.store.FxRatesOn(ctx, candidates.keys)
 	if err != nil {
-		return nil, err
+		return Rates{}, err
 	}
 
 	// Second pass: the same rules, now answered from what the first pass
@@ -401,23 +490,23 @@ func (c *Converter) RatesOn(ctx context.Context, queries []RateQuery) (map[RateQ
 
 // resolveQueries answers every query from rows, sorting the two kinds of
 // failure: ErrNoRate rides along in the query's own result, anything else
-// fails the call and voids the map.
+// fails the call and voids the whole batch.
 //
 // Over a prefetched source, "anything else" can only be errNotPrefetched —
 // the two passes of RatesOn disagreeing about what resolution consults. That
 // is a bug in this file, and the one outcome it must not have is to pass for
 // a missing rate on one row of a page that otherwise looks perfectly fine.
-func resolveQueries(ctx context.Context, rows fxRateRows, queries []RateQuery) (map[RateQuery]RateResult, error) {
-	out := make(map[RateQuery]RateResult, len(queries))
+func resolveQueries(ctx context.Context, rows fxRateRows, queries []RateQuery) (Rates, error) {
+	out := Rates{byKey: make(map[rateLookupKey]RateResult, len(queries))}
 	for _, q := range queries {
 		rate, rateDate, err := rateVia(ctx, rows, q.From, q.To, q.On)
 		switch {
 		case err == nil:
-			out[q] = RateResult{Rate: rate, RateDate: rateDate}
+			out.byKey[q.lookupKey()] = RateResult{Rate: rate, RateDate: rateDate}
 		case errors.Is(err, ErrNoRate):
-			out[q] = RateResult{Err: err}
+			out.byKey[q.lookupKey()] = RateResult{Err: err}
 		default:
-			return nil, err
+			return Rates{}, err
 		}
 	}
 	return out, nil
