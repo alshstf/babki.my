@@ -907,14 +907,18 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // position becomes expressible in RUB, and withholding it turns into a real
 // choice that would have to be argued for here instead of merely explained.
 //
-// Two rows slip through the argument as it stands, and the written-out rule
-// covers them too. A position holding no lot and having received no income sums
-// nothing, needs no rate to do it, and so survives a missing P->RUB — but it
-// holds nothing either, and the valuation the rule withholds from it is the
-// zero of a closed row. And nothing rejects an operation dated in the future, so
-// a lot dated past every fx row could be valued off a row dated after today,
-// which is the one way a missing P->RUB for TODAY stops meaning that cost_minor
-// was unstrikable.
+// The step "P->RUB missing has already nulled this object" holds only because
+// no lot can be dated later than today: Service rejects an operation dated in
+// the future (see its occurred_on check), and Store.FxRateOn resolves the
+// nearest EARLIER row, so a table that answers any lot's date answers today's
+// too. Contrapositive: no answer today means no answer on any lot date either,
+// and cost_minor was unstrikable before this branch was reached.
+//
+// ONE row still slips through, and the written-out rule covers it. A position
+// holding no lot and having received no income sums nothing, needs no rate to do
+// it, and so survives a missing P->RUB — for it, F->RUB may well exist and the
+// base-currency valuation is genuinely computable. What the rule withholds there
+// is the zero of a closed row.
 //
 // Asymmetry between this object and the position's own figures is ordinary, not
 // something this rule prevents: realized_pnl_minor goes null here while
