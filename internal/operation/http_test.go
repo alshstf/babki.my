@@ -142,6 +142,11 @@ type opResp struct {
 	Quantity    *string `json:"quantity"`
 	Price       *string `json:"price"`
 	AmountMinor int64   `json:"amount_minor"`
+	// HasUndatedLots is published on every operation, this response included
+	// (see the API contract) — the two legs of one transfer must answer it
+	// identically, which is what TestTransferPairAnswersUndatedTheSameOnBothLegs
+	// reads it here for.
+	HasUndatedLots bool `json:"has_undated_lots"`
 }
 
 type transferResp struct {

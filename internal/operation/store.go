@@ -115,6 +115,10 @@ const insertLotSQL = `
 // destination's whole ruble basis with it — dates that were resolvable at
 // write time and are not resolvable ever again.
 //
+// Both returned legs carry that breakdown, though only one of them stores it,
+// for the reason attachTransferLots gives at every later read: the pieces
+// describe one parcel and the departing leg is that same parcel leaving.
+//
 // Everything it returns has been read back out of the database, never handed
 // through from the arguments — both operations come from the INSERT's
 // RETURNING, and so now do the pieces. That is not ceremony: quantities are
@@ -156,6 +160,16 @@ func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Opera
 			stored = append(stored, back)
 		}
 		cIn.TransferLots = stored
+		// The departing leg gets them too. The rows are stored next to the
+		// arriving leg only, but they describe THE PARCEL, and the pair is one
+		// parcel with the opposite sign — which is exactly what
+		// attachTransferLots decided for every later read (see its doc). Handing
+		// back an out leg with an empty breakdown made the pair contradict itself
+		// within a single response: whether a transfer knows when its shares were
+		// bought is published per operation (Operation.has_undated_lots, see the
+		// API contract), and the departing leg would have answered "no" about a
+		// parcel whose dates are sitting in the same transaction.
+		cOut.TransferLots = stored
 		if err := portfolio.CheckTransferLots(cIn); err != nil {
 			// The rows are already in this transaction, so refusing here rolls
 			// them back. Reaching this means the write path built a breakdown

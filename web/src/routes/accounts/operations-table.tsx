@@ -97,7 +97,19 @@ export function OperationsTable({
   // are historical like these, but describe their own dates (each lot's
   // purchase, each payout), so they carry their own wording rather than
   // sharing the journal's.
+  //
+  // Two different conditions leave a row unconverted, exactly as on the
+  // positions screen, and they are not the same news. A missing fx rate is a
+  // gap the instance's own backfill closes — the ruble figure appears later.
+  // A transfer whose purchase dates were never recorded (has_undated_lots,
+  // see the API contract) never converts, and here "нет курса на дату
+  // операции" is not merely unhelpful but false: the transfer's own date
+  // usually has a rate, it is just not a rate that may value a basis assembled
+  // on other days. Naming it would blame a cause that is not the cause and
+  // promise a number that will never come. Both are per-row, hence resolved
+  // inside the map below.
   const notConvertedTitle = t("operations.notConverted");
+  const undatedLotsTitle = t("operations.notConvertedUndatedLots");
 
   const instrumentName = (instrumentId: string | null | undefined) => {
     if (!instrumentId) return "—";
@@ -198,6 +210,9 @@ export function OperationsTable({
               : operation.in_base?.rate_on === operation.occurred_on
                 ? (date: string) => t("operations.convertedAtDate", { date })
                 : (date: string) => t("operations.convertedAtEarlierDate", { date });
+            const unconvertedTitle = operation.has_undated_lots
+              ? undatedLotsTitle
+              : notConvertedTitle;
             return (
               <TableRow key={operation.id}>
                 <TableCell className="whitespace-nowrap">{formatDate(operation.occurred_on)}</TableCell>
@@ -214,7 +229,7 @@ export function OperationsTable({
                   <MoneyCell
                     resolved={resolvedAmount}
                     className={signClass(resolvedAmount.amountMinor)}
-                    notConvertedTitle={notConvertedTitle}
+                    notConvertedTitle={unconvertedTitle}
                     convertedTitle={convertedTitle}
                     testId="operation-amount"
                   />
@@ -225,7 +240,7 @@ export function OperationsTable({
                   {operation.fee_minor > 0 ? (
                     <MoneyCell
                       resolved={resolvedFee}
-                      notConvertedTitle={notConvertedTitle}
+                      notConvertedTitle={unconvertedTitle}
                       convertedTitle={convertedTitle}
                       testId="operation-fee"
                     />

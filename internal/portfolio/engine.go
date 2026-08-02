@@ -292,17 +292,22 @@ func (p *Position) applySplit(ratio decimal.Decimal) {
 // acquiredBefore reports whether a lot acquired on a must leave the queue
 // ahead of one acquired on b, for two dates that are not equal.
 //
-// An UNKNOWN acquisition comes before every known one. That is not a
-// convenience: it is the rule 26 CFR 1.6045A-1(b)(10) settles for exactly this
-// case — transferred securities that arrived without their acquisition dates
-// are treated as disposed of first, ahead of every dated lot. It is also the
-// only placement that does not require inventing a date. Anywhere else in the
-// queue is defined by comparing the unknown against real days, which means
-// quietly choosing a day for it — the very thing Lot.AcquiredOn exists to
-// refuse. And it has a practical edge: sales drain the undated lots out of an
-// account first, after which the position can be valued in another currency
-// again (Handler.positionInBase publishes nothing while a single lot is
-// undated).
+// An UNKNOWN acquisition comes before every known one. The reason is this
+// package's own and needs no outside support: the head of the queue is the ONLY
+// placement that does not require inventing a date. Anywhere else is defined by
+// comparing the unknown against real days, which means quietly choosing a day
+// for it — the very thing Lot.AcquiredOn exists to refuse. It also has a
+// practical edge: sales drain the undated lots out of an account first, after
+// which the position can be valued in another currency again
+// (Handler.positionInBase publishes nothing while a single lot is undated).
+//
+// US practice points the same way BY ANALOGY, and only by analogy: 26 CFR
+// 1.6045A-1(b)(10) has a transferring broker report securities of unknown
+// acquisition date as the earliest acquired ones. That is a rule about what a
+// broker must REPORT when part of a position moves, not about which shares
+// count as sold — the default lot-relief rule (1.1012-1(c)(1)(i)) has no
+// "unknown date" tier at all. So it corroborates the ordering and does not
+// license it; the argument above is the one that carries this function.
 //
 // Dates are calendar days at UTC midnight — occurred_on and acquired_on are
 // both DATE columns — so comparing instants compares days, as CheckTransferLots

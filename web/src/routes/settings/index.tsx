@@ -84,6 +84,18 @@ export function SettingsPage() {
     countryName(a.country).localeCompare(countryName(b.country), "ru"),
   );
 
+  // A country stored outside this form — a hand-edited row, or one the server's
+  // table dropped since — has no option to match. Radix fills its trigger by
+  // portaling the SELECTED ITEM's own text into it, and falls back to the
+  // placeholder only for an empty value, so such a country renders an empty
+  // box: the screen says nothing at all about the one setting it is here to
+  // show, directly above a notice that explains that very country's
+  // consequences. Naming it, and saying plainly that its rules are not known,
+  // is the same answer the server already gives (MethodUnknown /
+  // PerimeterUnknown / unknown_country) — the selector must not be the one
+  // place that stays quiet about it.
+  const selectedIsOffered = countries.some((rules) => rules.country === country);
+
   return (
     <div className="grid gap-6">
       <h1 className="text-2xl font-bold">{t("settings.title")}</h1>
@@ -140,7 +152,14 @@ export function SettingsPage() {
                 }}
               >
                 <SelectTrigger id="tax-residency">
-                  <SelectValue placeholder={t("app.loading")} />
+                  {/* Children override what Radix renders, so they are passed
+                      ONLY for the unmatched country — `undefined` otherwise
+                      leaves the ordinary selected-item text in place. */}
+                  <SelectValue placeholder={t("app.loading")}>
+                    {countries.length > 0 && !selectedIsOffered
+                      ? t("settings.unknownCountry", { country: countryName(country) })
+                      : undefined}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {countries.map((rules) => (

@@ -244,9 +244,42 @@ describe("SettingsPage", () => {
       // Both of Britain's divergences, from the list the server sent with
       // that country — no save round trip needed to learn them.
       const notice = screen.getByTestId("cost-basis-notice");
-      expect(within(notice).getByText(/списываются не самые ранние покупки/)).toBeInTheDocument();
+      expect(within(notice).getByText(/не самая ранняя покупка/)).toBeInTheDocument();
       expect(within(notice).getByText(/сразу по всем счетам владельца/)).toBeInTheDocument();
       expect(within(notice).queryByText(/соответствует правилам этой страны/)).toBeNull();
+    });
+
+    it("names a stored country the list does not offer instead of rendering nothing", async () => {
+      // Reachable only by editing the row outside this form (or by a country
+      // later dropped from the server's table), which is exactly the case
+      // MethodUnknown/PerimeterUnknown exist for: the server reports "no rules
+      // for this one" rather than guessing, and the notice below the selector
+      // says so. The selector itself has no option to match: Radix portals the
+      // SELECTED ITEM's text into the trigger, and shows its placeholder only
+      // for an empty value, so a stored country with no option renders an
+      // empty box — the screen goes silent about the one setting it exists to
+      // show, right above a notice explaining that very country.
+      const unknownRules: CostBasisRules = {
+        country: "FR",
+        method: "unknown",
+        perimeter: "unknown",
+        supported: false,
+        notices: ["unknown_country"],
+      };
+      const stored = makeSession({ tax_residency: "FR", cost_basis_rules: unknownRules });
+      serve({
+        "/api/v1/auth/me": { body: stored },
+        "/api/v1/tax-residencies": { body: [RU_RULES, GB_RULES, DE_RULES] },
+      });
+      wrap(<SettingsPage />, stored);
+
+      await waitFor(() => expect(countrySelect()).toBeEnabled());
+      expect(countrySelect().textContent).toContain("Франция");
+      expect(countrySelect().textContent).not.toContain("Загрузка");
+      // The notice was already right about this case and must stay right.
+      expect(
+        within(screen.getByTestId("cost-basis-notice")).getByText(/Правил этой страны/),
+      ).toBeInTheDocument();
     });
 
     it("saves the country alone and refreshes what its statement travels with", async () => {

@@ -83,11 +83,27 @@ const (
 type CostBasisNotice string
 
 const (
-	// NoticeMethodMismatch: the country matches disposals by another method, so
-	// the figures are not a cost basis under its rules.
+	// NoticeMethodMismatch: the country decides WHICH parcels a disposal
+	// consumed by some rule other than the earliest-first one computed here, so
+	// the figures may not be a cost basis under its rules.
+	//
+	// "May", not "are", and the interface's Russian says it that way for a
+	// reason: one code covers two different disagreements. GB and CA pool
+	// instead of queueing, so the earliest purchase is never what a disposal
+	// consumes there. AU lets the taxpayer nominate the parcel — and where no
+	// election was made, the same ATO ruling accepts FIFO, which is exactly
+	// what this application computes (see the AU row). A sentence asserting
+	// outright that the earliest purchases are NOT the ones released would be a
+	// claim about Australian law that is false in that case. A code-to-sentence
+	// mapping has one sentence per code, so the sentence must be true of every
+	// row carrying the code; which country's rule it actually is is named
+	// separately, in the notice's tooltip (costBasis.countryRule in ru.json).
 	NoticeMethodMismatch CostBasisNotice = "method_mismatch"
-	// NoticePerimeterMismatch: the queue must span more than the one account
-	// the engine folds.
+	// NoticePerimeterMismatch: the country's computation spans more than the one
+	// account the engine folds. Deliberately not "the QUEUE must span more":
+	// only PerimeterOwner rows carry this, and both of them (GB, CA) pool rather
+	// than queue, so there is no queue there to widen. The Russian wording keeps
+	// the same neutrality, for the same reason NoticeMethodMismatch's does.
 	NoticePerimeterMismatch CostBasisNotice = "perimeter_mismatch"
 	// NoticeNotTaxed: the country does not tax an individual's capital gain, so
 	// the figures are informational rather than fiscal.
@@ -186,12 +202,16 @@ var taxRules = map[string]TaxRules{
 	// permitted, and averaging permitted for regulated investment company
 	// shares. The row records the DEFAULT, which is what an application that
 	// does not ask the owner to nominate parcels actually computes. Perimeter:
-	// the IRS declined in 2010 to write "per account" into the regulation
-	// itself, but subsequent IRS guidance on that same regulation's adequate-
-	// identification and average-basis procedures describes lot-relief methods
-	// — FIFO included — as applied on a per-account basis, so this is not resting
-	// on broker convention alone; brokers computing and reporting per account
-	// is also what a US resident's statements will agree with.
+	// 26 USC 1012(c)(1) — the statute above the regulation — requires the
+	// conventions prescribed under this section to be applied "on an account by
+	// account basis" for specified securities, which is where this row's
+	// perimeter comes from. The regulation's own text does not repeat those
+	// words (the IRS declined in 2010 to write them in, and the per-account
+	// language inside the regulation is about average-basis elections rather
+	// than lot relief generally), so the statute is the citation that carries
+	// this row and nothing else is claimed. Broker basis reporting on Form
+	// 1099-B is compiled per account for the same reason, which is why a US
+	// resident's statements will agree with the figures here.
 	"US": {Country: "US", Method: MethodFIFO, Perimeter: PerimeterAccount, CapitalGainsTaxed: true},
 
 	// United Kingdom. TCGA 1992 s.104 pools identical securities into a single
@@ -221,7 +241,9 @@ var taxRules = map[string]TaxRules{
 	// to fifo/account on the strength of the second half of the ruling alone.
 	// There is no queue to scope either way — the perimeter is not "unknown", it
 	// does not exist: a choice (or a fallback to FIFO) has no ordering to be
-	// bounded by.
+	// bounded by. The sentence the owner actually reads for method_mismatch is
+	// conditional precisely so this stays an over-warning instead of becoming a
+	// false statement about Australian law — see NoticeMethodMismatch.
 	"AU": {Country: "AU", Method: MethodSpecificLot, Perimeter: PerimeterNotApplicable, CapitalGainsTaxed: true},
 
 	// Netherlands. An individual's capital gain on securities is not taxed as
@@ -272,10 +294,13 @@ func TaxResidencies() []TaxRules {
 
 // taxResidencyCodes is the same list as country codes only, for naming the
 // countries this application KNOWS THE RULES OF in a validation error the
-// owner will read. That is deliberately not "can answer for": five of these
-// nine rows carry a mismatch notice, so knowing a country's rules and this
+// owner will read. That is deliberately not "can answer for": RU, DE and US are
+// the whole of what this application computes correctly, and the other six of
+// these nine rows carry a notice — so knowing a country's rules and this
 // application's figures actually being that country's cost basis are two
-// different claims, and the error must not conflate them.
+// different claims, and the error must not conflate them. (Naming the three
+// rather than only counting the six is on purpose: the count drifted once
+// already, when KZ was added and this sentence was not.)
 func taxResidencyCodes() []string {
 	out := make([]string, 0, len(taxRules))
 	for code := range taxRules {

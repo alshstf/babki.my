@@ -223,7 +223,7 @@ describe("AccountDetailPage", () => {
     // Both divergences are named, not just the first: Britain differs in the
     // method AND in the perimeter, and reporting one hides the other.
     expect(
-      await screen.findByText(/списываются не самые ранние покупки/),
+      await screen.findByText(/не самая ранняя покупка/),
     ).toBeInTheDocument();
     expect(screen.getByText(/сразу по всем счетам владельца/)).toBeInTheDocument();
     // The country is named, so "в этой стране" has a referent on a screen

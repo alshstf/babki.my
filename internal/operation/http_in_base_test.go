@@ -40,6 +40,10 @@ type journalItem struct {
 	FeeMinor    int64            `json:"fee_minor"`
 	Currency    string           `json:"currency"`
 	InBase      *operationInBase `json:"in_base"`
+	// HasUndatedLots says WHY in_base is null when it is: a rate nobody has
+	// fetched yet, or a purchase date nobody ever wrote down. The two must not
+	// be explained to a reader with the same sentence (see the API contract).
+	HasUndatedLots bool `json:"has_undated_lots"`
 }
 
 // listJournal fetches GET .../operations and decodes it, failing the test on

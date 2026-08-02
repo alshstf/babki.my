@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -91,18 +92,47 @@ func writeError(w http.ResponseWriter, err error) {
 	family.WriteError(w, err)
 }
 
+// hasUndatedLots reports whether this operation's amount is a cost basis whose
+// purchase dates are not all known — the exact condition amountTerms refuses to
+// answer for (see its doc comment), stated as a fact ABOUT the operation rather
+// than left to be inferred from in_base coming back null.
+//
+// It is the journal's twin of portfolio.hasUndatedLots, and it is here for the
+// same reason: null has two causes and they are not the same news. A missing fx
+// rate is a gap the backfill job closes on its own; an unrecorded purchase date
+// never resolves. On a journal row the difference is sharper than on a position
+// — a transfer's own date usually HAS a rate — so a screen that says "no rate
+// for the operation's date" over this case names a cause that is not the cause
+// and promises a number that will never come.
+//
+// Only a transfer can be in this state. Every other operation's amount is money
+// that moved on the day the row is dated, which is a date it always has.
+func hasUndatedLots(o Operation) bool {
+	if o.Type != TypeTransferIn && o.Type != TypeTransferOut {
+		return false
+	}
+	// No breakdown at all is the smallest instance of the case below, not a
+	// separate one: a basis given by hand, or one recorded before breakdowns
+	// were kept, has every piece dateless (see amountTerms).
+	if len(o.TransferLots) == 0 {
+		return true
+	}
+	return slices.ContainsFunc(o.TransferLots, func(l ReleasedLot) bool { return l.AcquiredOn == nil })
+}
+
 func toAPI(o Operation) apitypes.Operation {
 	out := apitypes.Operation{
-		Id:          o.ID,
-		AccountId:   o.AccountID,
-		Type:        apitypes.OperationType(o.Type),
-		OccurredOn:  o.OccurredOn.Format("2006-01-02"),
-		AmountMinor: o.AmountMinor,
-		Currency:    o.Currency,
-		FeeMinor:    o.FeeMinor,
-		Note:        o.Note,
-		Source:      o.Source,
-		CreatedAt:   o.CreatedAt,
+		Id:             o.ID,
+		AccountId:      o.AccountID,
+		Type:           apitypes.OperationType(o.Type),
+		OccurredOn:     o.OccurredOn.Format("2006-01-02"),
+		AmountMinor:    o.AmountMinor,
+		Currency:       o.Currency,
+		FeeMinor:       o.FeeMinor,
+		Note:           o.Note,
+		Source:         o.Source,
+		CreatedAt:      o.CreatedAt,
+		HasUndatedLots: hasUndatedLots(o),
 	}
 	if o.InstrumentID != nil {
 		out.InstrumentId = nullable.NewNullableWithValue(*o.InstrumentID)
