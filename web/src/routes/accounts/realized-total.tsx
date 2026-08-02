@@ -4,6 +4,18 @@ import { cn } from "@/lib/utils";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
 import type { RealizedGap, RealizedTotal as RealizedTotalPayload } from "@/api/positions";
 
+// assertUnreachable is gapWording's runtime backstop for a RealizedGap value
+// this build cannot name. TypeScript proves the switch below exhaustive over
+// the union it knows about — a NEW member added to the contract's enum
+// without a case here fails to compile, because `gap` at the default branch
+// would no longer narrow to `never`. But `gap` is JSON off the wire, typed by
+// assertion rather than validated, so a client running slightly behind the
+// server it talks to can still receive a literal outside the union it was
+// built with; that must degrade at runtime, not throw or fabricate a label.
+function assertUnreachable(_: never): undefined {
+  return undefined;
+}
+
 // The wording for a gap: what is shown instead of the sum, and the tooltip that
 // says why no partial sum is shown in its place. The gap itself arrives named
 // from the server (RealizedTotal.in_base_gap) — this screen never works it out
@@ -13,10 +25,16 @@ import type { RealizedGap, RealizedTotal as RealizedTotalPayload } from "@/api/p
 // Written as a switch over literal keys rather than a lookup table, so every
 // key stays a literal at the t() call site — that is the only shape
 // scripts/check-i18n.mjs can verify.
+//
+// Returns undefined for a gap value outside the three named above (see
+// assertUnreachable) — the caller must then show nothing rather than the
+// label over an empty amount, which is what happens if the label's row
+// renders as soon as ANY gap is non-null without checking that wording for
+// it actually exists.
 function gapWording(
   t: (key: string) => string,
   gap: RealizedGap,
-): { text: string; hint: string } {
+): { text: string; hint: string } | undefined {
   switch (gap) {
     case "undated":
       return {
@@ -33,6 +51,8 @@ function gapWording(
         text: t("positions.realizedGapBoth"),
         hint: t("positions.realizedGapBothHint"),
       };
+    default:
+      return assertUnreachable(gap);
   }
 }
 
@@ -83,12 +103,15 @@ export function RealizedTotal({
           currency: entry.currency,
           amountMinor: entry.realized_pnl_minor,
         }));
-  // Neither a figure nor a named reason: nothing this screen could say would
-  // be true, and a reason invented here is exactly what the named gap exists
-  // to prevent.
-  if (!gap && figures.length === 0) return null;
 
-  const wording = gap ? gapWording(t, gap) : null;
+  const wording = gap ? gapWording(t, gap) : undefined;
+  // Neither a figure nor a wording for the gap that stopped it: nothing this
+  // screen could say would be true. Checked against wording rather than gap
+  // itself — a gap can be non-null yet unnameable (see assertUnreachable),
+  // and a reason invented here is exactly what the named gap exists to
+  // prevent, so that case must fall through to the same blank as no gap at
+  // all rather than render the label over an empty amount.
+  if (!wording && figures.length === 0) return null;
   return (
     <div className="mt-2 flex flex-wrap items-baseline gap-x-2 text-sm" data-testid="realized-total">
       <span

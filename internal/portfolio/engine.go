@@ -302,6 +302,37 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) ([]ReleasedLot, error) {
 	for remaining.IsPositive() {
 		l := &p.Lots[0]
 		if l.Quantity.LessThanOrEqual(remaining) {
+			// A lot that is entirely consumed here produces a piece EVEN WHEN
+			// its CostMinor is 0 — unlike drainLotsCost, which skips a lot
+			// that gives up nothing (see drainLotsCost). The two look like
+			// they should agree, and they deliberately do not.
+			//
+			// drainLotsCost's pieces never carry a quantity — an amortization
+			// moves no shares, see its own doc — so a zero-cost piece there is
+			// empty on both axes and skipping it discards nothing. A piece
+			// here always carries the REAL quantity taken from the lot,
+			// because these pieces are not only a sale's own record
+			// (Realization.Released) but, via ReleasedLots, the very rows a
+			// transfer stores as its FIFO breakdown (Operation.TransferLots) —
+			// and CheckTransferLots later reconstructs the operation's
+			// quantity by summing exactly those rows. Dropping a whole
+			// zero-cost lot's piece would leave its quantity unaccounted for,
+			// and a transfer moving nothing but such a lot would then read as
+			// journal corruption ("transfer lots sum to quantity 0, but the
+			// operation moves N") for a perfectly legitimate, zero-basis
+			// parcel — confirmed by temporarily mirroring the guard here and
+			// watching CheckTransferLots reject exactly that transfer.
+			//
+			// The cost of keeping it: a sale (or transfer) that empties an
+			// undated zero-cost lot puts an undated, zero-cost piece into
+			// Realization.Released, and realizedTerms (see http.go) will then
+			// decline to strike a ruble figure for the whole disposal — even
+			// though a zero-cost term needs no fx rate to be valued at all.
+			// That reads as a silence the number did not have to pay, but the
+			// piece is not a lie the way an empty drainLotsCost piece would
+			// have been: real shares, from a real lot, really left, and the
+			// lot really has no date. Suppressing it here to avoid that
+			// silence would trade an honest gap for a corrupted transfer.
 			pieces = append(pieces, ReleasedLot{Quantity: l.Quantity, CostMinor: l.CostMinor, AcquiredOn: l.AcquiredOn})
 			released += l.CostMinor
 			remaining = remaining.Sub(l.Quantity)

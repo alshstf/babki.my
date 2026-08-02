@@ -160,4 +160,19 @@ describe("RealizedTotal", () => {
 
     expect(screen.queryByTestId("realized-total")).not.toBeInTheDocument();
   });
+
+  it("renders nothing, not the label over an empty amount, when the wire names a gap kind this build cannot word", () => {
+    // A client can run slightly behind the server it talks to: RealizedGap
+    // grows a member the bundle in the browser was built before. That value
+    // is still valid JSON and still passes through the type assertion at the
+    // API boundary unchanged — TypeScript's exhaustiveness check on
+    // gapWording's switch cannot see it, because it never saw the string at
+    // compile time. The cast below stands in for exactly that value.
+    const unknownGap = "future_gap_kind" as unknown as RealizedTotalPayload["in_base_gap"];
+    render(<RealizedTotal total={makeTotal({ in_base: null, in_base_gap: unknownGap })} mode="base" />);
+
+    expect(screen.queryByTestId("realized-total")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("realized-total-gap")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("realized-total-amounts")).not.toBeInTheDocument();
+  });
 });

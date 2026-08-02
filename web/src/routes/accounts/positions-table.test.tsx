@@ -48,8 +48,9 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     // its own date. Tests about the other case set it explicitly.
     has_undated_lots: false,
     // Same default for the realized-side twin: no test in this file exercises
-    // it yet (the interface doesn't read it — see the API contract's note
-    // that showing it is a later task), so it stays at its honest default.
+    // it yet, because PositionsTable does not read it — nothing in this
+    // component surfaces a per-position realized-undated indicator, so the
+    // field stays at its honest default rather than an untested guess.
     has_undated_realizations: false,
     ...overrides,
   };

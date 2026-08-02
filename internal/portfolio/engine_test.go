@@ -765,6 +765,61 @@ func TestAmortizationDrainsTheOlderTransferredLotFirst(t *testing.T) {
 	}
 }
 
+// TestAmortizationSkipsAnEmptyUndatedLot pins the safeguard in drainLotsCost
+// that treats a lot with nothing left to give (CostMinor == 0) as producing NO
+// piece at all — see drainLotsCost's own doc for why an empty piece would
+// misreport a lot as having taken part in an event it took no part in.
+//
+// The safeguard is not cosmetic. A zero-basis parcel that arrived by transfer
+// with no breakdown is undated (see TestUndatedLotLeavesTheQueueFirst) AND
+// sits at the very head of the queue, ahead of every dated lot. Without the
+// guard, an amortization that has to walk past such a lot to reach real cost
+// would emit an empty piece carrying that lot's own (missing) acquisition
+// date — and realizedTerms (see http.go) bails out the instant ANY released
+// piece has no date, even though an expense of exactly zero needs no fx rate
+// to be valued at all. The position's ruble realized figure, and the account
+// total riding on it, would go silently and permanently null — not because
+// anything is actually unknown, but because an empty piece pretended to be
+// one.
+func TestAmortizationSkipsAnEmptyUndatedLot(t *testing.T) {
+	ops := []portfolio.Operation{
+		// Zero-basis parcel, no breakdown: undated, gives up nothing, and
+		// stands ahead of the dated purchase below.
+		op(portfolio.TypeTransferIn, 1, &sber, "5", "", 0, 0),
+		// A real, dated purchase.
+		op(portfolio.TypeBuy, 20, &sber, "10", "300", -300_000, 0),
+		// Amortization that has to walk past the empty lot to find real cost.
+		op(portfolio.TypeAmortization, 30, &sber, "", "", 40_000, 0),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	if len(p.Realizations) != 1 {
+		t.Fatalf("realizations = %d, want 1", len(p.Realizations))
+	}
+	released := p.Realizations[0].Released
+	if len(released) != 1 {
+		t.Fatalf("released pieces = %+v, want exactly 1 — the empty undated lot must not appear in the amortization's breakdown", released)
+	}
+	r := released[0]
+	if r.AcquiredOn == nil {
+		t.Fatalf("released piece has no acquisition date — the empty undated lot leaked into the breakdown, which is exactly what silences the ruble realized figure (see realizedTerms in http.go)")
+	}
+	if !sameAcquisition(r.AcquiredOn, dayp(20)) || r.CostMinor != 40_000 {
+		t.Errorf("released piece = {cost %d on %s}, want {cost 40000 on %s}",
+			r.CostMinor, acquired(r.AcquiredOn), day(20).Format("2006-01-02"))
+	}
+	if len(p.Lots) != 2 {
+		t.Fatalf("lots = %+v, want 2", p.Lots)
+	}
+	if p.Lots[0].CostMinor != 0 || p.Lots[0].AcquiredOn != nil {
+		t.Errorf("undated lot = %+v, want untouched at {cost 0, no date}", p.Lots[0])
+	}
+	checkLotInvariants(t, p)
+}
+
 // TestUndatedLotLeavesTheQueueFirst pins the second half of the ordering rule:
 // a lot that does not know when it was acquired goes out BEFORE every dated
 // one, however old the dated ones are.
