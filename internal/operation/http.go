@@ -193,17 +193,19 @@ func toAPI(o Operation) apitypes.Operation {
 	return out
 }
 
-// rateKey identifies one memoized fx rate lookup. Unlike account's cache —
-// which converts everything at today's rate and can therefore key by
-// currency alone — the journal resolves a rate per operation DATE, so the
-// date has to be part of the key. A single page of the journal routinely
-// holds the same currency on a dozen different dates with a dozen different
-// rates; keying by currency alone would silently reuse the first operation's
-// rate for all of them, producing wrong numbers that look entirely plausible
-// on screen. portfolio's cache (portfolio.rateKey) is keyed the same way and
-// for the same reason: its per-lot and per-income-operation conversions are,
-// like the journal's, valued at each item's own date rather than one rate
-// for everything — only account still converts everything at today's rate.
+// rateKey identifies one memoized fx rate lookup: the currency being
+// converted, the currency it is converted INTO, and the date its rate must
+// come from. Unlike account's cache — which converts everything at today's
+// rate and can therefore key by currency alone — the journal resolves a rate
+// per operation DATE, so the date has to be part of the key. A single page of
+// the journal routinely holds the same currency on a dozen different dates
+// with a dozen different rates; keying by currency alone would silently reuse
+// the first operation's rate for all of them, producing wrong numbers that
+// look entirely plausible on screen. portfolio's cache (portfolio.rateKey) is
+// keyed the same way and for the same reason: its per-lot and
+// per-income-operation conversions are, like the journal's, valued at each
+// item's own date rather than one rate for everything — only account still
+// converts everything at today's rate.
 //
 // The date is held as its YYYY-MM-DD string rather than a time.Time so the
 // key is a value comparison on the calendar date itself, immune to two
@@ -211,16 +213,23 @@ func toAPI(o Operation) apitypes.Operation {
 // *time.Location pointer (which would merely cost extra lookups, but would
 // do so invisibly).
 //
-// There is no TARGET currency in the key, unlike portfolio.rateKey, because
-// this page has exactly one: the space's base currency, read once per request
-// and handed to every lookup and every prefetched query alike (see
-// handleListByAccount). portfolio's screen converts into two — a bond's
-// valuation into the position's own currency, everything else into the base —
-// so a key naming only the source would file one of them under the other's
-// entry there. If this page ever gains a second target, this key must gain the
-// field in the same commit, and rateQueries must carry it too.
+// The TARGET currency is in the key too, mirroring portfolio.rateKey, even
+// though this page converts into exactly one currency today: the space's base
+// currency, read once per request and handed to every lookup and every
+// prefetched query alike (see handleListByAccount). With a single target the
+// field never changes what any lookup finds — every entry here names the same
+// one — so leaving it out costs nothing YET. What it guards against is this
+// codebase's worst failure class: the day some future change converts one
+// figure into a second target (an account's own currency, say, instead of the
+// base) without also widening this key, that figure's lookup collides with an
+// unrelated row already cached under the same source currency and date, and
+// silently publishes THAT row's rate under a rate_on that reads like its own.
+// Before this, a comment was the only thing standing between that change and
+// merging clean. Now the same mistake also needs a second field added, not
+// just a currency passed to a second lookup.
 type rateKey struct {
 	currency string
+	target   string
 	on       string
 }
 
@@ -230,8 +239,8 @@ type rateKey struct {
 // every prefetched answer where nothing looks for it: no wrong number, just a
 // batch paid for and then ignored, which is precisely the kind of failure that
 // leaves no trace.
-func newRateKey(currency string, on time.Time) rateKey {
-	return rateKey{currency: currency, on: on.Format("2006-01-02")}
+func newRateKey(currency, target string, on time.Time) rateKey {
+	return rateKey{currency: currency, target: target, on: on.Format("2006-01-02")}
 }
 
 // rateLookup memoizes one (currency, date) pair's resolved fx rate — the
@@ -261,7 +270,7 @@ type rateLookup struct {
 // figure on the page depends on the prefetch being complete or even on its
 // having succeeded. Only the cost does.
 func (h *Handler) rateFor(ctx context.Context, currency, baseCurrency string, on time.Time, cache map[rateKey]*rateLookup) *rateLookup {
-	key := newRateKey(currency, on)
+	key := newRateKey(currency, baseCurrency, on)
 	rl, ok := cache[key]
 	if !ok {
 		rate, date, err := h.conv.Rate(ctx, currency, baseCurrency, on)
@@ -566,7 +575,7 @@ func rateQueries(ops []Operation, baseCurrency string) []marketdata.RateQuery {
 	var out []marketdata.RateQuery
 	seen := make(map[rateKey]bool, len(ops))
 	add := func(currency string, on time.Time) {
-		key := newRateKey(currency, on)
+		key := newRateKey(currency, baseCurrency, on)
 		if seen[key] {
 			return
 		}
@@ -635,7 +644,7 @@ func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQue
 			// journal.
 			continue
 		}
-		cache[newRateKey(q.From, q.On)] = &rateLookup{rate: res.Rate, date: res.RateDate, err: res.Err}
+		cache[newRateKey(q.From, q.To, q.On)] = &rateLookup{rate: res.Rate, date: res.RateDate, err: res.Err}
 	}
 }
 

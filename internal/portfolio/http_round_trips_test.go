@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/family"
@@ -111,6 +112,28 @@ func (s *countingSpaces) SpaceByID(ctx context.Context, id uuid.UUID) (family.Sp
 // answered: every round trip the handler made, split by which dependency it
 // went to, plus the payload itself so a test can check the cost was paid for
 // real work.
+//
+// trips is the figure that matters, and the one this file's own review found
+// pinned by nothing: connections ACQUIRED FROM THE POOL during the request —
+// one per statement it sends, since nothing on this path holds a connection
+// across several (no transaction is opened while the positions screen is
+// read; every pool.Begin in this codebase is on a write). It is measured
+// BELOW every dependency this handler has, including instrumentStore, and
+// that placement is the whole point: instrument.Store.ByIDs was once
+// reimplemented as a loop of ByID — one handler call, N statements — and
+// handlerCalls() below stayed exactly the same across that change, because it
+// counts how many times the handler asked the catalog for something, not
+// what the asking cost. trips is what caught it, by counting what actually
+// left the process.
+//
+// handlerCalls (spaces + journal + instruments + quotes + rate + batch) is
+// kept alongside for diagnosis and because trips cannot see everything on its
+// own: fakeQuoteStore is an in-memory map that never touches the database, so
+// a quote fetch never acquires a connection and trips would read the same
+// whether LatestQuotes made one call or looped into many. What these count is
+// what the handler ASKED for, which is the right question for that one
+// dependency and the wrong one for whether an N+1 is hiding inside a call to
+// a real store.
 type screenCost struct {
 	spaces      int
 	journal     int
@@ -118,16 +141,21 @@ type screenCost struct {
 	quotes      int
 	rate        int
 	batch       int
+	trips       int64
 	body        positionsResp
 }
 
-func (c screenCost) trips() int {
+// handlerCalls sums the per-dependency counters — how many times the handler
+// asked each collaborator for something, once per named one (see the
+// counting* types) — as distinct from trips, which counts what left the
+// process (see screenCost's doc comment).
+func (c screenCost) handlerCalls() int {
 	return c.spaces + c.journal + c.instruments + c.quotes + c.rate + c.batch
 }
 
 func (c screenCost) String() string {
-	return fmt.Sprintf("%d trips (space %d, journal %d, instruments %d, quotes %d, one-pair rates %d, batched rates %d)",
-		c.trips(), c.spaces, c.journal, c.instruments, c.quotes, c.rate, c.batch)
+	return fmt.Sprintf("%d db round trips, %d handler calls (space %d, journal %d, instruments %d, quotes %d, one-pair rates %d, batched rates %d)",
+		c.trips, c.handlerCalls(), c.spaces, c.journal, c.instruments, c.quotes, c.rate, c.batch)
 }
 
 // positionsScreen builds an account of the given size (see seedPositions),
@@ -175,6 +203,7 @@ func positionsScreen(t *testing.T, size int, keep func(marketdata.RateQuery) boo
 	// one GET below.
 	*conv = countingConverter{inner: conv.inner, keep: conv.keep}
 	instruments.calls, journal.calls, spaces.calls, quotes.calls = 0, 0, 0, 0
+	before := poolTrips(pool)
 
 	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
 	if resp.StatusCode != http.StatusOK {
@@ -185,8 +214,28 @@ func positionsScreen(t *testing.T, size int, keep func(marketdata.RateQuery) boo
 		quotes: quotes.calls, rate: conv.rate, batch: conv.batch,
 	}
 	decodeJSON(t, resp, &cost.body)
+	// trips is read only once decodeJSON has drained the body, not right after
+	// do() returns: today's handler finishes every round trip before it ever
+	// calls httpjson.Write (everything above builds the full response value
+	// first), so the two orderings agree here, but reading the delta after the
+	// response is fully consumed is what keeps agreeing even if that ever
+	// stopped being true — do() returning only promises the status line and
+	// headers have arrived, not that nothing is still running server-side.
+	cost.trips = poolTrips(pool) - before
 	return cost
 }
+
+// poolTrips reads the pool's lifetime count of acquired connections. Every
+// statement the handler sends takes one acquire, so the difference across a
+// request is how many round trips that request made — the same technique
+// operation's identically named helper uses for the journal page
+// (internal/operation/http_round_trips_test.go), applied here to the
+// positions screen. Acquires equal statements only while nothing opens a
+// transaction: a transaction holds one connection across every statement it
+// runs, undercounting them as a single acquire. Every pool.Begin in this
+// codebase is on a write, so every read path here — including this one — is
+// unaffected.
+func poolTrips(pool *pgxpool.Pool) int64 { return pool.Stat().AcquireCount() }
 
 // seedPositions fills one USD account of the (RUB-based) space with size share
 // positions and size bond positions, and returns the account's id.
@@ -322,7 +371,7 @@ func TestPositionsRoundTripsDoNotGrowWithTheData(t *testing.T) {
 	t.Logf("%d positions: %s", len(small.body.Positions), small)
 	t.Logf("%d positions: %s", len(large.body.Positions), large)
 
-	if large.trips() != small.trips() {
+	if large.trips != small.trips {
 		t.Fatalf("round trips grew with the data: %d positions cost %s, %d positions cost %s",
 			len(small.body.Positions), small, len(large.body.Positions), large)
 	}
@@ -388,6 +437,9 @@ func TestPositionsIncompletePrewarmCostsTripsNotNumbers(t *testing.T) {
 			}
 			if partial.rate <= full.rate {
 				t.Fatalf("prewarm dropped queries but nothing fell back: %s (complete prewarm: %s) — the fake is not dropping what it claims to", partial, full)
+			}
+			if partial.trips <= full.trips {
+				t.Fatalf("prewarm dropped queries but the request cost no more: %s (complete prewarm: %s)", partial, full)
 			}
 		})
 	}

@@ -510,3 +510,83 @@ func TestMixedBreakdownReachedThroughTheAPIGoesNullOnBothLegs(t *testing.T) {
 		}
 	}
 }
+
+// TestTransferInBaseRoundsOnceForTheWholeAmount pins the other half of the
+// "one rounding per published figure" invariant — every term of a multi-term
+// amount is multiplied as a decimal and only the TOTAL is rounded, once (see
+// operationInBase's doc comment). The fee-vs-amount half of that rule is
+// already pinned, by TestListOperationInBaseFeeIsNotDerivedFromTheCombinedTotal;
+// this is the half nothing here checked: that a transfer's amount, which is
+// the ONLY figure on this page ever built from more than one term, is not
+// rounded term by term before being summed.
+//
+// Every existing multi-lot fixture in this file happens to multiply exactly
+// (100000 × 78.50, 10000 × 65.4567 and the like — see
+// TestTransferInBaseMatchesThePositionItProduces and its neighbors), so
+// rounding each lot's ruble figure before adding them and rounding the added
+// total once land on the very same integer either way. A version of
+// operationInBase that rounded per term would pass every one of those tests
+// and this page would still be one minor unit adrift the day a real rate
+// landed on a transfer that split unevenly across two purchase dates — which
+// is what this fixture is built to force:
+//
+//	lot 1: 14 @ $92.56 on 2019-03-01 -> 129584 minor USD of cost basis
+//	lot 2:  8 @ $119.89 on 2019-03-02 -> 95912 minor USD of cost basis
+//	both dates fall after the one rate seeded below (78.4913), so both
+//	resolve to it via FxRateOn's nearest-earlier-date rule — one rate, two
+//	dates, which keeps this fixture from also exercising rate_on's own
+//	resolution
+//
+// (a transfer's amount_minor, and each ReleasedLot.CostMinor term behind it,
+// is the positive magnitude of the basis moved — not a signed cash flow like
+// an ordinary buy's, which is why both terms below are positive)
+//
+//	129584 × 78.4913 = 10171216.6192 -> rounds ALONE to 10171217
+//	 95912 × 78.4913 =  7528257.5656 -> rounds ALONE to  7528258
+//	summed rounded first: 10171217 + 7528258 = 17699475
+//
+//	summed unrounded, rounded ONCE: 10171216.6192 + 7528257.5656
+//	                               = 17699474.1848 -> 17699474
+//
+// 17699475 is what a term-then-sum implementation publishes; 17699474 is
+// what this test wants.
+func TestTransferInBaseRoundsOnceForTheWholeAmount(t *testing.T) {
+	url, c, mdStore := newAPIWithConverter(t)
+	seedFxRate(t, mdStore, "2019-01-01", "78.4913")
+
+	from := mkAccount(t, url, c, "Т-Банк", "USD")
+	to := mkAccount(t, url, c, "Freedom KZ", "USD")
+	tsla := mkInstrument(t, url, c,
+		`{"type":"share","name":"Tesla","ticker":"TSLA","currency":"USD"}`)
+
+	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2019-03-01","quantity":"14","price":"92.56","amount_minor":-129584,"currency":"USD"}`, from, tsla))
+	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2019-03-02","quantity":"8","price":"119.89","amount_minor":-95912,"currency":"USD"}`, from, tsla))
+
+	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"22","occurred_on":"2019-03-10"}`,
+		from, to, tsla))
+	if resp.StatusCode != 201 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
+	}
+	var pair transferResp
+	decodeJSON(t, resp, &pair)
+
+	const wantSummedThenRounded = int64(17699474)
+	const roundedEachTermFirst = int64(17699475)
+
+	row := findOperation(t, listJournal(t, url, c, to), pair.In.ID)
+	if row.InBase == nil {
+		t.Fatalf("transfer_in in_base = null, want a conversion from both purchase dates")
+	}
+	if row.InBase.AmountMinor == roundedEachTermFirst {
+		t.Fatalf("transfer_in in_base.amount_minor = %d — each lot's ruble figure was rounded on its own before being summed; summed unrounded and rounded once for the whole amount it is %d",
+			roundedEachTermFirst, wantSummedThenRounded)
+	}
+	if row.InBase.AmountMinor != wantSummedThenRounded {
+		t.Errorf("transfer_in in_base.amount_minor = %d, want %d (both lots' rubles summed as decimals, rounded once for the whole figure)",
+			row.InBase.AmountMinor, wantSummedThenRounded)
+	}
+}

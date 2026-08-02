@@ -18,8 +18,7 @@ import (
 // nothing: connections ACQUIRED FROM THE POOL during the request — one per
 // statement it sends, since nothing on this path holds a connection across
 // several (no transaction is opened while a journal page is read). It is
-// measured BELOW the converter
-// on purpose. A counter on Converter.Rate — what
+// measured BELOW the converter on purpose. A counter on Converter.Rate — what
 // TestListOperationInBaseMemoizesRatePerCurrencyAndDate had, and all it had —
 // counts how often the handler ASKED for a rate, not what the asking cost: one
 // Rate is between one and six statements depending on whether the pair
@@ -70,6 +69,7 @@ func journalScreen(t *testing.T, size int, keep func(marketdata.RateQuery) bool)
 	// read fresh here: what they hold afterwards can only be the one GET below.
 	conv.rate.Store(0)
 	conv.batch.Store(0)
+	conv.queries.Store(0)
 	before := poolTrips(pool)
 
 	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/operations?limit=200", "")
