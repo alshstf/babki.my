@@ -312,8 +312,10 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 	// other rows) using today's fx rate ("today" is the only sensible answer
 	// for "what is this holding worth right now", as opposed to some
 	// historical rate). The original figure is preserved in
-	// market_value_source_currency/_minor purely for transparency (e.g. a UI
-	// tooltip) — it plays no further part in the computation below.
+	// market_value_source_currency/_minor — for transparency (a UI tooltip
+	// names it: «Пересчитано из 1 000,00 €») and because it, not the converted
+	// figure, is what positionInBase carries on into the base currency. Nothing
+	// below in THIS function reads it back.
 	//
 	// The rate comes from the request's memo (rateFor) and the arithmetic is
 	// Convert's own (applyTo), which together produce exactly what
@@ -841,8 +843,11 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 //   - income_minor sums the position's income operations, each at the rate of
 //     the day it occurred (income, unlike the lots, is passed in: see
 //     incomeByInstrument).
-//   - market_value_minor uses TODAY's rate. It is the one current figure here,
-//     because "what is this holding worth" is a question about now.
+//   - market_value_minor uses TODAY's rate, from the currency the valuation is
+//     REALLY denominated in — a bond's face currency when the row had to
+//     convert it (market_value_source_currency), the position's own otherwise.
+//     It is the one current figure here, because "what is this holding worth"
+//     is a question about now.
 //   - unrealized_pnl_minor is that valuation minus that basis, both already in
 //     baseCurrency, so it is exact integer subtraction with no second
 //     rounding. Base-currency profit therefore INCLUDES the currency's
@@ -864,18 +869,29 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // fees_minor is deliberately excluded (owner feedback — not carried into
 // PositionInBase at all, see the API contract).
 //
-// Only a valuation denominated in the position's own currency may be
-// converted with the position's own rate. cost and income always are. The
-// market valuation is not: when no rate was available to bring it into the
-// position's currency, toAPI publishes it raw, in market_value_currency (a
-// bond's face_currency, say EUR, on a USD position). Multiplying that EUR
-// figure by the USD->RUB rate and labeling the product "RUB" would be a
-// silently wrong number — and, since it equals the converted cost whenever
-// cost and valuation coincide, would read as "profit exactly zero". So
-// market_value_minor is published in_base only when market_value_currency
-// equals p.Currency, and unrealized_pnl_minor follows it. Null there is
-// honest: the frontend falls back to showing the raw amount in its own
-// currency with a "not converted" marker.
+// EVERY FIGURE IS CONVERTED FROM THE CURRENCY IT IS ACTUALLY IN, ONCE. cost
+// and income are in the position's own currency and always were. The market
+// valuation may not be: a bond's is born in its face currency and toAPI brings
+// it into the position's so the row can compare it with cost_minor (see
+// toAPI). This object does NOT continue from that converted figure — it goes
+// back to the original, market_value_source_minor in
+// market_value_source_currency, and converts that straight into the base
+// currency. One multiplication, one rounding. Chaining the two conversions
+// rounded the money to a whole cent in a currency that appears nowhere in the
+// answer, and then multiplied that lost fraction by the second rate: 1 000,00 €
+// through the dollar came out 9 999 990 kopecks instead of 10 000 000, under a
+// tooltip saying it had been converted from euros (#39). It had not been.
+//
+// market_value_minor is still published in_base ONLY when market_value_currency
+// equals p.Currency, and unrealized_pnl_minor follows it. That rule is now a
+// boundary rather than an impossibility, and the difference matters to anyone
+// reading it: the arithmetic could be done — a valuation stuck in EUR could be
+// carried into RUB by the EUR->RUB rate exactly as it is above, without ever
+// touching the position's currency — and it deliberately is not. A holding is
+// valued in both currencies or in neither, so the display-currency switch can
+// never turn a row that shows no profit at all into a row that shows one. Null
+// there is honest either way: the frontend falls back to showing the raw amount
+// in its own currency with a "not converted" marker.
 //
 // It returns (nil, nil) — render in_base as null, the WHOLE object, never
 // partially populated — when p.Currency already equals baseCurrency (nothing
@@ -954,13 +970,29 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		Currency:         baseCurrency,
 	}
 
+	// Which figure this object converts, and out of which currency. The GUARD
+	// comes first and is unchanged: a valuation that never reached the
+	// position's currency is not carried into the base one (see this
+	// function's doc comment for why that is a boundary and not an
+	// impossibility).
 	marketValueMinor := nullableValue(apiPos.MarketValueMinor)
+	valuationCurrency := p.Currency
 	if c := nullableValue(apiPos.MarketValueCurrency); c == nil || *c != p.Currency {
 		marketValueMinor = nil
 	}
+	// Only then is the converted figure swapped back for the original it was
+	// converted FROM, so the base-currency answer is struck in one step.
+	// toAPI sets these two only when that conversion succeeded, so this can
+	// never smuggle past the guard above — but the guard is what states the
+	// rule, and this must not become a second, quieter statement of it.
+	if src, srcCurrency := nullableValue(apiPos.MarketValueSourceMinor), nullableValue(apiPos.MarketValueSourceCurrency); marketValueMinor != nil && src != nil && srcCurrency != nil {
+		marketValueMinor, valuationCurrency = src, *srcCurrency
+	}
 	if marketValueMinor == nil {
-		// No valuation this object may convert — no usable quote, or one
-		// denominated in a currency this rate cannot bring into the base one.
+		// No valuation this object may convert — no usable quote, or one the
+		// guard above withheld because it never reached the position's own
+		// currency (not because no rate could carry it: it is converted out of
+		// its own currency now, and that rate may well exist).
 		// rate_on goes with it, because rate_on is the DATE OF that figure and
 		// of nothing else here: the basis and the income are struck at the
 		// rates of their own many dates, and a date published beside them
@@ -992,7 +1024,14 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 	// stale. Without it the valuation cannot be struck, and since the profit
 	// below is measured against a basis that would then be published beside a
 	// valuation that is not, the whole object goes rather than half of it.
-	today := h.rateFor(ctx, p.Currency, baseCurrency, now, cache)
+	//
+	// The pair is the VALUATION's currency against the base one, which for a
+	// bond priced off a foreign face value is neither the position's currency
+	// nor the one any other figure in this object is converted from. That is
+	// the whole point (see the doc comment): one screen can therefore ask
+	// about EUR->RUB for a row whose every other figure is USD->RUB, and
+	// rateQueries enumerates it from the same marketValue call that decides it.
+	today := h.rateFor(ctx, valuationCurrency, baseCurrency, now, cache)
 	if today.err != nil {
 		if errors.Is(today.err, marketdata.ErrNoRate) {
 			return nil, nil
@@ -1009,7 +1048,20 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 	}
 	out.MarketValueMinor = nullable.NewNullableWithValue(valuation)
 	out.UnrealizedPnlMinor = nullable.NewNullableWithValue(valuation - costMinor)
-	out.RateOn = nullable.NewNullableWithValue(today.date.Format("2006-01-02"))
+	// rate_on names the rate that was actually applied, and there is not always
+	// one to name: a valuation already denominated in the base currency (an OFZ
+	// with a ruble face value in a dollar account of a ruble space) is the
+	// answer as it stands, and rateFor hands back a rate of 1 on the ZERO date
+	// — marketdata resolves nothing for from == to, deliberately, so that an
+	// identity conversion cannot disclose a staleness that does not exist. That
+	// zero date formats as "0001-01-01", so the choice here is between an
+	// explicit null and a caption naming a rate that had no part in the figure.
+	// Null, then — for the same reason the branch above publishes one.
+	if today.date.IsZero() {
+		out.RateOn = nullable.NewNullNullable[string]()
+	} else {
+		out.RateOn = nullable.NewNullableWithValue(today.date.Format("2006-01-02"))
+	}
 	return out, nil
 }
 
@@ -1088,14 +1140,26 @@ func rateQueries(
 				}
 				if p.Currency != baseCurrency {
 					// positionInBase carries that valuation on into the base
-					// currency, and asks for today's rate only when there is a
-					// valuation to convert. Whether there still is one depends
-					// on the conversion just above having succeeded, which is
-					// not known until it runs — so this asks whenever a
-					// valuation exists at all, and over-asks in exactly the
-					// case where the position ends up publishing no in_base
-					// valuation anyway.
-					out = append(out, marketdata.RateQuery{From: p.Currency, To: baseCurrency, On: now})
+					// currency FROM THE SAME `currency` toAPI converted it out
+					// of, not from the position's — the valuation is converted
+					// once, from where it really is (#39, see positionInBase).
+					// So this is `currency` here too, and both queries come out
+					// of the one marketValue call above rather than restating
+					// which currency a bond's valuation is in.
+					//
+					// It asks for today's rate only when there is a valuation
+					// to convert. Whether there still is one depends on the
+					// conversion just above having succeeded, which is not
+					// known until it runs — so this asks whenever a valuation
+					// exists at all, and over-asks in exactly the case where
+					// the position ends up publishing no in_base valuation
+					// anyway. It also asks when `currency` IS the base
+					// currency, which positionInBase resolves as an identity
+					// without touching the store: a wasted row in a batch that
+					// was happening anyway, and the alternative — a second
+					// place that knows identities are free — is how an
+					// enumeration comes to disagree with its consumer.
+					out = append(out, marketdata.RateQuery{From: currency, To: baseCurrency, On: now})
 				}
 			}
 		}

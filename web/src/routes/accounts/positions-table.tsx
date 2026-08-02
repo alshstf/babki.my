@@ -95,13 +95,16 @@ export function PositionsTable({
   // A valuation that came out in a THIRD currency — a bond priced off a face
   // value denominated in neither the position's currency nor the base one —
   // is the third, and "нет курса" is wrong about it in a subtler way: a rate
-  // from that currency to the base one may well exist. What is missing is the
-  // link from it to the position's currency, without which the figure cannot
-  // be brought into the base currency at all; multiplying it by the
-  // position's own rate would be a silently wrong number (see
-  // PositionInBase.market_value_minor). The cause is the chain, not the rate,
-  // and only this figure has it — the row's cost and income are in the
-  // position's currency and convert as usual.
+  // from that currency to the base one may well exist, and the backend would
+  // use exactly that one if it published this figure at all (it converts a
+  // valuation out of its own currency, not the position's — see
+  // PositionInBase.market_value_minor). What is missing is the link to the
+  // position's currency, without which the row has nothing to compare the
+  // valuation against; the backend then withholds the base-currency figure too,
+  // so that a holding is valued in both currencies or in neither. The cause is
+  // that missing link, not a missing rate to the base currency, and only this
+  // figure has it — the row's cost and income are in the position's currency
+  // and convert as usual.
   //
   // All three are per-row, hence resolved inside the map below.
   const notConvertedTitle = t("positions.notConverted");

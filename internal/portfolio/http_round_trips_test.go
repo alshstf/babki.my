@@ -33,6 +33,19 @@ func formatMinor(p *int64) string {
 	return strconv.FormatInt(*p, 10)
 }
 
+// formatText is formatMinor's twin for a *string API field — a currency code,
+// a date — and exists for the identical reason: %v on a non-nil *string prints
+// its address, so a genuine failure reads as "rate_on = 0x743c2bdf50b8"
+// instead of the date the message is trying to show. Quoted rather than bare,
+// so an empty string is visible as one and cannot be mistaken for the "<nil>"
+// beside it.
+func formatText(p *string) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return strconv.Quote(*p)
+}
+
 // countingConverter counts what one screen asks of the fx layer while
 // delegating every answer to a real *marketdata.Converter, so the figures on
 // the page stay the production ones and only their cost is observed.
@@ -468,6 +481,14 @@ func TestPositionsIncompletePrewarmCostsTripsNotNumbers(t *testing.T) {
 //
 //	share position (USD), 10 bought at 100,00, quoted at 110,00:
 //	  market_value_minor = 110 000 minor USD, converted for in_base at 90
+//
+// The in_base valuations below are struck from each row's RAW valuation at its
+// own currency's rate (#39), so the bond's is 100 000 USD * 90 rather than
+// 90 000 EUR * 100. Both arrive at 9 000 000 here, because this fixture's rates
+// are a consistent triangle — it is about the memo's keys, not about how many
+// conversions the figure went through, which
+// TestPositionInBaseValuationIsConvertedOnceFromItsOwnCurrency pins on rates
+// built to tell the two apart.
 func TestPositionsSharedRateMemoKeepsTargetsApart(t *testing.T) {
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
@@ -533,7 +554,7 @@ func TestPositionsSharedRateMemoKeepsTargetsApart(t *testing.T) {
 			formatMinor(bondPos.MarketValueMinor))
 	}
 	if got := inBaseMarketValue(t, bondPos); got != 9_000_000 {
-		t.Errorf("bond in_base.market_value_minor = %d, want 9000000 (90000 EUR at EUR->RUB 100)", got)
+		t.Errorf("bond in_base.market_value_minor = %d, want 9000000 (the raw 100000 USD at USD->RUB 90)", got)
 	}
 
 	sharePos, ok := byID[share.ID]

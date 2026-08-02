@@ -633,14 +633,17 @@ describe("PositionsTable", () => {
       expect(norm(marketValue.textContent ?? "")).toContain(norm(formatMinor(100_000, "EUR")));
       expect(marketValue.textContent).not.toMatch(/₽/);
       // Issue #42: the marker must name the cause that IS the cause. A EUR->RUB
-      // rate may well exist — what is missing is the link from EUR to the
-      // position's USD, without which nothing can carry the figure into rubles.
-      // "Нет курса" states something the screen does not know and points the
-      // reader at a gap that may not be there at all.
+      // rate may well exist — and since #39 the backend converts a valuation
+      // out of its own currency, so that rate is the very one it would use.
+      // What is missing is the link from EUR to the position's USD, without
+      // which the row has nothing to compare the valuation against, and the
+      // backend withholds the base-currency figure with it. "Нет курса" states
+      // something the screen does not know and points the reader at a gap that
+      // may not be there at all.
       const valuationMarker = screen.getByTestId("position-market-value-not-converted");
       expect(valuationMarker).toHaveAttribute(
         "title",
-        "Оценка получилась в третьей валюте — не в валюте позиции и не в базовой, — а курса от неё до валюты позиции нет: курсом самой позиции её пересчитывать нельзя, это другая пара. Поэтому показана в исходной валюте",
+        "Оценка получилась в третьей валюте — не в валюте позиции и не в базовой, — а курса от неё до валюты позиции нет: сравнить её со стоимостью позиции не с чем. Пока оценка не выражена в валюте позиции, программа не показывает её и в базовой. Поэтому показана в исходной валюте",
       );
       expect(valuationMarker.getAttribute("title")).not.toBe(
         "Нет курса — показано в исходной валюте",

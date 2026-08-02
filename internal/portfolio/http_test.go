@@ -730,10 +730,10 @@ func TestPositionsMarketValueConvertsToPositionCurrency(t *testing.T) {
 // TestPositionsConvertedValuationRoundsHalfAwayFromZero pins the rounding of
 // three figures this handler strikes, each from its own single multiplication:
 // a bond's raw valuation (marketValue itself), that valuation brought into the
-// position's currency (toAPI), and that converted valuation carried on into
-// the base currency (positionInBase). The latter two go through
-// rateLookup.applyTo; marketValue rounds inline. All three must round exactly
-// as marketdata.Converter.Convert does — once, at the end, half-away-from-zero.
+// position's currency (toAPI), and the SAME raw valuation carried into the base
+// currency (positionInBase). The latter two go through rateLookup.applyTo;
+// marketValue rounds inline. All three must round exactly as
+// marketdata.Converter.Convert does — once, at the end, half-away-from-zero.
 //
 // It exists because that arithmetic used to BE Convert's, covered by
 // marketdata's own tests, and now lives here: without this, replacing the
@@ -741,22 +741,30 @@ func TestPositionsMarketValueConvertsToPositionCurrency(t *testing.T) {
 // this package notices (confirmed by hand — Round -> Truncate passed the whole
 // suite before this test was written).
 //
-// The bond's own price and both rates are chosen to land every one of the
+// The bond's own price and all three rates are chosen to land every one of the
 // three products exactly on the half-unit boundary, which is the only place
 // Round and Truncate differ:
 //
 //	bond: face 1 000,00 USD, quantity 1, quoted at 99,9995% of face (not par)
 //	  raw valuation (marketValue)    =  99 999,5 -> 100 000 minor USD (truncation: 99 999)
 //	  USD -> EUR 0,900005            = 100 000 * 0,900005 = 90 000,5 -> 90 001  (truncation: 90 000)
-//	  in_base, EUR -> RUB 0,5        =  90 001 * 0,5      = 45 000,5 -> 45 001  (truncation: 45 000)
+//	  in_base, USD -> RUB 0,440005   = 100 000 * 0,440005 = 44 000,5 -> 44 001  (truncation: 44 000)
 //
 // The price is deliberately not a round number either: at an exact par quote
 // the raw valuation is already an integer number of minor units (100000 *
 // 100.00 / 100 = 100000,00 exactly), so marketValue's own Round(0) has nothing
 // to round and Round -> Truncate there passes unnoticed even though the two
-// downstream conversions still catch a mutation of their own roundings. Both
-// the price and the second rate are chosen purely to sit on a boundary; the
+// downstream conversions still catch a mutation of their own roundings. All of
+// the price and the rates are chosen purely to sit on a boundary; the
 // arithmetic is what is under test, not a plausible market quote.
+//
+// The three rates form no consistent triangle ON PURPOSE, and undoing that
+// would blind this test: 0,900005 * 0,5 is not 0,440005, so the base valuation
+// this fixture expects (44 001) is unreachable by any route through the EUR
+// figure — the old chained conversion would have produced 90 001 * 0,5 = 45 001
+// here. A fixture whose direct rate happened to equal the product of the other
+// two would pass whether the valuation was converted once or twice, which is
+// exactly what #39 was about.
 func TestPositionsConvertedValuationRoundsHalfAwayFromZero(t *testing.T) {
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
@@ -766,6 +774,7 @@ func TestPositionsConvertedValuationRoundsHalfAwayFromZero(t *testing.T) {
 	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
 		{Base: "USD", Quote: "EUR", On: mustDate(t, "2026-01-01"), Rate: decimal.RequireFromString("0.900005"), Source: "test"},
 		{Base: "EUR", Quote: "RUB", On: mustDate(t, "2026-01-01"), Rate: decimal.RequireFromString("0.5"), Source: "test"},
+		{Base: "USD", Quote: "RUB", On: mustDate(t, "2026-01-01"), Rate: decimal.RequireFromString("0.440005"), Source: "test"},
 	}); err != nil {
 		t.Fatalf("seed fx rates: %v", err)
 	}
@@ -799,10 +808,10 @@ func TestPositionsConvertedValuationRoundsHalfAwayFromZero(t *testing.T) {
 		t.Fatalf("in_base = null, want the object: every rate this position needs is seeded")
 	}
 	if p.InBase.MarketValueMinor == nil {
-		t.Fatalf("in_base.market_value_minor = null, want 45001: the EUR -> RUB rate is seeded too")
+		t.Fatalf("in_base.market_value_minor = null, want 44001: the USD -> RUB rate is seeded too")
 	}
-	if *p.InBase.MarketValueMinor != 45001 {
-		t.Errorf("in_base.market_value_minor = %d, want 45001 (90001 * 0,5 = 45000,5, rounded away from zero) — 45000 is truncation",
+	if *p.InBase.MarketValueMinor != 44001 {
+		t.Errorf("in_base.market_value_minor = %d, want 44001 (100000 * 0,440005 = 44000,5, rounded away from zero) — 44000 is truncation, 45001 is the valuation converted a second time through the euro",
 			*p.InBase.MarketValueMinor)
 	}
 }

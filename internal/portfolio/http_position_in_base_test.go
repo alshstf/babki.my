@@ -506,7 +506,7 @@ func TestPositionInBaseNullMarketValueWhenValuationInForeignCurrency(t *testing.
 			*p.InBase.MarketValueMinor, *p.InBase.MarketValueMinor)
 	}
 	if p.InBase.UnrealizedPnlMinor != nil {
-		t.Errorf("in_base.unrealized_pnl_minor = %v, want null (derived from a valuation that cannot be converted)", p.InBase.UnrealizedPnlMinor)
+		t.Errorf("in_base.unrealized_pnl_minor = %s, want null (derived from a valuation that cannot be converted)", formatMinor(p.InBase.UnrealizedPnlMinor))
 	}
 	// rate_on is the date OF market_value_minor, so it goes null with it: the
 	// object holds no figure struck at a single rate, and a date beside the
@@ -516,6 +516,247 @@ func TestPositionInBaseNullMarketValueWhenValuationInForeignCurrency(t *testing.
 	}
 	if p.InBase.Currency != "RUB" {
 		t.Errorf("in_base.currency = %q, want RUB", p.InBase.Currency)
+	}
+}
+
+// TestPositionInBaseValuationIsConvertedOnceFromItsOwnCurrency is #39: a bond
+// whose valuation is denominated in a THIRD currency reached the base currency
+// through the position's currency, and paid for two multiplications and two
+// roundings to get there. It now goes straight from the currency it is really
+// in, so the published base figure is one multiplication and one rounding —
+// and the caption beside it becomes true.
+//
+// The chain is not merely dearer, it answers a different question. 1 000,00 €
+// turned into dollars and then into rubles is not what 1 000,00 € is worth in
+// rubles: the intermediate figure is rounded to a whole cent before the second
+// rate ever sees it, and that lost fraction is multiplied by ~90 on its way
+// out. The tooltip on this very cell says «Пересчитано из 1 000,00 €», and
+// until this change it was describing a conversion the number had never been
+// through.
+//
+// Fixture (the numbers from the issue), with the two fx rows deliberately
+// dated APART so that in_base.rate_on has to name one of them:
+//
+//	base currency RUB (space default), account and both positions in USD
+//	fx: USD -> RUB = 90 on 2026-01-01, EUR -> RUB = 100 on 2026-02-01
+//	  EUR -> USD is not a row at all: it resolves as the RUB bridge,
+//	  100 * 1/90 = 1,1111... (see marketdata.resolveRate)
+//
+//	bond: face 1 000,00 EUR (100_000 minor), face_currency EUR, quoted at par,
+//	quantity 1, bought for 900,00 USD
+//	  market_value_source_minor    = 100_000 minor EUR   (the raw valuation)
+//	  market_value_minor           = round(100_000 * 1,1111...) = 111_111 USD
+//	  in_base.market_value_minor   = 100_000 * 100 = 10_000_000 RUB  <- one step
+//	    the chain gave  round(111_111 * 90)        =  9_999_990 RUB
+//	  in_base.cost_minor           =  90_000 * 90  =  8_100_000 RUB
+//	  in_base.unrealized_pnl_minor = 10_000_000 - 8_100_000 = 1_900_000
+//	  in_base.rate_on              = 2026-02-01 (the EUR -> RUB row's date)
+//	    the chain named             2026-01-01 (the USD -> RUB row's date)
+//
+//	share: 10 bought at 100,00 USD, quoted at 110,00 USD — no third currency
+//	anywhere, so nothing about it may change
+//	  in_base.market_value_minor   = 110_000 * 90 = 9_900_000 RUB
+//	  in_base.cost_minor           = 100_000 * 90 = 9_000_000 RUB
+//	  in_base.rate_on              = 2026-01-01 (the USD -> RUB row's date)
+//
+// The two rows sit in one response on purpose. The share is the "nothing else
+// moved" half of the requirement, and the two rate_on values differing between
+// two rows of the same account is what pins the rule the date is under: each
+// figure names the rate that actually produced it, not the one its row's
+// currency would suggest.
+func TestPositionInBaseValuationIsConvertedOnceFromItsOwnCurrency(t *testing.T) {
+	pool := testdb.New(t)
+	mdStore := marketdata.NewStore(pool)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(mdStore))
+
+	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: mustDate(t, "2026-01-01"), Rate: decimal.RequireFromString("90"), Source: "test"},
+		{Base: "EUR", Quote: "RUB", On: mustDate(t, "2026-02-01"), Rate: decimal.RequireFromString("100"), Source: "test"},
+	}); err != nil {
+		t.Fatalf("seed fx rates: %v", err)
+	}
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	bond := createInstrument(t, c, url,
+		`{"type":"bond","name":"Еврооблигация","ticker":"EUB","currency":"USD","face_value_minor":100000,"face_currency":"EUR"}`)
+	share := createInstrument(t, c, url,
+		`{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
+	bondID, err := uuid.Parse(bond.ID)
+	if err != nil {
+		t.Fatalf("parse bond id: %v", err)
+	}
+	shareID, err := uuid.Parse(share.ID)
+	if err != nil {
+		t.Fatalf("parse share id: %v", err)
+	}
+	quotes.byInstrument[bondID] = marketdata.Quote{
+		InstrumentID: bondID, On: mustDate(t, "2026-07-20"),
+		Price: decimal.RequireFromString("100.00"), Currency: "USD", Source: "test",
+	}
+	quotes.byInstrument[shareID] = marketdata.Quote{
+		InstrumentID: shareID, On: mustDate(t, "2026-07-20"),
+		Price: decimal.RequireFromString("110.00"), Currency: "USD", Source: "test",
+	}
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-03-01","quantity":"1","price":"900",
+		"amount_minor":-90000,"currency":"USD"}`, acc.ID, bond.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-03-01","quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, acc.ID, share.ID))
+
+	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
+	}
+	var got positionsResp
+	decodeJSON(t, resp, &got)
+	byID := make(map[string]positionResp, len(got.Positions))
+	for _, p := range got.Positions {
+		byID[p.Instrument.Id] = p
+	}
+
+	bondPos, ok := byID[bond.ID]
+	if !ok {
+		t.Fatalf("no position for the bond: %+v", got.Positions)
+	}
+	// Pin the fixture the assertion below rests on: the valuation really is
+	// denominated in a third currency and really did reach the position's own,
+	// which is what makes market_value_source_* the figure to convert.
+	if bondPos.MarketValueSourceCurrency == nil || *bondPos.MarketValueSourceCurrency != "EUR" {
+		t.Fatalf("bond market_value_source_currency = %s, want EUR (the face currency the valuation came out in)", formatText(bondPos.MarketValueSourceCurrency))
+	}
+	if bondPos.MarketValueSourceMinor == nil || *bondPos.MarketValueSourceMinor != 100000 {
+		t.Fatalf("bond market_value_source_minor = %s, want 100000 (1 000,00 EUR of face, quoted at par)", formatMinor(bondPos.MarketValueSourceMinor))
+	}
+	// The position-currency figure is NOT what this change is about: it is
+	// still the valuation brought into USD, still rounded there, and still
+	// what the row shows in native mode.
+	if bondPos.MarketValueMinor == nil || *bondPos.MarketValueMinor != 111111 {
+		t.Errorf("bond market_value_minor = %s, want 111111 (100000 EUR at the bridged EUR->USD rate) — the position-currency figure must not move",
+			formatMinor(bondPos.MarketValueMinor))
+	}
+	if bondPos.InBase == nil {
+		t.Fatalf("bond in_base = nil, want the object: every rate this position needs is seeded")
+	}
+	if bondPos.InBase.CostMinor != 8100000 {
+		t.Errorf("bond in_base.cost_minor = %d, want 8100000 (90000 USD at 90)", bondPos.InBase.CostMinor)
+	}
+	if bondPos.InBase.MarketValueMinor == nil || *bondPos.InBase.MarketValueMinor != 10000000 {
+		t.Errorf("bond in_base.market_value_minor = %s, want 10000000 (100000 EUR at EUR->RUB 100, one multiplication) — 9999990 is the same money sent through the dollar first and rounded on the way",
+			formatMinor(bondPos.InBase.MarketValueMinor))
+	}
+	if bondPos.InBase.UnrealizedPnlMinor == nil || *bondPos.InBase.UnrealizedPnlMinor != 1900000 {
+		t.Errorf("bond in_base.unrealized_pnl_minor = %s, want 1900000 (10000000 - 8100000) — it must be the difference of the two figures published beside it",
+			formatMinor(bondPos.InBase.UnrealizedPnlMinor))
+	}
+	if bondPos.InBase.RateOn == nil || *bondPos.InBase.RateOn != "2026-02-01" {
+		t.Errorf("bond in_base.rate_on = %s, want 2026-02-01 (the EUR->RUB row, the rate actually behind the figure) — 2026-01-01 is the USD->RUB row, which no longer has anything to do with this valuation",
+			formatText(bondPos.InBase.RateOn))
+	}
+
+	sharePos, ok := byID[share.ID]
+	if !ok {
+		t.Fatalf("no position for the share: %+v", got.Positions)
+	}
+	if sharePos.MarketValueSourceCurrency != nil || sharePos.MarketValueSourceMinor != nil {
+		t.Fatalf("share market_value_source_currency/_minor = %s/%s, want both null: the quote is already in the position's currency, so nothing was converted",
+			formatText(sharePos.MarketValueSourceCurrency), formatMinor(sharePos.MarketValueSourceMinor))
+	}
+	if sharePos.InBase == nil {
+		t.Fatalf("share in_base = nil, want the object")
+	}
+	if sharePos.InBase.MarketValueMinor == nil || *sharePos.InBase.MarketValueMinor != 9900000 {
+		t.Errorf("share in_base.market_value_minor = %s, want 9900000 (110000 USD at 90) — a position with no source valuation converts exactly as it always did",
+			formatMinor(sharePos.InBase.MarketValueMinor))
+	}
+	if sharePos.InBase.CostMinor != 9000000 {
+		t.Errorf("share in_base.cost_minor = %d, want 9000000 (100000 USD at 90)", sharePos.InBase.CostMinor)
+	}
+	if sharePos.InBase.RateOn == nil || *sharePos.InBase.RateOn != "2026-01-01" {
+		t.Errorf("share in_base.rate_on = %s, want 2026-01-01 (the USD->RUB row): the two rows of this one account name different rate dates because their valuations really are struck at different rates",
+			formatText(sharePos.InBase.RateOn))
+	}
+}
+
+// TestPositionInBaseValuationAlreadyInBaseCurrencyIsNotConverted is the corner
+// the change above opens: once the valuation is converted from the currency it
+// is really denominated in, that currency can BE the base one. An OFZ with a
+// ruble face value held in a dollar account of a ruble-based space is exactly
+// that — the valuation is born in rubles, is brought into dollars so the row
+// can compare it with its own cost, and the base-currency answer is the ruble
+// figure it started as, to the kopeck.
+//
+// Two things must hold, and neither is what the code did before:
+//
+//   - the base figure is the ORIGINAL 1 000,00 ₽, not the dollars it was turned
+//     into and back. The round trip through USD costs a whole ruble here;
+//   - rate_on is NULL, because no rate was used. A conversion from a currency
+//     into itself resolves nothing (marketdata.rateVia short-circuits from ==
+//     to and returns no date at all), so any date printed beside this figure
+//     would be naming a rate that had no part in it — and the zero time.Time
+//     formats as "0001-01-01", which is what a caption invented from nothing
+//     looks like on screen.
+//
+// Fixture:
+//
+//	base currency RUB (space default), account and position in USD
+//	fx: USD -> RUB = 90 (so RUB -> USD is its inverse, 1/90)
+//	bond: face 1 000,00 RUB (100_000 minor), face_currency RUB, quoted at par,
+//	quantity 1, bought for 1 000,00 USD
+//	  market_value_source_minor  = 100_000 minor RUB
+//	  market_value_minor         = round(100_000 * 1/90) = 1_111 USD
+//	  in_base.market_value_minor = 100_000 RUB exactly   <- nothing applied
+//	    the chain gave  round(1_111 * 90) = 99_990 RUB
+//	  in_base.cost_minor         = 100_000 * 90 = 9_000_000 RUB
+func TestPositionInBaseValuationAlreadyInBaseCurrencyIsNotConverted(t *testing.T) {
+	pool := testdb.New(t)
+	mdStore := marketdata.NewStore(pool)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(mdStore))
+
+	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: mustDate(t, "2026-01-01"), Rate: decimal.RequireFromString("90"), Source: "test"},
+	}); err != nil {
+		t.Fatalf("seed fx rate: %v", err)
+	}
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	bond := createInstrument(t, c, url,
+		`{"type":"bond","name":"ОФЗ","ticker":"OFZ","currency":"USD","face_value_minor":100000,"face_currency":"RUB"}`)
+	bondID, err := uuid.Parse(bond.ID)
+	if err != nil {
+		t.Fatalf("parse bond id: %v", err)
+	}
+	quotes.byInstrument[bondID] = marketdata.Quote{
+		InstrumentID: bondID, On: mustDate(t, "2026-07-20"),
+		Price: decimal.RequireFromString("100.00"), Currency: "USD", Source: "test",
+	}
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-03-01","quantity":"1","price":"1000",
+		"amount_minor":-100000,"currency":"USD"}`, acc.ID, bond.ID))
+
+	p := onlyPosition(t, c, url, acc.ID)
+	if p.MarketValueSourceCurrency == nil || *p.MarketValueSourceCurrency != "RUB" {
+		t.Fatalf("market_value_source_currency = %s, want RUB (the face currency, which here IS the base currency)", formatText(p.MarketValueSourceCurrency))
+	}
+	if p.MarketValueMinor == nil || *p.MarketValueMinor != 1111 {
+		t.Fatalf("market_value_minor = %s, want 1111 (100000 RUB at RUB->USD 1/90)", formatMinor(p.MarketValueMinor))
+	}
+	if p.InBase == nil {
+		t.Fatalf("in_base = nil, want the object")
+	}
+	if p.InBase.MarketValueMinor == nil || *p.InBase.MarketValueMinor != 100000 {
+		t.Errorf("in_base.market_value_minor = %s, want 100000 — the valuation was already in rubles, so it is the answer; 99990 is that answer sent to the dollar and back",
+			formatMinor(p.InBase.MarketValueMinor))
+	}
+	if p.InBase.UnrealizedPnlMinor == nil || *p.InBase.UnrealizedPnlMinor != -8900000 {
+		t.Errorf("in_base.unrealized_pnl_minor = %s, want -8900000 (100000 - 9000000)", formatMinor(p.InBase.UnrealizedPnlMinor))
+	}
+	if p.InBase.RateOn != nil {
+		t.Errorf("in_base.rate_on = %q, want null: no rate was applied to this valuation, and a date here would name one that had no part in the figure", *p.InBase.RateOn)
 	}
 }
 
