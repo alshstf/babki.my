@@ -44,23 +44,42 @@ type quoteStore interface {
 	LatestQuotes(ctx context.Context, instrumentIDs []uuid.UUID) (map[uuid.UUID]marketdata.Quote, error)
 }
 
-// converter is the subset of *marketdata.Converter this handler needs: a
-// single fx conversion, used to bring a market valuation denominated in a
-// different currency than the position (see toAPI) into the position's own
-// currency, plus Rate, used to convert a whole position's amounts into the
-// space's base currency (see positionInBase) while resolving the underlying
-// rate at most once per (currency, date) pair per request — each lot and
-// each income operation is valued at the rate of its own date, so the same
-// currency can need several different rates within one request (see
-// rateKey). Local interface (mirroring
-// journalStore/quoteStore) so tests can inject a fake in place of a real
-// *marketdata.Converter to control exactly which currency pairs have a
-// resolvable rate, including forcing marketdata.ErrNoRate —
-// *marketdata.Converter satisfies this structurally, no conversion needed at
-// the call site.
+// instrumentStore is the subset of *instrument.Store this handler needs: the
+// catalog rows behind a whole list of positions, read in one round trip rather
+// than one per position (see instrument.Store.ByIDs). Local interface for the
+// same reasons quoteStore is one — a fake can count the round trips, and can
+// produce the missing-row case a foreign key otherwise makes unreachable — and
+// *instrument.Store satisfies it structurally, so nothing changes at the call
+// site.
+type instrumentStore interface {
+	ByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]instrument.Instrument, error)
+}
+
+// converter is the subset of *marketdata.Converter this handler needs, in the
+// two shapes it needs it.
+//
+// RatesOn resolves every rate the whole screen is about to want in a single
+// round trip, and its answers are filed in the request's memo before the
+// per-position loop starts (see prewarmRates). Rate resolves one pair on one
+// date, and stays because the memo has to be able to answer anything the
+// prefetch did not think to ask for: each lot and each income operation is
+// valued at the rate of its own date, and a market valuation at the rate of
+// today, so one request wants many rates and the enumeration that predicts
+// them is an optimization, never a precondition (see rateQueries and rateKey).
+//
+// Convert is deliberately absent although *marketdata.Converter has it: every
+// conversion here now resolves its rate through the memo and applies it
+// itself (see rateLookup.applyTo), which is Convert's own arithmetic, so
+// calling it would be the one lookup on the page that could not be shared.
+//
+// Local interface (mirroring journalStore/quoteStore) so tests can inject a
+// fake in place of a real *marketdata.Converter to control exactly which
+// currency pairs have a resolvable rate, including forcing
+// marketdata.ErrNoRate — *marketdata.Converter satisfies this structurally, no
+// conversion needed at the call site.
 type converter interface {
-	Convert(ctx context.Context, amountMinor int64, from, to string, on time.Time) (int64, error)
 	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
+	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
 }
 
 // spaceStore is the subset of family.Store this handler needs: reading the
@@ -76,7 +95,7 @@ type spaceStore interface {
 // Handler exposes computed account positions over HTTP.
 type Handler struct {
 	ops         journalStore
-	instruments *instrument.Store
+	instruments instrumentStore
 	quotes      quoteStore
 	conv        converter
 	spaces      spaceStore
@@ -84,7 +103,7 @@ type Handler struct {
 	sm          *scs.SessionManager
 }
 
-func NewHandler(ops journalStore, instruments *instrument.Store, quotes quoteStore, conv converter, spaces spaceStore, auth *family.Auth, sm *scs.SessionManager) *Handler {
+func NewHandler(ops journalStore, instruments instrumentStore, quotes quoteStore, conv converter, spaces spaceStore, auth *family.Auth, sm *scs.SessionManager) *Handler {
 	return &Handler{ops: ops, instruments: instruments, quotes: quotes, conv: conv, spaces: spaces, auth: auth, sm: sm}
 }
 
@@ -217,13 +236,19 @@ func hasUndatedRealizations(p *Position) bool {
 
 // toAPI builds one position's API representation, including its market
 // valuation and — when that valuation isn't already in the position's own
-// currency — an fx conversion into it (conv.Convert is only ever called
-// when that conversion is actually needed).
+// currency — an fx conversion into it (a rate is only ever asked for when that
+// conversion is actually needed).
+//
+// now is the request's one reading of "today", passed in rather than taken
+// here, so this conversion, the base-currency one in positionInBase and the
+// prefetch that resolves both name the same calendar day. A request that
+// straddled UTC midnight would otherwise ask for two different days under one
+// word and quietly miss the memo.
 //
 // err is non-nil only for a genuine conversion failure (a Store/DB error, a
 // canceled context) — never for marketdata.ErrNoRate, which is an expected,
 // handled outcome (see below), not a request failure.
-func toAPI(ctx context.Context, conv converter, p *Position, inst instrument.Instrument, quotes map[uuid.UUID]marketdata.Quote) (apitypes.Position, error) {
+func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instrument, quotes map[uuid.UUID]marketdata.Quote, now time.Time, cache map[rateKey]*rateLookup) (apitypes.Position, error) {
 	out := apitypes.Position{
 		Instrument:             instrumentToAPI(inst),
 		Quantity:               p.Quantity.String(),
@@ -258,18 +283,28 @@ func toAPI(ctx context.Context, conv converter, p *Position, inst instrument.Ins
 	// Rather than leave that valuation unusable, convert it into the
 	// position's own currency (never the space's base currency — the goal is
 	// comparability with cost_minor, which is always in p.Currency, not with
-	// other rows) using today's fx rate (time.Now().UTC(): "today" is the
-	// only sensible answer for "what is this holding worth right now", as
-	// opposed to some historical rate). The original figure is preserved in
+	// other rows) using today's fx rate ("today" is the only sensible answer
+	// for "what is this holding worth right now", as opposed to some
+	// historical rate). The original figure is preserved in
 	// market_value_source_currency/_minor purely for transparency (e.g. a UI
 	// tooltip) — it plays no further part in the computation below.
+	//
+	// The rate comes from the request's memo (rateFor) and the arithmetic is
+	// Convert's own (applyTo), which together produce exactly what
+	// conv.Convert produced when this called it directly — Convert resolves
+	// the rate the same way and multiplies it the same way, and from != to is
+	// guaranteed here, so its identity short-circuit never applied anyway.
+	// What changes is that this lookup is now shareable: it is the one pair on
+	// the page whose target is the position's currency instead of the base
+	// one, and going through the memo is what lets the prefetch cover it and
+	// what lets a page of bonds in the same currency pay for it once.
 	if currency != p.Currency {
-		converted, err := conv.Convert(ctx, minor, currency, p.Currency, time.Now().UTC())
-		switch {
+		rl := h.rateFor(ctx, currency, p.Currency, now, cache)
+		switch err := rl.err; {
 		case err == nil:
 			out.MarketValueSourceCurrency = nullable.NewNullableWithValue(currency)
 			out.MarketValueSourceMinor = nullable.NewNullableWithValue(minor)
-			minor, currency = converted, p.Currency
+			minor, currency = rl.applyTo(minor), p.Currency
 		case errors.Is(err, marketdata.ErrNoRate):
 			// No rate to convert with: fall back to publishing the raw,
 			// unconverted figure (as before this change) rather than hiding
@@ -313,38 +348,81 @@ func nullableValue[T any](n nullable.Nullable[T]) *T {
 	return &v
 }
 
-// rateKey identifies one memoized fx rate lookup: a currency AND the date its
-// rate must come from. The date belongs in the key because this handler no
-// longer converts everything at today's rate — each lot is valued at the rate
-// of the day it was acquired and each income operation at the rate of the day
-// it occurred (see positionInBase) — so a cache keyed by currency alone would
-// serve the first date's rate for every later date, producing wrong numbers
-// that look entirely plausible on screen. Copied from operation.rateKey,
-// which keys the journal's per-operation conversions the same way and for the
-// same reason.
+// rateKey identifies one memoized fx rate lookup: the pair being converted AND
+// the date its rate must come from. The date belongs in the key because this
+// handler no longer converts everything at today's rate — each lot is valued at
+// the rate of the day it was acquired and each income operation at the rate of
+// the day it occurred (see positionInBase) — so a cache keyed by currency alone
+// would serve the first date's rate for every later date, producing wrong
+// numbers that look entirely plausible on screen. Copied from
+// operation.rateKey, which keys the journal's per-operation conversions the
+// same way and for the same reason.
 //
 // The date is held as its YYYY-MM-DD string rather than a time.Time so the
 // key compares the calendar date itself, immune to two otherwise-equal
 // time.Time values differing in monotonic clock reading or *time.Location
 // pointer (which would merely cost extra lookups, but would do so invisibly).
 //
-// The target currency is not part of the key: one request converts everything
-// into one base currency, and the cache never outlives the request.
+// The TARGET currency is part of the key because this screen has two of them.
+// Almost everything here converts into the space's base currency, but a bond
+// whose valuation is denominated in its face currency is brought into the
+// POSITION's currency instead — that is the whole point of that conversion,
+// comparability with cost_minor (see toAPI) — so one request can legitimately
+// ask for the SAME source currency under two different targets: a bond with a
+// USD face value held in a EUR position needs USD->EUR today, while a plain
+// USD position on the same screen needs USD->RUB today — both "USD, today"
+// (see TestPositionsSharedRateMemoKeepsTargetsApart, which is exactly this
+// pair of positions). A key naming only the source would collide the two,
+// filing one position's rate where the other looks for its own: the same
+// silently-plausible wrong number the date is in the key to prevent.
+// operation.rateKey has one target and says so; this one cannot.
 type rateKey struct {
-	currency string
-	on       string
+	from string
+	to   string
+	on   string
 }
 
-// rateLookup memoizes one (currency, date) pair's resolved fx rate — the rate
-// itself, the date it actually came from, and the resolution error — so a
-// request hits the fx rate store at most once per distinct pair. A position
-// with many lots usually has few distinct purchase dates, and positions
-// sharing a currency share every lookup; "today" is one pair for the whole
-// request. Mirrors account's and operation's identically named type.
+// newRateKey is the only place a lookup becomes a key. Both halves of the memo
+// build one — the loop asking for a rate (rateFor) and the prefetch filing the
+// answers before it (prewarmRates) — and a key spelled two ways would file
+// every prefetched answer where nothing looks for it: no wrong number, just a
+// batch paid for and then ignored, which is precisely the kind of failure that
+// leaves no trace.
+func newRateKey(from, to string, on time.Time) rateKey {
+	return rateKey{from: from, to: to, on: on.Format("2006-01-02")}
+}
+
+// rateLookup memoizes one rateKey's resolved fx rate — the rate itself, the
+// date it actually came from, and the resolution error — so a request hits the
+// fx rate store at most once per distinct (pair, date). A position with many
+// lots usually has few distinct purchase dates, and positions sharing a
+// currency share every lookup; "today" is one entry for the whole request.
+// Mirrors account's and operation's identically named type.
 type rateLookup struct {
 	rate decimal.Decimal
 	date time.Time
 	err  error
+}
+
+// applyTo converts amountMinor at this rate — multiply as decimals, round the
+// product once, half-away-from-zero — which is exactly what
+// marketdata.Converter.Convert does with the rate it resolves.
+//
+// Both figures this file strikes from a single rate go through it: a bond's
+// valuation brought into the position's own currency (toAPI, which used to
+// call Convert and now shares the memo like everything else) and that
+// valuation carried on into the base currency (positionInBase). One statement
+// of how a rate becomes money, so the two cannot round differently from each
+// other. It is deliberately the same step marketdata.Converter.Convert applies
+// — but that is two statements of one rule, not one, and only tests hold them
+// together (Convert has no production caller left in this package). If
+// Convert's scale handling ever changes, for zero-decimal currencies or
+// anything else, this has to be changed with it. Amounts summed from many
+// rates do not come through
+// here — they must round once for the whole sum, not once per term (see
+// sumInBase).
+func (rl *rateLookup) applyTo(amountMinor int64) int64 {
+	return decimal.NewFromInt(amountMinor).Mul(rl.rate).Round(0).IntPart()
 }
 
 // datedMinor is one amount denominated in the position's own currency,
@@ -361,8 +439,16 @@ type datedMinor struct {
 // returning it, because callers must tell marketdata.ErrNoRate (an expected
 // outcome that nulls in_base) apart from a genuine failure (which fails the
 // request) — see positionInBase.
+//
+// The cache is normally already full when this is called: handleList prefetches
+// every rate the screen was expected to want in one round trip (see
+// prewarmRates). A MISS IS NOT AN ERROR — it is the whole safety net. Whatever
+// the enumeration failed to predict, or the batch failed to fetch, is resolved
+// here one pair at a time exactly as it was before any of that existed, so the
+// figures on the screen never depend on the prefetch being complete or even on
+// its having succeeded. Only their cost does.
 func (h *Handler) rateFor(ctx context.Context, from, to string, on time.Time, cache map[rateKey]*rateLookup) *rateLookup {
-	key := rateKey{currency: from, on: on.Format("2006-01-02")}
+	key := newRateKey(from, to, on)
 	rl, ok := cache[key]
 	if !ok {
 		rate, date, err := h.conv.Rate(ctx, from, to, on)
@@ -396,6 +482,51 @@ func (h *Handler) sumInBase(ctx context.Context, amounts []datedMinor, from, to 
 		total = total.Add(decimal.NewFromInt(a.minor).Mul(rl.rate))
 	}
 	return total.Round(0).IntPart(), true, nil
+}
+
+// lotTerms flattens the lots a position still holds into the terms of ONE sum
+// — its basis — each term carrying the date whose fx rate values it: the day
+// THAT lot was acquired, never today's (see positionInBase for why).
+//
+// dated is false as soon as one lot does not know when it was acquired (see
+// portfolio.Lot.AcquiredOn): it arrived by a transfer whose purchase dates
+// were never recorded. Its basis is real money, but there is no date to value
+// it at, and every candidate date — the transfer's, another lot's, today's —
+// would be a number this handler made up. What the caller does about that is
+// the caller's decision (positionInBase publishes nothing at all); this
+// function only refuses to invent the date.
+//
+// It is realizedTerms' twin for the held side, and like realizedTerms it is
+// called from two places: by the code that converts these terms and by the
+// enumeration that prefetches their rates (see rateQueries). That is the point
+// of it being a function at all — one statement of which dates the basis
+// needs, so the prefetch cannot come to disagree with the sum it is
+// prefetching for.
+func lotTerms(lots []Lot) (terms []datedMinor, dated bool) {
+	terms = make([]datedMinor, 0, len(lots))
+	for _, l := range lots {
+		if l.AcquiredOn == nil {
+			return nil, false
+		}
+		terms = append(terms, datedMinor{minor: l.CostMinor, on: *l.AcquiredOn})
+	}
+	return terms, true
+}
+
+// incomeTerms flattens a position's income operations into the terms of ONE
+// sum, each at the rate of the day it occurred (see incomeByInstrument for
+// which operations those are, and positionInBase for why not one rate for the
+// total).
+//
+// There is no undated case: an operation always has the day it occurred on.
+// Like lotTerms and realizedTerms, it is called both by the sum and by the
+// enumeration that prefetches the sum's rates.
+func incomeTerms(income []Operation) []datedMinor {
+	terms := make([]datedMinor, 0, len(income))
+	for _, o := range income {
+		terms = append(terms, datedMinor{minor: o.AmountMinor, on: o.OccurredOn})
+	}
+	return terms
 }
 
 // realizedTerms flattens every disposal a position has made into the terms of
@@ -720,30 +851,25 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // A non-nil error means a genuine failure (DB error, canceled context) that
 // the caller must surface as a request error — never silently rendered as
 // null, which would misrepresent an outage as "nothing to convert".
-func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, income []Operation, baseCurrency string, realizedMinor nullable.Nullable[int64], cache map[rateKey]*rateLookup) (*apitypes.PositionInBase, error) {
+// now is the request's one reading of "today" (see toAPI, which takes it for
+// the same reason): the valuation this object converts was itself brought into
+// p.Currency at today's rate a moment earlier, and the two must mean the same
+// day even for a request that crosses UTC midnight.
+func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, income []Operation, baseCurrency string, realizedMinor nullable.Nullable[int64], now time.Time, cache map[rateKey]*rateLookup) (*apitypes.PositionInBase, error) {
 	if p.Currency == baseCurrency {
 		return nil, nil
 	}
 
-	lots := make([]datedMinor, 0, len(p.Lots))
-	for _, l := range p.Lots {
-		if l.AcquiredOn == nil {
-			// This lot does not know when it was acquired (see
-			// portfolio.Lot.AcquiredOn): it arrived by a transfer whose
-			// purchase dates were never recorded. Its basis is real money, but
-			// there is no date to value it at, and every candidate date — the
-			// transfer's, another lot's, today's — would be a number this
-			// handler made up.
-			//
-			// So the whole object goes, exactly as it does when one lot's date
-			// has no fx rate: a basis summed from only the lots that could be
-			// converted is smaller than the truth, looks like an ordinary
-			// figure on screen, and drags the profit down with it. Nothing is
-			// published rather than something wrong, and the position still
-			// shows every figure it has in its own currency.
-			return nil, nil
-		}
-		lots = append(lots, datedMinor{minor: l.CostMinor, on: *l.AcquiredOn})
+	lots, dated := lotTerms(p.Lots)
+	if !dated {
+		// One lot does not know when it was acquired, so its basis cannot be
+		// valued at all (see lotTerms). The whole object goes, exactly as it
+		// does when one lot's date has no fx rate: a basis summed from only the
+		// lots that could be converted is smaller than the truth, looks like an
+		// ordinary figure on screen, and drags the profit down with it. Nothing
+		// is published rather than something wrong, and the position still
+		// shows every figure it has in its own currency.
+		return nil, nil
 	}
 	costMinor, ok, err := h.sumInBase(ctx, lots, p.Currency, baseCurrency, cache)
 	if err != nil {
@@ -753,11 +879,7 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		return nil, nil
 	}
 
-	payments := make([]datedMinor, 0, len(income))
-	for _, o := range income {
-		payments = append(payments, datedMinor{minor: o.AmountMinor, on: o.OccurredOn})
-	}
-	incomeMinor, ok, err := h.sumInBase(ctx, payments, p.Currency, baseCurrency, cache)
+	incomeMinor, ok, err := h.sumInBase(ctx, incomeTerms(income), p.Currency, baseCurrency, cache)
 	if err != nil {
 		return nil, err
 	}
@@ -813,18 +935,199 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 	// stale. Without it the valuation cannot be struck, and since the profit
 	// below is measured against a basis that would then be published beside a
 	// valuation that is not, the whole object goes rather than half of it.
-	today := h.rateFor(ctx, p.Currency, baseCurrency, time.Now().UTC(), cache)
+	today := h.rateFor(ctx, p.Currency, baseCurrency, now, cache)
 	if today.err != nil {
 		if errors.Is(today.err, marketdata.ErrNoRate) {
 			return nil, nil
 		}
 		return nil, today.err
 	}
-	valuation := decimal.NewFromInt(*marketValueMinor).Mul(today.rate).Round(0).IntPart()
+	valuation := today.applyTo(*marketValueMinor)
 	out.MarketValueMinor = nullable.NewNullableWithValue(valuation)
 	out.UnrealizedPnlMinor = nullable.NewNullableWithValue(valuation - costMinor)
 	out.RateOn = nullable.NewNullableWithValue(today.date.Format("2006-01-02"))
 	return out, nil
+}
+
+// rateQueries enumerates every fx rate the loop in handleList is about to ask
+// for, so one RatesOn call can resolve them all and every rateFor below finds
+// its answer already in the memo. A screen holding thirty positions bought on
+// a hundred days between them costs one round trip for the lot, instead of one
+// per distinct date per position (#40, #53).
+//
+// IT IS DERIVED FROM THE CODE THAT CONSUMES THE RATES WHEREVER THAT IS
+// POSSIBLE, RATHER THAN WRITTEN BESIDE IT. Every historical date here comes
+// out of lotTerms, incomeTerms or realizedTerms — the same three functions the
+// sums themselves are built from — and the one pair whose target is not the
+// base currency comes out of marketValue, the same function toAPI values the
+// position with. That leaves no list of DATES to keep in step with a second
+// list of dates, which is where this codebase has been bitten before: two
+// computations of one value drift apart, and a prefetch is the worst place for
+// it, since the two disagree in silence.
+//
+// ONE query is not derived: the position's own currency against the base ON
+// TODAY, below. positionInBase picks today's rate for the valuation as a flat
+// decision rather than by building terms, so there is nothing here to call,
+// and this restates that choice. If the valuation ever stops being struck at
+// today's rate, this line has to follow — and nothing will make it, because
+// the consequence is a missed prefetch, not a wrong figure (see below).
+//
+// Completeness is an optimization, not a correctness condition, and the
+// asymmetry is deliberate. Asking for a rate the loop turns out not to need
+// (the valuation below whose conversion fails, say) costs one row in a query
+// that was happening anyway. FAILING to ask for one costs nothing but a round
+// trip either, because rateFor resolves whatever it does not find, exactly as
+// it did before this existed. What would be dangerous is naming a DIFFERENT
+// pair than the loop asks for and having its answer read as the loop's — and
+// that cannot happen, because the memo is keyed by the pair and the day
+// themselves (see rateKey), so a mis-enumerated rate is filed where nothing
+// looks for it.
+//
+// The slice this builds names one query per TERM before it is returned —
+// appendTermQueries asks once per lot, per income operation, per released
+// parcel — so a position with many lots landing on a handful of purchase
+// dates repeats the same (pair, day) many times over. That costs nothing at
+// the database (RatesOn collapses duplicates before it ever queries the
+// store), but it is not free: prewarmRates below walks this same slice again
+// to file each answer in the memo, and RatesOn's own resolution walks it once
+// more to build its result. Both of those passes are O(terms) unless this one
+// hands them O(distinct queries) instead, so the return statement collapses
+// the slice through dedupeQueries before handing it back — keyed with rateKey,
+// the same identity the memo itself uses, rather than a second answer to what
+// makes two queries "the same".
+func rateQueries(
+	positions map[uuid.UUID]*Position,
+	instruments map[uuid.UUID]instrument.Instrument,
+	quotes map[uuid.UUID]marketdata.Quote,
+	income map[uuid.UUID][]Operation,
+	baseCurrency string,
+	now time.Time,
+) []marketdata.RateQuery {
+	var out []marketdata.RateQuery
+	for _, p := range positions {
+		inst, known := instruments[p.InstrumentID]
+		q, quoted := quotes[p.InstrumentID]
+		if known && quoted {
+			if _, currency, valued := marketValue(inst.Type, inst.FaceValueMinor, inst.FaceCurrency, p.Quantity, q); valued {
+				if currency != p.Currency {
+					// toAPI brings a valuation denominated in the face
+					// currency into the position's own — the one lookup on
+					// this page whose target is not the base currency.
+					out = append(out, marketdata.RateQuery{From: currency, To: p.Currency, On: now})
+				}
+				if p.Currency != baseCurrency {
+					// positionInBase carries that valuation on into the base
+					// currency, and asks for today's rate only when there is a
+					// valuation to convert. Whether there still is one depends
+					// on the conversion just above having succeeded, which is
+					// not known until it runs — so this asks whenever a
+					// valuation exists at all, and over-asks in exactly the
+					// case where the position ends up publishing no in_base
+					// valuation anyway.
+					out = append(out, marketdata.RateQuery{From: p.Currency, To: baseCurrency, On: now})
+				}
+			}
+		}
+		if p.Currency == baseCurrency {
+			// Nothing else on this position converts: positionInBase and
+			// realizedInBase both short-circuit on it.
+			continue
+		}
+		if lots, dated := lotTerms(p.Lots); dated {
+			out = appendTermQueries(out, lots, p.Currency, baseCurrency)
+		}
+		out = appendTermQueries(out, incomeTerms(income[p.InstrumentID]), p.Currency, baseCurrency)
+		if realized, dated := realizedTerms(p.Realizations); dated {
+			out = appendTermQueries(out, realized, p.Currency, baseCurrency)
+		}
+	}
+	return dedupeQueries(out)
+}
+
+// appendTermQueries asks for the rate of every term's own date — which is what
+// sumInBase will do with the same terms, one at a time.
+func appendTermQueries(dst []marketdata.RateQuery, terms []datedMinor, from, to string) []marketdata.RateQuery {
+	for _, t := range terms {
+		dst = append(dst, marketdata.RateQuery{From: from, To: to, On: t.on})
+	}
+	return dst
+}
+
+// dedupeQueries collapses queries onto one entry per distinct (pair, day),
+// keeping the first occurrence's own On value. It exists because
+// appendTermQueries asks once per TERM rather than once per distinct date:
+// 500 lots settling on 5 purchase dates produce 500 queries for 5 answers,
+// and every one of the three passes rateQueries and its callers make over
+// this slice — this function's own accumulation aside — pays for every
+// repeat, not just the distinct ones the store ends up billed for.
+//
+// Filters in place (out := queries[:0]) rather than allocating a second
+// slice: the read index is always at or ahead of the write index, so
+// overwriting queries as it is walked never clobbers an element still to be
+// read.
+//
+// Keyed with rateKey/newRateKey — the same identity the request's rate memo
+// itself uses (see rateFor) — rather than a second, independent notion of
+// "same query" that could disagree with it. That also sidesteps the usual
+// time.Time hazard for free: two dates naming the same calendar day but
+// differing in *time.Location or monotonic reading collapse here exactly as
+// they already collapse in the memo, because newRateKey reduces both to the
+// same YYYY-MM-DD string.
+func dedupeQueries(queries []marketdata.RateQuery) []marketdata.RateQuery {
+	seen := make(map[rateKey]bool, len(queries))
+	out := queries[:0]
+	for _, q := range queries {
+		k := newRateKey(q.From, q.To, q.On)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, q)
+	}
+	return out
+}
+
+// prewarmRates resolves queries in one round trip and files each answer in the
+// request's memo under the key rateFor will look it up by.
+//
+// NOTHING HERE FAILS THE REQUEST, and that is not laziness. This call buys
+// speed, not truth: every figure below is struck by rateFor, which resolves
+// whatever it does not find in the memo. A batch that fails leaves the memo
+// empty and the screen is computed exactly as it was before any prefetch
+// existed. An outage is met again by the very next lookup and reported from the
+// code that knows which figure it was resolving and can tell a missing rate (a
+// gap on the screen) from an outage (a 500). Failing here would move that
+// judgement to a place that cannot make it, and would turn into an error page
+// every request the fallback could have served correctly.
+//
+// KNOWN BLIND SPOT: a failure specific to the BATCH statement — a timeout on
+// the one large query, say — is met by nothing, because the per-pair fallback
+// then succeeds. The page is correct and slow, and no one is told the
+// optimization stopped working. No handler in this codebase holds a logger, so
+// closing this is a change of shape rather than a line, and it is filed rather
+// than done here.
+func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQuery, cache map[rateKey]*rateLookup) {
+	if len(queries) == 0 {
+		return
+	}
+	resolved, err := h.conv.RatesOn(ctx, queries)
+	if err != nil {
+		return
+	}
+	for _, q := range queries {
+		res, err := resolved.For(q.From, q.To, q.On)
+		if err != nil {
+			// The batch did not answer a query it was handed — a bug in the
+			// batch or in this loop, never a missing rate, which arrives as
+			// res.Err instead (see marketdata.Rates.For). Leaving the memo cold
+			// for it is the honest treatment: rateFor asks the store itself and
+			// the figure comes out the same, one round trip dearer. Filing res
+			// anyway would file a zero rate under an entry that reads as
+			// answered, and a zero rate is a plausible-looking 0,00 on screen.
+			continue
+		}
+		cache[newRateKey(q.From, q.To, q.On)] = &rateLookup{rate: res.Rate, date: res.RateDate, err: res.Err}
+	}
 }
 
 // handleList computes an account's positions by replaying its full
@@ -873,28 +1176,54 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	for id := range positions {
 		instrumentIDs = append(instrumentIDs, id)
 	}
-	// One batched round trip for every position's quote, never one per
-	// position (N+1) — see quoteStore's doc comment.
+	// One batched round trip for every position's catalog row and one for
+	// every position's quote, never one per position (N+1) — see
+	// instrumentStore and quoteStore.
+	instruments, err := h.instruments.ByIDs(r.Context(), instrumentIDs)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
 	quotes, err := h.quotes.LatestQuotes(r.Context(), instrumentIDs)
 	if err != nil {
 		family.WriteError(w, err)
 		return
 	}
 
+	// One reading of "today" for the whole request: the market valuations, the
+	// base-currency figures struck from them and the prefetch that resolves
+	// both must name the same calendar day, even for the one request a year
+	// that starts before UTC midnight and finishes after it.
+	now := time.Now().UTC()
+
 	// Both scoped to this request only: see positionInBase/rateKey and
 	// incomeByInstrument. The journal is already in hand, so grouping its
 	// income entries costs one pass and no extra round trip.
 	rates := make(map[rateKey]*rateLookup)
 	income := incomeByInstrument(ops)
+
+	// One round trip for every rate the loop below is about to want. It is a
+	// cache warm-up and nothing more: what it misses, and everything it
+	// resolves if it fails outright, the loop resolves for itself (see
+	// rateQueries, prewarmRates and rateFor).
+	h.prewarmRates(r.Context(), rateQueries(positions, instruments, quotes, income, sp.BaseCurrency, now), rates)
+
 	totals := newRealizedTotals(sp.BaseCurrency)
 	out := make([]apitypes.Position, 0, len(positions))
 	for _, pos := range positions {
-		inst, err := h.instruments.ByID(r.Context(), pos.InstrumentID)
-		if err != nil {
-			family.WriteError(w, err)
+		inst, ok := instruments[pos.InstrumentID]
+		if !ok {
+			// The journal names an instrument the catalog has no row for. A
+			// foreign key (operations.instrument_id, ON DELETE RESTRICT) makes
+			// this unreachable, and it is answered anyway rather than skipped:
+			// a skipped position is a holding missing from the portfolio with
+			// every total quietly smaller and nothing on screen saying so. The
+			// same 404 the one-at-a-time read published through
+			// family.WriteError(pgx.ErrNoRows) before it was batched.
+			httpjson.Error(w, http.StatusNotFound, "not found")
 			return
 		}
-		apiPos, err := toAPI(r.Context(), h.conv, pos, inst, quotes)
+		apiPos, err := h.toAPI(r.Context(), pos, inst, quotes, now, rates)
 		if err != nil {
 			family.WriteError(w, err)
 			return
@@ -912,7 +1241,7 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		totals.add(apiPos.Currency, apiPos.RealizedPnlMinor, realizedMinor, realizedGap)
 
-		inBase, err := h.positionInBase(r.Context(), pos, apiPos, income[pos.InstrumentID], sp.BaseCurrency, realizedMinor, rates)
+		inBase, err := h.positionInBase(r.Context(), pos, apiPos, income[pos.InstrumentID], sp.BaseCurrency, realizedMinor, now, rates)
 		if err != nil {
 			family.WriteError(w, err)
 			return

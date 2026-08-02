@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/family"
@@ -18,6 +19,7 @@ import (
 
 type fixture struct {
 	store *marketdata.Store
+	pool  *pgxpool.Pool // exposed so tests can inspect Stat() (e.g. zero-round-trip assertions)
 	ctx   context.Context
 	insts []uuid.UUID // 4 instruments: 3 get quotes, 1 stays without any
 }
@@ -47,7 +49,7 @@ func newFixture(t *testing.T) fixture {
 		insts = append(insts, inst.ID)
 	}
 
-	return fixture{store: marketdata.NewStore(pool), ctx: ctx, insts: insts}
+	return fixture{store: marketdata.NewStore(pool), pool: pool, ctx: ctx, insts: insts}
 }
 
 func date(s string) time.Time {
@@ -108,6 +110,99 @@ func TestUpsertFxRatesAndFxRateOn(t *testing.T) {
 	_, err = f.store.FxRateOn(f.ctx, "GBP", "RUB", date("2026-07-03"))
 	if !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("FxRateOn unknown pair: err = %v, want pgx.ErrNoRows", err)
+	}
+}
+
+func TestFxRatesOnBatch(t *testing.T) {
+	f := newFixture(t)
+
+	err := f.store.UpsertFxRates(f.ctx, []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: date("2026-07-01"), Rate: dec("90.5"), Source: "cbr"},
+		{Base: "USD", Quote: "RUB", On: date("2026-07-03"), Rate: dec("91.2"), Source: "cbr"},
+		{Base: "EUR", Quote: "RUB", On: date("2026-07-03"), Rate: dec("98.0"), Source: "cbr"},
+	})
+	if err != nil {
+		t.Fatalf("UpsertFxRates: %v", err)
+	}
+
+	// The two keys nothing answers sit FIRST and in the MIDDLE on purpose.
+	// FxRatesOn pairs each row with the key the caller asked with by that
+	// key's POSITION in this slice, and the position is assigned before the
+	// join drops the unanswered ones. Numbering after the join instead —
+	// row_number() over the surviving rows — renumbers across the gaps and
+	// hands every later key its neighbour's rate. With both absent keys at the
+	// tail there is nothing to renumber across, the two implementations agree
+	// exactly, and that mistake ships.
+	keys := []marketdata.FxRateKey{
+		{Base: "GBP", Quote: "RUB", On: date("2026-07-03")}, // unknown pair -> absent
+		{Base: "USD", Quote: "RUB", On: date("2026-07-01")}, // exact match
+		{Base: "USD", Quote: "RUB", On: date("2026-07-01")}, // duplicate of the above -> collapses
+		{Base: "USD", Quote: "RUB", On: date("2026-06-01")}, // earlier than all data -> absent
+		{Base: "USD", Quote: "RUB", On: date("2026-07-02")}, // no row on this day -> nearest earlier (07-01)
+		{Base: "USD", Quote: "RUB", On: date("2026-07-05")}, // later than all rows -> nearest earlier (07-03)
+		{Base: "EUR", Quote: "RUB", On: date("2026-07-03")}, // exact match
+	}
+
+	// Discriminating check: batching N keys must take exactly one round trip
+	// to the database, not N — that is the entire reason FxRatesOn exists
+	// instead of a loop of FxRateOn calls. AcquireCount is a lifetime
+	// counter on the pool (same technique the empty-input check below uses),
+	// so comparing before and after catches an implementation that compiles
+	// and returns correct rates while quietly issuing one query per key.
+	beforeBatch := f.pool.Stat().AcquireCount()
+	got, err := f.store.FxRatesOn(f.ctx, keys)
+	if err != nil {
+		t.Fatalf("FxRatesOn: %v", err)
+	}
+	if afterBatch := f.pool.Stat().AcquireCount(); afterBatch-beforeBatch != 1 {
+		t.Fatalf("FxRatesOn(%d keys) acquired %d connections, want exactly 1", len(keys), afterBatch-beforeBatch)
+	}
+
+	// Discriminating check: every key's outcome must agree with what FxRateOn
+	// returns for that same (base, quote, on) individually — same resolved
+	// date, same rate, same presence/absence. This is what catches a lateral
+	// join missing its ORDER BY (wrong row picked when more than one
+	// candidate qualifies) or a result that reports the requested date
+	// instead of the row's own.
+	for _, k := range keys {
+		want, wantErr := f.store.FxRateOn(f.ctx, k.Base, k.Quote, k.On)
+		gotRate, ok := got[k]
+		if wantErr != nil {
+			if !errors.Is(wantErr, pgx.ErrNoRows) {
+				t.Fatalf("FxRateOn(%+v) unexpected error: %v", k, wantErr)
+			}
+			if ok {
+				t.Fatalf("FxRatesOn[%+v] = %+v, want absent (FxRateOn found nothing)", k, gotRate)
+			}
+			continue
+		}
+		if !ok {
+			t.Fatalf("FxRatesOn[%+v] absent, want %+v (FxRateOn found it)", k, want)
+		}
+		if gotRate.Base != want.Base || gotRate.Quote != want.Quote ||
+			!gotRate.On.Equal(want.On) || !gotRate.Rate.Equal(want.Rate) || gotRate.Source != want.Source {
+			t.Fatalf("FxRatesOn[%+v] = %+v, want %+v (from FxRateOn)", k, gotRate, want)
+		}
+	}
+
+	// 7 keys in, 2 collapse (exact duplicate) and 2 are absent (GBP/RUB has
+	// no rows at all; 2026-06-01 is earlier than every USD/RUB row) -> 4
+	// distinct present keys.
+	if len(got) != 4 {
+		t.Fatalf("FxRatesOn len = %d, want 4: %+v", len(got), got)
+	}
+
+	// Empty input -> empty map and not a single round trip to the database.
+	// AcquireCount is a lifetime counter on the pool, so comparing before and
+	// after catches an implementation that forgot the short-circuit and
+	// queried with empty arrays instead.
+	before := f.pool.Stat().AcquireCount()
+	empty, err := f.store.FxRatesOn(f.ctx, nil)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("FxRatesOn(nil) = %+v, %v", empty, err)
+	}
+	if after := f.pool.Stat().AcquireCount(); after != before {
+		t.Fatalf("FxRatesOn(nil) acquired a connection (before=%d after=%d), want zero round trips for empty input", before, after)
 	}
 }
 

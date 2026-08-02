@@ -419,19 +419,18 @@ type oneDateConverter struct {
 	err    error
 }
 
-// Convert is never reached by the tests using this double — their positions are
-// shares, whose valuation is already in the position's own currency, so toAPI
-// does no fx conversion at all — and so it fails unconditionally rather than
-// inventing a plausible number for a path nobody exercises.
-func (c oneDateConverter) Convert(_ context.Context, _ int64, _, _ string, _ time.Time) (int64, error) {
-	return 0, c.err
-}
-
 func (c oneDateConverter) Rate(_ context.Context, _, _ string, on time.Time) (decimal.Decimal, time.Time, error) {
 	if on.Format("2006-01-02") == c.on {
 		return decimal.Decimal{}, time.Time{}, c.err
 	}
 	return c.rate, c.rateOn, nil
+}
+
+// RatesOn answers the batch from this double's own Rate, so the hole under the
+// one date is in the prewarm too and not only in the fallback (see
+// ratesFromRate).
+func (c oneDateConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
+	return ratesFromRate(ctx, c, queries)
 }
 
 // realizedRateHoleAPI wires the fixture the two tests below share: a USD

@@ -42,15 +42,23 @@ type spaceStore interface {
 }
 
 // converter is the subset of *marketdata.Converter this handler needs: Rate,
-// which resolves a currency pair's rate on a given DATE and reports the date
-// the rate actually came from. Local interface (mirroring account's and
-// portfolio's identically named ones) so tests can inject a double whose
-// lookups fail with a genuine error rather than marketdata.ErrNoRate — a
-// real, DB-backed Converter cannot be made to do that on demand, and the
-// handler must treat the two completely differently (see operationInBase).
-// *marketdata.Converter satisfies this structurally, no call site changes.
+// which resolves one currency pair's rate on a given DATE and reports the date
+// the rate actually came from, and RatesOn, which resolves many such queries in
+// a single round trip and answers each exactly as Rate would have (see
+// marketdata.RatesOn). The page uses both, and not interchangeably: RatesOn
+// fills the request's memo up front (prewarmRates) and Rate resolves whatever
+// is not in it (rateFor), which is what keeps the figures independent of the
+// prefetch.
+//
+// Local interface (mirroring account's and portfolio's identically named ones)
+// so tests can inject a double whose lookups fail with a genuine error rather
+// than marketdata.ErrNoRate — a real, DB-backed Converter cannot be made to do
+// that on demand, and the handler must treat the two completely differently
+// (see operationInBase). *marketdata.Converter satisfies this structurally, no
+// call site changes.
 type converter interface {
 	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
+	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
 }
 
 // Handler exposes the operations journal (and transfers) over HTTP.
@@ -185,26 +193,54 @@ func toAPI(o Operation) apitypes.Operation {
 	return out
 }
 
-// rateKey identifies one memoized fx rate lookup. Unlike account's cache —
-// which converts everything at today's rate and can therefore key by
-// currency alone — the journal resolves a rate per operation DATE, so the
-// date has to be part of the key. A single page of the journal routinely
-// holds the same currency on a dozen different dates with a dozen different
-// rates; keying by currency alone would silently reuse the first operation's
-// rate for all of them, producing wrong numbers that look entirely plausible
-// on screen. portfolio's cache (portfolio.rateKey) is keyed the same way and
-// for the same reason: its per-lot and per-income-operation conversions are,
-// like the journal's, valued at each item's own date rather than one rate
-// for everything — only account still converts everything at today's rate.
+// rateKey identifies one memoized fx rate lookup: the currency being
+// converted, the currency it is converted INTO, and the date its rate must
+// come from. Unlike account's cache — which converts everything at today's
+// rate and can therefore key by currency alone — the journal resolves a rate
+// per operation DATE, so the date has to be part of the key. A single page of
+// the journal routinely holds the same currency on a dozen different dates
+// with a dozen different rates; keying by currency alone would silently reuse
+// the first operation's rate for all of them, producing wrong numbers that
+// look entirely plausible on screen. portfolio's cache (portfolio.rateKey) is
+// keyed the same way and for the same reason: its per-lot and
+// per-income-operation conversions are, like the journal's, valued at each
+// item's own date rather than one rate for everything — only account still
+// converts everything at today's rate.
 //
 // The date is held as its YYYY-MM-DD string rather than a time.Time so the
 // key is a value comparison on the calendar date itself, immune to two
 // otherwise-equal time.Time values differing in monotonic clock reading or
 // *time.Location pointer (which would merely cost extra lookups, but would
 // do so invisibly).
+//
+// The TARGET currency is in the key too, mirroring portfolio.rateKey, even
+// though this page converts into exactly one currency today: the space's base
+// currency, read once per request and handed to every lookup and every
+// prefetched query alike (see handleListByAccount). With a single target the
+// field never changes what any lookup finds — every entry here names the same
+// one — so leaving it out costs nothing YET. What it guards against is this
+// codebase's worst failure class: the day some future change converts one
+// figure into a second target (an account's own currency, say, instead of the
+// base) without also widening this key, that figure's lookup collides with an
+// unrelated row already cached under the same source currency and date, and
+// silently publishes THAT row's rate under a rate_on that reads like its own.
+// Before this, a comment was the only thing standing between that change and
+// merging clean. Now the same mistake also needs a second field added, not
+// just a currency passed to a second lookup.
 type rateKey struct {
 	currency string
+	target   string
 	on       string
+}
+
+// newRateKey is the only place a lookup becomes a key. Both halves of the memo
+// build one — the loop asking for a rate (rateFor) and the prefetch filing the
+// answers before it (prewarmRates) — and a key spelled two ways would file
+// every prefetched answer where nothing looks for it: no wrong number, just a
+// batch paid for and then ignored, which is precisely the kind of failure that
+// leaves no trace.
+func newRateKey(currency, target string, on time.Time) rateKey {
+	return rateKey{currency: currency, target: target, on: on.Format("2006-01-02")}
 }
 
 // rateLookup memoizes one (currency, date) pair's resolved fx rate — the
@@ -225,8 +261,16 @@ type rateLookup struct {
 // tell marketdata.ErrNoRate — an expected outcome that nulls in_base — apart
 // from a genuine failure, which fails the request. Mirrors portfolio's
 // identically named method.
+//
+// The cache is normally already full when this is called: handleListByAccount
+// prefetches every rate the page was expected to want in one round trip (see
+// prewarmRates). A MISS IS NOT AN ERROR — it is the whole safety net. Whatever
+// the enumeration failed to predict, or the batch failed to fetch, is resolved
+// here one pair at a time exactly as it was before any of that existed, so no
+// figure on the page depends on the prefetch being complete or even on its
+// having succeeded. Only the cost does.
 func (h *Handler) rateFor(ctx context.Context, currency, baseCurrency string, on time.Time, cache map[rateKey]*rateLookup) *rateLookup {
-	key := rateKey{currency: currency, on: on.Format("2006-01-02")}
+	key := newRateKey(currency, baseCurrency, on)
 	rl, ok := cache[key]
 	if !ok {
 		rate, date, err := h.conv.Rate(ctx, currency, baseCurrency, on)
@@ -484,6 +528,131 @@ func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency
 	}, nil
 }
 
+// rateQueries enumerates every fx rate the loop in handleListByAccount is
+// about to ask for, so one RatesOn call can resolve them all and every rateFor
+// below finds its answer already in the memo. A page of 200 operations on 200
+// different days costs one round trip for the lot, instead of one per distinct
+// date — and a date that needs a RUB bridge cost up to six on its own (#45).
+//
+// IT IS DERIVED FROM THE CODE THAT CONSUMES THE RATES, NEVER WRITTEN BESIDE
+// IT. Every date here comes out of amountTerms — the same function
+// operationInBase splits the amount with — so there is no second list of dates
+// to keep in step with the first, because there is no second list. This
+// codebase has been bitten more than once by two computations of one value
+// drifting apart, and a prefetch is the worst place for it: the two disagree in
+// silence. Calling amountTerms twice per operation is cheap and safe: it is a
+// pure function of the operation, reading nothing but the row and its stored
+// breakdown.
+//
+// ITS ERROR IS DELIBERATELY IGNORED. amountTerms fails when a transfer's
+// stored breakdown no longer sums to the operation carrying it — a genuine
+// failure that must reach the user as one, and it does: the loop calls the same
+// function on the same row moments later and returns the error from the place
+// that knows which figure it was building (see operationInBase). Surfacing it
+// here as well would put the same judgement in two places, and refusing to
+// prefetch is all this function can usefully do about it — which is what
+// happens anyway, since a failing amountTerms also answers ok=false.
+//
+// Completeness is an optimization, not a correctness condition, and the
+// asymmetry is deliberate. Asking for a rate the loop turns out not to need
+// costs one row in a query that was happening anyway. FAILING to ask for one
+// costs a round trip and nothing else, because rateFor resolves whatever it
+// does not find, exactly as it did before this existed. What would be dangerous
+// is naming a DIFFERENT date than the loop asks for and having its answer read
+// as the loop's — and that cannot happen, because the memo is keyed by the
+// currency and the day themselves (see rateKey), so a mis-enumerated rate is
+// filed where nothing looks for it.
+//
+// Duplicates are collapsed as they are collected rather than in a pass of their
+// own: one page routinely holds many operations on one day, and a transfer's
+// headline date is always one of its own term dates, so the same (currency,
+// day) arrives here several times over. Every repeat would be walked again by
+// prewarmRates and once more by RatesOn's own resolution, neither of which the
+// database is billed for but both of which are paid for in full. The seen set
+// is keyed with rateKey — the same identity the memo itself uses — rather than
+// a second, independent notion of "the same query" that could disagree with it.
+func rateQueries(ops []Operation, baseCurrency string) []marketdata.RateQuery {
+	var out []marketdata.RateQuery
+	seen := make(map[rateKey]bool, len(ops))
+	add := func(currency string, on time.Time) {
+		key := newRateKey(currency, baseCurrency, on)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, marketdata.RateQuery{From: currency, To: baseCurrency, On: on})
+	}
+	for _, o := range ops {
+		if o.Currency == baseCurrency {
+			// operationInBase short-circuits on this row without resolving
+			// anything: there is nothing to convert.
+			continue
+		}
+		terms, headline, ok, _ := amountTerms(o)
+		if !ok {
+			// Either the amount cannot be split into dated terms at all, or the
+			// breakdown is broken (the error ignored above). Both leave the loop
+			// publishing nothing for this row, and neither gives it a date worth
+			// asking about.
+			continue
+		}
+		// The headline rate values the fee and supplies rate_on, and the loop
+		// asks for it in its own right (see operationInBase) — so this asks for
+		// it too, rather than relying on amountTerms picking it from among the
+		// terms. It does today, on both branches, which is why the seen set
+		// swallows this line's query every time; that is the redundancy being
+		// paid for, and it is a line of code, not a round trip.
+		add(o.Currency, headline)
+		for _, t := range terms {
+			add(o.Currency, t.on)
+		}
+	}
+	return out
+}
+
+// prewarmRates resolves queries in one round trip and files each answer in the
+// request's memo under the key rateFor will look it up by.
+//
+// NOTHING HERE FAILS THE REQUEST, and that is not laziness. This call buys
+// speed, not truth: every figure on the page is struck by rateFor, which
+// resolves whatever it does not find in the memo. A batch that fails leaves the
+// memo empty and the page is computed exactly as it was before any prefetch
+// existed. An outage is met again by the very next lookup and reported from the
+// code that knows which figure it was resolving and can tell a missing rate (a
+// gap in the journal) from an outage (a 500). Failing here would move that
+// judgement to a place that cannot make it, and would turn into an error page
+// every request the fallback could have served correctly.
+//
+// KNOWN BLIND SPOT, the same one portfolio.Handler.prewarmRates carries: a
+// failure specific to the BATCH statement is met by nothing, because the
+// per-pair fallback then succeeds. The page is correct and slow, and no one is
+// told the optimization stopped working. No handler here holds a logger, so
+// closing it is a change of shape rather than a line, and it is filed.
+func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQuery, cache map[rateKey]*rateLookup) {
+	if len(queries) == 0 {
+		return
+	}
+	resolved, err := h.conv.RatesOn(ctx, queries)
+	if err != nil {
+		return
+	}
+	for _, q := range queries {
+		res, err := resolved.For(q.From, q.To, q.On)
+		if err != nil {
+			// The batch did not answer a query it was handed — a bug in the
+			// batch or in this loop, never a missing rate, which arrives as
+			// res.Err instead (see marketdata.Rates.For). Leaving the memo cold
+			// for it is the honest treatment: rateFor asks the store itself and
+			// the figure comes out the same, one round trip dearer. Filing res
+			// anyway would file a zero rate under an entry that reads as
+			// answered, and a zero rate is a plausible-looking 0,00 in the
+			// journal.
+			continue
+		}
+		cache[newRateKey(q.From, q.To, q.On)] = &rateLookup{rate: res.Rate, date: res.RateDate, err: res.Err}
+	}
+}
+
 // parseDate parses a YYYY-MM-DD date, matching account.parseAsOf's format.
 // Business-rule checks (e.g. "not in the future") are left to the service,
 // which already enforces them when replaying the journal.
@@ -640,6 +809,13 @@ func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {
 
 	// Scoped to this request only: see operationInBase/rateKey.
 	rates := make(map[rateKey]*rateLookup)
+
+	// One round trip for every rate the loop below is about to want. It is a
+	// cache warm-up and nothing more: what it misses, and everything it would
+	// have resolved had it failed outright, the loop resolves for itself (see
+	// rateQueries, prewarmRates and rateFor).
+	h.prewarmRates(r.Context(), rateQueries(ops, sp.BaseCurrency), rates)
+
 	out := make([]apitypes.Operation, 0, len(ops))
 	for _, o := range ops {
 		api := toAPI(o)
