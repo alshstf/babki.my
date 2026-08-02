@@ -226,8 +226,7 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) ([]ReleasedLot, error) {
 		// partial piece: floor share, remainder stays in the lot together
 		// with its acquisition date — what is left was bought on the same
 		// day as the part just released.
-		share := decimal.NewFromInt(l.CostMinor).
-			Mul(remaining).Div(l.Quantity).Floor().IntPart()
+		share := lotShare(*l, remaining)
 		pieces = append(pieces, ReleasedLot{Quantity: remaining, CostMinor: share, AcquiredOn: l.AcquiredOn})
 		l.CostMinor -= share
 		l.Quantity = l.Quantity.Sub(remaining)
@@ -238,6 +237,51 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) ([]ReleasedLot, error) {
 	p.CostMinor -= released
 	return pieces, nil
 }
+
+// lotShare is the cost basis that goes with taking qty units out of a lot: the
+// lot's WHOLE cost when the whole lot goes, the floor of its proportional share
+// otherwise. Flooring means a release never takes more money than the shares it
+// takes are worth, and what stays in the lot keeps the difference — a ledger may
+// leave a minor unit behind, but it must never hand out one that was not there.
+//
+// BOTH ways of releasing go through it: the queue-driven one (releaseFIFO) and
+// the record-driven one (Position.releaseRecorded). That is not tidiness. The
+// breakdown a transfer froze was computed by the first, and the second has to
+// reproduce it lot for lot when the journal has not moved — so the two must
+// answer the same for the same lot and the same quantity, and the way to be sure
+// of that is to have one answer rather than two that agree today.
+//
+// "The whole lot goes" is written as "qty is not less than the lot's quantity"
+// rather than "equal" so that a SHARELESS lot gives up all its money: taking
+// nothing out of a lot that holds nothing is taking the whole of it, and a lot
+// whose shares a reverse split rounded away still holds real basis (see
+// applySplit). A proportional share would be zero there, and the money would be
+// stranded in a lot no release can ever reach.
+func lotShare(l Lot, qty decimal.Decimal) int64 {
+	if !qty.LessThan(l.Quantity) {
+		return l.CostMinor
+	}
+	return decimal.NewFromInt(l.CostMinor).Mul(qty).Div(l.Quantity).Floor().IntPart()
+}
+
+// recordAndReplayDisagree is the tail both of releaseRecorded's refusals end
+// with, and it names TWO possible causes because naming one would name the wrong
+// one nearly every time.
+//
+// Rows this build writes cannot reach either refusal through the API at all:
+// every write path — recording an operation, recording a transfer, deleting
+// either — replays the account's journal first and turns the request down before
+// anything is stored (see operation.Service). So the reachable case is a journal
+// written by an EARLIER build, one whose release queue picked lots by another
+// rule, and in that case nobody edited anything. Stating "its history was edited
+// after the transfer was recorded" as a fact would accuse the owner of something
+// they did not do and send them looking for an edit that does not exist, while
+// the screen they came for stays blank. Both possibilities are named, and so is
+// the way out, which is the same one either way — the same recovery a quantity
+// that no longer fits after a split already has (see the package doc).
+const recordAndReplayDisagree = "either this account's history was edited after the transfer was recorded, " +
+	"or the transfer was recorded by a build whose release queue picked lots by a different rule; " +
+	"delete the transfer and record it again either way"
 
 // releaseRecorded gives up the lots a transfer's stored breakdown says left
 // this account, instead of deriving a fresh release from the queue as it stands
@@ -260,28 +304,59 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) ([]ReleasedLot, error) {
 //
 // Each piece is taken from the matching lots front-to-back, and only until its
 // QUANTITY is satisfied, so a piece never reaches into a lot a later piece
-// needs. Its cost comes out of those same lots, clamped by what each one still
-// holds; whatever the clamp leaves over is drained from the front of the queue
-// once every piece has been served. The leftover is not an oddity to be
-// tolerated but a case with a name: a lot whose entire holding was rounded away
-// by a reverse split has no quantity and real money still in it, the release
-// that built this breakdown consumed it as a piece of nothing, and
+// needs. Its cost comes out of those same lots, and each of them gives up
+// exactly the money that goes with the shares it gives up — all of its cost only
+// when all of its shares go, the floor of its proportional share otherwise,
+// which is the very allocation the release that built this breakdown used (see
+// lotShare). Whatever the piece still carries after that is drained from the
+// front of the queue once every piece has been served. The leftover is not an
+// oddity to be tolerated but a case with a name: a lot whose entire holding was
+// rounded away by a reverse split has no quantity and real money still in it,
+// the release that built this breakdown consumed it as a piece of nothing, and
 // operation.quantizeLots — unable to store a piece with no quantity — folded
 // its cost into the next piece along. So a piece can legitimately carry more
 // basis than the lot its date points at, and the money is sitting in a
 // shareless lot ahead of it. Refusing that would refuse a transfer this program
 // itself wrote, which is the one thing a loud check must never do.
 //
+// PROPORTIONING THE COST IS WHAT MAKES THAT LEFTOVER ARRIVE, and the obvious
+// alternative fails silently. Clamping a piece by the whole cost of the lot it
+// lands in — "take whatever the lot still holds" — is correct only while the
+// piece consumes that lot entirely; the moment it takes the lot in part, the
+// lot's whole cost is more than the piece asks for, the clamp never binds,
+// nothing is left over, and the shareless lot's money comes out of an innocent
+// parcel of the same day instead. The shareless lot then stays on the account
+// holding money the destination already holds. Every total still balances — the
+// account gives up the basis the record names, the family holds what it paid —
+// so nothing anywhere notices; only the parcels are wrong, which is precisely
+// the failure this whole mechanism exists to make impossible.
+//
 // WHAT CANNOT BE MATCHED IS REFUSED, LOUDLY. A piece whose acquisition day has
-// no shares left behind it means the journal, replayed under today's rules,
-// does not contain the parcel the record says departed — the source's history
-// was edited after the transfer, or the shares were released twice. There is no
-// quiet answer to that: taking the quantity from some other day's lot would
-// re-date shares that are still held and reprice them at a rate from a day they
-// were never bought on, and taking nothing would leave the family holding a
-// basis twice. The account's positions then fail to compute until the transfer
-// is deleted and re-entered, which is the same recovery a quantity that no
-// longer fits already has (see the package doc on truncation).
+// no shares left behind it means the journal, replayed under today's rules, does
+// not contain the parcel the record says departed: either the source's history
+// was edited after the transfer, or the transfer was written down by a build
+// whose queue rule picked other lots than today's (see
+// recordAndReplayDisagree). There is no quiet answer to that: taking the
+// quantity from some other day's lot would re-date shares that are still held
+// and reprice them at a rate from a day they were never bought on, and taking
+// nothing would leave the family holding a basis twice. The account's positions
+// then fail to compute until the transfer is deleted and re-entered, which is
+// the same recovery a quantity that no longer fits already has (see the package
+// doc on truncation).
+//
+// ONE SKEW SURVIVES ALL OF THIS, and it is worth naming rather than leaving to
+// be discovered. The record is honoured even when the account's shares have been
+// multiplied underneath it: a split entered AFTER a transfer but dated BEFORE it
+// doubles the lot the breakdown points at, so the recorded basis comes off twice
+// the shares it was struck against, and the source is left holding shares with
+// none of it while the destination holds all of it. The family still holds
+// exactly what it paid, and the money sits where the record says it went, so
+// this is strictly better than the re-derivation it replaced — but it is a
+// lopsided pair, and it arrives quietly, because a backdated split still
+// replays. Re-deriving the release would even it out, at the price of throwing
+// the record away, which is the bug this exists to prevent. Deleting the
+// transfer, recording the split, and recording the transfer again is the answer,
+// as it is for every other way a history can move underneath a record.
 //
 // Quantities and costs are conserved exactly: the position loses the pieces'
 // summed quantity and their summed cost, which CheckTransferLots has already
@@ -302,7 +377,8 @@ func (p *Position) releaseRecorded(o Operation) error {
 			if !sameAcquisition(l.AcquiredOn, pc.AcquiredOn) {
 				continue
 			}
-			takeQty, takeCost := decimal.Min(l.Quantity, qty), min(l.CostMinor, cost)
+			takeQty := decimal.Min(l.Quantity, qty)
+			takeCost := min(lotShare(*l, takeQty), cost)
 			l.Quantity, l.CostMinor = l.Quantity.Sub(takeQty), l.CostMinor-takeCost
 			p.Quantity, p.CostMinor = p.Quantity.Sub(takeQty), p.CostMinor-takeCost
 			qty, cost = qty.Sub(takeQty), cost-takeCost
@@ -312,16 +388,16 @@ func (p *Position) releaseRecorded(o Operation) error {
 		}
 		if qty.IsPositive() {
 			return badOp(o, fmt.Sprintf(
-				"transfer lot %d moved %s units acquired %s, but replaying this account leaves %s of them with no such lot to come from: its history was edited after the transfer was recorded",
-				i, pc.Quantity, acquisitionText(pc.AcquiredOn), qty))
+				"transfer lot %d moved %s units acquired %s, but replaying this account leaves %s of them with no such lot to come from: %s",
+				i, pc.Quantity, acquisitionText(pc.AcquiredOn), qty, recordAndReplayDisagree))
 		}
 		carried += cost
 	}
 	if carried > 0 {
 		if carried > p.CostMinor {
 			return badOp(o, fmt.Sprintf(
-				"the breakdown moves %d minor more basis than this account still holds (%d): its history was edited after the transfer was recorded",
-				carried, p.CostMinor))
+				"the breakdown moves %d minor more basis than this account still holds (%d): %s",
+				carried, p.CostMinor, recordAndReplayDisagree))
 		}
 		drainLotsCost(p, carried)
 		p.CostMinor -= carried

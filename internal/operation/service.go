@@ -518,7 +518,23 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 		return Operation{}, Operation{}, err
 	}
 
-	cOut, cIn, err := s.store.CreatePair(ctx, spaceID, outOp, inOp)
+	// And the same pair once more, as the database actually kept it — the guard
+	// Create has always had for a single operation, now that the departing leg
+	// replays the STORED pieces rather than a fresh slice of the queue (see
+	// portfolio.Position.releaseRecorded). What was checked above is an
+	// in-memory candidate; what every later read of the source account folds is
+	// the row below, with the quantities the columns rounded to. Twice already a
+	// difference between those two was accepted with a 201 and then refused on
+	// every later read by someone else (see quantizeLots and normalizeForStorage),
+	// and the second leg's release is a third way in. Not wrapped in
+	// ErrInconsistent: the caller's journal was fine and their request was
+	// accepted, so reaching this is a bug in this program, not something they did.
+	cOut, cIn, err := s.store.CreatePair(ctx, spaceID, outOp, inOp, func(storedOut, _ Operation) error {
+		if _, err := portfolio.Compute(journalWith(sourceJournal, []Operation{storedOut}, nil)); err != nil {
+			return fmt.Errorf("the transfer as stored no longer replays on the source account: %v", err)
+		}
+		return nil
+	})
 	if err != nil {
 		return Operation{}, Operation{}, mapWriteError(err)
 	}

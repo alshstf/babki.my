@@ -1,6 +1,8 @@
 package operation_test
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -109,4 +111,64 @@ func TestTransferReleasesTheParcelItRecorded(t *testing.T) {
 			"the departing leg gave away a parcel other than the one it recorded, so one parcel is on two accounts and another has vanished",
 			held, spent, held-spent)
 	}
+}
+
+// TestBackdatedSellThatEatsARecordedParcelIsRefusedAtWrite pins what is, for
+// the owner, the actual behaviour of this change.
+//
+// Reading a transfer's release off its record made a whole class of journal
+// unreplayable — and the write paths replay before they store, so what the
+// owner meets is not a broken positions screen but a REFUSAL AT THE MOMENT OF
+// ENTRY. Recording a sale dated before a transfer used to be accepted without
+// comment; if it consumed the parcel that transfer had recorded, the source
+// account then gave away some other parcel while the destination went on
+// holding the recorded one, and the family's books were quietly wrong from then
+// on. Now the sale is turned down and the books stay right.
+//
+// That is a visible change for anyone entering a forgotten operation, and it is
+// the barrier that makes the read-time refusal nearly unreachable — so it is
+// what the README describes. It is pinned here because it holds only as long as
+// the journal check runs on the write path: weaken that and nothing else
+// prevents "accepted with a 201, refused on every later read", which is the
+// exact fault this project has already been through twice.
+//
+// The sale is a legitimate one in every other respect — ten shares held, ten
+// shares sold, no oversell anywhere — so nothing but the record's own claim can
+// object to it.
+func TestBackdatedSellThatEatsARecordedParcelIsRefusedAtWrite(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+	twoLots(t, f, svc) // 01.07: 10 for 100000, 03.07: 10 for 900000
+
+	_, in, err := svc.CreateTransfer(f.ctx, f.spaceID, operation.TransferParams{
+		FromAccountID: f.accountID, ToAccountID: f.account2ID,
+		InstrumentID: f.sberID, Quantity: decimal.RequireFromString("10"),
+		OccurredOn: date("2026-07-10"),
+	})
+	if err != nil {
+		t.Fatalf("Брокер → Брокер 2: %v", err)
+	}
+	if len(in.TransferLots) != 1 || !sameAcquisition(in.TransferLots[0].AcquiredOn, datep("2026-07-01")) {
+		t.Fatalf("the move recorded %+v, want the 01.07 parcel — the rest of this test is about that parcel", in.TransferLots)
+	}
+
+	// Backdated ahead of the transfer, and it would consume the very parcel the
+	// transfer recorded as departed.
+	_, err = svc.Create(f.ctx, f.spaceID, operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeSell,
+		OccurredOn: date("2026-07-05"), Quantity: dec("10"), Price: dec("200"),
+		AmountMinor: 200_000, Currency: "RUB",
+	})
+	if !errors.Is(err, operation.ErrInconsistent) {
+		t.Fatalf("recording the sale answered %v, want ErrInconsistent: it takes away the parcel a transfer already recorded as gone, "+
+			"and accepting it would leave that parcel on the receiving account and its basis counted twice", err)
+	}
+	if !strings.Contains(err.Error(), "record it again") {
+		t.Errorf("refusal %q does not tell the owner how to record this sale (delete the transfer, record the sale, record the transfer again)", err)
+	}
+
+	// Nothing was written, and both accounts still replay — the refusal cost the
+	// owner the entry, not the account.
+	checkLots(t, f, f.accountID, []lotSummary{{"10", 900_000, "2026-07-03"}})
+	checkLots(t, f, f.account2ID, []lotSummary{{"10", 100_000, "2026-07-01"}})
 }

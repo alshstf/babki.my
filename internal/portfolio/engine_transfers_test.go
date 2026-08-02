@@ -253,10 +253,94 @@ func TestTransferOutRefusesAParcelTheAccountDoesNotHold(t *testing.T) {
 			t.Errorf("%s: err = %v, want ErrBadOperation — a record the journal contradicts must not be quietly replaced by a fresh guess", name, err)
 			continue
 		}
-		if !strings.Contains(err.Error(), "edited after the transfer") {
-			t.Errorf("%s: error %q does not say what is wrong or what to do about it", name, err)
+		checkNamesBothCausesAndTheWayOut(t, name, err)
+	}
+}
+
+// checkNamesBothCausesAndTheWayOut pins what the owner is actually told when a
+// recorded parcel cannot be found.
+//
+// The message used to state ONE cause as a fact — "its history was edited after
+// the transfer was recorded" — and that is the cause it almost never is. Every
+// write path replays the journal before storing anything (see
+// operation.Service), so rows written by this build cannot reach this refusal
+// through the API at all; what reaches it is a journal written under an earlier
+// queue rule, where nobody edited anything. The owner got a blank positions
+// screen, an account they could no longer write to, and an accusation about an
+// edit that never happened, with no way out named.
+func checkNamesBothCausesAndTheWayOut(t *testing.T, name string, err error) {
+	t.Helper()
+	for _, want := range []string{
+		"edited after the transfer was recorded", // the cause that may be true
+		"a different rule",                       // the cause that usually is
+		"record it again",                        // the way out, the same either way
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: error %q does not mention %q — it must name both possible causes, neither as a fact, and say what to do",
+				name, err, want)
 		}
 	}
+}
+
+// TestTransferOutRefusesAParcelAnEarlierQueueRuleRecorded is the refusal above
+// on data nobody touched — the only way it is actually reachable.
+//
+// The journal is one an older build wrote: the queue was ordered by ARRIVAL
+// then, so the sale on day 22 took the parcel bought on day 20 (which was on
+// the account first) and left the day-2 parcel for the transfer to record.
+// Today the queue is ordered by ACQUISITION, so the same sale takes the day-2
+// parcel instead and the recorded one is not there to be given up. No edit, no
+// second release — just a rule that moved under a frozen record, which is issue
+// #60 seen from the other side.
+func TestTransferOutRefusesAParcelAnEarlierQueueRuleRecorded(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
+		transferIn(21, "10", 100_000, piece("10", 100_000, 2)),
+		op(portfolio.TypeSell, 22, &sber, "10", "", 150_000, 0),
+		transferOut(23, "10", 100_000, piece("10", 100_000, 2)),
+	}
+	_, err := portfolio.Compute(ops)
+	if !errors.Is(err, portfolio.ErrBadOperation) {
+		t.Fatalf("err = %v, want ErrBadOperation: the day-%s parcel this transfer recorded was consumed by the sale under today's queue rule",
+			err, day(2).Format("02"))
+	}
+	checkNamesBothCausesAndTheWayOut(t, "recorded under the arrival-order rule", err)
+}
+
+// TestTransferOutRefusesToMoveMoreThanTheAccountHolds pins the oversell check
+// that runs before any piece is matched. Without it the shortfall still gets
+// caught — the pieces run out of lots to come from — but as "your record and
+// your history disagree, delete the transfer and record it again", which is the
+// wrong thing to tell someone whose account simply never held that many shares.
+func TestTransferOutRefusesToMoveMoreThanTheAccountHolds(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
+		transferOut(22, "15", 300_000, piece("15", 300_000, 20)),
+	}
+	if _, err := portfolio.Compute(ops); !errors.Is(err, portfolio.ErrOversell) {
+		t.Fatalf("err = %v, want ErrOversell: 15 units cannot leave an account holding 10", err)
+	}
+}
+
+// TestTransferOutRefusesABreakdownCarryingBasisTheAccountDoesNotHold pins the
+// other guard: the cost a breakdown could not take out of the lots of its own
+// dates is drained from the front of the queue, and there has to be that much
+// money there. Without the check the drain takes what it finds, the position's
+// basis goes NEGATIVE, and nothing says a word — a positions screen showing
+// less than nothing invested, from a journal that replays "successfully".
+func TestTransferOutRefusesABreakdownCarryingBasisTheAccountDoesNotHold(t *testing.T) {
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 2, &sber, "10", "", -100_000, 0),
+		transferOut(5, "10", 300_000, piece("10", 300_000, 2)),
+	}
+	_, err := portfolio.Compute(ops)
+	if !errors.Is(err, portfolio.ErrBadOperation) {
+		t.Fatalf("err = %v, want ErrBadOperation: the breakdown moves 300000 out of an account that only ever held 100000", err)
+	}
+	if !strings.Contains(err.Error(), "200000") {
+		t.Errorf("error %q does not name the 200000 minor units that are nowhere on the account", err)
+	}
+	checkNamesBothCausesAndTheWayOut(t, "more basis than the account holds", err)
 }
 
 // TestTransferOutRefusesABreakdownThatDoesNotAddUp extends the arriving leg's
@@ -335,6 +419,58 @@ func TestTransferOutTakesTheBasisOfAShareLessLotItsPieceCarries(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
+// TestTransferOutTakesAShareLessLotsBasisWhenItsPieceTakesOnlyPartOfALot is the
+// test above with one thing changed: the piece takes the lot it is dated by IN
+// PART instead of whole. That difference is the whole point.
+//
+// A piece may carry more basis than the lot of its date holds, because
+// operation.quantizeLots folded a shareless lot's money into it (see the test
+// above). Taking "whatever the lot still holds" for such a piece answers
+// correctly only while the piece empties that lot: the moment it takes a
+// fraction, the lot's whole cost exceeds what the piece asks for, so the clamp
+// never binds, nothing is carried, and the shareless lot's 30000 comes quietly
+// out of the fraction's own parcel — which had nothing to do with the transfer —
+// while the shareless lot stays on the account holding 30000 the destination
+// holds too.
+//
+// Nothing sums wrong when that happens. The account gives up the 330000 its
+// record names, the family holds the 930000 it paid, and both totals agree with
+// themselves; only the parcels are wrong, and every figure struck at a lot's own
+// date afterwards is wrong with them. The fixture is the reviewer's: 3 units on
+// day 1 for 30000, 10 on day 2 for 900000, a reverse split that rounds the day-1
+// lot's shares away, and a third of what is left departing.
+func TestTransferOutTakesAShareLessLotsBasisWhenItsPieceTakesOnlyPartOfALot(t *testing.T) {
+	// 3e-11 leaves the day-1 lot with no shares and the day-2 lot with 3e-10.
+	split := op(portfolio.TypeSplit, 3, &sber, "", "", 0, 0)
+	split.SplitRatio = dp("0.00000000003")
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "3", "", -30_000, 0),
+		op(portfolio.TypeBuy, 2, &sber, "10", "", -900_000, 0),
+		split,
+		// What CreateTransfer records for moving a third of the position: the
+		// shareless lot's whole 30000 plus a third of the day-2 lot's 900000,
+		// in the single storable piece its date is taken from.
+		transferOut(4, "0.0000000001", 330_000, piece("0.0000000001", 330_000, 2)),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v — this breakdown is one CreateTransfer itself writes", err)
+	}
+	p := pos[sber]
+	if len(p.Lots) != 1 {
+		t.Fatalf("source holds %+v, want one lot: the two thirds of the day-%s parcel that stayed. A shareless lot still holding the money it gave away is that money counted twice",
+			p.Lots, day(2).Format("02"))
+	}
+	if !p.Lots[0].Quantity.Equal(d("0.0000000002")) || p.Lots[0].CostMinor != 600_000 {
+		t.Errorf("remaining lot = {qty %s cost %d}, want {0.0000000002 600000} — two thirds of the shares keep two thirds of the money; the carried 30000 belongs to the shareless lot that departed",
+			p.Lots[0].Quantity, p.Lots[0].CostMinor)
+	}
+	if p.CostMinor != 930_000-330_000 {
+		t.Errorf("source basis = %d, want %d (930000 spent − 330000 moved)", p.CostMinor, 930_000-330_000)
+	}
+	checkLotInvariants(t, p)
+}
+
 // TestTransferOutMatchesPiecesToLotsOfTheSameDay covers two lots bought on ONE
 // day — the tie the queue breaks by journal order (see addLot). The breakdown
 // then holds two pieces with the same date, and each must find its own lot
@@ -356,6 +492,38 @@ func TestTransferOutMatchesPiecesToLotsOfTheSameDay(t *testing.T) {
 	}
 	if !p.Lots[0].Quantity.Equal(d("5")) || p.Lots[0].CostMinor != 450_000 {
 		t.Errorf("remaining lot = {qty %s cost %d}, want {5 450000}", p.Lots[0].Quantity, p.Lots[0].CostMinor)
+	}
+	checkLotInvariants(t, p)
+}
+
+// TestBackdatedSplitLeavesTheSourceWithSharesAndNoBasis pins the one skew
+// honouring the record cannot undo, so that the README's description of it and
+// the engine's behaviour cannot drift apart.
+//
+// A split entered AFTER a transfer but dated BEFORE it doubles the lot the
+// breakdown points at. The recorded basis is still honoured in full — that is
+// the point of reading the release off the record — so it comes off twice the
+// shares it was struck against, and the source keeps shares carrying none of it.
+// The family holds exactly what it paid and the money is where the record says
+// it went, which is why this is accepted rather than refused; it is simply all
+// on one side. Deleting the transfer, recording the split and recording the
+// transfer again is the way to even it out.
+func TestBackdatedSplitLeavesTheSourceWithSharesAndNoBasis(t *testing.T) {
+	split := op(portfolio.TypeSplit, 3, &sber, "", "", 0, 0)
+	split.SplitRatio = dp("2")
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "10", "", -300_000, 0),
+		split, // entered later, dated before the transfer below
+		transferOut(5, "10", 300_000, piece("10", 300_000, 1)),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v — a backdated split still replays; the record it moves under is honoured, not refused", err)
+	}
+	p := pos[sber]
+	if len(p.Lots) != 1 || !p.Lots[0].Quantity.Equal(d("10")) || p.Lots[0].CostMinor != 0 {
+		t.Fatalf("source holds %+v, want one lot of 10 shares with no basis: the 300000 the record moved came off twenty shares, not the ten it was struck against",
+			p.Lots)
 	}
 	checkLotInvariants(t, p)
 }

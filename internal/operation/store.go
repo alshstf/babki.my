@@ -129,7 +129,20 @@ const insertLotSQL = `
 // whose breakdown does not add up in the database is never committed at all
 // — instead of being accepted and failing every later read of the receiving
 // account (see portfolio.CheckTransferLots).
-func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Operation) (Operation, Operation, error) {
+//
+// verify is the caller's own last look at the pair AS STORED, before the
+// transaction commits, and it is the same guard Create has for a single
+// operation — for a reason that has grown sharper. The departing leg no longer
+// merely records a quantity: it RELEASES the very pieces stored here (see
+// portfolio.Position.releaseRecorded), so the row that will be replayed on the
+// source account from now on is this one, with the quantities the columns
+// rounded to and the pieces the table gave back, not the one the service
+// checked in memory. Confirming the stored pair replays is what keeps "accepted
+// with a 201, then refused on every later read" from returning by a new door;
+// the project has been through that door twice already (see quantizeLots and
+// normalizeForStorage). A nil verify means the caller has nothing to confirm —
+// a plain insert, for tests exercising storage itself.
+func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Operation, verify func(out, in Operation) error) (Operation, Operation, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Operation{}, Operation{}, err
@@ -178,6 +191,11 @@ func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Opera
 			// and surfaces as a server error, loudly, on the request that
 			// caused it rather than on every future read by someone else.
 			return Operation{}, Operation{}, fmt.Errorf("transfer lots as stored: %w", err)
+		}
+	}
+	if verify != nil {
+		if err := verify(cOut, cIn); err != nil {
+			return Operation{}, Operation{}, err
 		}
 	}
 	return cOut, cIn, tx.Commit(ctx)
