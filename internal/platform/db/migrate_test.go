@@ -9,7 +9,10 @@ import (
 )
 
 func TestMigrate(t *testing.T) {
-	pool := testdb.New(t)
+	// NewEmpty, not New: this is the one test that has to watch the migrations
+	// build a schema from nothing, so it cannot be handed the pre-migrated
+	// database every other test gets.
+	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
 
 	if err := db.Migrate(ctx, pool); err != nil {

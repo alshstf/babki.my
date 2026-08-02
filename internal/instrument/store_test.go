@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 
 	"babki.my/babki/internal/instrument"
-	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -15,9 +14,6 @@ func newStore(t *testing.T) (*instrument.Store, context.Context) {
 	t.Helper()
 	pool := testdb.New(t)
 	ctx := context.Background()
-	if err := db.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	return instrument.NewStore(pool), ctx
 }
 

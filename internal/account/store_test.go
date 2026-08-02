@@ -11,7 +11,6 @@ import (
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
-	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -20,9 +19,6 @@ func newStore(t *testing.T) (*account.Store, uuid.UUID, uuid.UUID, context.Conte
 	t.Helper()
 	pool := testdb.New(t)
 	ctx := context.Background()
-	if err := db.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	fam := family.NewStore(pool)
 	u, err := fam.CreateUser(ctx, "alex", "A", "h")
 	if err != nil {

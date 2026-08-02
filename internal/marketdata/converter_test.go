@@ -8,7 +8,6 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
-	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -20,9 +19,6 @@ func newConverterFixture(t *testing.T) (*marketdata.Converter, *marketdata.Store
 	t.Helper()
 	pool := testdb.New(t)
 	ctx := context.Background()
-	if err := db.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	store := marketdata.NewStore(pool)
 	return marketdata.NewConverter(store), store, ctx
 }

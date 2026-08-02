@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"babki.my/babki/internal/family"
-	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/testdb"
 )
@@ -19,9 +18,6 @@ func cookiejarNew() (http.CookieJar, error) { return cookiejar.New(nil) }
 func TestSessionAuthFlow(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
-	if err := db.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	store := family.NewStore(pool)
 	svc := family.NewService(store)
 	_, owner, err := svc.Setup(ctx, family.SetupParams{

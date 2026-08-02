@@ -14,7 +14,6 @@ import (
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
-	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/testdb"
 	"babki.my/babki/internal/portfolio"
 )
@@ -38,9 +37,6 @@ func mustAcquired(t *testing.T, on *time.Time, what string) time.Time {
 func TestSeedDemo(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
-	if err := db.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 
 	if err := seedDemo(ctx, pool); err != nil {
 		t.Fatalf("seedDemo: %v", err)

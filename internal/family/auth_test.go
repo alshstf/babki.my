@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"babki.my/babki/internal/family"
-	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -15,9 +14,6 @@ func newService(t *testing.T) (*family.Service, context.Context) {
 	t.Helper()
 	pool := testdb.New(t)
 	ctx := context.Background()
-	if err := db.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	return family.NewService(family.NewStore(pool)), ctx
 }
 
@@ -126,9 +122,6 @@ func TestCreateMemberRoles(t *testing.T) {
 func TestLoginOrphanedUser(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
-	if err := db.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	store := family.NewStore(pool)
 	svc := family.NewService(store)
 

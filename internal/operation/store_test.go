@@ -16,7 +16,6 @@ import (
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/operation"
-	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -35,9 +34,6 @@ func newFixture(t *testing.T) fixture {
 	t.Helper()
 	pool := testdb.New(t)
 	ctx := context.Background()
-	if err := db.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	fam := family.NewStore(pool)
 	u, err := fam.CreateUser(ctx, "alex", "A", "h")
 	if err != nil {

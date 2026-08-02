@@ -1,7 +1,6 @@
 package family_test
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -12,7 +11,6 @@ import (
 	"testing"
 
 	"babki.my/babki/internal/family"
-	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 )
@@ -22,9 +20,6 @@ import (
 func newAPI(t *testing.T) (*httptest.Server, *http.Client) {
 	t.Helper()
 	pool := testdb.New(t)
-	if err := db.Migrate(context.Background(), pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	store := family.NewStore(pool)
 	svc := family.NewService(store)
 	sm := family.NewSessionManager(pool)

@@ -10,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"babki.my/babki/internal/family"
-	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -18,9 +17,6 @@ func newStore(t *testing.T) (*family.Store, context.Context) {
 	t.Helper()
 	pool := testdb.New(t)
 	ctx := context.Background()
-	if err := db.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	return family.NewStore(pool), ctx
 }
 
