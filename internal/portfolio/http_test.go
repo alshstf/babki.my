@@ -44,8 +44,36 @@ type quoteStoreLike interface {
 // via mdStore.UpsertFxRates and see them picked up here) satisfies it
 // structurally.
 type converterLike interface {
-	Convert(ctx context.Context, amountMinor int64, from, to string, on time.Time) (int64, error)
 	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
+	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
+}
+
+// journalStoreLike, instrumentStoreLike and spaceStoreLike mirror the rest of
+// portfolio's unexported dependency interfaces, for the same reason
+// quoteStoreLike and converterLike do. A *operation.Store, an
+// *instrument.Store and a *family.Store satisfy them structurally.
+type (
+	journalStoreLike interface {
+		ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]portfolio.Operation, error)
+	}
+	instrumentStoreLike interface {
+		ByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]instrument.Instrument, error)
+	}
+	spaceStoreLike interface {
+		SpaceByID(ctx context.Context, id uuid.UUID) (family.Space, error)
+	}
+)
+
+// portfolioStores are the three stores setupAPI hands the portfolio handler
+// besides the quotes and the converter. They are named here — rather than
+// built and passed straight in — so a test can interpose a double between the
+// handler and the real store: the round-trip counters in
+// http_round_trips_test.go wrap each one to count how often a single request
+// reaches for it, and nothing outside this package can observe that otherwise.
+type portfolioStores struct {
+	ops         journalStoreLike
+	instruments instrumentStoreLike
+	spaces      spaceStoreLike
 }
 
 // setupAPI wires the full stack: family + account + instrument + operation +
@@ -55,7 +83,13 @@ type converterLike interface {
 // provided by the caller (rather than created here) so tests that need
 // direct DB access for setup, or that just want the default real
 // marketdata.Store, can share the same pool the HTTP stack runs on.
-func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv converterLike) (string, *http.Client) {
+//
+// wrap, when given, is handed the real stores the portfolio handler would
+// have received and returns whatever should stand in their place (see
+// portfolioStores). Only the portfolio handler sees the substitution — every
+// other module keeps the real store, so a counting double counts one screen's
+// round trips and not the fixture's own writes.
+func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv converterLike, wrap ...func(portfolioStores) portfolioStores) (string, *http.Client) {
 	t.Helper()
 	famStore := family.NewStore(pool)
 	famSvc := family.NewService(famStore)
@@ -75,7 +109,12 @@ func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv conv
 	// behavior, and the journal's own in_base conversion is covered by
 	// package operation's tests.
 	operation.NewHandler(opSvc, opStore, famStore, marketdata.NewConverter(marketdata.NewStore(pool)), auth, sm).Mount(srv)
-	portfolio.NewHandler(opStore, instStore, quotes, conv, famStore, auth, sm).Mount(srv)
+
+	stores := portfolioStores{ops: opStore, instruments: instStore, spaces: famStore}
+	for _, w := range wrap {
+		stores = w(stores)
+	}
+	portfolio.NewHandler(stores.ops, stores.instruments, quotes, conv, stores.spaces, auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -688,6 +727,77 @@ func TestPositionsMarketValueConvertsToPositionCurrency(t *testing.T) {
 	}
 }
 
+// TestPositionsConvertedValuationRoundsHalfAwayFromZero pins the rounding of
+// the two figures this handler strikes from a single fx rate: a valuation
+// brought into the position's currency (toAPI) and that valuation carried on
+// into the base currency (positionInBase). Both go through rateLookup.applyTo,
+// and both must round exactly as marketdata.Converter.Convert does — once, at
+// the end, half-away-from-zero.
+//
+// It exists because that arithmetic used to BE Convert's, covered by
+// marketdata's own tests, and now lives here: without this, replacing the
+// rounding with truncation changes real money on the screen and no test in
+// this package notices (confirmed by hand — Round -> Truncate passed the whole
+// suite before this test was written).
+//
+// Both rates are chosen to land the product exactly on the half-unit boundary,
+// which is the only place the two rules differ:
+//
+//	bond: face 1 000,00 USD, quoted at par, quantity 1
+//	  raw valuation                  = 100 000 minor USD
+//	  USD -> EUR 0,900005            =  90 000,5 -> 90 001  (truncation: 90 000)
+//	  in_base, EUR -> RUB 0,5        =  45 000,5 -> 45 001  (truncation: 45 000)
+//
+// The second rate is deliberately not a plausible market rate; it is a
+// boundary, and the arithmetic is what is under test.
+func TestPositionsConvertedValuationRoundsHalfAwayFromZero(t *testing.T) {
+	pool := testdb.New(t)
+	mdStore := marketdata.NewStore(pool)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(mdStore))
+
+	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
+		{Base: "USD", Quote: "EUR", On: mustDate(t, "2026-01-01"), Rate: decimal.RequireFromString("0.900005"), Source: "test"},
+		{Base: "EUR", Quote: "RUB", On: mustDate(t, "2026-01-01"), Rate: decimal.RequireFromString("0.5"), Source: "test"},
+	}); err != nil {
+		t.Fatalf("seed fx rates: %v", err)
+	}
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"EUR"}`)
+	bond := createInstrument(t, c, url,
+		`{"type":"bond","name":"Облигация","ticker":"BONDR","currency":"EUR","face_value_minor":100000,"face_currency":"USD"}`)
+	bondID, err := uuid.Parse(bond.ID)
+	if err != nil {
+		t.Fatalf("parse bond id: %v", err)
+	}
+	quotes.byInstrument[bondID] = marketdata.Quote{
+		InstrumentID: bondID, On: mustDate(t, "2026-07-21"),
+		Price: decimal.RequireFromString("100.00"), Currency: "EUR", Source: "test",
+	}
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-01","quantity":"1","price":"800",
+		"amount_minor":-80000,"currency":"EUR"}`, acc.ID, bond.ID))
+
+	p := onlyPosition(t, c, url, acc.ID)
+	if p.MarketValueMinor == nil {
+		t.Fatalf("market_value_minor = null, want 90001: the bond is quoted and its USD -> EUR rate is seeded")
+	}
+	if *p.MarketValueMinor != 90001 {
+		t.Errorf("market_value_minor = %d, want 90001 (100000 * 0,900005 = 90000,5, rounded away from zero) — 90000 is truncation",
+			*p.MarketValueMinor)
+	}
+	if p.InBase == nil {
+		t.Fatalf("in_base = null, want the object: every rate this position needs is seeded")
+	}
+	if p.InBase.MarketValueMinor == nil {
+		t.Fatalf("in_base.market_value_minor = null, want 45001: the EUR -> RUB rate is seeded too")
+	}
+	if *p.InBase.MarketValueMinor != 45001 {
+		t.Errorf("in_base.market_value_minor = %d, want 45001 (90001 * 0,5 = 45000,5, rounded away from zero) — 45000 is truncation",
+			*p.InBase.MarketValueMinor)
+	}
+}
+
 // TestPositionsMarketValueFallsBackWithoutRate is
 // TestPositionsMarketValueConvertsToPositionCurrency's negative twin: same
 // currency-mismatched bond, but with NO USD->RUB fx_rates row seeded on this
@@ -985,12 +1095,46 @@ func mustDate(t *testing.T, s string) time.Time {
 // be made to fail on demand.
 type failingConverter struct{ err error }
 
-func (c failingConverter) Convert(_ context.Context, _ int64, _, _ string, _ time.Time) (int64, error) {
-	return 0, c.err
-}
-
 func (c failingConverter) Rate(_ context.Context, _, _ string, _ time.Time) (decimal.Decimal, time.Time, error) {
 	return decimal.Decimal{}, time.Time{}, c.err
+}
+
+func (c failingConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
+	return ratesFromRate(ctx, c, queries)
+}
+
+// rateResolver is the one-pair half of converterLike, which is all
+// ratesFromRate needs of a double.
+type rateResolver interface {
+	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
+}
+
+// ratesFromRate answers a whole batch by asking the double's OWN Rate once per
+// query. It exists so no test double can answer the batch differently from the
+// pair: marketdata.Converter guarantees the two agree ("no number it produces
+// differs from Rate's" — see RatesOn), and a fake that had to state its
+// behavior twice would eventually state it twice differently, leaving a test
+// that pins a rule the production converter does not follow. Here the batch is
+// derived from the pair, so whatever a test makes Rate say — a rate, a missing
+// rate, an outage — the prewarm says exactly the same.
+//
+// The two kinds of failure are sorted the way RatesOn sorts them:
+// marketdata.ErrNoRate is that one query's answer and the rest of the page
+// stands, anything else voids the whole batch.
+func ratesFromRate(ctx context.Context, r rateResolver, queries []marketdata.RateQuery) (marketdata.Rates, error) {
+	out := make(map[marketdata.RateQuery]marketdata.RateResult, len(queries))
+	for _, q := range queries {
+		rate, on, err := r.Rate(ctx, q.From, q.To, q.On)
+		switch {
+		case err == nil:
+			out[q] = marketdata.RateResult{Rate: rate, RateDate: on}
+		case errors.Is(err, marketdata.ErrNoRate):
+			out[q] = marketdata.RateResult{Err: err}
+		default:
+			return marketdata.Rates{}, err
+		}
+	}
+	return marketdata.NewRates(out), nil
 }
 
 // TestPositionsRealRateErrorFailsRequest pins the distinction the whole

@@ -1159,19 +1159,17 @@ type historicalFailingConverter struct {
 	err    error
 }
 
-// Convert is never reached by the test using this double — a share's
-// valuation is already in the position's own currency, so toAPI does no fx
-// conversion at all — and so it fails unconditionally rather than inventing a
-// plausible number for a path nobody exercises.
-func (c historicalFailingConverter) Convert(_ context.Context, _ int64, _, _ string, _ time.Time) (int64, error) {
-	return 0, c.err
-}
-
 func (c historicalFailingConverter) Rate(_ context.Context, _, _ string, on time.Time) (decimal.Decimal, time.Time, error) {
 	if on.Before(c.since) {
 		return decimal.Decimal{}, time.Time{}, c.err
 	}
 	return c.rate, c.rateOn, nil
+}
+
+// RatesOn answers the batch from this double's own Rate, so the prewarm cannot
+// say anything the per-pair path would not (see ratesFromRate).
+func (c historicalFailingConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
+	return ratesFromRate(ctx, c, queries)
 }
 
 // TestPositionInBaseHistoricalRateErrorFailsRequest extends the distinction
