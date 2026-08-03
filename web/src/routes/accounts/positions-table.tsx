@@ -112,15 +112,41 @@ function valuationGapTitle(
 // text, per the same "less visual noise" preference. Returns null unless
 // both the price and the quote date are present and well-formed — a
 // half-rendered hint would be more misleading than no hint at all.
+//
+// WHAT THE NUMBER IS depends on the instrument, and that is the whole of #32.
+// For a share or an ETF the quote is money per unit, in the same currency as
+// the valuation above it, so it needs no unit stated — the currency is right
+// there. For a BOND the quote is a percentage of face value (the MOEX
+// convention): the server publishes q.Price untouched in Position.price, and
+// marketValue() in internal/portfolio/http.go multiplies it as
+// faceValueMinor × price/100 × quantity. The demo seed's OFZ26238 makes the
+// gap concrete — face value 1 000,00 ₽, quote 95.20, so one bond is worth
+// 952 ₽ while the line under its ruble valuation reads "95,20". Bare, that is
+// a money figure ten times too small, sitting under a money figure.
+//
+// The alternative fix — deriving the 952 ₽ and showing THAT — was rejected on
+// two grounds. It is money arithmetic in the browser (face value × percent,
+// with a rounding decision of its own), which this project does everywhere on
+// the server; there is no per-unit price on the wire to render instead. And
+// even done correctly it would replace the number the exchange actually
+// quotes, the one the owner sees in his broker's app, with one no venue
+// prints. So the quote stays as quoted, and says which unit it is in.
 function priceHint(
   t: (key: string, opts?: Record<string, string>) => string,
   position: Position,
 ): { price: string; title: string } | null {
   if (!position.price || !position.price_on) return null;
-  const price = formatPrice(position.price);
+  const formatted = formatPrice(position.price);
   const date = formatDate(position.price_on);
-  if (price === null || !date) return null;
+  if (formatted === null || !date) return null;
+  let price = formatted;
   let title = t("positions.priceOn", { date });
+  // Written as a literal-key branch rather than t(cond ? a : b) so both keys
+  // stay verifiable by scripts/check-i18n.mjs, which only reads literals.
+  if (position.instrument.type === "bond") {
+    price = t("positions.pricePercent", { price: formatted });
+    title += "\n" + t("positions.priceIsPercentOfFace");
+  }
   const sourceCurrency = position.market_value_source_currency;
   const sourceMinor = position.market_value_source_minor;
   if (sourceCurrency != null && sourceMinor != null) {
@@ -336,6 +362,7 @@ export function PositionsTable({
                     />
                     {hint && (
                       <div
+                        data-testid="position-price"
                         className="text-xs font-normal text-muted-foreground"
                         title={hint.title}
                       >

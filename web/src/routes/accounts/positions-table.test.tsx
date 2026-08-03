@@ -299,6 +299,104 @@ describe("PositionsTable", () => {
     expect(priceLine.getAttribute("title")).toBe("Цена на 20.07.2026");
   });
 
+  // A bond is quoted as a PERCENTAGE of its face value (95.20 meaning 95.20 %
+  // of the face value), and that percentage is what the server publishes in
+  // Position.price — see marketValue() in internal/portfolio/http.go, where a
+  // bond's valuation is faceValueMinor × price/100 × quantity. The demo seed's
+  // OFZ26238 is exactly this: face value 1 000,00 ₽, quote 95.20, so the money
+  // one bond is worth is 952 ₽ and the figure under the valuation is 95,20.
+  // Printed bare beside a ruble amount that reading is off by a factor of ten
+  // (#32), so the unit is stated. What is NOT done is deriving the 952 ₽:
+  // that is money arithmetic in the browser, which this project does not do.
+  const BOND_PRICE_NOTE =
+    "Облигация котируется в процентах от номинала, а не в деньгах за штуку: рыночная оценка выше — это номинал, умноженный на этот процент и на количество";
+
+  function makeBond(overrides: Partial<Position> = {}): Position {
+    return makePosition({
+      instrument: {
+        id: "instr-bond",
+        type: "bond",
+        name: "ОФЗ 26238",
+        ticker: "OFZ26238",
+        isin: "RU000A1038V6",
+        figi: "",
+        currency: "RUB",
+        face_value_minor: 100_000,
+        face_currency: "RUB",
+        frozen: false,
+      },
+      currency: "RUB",
+      // 100 bonds × 1 000,00 ₽ face × 95.20 % = 95 200,00 ₽ — the number the
+      // valuation cell shows, which the price below it is NOT a per-unit slice of.
+      quantity: "100",
+      cost_minor: 9_000_000,
+      market_value_minor: 9_520_000,
+      market_value_currency: "RUB",
+      unrealized_pnl_minor: 520_000,
+      price: "95.20",
+      price_on: "2026-07-20",
+      ...overrides,
+    });
+  }
+
+  it("marks a bond's price as a percentage of face value and says so in the tooltip", () => {
+    wrap(<PositionsTable positions={[makeBond()]} mode="native" baseCurrency="RUB" />);
+
+    const priceLine = screen.getByTestId("position-price");
+    expect(norm(priceLine.textContent ?? "")).toBe("95,20 %");
+    expect(norm(priceLine.getAttribute("title") ?? "")).toBe(
+      norm(`Цена на 20.07.2026\n${BOND_PRICE_NOTE}`),
+    );
+  });
+
+  it.each([["share"], ["etf"]] as const)(
+    "leaves a %s's price bare — its quote really is money per unit",
+    (type) => {
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              instrument: { ...makePosition().instrument, type },
+            }),
+          ]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const priceLine = screen.getByTestId("position-price");
+      expect(norm(priceLine.textContent ?? "")).toBe("305,50");
+      expect(priceLine.textContent).not.toContain("%");
+      expect(priceLine.getAttribute("title")).toBe("Цена на 20.07.2026");
+      expect(priceLine.getAttribute("title")).not.toContain(BOND_PRICE_NOTE);
+    },
+  );
+
+  it("keeps the converted-from line alongside the percentage note on a bond", () => {
+    const sourceAmount = formatMinor(9_520_000, "RUB");
+    wrap(
+      <PositionsTable
+        positions={[
+          makeBond({
+            currency: "USD",
+            market_value_minor: 105_777,
+            market_value_currency: "USD",
+            market_value_source_currency: "RUB",
+            market_value_source_minor: 9_520_000,
+          }),
+        ]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const priceLine = screen.getByTestId("position-price");
+    expect(norm(priceLine.textContent ?? "")).toBe("95,20 %");
+    expect(norm(priceLine.getAttribute("title") ?? "")).toBe(
+      norm(`Цена на 20.07.2026\n${BOND_PRICE_NOTE}\nПересчитано из ${sourceAmount}`),
+    );
+  });
+
   it("omits the percentage (but still shows the amount) when cost is 0", () => {
     wrap(
       <PositionsTable
