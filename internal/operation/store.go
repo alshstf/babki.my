@@ -136,15 +136,26 @@ const insertLotSQL = `
 // any one statement arriving in a particular order — each statement writes and
 // returns exactly one piece.
 //
-// A failure part way through behaves as the one-at-a-time loop did. The caller
-// gets the FIRST error, naming the piece that caused it, rather than the
-// "current transaction is aborted" that the pieces queued behind it come back
-// with — they were sent before anything was read, so they reach a server that
-// has already given up on the transaction. And since every statement of the
-// batch runs inside the transaction CreatePair opened, the pieces written
-// before the bad one go with the pair when it is rolled back. The results are
-// closed before returning either way: the connection cannot be used again, not
-// even to roll back, while a batch's results are outstanding.
+// A failure part way through behaves as the one-at-a-time loop did: the caller
+// gets the FIRST error, naming the piece that caused it. That is not because
+// the pieces queued behind it come back with some other, distinguishable
+// error — they come back with nothing at all. pgx sends every statement in
+// the batch before reading a single result back — one pipeline, synced once,
+// after every statement is queued (see (*pgx.Conn).sendBatchExtendedWithDescription)
+// — so when Postgres reaches the bad statement it discards whatever is still
+// queued behind it, unread and unexecuted, all the way to that sync; the
+// statement that would have been read next produces no result of its own, not
+// an "aborted" one. Even a loop that kept reading past the first failure would
+// not see a different error: pgx's own reader makes the first error sticky
+// (pipelineBatchResults.Query returns the error already recorded on the batch
+// rather than reading further once one read has failed), so what actually
+// names the failing piece is the two things this loop does — it reads results
+// in order, and it returns on the first error, before asking for a second one.
+// Since every statement of the batch runs inside the transaction CreatePair
+// opened, the pieces written before the bad one go with the pair when it is
+// rolled back. The results are closed before returning either way: the
+// connection cannot be used again, not even to roll back, while a batch's
+// results are outstanding.
 func writeTransferLots(ctx context.Context, tx pgx.Tx, operationID uuid.UUID, lots []ReleasedLot) ([]ReleasedLot, error) {
 	batch := &pgx.Batch{}
 	for i, lot := range lots {

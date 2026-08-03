@@ -186,9 +186,11 @@ func TestTransferBreakdownCostsTheSameWhateverItsSize(t *testing.T) {
 //
 // TestTransferLotFailureRollsBackPair already covers a first piece the table
 // refuses. This one puts the bad piece in the MIDDLE, where sending and
-// reporting come apart: pieces after it reach the server too, and reach it after
-// the transaction is already aborted, so they fail for a different reason than
-// the piece that is actually wrong. The caller must still be told about the
+// reporting come apart: every statement is already queued and sent before any
+// result is read, so the pieces after the bad one are never executed at all —
+// Postgres discards them, unread, once it hits the one the CHECK constraint
+// rejects, and they come back with no result of their own, not a distinguishable
+// error to mix up with the real one. The caller must still be told about the
 // piece that is wrong — the first failure, by its own index — and the pair must
 // still leave nothing behind, exactly as when each statement waited its turn.
 func TestCreatePairReportsTheBreakdownPieceThatFailed(t *testing.T) {
@@ -199,12 +201,29 @@ func TestCreatePairReportsTheBreakdownPieceThatFailed(t *testing.T) {
 	// one.
 	in.TransferLots[2].CostMinor = -1
 
+	// Idle connections join and leave this count synchronously — Acquire and
+	// Release both run under the pool's own lock — so a reading taken right
+	// before and right after CreatePair needs no settling time either side.
+	idleBefore := f.pool.Stat().IdleConns()
+
 	_, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in, nil)
 	if err == nil {
 		t.Fatal("CreatePair with a piece the table refuses: want an error")
 	}
 	if !strings.Contains(err.Error(), "transfer lot 2") {
-		t.Errorf("CreatePair = %v, want the failure named against piece 2 — the piece that is actually wrong, not one of the pieces that merely arrived after the transaction was aborted", err)
+		t.Errorf("CreatePair = %v, want the failure named against piece 2 — the piece that is actually wrong, by the loop's own rule of reporting the first error it reads, not a later one it happens to reach", err)
+	}
+
+	// The connection came back to the pool IDLE, not destroyed. pgxpool
+	// destroys any connection it is asked to release with a transaction status
+	// other than idle (see (*pgxpool.Conn).Release), and a batch whose results
+	// are left unread when the transaction then rolls back is exactly what
+	// leaves a connection in that state — this is the one way the batched
+	// version could break a caller that the loop could not. It does not show up
+	// as an error CreatePair returns, only as churn in the pool, so it has to be
+	// read off the pool rather than off CreatePair's return value.
+	if idleAfter := f.pool.Stat().IdleConns(); idleAfter != idleBefore {
+		t.Errorf("pool has %d idle connections after a refused breakdown, want %d — the connection was destroyed instead of coming back usable", idleAfter, idleBefore)
 	}
 
 	for _, accountID := range []uuid.UUID{f.accountID, f.account2ID} {
@@ -224,10 +243,12 @@ func TestCreatePairReportsTheBreakdownPieceThatFailed(t *testing.T) {
 		t.Errorf("%d breakdown rows survived a refused pair, want none — the pieces written before the bad one must go with it", rows)
 	}
 
-	// The connection is still usable afterwards. A batch whose results were
-	// abandoned unread leaves it unfit for anything, including the rollback that
-	// has to follow, so this is not a formality: it is the one way the batched
-	// version could break a caller that the loop could not.
+	// A healthy transfer afterwards is a second, independent confirmation. It
+	// does not by itself prove the earlier connection survived — the pool has
+	// spare capacity to open a fresh one, so this call could pass even if the
+	// old connection had been thrown away — but it is here so a reader who
+	// doubts the idle-count check above can watch the store actually keep
+	// working rather than take the count on faith.
 	healthyOut, healthyIn := transferOfPieces(f, 3)
 	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, healthyOut, healthyIn, nil); err != nil {
 		t.Fatalf("a healthy transfer after a refused one: %v", err)
