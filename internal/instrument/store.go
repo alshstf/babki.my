@@ -2,11 +2,45 @@ package instrument
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"babki.my/babki/internal/family"
 )
+
+// pgUniqueViolation is the SQLSTATE code Postgres returns for a unique
+// constraint violation; instrumentsTickerUnique names the one this package can
+// trip (migration 0011).
+const (
+	pgUniqueViolation       = "23505"
+	instrumentsTickerUnique = "instruments_ticker_uniq"
+)
+
+// ErrTickerTaken means another instrument already carries this ticker. The
+// catalog holds at most one instrument per ticker because the quotes job looks
+// instruments up by ticker: a second row under the same one would simply never
+// be priced (see marketdata.quotesWorker). Wrapping family.ErrValidation is
+// what turns it into a 400 saying which rule was broken, instead of the
+// "internal error" that an unmapped unique violation falls through to.
+var ErrTickerTaken = fmt.Errorf("%w: ticker already belongs to another instrument", family.ErrValidation)
+
+// wrapTickerConflict maps a unique_violation on the ticker index to
+// ErrTickerTaken. Every other error passes through untouched — mirroring
+// family.wrapUsernameConflict and operation.mapWriteError, which translate
+// exactly the constraints their own writes can trip and nothing else.
+func wrapTickerConflict(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) &&
+		pgErr.Code == pgUniqueViolation && pgErr.ConstraintName == instrumentsTickerUnique {
+		return ErrTickerTaken
+	}
+	return err
+}
 
 type Store struct{ pool *pgxpool.Pool }
 
@@ -24,13 +58,17 @@ func scan(row pgx.Row) (Instrument, error) {
 }
 
 func (s *Store) Create(ctx context.Context, inst Instrument) (Instrument, error) {
-	return scan(s.pool.QueryRow(ctx, `
+	created, err := scan(s.pool.QueryRow(ctx, `
 		INSERT INTO instruments (type, name, ticker, isin, figi, currency,
 			face_value_minor, face_currency, frozen)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING `+cols,
 		inst.Type, inst.Name, inst.Ticker, inst.ISIN, inst.FIGI,
 		inst.Currency, inst.FaceValueMinor, inst.FaceCurrency, inst.Frozen))
+	if err != nil {
+		return Instrument{}, wrapTickerConflict(err)
+	}
+	return created, nil
 }
 
 func (s *Store) ByID(ctx context.Context, id uuid.UUID) (Instrument, error) {
@@ -141,7 +179,7 @@ func (s *Store) Update(ctx context.Context, id uuid.UUID, upd Update) (Instrumen
 		upd.FaceValueMinor != nil, doublePtr(upd.FaceValueMinor),
 		upd.FaceCurrency != nil, doublePtr(upd.FaceCurrency))
 	if err != nil {
-		return Instrument{}, err
+		return Instrument{}, wrapTickerConflict(err)
 	}
 	if ct.RowsAffected() == 0 {
 		return Instrument{}, pgx.ErrNoRows

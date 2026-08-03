@@ -141,6 +141,12 @@ func NewQuotesWorker(store *Store, instruments instrumentLister, provider QuoteP
 // debug log — that's an expected, routine condition (e.g. newly listed or
 // suspended instruments), not an error. A provider error is returned (not
 // swallowed) so River retries the job.
+//
+// Every instrument the mapping cannot carry leaves a line behind it. Two
+// instruments under one ticker are a Warn, because one of them will never be
+// priced while both exist; a ticker the catalog does not hold is a Debug,
+// because it costs nothing. Both used to be dropped in silence, which is how
+// a position could show no quote with no trace of the reason anywhere.
 func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]) error {
 	insts, err := w.instruments.ListTradable(ctx)
 	if err != nil {
@@ -155,6 +161,26 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 	byTicker := make(map[string]uuid.UUID, len(insts))
 	tickers := make([]string, 0, len(insts))
 	for _, inst := range insts {
+		if priced, taken := byTicker[inst.Ticker]; taken {
+			// instruments.ticker carries a partial unique index (migration
+			// 0011), so a read of the catalog cannot produce this any more.
+			// The check is here all the same because this worker is handed a
+			// LIST, not a table: whatever produced the list — a widened
+			// ListTradable, a second catalog source, an index dropped by hand
+			// — a mapping step that loses one of its entries has to say so.
+			// Overwriting in silence was the whole of issue #26: the loser was
+			// never priced again and nothing anywhere said why.
+			//
+			// Warn and carry on rather than failing the job: a retry cannot
+			// un-duplicate a ticker, so River would retry forever and every
+			// other instrument would stop being priced too — one wrong number
+			// traded for all of them.
+			w.log.Warn("marketdata: two instruments share a ticker, only one of them can be priced",
+				"ticker", inst.Ticker,
+				"priced_instrument_id", priced,
+				"skipped_instrument_id", inst.ID)
+			continue
+		}
 		byTicker[inst.Ticker] = inst.ID
 		tickers = append(tickers, inst.Ticker)
 	}
@@ -171,8 +197,19 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 	for _, tq := range tickerQuotes {
 		id, ok := byTicker[tq.Ticker]
 		if !ok {
-			// Provider reported a ticker we didn't ask about; ignore rather
-			// than fail the whole batch over it.
+			// A ticker we didn't ask about; ignored rather than failed over,
+			// but no longer dropped without a word — the sibling case ("we
+			// asked and got no price", below) has always logged, and silence
+			// has to be a decision rather than an oversight.
+			//
+			// Debug, and deliberately the same level as that sibling: nothing
+			// of ours goes unvalued because of this line, since an instrument
+			// that did go unpriced reports itself below, and a louder level
+			// would put something nobody can act on into every production log.
+			// It still earns a line: a provider spelling a ticker differently
+			// from the catalog is visible here and nowhere else.
+			w.log.Debug("marketdata: provider reported a ticker the catalog does not hold, ignoring it",
+				"provider", w.provider.Name(), "ticker", tq.Ticker)
 			continue
 		}
 		seen[tq.Ticker] = true

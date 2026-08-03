@@ -2,12 +2,14 @@ package instrument_test
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/platform/testdb"
 )
@@ -232,6 +234,66 @@ func TestByIDs(t *testing.T) {
 	}
 	if len(empty) != 0 {
 		t.Errorf("ByIDs(nil) = %+v, want an empty map", empty)
+	}
+}
+
+// TestTickerIsUniqueAmongInstrumentsThatCarryOne pins the constraint the
+// quotes job has always assumed and never had: at most one instrument per
+// ticker. That job maps ticker -> instrument id, because the provider answers
+// with tickers and knows nothing about this catalog; a map holds one value per
+// key, so a second row under the same ticker meant one of the two was
+// overwritten and never priced again — no error, no log line, just a position
+// showing no quote forever. The catalog refuses the second row instead, and
+// says which rule was broken: a 400 the caller can act on, not the 500 a raw
+// unique violation turns into at family.WriteError's default branch.
+//
+// The EMPTY ticker is deliberately outside the constraint. It is how "this
+// instrument has no exchange ticker" is written down — cash, metals, hand-made
+// holdings — those rows are excluded from ListTradable and never looked up by
+// ticker, so a full unique index would forbid the second one of them for
+// nothing.
+func TestTickerIsUniqueAmongInstrumentsThatCarryOne(t *testing.T) {
+	st, ctx, _ := newStore(t)
+
+	if _, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
+	}); err != nil {
+		t.Fatalf("Create first SBER: %v", err)
+	}
+
+	_, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Сбербанк, второй раз", Ticker: "SBER", Currency: "RUB",
+	})
+	if !errors.Is(err, instrument.ErrTickerTaken) {
+		t.Fatalf("Create a second SBER: err = %v, want ErrTickerTaken", err)
+	}
+	// Wrapping ErrValidation is what makes it a 400 rather than "internal
+	// error": the two assertions are separate because the sentinel could be
+	// defined without it and the caller would still see a 500.
+	if !errors.Is(err, family.ErrValidation) {
+		t.Errorf("Create a second SBER: err = %v, want it to wrap family.ErrValidation so the caller gets a 400", err)
+	}
+
+	// Renaming an existing instrument onto a taken ticker is the same
+	// collision, arrived at through the other write path.
+	gazp, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Газпром", Ticker: "GAZP", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("Create GAZP: %v", err)
+	}
+	taken := "SBER"
+	if _, err := st.Update(ctx, gazp.ID, instrument.Update{Ticker: &taken}); !errors.Is(err, instrument.ErrTickerTaken) {
+		t.Fatalf("Update GAZP onto SBER: err = %v, want ErrTickerTaken", err)
+	}
+
+	// Any number of instruments may carry no ticker at all.
+	for _, name := range []string{"Наличные", "Золотой слиток"} {
+		if _, err := st.Create(ctx, instrument.Instrument{
+			Type: instrument.TypeCustom, Name: name, Currency: "RUB",
+		}); err != nil {
+			t.Fatalf("Create tickerless %q: %v — the empty ticker must stay outside the unique index", name, err)
+		}
 	}
 }
 
