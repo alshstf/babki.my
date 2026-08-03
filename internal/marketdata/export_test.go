@@ -8,6 +8,15 @@ import (
 	"github.com/riverqueue/river"
 )
 
+// NewStoreForRows is NewStore over a caller-supplied source of rows in place
+// of a connection pool. Test-only (this file is compiled into the test binary
+// only): it exists so a reader can be run against a result set that yields
+// rows and then fails, which is what a connection dying mid-stream looks like
+// and which no real Postgres fixture can be asked to reproduce on demand. The
+// parameter type is unexported, but an external test package can still pass
+// any value whose method set satisfies it — see store_truncated_test.go.
+func NewStoreForRows(q querier) *Store { return &Store{db: q} }
+
 // mustBackfillFxWorker builds a backfillFxWorker via the public constructor
 // and unwraps it back to the concrete type, so test-only helpers can poke at
 // its unexported fields (now). NewBackfillFxWorker always returns
