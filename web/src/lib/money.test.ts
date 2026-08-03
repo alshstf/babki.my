@@ -58,9 +58,20 @@ describe("parseToMinor", () => {
 });
 
 describe("formatPrice", () => {
+  // The ordinary case, pinned digit for digit: every quote this program has
+  // met so far is a hundredth or more, and none of them may move because of
+  // what the sub-cent branch below does. Thousands separator included — the
+  // adaptive branch, applied to the whole range, would print 1234.5 as
+  // "1 230".
   it.each([
     ["305.567", "305,57"],
     ["100", "100,00"],
+    ["95.20", "95,20"],
+    ["1234.5", "1 234,50"],
+    ["0.01", "0,01"],
+    // A quote that really is zero is not a fake zero, and still prints as one.
+    ["0", "0,00"],
+    ["0.00", "0,00"],
   ])("formats %s as %s", (input, want) => {
     expect(norm(formatPrice(input) ?? "")).toBe(want);
   });
@@ -69,12 +80,33 @@ describe("formatPrice", () => {
     expect(formatPrice(input)).toBeNull();
   });
 
-  // TODO(sub-cent pricing): a price below half a kopeck rounds to "0,00",
-  // silently dropping the value instead of surfacing it. This pins the
-  // CURRENT behavior, not the desired one — a product decision on how to
-  // display sub-cent prices is still open.
-  it("rounds a sub-cent price down to 0,00 (documented, not desired)", () => {
-    expect(norm(formatPrice("0.0001") ?? "")).toBe("0,00");
+  // #30: two fraction digits turn any price below a hundredth into "0,00" — a
+  // number that is neither the price nor zero, printed one cell away from the
+  // column where this program refuses to show a figure it cannot vouch for.
+  // Below a hundredth the price is rendered by significant digits instead.
+  // Compared exactly, not by substring: "0" is a substring of nearly every
+  // number this function returns.
+  it.each([
+    ["0.0001", "0,0001"],
+    ["0.000123456", "0,000123"],
+    ["0.005", "0,005"],
+    ["0.0099", "0,0099"],
+    ["0.00000001234", "0,0000000123"],
+  ])("shows the significant digits of sub-cent price %s as %s", (input, want) => {
+    const got = norm(formatPrice(input) ?? "");
+    expect(got).toBe(want);
+    expect(got).not.toBe("0,00");
+  });
+
+  // The one input this function accepts that has no honest rendering at all:
+  // a decimal string so small it underflows the double to exactly zero, so
+  // there are no significant digits left to show. The server cannot send one
+  // (quotes are NUMERIC(30,10), and 1e-10 is nowhere near the underflow
+  // boundary), but this function's contract is its own regex, not its
+  // caller's table — and omitting the hint is what it already does for every
+  // other input it cannot render.
+  it("omits the hint entirely for a price too small to have any digits left", () => {
+    expect(formatPrice("0." + "0".repeat(400) + "1")).toBeNull();
   });
 });
 

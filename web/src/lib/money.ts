@@ -43,14 +43,52 @@ export function formatMinorCompact(amountMinor: number, currency: string): strin
   return formatWith(amountMinor, currency, 0);
 }
 
-// formatPrice renders a raw decimal-string price (a quote, not minor
-// units) as a fixed 2-fraction-digit ru-RU number, e.g. "305.5" -> "305,50".
+// A quote below a hundredth, but not zero: whole part 0, fraction starting
+// "00", and a non-zero digit somewhere in it. Matched on the DIGITS rather
+// than on the parsed double on purpose — see formatPrice.
+const SUB_CENT_PRICE_RE = /^0\.00\d*[1-9]/;
+
+// How many digits of a sub-cent price are worth showing. Three is the same
+// order of detail two fraction digits give an ordinary quote (95,20 is four
+// significant digits, 0,05 is one), enough to tell 0,000123 from 0,000456 —
+// and unlike a fixed fraction-digit count it needs no ceiling: the price
+// picks its own scale.
+const SUB_CENT_SIGNIFICANT_DIGITS = 3;
+
+// formatPrice renders a raw decimal-string price (a quote, not minor units)
+// as a ru-RU number. A price of a hundredth or more gets exactly two fraction
+// digits, e.g. "305.5" -> "305,50" — every quote this program has met so far
+// (ruble and dollar shares and bonds).
+//
+// Below a hundredth those two digits would print "0,00" (#30): a number that
+// is neither the price nor zero, one cell away from the column where this
+// program refuses to publish a figure it cannot vouch for. So a sub-cent
+// price is rendered by significant digits instead — "0.0001" -> "0,0001",
+// "0.000123456" -> "0,000123" — and never as a zero. Nothing is quoted that
+// finely today; crypto is where it starts.
+//
+// The branch is chosen from the input STRING, not from the parsed double, for
+// the same reason the threshold exists at all: a decimal string small enough
+// to underflow to exactly 0 would compare as "not below a hundredth" and take
+// the ordinary branch, printing the very "0,00" this avoids.
+//
 // Returns null on unparseable input so callers can skip the hint entirely
 // rather than render garbage — an honest omission over a fake display.
 export function formatPrice(value: string): string | null {
   if (!/^\d+(\.\d+)?$/.test(value)) return null;
   const num = Number(value);
   if (!Number.isFinite(num)) return null;
+  if (SUB_CENT_PRICE_RE.test(value)) {
+    // The digits said non-zero and the double says zero, so the value
+    // underflowed and there are no significant digits left to show. Out of
+    // reach from the wire — quotes are NUMERIC(30,10), whose smallest
+    // non-zero is 1e-10 — but this function's contract is the regex above,
+    // and "0" is not an answer it is allowed to give.
+    if (num === 0) return null;
+    return new Intl.NumberFormat("ru-RU", {
+      maximumSignificantDigits: SUB_CENT_SIGNIFICANT_DIGITS,
+    }).format(num);
+  }
   return new Intl.NumberFormat("ru-RU", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
