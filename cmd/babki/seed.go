@@ -497,9 +497,10 @@ func seedInstrumentsAndOperations(
 		// visible difference and it is meant to be: a EUR->USD rate is itself
 		// bridged through the ruble here, so both paths ultimately stand on the
 		// same two rows of the fx table and can only differ by that rounding.
-		// What the row is really here to show is the SENTENCE under the price —
-		// «Пересчитано из 4 900,00 €» — which now describes a conversion the
-		// ruble figure has actually been through.
+		// What the row is really here to show is the price line's own TOOLTIP —
+		// «Пересчитано из 4 900,00 €», appended to the hint that hovering the
+		// price shows, not a line printed under it — which now describes a
+		// conversion the ruble figure has actually been through.
 		//
 		// The price line itself reads «98,00 %», not «98,00»: the quote is a
 		// percentage of face, and one of these bonds is worth €980,00 rather

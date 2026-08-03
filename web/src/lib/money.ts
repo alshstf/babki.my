@@ -64,15 +64,18 @@ const SUB_CENT_SIGNIFICANT_DIGITS = 3;
 
 // formatPrice renders a raw decimal-string price (a quote, not minor units)
 // as a ru-RU number. A price of a hundredth or more gets exactly two fraction
-// digits, e.g. "305.5" -> "305,50" — every quote this program has met so far
-// (ruble and dollar shares and bonds).
+// digits, e.g. "305.5" -> "305,50" — the ordinary share and bond quote, and
+// what every quote in the demo seed but one is.
 //
 // Below a hundredth those two digits would print "0,00" (#30): a number that
 // is neither the price nor zero, one cell away from the column where this
 // program refuses to publish a figure it cannot vouch for. So a sub-cent
 // price is rendered by significant digits instead — "0.0001" -> "0,0001",
-// "0.000123456" -> "0,000123" — and never as a zero. Nothing is quoted that
-// finely today; crypto is where it starts.
+// "0.000123456" -> "0,000123" — and never as a zero. That branch is not held
+// in reserve for a currency this program has yet to meet: it runs every time
+// the demo stand draws the Freedom KZ account's positions, where WeWork is
+// quoted at $0.0025 after its bankruptcy (cmd/babki/seed.go), and a delisted
+// share reaches these digits the same way a coin does.
 //
 // The branch is chosen from the input STRING, not from the parsed double, for
 // the same reason the threshold exists at all: a decimal string small enough

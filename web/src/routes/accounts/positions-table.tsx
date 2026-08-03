@@ -45,10 +45,15 @@ function unnameableGap<T>(_: never, fallback: T): T {
 // that is exactly the defect (#66) this is fixing rather than repeating.
 //
 // The server checks its terms in a fixed order and stops at the first failure,
-// so a named cause also asserts that everything before it succeeded; two of
-// these sentences say so out loud («курсы на дни покупок нашлись»), which is
-// what answers the reader's obvious question about the ruble figure they can
-// see is missing from a cell whose own rates are all there.
+// so a named cause also asserts that nothing before it stopped the object; two
+// of these sentences say so out loud («дело не в стоимости»), which is what
+// answers the reader's obvious question about the ruble figure they can see is
+// missing from a cell whose own rates are all there. They claim no more than
+// that on purpose: a term the server never had to value — the cost of a
+// position holding no lot, the income of one that received none — was not
+// checked and found sound, it was simply never in the way, so «курсы на дни
+// покупок нашлись» over a sum with no terms reported a lookup that never
+// happened.
 //
 // Written as a switch over literal keys rather than a lookup table, so every
 // key stays a literal at the t() call site — the only shape
@@ -114,15 +119,22 @@ function valuationGapTitle(
 // half-rendered hint would be more misleading than no hint at all.
 //
 // WHAT THE NUMBER IS depends on the instrument, and that is the whole of #32.
-// For a share or an ETF the quote is money per unit, always in the
-// position's OWN currency (Position.price is never converted). That matches
-// the valuation above it, and needs no unit stated, only in the position's
-// own-currency display mode. In BASE mode the valuation converts but this
+// For a share or an ETF the quote is money per unit, in the currency the
+// QUOTE is denominated in. That is normally the position's own, and nothing
+// enforces it: Position.currency comes from the operation, a quote carries a
+// currency column of its own, and where the two differ the server converts
+// the VALUATION into the position's currency and discloses that in
+// market_value_source_currency — while Position.price stays exactly as
+// quoted and is never converted. On the ordinary row where they agree, the
+// bare number matches the valuation above it and needs no unit stated, in
+// the position's own-currency display mode. Two things break that, and
+// neither is a caption problem: in BASE mode the valuation converts and this
 // price line does not, so a foreign share prints a bare number in a currency
-// the ruble amount above it is not in — the same failure shape #32 fixed for
-// bonds below, left open here: fixing it needs a different RENDERING (a unit
-// suffix or a mode-aware omission), not just a truer caption, so it stays a
-// separate, still-open case rather than something this comment explains away.
+// the ruble amount above it is not in; and a share quoted in a currency
+// other than its position's — which no seed row and no test exercises today
+// — would print one in either mode. Both want a different RENDERING (a unit
+// suffix or a mode-aware omission) rather than a truer caption, so they stay
+// separate, still-open cases rather than something this comment explains away.
 // For a BOND the quote is a percentage of face value (the MOEX convention):
 // the server publishes q.Price untouched in Position.price, and
 // marketValue() in internal/portfolio/http.go multiplies it as
