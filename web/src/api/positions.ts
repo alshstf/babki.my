@@ -11,6 +11,14 @@ export type PositionsResponse = components["schemas"]["PositionsResponse"];
 // RealizedTotal in the API contract).
 export type RealizedTotal = components["schemas"]["RealizedTotal"];
 export type RealizedGap = components["schemas"]["RealizedGap"];
+// Which TERM the server could not value, and so why a position carries no
+// base-currency figures at all — and, separately, why its market valuation
+// carries none of its own. The screen never re-derives either from the
+// position's flags or from comparing two currency codes: only the server knows
+// which term it actually stopped on (see Position.in_base_gap /
+// Position.market_value_gap in the API contract).
+export type InBaseGap = components["schemas"]["InBaseGap"];
+export type MarketValueGap = components["schemas"]["MarketValueGap"];
 
 // Returns the WHOLE response, not just the positions array: cost_basis_rules
 // travels with these figures on purpose (see the API contract) — it says

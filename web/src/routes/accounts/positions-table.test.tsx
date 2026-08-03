@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import "@/i18n";
 import { PositionsTable } from "./positions-table";
 import type { Position } from "@/api/positions";
@@ -17,6 +17,36 @@ function wrap(ui: ReactElement) {
 // with explicit escapes (rather than the literal characters) so they can't
 // silently get mangled into plain ASCII spaces by an editing tool.
 const norm = (s: string) => s.replace(/[\u00A0\u202F]/g, " ");
+
+// The four sentences the row's caption can be, one per value of the server's
+// Position.in_base_gap, plus the general one a client that cannot name the
+// server's answer falls back to. Spelled out here in full rather than read
+// back out of ru.json: the whole point of #66 is WHICH sentence a cell gets,
+// and a test that fetched the sentence through the same lookup the component
+// uses would agree with the component no matter which one it picked.
+const CAPTION = {
+  general: "\u041D\u0435\u0442 \u043A\u0443\u0440\u0441\u0430 \u2014 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+  undatedLot:
+    "\u0423 \u043E\u0434\u043D\u043E\u0439 \u0438\u0437 \u043F\u0430\u0440\u0442\u0438\u0439 \u043D\u0435 \u0437\u0430\u043F\u0438\u0441\u0430\u043D\u0430 \u0434\u0430\u0442\u0430 \u043F\u043E\u043A\u0443\u043F\u043A\u0438, \u0430 \u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u043F\u043E \u043A\u0443\u0440\u0441\u0443 \u043D\u0430 \u0434\u0435\u043D\u044C \u043F\u043E\u043A\u0443\u043F\u043A\u0438 \u2014 \u0438 \u0432\u043E\u0441\u0441\u0442\u0430\u043D\u043E\u0432\u0438\u0442\u044C \u044D\u0442\u0443 \u0434\u0430\u0442\u0443 \u0443\u0436\u0435 \u043D\u0435\u043E\u0442\u043A\u0443\u0434\u0430: \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435 \u044D\u0442\u0430 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043D\u0435 \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u043D\u0438\u043A\u043E\u0433\u0434\u0430. \u0421\u0442\u0440\u043E\u043A\u0430 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442\u0441\u044F \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435 \u0446\u0435\u043B\u0438\u043A\u043E\u043C \u0438\u043B\u0438 \u043D\u0438\u043A\u0430\u043A, \u043F\u043E\u044D\u0442\u043E\u043C\u0443 \u0432\u0441\u044F \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u0430 \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+  noRateLotDate:
+    "\u041D\u0435\u0442 \u043A\u0443\u0440\u0441\u0430 \u043D\u0430 \u0434\u0435\u043D\u044C \u043F\u043E\u043A\u0443\u043F\u043A\u0438 \u043E\u0434\u043D\u043E\u0439 \u0438\u0437 \u043F\u0430\u0440\u0442\u0438\u0439, \u0430 \u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u043F\u043E \u043A\u0443\u0440\u0441\u0443 \u0442\u043E\u0433\u043E \u0434\u043D\u044F. \u041A\u0443\u0440\u0441 \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438 \u043A\u0443\u0440\u0441\u043E\u0432, \u0438 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0441\u0430\u043C\u0430. \u0421\u0442\u0440\u043E\u043A\u0430 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442\u0441\u044F \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435 \u0446\u0435\u043B\u0438\u043A\u043E\u043C \u0438\u043B\u0438 \u043D\u0438\u043A\u0430\u043A, \u043F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430 \u0432\u0441\u044F \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u0430 \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+  noRateIncomeDate:
+    "\u041A\u0443\u0440\u0441\u044B \u043D\u0430 \u0434\u043D\u0438 \u043F\u043E\u043A\u0443\u043F\u043E\u043A \u043D\u0430\u0448\u043B\u0438\u0441\u044C, \u0430 \u043D\u0430 \u0434\u0435\u043D\u044C \u043E\u0434\u043D\u043E\u0439 \u0438\u0437 \u0432\u044B\u043F\u043B\u0430\u0442 \u2014 \u0434\u0438\u0432\u0438\u0434\u0435\u043D\u0434\u0430, \u043A\u0443\u043F\u043E\u043D\u0430 \u0438\u043B\u0438 \u043D\u0430\u043B\u043E\u0433\u0430 \u2014 \u043D\u0435\u0442; \u0434\u043E\u0445\u043E\u0434 \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u043F\u043E \u043A\u0443\u0440\u0441\u0443 \u0442\u043E\u0433\u043E \u0434\u043D\u044F. \u041A\u0443\u0440\u0441 \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438 \u043A\u0443\u0440\u0441\u043E\u0432, \u0438 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0441\u0430\u043C\u0430. \u0421\u0442\u0440\u043E\u043A\u0430 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442\u0441\u044F \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435 \u0446\u0435\u043B\u0438\u043A\u043E\u043C \u0438\u043B\u0438 \u043D\u0438\u043A\u0430\u043A, \u043F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430 \u0432\u0441\u044F \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u0430 \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+  noRateToday:
+    "\u041A\u0443\u0440\u0441\u044B \u043D\u0430 \u0434\u043D\u0438 \u043F\u043E\u043A\u0443\u043F\u043E\u043A \u0438 \u0432\u044B\u043F\u043B\u0430\u0442 \u043D\u0430\u0448\u043B\u0438\u0441\u044C, \u0430 \u043D\u0430 \u0441\u0435\u0433\u043E\u0434\u043D\u044F \u2014 \u0434\u043B\u044F \u0432\u0430\u043B\u044E\u0442\u044B, \u0432 \u043A\u043E\u0442\u043E\u0440\u043E\u0439 \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0440\u044B\u043D\u043E\u0447\u043D\u0430\u044F \u043E\u0446\u0435\u043D\u043A\u0430, \u2014 \u043D\u0435\u0442; \u043E\u0446\u0435\u043D\u043A\u0430 \u0431\u0435\u0440\u0451\u0442\u0441\u044F \u043F\u043E \u0442\u0435\u043A\u0443\u0449\u0435\u043C\u0443 \u043A\u0443\u0440\u0441\u0443. \u041A\u0443\u0440\u0441 \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438 \u043A\u0443\u0440\u0441\u043E\u0432, \u0438 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0441\u0430\u043C\u0430. \u0421\u0442\u0440\u043E\u043A\u0430 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442\u0441\u044F \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435 \u0446\u0435\u043B\u0438\u043A\u043E\u043C \u0438\u043B\u0438 \u043D\u0438\u043A\u0430\u043A, \u043F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430 \u0432\u0441\u044F \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u0430 \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+  valuationCurrency:
+    "\u041E\u0446\u0435\u043D\u043A\u0430 \u043F\u043E\u043B\u0443\u0447\u0438\u043B\u0430\u0441\u044C \u0432 \u0442\u0440\u0435\u0442\u044C\u0435\u0439 \u0432\u0430\u043B\u044E\u0442\u0435 \u2014 \u043D\u0435 \u0432 \u0432\u0430\u043B\u044E\u0442\u0435 \u043F\u043E\u0437\u0438\u0446\u0438\u0438 \u0438 \u043D\u0435 \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439, \u2014 \u0430 \u043A\u0443\u0440\u0441\u0430 \u043E\u0442 \u043D\u0435\u0451 \u0434\u043E \u0432\u0430\u043B\u044E\u0442\u044B \u043F\u043E\u0437\u0438\u0446\u0438\u0438 \u043D\u0435\u0442: \u0441\u0440\u0430\u0432\u043D\u0438\u0442\u044C \u0435\u0451 \u0441\u043E \u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C\u044E \u043F\u043E\u0437\u0438\u0446\u0438\u0438 \u043D\u0435\u043B\u044C\u0437\u044F. \u041F\u043E\u043A\u0430 \u043E\u0446\u0435\u043D\u043A\u0430 \u043D\u0435 \u0432\u044B\u0440\u0430\u0436\u0435\u043D\u0430 \u0432 \u0432\u0430\u043B\u044E\u0442\u0435 \u043F\u043E\u0437\u0438\u0446\u0438\u0438, \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u0430 \u043D\u0435 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442 \u0435\u0451 \u0438 \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439. \u041F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u0430 \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+} as const;
+
+// Every money cell of a row carries the row's caption; the valuation is the
+// one that can carry its own instead (market_value_gap). Named here so a test
+// can say "all four" without repeating the ids.
+const ROW_MARKERS = [
+  "position-cost-not-converted",
+  "position-market-value-not-converted",
+  "position-profit-amount-not-converted",
+  "position-income-not-converted",
+] as const;
 
 function makePosition(overrides: Partial<Position> = {}): Position {
   return {
@@ -52,12 +82,13 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     // component surfaces a per-position realized-undated indicator, so the
     // field stays at its honest default rather than an untested guess.
     has_undated_realizations: false,
-    // The two server-named causes (#66). Null is the honest default for this
-    // fixture: it converts cleanly, so nothing stopped the object and nothing
-    // was withheld from the valuation. PositionsTable does not read either
-    // field yet — the captions still come from has_undated_lots and a currency
-    // comparison — so the tests that set them are the ones that will arrive
-    // with that change.
+    // The two server-named causes (#66), and the only source the row's and the
+    // valuation's captions read. Null is the honest default for this fixture:
+    // it converts cleanly, so nothing stopped the object and nothing was
+    // withheld from the valuation. A test that nulls in_base must set
+    // in_base_gap too — the server publishes the two together (see
+    // Position.in_base_gap in the API contract: non-null exactly when in_base
+    // is null and the currency differs from the base one).
     in_base_gap: null,
     market_value_gap: null,
     ...overrides,
@@ -408,6 +439,7 @@ describe("PositionsTable", () => {
               income_minor: 1_000,
               unrealized_pnl_minor: 25_000,
               in_base: null,
+              in_base_gap: "no_rate_lot_date",
             }),
           ]}
           mode="base"
@@ -431,26 +463,118 @@ describe("PositionsTable", () => {
 
       expect(screen.getByTestId("position-cost-not-converted")).toHaveAttribute(
         "title",
-        "Нет курса — показано в исходной валюте",
+        CAPTION.noRateLotDate,
       );
       expect(screen.getByTestId("position-market-value-not-converted")).toBeInTheDocument();
       expect(screen.getByTestId("position-profit-amount-not-converted")).toBeInTheDocument();
       expect(screen.getByTestId("position-income-not-converted")).toBeInTheDocument();
     });
 
-    it("explains an undated lot as an undated lot, not as a missing rate", () => {
-      // Both conditions null in_base, and a reader told "нет курса" over the
-      // second one is told something false: a missing rate is a gap the fx
-      // backfill closes on its own, an unrecorded purchase date never
-      // resolves — nobody wrote it down (see has_undated_lots in the API
-      // contract). The marker has to name the cause it was given.
+    // #66. Four different things stop in_base, the server names the one it
+    // stopped on, and a reader told «нет курса» over all four is told something
+    // false about three of them. Each case below pins its OWN sentence on every
+    // cell of the row and pins that it is not any of the other three — a test
+    // that only asked "is there a caption" would pass with the causes swapped,
+    // which is the exact defect this branch exists to fix.
+    describe("the caption names the term the server stopped on", () => {
+      // Renders one position that failed for `gap` and returns the titles of
+      // the four markers, so each case can assert on all of them at once.
+      // Unmounts whatever a previous call rendered first: a case that asks for
+      // several gaps in a row would otherwise leave two tables in one document
+      // and every getByTestId below would find two elements.
+      function captionsFor(gap: NonNullable<Position["in_base_gap"]>): string[] {
+        cleanup();
+        wrap(
+          <PositionsTable
+            positions={[
+              makePosition({
+                currency: "USD",
+                income_minor: 1_000,
+                in_base: null,
+                in_base_gap: gap,
+              }),
+            ]}
+            mode="base"
+            baseCurrency="RUB"
+          />,
+        );
+        return ROW_MARKERS.map((id) => screen.getByTestId(id).getAttribute("title") ?? "");
+      }
+
+      it("says an unrecorded purchase date, and says it will never resolve", () => {
+        for (const title of captionsFor("undated_lot")) {
+          expect(title).toBe(CAPTION.undatedLot);
+        }
+        // The half that matters most: this one is permanent. No promise of a
+        // figure that is not coming.
+        expect(CAPTION.undatedLot).toContain("никогда");
+        expect(CAPTION.undatedLot).not.toContain("появится при обновлении");
+      });
+
+      it("says a purchase day's missing rate, not an unrecorded date", () => {
+        for (const title of captionsFor("no_rate_lot_date")) {
+          expect(title).toBe(CAPTION.noRateLotDate);
+          expect(title).not.toBe(CAPTION.undatedLot);
+          expect(title).not.toBe(CAPTION.noRateIncomeDate);
+          expect(title).not.toBe(CAPTION.noRateToday);
+        }
+      });
+
+      it("says a payment day's missing rate, and not a purchase day's", () => {
+        for (const title of captionsFor("no_rate_income_date")) {
+          expect(title).toBe(CAPTION.noRateIncomeDate);
+          expect(title).not.toBe(CAPTION.noRateLotDate);
+          expect(title).not.toBe(CAPTION.noRateToday);
+          expect(title).not.toBe(CAPTION.undatedLot);
+        }
+      });
+
+      it("says today's missing rate, and not a historical day's", () => {
+        for (const title of captionsFor("no_rate_today")) {
+          expect(title).toBe(CAPTION.noRateToday);
+          expect(title).not.toBe(CAPTION.noRateLotDate);
+          expect(title).not.toBe(CAPTION.noRateIncomeDate);
+          expect(title).not.toBe(CAPTION.undatedLot);
+        }
+      });
+
+      it("promises the figure will appear for every closeable cause, and for no other", () => {
+        // The whole user value of naming the term: «подтянется само» versus
+        // «этого числа не будет никогда». Asserted as a property of the four
+        // sentences rather than case by case, so a new cause worded without
+        // either half fails here.
+        for (const gap of ["no_rate_lot_date", "no_rate_income_date", "no_rate_today"] as const) {
+          const [cost] = captionsFor(gap);
+          expect(cost).toContain("появится при обновлении курсов");
+          expect(cost).not.toContain("никогда");
+        }
+        const [undated] = captionsFor("undated_lot");
+        expect(undated).toContain("уже неоткуда");
+      });
+    });
+
+    it("captions the row from in_base_gap alone, never from has_undated_lots", () => {
+      // The row's caption has ONE source. Both fields derive from the same
+      // server-side predicate and so cannot disagree in a real payload — these
+      // two rows are therefore deliberately impossible ones, and they exist for
+      // exactly that: they are the only way to prove WHICH field is read, and
+      // two sources for one sentence is how the two eventually disagree.
       wrap(
         <PositionsTable
           positions={[
             makePosition({
+              instrument: { ...makePosition().instrument, id: "instr-flag-on" },
               currency: "USD",
               has_undated_lots: true,
               in_base: null,
+              in_base_gap: "no_rate_lot_date",
+            }),
+            makePosition({
+              instrument: { ...makePosition().instrument, id: "instr-flag-off" },
+              currency: "USD",
+              has_undated_lots: false,
+              in_base: null,
+              in_base_gap: "undated_lot",
             }),
           ]}
           mode="base"
@@ -458,36 +582,47 @@ describe("PositionsTable", () => {
         />,
       );
 
-      const marker = screen.getByTestId("position-cost-not-converted");
-      expect(marker).toHaveAttribute(
-        "title",
-        "У одной из партий не записана дата покупки, а стоимость считается по курсу на день покупки — поэтому вся позиция показана в исходной валюте",
-      );
-      // Every cell of the row is qualified the same way: the position is
-      // unconvertible as a whole, not just its cost.
-      expect(screen.getByTestId("position-income-not-converted")).toHaveAttribute(
-        "title",
-        expect.stringContaining("не записана дата покупки"),
-      );
+      const [flagOn, flagOff] = screen.getAllByTestId("position-cost-not-converted");
+      expect(flagOn).toHaveAttribute("title", CAPTION.noRateLotDate);
+      expect(flagOff).toHaveAttribute("title", CAPTION.undatedLot);
     });
 
-    it("keeps the missing-rate wording for a position whose lots are all dated", () => {
-      // The twin of the test above: has_undated_lots false must not inherit
-      // the undated-lot explanation just because in_base is null.
+    it("falls back to the general phrase for a cause this build cannot name", () => {
+      // A server newer than the client sends a value outside the union this
+      // build knows. That must degrade to today's vague-but-true sentence —
+      // not to a blank tooltip, not to a thrown render, and not to one of the
+      // four specific sentences, which would name a cause the server did not
+      // state. The second row is the same requirement for a payload with no
+      // cause at all (an older server, or one breaking its own contract).
       wrap(
         <PositionsTable
           positions={[
-            makePosition({ currency: "USD", has_undated_lots: false, in_base: null }),
+            makePosition({
+              instrument: { ...makePosition().instrument, id: "instr-unknown-gap" },
+              currency: "USD",
+              in_base: null,
+              // Deliberately outside the generated union — this is JSON off the
+              // wire, typed by assertion rather than validated.
+              in_base_gap: "no_rate_martian_holiday" as Position["in_base_gap"],
+            }),
+            makePosition({
+              instrument: { ...makePosition().instrument, id: "instr-no-gap" },
+              currency: "USD",
+              in_base: null,
+              in_base_gap: null,
+            }),
           ]}
           mode="base"
           baseCurrency="RUB"
         />,
       );
 
-      expect(screen.getByTestId("position-cost-not-converted")).toHaveAttribute(
-        "title",
-        "Нет курса — показано в исходной валюте",
-      );
+      for (const marker of screen.getAllByTestId("position-cost-not-converted")) {
+        expect(marker).toHaveAttribute("title", CAPTION.general);
+      }
+      // Still marked, still showing the native figure: degrading the wording
+      // must not degrade the disclosure.
+      expect(screen.getAllByTestId("position-income-not-converted")).toHaveLength(2);
     });
 
     it("shows the plain native amounts with no indicator when the position's currency already is the base currency", () => {
@@ -574,19 +709,30 @@ describe("PositionsTable", () => {
     it("names the source currency, not the account's, in the not-converted marker", () => {
       // A position row's amounts are in the position's / quote's / bond face
       // value's currency — calling that "the account's currency" would point
-      // the user at the wrong thing.
-      wrap(
-        <PositionsTable
-          positions={[makePosition({ currency: "USD", in_base: null })]}
-          mode="base"
-          baseCurrency="RUB"
-        />,
-      );
+      // the user at the wrong thing. True of every one of the sentences a gap
+      // can produce, so it is asserted over all of them rather than over the
+      // one this row happens to carry.
+      for (const gap of [
+        "undated_lot",
+        "no_rate_lot_date",
+        "no_rate_income_date",
+        "no_rate_today",
+        null,
+      ] as const) {
+        cleanup();
+        wrap(
+          <PositionsTable
+            positions={[makePosition({ currency: "USD", in_base: null, in_base_gap: gap })]}
+            mode="base"
+            baseCurrency="RUB"
+          />,
+        );
 
-      expect(screen.getByTestId("position-cost-not-converted")).toHaveAttribute(
-        "title",
-        "Нет курса — показано в исходной валюте",
-      );
+        const title = screen.getByTestId("position-cost-not-converted").getAttribute("title") ?? "";
+        expect(title).toContain("в исходной валюте");
+        expect(title).not.toContain("счёт");
+        expect(title).not.toContain("счет");
+      }
     });
 
     it("shows a valuation in a third currency honestly, in its own currency, when in_base cannot express it", () => {
@@ -606,6 +752,11 @@ describe("PositionsTable", () => {
               market_value_minor: 100_000,
               market_value_currency: "EUR",
               unrealized_pnl_minor: null,
+              // The valuation's own cause, published by the server where the
+              // conversion actually failed — never re-derived here by comparing
+              // the two currency codes. in_base_gap stays null: the OBJECT was
+              // struck, only this one figure inside it was not.
+              market_value_gap: "no_rate_valuation_currency",
               in_base: {
                 cost_minor: 9_000_000,
                 market_value_minor: null,
@@ -648,25 +799,21 @@ describe("PositionsTable", () => {
       // above. "Нет курса" is the row's marker and would say the row could not
       // be converted at all, which the cell beside it disproves.
       const valuationMarker = screen.getByTestId("position-market-value-not-converted");
-      expect(valuationMarker).toHaveAttribute(
-        "title",
-        "Оценка получилась в третьей валюте — не в валюте позиции и не в базовой, — а курса от неё до валюты позиции нет: сравнить её со стоимостью позиции нельзя. Пока оценка не выражена в валюте позиции, программа не показывает её и в базовой. Поэтому показана в исходной валюте",
-      );
-      expect(valuationMarker.getAttribute("title")).not.toBe(
-        "Нет курса — показано в исходной валюте",
-      );
+      expect(valuationMarker).toHaveAttribute("title", CAPTION.valuationCurrency);
+      expect(valuationMarker.getAttribute("title")).not.toBe(CAPTION.general);
       // Profit is derived from that valuation, so it stays an honest dash.
       expect(screen.getByTestId("position-profit-dash")).toHaveTextContent("—");
       expect(screen.queryByTestId("position-profit-amount")).not.toBeInTheDocument();
     });
 
     it("keeps the row's own reason on the cells the valuation's reason is not true of", () => {
-      // The twin of the test above. A third-currency valuation is a fact about
-      // ONE figure: the cost and the income are denominated in the position's
-      // own currency and convert exactly as they always do. Here the row also
-      // has no fx rate at all, so its other cells fall back natively — and they
-      // must say "нет курса", not repeat the valuation's own reason, which is
-      // not true of them.
+      // The twin of the test above, and the combination the contract calls out
+      // as the reason market_value_gap is a SECOND field rather than one more
+      // value of in_base_gap: both are set, and both are true, of different
+      // cells of one row. The valuation is stuck in a third currency; the cost
+      // and the income are in the position's own currency and were stopped by
+      // something else entirely — a dateless lot, which is permanent and which
+      // the valuation's own sentence says nothing about.
       wrap(
         <PositionsTable
           positions={[
@@ -676,6 +823,8 @@ describe("PositionsTable", () => {
               market_value_currency: "EUR",
               unrealized_pnl_minor: null,
               in_base: null,
+              in_base_gap: "undated_lot",
+              market_value_gap: "no_rate_valuation_currency",
             }),
           ]}
           mode="base"
@@ -683,27 +832,139 @@ describe("PositionsTable", () => {
         />,
       );
 
+      // The nearer, cell-specific cause wins on the cell it belongs to.
       expect(screen.getByTestId("position-market-value-not-converted")).toHaveAttribute(
         "title",
-        expect.stringContaining("в третьей валюте"),
+        CAPTION.valuationCurrency,
       );
+      // ...and does not leak onto the cells it says nothing about.
       expect(screen.getByTestId("position-cost-not-converted")).toHaveAttribute(
         "title",
-        "Нет курса — показано в исходной валюте",
+        CAPTION.undatedLot,
       );
       expect(screen.getByTestId("position-income-not-converted")).toHaveAttribute(
         "title",
-        "Нет курса — показано в исходной валюте",
+        CAPTION.undatedLot,
       );
     });
 
+    it("gives the valuation the row's own cause when the valuation itself converted fine", () => {
+      // The decision this task had to make. in_base_gap says the row stopped on
+      // a purchase day's missing rate; market_value_gap is null, so nothing
+      // about THIS figure's own conversion failed — the whole in_base object
+      // was withheld, the valuation with it. The row's sentence is what is true
+      // here, and it is worded to say so («строка показывается целиком или
+      // никак»). What must not appear is the valuation's own sentence, which
+      // would blame a third currency that is not in play, or a bare «нет
+      // курса», which reads as "today's rate is missing" over a figure whose
+      // today-rate the server never even got to ask for.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "USD",
+              in_base: null,
+              in_base_gap: "no_rate_lot_date",
+              market_value_gap: null,
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const valuationMarker = screen.getByTestId("position-market-value-not-converted");
+      expect(valuationMarker).toHaveAttribute("title", CAPTION.noRateLotDate);
+      expect(valuationMarker.getAttribute("title")).not.toBe(CAPTION.valuationCurrency);
+      expect(valuationMarker.getAttribute("title")).not.toBe(CAPTION.general);
+      expect(valuationMarker.getAttribute("title")).not.toBe(CAPTION.noRateToday);
+    });
+
+    it("captions the valuation from market_value_gap, never from the two currency codes", () => {
+      // The valuation's caption has ONE source too, and this row is the only
+      // way to prove which: market_value_currency differs from the position's,
+      // yet the server reports no gap of the valuation's own. That payload is
+      // impossible today — the server sets the flag in the very branch where
+      // the conversion into the position's currency fails, which is the only
+      // way the two codes can come apart — and it is impossible on purpose:
+      // re-deriving the cause from the codes is a SECOND answer waiting to
+      // disagree with the server's, and the contract already warns it will
+      // (a rate table quoted in something other than RUB makes such a
+      // valuation convertible, and the codes would still differ).
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "USD",
+              market_value_minor: 100_000,
+              market_value_currency: "EUR",
+              unrealized_pnl_minor: null,
+              in_base: null,
+              in_base_gap: "no_rate_income_date",
+              market_value_gap: null,
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const valuationMarker = screen.getByTestId("position-market-value-not-converted");
+      expect(valuationMarker).toHaveAttribute("title", CAPTION.noRateIncomeDate);
+      expect(valuationMarker.getAttribute("title")).not.toBe(CAPTION.valuationCurrency);
+    });
+
+    it("falls back to the row's cause for a valuation gap this build cannot name", () => {
+      // Same requirement as the row's unknown value, answered one step
+      // differently: a valuation whose own cause this build cannot name is
+      // still covered by whatever stopped the row, which the server did name —
+      // so the cell degrades to that rather than to blankness. When the row has
+      // no named cause either, that fallback is itself the general phrase.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              instrument: { ...makePosition().instrument, id: "instr-row-named" },
+              currency: "USD",
+              market_value_minor: 100_000,
+              market_value_currency: "EUR",
+              unrealized_pnl_minor: null,
+              in_base: null,
+              in_base_gap: "undated_lot",
+              market_value_gap:
+                "no_rate_lunar_settlement" as Position["market_value_gap"],
+            }),
+            makePosition({
+              instrument: { ...makePosition().instrument, id: "instr-row-unnamed" },
+              currency: "USD",
+              market_value_minor: 100_000,
+              market_value_currency: "EUR",
+              unrealized_pnl_minor: null,
+              in_base: null,
+              in_base_gap: null,
+              market_value_gap:
+                "no_rate_lunar_settlement" as Position["market_value_gap"],
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const [rowNamed, rowUnnamed] = screen.getAllByTestId(
+        "position-market-value-not-converted",
+      );
+      expect(rowNamed).toHaveAttribute("title", CAPTION.undatedLot);
+      expect(rowUnnamed).toHaveAttribute("title", CAPTION.general);
+    });
+
     it("never calls the base currency a third one, even on a position denominated in another", () => {
-      // The chain wording is chosen by comparing the valuation's currency with
-      // the POSITION's, which on its own would also be true of a valuation that
-      // came out in the base currency — where "третья валюта" would be plainly
-      // false, since the base currency is the second one and the figure needs
-      // no chain to reach it. The condition holds anyway, and this pins WHY:
-      // the marker the wording rides on appears only when a figure could not be
+      // The server sets market_value_gap wherever the valuation failed to reach
+      // the POSITION's currency — which is also true of a valuation that came
+      // out in the base currency, where «третья валюта» would be plainly false:
+      // the base currency is the second one and the figure needs no chain to
+      // reach it. The sentence stays unshown anyway, and this pins WHY: it
+      // rides on the marker, the marker appears only when a figure could not be
       // converted, and a figure already denominated in the base currency has
       // nothing to convert. The invariant was left to be inferred; here it is
       // stated, so a later change to either half fails instead of producing a
@@ -719,7 +980,9 @@ describe("PositionsTable", () => {
               // currency, held on a dollar position.
               market_value_currency: "RUB",
               unrealized_pnl_minor: null,
+              market_value_gap: "no_rate_valuation_currency",
               in_base: null,
+              in_base_gap: "no_rate_lot_date",
             }),
           ]}
           mode="base"
@@ -732,10 +995,11 @@ describe("PositionsTable", () => {
       expect(screen.queryByTestId("position-market-value-not-converted")).not.toBeInTheDocument();
       expect(screen.queryByTitle(/в третьей валюте/)).not.toBeInTheDocument();
       // The cells that ARE in the position's currency keep the row's own
-      // reason, which here is a missing rate and nothing to do with chains.
+      // reason, which here is a purchase day's missing rate and nothing to do
+      // with chains.
       expect(screen.getByTestId("position-cost-not-converted")).toHaveAttribute(
         "title",
-        "Нет курса — показано в исходной валюте",
+        CAPTION.noRateLotDate,
       );
     });
 
