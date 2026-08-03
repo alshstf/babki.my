@@ -26,14 +26,20 @@ const norm = (s: string) => s.replace(/[\u00A0\u202F]/g, " ");
 // uses would agree with the component no matter which one it picked.
 const CAPTION = {
   general: "\u041D\u0435\u0442 \u043A\u0443\u0440\u0441\u0430 \u2014 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+  // #66's wording fix: the old ending (\u00AB\u0441\u0442\u0440\u043E\u043A\u0430 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442\u0441\u044F \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435
+  // \u0446\u0435\u043B\u0438\u043A\u043E\u043C \u0438\u043B\u0438 \u043D\u0438\u043A\u0430\u043A\u00BB) stated a rule about how EVERY row displays, and a row
+  // with in_base present plus its own market_value_gap breaks it (cost/income
+  // in rubles, valuation in euros, on the same row). The new ending is scoped
+  // to the row this caption sits on and stays true regardless of what a
+  // different row is doing.
   undatedLot:
-    "\u0423 \u043E\u0434\u043D\u043E\u0439 \u0438\u0437 \u043F\u0430\u0440\u0442\u0438\u0439 \u043D\u0435 \u0437\u0430\u043F\u0438\u0441\u0430\u043D\u0430 \u0434\u0430\u0442\u0430 \u043F\u043E\u043A\u0443\u043F\u043A\u0438, \u0430 \u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u043F\u043E \u043A\u0443\u0440\u0441\u0443 \u043D\u0430 \u0434\u0435\u043D\u044C \u043F\u043E\u043A\u0443\u043F\u043A\u0438 \u2014 \u0438 \u0432\u043E\u0441\u0441\u0442\u0430\u043D\u043E\u0432\u0438\u0442\u044C \u044D\u0442\u0443 \u0434\u0430\u0442\u0443 \u0443\u0436\u0435 \u043D\u0435\u043E\u0442\u043A\u0443\u0434\u0430: \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435 \u044D\u0442\u0430 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043D\u0435 \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u043D\u0438\u043A\u043E\u0433\u0434\u0430. \u0421\u0442\u0440\u043E\u043A\u0430 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442\u0441\u044F \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435 \u0446\u0435\u043B\u0438\u043A\u043E\u043C \u0438\u043B\u0438 \u043D\u0438\u043A\u0430\u043A, \u043F\u043E\u044D\u0442\u043E\u043C\u0443 \u0432\u0441\u044F \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u0430 \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+    "\u0423 \u043E\u0434\u043D\u043E\u0439 \u0438\u0437 \u043F\u0430\u0440\u0442\u0438\u0439 \u043D\u0435 \u0437\u0430\u043F\u0438\u0441\u0430\u043D\u0430 \u0434\u0430\u0442\u0430 \u043F\u043E\u043A\u0443\u043F\u043A\u0438, \u0430 \u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u043F\u043E \u043A\u0443\u0440\u0441\u0443 \u043D\u0430 \u0434\u0435\u043D\u044C \u043F\u043E\u043A\u0443\u043F\u043A\u0438 \u2014 \u0438 \u0432\u043E\u0441\u0441\u0442\u0430\u043D\u043E\u0432\u0438\u0442\u044C \u044D\u0442\u0443 \u0434\u0430\u0442\u0443 \u0443\u0436\u0435 \u043D\u0435\u043E\u0442\u043A\u0443\u0434\u0430: \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435 \u044D\u0442\u0430 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u0441\u0430\u043C\u0430 \u043D\u0435 \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F. \u041F\u043E\u044D\u0442\u043E\u043C\u0443 \u043D\u0438 \u043E\u0434\u043D\u043E \u0447\u0438\u0441\u043B\u043E \u044D\u0442\u043E\u0439 \u0441\u0442\u0440\u043E\u043A\u0438 \u043D\u0435 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
   noRateLotDate:
-    "\u041D\u0435\u0442 \u043A\u0443\u0440\u0441\u0430 \u043D\u0430 \u0434\u0435\u043D\u044C \u043F\u043E\u043A\u0443\u043F\u043A\u0438 \u043E\u0434\u043D\u043E\u0439 \u0438\u0437 \u043F\u0430\u0440\u0442\u0438\u0439, \u0430 \u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u043F\u043E \u043A\u0443\u0440\u0441\u0443 \u0442\u043E\u0433\u043E \u0434\u043D\u044F. \u041A\u0443\u0440\u0441 \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438 \u043A\u0443\u0440\u0441\u043E\u0432, \u0438 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0441\u0430\u043C\u0430. \u0421\u0442\u0440\u043E\u043A\u0430 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442\u0441\u044F \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435 \u0446\u0435\u043B\u0438\u043A\u043E\u043C \u0438\u043B\u0438 \u043D\u0438\u043A\u0430\u043A, \u043F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430 \u0432\u0441\u044F \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u0430 \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+    "\u041D\u0435\u0442 \u043A\u0443\u0440\u0441\u0430 \u043D\u0430 \u0434\u0435\u043D\u044C \u043F\u043E\u043A\u0443\u043F\u043A\u0438 \u043E\u0434\u043D\u043E\u0439 \u0438\u0437 \u043F\u0430\u0440\u0442\u0438\u0439, \u0430 \u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u043F\u043E \u043A\u0443\u0440\u0441\u0443 \u0442\u043E\u0433\u043E \u0434\u043D\u044F. \u041A\u0443\u0440\u0441 \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438 \u043A\u0443\u0440\u0441\u043E\u0432, \u0438 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0441\u0430\u043C\u0430. \u041F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430 \u043D\u0438 \u043E\u0434\u043D\u043E \u0447\u0438\u0441\u043B\u043E \u044D\u0442\u043E\u0439 \u0441\u0442\u0440\u043E\u043A\u0438 \u043D\u0435 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
   noRateIncomeDate:
-    "\u041A\u0443\u0440\u0441\u044B \u043D\u0430 \u0434\u043D\u0438 \u043F\u043E\u043A\u0443\u043F\u043E\u043A \u043D\u0430\u0448\u043B\u0438\u0441\u044C, \u0430 \u043D\u0430 \u0434\u0435\u043D\u044C \u043E\u0434\u043D\u043E\u0439 \u0438\u0437 \u0432\u044B\u043F\u043B\u0430\u0442 \u2014 \u0434\u0438\u0432\u0438\u0434\u0435\u043D\u0434\u0430, \u043A\u0443\u043F\u043E\u043D\u0430 \u0438\u043B\u0438 \u043D\u0430\u043B\u043E\u0433\u0430 \u2014 \u043D\u0435\u0442; \u0434\u043E\u0445\u043E\u0434 \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u043F\u043E \u043A\u0443\u0440\u0441\u0443 \u0442\u043E\u0433\u043E \u0434\u043D\u044F. \u041A\u0443\u0440\u0441 \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438 \u043A\u0443\u0440\u0441\u043E\u0432, \u0438 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0441\u0430\u043C\u0430. \u0421\u0442\u0440\u043E\u043A\u0430 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442\u0441\u044F \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435 \u0446\u0435\u043B\u0438\u043A\u043E\u043C \u0438\u043B\u0438 \u043D\u0438\u043A\u0430\u043A, \u043F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430 \u0432\u0441\u044F \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u0430 \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+    "\u041A\u0443\u0440\u0441\u044B \u043D\u0430 \u0434\u043D\u0438 \u043F\u043E\u043A\u0443\u043F\u043E\u043A \u043D\u0430\u0448\u043B\u0438\u0441\u044C, \u0430 \u043D\u0430 \u0434\u0435\u043D\u044C \u043E\u0434\u043D\u043E\u0439 \u0438\u0437 \u0432\u044B\u043F\u043B\u0430\u0442 \u2014 \u0434\u0438\u0432\u0438\u0434\u0435\u043D\u0434\u0430, \u043A\u0443\u043F\u043E\u043D\u0430 \u0438\u043B\u0438 \u043D\u0430\u043B\u043E\u0433\u0430 \u2014 \u043D\u0435\u0442; \u0434\u043E\u0445\u043E\u0434 \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u043F\u043E \u043A\u0443\u0440\u0441\u0443 \u0442\u043E\u0433\u043E \u0434\u043D\u044F. \u041A\u0443\u0440\u0441 \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438 \u043A\u0443\u0440\u0441\u043E\u0432, \u0438 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0441\u0430\u043C\u0430. \u041F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430 \u043D\u0438 \u043E\u0434\u043D\u043E \u0447\u0438\u0441\u043B\u043E \u044D\u0442\u043E\u0439 \u0441\u0442\u0440\u043E\u043A\u0438 \u043D\u0435 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
   noRateToday:
-    "\u041A\u0443\u0440\u0441\u044B \u043D\u0430 \u0434\u043D\u0438 \u043F\u043E\u043A\u0443\u043F\u043E\u043A \u0438 \u0432\u044B\u043F\u043B\u0430\u0442 \u043D\u0430\u0448\u043B\u0438\u0441\u044C, \u0430 \u043D\u0430 \u0441\u0435\u0433\u043E\u0434\u043D\u044F \u2014 \u0434\u043B\u044F \u0432\u0430\u043B\u044E\u0442\u044B, \u0432 \u043A\u043E\u0442\u043E\u0440\u043E\u0439 \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0440\u044B\u043D\u043E\u0447\u043D\u0430\u044F \u043E\u0446\u0435\u043D\u043A\u0430, \u2014 \u043D\u0435\u0442; \u043E\u0446\u0435\u043D\u043A\u0430 \u0431\u0435\u0440\u0451\u0442\u0441\u044F \u043F\u043E \u0442\u0435\u043A\u0443\u0449\u0435\u043C\u0443 \u043A\u0443\u0440\u0441\u0443. \u041A\u0443\u0440\u0441 \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438 \u043A\u0443\u0440\u0441\u043E\u0432, \u0438 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0441\u0430\u043C\u0430. \u0421\u0442\u0440\u043E\u043A\u0430 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442\u0441\u044F \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435 \u0446\u0435\u043B\u0438\u043A\u043E\u043C \u0438\u043B\u0438 \u043D\u0438\u043A\u0430\u043A, \u043F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430 \u0432\u0441\u044F \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u0430 \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+    "\u041A\u0443\u0440\u0441\u044B \u043D\u0430 \u0434\u043D\u0438 \u043F\u043E\u043A\u0443\u043F\u043E\u043A \u0438 \u0432\u044B\u043F\u043B\u0430\u0442 \u043D\u0430\u0448\u043B\u0438\u0441\u044C, \u0430 \u043D\u0430 \u0441\u0435\u0433\u043E\u0434\u043D\u044F \u2014 \u0434\u043B\u044F \u0432\u0430\u043B\u044E\u0442\u044B, \u0432 \u043A\u043E\u0442\u043E\u0440\u043E\u0439 \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0440\u044B\u043D\u043E\u0447\u043D\u0430\u044F \u043E\u0446\u0435\u043D\u043A\u0430, \u2014 \u043D\u0435\u0442; \u043E\u0446\u0435\u043D\u043A\u0430 \u0431\u0435\u0440\u0451\u0442\u0441\u044F \u043F\u043E \u0442\u0435\u043A\u0443\u0449\u0435\u043C\u0443 \u043A\u0443\u0440\u0441\u0443. \u041A\u0443\u0440\u0441 \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438 \u043A\u0443\u0440\u0441\u043E\u0432, \u0438 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0441\u0430\u043C\u0430. \u041F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430 \u043D\u0438 \u043E\u0434\u043D\u043E \u0447\u0438\u0441\u043B\u043E \u044D\u0442\u043E\u0439 \u0441\u0442\u0440\u043E\u043A\u0438 \u043D\u0435 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
   valuationCurrency:
     "\u041E\u0446\u0435\u043D\u043A\u0430 \u043F\u043E\u043B\u0443\u0447\u0438\u043B\u0430\u0441\u044C \u0432 \u0442\u0440\u0435\u0442\u044C\u0435\u0439 \u0432\u0430\u043B\u044E\u0442\u0435 \u2014 \u043D\u0435 \u0432 \u0432\u0430\u043B\u044E\u0442\u0435 \u043F\u043E\u0437\u0438\u0446\u0438\u0438 \u0438 \u043D\u0435 \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439, \u2014 \u0430 \u043A\u0443\u0440\u0441\u0430 \u043E\u0442 \u043D\u0435\u0451 \u0434\u043E \u0432\u0430\u043B\u044E\u0442\u044B \u043F\u043E\u0437\u0438\u0446\u0438\u0438 \u043D\u0435\u0442: \u0441\u0440\u0430\u0432\u043D\u0438\u0442\u044C \u0435\u0451 \u0441\u043E \u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C\u044E \u043F\u043E\u0437\u0438\u0446\u0438\u0438 \u043D\u0435\u043B\u044C\u0437\u044F. \u041F\u043E\u043A\u0430 \u043E\u0446\u0435\u043D\u043A\u0430 \u043D\u0435 \u0432\u044B\u0440\u0430\u0436\u0435\u043D\u0430 \u0432 \u0432\u0430\u043B\u044E\u0442\u0435 \u043F\u043E\u0437\u0438\u0446\u0438\u0438, \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u0430 \u043D\u0435 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442 \u0435\u0451 \u0438 \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439. \u041F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u0430 \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
 } as const;
@@ -501,14 +507,19 @@ describe("PositionsTable", () => {
         return ROW_MARKERS.map((id) => screen.getByTestId(id).getAttribute("title") ?? "");
       }
 
-      it("says an unrecorded purchase date, and says it will never resolve", () => {
+      it("says an unrecorded purchase date, and does not promise it will resolve on its own", () => {
         for (const title of captionsFor("undated_lot")) {
           expect(title).toBe(CAPTION.undatedLot);
         }
-        // The half that matters most: this one is permanent. No promise of a
-        // figure that is not coming.
-        expect(CAPTION.undatedLot).toContain("никогда");
+        // The half that matters most: unlike the other three, nothing is
+        // going to close this gap by itself — no rate backfill fixes a
+        // missing DATE. But the date not being recoverable is not the same
+        // as the position never computing (selling the lot, or re-entering
+        // the transfer with a per-lot breakdown, both fix it), so the
+        // caption must not claim "never" — only "not on its own".
+        expect(CAPTION.undatedLot).not.toContain("никогда");
         expect(CAPTION.undatedLot).not.toContain("появится при обновлении");
+        expect(CAPTION.undatedLot).toContain("уже неоткуда");
       });
 
       it("says a purchase day's missing rate, not an unrecorded date", () => {
@@ -540,9 +551,12 @@ describe("PositionsTable", () => {
 
       it("promises the figure will appear for every closeable cause, and for no other", () => {
         // The whole user value of naming the term: «подтянется само» versus
-        // «этого числа не будет никогда». Asserted as a property of the four
-        // sentences rather than case by case, so a new cause worded without
-        // either half fails here.
+        // «само не подтянется» — the closeable causes promise the figure will
+        // appear on its own, the permanent one (undated_lot) promises only
+        // that nothing will fix it automatically, never that it can't be
+        // fixed at all. Asserted as a property of the four sentences rather
+        // than case by case, so a new cause worded without either half fails
+        // here.
         for (const gap of ["no_rate_lot_date", "no_rate_income_date", "no_rate_today"] as const) {
           const [cost] = captionsFor(gap);
           expect(cost).toContain("появится при обновлении курсов");
@@ -652,6 +666,48 @@ describe("PositionsTable", () => {
       expect(screen.queryByTestId("position-income-not-converted")).not.toBeInTheDocument();
     });
 
+    it("gives the valuation its own cause even when the position's currency already is the base currency", () => {
+      // The contract publishes market_value_gap independently of whether
+      // `currency` already equals the space's base one (server-side pinned by
+      // internal/portfolio/http_position_in_base_gap_test.go,
+      // TestPositionMarketValueGapPublishedOnABaseCurrencyPosition — a bond's
+      // EUR face value stuck on a RUB position of a RUB space). in_base_gap
+      // stays null here: cost/income/profit are already in the base currency,
+      // so rowGapTitle's fallback for this row is the vague general phrase —
+      // making this the one row where the valuation's own, nearer cause has
+      // to outrank the fallback rather than merely outrank a named row cause.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "RUB",
+              market_value_currency: "EUR",
+              cost_minor: 250_000,
+              income_minor: 1_000,
+              unrealized_pnl_minor: 25_000,
+              in_base: null,
+              in_base_gap: null,
+              market_value_gap: "no_rate_valuation_currency",
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      // Cost/income/profit need no conversion at all — no marker on any of
+      // them.
+      expect(screen.queryByTestId("position-cost-not-converted")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("position-profit-amount-not-converted")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("position-income-not-converted")).not.toBeInTheDocument();
+
+      // The valuation alone carries a marker, and it names its OWN cause —
+      // not the general phrase the row would otherwise fall back to.
+      const valuationMarker = screen.getByTestId("position-market-value-not-converted");
+      expect(valuationMarker).toHaveAttribute("title", CAPTION.valuationCurrency);
+      expect(valuationMarker.getAttribute("title")).not.toBe(CAPTION.general);
+    });
+
     it("claims today's rate only for the market value, and names the historical rates behind cost, income and profit", () => {
       // in_base.rate_on is the rate date behind the market VALUATION and
       // nothing else. The ruble basis is built lot by lot at each purchase
@@ -706,18 +762,21 @@ describe("PositionsTable", () => {
       expect(screen.queryByText(/19\.07\.2026/)).not.toBeInTheDocument();
     });
 
-    it("names the source currency, not the account's, in the not-converted marker", () => {
+    it("never calls the missing figure the account's, whichever gap fired", () => {
       // A position row's amounts are in the position's / quote's / bond face
       // value's currency — calling that "the account's currency" would point
-      // the user at the wrong thing. True of every one of the sentences a gap
-      // can produce, so it is asserted over all of them rather than over the
-      // one this row happens to carry.
+      // the user at the wrong thing. The four named-gap sentences (#66) no
+      // longer name any currency at all in their closing clause since the
+      // wording fix that scoped it to the row (it says only that no figure in
+      // the row reached the BASE currency, true regardless of which currency
+      // it stayed in) — so "не называет счётом" is what is left to assert for
+      // them. The general fallback is the only one of the five that still
+      // names a currency, and it must still name the right one.
       for (const gap of [
         "undated_lot",
         "no_rate_lot_date",
         "no_rate_income_date",
         "no_rate_today",
-        null,
       ] as const) {
         cleanup();
         wrap(
@@ -729,10 +788,23 @@ describe("PositionsTable", () => {
         );
 
         const title = screen.getByTestId("position-cost-not-converted").getAttribute("title") ?? "";
-        expect(title).toContain("в исходной валюте");
         expect(title).not.toContain("счёт");
         expect(title).not.toContain("счет");
       }
+
+      cleanup();
+      wrap(
+        <PositionsTable
+          positions={[makePosition({ currency: "USD", in_base: null, in_base_gap: null })]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+      const generalTitle =
+        screen.getByTestId("position-cost-not-converted").getAttribute("title") ?? "";
+      expect(generalTitle).toContain("в исходной валюте");
+      expect(generalTitle).not.toContain("счёт");
+      expect(generalTitle).not.toContain("счет");
     });
 
     it("shows a valuation in a third currency honestly, in its own currency, when in_base cannot express it", () => {
@@ -853,8 +925,9 @@ describe("PositionsTable", () => {
       // a purchase day's missing rate; market_value_gap is null, so nothing
       // about THIS figure's own conversion failed — the whole in_base object
       // was withheld, the valuation with it. The row's sentence is what is true
-      // here, and it is worded to say so («строка показывается целиком или
-      // никак»). What must not appear is the valuation's own sentence, which
+      // here, and it is worded to say so («ни одно число этой строки не
+      // показано в базовой валюте»). What must not appear is the valuation's
+      // own sentence, which
       // would blame a third currency that is not in play, or a bare «нет
       // курса», which reads as "today's rate is missing" over a figure whose
       // today-rate the server never even got to ask for.

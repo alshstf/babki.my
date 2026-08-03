@@ -1,6 +1,7 @@
 package portfolio_test
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -365,6 +366,92 @@ func TestPositionInBaseGapNamesTheLotDateOverTheIncomeDateWhenBothAreMissing(t *
 	}
 	if p.InBaseGap == nil || *p.InBaseGap != "no_rate_lot_date" {
 		t.Fatalf("in_base_gap = %s, want no_rate_lot_date: the contract promises the server stops at the FIRST term it cannot value, in the declared order, and the lot sum is checked before the income sum — a row missing a rate for both must report the lot's term, never the income's, or the contract's ordering promise is false",
+			gapText(p.InBaseGap))
+	}
+}
+
+// twoDateConverter is oneDateConverter's twin for a fixture that needs a hole
+// under TWO specific dates at once — here, an income operation's date and
+// today's — rather than the one oneDateConverter can put a hole under. Same
+// flat-rate/err shape, checked against a small set instead of a single
+// string.
+type twoDateConverter struct {
+	rate   decimal.Decimal
+	rateOn time.Time
+	// holes maps each YYYY-MM-DD string that has no rate to the error Rate
+	// answers with for it.
+	holes map[string]error
+}
+
+func (c twoDateConverter) Rate(_ context.Context, _, _ string, on time.Time) (decimal.Decimal, time.Time, error) {
+	if err, missing := c.holes[on.Format("2006-01-02")]; missing {
+		return decimal.Decimal{}, time.Time{}, err
+	}
+	return c.rate, c.rateOn, nil
+}
+
+// RatesOn answers the batch from this double's own Rate, for the same reason
+// oneDateConverter's does.
+func (c twoDateConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
+	return ratesFromRate(ctx, c, queries)
+}
+
+// TestPositionInBaseGapNamesTheIncomeDateOverTodaysRateWhenBothAreMissing is
+// TestPositionInBaseGapNamesTheLotDateOverTheIncomeDateWhenBothAreMissing's
+// twin for the OTHER adjacent pair the contract's ordering promise covers:
+// the income sum (positionInBase's second check) against today's rate for the
+// market valuation (its third and last). Before this test, no fixture put a
+// hole under both the income date and today at once, so a build that checked
+// them in the wrong order — today before income — would still report
+// no_rate_income_date whenever only the income date lacked a rate (today's
+// still present, the common case every other test in this file exercises)
+// and still report no_rate_today whenever only today lacked one
+// (TestPositionInBaseGapNamesTodaysRate) — the swap would be invisible until
+// a row hit both holes simultaneously, which is exactly what this fixture
+// does. The lot itself is dated and rated: only the dividend's day and today
+// have no rate, so the lot sum succeeds and the object stops at the income
+// sum, never reaching the today check at all.
+func TestPositionInBaseGapNamesTheIncomeDateOverTodaysRateWhenBothAreMissing(t *testing.T) {
+	pool := testdb.New(t)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	today := time.Now().UTC().Format("2006-01-02")
+	url, c := setupAPI(t, pool, quotes, twoDateConverter{
+		rate:   decimal.RequireFromString("90"),
+		rateOn: mustDate(t, lateRateOn),
+		holes: map[string]error{
+			earlyBuyOn: fmt.Errorf("%w: USD -> RUB on %s", marketdata.ErrNoRate, earlyBuyOn),
+			today:      fmt.Errorf("%w: USD -> RUB today", marketdata.ErrNoRate),
+		},
+	})
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	share := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
+	shareID, err := uuid.Parse(share.ID)
+	if err != nil {
+		t.Fatalf("parse share id: %v", err)
+	}
+	// A quote is required to reach the today check at all (see
+	// TestPositionInBaseGapNamesTodaysRate) — without one, positionInBase
+	// returns before it ever asks for today's rate, and the fixture would
+	// prove nothing about which of the two remaining checks runs first.
+	quotes.byInstrument[shareID] = marketdata.Quote{
+		InstrumentID: shareID, On: mustDate(t, "2026-07-20"),
+		Price: decimal.RequireFromString("120.00"), Currency: "USD", Source: "test",
+	}
+	// The lot is dated lateBuyOn, which resolves at the flat rate — only the
+	// dividend and today are holes.
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, acc.ID, share.ID, lateBuyOn))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"dividend",
+		"occurred_on":%q,"amount_minor":10000,"currency":"USD"}`, acc.ID, share.ID, earlyBuyOn))
+
+	p := onlyPosition(t, c, url, acc.ID)
+	if p.InBase != nil {
+		t.Fatalf("in_base = %+v, want null: both the dividend's date (%s) and today have no fx rate", *p.InBase, earlyBuyOn)
+	}
+	if p.InBaseGap == nil || *p.InBaseGap != "no_rate_income_date" {
+		t.Fatalf("in_base_gap = %s, want no_rate_income_date: the contract promises the server stops at the FIRST term it cannot value, in the declared order, and the income sum is checked before today's rate for the valuation — a row missing both must report the income term, never today's, or the contract's ordering promise is false",
 			gapText(p.InBaseGap))
 	}
 }
