@@ -794,11 +794,27 @@ var seededUSDRates = []struct{ on, rate string }{
 // leaving the feature invisible on the demo screens. See seededUSDRates for
 // what each date demonstrates.
 //
-// FXUS and AAPL deliberately get no quote: FXUS is Frozen, so its position
-// demonstrates the null-valuation path (a holding the app can't safely
-// price rather than a silent zero); AAPL is a live foreign instrument with
-// no provider yet (cbr/moex only cover the Russian market — plan 4b widens
-// this).
+// FXUS and AAPL deliberately get no quote, so their positions demonstrate the
+// null-valuation path: a holding the app cannot price shows a dash and says
+// so, rather than a silent zero. The cause in both cases is this function and
+// nothing else — no quote row is written for either ticker below.
+//
+// It is NOT that FXUS is Frozen, which is what this comment claimed until
+// #85. Nothing on the way to a valuation reads that flag: ListTradable selects
+// by type and ticker alone (see internal/instrument/store.go), marketValue
+// never sees the instrument's flags at all, and the only place the flag
+// reaches a person is the «заморожен» badge on the positions screen — the
+// instrument API carries the field both ways, but no screen sets it and no
+// computation branches on it. Setting it on
+// FXUS is therefore decoration for the demo — a delisted FinEx fund is what a
+// reader expects to see priceless — and if the flag is to actually stop a
+// lookup, that is a behaviour change owed its own argument, not something to
+// be assumed by a comment.
+//
+// AAPL is priceless for a different and real reason: it is a live foreign
+// instrument, and this program has no provider that covers one. The two
+// wired in cmd/babki/root.go are cbr (fx rates) and moex (quotes), both
+// Russian-market only.
 //
 // MSFT is the exception among the foreign instruments, and it is hand-seeded
 // rather than provider-supplied for one reason: a position needs a valuation
