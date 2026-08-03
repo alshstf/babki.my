@@ -87,17 +87,25 @@ func seedDemo(ctx context.Context, pool *pgxpool.Pool) error {
 		{
 			// The recorded balance of a brokerage account is taken to already
 			// include the securities sitting in it (see the portfolio package
-			// doc), so it has to exceed what the seeded positions cost: AAPL
-			// ($6 209,20), MSFT ($10 000,00), the transferred TSLA ($1 900,00)
-			// and what is left of NVDA ($1 500,00) run to $19 609,20 here. A
-			// balance below that would put a single position above the whole
+			// doc), so it has to exceed what the seeded positions cost:
+			//
+			//	AAPL                       $6 209,20
+			//	MSFT                      $10 000,00
+			//	TSLA (transferred in)      $1 900,00
+			//	NVDA (what is left)        $1 500,00
+			//	KAZ32EUR (the eurobond)    $5 750,00
+			//	WEWKQ                      $2 000,00
+			//	INTC (hand-entered basis)  $3 000,00
+			//	                          $30 359,20
+			//
+			// A balance below that would put a single position above the whole
 			// account it lives in, right on the screen this data exists to show.
 			// Alphabet is absent from that sum on purpose: its parcel was bought
 			// and sold in full inside the period, so it holds nothing today and
 			// weighs nothing against this balance — only its settled result
 			// survives, in the account's «Зафиксировано» line.
 			"Freedom KZ", account.TypeBrokerage, "USD", "Freedom Finance", false,
-			[3]int64{24_000_00, 24_500_00, 25_000_00},
+			[3]int64{35_000_00, 36_000_00, 37_000_00},
 		},
 		{
 			"Текущий Сбер", account.TypeChecking, "RUB", "Сбер", false,
@@ -154,6 +162,11 @@ func seedInstrumentsAndOperations(
 
 	faceValue := int64(1_000_00)
 	faceCurrency := "RUB"
+	// The eurobond's face value is denominated in a THIRD currency: not the
+	// dollars its position trades in and not the rubles the space totals in.
+	// That is the whole point of it — see the buy below (#39).
+	eurFaceValue := int64(1_000_00)
+	eurFaceCurrency := "EUR"
 	instSeeds := []struct {
 		key  string
 		inst instrument.Instrument
@@ -170,6 +183,12 @@ func seedInstrumentsAndOperations(
 		{"TSLA", instrument.Instrument{Type: instrument.TypeShare, Name: "Tesla", Ticker: "TSLA", Currency: "USD"}},
 		{"NVDA", instrument.Instrument{Type: instrument.TypeShare, Name: "NVIDIA", Ticker: "NVDA", Currency: "USD"}},
 		{"GOOGL", instrument.Instrument{Type: instrument.TypeShare, Name: "Alphabet", Ticker: "GOOGL", Currency: "USD"}},
+		{"KAZ32EUR", instrument.Instrument{
+			Type: instrument.TypeBond, Name: "Еврооблигация Казахстан 2032", Ticker: "KAZ32EUR", Currency: "USD",
+			FaceValueMinor: &eurFaceValue, FaceCurrency: &eurFaceCurrency,
+		}},
+		{"WEWKQ", instrument.Instrument{Type: instrument.TypeShare, Name: "WeWork", Ticker: "WEWKQ", Currency: "USD"}},
+		{"INTC", instrument.Instrument{Type: instrument.TypeShare, Name: "Intel", Ticker: "INTC", Currency: "USD"}},
 	}
 	instIDs := make(map[string]uuid.UUID, len(instSeeds))
 	for _, is := range instSeeds {
@@ -206,7 +225,7 @@ func seedInstrumentsAndOperations(
 		},
 		{
 			AccountID: freedom, Type: operation.TypeDeposit,
-			OccurredOn: d("2026-05-06"), AmountMinor: 2_500_000, Currency: "USD",
+			OccurredOn: d("2026-05-06"), AmountMinor: 4_000_000, Currency: "USD",
 		},
 		// Apple is bought TWICE, and this first buy is deliberately dated
 		// inside the gap before the fx history starts (see seededUSDRates):
@@ -267,6 +286,32 @@ func seedInstrumentsAndOperations(
 			AccountID: tbank, InstrumentID: inst("FXUS"), Type: operation.TypeBuy,
 			OccurredOn: d("2026-05-20"), Quantity: qty("30"), Price: price("85"),
 			AmountMinor: -255_000, Currency: "USD",
+		},
+		// The demo's SUB-CENT price (#30). Bought at $0,40 while there was still
+		// a company behind the ticker and quoted at $0,0025 after it went
+		// through bankruptcy: rendered with the usual two fraction digits that
+		// quote prints as «0,00» — a figure that is neither the price nor zero,
+		// one column away from the place this program refuses to publish numbers
+		// it cannot vouch for. The price line under the valuation reads
+		// «0,0025» instead, by significant digits.
+		//
+		// It is deliberately a SHARE. portfolio.marketValue has no valuation
+		// model for crypto, currencies, metals or custom instruments, so rows of
+		// those types carry no price line at all and a sub-cent quote on one of
+		// them would be invisible on this screen — which is where the owner
+		// reviews this.
+		//
+		//	cost   5 000 × $0,40   = $2 000,00 =  200_000 minor USD, 2026-05-20
+		//	  in ₽ 200_000 × 79.15 (that day's own rate) = 15_830_000 = 158 300,00 ₽
+		//	value  5 000 × $0,0025 =    $12,50 =    1_250 minor USD
+		//	  in ₽   1_250 × 78.50 (today's rate)      =      98_125 =     981,25 ₽
+		//
+		//	profit in USD =  1_250 −    200_000 =    −198_750  (−$1 987,50, −99,4 %)
+		//	profit in RUB = 98_125 − 15_830_000 = −15_731_875  (−157 318,75 ₽, −99,4 %)
+		{
+			AccountID: freedom, InstrumentID: inst("WEWKQ"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-05-20"), Quantity: qty("5000"), Price: price("0.40"),
+			AmountMinor: -200_000, Currency: "USD",
 		},
 		{
 			AccountID: tbank, InstrumentID: inst("LKOH"), Type: operation.TypeBuy,
@@ -357,8 +402,12 @@ func seedInstrumentsAndOperations(
 		//
 		// So the account's own total disagrees in sign with itself across the
 		// display-currency toggle, on real demo data, one click apart. The other
-		// three positions at Freedom KZ contribute exactly zero: none of them has
-		// ever disposed of anything, and a transfer is not a disposal.
+		// six positions at Freedom KZ — AAPL, MSFT, TSLA, the eurobond, WeWork
+		// and the transferred Intel parcel — contribute exactly zero: none of
+		// them has ever disposed of anything, and a transfer is not a disposal.
+		// That is also what keeps this line computable at all: a position with
+		// no disposals asks the rate table for nothing, so neither AAPL's
+		// rate-less lot nor Intel's dateless one can stop the account's total.
 		//
 		// The whole parcel is sold, so this leaves NO holding — deliberately.
 		// A position that survived the sale would add its basis to an account
@@ -381,6 +430,19 @@ func seedInstrumentsAndOperations(
 			OccurredOn: d("2026-06-15"), Quantity: qty("5"), Price: price("200"),
 			AmountMinor: -100_000, Currency: "USD",
 		},
+		// Intel is bought here for one reason only: so that it can LEAVE. The
+		// transfer below moves the whole parcel to Freedom KZ with a basis typed
+		// in BY HAND, and a transfer needs a source account that holds the
+		// instrument (see operation.Service.CreateTransfer, which reads the
+		// currency off the source journal before it looks at the override).
+		// Nothing about this buy is on show; what is on show is the DATELESS lot
+		// it turns into over there — see the transfer call for the arithmetic
+		// and for why this seed can produce that lot no other way.
+		{
+			AccountID: tbank, InstrumentID: inst("INTC"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-06-15"), Quantity: qty("100"), Price: price("30"),
+			AmountMinor: -300_000, Currency: "USD",
+		},
 		{
 			AccountID: tbank, InstrumentID: inst("OFZ26238"), Type: operation.TypeCoupon,
 			OccurredOn: d("2026-06-18"), AmountMinor: 354_000, Currency: "RUB",
@@ -402,6 +464,57 @@ func seedInstrumentsAndOperations(
 			AccountID: freedom, InstrumentID: inst("GOOGL"), Type: operation.TypeSell,
 			OccurredOn: d("2026-06-20"), Quantity: qty("50"), Price: price("210"),
 			AmountMinor: 1_050_000, Currency: "USD",
+		},
+		// The demo's THIRD-CURRENCY holding: a eurobond with a €1 000,00 face
+		// value, traded and settled in dollars, inside a space that totals in
+		// rubles. Three currencies, one row — the case #39 was about, and one
+		// nothing in this seed exercised before: the only other bond here has a
+		// ruble face value on a ruble position, where all three collapse into
+		// one and none of this can go wrong.
+		//
+		// A bond is quoted as a PERCENTAGE OF ITS FACE VALUE, so the money that
+		// quote stands for is denominated in the FACE currency, never the
+		// position's (see portfolio.marketValue). The euro figure therefore has
+		// to reach two places: dollars, so the row can subtract cost from
+		// valuation, and rubles, so the row can be read beside the others. Those
+		// are two conversions OF THE SAME EURO FIGURE, not a chain — the ruble
+		// answer is struck from the euros and never from the dollars:
+		//
+		//	valuation  €1 000,00 × 98,00 % × 5 = €4 900,00 =    490_000 minor EUR
+		//	  in $     490_000 × (92.30 ÷ 78.50) =    576_140 = $5 761,40
+		//	  in ₽     490_000 × 92.30           = 45_227_000 = 452 270,00 ₽
+		//	cost       5 × $1 150,00 = $5 750,00 =    575_000 minor USD, 2026-06-20
+		//	  in ₽     575_000 × 65.00 (that day's own rate) = 37_375_000 = 373 750,00 ₽
+		//
+		//	profit in USD =    576_140 −    575_000 =    +1_140  (+$11,40, +0,2 %)
+		//	profit in RUB = 45_227_000 − 37_375_000 = +7_852_000  (+78 520,00 ₽, +21,0 %)
+		//
+		// Chaining the two conversions — the pre-plan-9 path — carried the
+		// DOLLAR figure onward instead: 576_140 × 78.50 = 45_226_990, ten
+		// kopecks short of the euro answer, because rounding the euros to a
+		// whole cent of a currency that appears in no answer throws away a
+		// fraction the second rate then multiplies. Ten kopecks is the entire
+		// visible difference and it is meant to be: a EUR->USD rate is itself
+		// bridged through the ruble here, so both paths ultimately stand on the
+		// same two rows of the fx table and can only differ by that rounding.
+		// What the row is really here to show is the SENTENCE under the price —
+		// «Пересчитано из 4 900,00 €» — which now describes a conversion the
+		// ruble figure has actually been through.
+		//
+		// The price line itself reads «98,00 %», not «98,00»: the quote is a
+		// percentage of face, and one of these bonds is worth €980,00 rather
+		// than the €98,00 a bare number sitting under a money figure reads as
+		// (#32).
+		//
+		// The buy's own price is money per unit, $1 150,00, the way every other
+		// buy in this journal is recorded (the OFZ above does the same) — the
+		// percentage convention belongs to the QUOTE, not to what the owner
+		// paid. At today's rates €980,00 is about $1 152, so the deal is priced
+		// where such a bond would actually have traded.
+		{
+			AccountID: freedom, InstrumentID: inst("KAZ32EUR"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-06-20"), Quantity: qty("5"), Price: price("1150"),
+			AmountMinor: -575_000, Currency: "USD",
 		},
 		// A foreign-currency operation on a RUB account, deliberately dated a
 		// Saturday: the CBR publishes no rate on weekends, so the journal has
@@ -517,6 +630,52 @@ func seedInstrumentsAndOperations(
 		return fmt.Errorf("seed transfer NVDA: %w", err)
 	}
 
+	// The demo's DATELESS PARCEL — and the second half of the pair this branch
+	// exists for. Two positions on ONE screen have no ruble figures, for two
+	// DIFFERENT reasons, so the two sentences can be read side by side:
+	//
+	//	Apple  — no fx rate for one lot's purchase date. Its 2026-05-08 buy
+	//	         predates everything in seededUSDRates, and the backfill job
+	//	         will fill that date from cbr.ru: the gap CLOSES ON ITS OWN.
+	//	Intel  — no purchase date for the parcel at all. Nobody recorded it and
+	//	         nothing can recover it: the gap NEVER CLOSES.
+	//
+	// Both rows used to say «Нет курса — показано в исходной валюте». On the
+	// second one that named a cause that is not the cause and promised a number
+	// that is never coming (#66). They now say different things, and the demo
+	// is where that difference is visible without opening a test file.
+	//
+	// The basis is given BY HAND — TransferParams.CostMinorOverride, the
+	// `cost_minor` field of POST /operations/transfer — which is what a parcel
+	// arriving from a broker that reported a total and nothing else looks like.
+	// Nothing is released from the source in that case, so there are no source
+	// lots behind the number and no acquisition dates to carry, and the
+	// arriving lot is created with NONE. Not the transfer's own date: a lot's
+	// date claims to say when its shares were bought, and 2026-07-20 is the day
+	// the paperwork moved (see portfolio.Lot.AcquiredOn and Compute's
+	// TypeTransferIn branch, where that lot is actually built).
+	//
+	//	hand-entered basis       $3 000,00 = 300_000 minor USD, and no date at all
+	//	valuation 100 × $34,00 = $3 400,00 = 340_000 minor USD
+	//	profit in USD = 340_000 − 300_000 =  +40_000 (+$400,00, +13,3 %)
+	//	in rubles     = nothing whatsoever, on all four figures of the row, and
+	//	                that IS the answer — see Handler.positionInBase, which
+	//	                publishes no object rather than a basis summed from the
+	//	                lots that happened to be datable.
+	//
+	// It is routed through Т-Банк because a transfer needs a source account
+	// holding the instrument (see the Intel buy above). The source's real dates
+	// are deliberately NOT carried across — that is exactly the case being
+	// shown, and it is what the override branch does.
+	handEnteredBasis := int64(300_000)
+	if _, _, err := opSvc.CreateTransfer(ctx, spaceID, operation.TransferParams{
+		FromAccountID: tbank, ToAccountID: freedom, InstrumentID: instIDs["INTC"],
+		Quantity: decimal.RequireFromString("100"), OccurredOn: d("2026-07-20"),
+		CostMinorOverride: &handEnteredBasis,
+	}); err != nil {
+		return fmt.Errorf("seed transfer INTC: %w", err)
+	}
+
 	// Recorded after the transfer on purpose: Service.Create replays the
 	// journal, and the parcel this sale is meant to consume only exists in
 	// this account once the transfer above has been written.
@@ -560,9 +719,14 @@ func seedInstrumentsAndOperations(
 //     as the day the Alphabet parcel is SOLD, which is what values that
 //     deal's proceeds (plan 7b — see the Alphabet buy): 65.00 against the
 //     81.40 its expense was struck at is the whole reason a dollar profit
-//     settles as a ruble loss there.
-//   - 2026-05-20 — the FXUS buy's own date: converted at the exact date's
-//     rate, the ordinary case.
+//     settles as a ruble loss there. 2026-06-20 is also the eurobond's buy
+//     date, which is what its ruble basis is struck at (373 750,00 ₽).
+//     2026-06-15 likewise does double duty as the Intel buy's date, though
+//     nothing on screen converts through it: that parcel leaves for Freedom KZ
+//     with a hand-typed basis and arrives with no purchase date at all, so the
+//     rate reaches only the Т-Банк journal row for the buy itself.
+//   - 2026-05-20 — the FXUS and WeWork buys' own date: converted at the exact
+//     date's rate, the ordinary case.
 //   - 2026-06-10 — the AAPL, MSFT and Alphabet buys' own date, at a visibly
 //     different rate: two operations, two dates, two rates, so the journal
 //     cannot be mistaken for "everything at today's rate". It is also the
@@ -577,7 +741,12 @@ func seedInstrumentsAndOperations(
 //     own.
 //   - 2026-07-20 — today's-rate anchor, shared with the quotes and the
 //     latest account balances; also what GET /summary converts at, and the
-//     TSLA transfer's own date.
+//     date of all three transfers (TSLA, NVDA and the hand-priced Intel
+//     parcel). It is one half of the EUR->USD rate the eurobond's valuation
+//     needs: no EUR/USD pair is seeded, and none is needed — every rate this
+//     program stores is quoted against the ruble, so the converter bridges
+//     92.30 ÷ 78.50 out of the two rows it already has (see
+//     marketdata.resolveRate).
 //
 // Nothing is seeded on or before 2026-05-08, the dates of the demo's two
 // earliest USD operations (the Freedom KZ deposit and the first AAPL buy),
@@ -614,7 +783,10 @@ var seededUSDRates = []struct{ on, rate string }{
 //
 // Quotes and the EUR/KZT rates are pinned to 2026-07-20 — the same date as
 // the latest seeded account balance — because both answer "what is this
-// worth now". USD/RUB, in contrast, is seeded as a short HISTORY, with a
+// worth now". EUR/RUB is load-bearing rather than decorative: it is the rate
+// the eurobond's euro-denominated valuation reaches the base currency by, and
+// bridged against USD/RUB it is also the rate that brings that valuation into
+// the position's dollars (see the KAZ32EUR buy). USD/RUB, in contrast, is seeded as a short HISTORY, with a
 // deliberately different rate per date: the journal converts every entry at
 // its own date's rate, and a single flat rate would make a historical
 // conversion and a today's-rate conversion produce identical numbers,
@@ -634,6 +806,10 @@ var seededUSDRates = []struct{ on, rate string }{
 // buy for the arithmetic). 510.00 against a 500.00 purchase is a 2 % gain in
 // dollars — small on purpose, because the ruble moved 3.7 % the other way
 // over the same weeks and the point is that the smaller move loses.
+//
+// KAZ32EUR, WEWKQ and INTC are hand-seeded for the same kind of reason — each
+// carries one of this branch's four demonstrations and none of them can be
+// seen without a valuation. See each quote below.
 func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]uuid.UUID, d func(string) time.Time) error {
 	mdStore := marketdata.NewStore(pool)
 	on := d("2026-07-20")
@@ -667,6 +843,23 @@ func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]
 		// realized column was removed as visual noise (owner feedback, 4c).
 		// Both figures are round and checkable without a calculator.
 		{InstrumentID: instIDs["NVDA"], On: on, Price: rate("200.00"), Currency: "USD", Source: "seed"},
+		// The eurobond, quoted like any bond as a percentage of face — 98.00
+		// meaning 98,00 %. The `Currency` here is the unit that PERCENTAGE is
+		// quoted in, not a currency the resulting money is ever in: the money is
+		// denominated in the face value's currency, which is why marketValue
+		// reads FaceCurrency and not this field (see its doc comment). It is
+		// written as EUR rather than USD so the two say the same thing about
+		// the same bond, the way OFZ26238's RUB quote does above.
+		{InstrumentID: instIDs["KAZ32EUR"], On: on, Price: rate("98.00"), Currency: "EUR", Source: "seed"},
+		// A price below a hundredth, and the only one in this seed: two fraction
+		// digits would print it as «0,00» (#30). See the WEWKQ buy.
+		{InstrumentID: instIDs["WEWKQ"], On: on, Price: rate("0.0025"), Currency: "USD", Source: "seed"},
+		// Intel is quoted so that the row carrying the dateless parcel has all
+		// four money figures to withhold, not just two: a position with no quote
+		// publishes no valuation and no profit anyway, and would show the
+		// permanent «дату уже не восстановить» sentence on half the row it is
+		// true of. See the INTC transfer.
+		{InstrumentID: instIDs["INTC"], On: on, Price: rate("34.00"), Currency: "USD", Source: "seed"},
 	}
 	if err := mdStore.UpsertQuotes(ctx, quotes); err != nil {
 		return fmt.Errorf("seed quotes: %w", err)
