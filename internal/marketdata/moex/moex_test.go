@@ -2,6 +2,7 @@ package moex_test
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -51,7 +52,7 @@ func allBoards(overrides map[string]route) map[string]route {
 }
 
 func TestName(t *testing.T) {
-	c := moex.New(nil, "")
+	c := moex.New(nil, "", nil)
 	if got := c.Name(); got != "moex" {
 		t.Fatalf("Name() = %q, want %q", got, "moex")
 	}
@@ -101,7 +102,7 @@ func TestQuotesFor_ParsesFixture(t *testing.T) {
 		bondsPath:  {status: http.StatusOK, body: bonds},
 	}))
 
-	c := moex.New(srv.Client(), srv.URL)
+	c := moex.New(srv.Client(), srv.URL, nil)
 	on := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
 
 	// Request a mix of: a plain share (SBER), a share with a null price
@@ -201,7 +202,7 @@ func TestQuotesFor_FiltersToRequestedTickers(t *testing.T) {
 		bondsPath:  {status: http.StatusOK, body: bonds},
 	}))
 
-	c := moex.New(srv.Client(), srv.URL)
+	c := moex.New(srv.Client(), srv.URL, nil)
 	quotes, err := c.QuotesFor(context.Background(), []string{"SBER"}, time.Now())
 	if err != nil {
 		t.Fatalf("QuotesFor: %v", err)
@@ -227,7 +228,7 @@ func TestQuotesFor_MissingColumn(t *testing.T) {
 		sharesPath: {status: http.StatusOK, body: body},
 	}))
 
-	c := moex.New(srv.Client(), srv.URL)
+	c := moex.New(srv.Client(), srv.URL, nil)
 	_, err := c.QuotesFor(context.Background(), []string{"SBER"}, time.Now())
 	if err == nil {
 		t.Fatal("QuotesFor: want error when PREVPRICE column is missing, got nil")
@@ -251,7 +252,7 @@ func TestQuotesFor_OneBoardFailingFailsTheWholeCall(t *testing.T) {
 		corpPath:   {status: http.StatusInternalServerError, body: emptyBoard},
 	}))
 
-	c := moex.New(srv.Client(), srv.URL)
+	c := moex.New(srv.Client(), srv.URL, nil)
 	quotes, err := c.QuotesFor(context.Background(), []string{"SBER", "RU000A0JSGV0"}, time.Now())
 	if err == nil {
 		t.Fatal("QuotesFor: want error when a board returns HTTP 500, got nil")
@@ -274,7 +275,7 @@ func TestQuotesFor_OneBoardFailingFailsTheWholeCall(t *testing.T) {
 func TestQuotesFor_QueriesEveryBoard(t *testing.T) {
 	srv, gotQueries := serve(t, allBoards(nil))
 
-	c := moex.New(srv.Client(), srv.URL)
+	c := moex.New(srv.Client(), srv.URL, nil)
 	if _, err := c.QuotesFor(context.Background(), []string{"SBER"}, time.Now()); err != nil {
 		t.Fatalf("QuotesFor: %v", err)
 	}
@@ -303,7 +304,7 @@ func TestQuotesFor_CorporateBondsAreQuoted(t *testing.T) {
 		corpDPath: {status: http.StatusOK, body: readFixture(t, "corp_bonds_d.json")},
 	}))
 
-	c := moex.New(srv.Client(), srv.URL)
+	c := moex.New(srv.Client(), srv.URL, nil)
 	quotes, err := c.QuotesFor(context.Background(),
 		[]string{"RU000A0JSGV0", "RU000A0JWRV9", "RU000A105SZ2"}, time.Now())
 	if err != nil {
@@ -358,7 +359,7 @@ func TestQuotesFor_TMOSRowRecordsETFOnTQBRDecision(t *testing.T) {
 		sharesPath: {status: http.StatusOK, body: readFixture(t, "shares.json")},
 	}))
 
-	c := moex.New(srv.Client(), srv.URL)
+	c := moex.New(srv.Client(), srv.URL, nil)
 	quotes, err := c.QuotesFor(context.Background(), []string{"TMOS"}, time.Now())
 	if err != nil {
 		t.Fatalf("QuotesFor: %v", err)
@@ -387,7 +388,7 @@ func TestQuotesFor_TickerOnTwoBoardsTakesTheFirst(t *testing.T) {
 			`{"securities":{"columns":["SECID","PREVPRICE","CURRENCYID"],"data":[["COLLIDE",222.22,"USD"]]}}`)},
 	}))
 
-	c := moex.New(srv.Client(), srv.URL)
+	c := moex.New(srv.Client(), srv.URL, nil)
 	quotes, err := c.QuotesFor(context.Background(), []string{"COLLIDE"}, time.Now())
 	if err != nil {
 		t.Fatalf("QuotesFor: %v", err)
@@ -416,7 +417,7 @@ func TestQuotesFor_NullPriceDoesNotClaimPrecedence(t *testing.T) {
 			`{"securities":{"columns":["SECID","PREVPRICE","CURRENCYID"],"data":[["COLLIDE",222.22,"SUR"]]}}`)},
 	}))
 
-	c := moex.New(srv.Client(), srv.URL)
+	c := moex.New(srv.Client(), srv.URL, nil)
 	quotes, err := c.QuotesFor(context.Background(), []string{"COLLIDE"}, time.Now())
 	if err != nil {
 		t.Fatalf("QuotesFor: %v", err)
@@ -434,7 +435,7 @@ func TestQuotesFor_InvalidJSON(t *testing.T) {
 		sharesPath: {status: http.StatusOK, body: []byte(`{"securities":`)},
 	}))
 
-	c := moex.New(srv.Client(), srv.URL)
+	c := moex.New(srv.Client(), srv.URL, nil)
 	_, err := c.QuotesFor(context.Background(), []string{"SBER"}, time.Now())
 	if err == nil {
 		t.Fatal("QuotesFor: want error on invalid JSON, got nil")
@@ -449,12 +450,82 @@ func TestQuotesFor_NoTickersRequested(t *testing.T) {
 		bondsPath:  {status: http.StatusOK, body: bonds},
 	}))
 
-	c := moex.New(srv.Client(), srv.URL)
+	c := moex.New(srv.Client(), srv.URL, nil)
 	quotes, err := c.QuotesFor(context.Background(), nil, time.Now())
 	if err != nil {
 		t.Fatalf("QuotesFor: %v", err)
 	}
 	if len(quotes) != 0 {
 		t.Errorf("QuotesFor(tickers=nil) = %+v, want empty", quotes)
+	}
+}
+
+// recordingHandler captures records so a test can assert on the LEVEL and the
+// attributes of a log line rather than on a substring of rendered text — a
+// substring match cannot tell a Warn from a Debug, and this repository has
+// already shipped one test that passed for exactly that wrong reason.
+type recordingHandler struct{ records *[]slog.Record }
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	*h.records = append(*h.records, r)
+	return nil
+}
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+
+// TestQuotesFor_EmptyBoardIsWarned covers the case where ISS answers 200 with
+// no securities at all. That is not a quiet day: securities.json lists what is
+// LISTED, not what has traded, so every board queried here carries hundreds or
+// thousands of rows on any day of the week. Zero rows means the path has
+// stopped naming a live board — ISS answers exactly this way for a board that
+// was renamed or retired, and seven such paths were found while choosing this
+// board list.
+//
+// Without the warning, every instrument on that board simply has no price, and
+// the screen reports that as "no quote" — a statement about the instrument,
+// when the truth is a statement about our URL.
+//
+// The other boards' prices must survive: the response was valid, and failing
+// the call would throw away three boards of correct data over the fourth.
+func TestQuotesFor_EmptyBoardIsWarned(t *testing.T) {
+	shares := readFixture(t, "shares.json")
+	srv, _ := serve(t, allBoards(map[string]route{
+		sharesPath: {status: http.StatusOK, body: shares},
+	}))
+
+	var records []slog.Record
+	c := moex.New(srv.Client(), srv.URL, slog.New(&recordingHandler{records: &records}))
+	quotes, err := c.QuotesFor(context.Background(), []string{"SBER"}, time.Now())
+	if err != nil {
+		t.Fatalf("QuotesFor: %v — an empty board must not fail the whole call", err)
+	}
+	if len(quotes) != 1 {
+		t.Fatalf("QuotesFor returned %d quotes, want 1: the boards that did answer must still be used", len(quotes))
+	}
+
+	// Three of the four boards served emptyBoard, so exactly three lines, each
+	// naming its own board. Counting them is what catches a warning emitted
+	// once per call instead of once per board.
+	var warned []string
+	for _, r := range records {
+		if r.Message != "moex: board returned no securities at all, everything listed on it will have no price" {
+			continue
+		}
+		if r.Level != slog.LevelWarn {
+			t.Errorf("the empty board was logged at %s, want WARN: Debug is off on a production instance, "+
+				"which is exactly where an un-priced board would go unnoticed", r.Level)
+		}
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == "board" {
+				warned = append(warned, a.Value.String())
+			}
+			return true
+		})
+	}
+	sort.Strings(warned)
+	want := []string{"bonds/TQCB", "bonds/TQOB", "bonds/TQRD"}
+	if strings.Join(warned, ",") != strings.Join(want, ",") {
+		t.Fatalf("warned about boards %v, want %v", warned, want)
 	}
 }

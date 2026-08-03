@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -123,20 +124,29 @@ const requestedColumns = "SECID,PREVPRICE,CURRENCYID"
 type Client struct {
 	http    *http.Client
 	baseURL string
+	log     *slog.Logger
 }
 
 // New returns a Client. client may be nil, in which case http.DefaultClient
 // is used; baseURL may be empty, in which case DefaultBaseURL is used.
 // baseURL is parameterized (rather than hardcoded) so tests can point it at
 // an httptest.Server instead of the real iss.moex.com.
-func New(client *http.Client, baseURL string) *Client {
+// log may be nil, in which case slog.Default is used — which is the
+// configured logger, since cmd/babki installs it at startup. It is a
+// parameter rather than a package-level read so a test can watch the
+// empty-board warning without swapping a global out from under every other
+// test running beside it.
+func New(client *http.Client, baseURL string, log *slog.Logger) *Client {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
 	}
-	return &Client{http: client, baseURL: baseURL}
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Client{http: client, baseURL: baseURL, log: log}
 }
 
 // Name implements marketdata.QuoteProvider.
@@ -153,6 +163,11 @@ func (c *Client) Name() string { return sourceName }
 // Tickers not present on any board, and tickers whose PREVPRICE is null (no
 // trade recorded), are silently absent from the result — not an error, per
 // the marketdata.QuoteProvider contract.
+//
+// A board that answers with no securities at all is a different matter and
+// gets a Warn: see the empty-board branch below for why zero rows means the
+// path has stopped pointing at a live board rather than that the board is
+// quiet today.
 //
 // # A board that fails fails the whole call
 //
@@ -196,6 +211,29 @@ func (c *Client) QuotesFor(ctx context.Context, tickers []string, on time.Time) 
 		rows, err := c.fetchBoard(ctx, b)
 		if err != nil {
 			return nil, err
+		}
+		if len(rows) == 0 {
+			// A board that answers with no securities at all is not a board
+			// with nothing to say — every board queried here lists hundreds or
+			// thousands of instruments on any day of the week, holidays
+			// included, because securities.json lists what is LISTED rather
+			// than what has traded. Zero rows means the path stopped pointing
+			// at a live board: ISS answers 200 with an empty securities array
+			// for a board that has been renamed or retired, exactly as it does
+			// for one that never existed. Seven such paths were found while
+			// choosing this board list, so the shape is not hypothetical.
+			//
+			// Every instrument on that board would then quietly have no price,
+			// which reads on screen as "no quote" — a real, expected answer
+			// about the instrument rather than a fact about our URL.
+			//
+			// Warn and carry on, rather than failing the call: the response was
+			// valid and the other boards' prices are good. Failing here would
+			// throw away three boards' worth of correct data over the fourth,
+			// and the log line is what makes the cause findable.
+			//
+			c.log.Warn("moex: board returned no securities at all, everything listed on it will have no price",
+				"board", b.label, "path", b.path)
 		}
 		for _, row := range rows {
 			if !want[row.ticker] || row.price == nil || quoted[row.ticker] {

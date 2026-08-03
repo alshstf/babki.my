@@ -69,9 +69,12 @@ func newCbrHTTPClient() *http.Client {
 // startJobClient wires up the job workers and River client and starts it.
 // Shared by the "all" and "worker" roles. cbr and moex are used with their
 // default base URLs — no configuration knob is exposed for them yet. cbr's
-// HTTP client is bounded by cbrHTTPTimeout (see above); moex isn't, since a
-// quotes run makes a single request while cbr's history run makes one per
-// currency in use, each transferring a whole series.
+// HTTP client is bounded by cbrHTTPTimeout (see above); moex isn't. The
+// reason given here used to be that a quotes run makes a single request, and
+// that stopped being true when the provider took on the corporate-bond boards
+// — it now makes one request per board. Nothing has replaced the reason: an
+// unbounded client on the quotes path is a gap, not a decision, and it is
+// filed rather than fixed here.
 func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	mdStore := marketdata.NewStore(r.pool)
 	instStore := instrument.NewStore(r.pool)
@@ -79,7 +82,7 @@ func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	accStore := account.NewStore(r.pool)
 	famStore := family.NewStore(r.pool)
 	fxProvider := cbr.New(newCbrHTTPClient(), "")
-	quoteProvider := moex.New(nil, "")
+	quoteProvider := moex.New(nil, "", r.log)
 	workers := jobs.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, accStore, famStore,
 		fxProvider, quoteProvider)
 	client, err := jobs.NewClient(r.pool, workers, r.log)
