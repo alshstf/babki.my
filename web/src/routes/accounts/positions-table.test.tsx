@@ -54,6 +54,50 @@ const CAPTION = {
     "\u041E\u0446\u0435\u043D\u043A\u0430 \u043F\u043E\u043B\u0443\u0447\u0438\u043B\u0430\u0441\u044C \u0432 \u0434\u0440\u0443\u0433\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435, \u0447\u0435\u043C \u043F\u043E\u0437\u0438\u0446\u0438\u044F, \u0430 \u043A\u0443\u0440\u0441\u0430 \u043E\u0442 \u043D\u0435\u0451 \u0434\u043E \u0432\u0430\u043B\u044E\u0442\u044B \u043F\u043E\u0437\u0438\u0446\u0438\u0438 \u043D\u0435\u0442: \u0441\u0440\u0430\u0432\u043D\u0438\u0442\u044C \u0435\u0451 \u0441\u043E \u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C\u044E \u043F\u043E\u0437\u0438\u0446\u0438\u0438 \u043D\u0435\u043B\u044C\u0437\u044F. \u041F\u043E\u043A\u0430 \u043E\u0446\u0435\u043D\u043A\u0430 \u043D\u0435 \u0432\u044B\u0440\u0430\u0436\u0435\u043D\u0430 \u0432 \u0432\u0430\u043B\u044E\u0442\u0435 \u043F\u043E\u0437\u0438\u0446\u0438\u0438, \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u0430 \u043D\u0435 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442 \u0435\u0451 \u0438 \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439. \u041F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u0430 \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
 } as const;
 
+// The two sentences the price line's tooltip carries under the date, spelled
+// out here in full for the same reason the captions above are: what this is
+// about is WHICH sentence sits beside the number, and a test that fetched it
+// through the component's own lookup would agree with the component whatever
+// it picked.
+//
+// WHY THEY EXIST. price_on is the trading session the source itself attaches
+// the price to — never the day this program fetched it, which is what #90 was
+// (the fetch day stored as the price's own, so Friday's price read «Цена на
+// 03.08.2026» on the Monday). With the date now true, a bare «Цена на
+// 31.07.2026» read on a Monday is still two different pieces of news wearing
+// one sentence — "this is the market's last word" and "the quote job stopped
+// updating" — and nothing else on this screen tells them apart. So the caption
+// says what the date IS rather than leaving the reader to guess.
+//
+// WHAT THEY MUST NOT SAY is the other half of the same care, and it is why
+// these two sentences are worded so carefully around the exchange's own
+// behaviour (all of it measured against live ISS — see the QuotesFor doc block
+// in internal/marketdata/moex/moex.go):
+//   - not «цена закрытия». MOEX publishes the official close in a different
+//     column (PREVLEGALCLOSEPRICE) and it is a different number — SBER's two
+//     read 276.52 and 275.60 on one row.
+//   - not "traded at that price on that day". Of TQCB's 3021 rows measured for
+//     one session, 779 carried a price for a paper that did not trade at all,
+//     and RU000A103AP6 reported a price last struck three weeks earlier beside
+//     that session's date.
+//   - not «предыдущая сессия». The wire carries whatever day the SOURCE named
+//     (TickerQuote.On), and this screen knows nothing of any source's habits;
+//     "previous" is a fact about MOEX's PREVPRICE, not about the contract.
+//   - not "so the data is fresh". A date in the past is exactly what a broken
+//     quotes job looks like too, and a caption that reassured the reader would
+//     be covering for it.
+const PRICE_SESSION_NOTE =
+  "Это цена той торговой сессии: так её датирует биржа, а не программа в день загрузки. Сделки в тот день могло и не быть — биржа называет цену и для бумаги, которая не торговалась";
+// The second half of the picture, and the project's "three rates for three
+// questions" rule applied to this cell: the valuation is struck from a price
+// belonging to some past session, but any conversion of that valuation is done
+// at the CURRENT rate (internal/portfolio/http.go converts into the position's
+// currency and into the base one at `now`, never at the quote's date). The
+// conditional wording is load-bearing — a position whose valuation is already
+// in its own currency, shown in native mode, converts nothing at all.
+const PRICE_VALUATION_NOTE =
+  "Рыночная оценка посчитана из этой цены. Если оценку пересчитывают в другую валюту, берётся текущий курс, а не курс на эту дату";
+
 // Every money cell of a row carries the row's caption; the valuation is the
 // one that can carry its own instead (market_value_gap). Named here so a test
 // can say "all four" without repeating the ids.
@@ -123,7 +167,55 @@ describe("PositionsTable", () => {
     expect(priceLine).toBeInTheDocument();
     // ...but the date is not — it moved into the title tooltip.
     expect(screen.queryByText(/20\.07\.2026/)).not.toBeInTheDocument();
-    expect(priceLine).toHaveAttribute("title", "Цена на 20.07.2026");
+    expect(priceLine.getAttribute("title")).toContain("Цена на 20.07.2026");
+  });
+
+  it("captions the price with the session it belongs to, not with the day it was fetched", () => {
+    wrap(<PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />);
+
+    // Pinned as ONE exact string, in order: swapping any of the three lines
+    // for another sentence, dropping one, or reordering them fails here. That
+    // is the whole point of this test — the number was never the thing at
+    // risk, the sentence beside it was (see PRICE_SESSION_NOTE above for what
+    // it is forbidden to say).
+    expect(screen.getByTestId("position-price").getAttribute("title")).toBe(
+      `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${PRICE_VALUATION_NOTE}`,
+    );
+  });
+
+  it("dates the price by price_on and the conversion by rate_on — two fields, two dates, one format", () => {
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            currency: "USD",
+            in_base: {
+              cost_minor: 2_275_000,
+              market_value_minor: 2_780_050,
+              unrealized_pnl_minor: 227_500,
+              income_minor: 0,
+              currency: "RUB",
+              // Deliberately NOT the quote's date: the two answer different
+              // questions ("which session is this price of" vs "which day's
+              // rate converted the valuation"), and a price line that read
+              // this field instead would still print a plausible date.
+              rate_on: "2026-07-22",
+            },
+          }),
+        ]}
+        mode="base"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const priceTitle = screen.getByTestId("position-price").getAttribute("title") ?? "";
+    expect(priceTitle).toContain("Цена на 20.07.2026");
+    expect(priceTitle).not.toContain("22.07.2026");
+    // The neighbour's date, rendered by the same formatDate: same dd.MM.yyyy
+    // shape, so the two dates on one row cannot be read as two conventions.
+    expect(screen.getByTestId("position-market-value").getAttribute("title")).toBe(
+      "Пересчитано по текущему курсу (на 22.07.2026)",
+    );
   });
 
   it("shows an honest dash with a tooltip instead of a fake zero when there is no quote", () => {
@@ -298,7 +390,9 @@ describe("PositionsTable", () => {
     expect(screen.queryByText(sourceAmount)).not.toBeInTheDocument();
     const priceLine = screen.getByText("305,50");
     expect(norm(priceLine.getAttribute("title") ?? "")).toBe(
-      norm(`Цена на 20.07.2026\nПересчитано из ${sourceAmount}`),
+      norm(
+        `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${PRICE_VALUATION_NOTE}\nПересчитано из ${sourceAmount}`,
+      ),
     );
   });
 
@@ -306,7 +400,9 @@ describe("PositionsTable", () => {
     wrap(<PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />);
 
     const priceLine = screen.getByText("305,50");
-    expect(priceLine.getAttribute("title")).toBe("Цена на 20.07.2026");
+    expect(priceLine.getAttribute("title")).toBe(
+      `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${PRICE_VALUATION_NOTE}`,
+    );
   });
 
   // A bond is quoted as a PERCENTAGE of its face value (95.20 meaning 95.20 %
@@ -365,8 +461,13 @@ describe("PositionsTable", () => {
     // from a plain one that would let "%" wrap onto its own line — pin the
     // raw character too, unnormalized, against ru.json's pricePercent key.
     expect(priceLine.textContent).toBe("95,20 %");
+    // The session note sits under the date it explains and ABOVE the
+    // percentage note, and the valuation note under both: a reader learns what
+    // the date means, then what the number is, then what was computed from it.
     expect(norm(priceLine.getAttribute("title") ?? "")).toBe(
-      norm(`Цена на 20.07.2026\n${BOND_PRICE_NOTE}`),
+      norm(
+        `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${BOND_PRICE_NOTE}\n${PRICE_VALUATION_NOTE}`,
+      ),
     );
   });
 
@@ -388,7 +489,9 @@ describe("PositionsTable", () => {
       const priceLine = screen.getByTestId("position-price");
       expect(norm(priceLine.textContent ?? "")).toBe("305,50");
       expect(priceLine.textContent).not.toContain("%");
-      expect(priceLine.getAttribute("title")).toBe("Цена на 20.07.2026");
+      expect(priceLine.getAttribute("title")).toBe(
+        `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${PRICE_VALUATION_NOTE}`,
+      );
       expect(priceLine.getAttribute("title")).not.toContain(BOND_PRICE_NOTE);
     },
   );
@@ -414,7 +517,9 @@ describe("PositionsTable", () => {
     const priceLine = screen.getByTestId("position-price");
     expect(norm(priceLine.textContent ?? "")).toBe("95,20 %");
     expect(norm(priceLine.getAttribute("title") ?? "")).toBe(
-      norm(`Цена на 20.07.2026\n${BOND_PRICE_NOTE}\nПересчитано из ${sourceAmount}`),
+      norm(
+        `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${BOND_PRICE_NOTE}\n${PRICE_VALUATION_NOTE}\nПересчитано из ${sourceAmount}`,
+      ),
     );
   });
 
