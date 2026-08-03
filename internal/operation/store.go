@@ -102,10 +102,69 @@ func (s *Store) Create(ctx context.Context, spaceID uuid.UUID, op Operation, ver
 // NUMERIC(30,10) and what goes in is not always what comes out — the column
 // has a scale and the value in memory does not. The caller publishes and
 // checks the row Postgres kept, not the one it sent (see CreatePair).
+//
+// One statement per piece, but not one round trip per piece: the pieces are
+// queued into a single pgx.Batch (see writeTransferLots).
 const insertLotSQL = `
 	INSERT INTO operation_transfer_lots (operation_id, seq, quantity, cost_minor, acquired_on)
 	VALUES ($1, $2, $3, $4, $5)
 	RETURNING quantity, cost_minor, acquired_on`
+
+// writeTransferLots stores a transfer's FIFO breakdown next to the operation
+// carrying it and returns the pieces AS THE DATABASE KEPT THEM, in the order
+// they were released in.
+//
+// The pieces go out as one batch rather than one statement at a time. What they
+// cost used to grow with the parcel's history rather than with the transfer: a
+// position built up by a decade of monthly buying moves as some 120 pieces, and
+// that was 120 statements, each waiting for the one before it (#73). Queued
+// together they are a single write and a single wait, whatever the parcel has
+// been through.
+//
+// What the batch was NOT allowed to change is which pieces come back. Each
+// statement still RETURNS its stored row, and it is those rows that are handed
+// on to be checked and published — never the arguments echoed back. The
+// distinction is the whole reason the RETURNING is there: quantity is stored on
+// a fixed scale, so a piece can come back a shade different from the one that
+// went in, and a breakdown that was checked before the rounding and committed
+// after it is the fault this project has already met twice (see CreatePair).
+//
+// Reading them back in queue order is the driver's documented behaviour, not an
+// observation: pgx.BatchResults.Query "reads the results from the NEXT query in
+// the batch", and the underlying protocol returns one result per queued
+// statement in the order they were sent. Nothing here depends on the rows of
+// any one statement arriving in a particular order — each statement writes and
+// returns exactly one piece.
+//
+// A failure part way through behaves as the one-at-a-time loop did. The caller
+// gets the FIRST error, naming the piece that caused it, rather than the
+// "current transaction is aborted" that the pieces queued behind it come back
+// with — they were sent before anything was read, so they reach a server that
+// has already given up on the transaction. And since every statement of the
+// batch runs inside the transaction CreatePair opened, the pieces written
+// before the bad one go with the pair when it is rolled back. The results are
+// closed before returning either way: the connection cannot be used again, not
+// even to roll back, while a batch's results are outstanding.
+func writeTransferLots(ctx context.Context, tx pgx.Tx, operationID uuid.UUID, lots []ReleasedLot) ([]ReleasedLot, error) {
+	batch := &pgx.Batch{}
+	for i, lot := range lots {
+		batch.Queue(insertLotSQL, operationID, i, lot.Quantity, lot.CostMinor, lot.AcquiredOn)
+	}
+	br := tx.SendBatch(ctx, batch)
+	stored := make([]ReleasedLot, 0, len(lots))
+	for i := range lots {
+		var back ReleasedLot
+		if err := br.QueryRow().Scan(&back.Quantity, &back.CostMinor, &back.AcquiredOn); err != nil {
+			_ = br.Close()
+			return nil, fmt.Errorf("transfer lot %d: %w", i, err)
+		}
+		stored = append(stored, back)
+	}
+	if err := br.Close(); err != nil {
+		return nil, fmt.Errorf("transfer lots: %w", err)
+	}
+	return stored, nil
+}
 
 // CreatePair inserts a transfer_out/transfer_in pair atomically with a
 // shared transfer_group_id, together with the FIFO breakdown carried on the
@@ -162,15 +221,9 @@ func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Opera
 		return Operation{}, Operation{}, fmt.Errorf("transfer in: %w", err)
 	}
 	if len(in.TransferLots) > 0 {
-		stored := make([]ReleasedLot, 0, len(in.TransferLots))
-		for i, lot := range in.TransferLots {
-			var back ReleasedLot
-			if err := tx.QueryRow(ctx, insertLotSQL,
-				cIn.ID, i, lot.Quantity, lot.CostMinor, lot.AcquiredOn).
-				Scan(&back.Quantity, &back.CostMinor, &back.AcquiredOn); err != nil {
-				return Operation{}, Operation{}, fmt.Errorf("transfer lot %d: %w", i, err)
-			}
-			stored = append(stored, back)
+		stored, err := writeTransferLots(ctx, tx, cIn.ID, in.TransferLots)
+		if err != nil {
+			return Operation{}, Operation{}, err
 		}
 		cIn.TransferLots = stored
 		// The departing leg gets them too. The rows are stored next to the
