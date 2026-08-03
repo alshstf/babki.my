@@ -57,9 +57,7 @@ func TestName(t *testing.T) {
 	}
 }
 
-// route is one path's canned response: status and body (nil body panics the
-// handler if hit unexpectedly, which is intentional — it flags board paths
-// the test forgot to stub).
+// route is one path's canned response: status and body.
 type route struct {
 	status int
 	body   []byte
@@ -118,7 +116,7 @@ func TestQuotesFor_ParsesFixture(t *testing.T) {
 		t.Fatalf("QuotesFor: %v", err)
 	}
 
-	wantQuery := "iss.meta=off&securities.columns=SECID,PREVPRICE,CURRENCYID"
+	wantQuery := "iss.meta=off&iss.only=securities&securities.columns=SECID,PREVPRICE,CURRENCYID"
 	for _, p := range wantBoardPaths {
 		if gotQueries[p] != wantQuery {
 			t.Errorf("request query for %s = %q, want %q", p, gotQueries[p], wantQuery)
@@ -340,13 +338,22 @@ func TestQuotesFor_CorporateBondsAreQuoted(t *testing.T) {
 	}
 }
 
-// TestQuotesFor_ETFIsQuotedOnTQBR pins a fact that is easy to get wrong in
-// the other direction: exchange-traded funds are NOT on a fund-specific
-// board. ISS reports the dedicated ETF board TQTF as not traded, with no
-// securities on it, and reports TQBR as the primary traded board for funds
-// like TMOS — so TQBR is what has to carry them, and a change that narrowed
-// TQBR to "shares only" would silently stop pricing every fund.
-func TestQuotesFor_ETFIsQuotedOnTQBR(t *testing.T) {
+// TestQuotesFor_TMOSRowRecordsETFOnTQBRDecision does not prove that ISS
+// puts exchange-traded funds on TQBR rather than the dedicated (and
+// currently empty) TQTF board — no offline test can pin a fact about a
+// live third-party API, and a live-network test here would be worse: slow,
+// flaky, and dependent on TMOS still trading whenever CI happens to run.
+// See the shares/TQBR entry in the boards doc comment for the live-checked
+// evidence the decision actually rests on.
+//
+// What this test does is record that decision and guard the fixture it
+// depends on: the only edit that reddens this test alone is deleting the
+// TMOS row from testdata/shares.json. Every code mutation that would break
+// the underlying claim (e.g. filtering out fund tickers, or mishandling a
+// row that happens to be an ETF) also breaks four or more other tests,
+// starting with TestQuotesFor_ParsesFixture, which already pins the same
+// parsing behaviour via SBER.
+func TestQuotesFor_TMOSRowRecordsETFOnTQBRDecision(t *testing.T) {
 	srv, _ := serve(t, allBoards(map[string]route{
 		sharesPath: {status: http.StatusOK, body: readFixture(t, "shares.json")},
 	}))

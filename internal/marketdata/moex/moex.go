@@ -47,11 +47,16 @@ type board struct {
 //
 //   - shares/TQBR, "Т+: Акции и ДР" (502 securities) — ordinary shares,
 //     depositary receipts, and exchange-traded funds. Funds are NOT on a
-//     fund-specific board: ISS lists the dedicated ETF board shares/TQTF as
-//     not traded (is_traded=0) with zero securities on it, and reports TQBR
-//     as the primary traded board for every fund checked (TMOS, SBMX, EQMX,
-//     LQDT). TQTF is therefore deliberately not queried — it would cost one
-//     request per refresh and return nothing.
+//     fund-specific board: shares/TQTF, the dedicated ETF board, returns
+//     zero securities from ISS today, and for every fund checked (TMOS,
+//     SBMX, EQMX, LQDT), ISS's own per-security board list marks TQTF as
+//     not traded (is_traded=0) and TQBR as its primary traded board
+//     (is_traded=1, is_primary=1) — see e.g. /iss/securities/TMOS.json.
+//     (The market-wide /iss/engines/stock/markets/shares/boards.json lists
+//     TQTF itself as is_traded=1; that flag describes the board in
+//     general, not any given security's listing on it, and does not
+//     contradict the above.) TQTF is therefore deliberately not queried —
+//     it would cost one request per refresh and return nothing.
 //   - bonds/TQOB, "Т+: Гособлигации" (62 securities) — government bonds
 //     (OFZ) only. It does not carry corporate bonds.
 //   - bonds/TQCB, "Т+: Облигации" (3021 securities) — the main corporate
@@ -62,12 +67,19 @@ type board struct {
 //     corporate bonds with a SUR face value. What the "Д" abbreviates is
 //     not stated in the ISS board listing and is not guessed at here.
 //
-// Every bonds-market board quotes PREVPRICE as a percentage of face value,
-// and every shares-market board quotes it as money per unit. That split is
-// per market, not per board, so the boards added here mean exactly what the
-// board they join already meant, and portfolio.marketValue — which picks
-// between the two readings by instrument type, not by board — needs no
-// change.
+// TQOB, TQCB, and TQRD — the three bonds-market boards queried here — all
+// quote PREVPRICE as a percentage of face value, and every shares-market
+// board quotes it as money per unit. portfolio.marketValue, which picks
+// between the two readings by instrument type rather than by board, needs
+// no change for the two boards added here.
+//
+// That percentage-of-face-value convention is not a blanket property of
+// "markets/bonds" as a whole, so it does not automatically extend to a
+// future board added there. markets/bonds also hosts bonds/TQTC and
+// bonds/EQTC ("Т+: ETC" / "Т0 ETC" — exchange-traded commodities, which are
+// not bonds); both are is_traded=0 with zero securities today, so nothing
+// is wrong yet, but if ETC trading resumes, its PREVPRICE convention needs
+// checking on its own before a line for it is added here.
 //
 // Boards deliberately left out, and why. shares/SMAL (odd lots, 175
 // securities) and shares/TQTY (fund units settled in CNY, 6) republish
@@ -77,6 +89,15 @@ type board struct {
 // settlement currency. A ticker alone does not say which settlement
 // currency a holding is in, so querying those boards would hand the
 // precedence rule below a choice it has no basis to make.
+//
+// The above is not a partial list standing in for an exhaustive one. Every
+// other board that the stock engine's shares and bonds markets mark
+// is_traded=1 today, and that is not already named above, was checked too,
+// on 2026-08-03: bonds/TQUD, bonds/TQOE, bonds/AUCT, bonds/PACT, bonds/PAYT,
+// and shares/TQIF ("Т+: Паи") all return zero securities, the same as
+// shares/TQTF; shares/SPEQ's 84 tickers are all already on TQBR; and
+// bonds/SPOB's 41 are all already inside TQOB ∪ TQCB ∪ TQRD. None of them
+// need a line here.
 var boards = []board{
 	{label: "shares/TQBR", path: "/iss/engines/stock/markets/shares/boards/TQBR/securities.json"},
 	{label: "bonds/TQOB", path: "/iss/engines/stock/markets/bonds/boards/TQOB/securities.json"},
@@ -88,6 +109,14 @@ var boards = []board{
 // every board request, asking ISS to return only the columns this provider
 // understands. ISS is free to return them in any order, so responses are
 // still mapped by column name, not by position.
+//
+// securities.columns alone does not stop ISS from also sending the
+// marketdata and marketdata_yields blocks alongside securities — those are
+// dropped by iss.only=securities instead (see fetchBoard). Measured on
+// 2026-08-03, bonds/TQCB (3021 rows) is ~1.85 MB with both blocks attached
+// and ~102 KB with only securities requested — the same 3021 rows, same
+// columns, same values throughout, just without the two blocks nothing
+// here parses.
 const requestedColumns = "SECID,PREVPRICE,CURRENCYID"
 
 // Client fetches instrument prices from the Moscow Exchange ISS API.
@@ -213,8 +242,14 @@ type issSecuritiesResponse struct {
 }
 
 // fetchBoard requests and parses one board's securities.json response.
+//
+// iss.only=securities tells ISS to omit the marketdata and
+// marketdata_yields blocks it would otherwise attach to the response —
+// blocks this provider decodes into issSecuritiesResponse (which has no
+// field for them) and then discards. See the note on requestedColumns for
+// the measured cost of leaving it off.
 func (c *Client) fetchBoard(ctx context.Context, b board) ([]secRow, error) {
-	url := c.baseURL + b.path + "?iss.meta=off&securities.columns=" + requestedColumns
+	url := c.baseURL + b.path + "?iss.meta=off&iss.only=securities&securities.columns=" + requestedColumns
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("moex: %s: build request: %w", b.label, err)
