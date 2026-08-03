@@ -46,7 +46,7 @@ func (stubFxProvider) Name() string { return "stub-fx" }
 
 type stubQuoteProvider struct{}
 
-func (stubQuoteProvider) QuotesFor(context.Context, []string, time.Time) ([]marketdata.TickerQuote, error) {
+func (stubQuoteProvider) QuotesFor(context.Context, []string) ([]marketdata.TickerQuote, error) {
 	return nil, nil
 }
 

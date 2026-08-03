@@ -49,7 +49,7 @@ type fakeQuoteProvider struct {
 	calls *[][]string
 }
 
-func (p fakeQuoteProvider) QuotesFor(_ context.Context, tickers []string, _ time.Time) ([]marketdata.TickerQuote, error) {
+func (p fakeQuoteProvider) QuotesFor(_ context.Context, tickers []string) ([]marketdata.TickerQuote, error) {
 	if p.calls != nil {
 		*p.calls = append(*p.calls, tickers)
 	}
@@ -242,6 +242,128 @@ func TestQuotesWorker_UpsertsMatchedTickersAndSkipsMissingPrices(t *testing.T) {
 	}
 	if q, ok := latest[sber.ID]; !ok || !q.Price.Equal(dec("305.5")) {
 		t.Fatalf("sber quote = %+v", q)
+	}
+}
+
+// TestQuotesWorker_StoresTheDayTheProviderNamed pins where a stored quote's
+// date comes from: the provider's TickerQuote.On, which is the exchange's own
+// word for which session the price belongs to. The worker used to date every
+// quote time.Now() instead, so the previous session's price was written down
+// as today's and nothing downstream could tell how old it was (#90).
+//
+// The date the provider names here is in the past and cannot be produced by
+// any clock, so an implementation that reached for one fails on the value, not
+// on a comparison that could go either way.
+func TestQuotesWorker_StoresTheDayTheProviderNamed(t *testing.T) {
+	store, instStore, ctx := newJobsFixture(t)
+
+	sber, err := instStore.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("create sber: %v", err)
+	}
+
+	session := date("2026-07-24")
+	provider := fakeQuoteProvider{quotes: []marketdata.TickerQuote{
+		{Ticker: "SBER", Price: dec("276.52"), Currency: "RUB", On: session},
+	}}
+	worker := marketdata.NewQuotesWorker(store, instStore, provider, slog.Default())
+	if err := worker.Work(ctx, &river.Job[marketdata.RefreshQuotesArgs]{Args: marketdata.RefreshQuotesArgs{}}); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	latest, err := store.LatestQuotes(ctx, []uuid.UUID{sber.ID})
+	if err != nil {
+		t.Fatalf("LatestQuotes: %v", err)
+	}
+	q, ok := latest[sber.ID]
+	if !ok {
+		t.Fatalf("LatestQuotes has no quote for sber: %+v", latest)
+	}
+	if !q.On.Equal(session) {
+		t.Errorf("stored quote is dated %s, want %s — the day the exchange named, not the day of the refresh",
+			q.On.Format(time.DateOnly), session.Format(time.DateOnly))
+	}
+
+	// And the row really is at that date rather than merely reporting it:
+	// asked for the day before, the store must say there is no quote yet.
+	if _, err := store.QuoteOn(ctx, sber.ID, session.AddDate(0, 0, -1)); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("QuoteOn(the day before the session) err = %v, want pgx.ErrNoRows: "+
+			"a quote must not exist on a day before the session it belongs to", err)
+	}
+}
+
+// TestQuotesWorker_RowsFollowTheExchangesSessionsNotTheRefreshes covers the
+// side effect of dating quotes by session: repeat refreshes now rewrite one
+// row instead of laying down a new one per calendar day, and a new row appears
+// exactly when the exchange has a new session to report.
+//
+// Both store reads are checked against that, since both are how the rest of
+// the app sees quotes: LatestQuotes must follow the exchange's newest session,
+// and QuoteOn must still find the older one at its own date.
+func TestQuotesWorker_RowsFollowTheExchangesSessionsNotTheRefreshes(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	store, instStore := marketdata.NewStore(pool), instrument.NewStore(pool)
+
+	sber, err := instStore.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("create sber: %v", err)
+	}
+
+	rows := func() int {
+		t.Helper()
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM quotes WHERE instrument_id = $1`, sber.ID).Scan(&n); err != nil {
+			t.Fatalf("count quotes: %v", err)
+		}
+		return n
+	}
+	refresh := func(price string, on time.Time) {
+		t.Helper()
+		provider := fakeQuoteProvider{quotes: []marketdata.TickerQuote{
+			{Ticker: "SBER", Price: dec(price), Currency: "RUB", On: on},
+		}}
+		worker := marketdata.NewQuotesWorker(store, instStore, provider, slog.Default())
+		if err := worker.Work(ctx, &river.Job[marketdata.RefreshQuotesArgs]{Args: marketdata.RefreshQuotesArgs{}}); err != nil {
+			t.Fatalf("Work: %v", err)
+		}
+	}
+
+	friday, monday := date("2026-07-24"), date("2026-07-27")
+
+	// Two refreshes while the exchange still reports the same session: the
+	// half-hourly job must not turn one session into a row per run.
+	refresh("276.52", friday)
+	refresh("276.52", friday)
+	if n := rows(); n != 1 {
+		t.Fatalf("%d rows after two refreshes of the same session, want 1", n)
+	}
+
+	// The exchange moves on: a second row, and the newer one is what the
+	// positions screen reads.
+	refresh("280.85", monday)
+	if n := rows(); n != 2 {
+		t.Fatalf("%d rows after a refresh naming a later session, want 2", n)
+	}
+	latest, err := store.LatestQuotes(ctx, []uuid.UUID{sber.ID})
+	if err != nil {
+		t.Fatalf("LatestQuotes: %v", err)
+	}
+	if q := latest[sber.ID]; !q.On.Equal(monday) || !q.Price.Equal(dec("280.85")) {
+		t.Errorf("LatestQuotes = %s on %s, want 280.85 on %s", q.Price, q.On.Format(time.DateOnly), monday.Format(time.DateOnly))
+	}
+	// The earlier session is still there, at its own date, for anything
+	// valuing a position as of that day.
+	old, err := store.QuoteOn(ctx, sber.ID, friday)
+	if err != nil {
+		t.Fatalf("QuoteOn(friday): %v", err)
+	}
+	if !old.On.Equal(friday) || !old.Price.Equal(dec("276.52")) {
+		t.Errorf("QuoteOn(friday) = %s on %s, want 276.52 on %s", old.Price, old.On.Format(time.DateOnly), friday.Format(time.DateOnly))
 	}
 }
 

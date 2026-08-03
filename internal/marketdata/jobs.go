@@ -204,16 +204,28 @@ func NewQuotesWorker(store *Store, instruments instrumentLister, provider QuoteP
 // dropped in silence, which is how a position could show no quote with no trace
 // of the reason anywhere.
 //
+// Each stored quote carries the day the PROVIDER says its price belongs to,
+// never this worker's clock — see marketdata.TickerQuote.On. A repeat refresh
+// therefore rewrites one row per instrument instead of adding a row a day, and
+// what LatestQuotes then returns is the exchange's own most recent session
+// rather than the most recent time this job happened to run.
+//
 // The job is enqueued every half hour around the clock and asks on every one
-// of those runs — roughly 48 requests a day for a value that cannot change
-// that often, since the MOEX provider reads PREVPRICE and that is the previous
-// trading day's close (see its QuotesFor). A night-and-weekend window was
+// of those runs — roughly 48 requests a day for a value that moves about once
+// a trading day, since the MOEX provider reads a previous-session price (see
+// its QuotesFor for what that is exactly). A night-and-weekend window was
 // tried here and removed: it was justified by session hours MOEX does not
 // keep — there is a morning session from 06:50 MSK and there are weekend
 // sessions — so it clipped real trading while still not making the stored
-// value any fresher. Filed as #90 rather than retuned, because the choice is
-// between reading a column that actually moves and asking once a day, and
-// that is a product question about which price the owner wants.
+// value any fresher.
+//
+// The cadence is deliberately left as it is. A full refresh costs about 170 KB
+// (all four boards, measured 2026-08-03), and asking often is the only thing that gives an
+// instrument added today a price before tomorrow. What #90 was really about —
+// the price being stored under the wrong day — is fixed at the provider, not
+// by asking less often. Whether to show a price that moves intraday instead of
+// the previous session's is a separate product question, and the owner's
+// answer for now is to keep the previous session's.
 func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]) error {
 	insts, err := w.instruments.ListTradable(ctx)
 	if err != nil {
@@ -271,8 +283,7 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 		tickers = append(tickers, inst.Ticker)
 	}
 
-	on := time.Now().UTC()
-	tickerQuotes, err := w.provider.QuotesFor(ctx, tickers, on)
+	tickerQuotes, err := w.provider.QuotesFor(ctx, tickers)
 	if err != nil {
 		w.log.Error("marketdata: fetch quotes failed", "provider", w.provider.Name(), "err", err)
 		return err

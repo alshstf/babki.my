@@ -1,9 +1,9 @@
 {
   "securities": {
-    "columns": ["PREVPRICE", "SECID", "CURRENCYID"],
+    "columns": ["PREVPRICE", "SECID", "PREVDATE", "CURRENCYID"],
     "data": [
-      [99.85, "SU26238RMFS4", "SUR"],
-      [101.2, "RU000A105EX7", "USD"]
+      [99.85, "SU26238RMFS4", "2026-07-24", "SUR"],
+      [101.2, "RU000A105EX7", "2026-07-24", "USD"]
     ]
   }
 }
