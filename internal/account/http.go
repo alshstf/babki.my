@@ -18,6 +18,7 @@ import (
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
+	"babki.my/babki/internal/platform/money"
 )
 
 var currencyRe = regexp.MustCompile(`^[A-Z]{3}$`)
@@ -172,7 +173,15 @@ func (h *Handler) balanceInBase(ctx context.Context, a WithBalance, baseCurrency
 		}
 		return nil, rl.err
 	}
-	minor := decimal.NewFromInt(a.Balance.AmountMinor).Mul(rl.rate).Round(0).IntPart()
+	// Rounded once and refused rather than wrapped if the converted balance is
+	// not an int64 of minor units (money.ErrOverflow, #27). The refusal is an
+	// error and not the (nil, nil) above: that null says the provider covers no
+	// rate for this currency, and a balance too large to state says something
+	// else entirely.
+	minor, err := money.Minor(decimal.NewFromInt(a.Balance.AmountMinor).Mul(rl.rate))
+	if err != nil {
+		return nil, fmt.Errorf("%w: balance of account %s in %s", err, a.ID, baseCurrency)
+	}
 	return &apitypes.MoneyInBase{
 		AmountMinor: minor,
 		Currency:    baseCurrency,

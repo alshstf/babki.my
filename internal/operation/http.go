@@ -19,6 +19,7 @@ import (
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
+	"babki.my/babki/internal/platform/money"
 	"babki.my/babki/internal/portfolio"
 )
 
@@ -520,9 +521,22 @@ func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency
 	// about o.TransferLots, unchanged by whatever this function just computed,
 	// so duplicating it on this object would only be two places to keep in
 	// sync for a single answer that is the same at both (#67).
+	// Each figure is rounded once and refused rather than wrapped if it does
+	// not fit an int64 of minor units (money.ErrOverflow, #27). The refusal is
+	// an error and not the (nil, nil) above: that null says this row has no
+	// rate yet, which the backfill fixes, and an amount too large to state is
+	// not waiting for anything.
+	amountMinor, err := money.Minor(amount)
+	if err != nil {
+		return nil, fmt.Errorf("%w: amount of operation %s in %s", err, o.ID, baseCurrency)
+	}
+	feeMinor, err := money.Minor(decimal.NewFromInt(o.FeeMinor).Mul(rl.rate))
+	if err != nil {
+		return nil, fmt.Errorf("%w: fee of operation %s in %s", err, o.ID, baseCurrency)
+	}
 	return &apitypes.OperationInBase{
-		AmountMinor: amount.Round(0).IntPart(),
-		FeeMinor:    decimal.NewFromInt(o.FeeMinor).Mul(rl.rate).Round(0).IntPart(),
+		AmountMinor: amountMinor,
+		FeeMinor:    feeMinor,
 		Currency:    baseCurrency,
 		RateOn:      rl.date.Format("2006-01-02"),
 	}, nil

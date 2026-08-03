@@ -9,6 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
+
+	"babki.my/babki/internal/platform/money"
 )
 
 // ErrNoRate is returned by Convert when no path connects the two
@@ -69,6 +71,11 @@ func NewConverter(store *Store) *Converter {
 // 150.5 rounds to 151, and symmetrically -150.5 rounds to -151. That
 // symmetry is a deliberate choice for negative amounts (debts): rounding
 // never shrinks the magnitude of a debt.
+//
+// A product too large for an int64 is refused (money.ErrOverflow) rather than
+// wrapped. Neither input has to look unusual for that to happen — an amount
+// near the top of its column at a rate of 2 is enough — and the wrapped
+// answer is a small, plausible figure of the wrong sign (see money.Minor).
 func (c *Converter) Convert(ctx context.Context, amountMinor int64, from, to string, on time.Time) (int64, error) {
 	converted, _, err := c.convert(ctx, amountMinor, from, to, on)
 	return converted, err
@@ -87,7 +94,11 @@ func (c *Converter) convert(ctx context.Context, amountMinor int64, from, to str
 	if err != nil {
 		return 0, time.Time{}, err
 	}
-	return decimal.NewFromInt(amountMinor).Mul(rate).Round(0).IntPart(), rateDate, nil
+	converted, err = money.Minor(decimal.NewFromInt(amountMinor).Mul(rate))
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("%w: %d %s at the %s rate of %s", err, amountMinor, from, to, on.Format("2006-01-02"))
+	}
+	return converted, rateDate, nil
 }
 
 // ConvertMany converts every entry of amounts into currency to (via
@@ -97,9 +108,16 @@ func (c *Converter) convert(ctx context.Context, amountMinor int64, from, to str
 // rather than failing the whole call: a portfolio summary should show a
 // partial total plus a "N currencies not converted" note, not an error
 // page, just because one obscure holding lacks a fresh quote. err is
-// reserved for genuine failures — a DB error, a canceled context — that
+// reserved for genuine failures — a DB error, a canceled context, an amount
+// whose converted value does not fit in an int64 (money.ErrOverflow) — that
 // make converted untrustworthy; when err is non-nil, converted, missing and
 // ratesOn are all zero-valued and must be ignored.
+//
+// An overflow deliberately fails the whole call rather than joining missing:
+// missing is published beside the total as "these currencies were left out",
+// a note a reader takes as complete for everything else, and a total quietly
+// short of the one holding too big to convert would be exactly the kind of
+// smaller-than-truth figure that looks perfectly ordinary on screen.
 //
 // ratesOn is the date of the OLDEST fx rate actually used across every
 // converted entry — never today's date, since FxRateOn resolves to the
