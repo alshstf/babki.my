@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  bondPercentFromPrice,
+  bondPriceFromPercent,
   formatMinor,
   formatMinorCompact,
   formatPrice,
@@ -188,5 +190,112 @@ describe("multiplyToMinor", () => {
     // 90_000 × 100 = 9_000_000 rubles = 900_000_000 minor units, safely
     // under Number.MAX_SAFE_INTEGER (~9.007e15).
     expect(multiplyToMinor("90000", "100")).toBe(900_000_000);
+  });
+});
+
+// The two halves of the bond quote convention (#77): an exchange quotes a bond
+// as a PERCENTAGE OF FACE VALUE, so 98 against a 1 000 ₽ face means 980 ₽ per
+// bond. Both directions are exact integer arithmetic — the whole point of the
+// pair is that the money side of it is a figure the user is about to record as
+// a cost basis, and a float would put an invented kopeck in it.
+describe("bondPriceFromPercent", () => {
+  // THE case from the issue, digit for digit: the owner copies 98 out of his
+  // broker's terminal for an OFZ with a 1 000,00 ₽ face. Anything but 980
+  // here is the ten-times-too-small cost basis the whole task exists to end.
+  it("turns the owner's 98 % of a 1 000 ₽ face into 980 per bond", () => {
+    expect(bondPriceFromPercent("98", 100_000)).toBe("980.00");
+  });
+
+  it.each([
+    // A face value's own scale must not leak into the answer: the same 98 %
+    // against a 100,00 ₽ face is 98 ₽, against a 1,00 ₽ face 0,98 ₽. These
+    // pin the two /100 steps (minor→major, percent→fraction) separately —
+    // dropping either turns 980,00 into 98 000,00 or 9,80.
+    ["98", 10_000, "98.00"],
+    ["98", 100, "0.98"],
+    // Par, premium and deep discount against the 1 000 ₽ face.
+    ["100", 100_000, "1000.00"],
+    ["104.5", 100_000, "1045.00"],
+    ["7.25", 100_000, "72.50"],
+    // Fraction digits the money price genuinely needs are kept, not rounded
+    // away: 98,005 % of 1 000 ₽ is 980,05 ₽ exactly, 33,3333 % is 333,333 ₽
+    // exactly, and 33,3333 % of a 1,00 ₽ face is 0,333333 ₽ exactly — six
+    // digits, kept. No rounding happens anywhere in this conversion, which is
+    // what lets the total round exactly once, in multiplyToMinor.
+    ["98.005", 100_000, "980.05"],
+    ["33.3333", 100_000, "333.333"],
+    ["33.3333", 100, "0.333333"],
+  ])("converts %s %% of a face of %d minor units", (percent, faceMinor, want) => {
+    expect(bondPriceFromPercent(percent, faceMinor)).toBe(want);
+  });
+
+  // Honesty over silence, in its arithmetic form: with no usable face value
+  // there is no conversion to perform, and 0 would be a fabricated answer
+  // rather than an absent one. The caller renders the absence; it must never
+  // receive a number here.
+  it.each([[0], [-100_000]])("refuses a face value of %d", (faceMinor) => {
+    expect(bondPriceFromPercent("98", faceMinor)).toBeNull();
+  });
+
+  it.each([[""], ["abc"], ["-5"], ["9,8"], ["1e2"]])("refuses percent %s", (percent) => {
+    expect(bondPriceFromPercent(percent, 100_000)).toBeNull();
+  });
+});
+
+describe("bondPercentFromPrice", () => {
+  // The other direction of the owner's own case: 980 ₽ per bond against a
+  // 1 000 ₽ face is 98 %, and the field must say so with the two fraction
+  // digits a quote is written with.
+  it("turns 980 per bond against a 1 000 ₽ face back into 98 %", () => {
+    expect(bondPercentFromPrice("980", 100_000)).toBe("98.00");
+  });
+
+  it.each([
+    ["98", 10_000, "98.00"],
+    ["0.98", 100, "98.00"],
+    ["1000", 100_000, "100.00"],
+    // A price with kopecks in it: 983,75 ₽ of a 1 000 ₽ face is 98,375 %,
+    // exactly — the third digit is kept rather than rounded to 98,38.
+    ["983.75", 100_000, "98.375"],
+  ])("converts a price of %s against a face of %d minor units", (price, faceMinor, want) => {
+    expect(bondPercentFromPrice(price, faceMinor)).toBe(want);
+  });
+
+  it.each([[0], [-100_000]])("refuses a face value of %d", (faceMinor) => {
+    expect(bondPercentFromPrice("980", faceMinor)).toBeNull();
+  });
+
+  it.each([[""], ["abc"], ["-5"], ["9,8"]])("refuses price %s", (price) => {
+    expect(bondPercentFromPrice(price, 100_000)).toBeNull();
+  });
+
+  // The one place a rounding is allowed to appear in this pair, and it is on
+  // the PERCENTAGE — a ratio, not money (the project's standing exception).
+  // A face value whose denominator is not built from 2s and 5s makes the
+  // percentage non-terminating: 100 ₽ per bond against a 3,00 ₽ face is
+  // 3333,333… %. Every face value a real bond carries (1, 10, 100, 1 000,
+  // 10 000 units) divides exactly, so this branch is reachable only from
+  // hand-entered data — and it still may not print a wrong digit, only a
+  // rounded last one.
+  it("rounds a non-terminating percentage rather than dropping digits", () => {
+    expect(bondPercentFromPrice("100", 300)).toBe("3333.3333333333");
+  });
+});
+
+// The pair as a whole: whatever the user types into one field, the other must
+// describe the SAME trade, and the money one must survive a round trip.
+// A conversion that is off by a factor of a hundred in one direction and back
+// would pass each single-direction assertion above; this catches it.
+describe("bond price and percent round-trip", () => {
+  it.each([
+    ["98", 100_000],
+    ["104.5", 100_000],
+    ["98.375", 100_000],
+    ["7.25", 10_000],
+  ])("returns to %s %% through the money price", (percent, faceMinor) => {
+    const price = bondPriceFromPercent(percent, faceMinor);
+    expect(price).not.toBeNull();
+    const back = bondPercentFromPrice(price as string, faceMinor);
+    expect(Number(back)).toBe(Number(percent));
   });
 });
