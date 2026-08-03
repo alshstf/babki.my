@@ -214,6 +214,27 @@ describe("TradeDialog: a bond is quoted in percent of face value (#77)", () => {
     expect(percentField()).toHaveValue("99.00");
   });
 
+  // A percentage that stops converting takes the money price with it. «98,5»
+  // — the Russian decimal comma, which this application accepts nowhere — is
+  // not a number this dialog can turn into money, and the money field is the
+  // one that gets recorded: a stale 980,00 left standing beside it would keep
+  // the Buy button enabled over a price the user can see is not the one he
+  // just wrote. Emptied, the trade cannot be submitted until the price is a
+  // price again. (The comma itself is rejected everywhere in this app and is
+  // its own follow-up; this is about what the pair does when it is typed.)
+  it("empties the money field when the percentage stops converting", async () => {
+    await openWith(ofz());
+
+    typeInto(percentField(), "98");
+    typeInto(quantityField(), "10");
+    expect(perBondField()).toHaveValue("980.00");
+    expect(screen.getByRole("button", { name: "Покупка" })).toBeEnabled();
+
+    typeInto(percentField(), "98,5");
+    expect(perBondField()).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Покупка" })).toBeDisabled();
+  });
+
   // The percentage a user typed belongs to the face value it was typed
   // against. Picking a different bond changes that face value, and a
   // percentage left standing beside a price it no longer describes is the
@@ -292,6 +313,42 @@ describe("TradeDialog: a bond whose face value cannot be used", () => {
     typeInto(perBondField(), "980");
     typeInto(quantityField(), "10");
     expect(total()).toContain("9 800,00");
+  });
+
+  // The face value the catalog DOES hold and the conversion still cannot use:
+  // zero. Nothing upstream refuses it — instrument creation checks only that a
+  // face value and its currency arrive together, and api/openapi.yaml declares
+  // a plain integer with no minimum — so it reaches this dialog, where every
+  // percentage of it is zero. Without a cause of its own it would fall past
+  // the currency checks and come out looking convertible: an ENABLED percent
+  // field over a hint reading «Номинал — 0,00 ₽», each keystroke in it
+  // silently blanking the money field. That is the "enabled and doing nothing"
+  // state this whole set of refusals exists to make impossible.
+  it("names a face value of zero and refuses to convert", async () => {
+    await openWith(ofz({ face_value_minor: 0 }));
+
+    expect(percentField()).toBeDisabled();
+    expect(screen.getByTestId("trade-bond-gap").textContent).toContain(
+      "записан нулевым или отрицательным",
+    );
+    // And no face-value hint beside it. That hint names the number the
+    // percentage is a percentage OF, and «0,00 ₽» is not such a number.
+    expect(screen.queryByTestId("trade-bond-hint")).toBeNull();
+  });
+
+  // A face value with no currency at all — the state a PATCH clearing
+  // face_currency leaves behind (no pairing check on update, filed separately).
+  // It needs a cause of its own, and the sentence is the reason why: fall
+  // through to the currency-mismatch one below and it reads «Номинал в , а
+  // сделка в RUB» — a caption naming a currency that is not there, which in
+  // this repository is not a typo but the defect class itself.
+  it("names a face value with no currency, and never a currency that is missing", async () => {
+    await openWith(ofz({ face_currency: null }));
+
+    expect(percentField()).toBeDisabled();
+    const gap = screen.getByTestId("trade-bond-gap").textContent ?? "";
+    expect(gap).toContain("У номинала этой облигации не указана валюта");
+    expect(gap).not.toContain("а сделка в");
   });
 
   // A second cause, and a different sentence for it: the face value is

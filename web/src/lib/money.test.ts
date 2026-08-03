@@ -240,6 +240,39 @@ describe("bondPriceFromPercent", () => {
   it.each([[""], ["abc"], ["-5"], ["9,8"], ["1e2"]])("refuses percent %s", (percent) => {
     expect(bondPriceFromPercent(percent, 100_000)).toBeNull();
   });
+
+  // The guarantee this direction owes the form, and the one the percentage
+  // direction has had all along: whatever comes back, the price field's own
+  // validator takes. An exact price finer than a price is stored has no honest
+  // rendering here — rounding it would drop money out of a cost basis — so the
+  // conversion is refused, and the caller is left with the absence it already
+  // knows how to show. Handing back a value the form rejects would instead
+  // make the dialog complain about a price field the user never typed in and
+  // cannot correct from the percentage he did type.
+  it("refuses a percentage whose exact price is finer than a stored price", () => {
+    // 98,0000000001 % of a 1,00 ₽ face is 0,980000000001 ₽ exactly: twelve
+    // fraction digits, two past what isPositiveDecimal accepts.
+    expect(bondPriceFromPercent("98.0000000001", 100)).toBeNull();
+  });
+
+  it("still converts the finest percentage whose price does fit", () => {
+    // Exactly ten fraction digits — the last accepted width, pinned so the
+    // refusal above cannot creep inward and start refusing storable prices.
+    expect(bondPriceFromPercent("98.00000001", 100)).toBe("0.9800000001");
+  });
+
+  it.each([
+    ["98", 100_000],
+    ["33.3333", 100],
+    ["98.00000001", 100],
+    // Ten decimal places of arithmetic, two digits of answer: the trailing
+    // zeros are trimmed, so the width that matters is the rendered one.
+    ["98.000000", 100_000],
+  ])("returns %s of a face of %d minor units as a price the form takes back", (percent, faceMinor) => {
+    const price = bondPriceFromPercent(percent, faceMinor);
+    expect(price).not.toBeNull();
+    expect(isPositiveDecimal(price as string)).toBe(true);
+  });
 });
 
 describe("bondPercentFromPrice", () => {
@@ -272,13 +305,20 @@ describe("bondPercentFromPrice", () => {
   // The one place a rounding is allowed to appear in this pair, and it is on
   // the PERCENTAGE — a ratio, not money (the project's standing exception).
   // A face value whose denominator is not built from 2s and 5s makes the
-  // percentage non-terminating: 100 ₽ per bond against a 3,00 ₽ face is
-  // 3333,333… %. Every face value a real bond carries (1, 10, 100, 1 000,
+  // percentage non-terminating: 100 ₽ per bond against a 6,00 ₽ face is
+  // 1666,666… %. Every face value a real bond carries (1, 10, 100, 1 000,
   // 10 000 units) divides exactly, so this branch is reachable only from
   // hand-entered data — and it still may not print a wrong digit, only a
   // rounded last one.
-  it("rounds a non-terminating percentage rather than dropping digits", () => {
-    expect(bondPercentFromPrice("100", 300)).toBe("3333.3333333333");
+  //
+  // The 6,00 ₽ face is the fixture on purpose: a repeating 6 makes the digit
+  // past the tenth round the last one UP, so half-away-from-zero and plain
+  // truncation give different strings and only one of them passes. The 3,00 ₽
+  // face this case used to carry cannot tell them apart — a repeating 3 gives
+  // "3333.3333333333" under either rule, which pinned the digit count and
+  // nothing whatever about the rounding.
+  it("rounds a non-terminating percentage rather than truncating it", () => {
+    expect(bondPercentFromPrice("100", 600)).toBe("1666.6666666667");
   });
 });
 

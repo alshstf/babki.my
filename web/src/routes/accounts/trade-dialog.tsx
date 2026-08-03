@@ -162,6 +162,18 @@ export function TradeDialog({
   // other; neither is allowed to set only itself, which is the whole point of
   // showing both. Editing the money field drops the percent draft so the
   // percentage goes back to following the money.
+  //
+  // A percentage that does not convert — «98,5», typed with the Russian
+  // decimal comma this application accepts nowhere — EMPTIES the money field
+  // rather than leaving the last value that did convert standing there. That
+  // costs a user his typing, and it is still the right way round: the money
+  // field is the one that gets recorded, so a stale 980,00 sitting beside a
+  // freshly typed 98,5 would leave the Buy button enabled over a price the
+  // user can plainly see is not the one he wrote — a wrong cost basis, entered
+  // in silence, which is the exact failure this pair of fields was built to
+  // end. Emptied, the price is invalid, the button is disabled and
+  // «Проверьте количество и цену» appears. The price is retyped; nothing wrong
+  // is recorded.
   const changePercent = (value: string) => {
     setPercentInput(value);
     if (!canConvertFace) return;

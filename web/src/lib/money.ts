@@ -31,9 +31,18 @@ export function formatMinor(amountMinor: number, currency: string): string {
   return formatWith(amountMinor, currency, 2);
 }
 
-// isPositiveDecimal validates a positive decimal string with up to 10 fraction
-// digits (matches backend NUMERIC(30,10) validation for quantity fields).
-const DECIMAL_RE = /^\d+(\.\d{1,10})?$/;
+// The most fraction digits a quantity or a price may carry: the scale the
+// backend stores them at (NUMERIC(30,10)). Both the validator below and every
+// guarantee in this file that a DERIVED value is one the form will accept back
+// are written from this single number rather than from copies of it — two
+// copies of one figure eventually drift apart, and this drift would surface as
+// a form complaining about a field the user never typed in.
+const MAX_FRACTION_DIGITS = 10;
+
+// isPositiveDecimal validates a positive decimal string with up to
+// MAX_FRACTION_DIGITS fraction digits (matches backend NUMERIC(30,10)
+// validation for quantity fields).
+const DECIMAL_RE = new RegExp(`^\\d+(\\.\\d{1,${MAX_FRACTION_DIGITS}})?$`);
 
 export function isPositiveDecimal(value: string): boolean {
   return DECIMAL_RE.test(value) && Number(value) > 0;
@@ -161,6 +170,17 @@ function renderDecimal(mantissa: bigint, decimals: number): string {
   return `${whole}.${frac.padEnd(MIN_DERIVED_FRACTION_DIGITS, "0")}`;
 }
 
+// How many digits a rendered decimal string carries after the point. Counted
+// on the RENDERED text rather than on the decimal count the arithmetic was
+// carried out at, because renderDecimal trims trailing zeros: 98,000000 % of a
+// 1 000,00 ₽ face is computed at ten decimal places and written as "980.00",
+// and judging that by the width of its intermediate would refuse an exact,
+// perfectly ordinary price.
+function fractionDigitsOf(value: string): number {
+  const point = value.indexOf(".");
+  return point < 0 ? 0 : value.length - point - 1;
+}
+
 // bondPriceFromPercent converts an exchange's bond quote — a PERCENTAGE OF
 // FACE VALUE, e.g. "98" — into the money one bond costs, as a decimal string
 // in the face value's currency: 98 % of a 1 000,00 ₽ face is "980.00".
@@ -171,24 +191,39 @@ function renderDecimal(mantissa: bigint, decimals: number): string {
 // 980 ₽ instead of 9 800 ₽ — a cost basis ten times too small, and the
 // expense side of a tax calculation with it.
 //
-// It agrees with the server's own statement of the same arithmetic
+// Its ALGEBRA is the server's own statement of the same arithmetic
 // (marketValue in internal/portfolio/http.go: faceValueMinor × price/100 ×
-// quantity, in the FACE currency) by doing exactly its first two factors and
-// stopping there — the quantity is applied afterwards by multiplyToMinor,
-// which is where this trade's single rounding happens. Not "agrees to within
-// a rounding step": THIS function rounds nothing at all. The exact product of
-// an integer number of minor units and a finite decimal percentage is itself
-// a finite decimal, so it is written out in full however many digits that
-// takes, and the only place a fraction of a kopeck can be dropped is the
-// total — once, exactly as it always was for a share.
+// quantity, in the FACE currency): this function does exactly its first two
+// factors and stops there, the quantity being applied afterwards by
+// multiplyToMinor. Not "agrees to within a rounding step": THIS function
+// rounds nothing at all. The exact product of an integer number of minor
+// units and a finite decimal percentage is itself a finite decimal, so it is
+// written out in full however many digits that takes, and the only place a
+// fraction of a kopeck can be dropped is the total — once, exactly as it
+// always was for a share.
+//
+// Where the two part company is that last step, and the comment stops short of
+// claiming otherwise: the server's money.Minor
+// (internal/platform/money/money.go) rounds half away from zero, while
+// multiplyToMinor truncates. 98,0005 % of a 1 000,00 ₽ face, one bond, is
+// 980,005 ₽ exactly — from which this side takes 98 000 kopecks and the
+// server's valuation of the same holding takes 98 001. That difference is
+// older than bonds (a share's total truncates the same way), it is a kopeck
+// on a sub-kopeck remainder, and the two figures are answers to different
+// questions anyway: what this trade cost versus what the position is worth
+// today. It is written down here so that "agrees" is not read as "agrees to
+// the kopeck", not as a defect this function may quietly fix — a client that
+// started rounding money differently from the rest of its own path would be
+// a worse problem than the kopeck.
 //
 // Returns null rather than a number whenever there is no conversion to
-// perform: a malformed percentage, or a face value that is absent, zero or
-// negative. A zero face value is refused rather than multiplied, because
+// publish. A malformed percentage, or a face value that is absent, zero or
+// negative: a zero face value is refused rather than multiplied, because
 // 0 × anything is 0 and a fabricated zero in a price field is precisely the
-// plausible-looking number this project does not publish. The caller's job is
-// then to say what is missing — never to show the percentage as if it were
-// money.
+// plausible-looking number this project does not publish. And an exact price
+// too fine to be written down — see the digit ceiling at the end of the
+// function. The caller's job is then to say what is missing — never to show
+// the percentage as if it were money.
 export function bondPriceFromPercent(percentOfFace: string, faceValueMinor: number): string | null {
   const percent = parseDecimalString(percentOfFace);
   if (!percent) return null;
@@ -198,14 +233,28 @@ export function bondPriceFromPercent(percentOfFace: string, faceValueMinor: numb
   // quote from percent into a fraction. Folding them into a single /100 is
   // the off-by-a-hundred this whole function exists to prevent, so they are
   // spelled out as two separate decimal shifts of two each.
-  return renderDecimal(BigInt(faceValueMinor) * percent.mantissa, percent.decimals + 2 + 2);
+  const price = renderDecimal(BigInt(faceValueMinor) * percent.mantissa, percent.decimals + 2 + 2);
+  // The same guarantee the percentage direction gives (see
+  // PERCENT_FRACTION_DIGITS): what this function returns is always a value the
+  // form will take back. A percentage fine enough — "98.0000000001" against a
+  // 1,00 ₽ face — makes an exact price with more fraction digits than a price
+  // is stored with, and isPositiveDecimal then rejects it, so the dialog would
+  // complain about a price field the user never typed in and cannot correct
+  // from the percentage he did type. Rounding it to fit is not on the table:
+  // this number is on its way into a cost basis, and this function's whole
+  // claim is that it drops nothing. So the conversion is refused instead, the
+  // money field is left empty, and the percentage that could not be converted
+  // stays on screen where its author can see it.
+  return fractionDigitsOf(price) > MAX_FRACTION_DIGITS ? null : price;
 }
 
-// How many fraction digits the derived PERCENTAGE is computed to. Ten matches
-// the scale prices are stored at (NUMERIC(30,10)) and the ceiling
-// isPositiveDecimal enforces on what the field will accept back, so a value
-// this function produces is always one the form will take.
-const PERCENT_FRACTION_DIGITS = 10;
+// How many fraction digits the derived PERCENTAGE is computed to. The scale
+// prices are stored at and the ceiling isPositiveDecimal enforces on what the
+// field will accept back — one and the same number, MAX_FRACTION_DIGITS — so a
+// value this function produces is always one the form will take. The money
+// direction gives the same guarantee by refusing anything wider; here it is
+// had by construction, since a quotient computed to N places has N.
+const PERCENT_FRACTION_DIGITS = MAX_FRACTION_DIGITS;
 
 // bondPercentFromPrice is the same conversion read backwards: given the money
 // one bond costs, what percentage of face is the exchange quoting? 980 ₽
