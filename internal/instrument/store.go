@@ -2,11 +2,64 @@ package instrument
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"babki.my/babki/internal/family"
 )
+
+// pgUniqueViolation is the SQLSTATE code Postgres returns for a unique
+// constraint violation; instrumentsTickerUnique names the one this package can
+// trip (migration 0011).
+const (
+	pgUniqueViolation       = "23505"
+	instrumentsTickerUnique = "instruments_ticker_uniq"
+)
+
+// ErrTickerTaken means another instrument already carries this ticker. The
+// catalog holds at most one instrument per ticker among shares, bonds and
+// funds, because the quotes job looks instruments up by ticker: a second row
+// under the same one would simply never be priced (see marketdata.quotesWorker
+// and migration 0011). Instruments no price is fetched for — crypto, metals,
+// currencies, custom holdings, and anything with no ticker at all — are outside
+// that index and so outside this error; two of them may share a ticker.
+//
+// Wrapping family.ErrValidation is what turns it into a 400 saying which rule
+// was broken, instead of the "internal error" that an unmapped unique violation
+// falls through to. 400 and not 409 because of the contract (api/openapi.yaml):
+// POST /api/v1/instruments declares 400 and 403, the PATCH beside it declares
+// 400, 403 and 404, and 409 appears on neither — so it is not among the answers
+// either of the two writes below is allowed to give.
+//
+// The convention next door says 409, and this is deferred rather than in
+// disagreement with it: family.ErrUsernameTaken is deliberately NOT an
+// ErrValidation — "the input itself is well-formed; the conflict is with
+// existing state, so it maps to 409 rather than 400" — and a taken ticker is
+// the same shape of thing. Aligning it means changing the contract and
+// regenerating the client, which is scope this change does not carry. Nothing
+// visible turns on it today: the create dialog is the only screen that reaches
+// either write, and it renders one generic message whatever comes back.
+var ErrTickerTaken = fmt.Errorf("%w: ticker already belongs to another instrument", family.ErrValidation)
+
+// wrapTickerConflict maps a unique_violation on the ticker index to
+// ErrTickerTaken. Every other error passes through untouched — the same shape
+// as family.wrapUsernameConflict and operation.mapWriteError, which translate
+// exactly the constraints their own writes can trip and nothing else. The shape
+// only: the sentinel this one produces is a 400 while family's is a 409, for
+// the reason recorded on ErrTickerTaken above.
+func wrapTickerConflict(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) &&
+		pgErr.Code == pgUniqueViolation && pgErr.ConstraintName == instrumentsTickerUnique {
+		return ErrTickerTaken
+	}
+	return err
+}
 
 type Store struct{ pool *pgxpool.Pool }
 
@@ -24,13 +77,17 @@ func scan(row pgx.Row) (Instrument, error) {
 }
 
 func (s *Store) Create(ctx context.Context, inst Instrument) (Instrument, error) {
-	return scan(s.pool.QueryRow(ctx, `
+	created, err := scan(s.pool.QueryRow(ctx, `
 		INSERT INTO instruments (type, name, ticker, isin, figi, currency,
 			face_value_minor, face_currency, frozen)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING `+cols,
 		inst.Type, inst.Name, inst.Ticker, inst.ISIN, inst.FIGI,
 		inst.Currency, inst.FaceValueMinor, inst.FaceCurrency, inst.Frozen))
+	if err != nil {
+		return Instrument{}, wrapTickerConflict(err)
+	}
+	return created, nil
 }
 
 func (s *Store) ByID(ctx context.Context, id uuid.UUID) (Instrument, error) {
@@ -98,6 +155,14 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]Instrume
 // non-empty ticker — the subset background market-data jobs can look up on
 // an exchange. Currency/crypto/metal/custom instruments and tickerless rows
 // are excluded: there is no exchange ticker to fetch a quote for.
+//
+// The filter below is written a second time as the predicate of the partial
+// unique index on instruments.ticker (migration 0011), because every row this
+// reader can return has to be unique by ticker — the quotes job keys a map on
+// it. Widening this filter without widening that predicate reopens the silent
+// overwrite the index closed; see
+// TestUniqueTickerCoversExactlyTheRowsListTradableReturns, which fails if the
+// two stop describing the same rows.
 func (s *Store) ListTradable(ctx context.Context) ([]Instrument, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+cols+` FROM instruments
@@ -141,7 +206,7 @@ func (s *Store) Update(ctx context.Context, id uuid.UUID, upd Update) (Instrumen
 		upd.FaceValueMinor != nil, doublePtr(upd.FaceValueMinor),
 		upd.FaceCurrency != nil, doublePtr(upd.FaceCurrency))
 	if err != nil {
-		return Instrument{}, err
+		return Instrument{}, wrapTickerConflict(err)
 	}
 	if ct.RowsAffected() == 0 {
 		return Instrument{}, pgx.ErrNoRows

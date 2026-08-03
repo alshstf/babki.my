@@ -3,6 +3,7 @@ package portfolio
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"sort"
@@ -19,6 +20,7 @@ import (
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
+	"babki.my/babki/internal/platform/money"
 )
 
 // journalStore is the subset of operation.Store this handler needs. It is a
@@ -178,19 +180,37 @@ const centsPerUnit = 2
 // Both branches multiply as decimals throughout and round exactly once at
 // the end, half-away-from-zero (decimal.Decimal.Round's native behavior, the
 // same rounding marketdata.Converter.Convert uses) — never float, never an
-// intermediate round.
-func marketValue(instType instrument.Type, faceValueMinor *int64, faceCurrency *string, quantity decimal.Decimal, q marketdata.Quote) (minor int64, currency string, ok bool) {
+// intermediate round. That last step is money.Minor, which also refuses a
+// product too large to be an int64 of minor units rather than letting it wrap
+// (#27): quantity is validated as positive and bounded from above by nothing,
+// so a price and a quantity that each look ordinary can multiply past the
+// edge, and the wrapped answer is a small figure of arbitrary sign.
+//
+// err is that refusal and NOTHING ELSE, which is why it is separate from ok.
+// ok=false says no valuation applies to this instrument, and the caller
+// answers it by publishing nulls — the same nulls it publishes for a position
+// with no quote at all. An overflow answered that way would be a broken
+// journal wearing the face of absent market data.
+func marketValue(instType instrument.Type, faceValueMinor *int64, faceCurrency *string, quantity decimal.Decimal, q marketdata.Quote) (minor int64, currency string, ok bool, err error) {
 	switch instType {
 	case instrument.TypeShare, instrument.TypeETF:
-		return q.Price.Mul(quantity).Shift(centsPerUnit).Round(0).IntPart(), q.Currency, true
+		minor, err = money.Minor(q.Price.Mul(quantity).Shift(centsPerUnit))
+		if err != nil {
+			return 0, "", false, fmt.Errorf("%w: %s at %s", err, quantity, q.Price)
+		}
+		return minor, q.Currency, true, nil
 	case instrument.TypeBond:
 		if faceValueMinor == nil || faceCurrency == nil {
-			return 0, "", false
+			return 0, "", false, nil
 		}
-		return decimal.NewFromInt(*faceValueMinor).Mul(q.Price).Shift(-centsPerUnit).Mul(quantity).Round(0).IntPart(), *faceCurrency, true
+		minor, err = money.Minor(decimal.NewFromInt(*faceValueMinor).Mul(q.Price).Shift(-centsPerUnit).Mul(quantity))
+		if err != nil {
+			return 0, "", false, fmt.Errorf("%w: %s at %s%% of a face value of %d", err, quantity, q.Price, *faceValueMinor)
+		}
+		return minor, *faceCurrency, true, nil
 	default:
 		// currency, crypto, metal, custom: no defined valuation model yet.
-		return 0, "", false
+		return 0, "", false, nil
 	}
 }
 
@@ -264,7 +284,13 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 	if !found {
 		return out, nil
 	}
-	minor, currency, ok := marketValue(inst.Type, inst.FaceValueMinor, inst.FaceCurrency, p.Quantity, q)
+	minor, currency, ok, err := marketValue(inst.Type, inst.FaceValueMinor, inst.FaceCurrency, p.Quantity, q)
+	if err != nil {
+		// The valuation does not fit in an int64 — a broken quantity or price,
+		// not absent data — so it is surfaced as a request error rather than
+		// published as the same null a position without a quote gets.
+		return apitypes.Position{}, err
+	}
 	if !ok {
 		return out, nil
 	}
@@ -302,9 +328,19 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 		rl := h.rateFor(ctx, currency, p.Currency, now, cache)
 		switch err := rl.err; {
 		case err == nil:
+			converted, convErr := rl.applyTo(minor)
+			if convErr != nil {
+				// The rate is there; the product is not an int64. The
+				// missing-rate branch below answers ITS problem by publishing
+				// the raw figure in its own currency, and that answer is not
+				// available here: it would put an unconverted valuation on
+				// screen wearing exactly the marks of a missing rate, which is
+				// the one thing this refusal must not resemble.
+				return apitypes.Position{}, convErr
+			}
 			out.MarketValueSourceCurrency = nullable.NewNullableWithValue(currency)
 			out.MarketValueSourceMinor = nullable.NewNullableWithValue(minor)
-			minor, currency = rl.applyTo(minor), p.Currency
+			minor, currency = converted, p.Currency
 		case errors.Is(err, marketdata.ErrNoRate):
 			// No rate to convert with: fall back to publishing the raw,
 			// unconverted figure (as before this change) rather than hiding
@@ -421,8 +457,17 @@ type rateLookup struct {
 // rates do not come through
 // here — they must round once for the whole sum, not once per term (see
 // sumInBase).
-func (rl *rateLookup) applyTo(amountMinor int64) int64 {
-	return decimal.NewFromInt(amountMinor).Mul(rl.rate).Round(0).IntPart()
+//
+// A product that does not fit in an int64 of minor units is refused rather
+// than wrapped (money.ErrOverflow, #27). Callers surface that as a request
+// error: it is a figure this server cannot state, not a figure it has yet to
+// learn, and every null on this screen means the latter.
+func (rl *rateLookup) applyTo(amountMinor int64) (int64, error) {
+	minor, err := money.Minor(decimal.NewFromInt(amountMinor).Mul(rl.rate))
+	if err != nil {
+		return 0, fmt.Errorf("%w: %d at a rate of %s", err, amountMinor, rl.rate)
+	}
+	return minor, nil
 }
 
 // datedMinor is one amount denominated in the position's own currency,
@@ -468,7 +513,15 @@ func (h *Handler) rateFor(ctx context.Context, from, to string, on time.Time, ca
 // ok is false when at least one date has no rate at all
 // (marketdata.ErrNoRate): the caller must then publish nothing rather than a
 // total quietly missing one of its terms. err is reserved for genuine
-// failures (DB error, canceled context), which must fail the request instead.
+// failures (DB error, canceled context, or a total too large to be an int64 of
+// minor units), which must fail the request instead.
+//
+// The overflow guard sits on the TOTAL, because the total is the published
+// figure: every term can be an ordinary amount and their sum still leave the
+// range. It is an error and not ok=false for the reason that distinction
+// exists at all — ok=false is answered with a null the screen reads as data
+// that has yet to arrive, and a sum too large to state is not waiting for
+// anything.
 func (h *Handler) sumInBase(ctx context.Context, amounts []datedMinor, from, to string, cache map[rateKey]*rateLookup) (minor int64, ok bool, err error) {
 	total := decimal.Zero
 	for _, a := range amounts {
@@ -481,7 +534,11 @@ func (h *Handler) sumInBase(ctx context.Context, amounts []datedMinor, from, to 
 		}
 		total = total.Add(decimal.NewFromInt(a.minor).Mul(rl.rate))
 	}
-	return total.Round(0).IntPart(), true, nil
+	minor, err = money.Minor(total)
+	if err != nil {
+		return 0, false, fmt.Errorf("%w: %d terms totalling %s %s", err, len(amounts), total, to)
+	}
+	return minor, true, nil
 }
 
 // lotTerms flattens the lots a position still holds into the terms of ONE sum
@@ -942,7 +999,14 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		}
 		return nil, today.err
 	}
-	valuation := today.applyTo(*marketValueMinor)
+	valuation, err := today.applyTo(*marketValueMinor)
+	if err != nil {
+		// Too large to state in the base currency. The missing rate handled
+		// just above nulls the whole object, because the figure it stops is one
+		// the fx backfill will supply later; this one is not waiting for
+		// anything, so it fails the request rather than joining that null.
+		return nil, err
+	}
 	out.MarketValueMinor = nullable.NewNullableWithValue(valuation)
 	out.UnrealizedPnlMinor = nullable.NewNullableWithValue(valuation - costMinor)
 	out.RateOn = nullable.NewNullableWithValue(today.date.Format("2006-01-02"))
@@ -1008,7 +1072,14 @@ func rateQueries(
 		inst, known := instruments[p.InstrumentID]
 		q, quoted := quotes[p.InstrumentID]
 		if known && quoted {
-			if _, currency, valued := marketValue(inst.Type, inst.FaceValueMinor, inst.FaceCurrency, p.Quantity, q); valued {
+			// marketValue's error is deliberately ignored here, as
+			// operation.rateQueries ignores amountTerms': this pass only
+			// predicts which rates to fetch, and the loop calls the same
+			// function on the same position moments later and fails from the
+			// place that knows which figure it was building (see toAPI). A
+			// valuation that cannot be struck simply asks for no rate, which is
+			// also all this function could usefully do about it.
+			if _, currency, valued, _ := marketValue(inst.Type, inst.FaceValueMinor, inst.FaceCurrency, p.Quantity, q); valued {
 				if currency != p.Currency {
 					// toAPI brings a valuation denominated in the face
 					// currency into the position's own — the one lookup on

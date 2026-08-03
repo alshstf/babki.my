@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
@@ -107,6 +108,69 @@ func TestFxWorker_ProviderErrorReturnsFromWork(t *testing.T) {
 	err := worker.Work(ctx, &river.Job[marketdata.RefreshFxArgs]{Args: marketdata.RefreshFxArgs{}})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Work err = %v, want %v", err, wantErr)
+	}
+}
+
+// TestFxWorker_NonPositiveRateIsDroppedAndTheRestIsStored is the poison-batch
+// half of issue #28. fx_rates.rate carries CHECK (rate > 0) (migration 0006)
+// and the upsert is one pgx batch, which Postgres runs inside a single
+// implicit transaction: before this, ONE non-positive row from the source made
+// the whole call fail and not a single rate was written, so every currency
+// went stale rather than one. River then retried the job, the source answered
+// with the identical set, and it failed again — the same poison, forever.
+//
+// The assertion is therefore both halves at once: the run succeeds AND the
+// sound rates are in the table. Dropping the bad rows without storing the good
+// ones would be the same outage wearing a green log line.
+func TestFxWorker_NonPositiveRateIsDroppedAndTheRestIsStored(t *testing.T) {
+	store, _, ctx := newJobsFixture(t)
+	on := date("2026-07-25")
+	log, records := newRecordingLogger()
+
+	// Zero and negative are both refused by the CHECK, and both are things a
+	// source can emit: zero for a currency it has stopped quoting, a negative
+	// for a parse or sign bug at either end.
+	provider := fakeFxProvider{rates: []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90.5"), Source: "fake-fx"},
+		{Base: "XXX", Quote: "RUB", On: on, Rate: dec("0"), Source: "fake-fx"},
+		{Base: "YYY", Quote: "RUB", On: on, Rate: dec("-1.5"), Source: "fake-fx"},
+		{Base: "EUR", Quote: "RUB", On: on, Rate: dec("98.0"), Source: "fake-fx"},
+	}}
+	worker := marketdata.NewFxWorker(store, provider, log)
+
+	if err := worker.Work(ctx, &river.Job[marketdata.RefreshFxArgs]{Args: marketdata.RefreshFxArgs{}}); err != nil {
+		t.Fatalf("Work: %v, want one unusable rate not to cost the whole day's set", err)
+	}
+
+	for _, base := range []string{"USD", "EUR"} {
+		if _, err := store.FxRateOn(ctx, base, "RUB", on); err != nil {
+			t.Fatalf("FxRateOn(%s): %v, want the sound rates stored regardless of the unusable ones", base, err)
+		}
+	}
+	for _, base := range []string{"XXX", "YYY"} {
+		if got, err := store.FxRateOn(ctx, base, "RUB", on); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("FxRateOn(%s) = %+v, err = %v, want pgx.ErrNoRows: a rate the table refuses must not be stored", base, got, err)
+		}
+	}
+
+	// The drop is a loss of data, so it is recorded rather than swallowed —
+	// one line per rate, at Warn, naming which pair and which value. Debug
+	// would not do: it is off on a production instance, which is the only
+	// place this can happen.
+	dropped := linesFor(*records, droppedRateMsg)
+	if len(dropped) != 2 {
+		t.Fatalf("%d dropped-rate lines, want 2 (one per dropped rate):\n%s", len(dropped), showLines(*records))
+	}
+	for _, line := range dropped {
+		if line.level != slog.LevelWarn {
+			t.Fatalf("dropped-rate line at %s, want WARN:\n%s", line.level, showLines(*records))
+		}
+	}
+	if bases := []string{dropped[0].attrs["base"], dropped[1].attrs["base"]}; !slices.Equal(bases, []string{"XXX", "YYY"}) {
+		t.Fatalf("dropped-rate lines name %v, want [XXX YYY]:\n%s", bases, showLines(*records))
+	}
+	if got := dropped[0].attrs["rate"]; got != "0" {
+		t.Fatalf("dropped-rate line for XXX says rate=%q, want the value that was refused:\n%s", got, showLines(*records))
 	}
 }
 
@@ -215,6 +279,349 @@ func TestQuotesWorker_ProviderErrorReturnsFromWork(t *testing.T) {
 	}
 }
 
+// --- structured log capture -------------------------------------------------
+
+// logLine is one record a worker logged, kept as structure rather than as
+// rendered text. Matching a substring against a log buffer cannot tell a Warn
+// from a Debug: the same words render either way, so demoting a message —
+// which makes it vanish on a production instance, where the level is info —
+// would leave such a test green while the operator loses the only signal there
+// is. That mistake has been made in this repository before. Here the level and
+// the attributes are separate fields, so an assertion has to name which one it
+// means.
+type logLine struct {
+	level slog.Level
+	msg   string
+	attrs map[string]string
+}
+
+// recordingHandler collects every record, at every level, into records.
+type recordingHandler struct {
+	records *[]logLine
+	base    []slog.Attr
+}
+
+// newRecordingLogger returns a logger that keeps what it is given, and the
+// slice it keeps it in.
+func newRecordingLogger() (*slog.Logger, *[]logLine) {
+	var records []logLine
+	return slog.New(&recordingHandler{records: &records}), &records
+}
+
+// Enabled is true at every level: a test about a Debug line must be able to
+// see one, and the level a record carries is asserted on directly rather than
+// filtered here.
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	line := logLine{
+		level: r.Level,
+		msg:   r.Message,
+		attrs: make(map[string]string, len(h.base)+r.NumAttrs()),
+	}
+	for _, a := range h.base {
+		line.attrs[a.Key] = a.Value.String()
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		line.attrs[a.Key] = a.Value.String()
+		return true
+	})
+	*h.records = append(*h.records, line)
+	return nil
+}
+
+// WithAttrs carries the attributes forward rather than dropping them. No
+// worker uses logger.With today; one that started would otherwise lose exactly
+// the attributes these tests assert on, and the failure would point at the
+// code under test instead of at this helper.
+func (h *recordingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &recordingHandler{records: h.records, base: append(slices.Clip(h.base), attrs...)}
+}
+
+// WithGroup panics rather than pretending: grouped attributes would land in
+// this flat map under their bare keys, which is not what the caller wrote, and
+// a test passing on a misread record is worse than one that stops.
+func (h *recordingHandler) WithGroup(string) slog.Handler {
+	panic("recordingHandler: grouped attributes are not modelled; teach it if a worker starts using them")
+}
+
+// droppedRateMsg is the message the fx workers log for a rate the fx_rates
+// table would refuse. It is spelled out here rather than imported from the
+// package under test on purpose: a copy is what makes rewording the production
+// message turn these tests red, where a shared constant would let the two move
+// together and pin nothing.
+const droppedRateMsg = "marketdata: source published a rate that is not positive, dropping it (this pair keeps whatever earlier rate it already has)"
+
+// emptySeriesMsg, allRefusedMsg and downloadedMsg are the backfill worker's
+// three verdicts on one currency's series, copied here for the same reason
+// droppedRateMsg is: they name three different causes with the same
+// user-visible outcome, and a test that let them drift would be a test that
+// stopped telling them apart.
+const (
+	emptySeriesMsg = "marketdata: source published no rates for currency over the whole range (its amounts stay unconverted)"
+	allRefusedMsg  = "marketdata: every rate the source published for this currency was refused as not positive (its amounts keep whatever earlier rates they already have)"
+	downloadedMsg  = "marketdata: downloaded fx history"
+)
+
+// linesFor returns every captured record carrying this exact message, in the
+// order they were logged.
+func linesFor(records []logLine, msg string) []logLine {
+	var found []logLine
+	for _, r := range records {
+		if r.msg == msg {
+			found = append(found, r)
+		}
+	}
+	return found
+}
+
+// onlyLine returns the single captured record carrying this exact message.
+func onlyLine(t *testing.T, records []logLine, msg string) logLine {
+	t.Helper()
+	found := linesFor(records, msg)
+	if len(found) != 1 {
+		t.Fatalf("%d records with message %q, want exactly 1:\n%s", len(found), msg, showLines(records))
+	}
+	return found[0]
+}
+
+func showLines(records []logLine) string {
+	out := make([]string, len(records))
+	for i, r := range records {
+		out[i] = r.level.String() + " " + r.msg + " " + fmt.Sprint(r.attrs)
+	}
+	return strings.Join(out, "\n")
+}
+
+// --- ticker collisions ------------------------------------------------------
+
+// fakeInstrumentLister hands the quotes worker a catalog listing directly.
+//
+// The state it exists to produce — two tradable instruments under one ticker —
+// cannot be built through instrument.Store any more: migration 0011 makes
+// the column unique and the store refuses the second row (see
+// instrument.TestTickerIsUniqueAmongInstrumentsThatCarryOne). That is exactly
+// why the worker checks as well: it consumes a LIST, not a table, and a
+// mapping step that silently drops an entry has to say so whatever the list
+// came from — a widened ListTradable, a second catalog source, or an index
+// somebody dropped by hand.
+type fakeInstrumentLister struct {
+	insts []instrument.Instrument
+	err   error
+}
+
+func (l fakeInstrumentLister) ListTradable(context.Context) ([]instrument.Instrument, error) {
+	return l.insts, l.err
+}
+
+func quotesJob() *river.Job[marketdata.RefreshQuotesArgs] {
+	return &river.Job[marketdata.RefreshQuotesArgs]{Args: marketdata.RefreshQuotesArgs{}}
+}
+
+// TestQuotesWorker_TwoInstrumentsUnderOneTickerAreWarned is issue #26. The
+// worker maps ticker -> instrument id; two instruments carrying one ticker
+// means one of them is not in the map and is never priced, for as long as both
+// rows exist. Before this, the loser was overwritten without a word: the
+// position simply showed no quote, and nothing anywhere said why.
+//
+// WARN, and the run continues. Warn rather than Debug because Debug is off on
+// a production instance, which is precisely where the silence hurt; Warn
+// rather than a failed job because retrying cannot resolve a duplicate — River
+// would retry forever and every other instrument would stop being priced too,
+// trading one wrong number for all of them.
+func TestQuotesWorker_TwoInstrumentsUnderOneTickerAreWarned(t *testing.T) {
+	store, instStore, ctx := newJobsFixture(t)
+
+	// Two real catalog rows, so the quote written for the winner has an
+	// instrument to point at (quotes.instrument_id is a foreign key). The
+	// collision is then staged in the LIST the worker is handed, which is the
+	// only place it can exist now that the column is unique.
+	sber, err := instStore.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("create sber: %v", err)
+	}
+	twin, err := instStore.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Сбербанк, второй раз", Ticker: "GAZP", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("create twin: %v", err)
+	}
+	twin.Ticker = "SBER"
+
+	var calls [][]string
+	provider := fakeQuoteProvider{
+		calls: &calls,
+		quotes: []marketdata.TickerQuote{
+			{Ticker: "SBER", Price: dec("305.5"), Currency: "RUB", On: date("2026-07-25")},
+		},
+	}
+	log, records := newRecordingLogger()
+	worker := marketdata.NewQuotesWorker(store,
+		fakeInstrumentLister{insts: []instrument.Instrument{sber, twin}}, provider, log)
+
+	if err := worker.Work(ctx, quotesJob()); err != nil {
+		t.Fatalf("Work: %v — one duplicated ticker must not cost the whole refresh", err)
+	}
+
+	line := onlyLine(t, *records, "marketdata: two instruments share a ticker, only one of them can be priced")
+	if line.level != slog.LevelWarn {
+		t.Errorf("the collision was logged at %s, want WARN: Debug is off on a production instance, "+
+			"which is exactly where this went unnoticed", line.level)
+	}
+	// The attributes have to name all three things a person needs to fix it:
+	// which ticker, which instrument got the price, which one did not.
+	if got := line.attrs["ticker"]; got != "SBER" {
+		t.Errorf("ticker attribute = %q, want SBER", got)
+	}
+	if got := line.attrs["priced_instrument_id"]; got != sber.ID.String() {
+		t.Errorf("priced_instrument_id = %q, want %s", got, sber.ID)
+	}
+	if got := line.attrs["skipped_instrument_id"]; got != twin.ID.String() {
+		t.Errorf("skipped_instrument_id = %q, want %s", got, twin.ID)
+	}
+
+	// The duplicate is dropped from the request too, not asked for twice.
+	if len(calls) != 1 || !slices.Equal(calls[0], []string{"SBER"}) {
+		t.Errorf("provider was asked for %v, want one SBER: the second row adds nothing to ask for", calls)
+	}
+
+	// The winner is priced and the loser is not — which is the outcome the
+	// warning exists to explain, so it has to be the outcome that happens.
+	latest, err := store.LatestQuotes(ctx, []uuid.UUID{sber.ID, twin.ID})
+	if err != nil {
+		t.Fatalf("LatestQuotes: %v", err)
+	}
+	if q, ok := latest[sber.ID]; !ok || !q.Price.Equal(dec("305.5")) {
+		t.Errorf("sber quote = %+v, ok = %v, want 305.5", q, ok)
+	}
+	if q, ok := latest[twin.ID]; ok {
+		t.Errorf("the duplicate got a quote %+v; only one instrument per ticker can", q)
+	}
+}
+
+// TestQuotesWorker_TickerTheCatalogDoesNotHoldIsLoggedAtDebug closes the last
+// silent drop in this worker: a ticker the provider reported that no catalog
+// row carries used to be skipped with no record at all — unlike the sibling
+// case, "we asked and got no price", which has always logged. Silence has to
+// be a decision, so the two now match.
+//
+// DEBUG, deliberately, and the same level as that sibling. Nothing of ours
+// goes unvalued because of it: the provider is asked for a fixed list and is
+// free to answer with whatever it likes (MOEX filters its own boards, so this
+// is empty in practice), and any instrument that did go unpriced says so on
+// its own line. Promoting it to Warn would put lines an operator can do
+// nothing about into every production log; leaving it silent would hide the
+// one thing that explains a ticker spelt differently on the two sides.
+func TestQuotesWorker_TickerTheCatalogDoesNotHoldIsLoggedAtDebug(t *testing.T) {
+	store, instStore, ctx := newJobsFixture(t)
+
+	sber, err := instStore.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("create sber: %v", err)
+	}
+
+	provider := fakeQuoteProvider{quotes: []marketdata.TickerQuote{
+		{Ticker: "SBER", Price: dec("305.5"), Currency: "RUB", On: date("2026-07-25")},
+		{Ticker: "SBER-RM", Price: dec("306.0"), Currency: "RUB", On: date("2026-07-25")},
+	}}
+	log, records := newRecordingLogger()
+	worker := marketdata.NewQuotesWorker(store, instStore, provider, log)
+
+	if err := worker.Work(ctx, quotesJob()); err != nil {
+		t.Fatalf("Work: %v — an unknown ticker must not fail the batch", err)
+	}
+
+	line := onlyLine(t, *records, "marketdata: provider reported a ticker the catalog does not hold, ignoring it")
+	if line.level != slog.LevelDebug {
+		t.Errorf("the unknown ticker was logged at %s, want DEBUG: it costs no instrument its price, "+
+			"and a louder level would fill every production log with something nobody can act on", line.level)
+	}
+	if got := line.attrs["ticker"]; got != "SBER-RM" {
+		t.Errorf("ticker attribute = %q, want SBER-RM", got)
+	}
+	if got := line.attrs["provider"]; got != "fake-quotes" {
+		t.Errorf("provider attribute = %q, want fake-quotes", got)
+	}
+
+	// The known ticker in the same batch is still stored: one unknown name
+	// must not cost the quotes that came with it.
+	latest, err := store.LatestQuotes(ctx, []uuid.UUID{sber.ID})
+	if err != nil {
+		t.Fatalf("LatestQuotes: %v", err)
+	}
+	if q, ok := latest[sber.ID]; !ok || !q.Price.Equal(dec("305.5")) {
+		t.Errorf("sber quote = %+v, ok = %v, want 305.5", q, ok)
+	}
+}
+
+// TestQuotesWorker_InstrumentsWithNoTickerAreNotReportedAsACollision is about
+// what the worker SAYS in the one scenario its collision check exists for.
+// That check defends against a list ListTradable would not have produced —
+// including one that stopped excluding tickerless rows. Every such row keys on
+// the empty string, so they would all collide with one another, and the
+// collision line would announce "two instruments share a ticker, only one of
+// them can be priced" with ticker="": they share no ticker, and neither is
+// priced with or without the other. A guard kept for a case it describes
+// wrongly is worse than no guard, so the empty ticker is recognised for what it
+// is, on a line of its own, and nothing is asked of the provider for it.
+func TestQuotesWorker_InstrumentsWithNoTickerAreNotReportedAsACollision(t *testing.T) {
+	store, instStore, ctx := newJobsFixture(t)
+
+	var tickerless []instrument.Instrument
+	for _, name := range []string{"Наличные", "Золотой слиток"} {
+		inst, err := instStore.Create(ctx, instrument.Instrument{
+			Type: instrument.TypeCustom, Name: name, Currency: "RUB",
+		})
+		if err != nil {
+			t.Fatalf("create %q: %v", name, err)
+		}
+		tickerless = append(tickerless, inst)
+	}
+
+	var calls [][]string
+	provider := fakeQuoteProvider{calls: &calls}
+	log, records := newRecordingLogger()
+	worker := marketdata.NewQuotesWorker(store,
+		fakeInstrumentLister{insts: tickerless}, provider, log)
+
+	if err := worker.Work(ctx, quotesJob()); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	for _, r := range *records {
+		if r.msg == "marketdata: two instruments share a ticker, only one of them can be priced" {
+			t.Errorf("two tickerless instruments were reported as sharing a ticker (ticker=%q): "+
+				"they share the absence of one, and neither is priced either way", r.attrs["ticker"])
+		}
+	}
+	// Each of them is still accounted for — silence is what this worker was
+	// fixed for — and named by id, there being no ticker to name it by.
+	var seen []string
+	for _, r := range *records {
+		if r.msg == "marketdata: instrument has no ticker, there is nothing to ask a price for" {
+			if r.level != slog.LevelDebug {
+				t.Errorf("a tickerless instrument was logged at %s, want DEBUG: it loses no price it could have had", r.level)
+			}
+			seen = append(seen, r.attrs["instrument_id"])
+		}
+	}
+	for _, inst := range tickerless {
+		if !slices.Contains(seen, inst.ID.String()) {
+			t.Errorf("%q was dropped from the mapping without a line naming it; logged ids: %v", inst.Name, seen)
+		}
+	}
+
+	// And the empty string never reaches the provider: it is not a ticker, and
+	// asking for it would be asking for nothing under a name.
+	if len(calls) != 1 || len(calls[0]) != 0 {
+		t.Errorf("provider was asked for %q, want one call with nothing in it", calls)
+	}
+}
+
 // --- historical fx backfill -------------------------------------------------
 
 // cbrIDs stands in for the Bank of Russia's ISO code -> internal identifier
@@ -246,6 +653,8 @@ type recordingHistoryProvider struct {
 	idCalls  int
 	idsErr   error  // failure CurrencyIDs returns; nil means it always succeeds
 	emptyFor string // ISO code whose series comes back with no records at all
+	zeroFor  string // ISO code whose series carries a zero rate at the older end
+	allZero  string // ISO code whose series is non-positive from end to end
 	requests []rangeRequest
 	failFor  string // ISO code whose RatesRange fails
 	err      error  // the failure it returns; nil means never fail
@@ -270,6 +679,10 @@ func (p *recordingHistoryProvider) CurrencyIDs(context.Context) (map[string]stri
 
 // RatesRange answers with two rates, one dated at each end of the requested
 // range, so what was stored reflects what was asked for.
+//
+// For zeroFor's code the older of the two carries a zero rate — a value the
+// fx_rates CHECK refuses — while the newer stays sound, so a test can tell
+// "the bad record was dropped" apart from "the series was thrown away".
 func (p *recordingHistoryProvider) RatesRange(
 	_ context.Context, code, currencyID string, from, to time.Time,
 ) ([]marketdata.FxRate, error) {
@@ -280,9 +693,16 @@ func (p *recordingHistoryProvider) RatesRange(
 	if code == p.emptyFor {
 		return nil, nil
 	}
+	older, newer := dec("90.5"), dec("91.5")
+	if code == p.zeroFor {
+		older = dec("0")
+	}
+	if code == p.allZero {
+		older, newer = dec("0"), dec("-1")
+	}
 	return []marketdata.FxRate{
-		{Base: code, Quote: "RUB", On: from, Rate: dec("90.5"), Source: p.Name()},
-		{Base: code, Quote: "RUB", On: to, Rate: dec("91.5"), Source: p.Name()},
+		{Base: code, Quote: "RUB", On: from, Rate: older, Source: p.Name()},
+		{Base: code, Quote: "RUB", On: to, Rate: newer, Source: p.Name()},
 	}, nil
 }
 
@@ -764,6 +1184,109 @@ func TestBackfillFx_EmptySeriesIsWarnedNotReportedAsADownload(t *testing.T) {
 		t.Fatalf("USD rates missing after the run: %v", err)
 	}
 	wantWarned(t, &logs, "GBP")
+}
+
+// TestBackfillFx_NonPositiveRateIsDroppedAndTheRestOfTheSeriesStored is the
+// history half of the poison batch (#28). One request brings back a whole
+// multi-year series, and it is upserted as one batch: before this, a single
+// unusable record anywhere in it discarded every other rate in that currency's
+// entire history, and the retry brought the identical series back.
+//
+// A currency that is not the poisoned one is downloaded in the same run, so
+// the test also says that one bad series does not end the run.
+func TestBackfillFx_NonPositiveRateIsDroppedAndTheRestOfTheSeriesStored(t *testing.T) {
+	store, _, ctx := newBackfillFixture(t)
+
+	log, records := newRecordingLogger()
+	// GBP's series carries a zero at its older end and a sound rate at its
+	// newer one; USD's is sound throughout.
+	provider := &recordingHistoryProvider{ids: cbrIDs, zeroFor: "GBP"}
+	worker := newBackfillWorker(store,
+		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"GBP"}},
+		fakeAccountStore{currencies: []string{"USD"}},
+		fakeSpaceStore{base: []string{"RUB"}},
+		provider, log)
+
+	if err := worker.Work(ctx, backfillJob()); err != nil {
+		t.Fatalf("Work: %v, want one unusable record not to cost the whole series", err)
+	}
+
+	// The sound end of the poisoned series is stored...
+	got, err := store.FxRateOn(ctx, "GBP", "RUB", pinnedToday)
+	if err != nil {
+		t.Fatalf("FxRateOn(GBP): %v, want the sound part of the series stored", err)
+	}
+	if !got.Rate.Equal(dec("91.5")) {
+		t.Fatalf("GBP rate = %s, want 91.5", got.Rate)
+	}
+	// ...and the refused record is not: asking on its own date must fall
+	// through to nothing rather than find a zero.
+	if got, err := store.FxRateOn(ctx, "GBP", "RUB", date("2024-01-10")); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("FxRateOn(GBP, 2024-01-10) = %+v, err = %v, want pgx.ErrNoRows: the refused record must not be stored", got, err)
+	}
+	// The other currency is untouched by any of it.
+	if _, err := store.FxRateOn(ctx, "USD", "RUB", pinnedToday); err != nil {
+		t.Fatalf("USD rates missing after the run: %v", err)
+	}
+
+	dropped := linesFor(*records, droppedRateMsg)
+	if len(dropped) != 1 {
+		t.Fatalf("%d dropped-rate lines, want exactly 1:\n%s", len(dropped), showLines(*records))
+	}
+	if dropped[0].level != slog.LevelWarn || dropped[0].attrs["base"] != "GBP" {
+		t.Fatalf("dropped-rate line = %s base=%q, want WARN for GBP:\n%s",
+			dropped[0].level, dropped[0].attrs["base"], showLines(*records))
+	}
+}
+
+// TestBackfillFx_WholeSeriesRefusedIsNotReportedAsAnEmptySeries is the caption
+// half of the same change, and it is the mistake this repository keeps making:
+// the number is right and the stated reason is not.
+//
+// "The source published no rates over the whole range" is a claim about the
+// SOURCE. Checking it after the unusable records have been removed would make
+// it fire for a currency the source published plenty for, naming a cause that
+// is not the cause — while the operator, told the source is silent, goes
+// looking at cbr.ru instead of at the values.
+func TestBackfillFx_WholeSeriesRefusedIsNotReportedAsAnEmptySeries(t *testing.T) {
+	store, _, ctx := newBackfillFixture(t)
+
+	log, records := newRecordingLogger()
+	provider := &recordingHistoryProvider{ids: cbrIDs, allZero: "GBP"}
+	worker := newBackfillWorker(store,
+		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"GBP"}},
+		fakeAccountStore{currencies: []string{"USD"}},
+		fakeSpaceStore{base: []string{"RUB"}},
+		provider, log)
+
+	if err := worker.Work(ctx, backfillJob()); err != nil {
+		t.Fatalf("Work: %v, want an entirely unusable series to be reported, not to fail the run", err)
+	}
+
+	if n := len(linesFor(*records, emptySeriesMsg)); n != 0 {
+		t.Fatalf("%d empty-series lines, want 0: the source published two records, they were refused here:\n%s",
+			n, showLines(*records))
+	}
+	line := onlyLine(t, *records, allRefusedMsg)
+	if line.level != slog.LevelWarn {
+		t.Fatalf("all-refused line at %s, want WARN — it leaves the currency unconverted exactly as an empty series does:\n%s",
+			line.level, showLines(*records))
+	}
+	if line.attrs["currency"] != "GBP" {
+		t.Fatalf("all-refused line names currency=%q, want GBP:\n%s", line.attrs["currency"], showLines(*records))
+	}
+	// An Info line reading "rates=0" would look like an ordinary run, which is
+	// the same trap TestBackfillFx_EmptySeriesIsWarnedNotReportedAsADownload
+	// closes for the other cause.
+	for _, l := range linesFor(*records, downloadedMsg) {
+		if l.attrs["currency"] == "GBP" {
+			t.Fatalf("GBP reported as a download:\n%s", showLines(*records))
+		}
+	}
+	// The sound currency in the same run still lands.
+	if _, err := store.FxRateOn(ctx, "USD", "RUB", pinnedToday); err != nil {
+		t.Fatalf("USD rates missing after the run: %v", err)
+	}
 }
 
 func TestBackfillFx_ClampsAbsurdlyEarlyOperationToTheFloor(t *testing.T) {

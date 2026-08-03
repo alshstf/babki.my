@@ -9,9 +9,24 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type Store struct{ pool *pgxpool.Pool }
+// querier is the part of *pgxpool.Pool this Store uses. It is an interface
+// rather than the pool itself for one reason: a reader that streams rows can
+// fail after it has already handed back some of them, and no fixture can make
+// a real Postgres do that on demand. Standing a result set in for the pool is
+// what lets the readers below be run against one that starts fine and then
+// breaks (see NewStoreForRows in export_test.go and store_truncated_test.go).
+//
+// Nothing in production passes anything but a pool, and NewStore still takes
+// one, so this changes no call site and no behavior.
+type querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
+}
 
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+type Store struct{ db querier }
+
+func NewStore(pool *pgxpool.Pool) *Store { return &Store{db: pool} }
 
 const fxRateCols = `base, quote, on_date, rate, source`
 
@@ -32,8 +47,8 @@ func scanQuote(row pgx.Row) (Quote, error) {
 // runBatch sends batch and checks the result of each of its n queued
 // commands, so a mid-batch failure (e.g. a CHECK violation) is reported
 // instead of silently ignored.
-func runBatch(ctx context.Context, pool *pgxpool.Pool, batch *pgx.Batch, n int) error {
-	br := pool.SendBatch(ctx, batch)
+func runBatch(ctx context.Context, db querier, batch *pgx.Batch, n int) error {
+	br := db.SendBatch(ctx, batch)
 	for range n {
 		if _, err := br.Exec(); err != nil {
 			_ = br.Close()
@@ -59,14 +74,14 @@ func (s *Store) UpsertFxRates(ctx context.Context, rates []FxRate) error {
 				rate = EXCLUDED.rate, source = EXCLUDED.source, updated_at = now()`,
 			r.Base, r.Quote, r.On, r.Rate, r.Source)
 	}
-	return runBatch(ctx, s.pool, batch, len(rates))
+	return runBatch(ctx, s.db, batch, len(rates))
 }
 
 // FxRateOn returns the rate for (base, quote) on the exact date, or, if
 // missing, the nearest earlier date. pgx.ErrNoRows if no rate exists on or
 // before the given date.
 func (s *Store) FxRateOn(ctx context.Context, base, quote string, on time.Time) (FxRate, error) {
-	return scanFxRate(s.pool.QueryRow(ctx, `
+	return scanFxRate(s.db.QueryRow(ctx, `
 		SELECT `+fxRateCols+` FROM fx_rates
 		WHERE base = $1 AND quote = $2 AND on_date <= $3
 		ORDER BY on_date DESC LIMIT 1`, base, quote, on))
@@ -117,7 +132,7 @@ func (s *Store) FxRatesOn(ctx context.Context, keys []FxRateKey) (map[FxRateKey]
 		dates[i] = k.On
 	}
 
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.db.Query(ctx, `
 		SELECT k.ord, r.on_date, r.rate, r.source
 		FROM unnest($1::text[], $2::text[], $3::date[]) WITH ORDINALITY AS k(base, quote, on_date, ord)
 		JOIN LATERAL (
@@ -143,12 +158,23 @@ func (s *Store) FxRatesOn(ctx context.Context, keys []FxRateKey) (map[FxRateKey]
 		r.Base, r.Quote = key.Base, key.Quote
 		out[key] = r
 	}
-	return out, rows.Err()
+	// A read that breaks partway ends the loop exactly as an exhausted one
+	// does — Next returns false either way — and only Err tells the two apart.
+	// The rows that arrived before the break are dropped rather than handed
+	// back beside the error, because what makes this dangerous is precisely
+	// that a short answer here is indistinguishable from a true one: a key
+	// missing from this map means "that pair has no rate on or before its
+	// date", which is a gap this application shows a person as honest. An
+	// outage must not be able to print itself as one (#71).
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // LatestFxRates returns the most recent rate for every (base, quote) pair.
 func (s *Store) LatestFxRates(ctx context.Context) ([]FxRate, error) {
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.db.Query(ctx, `
 		SELECT DISTINCT ON (base, quote) `+fxRateCols+`
 		FROM fx_rates
 		ORDER BY base, quote, on_date DESC`)
@@ -164,7 +190,13 @@ func (s *Store) LatestFxRates(ctx context.Context) ([]FxRate, error) {
 		}
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	// Interrupted reads are a failure and never a shorter slice, for the
+	// reason FxRatesOn states above: the pairs that did not arrive are
+	// indistinguishable from pairs that have no rate at all.
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // UpsertQuotes inserts or updates a batch of daily instrument quotes. A
@@ -184,14 +216,14 @@ func (s *Store) UpsertQuotes(ctx context.Context, quotes []Quote) error {
 				source = EXCLUDED.source, updated_at = now()`,
 			q.InstrumentID, q.On, q.Price, q.Currency, q.Source)
 	}
-	return runBatch(ctx, s.pool, batch, len(quotes))
+	return runBatch(ctx, s.db, batch, len(quotes))
 }
 
 // QuoteOn returns the instrument's price on the exact date, or, if missing,
 // the nearest earlier date. pgx.ErrNoRows if no quote exists on or before
 // the given date.
 func (s *Store) QuoteOn(ctx context.Context, instrumentID uuid.UUID, on time.Time) (Quote, error) {
-	return scanQuote(s.pool.QueryRow(ctx, `
+	return scanQuote(s.db.QueryRow(ctx, `
 		SELECT `+quoteCols+` FROM quotes
 		WHERE instrument_id = $1 AND on_date <= $2
 		ORDER BY on_date DESC LIMIT 1`, instrumentID, on))
@@ -205,7 +237,7 @@ func (s *Store) LatestQuotes(ctx context.Context, instrumentIDs []uuid.UUID) (ma
 	if len(instrumentIDs) == 0 {
 		return out, nil
 	}
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.db.Query(ctx, `
 		SELECT DISTINCT ON (instrument_id) `+quoteCols+`
 		FROM quotes
 		WHERE instrument_id = ANY($1)
@@ -221,5 +253,13 @@ func (s *Store) LatestQuotes(ctx context.Context, instrumentIDs []uuid.UUID) (ma
 		}
 		out[q.InstrumentID] = q
 	}
-	return out, rows.Err()
+	// Interrupted reads are a failure and never a shorter map, for the reason
+	// FxRatesOn states above — and here the misreading is the one #71 is named
+	// for: an instrument absent from this map is an instrument with no quote,
+	// so the positions screen would price a whole account as unquotable
+	// because one read broke halfway.
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

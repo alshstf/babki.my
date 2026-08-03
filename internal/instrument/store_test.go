@@ -2,12 +2,15 @@ package instrument_test
 
 import (
 	"context"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/platform/testdb"
 )
@@ -232,6 +235,166 @@ func TestByIDs(t *testing.T) {
 	}
 	if len(empty) != 0 {
 		t.Errorf("ByIDs(nil) = %+v, want an empty map", empty)
+	}
+}
+
+// TestTickerIsUniqueAmongInstrumentsThatCarryOne pins the constraint the
+// quotes job has always assumed and never had: at most one instrument per
+// ticker. That job maps ticker -> instrument id, because the provider answers
+// with tickers and knows nothing about this catalog; a map holds one value per
+// key, so a second row under the same ticker meant one of the two was
+// overwritten and never priced again — no error, no log line, just a position
+// showing no quote forever. The catalog refuses the second row instead, and
+// says which rule was broken: a 400 the caller can act on, not the 500 a raw
+// unique violation turns into at family.WriteError's default branch.
+//
+// The EMPTY ticker is deliberately outside the constraint. It is how "this
+// instrument has no exchange ticker" is written down — cash, metals, hand-made
+// holdings — those rows are excluded from ListTradable and never looked up by
+// ticker, so a full unique index would forbid the second one of them for
+// nothing.
+func TestTickerIsUniqueAmongInstrumentsThatCarryOne(t *testing.T) {
+	st, ctx, _ := newStore(t)
+
+	if _, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
+	}); err != nil {
+		t.Fatalf("Create first SBER: %v", err)
+	}
+
+	_, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Сбербанк, второй раз", Ticker: "SBER", Currency: "RUB",
+	})
+	if !errors.Is(err, instrument.ErrTickerTaken) {
+		t.Fatalf("Create a second SBER: err = %v, want ErrTickerTaken", err)
+	}
+	// Wrapping ErrValidation is what makes it a 400 rather than "internal
+	// error": the two assertions are separate because the sentinel could be
+	// defined without it and the caller would still see a 500.
+	if !errors.Is(err, family.ErrValidation) {
+		t.Errorf("Create a second SBER: err = %v, want it to wrap family.ErrValidation so the caller gets a 400", err)
+	}
+
+	// Renaming an existing instrument onto a taken ticker is the same
+	// collision, arrived at through the other write path.
+	gazp, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Газпром", Ticker: "GAZP", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("Create GAZP: %v", err)
+	}
+	taken := "SBER"
+	if _, err := st.Update(ctx, gazp.ID, instrument.Update{Ticker: &taken}); !errors.Is(err, instrument.ErrTickerTaken) {
+		t.Fatalf("Update GAZP onto SBER: err = %v, want ErrTickerTaken", err)
+	}
+
+	// Any number of instruments may carry no ticker at all.
+	for _, name := range []string{"Наличные", "Золотой слиток"} {
+		if _, err := st.Create(ctx, instrument.Instrument{
+			Type: instrument.TypeCustom, Name: name, Currency: "RUB",
+		}); err != nil {
+			t.Fatalf("Create tickerless %q: %v — the empty ticker must stay outside the unique index", name, err)
+		}
+	}
+}
+
+// TestUniqueTickerCoversExactlyTheRowsListTradableReturns holds two spellings
+// of one rule together. The quotes job keys a map on the ticker of every row
+// ListTradable hands it, so each of those rows has to be unique by ticker —
+// which is what migration 0011's partial index enforces, with that reader's
+// filter written out a second time as its predicate. Two spellings drift apart;
+// this fails as soon as they do, in either direction:
+//
+//   - widen the reader without widening the index, and a row it returns turns
+//     out to be duplicable — the silent overwrite of #26 is back, one of the
+//     pair never priced and nothing saying why;
+//   - widen the index without widening the reader, and a duplicate nobody would
+//     ever have priced is refused instead — the create dialog offers all seven
+//     instrument types with a free ticker field, and two crypto rows for one
+//     coin on two venues, or two metal rows both reading XAU for gold vaulted
+//     at two brokers, are things a user legitimately has.
+//
+// The reader itself says which types are which: the test asks the catalog for a
+// duplicate under every type there is and compares refusal against what
+// ListTradable actually returned, never against a third list of types written
+// out here — which would be a third spelling to drift.
+func TestUniqueTickerCoversExactlyTheRowsListTradableReturns(t *testing.T) {
+	st, ctx, _ := newStore(t)
+
+	types := []instrument.Type{
+		instrument.TypeShare, instrument.TypeBond, instrument.TypeETF,
+		instrument.TypeCurrency, instrument.TypeCrypto, instrument.TypeMetal,
+		instrument.TypeCustom,
+	}
+	// One ticker per type, so a pair can only collide with itself and a refusal
+	// can only mean "this type is covered".
+	refused := make(map[instrument.Type]bool, len(types))
+	for _, tp := range types {
+		ticker := "DUP" + strings.ToUpper(string(tp))
+		if _, err := st.Create(ctx, instrument.Instrument{
+			Type: tp, Name: "первый " + string(tp), Ticker: ticker, Currency: "RUB",
+		}); err != nil {
+			t.Fatalf("Create first %s: %v", tp, err)
+		}
+		_, err := st.Create(ctx, instrument.Instrument{
+			Type: tp, Name: "второй " + string(tp), Ticker: ticker, Currency: "RUB",
+		})
+		switch {
+		case err == nil:
+			refused[tp] = false
+		case errors.Is(err, instrument.ErrTickerTaken):
+			refused[tp] = true
+		default:
+			t.Fatalf("Create second %s: %v", tp, err)
+		}
+	}
+
+	tradable, err := st.ListTradable(ctx)
+	if err != nil {
+		t.Fatalf("ListTradable: %v", err)
+	}
+	returned := make(map[instrument.Type]bool, len(types))
+	for _, inst := range tradable {
+		returned[inst.Type] = true
+	}
+	// The comparison below is against what the reader returned, so it has to
+	// have returned something: an empty list would agree with an index that
+	// refuses nothing at all.
+	if len(returned) == 0 {
+		t.Fatal("ListTradable returned nothing; there would be nothing for the index to be compared against")
+	}
+	for _, tp := range types {
+		switch {
+		case returned[tp] && !refused[tp]:
+			t.Errorf("ListTradable returns %s instruments, but the catalog accepted two of them under one ticker: "+
+				"the quotes job maps ticker -> instrument id over that list, so one of the two would never be priced", tp)
+		case !returned[tp] && refused[tp]:
+			t.Errorf("the catalog refused a second %s instrument under a ticker already taken, "+
+				"but ListTradable never returns %s instruments — no price is ever fetched for them, "+
+				"so the write costs nobody a quote and must be allowed", tp, tp)
+		}
+	}
+
+	// The other half of the reader's filter, which the loop above cannot see
+	// because every row in it carries a ticker. Any number of rows may have no
+	// ticker at all, so the reader must not return them: the job's map would
+	// collapse every one of them onto the key "" and price none of them.
+	for _, name := range []string{"Наличные", "Золотой слиток"} {
+		if _, err := st.Create(ctx, instrument.Instrument{
+			Type: instrument.TypeShare, Name: name, Currency: "RUB",
+		}); err != nil {
+			t.Fatalf("Create tickerless %q: %v — rows with no ticker must stay outside the unique index", name, err)
+		}
+	}
+	tradable, err = st.ListTradable(ctx)
+	if err != nil {
+		t.Fatalf("ListTradable after the tickerless rows: %v", err)
+	}
+	for _, inst := range tradable {
+		if inst.Ticker == "" {
+			t.Errorf("ListTradable returned %q, which has no ticker: several such rows may exist, "+
+				"so the quotes job would map them all onto the empty key", inst.Name)
+		}
 	}
 }
 

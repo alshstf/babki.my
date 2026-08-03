@@ -85,6 +85,52 @@ type instrumentLister interface {
 	ListTradable(ctx context.Context) ([]instrument.Instrument, error)
 }
 
+// storableRates is every rate in rates that the fx_rates table will accept,
+// plus one log line for each one it leaves behind.
+//
+// fx_rates.rate carries CHECK (rate > 0) (migration 0006), and UpsertFxRates
+// queues the whole set as one pgx batch, which Postgres runs inside a single
+// implicit transaction. So ONE unusable rate does not cost one currency, it
+// costs every currency in the call: nothing at all is written. River then
+// retries the job, the source answers with the identical set, and it fails
+// again — the same poison for as long as the source keeps publishing it (#28).
+// Neither zero nor a negative is far-fetched: zero is what a source can put
+// against a currency it has stopped quoting, and nothing between the wire and
+// here has ever checked the sign.
+//
+// The alternative was to let runBatch tolerate a per-row failure, and it was
+// rejected on two counts. It would make a partial write the ordinary outcome
+// of a store method whose entire contract is "these rows are now stored",
+// for quotes as well as rates; and it would still have to say something about
+// the row it dropped, from a place that knows only an SQLSTATE — not which
+// source, which currency, or what value. Filtering inside the cbr client was
+// rejected for the mirror reason: that package has no logger, and dropping a
+// rate there without a word is the silence this one exists to prevent.
+//
+// Dropping a rate is a loss of data, so each one gets a line, at Warn rather
+// than Debug because Debug is off exactly where this can happen. What the line
+// says is bounded by what is true: the pair is NOT left unconvertible, because
+// FxRateOn resolves the nearest earlier date, so it keeps whatever earlier
+// rate it already has (possibly none, if this was to be its first).
+//
+// Only the CHECK is answered here, and deliberately: a rate whose integer part
+// overflows NUMERIC(30,10) would poison a batch in the same way, and this does
+// not catch it. Saying "every row the table would refuse" would be a wider
+// claim than the code makes.
+func storableRates(rates []FxRate, provider string, log *slog.Logger) []FxRate {
+	kept := make([]FxRate, 0, len(rates))
+	for _, r := range rates {
+		if r.Rate.Sign() <= 0 {
+			log.Warn("marketdata: source published a rate that is not positive, dropping it (this pair keeps whatever earlier rate it already has)",
+				"provider", provider, "base", r.Base, "quote", r.Quote,
+				"on", r.On.Format(time.DateOnly), "rate", r.Rate.String())
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return kept
+}
+
 // fxWorker refreshes today's FX rates via FxProvider and stores them.
 type fxWorker struct {
 	river.WorkerDefaults[RefreshFxArgs]
@@ -102,18 +148,26 @@ func NewFxWorker(store *Store, provider FxProvider, log *slog.Logger) river.Work
 // Work fetches today's rates and upserts them. A provider error is returned
 // (not swallowed) so River retries the job per its backoff policy; it is
 // also logged here since River's own failure log lacks provider context.
+//
+// Rates the table would refuse are dropped before the upsert (see
+// storableRates) so that one of them cannot cost the whole day's set. The
+// count reported here is what was stored, and `dropped` is what it took to
+// get there, so the two add up to what the source published rather than
+// leaving a shrunken figure to explain itself.
 func (w *fxWorker) Work(ctx context.Context, _ *river.Job[RefreshFxArgs]) error {
 	on := time.Now().UTC()
-	rates, err := w.provider.RatesOn(ctx, on)
+	published, err := w.provider.RatesOn(ctx, on)
 	if err != nil {
 		w.log.Error("marketdata: fetch fx rates failed", "provider", w.provider.Name(), "err", err)
 		return err
 	}
+	rates := storableRates(published, w.provider.Name(), w.log)
 	if err := w.store.UpsertFxRates(ctx, rates); err != nil {
 		w.log.Error("marketdata: store fx rates failed", "provider", w.provider.Name(), "err", err)
 		return err
 	}
-	w.log.Info("marketdata: refreshed fx rates", "provider", w.provider.Name(), "count", len(rates))
+	w.log.Info("marketdata: refreshed fx rates", "provider", w.provider.Name(),
+		"count", len(rates), "dropped", len(published)-len(rates))
 	return nil
 }
 
@@ -141,6 +195,25 @@ func NewQuotesWorker(store *Store, instruments instrumentLister, provider QuoteP
 // debug log — that's an expected, routine condition (e.g. newly listed or
 // suspended instruments), not an error. A provider error is returned (not
 // swallowed) so River retries the job.
+//
+// Every instrument the mapping cannot carry leaves a line behind it, saying
+// which of the three reasons it was. Two instruments under one ticker are a
+// Warn, because one of them will never be priced while both exist; an
+// instrument with no ticker at all, and a ticker the catalog does not hold, are
+// Debug, because neither costs any instrument a price. The last two used to be
+// dropped in silence, which is how a position could show no quote with no trace
+// of the reason anywhere.
+//
+// The job is enqueued every half hour around the clock and asks on every one
+// of those runs — roughly 48 requests a day for a value that cannot change
+// that often, since the MOEX provider reads PREVPRICE and that is the previous
+// trading day's close (see its QuotesFor). A night-and-weekend window was
+// tried here and removed: it was justified by session hours MOEX does not
+// keep — there is a morning session from 06:50 MSK and there are weekend
+// sessions — so it clipped real trading while still not making the stored
+// value any fresher. Filed as #90 rather than retuned, because the choice is
+// between reading a column that actually moves and asking once a day, and
+// that is a product question about which price the owner wants.
 func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]) error {
 	insts, err := w.instruments.ListTradable(ctx)
 	if err != nil {
@@ -155,6 +228,45 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 	byTicker := make(map[string]uuid.UUID, len(insts))
 	tickers := make([]string, 0, len(insts))
 	for _, inst := range insts {
+		if inst.Ticker == "" {
+			// The empty string is how "this instrument has no exchange ticker"
+			// is written down — cash, hand-made holdings, anything an exchange
+			// does not quote — and there is nothing in it to ask a provider
+			// for. ListTradable excludes such rows, so this is the same
+			// "whatever produced the list" case as the collision below, but a
+			// different fact, and the collision's line would state it wrongly:
+			// several tickerless rows share no ticker, and none of them is
+			// priced either way, so "only one of them can be priced" would be
+			// false of all of them.
+			//
+			// Debug, like the unknown-ticker case further down: no instrument
+			// loses a price it could otherwise have had.
+			w.log.Debug("marketdata: instrument has no ticker, there is nothing to ask a price for",
+				"instrument_id", inst.ID)
+			continue
+		}
+		if priced, taken := byTicker[inst.Ticker]; taken {
+			// instruments.ticker carries a partial unique index (migration
+			// 0011) over exactly what ListTradable returns, so a read of the
+			// catalog cannot produce this any more. The check is here all the
+			// same because this worker is handed a LIST, not a table: whatever
+			// produced the list — a ListTradable widened to a type the index
+			// leaves alone, where two rows reading BTC are legitimate, a second
+			// catalog source, an index dropped by hand — a mapping step that
+			// loses one of its entries has to say so.
+			// Overwriting in silence was the whole of issue #26: the loser was
+			// never priced again and nothing anywhere said why.
+			//
+			// Warn and carry on rather than failing the job: a retry cannot
+			// un-duplicate a ticker, so River would retry forever and every
+			// other instrument would stop being priced too — one wrong number
+			// traded for all of them.
+			w.log.Warn("marketdata: two instruments share a ticker, only one of them can be priced",
+				"ticker", inst.Ticker,
+				"priced_instrument_id", priced,
+				"skipped_instrument_id", inst.ID)
+			continue
+		}
 		byTicker[inst.Ticker] = inst.ID
 		tickers = append(tickers, inst.Ticker)
 	}
@@ -171,8 +283,19 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 	for _, tq := range tickerQuotes {
 		id, ok := byTicker[tq.Ticker]
 		if !ok {
-			// Provider reported a ticker we didn't ask about; ignore rather
-			// than fail the whole batch over it.
+			// A ticker we didn't ask about; ignored rather than failed over,
+			// but no longer dropped without a word — the sibling case ("we
+			// asked and got no price", below) has always logged, and silence
+			// has to be a decision rather than an oversight.
+			//
+			// Debug, and deliberately the same level as that sibling: nothing
+			// of ours goes unvalued because of this line, since an instrument
+			// that did go unpriced reports itself below, and a louder level
+			// would put something nobody can act on into every production log.
+			// It still earns a line: a provider spelling a ticker differently
+			// from the catalog is visible here and nowhere else.
+			w.log.Debug("marketdata: provider reported a ticker the catalog does not hold, ignoring it",
+				"provider", w.provider.Name(), "ticker", tq.Ticker)
 			continue
 		}
 		seen[tq.Ticker] = true
@@ -294,19 +417,20 @@ func (w *backfillFxWorker) Work(ctx context.Context, _ *river.Job[BackfillFxArgs
 				"provider", w.provider.Name(), "currency", code)
 			continue
 		}
-		rates, err := w.provider.RatesRange(ctx, code, id, from, to)
+		published, err := w.provider.RatesRange(ctx, code, id, from, to)
 		if err != nil {
 			w.log.Error("marketdata: fetch fx history failed",
 				"provider", w.provider.Name(), "currency", code,
 				"from", from.Format(time.DateOnly), "to", to.Format(time.DateOnly), "err", err)
 			return err
 		}
-		if err := w.store.UpsertFxRates(ctx, rates); err != nil {
-			w.log.Error("marketdata: store fx history failed",
-				"provider", w.provider.Name(), "currency", code, "err", err)
-			return err
-		}
-		if len(rates) == 0 {
+		// Asked BEFORE anything is dropped, because it is a claim about the
+		// SOURCE and only the source's own answer can settle it. Checked after
+		// the filter it would fire for a currency the source published plenty
+		// for, sending whoever reads it to look at cbr.ru instead of at the
+		// values — the number right, the reason wrong, which is the mistake
+		// this repository keeps having to undo.
+		if len(published) == 0 {
 			// The source has an identifier for this currency yet published
 			// nothing across the entire range — its identifier has most
 			// likely been retired and re-issued. The outcome matches a
@@ -318,9 +442,29 @@ func (w *backfillFxWorker) Work(ctx context.Context, _ *river.Job[BackfillFxArgs
 				"from", from.Format(time.DateOnly), "to", to.Format(time.DateOnly))
 			continue
 		}
+		rates := storableRates(published, w.provider.Name(), w.log)
+		if err := w.store.UpsertFxRates(ctx, rates); err != nil {
+			w.log.Error("marketdata: store fx history failed",
+				"provider", w.provider.Name(), "currency", code, "err", err)
+			return err
+		}
+		if len(rates) == 0 {
+			// Nothing survived. The currency ends up exactly where an empty
+			// series leaves it, so it is as loud — but for its own reason,
+			// which the line above would have stated wrongly. The individual
+			// records already have their own lines; this one is here so that a
+			// whole currency going missing is one line and not a count the
+			// reader has to do.
+			w.log.Warn("marketdata: every rate the source published for this currency was refused as not positive (its amounts keep whatever earlier rates they already have)",
+				"provider", w.provider.Name(), "currency", code, "id", id,
+				"from", from.Format(time.DateOnly), "to", to.Format(time.DateOnly),
+				"published", len(published))
+			continue
+		}
 		w.log.Info("marketdata: downloaded fx history",
 			"provider", w.provider.Name(), "currency", code,
-			"from", from.Format(time.DateOnly), "to", to.Format(time.DateOnly), "rates", len(rates))
+			"from", from.Format(time.DateOnly), "to", to.Format(time.DateOnly),
+			"rates", len(rates), "dropped", len(published)-len(rates))
 	}
 	return nil
 }

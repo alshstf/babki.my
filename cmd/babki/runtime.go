@@ -26,6 +26,14 @@ func setup(ctx context.Context, migrate bool) (*rt, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	log := logging.New(cfg.LogLevel, cfg.LogFormat)
+	// Everything that has a logger handed to it keeps using this same value; the
+	// default is installed for the code that has none and cannot be given one
+	// without threading a logger through forty-odd call sites — today that is
+	// family.WriteError, which logs the error behind every 500 so a failure is
+	// diagnosable at all (see its doc). Installing it here rather than reaching
+	// for a package-level global is what keeps that line inside the configured
+	// level and format instead of a second, differently shaped stream.
+	slog.SetDefault(log)
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("BABKI_DATABASE_URL is required")
 	}
