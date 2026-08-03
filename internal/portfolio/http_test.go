@@ -225,6 +225,13 @@ type positionResp struct {
 	HasUndatedLots            bool            `json:"has_undated_lots"`
 	HasUndatedRealizations    bool            `json:"has_undated_realizations"`
 	InBase                    *positionInBase `json:"in_base"`
+	// InBaseGap and MarketValueGap are pointers so a test can tell an explicit
+	// null — nothing stopped the object, or nothing was withheld from the
+	// valuation — apart from a named cause, which the empty string could not:
+	// "" is also what a decoder writes for a key that is absent, and the
+	// contract requires both keys on every position.
+	InBaseGap      *string `json:"in_base_gap"`
+	MarketValueGap *string `json:"market_value_gap"`
 }
 
 // positionInBase mirrors apitypes.PositionInBase for decoding in tests (see

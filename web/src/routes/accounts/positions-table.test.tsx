@@ -52,6 +52,14 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     // component surfaces a per-position realized-undated indicator, so the
     // field stays at its honest default rather than an untested guess.
     has_undated_realizations: false,
+    // The two server-named causes (#66). Null is the honest default for this
+    // fixture: it converts cleanly, so nothing stopped the object and nothing
+    // was withheld from the valuation. PositionsTable does not read either
+    // field yet — the captions still come from has_undated_lots and a currency
+    // comparison — so the tests that set them are the ones that will arrive
+    // with that change.
+    in_base_gap: null,
+    market_value_gap: null,
     ...overrides,
   };
 }
