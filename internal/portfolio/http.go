@@ -214,57 +214,76 @@ func marketValue(instType instrument.Type, faceValueMinor *int64, faceCurrency *
 	}
 }
 
-// hasUndatedLots reports whether any lot still held has no acquisition date
-// (see Lot.AcquiredOn). It is published as a fact about the position rather
-// than left to be inferred from in_base being null, because null has two
-// causes and they are not the same news: a missing fx rate is a gap the
-// backfill job closes on its own, an unrecorded purchase date never resolves.
-// Only the position that HAS one can tell them apart, so it says which.
-//
-// It scans the same slice positionInBase walks and stops at the first hit —
-// the question is whether any exists, not how many.
-func hasUndatedLots(p *Position) bool {
-	return anyUndatedLot(p.Lots)
-}
-
 // anyUndatedLot is the ONE statement of "this basis contains a piece with no
-// purchase date". Two published facts rest on it — has_undated_lots above and
-// the in_base_gap value `undated_lot`, which lotTerms decides — and they are
+// purchase date" — published as Position.has_undated_lots (via hasUndatedLots
+// below) rather than left to be inferred from in_base being null, because null
+// has two causes and they are not the same news: a missing fx rate is a gap
+// the backfill job closes on its own, an unrecorded purchase date never
+// resolves. Only the position that HAS one can tell them apart, so it says
+// which.
+//
+// Two published facts rest on this one predicate — has_undated_lots and the
+// in_base_gap value `undated_lot`, which lotTerms decides — and they are
 // claims about the same lots in the same response: a reader who saw
 // has_undated_lots false beside in_base_gap: undated_lot would have no way to
 // tell which of the two was lying. They were separate predicates until the gap
 // existed, when only the first was published and the second was merely a null
 // object; naming the cause is what makes a disagreement legible, so the second
 // answer is derived from the first rather than written out again.
+//
+// It scans the same slice positionInBase walks and stops at the first hit —
+// the question is whether any exists, not how many.
 func anyUndatedLot(lots []Lot) bool {
 	return slices.ContainsFunc(lots, func(l Lot) bool { return l.AcquiredOn == nil })
 }
 
-// hasUndatedRealizations reports whether any disposal already made (a sale or
-// a covered amortization — see Position.Realizations) retired a piece of
-// basis with no acquisition date (see ReleasedLot.AcquiredOn). It is
-// hasUndatedLots' twin for the realized side, published for the identical
-// reason: in_base.realized_pnl_minor being null has two causes — no fx rate
-// for one of its dates, or no purchase date for a parcel it retired — and
-// they are not the same news to a reader.
+// hasUndatedLots is anyUndatedLot published as Position.has_undated_lots (see
+// anyUndatedLot for why it exists and what rests on it).
+func hasUndatedLots(p *Position) bool {
+	return anyUndatedLot(p.Lots)
+}
+
+// anyUndatedRealization is the ONE statement of "this position's disposals
+// retired a piece of basis with no acquisition date" (see
+// ReleasedLot.AcquiredOn) — published as Position.has_undated_realizations (via
+// hasUndatedRealizations below), anyUndatedLot's twin for the realized side,
+// for the identical reason: in_base.realized_pnl_minor being null has two
+// causes — no fx rate for one of its dates, or no purchase date for a parcel
+// it retired — and they are not the same news to a reader.
 //
-// hasUndatedLots cannot stand in for it: that flag scans p.Lots, the lots
+// anyUndatedLot cannot stand in for it: that predicate scans p.Lots, the lots
 // still HELD, and a piece that stopped realized_pnl_minor has by definition
 // already been sold — it is never among them. A position can therefore show
 // has_undated_lots=false and has_undated_realizations=true in the very same
 // response (see TestPositionInBaseRealizedNullWhenAReleasedParcelHasNoAcquisitionDate),
-// which is exactly the case the old single flag could not describe.
+// which is exactly the case a single flag could not describe.
+//
+// Two published facts rest on this one predicate, exactly as with
+// anyUndatedLot — has_undated_realizations above, and the RealizedTotal
+// (account-level) in_base_gap value `undated`, which realizedTerms decides on
+// the way to gapUndated (see realizedInBase) and which realizedTotals.add/
+// result then carries onto the wire. A reader who saw has_undated_realizations
+// false on a row while the account's total answered `undated` would have no
+// way to tell which one was lying; deriving the second from the first is what
+// makes such a disagreement impossible rather than merely unlikely.
 //
 // It scans every Realization rather than stopping at the first one with any
 // Released piece, but the question is still only whether any undated piece
 // exists anywhere, not how many or in which disposal.
-func hasUndatedRealizations(p *Position) bool {
-	for _, r := range p.Realizations {
-		if slices.ContainsFunc(r.Released, func(rl ReleasedLot) bool { return rl.AcquiredOn == nil }) {
+func anyUndatedRealization(events []Realization) bool {
+	for _, e := range events {
+		if slices.ContainsFunc(e.Released, func(r ReleasedLot) bool { return r.AcquiredOn == nil }) {
 			return true
 		}
 	}
 	return false
+}
+
+// hasUndatedRealizations is anyUndatedRealization published as
+// Position.has_undated_realizations (see anyUndatedRealization for why it
+// exists and what rests on it).
+func hasUndatedRealizations(p *Position) bool {
+	return anyUndatedRealization(p.Realizations)
 }
 
 // toAPI builds one position's API representation, including its market
@@ -642,13 +661,23 @@ func incomeTerms(income []Operation) []datedMinor {
 // as none (see Realization), so which events reach this function is settled
 // there rather than re-decided here.
 //
-// dated is false as soon as one retired parcel does not know when it was
-// bought (see Lot.AcquiredOn): there is no date to ask the fx table about, and
-// every candidate — the disposal's own day, another parcel's, today's — would
-// be a number this handler made up. The caller publishes nothing for the
-// realized figure then; it does NOT drop the terms it could value, since a
-// result missing part of its expense reads as a larger profit, not as a gap.
+// dated is false whenever any retired parcel does not know when it was bought
+// (see Lot.AcquiredOn): there is no date to ask the fx table about, and every
+// candidate — the disposal's own day, another parcel's, today's — would be a
+// number this handler made up. The caller publishes nothing for the realized
+// figure then; it does NOT drop the terms it could value, since a result
+// missing part of its expense reads as a larger profit, not as a gap.
+//
+// It is lotTerms' twin for the realized side, and like lotTerms it asks
+// anyUndatedRealization first and walks the events a second time to build the
+// terms, rather than bailing out mid-loop as it used to (see anyUndatedLot):
+// the answer published as has_undated_realizations and the answer published
+// as RealizedTotal's `undated` gap are one predicate rather than two that must
+// agree. The dereference below is safe for exactly that reason.
 func realizedTerms(events []Realization) (terms []datedMinor, dated bool) {
+	if anyUndatedRealization(events) {
+		return nil, false
+	}
 	terms = make([]datedMinor, 0, len(events)*2)
 	for _, e := range events {
 		terms = append(terms,
@@ -656,9 +685,6 @@ func realizedTerms(events []Realization) (terms []datedMinor, dated bool) {
 			datedMinor{minor: -e.FeeMinor, on: e.OccurredOn},
 		)
 		for _, r := range e.Released {
-			if r.AcquiredOn == nil {
-				return nil, false
-			}
 			terms = append(terms, datedMinor{minor: -r.CostMinor, on: *r.AcquiredOn})
 		}
 	}
@@ -705,8 +731,11 @@ const (
 	inBaseStruck inBaseGap = iota
 	// inBaseSameCurrency: the position is already denominated in the base
 	// currency, so there is no object and nothing to explain either — its own
-	// figures ARE the base-currency ones. The only value that means "null with
-	// no gap", and the reason this type has two non-gap members instead of one.
+	// figures ARE the base-currency ones. Named separately from inBaseStruck
+	// purely for readability at the call site (see positionInBase's early
+	// return): nothing downstream tells the two apart — apiInBaseGap maps both
+	// to "no cause published" and handleList separates "struck" from "nothing
+	// to convert" by checking the *PositionInBase pointer, never this value.
 	inBaseSameCurrency
 	// inBaseUndatedLot: a lot still held does not know when it was acquired
 	// (see Lot.AcquiredOn and lotTerms), so there is no date to ask the fx

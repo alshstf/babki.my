@@ -324,6 +324,51 @@ func TestPositionInBaseGapNamesThePermanentCauseWhenTwoAreTrue(t *testing.T) {
 	}
 }
 
+// TestPositionInBaseGapNamesTheLotDateOverTheIncomeDateWhenBothAreMissing is
+// what the contract's ordering promise actually rests on. The lot sum and the
+// income sum are two adjacent, independent calls (see positionInBase): nothing
+// makes the lot's check run before the income's except the order they are
+// written in. This fixture puts a hole under BOTH the lot's date and the
+// dividend's — the same day, so one missing rate takes down both terms at
+// once — and the contract (InBaseGap's description, api/openapi.yaml) says the
+// server "stops at the first term it cannot value, in the order listed above,
+// so each value also says that everything before it succeeded". For a row
+// missing both, that promise is `no_rate_lot_date`: if the two calls were ever
+// reordered, this is the one test that would catch it, because every other
+// gap test in this file leaves only ONE term unresolvable and cannot tell
+// "checked first" from "the only one that failed".
+func TestPositionInBaseGapNamesTheLotDateOverTheIncomeDateWhenBothAreMissing(t *testing.T) {
+	pool := testdb.New(t)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes, oneDateConverter{
+		rate:   decimal.RequireFromString("90"),
+		rateOn: mustDate(t, lateRateOn),
+		on:     earlyBuyOn,
+		err:    fmt.Errorf("%w: USD -> RUB on %s", marketdata.ErrNoRate, earlyBuyOn),
+	})
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	share := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
+
+	// Buy and dividend dated the SAME day, so the one hole in the rate table
+	// stops both the lot sum and the income sum at once — neither term is
+	// merely "the only one that failed".
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, acc.ID, share.ID, earlyBuyOn))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"dividend",
+		"occurred_on":%q,"amount_minor":10000,"currency":"USD"}`, acc.ID, share.ID, earlyBuyOn))
+
+	p := onlyPosition(t, c, url, acc.ID)
+	if p.InBase != nil {
+		t.Fatalf("in_base = %+v, want null: both the lot and the dividend are dated %s, which has no fx rate", *p.InBase, earlyBuyOn)
+	}
+	if p.InBaseGap == nil || *p.InBaseGap != "no_rate_lot_date" {
+		t.Fatalf("in_base_gap = %s, want no_rate_lot_date: the contract promises the server stops at the FIRST term it cannot value, in the declared order, and the lot sum is checked before the income sum — a row missing a rate for both must report the lot's term, never the income's, or the contract's ordering promise is false",
+			gapText(p.InBaseGap))
+	}
+}
+
 // TestPositionInBaseGapNullWhenNothingStoppedTheObject pins the two ways the
 // field is legitimately absent, which a client tells apart by `currency` alone:
 // the object was struck (USD row, every rate present), and there was never
@@ -541,5 +586,98 @@ func TestPositionGapsAnswerForDifferentCellsAtOnce(t *testing.T) {
 	if p.MarketValueGap == nil || *p.MarketValueGap != "no_rate_valuation_currency" {
 		t.Fatalf("market_value_gap = %s, want no_rate_valuation_currency: the valuation is stuck in EUR for its own reason, which the row's missing purchase date neither caused nor describes — and it is published whether or not in_base survived",
 			gapText(p.MarketValueGap))
+	}
+}
+
+// TestPositionMarketValueGapPublishedOnABaseCurrencyPosition pins a contract
+// claim (api/openapi.yaml, Position.market_value_gap) that nothing exercised
+// before this task: the field answers for the valuation cell reaching the
+// POSITION's own currency, a question entirely independent of whether that
+// currency also happens to be the space's BASE one. A position already in the
+// base currency skips in_base and in_base_gap entirely (positionInBase returns
+// early on p.Currency == baseCurrency, before it ever looks at the valuation),
+// but toAPI's own conversion — the one market_value_gap reports — runs
+// regardless, and this fixture's bond still cannot reach RUB from EUR no
+// matter which currency is "base".
+func TestPositionMarketValueGapPublishedOnABaseCurrencyPosition(t *testing.T) {
+	pool := testdb.New(t)
+	mdStore := marketdata.NewStore(pool)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(mdStore))
+	// No EUR rate anywhere: the bond's face-currency valuation can never reach
+	// RUB, whether or not RUB is also the space's base currency.
+
+	acc := createAccount(t, c, url, `{"name":"Рублёвый","type":"brokerage","currency":"RUB"}`)
+	bond := createInstrument(t, c, url,
+		`{"type":"bond","name":"Еврооблигация","ticker":"EUB","currency":"RUB","face_value_minor":100000,"face_currency":"EUR"}`)
+	bondID, err := uuid.Parse(bond.ID)
+	if err != nil {
+		t.Fatalf("parse bond id: %v", err)
+	}
+	quotes.byInstrument[bondID] = marketdata.Quote{
+		InstrumentID: bondID, On: mustDate(t, "2026-07-20"),
+		Price: decimal.RequireFromString("100.00"), Currency: "RUB", Source: "test",
+	}
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-01","quantity":"1","price":"1000",
+		"amount_minor":-100000,"currency":"RUB"}`, acc.ID, bond.ID))
+
+	p := onlyPosition(t, c, url, acc.ID)
+	if p.Currency != "RUB" {
+		t.Fatalf("currency = %s, want RUB: this fixture is not testing a base-currency position", p.Currency)
+	}
+	if p.InBase != nil {
+		t.Fatalf("in_base = %+v, want null: currency already equals the base currency, so there was nothing to convert", *p.InBase)
+	}
+	if p.InBaseGap != nil {
+		t.Fatalf("in_base_gap = %s, want null: nothing was missing — there was nothing to convert in the first place", gapText(p.InBaseGap))
+	}
+	if p.MarketValueGap == nil || *p.MarketValueGap != "no_rate_valuation_currency" {
+		t.Fatalf("market_value_gap = %s, want no_rate_valuation_currency: the valuation is stuck in EUR for a reason of its own, and that reason does not go away just because RUB happens to be both this position's currency and the space's base one",
+			gapText(p.MarketValueGap))
+	}
+}
+
+// TestPositionHasUndatedLotsOnABaseCurrencyPosition pins the other contract
+// claim finding-6 asks about: has_undated_lots is a standing fact about the
+// position's own lots (see anyUndatedLot), published whether or not there was
+// ever anything to convert. A base-currency position with a dateless lot must
+// still report it, alongside an in_base_gap that stays null — currency already
+// equals the base currency, so there is no conversion for the missing date to
+// have stopped (positionInBase never reaches lotTerms/anyUndatedLot on this
+// path at all).
+func TestPositionHasUndatedLotsOnABaseCurrencyPosition(t *testing.T) {
+	pool := testdb.New(t)
+	mdStore := marketdata.NewStore(pool)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(mdStore))
+	// No fx rates seeded at all: both accounts are RUB, the space's base
+	// currency, so nothing here ever needs one.
+
+	from := createAccount(t, c, url, `{"name":"Старый брокер","type":"brokerage","currency":"RUB"}`)
+	to := createAccount(t, c, url, `{"name":"Новый брокер","type":"brokerage","currency":"RUB"}`)
+	share := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"RUB"}`)
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"RUB"}`, from.ID, share.ID, earlyBuyOn))
+	createTransfer(t, c, url, fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,
+		"quantity":"10","occurred_on":%q}`, from.ID, to.ID, share.ID, transferOn))
+	if _, err := pool.Exec(t.Context(), `DELETE FROM operation_transfer_lots`); err != nil {
+		t.Fatalf("drop the stored breakdown: %v", err)
+	}
+
+	p := onlyPosition(t, c, url, to.ID)
+	if p.Currency != "RUB" {
+		t.Fatalf("currency = %s, want RUB: this fixture is not testing a base-currency position", p.Currency)
+	}
+	if !p.HasUndatedLots {
+		t.Fatalf("has_undated_lots = false, want true: its only lot arrived by a transfer with no stored breakdown, so nothing knows when those shares were bought")
+	}
+	if p.InBaseGap != nil {
+		t.Fatalf("in_base_gap = %s, want null: currency already equals the base currency, so there is no conversion for the missing date to have stopped", gapText(p.InBaseGap))
+	}
+	if p.InBase != nil {
+		t.Fatalf("in_base = %+v, want null: nothing to convert", *p.InBase)
 	}
 }
