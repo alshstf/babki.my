@@ -367,6 +367,129 @@ func TestQuotesWorker_RowsFollowTheExchangesSessionsNotTheRefreshes(t *testing.T
 	}
 }
 
+// TestQuotesWorker_RefusesAQuoteDatedZeroOrAfterToday is the worker-side
+// guard against a quote the provider itself cannot be relied on to reject:
+// QuoteProvider.QuotesFor deliberately takes no date argument any more
+// (that is what #90 fixed), which means a provider also has no "today" of
+// its own to compare a price's date against. Only the worker does.
+//
+// The stakes are why this is more than tidiness. LatestQuotes is
+// `DISTINCT ON (instrument_id) ... ORDER BY on_date DESC`, so a single quote
+// wrongly dated in the future would outrank every genuine refresh that
+// follows it until the calendar caught up — for a date far enough out,
+// effectively forever, on every screen showing that instrument, with nothing
+// in any log to say why. The old time.Now()-stamped quotes could not produce
+// this failure at all; it is new precisely because the provider now supplies
+// the date.
+func TestQuotesWorker_RefusesAQuoteDatedZeroOrAfterToday(t *testing.T) {
+	tests := []struct {
+		name string
+		on   time.Time
+	}{
+		{"zero date", time.Time{}},
+		{"tomorrow", futureDay(1)},
+		{"a year from now", futureDay(365)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, instStore, ctx := newJobsFixture(t)
+
+			sber, err := instStore.Create(ctx, instrument.Instrument{
+				Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
+			})
+			if err != nil {
+				t.Fatalf("create sber: %v", err)
+			}
+
+			provider := fakeQuoteProvider{quotes: []marketdata.TickerQuote{
+				{Ticker: "SBER", Price: dec("305.5"), Currency: "RUB", On: tt.on},
+			}}
+			log, records := newRecordingLogger()
+			worker := marketdata.NewQuotesWorker(store, instStore, provider, log)
+
+			if err := worker.Work(ctx, quotesJob()); err != nil {
+				t.Fatalf("Work: %v — one untrustworthy date must not fail the whole refresh", err)
+			}
+
+			latest, err := store.LatestQuotes(ctx, []uuid.UUID{sber.ID})
+			if err != nil {
+				t.Fatalf("LatestQuotes: %v", err)
+			}
+			if q, ok := latest[sber.ID]; ok {
+				t.Errorf("quote was stored: %+v, want it refused — a zero or future date cannot be true, "+
+					"and LatestQuotes would keep returning it forever", q)
+			}
+
+			line := onlyLine(t, *records, futureOrZeroQuoteDateMsg)
+			if line.level != slog.LevelWarn {
+				t.Errorf("the bad date was logged at %s, want WARN: this is not a routine absence like a "+
+					"missing price, it is data that cannot be true", line.level)
+			}
+			if got := line.attrs["ticker"]; got != "SBER" {
+				t.Errorf("ticker attribute = %q, want SBER", got)
+			}
+
+			// The debug line for "no price at all" belongs to a different
+			// ticker in a different state; it must not also fire here, or the
+			// log would carry two different explanations for the one quote.
+			if lines := linesFor(*records, "marketdata: no price for ticker, skipping"); len(lines) != 0 {
+				t.Errorf("also logged the no-price line, want only the refusal above: the provider DID "+
+					"answer for this ticker, just not with a storable date:\n%s", showLines(lines))
+			}
+		})
+	}
+}
+
+// TestQuotesWorker_AcceptsAQuoteDatedExactlyToday pins the boundary the
+// guard above must not overreach past: "today" itself is a real session a
+// quote can legitimately be dated, and only a date strictly AFTER it is
+// refused. A guard written as >= instead of > would reject today's own
+// price along with tomorrow's, which is a second false rejection this test
+// exists to catch on its own.
+func TestQuotesWorker_AcceptsAQuoteDatedExactlyToday(t *testing.T) {
+	store, instStore, ctx := newJobsFixture(t)
+
+	sber, err := instStore.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("create sber: %v", err)
+	}
+
+	today := futureDay(0)
+	provider := fakeQuoteProvider{quotes: []marketdata.TickerQuote{
+		{Ticker: "SBER", Price: dec("305.5"), Currency: "RUB", On: today},
+	}}
+	worker := marketdata.NewQuotesWorker(store, instStore, provider, slog.Default())
+
+	if err := worker.Work(ctx, quotesJob()); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	latest, err := store.LatestQuotes(ctx, []uuid.UUID{sber.ID})
+	if err != nil {
+		t.Fatalf("LatestQuotes: %v", err)
+	}
+	if q, ok := latest[sber.ID]; !ok || !q.Price.Equal(dec("305.5")) {
+		t.Errorf("sber quote = %+v, ok = %v, want 305.5 on today's own date to be accepted", q, ok)
+	}
+}
+
+// futureDay returns midnight UTC, n calendar days after the real "today" —
+// used to build a date the worker's Work (which reads the wall clock
+// directly, not through an injectable seam) will reliably see as today or
+// later, whatever moment the test happens to run at. n == 0 is today itself.
+func futureDay(n int) time.Time {
+	now := time.Now().UTC().AddDate(0, 0, n)
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// futureOrZeroQuoteDateMsg is the quotes worker's message for a quote it
+// refused for carrying no date, or one dated after today — copied here
+// rather than imported so that rewording the production message turns this
+// test red, the same reasoning behind droppedRateMsg above.
+const futureOrZeroQuoteDateMsg = "marketdata: provider reported a quote with no date or dated after today, refusing to store it (this instrument keeps whatever earlier quote it already has)"
+
 func TestQuotesWorker_NoTradableInstrumentsSkipsProviderCall(t *testing.T) {
 	store, instStore, ctx := newJobsFixture(t)
 

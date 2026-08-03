@@ -210,6 +210,18 @@ func NewQuotesWorker(store *Store, instruments instrumentLister, provider QuoteP
 // what LatestQuotes then returns is the exchange's own most recent session
 // rather than the most recent time this job happened to run.
 //
+// A quote dated zero or after today is refused rather than stored, here and
+// not in the provider. QuotesFor deliberately takes no date argument any
+// more (see QuoteProvider.QuotesFor), precisely so a provider cannot invent a
+// day of its own — which means it also has no "today" to compare a price's
+// date against and catch a glitch like this. The worker does have one. The
+// check earns its place because LatestQuotes is `DISTINCT ON (instrument_id)
+// ... ORDER BY on_date DESC`: a single row dated, say, a year from now would
+// outrank every genuine refresh that follows it for the whole of that year,
+// silently, on every position the instrument appears in — a failure mode the
+// old time.Now()-stamped quotes could not produce at all, since nothing ever
+// asked the exchange what day it thought it was.
+//
 // The job is enqueued every half hour around the clock and asks on every one
 // of those runs — roughly 48 requests a day for a value that moves about once
 // a trading day, since the MOEX provider reads a previous-session price (see
@@ -289,6 +301,7 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 		return err
 	}
 
+	today := utcDay(time.Now())
 	seen := make(map[string]bool, len(tickerQuotes))
 	quotes := make([]Quote, 0, len(tickerQuotes))
 	for _, tq := range tickerQuotes {
@@ -310,6 +323,24 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 			continue
 		}
 		seen[tq.Ticker] = true
+		if tq.On.IsZero() || tq.On.After(today) {
+			// A price with no date, or one dated after today, cannot be true —
+			// the exchange has no session in the future to have priced it as
+			// of. That is a different kind of absence from "the provider had
+			// nothing to say about this ticker" (Debug, below): here the
+			// provider DID answer, with a value this worker knows cannot be
+			// right, so it is refused rather than trusted and stored. Warn,
+			// not Debug: an ordinary missing price is routine (a new listing,
+			// a suspension), but a claim that cannot be true is exactly the
+			// kind of thing Debug being off in production would hide.
+			//
+			// seen was already set above so the "no price for ticker" line
+			// below does not also fire for it — the provider did report
+			// something, just not something storable.
+			w.log.Warn("marketdata: provider reported a quote with no date or dated after today, refusing to store it (this instrument keeps whatever earlier quote it already has)",
+				"provider", w.provider.Name(), "ticker", tq.Ticker, "on", tq.On.Format(time.DateOnly))
+			continue
+		}
 		quotes = append(quotes, Quote{
 			InstrumentID: id,
 			On:           tq.On,
