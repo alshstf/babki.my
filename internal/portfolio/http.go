@@ -1281,10 +1281,13 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 	valuation, err := today.applyTo(*marketValueMinor)
 	if err != nil {
 		// Too large to state in the base currency. The missing rate handled
-		// just above nulls the whole object, because the figure it stops is one
-		// the fx backfill will supply later; this one is not waiting for
-		// anything, so it fails the request rather than joining that null.
-		return nil, err
+		// just above nulls the whole object and names a gap, because the figure
+		// it stops is one the fx backfill will supply later; this one is not
+		// waiting for anything, so it fails the request rather than joining
+		// that null. The gap it returns beside the error is inBaseStruck — not
+		// a cause, because nothing here is a gap the caller should publish: a
+		// non-nil error means the request dies and no gap is ever read.
+		return nil, inBaseStruck, err
 	}
 	out.MarketValueMinor = nullable.NewNullableWithValue(valuation)
 	out.UnrealizedPnlMinor = nullable.NewNullableWithValue(valuation - costMinor)
