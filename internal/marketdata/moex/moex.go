@@ -24,8 +24,8 @@ const sourceName = "moex"
 // rubCurrencyID is the ISS code for Russian roubles on the CURRENCYID
 // column. ISS reports it as "SUR" (a legacy ISO 4217 code for the pre-1998
 // redenominated rouble) rather than the current "RUB"; every other
-// CURRENCYID value observed on TQBR/TQOB is already a live ISO 4217 code and
-// is passed through unchanged.
+// CURRENCYID value observed on the boards below is already a live ISO 4217
+// code and is passed through unchanged.
 const rubCurrencyID = "SUR"
 
 // board describes one ISS securities listing to query. ISS has no single
@@ -38,11 +38,50 @@ type board struct {
 	path string
 }
 
-// boards lists every board QuotesFor queries. TQBR is the main equities
-// board; TQOB is the main corporate/government bonds board.
+// boards lists every board QuotesFor queries, in precedence order: when two
+// boards report the same ticker, the earlier one here wins (see QuotesFor).
+// Adding coverage means adding a line here and nothing else.
+//
+// Board membership was checked against iss.moex.com on 2026-08-03; the
+// security counts quoted below are from that check.
+//
+//   - shares/TQBR, "Т+: Акции и ДР" (502 securities) — ordinary shares,
+//     depositary receipts, and exchange-traded funds. Funds are NOT on a
+//     fund-specific board: ISS lists the dedicated ETF board shares/TQTF as
+//     not traded (is_traded=0) with zero securities on it, and reports TQBR
+//     as the primary traded board for every fund checked (TMOS, SBMX, EQMX,
+//     LQDT). TQTF is therefore deliberately not queried — it would cost one
+//     request per refresh and return nothing.
+//   - bonds/TQOB, "Т+: Гособлигации" (62 securities) — government bonds
+//     (OFZ) only. It does not carry corporate bonds.
+//   - bonds/TQCB, "Т+: Облигации" (3021 securities) — the main corporate
+//     bond board.
+//   - bonds/TQRD, "Т+: Облигации Д" (47 securities) — a second corporate
+//     bond board under a separate settlement regime, all but one of whose
+//     securities are absent from TQCB. Sampled securities are ordinary
+//     corporate bonds with a SUR face value. What the "Д" abbreviates is
+//     not stated in the ISS board listing and is not guessed at here.
+//
+// Every bonds-market board quotes PREVPRICE as a percentage of face value,
+// and every shares-market board quotes it as money per unit. That split is
+// per market, not per board, so the boards added here mean exactly what the
+// board they join already meant, and portfolio.marketValue — which picks
+// between the two readings by instrument type, not by board — needs no
+// change.
+//
+// Boards deliberately left out, and why. shares/SMAL (odd lots, 175
+// securities) and shares/TQTY (fund units settled in CNY, 6) republish
+// tickers that are all already on TQBR, at a different price or in a
+// different currency. bonds/TQOD (USD, 221) and bonds/TQOY (CNY, 54)
+// likewise republish 210 and 42 TQCB tickers respectively under a different
+// settlement currency. A ticker alone does not say which settlement
+// currency a holding is in, so querying those boards would hand the
+// precedence rule below a choice it has no basis to make.
 var boards = []board{
 	{label: "shares/TQBR", path: "/iss/engines/stock/markets/shares/boards/TQBR/securities.json"},
 	{label: "bonds/TQOB", path: "/iss/engines/stock/markets/bonds/boards/TQOB/securities.json"},
+	{label: "bonds/TQCB", path: "/iss/engines/stock/markets/bonds/boards/TQCB/securities.json"},
+	{label: "bonds/TQRD", path: "/iss/engines/stock/markets/bonds/boards/TQRD/securities.json"},
 }
 
 // requestedColumns is sent as the securities.columns query parameter on
@@ -74,17 +113,48 @@ func New(client *http.Client, baseURL string) *Client {
 // Name implements marketdata.QuoteProvider.
 func (c *Client) Name() string { return sourceName }
 
-// QuotesFor implements marketdata.QuoteProvider. It queries both the shares
-// (TQBR) and bonds (TQOB) boards and merges the results.
+// QuotesFor implements marketdata.QuoteProvider. It queries every board in
+// boards, in order, and merges the results.
 //
 // ISS does not report a date for these boards (PREVPRICE is simply "the
 // last traded price known to ISS right now"), so every returned quote's On
 // field is set to the caller-supplied on rather than anything read from the
 // response.
 //
-// Tickers not present on either board, and tickers whose PREVPRICE is null
-// (no trade recorded), are silently absent from the result — not an error,
-// per the marketdata.QuoteProvider contract.
+// Tickers not present on any board, and tickers whose PREVPRICE is null (no
+// trade recorded), are silently absent from the result — not an error, per
+// the marketdata.QuoteProvider contract.
+//
+// # A board that fails fails the whole call
+//
+// If any board errors, QuotesFor returns that error and no quotes at all,
+// discarding whatever the boards before it already produced. This is
+// deliberate, and it is the more useful behaviour rather than merely the
+// simpler one.
+//
+// The QuoteProvider contract gives an absent ticker exactly one meaning:
+// no price is available for it. Callers act on that — quotesWorker upserts
+// what came back and logs the rest at debug level, and a position with no
+// fresh quote is reported to the user as having no quote. So a partial
+// result would be indistinguishable from a genuine absence of prices, and
+// would quietly attribute a broken request to every instrument on the board
+// that failed, naming a cause that is not the cause. Failing loudly instead
+// lets River retry the job and leaves the previous quotes standing: stale
+// and known to be stale, rather than silently wrong.
+//
+// # A ticker reported by more than one board
+//
+// The first board in boards order that reports a usable price for a ticker
+// wins; later boards' rows for that same ticker are ignored, as are repeat
+// rows within one board. A null PREVPRICE is not a win — it means no trade
+// was recorded, not that a value was found — so a later board may still
+// supply a price for a ticker an earlier board listed as null.
+//
+// Some rule is required here, because a ticker can legitimately appear on
+// two boards at two different prices in two different currencies, and our
+// catalog has exactly one instrument to attach a quote to. Without a rule
+// both quotes are returned, and which one lands in the database is decided
+// by upsert ordering — a coin flip between two numbers, published as fact.
 func (c *Client) QuotesFor(ctx context.Context, tickers []string, on time.Time) ([]marketdata.TickerQuote, error) {
 	want := make(map[string]bool, len(tickers))
 	for _, t := range tickers {
@@ -92,15 +162,17 @@ func (c *Client) QuotesFor(ctx context.Context, tickers []string, on time.Time) 
 	}
 
 	var quotes []marketdata.TickerQuote
+	quoted := make(map[string]bool, len(tickers))
 	for _, b := range boards {
 		rows, err := c.fetchBoard(ctx, b)
 		if err != nil {
 			return nil, err
 		}
 		for _, row := range rows {
-			if !want[row.ticker] || row.price == nil {
+			if !want[row.ticker] || row.price == nil || quoted[row.ticker] {
 				continue
 			}
+			quoted[row.ticker] = true
 			quotes = append(quotes, marketdata.TickerQuote{
 				Ticker:   row.ticker,
 				Price:    *row.price,
