@@ -87,7 +87,7 @@ const CAPTION = {
 //     quotes job looks like too, and a caption that reassured the reader would
 //     be covering for it.
 const PRICE_SESSION_NOTE =
-  "Это цена той торговой сессии: так её датирует биржа, а не программа в день загрузки. Сделки в тот день могло и не быть — биржа называет цену и для бумаги, которая не торговалась";
+  "Это цена той торговой сессии: так её датирует источник котировки, а не программа в день загрузки. Сделки в тот день могло и не быть — источник называет цену и для бумаги, которая не торговалась";
 // The second half of the picture, and the project's "three rates for three
 // questions" rule applied to this cell: the valuation is struck from a price
 // belonging to some past session, but any conversion of that valuation is done

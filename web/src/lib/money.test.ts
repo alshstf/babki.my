@@ -241,6 +241,13 @@ describe("bondPriceFromPercent", () => {
     expect(bondPriceFromPercent(percent, 100_000)).toBeNull();
   });
 
+  // Zero is not malformed input, but it is the same fabricated-answer problem
+  // as a zero face value read the other way round: 0 % of any face is 0, a
+  // plausible-looking price this project does not publish either.
+  it.each([["0"], ["0.00"]])("refuses a percentage of %s", (percent) => {
+    expect(bondPriceFromPercent(percent, 100_000)).toBeNull();
+  });
+
   // The guarantee this direction owes the form, and the one the percentage
   // direction has had all along: whatever comes back, the price field's own
   // validator takes. An exact price finer than a price is stored has no honest

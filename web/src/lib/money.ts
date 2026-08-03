@@ -217,16 +217,17 @@ function fractionDigitsOf(value: string): number {
 // a worse problem than the kopeck.
 //
 // Returns null rather than a number whenever there is no conversion to
-// publish. A malformed percentage, or a face value that is absent, zero or
-// negative: a zero face value is refused rather than multiplied, because
-// 0 × anything is 0 and a fabricated zero in a price field is precisely the
-// plausible-looking number this project does not publish. And an exact price
-// too fine to be written down — see the digit ceiling at the end of the
-// function. The caller's job is then to say what is missing — never to show
-// the percentage as if it were money.
+// publish. A malformed percentage, a percentage of exactly zero, or a face
+// value that is absent, zero or negative: any of the three is refused rather
+// than multiplied, because 0 × anything is 0 and a fabricated zero in a price
+// field is precisely the plausible-looking number this project does not
+// publish — that holds whichever of the two factors is the zero one. And an
+// exact price too fine to be written down — see the digit ceiling at the end
+// of the function. The caller's job is then to say what is missing — never to
+// show the percentage as if it were money.
 export function bondPriceFromPercent(percentOfFace: string, faceValueMinor: number): string | null {
   const percent = parseDecimalString(percentOfFace);
-  if (!percent) return null;
+  if (!percent || percent.mantissa === 0n) return null;
   if (!Number.isSafeInteger(faceValueMinor) || faceValueMinor <= 0) return null;
   // Two divisions by a hundred, and they are different divisions: one takes
   // the face value from minor units into major ones, the other takes the
@@ -250,10 +251,21 @@ export function bondPriceFromPercent(percentOfFace: string, faceValueMinor: numb
 
 // How many fraction digits the derived PERCENTAGE is computed to. The scale
 // prices are stored at and the ceiling isPositiveDecimal enforces on what the
-// field will accept back — one and the same number, MAX_FRACTION_DIGITS — so a
-// value this function produces is always one the form will take. The money
-// direction gives the same guarantee by refusing anything wider; here it is
-// had by construction, since a quotient computed to N places has N.
+// field will accept back — one and the same number, MAX_FRACTION_DIGITS — so
+// the WIDTH of a value this function produces never exceeds one the form
+// would take. The money direction gives the same guarantee by refusing
+// anything wider; here it is had by construction, since a quotient computed
+// to N places has N.
+//
+// Width is not the only thing isPositiveDecimal checks, though, and rounding
+// to N places can still produce a string that check refuses outright: a price
+// too small to move the percentage at this many places — "0.0000000001" ₽
+// against a face that makes it round to zero at ten digits — renders as
+// "0.00", which isPositiveDecimal's own positivity clause rejects. This
+// function does not guard against that case the way bondPriceFromPercent
+// guards its own zero: its output is a display-only derived value, shown but
+// never itself submitted, so a misleading "0.00" here costs a stale caption,
+// not a fabricated cost basis.
 const PERCENT_FRACTION_DIGITS = MAX_FRACTION_DIGITS;
 
 // bondPercentFromPrice is the same conversion read backwards: given the money

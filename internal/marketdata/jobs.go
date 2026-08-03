@@ -324,15 +324,25 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 		}
 		seen[tq.Ticker] = true
 		if tq.On.IsZero() || tq.On.After(today) {
-			// A price with no date, or one dated after today, cannot be true —
-			// the exchange has no session in the future to have priced it as
-			// of. That is a different kind of absence from "the provider had
-			// nothing to say about this ticker" (Debug, below): here the
-			// provider DID answer, with a value this worker knows cannot be
-			// right, so it is refused rather than trusted and stored. Warn,
-			// not Debug: an ordinary missing price is routine (a new listing,
-			// a suspension), but a claim that cannot be true is exactly the
-			// kind of thing Debug being off in production would hide.
+			// A price with no date, or one dated after today (today taken as a
+			// UTC day, with zero tolerance either side), is refused as a claim
+			// that cannot be true — a source has no session in the future to
+			// have priced it as of. That assumes a source dates its sessions by
+			// a day that does not run ahead of UTC; every provider wired in so
+			// far (MOEX) does. A source east of UTC that dates a quote by its
+			// own local day — a market in UTC+10..+13, say — could publish a
+			// same-day quote this check would see as still in the future and
+			// refuse; nothing here has been built or tested against such a
+			// source, so this comparison is a standing assumption about the
+			// providers this worker has, not a fact proven of every provider it
+			// could ever have. That is a different kind of absence from "the
+			// provider had nothing to say about this ticker" (Debug, below):
+			// here the provider DID answer, with a value this worker believes
+			// cannot be right, so it is refused rather than trusted and stored.
+			// Warn, not Debug: an ordinary missing price is routine (a new
+			// listing, a suspension), but a claim that looks impossible is
+			// exactly the kind of thing Debug being off in production would
+			// hide.
 			//
 			// seen was already set above so the "no price for ticker" line
 			// below does not also fire for it — the provider did report

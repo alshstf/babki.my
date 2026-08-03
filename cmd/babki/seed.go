@@ -280,9 +280,17 @@ func seedInstrumentsAndOperations(
 		// arithmetic above: the dialog's «Итого» is quantity × price and the fee
 		// is a field of its own, exactly as it is here.
 		//
-		// The quote below is 95,20 %, so one bond is worth 952,00 ₽ against the
-		// 950,00 ₽ paid — 95 200,00 ₽ against 95 000,00 ₽, +200,00 ₽ (+0,2 %) on
-		// the row, checkable without a calculator.
+		// The quote below is 95,20 %, so one bond is worth 952,00 ₽ — 95 200,00 ₽
+		// (9_520_000 minor) for the row's 100 bonds. That is NOT 200,00 ₽ above
+		// what the row's own cost basis paid, because the basis is not the
+		// 95 000,00 ₽ price alone: the engine capitalises a buy's fee into the
+		// lot (addLot in internal/portfolio/engine.go, -AmountMinor+FeeMinor),
+		// and this is the only seeded buy that carries one. Basis is therefore
+		// 9_509_500 minor — 95 095,00 ₽, the 95 000,00 ₽ paid plus the 95,00 ₽
+		// fee above — so the row reads +105,00 ₽ (+0,1 %), not +200,00 ₽
+		// (+0,2 %). Read from a seeded database, not from arithmetic on paper.
+		// NVDA and KAZ32EUR below carry no fee, so their own profit comments
+		// are the plain price difference and are unaffected by this.
 		{
 			AccountID: tbank, InstrumentID: inst("OFZ26238"), Type: operation.TypeBuy,
 			OccurredOn: d("2026-05-12"), Quantity: qty("100"), Price: price("950"),

@@ -579,7 +579,7 @@ type Position struct {
 	// Price Decimal as string; latest quote price used for the valuation. What it MEANS depends on instrument.type: for share/etf it is money per unit, in the currency the QUOTE is denominated in — normally the position's own `currency`, but nothing in the model requires the two to agree: a quote carries a currency of its own, and where it differs the server converts the VALUATION into the position's currency (see market_value_minor) while this field stays exactly as quoted. That currency is therefore `market_value_source_currency` when that field is set, and `market_value_currency` otherwise. For a BOND it is instead a PERCENTAGE OF FACE VALUE (e.g. "95.20" meaning 95.20% of face, the MOEX convention) — not money, and not in any currency itself — so market_value_minor for a bond is instrument.face_value_minor × price/100 × quantity, denominated in instrument.face_currency rather than in this field's own unit.
 	Price nullable.Nullable[string] `json:"price,omitempty"`
 
-	// PriceOn Date YYYY-MM-DD of the quote used for the valuation
+	// PriceOn Date YYYY-MM-DD of the trading session the quote's SOURCE attaches this price to — never the day the server fetched it; a source asked at any hour of one day may answer with an earlier day's price, dated as that earlier day. Not a guarantee that the instrument traded on this date: a source can publish a price for a paper that did not trade at all in a given session. Not necessarily the most recent session either — that depends on how current the source's own data is, which this field does not describe.
 	PriceOn nullable.Nullable[string] `json:"price_on,omitempty"`
 
 	// Quantity Decimal as string
