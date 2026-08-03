@@ -521,6 +521,7 @@ func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency
 	// about o.TransferLots, unchanged by whatever this function just computed,
 	// so duplicating it on this object would only be two places to keep in
 	// sync for a single answer that is the same at both (#67).
+	//
 	// Each figure is rounded once and refused rather than wrapped if it does
 	// not fit an int64 of minor units (money.ErrOverflow, #27). The refusal is
 	// an error and not the (nil, nil) above: that null says this row has no

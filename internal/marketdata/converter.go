@@ -109,9 +109,10 @@ func (c *Converter) convert(ctx context.Context, amountMinor int64, from, to str
 // partial total plus a "N currencies not converted" note, not an error
 // page, just because one obscure holding lacks a fresh quote. err is
 // reserved for genuine failures — a DB error, a canceled context, an amount
-// whose converted value does not fit in an int64 (money.ErrOverflow) — that
-// make converted untrustworthy; when err is non-nil, converted, missing and
-// ratesOn are all zero-valued and must be ignored.
+// whose converted value does not fit in an int64, or a TOTAL that does not
+// (money.ErrOverflow either way) — that make converted untrustworthy; when err
+// is non-nil, converted, missing and ratesOn are all zero-valued and must be
+// ignored.
 //
 // An overflow deliberately fails the whole call rather than joining missing:
 // missing is published beside the total as "these currencies were left out",
@@ -129,10 +130,11 @@ func (c *Converter) convert(ctx context.Context, amountMinor int64, from, to str
 // empty, or every entry ended up in missing, ratesOn is the zero time.Time
 // — the caller must render that as "null", not as a date.
 func (c *Converter) ConvertMany(ctx context.Context, amounts map[string]int64, to string, on time.Time) (converted int64, missing []string, ratesOn time.Time, err error) {
+	total := decimal.Zero
 	for currency, amountMinor := range amounts {
 		got, rateDate, cErr := c.convert(ctx, amountMinor, currency, to, on)
 		if cErr == nil {
-			converted += got
+			total = total.Add(decimal.NewFromInt(got))
 			if !rateDate.IsZero() && (ratesOn.IsZero() || rateDate.Before(ratesOn)) {
 				ratesOn = rateDate
 			}
@@ -143,6 +145,23 @@ func (c *Converter) ConvertMany(ctx context.Context, amounts map[string]int64, t
 			continue
 		}
 		return 0, nil, time.Time{}, cErr
+	}
+	// The guard sits on the TOTAL as well as on each term, because the total is
+	// what gets published: two balances that each convert to a perfectly
+	// ordinary int64 can still sum past the edge, and `converted` is
+	// total_in_base_minor on GET /summary (see account.Handler.handleSummary) —
+	// a plain += would put a small negative number on the one screen whose whole
+	// job is to say how much there is.
+	//
+	// Every term added above is already a whole number of minor units, so the
+	// rounding money.Minor does changes nothing here and the range check is its
+	// only effect. That is the difference from sumInBase in the positions
+	// handler, which accumulates UNROUNDED products and therefore rounds once
+	// for the whole sum; here each amount was rounded as it was converted, which
+	// is what this function has always published.
+	converted, err = money.Minor(total)
+	if err != nil {
+		return 0, nil, time.Time{}, fmt.Errorf("%w: %d converted amounts totalling %s %s", err, len(amounts)-len(missing), total, to)
 	}
 	sort.Strings(missing)
 	return converted, missing, ratesOn, nil
@@ -160,10 +179,17 @@ func (c *Converter) ConvertMany(ctx context.Context, amounts map[string]int64, t
 // the underlying rate lookup once per amount. Convert (and ConvertMany)
 // still do exactly that internally, at one amount per call; Rate lets a
 // caller resolve the rate once, cache it in a local map keyed by currency,
-// and apply it to each amount itself via the identical
-// decimal.Mul(...).Round(0) step convert uses, so the result matches calling
-// Convert per amount bit-for-bit — only the redundant DB round trips are
+// and apply it to each amount itself — only the redundant DB round trips are
 // removed.
+//
+// Applying it means decimal.NewFromInt(amountMinor).Mul(rate) handed to
+// money.Minor, which is the whole of what convert does with a rate once it has
+// one. money.Minor and not .Round(0).IntPart(): it rounds identically, but it
+// also REFUSES a product too large for an int64 instead of wrapping it to a
+// small figure of arbitrary sign (money.ErrOverflow, #27). A caller that
+// rounds by hand therefore does not match Convert — it publishes a wrapped
+// number exactly where Convert would have failed, which is the whole reason
+// package money exists.
 //
 // That memoization only helps while the pair and the date repeat. When they
 // vary from row to row — a page of the journal, a list of positions — RatesOn

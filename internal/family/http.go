@@ -2,6 +2,7 @@ package family
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/alexedwards/scs/v2"
@@ -26,6 +27,24 @@ func NewHandler(svc *Service, store *Store, auth *Auth, sm *scs.SessionManager) 
 }
 
 // WriteError maps domain errors to HTTP responses. Shared by other modules.
+//
+// An error that matches none of the cases below is not a domain outcome at
+// all: a DB failure, a canceled context, a figure too large to state in minor
+// units (money.ErrOverflow). The client is told "internal error" and nothing
+// more — deliberately, since the text of those errors is server internals —
+// and that leaves the owner with a blank screen and no way to learn WHICH row
+// broke. So the default branch logs the error's own text, which is where every
+// context string the callers build ends up ("balance of account <uuid> in
+// RUB", "%d terms totalling %s %s"). Without this the request log records only
+// method, path, status and duration (see httpserver's withRequestLog), and the
+// diagnosis is unreachable even with server access.
+//
+// It logs through slog.Default() because WriteError takes no logger and is
+// called from forty-odd places across five packages, none of which could hand
+// it one without threading a logger through every one of them. cmd/babki
+// installs the configured logger as the default at startup (see setup in
+// runtime.go), so this line lands in the same stream, level and format as
+// every other rather than in a second, differently shaped one.
 func WriteError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrValidation):
@@ -41,6 +60,7 @@ func WriteError(w http.ResponseWriter, err error) {
 	case errors.Is(err, pgx.ErrNoRows):
 		httpjson.Error(w, http.StatusNotFound, "not found")
 	default:
+		slog.Default().Error("request failed", "err", err.Error())
 		httpjson.Error(w, http.StatusInternalServerError, "internal error")
 	}
 }

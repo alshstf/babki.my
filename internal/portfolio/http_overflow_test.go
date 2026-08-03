@@ -7,10 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/oapi-codegen/nullable"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/money"
 )
 
@@ -37,8 +40,15 @@ func (c fixedRateConverter) Rate(context.Context, string, string, time.Time) (de
 	return c.rate, time.Time{}, nil
 }
 
+// RatesOn panics rather than answering, as the equivalent fakes in account and
+// marketdata do. Nothing in this file goes through the prefetch — every test
+// here calls one function of the handler directly — and an empty
+// marketdata.Rates would answer "not among the resolved queries" for every
+// triple, which the code under test reads as a missing rate. A change that
+// routed any of these paths through the prefetch would then leave the tests
+// passing for a reason that has nothing to do with what they check.
 func (c fixedRateConverter) RatesOn(context.Context, []marketdata.RateQuery) (marketdata.Rates, error) {
-	return marketdata.Rates{}, nil
+	panic("fixedRateConverter: RatesOn not used")
 }
 
 func TestMarketValueRefusesAShareValuationThatWouldWrap(t *testing.T) {
@@ -133,5 +143,96 @@ func TestSumInBaseOverflowIsNotAMissingRate(t *testing.T) {
 
 	if _, _, err := h.sumInBase(context.Background(), terms, "USD", "RUB", map[rateKey]*rateLookup{}); err == nil {
 		t.Fatal("sumInBase answered an overflow with a nil error, which this handler reads as a missing rate and renders as a gap")
+	}
+}
+
+// The three tests below stand at the CALL SITES rather than at the guards.
+// Each guard above is only as good as the `if err != nil` that reads it, and
+// that `if` is code like any other: neutered, every one of them let the request
+// finish successfully and published the position anyway. What reached the
+// screen was not even an obviously broken number — it was a null market value,
+// or a converted valuation of zero, which is precisely the shape this screen
+// uses for "no quote yet" and "no rate yet". An overflow wearing that shape is
+// the failure the whole branch exists to remove, so the branch owes a test that
+// reddens when the check disappears.
+
+// TestToAPIRefusesToPublishAPositionWhoseValuationCannotBeStruck: marketValue
+// refuses, and toAPI must fail with it. Swallowing the refusal drops toAPI into
+// the `!ok` branch a paragraph below, which returns the position with
+// market_value_minor left null — an overflow published as "this instrument has
+// no quote".
+//
+// The position's currency and the quote's agree, so no rate is resolved and the
+// handler needs no converter at all.
+func TestToAPIRefusesToPublishAPositionWhoseValuationCannotBeStruck(t *testing.T) {
+	id := uuid.New()
+	p := &Position{InstrumentID: id, Currency: "USD", Quantity: dec("1e17")}
+	inst := instrument.Instrument{ID: id, Type: instrument.TypeShare, Currency: "USD"}
+	quotes := map[uuid.UUID]marketdata.Quote{id: {InstrumentID: id, Price: dec("100"), Currency: "USD"}}
+
+	out, err := (&Handler{}).toAPI(context.Background(), p, inst, quotes, time.Now(), map[rateKey]*rateLookup{})
+	if !errors.Is(err, money.ErrOverflow) {
+		t.Fatalf("toAPI = %+v, err = %v; want ErrOverflow: 1e17 shares at 100 is not an int64 of cents, and a position published here would show a null market value instead", out, err)
+	}
+	if out.Quantity != "" {
+		t.Errorf("toAPI returned a position (%+v) alongside the refusal, want the zero value", out)
+	}
+}
+
+// TestToAPIRefusesAValuationThatCannotBeConvertedToThePositionCurrency is the
+// same call site one branch further in, where the valuation is struck but the
+// conversion into the position's own currency is not. The quote is in USD and
+// the position trades in RUB, so the rate is actually applied; the valuation
+// lands exactly on maxint64 kopecks and only doubling it leaves the range.
+//
+// Swallowing this refusal publishes market_value_minor = 0 RUB beside a
+// market_value_source_minor of maxint64 USD — a holding worth nothing at all,
+// on a row that says in the next column what it is worth.
+func TestToAPIRefusesAValuationThatCannotBeConvertedToThePositionCurrency(t *testing.T) {
+	id := uuid.New()
+	p := &Position{InstrumentID: id, Currency: "RUB", Quantity: dec("1")}
+	inst := instrument.Instrument{ID: id, Type: instrument.TypeShare, Currency: "USD"}
+	// price * quantity * 100 == math.MaxInt64, exactly — see
+	// TestMarketValuePublishesTheLargestValuationThatFits.
+	quotes := map[uuid.UUID]marketdata.Quote{id: {InstrumentID: id, Price: dec("92233720368547758.07"), Currency: "USD"}}
+	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(2)}}
+
+	out, err := h.toAPI(context.Background(), p, inst, quotes, time.Now(), map[rateKey]*rateLookup{})
+	if !errors.Is(err, money.ErrOverflow) {
+		t.Fatalf("toAPI = %+v, err = %v; want ErrOverflow: twice maxint64 is not an int64, and a position published here would show a market value of zero", out, err)
+	}
+	if out.Quantity != "" {
+		t.Errorf("toAPI returned a position (%+v) alongside the refusal, want the zero value", out)
+	}
+}
+
+// TestPositionInBaseRefusesAValuationThatCannotBeStruckInTheBaseCurrency is the
+// third call site: the valuation is fine in the position's own currency and
+// does not fit once carried into the base one. The basis converts perfectly
+// well at the same rate, which is the point — swallowing the refusal publishes
+// in_base with market_value_minor = 0 and an unrealized loss of exactly the
+// basis, a figure that reads as a holding wiped out rather than as a broken
+// one.
+func TestPositionInBaseRefusesAValuationThatCannotBeStruckInTheBaseCurrency(t *testing.T) {
+	acquired := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	p := &Position{
+		Currency:  "USD",
+		Quantity:  dec("1"),
+		CostMinor: 100,
+		Lots:      []Lot{{Quantity: dec("1"), CostMinor: 100, AcquiredOn: &acquired}},
+	}
+	apiPos := apitypes.Position{
+		MarketValueMinor:    nullable.NewNullableWithValue(int64(math.MaxInt64)),
+		MarketValueCurrency: nullable.NewNullableWithValue("USD"),
+	}
+	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(2)}}
+
+	out, err := h.positionInBase(context.Background(), p, apiPos, nil, "RUB",
+		nullable.NewNullNullable[int64](), time.Now(), map[rateKey]*rateLookup{})
+	if !errors.Is(err, money.ErrOverflow) {
+		t.Fatalf("positionInBase = %+v, err = %v; want ErrOverflow: twice maxint64 is not an int64 of kopecks", out, err)
+	}
+	if out != nil {
+		t.Errorf("positionInBase returned %+v alongside the refusal, want nil", out)
 	}
 }
