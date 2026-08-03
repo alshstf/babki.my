@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -293,6 +294,106 @@ func TestTickerIsUniqueAmongInstrumentsThatCarryOne(t *testing.T) {
 			Type: instrument.TypeCustom, Name: name, Currency: "RUB",
 		}); err != nil {
 			t.Fatalf("Create tickerless %q: %v — the empty ticker must stay outside the unique index", name, err)
+		}
+	}
+}
+
+// TestUniqueTickerCoversExactlyTheRowsListTradableReturns holds two spellings
+// of one rule together. The quotes job keys a map on the ticker of every row
+// ListTradable hands it, so each of those rows has to be unique by ticker —
+// which is what migration 0011's partial index enforces, with that reader's
+// filter written out a second time as its predicate. Two spellings drift apart;
+// this fails as soon as they do, in either direction:
+//
+//   - widen the reader without widening the index, and a row it returns turns
+//     out to be duplicable — the silent overwrite of #26 is back, one of the
+//     pair never priced and nothing saying why;
+//   - widen the index without widening the reader, and a duplicate nobody would
+//     ever have priced is refused instead — the create dialog offers all seven
+//     instrument types with a free ticker field, and two crypto rows for one
+//     coin on two venues, or two metal rows both reading XAU for gold vaulted
+//     at two brokers, are things a user legitimately has.
+//
+// The reader itself says which types are which: the test asks the catalog for a
+// duplicate under every type there is and compares refusal against what
+// ListTradable actually returned, never against a third list of types written
+// out here — which would be a third spelling to drift.
+func TestUniqueTickerCoversExactlyTheRowsListTradableReturns(t *testing.T) {
+	st, ctx, _ := newStore(t)
+
+	types := []instrument.Type{
+		instrument.TypeShare, instrument.TypeBond, instrument.TypeETF,
+		instrument.TypeCurrency, instrument.TypeCrypto, instrument.TypeMetal,
+		instrument.TypeCustom,
+	}
+	// One ticker per type, so a pair can only collide with itself and a refusal
+	// can only mean "this type is covered".
+	refused := make(map[instrument.Type]bool, len(types))
+	for _, tp := range types {
+		ticker := "DUP" + strings.ToUpper(string(tp))
+		if _, err := st.Create(ctx, instrument.Instrument{
+			Type: tp, Name: "первый " + string(tp), Ticker: ticker, Currency: "RUB",
+		}); err != nil {
+			t.Fatalf("Create first %s: %v", tp, err)
+		}
+		_, err := st.Create(ctx, instrument.Instrument{
+			Type: tp, Name: "второй " + string(tp), Ticker: ticker, Currency: "RUB",
+		})
+		switch {
+		case err == nil:
+			refused[tp] = false
+		case errors.Is(err, instrument.ErrTickerTaken):
+			refused[tp] = true
+		default:
+			t.Fatalf("Create second %s: %v", tp, err)
+		}
+	}
+
+	tradable, err := st.ListTradable(ctx)
+	if err != nil {
+		t.Fatalf("ListTradable: %v", err)
+	}
+	returned := make(map[instrument.Type]bool, len(types))
+	for _, inst := range tradable {
+		returned[inst.Type] = true
+	}
+	// The comparison below is against what the reader returned, so it has to
+	// have returned something: an empty list would agree with an index that
+	// refuses nothing at all.
+	if len(returned) == 0 {
+		t.Fatal("ListTradable returned nothing; there would be nothing for the index to be compared against")
+	}
+	for _, tp := range types {
+		switch {
+		case returned[tp] && !refused[tp]:
+			t.Errorf("ListTradable returns %s instruments, but the catalog accepted two of them under one ticker: "+
+				"the quotes job maps ticker -> instrument id over that list, so one of the two would never be priced", tp)
+		case !returned[tp] && refused[tp]:
+			t.Errorf("the catalog refused a second %s instrument under a ticker already taken, "+
+				"but ListTradable never returns %s instruments — no price is ever fetched for them, "+
+				"so the write costs nobody a quote and must be allowed", tp, tp)
+		}
+	}
+
+	// The other half of the reader's filter, which the loop above cannot see
+	// because every row in it carries a ticker. Any number of rows may have no
+	// ticker at all, so the reader must not return them: the job's map would
+	// collapse every one of them onto the key "" and price none of them.
+	for _, name := range []string{"Наличные", "Золотой слиток"} {
+		if _, err := st.Create(ctx, instrument.Instrument{
+			Type: instrument.TypeShare, Name: name, Currency: "RUB",
+		}); err != nil {
+			t.Fatalf("Create tickerless %q: %v — rows with no ticker must stay outside the unique index", name, err)
+		}
+	}
+	tradable, err = st.ListTradable(ctx)
+	if err != nil {
+		t.Fatalf("ListTradable after the tickerless rows: %v", err)
+	}
+	for _, inst := range tradable {
+		if inst.Ticker == "" {
+			t.Errorf("ListTradable returned %q, which has no ticker: several such rows may exist, "+
+				"so the quotes job would map them all onto the empty key", inst.Name)
 		}
 	}
 }

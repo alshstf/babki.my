@@ -142,11 +142,13 @@ func NewQuotesWorker(store *Store, instruments instrumentLister, provider QuoteP
 // suspended instruments), not an error. A provider error is returned (not
 // swallowed) so River retries the job.
 //
-// Every instrument the mapping cannot carry leaves a line behind it. Two
-// instruments under one ticker are a Warn, because one of them will never be
-// priced while both exist; a ticker the catalog does not hold is a Debug,
-// because it costs nothing. Both used to be dropped in silence, which is how
-// a position could show no quote with no trace of the reason anywhere.
+// Every instrument the mapping cannot carry leaves a line behind it, saying
+// which of the three reasons it was. Two instruments under one ticker are a
+// Warn, because one of them will never be priced while both exist; an
+// instrument with no ticker at all, and a ticker the catalog does not hold, are
+// Debug, because neither costs any instrument a price. The last two used to be
+// dropped in silence, which is how a position could show no quote with no trace
+// of the reason anywhere.
 func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]) error {
 	insts, err := w.instruments.ListTradable(ctx)
 	if err != nil {
@@ -161,13 +163,32 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 	byTicker := make(map[string]uuid.UUID, len(insts))
 	tickers := make([]string, 0, len(insts))
 	for _, inst := range insts {
+		if inst.Ticker == "" {
+			// The empty string is how "this instrument has no exchange ticker"
+			// is written down — cash, hand-made holdings, anything an exchange
+			// does not quote — and there is nothing in it to ask a provider
+			// for. ListTradable excludes such rows, so this is the same
+			// "whatever produced the list" case as the collision below, but a
+			// different fact, and the collision's line would state it wrongly:
+			// several tickerless rows share no ticker, and none of them is
+			// priced either way, so "only one of them can be priced" would be
+			// false of all of them.
+			//
+			// Debug, like the unknown-ticker case further down: no instrument
+			// loses a price it could otherwise have had.
+			w.log.Debug("marketdata: instrument has no ticker, there is nothing to ask a price for",
+				"instrument_id", inst.ID)
+			continue
+		}
 		if priced, taken := byTicker[inst.Ticker]; taken {
 			// instruments.ticker carries a partial unique index (migration
-			// 0011), so a read of the catalog cannot produce this any more.
-			// The check is here all the same because this worker is handed a
-			// LIST, not a table: whatever produced the list — a widened
-			// ListTradable, a second catalog source, an index dropped by hand
-			// — a mapping step that loses one of its entries has to say so.
+			// 0011) over exactly what ListTradable returns, so a read of the
+			// catalog cannot produce this any more. The check is here all the
+			// same because this worker is handed a LIST, not a table: whatever
+			// produced the list — a ListTradable widened to a type the index
+			// leaves alone, where two rows reading BTC are legitimate, a second
+			// catalog source, an index dropped by hand — a mapping step that
+			// loses one of its entries has to say so.
 			// Overwriting in silence was the whole of issue #26: the loser was
 			// never priced again and nothing anywhere said why.
 			//

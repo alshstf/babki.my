@@ -470,6 +470,70 @@ func TestQuotesWorker_TickerTheCatalogDoesNotHoldIsLoggedAtDebug(t *testing.T) {
 	}
 }
 
+// TestQuotesWorker_InstrumentsWithNoTickerAreNotReportedAsACollision is about
+// what the worker SAYS in the one scenario its collision check exists for.
+// That check defends against a list ListTradable would not have produced —
+// including one that stopped excluding tickerless rows. Every such row keys on
+// the empty string, so they would all collide with one another, and the
+// collision line would announce "two instruments share a ticker, only one of
+// them can be priced" with ticker="": they share no ticker, and neither is
+// priced with or without the other. A guard kept for a case it describes
+// wrongly is worse than no guard, so the empty ticker is recognised for what it
+// is, on a line of its own, and nothing is asked of the provider for it.
+func TestQuotesWorker_InstrumentsWithNoTickerAreNotReportedAsACollision(t *testing.T) {
+	store, instStore, ctx := newJobsFixture(t)
+
+	var tickerless []instrument.Instrument
+	for _, name := range []string{"Наличные", "Золотой слиток"} {
+		inst, err := instStore.Create(ctx, instrument.Instrument{
+			Type: instrument.TypeCustom, Name: name, Currency: "RUB",
+		})
+		if err != nil {
+			t.Fatalf("create %q: %v", name, err)
+		}
+		tickerless = append(tickerless, inst)
+	}
+
+	var calls [][]string
+	provider := fakeQuoteProvider{calls: &calls}
+	log, records := newRecordingLogger()
+	worker := marketdata.NewQuotesWorker(store,
+		fakeInstrumentLister{insts: tickerless}, provider, log)
+
+	if err := worker.Work(ctx, quotesJob()); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	for _, r := range *records {
+		if r.msg == "marketdata: two instruments share a ticker, only one of them can be priced" {
+			t.Errorf("two tickerless instruments were reported as sharing a ticker (ticker=%q): "+
+				"they share the absence of one, and neither is priced either way", r.attrs["ticker"])
+		}
+	}
+	// Each of them is still accounted for — silence is what this worker was
+	// fixed for — and named by id, there being no ticker to name it by.
+	var seen []string
+	for _, r := range *records {
+		if r.msg == "marketdata: instrument has no ticker, there is nothing to ask a price for" {
+			if r.level != slog.LevelDebug {
+				t.Errorf("a tickerless instrument was logged at %s, want DEBUG: it loses no price it could have had", r.level)
+			}
+			seen = append(seen, r.attrs["instrument_id"])
+		}
+	}
+	for _, inst := range tickerless {
+		if !slices.Contains(seen, inst.ID.String()) {
+			t.Errorf("%q was dropped from the mapping without a line naming it; logged ids: %v", inst.Name, seen)
+		}
+	}
+
+	// And the empty string never reaches the provider: it is not a ticker, and
+	// asking for it would be asking for nothing under a name.
+	if len(calls) != 1 || len(calls[0]) != 0 {
+		t.Errorf("provider was asked for %q, want one call with nothing in it", calls)
+	}
+}
+
 // --- historical fx backfill -------------------------------------------------
 
 // cbrIDs stands in for the Bank of Russia's ISO code -> internal identifier
