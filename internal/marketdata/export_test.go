@@ -59,30 +59,3 @@ func NewBackfillFxWorkerWithClock(
 	w.now = now
 	return w
 }
-
-// NewQuotesWorkerWithClock is NewQuotesWorker with a caller-chosen clock in
-// place of time.Now. Test-only (this file is compiled into the test binary
-// only), and mandatory for every quotes test rather than a convenience: the
-// worker asks for nothing outside the trading window, so a test that let it
-// read the wall clock would pass on a Tuesday afternoon and fail, having
-// tested nothing, every night and every weekend.
-func NewQuotesWorkerWithClock(
-	store *Store,
-	instruments instrumentLister,
-	provider QuoteProvider,
-	log *slog.Logger,
-	now func() time.Time,
-) river.Worker[RefreshQuotesArgs] {
-	worker := NewQuotesWorker(store, instruments, provider, log)
-	w, ok := worker.(*quotesWorker)
-	if !ok {
-		panic(fmt.Sprintf("NewQuotesWorker returned %T, want *quotesWorker", worker))
-	}
-	w.now = now
-	return w
-}
-
-// TradingHours reports the window's bounds so a test can build a time inside
-// or outside it without restating the constants — two statements of one rule
-// is how a test starts passing while the rule it pins has moved.
-func TradingHours() (openHour, closeHour int) { return tradingOpenHour, tradingCloseHour }

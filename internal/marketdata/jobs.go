@@ -179,55 +179,13 @@ type quotesWorker struct {
 	instruments instrumentLister
 	provider    QuoteProvider
 	log         *slog.Logger
-	// now is the clock the trading-window check reads. Production leaves it
-	// nil and gets time.Now; a test supplies its own so the window can be
-	// exercised without waiting for a Tuesday.
-	now func() time.Time
 }
-
-// moscow is the exchange's clock. A fixed offset rather than a named zone on
-// purpose: Russia has had no daylight saving since 2014, so +03:00 is exact,
-// and time.LoadLocation would put a tzdata file in the runtime path of a
-// container image that has no reason to carry one.
-var moscow = time.FixedZone("MSK", 3*60*60)
-
-// Trading window, in Moscow time, outside of which the quotes worker does not
-// ask the provider anything. It is deliberately WIDER than any MOEX session:
-// the main equity session runs 09:50-18:50 and the evening session to 23:50,
-// so a window from 09:00 to midnight cannot clip a session's start or end,
-// whatever the board.
-//
-// WHAT IT DOES NOT KNOW: holidays. MOEX's calendar is published, not derived —
-// there is no formula for it — so a public holiday still costs a day of
-// requests that return yesterday's prices. Skipping nights and weekends is
-// what can be decided from the clock alone; the rest would need a calendar
-// this application has no other use for, and a wrong calendar costs stale
-// prices, which is worse than a wasted request.
-const (
-	tradingOpenHour  = 9
-	tradingCloseHour = 24
-)
 
 // NewQuotesWorker builds the River worker that refreshes quotes, via
 // provider, for every tradable instrument (share/bond/etf with a ticker)
 // and upserts them into store. Register it with river.AddWorker.
 func NewQuotesWorker(store *Store, instruments instrumentLister, provider QuoteProvider, log *slog.Logger) river.Worker[RefreshQuotesArgs] {
 	return &quotesWorker{store: store, instruments: instruments, provider: provider, log: log}
-}
-
-// insideTradingWindow reports whether the exchange could plausibly be trading
-// right now, from the clock alone (see tradingOpenHour for what that can and
-// cannot answer).
-func (w *quotesWorker) insideTradingWindow() bool {
-	clock := w.now
-	if clock == nil {
-		clock = time.Now
-	}
-	t := clock().In(moscow)
-	if t.Weekday() == time.Saturday || t.Weekday() == time.Sunday {
-		return false
-	}
-	return t.Hour() >= tradingOpenHour && t.Hour() < tradingCloseHour
 }
 
 // Work looks up the tradable instrument catalog, maps ticker -> InstrumentID
@@ -246,18 +204,17 @@ func (w *quotesWorker) insideTradingWindow() bool {
 // dropped in silence, which is how a position could show no quote with no trace
 // of the reason anywhere.
 //
-// Outside the trading window it asks nothing at all and returns success. The
-// job is enqueued every half hour around the clock, so before this it made
-// about 48 requests a day that could only return the last session's prices —
-// which the previous run already stored. Returning success rather than an
-// error is the point: nothing failed, and River must not retry a decision the
-// clock will make the same way a minute later.
+// The job is enqueued every half hour around the clock and asks on every one
+// of those runs — roughly 48 requests a day for a value that cannot change
+// that often, since the MOEX provider reads PREVPRICE and that is the previous
+// trading day's close (see its QuotesFor). A night-and-weekend window was
+// tried here and removed: it was justified by session hours MOEX does not
+// keep — there is a morning session from 06:50 MSK and there are weekend
+// sessions — so it clipped real trading while still not making the stored
+// value any fresher. Filed as #90 rather than retuned, because the choice is
+// between reading a column that actually moves and asking once a day, and
+// that is a product question about which price the owner wants.
 func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]) error {
-	if !w.insideTradingWindow() {
-		w.log.Debug("marketdata: outside the trading window, not asking for quotes")
-		return nil
-	}
-
 	insts, err := w.instruments.ListTradable(ctx)
 	if err != nil {
 		w.log.Error("marketdata: list tradable instruments failed", "err", err)

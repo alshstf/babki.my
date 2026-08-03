@@ -58,21 +58,45 @@ type board struct {
 //     general, not any given security's listing on it, and does not
 //     contradict the above.) TQTF is therefore deliberately not queried —
 //     it would cost one request per refresh and return nothing.
+//
 //   - bonds/TQOB, "Т+: Гособлигации" (62 securities) — government bonds
 //     (OFZ) only. It does not carry corporate bonds.
+//
 //   - bonds/TQCB, "Т+: Облигации" (3021 securities) — the main corporate
 //     bond board.
+//
 //   - bonds/TQRD, "Т+: Облигации Д" (47 securities) — a second corporate
-//     bond board under a separate settlement regime, all but one of whose
-//     securities are absent from TQCB. Sampled securities are ordinary
-//     corporate bonds with a SUR face value. What the "Д" abbreviates is
-//     not stated in the ISS board listing and is not guessed at here.
+//     bond board, all but one of whose securities (RU000A108CE5) are absent
+//     from TQCB, and all 47 of which have a SUR face value. What the "Д"
+//     abbreviates is not stated in the ISS board listing and is not guessed
+//     at here; neither is a settlement regime of its own, which ISS gives no
+//     sign of — all 47 rows carry SETTLEDATE 2026-08-04, a subset of TQCB's
+//     own {2026-08-04, 2026-08-05}.
+//
+//     These are NOT ordinary corporate bonds, and "ordinary" is exactly the
+//     word a reader would go by when deciding how far to trust a price from
+//     here, so it is worth being precise about. Checked on
+//     2026-08-03: all 47 are LISTLEVEL 3, the lowest tier ISS reports (TQCB
+//     is mixed — 478 at level 1, 570 at level 2, 1973 at level 3 — and
+//     TQOB's 62 OFZ are all level 1). 45 of the 47 quote a PREVPRICE
+//     between 2.23 and 46.9, which on this board is percent of face value:
+//     two to forty-seven kopecks on each rouble of principal outstanding.
+//     Many also carry a FACEVALUE well under the INITIALFACEVALUE of 1000
+//     they were issued at (130, 160, 300, 494, 615.40, 666.68), so that
+//     percentage is of a reduced principal rather than the original.
+//     SHORTNAMEs read КВС, СИБАВТО, МЛФТ, НафттрнБО, РоялКапБ, ЧИСТПЛАН.
+//     Whatever the story behind each one, this board is priced like
+//     distressed paper, and the prices are real quotes on it.
 //
 // TQOB, TQCB, and TQRD — the three bonds-market boards queried here — all
 // quote PREVPRICE as a percentage of face value, and every shares-market
-// board quotes it as money per unit. portfolio.marketValue, which picks
-// between the two readings by instrument type rather than by board, needs
-// no change for the two boards added here.
+// board quotes it as money per unit. ISS states this itself rather than
+// leaving it to be inferred from the numbers: the per-security board list at
+// /iss/securities/<secid>.json carries a `unit` column, and on 2026-08-03 it
+// read "%" for TQOB, TQCB and TQRD (checked on RU000A0ZZWQ8 and
+// SU26238RMFS4) and "M" for TQBR (checked on SBER).
+// portfolio.marketValue, which picks between the two readings by instrument
+// type rather than by board, needs no change for the two boards added here.
 //
 // That percentage-of-face-value convention is not a blanket property of
 // "markets/bonds" as a whole, so it does not automatically extend to a
@@ -155,14 +179,28 @@ func (c *Client) Name() string { return sourceName }
 // QuotesFor implements marketdata.QuoteProvider. It queries every board in
 // boards, in order, and merges the results.
 //
-// ISS does not report a date for these boards (PREVPRICE is simply "the
-// last traded price known to ISS right now"), so every returned quote's On
-// field is set to the caller-supplied on rather than anything read from the
-// response.
+// # What PREVPRICE is, and what On therefore means
 //
-// Tickers not present on any board, and tickers whose PREVPRICE is null (no
-// trade recorded), are silently absent from the result — not an error, per
-// the marketdata.QuoteProvider contract.
+// PREVPRICE is the PREVIOUS TRADING DAY'S CLOSE. It is not a live price and
+// it is not "the last price ISS knows right now". Measured on 2026-08-03 at
+// 22:30 Moscow time, with the evening session trading (TRADINGSTATUS=T):
+// SBER on TQBR had PREVPRICE 276.52 while LAST was 280.86, and the PREVDATE
+// column beside it read 2026-07-31 — the previous Friday. So a quote taken
+// from here moves at most once per trading day, whatever hour it is fetched.
+//
+// Every returned quote's On is nonetheless the caller-supplied on, not
+// anything read from the response, and quotesWorker passes today. That means
+// the stored quote carries today's date on the previous session's price, and
+// nothing downstream can tell how old that price is. ISS would say: PREVDATE
+// is present on all four boards above (on 2026-08-03 all of them read
+// 2026-07-31). This provider does not request that column and does not read
+// it, which is a gap rather than a decision, and it is filed as #90 — along
+// with the larger question of whether a column that moves intraday should be
+// read instead.
+//
+// Tickers not present on any board, and tickers whose PREVPRICE is null (the
+// instrument recorded no close in the previous session), are silently absent
+// from the result — not an error, per the marketdata.QuoteProvider contract.
 //
 // A board that answers with no securities at all is a different matter and
 // gets a Warn: see the empty-board branch below for why zero rows means the
@@ -361,10 +399,12 @@ func parseSecurities(boardLabel string, columns []string, data [][]any) ([]secRo
 
 		row := secRow{ticker: ticker, currency: currency}
 
-		// PREVPRICE is nullable: ISS reports null when the instrument has
-		// no last-traded price (e.g. newly listed, currently suspended).
-		// That is a normal, expected condition, not an error — the caller
-		// simply won't see this ticker in the result.
+		// PREVPRICE is nullable: ISS reports null when the instrument
+		// recorded no close in the previous trading session (e.g. newly
+		// listed, currently suspended, or simply not traded that day — two
+		// of TQRD's 47 rows were null on 2026-08-03 while carrying the same
+		// PREVDATE as the rest). That is a normal, expected condition, not
+		// an error — the caller simply won't see this ticker in the result.
 		if raw := fields[priceIdx]; raw != nil {
 			num, ok := raw.(json.Number)
 			if !ok {

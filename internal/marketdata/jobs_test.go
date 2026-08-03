@@ -212,7 +212,7 @@ func TestQuotesWorker_UpsertsMatchedTickersAndSkipsMissingPrices(t *testing.T) {
 			{Ticker: "GAZP", Price: dec("150.0"), Currency: "RUB", On: date("2026-07-25")},
 		},
 	}
-	worker := marketdata.NewQuotesWorkerWithClock(store, instStore, provider, slog.Default(), insideTradingWindow)
+	worker := marketdata.NewQuotesWorker(store, instStore, provider, slog.Default())
 
 	err = worker.Work(ctx, &river.Job[marketdata.RefreshQuotesArgs]{Args: marketdata.RefreshQuotesArgs{}})
 	if err != nil {
@@ -250,7 +250,7 @@ func TestQuotesWorker_NoTradableInstrumentsSkipsProviderCall(t *testing.T) {
 
 	var calls [][]string
 	provider := fakeQuoteProvider{calls: &calls, err: errors.New("must not be called")}
-	worker := marketdata.NewQuotesWorkerWithClock(store, instStore, provider, slog.Default(), insideTradingWindow)
+	worker := marketdata.NewQuotesWorker(store, instStore, provider, slog.Default())
 
 	err := worker.Work(ctx, &river.Job[marketdata.RefreshQuotesArgs]{Args: marketdata.RefreshQuotesArgs{}})
 	if err != nil {
@@ -271,7 +271,7 @@ func TestQuotesWorker_ProviderErrorReturnsFromWork(t *testing.T) {
 	}
 
 	wantErr := errors.New("moex unreachable")
-	worker := marketdata.NewQuotesWorkerWithClock(store, instStore, fakeQuoteProvider{err: wantErr}, slog.Default(), insideTradingWindow)
+	worker := marketdata.NewQuotesWorker(store, instStore, fakeQuoteProvider{err: wantErr}, slog.Default())
 
 	err := worker.Work(ctx, &river.Job[marketdata.RefreshQuotesArgs]{Args: marketdata.RefreshQuotesArgs{}})
 	if !errors.Is(err, wantErr) {
@@ -418,105 +418,6 @@ func quotesJob() *river.Job[marketdata.RefreshQuotesArgs] {
 	return &river.Job[marketdata.RefreshQuotesArgs]{Args: marketdata.RefreshQuotesArgs{}}
 }
 
-// insideTradingWindow is the clock every quotes test runs on. The worker asks
-// for nothing outside the trading window, so a test left on the wall clock
-// would pass on a weekday afternoon and then, having tested nothing, fail
-// every night and every weekend.
-//
-// The hour comes from marketdata.TradingHours rather than a literal so this
-// helper cannot drift from the window it is meant to sit inside; the day is
-// pinned to a Wednesday.
-func insideTradingWindow() time.Time {
-	open, _ := marketdata.TradingHours()
-	t := time.Date(2026, 7, 22, open+1, 30, 0, 0, time.FixedZone("MSK", 3*60*60))
-	if t.Weekday() != time.Wednesday {
-		panic("insideTradingWindow: fixture date is not the weekday it claims")
-	}
-	return t
-}
-
-// TestQuotesWorker_OutsideTheTradingWindowAsksNothing is issue #28. The job is
-// enqueued every half hour around the clock, so before this it made about 48
-// requests a day that could only return the previous session's prices — which
-// the run before them had already stored.
-//
-// Each case is asserted on its own, not by a loop over a table of "outside"
-// times, so a failure names which boundary moved. Two of the three sit exactly
-// ON a boundary: the window is half-open at both ends and that is the part a
-// refactor gets wrong.
-func TestQuotesWorker_OutsideTheTradingWindowAsksNothing(t *testing.T) {
-	store, _, ctx := newJobsFixture(t)
-	open, closed := marketdata.TradingHours()
-	msk := time.FixedZone("MSK", 3*60*60)
-
-	cases := []struct {
-		name string
-		at   time.Time
-		want bool // want the provider asked
-	}{
-		{"a Saturday inside the hours", time.Date(2026, 7, 25, open+2, 0, 0, 0, msk), false},
-		{"a Sunday inside the hours", time.Date(2026, 7, 26, open+2, 0, 0, 0, msk), false},
-		{"a weekday one hour before the window opens", time.Date(2026, 7, 22, open-1, 59, 0, 0, msk), false},
-		{"a weekday at the very minute it opens", time.Date(2026, 7, 22, open, 0, 0, 0, msk), true},
-		{"a weekday one minute before it closes", time.Date(2026, 7, 22, closed-1, 59, 0, 0, msk), true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			var calls [][]string
-			// A provider that fails if asked: "did not ask" has to be visible as
-			// silence AND as a passing Work, not as an error that happens to
-			// look the same from the outside.
-			provider := fakeQuoteProvider{calls: &calls, err: errors.New("must not be asked outside the window")}
-			if c.want {
-				provider.err = nil
-			}
-			worker := marketdata.NewQuotesWorkerWithClock(store,
-				fakeInstrumentLister{insts: []instrument.Instrument{{
-					ID: uuid.New(), Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
-				}}}, provider, slog.Default(), func() time.Time { return c.at })
-
-			if err := worker.Work(ctx, quotesJob()); err != nil {
-				t.Fatalf("Work: %v", err)
-			}
-			asked := len(calls) > 0
-			if asked != c.want {
-				t.Fatalf("provider asked = %v, want %v at %s (%s)",
-					asked, c.want, c.at.Format(time.RFC3339), c.at.Weekday())
-			}
-		})
-	}
-}
-
-// TestQuotesWorker_TheWindowIsReadInMoscowTime pins the zone the window is
-// judged in. The exchange keeps Moscow time; a server in any other zone that
-// judged the window by its own clock would stop asking in the middle of the
-// session, or keep asking all night, and neither would look like a bug from
-// the outside — the quotes would simply be a few hours stale.
-func TestQuotesWorker_TheWindowIsReadInMoscowTime(t *testing.T) {
-	store, _, ctx := newJobsFixture(t)
-	open, _ := marketdata.TradingHours()
-
-	// 09:30 in Moscow — inside the window — written as the same instant in UTC,
-	// where it reads as 06:30 and would fall outside a naive local check.
-	at := time.Date(2026, 7, 22, open, 30, 0, 0, time.FixedZone("MSK", 3*60*60)).UTC()
-	if at.Hour() >= open {
-		t.Fatalf("fixture does not discriminate: %s reads as inside the window in UTC too", at.Format(time.RFC3339))
-	}
-
-	var calls [][]string
-	worker := marketdata.NewQuotesWorkerWithClock(store,
-		fakeInstrumentLister{insts: []instrument.Instrument{{
-			ID: uuid.New(), Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
-		}}}, fakeQuoteProvider{calls: &calls}, slog.Default(), func() time.Time { return at })
-
-	if err := worker.Work(ctx, quotesJob()); err != nil {
-		t.Fatalf("Work: %v", err)
-	}
-	if len(calls) != 1 {
-		t.Fatalf("provider asked %d times at %s (09:30 Moscow), want 1", len(calls), at.Format(time.RFC3339))
-	}
-}
-
 // TestQuotesWorker_TwoInstrumentsUnderOneTickerAreWarned is issue #26. The
 // worker maps ticker -> instrument id; two instruments carrying one ticker
 // means one of them is not in the map and is never priced, for as long as both
@@ -557,8 +458,8 @@ func TestQuotesWorker_TwoInstrumentsUnderOneTickerAreWarned(t *testing.T) {
 		},
 	}
 	log, records := newRecordingLogger()
-	worker := marketdata.NewQuotesWorkerWithClock(store,
-		fakeInstrumentLister{insts: []instrument.Instrument{sber, twin}}, provider, log, insideTradingWindow)
+	worker := marketdata.NewQuotesWorker(store,
+		fakeInstrumentLister{insts: []instrument.Instrument{sber, twin}}, provider, log)
 
 	if err := worker.Work(ctx, quotesJob()); err != nil {
 		t.Fatalf("Work: %v — one duplicated ticker must not cost the whole refresh", err)
@@ -628,7 +529,7 @@ func TestQuotesWorker_TickerTheCatalogDoesNotHoldIsLoggedAtDebug(t *testing.T) {
 		{Ticker: "SBER-RM", Price: dec("306.0"), Currency: "RUB", On: date("2026-07-25")},
 	}}
 	log, records := newRecordingLogger()
-	worker := marketdata.NewQuotesWorkerWithClock(store, instStore, provider, log, insideTradingWindow)
+	worker := marketdata.NewQuotesWorker(store, instStore, provider, log)
 
 	if err := worker.Work(ctx, quotesJob()); err != nil {
 		t.Fatalf("Work: %v — an unknown ticker must not fail the batch", err)
@@ -684,8 +585,8 @@ func TestQuotesWorker_InstrumentsWithNoTickerAreNotReportedAsACollision(t *testi
 	var calls [][]string
 	provider := fakeQuoteProvider{calls: &calls}
 	log, records := newRecordingLogger()
-	worker := marketdata.NewQuotesWorkerWithClock(store,
-		fakeInstrumentLister{insts: tickerless}, provider, log, insideTradingWindow)
+	worker := marketdata.NewQuotesWorker(store,
+		fakeInstrumentLister{insts: tickerless}, provider, log)
 
 	if err := worker.Work(ctx, quotesJob()); err != nil {
 		t.Fatalf("Work: %v", err)
