@@ -114,10 +114,17 @@ function valuationGapTitle(
 // half-rendered hint would be more misleading than no hint at all.
 //
 // WHAT THE NUMBER IS depends on the instrument, and that is the whole of #32.
-// For a share or an ETF the quote is money per unit, in the same currency as
-// the valuation above it, so it needs no unit stated — the currency is right
-// there. For a BOND the quote is a percentage of face value (the MOEX
-// convention): the server publishes q.Price untouched in Position.price, and
+// For a share or an ETF the quote is money per unit, always in the
+// position's OWN currency (Position.price is never converted). That matches
+// the valuation above it, and needs no unit stated, only in the position's
+// own-currency display mode. In BASE mode the valuation converts but this
+// price line does not, so a foreign share prints a bare number in a currency
+// the ruble amount above it is not in — the same failure shape #32 fixed for
+// bonds below, left open here: fixing it needs a different RENDERING (a unit
+// suffix or a mode-aware omission), not just a truer caption, so it stays a
+// separate, still-open case rather than something this comment explains away.
+// For a BOND the quote is a percentage of face value (the MOEX convention):
+// the server publishes q.Price untouched in Position.price, and
 // marketValue() in internal/portfolio/http.go multiplies it as
 // faceValueMinor × price/100 × quantity. The demo seed's OFZ26238 makes the
 // gap concrete — face value 1 000,00 ₽, quote 95.20, so one bond is worth

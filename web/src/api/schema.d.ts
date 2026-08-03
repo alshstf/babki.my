@@ -673,7 +673,7 @@ export interface components {
              * @description Set only when market_value_minor was converted from a different currency: the original, unconverted valuation amount in market_value_source_currency. It is what a client should name when it discloses where the converted figure came from ("converted from 1 000,00 €"), and — since it is also what in_base.market_value_minor is struck from, at the rate of THIS currency rather than the position's — that disclosure is true of the base-currency figure as well as of market_value_minor. Null when no conversion happened.
              */
             market_value_source_minor?: number | null;
-            /** @description Decimal as string; latest quote price used for the valuation */
+            /** @description Decimal as string; latest quote price used for the valuation. What it MEANS depends on instrument.type: for share/etf it is money per unit, in the position's own `currency`. For a BOND it is instead a PERCENTAGE OF FACE VALUE (e.g. "95.20" meaning 95.20% of face, the MOEX convention) — not money, and not in any currency itself — so market_value_minor for a bond is instrument.face_value_minor × price/100 × quantity, denominated in instrument.face_currency rather than in this field's own unit. */
             price?: string | null;
             /** @description Date YYYY-MM-DD of the quote used for the valuation */
             price_on?: string | null;

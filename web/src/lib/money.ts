@@ -43,10 +43,17 @@ export function formatMinorCompact(amountMinor: number, currency: string): strin
   return formatWith(amountMinor, currency, 0);
 }
 
-// A quote below a hundredth, but not zero: whole part 0, fraction starting
-// "00", and a non-zero digit somewhere in it. Matched on the DIGITS rather
-// than on the parsed double on purpose — see formatPrice.
-const SUB_CENT_PRICE_RE = /^0\.00\d*[1-9]/;
+// A quote below a hundredth, but not zero: whole part 0 — possibly written
+// with extra leading zeros ("00.0001"), which this function's own validator
+// two lines below accepts (`\d+` matches any run of digits) — fraction
+// starting "00", and a non-zero digit somewhere in it. Without the `0*`
+// prefix, "00.0001" would fall through to the ordinary two-fraction-digit
+// branch and print the fake zero this regex exists to prevent; the leading
+// zeros are never on the wire (decimal.String() emits none), but the
+// contract is the regex, not the sender — same standard as the underflow
+// guard below. Matched on the DIGITS rather than on the parsed double on
+// purpose — see formatPrice.
+const SUB_CENT_PRICE_RE = /^0*0\.00\d*[1-9]/;
 
 // How many digits of a sub-cent price are worth showing. Three is the same
 // order of detail two fraction digits give an ordinary quote (95,20 is four

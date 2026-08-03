@@ -72,6 +72,14 @@ describe("formatPrice", () => {
     // A quote that really is zero is not a fake zero, and still prints as one.
     ["0", "0,00"],
     ["0.00", "0,00"],
+    // Pins the sub-cent threshold's UPPER edge. SUB_CENT_PRICE_RE requires
+    // "0.00" right after the point; a price in [0.01, 0.1) has a non-"00"
+    // pair there and must stay on the ordinary two-fraction-digit branch. The
+    // nearby "0.01" case above doesn't pin this: it happens to format the
+    // same whether or not the regex is widened to match "0.0" instead of
+    // "0.00". This one, with three fraction digits and a value that only the
+    // ordinary branch rounds this way, does not.
+    ["0.0567", "0,06"],
   ])("formats %s as %s", (input, want) => {
     expect(norm(formatPrice(input) ?? "")).toBe(want);
   });
@@ -95,6 +103,19 @@ describe("formatPrice", () => {
   ])("shows the significant digits of sub-cent price %s as %s", (input, want) => {
     const got = norm(formatPrice(input) ?? "");
     expect(got).toBe(want);
+    expect(got).not.toBe("0,00");
+  });
+
+  // formatPrice's own input validator (`/^\d+(\.\d+)?$/`) accepts extra
+  // leading zeros before the point, but SUB_CENT_PRICE_RE used to anchor on
+  // a literal "0\." and so never matched "00.0001" — that input fell to the
+  // ordinary branch and printed the fake "0,00" this whole function exists to
+  // avoid. Unreachable from the wire (decimal.String() never emits a leading
+  // zero), but out of reach is not the same contract as "cannot happen": the
+  // regex is what decides, same as the double-underflow guard just below.
+  it("shows significant digits, not a fake zero, for a sub-cent price with a leading zero", () => {
+    const got = norm(formatPrice("00.0001") ?? "");
+    expect(got).toBe("0,0001");
     expect(got).not.toBe("0,00");
   });
 

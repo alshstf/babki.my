@@ -308,8 +308,15 @@ describe("PositionsTable", () => {
   // Printed bare beside a ruble amount that reading is off by a factor of ten
   // (#32), so the unit is stated. What is NOT done is deriving the 952 ₽:
   // that is money arithmetic in the browser, which this project does not do.
+  //
+  // The caption states the RULE (face × percent) rather than pointing at "the
+  // figure above" or naming a derived amount: the cell above is only that
+  // product when the row is shown in the position's own currency. In base
+  // mode it is the base-currency valuation instead, which is not face ×
+  // percent × quantity in any currency — a caption that pointed at it would
+  // be false in exactly the mode the owner uses.
   const BOND_PRICE_NOTE =
-    "Облигация котируется в процентах от номинала, а не в деньгах за штуку: рыночная оценка выше — это номинал, умноженный на этот процент и на количество";
+    "Облигация котируется в процентах от номинала, а не в деньгах за штуку: одна бумага стоит номинал, умноженный на этот процент";
 
   function makeBond(overrides: Partial<Position> = {}): Position {
     return makePosition({
@@ -344,6 +351,10 @@ describe("PositionsTable", () => {
 
     const priceLine = screen.getByTestId("position-price");
     expect(norm(priceLine.textContent ?? "")).toBe("95,20 %");
+    // norm() above strips NBSP, so it can't tell a real non-breaking space
+    // from a plain one that would let "%" wrap onto its own line — pin the
+    // raw character too, unnormalized, against ru.json's pricePercent key.
+    expect(priceLine.textContent).toBe("95,20 %");
     expect(norm(priceLine.getAttribute("title") ?? "")).toBe(
       norm(`Цена на 20.07.2026\n${BOND_PRICE_NOTE}`),
     );
