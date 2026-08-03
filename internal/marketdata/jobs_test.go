@@ -111,6 +111,69 @@ func TestFxWorker_ProviderErrorReturnsFromWork(t *testing.T) {
 	}
 }
 
+// TestFxWorker_NonPositiveRateIsDroppedAndTheRestIsStored is the poison-batch
+// half of issue #28. fx_rates.rate carries CHECK (rate > 0) (migration 0006)
+// and the upsert is one pgx batch, which Postgres runs inside a single
+// implicit transaction: before this, ONE non-positive row from the source made
+// the whole call fail and not a single rate was written, so every currency
+// went stale rather than one. River then retried the job, the source answered
+// with the identical set, and it failed again — the same poison, forever.
+//
+// The assertion is therefore both halves at once: the run succeeds AND the
+// sound rates are in the table. Dropping the bad rows without storing the good
+// ones would be the same outage wearing a green log line.
+func TestFxWorker_NonPositiveRateIsDroppedAndTheRestIsStored(t *testing.T) {
+	store, _, ctx := newJobsFixture(t)
+	on := date("2026-07-25")
+	log, records := newRecordingLogger()
+
+	// Zero and negative are both refused by the CHECK, and both are things a
+	// source can emit: zero for a currency it has stopped quoting, a negative
+	// for a parse or sign bug at either end.
+	provider := fakeFxProvider{rates: []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90.5"), Source: "fake-fx"},
+		{Base: "XXX", Quote: "RUB", On: on, Rate: dec("0"), Source: "fake-fx"},
+		{Base: "YYY", Quote: "RUB", On: on, Rate: dec("-1.5"), Source: "fake-fx"},
+		{Base: "EUR", Quote: "RUB", On: on, Rate: dec("98.0"), Source: "fake-fx"},
+	}}
+	worker := marketdata.NewFxWorker(store, provider, log)
+
+	if err := worker.Work(ctx, &river.Job[marketdata.RefreshFxArgs]{Args: marketdata.RefreshFxArgs{}}); err != nil {
+		t.Fatalf("Work: %v, want one unusable rate not to cost the whole day's set", err)
+	}
+
+	for _, base := range []string{"USD", "EUR"} {
+		if _, err := store.FxRateOn(ctx, base, "RUB", on); err != nil {
+			t.Fatalf("FxRateOn(%s): %v, want the sound rates stored regardless of the unusable ones", base, err)
+		}
+	}
+	for _, base := range []string{"XXX", "YYY"} {
+		if got, err := store.FxRateOn(ctx, base, "RUB", on); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("FxRateOn(%s) = %+v, err = %v, want pgx.ErrNoRows: a rate the table refuses must not be stored", base, got, err)
+		}
+	}
+
+	// The drop is a loss of data, so it is recorded rather than swallowed —
+	// one line per rate, at Warn, naming which pair and which value. Debug
+	// would not do: it is off on a production instance, which is the only
+	// place this can happen.
+	dropped := linesFor(*records, droppedRateMsg)
+	if len(dropped) != 2 {
+		t.Fatalf("%d dropped-rate lines, want 2 (one per dropped rate):\n%s", len(dropped), showLines(*records))
+	}
+	for _, line := range dropped {
+		if line.level != slog.LevelWarn {
+			t.Fatalf("dropped-rate line at %s, want WARN:\n%s", line.level, showLines(*records))
+		}
+	}
+	if bases := []string{dropped[0].attrs["base"], dropped[1].attrs["base"]}; !slices.Equal(bases, []string{"XXX", "YYY"}) {
+		t.Fatalf("dropped-rate lines name %v, want [XXX YYY]:\n%s", bases, showLines(*records))
+	}
+	if got := dropped[0].attrs["rate"]; got != "0" {
+		t.Fatalf("dropped-rate line for XXX says rate=%q, want the value that was refused:\n%s", got, showLines(*records))
+	}
+}
+
 func TestQuotesWorker_UpsertsMatchedTickersAndSkipsMissingPrices(t *testing.T) {
 	store, instStore, ctx := newJobsFixture(t)
 
@@ -149,7 +212,7 @@ func TestQuotesWorker_UpsertsMatchedTickersAndSkipsMissingPrices(t *testing.T) {
 			{Ticker: "GAZP", Price: dec("150.0"), Currency: "RUB", On: date("2026-07-25")},
 		},
 	}
-	worker := marketdata.NewQuotesWorker(store, instStore, provider, slog.Default())
+	worker := marketdata.NewQuotesWorkerWithClock(store, instStore, provider, slog.Default(), insideTradingWindow)
 
 	err = worker.Work(ctx, &river.Job[marketdata.RefreshQuotesArgs]{Args: marketdata.RefreshQuotesArgs{}})
 	if err != nil {
@@ -187,7 +250,7 @@ func TestQuotesWorker_NoTradableInstrumentsSkipsProviderCall(t *testing.T) {
 
 	var calls [][]string
 	provider := fakeQuoteProvider{calls: &calls, err: errors.New("must not be called")}
-	worker := marketdata.NewQuotesWorker(store, instStore, provider, slog.Default())
+	worker := marketdata.NewQuotesWorkerWithClock(store, instStore, provider, slog.Default(), insideTradingWindow)
 
 	err := worker.Work(ctx, &river.Job[marketdata.RefreshQuotesArgs]{Args: marketdata.RefreshQuotesArgs{}})
 	if err != nil {
@@ -208,7 +271,7 @@ func TestQuotesWorker_ProviderErrorReturnsFromWork(t *testing.T) {
 	}
 
 	wantErr := errors.New("moex unreachable")
-	worker := marketdata.NewQuotesWorker(store, instStore, fakeQuoteProvider{err: wantErr}, slog.Default())
+	worker := marketdata.NewQuotesWorkerWithClock(store, instStore, fakeQuoteProvider{err: wantErr}, slog.Default(), insideTradingWindow)
 
 	err := worker.Work(ctx, &river.Job[marketdata.RefreshQuotesArgs]{Args: marketdata.RefreshQuotesArgs{}})
 	if !errors.Is(err, wantErr) {
@@ -282,15 +345,40 @@ func (h *recordingHandler) WithGroup(string) slog.Handler {
 	panic("recordingHandler: grouped attributes are not modelled; teach it if a worker starts using them")
 }
 
-// onlyLine returns the single captured record carrying this exact message.
-func onlyLine(t *testing.T, records []logLine, msg string) logLine {
-	t.Helper()
+// droppedRateMsg is the message the fx workers log for a rate the fx_rates
+// table would refuse. It is spelled out here rather than imported from the
+// package under test on purpose: a copy is what makes rewording the production
+// message turn these tests red, where a shared constant would let the two move
+// together and pin nothing.
+const droppedRateMsg = "marketdata: source published a rate that is not positive, dropping it (this pair keeps whatever earlier rate it already has)"
+
+// emptySeriesMsg, allRefusedMsg and downloadedMsg are the backfill worker's
+// three verdicts on one currency's series, copied here for the same reason
+// droppedRateMsg is: they name three different causes with the same
+// user-visible outcome, and a test that let them drift would be a test that
+// stopped telling them apart.
+const (
+	emptySeriesMsg = "marketdata: source published no rates for currency over the whole range (its amounts stay unconverted)"
+	allRefusedMsg  = "marketdata: every rate the source published for this currency was refused as not positive (its amounts keep whatever earlier rates they already have)"
+	downloadedMsg  = "marketdata: downloaded fx history"
+)
+
+// linesFor returns every captured record carrying this exact message, in the
+// order they were logged.
+func linesFor(records []logLine, msg string) []logLine {
 	var found []logLine
 	for _, r := range records {
 		if r.msg == msg {
 			found = append(found, r)
 		}
 	}
+	return found
+}
+
+// onlyLine returns the single captured record carrying this exact message.
+func onlyLine(t *testing.T, records []logLine, msg string) logLine {
+	t.Helper()
+	found := linesFor(records, msg)
 	if len(found) != 1 {
 		t.Fatalf("%d records with message %q, want exactly 1:\n%s", len(found), msg, showLines(records))
 	}
@@ -328,6 +416,105 @@ func (l fakeInstrumentLister) ListTradable(context.Context) ([]instrument.Instru
 
 func quotesJob() *river.Job[marketdata.RefreshQuotesArgs] {
 	return &river.Job[marketdata.RefreshQuotesArgs]{Args: marketdata.RefreshQuotesArgs{}}
+}
+
+// insideTradingWindow is the clock every quotes test runs on. The worker asks
+// for nothing outside the trading window, so a test left on the wall clock
+// would pass on a weekday afternoon and then, having tested nothing, fail
+// every night and every weekend.
+//
+// The hour comes from marketdata.TradingHours rather than a literal so this
+// helper cannot drift from the window it is meant to sit inside; the day is
+// pinned to a Wednesday.
+func insideTradingWindow() time.Time {
+	open, _ := marketdata.TradingHours()
+	t := time.Date(2026, 7, 22, open+1, 30, 0, 0, time.FixedZone("MSK", 3*60*60))
+	if t.Weekday() != time.Wednesday {
+		panic("insideTradingWindow: fixture date is not the weekday it claims")
+	}
+	return t
+}
+
+// TestQuotesWorker_OutsideTheTradingWindowAsksNothing is issue #28. The job is
+// enqueued every half hour around the clock, so before this it made about 48
+// requests a day that could only return the previous session's prices — which
+// the run before them had already stored.
+//
+// Each case is asserted on its own, not by a loop over a table of "outside"
+// times, so a failure names which boundary moved. Two of the three sit exactly
+// ON a boundary: the window is half-open at both ends and that is the part a
+// refactor gets wrong.
+func TestQuotesWorker_OutsideTheTradingWindowAsksNothing(t *testing.T) {
+	store, _, ctx := newJobsFixture(t)
+	open, closed := marketdata.TradingHours()
+	msk := time.FixedZone("MSK", 3*60*60)
+
+	cases := []struct {
+		name string
+		at   time.Time
+		want bool // want the provider asked
+	}{
+		{"a Saturday inside the hours", time.Date(2026, 7, 25, open+2, 0, 0, 0, msk), false},
+		{"a Sunday inside the hours", time.Date(2026, 7, 26, open+2, 0, 0, 0, msk), false},
+		{"a weekday one hour before the window opens", time.Date(2026, 7, 22, open-1, 59, 0, 0, msk), false},
+		{"a weekday at the very minute it opens", time.Date(2026, 7, 22, open, 0, 0, 0, msk), true},
+		{"a weekday one minute before it closes", time.Date(2026, 7, 22, closed-1, 59, 0, 0, msk), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var calls [][]string
+			// A provider that fails if asked: "did not ask" has to be visible as
+			// silence AND as a passing Work, not as an error that happens to
+			// look the same from the outside.
+			provider := fakeQuoteProvider{calls: &calls, err: errors.New("must not be asked outside the window")}
+			if c.want {
+				provider.err = nil
+			}
+			worker := marketdata.NewQuotesWorkerWithClock(store,
+				fakeInstrumentLister{insts: []instrument.Instrument{{
+					ID: uuid.New(), Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
+				}}}, provider, slog.Default(), func() time.Time { return c.at })
+
+			if err := worker.Work(ctx, quotesJob()); err != nil {
+				t.Fatalf("Work: %v", err)
+			}
+			asked := len(calls) > 0
+			if asked != c.want {
+				t.Fatalf("provider asked = %v, want %v at %s (%s)",
+					asked, c.want, c.at.Format(time.RFC3339), c.at.Weekday())
+			}
+		})
+	}
+}
+
+// TestQuotesWorker_TheWindowIsReadInMoscowTime pins the zone the window is
+// judged in. The exchange keeps Moscow time; a server in any other zone that
+// judged the window by its own clock would stop asking in the middle of the
+// session, or keep asking all night, and neither would look like a bug from
+// the outside — the quotes would simply be a few hours stale.
+func TestQuotesWorker_TheWindowIsReadInMoscowTime(t *testing.T) {
+	store, _, ctx := newJobsFixture(t)
+	open, _ := marketdata.TradingHours()
+
+	// 09:30 in Moscow — inside the window — written as the same instant in UTC,
+	// where it reads as 06:30 and would fall outside a naive local check.
+	at := time.Date(2026, 7, 22, open, 30, 0, 0, time.FixedZone("MSK", 3*60*60)).UTC()
+	if at.Hour() >= open {
+		t.Fatalf("fixture does not discriminate: %s reads as inside the window in UTC too", at.Format(time.RFC3339))
+	}
+
+	var calls [][]string
+	worker := marketdata.NewQuotesWorkerWithClock(store,
+		fakeInstrumentLister{insts: []instrument.Instrument{{
+			ID: uuid.New(), Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
+		}}}, fakeQuoteProvider{calls: &calls}, slog.Default(), func() time.Time { return at })
+
+	if err := worker.Work(ctx, quotesJob()); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("provider asked %d times at %s (09:30 Moscow), want 1", len(calls), at.Format(time.RFC3339))
+	}
 }
 
 // TestQuotesWorker_TwoInstrumentsUnderOneTickerAreWarned is issue #26. The
@@ -370,8 +557,8 @@ func TestQuotesWorker_TwoInstrumentsUnderOneTickerAreWarned(t *testing.T) {
 		},
 	}
 	log, records := newRecordingLogger()
-	worker := marketdata.NewQuotesWorker(store,
-		fakeInstrumentLister{insts: []instrument.Instrument{sber, twin}}, provider, log)
+	worker := marketdata.NewQuotesWorkerWithClock(store,
+		fakeInstrumentLister{insts: []instrument.Instrument{sber, twin}}, provider, log, insideTradingWindow)
 
 	if err := worker.Work(ctx, quotesJob()); err != nil {
 		t.Fatalf("Work: %v — one duplicated ticker must not cost the whole refresh", err)
@@ -441,7 +628,7 @@ func TestQuotesWorker_TickerTheCatalogDoesNotHoldIsLoggedAtDebug(t *testing.T) {
 		{Ticker: "SBER-RM", Price: dec("306.0"), Currency: "RUB", On: date("2026-07-25")},
 	}}
 	log, records := newRecordingLogger()
-	worker := marketdata.NewQuotesWorker(store, instStore, provider, log)
+	worker := marketdata.NewQuotesWorkerWithClock(store, instStore, provider, log, insideTradingWindow)
 
 	if err := worker.Work(ctx, quotesJob()); err != nil {
 		t.Fatalf("Work: %v — an unknown ticker must not fail the batch", err)
@@ -497,8 +684,8 @@ func TestQuotesWorker_InstrumentsWithNoTickerAreNotReportedAsACollision(t *testi
 	var calls [][]string
 	provider := fakeQuoteProvider{calls: &calls}
 	log, records := newRecordingLogger()
-	worker := marketdata.NewQuotesWorker(store,
-		fakeInstrumentLister{insts: tickerless}, provider, log)
+	worker := marketdata.NewQuotesWorkerWithClock(store,
+		fakeInstrumentLister{insts: tickerless}, provider, log, insideTradingWindow)
 
 	if err := worker.Work(ctx, quotesJob()); err != nil {
 		t.Fatalf("Work: %v", err)
@@ -565,6 +752,8 @@ type recordingHistoryProvider struct {
 	idCalls  int
 	idsErr   error  // failure CurrencyIDs returns; nil means it always succeeds
 	emptyFor string // ISO code whose series comes back with no records at all
+	zeroFor  string // ISO code whose series carries a zero rate at the older end
+	allZero  string // ISO code whose series is non-positive from end to end
 	requests []rangeRequest
 	failFor  string // ISO code whose RatesRange fails
 	err      error  // the failure it returns; nil means never fail
@@ -589,6 +778,10 @@ func (p *recordingHistoryProvider) CurrencyIDs(context.Context) (map[string]stri
 
 // RatesRange answers with two rates, one dated at each end of the requested
 // range, so what was stored reflects what was asked for.
+//
+// For zeroFor's code the older of the two carries a zero rate — a value the
+// fx_rates CHECK refuses — while the newer stays sound, so a test can tell
+// "the bad record was dropped" apart from "the series was thrown away".
 func (p *recordingHistoryProvider) RatesRange(
 	_ context.Context, code, currencyID string, from, to time.Time,
 ) ([]marketdata.FxRate, error) {
@@ -599,9 +792,16 @@ func (p *recordingHistoryProvider) RatesRange(
 	if code == p.emptyFor {
 		return nil, nil
 	}
+	older, newer := dec("90.5"), dec("91.5")
+	if code == p.zeroFor {
+		older = dec("0")
+	}
+	if code == p.allZero {
+		older, newer = dec("0"), dec("-1")
+	}
 	return []marketdata.FxRate{
-		{Base: code, Quote: "RUB", On: from, Rate: dec("90.5"), Source: p.Name()},
-		{Base: code, Quote: "RUB", On: to, Rate: dec("91.5"), Source: p.Name()},
+		{Base: code, Quote: "RUB", On: from, Rate: older, Source: p.Name()},
+		{Base: code, Quote: "RUB", On: to, Rate: newer, Source: p.Name()},
 	}, nil
 }
 
@@ -1083,6 +1283,109 @@ func TestBackfillFx_EmptySeriesIsWarnedNotReportedAsADownload(t *testing.T) {
 		t.Fatalf("USD rates missing after the run: %v", err)
 	}
 	wantWarned(t, &logs, "GBP")
+}
+
+// TestBackfillFx_NonPositiveRateIsDroppedAndTheRestOfTheSeriesStored is the
+// history half of the poison batch (#28). One request brings back a whole
+// multi-year series, and it is upserted as one batch: before this, a single
+// unusable record anywhere in it discarded every other rate in that currency's
+// entire history, and the retry brought the identical series back.
+//
+// A currency that is not the poisoned one is downloaded in the same run, so
+// the test also says that one bad series does not end the run.
+func TestBackfillFx_NonPositiveRateIsDroppedAndTheRestOfTheSeriesStored(t *testing.T) {
+	store, _, ctx := newBackfillFixture(t)
+
+	log, records := newRecordingLogger()
+	// GBP's series carries a zero at its older end and a sound rate at its
+	// newer one; USD's is sound throughout.
+	provider := &recordingHistoryProvider{ids: cbrIDs, zeroFor: "GBP"}
+	worker := newBackfillWorker(store,
+		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"GBP"}},
+		fakeAccountStore{currencies: []string{"USD"}},
+		fakeSpaceStore{base: []string{"RUB"}},
+		provider, log)
+
+	if err := worker.Work(ctx, backfillJob()); err != nil {
+		t.Fatalf("Work: %v, want one unusable record not to cost the whole series", err)
+	}
+
+	// The sound end of the poisoned series is stored...
+	got, err := store.FxRateOn(ctx, "GBP", "RUB", pinnedToday)
+	if err != nil {
+		t.Fatalf("FxRateOn(GBP): %v, want the sound part of the series stored", err)
+	}
+	if !got.Rate.Equal(dec("91.5")) {
+		t.Fatalf("GBP rate = %s, want 91.5", got.Rate)
+	}
+	// ...and the refused record is not: asking on its own date must fall
+	// through to nothing rather than find a zero.
+	if got, err := store.FxRateOn(ctx, "GBP", "RUB", date("2024-01-10")); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("FxRateOn(GBP, 2024-01-10) = %+v, err = %v, want pgx.ErrNoRows: the refused record must not be stored", got, err)
+	}
+	// The other currency is untouched by any of it.
+	if _, err := store.FxRateOn(ctx, "USD", "RUB", pinnedToday); err != nil {
+		t.Fatalf("USD rates missing after the run: %v", err)
+	}
+
+	dropped := linesFor(*records, droppedRateMsg)
+	if len(dropped) != 1 {
+		t.Fatalf("%d dropped-rate lines, want exactly 1:\n%s", len(dropped), showLines(*records))
+	}
+	if dropped[0].level != slog.LevelWarn || dropped[0].attrs["base"] != "GBP" {
+		t.Fatalf("dropped-rate line = %s base=%q, want WARN for GBP:\n%s",
+			dropped[0].level, dropped[0].attrs["base"], showLines(*records))
+	}
+}
+
+// TestBackfillFx_WholeSeriesRefusedIsNotReportedAsAnEmptySeries is the caption
+// half of the same change, and it is the mistake this repository keeps making:
+// the number is right and the stated reason is not.
+//
+// "The source published no rates over the whole range" is a claim about the
+// SOURCE. Checking it after the unusable records have been removed would make
+// it fire for a currency the source published plenty for, naming a cause that
+// is not the cause — while the operator, told the source is silent, goes
+// looking at cbr.ru instead of at the values.
+func TestBackfillFx_WholeSeriesRefusedIsNotReportedAsAnEmptySeries(t *testing.T) {
+	store, _, ctx := newBackfillFixture(t)
+
+	log, records := newRecordingLogger()
+	provider := &recordingHistoryProvider{ids: cbrIDs, allZero: "GBP"}
+	worker := newBackfillWorker(store,
+		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"GBP"}},
+		fakeAccountStore{currencies: []string{"USD"}},
+		fakeSpaceStore{base: []string{"RUB"}},
+		provider, log)
+
+	if err := worker.Work(ctx, backfillJob()); err != nil {
+		t.Fatalf("Work: %v, want an entirely unusable series to be reported, not to fail the run", err)
+	}
+
+	if n := len(linesFor(*records, emptySeriesMsg)); n != 0 {
+		t.Fatalf("%d empty-series lines, want 0: the source published two records, they were refused here:\n%s",
+			n, showLines(*records))
+	}
+	line := onlyLine(t, *records, allRefusedMsg)
+	if line.level != slog.LevelWarn {
+		t.Fatalf("all-refused line at %s, want WARN — it leaves the currency unconverted exactly as an empty series does:\n%s",
+			line.level, showLines(*records))
+	}
+	if line.attrs["currency"] != "GBP" {
+		t.Fatalf("all-refused line names currency=%q, want GBP:\n%s", line.attrs["currency"], showLines(*records))
+	}
+	// An Info line reading "rates=0" would look like an ordinary run, which is
+	// the same trap TestBackfillFx_EmptySeriesIsWarnedNotReportedAsADownload
+	// closes for the other cause.
+	for _, l := range linesFor(*records, downloadedMsg) {
+		if l.attrs["currency"] == "GBP" {
+			t.Fatalf("GBP reported as a download:\n%s", showLines(*records))
+		}
+	}
+	// The sound currency in the same run still lands.
+	if _, err := store.FxRateOn(ctx, "USD", "RUB", pinnedToday); err != nil {
+		t.Fatalf("USD rates missing after the run: %v", err)
+	}
 }
 
 func TestBackfillFx_ClampsAbsurdlyEarlyOperationToTheFloor(t *testing.T) {
