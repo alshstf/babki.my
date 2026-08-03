@@ -227,12 +227,20 @@ func TestPositionInBaseRefusesAValuationThatCannotBeStruckInTheBaseCurrency(t *t
 	}
 	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(2)}}
 
-	out, err := h.positionInBase(context.Background(), p, apiPos, nil, "RUB",
+	out, gap, err := h.positionInBase(context.Background(), p, apiPos, nil, "RUB",
 		nullable.NewNullNullable[int64](), time.Now(), map[rateKey]*rateLookup{})
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("positionInBase = %+v, err = %v; want ErrOverflow: twice maxint64 is not an int64 of kopecks", out, err)
 	}
 	if out != nil {
 		t.Errorf("positionInBase returned %+v alongside the refusal, want nil", out)
+	}
+	// An overflow is not a gap the screen may caption. A gap says "this figure
+	// is missing and here is why a reader should expect it later"; this one is
+	// broken input, the request dies with it, and naming a cause here would be
+	// the one thing this branch spent itself removing — a caption for a state
+	// nobody is in.
+	if gap != inBaseStruck {
+		t.Errorf("positionInBase named gap %v beside the refusal, want none: an overflow fails the request, it is not a gap to caption", gap)
 	}
 }

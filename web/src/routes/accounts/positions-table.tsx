@@ -14,7 +14,99 @@ import { formatDate } from "@/lib/dates";
 import { resolveDisplayAmount } from "@/lib/display-amount";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
 import { MoneyCell } from "@/components/money-cell";
-import type { Position } from "@/api/positions";
+import type { InBaseGap, MarketValueGap, Position } from "@/api/positions";
+
+// Runtime backstop for a gap value this build cannot name. TypeScript proves
+// each switch below exhaustive over the union it was compiled against — a NEW
+// member added to the contract's enum without a case here fails to compile,
+// because the argument would no longer narrow to `never`. But these values are
+// JSON off the wire, typed by assertion rather than validated, so a client
+// running behind the server it talks to can still receive a literal outside
+// that union; that must degrade to a sentence that is still true, never to a
+// blank tooltip and never to a thrown render. The fallback is the caller's,
+// because what "still true" means differs between the two call sites.
+function unnameableGap<T>(_: never, fallback: T): T {
+  return fallback;
+}
+
+// The one sentence that captions EVERY money cell of a row, chosen from the
+// term the server says it stopped on (Position.in_base_gap). It is the row's
+// only source: has_undated_lots answers the same question for the first of
+// these four causes and cannot disagree with it — both derive from one
+// server-side predicate — but a caption assembled from two sources is a
+// caption that will eventually be assembled from two sources that have drifted.
+//
+// Each sentence explains why the WHOLE row carries no base-currency figures,
+// not why one cell does, and that is what makes it true over all four cells:
+// in_base is published as a whole or not at all, so a single unvaluable term
+// withholds the cost, the income, the profit AND the valuation together. A
+// sentence that named only its own term — «нет курса на день покупки» — would
+// hang over the income and the valuation, which need no purchase date, and
+// that is exactly the defect (#66) this is fixing rather than repeating.
+//
+// The server checks its terms in a fixed order and stops at the first failure,
+// so a named cause also asserts that nothing before it stopped the object; two
+// of these sentences say so out loud («дело не в стоимости»), which is what
+// answers the reader's obvious question about the ruble figure they can see is
+// missing from a cell whose own rates are all there. They claim no more than
+// that on purpose: a term the server never had to value — the cost of a
+// position holding no lot, the income of one that received none — was not
+// checked and found sound, it was simply never in the way, so «курсы на дни
+// покупок нашлись» over a sum with no terms reported a lookup that never
+// happened.
+//
+// Written as a switch over literal keys rather than a lookup table, so every
+// key stays a literal at the t() call site — the only shape
+// scripts/check-i18n.mjs can verify.
+function rowGapTitle(t: (key: string) => string, gap: InBaseGap | null): string {
+  switch (gap) {
+    case "undated_lot":
+      return t("positions.notConvertedUndatedLot");
+    case "no_rate_lot_date":
+      return t("positions.notConvertedNoRateLotDate");
+    case "no_rate_income_date":
+      return t("positions.notConvertedNoRateIncomeDate");
+    case "no_rate_today":
+      return t("positions.notConvertedNoRateToday");
+    case null:
+      // The contract publishes a cause whenever in_base is null and the
+      // currency differs from the base one, so a row with a marker and no
+      // cause should not occur. It is not left to crash or to say nothing:
+      // the general phrase is vague but true — some rate is missing
+      // somewhere — and it is what an older server's payload deserves.
+      return t("positions.notConverted");
+    default:
+      return unnameableGap(gap, t("positions.notConverted"));
+  }
+}
+
+// What the VALUATION cell says, which is the one cell that can have a cause of
+// its own (Position.market_value_gap) — the nearer one, and the one that wins
+// there. `rowTitle` is what it falls back to, and that fallback is the whole
+// decision this cell needed: when the valuation itself converted fine and the
+// row's own term is what withheld it, the row's sentence is the true one and
+// it already says so. Repeating the valuation's own sentence there would blame
+// a third currency that is not in play; saying nothing would leave an
+// unexplained marker on a figure the reader can see is not in rubles.
+//
+// An unnameable value degrades to the row's sentence for the same reason: the
+// row's cause is true of this cell too (the object it withholds contains this
+// figure), it is merely not the nearest one — and where the row has no named
+// cause either, that fallback is itself the general phrase.
+function valuationGapTitle(
+  t: (key: string) => string,
+  gap: MarketValueGap | null,
+  rowTitle: string,
+): string {
+  switch (gap) {
+    case "no_rate_valuation_currency":
+      return t("positions.notConvertedValuationCurrency");
+    case null:
+      return rowTitle;
+    default:
+      return unnameableGap(gap, rowTitle);
+  }
+}
 
 // Renders the price shown under the market value amount. The quote date used
 // to be shown inline too ("274,49 · 28.07.2026") but that's visual noise for
@@ -25,15 +117,55 @@ import type { Position } from "@/api/positions";
 // text, per the same "less visual noise" preference. Returns null unless
 // both the price and the quote date are present and well-formed — a
 // half-rendered hint would be more misleading than no hint at all.
+//
+// WHAT THE NUMBER IS depends on the instrument, and that is the whole of #32.
+// For a share or an ETF the quote is money per unit, in the currency the
+// QUOTE is denominated in. That is normally the position's own, and nothing
+// enforces it: Position.currency comes from the operation, a quote carries a
+// currency column of its own, and where the two differ the server converts
+// the VALUATION into the position's currency and discloses that in
+// market_value_source_currency — while Position.price stays exactly as
+// quoted and is never converted. On the ordinary row where they agree, the
+// bare number matches the valuation above it and needs no unit stated, in
+// the position's own-currency display mode. Two things break that, and
+// neither is a caption problem: in BASE mode the valuation converts and this
+// price line does not, so a foreign share prints a bare number in a currency
+// the ruble amount above it is not in; and a share quoted in a currency
+// other than its position's — which no seed row and no test exercises today
+// — would print one in either mode. Both want a different RENDERING (a unit
+// suffix or a mode-aware omission) rather than a truer caption, so they stay
+// separate, still-open cases rather than something this comment explains away.
+// For a BOND the quote is a percentage of face value (the MOEX convention):
+// the server publishes q.Price untouched in Position.price, and
+// marketValue() in internal/portfolio/http.go multiplies it as
+// faceValueMinor × price/100 × quantity. The demo seed's OFZ26238 makes the
+// gap concrete — face value 1 000,00 ₽, quote 95.20, so one bond is worth
+// 952 ₽ while the line under its ruble valuation reads "95,20". Bare, that is
+// a money figure ten times too small, sitting under a money figure.
+//
+// The alternative fix — deriving the 952 ₽ and showing THAT — was rejected on
+// two grounds. It is money arithmetic in the browser (face value × percent,
+// with a rounding decision of its own), which this project does everywhere on
+// the server; there is no per-unit price on the wire to render instead. And
+// even done correctly it would replace the number the exchange actually
+// quotes, the one the owner sees in his broker's app, with one no venue
+// prints. So the quote stays as quoted, and says which unit it is in.
 function priceHint(
   t: (key: string, opts?: Record<string, string>) => string,
   position: Position,
 ): { price: string; title: string } | null {
   if (!position.price || !position.price_on) return null;
-  const price = formatPrice(position.price);
+  const formatted = formatPrice(position.price);
   const date = formatDate(position.price_on);
-  if (price === null || !date) return null;
+  if (formatted === null || !date) return null;
+  let price = formatted;
   let title = t("positions.priceOn", { date });
+  // Written as a literal-key branch rather than t(cond ? a : b) so both keys
+  // stay verifiable by scripts/check-i18n.mjs, which only reads literals.
+  if (position.instrument.type === "bond") {
+    price = t("positions.pricePercent", { price: formatted });
+    title += "\n" + t("positions.priceIsPercentOfFace");
+  }
   const sourceCurrency = position.market_value_source_currency;
   const sourceMinor = position.market_value_source_minor;
   if (sourceCurrency != null && sourceMinor != null) {
@@ -75,38 +207,24 @@ export function PositionsTable({
   const { t } = useTranslation();
   // A position row's money amounts are denominated in the position's own
   // currency, the quote's, or a bond face value's — never "the account's",
-  // which is what the default MoneyCell wording says. Resolved once here and
-  // handed to every cell rather than per cell.
+  // which is what the default MoneyCell wording says, so every cell below is
+  // handed wording of its own.
   //
-  // Three different conditions leave a figure unconverted, and they are not
-  // the same news to the person reading it. Each says what is missing and
-  // what is shown instead, in that order — the shape every "this is not in
-  // the base currency" sentence in this application follows.
+  // WHICH wording is not this screen's to work out. Five different things
+  // leave a figure unconverted — four that stop the row's whole base-currency
+  // block and one that stops its valuation alone — and they are five different
+  // pieces of news to the person reading the row, one of them about a figure
+  // that is never coming. Only the server knows which of them actually
+  // happened, and it says so in Position.in_base_gap and
+  // Position.market_value_gap; rowGapTitle and valuationGapTitle above turn
+  // those answers into sentences and add nothing. Nothing here infers a cause
+  // from a flag or from comparing two currency codes: an inferred cause is a
+  // second answer waiting to disagree with the server's, and «нет курса» over
+  // a row whose problem is a missing DATE is precisely the disagreement this
+  // screen shipped with (#66).
   //
-  // A missing fx rate is a gap the instance's own backfill closes on its own
-  // — the ruble figure appears later.
+  // Both are per-row, hence resolved inside the map below.
   //
-  // A lot that does not know when it was bought (has_undated_lots, see the
-  // API contract) never converts: the purchase date was never recorded and
-  // nothing can recover it, so there is no rate to ask for. Saying "нет
-  // курса" over that names a cause that is not the cause and promises a
-  // number that will never come.
-  //
-  // A valuation that came out in a THIRD currency — a bond priced off a face
-  // value denominated in neither the position's currency nor the base one —
-  // is the third, and "нет курса" is wrong about it in a subtler way: a rate
-  // from that currency to the base one may well exist. What is missing is the
-  // link from it to the position's currency, without which the figure cannot
-  // be brought into the base currency at all; multiplying it by the
-  // position's own rate would be a silently wrong number (see
-  // PositionInBase.market_value_minor). The cause is the chain, not the rate,
-  // and only this figure has it — the row's cost and income are in the
-  // position's currency and convert as usual.
-  //
-  // All three are per-row, hence resolved inside the map below.
-  const notConvertedTitle = t("positions.notConverted");
-  const undatedLotTitle = t("positions.notConvertedUndatedLot");
-  const valuationCurrencyTitle = t("positions.notConvertedValuationCurrency");
   // Only the market value is converted at today's rate, so only it keeps
   // MoneyCell's default "converted at the current rate (on <date>)" wording.
   // The ruble basis is built lot by lot at each purchase date's rate and
@@ -136,24 +254,23 @@ export function PositionsTable({
       <TableBody>
         {positions.map((position) => {
           const closed = position.quantity === "0";
-          const unconvertedTitle = position.has_undated_lots
-            ? undatedLotTitle
-            : notConvertedTitle;
+          const unconvertedTitle = rowGapTitle(t, position.in_base_gap);
           // Market value's currency can differ from the position's own
           // currency (a bond's face-value currency, for instance), so it is
           // always formatted with market_value_currency, never `currency`.
           const marketValueMinor = position.market_value_minor;
           const marketValueCurrency = position.market_value_currency;
           const hasMarketValue = marketValueMinor != null && marketValueCurrency != null;
-          // The valuation's own reason, which outranks the row's: when it is
-          // denominated in some third currency, no chain reaches the base one
-          // from it, and that stays true whether or not the row also has a
-          // dateless lot or a missing rate of its own. The other cells keep
-          // the row's reason — it is the only one true of them.
-          const valuationUnconvertedTitle =
-            hasMarketValue && marketValueCurrency !== position.currency
-              ? valuationCurrencyTitle
-              : unconvertedTitle;
+          // The valuation's own reason, which outranks the row's on its own
+          // cell and nowhere else. The two can be set at once and both be
+          // true — a row stopped by a dateless lot whose valuation is also
+          // stuck in a third currency — and this cell takes the nearer of
+          // them, while the rest of the row keeps the one that is true of it.
+          const valuationUnconvertedTitle = valuationGapTitle(
+            t,
+            position.market_value_gap,
+            unconvertedTitle,
+          );
           const hint = hasMarketValue ? priceHint(t, position) : null;
           const unrealizedMinor = position.unrealized_pnl_minor;
           const hasUnrealized = unrealizedMinor != null;
@@ -264,6 +381,7 @@ export function PositionsTable({
                     />
                     {hint && (
                       <div
+                        data-testid="position-price"
                         className="text-xs font-normal text-muted-foreground"
                         title={hint.title}
                       >

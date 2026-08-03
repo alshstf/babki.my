@@ -214,44 +214,76 @@ func marketValue(instType instrument.Type, faceValueMinor *int64, faceCurrency *
 	}
 }
 
-// hasUndatedLots reports whether any lot still held has no acquisition date
-// (see Lot.AcquiredOn). It is published as a fact about the position rather
-// than left to be inferred from in_base being null, because null has two
-// causes and they are not the same news: a missing fx rate is a gap the
-// backfill job closes on its own, an unrecorded purchase date never resolves.
-// Only the position that HAS one can tell them apart, so it says which.
+// anyUndatedLot is the ONE statement of "this basis contains a piece with no
+// purchase date" — published as Position.has_undated_lots (via hasUndatedLots
+// below) rather than left to be inferred from in_base being null, because null
+// has two causes and they are not the same news: a missing fx rate is a gap
+// the backfill job closes on its own, an unrecorded purchase date never
+// resolves. Only the position that HAS one can tell them apart, so it says
+// which.
+//
+// Two published facts rest on this one predicate — has_undated_lots and the
+// in_base_gap value `undated_lot`, which lotTerms decides — and they are
+// claims about the same lots in the same response: a reader who saw
+// has_undated_lots false beside in_base_gap: undated_lot would have no way to
+// tell which of the two was lying. They were separate predicates until the gap
+// existed, when only the first was published and the second was merely a null
+// object; naming the cause is what makes a disagreement legible, so the second
+// answer is derived from the first rather than written out again.
 //
 // It scans the same slice positionInBase walks and stops at the first hit —
 // the question is whether any exists, not how many.
-func hasUndatedLots(p *Position) bool {
-	return slices.ContainsFunc(p.Lots, func(l Lot) bool { return l.AcquiredOn == nil })
+func anyUndatedLot(lots []Lot) bool {
+	return slices.ContainsFunc(lots, func(l Lot) bool { return l.AcquiredOn == nil })
 }
 
-// hasUndatedRealizations reports whether any disposal already made (a sale or
-// a covered amortization — see Position.Realizations) retired a piece of
-// basis with no acquisition date (see ReleasedLot.AcquiredOn). It is
-// hasUndatedLots' twin for the realized side, published for the identical
-// reason: in_base.realized_pnl_minor being null has two causes — no fx rate
-// for one of its dates, or no purchase date for a parcel it retired — and
-// they are not the same news to a reader.
+// hasUndatedLots is anyUndatedLot published as Position.has_undated_lots (see
+// anyUndatedLot for why it exists and what rests on it).
+func hasUndatedLots(p *Position) bool {
+	return anyUndatedLot(p.Lots)
+}
+
+// anyUndatedRealization is the ONE statement of "this position's disposals
+// retired a piece of basis with no acquisition date" (see
+// ReleasedLot.AcquiredOn) — published as Position.has_undated_realizations (via
+// hasUndatedRealizations below), anyUndatedLot's twin for the realized side,
+// for the identical reason: in_base.realized_pnl_minor being null has two
+// causes — no fx rate for one of its dates, or no purchase date for a parcel
+// it retired — and they are not the same news to a reader.
 //
-// hasUndatedLots cannot stand in for it: that flag scans p.Lots, the lots
+// anyUndatedLot cannot stand in for it: that predicate scans p.Lots, the lots
 // still HELD, and a piece that stopped realized_pnl_minor has by definition
 // already been sold — it is never among them. A position can therefore show
 // has_undated_lots=false and has_undated_realizations=true in the very same
 // response (see TestPositionInBaseRealizedNullWhenAReleasedParcelHasNoAcquisitionDate),
-// which is exactly the case the old single flag could not describe.
+// which is exactly the case a single flag could not describe.
+//
+// Two published facts rest on this one predicate, exactly as with
+// anyUndatedLot — has_undated_realizations above, and the RealizedTotal
+// (account-level) in_base_gap value `undated`, which realizedTerms decides on
+// the way to gapUndated (see realizedInBase) and which realizedTotals.add/
+// result then carries onto the wire. A reader who saw has_undated_realizations
+// false on a row while the account's total answered `undated` would have no
+// way to tell which one was lying; deriving the second from the first is what
+// makes such a disagreement impossible rather than merely unlikely.
 //
 // It scans every Realization rather than stopping at the first one with any
 // Released piece, but the question is still only whether any undated piece
 // exists anywhere, not how many or in which disposal.
-func hasUndatedRealizations(p *Position) bool {
-	for _, r := range p.Realizations {
-		if slices.ContainsFunc(r.Released, func(rl ReleasedLot) bool { return rl.AcquiredOn == nil }) {
+func anyUndatedRealization(events []Realization) bool {
+	for _, e := range events {
+		if slices.ContainsFunc(e.Released, func(r ReleasedLot) bool { return r.AcquiredOn == nil }) {
 			return true
 		}
 	}
 	return false
+}
+
+// hasUndatedRealizations is anyUndatedRealization published as
+// Position.has_undated_realizations (see anyUndatedRealization for why it
+// exists and what rests on it).
+func hasUndatedRealizations(p *Position) bool {
+	return anyUndatedRealization(p.Realizations)
 }
 
 // toAPI builds one position's API representation, including its market
@@ -279,6 +311,12 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 		FeesMinor:              p.FeesMinor,
 		HasUndatedLots:         hasUndatedLots(p),
 		HasUndatedRealizations: hasUndatedRealizations(p),
+		// Nothing has been withheld from the valuation until the conversion
+		// below actually fails, and every path out of this function leaves the
+		// field as it is set here — an explicit null, never an unspecified key
+		// (the contract requires it on every position, and an unspecified
+		// nullable does not marshal as one).
+		MarketValueGap: nullable.NewNullNullable[apitypes.MarketValueGap](),
 	}
 	q, found := quotes[p.InstrumentID]
 	if !found {
@@ -312,8 +350,10 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 	// other rows) using today's fx rate ("today" is the only sensible answer
 	// for "what is this holding worth right now", as opposed to some
 	// historical rate). The original figure is preserved in
-	// market_value_source_currency/_minor purely for transparency (e.g. a UI
-	// tooltip) — it plays no further part in the computation below.
+	// market_value_source_currency/_minor — for transparency (a UI tooltip
+	// names it: «Пересчитано из 1 000,00 €») and because it, not the converted
+	// figure, is what positionInBase carries on into the base currency. Nothing
+	// below in THIS function reads it back.
 	//
 	// The rate comes from the request's memo (rateFor) and the arithmetic is
 	// Convert's own (applyTo), which together produce exactly what
@@ -347,6 +387,17 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 			// it. market_value_source_* stay null — nothing was converted.
 			// unrealized_pnl_minor is left null below, same as any other
 			// currency mismatch.
+			//
+			// THIS IS THE POINT WHERE THE VALUATION'S OWN GAP IS DECIDED, so it
+			// is where the gap is named. It is not a second reading of the
+			// outcome: positionInBase withholds the base-currency valuation by
+			// asking this very field (see its guard), so the flag a client
+			// captions the cell with and the figure the client does not get are
+			// one decision. Comparing market_value_currency with p.Currency
+			// afterwards would answer the same question today — this branch is
+			// the only way the two can differ — and would be a second answer
+			// waiting to disagree with this one.
+			out.MarketValueGap = nullable.NewNullableWithValue(apitypes.NoRateValuationCurrency)
 		default:
 			// A genuine failure (DB error, canceled context) — not "no rate
 			// available" — must not be silently swallowed into "no
@@ -559,12 +610,19 @@ func (h *Handler) sumInBase(ctx context.Context, amounts []datedMinor, from, to 
 // of it being a function at all — one statement of which dates the basis
 // needs, so the prefetch cannot come to disagree with the sum it is
 // prefetching for.
+// It asks anyUndatedLot first and walks the lots a second time to build the
+// terms, rather than bailing out mid-loop as it used to. The second walk costs
+// a nil check per lot and no allocation; what it buys is that the answer
+// published as `undated_lot` and the answer published as has_undated_lots are
+// one predicate rather than two that must agree (see anyUndatedLot). The
+// dereference below is safe for exactly that reason, and a broken predicate
+// would panic here rather than quietly value a lot at a date it does not have.
 func lotTerms(lots []Lot) (terms []datedMinor, dated bool) {
+	if anyUndatedLot(lots) {
+		return nil, false
+	}
 	terms = make([]datedMinor, 0, len(lots))
 	for _, l := range lots {
-		if l.AcquiredOn == nil {
-			return nil, false
-		}
 		terms = append(terms, datedMinor{minor: l.CostMinor, on: *l.AcquiredOn})
 	}
 	return terms, true
@@ -603,13 +661,23 @@ func incomeTerms(income []Operation) []datedMinor {
 // as none (see Realization), so which events reach this function is settled
 // there rather than re-decided here.
 //
-// dated is false as soon as one retired parcel does not know when it was
-// bought (see Lot.AcquiredOn): there is no date to ask the fx table about, and
-// every candidate — the disposal's own day, another parcel's, today's — would
-// be a number this handler made up. The caller publishes nothing for the
-// realized figure then; it does NOT drop the terms it could value, since a
-// result missing part of its expense reads as a larger profit, not as a gap.
+// dated is false whenever any retired parcel does not know when it was bought
+// (see Lot.AcquiredOn): there is no date to ask the fx table about, and every
+// candidate — the disposal's own day, another parcel's, today's — would be a
+// number this handler made up. The caller publishes nothing for the realized
+// figure then; it does NOT drop the terms it could value, since a result
+// missing part of its expense reads as a larger profit, not as a gap.
+//
+// It is lotTerms' twin for the realized side, and like lotTerms it asks
+// anyUndatedRealization first and walks the events a second time to build the
+// terms, rather than bailing out mid-loop as it used to (see anyUndatedLot):
+// the answer published as has_undated_realizations and the answer published
+// as RealizedTotal's `undated` gap are one predicate rather than two that must
+// agree. The dereference below is safe for exactly that reason.
 func realizedTerms(events []Realization) (terms []datedMinor, dated bool) {
+	if anyUndatedRealization(events) {
+		return nil, false
+	}
 	terms = make([]datedMinor, 0, len(events)*2)
 	for _, e := range events {
 		terms = append(terms,
@@ -617,9 +685,6 @@ func realizedTerms(events []Realization) (terms []datedMinor, dated bool) {
 			datedMinor{minor: -e.FeeMinor, on: e.OccurredOn},
 		)
 		for _, r := range e.Released {
-			if r.AcquiredOn == nil {
-				return nil, false
-			}
 			terms = append(terms, datedMinor{minor: -r.CostMinor, on: *r.AcquiredOn})
 		}
 	}
@@ -645,6 +710,81 @@ const (
 	// will ever be recovered — nobody wrote it down.
 	gapUndated
 )
+
+// inBaseGap names WHICH TERM stopped a position's whole in_base object, and is
+// what the contract's Position.in_base_gap publishes.
+//
+// It is baseGap's neighbour and deliberately not baseGap itself. That type
+// answers for the account's realized total, which sums MANY positions, so the
+// most it can name is the KIND of gap — no single term exists to point at, and
+// it needs a `both` value because two kinds really can be true of one total at
+// once. Here there is exactly one position, its terms are the very figures a
+// row shows side by side, and the kind alone is not enough to caption them
+// with: «нет курса» is false about a lot whose DATE nobody recorded, and
+// «нет курса на дату покупки» is false over a market valuation whose row failed
+// on today's rate. So this vocabulary names terms, and it needs no `both` — see
+// apiInBaseGap for why one value is enough.
+type inBaseGap uint8
+
+const (
+	// inBaseStruck: nothing was missing; there is an object.
+	inBaseStruck inBaseGap = iota
+	// inBaseSameCurrency: the position is already denominated in the base
+	// currency, so there is no object and nothing to explain either — its own
+	// figures ARE the base-currency ones. Named separately from inBaseStruck
+	// purely for readability at the call site (see positionInBase's early
+	// return): nothing downstream tells the two apart — apiInBaseGap maps both
+	// to "no cause published" and handleList separates "struck" from "nothing
+	// to convert" by checking the *PositionInBase pointer, never this value.
+	inBaseSameCurrency
+	// inBaseUndatedLot: a lot still held does not know when it was acquired
+	// (see Lot.AcquiredOn and lotTerms), so there is no date to ask the fx
+	// table about. The one member that never resolves on its own.
+	inBaseUndatedLot
+	// inBaseNoRateLotDate: every lot is dated, but the fx table has no rate for
+	// at least one of those days, nor for any earlier one.
+	inBaseNoRateLotDate
+	// inBaseNoRateIncomeDate: the same, for the day one of the position's
+	// income operations occurred.
+	inBaseNoRateIncomeDate
+	// inBaseNoRateToday: no rate today for the pair the market valuation needs
+	// — the currency THAT VALUATION is in against the base one. Only a position
+	// with a valuation to convert ever asks for it.
+	inBaseNoRateToday
+)
+
+// apiInBaseGap maps a gap onto the contract's vocabulary. ok is false for the
+// two members that are not gaps at all (inBaseStruck, inBaseSameCurrency),
+// which publish no cause: one has a figure and the other has nothing to
+// convert, and the client tells those apart by comparing the position's
+// currency with the base one.
+//
+// EXACTLY ONE CAUSE IS EVER PUBLISHED, and that is a decision rather than a
+// limitation of the type. positionInBase stops at the first term it cannot
+// value, and it looks at them in the order the constants above are declared —
+// which puts inBaseUndatedLot, the only member that no backfill will ever
+// close, ahead of the three that it will. A row that has both a dateless lot
+// and a missing rate therefore reports the dateless lot, and never promises a
+// converted figure that is not coming. Among the three closeable ones, whichever
+// is reported is true, and closing it reports the next: the caption converges
+// instead of ever claiming more than the server knows. baseGap needs `both` for
+// the opposite reason — it aggregates positions, so a permanent gap in one and a
+// closeable gap in another are simultaneously true of the single total it
+// describes.
+func apiInBaseGap(g inBaseGap) (apitypes.InBaseGap, bool) {
+	switch g {
+	case inBaseUndatedLot:
+		return apitypes.UndatedLot, true
+	case inBaseNoRateLotDate:
+		return apitypes.NoRateLotDate, true
+	case inBaseNoRateIncomeDate:
+		return apitypes.NoRateIncomeDate, true
+	case inBaseNoRateToday:
+		return apitypes.NoRateToday, true
+	default:
+		return "", false
+	}
+}
 
 // realizedInBase is the position's realized result in currency to, or an
 // explicit null with the kind of gap that stopped it. It answers for both
@@ -841,8 +981,11 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 //   - income_minor sums the position's income operations, each at the rate of
 //     the day it occurred (income, unlike the lots, is passed in: see
 //     incomeByInstrument).
-//   - market_value_minor uses TODAY's rate. It is the one current figure here,
-//     because "what is this holding worth" is a question about now.
+//   - market_value_minor uses TODAY's rate, from the currency the valuation is
+//     REALLY denominated in — a bond's face currency when the row had to
+//     convert it (market_value_source_currency), the position's own otherwise.
+//     It is the one current figure here, because "what is this holding worth"
+//     is a question about now.
 //   - unrealized_pnl_minor is that valuation minus that basis, both already in
 //     baseCurrency, so it is exact integer subtraction with no second
 //     rounding. Base-currency profit therefore INCLUDES the currency's
@@ -864,27 +1007,82 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // fees_minor is deliberately excluded (owner feedback — not carried into
 // PositionInBase at all, see the API contract).
 //
-// Only a valuation denominated in the position's own currency may be
-// converted with the position's own rate. cost and income always are. The
-// market valuation is not: when no rate was available to bring it into the
-// position's currency, toAPI publishes it raw, in market_value_currency (a
-// bond's face_currency, say EUR, on a USD position). Multiplying that EUR
-// figure by the USD->RUB rate and labeling the product "RUB" would be a
-// silently wrong number — and, since it equals the converted cost whenever
-// cost and valuation coincide, would read as "profit exactly zero". So
-// market_value_minor is published in_base only when market_value_currency
-// equals p.Currency, and unrealized_pnl_minor follows it. Null there is
-// honest: the frontend falls back to showing the raw amount in its own
+// EVERY FIGURE IS CONVERTED FROM THE CURRENCY IT IS ACTUALLY IN, ONCE. cost
+// and income are in the position's own currency and always were. The market
+// valuation may not be: a bond's is born in its face currency and toAPI brings
+// it into the position's so the row can compare it with cost_minor (see
+// toAPI). This object does NOT continue from that converted figure — it goes
+// back to the original, market_value_source_minor in
+// market_value_source_currency, and converts that straight into the base
+// currency. One multiplication, one rounding. Chaining the two conversions
+// rounded the money to a whole cent in a currency that appears nowhere in the
+// answer, and then multiplied that lost fraction by the second rate: 1 000,00 €
+// through the dollar came out 9 999 990 kopecks instead of 10 000 000, under a
+// tooltip saying it had been converted from euros (#39). It had not been.
+//
+// market_value_minor is still published in_base ONLY when market_value_currency
+// equals p.Currency, and unrealized_pnl_minor follows it. THAT RULE WITHHOLDS
+// NOTHING THAT COULD BE COMPUTED, and the reason is checkable rather than a
+// principle. Every fx row this program stores is quoted in RUB: the seed writes
+// <currency>/RUB rows (cmd/babki/seed.go) and the only provider behind the
+// refresh jobs is the CBR one, which publishes nothing else (marketdata/cbr).
+// marketdata.resolveRate reaches a pair only as a direct row, as the inverse of
+// one, or as a bridge X->RUB->Y. So for a valuation denominated in F on a
+// position in P: this rule fires only after the F->P conversion in toAPI
+// failed, which in a RUB-quoted table means F->RUB is missing or P->RUB is. A
+// pair the table cannot resolve today it cannot resolve for any earlier day
+// either (Store.FxRateOn takes the nearest EARLIER row), so a missing P->RUB
+// has already taken cost_minor or income_minor down with it and this function
+// returned nil far above, before the rule was reached at all. What is left is a
+// missing F->RUB — and then F->baseCurrency has no route either, whatever the
+// base currency is. The figure is absent because there is none, not because one
+// is being kept back.
+//
+// The rule is nevertheless written out rather than left to that argument,
+// because the argument is about the rate TABLE rather than about this function.
+// The day one non-RUB-quoted row exists — a direct GBP/USD, say, which nothing
+// in this codebase can currently create — a valuation stuck in GBP on a USD
+// position becomes expressible in RUB, and withholding it turns into a real
+// choice that would have to be argued for here instead of merely explained.
+//
+// The step "P->RUB missing has already nulled this object" holds only because
+// no lot can be dated later than today: Service rejects an operation dated in
+// the future (see its occurred_on check), and Store.FxRateOn resolves the
+// nearest EARLIER row, so a table that answers any lot's date answers today's
+// too. Contrapositive: no answer today means no answer on any lot date either,
+// and cost_minor was unstrikable before this branch was reached.
+//
+// ONE row still slips through, and the written-out rule covers it. A position
+// holding no lot and having received no income sums nothing, needs no rate to do
+// it, and so survives a missing P->RUB — for it, F->RUB may well exist and the
+// base-currency valuation is genuinely computable. What the rule withholds there
+// is the zero of a closed row.
+//
+// Asymmetry between this object and the position's own figures is ordinary, not
+// something this rule prevents: realized_pnl_minor goes null here while
+// Position.realized_pnl_minor is published either way, and one undated lot nulls
+// this whole object while every native figure stays. Null here is honest in all
+// of those cases: the frontend falls back to showing the raw amount in its own
 // currency with a "not converted" marker.
 //
-// It returns (nil, nil) — render in_base as null, the WHOLE object, never
-// partially populated — when p.Currency already equals baseCurrency (nothing
-// to convert), when any single rate the object needs is missing
+// It returns no object — render in_base as null, the WHOLE object, never
+// partially populated — together with the inBaseGap naming the term that
+// stopped it, when p.Currency already equals baseCurrency (nothing
+// to convert, and so no gap either: that one is inBaseSameCurrency, and the
+// position's own figures ARE the base-currency ones), when any single rate the
+// object needs is missing
 // (marketdata.ErrNoRate): one lot's, one income operation's, or today's — and
 // today's is needed only when there is a valuation for it to convert, so a
 // position with no usable quote publishes its basis and its income without
 // ever asking for a rate for today (rate_on is then null, saying exactly
-// that) — or when a single lot does not know WHEN it was acquired
+// that). Today's is now asked for the VALUATION's currency against the base
+// one, not the position's, so on a bond priced off a foreign face value a
+// missing rate there takes cost_minor and income_minor down with it as well —
+// unreachable in a RUB-quoted table, by the same kind of argument as the rule
+// above and spelled out at the today's-rate block below, and stated here
+// because it is a fact about the whole object rather than about the valuation
+// alone. It also returns
+// no object when a single lot does not know WHEN it was acquired
 // (Lot.AcquiredOn nil),
 // which leaves no date to ask for a rate in the first place. A basis summed
 // from only the lots that happened to convert is an invented number, smaller
@@ -907,14 +1105,24 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 //
 // A non-nil error means a genuine failure (DB error, canceled context) that
 // the caller must surface as a request error — never silently rendered as
-// null, which would misrepresent an outage as "nothing to convert".
+// null, which would misrepresent an outage as "nothing to convert". The gap
+// returned beside such an error is inBaseStruck and means nothing: an outage is
+// not one of the gaps this vocabulary describes, and handleList reads the error
+// first (mirroring realizedInBase, which returns gapNone on the same path).
+//
+// EVERY RETURN NAMES BOTH AT ONCE, which is the point of the second result
+// rather than a flag computed beside the call: the sentence a reader is shown
+// and the figure they are not shown leave this function in one statement, so
+// the caption cannot come to describe a different failure than the one that
+// actually happened. handleList closes the loop from the other end — it
+// publishes the object only when the gap says there was none (see there).
 // now is the request's one reading of "today" (see toAPI, which takes it for
 // the same reason): the valuation this object converts was itself brought into
 // p.Currency at today's rate a moment earlier, and the two must mean the same
 // day even for a request that crosses UTC midnight.
-func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, income []Operation, baseCurrency string, realizedMinor nullable.Nullable[int64], now time.Time, cache map[rateKey]*rateLookup) (*apitypes.PositionInBase, error) {
+func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, income []Operation, baseCurrency string, realizedMinor nullable.Nullable[int64], now time.Time, cache map[rateKey]*rateLookup) (*apitypes.PositionInBase, inBaseGap, error) {
 	if p.Currency == baseCurrency {
-		return nil, nil
+		return nil, inBaseSameCurrency, nil
 	}
 
 	lots, dated := lotTerms(p.Lots)
@@ -926,22 +1134,26 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		// ordinary figure on screen, and drags the profit down with it. Nothing
 		// is published rather than something wrong, and the position still
 		// shows every figure it has in its own currency.
-		return nil, nil
+		//
+		// This is checked before any rate is asked for, which is also what
+		// settles the answer for a position that has this gap AND a missing
+		// rate: the permanent cause is the one reported (see apiInBaseGap).
+		return nil, inBaseUndatedLot, nil
 	}
 	costMinor, ok, err := h.sumInBase(ctx, lots, p.Currency, baseCurrency, cache)
 	if err != nil {
-		return nil, err
+		return nil, inBaseStruck, err
 	}
 	if !ok {
-		return nil, nil
+		return nil, inBaseNoRateLotDate, nil
 	}
 
 	incomeMinor, ok, err := h.sumInBase(ctx, incomeTerms(income), p.Currency, baseCurrency, cache)
 	if err != nil {
-		return nil, err
+		return nil, inBaseStruck, err
 	}
 	if !ok {
-		return nil, nil
+		return nil, inBaseNoRateIncomeDate, nil
 	}
 
 	// Unlike the two sums above, a realized result that cannot be struck nulls
@@ -954,13 +1166,50 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		Currency:         baseCurrency,
 	}
 
+	// Which figure this object converts, and out of which currency. The GUARD
+	// comes first and the rule it enforces is unchanged: a valuation that never
+	// reached the position's currency is not carried into the base one (see this
+	// function's doc comment — in a table where every rate is quoted in RUB,
+	// there is no base-currency figure to carry).
+	//
+	// WHAT IT ASKS changed with the gap. It used to compare
+	// market_value_currency with p.Currency, which is toAPI's outcome read back
+	// out of the payload; it now asks toAPI's own answer, market_value_gap, set
+	// in the branch where the conversion into p.Currency failed. The two are
+	// equivalent today — that branch is the only way the two currencies can
+	// differ, and the `c == nil` half of the old condition was already
+	// redundant, since toAPI sets market_value_minor and market_value_currency
+	// together and a nil valuation is handled below regardless. What the change
+	// buys is that the cause published to the reader and the figure withheld
+	// from them are one decision instead of two that must keep agreeing: a
+	// caption saying the valuation could not be converted, over a converted
+	// valuation, is precisely the failure this whole change is about.
 	marketValueMinor := nullableValue(apiPos.MarketValueMinor)
-	if c := nullableValue(apiPos.MarketValueCurrency); c == nil || *c != p.Currency {
+	valuationCurrency := p.Currency
+	if nullableValue(apiPos.MarketValueGap) != nil {
 		marketValueMinor = nil
 	}
+	// Only then is the converted figure swapped back for the original it was
+	// converted FROM, so the base-currency answer is struck in one step.
+	//
+	// `marketValueMinor != nil` here is UNREACHABLE INSURANCE, not part of the
+	// rule: toAPI sets the two source fields only in the branch where the
+	// conversion succeeded, which is not the branch that sets the gap, so the
+	// guard above never struck the figure this would put back. Removing the
+	// conjunct leaves the whole suite green, and it is kept anyway — not as a
+	// second, quieter statement of the rule (the guard states it), but so that a
+	// future toAPI which set the source fields on a path that did NOT convert
+	// could not resurrect, here, a valuation the guard has just withheld. What no
+	// test can pin, a comment has to say.
+	if src, srcCurrency := nullableValue(apiPos.MarketValueSourceMinor), nullableValue(apiPos.MarketValueSourceCurrency); marketValueMinor != nil && src != nil && srcCurrency != nil {
+		marketValueMinor, valuationCurrency = src, *srcCurrency
+	}
 	if marketValueMinor == nil {
-		// No valuation this object may convert — no usable quote, or one
-		// denominated in a currency this rate cannot bring into the base one.
+		// No valuation this object may convert — no usable quote, or one the
+		// guard above withheld because it never reached the position's own
+		// currency. Nothing is being kept back in that second case: the
+		// conversion out of its own currency needs the very rate whose absence
+		// stopped it from reaching p.Currency (see the doc comment).
 		// rate_on goes with it, because rate_on is the DATE OF that figure and
 		// of nothing else here: the basis and the income are struck at the
 		// rates of their own many dates, and a date published beside them
@@ -982,7 +1231,13 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		out.MarketValueMinor = nullable.NewNullNullable[int64]()
 		out.UnrealizedPnlMinor = nullable.NewNullNullable[int64]()
 		out.RateOn = nullable.NewNullNullable[string]()
-		return out, nil
+		// The object stands, so nothing stopped IT — which is why this returns
+		// no gap even though a figure inside it is null. The one case that has
+		// something to explain is already published on the position itself, by
+		// the code that decided it (Position.market_value_gap, set in toAPI);
+		// the other, a position with no usable quote, has no valuation to
+		// withhold and nothing to caption.
+		return out, inBaseStruck, nil
 	}
 
 	// Today's rate values the market valuation and supplies rate_on — the one
@@ -992,25 +1247,65 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 	// stale. Without it the valuation cannot be struck, and since the profit
 	// below is measured against a basis that would then be published beside a
 	// valuation that is not, the whole object goes rather than half of it.
-	today := h.rateFor(ctx, p.Currency, baseCurrency, now, cache)
+	//
+	// The pair is the VALUATION's currency against the base one, which for a
+	// bond priced off a foreign face value is neither the position's currency
+	// nor the one any other figure in this object is converted from. That is
+	// the whole point (see the doc comment): one screen can therefore ask
+	// about EUR->RUB for a row whose every other figure is USD->RUB, and
+	// rateQueries enumerates it from the same marketValue call that decides it.
+	//
+	// It also widens what the ErrNoRate below can take down. Before, only the
+	// POSITION currency's today-rate could null this object; now a missing rate
+	// for a bond's FACE currency nulls cost_minor and income_minor too, though
+	// neither is converted through it. Nothing reaches that today: this line
+	// runs only when the valuation did arrive in p.Currency, so toAPI resolved
+	// F->p.Currency, so — every rate this program stores being quoted in RUB —
+	// the table holds F->RUB; and cost_minor was struck through
+	// p.Currency->baseCurrency at each lot's own date, so RUB->baseCurrency sits
+	// there on a day no later than today, which by Store.FxRateOn's
+	// nearest-earlier rule answers for today as well; F->baseCurrency is the two
+	// of them bridged. (A position holding no lot strikes its basis without any
+	// rate at all and escapes the second half of that — it has nothing but zeros
+	// to lose here.) It is written down because what changed is the SHAPE of the
+	// failure rather than anything reachable: the day a non-RUB-quoted row
+	// exists, this refusal becomes reachable, and it refuses figures that have
+	// nothing to do with the valuation.
+	today := h.rateFor(ctx, valuationCurrency, baseCurrency, now, cache)
 	if today.err != nil {
 		if errors.Is(today.err, marketdata.ErrNoRate) {
-			return nil, nil
+			return nil, inBaseNoRateToday, nil
 		}
-		return nil, today.err
+		return nil, inBaseStruck, today.err
 	}
 	valuation, err := today.applyTo(*marketValueMinor)
 	if err != nil {
 		// Too large to state in the base currency. The missing rate handled
-		// just above nulls the whole object, because the figure it stops is one
-		// the fx backfill will supply later; this one is not waiting for
-		// anything, so it fails the request rather than joining that null.
-		return nil, err
+		// just above nulls the whole object and names a gap, because the figure
+		// it stops is one the fx backfill will supply later; this one is not
+		// waiting for anything, so it fails the request rather than joining
+		// that null. The gap it returns beside the error is inBaseStruck — not
+		// a cause, because nothing here is a gap the caller should publish: a
+		// non-nil error means the request dies and no gap is ever read.
+		return nil, inBaseStruck, err
 	}
 	out.MarketValueMinor = nullable.NewNullableWithValue(valuation)
 	out.UnrealizedPnlMinor = nullable.NewNullableWithValue(valuation - costMinor)
-	out.RateOn = nullable.NewNullableWithValue(today.date.Format("2006-01-02"))
-	return out, nil
+	// rate_on names the rate that was actually applied, and there is not always
+	// one to name: a valuation already denominated in the base currency (an OFZ
+	// with a ruble face value in a dollar account of a ruble space) is the
+	// answer as it stands, and rateFor hands back a rate of 1 on the ZERO date
+	// — marketdata resolves nothing for from == to, deliberately, so that an
+	// identity conversion cannot disclose a staleness that does not exist. That
+	// zero date formats as "0001-01-01", so the choice here is between an
+	// explicit null and a caption naming a rate that had no part in the figure.
+	// Null, then — for the same reason the branch above publishes one.
+	if today.date.IsZero() {
+		out.RateOn = nullable.NewNullNullable[string]()
+	} else {
+		out.RateOn = nullable.NewNullableWithValue(today.date.Format("2006-01-02"))
+	}
+	return out, inBaseStruck, nil
 }
 
 // rateQueries enumerates every fx rate the loop in handleList is about to ask
@@ -1029,12 +1324,16 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 // computations of one value drift apart, and a prefetch is the worst place for
 // it, since the two disagree in silence.
 //
-// ONE query is not derived: the position's own currency against the base ON
-// TODAY, below. positionInBase picks today's rate for the valuation as a flat
-// decision rather than by building terms, so there is nothing here to call,
-// and this restates that choice. If the valuation ever stops being struck at
-// today's rate, this line has to follow — and nothing will make it, because
-// the consequence is a missed prefetch, not a wrong figure (see below).
+// ONE thing is not derived, and it is a DATE rather than a pair: the two
+// valuation queries below are written `now` by hand. toAPI and positionInBase
+// both value a holding at today's rate as a flat decision rather than by
+// building terms, so there is nothing here to call for it and these two lines
+// restate that choice. Their PAIRS are derived like everything else — both come
+// out of the one marketValue call in the loop, so neither restates which
+// currency a bond's valuation is really in. If the valuation ever stops being
+// struck at today's rate, these two dates have to follow — and nothing will
+// make them, because the consequence is a missed prefetch, not a wrong figure
+// (see below).
 //
 // Completeness is an optimization, not a correctness condition, and the
 // asymmetry is deliberate. Asking for a rate the loop turns out not to need
@@ -1088,14 +1387,26 @@ func rateQueries(
 				}
 				if p.Currency != baseCurrency {
 					// positionInBase carries that valuation on into the base
-					// currency, and asks for today's rate only when there is a
-					// valuation to convert. Whether there still is one depends
-					// on the conversion just above having succeeded, which is
-					// not known until it runs — so this asks whenever a
-					// valuation exists at all, and over-asks in exactly the
-					// case where the position ends up publishing no in_base
-					// valuation anyway.
-					out = append(out, marketdata.RateQuery{From: p.Currency, To: baseCurrency, On: now})
+					// currency FROM THE SAME `currency` toAPI converted it out
+					// of, not from the position's — the valuation is converted
+					// once, from where it really is (#39, see positionInBase).
+					// So this is `currency` here too, and both queries come out
+					// of the one marketValue call above rather than restating
+					// which currency a bond's valuation is in.
+					//
+					// It asks for today's rate only when there is a valuation
+					// to convert. Whether there still is one depends on the
+					// conversion just above having succeeded, which is not
+					// known until it runs — so this asks whenever a valuation
+					// exists at all, and over-asks in exactly the case where
+					// the position ends up publishing no in_base valuation
+					// anyway. It also asks when `currency` IS the base
+					// currency, which positionInBase resolves as an identity
+					// without touching the store: a wasted row in a batch that
+					// was happening anyway, and the alternative — a second
+					// place that knows identities are free — is how an
+					// enumeration comes to disagree with its consumer.
+					out = append(out, marketdata.RateQuery{From: currency, To: baseCurrency, On: now})
 				}
 			}
 		}
@@ -1312,15 +1623,34 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		totals.add(apiPos.Currency, apiPos.RealizedPnlMinor, realizedMinor, realizedGap)
 
-		inBase, err := h.positionInBase(r.Context(), pos, apiPos, income[pos.InstrumentID], sp.BaseCurrency, realizedMinor, now, rates)
+		inBase, gap, err := h.positionInBase(r.Context(), pos, apiPos, income[pos.InstrumentID], sp.BaseCurrency, realizedMinor, now, rates)
 		if err != nil {
 			family.WriteError(w, err)
 			return
 		}
-		if inBase != nil {
-			apiPos.InBase = nullable.NewNullableWithValue(*inBase)
-		} else {
+		// THE GAP DECIDES WHETHER THERE IS AN OBJECT TO PUBLISH, not a second
+		// look at the pointer. positionInBase names both in one statement, and
+		// this reads the naming: a cause is published only with no object beside
+		// it, and an object only with no cause. Should the two ever be returned
+		// together by mistake, this drops the object and keeps the honest
+		// caption — the wrong way round would put a converted figure under a
+		// sentence saying it could not be converted, which is the one outcome
+		// worse than today's vague-but-true phrase.
+		if apiGap, missing := apiInBaseGap(gap); missing {
 			apiPos.InBase = nullable.NewNullNullable[apitypes.PositionInBase]()
+			apiPos.InBaseGap = nullable.NewNullableWithValue(apiGap)
+		} else {
+			apiPos.InBaseGap = nullable.NewNullNullable[apitypes.InBaseGap]()
+			// No gap covers two answers — the object was struck, or the position
+			// is already in the base currency and there was nothing to convert
+			// — and the pointer is what tells them apart. Both publish a null
+			// gap: nothing is missing in either, and a client separates them by
+			// comparing the position's currency with the base one.
+			if inBase != nil {
+				apiPos.InBase = nullable.NewNullableWithValue(*inBase)
+			} else {
+				apiPos.InBase = nullable.NewNullNullable[apitypes.PositionInBase]()
+			}
 		}
 
 		out = append(out, apiPos)

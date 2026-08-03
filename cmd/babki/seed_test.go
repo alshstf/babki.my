@@ -21,11 +21,16 @@ import (
 // mustAcquired asserts that a lot (or a piece of a transfer's breakdown) knows
 // when it was acquired, and returns that date. Nil is a legitimate value in
 // general — a transfer with no recoverable purchase dates produces lots that
-// carry none (see portfolio.Lot.AcquiredOn) — but not anywhere in this seed:
-// every lot here comes from a real buy or from the TSLA transfer that carries
-// those buys' own dates across, and that survival is exactly what the demo
-// exists to show. An unknown date here means the seed has stopped demonstrating
-// it, so this fails rather than skipping the arithmetic.
+// carry none (see portfolio.Lot.AcquiredOn) — and the seed contains EXACTLY ONE
+// such lot on purpose: the Intel parcel that arrives at Freedom KZ with a
+// hand-typed basis, which is the demo's permanent-gap row (see the INTC
+// transfer). Nowhere else: every other lot comes from a real buy or from a
+// transfer that carries those buys' own dates across, and that survival is
+// exactly what the demo exists to show. This is therefore called only on the
+// lots that must be dated — never on Intel's, which has an assertion of its own
+// stating the opposite — and an unknown date at any of those call sites means
+// the seed has stopped demonstrating something, so it fails rather than
+// skipping the arithmetic.
 func mustAcquired(t *testing.T, on *time.Time, what string) time.Time {
 	t.Helper()
 	if on == nil {
@@ -104,8 +109,9 @@ func TestSeedDemo(t *testing.T) {
 	}
 
 	tbankPositions := positionsByTicker(tbankID)
-	if len(tbankPositions) != 6 {
-		t.Fatalf("Т-Банк positions = %d, want 6: %+v", len(tbankPositions), tbankPositions)
+	if len(tbankPositions) != 7 {
+		t.Fatalf("Т-Банк positions = %d, want 7 (SBER, LKOH, OFZ26238, FXUS + TSLA, NVDA and INTC left closed by their transfers): %+v",
+			len(tbankPositions), tbankPositions)
 	}
 	wantQty := map[string]string{"SBER": "300", "OFZ26238": "100", "FXUS": "30", "LKOH": "15"}
 	for ticker, qty := range wantQty {
@@ -136,8 +142,8 @@ func TestSeedDemo(t *testing.T) {
 	}
 
 	freedomPositions := positionsByTicker(freedomID)
-	if len(freedomPositions) != 5 {
-		t.Fatalf("Freedom positions = %d, want 5 (AAPL, GOOGL, MSFT, NVDA, TSLA): %+v", len(freedomPositions), freedomPositions)
+	if len(freedomPositions) != 8 {
+		t.Fatalf("Freedom positions = %d, want 8 (AAPL, GOOGL, MSFT, NVDA, TSLA, KAZ32EUR, WEWKQ, INTC): %+v", len(freedomPositions), freedomPositions)
 	}
 	aapl, ok := freedomPositions["AAPL"]
 	if !ok {
@@ -563,7 +569,9 @@ func TestSeedDemo(t *testing.T) {
 	//
 	//	NVDA     +100_000 USD    +9_650_000 ₽
 	//	GOOGL     +50_000 USD   −13_150_000 ₽
-	//	AAPL, MSFT, TSLA: no disposals, exactly zero in both
+	//	AAPL, MSFT, TSLA, KAZ32EUR, WEWKQ, INTC: no disposals, exactly zero in
+	//	  both — and, crucially, no rate asked for either, which is why AAPL's
+	//	  rate-less lot and INTC's dateless one cannot stop this total
 	//	total    +150_000 USD    −3_500_000 ₽
 	//	        (+$1 500.00)     (−35 000,00 ₽)
 	var accountUSD, accountRUB int64
@@ -577,6 +585,157 @@ func TestSeedDemo(t *testing.T) {
 	if accountUSD <= 0 || accountRUB >= 0 {
 		t.Errorf("Freedom KZ realized total = %d USD / %d RUB: the account's own «Зафиксировано» line must come out with opposite signs in the two display modes — that is what makes the plan's consequence visible without opening a single position",
 			accountUSD, accountRUB)
+	}
+
+	// THE DEMO'S DATELESS PARCEL, and the reason this seed can put two
+	// DIFFERENT "no ruble figures here" sentences on one screen (#66):
+	//
+	//	Apple — one lot's purchase date has no fx rate. The backfill job fills
+	//	        that date from cbr.ru and the row converts on its own. Pinned
+	//	        above, by lotsWithoutRate.
+	//	Intel — the parcel has no purchase date at all, because its basis was
+	//	        typed in by hand and nothing was released behind it. No job can
+	//	        close that.
+	//
+	// This is the ONE lot in the whole seed that legitimately has no date (see
+	// mustAcquired), and both halves are asserted: that Intel's has none, and
+	// that Apple's all have one. Without the second, a seed edit that made
+	// Apple dateless too would leave the screen showing one sentence twice with
+	// every test still green — and the pair is the entire point.
+	intc, ok := freedomPositions["INTC"]
+	if !ok {
+		t.Fatal("missing Freedom position INTC — the seed no longer shows a parcel whose purchase date was never recorded")
+	}
+	if len(intc.Lots) != 1 {
+		t.Fatalf("INTC lots = %d, want 1 (the whole parcel arrives as a single hand-priced lot)", len(intc.Lots))
+	}
+	if intc.Lots[0].AcquiredOn != nil {
+		t.Errorf("INTC lot acquired on %s, want NO date at all: a basis given by hand has no purchase behind it, and dating it on the day the shares changed brokers is exactly the invention portfolio.Lot.AcquiredOn refuses",
+			intc.Lots[0].AcquiredOn.Format(time.DateOnly))
+	}
+	if intc.CostMinor != 300_000 {
+		t.Errorf("INTC cost_minor = %d, want 300000 ($3 000,00 — the owner's own figure, which the journal may not contradict)", intc.CostMinor)
+	}
+	for _, l := range aapl.Lots {
+		if l.AcquiredOn == nil {
+			t.Fatal("an AAPL lot has no acquisition date: the demo's two unconvertible rows would then share ONE cause, and the pair of different sentences this seed exists to show collapses into a single one")
+		}
+	}
+	// The source account keeps Intel as closed history, exactly like TSLA and NVDA.
+	if tbankIntc, ok := tbankPositions["INTC"]; !ok {
+		t.Error("missing Т-Банк position INTC (closed by the transfer)")
+	} else if tbankIntc.Quantity.String() != "0" || tbankIntc.CostMinor != 0 {
+		t.Errorf("Т-Банк INTC after transferring everything = {qty %s cost %d}, want {0 0}",
+			tbankIntc.Quantity.String(), tbankIntc.CostMinor)
+	}
+
+	// THE DEMO'S THIRD-CURRENCY VALUATION (#39). A bond with a euro face value,
+	// held in a dollar position, inside a ruble space: three distinct
+	// currencies on one row, which is the only shape in which valuing it twice
+	// over can go wrong. Redone here from the seeded ingredients — face value,
+	// face currency, quote, and the two fx rows the bridge is built from —
+	// exactly as portfolio.marketValue and Handler.positionInBase strike it, so
+	// a seed edit that quietly brings any two of the three currencies back into
+	// agreement fails here instead of leaving the path untested on screen.
+	//
+	//	valuation  100_000 (€1 000,00 face) × 98.00 % × 5 =    490_000 minor EUR
+	//	  in $     490_000 × (92.30 ÷ 78.50)              =    576_140 ($5 761,40)
+	//	  in ₽     490_000 × 92.30, from the EUROS        = 45_227_000 (452 270,00 ₽)
+	//	  in ₽     576_140 × 78.50, chained via the dollar = 45_226_990 — ten
+	//	           kopecks short, the fraction the intermediate cent threw away
+	//	cost       575_000 minor USD × 65.00 (its lot's own day) = 37_375_000
+	bond, ok := freedomPositions["KAZ32EUR"]
+	if !ok {
+		t.Fatal("missing Freedom position KAZ32EUR — the seed no longer holds anything valued in a third currency")
+	}
+	bondInst, err := instStore.ByID(ctx, bond.InstrumentID)
+	if err != nil {
+		t.Fatalf("instrument ByID KAZ32EUR: %v", err)
+	}
+	if bondInst.FaceValueMinor == nil || bondInst.FaceCurrency == nil {
+		t.Fatalf("KAZ32EUR face value/currency = %v/%v, want both set — without them marketValue publishes no valuation at all",
+			bondInst.FaceValueMinor, bondInst.FaceCurrency)
+	}
+	if *bondInst.FaceCurrency == bond.Currency || bond.Currency == "RUB" || *bondInst.FaceCurrency == "RUB" {
+		t.Fatalf("KAZ32EUR face currency %s, position currency %s, base RUB: the three must all differ, or this row stops exercising the case it exists for",
+			*bondInst.FaceCurrency, bond.Currency)
+	}
+	bondQuote, err := marketdata.NewStore(pool).QuoteOn(ctx, bond.InstrumentID, on)
+	if err != nil {
+		t.Fatalf("QuoteOn KAZ32EUR: %v", err)
+	}
+	// Same expression portfolio.marketValue uses for a bond: face × percent ×
+	// quantity, rounded once, denominated in the FACE currency.
+	rawEUR := decimal.NewFromInt(*bondInst.FaceValueMinor).Mul(bondQuote.Price).Shift(-2).Mul(bond.Quantity).Round(0).IntPart()
+	if rawEUR != 490_000 {
+		t.Errorf("KAZ32EUR raw valuation = %d minor %s, want 490000 (€4 900,00)", rawEUR, *bondInst.FaceCurrency)
+	}
+	// No EUR/USD pair is seeded: the converter bridges it through the ruble out
+	// of the two rows that are (see marketdata.resolveRate). Asking for it here
+	// rather than computing it is what makes this the same rate the handler got.
+	eurToPosition, _, err := converter.Rate(ctx, *bondInst.FaceCurrency, bond.Currency, on)
+	if err != nil {
+		t.Fatalf("Rate(%s -> %s, today): %v — the bridge the eurobond's row depends on is gone", *bondInst.FaceCurrency, bond.Currency, err)
+	}
+	eurToBase, _, err := converter.Rate(ctx, *bondInst.FaceCurrency, "RUB", on)
+	if err != nil {
+		t.Fatalf("Rate(%s -> RUB, today): %v", *bondInst.FaceCurrency, err)
+	}
+	valuationUSD := decimal.NewFromInt(rawEUR).Mul(eurToPosition).Round(0).IntPart()
+	valuationRUB := decimal.NewFromInt(rawEUR).Mul(eurToBase).Round(0).IntPart()
+	chainedRUB := decimal.NewFromInt(valuationUSD).Mul(rateToday).Round(0).IntPart()
+	if bond.CostMinor != 575_000 || valuationUSD != 576_140 {
+		t.Errorf("KAZ32EUR cost/value in USD = %d/%d, want 575000/576140", bond.CostMinor, valuationUSD)
+	}
+	if valuationRUB != 45_227_000 {
+		t.Errorf("KAZ32EUR valuation in RUB = %d, want 45227000 (452 270,00 ₽ = 490000 × 92.30, struck from the euros)", valuationRUB)
+	}
+	if chainedRUB != 45_226_990 || chainedRUB == valuationRUB {
+		t.Errorf("KAZ32EUR valuation chained through the dollar = %d, want 45226990 and DIFFERENT from %d: if the two agree, this row no longer shows what converting once buys",
+			chainedRUB, valuationRUB)
+	}
+	if len(bond.Lots) != 1 {
+		t.Fatalf("KAZ32EUR lots = %d, want 1", len(bond.Lots))
+	}
+	bondLotOn := mustAcquired(t, bond.Lots[0].AcquiredOn, "the KAZ32EUR lot")
+	bondLotRate, _, err := converter.Rate(ctx, bond.Currency, "RUB", bondLotOn)
+	if err != nil {
+		t.Fatalf("Rate(USD -> RUB, KAZ32EUR lot date): %v", err)
+	}
+	if got := decimal.NewFromInt(bond.CostMinor).Mul(bondLotRate).Round(0).IntPart(); got != 37_375_000 {
+		t.Errorf("KAZ32EUR cost in RUB = %d, want 37375000 (373 750,00 ₽ = 575000 × 65.00, that lot's own day)", got)
+	}
+
+	// THE DEMO'S SUB-CENT QUOTE (#30). Two fraction digits print it as «0,00» —
+	// neither the price nor zero — so the screen renders it by significant
+	// digits instead. Pinned by the PROPERTY that makes it the demo's example,
+	// not just by its value: below a hundredth, above nothing, and on a share,
+	// because marketValue has no valuation model for crypto/currency/metal/
+	// custom and a row of those types carries no price line to render at all.
+	wework, ok := freedomPositions["WEWKQ"]
+	if !ok {
+		t.Fatal("missing Freedom position WEWKQ — the seed no longer holds anything quoted below a hundredth")
+	}
+	if weworkInst, err := instStore.ByID(ctx, wework.InstrumentID); err != nil {
+		t.Fatalf("instrument ByID WEWKQ: %v", err)
+	} else if weworkInst.Type != instrument.TypeShare && weworkInst.Type != instrument.TypeETF {
+		t.Errorf("WEWKQ type = %s, want share or etf: any other type has no valuation and therefore no price line, and the sub-cent rendering would be invisible", weworkInst.Type)
+	}
+	weworkQuote, err := marketdata.NewStore(pool).QuoteOn(ctx, wework.InstrumentID, on)
+	if err != nil {
+		t.Fatalf("QuoteOn WEWKQ: %v", err)
+	}
+	hundredth := decimal.RequireFromString("0.01")
+	if !weworkQuote.Price.IsPositive() || !weworkQuote.Price.LessThan(hundredth) {
+		t.Errorf("WEWKQ quote = %s, want a positive price below %s — at or above it the ordinary two-digit rendering is honest and the demo shows nothing",
+			weworkQuote.Price, hundredth)
+	}
+	if !weworkQuote.Price.Round(2).IsZero() {
+		t.Errorf("WEWKQ quote = %s rounds to %s at two digits: the point of this row is that the old rendering printed a ZERO for a price that is not zero",
+			weworkQuote.Price, weworkQuote.Price.Round(2))
+	}
+	if got := weworkQuote.Price.Mul(wework.Quantity).Shift(2).Round(0).IntPart(); got != 1_250 {
+		t.Errorf("WEWKQ valuation = %d, want 1250 ($12,50 = 5000 × 0.0025) — a real, nonzero holding priced at a fraction of a cent", got)
 	}
 
 	// every currency the demo space holds (RUB, USD) now has a seeded rate
