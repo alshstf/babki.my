@@ -8,6 +8,7 @@ import {
   useHasMultipleScreenCurrencies,
 } from "@/lib/screen-currencies";
 import { formatMinor } from "@/lib/money";
+import type { Instrument } from "@/api/instruments";
 import { formatDate, localToday } from "@/lib/dates";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
 import { JOURNAL_PAGE_SIZE, type Operation } from "@/api/operations";
@@ -103,14 +104,36 @@ const britain: CostBasisRules = {
   notices: ["method_mismatch", "perimeter_mismatch"],
 };
 
+// A catalog entry, as the instruments endpoint returns it. Only the price
+// tests need one: everything else renders operations with no instrument at
+// all, or lets the name fall back to an id suffix.
+function makeInstrument(overrides: Partial<Instrument> = {}): Instrument {
+  return {
+    id: "instr-1",
+    type: "share",
+    name: "Сбербанк",
+    ticker: "SBER",
+    isin: "",
+    figi: "",
+    currency: "RUB",
+    frozen: false,
+    ...overrides,
+  };
+}
+
 function renderTable({
   operations,
+  instruments = [],
   hasMore = false,
   mode = "native",
   baseCurrency = "RUB",
   costBasisRules,
 }: {
   operations: Operation[];
+  // The catalog page the table looks names and types up in. Empty by default,
+  // which is also what a real page looks like for an instrument past the
+  // fiftieth (see useInstruments).
+  instruments?: Instrument[];
   // Whether the server says the journal continues past this page. Defaults to
   // false — every test that is not about paging is looking at a whole journal.
   hasMore?: boolean;
@@ -122,7 +145,7 @@ function renderTable({
 }) {
   serve({
     "/operations": { body: { operations, has_more: hasMore } },
-    "/instruments": { body: [] },
+    "/instruments": { body: instruments },
   });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -956,6 +979,127 @@ describe("OperationsTable", () => {
 
       await screen.findByTestId("operation-amount");
       expect(screen.queryByTestId("operation-amount-caveat")).not.toBeInTheDocument();
+    });
+  });
+
+  // Issue #75. «Цена» means two different quantities in this application: in
+  // the journal it is the money one unit cost, on the positions screen a
+  // bond's is the percentage of face value the exchange quotes. Both are
+  // right, the word is one, and the journal used to print its number bare —
+  // straight off the wire, unformatted, with nothing saying which of the two
+  // it is.
+  describe("the price cell", () => {
+    const trade = (overrides: Partial<Operation> = {}): Operation =>
+      makeOperation({
+        id: "op-buy",
+        type: "buy",
+        instrument_id: "instr-1",
+        quantity: "100",
+        price: "950.00",
+        currency: "RUB",
+        amount_minor: -9_500_000,
+        fee_minor: 9_500,
+        ...overrides,
+      });
+
+    it("names the unit in the column header, where every row can read it", async () => {
+      renderTable({ operations: [trade()] });
+
+      await screen.findByTestId("operation-price");
+      expect(screen.getByRole("columnheader", { name: "Кол-во × цена за единицу" }))
+        .toBeInTheDocument();
+    });
+
+    it("formats the price instead of printing the wire string", async () => {
+      // A thousands separator and two fraction digits, as everywhere else a
+      // price is shown (formatPrice, the positions screen's quote). "1234.5"
+      // used to reach the screen exactly as typed here.
+      renderTable({ operations: [trade({ quantity: "1000", price: "1234.5" })] });
+
+      const price = await screen.findByTestId("operation-price");
+      expect(norm(price.textContent ?? "")).toBe("1 234,50");
+      expect(price.textContent).not.toContain("1234.5");
+    });
+
+    it("shows a sub-cent price as itself rather than as a fake zero", async () => {
+      // Two fraction digits would print «0,00» here: neither the price nor
+      // zero, one column away from figures this program refuses to fake (#30).
+      // No seeded journal row is this small yet — the demo's WeWork buy is at
+      // $0,40 and the $0,0025 that made #30 is its QUOTE, which the positions
+      // table draws — but a delisted share is bought at the same digits it is
+      // quoted at, and this column takes whatever price was recorded.
+      renderTable({
+        operations: [trade({ quantity: "500", price: "0.0025", currency: "USD" })],
+      });
+
+      const price = await screen.findByTestId("operation-price");
+      // Compared whole: «0,00» is a substring of the right answer too.
+      expect(norm(price.textContent ?? "")).toBe("0,0025");
+    });
+
+    it("keeps a price it cannot format rather than dropping the number", async () => {
+      // formatPrice answers null for anything outside a plain non-negative
+      // decimal. Nothing on the wire is supposed to look like this, and if
+      // something does, the row still records it: an unstyled number says more
+      // than a dash, and hiding it would hide the operation's own data.
+      renderTable({ operations: [trade({ price: "1e-12" })] });
+
+      expect((await screen.findByTestId("operation-price")).textContent).toBe("1e-12");
+    });
+
+    it("says the number is money per unit, in the operation's currency", async () => {
+      renderTable({ operations: [trade()], instruments: [makeInstrument()] });
+
+      expect(await screen.findByTestId("operation-price")).toHaveAttribute(
+        "title",
+        "Цена за единицу — деньги за одну штуку, в валюте операции",
+      );
+    });
+
+    it("says a bond's price here is money and not the percentage of face", async () => {
+      // The row the demo stand has: 100 ОФЗ at 950,00 ₽ apiece, whose position
+      // is captioned «95,20 %» in the table directly above this one on the
+      // same screen. One word, two quantities, both on screen at once.
+      renderTable({
+        operations: [trade()],
+        instruments: [makeInstrument({ type: "bond", name: "ОФЗ 26238", ticker: "OFZ26238" })],
+      });
+
+      const price = await screen.findByTestId("operation-price");
+      expect(price).toHaveAttribute(
+        "title",
+        "Цена за единицу — деньги за одну штуку, в валюте операции\nУ облигации это не процент от номинала: биржа котирует облигацию в процентах, и цена в таблице позиций — та самая котировка. Здесь — деньги за одну бумагу",
+      );
+      // And the figure is the money one, untouched — never the percentage,
+      // which this screen has no face value to derive and no business deriving.
+      expect(norm(price.textContent ?? "")).toBe("950,00");
+    });
+
+    it("says nothing about bonds over a share", async () => {
+      renderTable({ operations: [trade()], instruments: [makeInstrument({ type: "share" })] });
+
+      const title = (await screen.findByTestId("operation-price")).getAttribute("title") ?? "";
+      expect(title).not.toContain("облигаци");
+      expect(title).not.toContain("номинал");
+    });
+
+    it("still says what the number is when the catalog page has no such instrument", async () => {
+      // Past the fiftieth instrument the lookup finds nothing (see
+      // useInstruments), and the sentence that survives is the one true of
+      // every priced row whatever the instrument turns out to be.
+      renderTable({ operations: [trade({ instrument_id: "instr-off-page" })] });
+
+      expect(await screen.findByTestId("operation-price")).toHaveAttribute(
+        "title",
+        "Цена за единицу — деньги за одну штуку, в валюте операции",
+      );
+    });
+
+    it("keeps the dash, and no claim about a price, on a row that has none", async () => {
+      renderTable({ operations: [makeOperation({ type: "deposit", quantity: null, price: null })] });
+
+      await screen.findByTestId("operation-amount");
+      expect(screen.queryByTestId("operation-price")).not.toBeInTheDocument();
     });
   });
 

@@ -19,7 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { signClass } from "@/lib/money";
+import { formatPrice, signClass } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { resolveDisplayAmount } from "@/lib/display-amount";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
@@ -34,7 +34,7 @@ import {
   type Operation,
   type OperationInBaseGap,
 } from "@/api/operations";
-import { useInstruments } from "@/api/instruments";
+import { useInstruments, type Instrument } from "@/api/instruments";
 import type { CostBasisRules } from "@/api/tax-residencies";
 
 // Whether this row's amount is not money that moved on the day it is dated but
@@ -252,10 +252,61 @@ export function OperationsTable({
   // country's rule IS what is computed (see costBasisCaveat).
   const costBasisTitle = costBasisRules ? costBasisCaveat(t, costBasisRules) : undefined;
 
+  // The catalog entry behind a row, when the loaded page happens to hold it.
+  // Undefined for a row with no instrument at all (a deposit, a fee) and for
+  // one whose instrument sits past the fiftieth (see useInstruments), so every
+  // caller has to work without it.
+  const instrumentOf = (instrumentId: string | null | undefined): Instrument | undefined =>
+    instrumentId ? instruments.data?.find((instrument) => instrument.id === instrumentId) : undefined;
+
   const instrumentName = (instrumentId: string | null | undefined) => {
     if (!instrumentId) return "—";
-    const found = instruments.data?.find((instrument) => instrument.id === instrumentId);
+    const found = instrumentOf(instrumentId);
     return found ? found.name : `#${instrumentId.slice(-8)}`;
+  };
+
+  // WHAT THE PRICE IN THIS COLUMN IS, which #75 is about because «цена» names
+  // two different quantities in this application and both of them are right.
+  // Here it is money per unit: what one unit actually cost, and the only price
+  // an operation ever records — the trade dialog asks a bond's percentage of
+  // face as an input and sends the money field (see trade-dialog.tsx). On the
+  // positions table a bond's price is the exchange's quote, a PERCENTAGE of
+  // face value, and since #32 that table says so on the cell. Both are on ONE
+  // screen — the positions of an account and its journal are stacked on the
+  // same page (see detail.tsx) — and the demo stand puts both numbers for one
+  // bond on it: 100 ОФЗ bought at 950,00 ₽ apiece down here, «95,20 %» under
+  // the same position's valuation up there. Nothing told the reader which was
+  // which.
+  //
+  // Three ways to separate them were considered.
+  //   - Show the other quantity too, deriving one from the other. Rejected on
+  //     the grounds this project rejects it everywhere: it is money arithmetic
+  //     in the browser (face value × percent, with a rounding decision of its
+  //     own), and the journal has no face value on the wire to do it with.
+  //   - Put a currency on the number — «950,00 ₽». Rejected as noise: the
+  //     amount and the fee in this very row already carry the currency, so the
+  //     row reads as money without help, and a price is always denominated in
+  //     the operation's own currency.
+  //   - Name the unit, in the column header and in the cell's own tooltip.
+  //     That is this. The header is visible without hovering anything and
+  //     settles every row at once — a percentage of face is not «цена за
+  //     единицу» — and the tooltip adds the sentence for the instrument where
+  //     the confusion actually lives.
+  //
+  // The bond sentence is an ADDITION to the general one, never a correction of
+  // it, which is what lets the tooltip degrade honestly: an instrument the
+  // loaded catalog page does not hold leaves the general sentence standing,
+  // and that sentence is true of a bond too — the number here is money per
+  // bond whether or not this screen has been told it is a bond.
+  //
+  // Written as two literal-key branches rather than t(cond ? a : b) so both
+  // keys stay verifiable by scripts/check-i18n.mjs, which only reads literals.
+  const priceTitle = (instrument: Instrument | undefined): string => {
+    const title = t("operations.pricePerUnit");
+    if (instrument?.type === "bond") {
+      return title + "\n" + t("operations.priceNotPercentOfFace");
+    }
+    return title;
   };
 
   const confirmDelete = () => {
@@ -400,9 +451,30 @@ export function OperationsTable({
                 </TableCell>
                 <TableCell>{instrumentName(operation.instrument_id)}</TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {operation.quantity && operation.price
-                    ? `${operation.quantity} × ${operation.price}`
-                    : "—"}
+                  {operation.quantity && operation.price ? (
+                    <>
+                      {operation.quantity} ×{" "}
+                      <span
+                        data-testid="operation-price"
+                        title={priceTitle(instrumentOf(operation.instrument_id))}
+                      >
+                        {/* formatPrice, not the wire string: a thousands
+                            separator, two fraction digits, and the sub-cent
+                            branch that keeps a $0,0025 quote from printing as
+                            «0,00» (#30) — the same rendering the positions
+                            screen gives a price, so one number does not look
+                            like two things on two screens. It answers null for
+                            anything outside a plain non-negative decimal,
+                            which nothing on the wire should be; the raw value
+                            is shown then rather than dropped, because an
+                            unstyled number is still the operation's own datum
+                            and a dash in its place would hide it. */}
+                        {formatPrice(operation.price) ?? operation.price}
+                      </span>
+                    </>
+                  ) : (
+                    "—"
+                  )}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   <MoneyCell
