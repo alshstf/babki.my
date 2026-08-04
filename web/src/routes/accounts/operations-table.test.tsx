@@ -196,6 +196,45 @@ describe("OperationsTable", () => {
     expect(amount).not.toHaveAttribute("title");
   });
 
+  it("prints both converted figures of a row in the currency that row's in_base carries, not the session's", async () => {
+    // #106, in the shape the owner meets it: settings changes the base
+    // currency, the session's new answer lands in the cache at once
+    // (useUpdateSpace writes it directly), and this journal still holds
+    // figures the server converted into the OLD base currency until its
+    // refetch comes back. The rubles must keep printing as rubles for that
+    // window — a euro sign over them is not a mislabelling, it is a number
+    // wrong by the whole exchange rate with nothing on screen admitting it.
+    //
+    // Both cells are checked: the amount and the fee are converted and
+    // rounded independently and are resolved by two separate calls, so either
+    // could have been left reading the session.
+    renderTable({
+      operations: [
+        makeOperation({
+          currency: "USD",
+          amount_minor: 100_00,
+          fee_minor: 5_00,
+          in_base: inBase({
+            amount_minor: 655_000,
+            fee_minor: 32_750,
+            currency: "RUB",
+            rate_on: "2019-03-13",
+            dated_on: "2019-03-14",
+          }),
+        }),
+      ],
+      mode: "base",
+      baseCurrency: "EUR",
+    });
+
+    const amount = await screen.findByTestId("operation-amount");
+    expect(norm(amount.textContent ?? "")).toBe(norm(formatMinor(655_000, "RUB")));
+    expect(amount.textContent).not.toContain("€");
+    const fee = screen.getByTestId("operation-fee");
+    expect(norm(fee.textContent ?? "")).toBe(norm(formatMinor(32_750, "RUB")));
+    expect(fee.textContent).not.toContain("€");
+  });
+
   it("shows no conversion marker in native mode even for an operation that could not be converted", async () => {
     renderTable({
       operations: [makeOperation({ currency: "USD", in_base: null })],

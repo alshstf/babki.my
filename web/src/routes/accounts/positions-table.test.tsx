@@ -194,6 +194,50 @@ describe("PositionsTable", () => {
     );
   });
 
+  it("prints every converted figure of a row in the currency that row's in_base carries, not the session's", () => {
+    // #106, in the shape the owner meets it: settings changes the base
+    // currency, the session's new answer lands in the cache at once
+    // (useUpdateSpace writes it directly), and this screen still holds figures
+    // the server converted into the OLD base currency until its refetch comes
+    // back. The rubles must keep printing as rubles for that window — a euro
+    // sign over them is not a mislabelling, it is a number wrong by the whole
+    // exchange rate with nothing on screen admitting it.
+    //
+    // All four money cells of the row are checked, because all four read the
+    // one block and each could have been left reading the session instead.
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            currency: "USD",
+            income_minor: 1_000,
+            in_base: {
+              cost_minor: 2_275_000,
+              market_value_minor: 2_780_050,
+              unrealized_pnl_minor: 227_500,
+              income_minor: 9_100,
+              currency: "RUB",
+              rate_on: "2026-07-22",
+            },
+          }),
+        ]}
+        mode="base"
+        baseCurrency="EUR"
+      />,
+    );
+
+    for (const [testId, minor] of [
+      ["position-cost", 2_275_000],
+      ["position-market-value", 2_780_050],
+      ["position-profit-amount", 227_500],
+      ["position-income", 9_100],
+    ] as const) {
+      const cell = screen.getByTestId(testId);
+      expect(norm(cell.textContent ?? "")).toBe(norm(formatMinor(minor, "RUB")));
+      expect(cell.textContent).not.toContain("€");
+    }
+  });
+
   it("dates the price by price_on and the conversion by rate_on — two fields, two dates, one format", () => {
     wrap(
       <PositionsTable

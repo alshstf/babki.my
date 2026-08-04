@@ -368,21 +368,36 @@ export function OperationsTable({
             // Amount and fee are converted and rounded independently by the
             // backend — they are two separate figures, not terms of one
             // total — so each is resolved on its own.
+            const inBase = operation.in_base;
+            // One term of the row's converted block, welded to the currency
+            // that block says its figures are in (OperationInBase.currency,
+            // required by the contract) — never to the session's base
+            // currency, which is a second answer to the same question and
+            // comes apart from this one whenever a cached journal outlives a
+            // change of base currency (#106). The term is picked by a function
+            // of the block rather than passed in, so the fee cell cannot be
+            // handed the amount, nor either cell the operation's own figure.
+            const convertedTerm = (
+              term: (block: NonNullable<typeof inBase>) => number | null | undefined,
+            ) =>
+              inBase && {
+                amountMinor: term(inBase),
+                currency: inBase.currency,
+                rateOn: inBase.rate_on,
+              };
             const resolvedAmount = resolveDisplayAmount(
               mode,
               operation.currency,
               operation.amount_minor,
               baseCurrency,
-              operation.in_base?.amount_minor,
-              operation.in_base?.rate_on,
+              convertedTerm((block) => block.amount_minor),
             );
             const resolvedFee = resolveDisplayAmount(
               mode,
               operation.currency,
               operation.fee_minor,
               baseCurrency,
-              operation.in_base?.fee_minor,
-              operation.in_base?.rate_on,
+              convertedTerm((block) => block.fee_minor),
             );
             // Three different things a converted amount can be, and the
             // tooltip has to name the right one — it is read as a statement of
@@ -448,7 +463,6 @@ export function OperationsTable({
             // because the neighbouring screen's wordings do not mention a date
             // and must survive its absence; the transfer's own date is
             // formatted beside it, from the field that sentence is about.
-            const inBase = operation.in_base;
             const purchaseDate = inBase ? formatDate(inBase.dated_on) : "";
             const convertedTitle = (rateDate: string | null) => {
               // Unreachable — MoneyCell asks only when it is showing the

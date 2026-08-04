@@ -330,13 +330,29 @@ export function PositionsTable({
           // unrealized_pnl_minor whenever the valuation could not be
           // expressed in the position's currency, so cost and profit do not
           // always resolve the same way.
+          // One term of the row's converted block, welded to the currency that
+          // block says its figures are in (PositionInBase.currency, required
+          // by the contract) — never to the session's base currency, which is
+          // a second answer to the same question and comes apart from this one
+          // whenever a cached row outlives a change of base currency (#106).
+          // The term is picked by a function of the block rather than passed
+          // in, so a caller cannot hand over the position's OWN figure by
+          // mistake and have it printed under the base currency's sign.
+          const inBase = position.in_base;
+          const convertedTerm = (
+            term: (block: NonNullable<typeof inBase>) => number | null | undefined,
+          ) =>
+            inBase && {
+              amountMinor: term(inBase),
+              currency: inBase.currency,
+              rateOn: inBase.rate_on,
+            };
           const resolvedCost = resolveDisplayAmount(
             mode,
             position.currency,
             position.cost_minor,
             baseCurrency,
-            position.in_base?.cost_minor,
-            position.in_base?.rate_on,
+            convertedTerm((block) => block.cost_minor),
           );
           const resolvedMarketValue = hasMarketValue
             ? resolveDisplayAmount(
@@ -344,8 +360,7 @@ export function PositionsTable({
                 marketValueCurrency,
                 marketValueMinor,
                 baseCurrency,
-                position.in_base?.market_value_minor,
-                position.in_base?.rate_on,
+                convertedTerm((block) => block.market_value_minor),
               )
             : null;
           const resolvedUnrealized = hasUnrealized
@@ -354,8 +369,7 @@ export function PositionsTable({
                 position.currency,
                 unrealizedMinor,
                 baseCurrency,
-                position.in_base?.unrealized_pnl_minor,
-                position.in_base?.rate_on,
+                convertedTerm((block) => block.unrealized_pnl_minor),
               )
             : null;
           const resolvedIncome = resolveDisplayAmount(
@@ -363,8 +377,7 @@ export function PositionsTable({
             position.currency,
             position.income_minor,
             baseCurrency,
-            position.in_base?.income_minor,
-            position.in_base?.rate_on,
+            convertedTerm((block) => block.income_minor),
           );
           const unrealizedPct =
             resolvedUnrealized && resolvedUnrealized.currency === resolvedCost.currency
