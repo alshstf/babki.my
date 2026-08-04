@@ -297,8 +297,8 @@ func (s *Store) list(ctx context.Context, sql string, args ...any) ([]Operation,
 //
 // THE SECOND RESULT IS FETCHED, NOT INFERRED. One row beyond the page is asked
 // for, and whether it arrives IS the answer: the query reads it, and the trim
-// two statements later drops it again before anything downstream can mistake it
-// for part of the page. Nothing may substitute a comparison of the page's
+// three statements later drops it again before anything downstream can mistake
+// it for part of the page. Nothing may substitute a comparison of the page's
 // length against the limit for this: that comparison is right until the caller
 // clamps the limit it was given, and the handler does exactly that, which is how
 // a truncated journal came to present itself as a whole one (#86). Counting the

@@ -26,6 +26,7 @@ import type { DisplayCurrencyMode } from "@/lib/display-currency";
 import { useReportScreenCurrencies } from "@/lib/screen-currencies";
 import { MoneyCell } from "@/components/money-cell";
 import { costBasisCaveat } from "@/components/cost-basis-notice";
+import { unnameableGap } from "@/lib/unnameable-gap";
 import {
   useOperations,
   useDeleteOperation,
@@ -76,19 +77,6 @@ import type { CostBasisRules } from "@/api/tax-residencies";
 // operation removed that hole without adding a client-side list of types.
 function publishesACostBasis(operation: Operation): boolean {
   return operation.has_undated_lots || operation.assembled_from_lots;
-}
-
-// Runtime backstop for a gap value this build cannot name, and the same one
-// the positions screen keeps for the identical reason (see unnameableGap
-// there). TypeScript proves the switch below exhaustive over the union it was
-// compiled against — a new member of the contract's enum without a case here
-// fails to compile, because the argument would no longer narrow to `never` —
-// but these values are JSON off the wire, typed by assertion rather than
-// validated, so a client running behind the server it talks to can still
-// receive a literal outside that union. That must degrade to a sentence which
-// is still true, never to a blank tooltip and never to a thrown render.
-function unnameableGap<T>(_: never, fallback: T): T {
-  return fallback;
 }
 
 // The one sentence that captions BOTH money cells of a row, chosen from the
@@ -382,17 +370,33 @@ export function OperationsTable({
             // fact about the number beside it.
             //
             // A transfer between the family's own accounts carries the cost of
-            // shares bought on other days, so the backend converts it piece by
-            // piece at the rates of those days (operation.assembled_from_lots)
-            // and its headline date is the newest PURCHASE, not the transfer.
-            // That case must be checked FIRST, because neither of the other
-            // two wordings is true of it and a date comparison cannot tell:
-            // the headline rate happens to be dated the transfer day whenever
-            // the last purchase was made on it, so relying on the dates picks
-            // one false sentence or the other. On the demo data it read "there
-            // is no rate for the operation's date — converted at the nearest,
-            // 15.06.2026" about a figure assembled from two rates, on a day
-            // whose rate exists and was deliberately not used.
+            // the shares behind it, so the backend converts it piece by piece
+            // at the rate of each piece's own purchase day
+            // (operation.assembled_from_lots) and its headline date is the
+            // newest PURCHASE, not the transfer. That case must be checked
+            // FIRST, because neither of the other two wordings is true of it
+            // and a date comparison cannot tell: the headline rate happens to
+            // be dated the transfer day whenever the last purchase was made on
+            // it, so relying on the dates picks one false sentence or the
+            // other. On the demo data it read "there is no rate for the
+            // operation's date — converted at the nearest, 15.06.2026" about a
+            // figure assembled from two rates, on a day whose rate exists and
+            // was deliberately not used.
+            //
+            // The sentence names the RULE — each piece at its own purchase
+            // day's rate — rather than asserting the purchases fell on days
+            // OTHER than the transfer's, the way an earlier wording did
+            // ("...сделанных в другие дни ... а не по курсу дня перевода").
+            // internal/portfolio/engine.go's CheckTransferLots only rejects a
+            // piece dated AFTER the transfer, so a same-day buy-then-transfer
+            // is legal: buy on day X, move the whole parcel on day X, and
+            // every piece of the breakdown is dated X too. The old wording was
+            // false of that row on both halves at once — the purchases were
+            // NOT on other days, and the transfer day's rate WAS what struck
+            // the figure, because the one purchase day and the transfer day
+            // are the same day. The rule-naming form is true whichever way the
+            // dates land, exactly like operations.notConvertedNoRateLotDate
+            // below for the equivalent unconverted case (#79's fix).
             //
             // WHICH DATE EACH SENTENCE NAMES is the other half, and the two
             // published dates are not interchangeable (see OperationInBase in
@@ -450,14 +454,24 @@ export function OperationsTable({
                   <Badge variant="secondary">{t(`operationTypes.${operation.type}`)}</Badge>
                 </TableCell>
                 <TableCell>{instrumentName(operation.instrument_id)}</TableCell>
-                <TableCell className="text-right tabular-nums">
+                <TableCell
+                  className="text-right tabular-nums"
+                  // The tooltip sits on the whole cell, not just the price
+                  // number: "quantity ×" is most of the cell's width for a
+                  // large quantity ("100 ×" beside a one- or two-digit
+                  // price), and a title on the number alone left that area
+                  // dead to the mouse — the explanatory sentence's only hover
+                  // target was the smaller half of what it explains.
+                  title={
+                    operation.quantity && operation.price
+                      ? priceTitle(instrumentOf(operation.instrument_id))
+                      : undefined
+                  }
+                >
                   {operation.quantity && operation.price ? (
                     <>
                       {operation.quantity} ×{" "}
-                      <span
-                        data-testid="operation-price"
-                        title={priceTitle(instrumentOf(operation.instrument_id))}
-                      >
+                      <span data-testid="operation-price">
                         {/* formatPrice, not the wire string: a thousands
                             separator, two fraction digits, and the sub-cent
                             branch that keeps a $0,0025 quote from printing as

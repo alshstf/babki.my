@@ -368,7 +368,7 @@ describe("OperationsTable", () => {
       const amount = await screen.findByTestId("operation-amount");
       expect(amount).toHaveAttribute(
         "title",
-        "Это стоимость покупок, сделанных в другие дни — пересчитана по курсам тех дней, а не по курсу дня перевода. Самый поздний из них — на 15.06.2026",
+        "Это стоимость покупок, и каждая её часть пересчитана по курсу дня своей покупки. Самый поздний из них — на 15.06.2026",
       );
       // The two wordings that would both be lies here: there IS a rate on the
       // operation's date, and this figure was not converted at one rate at all.
@@ -407,9 +407,56 @@ describe("OperationsTable", () => {
       const amount = await screen.findByTestId("operation-amount");
       expect(amount).toHaveAttribute(
         "title",
-        "Это стоимость покупок, сделанных в другие дни — пересчитана по курсам тех дней, а не по курсу дня перевода. Самый поздний из них — на 20.07.2026",
+        "Это стоимость покупок, и каждая её часть пересчитана по курсу дня своей покупки. Самый поздний из них — на 20.07.2026",
       );
       expect(amount.getAttribute("title")).not.toContain("Пересчитано по курсу на дату операции");
+    });
+
+    it("stays true when every piece of the parcel was bought on the transfer's own day (#same-day)", async () => {
+      // The falsity FINDING 1 caught: the sibling test above only puts the
+      // NEWEST purchase on the transfer's own day — the flag decides the
+      // branch, not the dates, so that fixture proves the branch selection but
+      // not the sentence's truth. Here EVERY piece, and the transfer itself,
+      // share one day. internal/portfolio/engine.go's CheckTransferLots
+      // rejects only a purchase date AFTER the transfer, so buy-then-transfer
+      // on the same calendar day is a row a user can actually create — a
+      // RUB-based space, a USD account, 10 shares bought on 2026-03-10 and the
+      // whole parcel moved that same afternoon. Both legs publish
+      // assembled_from_lots true with dated_on === rate_on === occurred_on,
+      // and the figure genuinely WAS struck at that one day's rate. The old
+      // wording ("...сделанных в другие дни ... а не по курсу дня перевода")
+      // asserted the opposite of both facts; the rule-naming form makes no
+      // claim about which day the purchase fell on, so it stays true here too.
+      renderTable({
+        operations: [
+          makeOperation({
+            type: "transfer_in",
+            occurred_on: "2026-03-10",
+            currency: "USD",
+            amount_minor: 190_000,
+            fee_minor: 0,
+            assembled_from_lots: true,
+            in_base: inBase({
+              amount_minor: 1_805_000,
+              fee_minor: 0,
+              currency: "RUB",
+              rate_on: "2026-03-10",
+              dated_on: "2026-03-10",
+            }),
+          }),
+        ],
+        mode: "base",
+        baseCurrency: "RUB",
+      });
+
+      const amount = await screen.findByTestId("operation-amount");
+      expect(amount).toHaveAttribute(
+        "title",
+        "Это стоимость покупок, и каждая её часть пересчитана по курсу дня своей покупки. Самый поздний из них — на 10.03.2026",
+      );
+      // Neither false claim from the old wording may reappear.
+      expect(amount.getAttribute("title")).not.toContain("в другие дни");
+      expect(amount.getAttribute("title")).not.toContain("а не по курсу дня перевода");
     });
 
     it("names the day the purchase happened, not the day the rate came from (#80)", async () => {
@@ -447,7 +494,7 @@ describe("OperationsTable", () => {
       const amount = await screen.findByTestId("operation-amount");
       expect(amount).toHaveAttribute(
         "title",
-        "Это стоимость покупок, сделанных в другие дни — пересчитана по курсам тех дней, а не по курсу дня перевода. Самый поздний из них — на 14.06.2026",
+        "Это стоимость покупок, и каждая её часть пересчитана по курсу дня своей покупки. Самый поздний из них — на 14.06.2026",
       );
       // The rate's own day has no business being called a purchase date.
       expect(amount.getAttribute("title")).not.toContain("12.06.2026");
@@ -524,7 +571,17 @@ describe("OperationsTable", () => {
         "title",
         "Нет курса на дату операции, а сумма считается по курсу того дня. Курс появится при обновлении курсов, и операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
       );
-      expect(screen.getByTestId("operation-fee-not-converted")).toBeInTheDocument();
+      // FINDING 2 of the caption-truth review: nothing previously pinned the
+      // fee cell to the SAME per-cause sentence as the amount cell. in_base is
+      // published as a whole or not at all (see rowGapTitle's block comment
+      // above), so a single unvaluable term withholds both money cells of the
+      // row together, and both must carry the one true explanation — never
+      // the fee cell silently downgraded to the vague general phrase while the
+      // amount cell next to it keeps the specific, true one.
+      expect(screen.getByTestId("operation-fee-not-converted")).toHaveAttribute(
+        "title",
+        "Нет курса на дату операции, а сумма считается по курсу того дня. Курс появится при обновлении курсов, и операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
+      );
       // No conversion happened, so no rate date may be claimed.
       expect(amount).not.toHaveAttribute("title");
     });
@@ -1047,10 +1104,17 @@ describe("OperationsTable", () => {
       expect((await screen.findByTestId("operation-price")).textContent).toBe("1e-12");
     });
 
+    // FINDING 4 of the caption-truth review: the tooltip lives on the
+    // TableCell (`<td>`), not on the price span, precisely so the "quantity
+    // ×" area — most of the cell's width for a large quantity — is a hover
+    // target too. `.closest("td")` reaches it from the span the content
+    // assertions elsewhere in this block already key off of.
+
     it("says the number is money per unit, in the operation's currency", async () => {
       renderTable({ operations: [trade()], instruments: [makeInstrument()] });
 
-      expect(await screen.findByTestId("operation-price")).toHaveAttribute(
+      const price = await screen.findByTestId("operation-price");
+      expect(price.closest("td")).toHaveAttribute(
         "title",
         "Цена за единицу — деньги за одну штуку, в валюте операции",
       );
@@ -1066,7 +1130,7 @@ describe("OperationsTable", () => {
       });
 
       const price = await screen.findByTestId("operation-price");
-      expect(price).toHaveAttribute(
+      expect(price.closest("td")).toHaveAttribute(
         "title",
         "Цена за единицу — деньги за одну штуку, в валюте операции\nУ облигации это не процент от номинала: биржа котирует облигацию в процентах, и цена в таблице позиций — та самая котировка. Здесь — деньги за одну бумагу",
       );
@@ -1078,7 +1142,8 @@ describe("OperationsTable", () => {
     it("says nothing about bonds over a share", async () => {
       renderTable({ operations: [trade()], instruments: [makeInstrument({ type: "share" })] });
 
-      const title = (await screen.findByTestId("operation-price")).getAttribute("title") ?? "";
+      const price = await screen.findByTestId("operation-price");
+      const title = price.closest("td")?.getAttribute("title") ?? "";
       expect(title).not.toContain("облигаци");
       expect(title).not.toContain("номинал");
     });
@@ -1089,10 +1154,31 @@ describe("OperationsTable", () => {
       // every priced row whatever the instrument turns out to be.
       renderTable({ operations: [trade({ instrument_id: "instr-off-page" })] });
 
-      expect(await screen.findByTestId("operation-price")).toHaveAttribute(
+      const price = await screen.findByTestId("operation-price");
+      expect(price.closest("td")).toHaveAttribute(
         "title",
         "Цена за единицу — деньги за одну штуку, в валюте операции",
       );
+    });
+
+    it("puts the tooltip on the whole cell, not only the price number", async () => {
+      // FINDING 4's reproduction: a large quantity makes "100 ×" most of the
+      // cell's width, and before this fix the title sat only on the price
+      // span — hovering the quantity prefix showed nothing. The cell itself
+      // must carry the title so the whole printed area explains itself.
+      renderTable({ operations: [trade()], instruments: [makeInstrument()] });
+
+      const price = await screen.findByTestId("operation-price");
+      const cell = price.closest("td");
+      expect(cell?.textContent).toContain("100");
+      expect(cell).toHaveAttribute(
+        "title",
+        "Цена за единицу — деньги за одну штуку, в валюте операции",
+      );
+      // The number span itself carries no title of its own any more — a
+      // second, redundant title there would not be wrong, but this pins that
+      // the cell is genuinely the one place the tooltip lives.
+      expect(price).not.toHaveAttribute("title");
     });
 
     it("keeps the dash, and no claim about a price, on a row that has none", async () => {
