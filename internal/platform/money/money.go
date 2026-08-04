@@ -6,6 +6,10 @@
 // a basis, operation converts a journal entry, account converts a balance —
 // and it has to be taken the same way in all of them. Two statements of one
 // rule drift; this codebase has been bitten by that before.
+//
+// Add and Sub carry the same rule to figures that are ALREADY int64 minor
+// units. The arithmetic done on Minor's results is not itself safe — Go's + and
+// - wrap in silence — and the published figure is often a sum of them.
 package money
 
 import (
@@ -67,4 +71,37 @@ func Minor(d decimal.Decimal) (int64, error) {
 		return 0, ErrOverflow
 	}
 	return rounded.IntPart(), nil
+}
+
+// Add returns a + b, and Sub returns a - b, as int64 minor units — or
+// ErrOverflow if the result does not fit.
+//
+// They exist because the arithmetic DONE ON figures that already survived Minor
+// is not itself safe. Go's int64 + and - wrap silently past the range, in the
+// same way and for the same reason decimal.IntPart() does, and a wrapped total
+// is a plausible-looking sum of money of the wrong magnitude and often the wrong
+// sign. Every term of a total here is by construction an ordinary figure — it
+// had to be one to become an int64 at all — and their total need not be:
+// THE GUARD BELONGS ON THE PUBLISHED FIGURE, AND THE PUBLISHED FIGURE IS THE
+// TOTAL. That is the same argument portfolio.sumInBase and
+// marketdata.ConvertMany already stand on; these two carry it to the sums that
+// are struck from int64s rather than from decimals (#83).
+//
+// Both go through Minor rather than through an overflow test of their own, so
+// the range is stated once for the whole codebase. The decimals are exact and
+// whole, so nothing is rounded on the way. Sub is a real subtraction rather than
+// Add with a negated argument, because negating math.MinInt64 is itself an
+// overflow.
+//
+// The error names no figure, as Minor's does not: callers add the context that
+// says WHICH total failed. A caller must also never publish the refusal as
+// missing data — see ErrOverflow.
+func Add(a, b int64) (int64, error) {
+	return Minor(decimal.NewFromInt(a).Add(decimal.NewFromInt(b)))
+}
+
+// Sub returns a - b in minor units, or ErrOverflow if the difference does not
+// fit. See Add.
+func Sub(a, b int64) (int64, error) {
+	return Minor(decimal.NewFromInt(a).Sub(decimal.NewFromInt(b)))
 }

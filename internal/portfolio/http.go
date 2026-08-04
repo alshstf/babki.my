@@ -440,8 +440,22 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 	// brought it there. Where neither held, the profit is left null instead of
 	// struck across two currencies. So this is exact integer subtraction on
 	// minor units, never a mix of currencies and never a rounding operation.
+	//
+	// It is a GUARDED subtraction all the same (#83). Both operands fit in an
+	// int64 and a difference of two such figures need not, once their signs
+	// differ — and a negative valuation is reachable without any market
+	// misbehaving at all: a bond is valued at face value × price, and
+	// face_value_minor is a plain BIGINT that nothing checks for sign on the way
+	// in (#93). The wrapped answer would be an enormous PROFIT on a row that is
+	// merely broken, which is exactly the kind of figure this screen must not
+	// invent. Refused rather than published, and never as one of the nulls
+	// beside it: those mean data has yet to arrive (see money.ErrOverflow).
 	if currency == p.Currency {
-		out.UnrealizedPnlMinor = nullable.NewNullableWithValue(minor - p.CostMinor)
+		unrealized, err := money.Sub(minor, p.CostMinor)
+		if err != nil {
+			return apitypes.Position{}, fmt.Errorf("%w: a valuation of %d less a basis of %d", err, minor, p.CostMinor)
+		}
+		out.UnrealizedPnlMinor = nullable.NewNullableWithValue(unrealized)
 	}
 	return out, nil
 }
@@ -905,8 +919,30 @@ func newRealizedTotals(baseCurrency string) *realizedTotals {
 //
 // The base sum keeps accumulating even after a gap is seen: the terms cost
 // nothing to add, and result() drops the partial sum rather than publishing it.
-func (rt *realizedTotals) add(currency string, nativeMinor int64, baseMinor nullable.Nullable[int64], gap baseGap) {
-	rt.byCurrency[currency] += nativeMinor
+//
+// BOTH ACCUMULATIONS ARE GUARDED, and int64 addition is what they are guarded
+// against. Every term arriving here is an ordinary figure — it had to survive
+// money.Minor to be an int64 at all, and realizedInBase rounded it once for its
+// own position — and a total of ordinary terms can still leave the range, at
+// which point Go's + wraps as silently as decimal.IntPart() does. The same
+// argument sumInBase and marketdata.ConvertMany already stand on: the guard
+// belongs on the figure that gets published, and here that figure is the sum
+// (#83). Reachable through the base total in particular, where no fx rate is
+// bounded from above.
+//
+// A REFUSAL IS AN ERROR AND NOT A GAP. `undated` and `no_rate` say a term could
+// not be valued and the figure may yet appear; this total's terms are all
+// present and one of them is broken, so it is handed to the caller, which fails
+// the request (see handleList). Nothing is half-added on the way out: both
+// totals are computed before either is stored, so a refused position leaves the
+// accumulator exactly as it found it.
+func (rt *realizedTotals) add(currency string, nativeMinor int64, baseMinor nullable.Nullable[int64], gap baseGap) error {
+	native, err := money.Add(rt.byCurrency[currency], nativeMinor)
+	if err != nil {
+		return fmt.Errorf("%w: the account's realized total in %s, adding %d to %d",
+			err, currency, nativeMinor, rt.byCurrency[currency])
+	}
+	inBase := rt.inBaseMinor
 	switch gap {
 	case gapUndated:
 		rt.undated = true
@@ -914,8 +950,13 @@ func (rt *realizedTotals) add(currency string, nativeMinor int64, baseMinor null
 		rt.noRate = true
 	default:
 		// gapNone: the figure was struck, so there is one to add.
-		rt.inBaseMinor += baseMinor.MustGet()
+		if inBase, err = money.Add(rt.inBaseMinor, baseMinor.MustGet()); err != nil {
+			return fmt.Errorf("%w: the account's realized total in %s, adding %d to %d",
+				err, rt.baseCurrency, baseMinor.MustGet(), rt.inBaseMinor)
+		}
 	}
+	rt.byCurrency[currency], rt.inBaseMinor = native, inBase
+	return nil
 }
 
 // result is the account's answer as the contract publishes it.
@@ -1315,7 +1356,19 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		return nil, inBaseStruck, err
 	}
 	out.MarketValueMinor = nullable.NewNullableWithValue(valuation)
-	out.UnrealizedPnlMinor = nullable.NewNullableWithValue(valuation - costMinor)
+	// Guarded for the same reason the position's own unrealized figure is (see
+	// toAPI): two int64s of opposite sign can differ by more than an int64, and
+	// a negative valuation needs nothing worse than a negative face value to
+	// arrive. Both operands have been converted already, so this is the last
+	// arithmetic between here and the wire.
+	unrealized, err := money.Sub(valuation, costMinor)
+	if err != nil {
+		// Named, because money.Sub names no figure and a 500 whose log says only
+		// "does not fit" tells whoever reads it nothing about which row to look at.
+		return nil, inBaseStruck, fmt.Errorf("%w: a base valuation of %d less a basis of %d in %s",
+			err, valuation, costMinor, baseCurrency)
+	}
+	out.UnrealizedPnlMinor = nullable.NewNullableWithValue(unrealized)
 	// rate_on names the rate that was actually applied, and there is not always
 	// one to name: a valuation already denominated in the base currency (an OFZ
 	// with a ruble face value in a dollar account of a ruble space) is the
@@ -1646,7 +1699,10 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 			family.WriteError(w, err)
 			return
 		}
-		totals.add(apiPos.Currency, apiPos.RealizedPnlMinor, realizedMinor, realizedGap)
+		if err := totals.add(apiPos.Currency, apiPos.RealizedPnlMinor, realizedMinor, realizedGap); err != nil {
+			family.WriteError(w, err)
+			return
+		}
 
 		inBase, gap, err := h.positionInBase(r.Context(), pos, apiPos, income[pos.InstrumentID], sp.BaseCurrency, realizedMinor, now, rates)
 		if err != nil {
