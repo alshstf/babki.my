@@ -2,6 +2,7 @@ package operation_test
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -49,7 +50,24 @@ const (
 	priceBound      = "10000000000000"   // 10^13 major currency units per unit
 	productBound    = "1000000000000000" // 10^15 minor units of money
 	splitRatioBound = "10000000000"      // 10^10 new units per old one
+
+	// moneyBound is the cap on the money fields THEMSELVES — an operation's
+	// amount, its fee, and the cost basis a transfer may be handed. It prints
+	// the same digits as productBound because in the code it is the same
+	// constant: money.MaxAmountMinor bounds the product of the two factors and
+	// each of these three fields alike, which is the whole argument for there
+	// being one such constant (see its doc comment). It is written out here for
+	// the reason the block above gives — a test that derived the bound the way
+	// the code does would agree with a wrong bound as readily as with the right
+	// one — and the refusals are still compared WHOLE, so a message that swapped
+	// one of these fields for another still reddens.
+	moneyBound = "1000000000000000" // 10^15 minor units of money
 )
+
+// moneyBoundInt is moneyBound as the number, for building the figures the
+// requests below carry. Parsed from the very digits the messages are asserted
+// against, so the two cannot be moved apart.
+var moneyBoundInt = decimal.RequireFromString(moneyBound).IntPart()
 
 // wantRefusal asserts the WHOLE refusal, not fragments of it. A bound is only
 // useful if the message names the field it belongs to and the number that
@@ -341,5 +359,190 @@ func TestRowsWrittenBeforeTheBoundAreStillWorkable(t *testing.T) {
 
 	if err := svc.Delete(f.ctx, f.spaceID, stored.ID); err != nil {
 		t.Fatalf("delete the over-bound row: %v — deleting it is the only repair there is", err)
+	}
+}
+
+// The three money fields below were bounded by the server and pinned by
+// nothing. Every test above is about a FACTOR — a quantity, a price, a ratio —
+// and the money those factors stand for was left to the product check, which
+// only fires when both of them are present. amount_minor, fee_minor and a
+// transfer's cost_minor are money in their own right, arrive on their own, and
+// each has its own refusal; until now each of those refusals could have been
+// moved, loosened or dropped with the whole package still green.
+//
+// They are pinned HERE rather than left implied because the contract now states
+// them (#100, #102): api/openapi.yaml declares minimum/maximum on all three so a
+// client can validate before it sends, and
+// money.TestTheContractStatesTheBoundTheServerEnforces ties those numbers to
+// money.MaxAmountMinor. That test can only say the document and the constant
+// agree. What makes the constant the SERVER's answer rather than a number in a
+// file is below: the value on each bound is accepted and the one past it is
+// refused, by name and by the whole sentence.
+
+// TestAmountExactlyAtTheBoundIsAcceptedAndPastItRefused fixes both edges of
+// amount_minor. The bound is on the MAGNITUDE — an outflow is an ordinary
+// negative amount — so both ends are real doors, and both are compared
+// explicitly rather than through an abs(): negating math.MinInt64 is itself an
+// overflow, so a check written as abs() would let the one figure through that
+// no later arithmetic survives.
+func TestAmountExactlyAtTheBoundIsAcceptedAndPastItRefused(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	// The cap itself, in both directions. A bound that refused the value ON it
+	// would withhold a figure that is perfectly representable and say nothing
+	// about why.
+	for _, tc := range []struct {
+		what   string
+		typ    operation.Type
+		amount int64
+	}{
+		{"deposit of exactly the cap", operation.TypeDeposit, moneyBoundInt},
+		{"withdrawal of exactly the cap", operation.TypeWithdrawal, -moneyBoundInt},
+	} {
+		op := operation.Operation{
+			AccountID: f.accountID, Type: tc.typ, OccurredOn: date("2026-07-01"),
+			AmountMinor: tc.amount, Currency: "RUB",
+		}
+		created, err := svc.Create(f.ctx, f.spaceID, op)
+		if err != nil {
+			t.Fatalf("%s: %v — the value ON the bound is inside it", tc.what, err)
+		}
+		if created.AmountMinor != tc.amount {
+			t.Errorf("stored amount after a %s = %d, want %d", tc.what, created.AmountMinor, tc.amount)
+		}
+	}
+
+	// And one minor unit past it, which is where the bound actually is, plus the
+	// two figures that break the arithmetic outright. math.MinInt64 is the reason
+	// the check reads as two comparisons.
+	for _, tc := range []struct {
+		what   string
+		typ    operation.Type
+		amount int64
+	}{
+		{"deposit one minor unit past the cap", operation.TypeDeposit, moneyBoundInt + 1},
+		{"withdrawal one minor unit past the cap", operation.TypeWithdrawal, -moneyBoundInt - 1},
+		{"deposit of math.MaxInt64", operation.TypeDeposit, math.MaxInt64},
+		{"withdrawal of math.MinInt64", operation.TypeWithdrawal, math.MinInt64},
+	} {
+		op := operation.Operation{
+			AccountID: f.accountID, Type: tc.typ, OccurredOn: date("2026-07-02"),
+			AmountMinor: tc.amount, Currency: "RUB",
+		}
+		_, err := svc.Create(f.ctx, f.spaceID, op)
+		t.Run(tc.what, func(t *testing.T) {
+			wantRefusal(t, err, "amount_minor must be within ±"+moneyBound)
+		})
+	}
+}
+
+// TestFeeIsBoundedAtZeroAndAtTheCap fixes fee_minor's two edges, and they are
+// NOT the two edges of amount_minor: a fee is money that was charged, never
+// money that came back, so the floor is zero and the refusal for a negative one
+// is a sentence of its own. That asymmetry is the reason the contract's
+// declaration for this field could not be copied from the amount beside it — a
+// floor of -10^15 there would have promised a client that a negative fee is
+// sendable, and every such request would have come back 400.
+func TestFeeIsBoundedAtZeroAndAtTheCap(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	// Both ends of what is allowed: no fee at all, and a fee at the cap. On two
+	// dates because a deposit is an ordinary row and two of them may as well be
+	// two days apart.
+	for _, tc := range []struct {
+		on  string
+		fee int64
+	}{
+		{"2026-07-01", 0},
+		{"2026-07-02", moneyBoundInt},
+	} {
+		fee := tc.fee
+		op := operation.Operation{
+			AccountID: f.accountID, Type: operation.TypeDeposit, OccurredOn: date(tc.on),
+			AmountMinor: 100_000, FeeMinor: fee, Currency: "RUB",
+		}
+		created, err := svc.Create(f.ctx, f.spaceID, op)
+		if err != nil {
+			t.Fatalf("deposit with a fee of %d: %v — the value ON the bound is inside it", fee, err)
+		}
+		if created.FeeMinor != fee {
+			t.Errorf("stored fee = %d, want %d", created.FeeMinor, fee)
+		}
+	}
+
+	for _, tc := range []struct {
+		what string
+		fee  int64
+		want string
+	}{
+		{"a fee of one minor unit below zero", -1, "fee_minor must be >= 0"},
+		{"a fee of math.MinInt64", math.MinInt64, "fee_minor must be >= 0"},
+		{"a fee one minor unit past the cap", moneyBoundInt + 1, "fee_minor must be <= " + moneyBound},
+		{"a fee of math.MaxInt64", math.MaxInt64, "fee_minor must be <= " + moneyBound},
+	} {
+		op := operation.Operation{
+			AccountID: f.accountID, Type: operation.TypeDeposit, OccurredOn: date("2026-07-03"),
+			AmountMinor: 100_000, FeeMinor: tc.fee, Currency: "RUB",
+		}
+		_, err := svc.Create(f.ctx, f.spaceID, op)
+		t.Run(tc.what, func(t *testing.T) { wantRefusal(t, err, tc.want) })
+	}
+}
+
+// TestTransferCostOverrideIsBoundedAtZeroAndAtTheCap covers the third field,
+// and the one door that reaches it: a cost basis handed to a transfer instead
+// of computed from the source account's history. It does not go through
+// validate at all — CreateTransfer bounds it itself — so nothing above says
+// anything about it.
+//
+// Its floor is zero for a reason of its own: the figure is what the shares
+// COST, and a negative cost is not a direction, it is a number that would make
+// every later profit larger than the sale it came from.
+func TestTransferCostOverrideIsBoundedAtZeroAndAtTheCap(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	// Enough shares to move several times over, so each acceptance below has
+	// something left to move.
+	if _, err := svc.Create(f.ctx, f.spaceID, operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-07-01"), Quantity: dec("100"), Price: dec("100"),
+		AmountMinor: -1_000_000, Currency: "RUB",
+	}); err != nil {
+		t.Fatalf("seed the source position: %v", err)
+	}
+
+	move := func(on string, cost int64) error {
+		_, _, err := svc.CreateTransfer(f.ctx, f.spaceID, operation.TransferParams{
+			FromAccountID: f.accountID, ToAccountID: f.account2ID, InstrumentID: f.sberID,
+			Quantity: *dec("10"), OccurredOn: date(on), CostMinorOverride: &cost,
+		})
+		return err
+	}
+
+	// Zero is a real basis and not an empty field: shares can arrive at no cost
+	// at all, and the queue behind them is what a hand-given basis replaces.
+	if err := move("2026-07-02", 0); err != nil {
+		t.Fatalf("transfer with a hand-given basis of 0: %v — zero is inside the bound", err)
+	}
+	if err := move("2026-07-03", moneyBoundInt); err != nil {
+		t.Fatalf("transfer with a hand-given basis of exactly the cap: %v — the value ON the bound is inside it", err)
+	}
+
+	for _, tc := range []struct {
+		what string
+		cost int64
+	}{
+		{"a hand-given basis of one minor unit below zero", -1},
+		{"a hand-given basis of math.MinInt64", math.MinInt64},
+		{"a hand-given basis one minor unit past the cap", moneyBoundInt + 1},
+		{"a hand-given basis of math.MaxInt64", math.MaxInt64},
+	} {
+		err := move("2026-07-04", tc.cost)
+		t.Run(tc.what, func(t *testing.T) {
+			wantRefusal(t, err, "cost_minor must be within 0.."+moneyBound)
+		})
 	}
 }

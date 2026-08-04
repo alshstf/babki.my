@@ -374,7 +374,7 @@ export interface components {
         };
         /** @description Partial update of the space. Every field is optional and an omitted field is left unchanged, but at least one must be present — an empty body is rejected rather than silently accepted as a no-op. minProperties enforces that in the schema itself, not only in this description, so a schema-aware client can reject an empty body without a round trip. */
         UpdateSpaceRequest: {
-            /** @description ISO-4217 uppercase, e.g. RUB */
+            /** @description ISO-4217 uppercase, e.g. RUB. Three uppercase letters is the SHAPE of a code and it is the whole of what the server checks: it holds no register, so a well-formed code it has never met is accepted, and a lowercase spelling or a currency's name is a 400. Changing it changes the currency every converted figure in this API is published in; nothing stored is rewritten, since those figures are computed on the way out. */
             base_currency?: string;
             /** @description ISO 3166-1 alpha-2 uppercase, e.g. RU. Must be one of the countries this application has cost basis rules for (GET /api/v1/tax-residencies lists them); anything else is a 400. An unrecognised code is never accepted and quietly treated as Russia — that silent substitution is the exact failure this field exists to prevent. */
             tax_residency?: string;
@@ -463,7 +463,7 @@ export interface components {
         CreateAccountRequest: {
             name: string;
             type: components["schemas"]["AccountType"];
-            /** @description ISO-4217, e.g. RUB */
+            /** @description ISO-4217 uppercase, e.g. RUB. Three uppercase letters is the SHAPE of a code and it is the whole of what the server checks: it holds no register, so a well-formed code it has never met is accepted, and a lowercase spelling or a currency's name is a 400. It cannot be changed afterwards — UpdateAccountRequest carries no currency — because the balance marks recorded against the account carry no currency of their own and are denominated in this one. */
             currency: string;
             institution?: string;
             /** Format: uuid */
@@ -481,7 +481,7 @@ export interface components {
             as_of: string;
             /**
              * Format: int64
-             * @description Negative for a debt: a credit card or a loan carries what is owed as a negative balance. Bounded at ±10^15 minor units — ten trillion whole roubles or dollars — the SAME cap Operation.amount_minor carries, because it is the same money in the same currency on the same screen. Past it, 400. The bound is far above any real balance and far enough below int64 that the accounts screen can still convert what it accepts: at the largest balance taken here an fx rate of up to ~9223 still fits in an int64 of minor units, which is above any rate this program will meet. A balance that cannot be converted is not a wrong figure on the screen — the server refuses to publish one — it is an accounts list that cannot be drawn at all until the row is overwritten, which is why the refusal is at the write. Rows written before the bound existed are untouched and are still returned as they stand.
+             * @description Negative for a debt: a credit card or a loan carries what is owed as a negative balance. Bounded at ±10^15 minor units — ten trillion whole roubles or dollars — the SAME cap CreateOperationRequest.amount_minor carries, because it is the same money in the same currency on the same screen. Past it, 400. The bound is far above any real balance and far enough below int64 that the accounts screen can still convert what it accepts: at the largest balance taken here an fx rate of up to ~9223 still fits in an int64 of minor units, which is above any rate this program will meet. A balance that cannot be converted is not a wrong figure on the screen — the server refuses to publish one — it is an accounts list that cannot be drawn at all until the row is overwritten, which is why the refusal is at the write. Rows written before the bound existed are untouched and are still returned as they stand.
              */
             amount_minor: number;
         };
@@ -524,7 +524,7 @@ export interface components {
             currency: string;
             /**
              * Format: int64
-             * @description What one bond is worth at redemption, in face_currency's minor units. Null for anything that is not a bond, and for a bond whose face value has not been recorded. Never zero, never negative, never above ten trillion minor units, and never present without face_currency: the two are written together or not at all, and the writes enforce it (see the same field on CreateInstrumentRequest). All were reachable states before, and the pair is what a bond's price MEANS — an exchange quotes a bond as a percentage of face, so a face value of zero prices the whole holding at nothing, and one large enough overflows the very valuation it prices (portfolio.marketValue) and leaves the position unreadable. The bounds state in schema what that sentence promises in prose, so a client that validates against this document can check the guarantee rather than take it on trust.
+             * @description What one bond is worth at redemption, in face_currency's minor units. Null for a bond whose face value has not been recorded, and null for anything that is not a bond — the writes refuse the pair on every other type, since a bond is the one instrument whose quote is a percentage of face and the only one for which this field answers anything (see the same field on CreateInstrumentRequest). Rows written before that rule are returned exactly as they stand: no migration clears them, because a face value on a share makes no published figure wrong — a share is valued at the quote's price per unit and this field is never read for one — and discarding a number somebody entered is not a migration's decision. Clearing the pair through PATCH is the repair, and it stays available on any type. Never zero, never negative, and never present without face_currency: the two are written together or not at all, and the writes enforce it (see the same field on CreateInstrumentRequest). Both are backed by the CHECK constraint migration 0012 added on this column, which is why `minimum: 1` above is a guarantee about every row already stored, not merely about what a future write will accept. There is no `maximum` here on purpose: the write doors also refuse a face value too large, because one large enough overflows the very valuation it prices (portfolio.marketValue) and leaves the position unreadable — but that ceiling is a write-time check with no CHECK constraint behind it, so, unlike the floor, it is not a claim this response can make about a row already stored. The same line is already drawn for money elsewhere in this document: SetBalanceRequest.amount_minor carries a maximum and BalancePoint.amount_minor, the same figure coming back, carries none.
              */
             face_value_minor?: number | null;
             /** @description The currency face_value_minor is denominated in, which need not be the instrument's own currency. Null exactly when face_value_minor is null — see it. An ISO-4217 code, never an empty string: the writes enforce the pattern and a CHECK constraint keeps the empty string out (migration 0012). A face value denominated in nothing is what makes a valuation come back as a bare number with no currency on it. */
@@ -537,13 +537,14 @@ export interface components {
             ticker?: string;
             isin?: string;
             figi?: string;
+            /** @description ISO-4217 uppercase, e.g. RUB: the currency the instrument's own figures are denominated in, which is not necessarily face_currency below. Three uppercase letters is the SHAPE of a code and it is the whole of what the server checks: it holds no register, so a well-formed code it has never met is accepted, and a lowercase spelling or a currency's name is a 400. It cannot be changed afterwards — UpdateInstrumentRequest carries no currency. */
             currency: string;
             /**
              * Format: int64
-             * @description A bond's face value in face_currency's minor units. Must be POSITIVE, no larger than ten trillion minor units, and must be given TOGETHER with face_currency — both set, or neither. Past any rule, 400 naming the field. Zero is refused rather than stored because an exchange quotes a bond as a percentage of face: a face value of zero turns every price into no money at all, and the position it values into 0,00. The upper bound is the same cap every other money field in this API is written against (see amount_minor on SetBalanceRequest): far above any bond ever issued, and far enough below an int64's own range that multiplying it by a price and a quantity (portfolio.marketValue) cannot by itself be the reason a position's valuation overflows. A bond may be created without a face value; it simply cannot be priced until one is recorded.
+             * @description A bond's face value in face_currency's minor units. Only `type: bond` may carry one: sending either half with any other type is a 400 naming the type that was sent, because an exchange quotes a bond as a PERCENTAGE of face while every other instrument this program prices is quoted in money already, so the field answers nothing on them. Must be POSITIVE, no larger than ten trillion minor units, and must be given TOGETHER with face_currency — both set, or neither. Past any rule, 400 naming the field. Zero is refused rather than stored because an exchange quotes a bond as a percentage of face: a face value of zero turns every price into no money at all, and the position it values into 0,00. The upper bound is the same cap every other money field in this API is written against (see amount_minor on SetBalanceRequest): far above any bond ever issued, and far enough below an int64's own range that multiplying it by a price and a quantity (portfolio.marketValue) cannot by itself be the reason a position's valuation overflows. A bond may be created without a face value; it simply cannot be priced until one is recorded.
              */
             face_value_minor?: number | null;
-            /** @description The currency face_value_minor is denominated in: an ISO-4217 code in uppercase, and the pattern is enforced, not merely described. An empty string is refused with 400 like any other non-code — it passes a presence check and a NOT NULL alike while denominating the face value in nothing, which leaves a bond priced as a bare number with no currency beside it. Given together with face_value_minor or not at all — see it. */
+            /** @description The currency face_value_minor is denominated in: an ISO-4217 code in uppercase, and the pattern is enforced, not merely described. An empty string is refused with 400 like any other non-code — it passes a presence check and a NOT NULL alike while denominating the face value in nothing, which leaves a bond priced as a bare number with no currency beside it. Given together with face_value_minor or not at all, and on `type: bond` alone — see it. */
             face_currency?: string | null;
         };
         UpdateInstrumentRequest: {
@@ -554,10 +555,10 @@ export interface components {
             frozen?: boolean;
             /**
              * Format: int64
-             * @description Same rules as on creation, and they apply to the REQUEST rather than to the row it lands on: to touch either half of the pair, send both — either two values, or two nulls to clear the pair. Sending one alone is refused even when the stored row would make the result well formed, so that an accepted PATCH always leaves the pair whole without this endpoint having to read the row first and race a concurrent write. That refusal carries a sentence of its own — `face_value_minor and face_currency must be sent together, even to change one` — because creation's `set together or not at all` is true of the stored row both before such a PATCH and after it, and so names nothing the client could do about it. Omitting both leaves the pair exactly as it was.
+             * @description Same rules as on creation, with one addition and one difference. The addition: the bond-only rule is judged against the STORED instrument, since a PATCH carries no type and nothing in this API can change one — setting either half on a row that is not a bond is a 400 naming that row's type, while CLEARING the pair (two nulls) is allowed on any type and is how a face value recorded before that rule is taken back. This is the one place the endpoint reads the row before writing it, and it is not raced: a type is not a column any writer in this program can change, so what this read sees is what the write will land on. The difference is the mention rule, which applies to the REQUEST rather than to the row it lands on: to touch either half of the pair, send both — either two values, or two nulls to clear the pair. Sending one alone is refused even when the stored row would make the result well formed, so that an accepted PATCH always leaves the pair whole without this endpoint having to read the PAIR itself and race a concurrent write over it — unlike the type above, the pair is judged from the request alone and the row's own two columns are never read for this rule. That refusal carries a sentence of its own — `face_value_minor and face_currency must be sent together, even to change one` — because creation's `set together or not at all` is true of the stored row both before such a PATCH and after it, and so names nothing the client could do about it. Omitting both leaves the pair exactly as it was.
              */
             face_value_minor?: number | null;
-            /** @description The currency face_value_minor is denominated in: an ISO-4217 code in uppercase, enforced as on creation — an empty string comes back 400, not stored. Sent together with face_value_minor or not at all — see it. */
+            /** @description The currency face_value_minor is denominated in: an ISO-4217 code in uppercase, enforced as on creation — an empty string comes back 400, not stored. Sent together with face_value_minor or not at all, and set only on an instrument that is stored as a bond — see it. */
             face_currency?: string | null;
         };
         /** @enum {string} */
@@ -639,10 +640,17 @@ export interface components {
             quantity?: string | null;
             /** @description Decimal as string: money per unit, in MAJOR currency units. |price| must not exceed 10^13 (10000000000000) — one unit may not cost more than a whole operation is allowed to be for — and see quantity for the bound on the two multiplied together. Past either, 400. */
             price?: string | null;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description The operation's own amount in `currency`, sign preserved: an outflow is negative. Which sign is required depends on the type — a buy and a withdrawal must be negative, a deposit and a dividend positive, a split exactly 0, a conversion either way — and the wrong one is a 400 naming the type. Bounded at ±10^15 minor units, ten trillion whole roubles or dollars: the SAME cap SetBalanceRequest.amount_minor carries, because it is the same money in the same currency on the same screen — the accounts list sums balances, the journal sums amounts, and both are multiplied by an fx rate before anything is published. Past it, 400. The bound is on the MAGNITUDE, so an outflow is refused at the same size an inflow is. Rows written before the bound existed are untouched and are still returned as they stand.
+             */
             amount_minor: number;
+            /** @description ISO-4217 uppercase, e.g. RUB. Three uppercase letters is the SHAPE of a code and it is the whole of what the server checks: it holds no register, so a well-formed code it has never met is accepted, and a lowercase spelling or a currency's name is a 400. */
             currency: string;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description What this operation cost to make, in `currency`, as a POSITIVE figure whichever way `amount_minor` went — it is money charged, never money returned. That is why the floor here is 0 rather than the -10^15 the amount gets: a negative fee is refused by a rule of its own. Omitted or 0 means no fee. The ceiling is the same 10^15 minor units the amount stops at, for the same reason — it is money in the same currency on the same row. Past either end, 400.
+             */
             fee_minor?: number;
             note?: string;
             /** @description Decimal as string: how many units one unit becomes. Must be positive and strictly less than 10^10 (10000000000) — the first value the column cannot hold — or 400. A split multiplies the whole position's quantity, so a ratio that is a mis-scaled field rather than a corporate action carries an ordinary holding past what any screen can value; the bound refuses it by name instead of letting the database answer with an overflow. */
@@ -661,7 +669,7 @@ export interface components {
             occurred_on: string;
             /**
              * Format: int64
-             * @description Cost basis override; default is FIFO carryover from the source account
+             * @description Cost basis override; default is FIFO carryover from the source account. A basis is what the shares COST, so it is never negative: the floor is 0 and not the -10^15 an amount gets, and the ceiling is the same 10^15 minor units every other money field here is written against. Past either end, 400. Sending one has a second consequence that is not about its size: a basis given by hand replaces the parcel of purchases the queue would have released, so the shares arrive knowing no acquisition date at all — see Operation.has_undated_lots, which is what such a transfer then reports for good.
              */
             cost_minor?: number | null;
             note?: string;

@@ -10,6 +10,8 @@ import (
 	"github.com/alexedwards/argon2id"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"babki.my/babki/internal/platform/currency"
 )
 
 var (
@@ -24,10 +26,7 @@ var (
 	ErrUsernameTaken = errors.New("username already taken")
 )
 
-var (
-	usernameRe = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
-	currencyRe = regexp.MustCompile(`^[A-Z]{3}$`)
-)
+var usernameRe = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
 
 // dummyHash is a precomputed argon2id hash (params: argon2id.DefaultParams,
 // passphrase "dummy-password-for-timing-safety") used to run a real
@@ -209,7 +208,7 @@ func (s *Service) UpdateSpace(ctx context.Context, p Principal, in SpaceSettings
 	if in.BaseCurrency == nil && in.TaxResidency == nil {
 		return Space{}, fmt.Errorf("%w: nothing to update: give base_currency, tax_residency or both", ErrValidation)
 	}
-	if in.BaseCurrency != nil && !currencyRe.MatchString(*in.BaseCurrency) {
+	if in.BaseCurrency != nil && !currency.Valid(*in.BaseCurrency) {
 		return Space{}, fmt.Errorf("%w: base_currency must be an uppercase ISO-4217 code (e.g. RUB)", ErrValidation)
 	}
 	if in.TaxResidency != nil {

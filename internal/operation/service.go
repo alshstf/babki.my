@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"sort"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/platform/currency"
 	"babki.my/babki/internal/platform/money"
 	"babki.my/babki/internal/portfolio"
 )
@@ -28,8 +28,6 @@ const (
 	pgForeignKeyViolation = "23503"
 	pgUniqueViolation     = "23505"
 )
-
-var currencyRe = regexp.MustCompile(`^[A-Z]{3}$`)
 
 // THE MONEY CAP THIS FILE BOUNDS EVERYTHING ELSE AGAINST is
 // money.MaxAmountMinor: 10^15 minor units, ≈10 trillion roubles — far above any
@@ -214,7 +212,7 @@ func validate(o Operation) error {
 	if !o.Type.Valid() {
 		return fmt.Errorf("%w: invalid operation type", family.ErrValidation)
 	}
-	if !currencyRe.MatchString(o.Currency) {
+	if !currency.Valid(o.Currency) {
 		return fmt.Errorf("%w: currency must be ISO-4217 uppercase", family.ErrValidation)
 	}
 	if o.OccurredOn.After(maxOccurredOn()) {
