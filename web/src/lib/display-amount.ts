@@ -53,10 +53,20 @@ export interface ResolvedAmount {
   amountMinor: number;
   currency: string;
   /**
-   * True when mode is "base" but no fx rate was available for this
-   * currency, so the native amount is shown as an honest fallback instead
-   * — never a dash, never a fabricated zero. Callers should pair this with
-   * a small indicator (title: displayCurrency.notConverted).
+   * True when mode is "base" and the server published no converted figure for
+   * this cell, so the native amount is shown as an honest fallback instead —
+   * never a dash, never a fabricated zero. Callers should pair it with a small
+   * indicator.
+   *
+   * WHY it published none is not this flag's to say, and the name is older
+   * than that distinction: a missing fx rate is only one of the causes — a
+   * purchase date nobody ever recorded is another, and no rate answers for a
+   * date that does not exist — and only the server knows which one it actually
+   * stopped on (Position.in_base_gap, Operation.in_base_gap). That is why the
+   * two tables pass wordings of their own and only the accounts screens take
+   * the default, `displayCurrency.notConverted`, which does name a rate: for an
+   * account balance the contract leaves no other cause once there is a balance
+   * and the currencies differ.
    */
   noRate: boolean;
   /**
