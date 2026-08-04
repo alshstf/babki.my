@@ -504,10 +504,13 @@ describe("AccountDetailPage", () => {
             makeOperation({
               id: "op-transfer",
               type: "transfer_out",
-              // No breakdown was ever recorded for this parcel, so nothing
-              // converts and in_base is null — the row still publishes a cost
-              // basis and the server still says so (has_undated_lots).
-              has_undated_lots: true,
+              // A parcel with a stored breakdown: the source account's queue
+              // picked every piece of it, so this amount IS a figure some rule
+              // chose and the caveat is true of it. The fixture used to be a
+              // parcel with NO breakdown (has_undated_lots alone), where the
+              // caveat's «её выбрало то же правило очереди» is false — see
+              // publishesACostBasis and #81.
+              assembled_from_lots: true,
             }),
           ],
           has_more: false,
