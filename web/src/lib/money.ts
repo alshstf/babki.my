@@ -31,9 +31,18 @@ export function formatMinor(amountMinor: number, currency: string): string {
   return formatWith(amountMinor, currency, 2);
 }
 
-// isPositiveDecimal validates a positive decimal string with up to 10 fraction
-// digits (matches backend NUMERIC(30,10) validation for quantity fields).
-const DECIMAL_RE = /^\d+(\.\d{1,10})?$/;
+// The most fraction digits a quantity or a price may carry: the scale the
+// backend stores them at (NUMERIC(30,10)). Both the validator below and every
+// guarantee in this file that a DERIVED value is one the form will accept back
+// are written from this single number rather than from copies of it — two
+// copies of one figure eventually drift apart, and this drift would surface as
+// a form complaining about a field the user never typed in.
+const MAX_FRACTION_DIGITS = 10;
+
+// isPositiveDecimal validates a positive decimal string with up to
+// MAX_FRACTION_DIGITS fraction digits (matches backend NUMERIC(30,10)
+// validation for quantity fields).
+const DECIMAL_RE = new RegExp(`^\\d+(\\.\\d{1,${MAX_FRACTION_DIGITS}})?$`);
 
 export function isPositiveDecimal(value: string): boolean {
   return DECIMAL_RE.test(value) && Number(value) > 0;
@@ -136,6 +145,155 @@ function parseDecimalString(input: string): { mantissa: bigint; decimals: number
   if (!/^\d+(\.\d+)?$/.test(input)) return null;
   const [wholePart, fracPart = ""] = input.split(".");
   return { mantissa: BigInt(wholePart + fracPart), decimals: fracPart.length };
+}
+
+// How many fraction digits a derived price or percentage is written with at
+// minimum — two, so 980 prints as "980.00" and 98 as "98.00", the way a quote
+// is written everywhere else on this screen and in the broker's terminal the
+// number was copied out of. It is a MINIMUM and never a ceiling: renderDecimal
+// keeps every digit the exact value actually has, because the money side of
+// this pair is on its way into a cost basis and a dropped digit there is money
+// the position never gets back.
+const MIN_DERIVED_FRACTION_DIGITS = 2;
+
+// renderDecimal writes an exact BigInt mantissa with `decimals` decimal places
+// as a plain decimal string, trailing zeros trimmed down to (but never below)
+// MIN_DERIVED_FRACTION_DIGITS. The point separator is "." rather than the
+// Russian ",", because what this produces goes straight into an <input> whose
+// contents are validated by isPositiveDecimal and sent on the wire — it is a
+// value, not a rendering, and formatPrice is what turns a value into Russian.
+function renderDecimal(mantissa: bigint, decimals: number): string {
+  const digits = mantissa.toString().padStart(decimals + 1, "0");
+  const whole = digits.slice(0, digits.length - decimals);
+  let frac = decimals === 0 ? "" : digits.slice(digits.length - decimals);
+  frac = frac.replace(/0+$/, "");
+  return `${whole}.${frac.padEnd(MIN_DERIVED_FRACTION_DIGITS, "0")}`;
+}
+
+// How many digits a rendered decimal string carries after the point. Counted
+// on the RENDERED text rather than on the decimal count the arithmetic was
+// carried out at, because renderDecimal trims trailing zeros: 98,000000 % of a
+// 1 000,00 ₽ face is computed at ten decimal places and written as "980.00",
+// and judging that by the width of its intermediate would refuse an exact,
+// perfectly ordinary price.
+function fractionDigitsOf(value: string): number {
+  const point = value.indexOf(".");
+  return point < 0 ? 0 : value.length - point - 1;
+}
+
+// bondPriceFromPercent converts an exchange's bond quote — a PERCENTAGE OF
+// FACE VALUE, e.g. "98" — into the money one bond costs, as a decimal string
+// in the face value's currency: 98 % of a 1 000,00 ₽ face is "980.00".
+//
+// This is #77. A broker quotes a bond in percent and nothing about the number
+// says so: 98 is a perfectly good price, a form that asks for «цена за
+// единицу» accepts it without a murmur, and 10 bonds bought at it record
+// 980 ₽ instead of 9 800 ₽ — a cost basis ten times too small, and the
+// expense side of a tax calculation with it.
+//
+// Its ALGEBRA is the server's own statement of the same arithmetic
+// (marketValue in internal/portfolio/http.go: faceValueMinor × price/100 ×
+// quantity, in the FACE currency): this function does exactly its first two
+// factors and stops there, the quantity being applied afterwards by
+// multiplyToMinor. Not "agrees to within a rounding step": THIS function
+// rounds nothing at all. The exact product of an integer number of minor
+// units and a finite decimal percentage is itself a finite decimal, so it is
+// written out in full however many digits that takes, and the only place a
+// fraction of a kopeck can be dropped is the total — once, exactly as it
+// always was for a share.
+//
+// Where the two part company is that last step, and the comment stops short of
+// claiming otherwise: the server's money.Minor
+// (internal/platform/money/money.go) rounds half away from zero, while
+// multiplyToMinor truncates. 98,0005 % of a 1 000,00 ₽ face, one bond, is
+// 980,005 ₽ exactly — from which this side takes 98 000 kopecks and the
+// server's valuation of the same holding takes 98 001. That difference is
+// older than bonds (a share's total truncates the same way), it is a kopeck
+// on a sub-kopeck remainder, and the two figures are answers to different
+// questions anyway: what this trade cost versus what the position is worth
+// today. It is written down here so that "agrees" is not read as "agrees to
+// the kopeck", not as a defect this function may quietly fix — a client that
+// started rounding money differently from the rest of its own path would be
+// a worse problem than the kopeck.
+//
+// Returns null rather than a number whenever there is no conversion to
+// publish. A malformed percentage, a percentage of exactly zero, or a face
+// value that is absent, zero or negative: any of the three is refused rather
+// than multiplied, because 0 × anything is 0 and a fabricated zero in a price
+// field is precisely the plausible-looking number this project does not
+// publish — that holds whichever of the two factors is the zero one. And an
+// exact price too fine to be written down — see the digit ceiling at the end
+// of the function. The caller's job is then to say what is missing — never to
+// show the percentage as if it were money.
+export function bondPriceFromPercent(percentOfFace: string, faceValueMinor: number): string | null {
+  const percent = parseDecimalString(percentOfFace);
+  if (!percent || percent.mantissa === 0n) return null;
+  if (!Number.isSafeInteger(faceValueMinor) || faceValueMinor <= 0) return null;
+  // Two divisions by a hundred, and they are different divisions: one takes
+  // the face value from minor units into major ones, the other takes the
+  // quote from percent into a fraction. Folding them into a single /100 is
+  // the off-by-a-hundred this whole function exists to prevent, so they are
+  // spelled out as two separate decimal shifts of two each.
+  const price = renderDecimal(BigInt(faceValueMinor) * percent.mantissa, percent.decimals + 2 + 2);
+  // The same guarantee the percentage direction gives (see
+  // PERCENT_FRACTION_DIGITS): what this function returns is always a value the
+  // form will take back. A percentage fine enough — "98.0000000001" against a
+  // 1,00 ₽ face — makes an exact price with more fraction digits than a price
+  // is stored with, and isPositiveDecimal then rejects it, so the dialog would
+  // complain about a price field the user never typed in and cannot correct
+  // from the percentage he did type. Rounding it to fit is not on the table:
+  // this number is on its way into a cost basis, and this function's whole
+  // claim is that it drops nothing. So the conversion is refused instead, the
+  // money field is left empty, and the percentage that could not be converted
+  // stays on screen where its author can see it.
+  return fractionDigitsOf(price) > MAX_FRACTION_DIGITS ? null : price;
+}
+
+// How many fraction digits the derived PERCENTAGE is computed to. The scale
+// prices are stored at and the ceiling isPositiveDecimal enforces on what the
+// field will accept back — one and the same number, MAX_FRACTION_DIGITS — so
+// the WIDTH of a value this function produces never exceeds one the form
+// would take. The money direction gives the same guarantee by refusing
+// anything wider; here it is had by construction, since a quotient computed
+// to N places has N.
+//
+// Width is not the only thing isPositiveDecimal checks, though, and rounding
+// to N places can still produce a string that check refuses outright: a price
+// too small to move the percentage at this many places — "0.0000000001" ₽
+// against a face that makes it round to zero at ten digits — renders as
+// "0.00", which isPositiveDecimal's own positivity clause rejects. This
+// function does not guard against that case the way bondPriceFromPercent
+// guards its own zero: its output is a display-only derived value, shown but
+// never itself submitted, so a misleading "0.00" here costs a stale caption,
+// not a fabricated cost basis.
+const PERCENT_FRACTION_DIGITS = MAX_FRACTION_DIGITS;
+
+// bondPercentFromPrice is the same conversion read backwards: given the money
+// one bond costs, what percentage of face is the exchange quoting? 980 ₽
+// against a 1 000,00 ₽ face is "98.00".
+//
+// The direction matters for where a rounding may live. Percent → money is
+// always exact (see above) and is the figure that gets recorded; money →
+// percent need not be, because a face value whose denominator is not built
+// out of 2s and 5s makes the quotient non-terminating — 100 ₽ against a
+// 3,00 ₽ face is 3333,333… %. That last digit is therefore rounded
+// half-up at PERCENT_FRACTION_DIGITS, and it is allowed to be: a percentage
+// is not money (the same standing exception that lets the positions screen
+// compute a profit percentage in the browser), and this particular percentage
+// is a caption on a number the user typed rather than the number itself. What
+// gets sent is always the money price, exactly as entered.
+//
+// Rounded half-away-from-zero rather than truncated, which for a
+// non-negative quotient is floor(n/d + 1/2) — written as (2n + d) / 2d so the
+// halving happens in integers and no double is created on the way.
+export function bondPercentFromPrice(pricePerUnit: string, faceValueMinor: number): string | null {
+  const price = parseDecimalString(pricePerUnit);
+  if (!price) return null;
+  if (!Number.isSafeInteger(faceValueMinor) || faceValueMinor <= 0) return null;
+  // percent = price / (faceValueMinor / 100) × 100 = price × 10000 / faceValueMinor.
+  const numerator = price.mantissa * 10_000n * 10n ** BigInt(PERCENT_FRACTION_DIGITS);
+  const denominator = BigInt(faceValueMinor) * 10n ** BigInt(price.decimals);
+  return renderDecimal((2n * numerator + denominator) / (2n * denominator), PERCENT_FRACTION_DIGITS);
 }
 
 // multiplyToMinor computes qty × price as integer minor units (e.g. kopecks)

@@ -160,11 +160,21 @@ func seedInstrumentsAndOperations(
 ) error {
 	instStore := instrument.NewStore(pool)
 
+	// The OFZ's face value: a thousand rubles, on a bond whose operations are
+	// in rubles too. Face currency and trade currency agreeing is exactly the
+	// condition the trade dialog needs to turn a percentage of face into money
+	// per bond, so this is the demo's bond where that link works — see its buy
+	// below for the arithmetic both directions produce.
 	faceValue := int64(1_000_00)
 	faceCurrency := "RUB"
 	// The eurobond's face value is denominated in a THIRD currency: not the
 	// dollars its position trades in and not the rubles the space totals in.
-	// That is the whole point of it — see the buy below (#39).
+	// That is the whole point of it — see the buy below (#39) — and it is also
+	// the demo's example of the one thing the trade dialog refuses to do (#77):
+	// a percentage of a EUR face value is euros, the trade is booked in
+	// dollars, and that dialog holds no fx rate. So the percent field is
+	// disabled there and a sentence names the mismatch, instead of a number
+	// arrived at by multiplying one currency by another.
 	eurFaceValue := int64(1_000_00)
 	eurFaceCurrency := "EUR"
 	instSeeds := []struct {
@@ -246,6 +256,41 @@ func seedInstrumentsAndOperations(
 			OccurredOn: d("2026-05-10"), Quantity: qty("300"), Price: price("305.5"),
 			AmountMinor: -9_165_000, FeeMinor: 9_165, Currency: "RUB",
 		},
+		// The demo's ordinary bond, and the one that shows the trade dialog's
+		// two linked price fields agreeing (#77). What is RECORDED is money per
+		// bond — 950,00 ₽ — the same unit every other buy in this journal
+		// carries and the only price that ever goes on the wire. The percentage
+		// is what a broker quotes and what the dialog now asks for first:
+		//
+		//	номинал                            1 000,00 ₽ (faceValue above)
+		//	«Цена, % от номинала»                  95,00 %
+		//	«Цена за одну облигацию»              950,00 ₽ = 1 000,00 × 95 ÷ 100
+		//	итог  100 × 950,00 ₽             = 95 000,00 ₽ = 9_500_000 minor, the
+		//	                                                 AmountMinor below
+		//
+		// Both directions of the link land exactly here — 95 typed into the
+		// percent field derives "950.00", 950 typed into the money field derives
+		// "95.00" back (bondPriceFromPercent and bondPercentFromPrice in
+		// web/src/lib/money.ts) — and nothing rounds on the way: 95 % of a whole
+		// number of kopecks is a whole number of kopecks. So a reader who
+		// re-enters this trade in the dialog gets this row back, figure for
+		// figure, instead of having to trust that he would.
+		//
+		// The fee is the broker's 0,1 %, 95,00 ₽. It is deliberately outside the
+		// arithmetic above: the dialog's «Итого» is quantity × price and the fee
+		// is a field of its own, exactly as it is here.
+		//
+		// The quote below is 95,20 %, so one bond is worth 952,00 ₽ — 95 200,00 ₽
+		// (9_520_000 minor) for the row's 100 bonds. That is NOT 200,00 ₽ above
+		// what the row's own cost basis paid, because the basis is not the
+		// 95 000,00 ₽ price alone: the engine capitalises a buy's fee into the
+		// lot (addLot in internal/portfolio/engine.go, -AmountMinor+FeeMinor),
+		// and this is the only seeded buy that carries one. Basis is therefore
+		// 9_509_500 minor — 95 095,00 ₽, the 95 000,00 ₽ paid plus the 95,00 ₽
+		// fee above — so the row reads +105,00 ₽ (+0,1 %), not +200,00 ₽
+		// (+0,2 %). Read from a seeded database, not from arithmetic on paper.
+		// NVDA and KAZ32EUR below carry no fee, so their own profit comments
+		// are the plain price difference and are unaffected by this.
 		{
 			AccountID: tbank, InstrumentID: inst("OFZ26238"), Type: operation.TypeBuy,
 			OccurredOn: d("2026-05-12"), Quantity: qty("100"), Price: price("950"),
@@ -512,6 +557,17 @@ func seedInstrumentsAndOperations(
 		// percentage convention belongs to the QUOTE, not to what the owner
 		// paid. At today's rates €980,00 is about $1 152, so the deal is priced
 		// where such a bond would actually have traded.
+		//
+		// Re-entering this trade in the dialog is where the second half of #77
+		// becomes visible. «Цена, % от номинала» is greyed out and the sentence
+		// under the pair reads «Номинал в EUR, а сделка в USD: цену в валюте
+		// сделки из процента не получить — курса здесь нет. Введите цену за одну
+		// бумагу» — the mismatch named, rather than a number produced by
+		// multiplying a euro face value into a dollar trade. $1 150,00 then goes
+		// in by hand under «Цена за одну облигацию (USD)», which is precisely
+		// what this row records. The OFZ above is the same dialog with the link
+		// intact: two bonds, one screen, and the difference between them stated
+		// rather than silently absorbed.
 		{
 			AccountID: freedom, InstrumentID: inst("KAZ32EUR"), Type: operation.TypeBuy,
 			OccurredOn: d("2026-06-20"), Quantity: qty("5"), Price: price("1150"),
@@ -740,8 +796,9 @@ func seedInstrumentsAndOperations(
 //     rate of its own: the entry converts at the nearest earlier date and
 //     the journal discloses that date rather than claiming the operation's
 //     own.
-//   - 2026-07-20 — today's-rate anchor, shared with the quotes and the
-//     latest account balances; also what GET /summary converts at, and the
+//   - 2026-07-20 — today's-rate anchor, shared with the latest account
+//     balances and with every seeded quote but WeWork's (see seedMarketData
+//     for why that one is dated earlier); also what GET /summary converts at, and the
 //     date of all three transfers (TSLA, NVDA and the hand-priced Intel
 //     parcel). It is one half of the EUR->USD rate the eurobond's valuation
 //     needs: no EUR/USD pair is seeded, and none is needed — every rate this
@@ -782,9 +839,22 @@ var seededUSDRates = []struct{ on, rate string }{
 // price), and the journal's per-operation in_base (each foreign-currency
 // entry converted at the rate of the day it happened).
 //
-// Quotes and the EUR/KZT rates are pinned to 2026-07-20 — the same date as
-// the latest seeded account balance — because both answer "what is this
-// worth now". EUR/RUB is load-bearing rather than decorative: it is the rate
+// The EUR/KZT rates are pinned to 2026-07-20 — the same date as the latest
+// seeded account balance and the newest USD/RUB row — because that is this
+// demo's "now": every conversion struck at the current rate resolves there.
+//
+// A QUOTE's date is a different kind of date and is written here as one. It is
+// the trading SESSION the price belongs to, as stated by whoever published it
+// (marketdata.TickerQuote.On) — never the day the price was fetched, which is
+// what #90 was. So the dates below are weekdays a reader can take for
+// sessions: 2026-07-20, a Monday, for all of them but WeWork's, whose earlier
+// one is deliberate and explained at its quote. No arithmetic reads any of
+// them. The one thing a quote's date decides is which of an instrument's rows
+// is its latest (Store.LatestQuotes orders by on_date), and this function
+// writes exactly one row per instrument; beyond that the date reaches a person
+// only as the «Цена на …» caption on the positions screen.
+//
+// EUR/RUB is load-bearing rather than decorative: it is the rate
 // the eurobond's euro-denominated valuation reaches the base currency by, and
 // bridged against USD/RUB it is also the rate that brings that valuation into
 // the position's dollars (see the KAZ32EUR buy). USD/RUB, in contrast, is seeded as a short HISTORY, with a
@@ -794,11 +864,27 @@ var seededUSDRates = []struct{ on, rate string }{
 // leaving the feature invisible on the demo screens. See seededUSDRates for
 // what each date demonstrates.
 //
-// FXUS and AAPL deliberately get no quote: FXUS is Frozen, so its position
-// demonstrates the null-valuation path (a holding the app can't safely
-// price rather than a silent zero); AAPL is a live foreign instrument with
-// no provider yet (cbr/moex only cover the Russian market — plan 4b widens
-// this).
+// FXUS and AAPL deliberately get no quote, so their positions demonstrate the
+// null-valuation path: a holding the app cannot price shows a dash and says
+// so, rather than a silent zero. The cause in both cases is this function and
+// nothing else — no quote row is written for either ticker below.
+//
+// It is NOT that FXUS is Frozen, which is what this comment claimed until
+// #85. Nothing on the way to a valuation reads that flag: ListTradable selects
+// by type and ticker alone (see internal/instrument/store.go), marketValue
+// never sees the instrument's flags at all, and the only place the flag
+// reaches a person is the «заморожен» badge on the positions screen — the
+// instrument API carries the field both ways, but no screen sets it and no
+// computation branches on it. Setting it on
+// FXUS is therefore decoration for the demo — a delisted FinEx fund is what a
+// reader expects to see priceless — and if the flag is to actually stop a
+// lookup, that is a behaviour change owed its own argument, not something to
+// be assumed by a comment.
+//
+// AAPL is priceless for a different and real reason: it is a live foreign
+// instrument, and this program has no provider that covers one. The two
+// wired in cmd/babki/root.go are cbr (fx rates) and moex (quotes), both
+// Russian-market only.
 //
 // MSFT is the exception among the foreign instruments, and it is hand-seeded
 // rather than provider-supplied for one reason: a position needs a valuation
@@ -813,7 +899,19 @@ var seededUSDRates = []struct{ on, rate string }{
 // seen without a valuation. See each quote below.
 func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]uuid.UUID, d func(string) time.Time) error {
 	mdStore := marketdata.NewStore(pool)
+	// The demo's "now": the newest fx rate in the table, so every conversion
+	// struck at the current rate resolves here, and the same day as the newest
+	// account balance.
 	on := d("2026-07-20")
+	// The trading session most of the seeded quotes belong to. The same
+	// calendar day as the "now" above, and a separate name on purpose: a
+	// quote's date says which session priced the paper, while `on` dates a rate
+	// something is converted at. The two coincide here because it makes the
+	// demo easy to read, not because anything requires it. 2026-07-20 is a
+	// Monday, which is what lets a reader take it for a session at all.
+	session := d("2026-07-20")
+	// WeWork's own session: a Friday ten days earlier — see its quote below.
+	weworkSession := d("2026-07-10")
 	rate := decimal.RequireFromString
 
 	rates := []marketdata.FxRate{
@@ -830,12 +928,14 @@ func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]
 	}
 
 	// OFZ26238's price is a percentage of face value (95.20 meaning 95.20%),
-	// same convention as a real bond quote — see portfolio.marketValue.
+	// same convention as a real bond quote — see portfolio.marketValue. Against
+	// the 95,00 % this position was bought at, that is 952,00 ₽ a bond against
+	// 950,00 ₽ paid; the OFZ buy spells the whole comparison out.
 	quotes := []marketdata.Quote{
-		{InstrumentID: instIDs["SBER"], On: on, Price: rate("305.50"), Currency: "RUB", Source: "seed"},
-		{InstrumentID: instIDs["LKOH"], On: on, Price: rate("7550.00"), Currency: "RUB", Source: "seed"},
-		{InstrumentID: instIDs["OFZ26238"], On: on, Price: rate("95.20"), Currency: "RUB", Source: "seed"},
-		{InstrumentID: instIDs["MSFT"], On: on, Price: rate("510.00"), Currency: "USD", Source: "seed"},
+		{InstrumentID: instIDs["SBER"], On: session, Price: rate("305.50"), Currency: "RUB", Source: "seed"},
+		{InstrumentID: instIDs["LKOH"], On: session, Price: rate("7550.00"), Currency: "RUB", Source: "seed"},
+		{InstrumentID: instIDs["OFZ26238"], On: session, Price: rate("95.20"), Currency: "RUB", Source: "seed"},
+		{InstrumentID: instIDs["MSFT"], On: session, Price: rate("510.00"), Currency: "USD", Source: "seed"},
 		// NVDA is quoted at exactly the price the 2026-07-22 sale went off at,
 		// so the surviving parcel is valued at $2 000.00 against a $1 500.00
 		// basis: +$500.00 unrealized on the row itself, beside the +$1 000.00
@@ -843,7 +943,7 @@ func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]
 		// «Зафиксировано» line rather than the row, since the per-position
 		// realized column was removed as visual noise (owner feedback, 4c).
 		// Both figures are round and checkable without a calculator.
-		{InstrumentID: instIDs["NVDA"], On: on, Price: rate("200.00"), Currency: "USD", Source: "seed"},
+		{InstrumentID: instIDs["NVDA"], On: session, Price: rate("200.00"), Currency: "USD", Source: "seed"},
 		// The eurobond, quoted like any bond as a percentage of face — 98.00
 		// meaning 98,00 %. The `Currency` here is the unit that PERCENTAGE is
 		// quoted in, not a currency the resulting money is ever in: the money is
@@ -851,16 +951,43 @@ func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]
 		// reads FaceCurrency and not this field (see its doc comment). It is
 		// written as EUR rather than USD so the two say the same thing about
 		// the same bond, the way OFZ26238's RUB quote does above.
-		{InstrumentID: instIDs["KAZ32EUR"], On: on, Price: rate("98.00"), Currency: "EUR", Source: "seed"},
+		{InstrumentID: instIDs["KAZ32EUR"], On: session, Price: rate("98.00"), Currency: "EUR", Source: "seed"},
 		// A price below a hundredth, and the only one in this seed: two fraction
 		// digits would print it as «0,00» (#30). See the WEWKQ buy.
-		{InstrumentID: instIDs["WEWKQ"], On: on, Price: rate("0.0025"), Currency: "USD", Source: "seed"},
+		//
+		// It is also the one quote here dated to a DIFFERENT session from the
+		// rest, and that is what puts plan 11's first half on the stand. A
+		// quote's date belongs to the QUOTE — the session whoever published the
+		// price says it priced — and not to the screen that draws it; a demo
+		// where every row read the same day cannot tell those two apart, because
+		// a single shared date is exactly what a screen-wide "as of today" stamp
+		// looks like. With this row dated 2026-07-10 the positions screen shows
+		// «Цена на 10.07.2026» beside «Цена на 20.07.2026» on its neighbours,
+		// and the caption is visibly about the price rather than about the page.
+		//
+		// This row rather than SBER's or the OFZ's, because MOEX dates a whole
+		// BOARD's session at once — every one of TQBR's 502 rows carried the
+		// same PREVDATE in the measurement recorded in QuotesFor
+		// (internal/marketdata/moex/moex.go), traded and untraded alike — so
+		// splitting the Russian instruments apart would put a shape on the demo
+		// that the provider it imitates does not produce. WeWork has no provider
+		// at all here (nothing in this program covers a foreign market), and
+		// what a stale row means is not in doubt either way: an instrument a
+		// refresh cannot price keeps the row it already has, date included, since
+		// quotesWorker.Work stores nothing for a ticker with no price and
+		// deletes nothing.
+		//
+		// No figure on any screen moves because of this. Nothing computes from a
+		// quote's date: the valuation is struck from the price, and its
+		// conversion into rubles from today's rate — which is the second
+		// sentence the row's own tooltip now carries.
+		{InstrumentID: instIDs["WEWKQ"], On: weworkSession, Price: rate("0.0025"), Currency: "USD", Source: "seed"},
 		// Intel is quoted so that the row carrying the dateless parcel has all
 		// four money figures to withhold, not just two: a position with no quote
 		// publishes no valuation and no profit anyway, and would show the
 		// permanent «дату уже не восстановить» sentence on half the row it is
 		// true of. See the INTC transfer.
-		{InstrumentID: instIDs["INTC"], On: on, Price: rate("34.00"), Currency: "USD", Source: "seed"},
+		{InstrumentID: instIDs["INTC"], On: session, Price: rate("34.00"), Currency: "USD", Source: "seed"},
 	}
 	if err := mdStore.UpsertQuotes(ctx, quotes); err != nil {
 		return fmt.Errorf("seed quotes: %w", err)

@@ -59,16 +59,30 @@ type TickerQuote struct {
 	Ticker   string
 	Price    decimal.Decimal
 	Currency string
-	On       time.Time
+	// On is the trading day this price belongs to, as stated by the source —
+	// never the day it was fetched on. The two are not the same day: a source
+	// asked at any hour of Monday may well answer with Friday's price, and
+	// #90 is what storing such a price under Monday cost. A provider that
+	// cannot say which day a price belongs to must leave that price out
+	// rather than supply a day of its own.
+	On time.Time
 }
 
-// QuoteProvider fetches current prices for a set of exchange tickers (e.g.
+// QuoteProvider fetches recent prices for a set of exchange tickers (e.g.
 // MOEX ISS). Declared here alongside FxProvider so both provider kinds share
-// one home; the first implementation is added in a later task.
+// one home.
 type QuoteProvider interface {
-	// QuotesFor fetches prices for tickers as of date on. Tickers with no
-	// price available are simply absent from the result — not an error.
-	QuotesFor(ctx context.Context, tickers []string, on time.Time) ([]TickerQuote, error)
+	// QuotesFor fetches whatever price the source currently publishes for
+	// each ticker, each one dated by the source itself (see TickerQuote.On).
+	// Tickers with no usable price are simply absent from the result — not an
+	// error.
+	//
+	// There is deliberately no date argument. This method used to take the
+	// date to stamp on the results, and every caller passed today, which is
+	// how the previous session's price came to be stored as today's. A caller
+	// cannot know what day a price it has not fetched yet belongs to, so
+	// asking it is asking for an invented answer.
+	QuotesFor(ctx context.Context, tickers []string) ([]TickerQuote, error)
 	// Name identifies the provider; used as Quote.Source.
 	Name() string
 }

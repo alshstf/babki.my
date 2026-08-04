@@ -164,8 +164,22 @@ const centsPerUnit = 2
 // rather than publish a zero or misleading figure.
 //
 // share/etf: price (per unit, major currency units) × quantity, in the
-// quote's own currency (q.Currency) — price and instrument currency always
-// agree here.
+// quote's own currency (q.Currency). The QUOTE's, deliberately, because
+// nothing makes it the instrument's: q.Currency is whatever the provider
+// reported (MOEX sends one per row, in CURRENCYID), the instrument's comes
+// from the catalog someone filled in, and the position's own — the currency
+// this valuation is eventually compared against — comes from the journal,
+// being the currency of the position's first operation (see Compute in
+// engine.go). Three sources, nothing reconciling them.
+//
+// This comment used to say the price's currency and the instrument's "always
+// agree here". They are only EXPECTED to, and the code around this function is
+// already written for the case where they do not: toAPI converts a valuation
+// that did not arrive in the position's currency, discloses the figure it
+// converted from in market_value_source_currency/_minor, and publishes
+// market_value_gap = no_rate_valuation_currency when there is no rate to
+// convert with. A claim of "always" over a branch that handles "sometimes not"
+// invites the next reader to delete the branch.
 //
 // bond: price is a percentage of face value (e.g. 95.20 meaning 95.20%), so
 // the value is faceValueMinor × price/100 × quantity — already in minor
@@ -410,11 +424,14 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 
 	out.MarketValueMinor = nullable.NewNullableWithValue(minor)
 	out.MarketValueCurrency = nullable.NewNullableWithValue(currency)
-	// Both operands are now guaranteed to be in the same currency whenever
-	// this fires — either they always agreed (share/etf), or a successful
-	// conversion just brought market_value into p.Currency above — so this
-	// is exact integer subtraction on minor units, never a mix of
-	// currencies and never a rounding operation.
+	// Both operands are in the same currency whenever this fires, and it is the
+	// guard that makes that true rather than any property of the data: either
+	// the valuation arrived in p.Currency already (the ordinary share/etf row,
+	// whose quote happens to be denominated in the currency its operations are
+	// — expected, never guaranteed, see marketValue), or the conversion above
+	// brought it there. Where neither held, the profit is left null instead of
+	// struck across two currencies. So this is exact integer subtraction on
+	// minor units, never a mix of currencies and never a rounding operation.
 	if currency == p.Currency {
 		out.UnrealizedPnlMinor = nullable.NewNullableWithValue(minor - p.CostMinor)
 	}

@@ -118,6 +118,50 @@ function valuationGapTitle(
 // both the price and the quote date are present and well-formed — a
 // half-rendered hint would be more misleading than no hint at all.
 //
+// WHAT THE DATE IS, and why the tooltip spends two sentences on it. price_on
+// is the trading session the SOURCE attaches this price to — never the day
+// this program fetched it (see TickerQuote.On in
+// internal/marketdata/provider.go; #90 was the fetch day being stored as the
+// price's own, so on a Monday Friday's price was captioned with Monday). With
+// the date now true, the date alone still is not: a bare «Цена на 31.07.2026»
+// read on a Monday says both "this is the market's last word" and "the quotes
+// job stopped a week ago", and nothing on this screen tells the two apart. So
+// the caption states what the date is instead of leaving the reader to infer
+// freshness the server never claimed.
+//
+// The wording is constrained by measurements against live ISS, all of them
+// recorded in the QuotesFor doc block in internal/marketdata/moex/moex.go, and
+// every constraint is a sentence this caption is forbidden to write:
+//   - it is NOT the session's closing price. MOEX publishes that separately as
+//     PREVLEGALCLOSEPRICE and the two are different numbers on the same row.
+//   - it is NOT necessarily a price anything traded at that day. 779 of TQCB's
+//     3021 rows in one measured session carried a price for a paper that did
+//     not trade at all, so «сделки в тот день могло и не быть» is the fact,
+//     and it is stated as a possibility because that is what was proven.
+//   - it is NOT "the previous session" as far as THIS component can know. The
+//     wire carries whatever day the source named; "previous" is a property of
+//     MOEX's PREVPRICE, not of the contract this screen reads, and a caption
+//     that asserted it would be a claim about a provider the frontend has
+//     never heard of.
+//   - it does NOT say the data is fresh. A date in the past is also exactly
+//     what a broken refresh looks like, and reassurance here would cover for
+//     one.
+//
+// The second sentence is the project's "three rates for three questions" rule
+// made legible on this cell: the valuation IS struck from this price (see
+// marketValue in internal/portfolio/http.go — every path that publishes
+// Position.price publishes a valuation computed from it, and this hint is only
+// rendered when there is one), while any conversion of that valuation is done
+// at the current rate, never at the quote's date — toAPI converts into the
+// position's currency and positionInBase into the base one, both at the
+// request's `now`. Its conditional shape is load-bearing rather than timid: a
+// position whose valuation is already in its own currency, viewed in native
+// mode, converts nothing at all, and an unconditional «пересчитана по
+// текущему курсу» would name a conversion that never happened. The rate's own
+// DATE is deliberately not repeated here — MoneyCell prints it on the amount
+// itself («Пересчитано по текущему курсу (на 20.07.2026)»), and two places
+// stating one date is two places to drift apart.
+//
 // WHAT THE NUMBER IS depends on the instrument, and that is the whole of #32.
 // For a share or an ETF the quote is money per unit, in the currency the
 // QUOTE is denominated in. That is normally the position's own, and nothing
@@ -156,16 +200,21 @@ function priceHint(
 ): { price: string; title: string } | null {
   if (!position.price || !position.price_on) return null;
   const formatted = formatPrice(position.price);
+  // price_on, and nothing else on the position: it is the only field that
+  // dates the PRICE. in_base.rate_on is a plausible-looking neighbour that
+  // dates the valuation's fx conversion instead, and putting it here would
+  // print a real date under a sentence about the wrong thing.
   const date = formatDate(position.price_on);
   if (formatted === null || !date) return null;
   let price = formatted;
-  let title = t("positions.priceOn", { date });
+  let title = t("positions.priceOn", { date }) + "\n" + t("positions.priceSession");
   // Written as a literal-key branch rather than t(cond ? a : b) so both keys
   // stay verifiable by scripts/check-i18n.mjs, which only reads literals.
   if (position.instrument.type === "bond") {
     price = t("positions.pricePercent", { price: formatted });
     title += "\n" + t("positions.priceIsPercentOfFace");
   }
+  title += "\n" + t("positions.priceValuationRate");
   const sourceCurrency = position.market_value_source_currency;
   const sourceMinor = position.market_value_source_minor;
   if (sourceCurrency != null && sourceMinor != null) {

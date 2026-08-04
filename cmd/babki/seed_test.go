@@ -638,6 +638,13 @@ func TestSeedDemo(t *testing.T) {
 	// a seed edit that quietly brings any two of the three currencies back into
 	// agreement fails here instead of leaving the path untested on screen.
 	//
+	// The face-vs-position disagreement asserted below now carries a second
+	// demonstration as well: it is the one case the trade dialog refuses to
+	// convert a percentage of face into money, having no fx rate to do it with,
+	// so it names the mismatch instead (#77 — faceGapOf in
+	// web/src/routes/accounts/trade-dialog.tsx). The OFZ further down is the
+	// same dialog with the two currencies agreeing and the link intact.
+	//
 	//	valuation  100_000 (€1 000,00 face) × 98.00 % × 5 =    490_000 minor EUR
 	//	  in $     490_000 × (92.30 ÷ 78.50)              =    576_140 ($5 761,40)
 	//	  in ₽     490_000 × 92.30, from the EUROS        = 45_227_000 (452 270,00 ₽)
@@ -778,6 +785,117 @@ func TestSeedDemo(t *testing.T) {
 	}
 	if want := decimal.RequireFromString("305.50"); !sberQuote.Price.Equal(want) {
 		t.Errorf("SBER quote price = %s, want %s", sberQuote.Price.String(), want.String())
+	}
+
+	// THE DEMO'S BOND PRICE (#77). A broker quotes a bond as a percentage of
+	// its face value; this application records money per bond; and the trade
+	// dialog now shows both fields with each deriving the other. What is pinned
+	// here is that the seed's OFZ row is the row that dialog produces out of a
+	// round 95,00 %, so the stand shows the feature agreeing with the data
+	// rather than merely sitting beside it:
+	//
+	//	1 000,00 ₽ face × 95 % = 950,00 ₽ a bond × 100 = 95 000,00 ₽ recorded
+	//
+	// The expected price is recomputed from the seeded FACE VALUE rather than
+	// compared against a literal, so moving the face value without moving the
+	// price — the exact edit that would turn the comment on that operation into
+	// a false claim — fails here.
+	//
+	// The face value's currency being the instrument's own is asserted too, and
+	// it is not decoration: that equality is the entire condition under which
+	// the dialog is willing to convert at all (faceGapOf in
+	// web/src/routes/accounts/trade-dialog.tsx). The eurobond above is the
+	// demo's other side of the same coin, where the two currencies differ and
+	// the dialog names the mismatch instead of producing a number.
+	ofz, ok := tbankPositions["OFZ26238"]
+	if !ok {
+		t.Fatal("missing Т-Банк position OFZ26238 — the seed no longer holds the bond whose price the trade dialog is demonstrated on")
+	}
+	ofzInst, err := instStore.ByID(ctx, ofz.InstrumentID)
+	if err != nil {
+		t.Fatalf("instrument ByID OFZ26238: %v", err)
+	}
+	if ofzInst.FaceValueMinor == nil || ofzInst.FaceCurrency == nil || *ofzInst.FaceCurrency != ofzInst.Currency {
+		t.Fatalf("OFZ26238 face = %v %v against instrument currency %s, want a face value denominated in the instrument's own currency: without that equality the trade dialog refuses the conversion and this row demonstrates nothing",
+			ofzInst.FaceValueMinor, ofzInst.FaceCurrency, ofzInst.Currency)
+	}
+	// The same two decimal shifts bondPriceFromPercent performs (see
+	// web/src/lib/money.ts): minor units into major ones, and percent into a
+	// fraction. Two divisions by a hundred, deliberately not folded into one.
+	wantOFZPrice := decimal.NewFromInt(*ofzInst.FaceValueMinor).Shift(-2).
+		Mul(decimal.RequireFromString("95")).Shift(-2)
+	tbankOps, err := operation.NewStore(pool).ListForEngine(ctx, p.SpaceID, tbankID)
+	if err != nil {
+		t.Fatalf("ListForEngine Т-Банк: %v", err)
+	}
+	ofzBuys := 0
+	for _, op := range tbankOps {
+		if op.Type != operation.TypeBuy || op.InstrumentID == nil || *op.InstrumentID != ofz.InstrumentID {
+			continue
+		}
+		ofzBuys++
+		if op.Price == nil || op.Quantity == nil {
+			t.Errorf("OFZ26238 buy has price %v and quantity %v, want both recorded", op.Price, op.Quantity)
+			continue
+		}
+		if !op.Price.Equal(wantOFZPrice) {
+			t.Errorf("OFZ26238 buy price = %s, want %s (95 %% of the seeded face value, in %s): the operation and the comment above it have to say the same thing",
+				op.Price.String(), wantOFZPrice.String(), ofzInst.Currency)
+			continue
+		}
+		// Quantity × price, which is exactly what the dialog's «Итого» shows
+		// and what it sends as amount_minor.
+		if want := op.Price.Mul(*op.Quantity).Shift(2).Round(0).IntPart(); -op.AmountMinor != want {
+			t.Errorf("OFZ26238 buy amount = %d, want %d (quantity × price)", -op.AmountMinor, want)
+		}
+	}
+	if ofzBuys != 1 {
+		t.Errorf("OFZ26238 buys = %d, want exactly 1 — the arithmetic above is stated for a single purchase", ofzBuys)
+	}
+
+	// THE DEMO'S QUOTE DATES (#90). A quote's date is the trading SESSION its
+	// price belongs to — not the day anything was fetched, and not the day the
+	// seed ran — and the positions screen prints it as «Цена на …». Two
+	// properties keep that legible on the stand, and neither follows from the
+	// other:
+	//
+	//   - the quotes do NOT all share one date. One date across every row is
+	//     indistinguishable from a stamp the screen puts on the whole page,
+	//     which is precisely the reading this field stopped deserving;
+	//   - every date is a weekday, and none is later than the demo's own today.
+	//     A Saturday is not a session any exchange held, and a date in the
+	//     future is one the quotes worker refuses to store outright (see
+	//     jobs.go) — a seed writing either would be showing a state the running
+	//     system cannot reach.
+	//
+	// Read through LatestQuotes, the same call GET .../positions makes, so what
+	// is checked is what a row would actually be captioned with.
+	instrumentIDs := make([]uuid.UUID, 0, len(tbankPositions)+len(freedomPositions))
+	for _, pos := range tbankPositions {
+		instrumentIDs = append(instrumentIDs, pos.InstrumentID)
+	}
+	for _, pos := range freedomPositions {
+		instrumentIDs = append(instrumentIDs, pos.InstrumentID)
+	}
+	latestQuotes, err := marketdata.NewStore(pool).LatestQuotes(ctx, instrumentIDs)
+	if err != nil {
+		t.Fatalf("LatestQuotes: %v", err)
+	}
+	sessions := make(map[string]bool, len(latestQuotes))
+	for id, q := range latestQuotes {
+		sessions[q.On.Format(time.DateOnly)] = true
+		if wd := q.On.Weekday(); wd == time.Saturday || wd == time.Sunday {
+			t.Errorf("quote for instrument %s is dated %s, a %s: a seeded quote date has to be a day an exchange could have held a session",
+				id, q.On.Format(time.DateOnly), wd)
+		}
+		if q.On.After(on) {
+			t.Errorf("quote for instrument %s is dated %s, later than the demo's own today (%s)",
+				id, q.On.Format(time.DateOnly), on.Format(time.DateOnly))
+		}
+	}
+	if len(sessions) < 2 {
+		t.Errorf("seeded quotes span %d distinct session dates (%v), want at least 2 — with one date on every row the «Цена на …» caption cannot be told apart from a page-wide stamp",
+			len(sessions), sessions)
 	}
 
 	// second run refuses (instance not empty)

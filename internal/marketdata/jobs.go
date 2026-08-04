@@ -204,16 +204,40 @@ func NewQuotesWorker(store *Store, instruments instrumentLister, provider QuoteP
 // dropped in silence, which is how a position could show no quote with no trace
 // of the reason anywhere.
 //
+// Each stored quote carries the day the PROVIDER says its price belongs to,
+// never this worker's clock — see marketdata.TickerQuote.On. A repeat refresh
+// therefore rewrites one row per instrument instead of adding a row a day, and
+// what LatestQuotes then returns is the exchange's own most recent session
+// rather than the most recent time this job happened to run.
+//
+// A quote dated zero or after today is refused rather than stored, here and
+// not in the provider. QuotesFor deliberately takes no date argument any
+// more (see QuoteProvider.QuotesFor), precisely so a provider cannot invent a
+// day of its own — which means it also has no "today" to compare a price's
+// date against and catch a glitch like this. The worker does have one. The
+// check earns its place because LatestQuotes is `DISTINCT ON (instrument_id)
+// ... ORDER BY on_date DESC`: a single row dated, say, a year from now would
+// outrank every genuine refresh that follows it for the whole of that year,
+// silently, on every position the instrument appears in — a failure mode the
+// old time.Now()-stamped quotes could not produce at all, since nothing ever
+// asked the exchange what day it thought it was.
+//
 // The job is enqueued every half hour around the clock and asks on every one
-// of those runs — roughly 48 requests a day for a value that cannot change
-// that often, since the MOEX provider reads PREVPRICE and that is the previous
-// trading day's close (see its QuotesFor). A night-and-weekend window was
+// of those runs — roughly 48 requests a day for a value that moves about once
+// a trading day, since the MOEX provider reads a previous-session price (see
+// its QuotesFor for what that is exactly). A night-and-weekend window was
 // tried here and removed: it was justified by session hours MOEX does not
 // keep — there is a morning session from 06:50 MSK and there are weekend
 // sessions — so it clipped real trading while still not making the stored
-// value any fresher. Filed as #90 rather than retuned, because the choice is
-// between reading a column that actually moves and asking once a day, and
-// that is a product question about which price the owner wants.
+// value any fresher.
+//
+// The cadence is deliberately left as it is. A full refresh costs about 170 KB
+// (all four boards, measured 2026-08-03), and asking often is the only thing that gives an
+// instrument added today a price before tomorrow. What #90 was really about —
+// the price being stored under the wrong day — is fixed at the provider, not
+// by asking less often. Whether to show a price that moves intraday instead of
+// the previous session's is a separate product question, and the owner's
+// answer for now is to keep the previous session's.
 func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]) error {
 	insts, err := w.instruments.ListTradable(ctx)
 	if err != nil {
@@ -271,13 +295,13 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 		tickers = append(tickers, inst.Ticker)
 	}
 
-	on := time.Now().UTC()
-	tickerQuotes, err := w.provider.QuotesFor(ctx, tickers, on)
+	tickerQuotes, err := w.provider.QuotesFor(ctx, tickers)
 	if err != nil {
 		w.log.Error("marketdata: fetch quotes failed", "provider", w.provider.Name(), "err", err)
 		return err
 	}
 
+	today := utcDay(time.Now())
 	seen := make(map[string]bool, len(tickerQuotes))
 	quotes := make([]Quote, 0, len(tickerQuotes))
 	for _, tq := range tickerQuotes {
@@ -299,6 +323,34 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 			continue
 		}
 		seen[tq.Ticker] = true
+		if tq.On.IsZero() || tq.On.After(today) {
+			// A price with no date, or one dated after today (today taken as a
+			// UTC day, with zero tolerance either side), is refused as a claim
+			// that cannot be true — a source has no session in the future to
+			// have priced it as of. That assumes a source dates its sessions by
+			// a day that does not run ahead of UTC; every provider wired in so
+			// far (MOEX) does. A source east of UTC that dates a quote by its
+			// own local day — a market in UTC+10..+13, say — could publish a
+			// same-day quote this check would see as still in the future and
+			// refuse; nothing here has been built or tested against such a
+			// source, so this comparison is a standing assumption about the
+			// providers this worker has, not a fact proven of every provider it
+			// could ever have. That is a different kind of absence from "the
+			// provider had nothing to say about this ticker" (Debug, below):
+			// here the provider DID answer, with a value this worker believes
+			// cannot be right, so it is refused rather than trusted and stored.
+			// Warn, not Debug: an ordinary missing price is routine (a new
+			// listing, a suspension), but a claim that looks impossible is
+			// exactly the kind of thing Debug being off in production would
+			// hide.
+			//
+			// seen was already set above so the "no price for ticker" line
+			// below does not also fire for it — the provider did report
+			// something, just not something storable.
+			w.log.Warn("marketdata: provider reported a quote with no date or dated after today, refusing to store it (this instrument keeps whatever earlier quote it already has)",
+				"provider", w.provider.Name(), "ticker", tq.Ticker, "on", tq.On.Format(time.DateOnly))
+			continue
+		}
 		quotes = append(quotes, Quote{
 			InstrumentID: id,
 			On:           tq.On,
