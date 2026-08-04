@@ -142,7 +142,7 @@ func newAllCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signalCtx()
 			defer stop()
-			r, err := setup(ctx, true)
+			r, err := setup(ctx, true, true)
 			if err != nil {
 				return err
 			}
@@ -175,7 +175,7 @@ func newAPICmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signalCtx()
 			defer stop()
-			r, err := setup(ctx, true)
+			r, err := setup(ctx, true, true)
 			if err != nil {
 				return err
 			}
@@ -195,7 +195,7 @@ func newWorkerCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signalCtx()
 			defer stop()
-			r, err := setup(ctx, true)
+			r, err := setup(ctx, true, true)
 			if err != nil {
 				return err
 			}
@@ -219,7 +219,10 @@ func newMigrateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signalCtx()
 			defer stop()
-			r, err := setup(ctx, false)
+			// requireEncryptionKey=false: migrate exists precisely so schema
+			// can be applied on a machine where secrets have not been
+			// provisioned yet.
+			r, err := setup(ctx, false, false)
 			if err != nil {
 				return err
 			}

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -48,7 +50,7 @@ func TestSetupInstallsTheConfiguredLoggerAsTheDefault(t *testing.T) {
 	}
 	realStderr := os.Stderr
 	os.Stderr = w
-	_, setupErr := setup(ctx, false)
+	_, setupErr := setup(ctx, false, false)
 	os.Stderr = realStderr
 
 	if setupErr == nil {
@@ -100,5 +102,54 @@ func TestSetupInstallsTheConfiguredLoggerAsTheDefault(t *testing.T) {
 	}
 	if rec["account"] != "one" {
 		t.Errorf("account = %v, want \"one\": the attributes callers pass have to survive too", rec["account"])
+	}
+}
+
+// TestSetupRefusesToStartWithoutEncryptionKeyWhenRequired covers the worker
+// role (and, by the same requireEncryptionKey=true path, all/api): started
+// without BABKI_ENCRYPTION_KEY, it must refuse rather than come up unable to
+// ever decrypt a broker token it will later be asked to read.
+//
+// BABKI_DATABASE_URL is set to a syntactically valid but unreachable value —
+// setup must reject the missing key BEFORE it ever dials the database, so
+// this test needs no Docker/testdb dependency. If a future change reordered
+// the two checks, this test would start timing out against a connection
+// instead of failing fast, which is itself a signal something moved.
+func TestSetupRefusesToStartWithoutEncryptionKeyWhenRequired(t *testing.T) {
+	ctx := context.Background()
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	t.Setenv("BABKI_DATABASE_URL", "postgres://u:p@localhost:5432/babki")
+	t.Setenv("BABKI_ENCRYPTION_KEY", "")
+
+	_, err := setup(ctx, true, true)
+	if err == nil {
+		t.Fatal("setup(ctx, true, true) succeeded with no BABKI_ENCRYPTION_KEY; " +
+			"the worker/api/all roles must refuse to start without one")
+	}
+	if !strings.Contains(err.Error(), "BABKI_ENCRYPTION_KEY") {
+		t.Errorf("error does not name BABKI_ENCRYPTION_KEY: %v", err)
+	}
+	if !strings.Contains(err.Error(), "openssl rand -hex 32") {
+		t.Errorf("error does not give the exact command to generate a key: %v", err)
+	}
+}
+
+// TestVersionRoleNeedsNoEncryptionKey exercises the version command through
+// the real cobra tree, the way it is actually invoked: it never calls setup
+// at all, so BABKI_ENCRYPTION_KEY being unset must not matter to it.
+func TestVersionRoleNeedsNoEncryptionKey(t *testing.T) {
+	t.Setenv("BABKI_ENCRYPTION_KEY", "")
+
+	root := newRootCmd()
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"version"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("version command failed with no BABKI_ENCRYPTION_KEY: %v", err)
+	}
+	if buf.Len() == 0 {
+		t.Error("version command printed nothing")
 	}
 }

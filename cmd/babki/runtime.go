@@ -10,6 +10,7 @@ import (
 	"babki.my/babki/internal/platform/config"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/logging"
+	"babki.my/babki/internal/platform/secretbox"
 )
 
 // rt — shared runtime for all roles: config, logger, database.
@@ -20,7 +21,13 @@ type rt struct {
 }
 
 // setup loads config, connects to database, and optionally runs migrations.
-func setup(ctx context.Context, migrate bool) (*rt, error) {
+//
+// requireEncryptionKey gates validation of BABKI_ENCRYPTION_KEY: true for the
+// roles that decrypt a broker token at runtime (all, api, worker), false for
+// migrate, seed and version, which have to keep working on a machine where
+// the key has not been provisioned yet — migrate above all, since it is the
+// role that exists to run before secrets are.
+func setup(ctx context.Context, migrate, requireEncryptionKey bool) (*rt, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
@@ -38,6 +45,16 @@ func setup(ctx context.Context, migrate bool) (*rt, error) {
 	slog.SetDefault(log)
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("BABKI_DATABASE_URL is required")
+	}
+	// Checked before db.Connect on purpose: a role that needs the key but
+	// doesn't have one should fail on that fact alone, without also needing a
+	// reachable database to reach the check. secretbox.ParseKey's own error
+	// already names BABKI_ENCRYPTION_KEY and the exact command to generate a
+	// value it accepts, so it is returned as-is rather than re-wrapped.
+	if requireEncryptionKey {
+		if _, err := secretbox.ParseKey(cfg.EncryptionKey); err != nil {
+			return nil, err
+		}
 	}
 	pool, err := db.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {

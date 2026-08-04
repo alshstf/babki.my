@@ -24,7 +24,10 @@ func newSeedCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signalCtx()
 			defer stop()
-			r, err := setup(ctx, true)
+			// requireEncryptionKey=false: seed writes plain demo data and
+			// never touches an encrypted secret, so it must keep working on
+			// a machine where BABKI_ENCRYPTION_KEY hasn't been provisioned.
+			r, err := setup(ctx, true, false)
 			if err != nil {
 				return err
 			}
