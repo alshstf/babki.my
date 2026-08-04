@@ -5,7 +5,8 @@
     "cancel": "Отмена",
     "save": "Сохранить",
     "create": "Создать",
-    "actions": "Действия"
+    "actions": "Действия",
+    "amountTooLarge": "Слишком большая сумма: не больше {{max}}"
   },
   "nav": { "accounts": "Счета", "family": "Семья", "settings": "Настройки" },
   "roles": { "owner": "владелец", "editor": "редактор", "viewer": "наблюдатель" },

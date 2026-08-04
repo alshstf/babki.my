@@ -18,7 +18,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { parseToMinor } from "@/lib/money";
+import {
+  MAX_AMOUNT_MINOR,
+  amountRefusal,
+  formatMinorCompact,
+  parseToMinor,
+} from "@/lib/money";
 import { localToday } from "@/lib/dates";
 import { useCreateOperation, isConflict, type OperationType } from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
@@ -62,6 +67,10 @@ export function CashDialog({
   const isCredit = CREDIT_TYPES.has(type);
   const parsed = parseToMinor(amount);
   const amountValid = parsed !== null && parsed > 0;
+  // A sum past the bound is positive and parses perfectly well, so «введите
+  // положительную сумму» would name a cause that is not the cause (see
+  // AmountRefusal).
+  const refusal = amountRefusal(amount);
   const valid = amountValid && occurredOn !== "";
 
   const submit = () => {
@@ -114,7 +123,13 @@ export function CashDialog({
               {isCredit ? t("cash.creditHint") : t("cash.debitHint")}
             </p>
             {amount !== "" && !amountValid && (
-              <p className="text-xs text-red-500">{t("cash.badNumber")}</p>
+              <p className="text-xs text-red-500">
+                {refusal === "tooLarge"
+                  ? t("common.amountTooLarge", {
+                      max: formatMinorCompact(MAX_AMOUNT_MINOR, account.currency),
+                    })
+                  : t("cash.badNumber")}
+              </p>
             )}
           </div>
           <div className="grid gap-2">

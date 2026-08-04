@@ -479,7 +479,10 @@ export interface components {
         SetBalanceRequest: {
             /** @description Date YYYY-MM-DD */
             as_of: string;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Negative for a debt: a credit card or a loan carries what is owed as a negative balance. Bounded at ±10^15 minor units — ten trillion whole roubles or dollars — the SAME cap Operation.amount_minor carries, because it is the same money in the same currency on the same screen. Past it, 400. The bound is far above any real balance and far enough below int64 that the accounts screen can still convert what it accepts: at the largest balance taken here an fx rate of up to ~9223 still fits in an int64 of minor units, which is above any rate this program will meet. A balance that cannot be converted is not a wrong figure on the screen — the server refuses to publish one — it is an accounts list that cannot be drawn at all until the row is overwritten, which is why the refusal is at the write. Rows written before the bound existed are untouched and are still returned as they stand.
+             */
             amount_minor: number;
         };
         CurrencyTotal: {

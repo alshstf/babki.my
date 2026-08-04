@@ -18,7 +18,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { parseToMinor } from "@/lib/money";
+import {
+  MAX_AMOUNT_MINOR,
+  amountRefusal,
+  formatMinorCompact,
+  parseToMinor,
+} from "@/lib/money";
 import { localToday } from "@/lib/dates";
 import { useCreateOperation, isConflict, type OperationType } from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
@@ -63,6 +68,10 @@ export function IncomeDialog({
 
   const parsed = parseToMinor(amount);
   const amountValid = parsed !== null && parsed > 0;
+  // A sum past the bound is positive and parses perfectly well, so neither of
+  // this field's two existing complaints would be true of it (see
+  // AmountRefusal).
+  const refusal = amountRefusal(amount);
   const instrumentOk = instrument !== null || !REQUIRES_INSTRUMENT.has(type);
   const valid = amountValid && instrumentOk && occurredOn !== "";
 
@@ -139,7 +148,16 @@ export function IncomeDialog({
               onChange={(e) => setAmount(e.target.value)}
             />
             {amount !== "" && !amountValid && (
-              <p className="text-xs text-red-500">{t("income.badNumber")}</p>
+              <p className="text-xs text-red-500">
+                {refusal === "tooLarge"
+                  ? t("common.amountTooLarge", {
+                      max: formatMinorCompact(
+                        MAX_AMOUNT_MINOR,
+                        instrument ? instrument.currency : account.currency,
+                      ),
+                    })
+                  : t("income.badNumber")}
+              </p>
             )}
           </div>
           <div className="grid gap-2">

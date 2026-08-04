@@ -12,9 +12,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
+  MAX_AMOUNT_MINOR,
+  amountRefusal,
   bondPercentFromPrice,
   bondPriceFromPercent,
   formatMinor,
+  formatMinorCompact,
   multiplyToMinor,
   parseToMinor,
   isPositiveDecimal,
@@ -196,6 +199,12 @@ export function TradeDialog({
   const priceValid = isPositiveDecimal(price);
   const feeParsed = fee.trim() === "" ? 0 : parseToMinor(fee);
   const feeValid = feeParsed !== null && feeParsed >= 0;
+  // Read through the same "blank means no fee" rule as feeParsed above, so the
+  // field cannot complain about a fee it just accepted as zero. A fee past the
+  // bound parses perfectly well, and «проверьте комиссию» would leave its author
+  // checking a number that is not wrong in any way he can see (see
+  // AmountRefusal).
+  const feeRefusal = fee.trim() === "" ? null : amountRefusal(fee);
 
   // Total is computed with exact BigInt arithmetic (see multiplyToMinor) —
   // never as a float — so what's previewed here is exactly what gets sent.
@@ -351,7 +360,13 @@ export function TradeDialog({
               onChange={(e) => setFee(e.target.value)}
             />
             {fee !== "" && !feeValid && (
-              <p className="text-xs text-red-500">{t("trade.badFee")}</p>
+              <p className="text-xs text-red-500">
+                {feeRefusal === "tooLarge"
+                  ? t("common.amountTooLarge", {
+                      max: formatMinorCompact(MAX_AMOUNT_MINOR, account.currency),
+                    })
+                  : t("trade.badFee")}
+              </p>
             )}
           </div>
           <div className="grid gap-2">

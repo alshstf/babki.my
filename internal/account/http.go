@@ -508,6 +508,25 @@ func (h *Handler) handleSetBalance(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// The only door into account_balances.amount_minor, and until #89 it bounded
+	// nothing at all: math.MaxInt64 went in as readily as 150 000,00 ₽. What came
+	// back out was a screen that could not be drawn — balanceInBase multiplies a
+	// balance by an fx rate and refuses the product rather than wrapping it
+	// (money.ErrOverflow), so the accounts list answered 500 for every account in
+	// the space for as long as that one row existed, repairable only by finding
+	// and overwriting it. Caught here it is a rejected field.
+	//
+	// Compared at both ends explicitly rather than through an abs(), so
+	// math.MinInt64 — whose negation overflows — is refused too. The same bound
+	// an operation's amount_minor gets, and the same spelling of the refusal:
+	// they are the same money in the same currency on the same screen, and a
+	// program that took as a balance what it refuses as a deposit would have an
+	// asymmetry nobody could explain (see money.MaxAmountMinor).
+	if req.AmountMinor > money.MaxAmountMinor || req.AmountMinor < -money.MaxAmountMinor {
+		httpjson.Error(w, http.StatusBadRequest,
+			fmt.Sprintf("amount_minor must be within ±%d", money.MaxAmountMinor))
+		return
+	}
 	if err := h.store.SetBalance(r.Context(), p.SpaceID, id, asOf, req.AmountMinor); err != nil {
 		family.WriteError(w, err)
 		return

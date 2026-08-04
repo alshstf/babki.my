@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/platform/money"
 	"babki.my/babki/internal/portfolio"
 )
 
@@ -30,12 +31,18 @@ const (
 
 var currencyRe = regexp.MustCompile(`^[A-Z]{3}$`)
 
-// maxAmountMinor caps |amount_minor| and fee_minor at 10^15 minor units
-// (≈10 trillion roubles) — far above any real portfolio, yet far enough from
-// math.MaxInt64 that summing a whole journal of such values cannot overflow.
-// Without the cap, a single amount_minor = math.MinInt64 poisons the FIFO
-// cost basis and wraps realized P&L.
-const maxAmountMinor int64 = 1_000_000_000_000_000
+// THE MONEY CAP THIS FILE BOUNDS EVERYTHING ELSE AGAINST is
+// money.MaxAmountMinor: 10^15 minor units, ≈10 trillion roubles — far above any
+// real portfolio, yet far enough from math.MaxInt64 that summing a whole journal
+// of such values cannot overflow. Without it, a single amount_minor =
+// math.MinInt64 poisons the FIFO cost basis and wraps realized P&L.
+//
+// It sat here as this package's own constant until the balance a user records
+// for an account needed the very same cap (#89). The two figures meet — the
+// accounts screen sums balances, the journal sums amounts, both are money in an
+// account's currency, and the same screen shows them — so there is one constant
+// in one place instead of two that eventually differ. Its doc comment carries
+// the whole argument.
 
 // minorUnitScale is how many decimal places a major currency unit is split into
 // for storage: amount_minor and fee_minor are counts of those, and a price is
@@ -59,7 +66,7 @@ const minorUnitScale = 2
 //
 //   - maxQuantity is the money cap read as a COUNT of units: at one MAJOR unit
 //     apiece — a whole rouble or dollar for a single unit — 10^13 units are
-//     worth exactly maxAmountMinor. What the bound LEAVES is the number that
+//     worth exactly money.MaxAmountMinor. What the bound LEAVES is the number that
 //     matters: math.MaxInt64 / 100 / 10^13 ≈ 9223 units of money per unit of
 //     instrument can still be published at the largest quantity accepted here,
 //     which is above an ordinary share, bond or ETF unit. Read as a count of
@@ -127,23 +134,23 @@ const minorUnitScale = 2
 // A write-time bound cannot promise the product fits; it only stops one factor
 // from being the reason it does not.
 //
-// maxQuantity and maxPrice are DERIVED from maxAmountMinor rather than written
+// maxQuantity and maxPrice are DERIVED from money.MaxAmountMinor rather than written
 // out beside it, so that moving the money cap moves them with it. maxSplitRatio
 // is not: it is the column's ceiling, and the column is what would have to move
 // first.
 var (
-	maxQuantity = decimal.NewFromInt(maxAmountMinor).Shift(-minorUnitScale)
-	maxPrice    = decimal.NewFromInt(maxAmountMinor).Shift(-minorUnitScale)
+	maxQuantity = decimal.NewFromInt(money.MaxAmountMinor).Shift(-minorUnitScale)
+	maxPrice    = decimal.NewFromInt(money.MaxAmountMinor).Shift(-minorUnitScale)
 
 	// maxSplitRatio is the first ratio split_ratio cannot store, so the check
 	// against it refuses the value ON it rather than past it — unlike every
 	// other bound here, which admits its own edge.
 	maxSplitRatio = decimal.New(1, 10)
 
-	// maxAmountMinorDec is maxAmountMinor itself as a decimal, so the product
+	// maxAmountMinorDec is money.MaxAmountMinor itself as a decimal, so the product
 	// above is compared against it exactly rather than through an int64
 	// conversion that would have to survive the very overflow being checked for.
-	maxAmountMinorDec = decimal.NewFromInt(maxAmountMinor)
+	maxAmountMinorDec = decimal.NewFromInt(money.MaxAmountMinor)
 )
 
 // checkQuantityBound refuses a quantity past maxQuantity. Both doors into the
@@ -218,11 +225,11 @@ func validate(o Operation) error {
 	}
 	// Bounds are checked with explicit comparisons rather than an abs() so
 	// that math.MinInt64 (whose negation overflows) is rejected too.
-	if o.AmountMinor > maxAmountMinor || o.AmountMinor < -maxAmountMinor {
-		return fmt.Errorf("%w: amount_minor must be within ±%d", family.ErrValidation, maxAmountMinor)
+	if o.AmountMinor > money.MaxAmountMinor || o.AmountMinor < -money.MaxAmountMinor {
+		return fmt.Errorf("%w: amount_minor must be within ±%d", family.ErrValidation, money.MaxAmountMinor)
 	}
-	if o.FeeMinor > maxAmountMinor {
-		return fmt.Errorf("%w: fee_minor must be <= %d", family.ErrValidation, maxAmountMinor)
+	if o.FeeMinor > money.MaxAmountMinor {
+		return fmt.Errorf("%w: fee_minor must be <= %d", family.ErrValidation, money.MaxAmountMinor)
 	}
 	// The two factors, their product, and the ratio (see maxQuantity). Checked
 	// here rather than in the per-type branches below: nothing stops any other
@@ -252,7 +259,7 @@ func validate(o Operation) error {
 	}
 	if o.Quantity != nil && o.Price != nil {
 		if notional := o.Price.Mul(*o.Quantity).Abs().Shift(minorUnitScale); notional.GreaterThan(maxAmountMinorDec) {
-			return fmt.Errorf("%w: price × quantity must be within ±%d minor units", family.ErrValidation, maxAmountMinor)
+			return fmt.Errorf("%w: price × quantity must be within ±%d minor units", family.ErrValidation, money.MaxAmountMinor)
 		}
 	}
 	// The ratio is the one field whose damage is done to a position rather than
@@ -622,8 +629,8 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 		// Compute's TypeTransferIn branch, which is where that lot is actually
 		// built). Inventing pieces, or a date, here would fabricate history.
 		cost = *p.CostMinorOverride
-		if cost < 0 || cost > maxAmountMinor {
-			return Operation{}, Operation{}, fmt.Errorf("%w: cost_minor must be within 0..%d", family.ErrValidation, maxAmountMinor)
+		if cost < 0 || cost > money.MaxAmountMinor {
+			return Operation{}, Operation{}, fmt.Errorf("%w: cost_minor must be within 0..%d", family.ErrValidation, money.MaxAmountMinor)
 		}
 	} else {
 		// The basis must come from the journal as it stood on the transfer's

@@ -11,7 +11,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { formatMinor, parseToMinor } from "@/lib/money";
+import {
+  MAX_AMOUNT_MINOR,
+  amountRefusal,
+  formatMinor,
+  formatMinorCompact,
+  parseToMinor,
+} from "@/lib/money";
 import { formatDate, localToday } from "@/lib/dates";
 import { useSetBalance, type AccountWithBalance } from "@/api/accounts";
 
@@ -40,6 +46,10 @@ export function BalanceDialog({
 
   if (!account) return null;
   const parsed = parseToMinor(amount);
+  // Why the field cannot send what is in it, when it cannot. A sum past the
+  // bound parses perfectly well, so answering it with the parse error would name
+  // a cause that is not the cause — see AmountRefusal.
+  const refusal = amountRefusal(amount);
   const isLiability = account.type === "credit_card" || account.type === "loan";
 
   return (
@@ -74,9 +84,13 @@ export function BalanceDialog({
                 {t("accounts.balanceDialog.liabilityHint")}
               </p>
             )}
-            {amount !== "" && parsed === null && (
+            {amount !== "" && refusal !== null && (
               <p className="text-xs text-red-500">
-                {t("accounts.balanceDialog.parseError")}
+                {refusal === "tooLarge"
+                  ? t("common.amountTooLarge", {
+                      max: formatMinorCompact(MAX_AMOUNT_MINOR, account.currency),
+                    })
+                  : t("accounts.balanceDialog.parseError")}
               </p>
             )}
           </div>
