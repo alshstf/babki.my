@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { formatMinor, formatPrice, signClass } from "@/lib/money";
+import { formatMinor, formatPrice, formatPriceIn, signClass } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { resolveDisplayAmount } from "@/lib/display-amount";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
@@ -185,30 +185,43 @@ function valuationGapTitle(
 // itself («Пересчитано по текущему курсу (на 20.07.2026)»), and two places
 // stating one date is two places to drift apart.
 //
-// WHAT THE NUMBER IS depends on the instrument, and that is the whole of #32.
-// For a share or an ETF the quote is money per unit, in the currency the
-// QUOTE is denominated in. That is normally the position's own, and nothing
-// enforces it: Position.currency comes from the operation, a quote carries a
-// currency column of its own, and where the two differ the server converts
-// the VALUATION into the position's currency and discloses that in
-// market_value_source_currency — while Position.price stays exactly as
-// quoted and is never converted. On the ordinary row where they agree, the
-// bare number matches the valuation above it and needs no unit stated, in
-// the position's own-currency display mode. Two things break that, and
-// neither is a caption problem: in BASE mode the valuation converts and this
-// price line does not, so a foreign share prints a bare number in a currency
-// the ruble amount above it is not in; and a share quoted in a currency
-// other than its position's — which no seed row and no test exercises today
-// — would print one in either mode. Both want a different RENDERING (a unit
-// suffix or a mode-aware omission) rather than a truer caption, so they stay
-// separate, still-open cases rather than something this comment explains away.
-// For a BOND the quote is a percentage of face value (the MOEX convention):
-// the server publishes q.Price untouched in Position.price, and
-// marketValue() in internal/portfolio/http.go multiplies it as
-// faceValueMinor × price/100 × quantity. The demo seed's OFZ26238 makes the
-// gap concrete — face value 1 000,00 ₽, quote 95.20, so one bond is worth
-// 952 ₽ while the line under its ruble valuation reads "95,20". Bare, that is
-// a money figure ten times too small, sitting under a money figure.
+// WHAT THE NUMBER IS depends on the instrument, and that is the whole of #32
+// and #76 — one defect in two halves, a quote printed with nothing saying what
+// its unit is.
+//
+// For a share or an ETF the quote is MONEY PER UNIT, in the currency the QUOTE
+// is denominated in. That is normally the position's own, and nothing enforces
+// it: Position.currency comes from the operation, a quote carries a currency
+// column of its own, and where the two differ the server converts the
+// VALUATION into the position's currency and discloses the original in
+// market_value_source_currency — while Position.price stays exactly as quoted
+// and is never converted. So the price's currency is that source field when it
+// is set and market_value_currency otherwise, which is what the contract says
+// in as many words (Position.price). BOTH readings are needed: on the ordinary
+// row the two agree and either would do, and on the row where a quote is
+// denominated in something other than the position's currency they do not, and
+// market_value_currency then describes the CONVERTED figure above rather than
+// this one.
+//
+// Naming it unconditionally, rather than only where the reader might be
+// confused, is a decision (#76). The bare number was wrong in base mode — the
+// valuation converts with the toggle and this line does not, so «274 950,00 ₽»
+// stood over «305,50», which was dollars — and a mode-aware sign would be a
+// caption whose truth depended on which toggle the reader last touched, silently
+// wrong the moment he flipped it. The suffix has to exist for the mismatched-
+// quote row anyway; having it appear and disappear as well would be two
+// renderings of one number, one of them correct only in context.
+//
+// For a BOND the quote is a PERCENTAGE OF FACE VALUE (the MOEX convention):
+// the server publishes q.Price untouched in Position.price, and marketValue()
+// in internal/portfolio/http.go multiplies it as faceValueMinor × price/100 ×
+// quantity. The demo seed's OFZ26238 makes the gap concrete — face value
+// 1 000,00 ₽, quote 95.20, so one bond is worth 952 ₽ while the line under its
+// ruble valuation reads "95,20". Bare, that is a money figure ten times too
+// small, sitting under a money figure. It gets «%» and NO currency sign: a
+// percentage is denominated in nothing, and both of the fields a share reads
+// its currency from are filled in on a bond's row with the FACE value's
+// currency and the position's, neither of which this number is in.
 //
 // The alternative fix — deriving the 952 ₽ and showing THAT — was rejected on
 // two grounds. It is money arithmetic in the browser (face value × percent,
@@ -216,7 +229,19 @@ function valuationGapTitle(
 // the server; there is no per-unit price on the wire to render instead. And
 // even done correctly it would replace the number the exchange actually
 // quotes, the one the owner sees in his broker's app, with one no venue
-// prints. So the quote stays as quoted, and says which unit it is in.
+// prints. So the quote stays as quoted, and says which unit it is in. Reading
+// a currency CODE off the payload is not arithmetic and does not touch that
+// rule: no figure is computed here, only labelled.
+//
+// Any other type keeps a bare number. Today that branch cannot be reached from
+// this server — it prices share, etf and bond and nothing else, so a crypto or
+// metal row carries no valuation, no price, and no hint at all (marketValue's
+// `default`, published as market_value_gap: type_not_priced). It is written
+// out rather than folded into the share/etf case because the day a newer
+// server prices a new type, what its Position.price means will be decided
+// there and not here, and a client one release behind must not answer that
+// question with the valuation's currency. Same rule as the gap captions
+// (#105): what is known stays said, what is not stays unsaid.
 function priceHint(
   t: (key: string, opts?: Record<string, string>) => string,
   position: Position,
@@ -231,11 +256,28 @@ function priceHint(
   if (formatted === null || !date) return null;
   let price = formatted;
   let title = t("positions.priceOn", { date }) + "\n" + t("positions.priceSession");
-  // Written as a literal-key branch rather than t(cond ? a : b) so both keys
-  // stay verifiable by scripts/check-i18n.mjs, which only reads literals.
-  if (position.instrument.type === "bond") {
-    price = t("positions.pricePercent", { price: formatted });
-    title += "\n" + t("positions.priceIsPercentOfFace");
+  // A switch over the instrument's type rather than "bond or else", so the
+  // claim each branch makes is made only where it has been checked. Written
+  // with literal keys at every t() call site — the only shape
+  // scripts/check-i18n.mjs can verify.
+  switch (position.instrument.type) {
+    case "bond":
+      price = t("positions.pricePercent", { price: formatted });
+      title += "\n" + t("positions.priceIsPercentOfFace");
+      break;
+    case "share":
+    case "etf": {
+      const quoteCurrency =
+        position.market_value_source_currency ?? position.market_value_currency;
+      // The `?? formatted` is unreachable rather than defensive: this hint is
+      // only built for a row that HAS a valuation, which is a row that has a
+      // market_value_currency, and formatPrice already answered on this very
+      // string. It falls back to the bare number all the same, because the
+      // number is the position's own datum and dropping the line would hide
+      // it to protect a sign.
+      if (quoteCurrency) price = formatPriceIn(position.price, quoteCurrency) ?? formatted;
+      break;
+    }
   }
   title += "\n" + t("positions.priceValuationRate");
   const sourceCurrency = position.market_value_source_currency;

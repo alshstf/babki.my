@@ -204,8 +204,8 @@ describe("PositionsTable", () => {
       norm(formatMinor(305_50, "USD")),
     );
     // Price is shown as text...
-    const priceLine = screen.getByText("305,50");
-    expect(priceLine).toBeInTheDocument();
+    const priceLine = screen.getByTestId("position-price");
+    expect(norm(priceLine.textContent ?? "")).toBe("305,50 $");
     // ...but the date is not — it moved into the title tooltip.
     expect(screen.queryByText(/20\.07\.2026/)).not.toBeInTheDocument();
     expect(priceLine.getAttribute("title")).toContain("Цена на 20.07.2026");
@@ -640,7 +640,7 @@ describe("PositionsTable", () => {
     // ...and the source amount appears only in the tooltip, never as text.
     const sourceAmount = formatMinor(2_800_00, "RUB");
     expect(screen.queryByText(sourceAmount)).not.toBeInTheDocument();
-    const priceLine = screen.getByText("305,50");
+    const priceLine = screen.getByTestId("position-price");
     expect(norm(priceLine.getAttribute("title") ?? "")).toBe(
       norm(
         `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${PRICE_VALUATION_NOTE}\nПересчитано из ${sourceAmount}`,
@@ -651,7 +651,7 @@ describe("PositionsTable", () => {
   it("omits the converted-from tooltip line when the market value has no source currency/amount", () => {
     wrap(<PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />);
 
-    const priceLine = screen.getByText("305,50");
+    const priceLine = screen.getByTestId("position-price");
     expect(priceLine.getAttribute("title")).toBe(
       `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${PRICE_VALUATION_NOTE}`,
     );
@@ -713,6 +713,12 @@ describe("PositionsTable", () => {
     // from a plain one that would let "%" wrap onto its own line — pin the
     // raw character too, unnormalized, against ru.json's pricePercent key.
     expect(priceLine.textContent).toBe("95,20 %");
+    // And NOT a currency sign, which is the other half of #76: a bond's quote
+    // is a percentage of face value, not money, so it is denominated in
+    // nothing — even though this row's valuation right above it IS in rubles
+    // and market_value_currency says so, which is the field a share's price
+    // reads its own currency from.
+    expect(priceLine.textContent).not.toContain("₽");
     // The session note sits under the date it explains and ABOVE the
     // percentage note, and the valuation note under both: a reader learns what
     // the date means, then what the number is, then what was computed from it.
@@ -724,7 +730,7 @@ describe("PositionsTable", () => {
   });
 
   it.each([["share"], ["etf"]] as const)(
-    "leaves a %s's price bare — its quote really is money per unit",
+    "writes a %s's price in the currency it is quoted in, never as a percentage",
     (type) => {
       wrap(
         <PositionsTable
@@ -739,7 +745,7 @@ describe("PositionsTable", () => {
       );
 
       const priceLine = screen.getByTestId("position-price");
-      expect(norm(priceLine.textContent ?? "")).toBe("305,50");
+      expect(norm(priceLine.textContent ?? "")).toBe("305,50 $");
       expect(priceLine.textContent).not.toContain("%");
       expect(priceLine.getAttribute("title")).toBe(
         `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${PRICE_VALUATION_NOTE}`,
@@ -747,6 +753,125 @@ describe("PositionsTable", () => {
       expect(priceLine.getAttribute("title")).not.toContain(BOND_PRICE_NOTE);
     },
   );
+
+  // #76, IN THE SHAPE THE OWNER MEETS IT. The valuation cell converts with the
+  // display-currency toggle and this price line does not — it is the quote,
+  // published exactly as quoted — so in base mode a foreign share printed a
+  // ruble amount with a bare dollar figure under it, and nothing on the row
+  // said which of the two was which. #32 fixed the same shape for bonds by
+  // adding «%» and left this one open, because a share's price needed a
+  // currency rather than a unit.
+  //
+  // 10 × $305,50 = $3 055,00, which at 90 ₽/$ is the 274 950,00 ₽ above it.
+  // Those two numbers are deliberately far apart: a sign that only ever
+  // appeared where the figures already agreed would prove nothing.
+  it("names the currency of a share's price under a base-currency valuation", () => {
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            currency: "USD",
+            in_base: {
+              cost_minor: 22_500_000,
+              market_value_minor: 27_495_000,
+              unrealized_pnl_minor: 4_995_000,
+              income_minor: 0,
+              currency: "RUB",
+              rate_on: "2026-07-20",
+            },
+          }),
+        ]}
+        mode="base"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(norm(screen.getByTestId("position-market-value").textContent ?? "")).toBe(
+      norm(formatMinor(27_495_000, "RUB")),
+    );
+    const priceLine = screen.getByTestId("position-price");
+    expect(norm(priceLine.textContent ?? "")).toBe("305,50 $");
+    // The one wrong sign that would look plausible: the valuation's own, taken
+    // from the cell above instead of from the field that describes the price.
+    expect(priceLine.textContent).not.toContain("₽");
+  });
+
+  // WHICH FIELD describes the price, on the one row where the two candidates
+  // disagree. A quote carries a currency of its own, and where it differs from
+  // the position's the server converts the VALUATION into the position's
+  // currency and discloses the original in market_value_source_currency —
+  // while Position.price stays exactly as quoted (see its description in the
+  // API contract). So the price's currency is the SOURCE one here, and
+  // market_value_currency — the currency of the figure above — is the wrong
+  // answer that would look right on every other row.
+  it("takes a share price's currency from the quote, not from the converted valuation", () => {
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            currency: "USD",
+            market_value_minor: 105_777,
+            market_value_currency: "USD",
+            market_value_source_currency: "RUB",
+            market_value_source_minor: 9_520_000,
+          }),
+        ]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const priceLine = screen.getByTestId("position-price");
+    expect(norm(priceLine.textContent ?? "")).toBe("305,50 ₽");
+    expect(priceLine.textContent).not.toContain("$");
+  });
+
+  // The digit rules and the currency are one rendering, not two that meet
+  // later: the seed's WeWork is quoted at $0.0025 after its bankruptcy, and
+  // «0,00 $» would be a fake zero wearing a currency sign — #30 undone by
+  // #76's own fix.
+  it("keeps a sub-cent quote's digits when it gains a currency sign", () => {
+    wrap(
+      <PositionsTable
+        positions={[makePosition({ price: "0.0025", market_value_minor: 2 })]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const priceLine = screen.getByTestId("position-price");
+    expect(norm(priceLine.textContent ?? "")).toBe("0,0025 $");
+    expect(norm(priceLine.textContent ?? "")).not.toBe("0,00 $");
+  });
+
+  // A type this build cannot read a price for gets no currency claimed on its
+  // behalf. Today's server never sends such a row — it publishes no valuation
+  // and no price for anything but share, etf and bond (marketValue in
+  // internal/portfolio/http.go), so `hasMarketValue` is false and this hint is
+  // not rendered at all — and that is exactly why the branch is written and
+  // pinned rather than folded into the share/etf one: the day a NEWER server
+  // prices a new type, what its Position.price means will be decided there,
+  // and a client one release behind must not answer that question with the
+  // valuation's currency. It is the same rule the gap captions follow (#105):
+  // what is true stays said, what is not known stays unsaid.
+  it("claims no currency for a priced type this build does not know", () => {
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            instrument: { ...makePosition().instrument, type: "crypto" },
+          }),
+        ]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const priceLine = screen.getByTestId("position-price");
+    expect(norm(priceLine.textContent ?? "")).toBe("305,50");
+    expect(priceLine.textContent).not.toContain("$");
+    expect(priceLine.textContent).not.toContain("%");
+  });
 
   it("keeps the converted-from line alongside the percentage note on a bond", () => {
     const sourceAmount = formatMinor(9_520_000, "RUB");
@@ -768,6 +893,11 @@ describe("PositionsTable", () => {
 
     const priceLine = screen.getByTestId("position-price");
     expect(norm(priceLine.textContent ?? "")).toBe("95,20 %");
+    // The row where a bond has BOTH candidate currencies filled in — the
+    // position's own on the valuation, the face value's on the source — and
+    // the price belongs to neither of them (#76). It is still a percentage.
+    expect(priceLine.textContent).not.toContain("$");
+    expect(priceLine.textContent).not.toContain("₽");
     expect(norm(priceLine.getAttribute("title") ?? "")).toBe(
       norm(
         `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${BOND_PRICE_NOTE}\n${PRICE_VALUATION_NOTE}\nПересчитано из ${sourceAmount}`,
