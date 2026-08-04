@@ -96,7 +96,8 @@ func seedDemo(ctx context.Context, pool *pgxpool.Pool) error {
 			//	KAZ32EUR (the eurobond)    $5 750,00
 			//	WEWKQ                      $2 000,00
 			//	INTC (hand-entered basis)  $3 000,00
-			//	                          $30 359,20
+			//	AMZN (two transfers)       $3 800,00
+			//	                          $34 159,20
 			//
 			// A balance below that would put a single position above the whole
 			// account it lives in, right on the screen this data exists to show.
@@ -199,6 +200,14 @@ func seedInstrumentsAndOperations(
 		}},
 		{"WEWKQ", instrument.Instrument{Type: instrument.TypeShare, Name: "WeWork", Ticker: "WEWKQ", Currency: "USD"}},
 		{"INTC", instrument.Instrument{Type: instrument.TypeShare, Name: "Intel", Ticker: "INTC", Currency: "USD"}},
+		// Amazon carries the journal's remaining two demonstrations, and it is
+		// one instrument rather than two because both are about the SAME kind of
+		// row — a transfer, whose amount is a basis assembled from purchases —
+		// and are best read side by side. Its two parcels are bought at Т-Банк
+		// and moved to Freedom KZ one at a time, so the destination journal ends
+		// up with two arrivals of one ticker, on one day, saying different
+		// things. See the two buys and the two transfers below.
+		{"AMZN", instrument.Instrument{Type: instrument.TypeShare, Name: "Amazon", Ticker: "AMZN", Currency: "USD"}},
 	}
 	instIDs := make(map[string]uuid.UUID, len(instSeeds))
 	for _, is := range instSeeds {
@@ -255,6 +264,36 @@ func seedInstrumentsAndOperations(
 			AccountID: tbank, InstrumentID: inst("SBER"), Type: operation.TypeBuy,
 			OccurredOn: d("2026-05-10"), Quantity: qty("300"), Price: price("305.5"),
 			AmountMinor: -9_165_000, FeeMinor: 9_165, Currency: "RUB",
+		},
+		// Amazon's FIRST parcel, and the older of the two this instrument moves
+		// to Freedom KZ. It is dated inside the gap before the fx history starts
+		// (see seededUSDRates), so no rate can be resolved for it at all — and
+		// that one fact puts TWO DIFFERENT SENTENCES on the Т-Банк journal, three
+		// rows apart, which is the whole reason this parcel exists:
+		//
+		//	this row, a buy    — the amount is money that moved on 11.05.2026 and
+		//	                     THAT day has no rate: «Нет курса на дату
+		//	                     операции» (in_base_gap = no_rate_operation_date).
+		//	the transfer below — the amount is this parcel's cost basis, valued at
+		//	                     the day it was BOUGHT, and that is the day with no
+		//	                     rate: «стоимость покупок … нет курса на день одной
+		//	                     из этих покупок» (no_rate_lot_date). The
+		//	                     transfer's own date, 20.07.2026, has an exact rate
+		//	                     of its own (78.50) — it is simply not a rate that
+		//	                     may value shares bought in May, which is the whole
+		//	                     of #79.
+		//
+		// Before this seed the second sentence was reachable only from a test:
+		// every transfer here moved lots whose own days all had rates. The two
+		// are the pair most easily mistaken for each other, so they are put on one
+		// screen where the difference can be read rather than argued.
+		//
+		// 11.05.2026 is a Monday — an ordinary trading day, not a date chosen to
+		// be strange. What is missing is the demo's fx table, not the market.
+		{
+			AccountID: tbank, InstrumentID: inst("AMZN"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-05-11"), Quantity: qty("10"), Price: price("180"),
+			AmountMinor: -180_000, Currency: "USD",
 		},
 		// The demo's ordinary bond, and the one that shows the trade dialog's
 		// two linked price fields agreeing (#77). What is RECORDED is money per
@@ -467,6 +506,42 @@ func seedInstrumentsAndOperations(
 			AccountID: freedom, InstrumentID: inst("GOOGL"), Type: operation.TypeBuy,
 			OccurredOn: d("2026-06-10"), Quantity: qty("50"), Price: price("200"),
 			AmountMinor: -1_000_000, Currency: "USD",
+		},
+		// Amazon's SECOND parcel, and the demo's row where THE DAY A FIGURE IS
+		// VALUED AT AND THE DAY ITS RATE CAME FROM ARE DIFFERENT DAYS (#80).
+		//
+		// 12 июня is Russia Day — a non-working holiday, which in 2026 falls on a
+		// Friday. The CBR sets no rate that day; the New York exchange trades as
+		// usual, which is how a dollar share comes to be bought on a day the
+		// ruble has no rate of its own. The seeded table therefore carries
+		// 2026-06-11, the last working day before it (see seededUSDRates), and
+		// the conversion resolves to that:
+		//
+		//	cost  10 × $200,00 = $2 000,00 =    200_000 minor USD, dated 12.06.2026
+		//	  in ₽ 200_000 × 81.00 (the rate OF 11.06.2026) = 16_200_000 = 162 000,00 ₽
+		//
+		// So this row publishes dated_on = 2026-06-12 and rate_on = 2026-06-11,
+		// and its tooltip reads «На дату операции курса нет — пересчитано по
+		// ближайшему, на 11.06.2026». Naming 11.06 as the day the shares were
+		// bought — which the journal did until #80 — would name a holiday's
+		// eve for a holiday's purchase.
+		//
+		// The same pair of dates returns on the transfer below, where it matters
+		// more: there the sentence's subject is a PURCHASE («Самый поздний из них
+		// — на …»), so it must name 12.06.2026, the day the shares were bought,
+		// and not 11.06.2026, the day the rate is from. That row is the only
+		// place in this demo where the two dates differ on a transfer, and
+		// therefore the only place a reader can see which of them the sentence
+		// picked.
+		//
+		// No fee, so the ruble figure above is the whole of the row's amount and
+		// can be checked by eye; and 81.00 is a rate of its own rather than a
+		// copy of a neighbour, so a conversion that quietly used 10.06's 81.40 or
+		// 15.06's 64.00 instead would print a visibly different number.
+		{
+			AccountID: tbank, InstrumentID: inst("AMZN"), Type: operation.TypeBuy,
+			OccurredOn: d("2026-06-12"), Quantity: qty("10"), Price: price("200"),
+			AmountMinor: -200_000, Currency: "USD",
 		},
 		// TSLA's second lot — see the first lot above for why the rates and
 		// the transfer are shaped the way they are.
@@ -733,6 +808,69 @@ func seedInstrumentsAndOperations(
 		return fmt.Errorf("seed transfer INTC: %w", err)
 	}
 
+	// The two Amazon transfers, and the demo's pair for the journal's remaining
+	// two sentences. One instrument, one day, two arrivals at Freedom KZ, and
+	// they say different things — which is the point: the difference cannot come
+	// from the ticker, the account or the date, so it has to come from the
+	// purchases behind each amount.
+	//
+	// They are two transfers rather than one because a single transfer of both
+	// parcels could only demonstrate the first of the two. A row's whole
+	// base-currency block is published or withheld together, so a parcel
+	// containing the undatable-in-rubles 11.05 lot withholds the figure for the
+	// 12.06 lot as well, and the converted case would have nothing to stand on.
+	//
+	// Moving the parcels ONE AT A TIME is what the queue does anyway: each
+	// transfer releases the earliest purchase still held (portfolio.ReleasedLots
+	// — the same earliest-acquired-first rule everything else here obeys), so the
+	// first call takes the 11.05 parcel and the second is left with the 12.06
+	// one. Both are dated the same day as the three transfers above, and the
+	// second sees the first because a transfer's basis is read from the journal
+	// as it stood on its own date, same-date rows included (journalUpTo in
+	// Service.CreateTransfer).
+	//
+	//	first  10 @ $180,00 bought 11.05.2026 -> 180_000 minor USD ($1 800,00)
+	//	  in ₽ nothing: 11.05.2026 is before the fx history begins and there is
+	//	       no earlier date to fall back to either, so BOTH LEGS publish no
+	//	       ruble figure and name the cause as a missing rate for a PURCHASE
+	//	       day — not for the transfer's own day, 20.07.2026, whose rate
+	//	       (78.50) exists and is exactly the one that may not be used here.
+	//	second 10 @ $200,00 bought 12.06.2026 -> 200_000 minor USD ($2 000,00)
+	//	  in ₽ 200_000 × 81.00 (the rate of 11.06.2026, the last working day
+	//	       before Russia Day) = 16_200_000 = 162 000,00 ₽
+	//
+	// The second row is where #80 is visible. Its tooltip's subject is a
+	// purchase — «Это стоимость покупок … Самый поздний из них — на …» — so it
+	// names dated_on, 12.06.2026, the day the shares were bought, while the rate
+	// behind the figure is dated 11.06.2026. Every other transfer in this demo
+	// moves lots whose own days all have rates, which makes the two dates equal
+	// and the choice between them invisible.
+	//
+	// The second row's 162 000,00 ₽ is also the exact ruble figure of the BUY it
+	// carries across (see that buy above, −162 000,00 ₽): same parcel, same
+	// purchase day, same rate, once as money paid and once as basis moved. A
+	// transfer valued at the day the paperwork moved would print 200_000 × 78.50
+	// = 157 000,00 ₽ instead and disagree with a row four lines up its own
+	// journal.
+	//
+	// At Freedom KZ the two parcels then make ONE position of 20 shares —
+	// $3 800,00 of basis with no ruble figure at all, since one of its two lots
+	// still cannot be dated to a rate. The journal row that can be converted and
+	// the position that cannot are consistent: a position publishes its basis
+	// whole or not at all, exactly as a journal row does.
+	if _, _, err := opSvc.CreateTransfer(ctx, spaceID, operation.TransferParams{
+		FromAccountID: tbank, ToAccountID: freedom, InstrumentID: instIDs["AMZN"],
+		Quantity: decimal.RequireFromString("10"), OccurredOn: d("2026-07-20"),
+	}); err != nil {
+		return fmt.Errorf("seed transfer AMZN (2026-05-11 parcel): %w", err)
+	}
+	if _, _, err := opSvc.CreateTransfer(ctx, spaceID, operation.TransferParams{
+		FromAccountID: tbank, ToAccountID: freedom, InstrumentID: instIDs["AMZN"],
+		Quantity: decimal.RequireFromString("10"), OccurredOn: d("2026-07-20"),
+	}); err != nil {
+		return fmt.Errorf("seed transfer AMZN (2026-06-12 parcel): %w", err)
+	}
+
 	// Recorded after the transfer on purpose: Service.Create replays the
 	// journal, and the parcel this sale is meant to consume only exists in
 	// this account once the transfer above has been written.
@@ -742,6 +880,64 @@ func seedInstrumentsAndOperations(
 		AmountMinor: 200_000, Currency: "USD",
 	}); err != nil {
 		return fmt.Errorf("seed operation sell NVDA: %w", err)
+	}
+
+	// THE DEMO'S LONG JOURNAL. Everything else in this seed is a scenario; these
+	// 34 rows are not. They are ordinary housekeeping on the Т-Банк account —
+	// a monthly top-up and the broker's monthly service charge — and their only
+	// job is to make that account's journal longer than one page, so that
+	// «Показать еще» is something the owner can click on the stand rather than
+	// something only a test has ever seen (#86).
+	//
+	// WHY 34 AND NOT MORE. The client asks for 50 entries at a time
+	// (JOURNAL_PAGE_SIZE, web/src/api/operations.ts). Т-Банк already holds 21
+	// rows — sixteen operations above plus the five departing transfer legs — so
+	// 34 puts it at 55: the first page comes back full with has_more, the button
+	// appears, and the second page is five rows and ends. That is the smallest
+	// addition that shows BOTH halves of the fix, the button appearing when there
+	// is more and going away when there is not. A hundred rows would demonstrate
+	// nothing further and would bury the four scenarios this branch is about.
+	//
+	// WHY THIS ACCOUNT. The button belongs under the journal the reader is
+	// already on. Т-Банк carries both Amazon parcels, the Saturday deposit and
+	// the bond whose price is money per unit, so all of this branch's material
+	// and its paging are one screen.
+	//
+	// WHY THEY ARE DATED BEFORE EVERYTHING ELSE. The journal comes back newest
+	// first, so rows dated 2024-12..2026-04 sort BEHIND every scenario row (which
+	// start 2026-05-05). The first page opens on the 21 rows that mean something
+	// and the housekeeping trails after them; the second page is housekeeping
+	// alone. Dating them later would have pushed the scenarios onto page two.
+	//
+	// WHY THEY MOVE NO FIGURE ANYWHERE. They are rubles on a ruble account, so
+	// nothing about them converts and none of them can carry a rate, a gap or a
+	// caption. They name no instrument, so portfolio.Compute skips them before it
+	// reaches a position (see its cash-level branch) and no basis, valuation or
+	// realized result changes. And an account's balance is a figure the user
+	// RECORDS: every balance on screen is read from account_balances
+	// (account.Store.ListWithBalance and SummaryByCurrency), and this program
+	// never sums a journal into a balance — so the three recorded balances above
+	// stay exactly what they were.
+	//
+	// The 1st of the month is the anchor rather than the dates themselves, so
+	// the 5th and the 28th exist in every month February included.
+	fillerFirstMonth := d("2024-12-01")
+	for i := 0; i < 17; i++ {
+		month := fillerFirstMonth.AddDate(0, i, 0)
+		if _, err := opSvc.Create(ctx, spaceID, operation.Operation{
+			AccountID: tbank, Type: operation.TypeDeposit,
+			OccurredOn: month.AddDate(0, 0, 4), AmountMinor: 30_000_00, Currency: "RUB",
+			Note: "Ежемесячное пополнение",
+		}); err != nil {
+			return fmt.Errorf("seed monthly top-up %s: %w", month.Format("2006-01"), err)
+		}
+		if _, err := opSvc.Create(ctx, spaceID, operation.Operation{
+			AccountID: tbank, Type: operation.TypeFee,
+			OccurredOn: month.AddDate(0, 0, 27), AmountMinor: -290_00, Currency: "RUB",
+			Note: "Обслуживание брокерского счёта",
+		}); err != nil {
+			return fmt.Errorf("seed monthly service fee %s: %w", month.Format("2006-01"), err)
+		}
 	}
 
 	if err := seedMarketData(ctx, pool, instIDs, d); err != nil {
@@ -792,10 +988,22 @@ func seedInstrumentsAndOperations(
 //     against proceeds struck lower is what turns a dollar profit into a ruble
 //     loss — on paper for MSFT, valued at today's 78.50 (see the MSFT buy),
 //     and for good for Alphabet, sold at 65.00 (see the Alphabet buy).
+//   - 2026-06-11 — the Thursday before Russia Day, and the newest rate a
+//     purchase made ON that holiday can reach. 12 июня is a non-working day in
+//     Russia and the CBR sets no rate for it; the New York exchange trades, so
+//     the second Amazon parcel is bought that day at a price the ruble has no
+//     rate for. The pair is what makes «the day the figure is valued at» and
+//     «the day its rate came from» two different days on the demo — on an
+//     ordinary buy row and, more importantly, on the transfer that carries that
+//     parcel, where the sentence's subject is the PURCHASE and naming the rate's
+//     date instead was #80. 81.00 is close to 2026-06-10's 81.40 but not equal
+//     to it, so a conversion that reached for the wrong neighbour would print a
+//     different number rather than the same one.
 //   - 2026-07-03 — the Friday before the Saturday USD deposit, which has no
 //     rate of its own: the entry converts at the nearest earlier date and
 //     the journal discloses that date rather than claiming the operation's
-//     own.
+//     own. The same shape as 2026-06-11 above, on a weekend instead of a
+//     holiday and on a deposit instead of a purchase.
 //   - 2026-07-20 — today's-rate anchor, shared with the latest account
 //     balances and with every seeded quote but WeWork's (see seedMarketData
 //     for why that one is dated earlier); also what GET /summary converts at, and the
@@ -806,26 +1014,33 @@ func seedInstrumentsAndOperations(
 //     92.30 ÷ 78.50 out of the two rows it already has (see
 //     marketdata.resolveRate).
 //
-// Nothing is seeded on or before 2026-05-08, the dates of the demo's two
-// earliest USD operations (the Freedom KZ deposit and the first AAPL buy),
-// and that gap is deliberate. It buys two demonstrations at once:
+// Nothing at all is seeded before 2026-05-13, and three USD operations fall in
+// that opening gap on purpose. A rate lookup resolves the nearest EARLIER date
+// (marketdata.Store.FxRateOn), so these three — and only these three — have no
+// rate to fall back on at all, and each buys a different demonstration:
 //
-//   - the deposit has no resolvable rate at all, so that journal entry must
-//     show its original amount with an explanation instead of a dash or a
-//     zero;
-//   - the AAPL buy is one of two lots of a live position, so that whole
-//     position must refuse to be shown in rubles rather than publish a basis
-//     built from the one lot that did convert.
+//   - the Freedom KZ deposit (2026-05-06) has no resolvable rate, so that
+//     journal entry must show its original amount with an explanation instead
+//     of a dash or a zero;
+//   - the first AAPL buy (2026-05-08) is one of two lots of a live position, so
+//     that whole position must refuse to be shown in rubles rather than publish
+//     a basis built from the one lot that did convert;
+//   - the first Amazon buy (2026-05-11) is later moved to another account, so
+//     the TRANSFER carrying it has to say the missing rate is one for a PURCHASE
+//     day — while its own day, 2026-07-20, has a perfectly good rate that may
+//     not be used (#79). The buy row itself sits three lines away saying the
+//     other sentence, «нет курса на дату операции», about the same day.
 //
-// Seeding a rate for either would hide the honest-degradation paths behind
+// Seeding a rate for any of them would hide the honest-degradation paths behind
 // unit tests where nobody looks at them. On an instance with internet access
-// the fx backfill job eventually fills those dates from cbr.ru and both start
-// converting on their own — which is the point of the job.
+// the fx backfill job eventually fills those dates from cbr.ru and all three
+// start converting on their own — which is the point of the job.
 var seededUSDRates = []struct{ on, rate string }{
 	{"2026-05-13", "60.00"},
 	{"2026-05-14", "60.50"},
 	{"2026-05-20", "79.15"},
 	{"2026-06-10", "81.40"},
+	{"2026-06-11", "81.00"},
 	{"2026-06-15", "64.00"},
 	{"2026-06-20", "65.00"},
 	{"2026-07-03", "77.90"},
@@ -894,9 +1109,9 @@ var seededUSDRates = []struct{ on, rate string }{
 // dollars — small on purpose, because the ruble moved 3.7 % the other way
 // over the same weeks and the point is that the smaller move loses.
 //
-// KAZ32EUR, WEWKQ and INTC are hand-seeded for the same kind of reason — each
-// carries one of this branch's four demonstrations and none of them can be
-// seen without a valuation. See each quote below.
+// KAZ32EUR, WEWKQ, INTC and AMZN are hand-seeded for the same kind of reason —
+// each carries a demonstration of its own that cannot be seen without a
+// valuation. See each quote below.
 func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]uuid.UUID, d func(string) time.Time) error {
 	mdStore := marketdata.NewStore(pool)
 	// The demo's "now": the newest fx rate in the table, so every conversion
@@ -988,6 +1203,18 @@ func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]
 		// permanent «дату уже не восстановить» sentence on half the row it is
 		// true of. See the INTC transfer.
 		{InstrumentID: instIDs["INTC"], On: session, Price: rate("34.00"), Currency: "USD", Source: "seed"},
+		// Amazon is quoted so its position reads as a position rather than as a
+		// row of dashes. The two parcels moved in by the transfers cost
+		// $3 800,00 together (180_000 + 200_000 minor), and 20 × $209,00 =
+		// $4 180,00 values them at exactly ten percent more: +$380,00, +10,0 %.
+		//
+		// In rubles the same row publishes NOTHING — no basis, no valuation, no
+		// profit — because one of its two lots was bought on 2026-05-11, a day
+		// the demo's fx table cannot reach (see seededUSDRates). That is the
+		// position's half of what the journal says two rows at a time: the row's
+		// base-currency block goes whole or not at all, so the datable lot's
+		// 162 000,00 ₽ does not appear on its own here either.
+		{InstrumentID: instIDs["AMZN"], On: session, Price: rate("209.00"), Currency: "USD", Source: "seed"},
 	}
 	if err := mdStore.UpsertQuotes(ctx, quotes); err != nil {
 		return fmt.Errorf("seed quotes: %w", err)
