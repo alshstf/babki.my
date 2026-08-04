@@ -1,6 +1,7 @@
 package operation_test
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,14 +46,17 @@ func (c journalCost) String() string {
 // journalScreen builds an account whose journal grows with size (see
 // seedJournal), fetches its page once, and reports what that one request cost.
 //
-// keep, when non-nil, is applied to the prefetch: only the queries it accepts
-// are resolved in the batch, so a test can simulate an enumeration that has
-// fallen behind the conversion rules and check what that costs — and, more
-// importantly, what it does NOT change.
-func journalScreen(t *testing.T, size int, keep func(marketdata.RateQuery) bool) journalCost {
+// tune, when non-nil, bends the converter double before the page is fetched:
+// dropping() gives the prefetch a hole in it, failingBatch() kills the batch
+// statement outright. Both let a test check what a degraded prefetch costs and —
+// more importantly — what it does NOT change.
+func journalScreen(t *testing.T, size int, tune func(*countingConverter)) journalCost {
 	t.Helper()
 	pool, mdStore := newTestPool(t)
-	conv := &countingConverter{inner: marketdata.NewConverter(mdStore), keep: keep}
+	conv := &countingConverter{inner: marketdata.NewConverter(mdStore)}
+	if tune != nil {
+		tune(conv)
+	}
 	url, c := newAPIOn(t, pool, conv)
 
 	// One USD -> RUB row, dated before every operation in the fixture:
@@ -80,6 +84,18 @@ func journalScreen(t *testing.T, size int, keep func(marketdata.RateQuery) bool)
 	cost := journalCost{trips: poolTrips(pool) - before, rate: conv.rate.Load(), batch: conv.batch.Load()}
 	decodeJSON(t, resp, &cost.body)
 	return cost
+}
+
+// dropping and failingBatch are the two ways journalScreen bends the converter
+// double: an enumeration with a hole in it, and a batch statement that dies on
+// its own. Both are passed as a tune rather than set on the fixture's own line,
+// so the helper takes one parameter however many failure modes the double grows.
+func dropping(pred func(marketdata.RateQuery) bool) func(*countingConverter) {
+	return func(c *countingConverter) { c.keep = pred }
+}
+
+func failingBatch(err error) func(*countingConverter) {
+	return func(c *countingConverter) { c.batchErr = err }
 }
 
 // poolTrips reads the pool's lifetime count of acquired connections. Every
@@ -261,7 +277,7 @@ func TestJournalIncompletePrewarmCostsTripsNotNumbers(t *testing.T) {
 		{"nothing is prewarmed", func(marketdata.RateQuery) bool { return false }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			partial := journalScreen(t, 2, tc.keep)
+			partial := journalScreen(t, 2, dropping(tc.keep))
 
 			// The two runs are separate databases, so the operation ids differ
 			// by construction; everything else — every figure, every currency,
@@ -277,6 +293,94 @@ func TestJournalIncompletePrewarmCostsTripsNotNumbers(t *testing.T) {
 				t.Fatalf("prewarm dropped queries but the request cost no more: %s (complete prewarm: %s)", partial, full)
 			}
 		})
+	}
+}
+
+// TestJournalFailedBatchCostsTripsNotNumbers is the neighbouring property, and
+// the one the shared walk must not quietly lose: the batch STATEMENT dies —
+// timed out, or refused for how its array argument was encoded — while the
+// database is otherwise perfectly well, so every one-pair lookup still answers.
+//
+// The page must come out identical to the one a working batch produces, paid for
+// with the round trips the batch was there to save. What must NOT happen is an
+// error page: the failure is the optimization's, not the answer's, and a handler
+// that surfaced it would turn every request the fallback could serve correctly
+// into a 500. (An outage that takes the fallback down too is the opposite case
+// and does fail the request — see TestListOperationInBaseRealRateErrorFailsRequest.)
+func TestJournalFailedBatchCostsTripsNotNumbers(t *testing.T) {
+	full := journalScreen(t, 2, nil)
+	assertJournalIsFullyWorked(t, full.body)
+
+	dead := journalScreen(t, 2, failingBatch(errors.New("statement timeout on the batched fx lookup")))
+	assertJournalIsFullyWorked(t, dead.body)
+
+	// The two runs are separate databases, so the operation ids differ by
+	// construction; everything else — every figure, every currency, every date
+	// — must match exactly.
+	if !reflect.DeepEqual(blankJournalIDs(dead.body), blankJournalIDs(full.body)) {
+		t.Fatalf("a failed batch changed the answer:\n got %+v\nwant %+v", dead.body, full.body)
+	}
+	if dead.rate <= full.rate {
+		t.Fatalf("the batch failed but nothing fell back: %s (working batch: %s) — the double is not failing what it claims to",
+			dead, full)
+	}
+	if dead.trips <= full.trips {
+		t.Fatalf("the batch failed but the request cost no more: %s (working batch: %s)", dead, full)
+	}
+}
+
+// TestJournalGapIsFiledNotAskedAgain pins the other half of what the walk hands
+// back. A date the rate table does not reach back to comes out of the batch as a
+// resolved query carrying marketdata.ErrNoRate — an honest answer, not a miss —
+// and the memo must take it as one.
+//
+// Nothing on the page can tell the difference: filed or not, in_base is null for
+// that row either way, because the per-pair fallback would ask the store and be
+// told the same thing. The only trace is the cost, which is why this test
+// asserts on the fallback count and not only on the payload. Without it, a walk
+// that dropped every entry carrying an error would leave every figure right and
+// every gap paying for a second lookup, forever, with nothing to show for it.
+func TestJournalGapIsFiledNotAskedAgain(t *testing.T) {
+	pool, mdStore := newTestPool(t)
+	conv := &countingConverter{inner: marketdata.NewConverter(mdStore)}
+	url, c := newAPIOn(t, pool, conv)
+
+	// The rate table starts in 2025, so the 2025 operation resolves and the
+	// 2024 one has nothing on or before its date.
+	seedFxRate(t, mdStore, "2025-01-01", "90")
+	acc := mkAccount(t, url, c, "US брокер", "USD")
+	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"type":"withdrawal",
+		"occurred_on":"2025-06-01","amount_minor":-10000,"currency":"USD"}`, acc))
+	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"type":"withdrawal",
+		"occurred_on":"2024-06-01","amount_minor":-20000,"currency":"USD"}`, acc))
+
+	conv.rate.Store(0)
+	conv.batch.Store(0)
+	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations?limit=200", "")
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET operations = %d, want 200: %s", resp.StatusCode, b)
+	}
+	var rows []journalItem
+	decodeJSON(t, resp, &rows)
+
+	var gaps, converted int
+	for _, r := range rows {
+		if r.InBase == nil {
+			gaps++
+			continue
+		}
+		converted++
+	}
+	if gaps != 1 || converted != 1 {
+		t.Fatalf("page shows %d gap(s) and %d converted rows, want 1 and 1 — the fixture is not exercising a gap beside a working conversion", gaps, converted)
+	}
+	if got := conv.batch.Load(); got != 1 {
+		t.Fatalf("the page made %d batched rate resolutions, want exactly 1", got)
+	}
+	if got := conv.rate.Load(); got != 0 {
+		t.Fatalf("the page fell back to %d one-pair lookups — the batch answered «no rate» for 2024-06-01 and that answer must be filed in the memo, not thrown away and asked for again",
+			got)
 	}
 }
 

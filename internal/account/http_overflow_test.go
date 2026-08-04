@@ -9,6 +9,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/money"
 )
 
@@ -32,6 +33,20 @@ func (c fixedRateConverter) ConvertMany(context.Context, map[string]int64, strin
 	panic("fixedRateConverter: ConvertMany not used")
 }
 
+// RatesOn panics rather than answering, because balanceInBase must never reach
+// for the batch: prewarming is handleList's job, and the conversion below is
+// the fallback that has to work with a memo nobody filled (see prewarmRates).
+// A call arriving here would mean the two had swapped roles.
+func (c fixedRateConverter) RatesOn(context.Context, []marketdata.RateQuery) (marketdata.Rates, error) {
+	panic("fixedRateConverter: RatesOn not used")
+}
+
+// overflowOn is the date these conversions are asked for. Nothing depends on
+// its value — fixedRateConverter answers the same rate whatever the date — but
+// balanceInBase takes one now, and a fixed date keeps the test independent of
+// the clock.
+var overflowOn = time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+
 func withBalance(minor int64) WithBalance {
 	return WithBalance{
 		Account: Account{Currency: "USD"},
@@ -42,7 +57,7 @@ func withBalance(minor int64) WithBalance {
 func TestBalanceInBaseRefusesABalanceThatWouldWrap(t *testing.T) {
 	h := &Handler{converter: fixedRateConverter{rate: decimal.NewFromInt(2)}}
 
-	got, err := h.balanceInBase(context.Background(), withBalance(math.MaxInt64), "RUB", map[string]*rateLookup{})
+	got, err := h.balanceInBase(context.Background(), withBalance(math.MaxInt64), "RUB", overflowOn, map[rateKey]*rateLookup{})
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("balanceInBase = %+v, err = %v; want ErrOverflow: twice maxint64 is not an int64", got, err)
 	}
@@ -58,7 +73,7 @@ func TestBalanceInBaseRefusesABalanceThatWouldWrap(t *testing.T) {
 func TestBalanceInBaseOverflowIsNotAnUncoveredCurrency(t *testing.T) {
 	h := &Handler{converter: fixedRateConverter{rate: decimal.NewFromInt(2)}}
 
-	if _, err := h.balanceInBase(context.Background(), withBalance(math.MaxInt64), "RUB", map[string]*rateLookup{}); err == nil {
+	if _, err := h.balanceInBase(context.Background(), withBalance(math.MaxInt64), "RUB", overflowOn, map[rateKey]*rateLookup{}); err == nil {
 		t.Fatal("balanceInBase answered an overflow with a nil error, which this screen renders as a currency with no rate")
 	}
 }
@@ -69,7 +84,7 @@ func TestBalanceInBaseOverflowIsNotAnUncoveredCurrency(t *testing.T) {
 func TestBalanceInBasePublishesTheLargestBalanceThatFits(t *testing.T) {
 	h := &Handler{converter: fixedRateConverter{rate: decimal.NewFromInt(1)}}
 
-	got, err := h.balanceInBase(context.Background(), withBalance(math.MaxInt64), "RUB", map[string]*rateLookup{})
+	got, err := h.balanceInBase(context.Background(), withBalance(math.MaxInt64), "RUB", overflowOn, map[rateKey]*rateLookup{})
 	if err != nil {
 		t.Fatalf("balanceInBase at exactly maxint64: %v", err)
 	}

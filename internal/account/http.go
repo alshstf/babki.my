@@ -34,18 +34,32 @@ type spaceStore interface {
 }
 
 // converter is the subset of *marketdata.Converter this handler needs:
-// ConvertMany for GET /summary's per-currency totals, and Rate for
-// converting each account's balance into the base currency at most once per
-// currency per request (see balanceInBase). Local interface (mirroring
-// spaceStore, and portfolio's identically named one) so tests can inject a
-// double in place of a real *marketdata.Converter — in particular one whose
-// lookups fail with a genuine error rather than marketdata.ErrNoRate, which
-// a real, DB-backed Converter cannot be made to do on demand and which the
-// handler must treat completely differently (see balanceInBase).
-// *marketdata.Converter satisfies this structurally, so no call site changes.
+// ConvertMany for GET /summary's per-currency totals, Rate for converting each
+// account's balance into the base currency at most once per currency per
+// request (see balanceInBase), and RatesOn, which resolves many such pairs in a
+// single round trip and answers each exactly as Rate would have (see
+// marketdata.RatesOn). GET /accounts uses the last two, and not
+// interchangeably: RatesOn fills the request's memo up front (prewarmRates) and
+// Rate resolves whatever is not in it (balanceInBase), which is what keeps the
+// figures independent of the prefetch.
+//
+// GET /summary needs no RatesOn of its own: ConvertMany owns both the
+// resolution and the arithmetic behind total_in_base_minor, and batches its own
+// lookups internally (see marketdata.ConvertMany). Splitting that here would
+// mean restating the summing rule beside it, and two computations of one
+// published figure drift.
+//
+// Local interface (mirroring spaceStore, and operation's and portfolio's
+// identically named ones) so tests can inject a double in place of a real
+// *marketdata.Converter — in particular one whose lookups fail with a genuine
+// error rather than marketdata.ErrNoRate, which a real, DB-backed Converter
+// cannot be made to do on demand and which the handler must treat completely
+// differently (see balanceInBase). *marketdata.Converter satisfies this
+// structurally, so no call site changes.
 type converter interface {
 	ConvertMany(ctx context.Context, amounts map[string]int64, to string, on time.Time) (converted int64, missing []string, ratesOn time.Time, err error)
 	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
+	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
 }
 
 // Handler exposes the account module over HTTP.
@@ -130,7 +144,51 @@ func pathAccountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	return id, true
 }
 
-// rateLookup memoizes one currency's resolved fx rate (and the date it came
+// rateKey identifies one memoized fx rate lookup: the currency being
+// converted, the currency it is converted INTO, and the date its rate must come
+// from. Mirrors operation.rateKey and portfolio.rateKey, which carry the same
+// three fields.
+//
+// ONLY THE CURRENCY VARIES ON THIS SCREEN. Everything here is converted into
+// the space's base currency at TODAY's rate, both read once per request and
+// handed to every lookup and every prefetched query alike (see handleList), so
+// the other two fields never change what any lookup finds and the memo would
+// collapse identically without them. They are in the key because the memo now
+// has TWO writers — the loop asking for a rate, and the prefetch filing answers
+// before it (prewarmRates) — and a key of the currency alone cannot tell "USD
+// at today's rate into RUB" from "USD at any other day's rate, or into anything
+// else". An enumeration that named a different day or a different target would
+// have its answer filed exactly where the loop looks, and read as the answer to
+// a question it was never asked: a balance converted at yesterday's rate under
+// a rate_on that says yesterday, on a screen where nothing looks wrong, and
+// disagreeing with the total beside it — which converts at today's (see
+// handleSummary). That is not hypothetical here; it is what a mutation of the
+// enumeration's date did, invisibly to every test, until this key grew the
+// field. With all three in the key the same mistake files the answer where
+// nothing looks for it, and costs a round trip instead of a number.
+//
+// The date is held as its YYYY-MM-DD string rather than a time.Time so the key
+// is a value comparison on the calendar date itself, immune to two
+// otherwise-equal time.Time values differing in monotonic clock reading or
+// *time.Location pointer — which would merely cost extra lookups, but would do
+// so invisibly.
+type rateKey struct {
+	currency string
+	target   string
+	on       string
+}
+
+// newRateKey is the only place a lookup becomes a key. Both halves of the memo
+// build one — the loop asking for a rate (balanceInBase) and the prefetch
+// filing the answers before it (prewarmRates) — and a key spelled two ways
+// would file every prefetched answer where nothing looks for it: no wrong
+// number, just a batch paid for and then ignored, which is precisely the kind
+// of failure that leaves no trace.
+func newRateKey(currency, target string, on time.Time) rateKey {
+	return rateKey{currency: currency, target: target, on: on.Format("2006-01-02")}
+}
+
+// rateLookup memoizes one lookup's resolved fx rate (and the date it came
 // from, or the resolution error) so handleList's per-account conversion
 // loop below hits the fx rate store at most once per distinct source
 // currency, not once per account. See balanceInBase.
@@ -140,14 +198,35 @@ type rateLookup struct {
 	err  error
 }
 
-// balanceInBase converts a's balance into baseCurrency using cache to
-// memoize the underlying marketdata.Converter.Rate lookup across accounts
-// that share a's currency within a single handleList request: N accounts
-// denominated in the same non-base currency resolve that currency's rate
-// once, not N times (cache, keyed by currency, lives for the lifetime of
-// one request — see handleList). Applying the same cached rate to each
+// needsRate reports whether a's balance has to be converted at all — stated
+// once, as a fact about the account, because two things ask it: the loop that
+// converts (balanceInBase, where a "no" is the null balance_in_base of an
+// account with nothing to convert) and the enumeration that prefetches the
+// rates that loop is about to want (rateQueries). Written twice, the two would
+// drift, and the way they would drift is silent: the prefetch would stop
+// covering a case the loop still converts, and nothing but the round-trip count
+// would show it.
+func needsRate(a WithBalance, baseCurrency string) bool {
+	return a.Balance != nil && a.Currency != baseCurrency
+}
+
+// balanceInBase converts a's balance into baseCurrency at the fx rate of date
+// on, using cache to memoize the underlying marketdata.Converter.Rate lookup
+// across accounts that share a's currency within a single handleList request: N
+// accounts denominated in the same non-base currency resolve that currency's
+// rate once, not N times (cache, keyed by the (from, to, day) triple, lives
+// for the lifetime of one request — see rateKey and handleList). Applying the
+// same cached rate to each
 // account's own amountMinor via decimal.Mul(...).Round(0) reproduces
 // exactly what calling Converter.Convert per account would, per Rate's doc.
+//
+// The cache is normally already full when this is called: handleList prefetches
+// every currency on the screen in one round trip (see prewarmRates). A MISS IS
+// NOT AN ERROR — it is the whole safety net. Whatever the enumeration failed to
+// predict, or the batch failed to fetch, is resolved here one currency at a time
+// exactly as it was before any of that existed, so no figure on the screen
+// depends on the prefetch being complete or even on its having succeeded. Only
+// the cost does.
 //
 // It returns (nil, nil) — render balance_in_base as null — in exactly the
 // three expected cases: the account has no balance at all, its currency
@@ -157,15 +236,16 @@ type rateLookup struct {
 // error, canceled context) that the caller must surface as a request
 // error — never silently rendered as null, which would misrepresent an
 // outage as "nothing to convert".
-func (h *Handler) balanceInBase(ctx context.Context, a WithBalance, baseCurrency string, cache map[string]*rateLookup) (*apitypes.MoneyInBase, error) {
-	if a.Balance == nil || a.Currency == baseCurrency {
+func (h *Handler) balanceInBase(ctx context.Context, a WithBalance, baseCurrency string, on time.Time, cache map[rateKey]*rateLookup) (*apitypes.MoneyInBase, error) {
+	if !needsRate(a, baseCurrency) {
 		return nil, nil
 	}
-	rl, ok := cache[a.Currency]
+	key := newRateKey(a.Currency, baseCurrency, on)
+	rl, ok := cache[key]
 	if !ok {
-		rate, date, err := h.converter.Rate(ctx, a.Currency, baseCurrency, time.Now().UTC())
+		rate, date, err := h.converter.Rate(ctx, a.Currency, baseCurrency, on)
 		rl = &rateLookup{rate: rate, date: date, err: err}
-		cache[a.Currency] = rl
+		cache[key] = rl
 	}
 	if rl.err != nil {
 		if errors.Is(rl.err, marketdata.ErrNoRate) {
@@ -202,12 +282,25 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One clock reading for the whole request, handed to the enumeration and to
+	// the loop alike. Two readings would be two dates for a request that
+	// straddles midnight: the accounts converted before it at one day's rates
+	// and those after it at another's, on one screen, with nothing to say which
+	// is which. The memo would notice (the day is in its key — see rateKey) and
+	// pay for a second lookup; the screen would not.
+	now := time.Now().UTC()
+
 	// Scoped to this request only: see balanceInBase/rateLookup.
-	rates := make(map[string]*rateLookup)
+	rates := make(map[rateKey]*rateLookup)
+	// Every currency on the screen, resolved in one round trip, so the loop
+	// below finds its answer already in the memo. Nothing here is required for
+	// the figures — see rateQueries, prewarmRates and balanceInBase.
+	h.prewarmRates(r.Context(), rateQueries(accounts, sp.BaseCurrency, now), rates)
+
 	out := make([]apitypes.AccountWithBalance, 0, len(accounts))
 	for _, a := range accounts {
 		api := toAPI(a)
-		inBase, err := h.balanceInBase(r.Context(), a, sp.BaseCurrency, rates)
+		inBase, err := h.balanceInBase(r.Context(), a, sp.BaseCurrency, now, rates)
 		if err != nil {
 			family.WriteError(w, err)
 			return
@@ -220,6 +313,101 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		out = append(out, api)
 	}
 	httpjson.Write(w, http.StatusOK, out)
+}
+
+// rateQueries enumerates every fx rate the loop in handleList is about to ask
+// for, so one RatesOn call can resolve them all and every balanceInBase below
+// finds its answer already in the memo. A space holding six currencies costs
+// one round trip for the lot instead of one per currency — and a currency that
+// needs a RUB bridge costs up to six on its own (#72).
+//
+// The axis is the number of distinct CURRENCIES, not the number of accounts:
+// the memo has always collapsed same-currency accounts onto one lookup, which
+// is exactly why this screen was left out of the earlier batching work and why
+// the fixture behind it grows currencies rather than rows.
+//
+// IT IS DERIVED FROM THE CODE THAT CONSUMES THE RATES, NEVER WRITTEN BESIDE IT.
+// Which accounts need a rate is asked here through the same needsRate the loop
+// short-circuits on, so there is no second statement of that condition to keep
+// in step with the first. This codebase has been bitten more than once by two
+// computations of one value drifting apart, and a prefetch is the worst place
+// for it: the two disagree in silence.
+//
+// The target and the date are not derived from anything, because there is
+// nothing to derive them from: baseCurrency and on are read ONCE per request
+// and handed to this function and to every balanceInBase call in the same
+// breath (see handleList). What keeps a mistake there harmless is not that
+// argument but the memo's key, which carries all three parts of the triple
+// (rateKey): a query naming another day or another target is filed where
+// nothing looks for it, and the loop resolves the rate it actually wanted.
+//
+// Completeness is an optimization, not a correctness condition, and the
+// asymmetry is deliberate. Asking for a rate the loop turns out not to need
+// costs one row in a query that was happening anyway. FAILING to ask for one
+// costs a round trip and nothing else, because balanceInBase resolves whatever
+// it does not find, exactly as it did before this existed. What would be
+// dangerous is naming a DIFFERENT triple than the loop asks for and having its
+// answer read as the loop's — and that cannot happen, for the reason above.
+func rateQueries(accounts []WithBalance, baseCurrency string, on time.Time) []marketdata.RateQuery {
+	var out []marketdata.RateQuery
+	// Deduplicated by the memo's own key — the whole triple, built by the same
+	// newRateKey the loop below files its answers under — rather than by a
+	// second, independent notion of "the same query" that could disagree with
+	// it. On this screen the target and the date are the same for every
+	// account, so the currency alone would dedupe identically today; using the
+	// memo's key means the two cannot come apart the day that stops being true.
+	seen := make(map[rateKey]bool, len(accounts))
+	for _, a := range accounts {
+		key := newRateKey(a.Currency, baseCurrency, on)
+		if !needsRate(a, baseCurrency) || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, marketdata.RateQuery{From: a.Currency, To: baseCurrency, On: on})
+	}
+	return out
+}
+
+// prewarmRates resolves queries in one round trip and files each answer in the
+// request's memo under the key balanceInBase will look it up by.
+//
+// NOTHING HERE FAILS THE REQUEST, and that is not laziness. This call buys
+// speed, not truth: every figure on the screen is struck by balanceInBase,
+// which resolves whatever it does not find in the memo. A batch that fails
+// leaves the memo empty and the screen is computed exactly as it was before any
+// prefetch existed. An outage is met again by the very next lookup and reported
+// from the code that knows which figure it was resolving and can tell a missing
+// rate (a null balance_in_base) from an outage (a 500). Failing here would move
+// that judgement to a place that cannot make it, and would turn into an error
+// page every request the fallback could have served correctly.
+//
+// WHICH ANSWERS GET FILED IS NOT DECIDED HERE. Rates.Answered walks the
+// queries and hands back only the ones the batch resolved, so a query it never
+// answered leaves no entry and balanceInBase resolves it itself, while a query
+// answered with "no rate" arrives carrying marketdata.ErrNoRate and is filed as
+// the honest gap it is. That rule is one statement for all three screens that
+// warm a memo this way (see marketdata.Rates.Answered); only the key an answer
+// is filed under is this package's own.
+//
+// The error is dropped here and reported one layer down. A failure specific to
+// the BATCH statement leaves the screen correct and slow — balanceInBase
+// resolves every figure per pair — so there is nothing for this handler to tell
+// the user, and an error page would be a worse outcome than a slow one. But
+// there IS something to tell whoever runs this: the optimization has stopped
+// working and no request will ever say so. That warning is written where the
+// batch actually dies, which is the only place all four survivors of such a
+// failure pass through (marketdata.Converter.fetchRates, #70).
+func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQuery, cache map[rateKey]*rateLookup) {
+	if len(queries) == 0 {
+		return
+	}
+	resolved, err := h.converter.RatesOn(ctx, queries)
+	if err != nil {
+		return
+	}
+	for q, res := range resolved.Answered(queries) {
+		cache[newRateKey(q.From, q.To, q.On)] = &rateLookup{rate: res.Rate, date: res.RateDate, err: res.Err}
+	}
 }
 
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {

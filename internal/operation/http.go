@@ -638,11 +638,22 @@ func rateQueries(ops []Operation, baseCurrency string) []marketdata.RateQuery {
 // judgement to a place that cannot make it, and would turn into an error page
 // every request the fallback could have served correctly.
 //
-// KNOWN BLIND SPOT, the same one portfolio.Handler.prewarmRates carries: a
-// failure specific to the BATCH statement is met by nothing, because the
-// per-pair fallback then succeeds. The page is correct and slow, and no one is
-// told the optimization stopped working. No handler here holds a logger, so
-// closing it is a change of shape rather than a line, and it is filed.
+// WHICH ANSWERS GET FILED IS NOT DECIDED HERE. Rates.Answered walks the
+// queries and hands back only the ones the batch resolved, so a query it never
+// answered leaves no entry and rateFor resolves it itself, while a query
+// answered with "no rate" arrives carrying marketdata.ErrNoRate and is filed as
+// the honest gap it is. That rule is one statement for all three screens that
+// warm a memo this way (see marketdata.Rates.Answered); only the key an answer
+// is filed under is this package's own.
+//
+// The error is dropped here and reported one layer down. A failure specific to
+// the BATCH statement leaves the page correct and slow — rateFor resolves every
+// figure per pair — so there is nothing for this handler to tell the user, and
+// an error page would be a worse outcome than a slow one. But there IS something
+// to tell whoever runs this: the optimization has stopped working and no request
+// will ever say so. That warning is written where the batch actually dies, which
+// is the only place all four survivors of such a failure pass through
+// (marketdata.Converter.fetchRates, #70).
 func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQuery, cache map[rateKey]*rateLookup) {
 	if len(queries) == 0 {
 		return
@@ -651,19 +662,7 @@ func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQue
 	if err != nil {
 		return
 	}
-	for _, q := range queries {
-		res, err := resolved.For(q.From, q.To, q.On)
-		if err != nil {
-			// The batch did not answer a query it was handed — a bug in the
-			// batch or in this loop, never a missing rate, which arrives as
-			// res.Err instead (see marketdata.Rates.For). Leaving the memo cold
-			// for it is the honest treatment: rateFor asks the store itself and
-			// the figure comes out the same, one round trip dearer. Filing res
-			// anyway would file a zero rate under an entry that reads as
-			// answered, and a zero rate is a plausible-looking 0,00 in the
-			// journal.
-			continue
-		}
+	for q, res := range resolved.Answered(queries) {
 		cache[newRateKey(q.From, q.To, q.On)] = &rateLookup{rate: res.Rate, date: res.RateDate, err: res.Err}
 	}
 }

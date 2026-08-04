@@ -261,6 +261,7 @@ func TestAccountOwnerUserIDNullable(t *testing.T) {
 type converterLike interface {
 	ConvertMany(ctx context.Context, amounts map[string]int64, to string, on time.Time) (int64, []string, time.Time, error)
 	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
+	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
 }
 
 // failingConverter is a converter double whose fx lookups always fail with
@@ -278,6 +279,16 @@ func (c failingConverter) ConvertMany(_ context.Context, _ map[string]int64, _ s
 
 func (c failingConverter) Rate(_ context.Context, _, _ string, _ time.Time) (decimal.Decimal, time.Time, error) {
 	return decimal.Decimal{}, time.Time{}, c.err
+}
+
+// RatesOn fails the whole batch, which is what an outage does to it: the
+// zero Rates is returned alongside, and per marketdata.RatesOn it must be
+// ignored. The prewarm ignores it (it ignores every batch failure), so this
+// double leaves the memo empty and the outage has to be discovered — and
+// reported — by the per-currency fallback, which is precisely what
+// TestListRealRateErrorFailsRequest asserts.
+func (c failingConverter) RatesOn(_ context.Context, _ []marketdata.RateQuery) (marketdata.Rates, error) {
+	return marketdata.Rates{}, c.err
 }
 
 // newAPIWithConverterDouble is newAPI with the account handler's fx

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -77,7 +79,7 @@ func NewConverter(store *Store) *Converter {
 // near the top of its column at a rate of 2 is enough — and the wrapped
 // answer is a small, plausible figure of the wrong sign (see money.Minor).
 func (c *Converter) Convert(ctx context.Context, amountMinor int64, from, to string, on time.Time) (int64, error) {
-	converted, _, err := c.convert(ctx, amountMinor, from, to, on)
+	converted, _, err := c.convert(ctx, c.rows(), amountMinor, from, to, on)
 	return converted, err
 }
 
@@ -86,11 +88,18 @@ func (c *Converter) Convert(ctx context.Context, amountMinor int64, from, to str
 // an identity conversion (from == to), which resolves no rate at all. It
 // backs both Convert (which discards the date) and ConvertMany (which
 // tracks the oldest date across every entry it converts).
-func (c *Converter) convert(ctx context.Context, amountMinor int64, from, to string, on time.Time) (converted int64, rateDate time.Time, err error) {
+//
+// It takes the source of rows to resolve through rather than reaching for
+// c.rows() itself, which is the whole of the difference between the two: a
+// lone Convert queries the store as it goes, while ConvertMany hands every
+// entry the same prewarmed source (see prewarm). The arithmetic below — one
+// multiplication, one rounding, one overflow refusal — is the same statement
+// either way, so no number depends on which source resolved the rate.
+func (c *Converter) convert(ctx context.Context, rows fxRateRows, amountMinor int64, from, to string, on time.Time) (converted int64, rateDate time.Time, err error) {
 	if from == to {
 		return amountMinor, time.Time{}, nil
 	}
-	rate, rateDate, err := rateVia(ctx, c.rows(), from, to, on)
+	rate, rateDate, err := rateVia(ctx, rows, from, to, on)
 	if err != nil {
 		return 0, time.Time{}, err
 	}
@@ -120,6 +129,14 @@ func (c *Converter) convert(ctx context.Context, amountMinor int64, from, to str
 // short of the one holding too big to convert would be exactly the kind of
 // smaller-than-truth figure that looks perfectly ordinary on screen.
 //
+// Every rate the whole call needs is resolved in ONE round trip before the
+// loop starts (see prewarm), so what a caller pays does not grow with the
+// number of currencies — the axis that matters for GET /summary, where the
+// data is one row per currency and the currencies are the whole of it (#72).
+// That is a cost change and nothing else: the loop resolves and rounds exactly
+// as it always did, over the same rules, and a currency the prewarm did not
+// cover is simply looked up as it was before.
+//
 // ratesOn is the date of the OLDEST fx rate actually used across every
 // converted entry — never today's date, since FxRateOn resolves to the
 // nearest date on or before on, which for a stale rate table can be
@@ -130,9 +147,14 @@ func (c *Converter) convert(ctx context.Context, amountMinor int64, from, to str
 // empty, or every entry ended up in missing, ratesOn is the zero time.Time
 // — the caller must render that as "null", not as a date.
 func (c *Converter) ConvertMany(ctx context.Context, amounts map[string]int64, to string, on time.Time) (converted int64, missing []string, ratesOn time.Time, err error) {
+	// One round trip for every currency in amounts, after which the loop below
+	// is unchanged — same resolution, same arithmetic, same numbers (#72). The
+	// prewarm is a cache, not a contract: whatever it does not hold, the loop
+	// asks the store for, exactly as it did before this line existed.
+	rows := c.prewarm(ctx, amounts, to, on)
 	total := decimal.Zero
 	for currency, amountMinor := range amounts {
-		got, rateDate, cErr := c.convert(ctx, amountMinor, currency, to, on)
+		got, rateDate, cErr := c.convert(ctx, rows, amountMinor, currency, to, on)
 		if cErr == nil {
 			total = total.Add(decimal.NewFromInt(got))
 			if !rateDate.IsZero() && (ratesOn.IsZero() || rateDate.Before(ratesOn)) {
@@ -176,11 +198,12 @@ func (c *Converter) ConvertMany(ctx context.Context, amounts map[string]int64, t
 // It exists for callers that need to convert many different amounts that
 // share the same currency pair and date — e.g. one space's accounts, several
 // of them denominated in the same non-base currency — without paying for
-// the underlying rate lookup once per amount. Convert (and ConvertMany)
-// still do exactly that internally, at one amount per call; Rate lets a
-// caller resolve the rate once, cache it in a local map keyed by currency,
-// and apply it to each amount itself — only the redundant DB round trips are
-// removed.
+// the underlying rate lookup once per amount. Convert still does exactly that
+// internally, at one amount per call — ConvertMany no longer does, having
+// prewarmed its whole set first, but it only ever converts one amount per
+// currency anyway; Rate lets a caller resolve the rate once, cache it in a
+// local map keyed by currency, and apply it to each amount itself — only the
+// redundant DB round trips are removed.
 //
 // Applying it means decimal.NewFromInt(amountMinor).Mul(rate) handed to
 // money.Minor, which is the whole of what convert does with a rate once it has
@@ -311,11 +334,133 @@ type fxRateRows interface {
 	rateOn(ctx context.Context, base, quote string, on time.Time) (FxRate, bool, error)
 }
 
-// rows is the source Convert and Rate resolve through: every row resolution
-// asks for costs its own query, up to six of them for a pair that ends up
-// bridged. That is the cost RatesOn exists to collapse for callers resolving
-// a whole page of pairs at once.
+// rows is the source Convert and Rate resolve through, and the one ConvertMany
+// falls back to: every row resolution asks for costs its own query, up to six
+// of them for a pair that ends up bridged. That is the cost RatesOn exists to
+// collapse for callers resolving a whole page of pairs at once, and prewarm for
+// ConvertMany's own set.
 func (c *Converter) rows() fxRateRows { return storeRows{store: c.store} }
+
+// fetchRates is the one place a batch of rate rows is fetched, and therefore the
+// one place a failure of the batch STATEMENT — a timeout on the large query, a
+// problem encoding its array arguments — can be reported (#70).
+//
+// IT IS REPORTED BECAUSE NOBODY ELSE WILL. Both callers survive this failure by
+// design, and so does everyone above them: prewarm below returns the
+// un-prefetched row source and ConvertMany converts through per-pair lookups
+// exactly as it did before batching existed, while RatesOn returns the error to
+// three HTTP handlers that each drop it on the floor on purpose (an error page
+// would be a worse outcome than a slow correct one — see their prewarmRates).
+// The result is the failure this line exists for: the screen is right, the
+// screen is slow, and every trace of the optimization having died is gone. The
+// per-pair path is between one and six statements per pair, so what is lost is
+// not a rounding error in the request's cost — it is the whole of what batching
+// bought.
+//
+// WARN, deliberately, and not either neighbour. It is not an ERROR: nothing the
+// user asked for failed, and ERROR is what family.WriteError writes when a
+// request really did fail — spending it here would blunt it there. It is not
+// INFO or DEBUG either: this application runs at INFO by default (see
+// config.Config.LogLevel), so DEBUG would not be printed at all, which is
+// indistinguishable from the silence being fixed, and INFO would put a dead
+// optimization in the same stream as every ordinary request. The level is
+// pinned, structurally, by TestRatesOnLogsADeadBatchAsAWarning and its
+// ConvertMany twin.
+//
+// slog.Default rather than a logger of its own: a Converter is built once in
+// production (cmd/babki, mountModules) and threaded through three handlers, so
+// the obstacle is not the wiring — it is that a logger parameter on
+// NewConverter would have to be supplied by every test that builds one, and
+// there are about twenty. cmd/babki installs the configured logger as the
+// default precisely so code that holds none can still be heard (see
+// cmd/babki/runtime.go and family.WriteError, the other user of that
+// arrangement).
+func (c *Converter) fetchRates(ctx context.Context, keys []FxRateKey) (map[FxRateKey]FxRate, error) {
+	rows, err := c.store.FxRatesOn(ctx, keys)
+	if err != nil {
+		slog.Default().Warn("batched fx rate lookup failed", "keys", len(keys), "err", err.Error())
+		return nil, err
+	}
+	return rows, nil
+}
+
+// prewarm resolves, in one round trip, the rows converting every currency in
+// amounts is about to consult, and returns a source that answers from them.
+//
+// IT IS A CACHE, NOT A CONTRACT. Anything the batch does not hold — a row the
+// enumeration did not name, a batch that failed outright, a call with nothing
+// to look up — is answered by the store exactly as it was before this existed
+// (see warmRows and the two early returns below). So no figure ConvertMany
+// publishes depends on the prewarm being complete or even on its having
+// succeeded; only the number of round trips does. That is also why a failed
+// FxRatesOn is not returned as an error here: a genuine outage is met again by
+// the very next lookup and reported from convert, which knows which amount it
+// was converting, while a batch-specific failure the per-pair path can survive
+// must not become an error page.
+//
+// The enumeration is the resolution itself, run against recordingRows — the
+// same trick RatesOn uses, and for the same reason: a hand-written list of the
+// rows the rules imply would be a second statement of those rules, and it would
+// rot the day they changed. recordingRows never finds anything, so the pass
+// walks every branch resolveRate can take; a real resolution only ever prunes
+// branches, so what the loop consults is always a subset of what was asked for.
+func (c *Converter) prewarm(ctx context.Context, amounts map[string]int64, to string, on time.Time) fxRateRows {
+	store := c.rows()
+	candidates := &recordingRows{}
+	for currency := range amounts {
+		// The errors are discarded because the pass is run for what it records,
+		// not for what it returns: over recordingRows every resolution ends in
+		// ErrNoRate by construction.
+		_, _, _ = rateVia(ctx, candidates, currency, to, on)
+	}
+	if len(candidates.keys) == 0 {
+		// Nothing to look up at all — an empty call, or one holding nothing but
+		// identity conversions, which rateVia short-circuits. Asking the store
+		// for no rows would be a round trip bought for nothing.
+		return store
+	}
+	rows, err := c.fetchRates(ctx, candidates.keys)
+	if err != nil {
+		// Survived here and reported by fetchRates, which is the only place that
+		// can: from this line on the failure is gone for good, since the loop
+		// that follows resolves every rate itself and returns no trace of the
+		// batch having been tried at all.
+		return store
+	}
+	return warmRows{asked: candidates.seen, rows: rows, fallback: store}
+}
+
+// warmRows answers from a batch prefetched for one ConvertMany call, and asks
+// fallback for anything that batch was not asked for.
+//
+// That fallback is the one thing it does differently from prefetchedRows, which
+// treats the same case as a loud bug. The difference is not a relaxed standard,
+// it is a different question: prefetchedRows has no way to ANSWER an unasked
+// key, so its only choices are an error and a fabricated "this pair has no
+// rate" — and dressing a bug as an honest gap on a page where nothing looks
+// wrong is the failure this codebase guards hardest against. warmRows can
+// simply ask, and the answer it gets back is the right one. A prefetch that
+// falls behind the rules therefore costs round trips here and cannot cost
+// correctness.
+//
+// The key is asked, not rows, for the same reason prefetchedRows keeps the two
+// apart: a key that WAS requested and came back with nothing means the pair
+// truly has no row on or before that date — an honest answer that must be
+// passed on as one, not retried against the store as though it had been missed.
+type warmRows struct {
+	asked    map[FxRateKey]struct{}
+	rows     map[FxRateKey]FxRate
+	fallback fxRateRows
+}
+
+func (w warmRows) rateOn(ctx context.Context, base, quote string, on time.Time) (FxRate, bool, error) {
+	key := FxRateKey{Base: base, Quote: quote, On: on}
+	if _, requested := w.asked[key]; !requested {
+		return w.fallback.rateOn(ctx, base, quote, on)
+	}
+	r, found := w.rows[key]
+	return r, found, nil
+}
 
 // storeRows answers each lookup with a query of its own.
 type storeRows struct{ store *Store }
@@ -526,6 +671,51 @@ func (r Rates) For(from, to string, on time.Time) (RateResult, error) {
 // count once.
 func (r Rates) Len() int { return len(r.byKey) }
 
+// Answered walks queries in the order given and hands back only the ones this
+// batch actually resolved. It is the one statement of how a prefetch is
+// consumed, shared by every caller that warms a memo from RatesOn — the
+// accounts screen, the journal page and the positions screen (see their
+// prewarmRates). Their memo keys are three different unexported types, so what
+// they can share is the WALK and not the filing: each still writes its own entry
+// under its own key, from the pair this yields.
+//
+// A query the batch never answered is SKIPPED, not handed back. For reports that
+// as ErrNotRequested, which says the enumeration that built the queries and the
+// batch that resolved them disagree — a bug in the calling code, never a gap in
+// the data. Handing it to a caller that files whatever it is given would put
+// that bug in the memo, where it reads as an answer. Skipping it leaves the memo
+// cold, and the caller's own per-pair fallback resolves the very same figure one
+// round trip dearer. That is the whole arrangement a prefetch here rests on: it
+// can cost round trips and it cannot cost a number.
+//
+// A query that resolved to no rate IS handed back, carrying ErrNoRate in
+// RateResult.Err. That is an honest domain answer — nothing connects this pair
+// on this date — and filing it is what makes the figure it belongs to come out
+// as the gap it should be, without a second lookup that could only reach the
+// same conclusion. Skipping it would change no number and would quietly cost a
+// round trip per gap, which is why the distinction is pinned by a test of its
+// own (TestAnsweredHandsBackAGenuineGapAsAnAnswer) rather than left to the
+// handlers' figures to reveal.
+//
+// A batch that failed outright never reaches here as anything but the zero
+// Rates, which answers every For with ErrNotRequested — so the walk yields
+// nothing, no entry is filed, and every figure falls back. Callers still check
+// RatesOn's error in their own right; this makes the one that forgets cost round
+// trips rather than numbers.
+func (r Rates) Answered(queries []RateQuery) iter.Seq2[RateQuery, RateResult] {
+	return func(yield func(RateQuery, RateResult) bool) {
+		for _, q := range queries {
+			res, err := r.For(q.From, q.To, q.On)
+			if err != nil {
+				continue
+			}
+			if !yield(q, res) {
+				return
+			}
+		}
+	}
+}
+
 // RateResult is what Rate would have returned for one RateQuery: the rate,
 // the date of the fx_rates row(s) behind it, and the resolution error.
 //
@@ -580,7 +770,7 @@ func (c *Converter) RatesOn(ctx context.Context, queries []RateQuery) (Rates, er
 		_, _, _ = rateVia(ctx, candidates, q.From, q.To, q.On)
 	}
 
-	rows, err := c.store.FxRatesOn(ctx, candidates.keys)
+	rows, err := c.fetchRates(ctx, candidates.keys)
 	if err != nil {
 		return Rates{}, err
 	}
