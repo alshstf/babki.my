@@ -32,6 +32,7 @@ import {
   isConflict,
   JOURNAL_PAGE_SIZE,
   type Operation,
+  type OperationInBaseGap,
 } from "@/api/operations";
 import { useInstruments } from "@/api/instruments";
 import type { CostBasisRules } from "@/api/tax-residencies";
@@ -75,6 +76,84 @@ import type { CostBasisRules } from "@/api/tax-residencies";
 // operation removed that hole without adding a client-side list of types.
 function publishesACostBasis(operation: Operation): boolean {
   return operation.has_undated_lots || operation.assembled_from_lots;
+}
+
+// Runtime backstop for a gap value this build cannot name, and the same one
+// the positions screen keeps for the identical reason (see unnameableGap
+// there). TypeScript proves the switch below exhaustive over the union it was
+// compiled against — a new member of the contract's enum without a case here
+// fails to compile, because the argument would no longer narrow to `never` —
+// but these values are JSON off the wire, typed by assertion rather than
+// validated, so a client running behind the server it talks to can still
+// receive a literal outside that union. That must degrade to a sentence which
+// is still true, never to a blank tooltip and never to a thrown render.
+function unnameableGap<T>(_: never, fallback: T): T {
+  return fallback;
+}
+
+// The one sentence that captions BOTH money cells of a row, chosen from the
+// term the server says it stopped on (Operation.in_base_gap). It is the row's
+// only source: has_undated_lots answers the first of these causes on its own
+// and cannot disagree with it — both derive from one server-side predicate —
+// but a caption assembled from two sources is a caption that will eventually
+// be assembled from two sources that have drifted. That field keeps its other
+// job on this screen (whether the amount IS a cost basis, which it answers on
+// the create and transfer responses too, where no gap is published at all);
+// it simply no longer decides what the row says about a missing rate.
+//
+// Each sentence explains why the whole row carries no base-currency figures,
+// which is what makes it true over the amount cell and the fee cell alike:
+// in_base is published as a whole or not at all, so a single unvaluable term
+// withholds both figures together.
+//
+// The permanent cause is told apart from the temporary ones in as many words,
+// because that is the difference the reader is actually served by. A missing
+// rate is a gap the fx backfill closes on its own, after which the ruble
+// figure appears; an unrecorded purchase date resolves never, since nobody
+// wrote it down and nothing can recover it, and a caption that promised such a
+// row a figure would promise one that is not coming.
+//
+// The wordings are the positions screen's wherever the cause is the same
+// («восстановить … уже неоткуда», «Курс появится при обновлении курсов, и …
+// посчитается сама»): two screens explaining one condition differently is a
+// reader's problem, not a translator's.
+//
+// Written as a switch over literal keys rather than a lookup table, so every
+// key stays a literal at the t() call site — the only shape
+// scripts/check-i18n.mjs can verify.
+function rowGapTitle(
+  t: (key: string) => string,
+  gap: OperationInBaseGap | null | undefined,
+): string {
+  switch (gap) {
+    case "undated_lot":
+      return t("operations.notConvertedUndatedLot");
+    case "no_rate_operation_date":
+      return t("operations.notConvertedNoRateOperationDate");
+    // The whole of #79: this row's amount is a cost basis assembled from
+    // purchases, each valued at the rate of the day IT was made, and the day
+    // that has no rate is one of those. The transfer's own date usually has a
+    // perfectly good rate — it is simply not a rate that may value shares
+    // bought on other days — so «нет курса на дату операции» here does not
+    // merely fail to explain the row, it states something false about it. The
+    // sentence therefore names the rule rather than asserting that the
+    // purchases fell on other days: one of them may well have fallen on the
+    // transfer's own day, and this cause would read the same.
+    case "no_rate_lot_date":
+      return t("operations.notConvertedNoRateLotDate");
+    case null:
+    case undefined:
+      // The contract publishes a cause whenever in_base is null and the
+      // currency differs from the base one, so a row with a marker and no
+      // cause should not occur — and the field is absent altogether on the
+      // create and transfer responses, which this table never renders. It is
+      // left neither to crash nor to say nothing: the general phrase is vague
+      // but true — some rate is missing somewhere — and it is what an older
+      // server's payload deserves.
+      return t("operations.notConverted");
+    default:
+      return unnameableGap(gap, t("operations.notConverted"));
+  }
 }
 
 export function OperationsTable({
@@ -145,18 +224,24 @@ export function OperationsTable({
   // purchase, each payout), so they carry their own wording rather than
   // sharing the journal's.
   //
-  // Two different conditions leave a row unconverted, exactly as on the
-  // positions screen, and they are not the same news. A missing fx rate is a
-  // gap the instance's own backfill closes — the ruble figure appears later.
-  // A transfer whose purchase dates were never recorded (has_undated_lots,
-  // see the API contract) never converts, and here "нет курса на дату
-  // операции" is not merely unhelpful but false: the transfer's own date
-  // usually has a rate, it is just not a rate that may value a basis assembled
-  // on other days. Naming it would blame a cause that is not the cause and
-  // promise a number that will never come. Both are per-row, hence resolved
-  // inside the map below.
-  const notConvertedTitle = t("operations.notConverted");
-  const undatedLotsTitle = t("operations.notConvertedUndatedLots");
+  // WHICH sentence a row that carries no base-currency figures gets is not
+  // this screen's to work out. Three different terms can stop the conversion
+  // — the operation's own day's rate, a purchase day's rate, and a purchase
+  // date nobody ever recorded — and they are three different pieces of news,
+  // one of them about a figure that is never coming. Only the server knows
+  // which of them actually happened, and it says so in Operation.in_base_gap;
+  // rowGapTitle above turns that answer into a sentence and adds nothing.
+  //
+  // The positions screen draws the same line, over five causes of its own —
+  // four that stop a row's whole base-currency block and one that stops its
+  // valuation alone — and its wordings are reused here wherever the condition
+  // is the same one. What is NOT shared is the number of causes: the two
+  // screens sum different terms (a position has income and a valuation; an
+  // operation has neither), so each names its own, and neither list is a copy
+  // of the other to keep in step.
+  //
+  // Resolved per row, inside the map below.
+
   // The caveat that a cost basis here was picked by a queue that is not the
   // owner's country's. It hangs on the amount cells whose figure actually IS
   // one, and nowhere else. It used to be a banner over the whole table, which
@@ -248,42 +333,65 @@ export function OperationsTable({
             // A transfer between the family's own accounts carries the cost of
             // shares bought on other days, so the backend converts it piece by
             // piece at the rates of those days (operation.assembled_from_lots)
-            // and rate_on names only the newest of them. That case must be
-            // checked FIRST, because neither of the other two wordings is true
-            // of it and a date comparison cannot tell: rate_on happens to equal
-            // occurred_on whenever the last purchase was made on the transfer
-            // day, and differs from it otherwise, so relying on the dates picks
+            // and its headline date is the newest PURCHASE, not the transfer.
+            // That case must be checked FIRST, because neither of the other
+            // two wordings is true of it and a date comparison cannot tell:
+            // the headline rate happens to be dated the transfer day whenever
+            // the last purchase was made on it, so relying on the dates picks
             // one false sentence or the other. On the demo data it read "there
             // is no rate for the operation's date — converted at the nearest,
             // 15.06.2026" about a figure assembled from two rates, on a day
             // whose rate exists and was deliberately not used.
             //
-            // Otherwise rate_on is the nearest rate on or before occurred_on
-            // (see FxRateOn in the backend), not necessarily a rate dated
-            // occurred_on itself — weekends/holidays structurally never get
-            // their own backfilled rate. Claiming "on the operation's date"
-            // when the two dates differ would contradict the Date column
-            // right next to it, so that wording is only used when they
-            // actually match; otherwise the honest fallback wording is used.
+            // WHICH DATE EACH SENTENCE NAMES is the other half, and the two
+            // published dates are not interchangeable (see OperationInBase in
+            // the API contract). `dated_on` is the day a figure is VALUED at —
+            // the operation's own day for an ordinary row, the newest purchase
+            // in the parcel for a transfer. `rate_on` is the day the rate that
+            // answered actually came from, which is `dated_on` itself or the
+            // nearest earlier day that has one: the CBR publishes nothing at
+            // weekends and holidays, roughly a third of the calendar. So the
+            // transfer's sentence, whose subject is a purchase — «самый
+            // поздний из них» — names `dated_on`, and naming `rate_on` there
+            // printed a day nothing was bought on (#80). The other two
+            // sentences are about the rate and name `rate_on`.
             //
-            // All three name the rate date, so all three answer a date they
+            // The choice between those two is `rate_on === dated_on`, not
+            // `rate_on === occurred_on`: the question is whether the rate is
+            // the very day's or an earlier one, and the day in question is the
+            // one the figure is dated at. The contract makes the two equal
+            // wherever this branch is reached — a row not assembled from lots
+            // is dated on its own occurred_on — so the change moves no row
+            // today; it removes a second source for one answer, and the second
+            // source is what let a purchase date's rate be compared against
+            // the day the paperwork moved.
+            //
+            // Every one of the three ends in a date, so each answers a date it
             // cannot render — null, whether because none came or because it
             // did not parse — with no tooltip at all: half a sentence ending
-            // in a dash claims less than nothing. MoneyCell hands the decision
-            // over rather than making it, because the neighbouring screen's
-            // wordings do not mention a date and must survive its absence.
-            const convertedTitle = (date: string | null) => {
-              if (!date) return undefined;
+            // in a dash claims less than nothing. MoneyCell hands the rate
+            // date over already formatted and leaves the decision here,
+            // because the neighbouring screen's wordings do not mention a date
+            // and must survive its absence; the transfer's own date is
+            // formatted beside it, from the field that sentence is about.
+            const inBase = operation.in_base;
+            const purchaseDate = inBase ? formatDate(inBase.dated_on) : "";
+            const convertedTitle = (rateDate: string | null) => {
+              // Unreachable — MoneyCell asks only when it is showing the
+              // converted figure, which came from this very object — and
+              // silence rather than a guess if it ever is reached.
+              if (!inBase) return undefined;
               if (operation.assembled_from_lots) {
-                return t("operations.convertedAtPurchaseDates", { date });
+                return purchaseDate
+                  ? t("operations.convertedAtPurchaseDates", { date: purchaseDate })
+                  : undefined;
               }
-              return operation.in_base?.rate_on === operation.occurred_on
-                ? t("operations.convertedAtDate", { date })
-                : t("operations.convertedAtEarlierDate", { date });
+              if (!rateDate) return undefined;
+              return inBase.rate_on === inBase.dated_on
+                ? t("operations.convertedAtDate", { date: rateDate })
+                : t("operations.convertedAtEarlierDate", { date: rateDate });
             };
-            const unconvertedTitle = operation.has_undated_lots
-              ? undatedLotsTitle
-              : notConvertedTitle;
+            const unconvertedTitle = rowGapTitle(t, operation.in_base_gap);
             return (
               <TableRow key={operation.id}>
                 <TableCell className="whitespace-nowrap">{formatDate(operation.occurred_on)}</TableCell>

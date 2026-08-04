@@ -3,6 +3,11 @@ import { api } from "./client";
 import type { components } from "./schema";
 
 export type Operation = components["schemas"]["Operation"];
+// Which term the server could not value, and so why an operation carries no
+// base-currency figures — the journal's twin of the positions screen's
+// InBaseGap, and the only thing a row's «not converted» caption is allowed to
+// be built from (see Operation.in_base_gap in the API contract).
+export type OperationInBaseGap = components["schemas"]["OperationInBaseGap"];
 export type OperationsPage = components["schemas"]["OperationsResponse"];
 export type OperationType = components["schemas"]["OperationType"];
 export type CreateOperationBody = components["schemas"]["CreateOperationRequest"];

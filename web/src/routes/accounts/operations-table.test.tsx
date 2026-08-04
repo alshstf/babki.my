@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@/i18n";
 import { OperationsTable } from "./operations-table";
@@ -389,6 +389,85 @@ describe("OperationsTable", () => {
       expect(amount.getAttribute("title")).not.toContain("Пересчитано по курсу на дату операции");
     });
 
+    it("names the day the purchase happened, not the day the rate came from (#80)", async () => {
+      // The two dates come apart for about a third of the calendar: the CBR
+      // publishes nothing at weekends and holidays, so a parcel whose newest
+      // purchase fell on a Sunday is valued at Friday's rate. The sentence
+      // this caption ends with is about a PURCHASE — «самый поздний из них» —
+      // and `dated_on` is the field that publishes purchase dates, while
+      // `rate_on` publishes the day the rate that answered came from. Naming
+      // the latter as the former printed a day nothing was bought on.
+      renderTable({
+        operations: [
+          makeOperation({
+            type: "transfer_in",
+            occurred_on: "2026-07-20",
+            currency: "USD",
+            amount_minor: 190_000,
+            fee_minor: 0,
+            assembled_from_lots: true,
+            in_base: inBase({
+              amount_minor: 11_800_000,
+              fee_minor: 0,
+              currency: "RUB",
+              // 14.06.2026 is a Sunday: no rate of its own, so the newest
+              // purchase in the parcel was valued at the 12th's.
+              rate_on: "2026-06-12",
+              dated_on: "2026-06-14",
+            }),
+          }),
+        ],
+        mode: "base",
+        baseCurrency: "RUB",
+      });
+
+      const amount = await screen.findByTestId("operation-amount");
+      expect(amount).toHaveAttribute(
+        "title",
+        "Это стоимость покупок, сделанных в другие дни — пересчитана по курсам тех дней, а не по курсу дня перевода. Самый поздний из них — на 14.06.2026",
+      );
+      // The rate's own day has no business being called a purchase date.
+      expect(amount.getAttribute("title")).not.toContain("12.06.2026");
+    });
+
+    it("decides «rate of that very day» against dated_on, not against occurred_on", async () => {
+      // WHICH FIELD IS READ, not what this payload deserves: the contract
+      // makes dated_on equal to occurred_on on every row that is not
+      // assembled from lots (see OperationInBase.dated_on), so no payload the
+      // server can produce tells the two comparisons apart, and this one
+      // cannot occur. It is here because the pair means different things —
+      // dated_on is the day the figure is VALUED at, occurred_on is a
+      // property of the row — and a comparison against the second is a second
+      // source for one answer, which is how the caption came to compare a
+      // purchase date's rate against the day the paperwork moved. The wording
+      // it produces below is therefore not endorsed as true of this
+      // impossible fixture; the assertion is about which of the two fields
+      // the code consulted.
+      renderTable({
+        operations: [
+          makeOperation({
+            occurred_on: "2019-03-15",
+            currency: "USD",
+            in_base: inBase({
+              amount_minor: 655_000,
+              fee_minor: 32_750,
+              currency: "RUB",
+              rate_on: "2019-03-14",
+              dated_on: "2019-03-14",
+            }),
+          }),
+        ],
+        mode: "base",
+        baseCurrency: "RUB",
+      });
+
+      const amount = await screen.findByTestId("operation-amount");
+      expect(amount).toHaveAttribute(
+        "title",
+        "Пересчитано по курсу на дату операции — 14.03.2019",
+      );
+    });
+
     it("falls back to the operation's own amount plus a marker when it could not be converted", async () => {
       renderTable({
         operations: [
@@ -397,6 +476,7 @@ describe("OperationsTable", () => {
             amount_minor: 100_00,
             fee_minor: 5_00,
             in_base: null,
+            in_base_gap: "no_rate_operation_date",
           }),
         ],
         mode: "base",
@@ -419,7 +499,7 @@ describe("OperationsTable", () => {
       // foreign-currency operation can sit on a base-currency account.
       expect(screen.getByTestId("operation-amount-not-converted")).toHaveAttribute(
         "title",
-        "Нет курса на дату операции — показано в валюте операции",
+        "Нет курса на дату операции, а сумма считается по курсу того дня. Курс появится при обновлении курсов, и операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
       );
       expect(screen.getByTestId("operation-fee-not-converted")).toBeInTheDocument();
       // No conversion happened, so no rate date may be claimed.
@@ -427,16 +507,16 @@ describe("OperationsTable", () => {
     });
 
     it("blames the missing purchase dates, not a missing rate, on a transfer that has none", async () => {
-      // The twin of the test above, and the reason has_undated_lots exists on
-      // an operation at all. Both rows are unconverted; only one of them is
+      // The twin of the test above, and the reason the server publishes a
+      // cause at all. Both rows are unconverted; only one of them is
       // unconverted because no rate has been fetched yet. A transfer whose
       // parcel was never broken down carries a cost basis assembled on days
       // nobody recorded — and the transfer's OWN date usually does have a rate
       // (the demo instance has one for 2026-07-20, the day this fixture is
       // dated), so "нет курса на дату операции" here is not a vague
       // explanation but a false one, promising a figure that will never
-      // arrive. The positions screen was taught to tell these two apart in the
-      // previous commit; the journal says it about the very same shares.
+      // arrive. The positions screen was taught to tell these two apart in an
+      // earlier plan; the journal says it about the very same shares.
       renderTable({
         operations: [
           makeOperation({
@@ -448,6 +528,7 @@ describe("OperationsTable", () => {
             fee_minor: 0,
             in_base: null,
             has_undated_lots: true,
+            in_base_gap: "undated_lot",
           }),
         ],
         mode: "base",
@@ -456,7 +537,7 @@ describe("OperationsTable", () => {
 
       expect(await screen.findByTestId("operation-amount-not-converted")).toHaveAttribute(
         "title",
-        "Даты покупок этой партии не записаны, а её стоимость считается по курсам на дни покупок — поэтому сумма показана в валюте операции",
+        "Не записано, когда куплена эта партия или часть её, а её стоимость считается по курсам на дни покупок. Восстановить эти даты уже неоткуда: в базовой валюте эта операция сама не посчитается. Поэтому числа этой строки показаны в валюте операции",
       );
       // The figure itself is untouched: an unknown date costs no money.
       expect(norm(screen.getByTestId("operation-amount").textContent ?? "")).toContain(
@@ -534,6 +615,145 @@ describe("OperationsTable", () => {
 
       await screen.findByTestId("operation-amount");
       expect(screen.queryByTestId("operation-fee")).not.toBeInTheDocument();
+    });
+  });
+
+  // Issues #79 and #80. One phrase — «Нет курса на дату операции» — used to
+  // hang over every unconverted row in this table, including the transfers
+  // whose gap has nothing to do with the operation's date and the ones whose
+  // figure is not waiting for a rate at all. The server now says which term it
+  // stopped on (Operation.in_base_gap) and this table says what the server
+  // said, exactly as the positions screen does.
+  describe("the unconverted caption", () => {
+    // Everything below is the same unconverted row seen in base mode; only the
+    // cause differs, which is the whole point.
+    const unconverted = (overrides: Partial<Operation>): Operation =>
+      makeOperation({
+        currency: "USD",
+        amount_minor: 190_00,
+        fee_minor: 5_00,
+        in_base: null,
+        ...overrides,
+      });
+
+    // Unmounts whatever a previous call rendered: a case that asks for several
+    // causes in a row would otherwise leave two tables in one document and
+    // every query below would find two markers.
+    const captionFor = async (overrides: Partial<Operation>): Promise<string> => {
+      cleanup();
+      renderTable({
+        operations: [unconverted(overrides)],
+        mode: "base",
+        baseCurrency: "RUB",
+      });
+      const marker = await screen.findByTestId("operation-amount-not-converted");
+      return marker.getAttribute("title") ?? "";
+    };
+
+    it("blames the purchase day, never the operation's day, when a lot's rate is the one missing", async () => {
+      // The whole of #79. This row's amount is a cost basis assembled from
+      // purchases made on other days; the transfer's own date usually has a
+      // perfectly good rate and is simply not a rate that may value shares
+      // bought on other days.
+      const title = await captionFor({
+        type: "transfer_in",
+        occurred_on: "2026-07-20",
+        assembled_from_lots: true,
+        in_base_gap: "no_rate_lot_date",
+      });
+
+      expect(title).toBe(
+        "Сумма этой строки — стоимость покупок, и каждая её часть считается по курсу на день своей покупки. Нет курса на день одной из этих покупок. Курс появится при обновлении курсов, и операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
+      );
+      // Deliberately NOT «покупок, сделанных в другие дни»: a parcel can hold
+      // a piece bought on the transfer's own day, and this row's rate is
+      // missing for a PURCHASE day whichever day that turns out to be. The
+      // sentence names the rule — each part at the rate of its own purchase —
+      // which holds however the days fall.
+      expect(title).not.toContain("в другие дни");
+      // The sentence this replaces, in the exact shape it had.
+      expect(title).not.toContain("Нет курса на дату операции");
+    });
+
+    it("names the operation's own day when that is the day the server stopped on", async () => {
+      expect(await captionFor({ in_base_gap: "no_rate_operation_date" })).toBe(
+        "Нет курса на дату операции, а сумма считается по курсу того дня. Курс появится при обновлении курсов, и операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
+      );
+    });
+
+    it("says an unrecorded purchase date is never coming back", async () => {
+      const title = await captionFor({
+        type: "transfer_out",
+        has_undated_lots: true,
+        in_base_gap: "undated_lot",
+      });
+
+      expect(title).toBe(
+        "Не записано, когда куплена эта партия или часть её, а её стоимость считается по курсам на дни покупок. Восстановить эти даты уже неоткуда: в базовой валюте эта операция сама не посчитается. Поэтому числа этой строки показаны в валюте операции",
+      );
+    });
+
+    it("separates the gap that closes itself from the one that never will", async () => {
+      // The difference this whole field exists for, asserted as a difference
+      // rather than as three separate strings: a missing rate is a gap the
+      // backfill closes and the figure appears later, an unrecorded purchase
+      // date resolves never, because nobody wrote it down. A caption that
+      // promised the second row a figure would be promising one that is not
+      // coming.
+      const undated = await captionFor({
+        has_undated_lots: true,
+        in_base_gap: "undated_lot",
+      });
+      expect(undated).toContain("уже неоткуда");
+      expect(undated).not.toContain("Курс появится");
+
+      for (const gap of ["no_rate_operation_date", "no_rate_lot_date"] as const) {
+        const temporary = await captionFor({ in_base_gap: gap });
+        expect(temporary).toContain("Курс появится при обновлении курсов");
+        expect(temporary).not.toContain("уже неоткуда");
+      }
+    });
+
+    it("takes the cause from the gap the server published, not from the flag beside it", async () => {
+      // has_undated_lots answers a coarser question and stays published for
+      // the two responses that carry no gap at all, so the two fields are
+      // both on this object and can be read for two different things. The
+      // caption has exactly one source. A row whose parcel is fully dated but
+      // whose FIRST piece has no rate yet is the shape that tells them apart:
+      // the flag says "dateless" is not the story, and the gap says which day
+      // is.
+      const title = await captionFor({
+        type: "transfer_in",
+        assembled_from_lots: true,
+        has_undated_lots: false,
+        in_base_gap: "no_rate_lot_date",
+      });
+
+      expect(title).toContain("Нет курса на день одной из этих покупок");
+      expect(title).not.toContain("уже неоткуда");
+    });
+
+    it("degrades to the general phrase for a cause this build cannot name", async () => {
+      // A server newer than this client. The value is not in the union this
+      // build was compiled against, and the row must still explain itself:
+      // vague but true beats a blank tooltip, and beats a thrown render even
+      // more.
+      const title = await captionFor({
+        in_base_gap: "no_rate_next_tuesday" as Operation["in_base_gap"],
+      });
+
+      expect(title).toBe("Нет курса — показано в валюте операции");
+      // Vague on purpose: an unnameable cause may be about any day at all, so
+      // the fallback names none.
+      expect(title).not.toContain("дату операции");
+      expect(title).not.toContain("покуп");
+    });
+
+    it("degrades to the general phrase for a server that publishes no cause", async () => {
+      // An older server: the field is absent from the payload entirely.
+      const title = await captionFor({});
+
+      expect(title).toBe("Нет курса — показано в валюте операции");
     });
   });
 
@@ -662,6 +882,7 @@ describe("OperationsTable", () => {
             currency: "USD",
             in_base: null,
             has_undated_lots: true,
+            in_base_gap: "undated_lot",
           }),
         ],
         mode: "base",
@@ -674,7 +895,7 @@ describe("OperationsTable", () => {
       // which currency it is shown in, and what the number is.
       expect(screen.getByTestId("operation-amount-not-converted")).toHaveAttribute(
         "title",
-        "Даты покупок этой партии не записаны, а её стоимость считается по курсам на дни покупок — поэтому сумма показана в валюте операции",
+        "Не записано, когда куплена эта партия или часть её, а её стоимость считается по курсам на дни покупок. Восстановить эти даты уже неоткуда: в базовой валюте эта операция сама не посчитается. Поэтому числа этой строки показаны в валюте операции",
       );
     });
 

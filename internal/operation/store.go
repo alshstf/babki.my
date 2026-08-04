@@ -296,8 +296,9 @@ func (s *Store) list(ctx context.Context, sql string, args ...any) ([]Operation,
 // the same shares.
 //
 // THE SECOND RESULT IS FETCHED, NOT INFERRED. One row beyond the page is asked
-// for, and whether it arrives IS the answer; the same statement that reads it
-// drops it again. Nothing downstream may substitute a comparison of the page's
+// for, and whether it arrives IS the answer: the query reads it, and the trim
+// two statements later drops it again before anything downstream can mistake it
+// for part of the page. Nothing may substitute a comparison of the page's
 // length against the limit for this: that comparison is right until the caller
 // clamps the limit it was given, and the handler does exactly that, which is how
 // a truncated journal came to present itself as a whole one (#86). Counting the
@@ -305,9 +306,18 @@ func (s *Store) list(ctx context.Context, sql string, args ...any) ([]Operation,
 // nothing displays and that a concurrent write could put at odds with the very
 // page it travels with.
 //
-// limit is the size of the page the caller wants and must be positive; the
-// handler defaults and clamps it before this is reached.
+// limit is the size of the page the caller wants and must be positive — enforced
+// below rather than merely asked for, since a zero asks the query for the probe
+// row alone and then trims the page down to nothing, which publishes an empty
+// page with hasMore true: a journal showing nothing behind a control that loads
+// nothing however often it is pressed, and a negative panics on the same trim.
+// The refusal is a plain error, not a validation one: today's caller defaults
+// and clamps before it reaches here (see handleListByAccount), so a bad limit
+// arriving means the program is wrong, not the person using it.
 func (s *Store) ListByAccount(ctx context.Context, spaceID, accountID uuid.UUID, limit, offset int) ([]Operation, bool, error) {
+	if limit < 1 {
+		return nil, false, fmt.Errorf("list operations: limit must be positive, got %d", limit)
+	}
 	ops, err := s.list(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND account_id = $2
 		ORDER BY occurred_on DESC, created_at DESC LIMIT $3 OFFSET $4`,
