@@ -606,8 +606,15 @@ components:
         isin: { type: string }
         figi: { type: string }
         currency: { type: string }
-        face_value_minor: { type: integer, format: int64, nullable: true }
-        face_currency: { type: string, nullable: true }
+        face_value_minor:
+          type: integer
+          format: int64
+          nullable: true
+          description: "What one bond is worth at redemption, in face_currency's minor units. Null for anything that is not a bond, and for a bond whose face value has not been recorded. Never zero, never negative, and never present without face_currency: the two are written together or not at all, and the writes enforce it (see the same field on CreateInstrumentRequest). Both were reachable states before, and the pair is what a bond's price MEANS — an exchange quotes a bond as a percentage of face, so a face value of zero prices the whole holding at nothing."
+        face_currency:
+          type: string
+          nullable: true
+          description: "The currency face_value_minor is denominated in, which need not be the instrument's own currency. Null exactly when face_value_minor is null — see it."
         frozen: { type: boolean }
     CreateInstrumentRequest:
       type: object
@@ -619,8 +626,16 @@ components:
         isin: { type: string }
         figi: { type: string }
         currency: { type: string }
-        face_value_minor: { type: integer, format: int64, nullable: true }
-        face_currency: { type: string, nullable: true }
+        face_value_minor:
+          type: integer
+          format: int64
+          nullable: true
+          minimum: 1
+          description: "A bond's face value in face_currency's minor units. Must be POSITIVE and must be given TOGETHER with face_currency — both set, or neither. Past either rule, 400 naming the field. Zero is refused rather than stored because an exchange quotes a bond as a percentage of face: a face value of zero turns every price into no money at all, and the position it values into 0,00. A bond may be created without a face value; it simply cannot be priced until one is recorded."
+        face_currency:
+          type: string
+          nullable: true
+          description: "The currency face_value_minor is denominated in (ISO-4217). Given together with face_value_minor or not at all — see it."
     UpdateInstrumentRequest:
       type: object
       properties:
@@ -629,8 +644,16 @@ components:
         isin: { type: string }
         figi: { type: string }
         frozen: { type: boolean }
-        face_value_minor: { type: integer, format: int64, nullable: true }
-        face_currency: { type: string, nullable: true }
+        face_value_minor:
+          type: integer
+          format: int64
+          nullable: true
+          minimum: 1
+          description: "Same two rules as on creation, and they apply to the REQUEST rather than to the row it lands on: to touch either half of the pair, send both — either two values, or two nulls to clear the pair. Sending one alone is refused even when the stored row would make the result well formed, so that an accepted PATCH always leaves the pair whole without this endpoint having to read the row first and race a concurrent write. Omitting both leaves the pair exactly as it was."
+        face_currency:
+          type: string
+          nullable: true
+          description: "The currency face_value_minor is denominated in (ISO-4217). Sent together with face_value_minor or not at all — see it."
     OperationType:
       type: string
       enum: [buy, sell, deposit, withdrawal, dividend, coupon, amortization, fee, tax, transfer_in, transfer_out, split, interest, conversion]

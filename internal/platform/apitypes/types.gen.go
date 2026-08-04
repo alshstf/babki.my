@@ -376,14 +376,18 @@ type CreateAccountRequest struct {
 
 // CreateInstrumentRequest defines model for CreateInstrumentRequest.
 type CreateInstrumentRequest struct {
-	Currency       string                    `json:"currency"`
-	FaceCurrency   nullable.Nullable[string] `json:"face_currency,omitempty"`
-	FaceValueMinor nullable.Nullable[int64]  `json:"face_value_minor,omitempty"`
-	Figi           *string                   `json:"figi,omitempty"`
-	Isin           *string                   `json:"isin,omitempty"`
-	Name           string                    `json:"name"`
-	Ticker         *string                   `json:"ticker,omitempty"`
-	Type           InstrumentType            `json:"type"`
+	Currency string `json:"currency"`
+
+	// FaceCurrency The currency face_value_minor is denominated in (ISO-4217). Given together with face_value_minor or not at all — see it.
+	FaceCurrency nullable.Nullable[string] `json:"face_currency,omitempty"`
+
+	// FaceValueMinor A bond's face value in face_currency's minor units. Must be POSITIVE and must be given TOGETHER with face_currency — both set, or neither. Past either rule, 400 naming the field. Zero is refused rather than stored because an exchange quotes a bond as a percentage of face: a face value of zero turns every price into no money at all, and the position it values into 0,00. A bond may be created without a face value; it simply cannot be priced until one is recorded.
+	FaceValueMinor nullable.Nullable[int64] `json:"face_value_minor,omitempty"`
+	Figi           *string                  `json:"figi,omitempty"`
+	Isin           *string                  `json:"isin,omitempty"`
+	Name           string                   `json:"name"`
+	Ticker         *string                  `json:"ticker,omitempty"`
+	Type           InstrumentType           `json:"type"`
 }
 
 // CreateMemberRequest defines model for CreateMemberRequest.
@@ -438,16 +442,20 @@ type InBaseGap string
 
 // Instrument defines model for Instrument.
 type Instrument struct {
-	Currency       string                    `json:"currency"`
-	FaceCurrency   nullable.Nullable[string] `json:"face_currency,omitempty"`
-	FaceValueMinor nullable.Nullable[int64]  `json:"face_value_minor,omitempty"`
-	Figi           string                    `json:"figi"`
-	Frozen         bool                      `json:"frozen"`
-	Id             openapi_types.UUID        `json:"id"`
-	Isin           string                    `json:"isin"`
-	Name           string                    `json:"name"`
-	Ticker         string                    `json:"ticker"`
-	Type           InstrumentType            `json:"type"`
+	Currency string `json:"currency"`
+
+	// FaceCurrency The currency face_value_minor is denominated in, which need not be the instrument's own currency. Null exactly when face_value_minor is null — see it.
+	FaceCurrency nullable.Nullable[string] `json:"face_currency,omitempty"`
+
+	// FaceValueMinor What one bond is worth at redemption, in face_currency's minor units. Null for anything that is not a bond, and for a bond whose face value has not been recorded. Never zero, never negative, and never present without face_currency: the two are written together or not at all, and the writes enforce it (see the same field on CreateInstrumentRequest). Both were reachable states before, and the pair is what a bond's price MEANS — an exchange quotes a bond as a percentage of face, so a face value of zero prices the whole holding at nothing.
+	FaceValueMinor nullable.Nullable[int64] `json:"face_value_minor,omitempty"`
+	Figi           string                   `json:"figi"`
+	Frozen         bool                     `json:"frozen"`
+	Id             openapi_types.UUID       `json:"id"`
+	Isin           string                   `json:"isin"`
+	Name           string                   `json:"name"`
+	Ticker         string                   `json:"ticker"`
+	Type           InstrumentType           `json:"type"`
 }
 
 // InstrumentType defines model for InstrumentType.
@@ -741,13 +749,16 @@ type UpdateAccountRequest struct {
 
 // UpdateInstrumentRequest defines model for UpdateInstrumentRequest.
 type UpdateInstrumentRequest struct {
-	FaceCurrency   nullable.Nullable[string] `json:"face_currency,omitempty"`
-	FaceValueMinor nullable.Nullable[int64]  `json:"face_value_minor,omitempty"`
-	Figi           *string                   `json:"figi,omitempty"`
-	Frozen         *bool                     `json:"frozen,omitempty"`
-	Isin           *string                   `json:"isin,omitempty"`
-	Name           *string                   `json:"name,omitempty"`
-	Ticker         *string                   `json:"ticker,omitempty"`
+	// FaceCurrency The currency face_value_minor is denominated in (ISO-4217). Sent together with face_value_minor or not at all — see it.
+	FaceCurrency nullable.Nullable[string] `json:"face_currency,omitempty"`
+
+	// FaceValueMinor Same two rules as on creation, and they apply to the REQUEST rather than to the row it lands on: to touch either half of the pair, send both — either two values, or two nulls to clear the pair. Sending one alone is refused even when the stored row would make the result well formed, so that an accepted PATCH always leaves the pair whole without this endpoint having to read the row first and race a concurrent write. Omitting both leaves the pair exactly as it was.
+	FaceValueMinor nullable.Nullable[int64] `json:"face_value_minor,omitempty"`
+	Figi           *string                  `json:"figi,omitempty"`
+	Frozen         *bool                    `json:"frozen,omitempty"`
+	Isin           *string                  `json:"isin,omitempty"`
+	Name           *string                  `json:"name,omitempty"`
+	Ticker         *string                  `json:"ticker,omitempty"`
 }
 
 // UpdateMemberRequest defines model for UpdateMemberRequest.

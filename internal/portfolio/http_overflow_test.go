@@ -426,3 +426,50 @@ func TestPositionInBaseRefusesAValuationThatCannotBeStruckInTheBaseCurrency(t *t
 		t.Errorf("positionInBase named gap %v beside the refusal, want none: an overflow fails the request, it is not a gap to caption", gap)
 	}
 }
+
+// TestMarketValueNeedsBothHalvesOfTheFacePair pins the read-side guard that a
+// bond is valued from BOTH its face value and the currency that value is in, or
+// not at all. A bare number with no currency on it would be worse than no
+// valuation: the positions screen would print a figure nobody could say the unit
+// of.
+//
+// It used to be an end-to-end test (portfolio.TestPositions...), because
+// PATCHing face_currency to null was how the state was reached. #93 closed that
+// door at the write, and migration 0012 makes the state unstorable, so the
+// arguments are handed to marketValue directly now — its contract is about what
+// it is CALLED with, not about what the catalog happens to hold, and the guard
+// stays for the same reason every read-side guard here does.
+func TestMarketValueNeedsBothHalvesOfTheFacePair(t *testing.T) {
+	face := int64(100_000)
+	faceCurrency := "RUB"
+	q := marketdata.Quote{Price: dec("95.20"), Currency: "RUB"} // 95.20% of face
+
+	for _, tc := range []struct {
+		name     string
+		face     *int64
+		currency *string
+	}{
+		{"a face value with no currency to state it in", &face, nil},
+		{"a face currency with no value under it", nil, &faceCurrency},
+		{"neither half recorded", nil, nil},
+	} {
+		minor, currency, ok, err := marketValue(instrument.TypeBond, tc.face, tc.currency, dec("100"), q)
+		if err != nil {
+			t.Errorf("marketValue with %s: err = %v, want a plain refusal to value", tc.name, err)
+		}
+		if ok || minor != 0 || currency != "" {
+			t.Errorf("marketValue with %s = (%d, %q, %v), want no valuation at all", tc.name, minor, currency, ok)
+		}
+	}
+
+	// And with both halves it values as usual, so the guard above is about the
+	// missing half and not about bonds.
+	minor, currency, ok, err := marketValue(instrument.TypeBond, &face, &faceCurrency, dec("100"), q)
+	if err != nil || !ok {
+		t.Fatalf("marketValue of a whole pair = (%d, %q, %v), err = %v; want it valued", minor, currency, ok, err)
+	}
+	// 100 bonds at 95.20% of a 1 000,00 ₽ face.
+	if minor != 9_520_000 || currency != "RUB" {
+		t.Errorf("marketValue = (%d, %q), want (9520000, \"RUB\")", minor, currency)
+	}
+}

@@ -336,8 +336,12 @@ describe("TradeDialog: a bond whose face value cannot be used", () => {
     expect(screen.queryByTestId("trade-bond-hint")).toBeNull();
   });
 
-  // A face value with no currency at all — the state a PATCH clearing
-  // face_currency leaves behind (no pairing check on update, filed separately).
+  // A face value with no currency at all. A PATCH clearing face_currency used to
+  // leave exactly this behind; #93 closed that door, so no server this client
+  // talks to should produce it any more — which is not a reason to stop coping
+  // with it here. A client is a separate program from the API version in front
+  // of it, and what it does with an instrument it cannot price is its own
+  // business.
   // It needs a cause of its own, and the sentence is the reason why: fall
   // through to the currency-mismatch one below and it reads «Номинал в , а
   // сделка в RUB» — a caption naming a currency that is not there, which in

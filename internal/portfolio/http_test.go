@@ -882,61 +882,14 @@ func TestPositionsMarketValueFallsBackWithoutRate(t *testing.T) {
 	}
 }
 
-// TestPositionsBondWithoutFaceCurrencyHasNoValuation covers fix (2)'s edge
-// case: a bond that carries a face_value_minor but no face_currency (only
-// reachable by PATCHing face_currency to null after creation — POST
-// /instruments requires the two fields together, see
-// instrument.handleCreate) has no currency to label its market value with,
-// so it must get NO valuation at all — every one of
-// market_value_minor/market_value_currency/price/price_on stays null, even
-// though a quote exists and face_value_minor is still set. Publishing a
-// bare number with no currency would be actively misleading, worse than
-// publishing nothing.
-func TestPositionsBondWithoutFaceCurrencyHasNoValuation(t *testing.T) {
-	pool := testdb.New(t)
-	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
-	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(marketdata.NewStore(pool)))
-
-	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
-	bond := createInstrument(t, c, url,
-		`{"type":"bond","name":"Облигация без валюты номинала","ticker":"BOND2","currency":"RUB","face_value_minor":100000,"face_currency":"RUB"}`)
-	bondID, err := uuid.Parse(bond.ID)
-	if err != nil {
-		t.Fatalf("parse bond id: %v", err)
-	}
-	quotes.byInstrument[bondID] = marketdata.Quote{
-		InstrumentID: bondID, On: mustDate(t, "2026-07-21"),
-		Price: decimal.RequireFromString("95.20"), Currency: "RUB", Source: "test",
-	}
-
-	// Drift face_currency to null while leaving face_value_minor set — the
-	// only way to reach this state, since creation requires both or neither.
-	resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+bond.ID, `{"face_currency":null}`)
-	if resp.StatusCode != 200 {
-		b, _ := io.ReadAll(resp.Body)
-		t.Fatalf("PATCH instrument face_currency=null = %d: %s", resp.StatusCode, b)
-	}
-
-	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
-		"occurred_on":"2026-07-01","quantity":"100","price":"950",
-		"amount_minor":-9500000,"currency":"RUB"}`, acc.ID, bond.ID))
-
-	resp = do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
-	if resp.StatusCode != 200 {
-		b, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET positions = %d: %s", resp.StatusCode, b)
-	}
-	var got positionsResp
-	decodeJSON(t, resp, &got)
-	if len(got.Positions) != 1 {
-		t.Fatalf("positions = %+v, want exactly 1", got.Positions)
-	}
-
-	p := got.Positions[0]
-	if p.MarketValueMinor != nil || p.MarketValueCurrency != nil || p.Price != nil || p.PriceOn != nil || p.UnrealizedPnlMinor != nil {
-		t.Errorf("bond without face_currency = %+v, want market_value_minor/market_value_currency/price/price_on/unrealized_pnl_minor all null", p)
-	}
-}
+// A bond carrying a face_value_minor but no face_currency used to be tested
+// here, end to end, because PATCHing face_currency to null was how it was
+// reached. #93 closed that door — an update now refuses to touch one half of the
+// pair without the other, and migration 0012 makes the state unstorable — so
+// there is no longer a request sequence that produces it, and the case moved to
+// where it can still be exercised: TestMarketValueNeedsBothHalvesOfTheFacePair,
+// over marketValue itself. The read-side guard it pins stays exactly as it was;
+// only the route to it changed.
 
 // TestPositionsUnrealizedPnl covers unrealized_pnl_minor end to end: a share
 // position in profit, one in a loss (unrealized_pnl_minor negative), a
