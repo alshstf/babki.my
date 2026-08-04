@@ -269,10 +269,20 @@ func TestRealizedTotalsOverflowIsNotAGap(t *testing.T) {
 // just made sure of that — and a difference still leaves the range when they
 // have opposite signs.
 //
-// A NEGATIVE market value is what makes it reachable, and it comes from the
-// catalog rather than from the market: a bond's valuation is face value × price,
-// face_value_minor is a plain BIGINT with no positivity check on it at the write
-// (#93), so a negative face value produces a negative valuation of any size.
+// A NEGATIVE market value is what makes it reachable, and this test reaches it
+// the cheapest way available: an Instrument built directly in memory with a
+// negative face value, rather than through the HTTP write path. checkFacePair
+// (internal/instrument/http.go) now refuses a face value that is not positive
+// (#93), so this exact construction can no longer occur through a POST or a
+// PATCH. The guard below stays regardless — a broken face value was never the
+// only door to a negative basis: Position.CostMinor and RealizedPnLMinor are
+// both accumulated with a bare += in the engine (addLot at engine.go:702,
+// realize at engine.go:212), each term individually valid and none of them
+// carrying a broken field, so a long enough run of ordinary buys (about 4612
+// at the write side's own cap) wraps the running total negative with nothing
+// to catch it before it reaches this subtraction. This test exercises that
+// same guarded subtraction through the shorter path — a face value set
+// directly — rather than assembling four thousand operations to reach it.
 // Swallowing this refusal publishes an unrealized profit of +8446744073709551616
 // kopecks, which is what -10^19 wraps to: a broken row reading as an enormous
 // gain, beside a market value that says the opposite.

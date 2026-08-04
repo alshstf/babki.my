@@ -2,6 +2,7 @@ package instrument
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
+	"babki.my/babki/internal/platform/money"
 )
 
 var currencyRe = regexp.MustCompile(`^[A-Z]{3}$`)
@@ -127,6 +129,58 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 // halves before it values anything, but it is still a bond that silently cannot
 // be priced.
 //
+// A face value had no UPPER bound either, until this paragraph's own sweep
+// found it: creation and update both stopped at "positive", so math.MaxInt64
+// went in as readily as a real bond's 1 000,00. That is every other money
+// field this branch bounds — an operation's amount and price×quantity, an
+// account's balance — and this one was the single field of its own subject
+// the branch had left open. Verified end to end: POST an instrument with
+// face_value_minor = math.MaxInt64, 201; buy two of it at par, 201; GET the
+// account's positions, 500 forever — portfolio.marketValue multiplies the
+// face value by a price and a quantity, and money.Minor refuses a product
+// that does not fit in an int64 of minor units (#27) rather than publish a
+// wrapped figure, so the position that holds it can never be drawn again
+// without deleting the row by hand. Bounded at money.MaxAmountMinor, the same
+// cap and the same reasoning as the operation amount and the account balance
+// (see its doc comment): far above any bond ever issued, far enough below
+// math.MaxInt64 that this factor cannot be the reason a valuation overflows on
+// its own, and one constant instead of a fourth copy of a figure that has
+// already drifted apart from itself once in this codebase.
+//
+// DELIBERATELY NOT A CHECK CONSTRAINT, unlike the pair-and-sign rule migration
+// 0012 added for this same column. That constraint exists because a broken
+// pair or a non-positive value makes EVERY reader of the row wrong in the same
+// way, with no per-query way to guard against it — the database is the only
+// place such an invariant can be made to hold for certain. This bound is a
+// different kind of rule: neither operation.amount_minor nor
+// account_balances.amount_minor, the two fields it is copied from, carries a
+// matching CHECK either, and for the same reason — it is a write-time ceiling
+// on ordinary input, not an invariant a reader depends on to be correct, and
+// money.MaxAmountMinor already lives in exactly one place (this package's
+// import of it). A CHECK restating it in SQL would be a second spelling of the
+// same number, the very drift this constant exists to prevent one of.
+//
+
+// It also closes a second, related gap the sweep found but did not need a
+// fix of its own for: face_value_minor is the only money field in this API
+// that could have exceeded JavaScript's Number.MAX_SAFE_INTEGER (2^53-1), and
+// the frontend's bond price↔percent conversion (bondPriceFromPercent /
+// bondPercentFromPrice in web/src/lib/money.ts) both refuse to convert a face
+// value that fails Number.isSafeInteger — so no WRONG number could have come
+// of it — but nothing in trade-dialog.tsx's faceGapOf named that as a reason
+// the field is disabled, so a bond carrying such a value would have shown an
+// enabled percent field that simply produced nothing, with no caption saying
+// why. money.MaxAmountMinor is, by construction, safely below
+// MAX_SAFE_INTEGER (web/src/lib/money.ts's own MAX_AMOUNT_MINOR doc comment
+// states the same property for the identical constant), so bounding
+// face_value_minor here at the one door that writes it makes that state
+// unreachable rather than merely silent: no instrument can ever carry a face
+// value the browser cannot represent exactly, and no case needs adding to
+// faceGapOf for a state the write side no longer produces. This was never
+// live — the upper bound this comment adds and the missing bound it replaces
+// were both introduced on this same unmerged branch (e9daddf), so no row in
+// any deployed instance was ever written through the unbounded door.
+//
 // A currency that names no currency is the same failure wearing a value. The
 // contract calls face_currency ISO-4217 and the readers take it at its word: a
 // bond's market value is denominated in it (portfolio.marketValue), so an empty
@@ -144,19 +198,23 @@ var (
 	errFacePair     = errors.New("face_value_minor and face_currency must be set together or not at all")
 	errFaceMention  = errors.New("face_value_minor and face_currency must be sent together, even to change one")
 	errFacePositive = errors.New("face_value_minor must be positive")
+	errFaceTooLarge = fmt.Errorf("face_value_minor must be at most %d", money.MaxAmountMinor)
 	errFaceCurrency = errors.New("face_currency must be ISO-4217 uppercase")
 )
 
 // checkFacePair judges the pair as the request STATES it, and is what both doors
 // share: the value and its currency are present together or not at all, a
-// present value is positive, and a present currency is a currency code.
-// "Present" means carrying a value — an omitted field and an explicit null both
-// count as absent, which is what they mean on a creation.
+// present value is within (0, money.MaxAmountMinor], and a present currency is
+// a currency code. "Present" means carrying a value — an omitted field and an
+// explicit null both count as absent, which is what they mean on a creation.
 //
-// The value's own rule is tried before its currency's, so that the field a
+// The value's own rules are tried before its currency's, so that the field a
 // reader is told about is the one nearer the money: a face value of zero prices
-// the whole holding at nothing, while a misspelled currency merely stops it
-// being priced at all.
+// the whole holding at nothing and one past the cap breaks the very screen that
+// reads it (see the doc comment above), while a misspelled currency merely
+// stops it being priced at all. Between the value's own two rules, positive is
+// tried first because it is the cheaper mistake to make — a negative or zero
+// face value is one keystroke away from an ordinary one, math.MaxInt64 is not.
 func checkFacePair(value nullable.Nullable[int64], currency nullable.Nullable[string]) error {
 	valuePresent := value.IsSpecified() && !value.IsNull()
 	currencyPresent := currency.IsSpecified() && !currency.IsNull()
@@ -165,6 +223,9 @@ func checkFacePair(value nullable.Nullable[int64], currency nullable.Nullable[st
 	}
 	if valuePresent && value.MustGet() <= 0 {
 		return errFacePositive
+	}
+	if valuePresent && value.MustGet() > money.MaxAmountMinor {
+		return errFaceTooLarge
 	}
 	if currencyPresent && !currencyRe.MatchString(currency.MustGet()) {
 		return errFaceCurrency

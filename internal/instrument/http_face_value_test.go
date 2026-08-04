@@ -2,9 +2,13 @@ package instrument_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"testing"
+
+	"babki.my/babki/internal/platform/money"
 )
 
 // An instrument's face value was written unchecked (#93). Creation asked only
@@ -40,10 +44,11 @@ func wantFaceRefusal(t *testing.T, resp *http.Response, want, sent string) {
 	}
 }
 
-const (
+var (
 	facePairRule     = "face_value_minor and face_currency must be set together or not at all"
 	faceMentionRule  = "face_value_minor and face_currency must be sent together, even to change one"
 	facePositiveRule = "face_value_minor must be positive"
+	faceTooLargeRule = fmt.Sprintf("face_value_minor must be at most %d", money.MaxAmountMinor)
 	faceCurrencyRule = "face_currency must be ISO-4217 uppercase"
 )
 
@@ -121,6 +126,65 @@ func TestCreateTakesTheSmallestRealFaceValue(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create with a face value of one minor unit = %d, want 201: %s", resp.StatusCode, b)
+	}
+}
+
+// TestCreateTakesTheLargestRealFaceValue fixes the other edge: a face value at
+// money.MaxAmountMinor is exactly as recordable as one just under it — the same
+// cap an operation's amount and an account's balance are written against (see
+// its doc comment), and a rule that refused the cap itself rather than what
+// lies past it would be a different, stricter bound than the one this
+// codebase states everywhere else.
+func TestCreateTakesTheLargestRealFaceValue(t *testing.T) {
+	url, c := newAPI(t)
+
+	resp := do(t, c, "POST", url+"/api/v1/instruments",
+		fmt.Sprintf(`{"type":"bond","name":"Крупный номинал","currency":"RUB","face_value_minor":%d,"face_currency":"RUB"}`,
+			money.MaxAmountMinor))
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create with a face value of money.MaxAmountMinor = %d, want 201: %s", resp.StatusCode, b)
+	}
+}
+
+// TestCreateRefusesAFaceValueTooLarge is #93's own gap, found by this branch's
+// own sweep: creation and update both bounded a face value from below and
+// never from above, so math.MaxInt64 went in as readily as a real bond's
+// 1 000,00. Verified end to end (see checkFacePair's doc comment): such an
+// instrument bought into a position answers 500 on every later GET of that
+// account's positions, forever, which is exactly the failure this whole branch
+// exists to turn into a rejected field instead.
+func TestCreateRefusesAFaceValueTooLarge(t *testing.T) {
+	url, c := newAPI(t)
+
+	for _, tc := range []struct {
+		what  string
+		value int64
+	}{
+		{"create with a face value one minor unit past the cap", money.MaxAmountMinor + 1},
+		{"create with a face value of math.MaxInt64", math.MaxInt64},
+	} {
+		wantFaceRefusal(t, do(t, c, "POST", url+"/api/v1/instruments",
+			fmt.Sprintf(`{"type":"bond","name":"X","currency":"RUB","face_value_minor":%d,"face_currency":"RUB"}`, tc.value)),
+			faceTooLargeRule, tc.what)
+	}
+}
+
+// TestUpdateRefusesAFaceValueTooLarge is TestCreateRefusesAFaceValueTooLarge's
+// twin at the other door: a PATCH is the only way an instrument created sound
+// can be made to carry a face value the write side would have refused on
+// creation, and it must refuse it exactly the same way.
+func TestUpdateRefusesAFaceValueTooLarge(t *testing.T) {
+	url, c := newAPI(t)
+	id := mkBond(t, url, c)
+
+	wantFaceRefusal(t, do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
+		fmt.Sprintf(`{"face_value_minor":%d,"face_currency":"RUB"}`, money.MaxAmountMinor+1)),
+		faceTooLargeRule, "update to a face value one minor unit past the cap")
+
+	pair := readFacePair(t, url, c, id)
+	if pair.FaceValueMinor == nil || *pair.FaceValueMinor != 100000 {
+		t.Errorf("face value after the refusal = %+v, want 100000 untouched", pair)
 	}
 }
 
