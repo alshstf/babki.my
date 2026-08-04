@@ -196,9 +196,17 @@ const centsPerUnit = 2
 // same rounding marketdata.Converter.Convert uses) — never float, never an
 // intermediate round. That last step is money.Minor, which also refuses a
 // product too large to be an int64 of minor units rather than letting it wrap
-// (#27): quantity is validated as positive and bounded from above by nothing,
-// so a price and a quantity that each look ordinary can multiply past the
+// (#27): a price and a quantity that each look ordinary can multiply past the
 // edge, and the wrapped answer is a small figure of arbitrary sign.
+//
+// A QUANTITY AND A PRICE ARE NOW BOUNDED WHERE THEY ARE WRITTEN
+// (operation.maxQuantity, #84) AND THIS GUARD STAYS REGARDLESS, because a figure
+// that fitted when it was written can stop fitting afterwards. The price
+// multiplied in here is the QUOTE's, which no validation of ours reaches; the
+// bond branch below multiplies by a face value, which is the catalog's; a
+// position is the sum of many operations and can pass the per-operation bound
+// one accepted buy at a time; and the rows written before that bound existed are
+// still in the journal, since no migration came with it.
 //
 // err is that refusal and NOTHING ELSE, which is why it is separate from ok.
 // ok=false says no valuation applies to this instrument, and the caller

@@ -17,12 +17,17 @@ import (
 	"babki.my/babki/internal/platform/money"
 )
 
-// This file covers #27 where it reaches this screen. A quantity is validated
-// as positive and nothing bounds it from above, a price is whatever the market
-// data says, and their product can leave int64 without either input looking in
-// the least unusual. decimal.IntPart() does not fail there — it wraps, to a
-// small figure of arbitrary sign — so a holding could be published as worth
-// minus a few kopecks.
+// This file covers #27 where it reaches this screen. A price is whatever the
+// market data says, an fx rate likewise, and a product can leave int64 without
+// any one input looking in the least unusual. decimal.IntPart() does not fail
+// there — it wraps, to a small figure of arbitrary sign — so a holding could be
+// published as worth minus a few kopecks.
+//
+// A quantity and a price ARE now bounded where they are written
+// (operation.maxQuantity, #84), and the fixtures below still reach these guards
+// through inputs no write-time bound covers: a quote's price, an fx rate, a
+// position built from several operations, and journals written before that bound
+// existed. That is the whole reason the read side keeps its own guards.
 //
 // Every refusal here is an ERROR and not a null. The screen has nulls, and
 // they mean something specific: no quote, no rate, no purchase date — data
@@ -51,11 +56,15 @@ func (c fixedRateConverter) RatesOn(context.Context, []marketdata.RateQuery) (ma
 	panic("fixedRateConverter: RatesOn not used")
 }
 
+// The quantity here is 10^15 — exactly the largest a write accepts (see
+// operation.maxQuantity) — and the price an unremarkable 100. Their product is
+// still not an int64 of cents, which is the point: the write-side bound moves
+// the wrapping figure out of easy reach, it does not make it impossible.
 func TestMarketValueRefusesAShareValuationThatWouldWrap(t *testing.T) {
 	q := marketdata.Quote{Price: dec("100"), Currency: "USD"}
-	minor, currency, ok, err := marketValue(instrument.TypeShare, nil, nil, dec("1e17"), q)
+	minor, currency, ok, err := marketValue(instrument.TypeShare, nil, nil, dec("1e15"), q)
 	if !errors.Is(err, money.ErrOverflow) {
-		t.Fatalf("marketValue(share) = (%d, %q, %v), err = %v; want ErrOverflow: 1e17 shares at 100 is not an int64 of cents", minor, currency, ok, err)
+		t.Fatalf("marketValue(share) = (%d, %q, %v), err = %v; want ErrOverflow: 1e15 shares at 100 is not an int64 of cents", minor, currency, ok, err)
 	}
 	if ok {
 		t.Error("marketValue reported ok alongside the refusal; the caller would publish a wrapped figure")
@@ -166,13 +175,13 @@ func TestSumInBaseOverflowIsNotAMissingRate(t *testing.T) {
 // handler needs no converter at all.
 func TestToAPIRefusesToPublishAPositionWhoseValuationCannotBeStruck(t *testing.T) {
 	id := uuid.New()
-	p := &Position{InstrumentID: id, Currency: "USD", Quantity: dec("1e17")}
+	p := &Position{InstrumentID: id, Currency: "USD", Quantity: dec("1e15")}
 	inst := instrument.Instrument{ID: id, Type: instrument.TypeShare, Currency: "USD"}
 	quotes := map[uuid.UUID]marketdata.Quote{id: {InstrumentID: id, Price: dec("100"), Currency: "USD"}}
 
 	out, err := (&Handler{}).toAPI(context.Background(), p, inst, quotes, time.Now(), map[rateKey]*rateLookup{})
 	if !errors.Is(err, money.ErrOverflow) {
-		t.Fatalf("toAPI = %+v, err = %v; want ErrOverflow: 1e17 shares at 100 is not an int64 of cents, and a position published here would show a null market value instead", out, err)
+		t.Fatalf("toAPI = %+v, err = %v; want ErrOverflow: 1e15 shares at 100 is not an int64 of cents, and a position published here would show a null market value instead", out, err)
 	}
 	if out.Quantity != "" {
 		t.Errorf("toAPI returned a position (%+v) alongside the refusal, want the zero value", out)

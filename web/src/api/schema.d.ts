@@ -611,9 +611,9 @@ export interface components {
             /** @description Date YYYY-MM-DD */
             occurred_on: string;
             settled_on?: string | null;
-            /** @description Decimal as string */
+            /** @description Decimal as string. Bounded from above as well as below: |quantity| must not exceed 10^15 (1000000000000000) and, when a price is given too, |price × quantity| must not exceed 10^15 minor units — the same cap amount_minor carries, because it is the same money. Past either, 400. The bounds exist so that a figure no price can value is refused as a field rather than discovered later by the screen that cannot render it; rows written before they existed are untouched and are still returned as they stand. */
             quantity?: string | null;
-            /** @description Decimal as string */
+            /** @description Decimal as string: money per unit, in MAJOR currency units. |price| must not exceed 10^13 (10000000000000) — one unit may not cost more than a whole operation is allowed to be for — and see quantity for the bound on the two multiplied together. Past either, 400. */
             price?: string | null;
             /** Format: int64 */
             amount_minor: number;
@@ -631,7 +631,7 @@ export interface components {
             to_account_id: string;
             /** Format: uuid */
             instrument_id: string;
-            /** @description Decimal as string */
+            /** @description Decimal as string. |quantity| must not exceed 10^15 (1000000000000000), as on an operation — this writes the same column, on two rows. A position CAN hold more than that, having grown one accepted operation at a time; such a holding has to be moved in several transfers. */
             quantity: string;
             /** @description Date YYYY-MM-DD */
             occurred_on: string;

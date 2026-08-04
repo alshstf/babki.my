@@ -37,6 +37,84 @@ var currencyRe = regexp.MustCompile(`^[A-Z]{3}$`)
 // cost basis and wraps realized P&L.
 const maxAmountMinor int64 = 1_000_000_000_000_000
 
+// minorUnitScale is how many decimal places a major currency unit is split into
+// for storage: amount_minor and fee_minor are counts of those, and a price is
+// on the wire in MAJOR units, so it is shifted by this before the two are
+// compared. Same two-decimal convention as marketdata.Converter and
+// portfolio.centsPerUnit.
+const minorUnitScale = 2
+
+// maxQuantity and maxPrice bound the two factors of one product, and validate
+// bounds the product itself. All three come from one place — what has to fit in
+// an int64 of minor units — rather than from a guess at how many shares a person
+// might sensibly own.
+//
+// THE PRODUCT FIRST, because it is the only one of the three that is money.
+// price × quantity is what the trade was for, which is the same money
+// amount_minor carries on the very same row, so it is capped where that already
+// is: maxAmountMinor. Two fields describing one sum of money must not disagree
+// about how much money can exist. That cap is ~9223 times below math.MaxInt64,
+// and that ratio is the room to spare an fx rate needs on the way out — a
+// valuation is struck in the position's currency and then converted, and no rate
+// is bounded from above.
+//
+// THE FACTORS SEPARATELY, because the product cannot always be checked: price is
+// optional, and the read path multiplies the quantity by a QUOTE's price rather
+// than by this operation's, so a quantity arrives at the screen with no
+// companion at all.
+//
+//   - maxPrice is the money cap read as a price: one unit may not cost more than
+//     a whole operation is allowed to be for. maxAmountMinor minor units, i.e.
+//     10^13 major ones — orders of magnitude above the priciest security there
+//     is (a Berkshire A share, ~7×10^5 dollars) and above any hyperinflated
+//     currency's version of it.
+//   - maxQuantity is the same cap read as a count: at one minor unit apiece —
+//     the price at which a single unit is still worth a whole kopeck — 10^15
+//     units are worth exactly maxAmountMinor. Above that, a holding is worth more
+//     than the journal admits money can exist unless every unit is worth less
+//     than a kopeck.
+//
+// WHAT THAT LAST BOUND REFUSES THAT IS REAL: a position of more than 10^15 units
+// of something priced far below a kopeck — the quantities meme tokens are held
+// in. Nothing else comes close; a mis-scaled import column (#84, source
+// IN ('manual','csv','tinvest')) does. The refusal names the field and the
+// bound, and the bound is one line to move.
+//
+// NONE OF THIS LETS THE READ-SIDE GUARDS GO (portfolio.marketValue,
+// rateLookup.applyTo, sumInBase, and money.Minor behind them all). What fitted
+// when it was written can stop fitting later: a quote's price and an fx rate are
+// both unbounded from above and both arrive after the fact, a position is the
+// sum of many operations and can pass the bound one accepted buy at a time, and
+// the rows written before this bound existed are still in the journal — no
+// migration comes with it (see TestRowsWrittenBeforeTheBoundAreStillWorkable).
+// A write-time bound cannot promise the product fits; it only stops one factor
+// from being the reason it does not.
+// All three are DERIVED from maxAmountMinor rather than written out beside it,
+// so that moving the money cap moves them with it. maxQuantity comes out
+// numerically equal to it and is a different quantity all the same — a count of
+// units, not a sum of money — which is why it is named separately instead of
+// being one constant used twice.
+var (
+	maxQuantity = decimal.NewFromInt(maxAmountMinor)
+	maxPrice    = decimal.NewFromInt(maxAmountMinor).Shift(-minorUnitScale)
+
+	// maxAmountMinorDec is maxAmountMinor itself as a decimal, so the product
+	// above is compared against it exactly rather than through an int64
+	// conversion that would have to survive the very overflow being checked for.
+	maxAmountMinorDec = decimal.NewFromInt(maxAmountMinor)
+)
+
+// checkQuantityBound refuses a quantity past maxQuantity. Both doors into the
+// quantity column go through it — an operation's own field (validate) and the
+// quantity a transfer moves (CreateTransfer) — so the two cannot come to refuse
+// at different sizes or in different words.
+func checkQuantityBound(q decimal.Decimal) error {
+	if q.Abs().GreaterThan(maxQuantity) {
+		return fmt.Errorf("%w: quantity must be within ±%s", family.ErrValidation, maxQuantity)
+	}
+	return nil
+}
+
 // Service validates journal entries and guards journal consistency by
 // replaying the account's operations through the portfolio engine.
 type Service struct{ store *Store }
@@ -103,6 +181,26 @@ func validate(o Operation) error {
 	}
 	if o.FeeMinor > maxAmountMinor {
 		return fmt.Errorf("%w: fee_minor must be <= %d", family.ErrValidation, maxAmountMinor)
+	}
+	// The two factors and their product (see maxQuantity). Checked here rather
+	// than in the buy/sell branch below: nothing stops any other type from
+	// carrying a quantity or a price, and the columns are the same columns
+	// whichever type wrote them. Magnitudes, not signed values, because these
+	// bounds are about size — a sign that has no business being negative is the
+	// business of the per-type rules below, which is where it is already caught
+	// for buy and sell.
+	if o.Quantity != nil {
+		if err := checkQuantityBound(*o.Quantity); err != nil {
+			return err
+		}
+	}
+	if o.Price != nil && o.Price.Abs().GreaterThan(maxPrice) {
+		return fmt.Errorf("%w: price must be within ±%s per unit", family.ErrValidation, maxPrice)
+	}
+	if o.Quantity != nil && o.Price != nil {
+		if notional := o.Price.Mul(*o.Quantity).Abs().Shift(minorUnitScale); notional.GreaterThan(maxAmountMinorDec) {
+			return fmt.Errorf("%w: price × quantity must be within ±%d minor units", family.ErrValidation, maxAmountMinor)
+		}
 	}
 
 	switch o.Type {
@@ -422,6 +520,14 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 	if !quantity.IsPositive() {
 		return Operation{}, Operation{}, fmt.Errorf("%w: quantity is finer than the %d decimal places the journal records",
 			family.ErrValidation, quantityScale)
+	}
+	// The same bound the operation's own quantity gets (see maxQuantity), because
+	// this writes the same column and validate never sees these two rows. It is
+	// reachable rather than symmetry for its own sake: the bound is per
+	// operation, a position is the sum of many, so a holding can grow past it one
+	// accepted buy at a time and then be moved in a single transfer.
+	if err := checkQuantityBound(quantity); err != nil {
+		return Operation{}, Operation{}, err
 	}
 	if p.OccurredOn.After(maxOccurredOn()) {
 		return Operation{}, Operation{}, fmt.Errorf("%w: occurred_on must not be in the future", family.ErrValidation)
