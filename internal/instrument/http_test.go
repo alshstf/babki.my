@@ -20,15 +20,27 @@ import (
 // newAPI wires the full stack: family + instrument modules.
 func newAPI(t *testing.T) (string, *http.Client) {
 	t.Helper()
+	url, c, _ := newAPIWithCatalog(t)
+	return url, c
+}
+
+// newAPIWithCatalog is newAPI plus the store behind it, for the one kind of
+// test that has to write a row the HTTP door would refuse: a row as it was
+// written BEFORE that door refused it. Reaching past the handler is the only
+// way to set such a state up, and a test that could not set it up could not
+// check that the repair still works.
+func newAPIWithCatalog(t *testing.T) (string, *http.Client, *instrument.Store) {
+	t.Helper()
 	pool := testdb.New(t)
 	famStore := family.NewStore(pool)
 	famSvc := family.NewService(famStore)
 	sm := family.NewSessionManager(pool)
 	auth := family.NewAuth(sm, famStore)
 
+	store := instrument.NewStore(pool)
 	srv := httpserver.New(slog.Default(), pool)
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
-	instrument.NewHandler(instrument.NewStore(pool), auth, sm).Mount(srv)
+	instrument.NewHandler(store, auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -40,7 +52,7 @@ func newAPI(t *testing.T) (string, *http.Client) {
 	if err != nil || resp.StatusCode != 201 {
 		t.Fatalf("setup: %v %d", err, resp.StatusCode)
 	}
-	return ts.URL, client
+	return ts.URL, client, store
 }
 
 func do(t *testing.T, c *http.Client, method, url, body string) *http.Response {

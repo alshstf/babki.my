@@ -200,6 +200,81 @@ var (
 	errFaceCurrency = errors.New("face_currency must be ISO-4217 uppercase")
 )
 
+// A FACE VALUE IS A BOND'S, and nothing enforced it (#101). The contract has
+// said since the field existed that it is null for anything that is not a bond;
+// both doors took one on a share, an ETF, a currency or a crypto row alike and
+// published it back with a 201.
+//
+// Nothing computed a wrong number from that. portfolio.marketValue branches on
+// the type — a share and an ETF are valued at the quote's price per unit and
+// the face value is never read — and the trade dialog's faceGapOf returns early
+// for a non-bond, so the percent field it guards is not even rendered. So this
+// is not a broken screen; it is the document promising one thing and the server
+// accepting another.
+//
+// THE CHECK MOVED TO THE WRITE RATHER THAN THE PROMISE BEING WEAKENED, and the
+// argument is the pair's meaning rather than today's damage. An exchange quotes
+// a bond as a PERCENTAGE OF FACE, which is what makes the face value the factor
+// that turns a quote into money; on every other type a quote is money already
+// and the pair answers no question at all. A field that means nothing on a row
+// is a field a reader will one day read anyway — this program has been bitten by
+// exactly that, most recently by an empty face currency that no check looked at
+// (#93) — and the cheapest moment to make it unreachable is the one where a
+// person is still holding the request. Weakening the description would have been
+// the other honest option and buys nothing: it would leave the state reachable,
+// leave every future reader to decide what a share's face value means, and cost
+// the same words to write down.
+//
+// DELIBERATELY NOT A CHECK CONSTRAINT, unlike the pair-and-sign rule of
+// migration 0012, and this is the point where the two rules genuinely differ. A
+// broken pair makes every reader of the row wrong in the same way, so the
+// database is the only place it can be made to hold for certain. A face value on
+// a share makes no reader wrong today, and a constraint would come with a
+// migration that either stops a running instance over a harmless row or clears a
+// number somebody typed. Neither is a migration's decision to make (0012 says
+// the same about repairing rows), so rows written before this rule are left
+// exactly as they stand — and the rule is written about SETTING the pair rather
+// than about carrying it, so clearing such a row through the API keeps working.
+// That is the repair, and a rule that refused every PATCH of the pair on a
+// non-bond would have taken it away.
+//
+// The type is not in an UpdateInstrumentRequest and cannot be: nothing in this
+// program changes an instrument's type — the request has no such field and the
+// UPDATE statement does not touch the column — so the update door reads it from
+// the stored row. That read is not the kind checkFaceUpdate refuses to do: what
+// it reads cannot change between the read and the write, because no writer
+// exists that could change it.
+func errFaceBondOnly(t Type) error {
+	return fmt.Errorf("face_value_minor and face_currency belong to a bond; this instrument is a %s", t)
+}
+
+// checkFaceType refuses a face value, or its currency, on an instrument that is
+// not a bond. "Present" means carrying a value, as it does in checkFacePair: an
+// omitted field and an explicit null are both absent, so clearing the pair is
+// never what this refuses.
+//
+// EITHER HALF ALONE IS REFUSED BY THIS RULE RATHER THAN BY THE PAIRING ONE, and
+// that ordering is deliberate at both doors: on a non-bond neither half belongs,
+// so "set them together" would answer a client that may not send them at all by
+// asking it to send more. On a bond the pairing rule is reached exactly as
+// before.
+func checkFaceType(t Type, value nullable.Nullable[int64], code nullable.Nullable[string]) error {
+	if facePairCarriesAValue(value, code) && t != TypeBond {
+		return errFaceBondOnly(t)
+	}
+	return nil
+}
+
+// facePairCarriesAValue reports whether a request actually SETS one half of the
+// pair or the other, as against leaving it alone or clearing it. It is one
+// statement rather than two because the update door asks the same question
+// before it goes to the database for the row's type: if these two ever came to
+// answer differently, the door would fetch a row it then refuses to judge, or
+// judge one it never fetched.
+func facePairCarriesAValue(value nullable.Nullable[int64], code nullable.Nullable[string]) bool {
+	return value.IsSpecified() && !value.IsNull() || code.IsSpecified() && !code.IsNull()
+}
+
 // checkFacePair judges the pair as the request STATES it, and is what both doors
 // share: the value and its currency are present together or not at all, a
 // present value is within (0, money.MaxAmountMinor], and a present currency is
@@ -277,6 +352,13 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 			"name is required, type must be valid, currency must be ISO-4217 uppercase")
 		return
 	}
+	// The type rule first: it says the pair does not belong on this row at all,
+	// which is a more useful answer than a rule about the value inside it, and
+	// it is the same order the update door takes.
+	if err := checkFaceType(Type(req.Type), req.FaceValueMinor, req.FaceCurrency); err != nil {
+		httpjson.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := checkFacePair(req.FaceValueMinor, req.FaceCurrency); err != nil {
 		httpjson.Error(w, http.StatusBadRequest, err.Error())
 		return
@@ -325,6 +407,24 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.Name != nil && *req.Name == "" {
 		httpjson.Error(w, http.StatusBadRequest, "name must not be empty")
 		return
+	}
+	// The type rule is the one thing here that cannot be judged from the request:
+	// a PATCH carries no type, and nothing in this program can change one, so the
+	// stored row answers for it (see errFaceBondOnly). The row is read only when
+	// the request actually SETS a face value — a PATCH that touches other fields,
+	// or one that clears the pair, costs no extra query and is never refused by
+	// this rule. A missing row falls out here as the ordinary 404 rather than as
+	// a sentence about bonds.
+	if facePairCarriesAValue(req.FaceValueMinor, req.FaceCurrency) {
+		stored, err := h.store.ByID(r.Context(), id)
+		if err != nil {
+			family.WriteError(w, err)
+			return
+		}
+		if err := checkFaceType(stored.Type, req.FaceValueMinor, req.FaceCurrency); err != nil {
+			httpjson.Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	if err := checkFaceUpdate(req.FaceValueMinor, req.FaceCurrency); err != nil {
 		httpjson.Error(w, http.StatusBadRequest, err.Error())

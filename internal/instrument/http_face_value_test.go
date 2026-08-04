@@ -8,6 +8,9 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/google/uuid"
+
+	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/platform/money"
 )
 
@@ -51,6 +54,14 @@ var (
 	faceTooLargeRule = fmt.Sprintf("face_value_minor must be at most %d", money.MaxAmountMinor)
 	faceCurrencyRule = "face_currency must be ISO-4217 uppercase"
 )
+
+// faceBondOnlyRule is the refusal for a face value on something that is not a
+// bond, and it NAMES THE TYPE it found — spelled out here as a format so every
+// assertion below compares the whole sentence including that type. A message
+// that named the wrong type would send an importer to fix the wrong row.
+func faceBondOnlyRule(instrumentType string) string {
+	return fmt.Sprintf("face_value_minor and face_currency belong to a bond; this instrument is a %s", instrumentType)
+}
 
 // mkBond creates an ordinary bond with a sound face value and returns its id.
 func mkBond(t *testing.T, url string, c *http.Client) string {
@@ -376,5 +387,189 @@ func TestUpdateOfSomethingElseLeavesThePairAlone(t *testing.T) {
 	if pair.FaceValueMinor == nil || *pair.FaceValueMinor != 100000 ||
 		pair.FaceCurrency == nil || *pair.FaceCurrency != "RUB" {
 		t.Errorf("face pair = %+v, want 100000 RUB untouched", pair)
+	}
+}
+
+// A face value was accepted on ANY type of instrument, though the contract has
+// said all along that it is null for anything that is not a bond (#101).
+// Verified before this test existed: `{"type":"share", ...}` with a face value
+// came back 201 and GET published the field.
+//
+// Nothing computed a wrong figure from it — portfolio.marketValue branches on
+// the type and never reads a share's face value, and the trade dialog's
+// faceGapOf returns early for a non-bond — so this is not a broken screen. It
+// is the document promising one thing and the server accepting another, which
+// is what the next client writes its code against.
+//
+// The CHECK moved to the write rather than the promise being weakened, for the
+// reason a face value is already bounded, positive and pair-checked there: a
+// bond's quote is a percentage of face, so the pair MEANS something on a bond
+// and means nothing anywhere else, and a field that means nothing is one a
+// reader will one day read anyway.
+
+// TestCreateRefusesAFaceValueOnAnythingButABond covers every type the catalog
+// has, not just the share the issue reported: nothing about the rule is about
+// shares, and a check written as `!= bond` and one written as `== share` differ
+// on five types nobody would have tested by hand.
+func TestCreateRefusesAFaceValueOnAnythingButABond(t *testing.T) {
+	url, c := newAPI(t)
+
+	for _, kind := range []string{"share", "etf", "currency", "crypto", "metal", "custom"} {
+		wantFaceRefusal(t, do(t, c, "POST", url+"/api/v1/instruments",
+			fmt.Sprintf(`{"type":%q,"name":"X","currency":"RUB","face_value_minor":100000,"face_currency":"RUB"}`, kind)),
+			faceBondOnlyRule(kind), "create a "+kind+" carrying a face value")
+	}
+
+	// HALF a pair is refused by this rule too, and by this rule rather than by
+	// the pairing one: on a non-bond neither half belongs, so "set them
+	// together" would tell the client to send MORE of what it may not send at
+	// all.
+	for _, tc := range []struct{ what, body string }{
+		{"create a share with a face value alone", `{"type":"share","name":"X","currency":"RUB","face_value_minor":100000}`},
+		{"create a share with a face currency alone", `{"type":"share","name":"X","currency":"RUB","face_currency":"RUB"}`},
+	} {
+		wantFaceRefusal(t, do(t, c, "POST", url+"/api/v1/instruments", tc.body),
+			faceBondOnlyRule("share"), tc.what)
+	}
+}
+
+// TestCreateStillTakesANonBondWithNoFaceValue is the other side: the rule
+// refuses a face value on a non-bond, not the non-bond. Every ordinary catalog
+// row is one of these.
+func TestCreateStillTakesANonBondWithNoFaceValue(t *testing.T) {
+	url, c := newAPI(t)
+
+	for _, body := range []string{
+		`{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`,
+		`{"type":"crypto","name":"Bitcoin","currency":"USD"}`,
+		// Explicit nulls are absence, exactly as they are for a bond: a client
+		// that sends the whole shape of the object with two nulls in it has not
+		// asked for a face value.
+		`{"type":"etf","name":"Фонд","currency":"RUB","face_value_minor":null,"face_currency":null}`,
+	} {
+		if resp := do(t, c, "POST", url+"/api/v1/instruments", body); resp.StatusCode != http.StatusCreated {
+			b, _ := io.ReadAll(resp.Body)
+			t.Errorf("create %s = %d, want 201: %s", body, resp.StatusCode, b)
+		}
+	}
+}
+
+// mkShare creates an ordinary share carrying no face value and returns its id.
+func mkShare(t *testing.T, url string, c *http.Client) string {
+	t.Helper()
+	resp := do(t, c, "POST", url+"/api/v1/instruments",
+		`{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`)
+	if resp.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create share = %d: %s", resp.StatusCode, b)
+	}
+	var share struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&share); err != nil {
+		t.Fatalf("decode share: %v", err)
+	}
+	return share.ID
+}
+
+// TestUpdateRefusesAFaceValueOnAnythingButABond closes the other door, and it
+// is the door that matters most: an instrument's type cannot be changed
+// (UpdateInstrumentRequest has no type and the UPDATE statement does not touch
+// the column), so a PATCH is the only way a row created sound could have
+// acquired a face value it may not have.
+//
+// The type comes from the STORED row, which is the one thing a PATCH cannot
+// tell the server itself. That read cannot be raced by a concurrent write the
+// way a read of the face pair could: there is no code path in this program that
+// changes an instrument's type, so what this read sees is what the write will
+// land on.
+func TestUpdateRefusesAFaceValueOnAnythingButABond(t *testing.T) {
+	url, c := newAPI(t)
+	id := mkShare(t, url, c)
+
+	wantFaceRefusal(t, do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
+		`{"face_value_minor":100000,"face_currency":"RUB"}`),
+		faceBondOnlyRule("share"), "patch a face value onto a share")
+
+	pair := readFacePair(t, url, c, id)
+	if pair.FaceValueMinor != nil || pair.FaceCurrency != nil {
+		t.Errorf("face pair after the refusal = %+v, want both still null", pair)
+	}
+}
+
+// TestUpdateStillClearsAFaceValueRecordedBeforeTheRule is the repair path, and
+// the reason no migration comes with this rule. Rows written before it are
+// untouched — the catalog is not rewritten and the server is not stopped over a
+// state that computes nothing wrong — so the API has to keep the one action
+// that fixes such a row: clearing the pair.
+//
+// It is why the rule is written about SETTING a face value rather than about
+// carrying one. A check that refused any PATCH of the pair on a non-bond would
+// leave every such row unfixable through the API, which is a worse state than
+// the one it set out to prevent.
+func TestUpdateStillClearsAFaceValueRecordedBeforeTheRule(t *testing.T) {
+	url, c, store := newAPIWithCatalog(t)
+
+	// Straight through the store, which is how such a row got there: the rule
+	// lives at the HTTP door, and the door is what did not have it.
+	value := int64(100000)
+	code := "RUB"
+	legacy, err := store.Create(t.Context(), instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Акция с номиналом", Currency: "RUB",
+		FaceValueMinor: &value, FaceCurrency: &code,
+	})
+	if err != nil {
+		t.Fatalf("seed the pre-existing row: %v", err)
+	}
+
+	if resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+legacy.ID.String(),
+		`{"face_value_minor":null,"face_currency":null}`); resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("clear the pair on a share = %d, want 200: %s", resp.StatusCode, b)
+	}
+	if pair := readFacePair(t, url, c, legacy.ID.String()); pair.FaceValueMinor != nil || pair.FaceCurrency != nil {
+		t.Errorf("face pair after clearing = %+v, want both null", pair)
+	}
+
+	// And every other field of such a row stays editable: the rule is about the
+	// face pair, not about the instrument.
+	if resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+legacy.ID.String(),
+		`{"name":"Переименована"}`); resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Errorf("patch another field of such a row = %d, want 200: %s", resp.StatusCode, b)
+	}
+}
+
+// TestUpdateOfABondsFaceValueIsUnaffected: the rule must not have closed the
+// door it exists to keep open. A bond is the one type these two fields belong
+// to, and its own PATCH still works.
+func TestUpdateOfABondsFaceValueIsUnaffected(t *testing.T) {
+	url, c := newAPI(t)
+	id := mkBond(t, url, c)
+
+	if resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
+		`{"face_value_minor":200000,"face_currency":"USD"}`); resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("patch a bond's face pair = %d, want 200: %s", resp.StatusCode, b)
+	}
+	pair := readFacePair(t, url, c, id)
+	if pair.FaceValueMinor == nil || *pair.FaceValueMinor != 200000 ||
+		pair.FaceCurrency == nil || *pair.FaceCurrency != "USD" {
+		t.Errorf("face pair = %+v, want 200000 USD", pair)
+	}
+}
+
+// TestUpdateOfAMissingInstrumentIsStill404: the type rule needs the stored row,
+// and a rule that reads a row has to say the ordinary thing when there is none.
+// A 400 about bonds for an id that does not exist would be a sentence about a
+// row the client never had.
+func TestUpdateOfAMissingInstrumentIsStill404(t *testing.T) {
+	url, c := newAPI(t)
+
+	resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+uuid.NewString(),
+		`{"face_value_minor":100000,"face_currency":"RUB"}`)
+	if resp.StatusCode != http.StatusNotFound {
+		b, _ := io.ReadAll(resp.Body)
+		t.Errorf("patch a face value onto a missing instrument = %d, want 404: %s", resp.StatusCode, b)
 	}
 }
