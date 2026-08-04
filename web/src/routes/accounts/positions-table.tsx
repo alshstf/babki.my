@@ -81,29 +81,53 @@ function rowGapTitle(t: (key: string) => string, gap: InBaseGap | null): string 
 
 // What the VALUATION cell says, which is the one cell that can have a cause of
 // its own (Position.market_value_gap) — the nearer one, and the one that wins
-// there. `rowTitle` is what it falls back to, and that fallback is the whole
-// decision this cell needed: when the valuation itself converted fine and the
-// row's own term is what withheld it, the row's sentence is the true one and
-// it already says so. Repeating the valuation's own sentence there would blame
-// a third currency that is not in play; saying nothing would leave an
-// unexplained marker on a figure the reader can see is not in rubles.
+// there. It answers for that cell in both of its states, and the two are not
+// the same question, which is why `fallback` is a parameter rather than a
+// constant here:
 //
-// An unnameable value degrades to the row's sentence for the same reason: the
-// row's cause is true of this cell too (the object it withholds contains this
-// figure), it is merely not the nearest one — and where the row has no named
-// cause either, that fallback is itself the general phrase.
+//   - the cell HAS a figure that could not be converted. The row's own
+//     sentence is the fallback: when the valuation itself converted fine and
+//     the row's term is what withheld the base-currency block, that sentence is
+//     the true one and already says so. Repeating the valuation's own sentence
+//     there would blame a third currency that is not in play; saying nothing
+//     would leave an unexplained marker on a figure the reader can see is not
+//     in rubles.
+//   - the cell has NO figure and renders a dash. The fallback is then the
+//     general «оценки нет, причина не названа», because the row's sentence is
+//     about the base currency and this dash is not: a valuation this program
+//     never struck is missing in every currency.
+//
+// The three no-figure causes are the whole of #78. Until it, this switch had
+// one case and the dash was captioned «Нет котировки» from a literal in the
+// markup — an inference from an absent figure, and false on two of the three
+// rows it landed on: a crypto or metal position and a bond with no face value
+// recorded can both carry a perfectly good quote. Their sentences must
+// therefore not send the reader after one, and `type_not_priced`'s must not
+// promise a figure at all: no decision to write such a valuation has been
+// taken, so «пока» would be an invention.
+//
+// An unnameable value degrades to the caller's fallback for the same reason
+// (#105): what is true of the cell is still true, the cause merely is not
+// known, and a build one release behind a server must not answer a cause it
+// cannot read with one it can.
 function valuationGapTitle(
   t: (key: string) => string,
   gap: MarketValueGap | null,
-  rowTitle: string,
+  fallback: string,
 ): string {
   switch (gap) {
+    case "no_quote":
+      return t("positions.noQuote");
+    case "type_not_priced":
+      return t("positions.notPricedForType");
+    case "no_face_value":
+      return t("positions.noFaceValue");
     case "no_rate_valuation_currency":
       return t("positions.notConvertedValuationCurrency");
     case null:
-      return rowTitle;
+      return fallback;
     default:
-      return unnameableGap(gap, rowTitle);
+      return unnameableGap(gap, fallback);
   }
 }
 
@@ -314,10 +338,18 @@ export function PositionsTable({
           // true — a row stopped by a dateless lot whose valuation is also
           // stuck in a third currency — and this cell takes the nearer of
           // them, while the rest of the row keeps the one that is true of it.
+          //
+          // WHICH FALLBACK depends on whether there is a figure in the cell,
+          // and the two cases are answered by the same lookup so that one
+          // vocabulary of causes reaches both. With a figure, an unnamed cause
+          // means the row's own sentence is the true one. With none, the row's
+          // sentence would be false — it is about the base currency, and a
+          // valuation that was never struck is missing in every currency — so
+          // the general "no valuation, cause not named" phrase stands instead.
           const valuationUnconvertedTitle = valuationGapTitle(
             t,
             position.market_value_gap,
-            unconvertedTitle,
+            hasMarketValue ? unconvertedTitle : t("positions.noValuation"),
           );
           const hint = hasMarketValue ? priceHint(t, position) : null;
           const unrealizedMinor = position.unrealized_pnl_minor;
@@ -454,7 +486,7 @@ export function PositionsTable({
                   <span
                     data-testid="position-no-quote"
                     className="text-muted-foreground"
-                    title={t("positions.noQuote")}
+                    title={valuationUnconvertedTitle}
                   >
                     —
                   </span>
@@ -484,7 +516,21 @@ export function PositionsTable({
                   <span
                     data-testid="position-profit-dash"
                     className="text-muted-foreground"
-                    title={t(hasMarketValue ? "positions.currencyMismatch" : "positions.noQuote")}
+                    // Two ways to have no profit, and they are two different
+                    // sentences. With a valuation present, the profit is
+                    // missing because that valuation is in another currency
+                    // and cannot be subtracted from the basis. With none, the
+                    // profit is missing because one of its two operands is —
+                    // so this cell says that in its own words and then hands
+                    // over to the valuation's cause, whatever the server said
+                    // it was. It used to print «Нет котировки» flat, which is
+                    // the same false sentence #78 is about, one column over: a
+                    // crypto row's profit is not waiting for a quote either.
+                    title={
+                      hasMarketValue
+                        ? t("positions.currencyMismatch")
+                        : t("positions.profitNeedsValuation") + "\n" + valuationUnconvertedTitle
+                    }
                   >
                     —
                   </span>

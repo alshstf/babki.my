@@ -65,6 +65,36 @@ const CAPTION = {
     "Оценка получилась в другой валюте, чем позиция, а курса от неё до валюты позиции нет: сравнить её со стоимостью позиции нельзя. Пока оценка не выражена в валюте позиции, программа не показывает её и в базовой. Поэтому показана в исходной валюте",
 } as const;
 
+// The sentences for an EMPTY valuation cell, one per value of
+// Position.market_value_gap that says no valuation was struck, plus the general
+// one for a cause this build cannot name. Spelled out in full for the same
+// reason CAPTION is: which sentence lands on the dash is the whole of #78, and
+// a test reading them back through the component's own lookup would agree with
+// whatever it picked.
+//
+// The three named ones are three different pieces of news and are worded to be
+// unmistakable for one another. Only ONE of them mentions a quote as the thing
+// that is missing, and it is the only one where a quote IS the thing that is
+// missing. The other two are about a row that may well have a perfectly good
+// quote — and neither of them may claim that it HAS one either: the server
+// reports both of them whether a quote exists or not, because the ordering rule
+// puts the cause a quote would not close first (see MarketValueGap in the API
+// contract).
+const NO_VALUATION = {
+  noQuote: "Котировки пока нет. Когда она загрузится, рыночная оценка посчитается сама",
+  typeNotPriced:
+    "Стоимость для этого вида активов программа не считает — такого расчёта в ней нет. Котировка тут ничего не меняет: даже когда она есть, оценки не будет, и ждать её не нужно",
+  noFaceValue:
+    "У этой облигации не записан номинал, а котируется она в процентах от номинала: брать процент не от чего. Котировка тут ничего не меняет — пока номинала нет, оценки не будет",
+  general: "Рыночной оценки нет, а причина не названа",
+} as const;
+
+// What the PROFIT dash adds in front of the valuation's sentence. The profit
+// column's own dash needs its own first line: the sentences above explain why
+// there is no valuation, and this is why that leaves the profit cell empty
+// too.
+const PROFIT_NEEDS_VALUATION = "Прибыль — это рыночная оценка минус стоимость, а оценки нет";
+
 // The two sentences the price line's tooltip carries under the date, spelled
 // out here in full for the same reason the captions above are: what this is
 // about is WHICH sentence sits beside the number, and a test that fetched it
@@ -287,6 +317,10 @@ describe("PositionsTable", () => {
             market_value_currency: null,
             price: null,
             price_on: null,
+            // The contract publishes a cause on every row with no valuation
+            // (#78), and this fixture is the one the phrase «нет котировки» is
+            // actually true of: an ordinary share whose price has not arrived.
+            market_value_gap: "no_quote",
           }),
         ]}
         mode="native"
@@ -296,7 +330,7 @@ describe("PositionsTable", () => {
 
     const dash = screen.getByTestId("position-no-quote");
     expect(dash).toHaveTextContent("—");
-    expect(dash).toHaveAttribute("title", "Нет котировки");
+    expect(dash).toHaveAttribute("title", NO_VALUATION.noQuote);
     // "not preceded by a digit" excludes legitimate non-zero amounts that
     // happen to end in "0,00" (e.g. "500,00"), while still catching a real
     // fake-zero amount ("0,00").
@@ -376,6 +410,7 @@ describe("PositionsTable", () => {
             market_value_minor: null,
             market_value_currency: null,
             unrealized_pnl_minor: null,
+            market_value_gap: "no_quote",
           }),
         ]}
         mode="native"
@@ -385,7 +420,14 @@ describe("PositionsTable", () => {
 
     const dash = screen.getByTestId("position-profit-dash");
     expect(dash).toHaveTextContent("—");
-    expect(dash).toHaveAttribute("title", "Нет котировки");
+    // The profit is missing BECAUSE the valuation is, so this cell says that
+    // and then hands over to the valuation's own reason. It used to print
+    // «Нет котировки» flat, which on two of the three kinds of row that reach
+    // here is false (see the describe block below).
+    expect(dash).toHaveAttribute(
+      "title",
+      `${PROFIT_NEEDS_VALUATION}\n${NO_VALUATION.noQuote}`,
+    );
     expect(screen.queryByTestId("position-profit-amount")).not.toBeInTheDocument();
     expect(screen.queryByTestId("position-profit-percent")).not.toBeInTheDocument();
   });
@@ -414,6 +456,161 @@ describe("PositionsTable", () => {
     expect(dash).toHaveAttribute("title", "Оценка в другой валюте — прибыль не рассчитывается");
     expect(screen.queryByTestId("position-profit-amount")).not.toBeInTheDocument();
     expect(screen.queryByTestId("position-profit-percent")).not.toBeInTheDocument();
+  });
+
+  describe("the empty valuation cell says WHICH absence it is", () => {
+    // Issue #78. Three different things leave a position with no market
+    // valuation, and this screen used to put «Нет котировки» over all three.
+    // On two of them a quote exists and is not what is missing — the program
+    // has no valuation model for the instrument's type, or the bond's face
+    // value was never recorded — so the reader was sent off to wait for data
+    // that was already there. Only the server knows which of the three
+    // happened, and since #78 it says so in Position.market_value_gap.
+    //
+    // Every test here pins the EXACT sentence and, where it matters, asserts
+    // that the other ones are not the one shown: a caption that is merely
+    // different is not the property under test, the right cause is.
+    const withNoValuation = (gap: Position["market_value_gap"]) =>
+      makePosition({
+        market_value_minor: null,
+        market_value_currency: null,
+        price: null,
+        price_on: null,
+        unrealized_pnl_minor: null,
+        market_value_gap: gap,
+      });
+
+    it("says a quote is missing only where a quote is what is missing", () => {
+      wrap(
+        <PositionsTable
+          positions={[withNoValuation("no_quote")]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(screen.getByTestId("position-no-quote")).toHaveAttribute(
+        "title",
+        NO_VALUATION.noQuote,
+      );
+    });
+
+    it("does not blame a missing quote for a type it does not price", () => {
+      wrap(
+        <PositionsTable
+          positions={[withNoValuation("type_not_priced")]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const dash = screen.getByTestId("position-no-quote");
+      expect(dash).toHaveAttribute("title", NO_VALUATION.typeNotPriced);
+      // The two things this sentence is forbidden to do, both of them the
+      // reason the value exists at all. It may not send the reader off after a
+      // quote — the row may already have one, and a new one changes nothing —
+      // and it may not promise the figure is coming, because no decision to
+      // write such a valuation has been taken.
+      expect(dash.getAttribute("title")).not.toBe(NO_VALUATION.noQuote);
+      expect(dash.getAttribute("title")).not.toMatch(/появится|посчитается сама|пока нет/);
+    });
+
+    it("does not blame a missing quote for a bond with no face value", () => {
+      wrap(
+        <PositionsTable
+          positions={[withNoValuation("no_face_value")]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const dash = screen.getByTestId("position-no-quote");
+      expect(dash).toHaveAttribute("title", NO_VALUATION.noFaceValue);
+      expect(dash.getAttribute("title")).not.toBe(NO_VALUATION.noQuote);
+      expect(dash.getAttribute("title")).not.toBe(NO_VALUATION.typeNotPriced);
+    });
+
+    it("claims no cause for one it cannot name, and none for one the server did not send", () => {
+      // The #105 rule on this cell: a server NEWER than this build sends a
+      // value outside the union, and an OLDER one sends null where the
+      // contract now requires a cause. Neither may be captioned «Нет
+      // котировки» — that is a claim about a quote, and the condition that
+      // brings us here is not knowing anything about one.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              instrument: { ...makePosition().instrument, id: "instr-unnameable" },
+              market_value_minor: null,
+              market_value_currency: null,
+              unrealized_pnl_minor: null,
+              market_value_gap:
+                "no_lunar_settlement_price" as Position["market_value_gap"],
+            }),
+            makePosition({
+              instrument: { ...makePosition().instrument, id: "instr-no-cause" },
+              market_value_minor: null,
+              market_value_currency: null,
+              unrealized_pnl_minor: null,
+              market_value_gap: null,
+            }),
+          ]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const [unnameable, noCause] = screen.getAllByTestId("position-no-quote");
+      expect(unnameable).toHaveAttribute("title", NO_VALUATION.general);
+      expect(noCause).toHaveAttribute("title", NO_VALUATION.general);
+    });
+
+    it("gives the profit dash the valuation's cause, not «нет котировки»", () => {
+      // The second cell #78 lands on. The profit is a dash because the
+      // valuation is, so the reason for one is the reason for the other — and
+      // this cell said «Нет котировки» over a crypto row just as the valuation
+      // cell did.
+      wrap(
+        <PositionsTable
+          positions={[withNoValuation("type_not_priced")]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const dash = screen.getByTestId("position-profit-dash");
+      expect(dash).toHaveAttribute(
+        "title",
+        `${PROFIT_NEEDS_VALUATION}\n${NO_VALUATION.typeNotPriced}`,
+      );
+      expect(dash.getAttribute("title")).not.toContain(NO_VALUATION.noQuote);
+    });
+
+    it("keeps the currency-mismatch sentence on the profit dash of a row that HAS a valuation", () => {
+      // The other half of the profit dash, unchanged and asserted here beside
+      // its neighbour: with a valuation present the profit is missing for a
+      // different reason entirely, and the valuation's absence sentences say
+      // nothing true about it.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "RUB",
+              market_value_minor: 952_00,
+              market_value_currency: "USD",
+              unrealized_pnl_minor: null,
+              market_value_gap: "no_rate_valuation_currency",
+            }),
+          ]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const dash = screen.getByTestId("position-profit-dash");
+      expect(dash).toHaveAttribute("title", "Оценка в другой валюте — прибыль не рассчитывается");
+      expect(dash.getAttribute("title")).not.toContain(PROFIT_NEEDS_VALUATION);
+    });
   });
 
   it("adds a tooltip note with the pre-conversion amount when the market value was converted from another currency", () => {

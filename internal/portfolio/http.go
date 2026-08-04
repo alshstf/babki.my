@@ -155,13 +155,81 @@ func instrumentToAPI(i instrument.Instrument) apitypes.Instrument {
 // their currency.
 const centsPerUnit = 2
 
+// valuationGap names WHY a position has no market valuation, or why the one it
+// has could not be brought into the position's own currency. It is what the
+// contract's Position.market_value_gap publishes (see apiMarketValueGap), and
+// it exists for the reason inBaseGap does: the answer travels from the code
+// that decides it to the payload, instead of being reconstructed downstream
+// from an absent figure.
+//
+// THE THREE CAUSES OF AN ABSENT VALUATION ARE NOT THE SAME NEWS, which is the
+// whole of #78. Before this vocabulary the screen said «Нет котировки» over
+// every empty valuation cell, and two of the three rows it said that over have
+// a quote sitting right there: one whose type this program computes nothing
+// for, and a bond whose face value nobody recorded. Both sent the reader off to
+// wait for data that was not missing.
+type valuationGap uint8
+
+const (
+	// valuationStruck: there is a valuation. It is also what marketValue
+	// returns beside a refusal (see its err), where it means nothing: the
+	// caller reads the error first and never publishes a gap on that path —
+	// exactly as positionInBase returns inBaseStruck beside its own errors.
+	valuationStruck valuationGap = iota
+	// valuationTypeNotPriced: this program has no valuation model for the
+	// instrument's type. Reported whether or not a quote exists, because a
+	// quote closes nothing here.
+	valuationTypeNotPriced
+	// valuationNoFaceValue: a bond with no face value recorded. Its quote is a
+	// percentage of face value, so there is nothing to take the percentage of,
+	// and a quote closes nothing here either.
+	valuationNoFaceValue
+	// valuationNoQuote: the type is priced, the catalog row is complete, and no
+	// price has been stored yet. The only one of the three an arriving quote
+	// closes — which is why the two above are decided ahead of it.
+	valuationNoQuote
+	// valuationNoRateValuationCurrency: there IS a valuation, and the fx table
+	// could not convert it out of the currency it is denominated in into the
+	// position's own. Decided in toAPI rather than in marketValue, which knows
+	// nothing about rates.
+	valuationNoRateValuationCurrency
+)
+
+// apiMarketValueGap maps a gap onto the contract's vocabulary. ok is false for
+// valuationStruck, which is not a gap at all and publishes no cause.
+func apiMarketValueGap(g valuationGap) (apitypes.MarketValueGap, bool) {
+	switch g {
+	case valuationTypeNotPriced:
+		return apitypes.TypeNotPriced, true
+	case valuationNoFaceValue:
+		return apitypes.NoFaceValue, true
+	case valuationNoQuote:
+		return apitypes.NoQuote, true
+	case valuationNoRateValuationCurrency:
+		return apitypes.NoRateValuationCurrency, true
+	default:
+		return "", false
+	}
+}
+
 // marketValue computes a position's market value from the latest quote for
 // its instrument, in minor units, plus the currency that value is
-// denominated in. ok is false when no valuation applies — the instrument's
-// type isn't priced this way (bond without both a face value and a face
-// currency, or currency/crypto/metal/custom) — in which case the caller
-// must leave market_value_minor/market_value_currency/price/price_on null
-// rather than publish a zero or misleading figure.
+// denominated in. gap is valuationStruck when there is a figure, and otherwise
+// names which of the three absences applies, in which case the caller must
+// leave market_value_minor/market_value_currency/price/price_on null rather
+// than publish a zero or misleading figure — and publish the gap, so that the
+// dash on screen carries the reason it is there.
+//
+// quoted says whether q is a real quote rather than a zero value, and this
+// function takes it rather than being called only when it is true. That is what
+// puts the two permanent causes AHEAD of the missing quote: the switch below
+// decides the type before it looks at the quote at all, and the bond branch
+// checks its face value first. A crypto row with no quote therefore answers
+// `type_not_priced`, not `no_quote` — because a quote arriving for it would
+// still value nothing, and «no quote» would name the one thing whose arrival
+// changes something. It is the same ordering rule apiInBaseGap states for
+// in_base_gap: the cause no backfill closes is reported ahead of the ones it
+// does.
 //
 // share/etf: price (per unit, major currency units) × quantity, in the
 // quote's own currency (q.Currency). The QUOTE's, deliberately, because
@@ -208,31 +276,47 @@ const centsPerUnit = 2
 // one accepted buy at a time; and the rows written before that bound existed are
 // still in the journal, since no migration came with it.
 //
-// err is that refusal and NOTHING ELSE, which is why it is separate from ok.
-// ok=false says no valuation applies to this instrument, and the caller
-// answers it by publishing nulls — the same nulls it publishes for a position
-// with no quote at all. An overflow answered that way would be a broken
+// err is that refusal and NOTHING ELSE, which is why it is separate from gap.
+// A gap says no valuation exists, and the caller answers it by publishing
+// nulls plus the reason. An overflow answered that way would be a broken
 // journal wearing the face of absent market data.
-func marketValue(instType instrument.Type, faceValueMinor *int64, faceCurrency *string, quantity decimal.Decimal, q marketdata.Quote) (minor int64, currency string, ok bool, err error) {
+func marketValue(instType instrument.Type, faceValueMinor *int64, faceCurrency *string, quantity decimal.Decimal, q marketdata.Quote, quoted bool) (minor int64, currency string, gap valuationGap, err error) {
 	switch instType {
 	case instrument.TypeShare, instrument.TypeETF:
+		if !quoted {
+			return 0, "", valuationNoQuote, nil
+		}
 		minor, err = money.Minor(q.Price.Mul(quantity).Shift(centsPerUnit))
 		if err != nil {
-			return 0, "", false, fmt.Errorf("%w: %s at %s", err, quantity, q.Price)
+			return 0, "", valuationStruck, fmt.Errorf("%w: %s at %s", err, quantity, q.Price)
 		}
-		return minor, q.Currency, true, nil
+		return minor, q.Currency, valuationStruck, nil
 	case instrument.TypeBond:
+		// Before the quote, deliberately: a bond's price is a percentage of
+		// face value, so a quote arriving for a bond with no face value
+		// recorded would still value nothing, and «no quote» would be an
+		// answer the reader could act on where there is none.
 		if faceValueMinor == nil || faceCurrency == nil {
-			return 0, "", false, nil
+			return 0, "", valuationNoFaceValue, nil
+		}
+		if !quoted {
+			return 0, "", valuationNoQuote, nil
 		}
 		minor, err = money.Minor(decimal.NewFromInt(*faceValueMinor).Mul(q.Price).Shift(-centsPerUnit).Mul(quantity))
 		if err != nil {
-			return 0, "", false, fmt.Errorf("%w: %s at %s%% of a face value of %d", err, quantity, q.Price, *faceValueMinor)
+			return 0, "", valuationStruck, fmt.Errorf("%w: %s at %s%% of a face value of %d", err, quantity, q.Price, *faceValueMinor)
 		}
-		return minor, *faceCurrency, true, nil
+		return minor, *faceCurrency, valuationStruck, nil
 	default:
-		// currency, crypto, metal, custom: no defined valuation model yet.
-		return 0, "", false, nil
+		// currency, crypto, metal, custom — and any type added to
+		// instrument.Type without a branch above. This program computes no
+		// value for them. The quote is not consulted, and that is the point:
+		// such an instrument can carry a perfectly good quote (the seed's
+		// sub-cent share is deliberately a SHARE for exactly this reason), and
+		// the row still has no valuation. Nothing is coming — no decision to
+		// write such a model has been taken — so this gap must never be
+		// captioned as one that will close.
+		return 0, "", valuationTypeNotPriced, nil
 	}
 }
 
@@ -333,25 +417,32 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 		FeesMinor:              p.FeesMinor,
 		HasUndatedLots:         hasUndatedLots(p),
 		HasUndatedRealizations: hasUndatedRealizations(p),
-		// Nothing has been withheld from the valuation until the conversion
-		// below actually fails, and every path out of this function leaves the
-		// field as it is set here — an explicit null, never an unspecified key
-		// (the contract requires it on every position, and an unspecified
-		// nullable does not marshal as one).
+		// The starting value, and the answer for a row where the valuation is
+		// struck and needs no explaining. Every other path below overwrites it
+		// with a named cause. It is an explicit null, never an unspecified key
+		// (the contract requires the field on every position, and an
+		// unspecified nullable does not marshal as one).
 		MarketValueGap: nullable.NewNullNullable[apitypes.MarketValueGap](),
 	}
-	q, found := quotes[p.InstrumentID]
-	if !found {
-		return out, nil
-	}
-	minor, currency, ok, err := marketValue(inst.Type, inst.FaceValueMinor, inst.FaceCurrency, p.Quantity, q)
+	// The quote is looked up first and JUDGED LAST: marketValue takes `quoted`
+	// and decides the type and the face value before it, so the two causes an
+	// arriving quote would not close are reported ahead of the one it would
+	// (see marketValue). Nothing here re-decides that order.
+	q, quoted := quotes[p.InstrumentID]
+	minor, currency, gap, err := marketValue(inst.Type, inst.FaceValueMinor, inst.FaceCurrency, p.Quantity, q, quoted)
 	if err != nil {
 		// The valuation does not fit in an int64 — a broken quantity or price,
 		// not absent data — so it is surfaced as a request error rather than
-		// published as the same null a position without a quote gets.
+		// published as the same null a position without a valuation gets.
 		return apitypes.Position{}, err
 	}
-	if !ok {
+	if apiGap, missing := apiMarketValueGap(gap); missing {
+		// No valuation, and the dash the client renders in its place carries
+		// the reason it is there. Published from the one function that decided
+		// it, never inferred here from market_value_minor being nil — that
+		// inference is what said «Нет котировки» over a crypto row holding a
+		// perfectly good quote (#78).
+		out.MarketValueGap = nullable.NewNullableWithValue(apiGap)
 		return out, nil
 	}
 	out.Price = nullable.NewNullableWithValue(q.Price.String())
@@ -419,7 +510,13 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 			// afterwards would answer the same question today — this branch is
 			// the only way the two can differ — and would be a second answer
 			// waiting to disagree with this one.
-			out.MarketValueGap = nullable.NewNullableWithValue(apitypes.NoRateValuationCurrency)
+			//
+			// It goes through apiMarketValueGap like the three absences above,
+			// so every wire value this file publishes comes out of one mapping.
+			// The `ok` result is dropped because the argument is a literal
+			// constant: only valuationStruck answers false, and this is not it.
+			apiGap, _ := apiMarketValueGap(valuationNoRateValuationCurrency)
+			out.MarketValueGap = nullable.NewNullableWithValue(apiGap)
 		default:
 			// A genuine failure (DB error, canceled context) — not "no rate
 			// available" — must not be silently swallowed into "no
@@ -1254,16 +1351,25 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 	//
 	// WHAT IT ASKS changed with the gap. It used to compare
 	// market_value_currency with p.Currency, which is toAPI's outcome read back
-	// out of the payload; it now asks toAPI's own answer, market_value_gap, set
-	// in the branch where the conversion into p.Currency failed. The two are
-	// equivalent today — that branch is the only way the two currencies can
-	// differ, and the `c == nil` half of the old condition was already
-	// redundant, since toAPI sets market_value_minor and market_value_currency
-	// together and a nil valuation is handled below regardless. What the change
-	// buys is that the cause published to the reader and the figure withheld
-	// from them are one decision instead of two that must keep agreeing: a
+	// out of the payload; it now asks toAPI's own answer, market_value_gap. The
+	// two are equivalent today — the failed conversion is the only way the two
+	// currencies can differ, and the `c == nil` half of the old condition was
+	// already redundant, since toAPI sets market_value_minor and
+	// market_value_currency together and a nil valuation is handled below
+	// regardless. What the change buys is that the cause published to the reader
+	// and the figure withheld from them are one decision instead of two that
+	// must keep agreeing: a
 	// caption saying the valuation could not be converted, over a converted
 	// valuation, is precisely the failure this whole change is about.
+	//
+	// ANY gap withholds it, which is the same rule stated once for four values
+	// rather than one guard per value (#78 gave the field three more). Three of
+	// them say no valuation was struck at all, and on those rows this line
+	// changes nothing — market_value_minor is already nil. The fourth is the one
+	// it was written for. That the guard is now partly redundant is what makes
+	// it right: "a gap of any kind means there is no valuation this object may
+	// carry" holds for whatever value is added next, where a guard naming
+	// `no_rate_valuation_currency` would silently stop covering it.
 	marketValueMinor := nullableValue(apiPos.MarketValueMinor)
 	valuationCurrency := p.Currency
 	if nullableValue(apiPos.MarketValueGap) != nil {
@@ -1462,7 +1568,7 @@ func rateQueries(
 	for _, p := range positions {
 		inst, known := instruments[p.InstrumentID]
 		q, quoted := quotes[p.InstrumentID]
-		if known && quoted {
+		if known {
 			// marketValue's error is deliberately ignored here, as
 			// operation.rateQueries ignores amountTerms': this pass only
 			// predicts which rates to fetch, and the loop calls the same
@@ -1470,7 +1576,11 @@ func rateQueries(
 			// place that knows which figure it was building (see toAPI). A
 			// valuation that cannot be struck simply asks for no rate, which is
 			// also all this function could usefully do about it.
-			if _, currency, valued, _ := marketValue(inst.Type, inst.FaceValueMinor, inst.FaceCurrency, p.Quantity, q); valued {
+			//
+			// `quoted` is passed in rather than gating the call, exactly as in
+			// toAPI: this must ask the same function the same question the loop
+			// will, and marketValue answers `no quote` itself now.
+			if _, currency, gap, _ := marketValue(inst.Type, inst.FaceValueMinor, inst.FaceCurrency, p.Quantity, q, quoted); gap == valuationStruck {
 				if currency != p.Currency {
 					// toAPI brings a valuation denominated in the face
 					// currency into the position's own — the one lookup on
