@@ -208,7 +208,31 @@ func maxOccurredOn() time.Time {
 // per-type contract; note the engine itself does not check amount sign or
 // non-zero-ness for dividend/coupon/tax/fee/interest/deposit/withdrawal, so
 // the service must, or silent corruption of income/fees becomes possible.
+//
+// It is THE HAND-ENTRY PATH'S rule and only that one. The importer has its own
+// (validateImported), because the two differ on exactly two types and agree on
+// everything else; what they agree on lives in the two helpers below, so that
+// the import's arrival cannot quietly move a rule a person's own entry is
+// checked against.
 func validate(o Operation) error {
+	if err := validateFields(o); err != nil {
+		return err
+	}
+	if o.Type == TypeTransferIn || o.Type == TypeTransferOut {
+		// Unchanged: hand entry writes a transfer through the endpoint that
+		// records both legs at once, so that the shares and the basis they
+		// carry cannot end up in different accounts. The import path admits a
+		// leg on its own instead (see validateImported), because a broker
+		// reports shares arriving without reporting where they came from.
+		return fmt.Errorf("%w: use the transfer endpoint for %s", family.ErrValidation, o.Type)
+	}
+	return validateByType(o)
+}
+
+// validateFields is every check that looks at a field's own value rather than
+// at what the type means — shape, bounds, and the two money fields agreeing
+// with each other. Both write paths run it, unchanged, before they part ways.
+func validateFields(o Operation) error {
 	if !o.Type.Valid() {
 		return fmt.Errorf("%w: invalid operation type", family.ErrValidation)
 	}
@@ -268,7 +292,20 @@ func validate(o Operation) error {
 	if o.SplitRatio != nil && o.SplitRatio.Abs().GreaterThanOrEqual(maxSplitRatio) {
 		return fmt.Errorf("%w: split_ratio must be less than %s", family.ErrValidation, maxSplitRatio)
 	}
+	return nil
+}
 
+// validateByType is the per-type contract for every type the two write paths
+// agree about — which is all of them but transfer_in and transfer_out, where
+// they disagree by design (see validate and validateImported).
+//
+// It has NO branch for those two, deliberately. Each path decides what a
+// transfer leg means to it and says so before delegating here; a branch that
+// also refused them would let one of those decisions be deleted without a
+// single test noticing, since the fall-through would go on refusing in its own
+// words. A type with no branch here is accepted by this function, which is why
+// a caller must never hand it a type it has not already ruled on.
+func validateByType(o Operation) error {
 	switch o.Type {
 	case TypeBuy, TypeSell:
 		if o.InstrumentID == nil {
@@ -307,8 +344,6 @@ func validate(o Operation) error {
 		if o.Source != "" && o.Source != "manual" {
 			return fmt.Errorf("%w: split is only supported for source=manual", family.ErrValidation)
 		}
-	case TypeTransferIn, TypeTransferOut:
-		return fmt.Errorf("%w: use the transfer endpoint for %s", family.ErrValidation, o.Type)
 	case TypeConversion:
 		// cash-level: any sign is legitimate (buying vs. selling currency).
 	}
@@ -347,13 +382,24 @@ func journalWith(ops []Operation, add []Operation, removeIDs map[uuid.UUID]bool)
 		o.CreatedAt = time.Now()
 		journal = append(journal, o)
 	}
+	sortJournal(journal)
+	return journal
+}
+
+// sortJournal puts operations in the order the engine folds them, which is the
+// order ListForEngine reads them back in: by the day they happened, and within
+// a day by when they were recorded. One function because two paths assemble a
+// journal to fold — this one and the import's (see ApplyImportDelta and
+// prepareCandidate, which sort journals whose rows already carry a created_at)
+// — and an order that differs between the check and the read is the fault this
+// package spends most of its care on.
+func sortJournal(journal []Operation) {
 	sort.SliceStable(journal, func(i, j int) bool {
 		if !journal[i].OccurredOn.Equal(journal[j].OccurredOn) {
 			return journal[i].OccurredOn.Before(journal[j].OccurredOn)
 		}
 		return journal[i].CreatedAt.Before(journal[j].CreatedAt)
 	})
-	return journal
 }
 
 // checkJournalOps is checkJournal over an already-loaded journal, so a caller
@@ -716,10 +762,22 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 // Delete removes an operation (or, if it belongs to a transfer group, the
 // whole group) after confirming every affected account's journal stays
 // consistent without it.
+//
+// AN IMPORTED ROW IS NOT ITS TO DELETE. Rows whose source is not "manual" are
+// a projection of records held elsewhere — the broker's own, kept in the
+// mirror — and the projection is rebuilt from those records rather than from
+// what the journal happens to contain. A row deleted here is therefore written
+// again the next time it is rebuilt, without a word, and "deleted" was a lie
+// this program told. Refusing says who owns the row instead; removing it for
+// real means removing what it is projected from, which goes through the
+// importer's own path (see ApplyImportDelta).
 func (s *Service) Delete(ctx context.Context, spaceID, id uuid.UUID) error {
 	op, err := s.store.ByID(ctx, spaceID, id)
 	if err != nil {
 		return err
+	}
+	if op.Source != "manual" {
+		return fmt.Errorf("%w: imported operations are managed by the importer", family.ErrValidation)
 	}
 
 	accounts := map[uuid.UUID]bool{op.AccountID: true}

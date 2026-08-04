@@ -3,6 +3,7 @@ package operation_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -717,5 +718,302 @@ func TestCreatePairRollsBackWhatItCannotConfirm(t *testing.T) {
 	}
 	if n := f.lotRows(t, cIn.ID); n != 1 {
 		t.Errorf("committed pair kept %d breakdown rows, want 1", n)
+	}
+}
+
+// importedDeposit is the plainest row a batch delta carries: no instrument, no
+// breakdown, one broker record behind it.
+func importedDeposit(f fixture, externalID string, on string, amountMinor int64) operation.Operation {
+	return operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit, OccurredOn: date(on),
+		AmountMinor: amountMinor, Currency: "RUB", Source: "tinvest", ExternalID: &externalID,
+	}
+}
+
+// TestApplyDeltaRollsBackWhatItCannotConfirm is Create's guard at batch size,
+// and it covers the half a single insert does not have: the REMOVALS. A delta
+// that deletes some rows and writes others is one transaction or it is a
+// journal in a state nobody asked for — the rows that were to be replaced gone,
+// the ones replacing them never written.
+func TestApplyDeltaRollsBackWhatItCannotConfirm(t *testing.T) {
+	f := newFixture(t)
+
+	existing, err := f.store.Create(f.ctx, f.spaceID, importedDeposit(f, "op-old", "2026-07-01", 1_000), nil)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	refuse := errors.New("the delta as stored no longer replays")
+	var seen []operation.Operation
+	_, err = f.store.ApplyDelta(f.ctx, f.spaceID,
+		[]operation.Operation{importedDeposit(f, "op-new", "2026-07-02", 2_000)},
+		[]uuid.UUID{existing.ID},
+		func(stored []operation.Operation) error {
+			seen = stored
+			return refuse
+		})
+	if !errors.Is(err, refuse) {
+		t.Fatalf("ApplyDelta = %v, want the verifier's own error", err)
+	}
+	// The verifier is handed the rows as the database made them — not the
+	// arguments echoed back, or it could not detect anything the database did.
+	if len(seen) != 1 || seen[0].ID == uuid.Nil || seen[0].CreatedAt.IsZero() {
+		t.Errorf("verifier saw %+v, want the row as stored", seen)
+	}
+
+	list, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
+	if err != nil {
+		t.Fatalf("list journal: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != existing.ID {
+		t.Fatalf("journal = %d rows, want the one row the refused delta was going to replace", len(list))
+	}
+
+	// And it commits when the verifier is satisfied: the old row gone, the new
+	// one in its place.
+	stored, err := f.store.ApplyDelta(f.ctx, f.spaceID,
+		[]operation.Operation{importedDeposit(f, "op-new", "2026-07-02", 2_000)},
+		[]uuid.UUID{existing.ID},
+		func([]operation.Operation) error { return nil })
+	if err != nil {
+		t.Fatalf("ApplyDelta with a satisfied verifier: %v", err)
+	}
+	list, err = f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
+	if err != nil {
+		t.Fatalf("list journal: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != stored[0].ID || list[0].AmountMinor != 2_000 {
+		t.Errorf("journal = %+v, want exactly the committed row", list)
+	}
+}
+
+// TestApplyDeltaDeletesBeforeItInserts pins the order the two halves run in,
+// and it is not a preference: a broker record that was corrected keeps its
+// identity, so the row replacing it carries the very external id the row being
+// removed still holds. Insert first and the unique index refuses a correction
+// that is perfectly legitimate.
+func TestApplyDeltaDeletesBeforeItInserts(t *testing.T) {
+	f := newFixture(t)
+
+	existing, err := f.store.Create(f.ctx, f.spaceID, importedDeposit(f, "op-1", "2026-07-01", 1_000), nil)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	stored, err := f.store.ApplyDelta(f.ctx, f.spaceID,
+		[]operation.Operation{importedDeposit(f, "op-1", "2026-07-01", 2_000)},
+		[]uuid.UUID{existing.ID}, nil)
+	if err != nil {
+		t.Fatalf("replacing a row by its own external id: %v", err)
+	}
+	if len(stored) != 1 || stored[0].AmountMinor != 2_000 {
+		t.Fatalf("stored = %+v, want the corrected row", stored)
+	}
+	list, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
+	if err != nil {
+		t.Fatalf("list journal: %v", err)
+	}
+	if len(list) != 1 || list[0].AmountMinor != 2_000 {
+		t.Errorf("journal = %+v, want just the corrected row", list)
+	}
+}
+
+// TestApplyDeltaRefusesARemovalItCannotFind pins that "remove these ids" means
+// all of them: a caller that computed its difference against a journal that has
+// since moved must be told, not quietly obeyed in part.
+func TestApplyDeltaRefusesARemovalItCannotFind(t *testing.T) {
+	f := newFixture(t)
+
+	existing, err := f.store.Create(f.ctx, f.spaceID, importedDeposit(f, "op-1", "2026-07-01", 1_000), nil)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := f.store.ApplyDelta(f.ctx, f.spaceID, nil,
+		[]uuid.UUID{existing.ID, uuid.New()}, nil); err == nil {
+		t.Fatal("ApplyDelta with an id that is not there: want an error")
+	}
+	if list, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID); err != nil || len(list) != 1 {
+		t.Errorf("journal = %d rows (%v), want the row left alone", len(list), err)
+	}
+}
+
+// deltaCost is what applying one delta cost, and what it left behind.
+type deltaCost struct {
+	rows     int
+	trips    int64
+	acquires int64
+	stored   int
+	written  int
+}
+
+func (c deltaCost) String() string {
+	return fmt.Sprintf("%d rows: %d database round trips (%d pool acquisitions, %d rows returned, %d rows in the journal)",
+		c.rows, c.trips, c.acquires, c.stored, c.written)
+}
+
+// writeDelta applies one delta of n rows on a database of its own and reports
+// what it cost.
+func writeDelta(t *testing.T, n int) deltaCost {
+	t.Helper()
+	f := newFixture(t)
+	pool, counter := tracedPool(t, f)
+	store := operation.NewStore(pool)
+
+	add := make([]operation.Operation, 0, n)
+	for i := range n {
+		add = append(add, importedDeposit(f, fmt.Sprintf("op-%d", i), "2026-07-01", int64(1_000+i)))
+	}
+
+	trips, acquires := counter.n.Load(), pool.Stat().AcquireCount()
+	stored, err := store.ApplyDelta(f.ctx, f.spaceID, add, nil, nil)
+	cost := deltaCost{
+		rows:     n,
+		trips:    counter.n.Load() - trips,
+		acquires: pool.Stat().AcquireCount() - acquires,
+		stored:   len(stored),
+	}
+	if err != nil {
+		t.Fatalf("ApplyDelta of %d rows: %v", n, err)
+	}
+	// Counted through the fixture's own pool, after the measurement, so the
+	// check does not appear in it.
+	list, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
+	if err != nil {
+		t.Fatalf("list journal: %v", err)
+	}
+	cost.written = len(list)
+	return cost
+}
+
+// TestApplyDeltaCostsTheSameWhateverItsSize is the reason this method exists at
+// all: the first load of a broker's history is thousands of operations, and one
+// round trip apiece is what makes it unusable. Three hundred rows must cost what
+// one row costs.
+//
+// Two sizes rather than one pinned number, as the transfer breakdown's twin
+// test explains: what must be true is not "four", it is "the same".
+//
+// THE POOL ACQUISITION COUNT IS REPORTED, NOT RELIED ON. A transaction takes
+// one connection at Begin and sends everything else down it, so that counter
+// reads 1 whatever this code does — it can tell you the delta is one
+// transaction, and nothing at all about how many statements travelled inside
+// it. The trip count comes off the driver instead (see tripCounter).
+func TestApplyDeltaCostsTheSameWhateverItsSize(t *testing.T) {
+	small := writeDelta(t, 1)
+	large := writeDelta(t, 300)
+
+	// A write that stored nothing is the cheapest write there is, and must not
+	// be able to pass a performance test.
+	for _, c := range []deltaCost{small, large} {
+		if c.stored != c.rows || c.written != c.rows {
+			t.Fatalf("%s — every row must be written and handed back", c)
+		}
+		if c.acquires != 1 {
+			t.Errorf("%s — one delta is one transaction, so it takes the pool exactly once", c)
+		}
+	}
+	t.Logf("%s", small)
+	t.Logf("%s", large)
+
+	if large.trips != small.trips {
+		t.Fatalf("round trips grew with the delta: %s, against %s", large, small)
+	}
+}
+
+// TestApplyDeltaKeepsTheCreatedAtItWasGiven pins the one column this path sets
+// by hand. Everything a transaction inserts shares one now(), and rows of the
+// same date sharing one created_at leave the engine's own listing nothing to
+// order them by — so the caller that checked them in an order gets to state it.
+func TestApplyDeltaKeepsTheCreatedAtItWasGiven(t *testing.T) {
+	f := newFixture(t)
+
+	first := importedDeposit(f, "op-1", "2026-07-01", 1_000)
+	first.CreatedAt = time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
+	second := importedDeposit(f, "op-2", "2026-07-01", 2_000)
+	second.CreatedAt = time.Date(2026, 7, 1, 10, 0, 0, 1_000, time.UTC) // one microsecond later
+
+	stored, err := f.store.ApplyDelta(f.ctx, f.spaceID, []operation.Operation{first, second}, nil, nil)
+	if err != nil {
+		t.Fatalf("ApplyDelta: %v", err)
+	}
+	if !stored[0].CreatedAt.Equal(first.CreatedAt) || !stored[1].CreatedAt.Equal(second.CreatedAt) {
+		t.Errorf("stored created_at = %s / %s, want %s / %s",
+			stored[0].CreatedAt, stored[1].CreatedAt, first.CreatedAt, second.CreatedAt)
+	}
+	list, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
+	if err != nil {
+		t.Fatalf("list journal: %v", err)
+	}
+	if len(list) != 2 || list[0].AmountMinor != 1_000 || list[1].AmountMinor != 2_000 {
+		t.Errorf("journal = %+v, want the two rows in the order they were written", list)
+	}
+
+	// A row that names no time still gets the database's own, as every other
+	// write path does.
+	third := importedDeposit(f, "op-3", "2026-07-02", 3_000)
+	stored, err = f.store.ApplyDelta(f.ctx, f.spaceID, []operation.Operation{third}, nil, nil)
+	if err != nil {
+		t.Fatalf("ApplyDelta without a created_at: %v", err)
+	}
+	if stored[0].CreatedAt.IsZero() {
+		t.Error("row written with no created_at came back with none, want the database's own")
+	}
+}
+
+// TestListBySourceAndByIDsCarryTheBreakdown pins that a row these two hand out
+// is a row the engine can fold: a transfer without its pieces folds into a
+// position with no acquisition dates and a basis nobody can convert, and
+// nothing about the row says it is incomplete.
+func TestListBySourceAndByIDsCarryTheBreakdown(t *testing.T) {
+	f := newFixture(t)
+
+	byHand, err := f.store.Create(f.ctx, f.spaceID, operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit, OccurredOn: date("2026-07-01"),
+		AmountMinor: 1_000, Currency: "RUB",
+	}, nil)
+	if err != nil {
+		t.Fatalf("manual row: %v", err)
+	}
+	fromImport, err := f.store.Create(f.ctx, f.spaceID, importedDeposit(f, "op-1", "2026-07-02", 2_000), nil)
+	if err != nil {
+		t.Fatalf("imported row: %v", err)
+	}
+	out, in := f.transferPair([]operation.ReleasedLot{
+		{Quantity: decimal.RequireFromString("5"), CostMinor: 80_000, AcquiredOn: datep("2026-07-01")},
+	})
+	cOut, cIn, err := f.store.CreatePair(f.ctx, f.spaceID, out, in, nil)
+	if err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+
+	bySource, err := f.store.ListBySource(f.ctx, f.spaceID, f.accountID, "tinvest")
+	if err != nil {
+		t.Fatalf("ListBySource: %v", err)
+	}
+	if len(bySource) != 1 || bySource[0].ID != fromImport.ID {
+		t.Errorf("ListBySource returned %+v, want only the imported row", bySource)
+	}
+
+	byIDs, err := f.store.ByIDs(f.ctx, f.spaceID, []uuid.UUID{byHand.ID, cOut.ID, cIn.ID})
+	if err != nil {
+		t.Fatalf("ByIDs: %v", err)
+	}
+	if len(byIDs) != 3 {
+		t.Fatalf("ByIDs returned %d rows, want 3", len(byIDs))
+	}
+	departing := findByType(byIDs, operation.TypeTransferOut)
+	if departing == nil || len(departing.TransferLots) != 1 {
+		t.Fatalf("departing leg came back with %+v, want the parcel's one piece", departing)
+	}
+	if !sameAcquisition(departing.TransferLots[0].AcquiredOn, datep("2026-07-01")) {
+		t.Errorf("piece acquired %s, want 2026-07-01", acquired(departing.TransferLots[0].AcquiredOn))
+	}
+
+	// Another space's ids are nobody else's business.
+	other, err := f.store.ByIDs(f.ctx, uuid.New(), []uuid.UUID{byHand.ID})
+	if err != nil {
+		t.Fatalf("ByIDs in another space: %v", err)
+	}
+	if len(other) != 0 {
+		t.Errorf("ByIDs in another space returned %d rows, want none", len(other))
 	}
 }

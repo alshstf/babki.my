@@ -738,3 +738,48 @@ func TestTransferBasisConservation(t *testing.T) {
 		t.Errorf("dest position CostMinor = %d, want %d", destPos[f.sberID].CostMinor, wantCost)
 	}
 }
+
+// TestServiceDeleteRefusesAnImportedOperation pins the door that has to close
+// the moment an importer can write rows of its own.
+//
+// The projection is rebuilt from the broker's mirror, and a rebuild writes back
+// whatever the mirror still says exists. Deleting one of its rows by hand would
+// therefore be undone by the next sync without a word — the row reappears, and
+// "deleted" was a lie the program told. The honest answer is to refuse, and to
+// say who owns the row.
+func TestServiceDeleteRefusesAnImportedOperation(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	external := "op-1"
+	imported, err := f.store.Create(f.ctx, f.spaceID, operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit, OccurredOn: date("2026-07-01"),
+		AmountMinor: 1_000, Currency: "RUB", Source: "tinvest", ExternalID: &external,
+	}, nil)
+	if err != nil {
+		t.Fatalf("imported row: %v", err)
+	}
+	byHand, err := svc.Create(f.ctx, f.spaceID, operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit, OccurredOn: date("2026-07-02"),
+		AmountMinor: 2_000, Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("manual row: %v", err)
+	}
+
+	if err := svc.Delete(f.ctx, f.spaceID, imported.ID); !errors.Is(err, family.ErrValidation) {
+		t.Errorf("deleting an imported operation: err = %v, want ErrValidation", err)
+	}
+	list, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
+	if err != nil {
+		t.Fatalf("list journal: %v", err)
+	}
+	if len(list) != 2 {
+		t.Errorf("journal holds %d operations after a refused delete, want both", len(list))
+	}
+
+	// The manual row is still the owner's to remove.
+	if err := svc.Delete(f.ctx, f.spaceID, byHand.ID); err != nil {
+		t.Errorf("deleting a manual operation: %v", err)
+	}
+}
