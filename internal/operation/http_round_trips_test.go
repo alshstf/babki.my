@@ -82,7 +82,9 @@ func journalScreen(t *testing.T, size int, tune func(*countingConverter)) journa
 		t.Fatalf("GET operations = %d, want 200: %s", resp.StatusCode, b)
 	}
 	cost := journalCost{trips: poolTrips(pool) - before, rate: conv.rate.Load(), batch: conv.batch.Load()}
-	decodeJSON(t, resp, &cost.body)
+	var page journalPage
+	decodeJSON(t, resp, &page)
+	cost.body = page.Operations
 	return cost
 }
 
@@ -163,14 +165,20 @@ func dayCounter(t *testing.T, first string) func() string {
 }
 
 // mkTransfer moves a parcel between two accounts, failing the test on anything
-// but a 201.
-func mkTransfer(t *testing.T, url string, c *http.Client, body string) {
+// but a 201, and hands back the created pair. The body is passed whole so a
+// caller can add cost_minor (a basis typed in by hand) or leave it out (a FIFO
+// carryover from the source account's own lots) without a second helper. Tests
+// that only need the transfer to exist ignore the result.
+func mkTransfer(t *testing.T, url string, c *http.Client, body string) transferResp {
 	t.Helper()
 	resp := do(t, c, "POST", url+"/api/v1/operations/transfer", body)
 	if resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("transfer = %d: %s", resp.StatusCode, b)
 	}
+	var pair transferResp
+	decodeJSON(t, resp, &pair)
+	return pair
 }
 
 // assertJournalIsFullyWorked fails unless the page really published every
@@ -361,8 +369,9 @@ func TestJournalGapIsFiledNotAskedAgain(t *testing.T) {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET operations = %d, want 200: %s", resp.StatusCode, b)
 	}
-	var rows []journalItem
-	decodeJSON(t, resp, &rows)
+	var page journalPage
+	decodeJSON(t, resp, &page)
+	rows := page.Operations
 
 	var gaps, converted int
 	for _, r := range rows {

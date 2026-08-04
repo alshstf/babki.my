@@ -14,20 +14,8 @@ import { formatDate } from "@/lib/dates";
 import { resolveDisplayAmount } from "@/lib/display-amount";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
 import { MoneyCell } from "@/components/money-cell";
+import { unnameableGap } from "@/lib/unnameable-gap";
 import type { InBaseGap, MarketValueGap, Position } from "@/api/positions";
-
-// Runtime backstop for a gap value this build cannot name. TypeScript proves
-// each switch below exhaustive over the union it was compiled against — a NEW
-// member added to the contract's enum without a case here fails to compile,
-// because the argument would no longer narrow to `never`. But these values are
-// JSON off the wire, typed by assertion rather than validated, so a client
-// running behind the server it talks to can still receive a literal outside
-// that union; that must degrade to a sentence that is still true, never to a
-// blank tooltip and never to a thrown render. The fallback is the caller's,
-// because what "still true" means differs between the two call sites.
-function unnameableGap<T>(_: never, fallback: T): T {
-  return fallback;
-}
 
 // The one sentence that captions EVERY money cell of a row, chosen from the
 // term the server says it stopped on (Position.in_base_gap). It is the row's

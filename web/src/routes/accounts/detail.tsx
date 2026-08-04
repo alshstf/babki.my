@@ -203,9 +203,10 @@ export function AccountDetailPage() {
       <div className="grid gap-2">
         <h2 className="text-lg font-semibold">{t("operations.title")}</h2>
         {/* The cost basis statement comes from the session, which this screen
-            has already loaded, and not from the journal response — that one is
-            a bare array and a third copy of one truth is a third place to
-            forget it (see SessionInfo.cost_basis_rules in the API contract).
+            has already loaded, and not from the journal response — which since
+            #86 does have an envelope to carry one, and deliberately does not:
+            a third copy of one truth is a third place to forget it (see
+            SessionInfo.cost_basis_rules in the API contract).
             Deliberately NOT positions.data.cost_basis_rules, which is the same
             statement about the same space but reaches this screen only if the
             positions request succeeded: the journal renders on its own and

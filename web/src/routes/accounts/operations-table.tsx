@@ -19,23 +19,24 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { signClass } from "@/lib/money";
+import { formatPrice, signClass } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { resolveDisplayAmount } from "@/lib/display-amount";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
 import { useReportScreenCurrencies } from "@/lib/screen-currencies";
 import { MoneyCell } from "@/components/money-cell";
 import { costBasisCaveat } from "@/components/cost-basis-notice";
+import { unnameableGap } from "@/lib/unnameable-gap";
 import {
   useOperations,
   useDeleteOperation,
   isConflict,
+  JOURNAL_PAGE_SIZE,
   type Operation,
+  type OperationInBaseGap,
 } from "@/api/operations";
-import { useInstruments } from "@/api/instruments";
+import { useInstruments, type Instrument } from "@/api/instruments";
 import type { CostBasisRules } from "@/api/tax-residencies";
-
-const PAGE_SIZE = 50;
 
 // Whether this row's amount is not money that moved on the day it is dated but
 // a cost basis some rule picked out of earlier purchases — the only kind of
@@ -78,6 +79,71 @@ function publishesACostBasis(operation: Operation): boolean {
   return operation.has_undated_lots || operation.assembled_from_lots;
 }
 
+// The one sentence that captions BOTH money cells of a row, chosen from the
+// term the server says it stopped on (Operation.in_base_gap). It is the row's
+// only source: has_undated_lots answers the first of these causes on its own
+// and cannot disagree with it — both derive from one server-side predicate —
+// but a caption assembled from two sources is a caption that will eventually
+// be assembled from two sources that have drifted. That field keeps its other
+// job on this screen (whether the amount IS a cost basis, which it answers on
+// the create and transfer responses too, where no gap is published at all);
+// it simply no longer decides what the row says about a missing rate.
+//
+// Each sentence explains why the whole row carries no base-currency figures,
+// which is what makes it true over the amount cell and the fee cell alike:
+// in_base is published as a whole or not at all, so a single unvaluable term
+// withholds both figures together.
+//
+// The permanent cause is told apart from the temporary ones in as many words,
+// because that is the difference the reader is actually served by. A missing
+// rate is a gap the fx backfill closes on its own, after which the ruble
+// figure appears; an unrecorded purchase date resolves never, since nobody
+// wrote it down and nothing can recover it, and a caption that promised such a
+// row a figure would promise one that is not coming.
+//
+// The wordings are the positions screen's wherever the cause is the same
+// («восстановить … уже неоткуда», «Курс появится при обновлении курсов, и …
+// посчитается сама»): two screens explaining one condition differently is a
+// reader's problem, not a translator's.
+//
+// Written as a switch over literal keys rather than a lookup table, so every
+// key stays a literal at the t() call site — the only shape
+// scripts/check-i18n.mjs can verify.
+function rowGapTitle(
+  t: (key: string) => string,
+  gap: OperationInBaseGap | null | undefined,
+): string {
+  switch (gap) {
+    case "undated_lot":
+      return t("operations.notConvertedUndatedLot");
+    case "no_rate_operation_date":
+      return t("operations.notConvertedNoRateOperationDate");
+    // The whole of #79: this row's amount is a cost basis assembled from
+    // purchases, each valued at the rate of the day IT was made, and the day
+    // that has no rate is one of those. The transfer's own date usually has a
+    // perfectly good rate — it is simply not a rate that may value shares
+    // bought on other days — so «нет курса на дату операции» here does not
+    // merely fail to explain the row, it states something false about it. The
+    // sentence therefore names the rule rather than asserting that the
+    // purchases fell on other days: one of them may well have fallen on the
+    // transfer's own day, and this cause would read the same.
+    case "no_rate_lot_date":
+      return t("operations.notConvertedNoRateLotDate");
+    case null:
+    case undefined:
+      // The contract publishes a cause whenever in_base is null and the
+      // currency differs from the base one, so a row with a marker and no
+      // cause should not occur — and the field is absent altogether on the
+      // create and transfer responses, which this table never renders. It is
+      // left neither to crash nor to say nothing: the general phrase is vague
+      // but true — some rate is missing somewhere — and it is what an older
+      // server's payload deserves.
+      return t("operations.notConverted");
+    default:
+      return unnameableGap(gap, t("operations.notConverted"));
+  }
+}
+
 export function OperationsTable({
   accountId,
   canDelete,
@@ -98,21 +164,16 @@ export function OperationsTable({
   // (SessionInfo.cost_basis_rules). It arrives as a prop from the screen,
   // which has the session already, rather than being fetched here or shipped
   // a third time inside this listing: the statement belongs to the space, and
-  // the journal response is a bare array with nowhere to carry it (see the
-  // API contract). Undefined while the session is still loading — the caveat
+  // one truth in three payloads is two more places to forget it (see the API
+  // contract). Undefined while the session is still loading — the caveat
   // simply waits rather than guessing.
   costBasisRules?: CostBasisRules;
 }) {
   const { t } = useTranslation();
-  // "Show more" grows the fetch window (limit += 50, offset stays 0) instead
-  // of accumulating separate offset pages client-side. The backend returns a
-  // stable occurred_on/created_at DESC order, so re-fetching [0, limit) on
-  // each click always yields the same accumulated list with no client-side
-  // merge/dedup bookkeeping. Downside: once total operations is an exact
-  // multiple of PAGE_SIZE, "load more" stays visible for one extra (empty)
-  // click — acceptable for MVP journal sizes.
-  const [limit, setLimit] = useState(PAGE_SIZE);
-  const operations = useOperations(accountId, limit, 0);
+  // "Show more" fetches the next page and appends it (see useOperations). The
+  // backend returns a stable occurred_on/created_at DESC order, so consecutive
+  // offsets partition the journal with nothing repeated and nothing skipped.
+  const operations = useOperations(accountId, JOURNAL_PAGE_SIZE);
   // Instrument catalog for name lookup, capped at 50 (see useInstruments) —
   // enough for the MVP catalog. If it ever grows past 50, an operation whose
   // instrument isn't in this page falls back to an id suffix below instead
@@ -120,7 +181,7 @@ export function OperationsTable({
   const instruments = useInstruments("");
   const deleteOperation = useDeleteOperation();
   const [deleteTarget, setDeleteTarget] = useState<Operation | null>(null);
-  const list = operations.data ?? [];
+  const list = operations.data?.pages.flatMap((page) => page.operations) ?? [];
 
   // The journal reports its own currencies to the screen-wide counter that
   // decides whether the header's display-currency toggle is shown. It reports
@@ -128,12 +189,12 @@ export function OperationsTable({
   // own query, and its currencies can be ones nothing else on the screen
   // knows about: a foreign-currency operation on a base-currency account is
   // otherwise invisible to the counter, leaving the user with amounts they
-  // cannot switch. Only currencies in the currently loaded window (`list`,
-  // capped by `limit`) are counted — if the sole foreign-currency operation
-  // sits past row 50, the toggle won't appear until "Show more" is clicked.
-  // That's consistent with what the table actually shows, so it's accepted
-  // rather than worked around. Must run unconditionally, before the early
-  // returns below, per the Rules of Hooks.
+  // cannot switch. Only currencies in the pages loaded so far (`list`) are
+  // counted — if the sole foreign-currency operation sits past row 50, the
+  // toggle won't appear until "Show more" is clicked. That's consistent with
+  // what the table actually shows, so it's accepted rather than worked around.
+  // Must run unconditionally, before the early returns below, per the Rules of
+  // Hooks.
   useReportScreenCurrencies([
     ...list.map((operation) => operation.currency),
     // The conversion target belongs in the set too, so a journal that is
@@ -151,18 +212,24 @@ export function OperationsTable({
   // purchase, each payout), so they carry their own wording rather than
   // sharing the journal's.
   //
-  // Two different conditions leave a row unconverted, exactly as on the
-  // positions screen, and they are not the same news. A missing fx rate is a
-  // gap the instance's own backfill closes — the ruble figure appears later.
-  // A transfer whose purchase dates were never recorded (has_undated_lots,
-  // see the API contract) never converts, and here "нет курса на дату
-  // операции" is not merely unhelpful but false: the transfer's own date
-  // usually has a rate, it is just not a rate that may value a basis assembled
-  // on other days. Naming it would blame a cause that is not the cause and
-  // promise a number that will never come. Both are per-row, hence resolved
-  // inside the map below.
-  const notConvertedTitle = t("operations.notConverted");
-  const undatedLotsTitle = t("operations.notConvertedUndatedLots");
+  // WHICH sentence a row that carries no base-currency figures gets is not
+  // this screen's to work out. Three different terms can stop the conversion
+  // — the operation's own day's rate, a purchase day's rate, and a purchase
+  // date nobody ever recorded — and they are three different pieces of news,
+  // one of them about a figure that is never coming. Only the server knows
+  // which of them actually happened, and it says so in Operation.in_base_gap;
+  // rowGapTitle above turns that answer into a sentence and adds nothing.
+  //
+  // The positions screen draws the same line, over five causes of its own —
+  // four that stop a row's whole base-currency block and one that stops its
+  // valuation alone — and its wordings are reused here wherever the condition
+  // is the same one. What is NOT shared is the number of causes: the two
+  // screens sum different terms (a position has income and a valuation; an
+  // operation has neither), so each names its own, and neither list is a copy
+  // of the other to keep in step.
+  //
+  // Resolved per row, inside the map below.
+
   // The caveat that a cost basis here was picked by a queue that is not the
   // owner's country's. It hangs on the amount cells whose figure actually IS
   // one, and nowhere else. It used to be a banner over the whole table, which
@@ -173,10 +240,61 @@ export function OperationsTable({
   // country's rule IS what is computed (see costBasisCaveat).
   const costBasisTitle = costBasisRules ? costBasisCaveat(t, costBasisRules) : undefined;
 
+  // The catalog entry behind a row, when the loaded page happens to hold it.
+  // Undefined for a row with no instrument at all (a deposit, a fee) and for
+  // one whose instrument sits past the fiftieth (see useInstruments), so every
+  // caller has to work without it.
+  const instrumentOf = (instrumentId: string | null | undefined): Instrument | undefined =>
+    instrumentId ? instruments.data?.find((instrument) => instrument.id === instrumentId) : undefined;
+
   const instrumentName = (instrumentId: string | null | undefined) => {
     if (!instrumentId) return "—";
-    const found = instruments.data?.find((instrument) => instrument.id === instrumentId);
+    const found = instrumentOf(instrumentId);
     return found ? found.name : `#${instrumentId.slice(-8)}`;
+  };
+
+  // WHAT THE PRICE IN THIS COLUMN IS, which #75 is about because «цена» names
+  // two different quantities in this application and both of them are right.
+  // Here it is money per unit: what one unit actually cost, and the only price
+  // an operation ever records — the trade dialog asks a bond's percentage of
+  // face as an input and sends the money field (see trade-dialog.tsx). On the
+  // positions table a bond's price is the exchange's quote, a PERCENTAGE of
+  // face value, and since #32 that table says so on the cell. Both are on ONE
+  // screen — the positions of an account and its journal are stacked on the
+  // same page (see detail.tsx) — and the demo stand puts both numbers for one
+  // bond on it: 100 ОФЗ bought at 950,00 ₽ apiece down here, «95,20 %» under
+  // the same position's valuation up there. Nothing told the reader which was
+  // which.
+  //
+  // Three ways to separate them were considered.
+  //   - Show the other quantity too, deriving one from the other. Rejected on
+  //     the grounds this project rejects it everywhere: it is money arithmetic
+  //     in the browser (face value × percent, with a rounding decision of its
+  //     own), and the journal has no face value on the wire to do it with.
+  //   - Put a currency on the number — «950,00 ₽». Rejected as noise: the
+  //     amount and the fee in this very row already carry the currency, so the
+  //     row reads as money without help, and a price is always denominated in
+  //     the operation's own currency.
+  //   - Name the unit, in the column header and in the cell's own tooltip.
+  //     That is this. The header is visible without hovering anything and
+  //     settles every row at once — a percentage of face is not «цена за
+  //     единицу» — and the tooltip adds the sentence for the instrument where
+  //     the confusion actually lives.
+  //
+  // The bond sentence is an ADDITION to the general one, never a correction of
+  // it, which is what lets the tooltip degrade honestly: an instrument the
+  // loaded catalog page does not hold leaves the general sentence standing,
+  // and that sentence is true of a bond too — the number here is money per
+  // bond whether or not this screen has been told it is a bond.
+  //
+  // Written as two literal-key branches rather than t(cond ? a : b) so both
+  // keys stay verifiable by scripts/check-i18n.mjs, which only reads literals.
+  const priceTitle = (instrument: Instrument | undefined): string => {
+    const title = t("operations.pricePerUnit");
+    if (instrument?.type === "bond") {
+      return title + "\n" + t("operations.priceNotPercentOfFace");
+    }
+    return title;
   };
 
   const confirmDelete = () => {
@@ -206,7 +324,11 @@ export function OperationsTable({
     );
   }
 
-  const canLoadMore = list.length === limit;
+  // The server's answer, never the page's length. A page shorter than the one
+  // asked for means either the end of the journal or a `limit` the server
+  // clamped, and those are opposite facts — reading the length picked the wrong
+  // one at exactly the ceiling and hid every older entry (#86).
+  const canLoadMore = operations.hasNextPage;
 
   return (
     <div className="grid gap-3">
@@ -248,44 +370,83 @@ export function OperationsTable({
             // fact about the number beside it.
             //
             // A transfer between the family's own accounts carries the cost of
-            // shares bought on other days, so the backend converts it piece by
-            // piece at the rates of those days (operation.assembled_from_lots)
-            // and rate_on names only the newest of them. That case must be
-            // checked FIRST, because neither of the other two wordings is true
-            // of it and a date comparison cannot tell: rate_on happens to equal
-            // occurred_on whenever the last purchase was made on the transfer
-            // day, and differs from it otherwise, so relying on the dates picks
-            // one false sentence or the other. On the demo data it read "there
-            // is no rate for the operation's date — converted at the nearest,
-            // 15.06.2026" about a figure assembled from two rates, on a day
-            // whose rate exists and was deliberately not used.
+            // the shares behind it, so the backend converts it piece by piece
+            // at the rate of each piece's own purchase day
+            // (operation.assembled_from_lots) and its headline date is the
+            // newest PURCHASE, not the transfer. That case must be checked
+            // FIRST, because neither of the other two wordings is true of it
+            // and a date comparison cannot tell: the headline rate happens to
+            // be dated the transfer day whenever the last purchase was made on
+            // it, so relying on the dates picks one false sentence or the
+            // other. On the demo data it read "there is no rate for the
+            // operation's date — converted at the nearest, 15.06.2026" about a
+            // figure assembled from two rates, on a day whose rate exists and
+            // was deliberately not used.
             //
-            // Otherwise rate_on is the nearest rate on or before occurred_on
-            // (see FxRateOn in the backend), not necessarily a rate dated
-            // occurred_on itself — weekends/holidays structurally never get
-            // their own backfilled rate. Claiming "on the operation's date"
-            // when the two dates differ would contradict the Date column
-            // right next to it, so that wording is only used when they
-            // actually match; otherwise the honest fallback wording is used.
+            // The sentence names the RULE — each piece at its own purchase
+            // day's rate — rather than asserting the purchases fell on days
+            // OTHER than the transfer's, the way an earlier wording did
+            // ("...сделанных в другие дни ... а не по курсу дня перевода").
+            // internal/portfolio/engine.go's CheckTransferLots only rejects a
+            // piece dated AFTER the transfer, so a same-day buy-then-transfer
+            // is legal: buy on day X, move the whole parcel on day X, and
+            // every piece of the breakdown is dated X too. The old wording was
+            // false of that row on both halves at once — the purchases were
+            // NOT on other days, and the transfer day's rate WAS what struck
+            // the figure, because the one purchase day and the transfer day
+            // are the same day. The rule-naming form is true whichever way the
+            // dates land, exactly like operations.notConvertedNoRateLotDate
+            // below for the equivalent unconverted case (#79's fix).
             //
-            // All three name the rate date, so all three answer a date they
+            // WHICH DATE EACH SENTENCE NAMES is the other half, and the two
+            // published dates are not interchangeable (see OperationInBase in
+            // the API contract). `dated_on` is the day a figure is VALUED at —
+            // the operation's own day for an ordinary row, the newest purchase
+            // in the parcel for a transfer. `rate_on` is the day the rate that
+            // answered actually came from, which is `dated_on` itself or the
+            // nearest earlier day that has one: the CBR publishes nothing at
+            // weekends and holidays, roughly a third of the calendar. So the
+            // transfer's sentence, whose subject is a purchase — «самый
+            // поздний из них» — names `dated_on`, and naming `rate_on` there
+            // printed a day nothing was bought on (#80). The other two
+            // sentences are about the rate and name `rate_on`.
+            //
+            // The choice between those two is `rate_on === dated_on`, not
+            // `rate_on === occurred_on`: the question is whether the rate is
+            // the very day's or an earlier one, and the day in question is the
+            // one the figure is dated at. The contract makes the two equal
+            // wherever this branch is reached — a row not assembled from lots
+            // is dated on its own occurred_on — so the change moves no row
+            // today; it removes a second source for one answer, and the second
+            // source is what let a purchase date's rate be compared against
+            // the day the paperwork moved.
+            //
+            // Every one of the three ends in a date, so each answers a date it
             // cannot render — null, whether because none came or because it
             // did not parse — with no tooltip at all: half a sentence ending
-            // in a dash claims less than nothing. MoneyCell hands the decision
-            // over rather than making it, because the neighbouring screen's
-            // wordings do not mention a date and must survive its absence.
-            const convertedTitle = (date: string | null) => {
-              if (!date) return undefined;
+            // in a dash claims less than nothing. MoneyCell hands the rate
+            // date over already formatted and leaves the decision here,
+            // because the neighbouring screen's wordings do not mention a date
+            // and must survive its absence; the transfer's own date is
+            // formatted beside it, from the field that sentence is about.
+            const inBase = operation.in_base;
+            const purchaseDate = inBase ? formatDate(inBase.dated_on) : "";
+            const convertedTitle = (rateDate: string | null) => {
+              // Unreachable — MoneyCell asks only when it is showing the
+              // converted figure, which came from this very object — and
+              // silence rather than a guess if it ever is reached.
+              if (!inBase) return undefined;
               if (operation.assembled_from_lots) {
-                return t("operations.convertedAtPurchaseDates", { date });
+                return purchaseDate
+                  ? t("operations.convertedAtPurchaseDates", { date: purchaseDate })
+                  : undefined;
               }
-              return operation.in_base?.rate_on === operation.occurred_on
-                ? t("operations.convertedAtDate", { date })
-                : t("operations.convertedAtEarlierDate", { date });
+              if (!rateDate) return undefined;
+              return inBase.rate_on === inBase.dated_on
+                ? t("operations.convertedAtDate", { date: rateDate })
+                : t("operations.convertedAtEarlierDate", { date: rateDate });
             };
-            const unconvertedTitle = operation.has_undated_lots
-              ? undatedLotsTitle
-              : notConvertedTitle;
+            const unconvertedTitle = rowGapTitle(t, operation.in_base_gap);
             return (
               <TableRow key={operation.id}>
                 <TableCell className="whitespace-nowrap">{formatDate(operation.occurred_on)}</TableCell>
@@ -293,10 +454,41 @@ export function OperationsTable({
                   <Badge variant="secondary">{t(`operationTypes.${operation.type}`)}</Badge>
                 </TableCell>
                 <TableCell>{instrumentName(operation.instrument_id)}</TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {operation.quantity && operation.price
-                    ? `${operation.quantity} × ${operation.price}`
-                    : "—"}
+                <TableCell
+                  className="text-right tabular-nums"
+                  // The tooltip sits on the whole cell, not just the price
+                  // number: "quantity ×" is most of the cell's width for a
+                  // large quantity ("100 ×" beside a one- or two-digit
+                  // price), and a title on the number alone left that area
+                  // dead to the mouse — the explanatory sentence's only hover
+                  // target was the smaller half of what it explains.
+                  title={
+                    operation.quantity && operation.price
+                      ? priceTitle(instrumentOf(operation.instrument_id))
+                      : undefined
+                  }
+                >
+                  {operation.quantity && operation.price ? (
+                    <>
+                      {operation.quantity} ×{" "}
+                      <span data-testid="operation-price">
+                        {/* formatPrice, not the wire string: a thousands
+                            separator, two fraction digits, and the sub-cent
+                            branch that keeps a $0,0025 quote from printing as
+                            «0,00» (#30) — the same rendering the positions
+                            screen gives a price, so one number does not look
+                            like two things on two screens. It answers null for
+                            anything outside a plain non-negative decimal,
+                            which nothing on the wire should be; the raw value
+                            is shown then rather than dropped, because an
+                            unstyled number is still the operation's own datum
+                            and a dash in its place would hide it. */}
+                        {formatPrice(operation.price) ?? operation.price}
+                      </span>
+                    </>
+                  ) : (
+                    "—"
+                  )}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   <MoneyCell
@@ -347,10 +539,10 @@ export function OperationsTable({
       {canLoadMore && (
         <Button
           variant="outline"
-          disabled={operations.isFetching}
-          onClick={() => setLimit((current) => current + PAGE_SIZE)}
+          disabled={operations.isFetchingNextPage}
+          onClick={() => void operations.fetchNextPage()}
         >
-          {operations.isFetching ? t("app.loading") : t("operations.loadMore")}
+          {operations.isFetchingNextPage ? t("app.loading") : t("operations.loadMore")}
         </Button>
       )}
 

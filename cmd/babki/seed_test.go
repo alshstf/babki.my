@@ -109,8 +109,8 @@ func TestSeedDemo(t *testing.T) {
 	}
 
 	tbankPositions := positionsByTicker(tbankID)
-	if len(tbankPositions) != 7 {
-		t.Fatalf("Т-Банк positions = %d, want 7 (SBER, LKOH, OFZ26238, FXUS + TSLA, NVDA and INTC left closed by their transfers): %+v",
+	if len(tbankPositions) != 8 {
+		t.Fatalf("Т-Банк positions = %d, want 8 (SBER, LKOH, OFZ26238, FXUS + TSLA, NVDA, INTC and AMZN left closed by their transfers): %+v",
 			len(tbankPositions), tbankPositions)
 	}
 	wantQty := map[string]string{"SBER": "300", "OFZ26238": "100", "FXUS": "30", "LKOH": "15"}
@@ -142,8 +142,8 @@ func TestSeedDemo(t *testing.T) {
 	}
 
 	freedomPositions := positionsByTicker(freedomID)
-	if len(freedomPositions) != 8 {
-		t.Fatalf("Freedom positions = %d, want 8 (AAPL, GOOGL, MSFT, NVDA, TSLA, KAZ32EUR, WEWKQ, INTC): %+v", len(freedomPositions), freedomPositions)
+	if len(freedomPositions) != 9 {
+		t.Fatalf("Freedom positions = %d, want 9 (AAPL, GOOGL, MSFT, NVDA, TSLA, KAZ32EUR, WEWKQ, INTC, AMZN): %+v", len(freedomPositions), freedomPositions)
 	}
 	aapl, ok := freedomPositions["AAPL"]
 	if !ok {
@@ -258,6 +258,105 @@ func TestSeedDemo(t *testing.T) {
 	}
 	if lotsWithoutRate != 1 {
 		t.Errorf("AAPL lots with no fx rate on their acquisition date = %d, want exactly 1 — seeding a rate for the early buy would remove the demo's only position that honestly refuses to convert", lotsWithoutRate)
+	}
+
+	// AMZN carries the journal's last two sentences, and both of them are
+	// properties of ITS TWO LOTS' DATES rather than of anything on the position
+	// itself — so this pins the dates and what the fx table answers for each.
+	//
+	//	2026-05-11 — before the seeded history begins, so NO rate at all and no
+	//	             earlier one to fall back on. The transfer that carries this
+	//	             parcel is the demo's only row saying the missing rate is one
+	//	             for a PURCHASE day (in_base_gap = no_rate_lot_date), while
+	//	             its own day, 2026-07-20, has an exact rate that may not be
+	//	             used (#79).
+	//	2026-06-12 — Russia Day: no rate of its own, and the nearest earlier is
+	//	             2026-06-11's 81.00. That inequality is the demo's only place
+	//	             where a TRANSFER's dated_on (the purchase) and rate_on (the
+	//	             day the rate came from) are different days, which is the
+	//	             whole of #80 — every other transfer here moves lots whose
+	//	             own days all have rates, so the two collapse and the
+	//	             sentence's choice between them cannot be seen.
+	//
+	// Seeding a rate for 2026-05-11, or moving either buy onto a day that has
+	// one, silently removes a demonstration while leaving every other test
+	// green — so both are named here by value.
+	amzn, ok := freedomPositions["AMZN"]
+	if !ok {
+		t.Fatal("missing Freedom position AMZN — the seed no longer shows a missing rate for a purchase date")
+	}
+	if amzn.Quantity.String() != "20" || amzn.CostMinor != 380_000 {
+		t.Errorf("AMZN = {qty %s cost %d}, want {20 380000} ($1 800,00 + $2 000,00, two parcels moved one at a time)",
+			amzn.Quantity.String(), amzn.CostMinor)
+	}
+	if len(amzn.Lots) != 2 {
+		t.Fatalf("AMZN lots = %d, want 2 — the two transfers must arrive as two lots with two purchase dates", len(amzn.Lots))
+	}
+	amznLotOn := map[string]int64{}
+	for _, l := range amzn.Lots {
+		amznLotOn[mustAcquired(t, l.AcquiredOn, "an AMZN lot").Format(time.DateOnly)] = l.CostMinor
+	}
+	if cost, ok := amznLotOn["2026-05-11"]; !ok || cost != 180_000 {
+		t.Errorf("AMZN lots = %v, want one acquired 2026-05-11 costing 180000", amznLotOn)
+	}
+	if cost, ok := amznLotOn["2026-06-12"]; !ok || cost != 200_000 {
+		t.Errorf("AMZN lots = %v, want one acquired 2026-06-12 costing 200000", amznLotOn)
+	}
+	if _, _, err := converter.Rate(ctx, "USD", "RUB", day("2026-05-11")); !errors.Is(err, marketdata.ErrNoRate) {
+		t.Errorf("Rate(USD -> RUB, 2026-05-11) error = %v, want ErrNoRate — the AMZN parcel bought that day is what makes a transfer say the missing rate is a PURCHASE day's", err)
+	}
+	rateOnHoliday, dateOnHoliday, err := converter.Rate(ctx, "USD", "RUB", day("2026-06-12"))
+	if err != nil {
+		t.Fatalf("Rate(USD -> RUB, 2026-06-12): %v", err)
+	}
+	if want := decimal.RequireFromString("81.00"); !rateOnHoliday.Equal(want) {
+		t.Errorf("USD/RUB on 2026-06-12 = %s, want %s (2026-06-11's, the last working day before Russia Day)", rateOnHoliday, want)
+	}
+	if !dateOnHoliday.Equal(day("2026-06-11")) {
+		t.Errorf("USD/RUB rate date for 2026-06-12 = %s, want 2026-06-11 — equal dates would collapse the demo's only transfer where dated_on and rate_on differ",
+			dateOnHoliday.Format(time.DateOnly))
+	}
+	if got := decimal.NewFromInt(200_000).Mul(rateOnHoliday).Round(0).IntPart(); got != 16_200_000 {
+		t.Errorf("AMZN's datable parcel in rubles = %d, want 16200000 (162 000,00 ₽ = 200000 × 81.00) — the figure the transfer row and the buy row four lines above it must agree on", got)
+	}
+
+	// The demo's Т-Банк journal must be LONGER THAN ONE PAGE, or «Показать еще»
+	// never appears on the stand and the truncation fix (#86) can only be seen
+	// in a test. 50 is the page: the client asks for that many (JOURNAL_PAGE_SIZE
+	// in web/src/api/operations.ts) and it is also this handler's own default
+	// (defaultListLimit in internal/operation/http.go). What is asserted is the
+	// SERVER'S ANSWER, has_more — the very field the client now reads instead of
+	// comparing lengths — so this fails if a future seed edit trims the journal
+	// back under the page size.
+	firstPage, hasMore, err := opStore.ListByAccount(ctx, p.SpaceID, tbankID, 50, 0)
+	if err != nil {
+		t.Fatalf("ListByAccount(Т-Банк, 50, 0): %v", err)
+	}
+	if len(firstPage) != 50 || !hasMore {
+		t.Errorf("Т-Банк journal page one = %d rows, has_more = %v; want a full 50 and true — the demo must be able to show the «Показать еще» button",
+			len(firstPage), hasMore)
+	}
+	rest, restHasMore, err := opStore.ListByAccount(ctx, p.SpaceID, tbankID, 50, 50)
+	if err != nil {
+		t.Fatalf("ListByAccount(Т-Банк, 50, 50): %v", err)
+	}
+	if len(rest) == 0 || restHasMore {
+		t.Errorf("Т-Банк journal page two = %d rows, has_more = %v; want a non-empty last page and false — the button must also be able to go away",
+			len(rest), restHasMore)
+	}
+	// The rows that buy the length are the ones dated before the scenarios
+	// begin, and they must stay inert: base currency (so nothing about them
+	// converts, and no rate, gap or caption can attach to one) and no instrument
+	// (so no position, basis or realized figure moves). Page one therefore opens
+	// on the scenarios and the housekeeping trails behind them.
+	for _, o := range append(firstPage, rest...) {
+		if !o.OccurredOn.Before(day("2026-05-05")) {
+			continue
+		}
+		if o.Currency != "RUB" || o.InstrumentID != nil {
+			t.Errorf("the row dated %s that lengthens the journal is %s/instrument=%v, want RUB and none — added length must convert nothing and value nothing",
+				o.OccurredOn.Format(time.DateOnly), o.Currency, o.InstrumentID)
+		}
 	}
 
 	// The demo must contain one position whose unrealized profit has a

@@ -17,7 +17,7 @@ import (
 // into the base currency independently, so each is its own way past int64, and
 // decimal.IntPart() answers both by wrapping rather than failing.
 //
-// A refusal here is an error, never the (nil, nil) that renders in_base as
+// A refusal here is an error, never one of the gaps that render in_base as
 // null: that null tells the reader "no rate for this day", a gap the fx
 // backfill closes on its own. An amount too large to state is not waiting for
 // a backfill.
@@ -47,7 +47,7 @@ func TestOperationInBaseRefusesAnAmountThatWouldWrap(t *testing.T) {
 	h, op := overflowFixture()
 	op.AmountMinor = math.MaxInt64
 
-	got, err := h.operationInBase(context.Background(), op, "RUB", map[rateKey]*rateLookup{})
+	got, _, err := h.operationInBase(context.Background(), op, "RUB", map[rateKey]*rateLookup{})
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("operationInBase = %+v, err = %v; want ErrOverflow: twice maxint64 is not an int64", got, err)
 	}
@@ -64,7 +64,7 @@ func TestOperationInBaseRefusesAFeeThatWouldWrap(t *testing.T) {
 	h, op := overflowFixture()
 	op.FeeMinor = math.MaxInt64
 
-	got, err := h.operationInBase(context.Background(), op, "RUB", map[rateKey]*rateLookup{})
+	got, _, err := h.operationInBase(context.Background(), op, "RUB", map[rateKey]*rateLookup{})
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("operationInBase = %+v, err = %v; want ErrOverflow for the fee", got, err)
 	}
@@ -73,14 +73,15 @@ func TestOperationInBaseRefusesAFeeThatWouldWrap(t *testing.T) {
 	}
 }
 
-// TestOperationInBaseOverflowIsNotAMissingRate: (nil, nil) is this function's
-// word for "this row has no base-currency figure", which the journal renders
-// as a quiet gap. An overflow must not be able to take that shape.
+// TestOperationInBaseOverflowIsNotAMissingRate: a nil object with a nil error
+// is this function's word for "this row has no base-currency figure", which the
+// journal renders as a quiet gap. An overflow must not be able to take that
+// shape.
 func TestOperationInBaseOverflowIsNotAMissingRate(t *testing.T) {
 	h, op := overflowFixture()
 	op.AmountMinor = math.MaxInt64
 
-	if _, err := h.operationInBase(context.Background(), op, "RUB", map[rateKey]*rateLookup{}); err == nil {
+	if _, _, err := h.operationInBase(context.Background(), op, "RUB", map[rateKey]*rateLookup{}); err == nil {
 		t.Fatal("operationInBase answered an overflow with a nil error, which this page renders as a row that simply has no rate")
 	}
 }
@@ -98,7 +99,7 @@ func TestOperationInBasePublishesTheLargestFigureThatFits(t *testing.T) {
 		OccurredOn:  time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
 	}
 
-	got, err := h.operationInBase(context.Background(), op, "RUB", map[rateKey]*rateLookup{})
+	got, _, err := h.operationInBase(context.Background(), op, "RUB", map[rateKey]*rateLookup{})
 	if err != nil {
 		t.Fatalf("operationInBase at exactly maxint64: %v", err)
 	}

@@ -827,13 +827,13 @@ const (
 func apiInBaseGap(g inBaseGap) (apitypes.InBaseGap, bool) {
 	switch g {
 	case inBaseUndatedLot:
-		return apitypes.UndatedLot, true
+		return apitypes.InBaseGapUndatedLot, true
 	case inBaseNoRateLotDate:
-		return apitypes.NoRateLotDate, true
+		return apitypes.InBaseGapNoRateLotDate, true
 	case inBaseNoRateIncomeDate:
-		return apitypes.NoRateIncomeDate, true
+		return apitypes.InBaseGapNoRateIncomeDate, true
 	case inBaseNoRateToday:
-		return apitypes.NoRateToday, true
+		return apitypes.InBaseGapNoRateToday, true
 	default:
 		return "", false
 	}

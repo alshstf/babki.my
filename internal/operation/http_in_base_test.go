@@ -21,6 +21,12 @@ type operationInBase struct {
 	FeeMinor    int64  `json:"fee_minor"`
 	Currency    string `json:"currency"`
 	RateOn      string `json:"rate_on"`
+	// DatedOn is the date the headline rate was asked FOR, which RateOn is only
+	// equal to when that very day had a rate (see the API contract). The two are
+	// decoded separately here because a test that read one for the other could
+	// not tell a weekend's fallback from an exact hit — the confusion #80 is
+	// about.
+	DatedOn string `json:"dated_on"`
 }
 
 // journalItem is the subset of apitypes.Operation these tests care about. A
@@ -43,10 +49,18 @@ type journalItem struct {
 	// from a stored breakdown — a fact about the operation, published here
 	// regardless of whether in_base exists at all (#67; see the API contract).
 	AssembledFromLots bool `json:"assembled_from_lots"`
+	// InBaseGap names WHICH term stopped the conversion, sharper than
+	// HasUndatedLots (#79). Decoded as a plain string rather than the generated
+	// enum so a test can assert on the wire value and would notice a rename of
+	// the constant that never reached the contract.
+	InBaseGap string `json:"in_base_gap"`
 }
 
-// listJournal fetches GET .../operations and decodes it, failing the test on
-// a non-200 or a decode error.
+// listJournal fetches GET .../operations and returns the page's rows, failing
+// the test on a non-200 or a decode error. The response is an envelope rather
+// than a bare array since #86; tests about the envelope itself (whether the page
+// is the whole journal) go through getJournalPage instead — see
+// http_pagination_test.go.
 func listJournal(t *testing.T, url string, c *http.Client, accountID string) []journalItem {
 	t.Helper()
 	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/operations", "")
@@ -54,9 +68,9 @@ func listJournal(t *testing.T, url string, c *http.Client, accountID string) []j
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("list operations = %d: %s", resp.StatusCode, b)
 	}
-	var out []journalItem
-	decodeJSON(t, resp, &out)
-	return out
+	var page journalPage
+	decodeJSON(t, resp, &page)
+	return page.Operations
 }
 
 // mkAccount creates an account in currency and returns its id.

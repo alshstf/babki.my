@@ -207,8 +207,13 @@ func TestOperationsJournalAndTransfers(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("list acc1 = %d", resp.StatusCode)
 	}
-	var list1 []opResp
-	decodeJSON(t, resp, &list1)
+	// The listing is an envelope since #86 (see OperationsResponse); these
+	// assertions are about the rows inside it.
+	var page1 struct {
+		Operations []opResp `json:"operations"`
+	}
+	decodeJSON(t, resp, &page1)
+	list1 := page1.Operations
 	if len(list1) != 1 || list1[0].ID != buy.ID || list1[0].Quantity == nil || *list1[0].Quantity != "10" {
 		t.Fatalf("list1 after buy = %+v", list1)
 	}
@@ -243,13 +248,17 @@ func TestOperationsJournalAndTransfers(t *testing.T) {
 
 	// GET operations of both accounts see the respective leg
 	resp = do(t, c, "GET", url+"/api/v1/accounts/"+acc1.ID+"/operations", "")
-	decodeJSON(t, resp, &list1)
+	decodeJSON(t, resp, &page1)
+	list1 = page1.Operations
 	if len(list1) != 2 {
 		t.Fatalf("list acc1 after transfer = %+v, want 2", list1)
 	}
 	resp = do(t, c, "GET", url+"/api/v1/accounts/"+acc2.ID+"/operations", "")
-	var list2 []opResp
-	decodeJSON(t, resp, &list2)
+	var page2 struct {
+		Operations []opResp `json:"operations"`
+	}
+	decodeJSON(t, resp, &page2)
+	list2 := page2.Operations
 	if len(list2) != 1 || list2[0].ID != transfer.In.ID {
 		t.Fatalf("list acc2 after transfer = %+v", list2)
 	}
@@ -261,12 +270,14 @@ func TestOperationsJournalAndTransfers(t *testing.T) {
 		t.Fatalf("delete transfer = %d: %s", resp.StatusCode, b)
 	}
 	resp = do(t, c, "GET", url+"/api/v1/accounts/"+acc1.ID+"/operations", "")
-	decodeJSON(t, resp, &list1)
+	decodeJSON(t, resp, &page1)
+	list1 = page1.Operations
 	if len(list1) != 1 {
 		t.Fatalf("list acc1 after delete transfer = %+v, want 1 (buy only)", list1)
 	}
 	resp = do(t, c, "GET", url+"/api/v1/accounts/"+acc2.ID+"/operations", "")
-	decodeJSON(t, resp, &list2)
+	decodeJSON(t, resp, &page2)
+	list2 = page2.Operations
 	if len(list2) != 0 {
 		t.Fatalf("list acc2 after delete transfer = %+v, want 0", list2)
 	}
