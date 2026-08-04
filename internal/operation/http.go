@@ -27,6 +27,12 @@ import (
 // maxListLimit is clamped rather than rejected with 400, matching the
 // instrument catalog search: pagination is a best-effort detail, not
 // something a client should get an error for overshooting.
+//
+// The clamp is still silent in the sense that nothing names it, and that is
+// now safe because the response says whether anything was left behind
+// (OperationsResponse.has_more). While it did not, a clamped page was
+// indistinguishable from the end of the journal, and the client read it as one
+// — which is why raising this ceiling (#22) was never what #86 needed.
 const (
 	defaultListLimit = 50
 	maxListLimit     = 200
@@ -946,7 +952,12 @@ func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ops, err := h.store.ListByAccount(r.Context(), p.SpaceID, accountID, limit, offset)
+	// hasMore comes back from the query rather than from anything measured
+	// here. The clamp above is silent by design (see maxListLimit), so the page
+	// this handler returns can be shorter than what was asked for while the
+	// journal continues — the case a client comparing lengths reads as the end
+	// of the journal, and the whole of #86.
+	ops, hasMore, err := h.store.ListByAccount(r.Context(), p.SpaceID, accountID, limit, offset)
 	if err != nil {
 		family.WriteError(w, err)
 		return
@@ -967,7 +978,7 @@ func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {
 	// rateQueries, prewarmRates and rateFor).
 	h.prewarmRates(r.Context(), rateQueries(ops, sp.BaseCurrency), rates)
 
-	out := make([]apitypes.Operation, 0, len(ops))
+	page := make([]apitypes.Operation, 0, len(ops))
 	for _, o := range ops {
 		api := toAPI(o)
 		inBase, gap, err := h.operationInBase(r.Context(), o, sp.BaseCurrency, rates)
@@ -989,9 +1000,9 @@ func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {
 		} else {
 			api.InBaseGap = nullable.NewNullNullable[apitypes.OperationInBaseGap]()
 		}
-		out = append(out, api)
+		page = append(page, api)
 	}
-	httpjson.Write(w, http.StatusOK, out)
+	httpjson.Write(w, http.StatusOK, apitypes.OperationsResponse{Operations: page, HasMore: hasMore})
 }
 
 func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {

@@ -82,7 +82,9 @@ func journalScreen(t *testing.T, size int, tune func(*countingConverter)) journa
 		t.Fatalf("GET operations = %d, want 200: %s", resp.StatusCode, b)
 	}
 	cost := journalCost{trips: poolTrips(pool) - before, rate: conv.rate.Load(), batch: conv.batch.Load()}
-	decodeJSON(t, resp, &cost.body)
+	var page journalPage
+	decodeJSON(t, resp, &page)
+	cost.body = page.Operations
 	return cost
 }
 
@@ -367,8 +369,9 @@ func TestJournalGapIsFiledNotAskedAgain(t *testing.T) {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET operations = %d, want 200: %s", resp.StatusCode, b)
 	}
-	var rows []journalItem
-	decodeJSON(t, resp, &rows)
+	var page journalPage
+	decodeJSON(t, resp, &page)
+	rows := page.Operations
 
 	var gaps, converted int
 	for _, r := range rows {

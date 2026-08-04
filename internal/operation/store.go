@@ -283,27 +283,48 @@ func (s *Store) list(ctx context.Context, sql string, args ...any) ([]Operation,
 }
 
 // ListByAccount returns one page of the account's journal, newest first, with
-// the FIFO breakdown attached to the transfers that have one. The journal
-// listing needs it for the same reason the engine does: a transfer's amount is
-// a basis assembled from purchases on several days, and expressing it in the
-// space's base currency means converting each piece at the rate of the day it
-// was bought (see Handler.operationInBase). Without the pieces the row would
-// have to be converted at the rate of the day the shares changed brokers,
+// the FIFO breakdown attached to the transfers that have one, and whether the
+// journal holds anything beyond that page.
+//
+// The breakdown is here for the same reason the engine gets it: a transfer's
+// amount is a basis assembled from purchases on several days, and expressing it
+// in the space's base currency means converting each piece at the rate of the
+// day it was bought (see Handler.operationInBase). Without the pieces the row
+// would have to be converted at the rate of the day the shares changed brokers,
 // which is exactly the misvaluation this whole mechanism exists to prevent —
 // and the journal would print a different number than the position screen for
 // the same shares.
-func (s *Store) ListByAccount(ctx context.Context, spaceID, accountID uuid.UUID, limit, offset int) ([]Operation, error) {
+//
+// THE SECOND RESULT IS FETCHED, NOT INFERRED. One row beyond the page is asked
+// for, and whether it arrives IS the answer; the same statement that reads it
+// drops it again. Nothing downstream may substitute a comparison of the page's
+// length against the limit for this: that comparison is right until the caller
+// clamps the limit it was given, and the handler does exactly that, which is how
+// a truncated journal came to present itself as a whole one (#86). Counting the
+// table instead would cost a second pass over rows just read, to publish a total
+// nothing displays and that a concurrent write could put at odds with the very
+// page it travels with.
+//
+// limit is the size of the page the caller wants and must be positive; the
+// handler defaults and clamps it before this is reached.
+func (s *Store) ListByAccount(ctx context.Context, spaceID, accountID uuid.UUID, limit, offset int) ([]Operation, bool, error) {
 	ops, err := s.list(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND account_id = $2
 		ORDER BY occurred_on DESC, created_at DESC LIMIT $3 OFFSET $4`,
-		spaceID, accountID, limit, offset)
+		spaceID, accountID, limit+1, offset)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	hasMore := len(ops) > limit
+	if hasMore {
+		ops = ops[:limit]
+	}
+	// After the trim, never before: the probe row is not part of the page and
+	// must not have its breakdown fetched, let alone published.
 	if err := s.attachTransferLots(ctx, spaceID, ops); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return ops, nil
+	return ops, hasMore, nil
 }
 
 // ListForEngine returns the account's full journal in engine order, with the

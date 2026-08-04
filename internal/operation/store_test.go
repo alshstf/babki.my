@@ -145,9 +145,12 @@ func TestCreateListDelete(t *testing.T) {
 	if _, err := f.store.Create(f.ctx, f.spaceID, dep, nil); err != nil {
 		t.Fatalf("Create dep: %v", err)
 	}
-	list, err := f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0)
+	list, more, err := f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0)
 	if err != nil || len(list) != 2 || list[0].Type != operation.TypeDeposit {
 		t.Fatalf("ListByAccount = %+v, %v", list, err)
+	}
+	if more {
+		t.Errorf("ListByAccount reported more behind a window of 10 holding the whole two-row journal")
 	}
 	// engine order ASC
 	asc, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
@@ -159,7 +162,7 @@ func TestCreateListDelete(t *testing.T) {
 	if n, err := f.store.Delete(f.ctx, f.spaceID, created.ID); err != nil || n != 1 {
 		t.Fatalf("Delete = %d, %v", n, err)
 	}
-	if list, _ = f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0); len(list) != 1 {
+	if list, _, _ = f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0); len(list) != 1 {
 		t.Fatalf("after delete = %d", len(list))
 	}
 }
@@ -194,7 +197,7 @@ func TestTransferPairAtomicity(t *testing.T) {
 	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in, nil); err == nil {
 		t.Fatal("CreatePair foreign dest: want error")
 	}
-	if list, _ := f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0); len(list) != 0 {
+	if list, _, _ := f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0); len(list) != 0 {
 		t.Fatalf("orphan out op left: %d", len(list))
 	}
 }
@@ -522,7 +525,7 @@ func TestTransferLotFailureRollsBackPair(t *testing.T) {
 		t.Fatal("CreatePair with a rejected lot: want error")
 	}
 	for _, id := range []uuid.UUID{f.accountID, f.account2ID} {
-		ops, err := f.store.ListByAccount(f.ctx, f.spaceID, id, 10, 0)
+		ops, _, err := f.store.ListByAccount(f.ctx, f.spaceID, id, 10, 0)
 		if err != nil {
 			t.Fatalf("ListByAccount: %v", err)
 		}

@@ -249,7 +249,7 @@ describe("AccountDetailPage", () => {
           by_currency: [],
         })),
       },
-      "/operations": { body: [] },
+      "/operations": { body: { operations: [], has_more: false } },
       "/api/v1/instruments": { body: { instruments: [] } },
       // The space-wide summary is deliberately broken in every test here:
       // this page must not depend on it at all.
@@ -302,7 +302,7 @@ describe("AccountDetailPage", () => {
           notices: ["method_mismatch", "perimeter_mismatch"],
         }),
       },
-      "/operations": { body: [] },
+      "/operations": { body: { operations: [], has_more: false } },
       "/api/v1/instruments": { body: { instruments: [] } },
     });
 
@@ -346,7 +346,7 @@ describe("AccountDetailPage", () => {
           makeRealizedTotal({ by_currency: [{ currency: "USD", realized_pnl_minor: 12_600 }] }),
         ),
       },
-      "/operations": { body: [] },
+      "/operations": { body: { operations: [], has_more: false } },
       "/api/v1/instruments": { body: { instruments: [] } },
     });
 
@@ -373,7 +373,7 @@ describe("AccountDetailPage", () => {
           }),
         ),
       },
-      "/operations": { body: [] },
+      "/operations": { body: { operations: [], has_more: false } },
       "/api/v1/instruments": { body: { instruments: [] } },
     });
 
@@ -411,23 +411,27 @@ describe("AccountDetailPage", () => {
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": { body: makePositionsBody(russia, [], makeRealizedTotal({ by_currency: [] })) },
       "/operations": {
-        body: [
-          makeOperation({
-            id: "op-transfer",
-            type: "transfer_in",
-            // The server's own statement that this amount was assembled out
-            // of the purchases behind it — what makes the row a cost basis.
-            // A property of the operation itself (see the API contract), not
-            // of in_base, though this fixture also converts.
-            assembled_from_lots: true,
-            in_base: {
-              amount_minor: 900_000,
-              fee_minor: 0,
-              currency: "RUB",
-              rate_on: "2026-06-15",
-            },
-          }),
-        ],
+        body: {
+          operations: [
+            makeOperation({
+              id: "op-transfer",
+              type: "transfer_in",
+              // The server's own statement that this amount was assembled out
+              // of the purchases behind it — what makes the row a cost basis.
+              // A property of the operation itself (see the API contract), not
+              // of in_base, though this fixture also converts.
+              assembled_from_lots: true,
+              in_base: {
+                amount_minor: 900_000,
+                fee_minor: 0,
+                currency: "RUB",
+                rate_on: "2026-06-15",
+                dated_on: "2026-06-15",
+              },
+            }),
+          ],
+          has_more: false,
+        },
       },
       "/api/v1/instruments": { body: [] },
     });
@@ -456,7 +460,7 @@ describe("AccountDetailPage", () => {
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": { body: makePositionsBody(russia, [], makeRealizedTotal({ by_currency: [] })) },
-      "/operations": { body: [makeOperation()] },
+      "/operations": { body: { operations: [makeOperation()], has_more: false } },
       "/api/v1/instruments": { body: [] },
     });
 
@@ -476,16 +480,19 @@ describe("AccountDetailPage", () => {
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": { body: makePositionsBody(britain) },
       "/operations": {
-        body: [
-          makeOperation({
-            id: "op-transfer",
-            type: "transfer_out",
-            // No breakdown was ever recorded for this parcel, so nothing
-            // converts and in_base is null — the row still publishes a cost
-            // basis and the server still says so (has_undated_lots).
-            has_undated_lots: true,
-          }),
-        ],
+        body: {
+          operations: [
+            makeOperation({
+              id: "op-transfer",
+              type: "transfer_out",
+              // No breakdown was ever recorded for this parcel, so nothing
+              // converts and in_base is null — the row still publishes a cost
+              // basis and the server still says so (has_undated_lots).
+              has_undated_lots: true,
+            }),
+          ],
+          has_more: false,
+        },
       },
       "/api/v1/instruments": { body: [] },
     });
@@ -506,7 +513,7 @@ describe("AccountDetailPage", () => {
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": { body: makePositionsBody(makeSession().cost_basis_rules) },
-      "/operations": { body: [] },
+      "/operations": { body: { operations: [], has_more: false } },
       "/api/v1/instruments": { body: { instruments: [] } },
     });
 

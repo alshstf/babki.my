@@ -30,12 +30,11 @@ import {
   useOperations,
   useDeleteOperation,
   isConflict,
+  JOURNAL_PAGE_SIZE,
   type Operation,
 } from "@/api/operations";
 import { useInstruments } from "@/api/instruments";
 import type { CostBasisRules } from "@/api/tax-residencies";
-
-const PAGE_SIZE = 50;
 
 // Whether this row's amount is not money that moved on the day it is dated but
 // a cost basis some rule picked out of earlier purchases — the only kind of
@@ -98,21 +97,16 @@ export function OperationsTable({
   // (SessionInfo.cost_basis_rules). It arrives as a prop from the screen,
   // which has the session already, rather than being fetched here or shipped
   // a third time inside this listing: the statement belongs to the space, and
-  // the journal response is a bare array with nowhere to carry it (see the
-  // API contract). Undefined while the session is still loading — the caveat
+  // one truth in three payloads is two more places to forget it (see the API
+  // contract). Undefined while the session is still loading — the caveat
   // simply waits rather than guessing.
   costBasisRules?: CostBasisRules;
 }) {
   const { t } = useTranslation();
-  // "Show more" grows the fetch window (limit += 50, offset stays 0) instead
-  // of accumulating separate offset pages client-side. The backend returns a
-  // stable occurred_on/created_at DESC order, so re-fetching [0, limit) on
-  // each click always yields the same accumulated list with no client-side
-  // merge/dedup bookkeeping. Downside: once total operations is an exact
-  // multiple of PAGE_SIZE, "load more" stays visible for one extra (empty)
-  // click — acceptable for MVP journal sizes.
-  const [limit, setLimit] = useState(PAGE_SIZE);
-  const operations = useOperations(accountId, limit, 0);
+  // "Show more" fetches the next page and appends it (see useOperations). The
+  // backend returns a stable occurred_on/created_at DESC order, so consecutive
+  // offsets partition the journal with nothing repeated and nothing skipped.
+  const operations = useOperations(accountId, JOURNAL_PAGE_SIZE);
   // Instrument catalog for name lookup, capped at 50 (see useInstruments) —
   // enough for the MVP catalog. If it ever grows past 50, an operation whose
   // instrument isn't in this page falls back to an id suffix below instead
@@ -120,7 +114,7 @@ export function OperationsTable({
   const instruments = useInstruments("");
   const deleteOperation = useDeleteOperation();
   const [deleteTarget, setDeleteTarget] = useState<Operation | null>(null);
-  const list = operations.data ?? [];
+  const list = operations.data?.pages.flatMap((page) => page.operations) ?? [];
 
   // The journal reports its own currencies to the screen-wide counter that
   // decides whether the header's display-currency toggle is shown. It reports
@@ -128,12 +122,12 @@ export function OperationsTable({
   // own query, and its currencies can be ones nothing else on the screen
   // knows about: a foreign-currency operation on a base-currency account is
   // otherwise invisible to the counter, leaving the user with amounts they
-  // cannot switch. Only currencies in the currently loaded window (`list`,
-  // capped by `limit`) are counted — if the sole foreign-currency operation
-  // sits past row 50, the toggle won't appear until "Show more" is clicked.
-  // That's consistent with what the table actually shows, so it's accepted
-  // rather than worked around. Must run unconditionally, before the early
-  // returns below, per the Rules of Hooks.
+  // cannot switch. Only currencies in the pages loaded so far (`list`) are
+  // counted — if the sole foreign-currency operation sits past row 50, the
+  // toggle won't appear until "Show more" is clicked. That's consistent with
+  // what the table actually shows, so it's accepted rather than worked around.
+  // Must run unconditionally, before the early returns below, per the Rules of
+  // Hooks.
   useReportScreenCurrencies([
     ...list.map((operation) => operation.currency),
     // The conversion target belongs in the set too, so a journal that is
@@ -206,7 +200,11 @@ export function OperationsTable({
     );
   }
 
-  const canLoadMore = list.length === limit;
+  // The server's answer, never the page's length. A page shorter than the one
+  // asked for means either the end of the journal or a `limit` the server
+  // clamped, and those are opposite facts — reading the length picked the wrong
+  // one at exactly the ceiling and hid every older entry (#86).
+  const canLoadMore = operations.hasNextPage;
 
   return (
     <div className="grid gap-3">
@@ -347,10 +345,10 @@ export function OperationsTable({
       {canLoadMore && (
         <Button
           variant="outline"
-          disabled={operations.isFetching}
-          onClick={() => setLimit((current) => current + PAGE_SIZE)}
+          disabled={operations.isFetchingNextPage}
+          onClick={() => void operations.fetchNextPage()}
         >
-          {operations.isFetching ? t("app.loading") : t("operations.loadMore")}
+          {operations.isFetchingNextPage ? t("app.loading") : t("operations.loadMore")}
         </Button>
       )}
 

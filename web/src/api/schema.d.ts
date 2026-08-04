@@ -368,7 +368,7 @@ export interface components {
             tax_residency: string;
             /**
              * @description What tax_residency implies for the cost basis figures this application computes. Carried in the session so the settings screen can state the consequence of the country the owner picked; the same object is repeated on PositionsResponse so the screen showing the figures carries the caveat with them.
-             *     THIS IS THE STATEMENT OF RECORD, AND IT IS A PROPERTY OF THE SPACE RATHER THAN OF ANY ONE PAYLOAD. It qualifies EVERY cost basis this API publishes, wherever the figure appears — not only the ones on PositionsResponse. The journal has one of its own: a transfer's `Operation.amount_minor` (and its `in_base` twin) is the cost basis of the shares moved, picked by the very same queue of earliest purchases that produces Position.cost_minor, so it is a figure this object speaks about. GET /accounts/{accountId}/operations does not repeat it: that response is a bare array with no envelope to carry one, and one truth published in three places is two more places to forget when the truth changes. A client therefore reads this once, from the session it loads anyway, and applies it to every cost basis it renders — including the journal's, which otherwise shows a FIFO-derived amount with nothing said about it.
+             *     THIS IS THE STATEMENT OF RECORD, AND IT IS A PROPERTY OF THE SPACE RATHER THAN OF ANY ONE PAYLOAD. It qualifies EVERY cost basis this API publishes, wherever the figure appears — not only the ones on PositionsResponse. The journal has one of its own: a transfer's `Operation.amount_minor` (and its `in_base` twin) is the cost basis of the shares moved, picked by the very same queue of earliest purchases that produces Position.cost_minor, so it is a figure this object speaks about. GET /accounts/{accountId}/operations does not repeat it, and now does so as a choice rather than for want of anywhere to put it: OperationsResponse has been an envelope since #86, and this statement is still not in it, because one truth published in three places is two more places to forget when the truth changes. A client therefore reads this once, from the session it loads anyway, and applies it to every cost basis it renders — including the journal's, which otherwise shows a FIFO-derived amount with nothing said about it.
              */
             cost_basis_rules: components["schemas"]["CostBasisRules"];
         };
@@ -666,6 +666,13 @@ export interface components {
             cost_minor?: number | null;
             note?: string;
         };
+        /** @description One page of an account's journal. It used to be the bare array `operations` still is, which left a reader no way to tell a complete journal from a truncated one: the server clamps `limit` to its ceiling without saying so, and a client that asked for 250 and counted 200 back concluded there was nothing more. At exactly the ceiling the journal therefore presented itself as whole while hiding everything older, and the interface offered no other route to those rows (#86). */
+        OperationsResponse: {
+            /** @description The page itself, newest first, at most `limit` long — and shorter than `limit` whenever `limit` exceeded the ceiling this endpoint clamps to, which is the case that used to be indistinguishable from reaching the end. */
+            operations: components["schemas"]["Operation"][];
+            /** @description Whether the journal holds at least one more entry beyond this page — i.e. at `offset + len(operations)` and later. THE ONLY HONEST ANSWER TO «is that all», and it is the server's to give: the page's own length cannot answer it, because a short page means either the end of the journal or a clamped `limit`, and those are opposite facts. A FLAG RATHER THAN A TOTAL OR A CURSOR. A total would cost a second count of a table the page has already been read from, publish a number no screen shows, and could disagree with the very page it travels with if a row were written in between; the question a reader is actually asking is binary. A cursor would be a second way of saying where to continue beside the `offset` this endpoint already takes and this client already sends, and it would still have to answer this same question separately. It is derived where the decision is made — one row beyond the page is fetched and its arrival IS this answer, in the same statement that drops it — never by comparing the page's length against anything afterwards. False on an empty page, which is the end of the journal (or past it). */
+            has_more: boolean;
+        };
         TransferResponse: {
             out: components["schemas"]["Operation"];
             in: components["schemas"]["Operation"];
@@ -788,7 +795,7 @@ export interface components {
         };
         PositionsResponse: {
             positions: components["schemas"]["Position"][];
-            /** @description Whether the cost basis behind every figure above is the one the owner's country requires (see CostBasisRules). It travels with the numbers rather than only in the session because this is the payload a reader takes the numbers from: a client that renders positions without ever reading the session must still be unable to show cost_minor, unrealized_pnl_minor and realized_pnl_minor as if they were a tax basis when they are not. It describes the whole computation, not one row, so it sits on the response rather than being repeated identically inside every Position. This is the ONLY repetition of it, and the line is drawn here on purpose: the journal publishes a cost basis too (a transfer's Operation.amount_minor) and carries no copy, because that response is a bare array with nowhere to put one and because one statement living in three payloads is two extra places to forget. The statement belongs to the space, not to a payload — SessionInfo.cost_basis_rules is where a reader of any other figure takes it from. */
+            /** @description Whether the cost basis behind every figure above is the one the owner's country requires (see CostBasisRules). It travels with the numbers rather than only in the session because this is the payload a reader takes the numbers from: a client that renders positions without ever reading the session must still be unable to show cost_minor, unrealized_pnl_minor and realized_pnl_minor as if they were a tax basis when they are not. It describes the whole computation, not one row, so it sits on the response rather than being repeated identically inside every Position. This is the ONLY repetition of it, and the line is drawn here on purpose: the journal publishes a cost basis too (a transfer's Operation.amount_minor) and carries no copy — not for want of an envelope, which OperationsResponse has had since #86, but because one statement living in three payloads is two extra places to forget. The statement belongs to the space, not to a payload — SessionInfo.cost_basis_rules is where a reader of any other figure takes it from. */
             cost_basis_rules: components["schemas"]["CostBasisRules"];
             /** @description What this account's closed deals have locked in, across all of the positions above. It sits on the response rather than being computed by the reader from `positions`, and rather than living on its own endpoint: it is an aggregate of exactly these rows, arrives with them in the one round trip the screen already makes, and — like cost_basis_rules — describes the whole list rather than any one row. Present even for an account with no positions, where by_currency is empty and in_base is a plain zero. */
             realized_total: components["schemas"]["RealizedTotal"];
@@ -1312,13 +1319,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Account operations, newest first */
+            /** @description One page of the account's journal, newest first, saying whether there is more behind it */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Operation"][];
+                    "application/json": components["schemas"]["OperationsResponse"];
                 };
             };
             401: components["responses"]["Error"];

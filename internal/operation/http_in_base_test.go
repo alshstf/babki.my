@@ -56,8 +56,11 @@ type journalItem struct {
 	InBaseGap string `json:"in_base_gap"`
 }
 
-// listJournal fetches GET .../operations and decodes it, failing the test on
-// a non-200 or a decode error.
+// listJournal fetches GET .../operations and returns the page's rows, failing
+// the test on a non-200 or a decode error. The response is an envelope rather
+// than a bare array since #86; tests about the envelope itself (whether the page
+// is the whole journal) go through getJournalPage instead — see
+// http_pagination_test.go.
 func listJournal(t *testing.T, url string, c *http.Client, accountID string) []journalItem {
 	t.Helper()
 	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/operations", "")
@@ -65,9 +68,9 @@ func listJournal(t *testing.T, url string, c *http.Client, accountID string) []j
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("list operations = %d: %s", resp.StatusCode, b)
 	}
-	var out []journalItem
-	decodeJSON(t, resp, &out)
-	return out
+	var page journalPage
+	decodeJSON(t, resp, &page)
+	return page.Operations
 }
 
 // mkAccount creates an account in currency and returns its id.

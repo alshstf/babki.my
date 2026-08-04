@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@/i18n";
 import { OperationsTable } from "./operations-table";
@@ -10,7 +10,7 @@ import {
 import { formatMinor } from "@/lib/money";
 import { formatDate, localToday } from "@/lib/dates";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
-import type { Operation } from "@/api/operations";
+import { JOURNAL_PAGE_SIZE, type Operation } from "@/api/operations";
 import type { CostBasisRules } from "@/api/tax-residencies";
 
 // The API client captures globalThis.fetch once, when @/api/client is first
@@ -105,18 +105,25 @@ const britain: CostBasisRules = {
 
 function renderTable({
   operations,
+  hasMore = false,
   mode = "native",
   baseCurrency = "RUB",
   costBasisRules,
 }: {
   operations: Operation[];
+  // Whether the server says the journal continues past this page. Defaults to
+  // false — every test that is not about paging is looking at a whole journal.
+  hasMore?: boolean;
   mode?: DisplayCurrencyMode;
   baseCurrency?: string;
   // Omitted by every test that is not about the cost basis caveat, exactly as
   // the screen omits it while the session is still loading.
   costBasisRules?: CostBasisRules;
 }) {
-  serve({ "/operations": { body: operations }, "/instruments": { body: [] } });
+  serve({
+    "/operations": { body: { operations, has_more: hasMore } },
+    "/instruments": { body: [] },
+  });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
@@ -728,6 +735,95 @@ describe("OperationsTable", () => {
 
       await screen.findByTestId("operation-amount");
       expect(screen.queryByTestId("operation-amount-caveat")).not.toBeInTheDocument();
+    });
+  });
+
+  // Issue #86. The control that reaches older entries used to appear or not
+  // according to whether the page came back as long as the client asked for —
+  // a comparison that is right until the server clamps the limit, which it
+  // does silently at 200. At the ceiling the journal therefore looked complete
+  // and the older rows had no route in the interface at all.
+  describe("show more", () => {
+    it("offers to load more when the server says the journal continues", async () => {
+      renderTable({
+        // One row and has_more — the shape the length test gets wrong: a page
+        // far shorter than asked for, with the journal continuing behind it.
+        operations: [makeOperation()],
+        hasMore: true,
+      });
+
+      await screen.findByTestId("operation-amount");
+      expect(screen.getByRole("button", { name: "Показать еще" })).toBeInTheDocument();
+    });
+
+    it("offers nothing more when the server says this is the whole journal", async () => {
+      renderTable({ operations: [makeOperation()], hasMore: false });
+
+      await screen.findByTestId("operation-amount");
+      expect(screen.queryByRole("button", { name: "Показать еще" })).not.toBeInTheDocument();
+    });
+
+    it("appends the next page instead of refetching a wider window", async () => {
+      // Two pages served by offset. A client that grew a single window would
+      // ask for [0, 100) on the second request and get page one again — which
+      // is what the ceiling makes permanent once the window reaches it.
+      const asked: { limit: string | null; offset: string | null }[] = [];
+      fetchMock.mockImplementation((input: RequestInfo | URL) => {
+        const url = input instanceof Request ? input.url : String(input);
+        const parsed = new URL(url, "http://localhost");
+        let body: unknown = null;
+        if (parsed.pathname.endsWith("/instruments")) {
+          body = [];
+        } else if (parsed.pathname.endsWith("/operations")) {
+          asked.push({
+            limit: parsed.searchParams.get("limit"),
+            offset: parsed.searchParams.get("offset"),
+          });
+          const offset = Number(parsed.searchParams.get("offset") ?? "0");
+          body =
+            offset === 0
+              ? {
+                  operations: Array.from({ length: JOURNAL_PAGE_SIZE }, (_, i) =>
+                    makeOperation({ id: `op-newer-${i}` }),
+                  ),
+                  has_more: true,
+                }
+              : { operations: [makeOperation({ id: "op-older" })], has_more: false };
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      });
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <ScreenCurrencyCountProvider>
+            <OperationsTable accountId="acc-1" canDelete={false} mode="native" baseCurrency="RUB" />
+          </ScreenCurrencyCountProvider>
+        </QueryClientProvider>,
+      );
+
+      const more = await screen.findByRole("button", { name: "Показать еще" });
+      expect(screen.getAllByTestId("operation-amount")).toHaveLength(JOURNAL_PAGE_SIZE);
+      more.click();
+
+      // Both pages on screen at once: the second is added to the first, not
+      // put in its place.
+      await waitFor(() =>
+        expect(screen.getAllByTestId("operation-amount")).toHaveLength(JOURNAL_PAGE_SIZE + 1),
+      );
+      // And nothing further is offered, because the second page said so.
+      expect(screen.queryByRole("button", { name: "Показать еще" })).not.toBeInTheDocument();
+      // The second request starts where the first one ended. An offset that is
+      // anything else either repeats rows already shown or steps over rows
+      // nobody will ever see.
+      expect(asked).toEqual([
+        { limit: String(JOURNAL_PAGE_SIZE), offset: "0" },
+        { limit: String(JOURNAL_PAGE_SIZE), offset: String(JOURNAL_PAGE_SIZE) },
+      ]);
     });
   });
 
