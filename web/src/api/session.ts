@@ -66,12 +66,10 @@ export function useSetup() {
       const { data, error, response } = await api.POST("/api/v1/setup", {
         body,
       });
-      if (!data) {
-        throw new Error(
-          (error as { error?: string } | undefined)?.error ??
-            `setup failed: ${response.status}`,
-        );
-      }
+      // ApiError, so the page can tell «уже настроен» (409) from anything else
+      // by the status the API contract promises rather than by the English
+      // sentence it happens to carry.
+      if (!data) throw apiError(response, error);
       return data;
     },
     onSuccess: (data) => {

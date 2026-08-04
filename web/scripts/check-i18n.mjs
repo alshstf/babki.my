@@ -1,10 +1,17 @@
 #!/usr/bin/env node
-// Verifies that every `t("...")` / `t(`...`)` key used in web/src actually
-// exists in src/i18n/ru.json. Also verifies the handful of enum-driven
-// dynamic keys (t(`accountTypes.${x}`) and friends) by cross-checking the
-// enum members declared in the generated OpenAPI schema against the ru.json
-// namespace, so a missing translation for a valid backend enum value is
-// caught even though the key itself isn't a static string literal.
+// Two checks, both about the same rule: what a reader sees is Russian, and it
+// comes from ru.json.
+//
+// 1. KEYS. Every `t("...")` / `t(`...`)` key used in web/src actually exists in
+//    src/i18n/ru.json. Also the handful of enum-driven dynamic keys
+//    (t(`accountTypes.${x}`) and friends), by cross-checking the enum members
+//    declared in the generated OpenAPI schema against the ru.json namespace, so
+//    a missing translation for a valid backend enum value is caught even though
+//    the key itself isn't a static string literal.
+//
+// 2. THE SERVER'S OWN WORDS. See checkErrorTextInMarkup below — key coverage
+//    says nothing about a string that reaches the markup without a key at all,
+//    and that is exactly how English got onto four screens (#95).
 //
 // Usage: node scripts/check-i18n.mjs   (run from web/, or via `npm run i18n:check`)
 
@@ -73,6 +80,41 @@ function extractEnumMembers(schemaSrc, typeName) {
   const match = schemaSrc.match(re);
   if (!match) return null;
   return [...match[1].matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+}
+
+// An Error's `message` is the one foreign string that kept getting past the
+// key check, because it never needed a key: the API hooks build it out of the
+// server's error body, which is English prose written for a log. Four dialogs
+// printed it straight into a red panel, and two more picked their Russian
+// sentence by searching it for an English phrase (#95).
+//
+// The rule, therefore: a .tsx file may not touch `.message` at all. Rendering
+// it is the defect itself; branching on it is the same dependency on wording
+// the API never promised — what the contract promises is the status code (see
+// api/openapi.yaml), and ApiError carries exactly that (api/operations.ts).
+// Hooks in .ts files may keep building a message from the server's body: it
+// ends up in the console, where English belongs.
+//
+// What this does NOT catch, said plainly rather than papered over: an English
+// literal typed straight into JSX, or an error's text passed through a variable
+// or a .ts helper and rendered from there. Deciding "this string is not
+// Russian" in general is not something a grep can do, and nothing was invented
+// here to pretend otherwise. This closes the shape all six known cases had.
+function checkErrorTextInMarkup(files) {
+  const violations = [];
+  for (const file of files) {
+    if (!file.endsWith(".tsx")) continue;
+    const relPath = relative(webRoot, file);
+    const lines = readFileSync(file, "utf8").split("\n");
+    lines.forEach((line, index) => {
+      if (/\.message\b/.test(line)) {
+        violations.push(
+          `${relPath}:${index + 1}: reads an error's .message — a component may not render or branch on the server's own words; use t() for what to say and the HTTP status (isConflict / ApiError) for what happened`,
+        );
+      }
+    });
+  }
+  return violations;
 }
 
 function main() {
@@ -148,7 +190,16 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`i18n:check OK — verified keys across ${files.length} files against ru.json.`);
+  const foreignText = checkErrorTextInMarkup(files);
+  if (foreignText.length) {
+    console.error(`i18n:check failed — ${foreignText.length} place(s) reading the server's own words:`);
+    for (const line of foreignText) console.error(`  ${line}`);
+    process.exit(1);
+  }
+
+  console.log(
+    `i18n:check OK — verified keys across ${files.length} files against ru.json, and no .tsx reads an error's .message.`,
+  );
 }
 
 main();

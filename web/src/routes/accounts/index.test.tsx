@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -181,5 +181,42 @@ describe("AccountsPage — display currency mode", () => {
     expect(amount.textContent).toMatch(/₽/);
     // ...and the per-currency breakdown steps aside, as it does in base mode.
     expect(screen.queryByText("Итого в RUB")).not.toBeInTheDocument();
+  });
+});
+
+// #95: this confirmation printed whatever the server put in its error body,
+// which is English written for a developer reading a log.
+describe("AccountsPage — an archive the server refused", () => {
+  it("says it in Russian and does not repeat the server's own words", async () => {
+    // Method-aware: the archive is a DELETE to the very path the accounts list
+    // is read from, so a mock keyed on the path alone would answer it with the
+    // list — a 200, i.e. a success — and the dialog under test would never see
+    // a refusal at all.
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = input instanceof Request ? input.method : (init?.method ?? "GET");
+      const json = (status: number, body: unknown) =>
+        Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      if (method === "DELETE") return json(409, { error: "account has operations" });
+      if (url.includes("/api/v1/summary")) return json(200, makeSummary());
+      if (url.includes("/api/v1/accounts")) return json(200, [makeAccount()]);
+      return json(404, null);
+    });
+    renderPage();
+
+    // Radix's menu opens on pointerdown, and jsdom has no PointerEvent to fire;
+    // the trigger's own keyboard path opens the same menu.
+    fireEvent.keyDown(await screen.findByRole("button", { name: "Действия" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Архивировать" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Архивировать" }));
+
+    expect(await within(dialog).findByText("Не удалось архивировать счет")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("account has operations");
   });
 });

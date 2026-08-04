@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
+import { apiError } from "./operations";
 import type { components } from "./schema";
 
 export type MemberInfo = components["schemas"]["MemberInfo"];
@@ -30,11 +31,10 @@ export function useCreateMember() {
   return useMutation({
     mutationFn: async (body: CreateMemberBody) => {
       const { data, error, response } = await api.POST("/api/v1/members", { body });
-      if (!data) {
-        throw new Error(
-          (error as { error?: string } | undefined)?.error ?? `create failed: ${response.status}`,
-        );
-      }
+      // ApiError, so the dialog can tell «логин занят» (409) from anything else
+      // by the status the API contract promises rather than by the English
+      // sentence it happens to carry.
+      if (!data) throw apiError(response, error);
       return data;
     },
     onSuccess: invalidate,

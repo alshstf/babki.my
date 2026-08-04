@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { isConflict } from "@/api/operations";
 import { useCreateMember, type Role } from "@/api/members";
 
 const ASSIGNABLE_ROLES: Role[] = ["editor", "viewer"];
@@ -60,8 +61,14 @@ export function MemberDialog({
     );
   };
 
+  // By status, not by the server's sentence: 409 on POST /api/v1/members is
+  // documented (api/openapi.yaml) and means exactly this one thing
+  // (ErrUsernameTaken in internal/family/http.go), while the English prose
+  // beside it is promised nowhere and can be reworded at any time — silently
+  // demoting «Логин уже занят», the one message here that says what to change,
+  // into «попробуйте еще раз».
   const errorMessage = create.isError
-    ? create.error.message.includes("username already taken")
+    ? isConflict(create.error)
       ? t("family.usernameTaken")
       : t("family.genericError")
     : null;
