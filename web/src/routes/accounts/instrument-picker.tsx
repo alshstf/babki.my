@@ -148,10 +148,40 @@ export function InstrumentPicker({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
+      {/* A search that did not answer, said outside the scrolling list on
+          purpose: the warning it carries — do not create what may already be
+          there — is worth nothing if it can be scrolled out of sight. */}
+      {instruments.isError && (
+        <Alert variant="destructive">
+          <AlertDescription className="grid gap-2">
+            <span>{t("instrumentPicker.searchFailed")}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={() => void instruments.refetch()}
+            >
+              {t("common.retry")}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
       <div className="grid max-h-48 gap-1 overflow-y-auto">
-        {instruments.isLoading ? (
-          <div className="px-2 py-1.5 text-sm text-muted-foreground">{t("app.loading")}</div>
-        ) : instruments.data && instruments.data.length > 0 ? (
+        {instruments.isError ? null : instruments.data === undefined ? (
+          // No answer yet — and the two ways of having no answer read
+          // differently to the person waiting. "paused" is react-query holding
+          // the request because the browser reports itself offline (networkMode
+          // "online", the default); the request has not been sent and will be
+          // sent on its own once the connection returns. Keyed on `data` rather
+          // than on isLoading, which is isPending && isFetching and is therefore
+          // FALSE while paused — that gap is how a request nobody had sent used
+          // to arrive on screen as «Ничего не найдено» (#88).
+          <div className="px-2 py-1.5 text-sm text-muted-foreground">
+            {instruments.fetchStatus === "paused"
+              ? t("instrumentPicker.searchOffline")
+              : t("app.loading")}
+          </div>
+        ) : instruments.data.length > 0 ? (
           instruments.data.map((instrument) => (
             <button
               key={instrument.id}
