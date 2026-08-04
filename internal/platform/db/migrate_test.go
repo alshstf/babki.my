@@ -216,11 +216,15 @@ func TestMigrate_UnsoundFaceValuesStopTheUpgradeAndSayWhatToDo(t *testing.T) {
 	ctx := context.Background()
 
 	upTo(t, ctx, pool, faceValueMigration-1)
-	// Both shapes, because they are two different rules and a migration that
-	// caught only one would leave the other in the database. The zero is what
-	// creation let through; the half pair is what the update let through.
+	// Every shape, because they are separate rules and a migration that caught
+	// only some would leave the rest in the database. The zero is what creation
+	// let through by never checking the value; the empty currency is what it let
+	// through by checking the currency's presence and never its shape — and it is
+	// the one an IS NULL test cannot see, since '' IS NULL is false; the half pair
+	// is what the update let through by checking nothing at all.
 	staged := []struct{ name, face string }{
 		{"ОФЗ с нулевым номиналом", "0, 'RUB'"},
+		{"ОФЗ с пустой валютой номинала", "100000, ''"},
 		{"ОФЗ без валюты номинала", "100000, NULL"},
 	}
 	ids := make(map[string]string, len(staged))
@@ -257,7 +261,8 @@ func TestMigrate_UnsoundFaceValuesStopTheUpgradeAndSayWhatToDo(t *testing.T) {
 	// absent.
 	var rows int
 	if err := pool.QueryRow(ctx,
-		`SELECT count(*) FROM instruments WHERE face_value_minor = 0 OR face_currency IS NULL`).Scan(&rows); err != nil {
+		`SELECT count(*) FROM instruments
+		  WHERE face_value_minor = 0 OR face_currency IS NULL OR face_currency = ''`).Scan(&rows); err != nil {
 		t.Fatalf("count instruments: %v", err)
 	}
 	if rows != len(staged) {
@@ -271,6 +276,10 @@ func TestMigrate_UnsoundFaceValuesStopTheUpgradeAndSayWhatToDo(t *testing.T) {
 	if _, err := pool.Exec(ctx,
 		`UPDATE instruments SET face_value_minor = 100000 WHERE face_value_minor = 0`); err != nil {
 		t.Fatalf("record a real face value: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE instruments SET face_currency = 'RUB' WHERE face_currency = ''`); err != nil {
+		t.Fatalf("name the currency the face value is in: %v", err)
 	}
 	if _, err := pool.Exec(ctx,
 		`UPDATE instruments SET face_value_minor = NULL WHERE face_currency IS NULL`); err != nil {
@@ -324,7 +333,10 @@ func TestMigrate_SoundFaceValuesDoNotStopTheUpgrade(t *testing.T) {
 
 	// And the constraint goes on refusing what the handlers refuse, which is
 	// what the running application writes against.
-	for _, face := range []string{"0, 'RUB'", "-1, 'RUB'", "100000, NULL", "NULL, 'RUB'"} {
+	// "100000, ''" is the one no IS NULL test catches: an empty string is not
+	// null, so the pairing equality alone reads it as a whole pair while it
+	// denominates the face value in nothing.
+	for _, face := range []string{"0, 'RUB'", "-1, 'RUB'", "100000, NULL", "NULL, 'RUB'", "100000, ''"} {
 		if _, err := pool.Exec(ctx,
 			`INSERT INTO instruments (type, name, ticker, currency, face_value_minor, face_currency)
 			 VALUES ('bond', 'Сломанная', '', 'RUB', `+face+`)`); err == nil {

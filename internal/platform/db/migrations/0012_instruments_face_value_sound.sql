@@ -2,6 +2,27 @@
 -- A face value is either a positive number of minor units WITH the currency it
 -- is denominated in, or it is absent altogether. Nothing in between.
 --
+-- An EMPTY STRING is one of the things in between, and the reason it needs
+-- saying is that it does not look like one: `'' IS NULL` is false, so a face
+-- currency of '' satisfies a plain IS NULL equality while naming no currency at
+-- all. That is a half pair wearing a value — the readers demand a currency and
+-- get a string that denominates nothing, so the valuation comes out as a bare
+-- number with nothing on it and the trade dialog writes «Номинал в , а сделка в
+-- RUB». Written as a separate clause below rather than folded into the equality,
+-- because the equality is the honest statement of the pairing rule and '' is a
+-- second thing entirely.
+--
+-- What this deliberately does NOT do is enforce the ISO-4217 SHAPE. That rule
+-- belongs at the door (currencyRe in internal/instrument/http.go), where it has
+-- always been applied to the instrument's own currency column — which carries no
+-- constraint here either. Spelling the alphabet out in SQL as well would make
+-- face_currency the one currency in this schema whose shape is stated twice, in
+-- two languages, with nothing keeping the two statements in step; and this
+-- codebase's recurring bug is precisely two statements of one rule drifting
+-- apart. What the database is asked for is the part the readers cannot survive
+-- without and cannot check for themselves: that a face value which exists is
+-- denominated in SOMETHING.
+--
 -- The pair is what turns a bond's quote into money. An exchange quotes a bond as
 -- a PERCENTAGE OF FACE, not in money per unit (see portfolio.marketValue and
 -- bondPriceFromPercent in the frontend), so face value is the factor the whole
@@ -11,8 +32,9 @@
 -- every reader demands both halves before valuing anything, but it is still a
 -- bond that silently cannot be priced.
 --
--- Both states were reachable until #93: creation checked that the two arrived
--- together and never that the value was positive, so zero went in, and the
+-- All three states were reachable until #93: creation checked that the two
+-- arrived together and never that the value was positive, so zero went in; it
+-- checked the currency's presence and never its shape, so '' went in; and the
 -- update checked nothing at all, so a PATCH could clear one half and leave the
 -- other. Those two doors now refuse (checkFacePair / checkFaceUpdate in
 -- internal/instrument/http.go), which is where a refusal belongs — it comes back
@@ -55,7 +77,8 @@ BEGIN
       INTO unsound
       FROM instruments i
      WHERE (i.face_value_minor IS NULL) <> (i.face_currency IS NULL)
-        OR i.face_value_minor <= 0;
+        OR i.face_value_minor <= 0
+        OR i.face_currency = '';
 
     IF unsound IS NOT NULL THEN
         -- Assembled with || rather than as a run of adjacent literals: only an
@@ -74,7 +97,8 @@ $$;
 
 ALTER TABLE instruments ADD CONSTRAINT instruments_face_value_sound
     CHECK ((face_value_minor IS NULL) = (face_currency IS NULL)
-       AND (face_value_minor IS NULL OR face_value_minor > 0));
+       AND (face_value_minor IS NULL OR face_value_minor > 0)
+       AND (face_currency IS NULL OR face_currency <> ''));
 
 -- +goose Down
 ALTER TABLE instruments DROP CONSTRAINT instruments_face_value_sound;

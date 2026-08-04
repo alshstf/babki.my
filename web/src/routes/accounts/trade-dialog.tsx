@@ -65,11 +65,21 @@ type FaceGap =
 // face value with no currency at all buys no valuation (marketValue in
 // internal/portfolio/http.go). A face value in euros cannot price a trade
 // booked in rubles without an fx rate, and there is none in this dialog.
+// An EMPTY face currency counts as none, and that clause is the whole reason
+// this comment names it: an empty string is not null, so without it the
+// instrument falls past this check into the mismatch one below and is captioned
+// «Номинал в , а сделка в RUB» — a sentence naming a currency that is not there,
+// which in this repository is not a typo but the defect class itself. The API
+// refuses to store one now (checkFacePair in internal/instrument/http.go, and
+// the CHECK constraint in migration 0012), so no server this client talks to
+// should produce it — which is the same standing this file already gives a null
+// face currency, and for the same reason: a client is a separate program from
+// the API version in front of it.
 function faceGapOf(instrument: Instrument | null): FaceGap | null {
   if (!instrument || instrument.type !== "bond") return null;
   if (instrument.face_value_minor == null) return "no_face_value";
   if (instrument.face_value_minor <= 0) return "bad_face_value";
-  if (instrument.face_currency == null) return "no_face_currency";
+  if (instrument.face_currency == null || instrument.face_currency === "") return "no_face_currency";
   if (instrument.face_currency !== instrument.currency) return "face_currency_mismatch";
   return null;
 }

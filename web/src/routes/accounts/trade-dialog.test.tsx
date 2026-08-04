@@ -361,6 +361,22 @@ describe("TradeDialog: a bond whose face value cannot be used", () => {
   // fx rate is at hand to make it so. Reusing the «номинал не записан»
   // sentence here would name a cause that is not the cause — the mistake
   // this project has made four times and now tests for.
+  // The same missing currency wearing a value. An empty string is not null, so
+  // the check above lets it past unless it says so, and the caption then comes
+  // out as «Номинал в , а сделка в RUB» — the currency that is not there, named
+  // as though it were. The API refuses to store one now (checkFacePair in
+  // internal/instrument/http.go, and migration 0012's CHECK constraint), which
+  // is where the refusal belongs; this is the client going on coping with an
+  // instrument it cannot price, exactly as it does for a null.
+  it("treats an empty face currency as no currency, not as a currency named ''", async () => {
+    await openWith(ofz({ face_currency: "" }));
+
+    expect(percentField()).toBeDisabled();
+    const gap = screen.getByTestId("trade-bond-gap").textContent ?? "";
+    expect(gap).toContain("У номинала этой облигации не указана валюта");
+    expect(gap).not.toContain("а сделка в");
+  });
+
   it("names a face value denominated in another currency", async () => {
     await openWith(ofz({ currency: "USD", face_currency: "RUB" }));
 
@@ -368,6 +384,54 @@ describe("TradeDialog: a bond whose face value cannot be used", () => {
     const gap = screen.getByTestId("trade-bond-gap").textContent ?? "";
     expect(gap).toContain("Номинал в RUB, а сделка в USD");
     expect(gap).not.toContain("не записан");
+  });
+});
+
+// The fee is money on the same operation as the total above it, and it carries
+// the same bound — so it needs the same two sentences told apart. «Проверьте
+// комиссию» over 20 000 000 000 000 sends its author to check a number he can
+// see nothing wrong with: it is positive, it parses, and the only thing against
+// it is a ceiling the field never mentions.
+describe("TradeDialog: a fee too large to record", () => {
+  const feeField = () => screen.getByLabelText(/Комиссия/);
+
+  it("says the fee is too large rather than telling its author to check it", async () => {
+    await openWith(share());
+    typeInto(feeField(), "20000000000000");
+
+    expect(screen.getByText(/Слишком большая сумма/)).toBeTruthy();
+    expect(screen.queryByText(/Проверьте комиссию/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Покупка" })).toBeDisabled();
+  });
+
+  it("names the largest fee it would take, in the account's currency", async () => {
+    await openWith(share());
+    typeInto(feeField(), "10000000000000.01"); // one kopeck past the bound
+
+    const hint = norm(screen.getByText(/Слишком большая сумма/).textContent ?? "").replace(
+      /\s/g,
+      " ",
+    );
+    expect(hint).toContain("10 000 000 000 000 ₽");
+  });
+
+  it("still tells its author to check a fee that is not a number", async () => {
+    await openWith(share());
+    typeInto(feeField(), "abc");
+
+    expect(screen.getByText(/Проверьте комиссию/)).toBeTruthy();
+    expect(screen.queryByText(/Слишком большая сумма/)).toBeNull();
+  });
+
+  it("takes the largest fee there is, and complains about nothing", async () => {
+    await openWith(share());
+    typeInto(screen.getByLabelText(/Цена за единицу/), "305.5");
+    typeInto(quantityField(), "10");
+    typeInto(feeField(), "10000000000000");
+
+    expect(screen.queryByText(/Слишком большая сумма/)).toBeNull();
+    expect(screen.queryByText(/Проверьте комиссию/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Покупка" })).toBeEnabled();
   });
 });
 

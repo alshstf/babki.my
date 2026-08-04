@@ -524,10 +524,10 @@ export interface components {
             currency: string;
             /**
              * Format: int64
-             * @description What one bond is worth at redemption, in face_currency's minor units. Null for anything that is not a bond, and for a bond whose face value has not been recorded. Never zero, never negative, and never present without face_currency: the two are written together or not at all, and the writes enforce it (see the same field on CreateInstrumentRequest). Both were reachable states before, and the pair is what a bond's price MEANS — an exchange quotes a bond as a percentage of face, so a face value of zero prices the whole holding at nothing.
+             * @description What one bond is worth at redemption, in face_currency's minor units. Null for anything that is not a bond, and for a bond whose face value has not been recorded. Never zero, never negative, and never present without face_currency: the two are written together or not at all, and the writes enforce it (see the same field on CreateInstrumentRequest). Both were reachable states before, and the pair is what a bond's price MEANS — an exchange quotes a bond as a percentage of face, so a face value of zero prices the whole holding at nothing. The minimum states in schema what that sentence promises in prose, so a client that validates against this document can check the guarantee rather than take it on trust.
              */
             face_value_minor?: number | null;
-            /** @description The currency face_value_minor is denominated in, which need not be the instrument's own currency. Null exactly when face_value_minor is null — see it. */
+            /** @description The currency face_value_minor is denominated in, which need not be the instrument's own currency. Null exactly when face_value_minor is null — see it. An ISO-4217 code, never an empty string: the writes enforce the pattern and a CHECK constraint keeps the empty string out (migration 0012). A face value denominated in nothing is what makes a valuation come back as a bare number with no currency on it. */
             face_currency?: string | null;
             frozen: boolean;
         };
@@ -543,7 +543,7 @@ export interface components {
              * @description A bond's face value in face_currency's minor units. Must be POSITIVE and must be given TOGETHER with face_currency — both set, or neither. Past either rule, 400 naming the field. Zero is refused rather than stored because an exchange quotes a bond as a percentage of face: a face value of zero turns every price into no money at all, and the position it values into 0,00. A bond may be created without a face value; it simply cannot be priced until one is recorded.
              */
             face_value_minor?: number | null;
-            /** @description The currency face_value_minor is denominated in (ISO-4217). Given together with face_value_minor or not at all — see it. */
+            /** @description The currency face_value_minor is denominated in: an ISO-4217 code in uppercase, and the pattern is enforced, not merely described. An empty string is refused with 400 like any other non-code — it passes a presence check and a NOT NULL alike while denominating the face value in nothing, which leaves a bond priced as a bare number with no currency beside it. Given together with face_value_minor or not at all — see it. */
             face_currency?: string | null;
         };
         UpdateInstrumentRequest: {
@@ -554,10 +554,10 @@ export interface components {
             frozen?: boolean;
             /**
              * Format: int64
-             * @description Same two rules as on creation, and they apply to the REQUEST rather than to the row it lands on: to touch either half of the pair, send both — either two values, or two nulls to clear the pair. Sending one alone is refused even when the stored row would make the result well formed, so that an accepted PATCH always leaves the pair whole without this endpoint having to read the row first and race a concurrent write. Omitting both leaves the pair exactly as it was.
+             * @description Same rules as on creation, and they apply to the REQUEST rather than to the row it lands on: to touch either half of the pair, send both — either two values, or two nulls to clear the pair. Sending one alone is refused even when the stored row would make the result well formed, so that an accepted PATCH always leaves the pair whole without this endpoint having to read the row first and race a concurrent write. That refusal carries a sentence of its own — `face_value_minor and face_currency must be sent together, even to change one` — because creation's `set together or not at all` is true of the stored row both before such a PATCH and after it, and so names nothing the client could do about it. Omitting both leaves the pair exactly as it was.
              */
             face_value_minor?: number | null;
-            /** @description The currency face_value_minor is denominated in (ISO-4217). Sent together with face_value_minor or not at all — see it. */
+            /** @description The currency face_value_minor is denominated in: an ISO-4217 code in uppercase, enforced as on creation — an empty string comes back 400, not stored. Sent together with face_value_minor or not at all — see it. */
             face_currency?: string | null;
         };
         /** @enum {string} */

@@ -42,7 +42,9 @@ func wantFaceRefusal(t *testing.T, resp *http.Response, want, sent string) {
 
 const (
 	facePairRule     = "face_value_minor and face_currency must be set together or not at all"
+	faceMentionRule  = "face_value_minor and face_currency must be sent together, even to change one"
 	facePositiveRule = "face_value_minor must be positive"
+	faceCurrencyRule = "face_currency must be ISO-4217 uppercase"
 )
 
 // mkBond creates an ordinary bond with a sound face value and returns its id.
@@ -140,14 +142,77 @@ func TestCreateStillTakesAnInstrumentWithNoFaceValue(t *testing.T) {
 	}
 }
 
+// TestCreateRefusesAFaceCurrencyThatNamesNoCurrency is the gap the contract
+// described and nothing enforced: face_currency was declared ISO-4217 and
+// checked only for PRESENCE, so `"face_currency": ""` was created, stored, and
+// returned with a 201.
+//
+// An empty string is the interesting one because it is invisible to the checks
+// that were there. It is not null, so the pairing rule reads the pair as whole,
+// and an empty string is not NULL either, so the CHECK constraint behind it
+// passed the row too. What comes out is a bond whose face value is denominated
+// in nothing: portfolio.marketValue prices it in face_currency and publishes a
+// figure with an empty currency beside it — a bare number, which
+// TestMarketValueNeedsBothHalvesOfTheFacePair argues is worse than no valuation
+// at all — and the trade dialog captions it «Номинал в , а сделка в RUB».
+//
+// The instrument's own currency has been held to currencyRe at this same door
+// from the start. This is that rule reaching the other currency column.
+func TestCreateRefusesAFaceCurrencyThatNamesNoCurrency(t *testing.T) {
+	url, c := newAPI(t)
+
+	for _, tc := range []struct{ what, currency string }{
+		{"create with an empty face currency", `""`},
+		{"create with a lowercase face currency", `"rub"`},
+		{"create with a currency name rather than a code", `"RUBLE"`},
+		{"create with a face currency of blanks", `"   "`},
+	} {
+		wantFaceRefusal(t, do(t, c, "POST", url+"/api/v1/instruments",
+			`{"type":"bond","name":"X","currency":"RUB","face_value_minor":100000,"face_currency":`+tc.currency+`}`),
+			faceCurrencyRule, tc.what)
+	}
+}
+
+// TestUpdateRefusesAFaceCurrencyThatNamesNoCurrency: the same rule at the other
+// door, and reached with BOTH halves named so that the mention rule is not what
+// answers. A PATCH is the only way an instrument that was created sound can
+// become one that is not.
+func TestUpdateRefusesAFaceCurrencyThatNamesNoCurrency(t *testing.T) {
+	url, c := newAPI(t)
+	id := mkBond(t, url, c)
+
+	for _, tc := range []struct{ what, currency string }{
+		{"update to an empty face currency", `""`},
+		{"update to a lowercase face currency", `"usd"`},
+	} {
+		wantFaceRefusal(t, do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
+			`{"face_value_minor":200000,"face_currency":`+tc.currency+`}`),
+			faceCurrencyRule, tc.what)
+	}
+
+	// Refused whole: the face VALUE in the same request did not land either.
+	pair := readFacePair(t, url, c, id)
+	if pair.FaceValueMinor == nil || *pair.FaceValueMinor != 100000 ||
+		pair.FaceCurrency == nil || *pair.FaceCurrency != "RUB" {
+		t.Errorf("face pair after the refusals = %+v, want 100000 RUB untouched", pair)
+	}
+}
+
 // TestUpdateRefusesToBreakThePair is #93's second half: PATCH validated nothing
 // whatsoever, so either half of the pair could be cleared or set on its own.
 //
 // The rule is stated about the REQUEST, not about the row it lands on: to touch
 // either half, send both. That is deliberately stricter than "the result must be
 // sound" — it needs no read of the stored row, so it cannot be raced by a
-// concurrent PATCH that changes the other half between the read and the write,
-// and it is the same sentence creation refuses with.
+// concurrent PATCH that changes the other half between the read and the write.
+//
+// And it refuses in its OWN sentence, which is what this test pins by asserting
+// the whole string. Creation's «must be set together or not at all» would be a
+// true statement here and still a useless one: PATCH {"face_value_minor":200000}
+// lands on a bond that stores "RUB", where the two ARE set together both before
+// the request and after it, so the sentence describes nothing the client did
+// wrong and names nothing for it to do. The thing to do is resend the currency,
+// and only a rule about the request can say it.
 func TestUpdateRefusesToBreakThePair(t *testing.T) {
 	url, c := newAPI(t)
 	id := mkBond(t, url, c)
@@ -157,6 +222,18 @@ func TestUpdateRefusesToBreakThePair(t *testing.T) {
 		{"clear the value and leave the currency", `{"face_value_minor":null}`},
 		{"change the value alone", `{"face_value_minor":200000}`},
 		{"change the currency alone", `{"face_currency":"USD"}`},
+	} {
+		wantFaceRefusal(t, do(t, c, "PATCH", url+"/api/v1/instruments/"+id, tc.body),
+			faceMentionRule, tc.what)
+	}
+
+	// Mentioning both and VALUING only one is the other rule, and the one
+	// creation shares: both halves are named, so the mention rule has nothing to
+	// say, and what is left is a face value with no currency. Without a case here
+	// the update side of the shared rule would be pinned by nothing at all.
+	for _, tc := range []struct{ what, body string }{
+		{"null the value while naming a currency", `{"face_value_minor":null,"face_currency":"USD"}`},
+		{"null the currency while naming a value", `{"face_value_minor":200000,"face_currency":null}`},
 	} {
 		wantFaceRefusal(t, do(t, c, "PATCH", url+"/api/v1/instruments/"+id, tc.body),
 			facePairRule, tc.what)

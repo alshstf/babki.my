@@ -113,10 +113,12 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 // What a face value has to be, in one place, so that the two doors into those
 // two columns — creation and update — cannot come to refuse different things or
 // in different words (#93). Creation checked only that the pair arrived whole,
-// which let a face value of ZERO through; the update checked nothing whatsoever,
-// so a PATCH could clear the currency and leave the value behind.
+// which let a face value of ZERO and a currency of "" through; the update
+// checked nothing whatsoever, so a PATCH could clear the currency and leave the
+// value behind. Everything they can BOTH break is stated once, below; the update
+// adds one rule of its own, which only it can break (see checkFaceUpdate).
 //
-// Neither state is cosmetic. An exchange quotes a bond as a PERCENTAGE OF FACE
+// None of those states is cosmetic. An exchange quotes a bond as a PERCENTAGE OF FACE
 // (see portfolio.marketValue, and bondPriceFromPercent in the frontend), so the
 // face value is the factor that turns a quote into money. At zero the whole
 // holding is valued at 0,00 — a published figure that is not the truth, which is
@@ -125,20 +127,36 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 // halves before it values anything, but it is still a bond that silently cannot
 // be priced.
 //
+// A currency that names no currency is the same failure wearing a value. The
+// contract calls face_currency ISO-4217 and the readers take it at its word: a
+// bond's market value is denominated in it (portfolio.marketValue), so an empty
+// string there publishes a bare number with no currency on it, and the trade
+// dialog writes «Номинал в , а сделка в RUB». The instrument's own currency has
+// been held to currencyRe at this same door all along; its face value's currency
+// simply was not — and since an empty string is not NULL, neither the pair check
+// here nor the CHECK constraint behind it ever looked.
+//
 // The messages name the fields and the rule. The API is the only way to reach
-// either state (no screen writes a face value, and nothing in the frontend
-// PATCHes an instrument at all), so an importer's log is where these will be
-// read.
+// any of these states (no screen writes a face value, and nothing in the
+// frontend PATCHes an instrument at all), so an importer's log is where these
+// will be read.
 var (
 	errFacePair     = errors.New("face_value_minor and face_currency must be set together or not at all")
+	errFaceMention  = errors.New("face_value_minor and face_currency must be sent together, even to change one")
 	errFacePositive = errors.New("face_value_minor must be positive")
+	errFaceCurrency = errors.New("face_currency must be ISO-4217 uppercase")
 )
 
 // checkFacePair judges the pair as the request STATES it, and is what both doors
-// share: the value and its currency are present together or not at all, and a
-// present value is positive. "Present" means carrying a value — an omitted field
-// and an explicit null both count as absent, which is what they mean on a
-// creation.
+// share: the value and its currency are present together or not at all, a
+// present value is positive, and a present currency is a currency code.
+// "Present" means carrying a value — an omitted field and an explicit null both
+// count as absent, which is what they mean on a creation.
+//
+// The value's own rule is tried before its currency's, so that the field a
+// reader is told about is the one nearer the money: a face value of zero prices
+// the whole holding at nothing, while a misspelled currency merely stops it
+// being priced at all.
 func checkFacePair(value nullable.Nullable[int64], currency nullable.Nullable[string]) error {
 	valuePresent := value.IsSpecified() && !value.IsNull()
 	currencyPresent := currency.IsSpecified() && !currency.IsNull()
@@ -147,6 +165,9 @@ func checkFacePair(value nullable.Nullable[int64], currency nullable.Nullable[st
 	}
 	if valuePresent && value.MustGet() <= 0 {
 		return errFacePositive
+	}
+	if currencyPresent && !currencyRe.MatchString(currency.MustGet()) {
+		return errFaceCurrency
 	}
 	return nil
 }
@@ -158,21 +179,31 @@ func checkFacePair(value nullable.Nullable[int64], currency nullable.Nullable[st
 // {"face_currency": null} reads as "both absent", passes the shared rule, and
 // clears one half of a stored pair.
 //
+// It refuses in a sentence of its own, and that is not decoration. Answering
+// {"face_value_minor": 200000} on a bond that already stores "RUB" with the
+// shared rule's "must be set together or not at all" states something TRUE of
+// that row before the request and after it, which leaves the client no wiser
+// about why it was turned away; what it has to do is resend the currency, and
+// only a rule about the REQUEST can say so. The contract has described the
+// mention rule correctly on the field all along — this is the runtime catching
+// up with it.
+//
 // It is a rule about the REQUEST rather than about the row the request lands on,
 // and that is the deliberate part. Judging the RESULT would mean reading the
 // stored row first and then writing — and between the read and the write another
 // PATCH can move the half this one is not touching, so two requests that each
 // looked sound against what they read leave a broken pair behind. Reading the
-// request alone cannot be raced. Since creation refuses the same way, every
-// accepted write leaves the pair whole, and every row is whole by induction from
-// a catalog that starts whole (migration 0012).
+// request alone cannot be raced. Creation cannot break this particular rule at
+// all — there is no stored half for it to leave behind — so between the two
+// doors every accepted write leaves the pair whole, and every row is whole by
+// induction from a catalog that starts whole (migration 0012).
 //
 // What it costs: a client changing only the face value of a bond has to repeat
 // its currency. No screen does this today — nothing in the frontend PATCHes an
 // instrument — and the contract says so on the field.
 func checkFaceUpdate(value nullable.Nullable[int64], currency nullable.Nullable[string]) error {
 	if value.IsSpecified() != currency.IsSpecified() {
-		return errFacePair
+		return errFaceMention
 	}
 	return checkFacePair(value, currency)
 }
