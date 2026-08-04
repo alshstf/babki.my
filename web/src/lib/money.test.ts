@@ -38,6 +38,65 @@ describe("formatMinorCompact", () => {
   it("drops kopecks", () => {
     expect(norm(formatMinorCompact(138_500_000, "RUB"))).toBe("1 385 000 ₽");
   });
+
+  it("keeps abbreviating millions, thousands and whole units exactly as before", () => {
+    // The half of the behaviour that must not move. Everything at or above
+    // half a major unit keeps its kopecks dropped, rounded the way it always
+    // was — including the rounding itself, which is what makes 1 234,56 read
+    // as 1 235 and not 1 234.
+    expect(norm(formatMinorCompact(1_234_56, "RUB"))).toBe("1 235 ₽");
+    expect(norm(formatMinorCompact(-1_234_56, "RUB"))).toBe("-1 235 ₽");
+    expect(norm(formatMinorCompact(99, "RUB"))).toBe("1 ₽");
+    expect(norm(formatMinorCompact(50, "RUB"))).toBe("1 ₽");
+  });
+
+  it("shows a sum too small to survive the abbreviation instead of printing it as zero", () => {
+    // #107. Forty kopecks printed as «0 ₽» — a number that is neither the sum
+    // nor zero, and on the headline total card it arrives paired with the
+    // sign's own colour, so the reader is shown a GREEN ZERO: two statements
+    // that contradict each other over one figure. The same fake zero was
+    // already fixed once next door, in formatPrice for a sub-cent quote (#30).
+    //
+    // What replaces it is the amount at full precision. Unlike a price, a
+    // money amount has a smallest unit of its own — it IS an integer number of
+    // minor units — so "every digit it has" is always two digits and needs
+    // none of formatPrice's significant-digit machinery.
+    expect(norm(formatMinorCompact(40, "RUB"))).toBe("0,40 ₽");
+    expect(norm(formatMinorCompact(1, "RUB"))).toBe("0,01 ₽");
+    expect(norm(formatMinorCompact(49, "RUB"))).toBe("0,49 ₽");
+    // A currency this program has no symbol for takes the same branch.
+    expect(norm(formatMinorCompact(40, "XXX"))).toBe("0,40 XXX");
+  });
+
+  it("does not print a minus zero for a small debt either", () => {
+    // The negative side is worse than the positive one, because it survives
+    // the -0 guard in formatWith: that guard only catches an amount that IS
+    // zero, and -40 is not — it merely rounds to one, taking its minus sign
+    // with it. «-0 ₽» is a fake zero wearing a sign.
+    expect(norm(formatMinorCompact(-40, "RUB"))).toBe("-0,40 ₽");
+    expect(norm(formatMinorCompact(-1, "RUB"))).toBe("-0,01 ₽");
+    expect(norm(formatMinorCompact(-49, "RUB"))).toBe("-0,49 ₽");
+  });
+
+  it("prints a real zero as a zero", () => {
+    expect(norm(formatMinorCompact(0, "RUB"))).toBe("0 ₽");
+    expect(norm(formatMinorCompact(-0, "RUB"))).toBe("0 ₽");
+  });
+
+  it("renders no non-zero amount the way it renders zero, at any magnitude", () => {
+    // The guarantee stated as the property it is, rather than as the handful
+    // of cases above: whatever this function prints for a sum that is not
+    // zero, it is not what it prints for zero. Compared against the zero
+    // rendering as a whole string — asserting the absence of the character "0"
+    // would be meaningless, since «1 385 000 ₽» is full of them.
+    const zero = formatMinorCompact(0, "RUB");
+    for (const amountMinor of [
+      1, 5, 40, 49, 50, 51, 99, 100, 1_00, 999_99, 1_385_000_00,
+      -1, -5, -40, -49, -50, -51, -99, -100, -1_00, -999_99, -1_385_000_00,
+    ]) {
+      expect(formatMinorCompact(amountMinor, "RUB")).not.toBe(zero);
+    }
+  });
 });
 
 describe("parseToMinor", () => {

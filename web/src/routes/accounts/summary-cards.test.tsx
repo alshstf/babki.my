@@ -88,6 +88,22 @@ describe("SummaryCards", () => {
     expect(screen.queryByText("Нет курсов для пересчета")).not.toBeInTheDocument();
   });
 
+  it("does not print a coloured zero on the headline card for a total that is not zero", () => {
+    // #107 where it actually hurts. The total card pairs the figure with
+    // signClass, so forty kopecks used to be shown as «0 ₽» in the green of a
+    // gain: a zero and a sign, contradicting each other, on the largest number
+    // on the screen. Asserted against the zero rendering as a whole string —
+    // looking for the character "0" would match «1 385 000 ₽» just as well.
+    wrap(<SummaryCards summary={makeSummary({ total_in_base_minor: 40 })} mode="native" />);
+
+    const amount = screen.getByTestId("summary-total-amount");
+    expect(norm(amount.textContent ?? "")).toBe("0,40 ₽");
+    expect(amount.textContent).not.toBe(formatMinorCompact(0, "RUB"));
+    // The colour is right and stays: this total IS a gain, and the number now
+    // agrees with it.
+    expect(amount.className).toContain("emerald");
+  });
+
   it("omits the rates-date fragment when rates_on is unparseable", () => {
     wrap(
       <SummaryCards summary={makeSummary({ rates_on: "garbage" })} mode="native" />,
