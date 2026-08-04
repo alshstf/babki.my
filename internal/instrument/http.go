@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strconv"
 
 	"github.com/alexedwards/scs/v2"
@@ -13,12 +12,11 @@ import (
 
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/platform/apitypes"
+	"babki.my/babki/internal/platform/currency"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/money"
 )
-
-var currencyRe = regexp.MustCompile(`^[A-Z]{3}$`)
 
 // defaultSearchLimit/maxSearchLimit bound the GET /instruments listing.
 // A limit above maxSearchLimit is clamped down rather than rejected with
@@ -215,9 +213,9 @@ var (
 // stops it being priced at all. Between the value's own two rules, positive is
 // tried first because it is the cheaper mistake to make — a negative or zero
 // face value is one keystroke away from an ordinary one, math.MaxInt64 is not.
-func checkFacePair(value nullable.Nullable[int64], currency nullable.Nullable[string]) error {
+func checkFacePair(value nullable.Nullable[int64], code nullable.Nullable[string]) error {
 	valuePresent := value.IsSpecified() && !value.IsNull()
-	currencyPresent := currency.IsSpecified() && !currency.IsNull()
+	currencyPresent := code.IsSpecified() && !code.IsNull()
 	if valuePresent != currencyPresent {
 		return errFacePair
 	}
@@ -227,7 +225,7 @@ func checkFacePair(value nullable.Nullable[int64], currency nullable.Nullable[st
 	if valuePresent && value.MustGet() > money.MaxAmountMinor {
 		return errFaceTooLarge
 	}
-	if currencyPresent && !currencyRe.MatchString(currency.MustGet()) {
+	if currencyPresent && !currency.Valid(code.MustGet()) {
 		return errFaceCurrency
 	}
 	return nil
@@ -262,11 +260,11 @@ func checkFacePair(value nullable.Nullable[int64], currency nullable.Nullable[st
 // What it costs: a client changing only the face value of a bond has to repeat
 // its currency. No screen does this today — nothing in the frontend PATCHes an
 // instrument — and the contract says so on the field.
-func checkFaceUpdate(value nullable.Nullable[int64], currency nullable.Nullable[string]) error {
-	if value.IsSpecified() != currency.IsSpecified() {
+func checkFaceUpdate(value nullable.Nullable[int64], code nullable.Nullable[string]) error {
+	if value.IsSpecified() != code.IsSpecified() {
 		return errFaceMention
 	}
-	return checkFacePair(value, currency)
+	return checkFacePair(value, code)
 }
 
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -274,7 +272,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if httpjson.Decode(w, r, &req) != nil {
 		return
 	}
-	if req.Name == "" || !Type(req.Type).Valid() || !currencyRe.MatchString(req.Currency) {
+	if req.Name == "" || !Type(req.Type).Valid() || !currency.Valid(req.Currency) {
 		httpjson.Error(w, http.StatusBadRequest,
 			"name is required, type must be valid, currency must be ISO-4217 uppercase")
 		return

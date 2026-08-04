@@ -101,6 +101,15 @@ func TestAccountsCRUDAndBalance(t *testing.T) {
 		`{"name":"","type":"cash","currency":"RUB"}`,
 		`{"name":"X","type":"nope","currency":"RUB"}`,
 		`{"name":"X","type":"cash","currency":"russian rubles"}`,
+		// A LOWERCASE CODE, which the line above does not cover: a currency's
+		// name is refused by anything that looks at the string at all, while
+		// "rub" is refused only by the shape this door actually applies
+		// (currency.Pattern, declared on CreateAccountRequest.currency in the
+		// contract since #102). Without this case, loosening the shared pattern
+		// to accept either case left this package green while three others
+		// reddened — and a stored "rub" matches no rate row, so the account
+		// would simply never convert.
+		`{"name":"X","type":"cash","currency":"rub"}`,
 	} {
 		if resp = do(t, c, "POST", url+"/api/v1/accounts", bad); resp.StatusCode != 400 {
 			t.Errorf("create %s = %d, want 400", bad, resp.StatusCode)

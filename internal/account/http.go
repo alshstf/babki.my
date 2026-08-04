@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
 	"time"
 
 	"github.com/alexedwards/scs/v2"
@@ -16,12 +15,11 @@ import (
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
+	"babki.my/babki/internal/platform/currency"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/money"
 )
-
-var currencyRe = regexp.MustCompile(`^[A-Z]{3}$`)
 
 // spaceStore is the subset of family.Store this handler needs: reading the
 // space's base currency for GET /summary. Local interface (mirroring
@@ -416,7 +414,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if httpjson.Decode(w, r, &req) != nil {
 		return
 	}
-	if req.Name == "" || !Type(req.Type).Valid() || !currencyRe.MatchString(req.Currency) {
+	if req.Name == "" || !Type(req.Type).Valid() || !currency.Valid(req.Currency) {
 		httpjson.Error(w, http.StatusBadRequest,
 			"name is required, type must be valid, currency must be ISO-4217 uppercase")
 		return
