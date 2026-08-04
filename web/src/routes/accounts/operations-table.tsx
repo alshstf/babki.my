@@ -96,15 +96,25 @@ function publishesACostBasis(operation: Operation): boolean {
 //
 // The permanent cause is told apart from the temporary ones in as many words,
 // because that is the difference the reader is actually served by. A missing
-// rate is a gap the fx backfill closes on its own, after which the ruble
-// figure appears; an unrecorded purchase date resolves never, since nobody
-// wrote it down and nothing can recover it, and a caption that promised such a
-// row a figure would promise one that is not coming.
+// rate is a gap the fx backfill can close, after which the ruble figure
+// appears; an unrecorded purchase date resolves never, since nobody wrote it
+// down and nothing can recover it, and a caption that promised such a row a
+// figure would promise one that is not coming.
+//
+// What the temporary ones may say about the closing is a condition, not a
+// promise (#105). Rates come from one source with a currency list of its own,
+// so a pair it publishes no leg of never gets a rate at all — and which pairs
+// those are is not on the wire: the contract names no source and lists no
+// currencies, so this screen cannot qualify the sentence by pair either. It
+// states the consequence instead, and only as a consequence — «Если курс
+// появится … операция посчитается сама» — which every request makes true, since
+// each recomputes from whatever rates exist at the time.
 //
 // The wordings are the positions screen's wherever the cause is the same
-// («восстановить … уже неоткуда», «Курс появится при обновлении курсов, и …
+// («восстановить … уже неоткуда», «Если курс появится при обновлении курсов, …
 // посчитается сама»): two screens explaining one condition differently is a
-// reader's problem, not a translator's.
+// reader's problem, not a translator's — and both tables are stacked on one
+// account page, so the reader meets them in one glance.
 //
 // Written as a switch over literal keys rather than a lookup table, so every
 // key stays a literal at the t() call site — the only shape
@@ -135,11 +145,20 @@ function rowGapTitle(
       // currency differs from the base one, so a row with a marker and no
       // cause should not occur — and the field is absent altogether on the
       // create and transfer responses, which this table never renders. It is
-      // left neither to crash nor to say nothing: the general phrase is vague
-      // but true — some rate is missing somewhere — and it is what an older
-      // server's payload deserves.
+      // left neither to crash nor to say nothing: the general phrase says only
+      // what the payload itself shows — the base-currency figures were
+      // withheld — and it is what an older server's payload deserves.
       return t("operations.notConverted");
     default:
+      // The other way to reach that phrase, and the one that decided how it is
+      // worded (#105). A server NEWER than this build sends a value outside
+      // the union above; the sentence shown then may claim nothing about the
+      // cause, because not knowing the cause is the very condition that brings
+      // it here. «Нет курса», which is what it used to say, claims exactly
+      // that — and would be false of a value shaped like `undated_lot`, which
+      // is in TODAY's enum and is about a date nobody recorded rather than
+      // about a rate. The positions screen says the same thing in the same
+      // words for the same reason; the two are edited together.
       return unnameableGap(gap, t("operations.notConverted"));
   }
 }
@@ -349,21 +368,36 @@ export function OperationsTable({
             // Amount and fee are converted and rounded independently by the
             // backend — they are two separate figures, not terms of one
             // total — so each is resolved on its own.
+            const inBase = operation.in_base;
+            // One term of the row's converted block, welded to the currency
+            // that block says its figures are in (OperationInBase.currency,
+            // required by the contract) — never to the session's base
+            // currency, which is a second answer to the same question and
+            // comes apart from this one whenever a cached journal outlives a
+            // change of base currency (#106). The term is picked by a function
+            // of the block rather than passed in, so the fee cell cannot be
+            // handed the amount, nor either cell the operation's own figure.
+            const convertedTerm = (
+              term: (block: NonNullable<typeof inBase>) => number | null | undefined,
+            ) =>
+              inBase && {
+                amountMinor: term(inBase),
+                currency: inBase.currency,
+                rateOn: inBase.rate_on,
+              };
             const resolvedAmount = resolveDisplayAmount(
               mode,
               operation.currency,
               operation.amount_minor,
               baseCurrency,
-              operation.in_base?.amount_minor,
-              operation.in_base?.rate_on,
+              convertedTerm((block) => block.amount_minor),
             );
             const resolvedFee = resolveDisplayAmount(
               mode,
               operation.currency,
               operation.fee_minor,
               baseCurrency,
-              operation.in_base?.fee_minor,
-              operation.in_base?.rate_on,
+              convertedTerm((block) => block.fee_minor),
             );
             // Three different things a converted amount can be, and the
             // tooltip has to name the right one — it is read as a statement of
@@ -429,7 +463,6 @@ export function OperationsTable({
             // because the neighbouring screen's wordings do not mention a date
             // and must survive its absence; the transfer's own date is
             // formatted beside it, from the field that sentence is about.
-            const inBase = operation.in_base;
             const purchaseDate = inBase ? formatDate(inBase.dated_on) : "";
             const convertedTitle = (rateDate: string | null) => {
               // Unreachable — MoneyCell asks only when it is showing the

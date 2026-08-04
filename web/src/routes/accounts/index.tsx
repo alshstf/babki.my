@@ -144,9 +144,13 @@ export function AccountsPage() {
           <p className="text-sm text-muted-foreground">
             {t("accounts.archiveConfirm", { name: archiveTarget?.name ?? "" })}
           </p>
+          {/* Names the action that did not happen, and nothing else: the
+              server's own message is English prose written for a log, and it is
+              not part of the contract this client is written against (only the
+              status is — see api/openapi.yaml). */}
           {archiveAccount.isError && (
             <Alert variant="destructive">
-              <AlertDescription>{archiveAccount.error.message}</AlertDescription>
+              <AlertDescription>{t("accounts.archiveError")}</AlertDescription>
             </Alert>
           )}
           <DialogFooter>

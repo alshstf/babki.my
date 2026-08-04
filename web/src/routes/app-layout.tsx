@@ -1,6 +1,7 @@
 import { Link, Outlet } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { LogOut, Settings, Users, Wallet } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DisplayCurrencyToggle } from "@/components/display-currency-toggle";
@@ -68,6 +69,13 @@ export function AppLayout() {
                 <span className="text-sm">{session.user.display_name}</span>
                 <Badge variant="secondary">{t(`roles.${session.role}`)}</Badge>
                 <HeaderCurrencyToggle />
+                {/* Disabled only while a request is actually in flight, which
+                    is the whole of isPending now that this mutation runs with
+                    networkMode "always" (useLogout): with the default it also
+                    covered a request react-query was holding because the
+                    browser said it was offline, and that state ends only when
+                    the connection comes back — a button locked for as long as
+                    the reader has no way to try again. */}
                 <Button
                   variant="ghost"
                   size="icon"
@@ -80,6 +88,17 @@ export function AppLayout() {
               </>
             )}
           </header>
+          {/* A sign-out that did not go through is the one failure in this
+              application a reader must not miss: it is invisible in every other
+              way — the screen looks signed in, which is exactly what it is —
+              and the person it misleads is already walking away from the
+              machine. Full width under the header rather than a hint beside the
+              button, and it stays until the next attempt answers. */}
+          {logout.isError && (
+            <Alert variant="destructive" className="rounded-none border-x-0 border-t-0">
+              <AlertDescription>{t("auth.signOutFailed")}</AlertDescription>
+            </Alert>
+          )}
           <main className="flex-1 p-6">
             <Outlet />
           </main>

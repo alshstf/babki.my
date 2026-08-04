@@ -274,15 +274,34 @@ describe("AccountDetailPage", () => {
     expect(await screen.findByTestId("account-detail-balance")).toBeInTheDocument();
   });
 
-  it("converts the balance using the base currency from the session, not from the summary", async () => {
-    // The base currency this page needs is already in the session, so a
-    // broken /summary must not stop "base" mode working either.
+  it("shows the converted balance without the summary, taking the base currency it needs from the session", async () => {
+    // The base currency this page needs to decide whether there was anything
+    // to convert is already in the session, so a broken /summary must not stop
+    // "base" mode working either. The currency the figure PRINTS in is a
+    // different question, answered by the figure itself — see the test below.
     storeMode("base");
     renderPage();
 
     const balance = await screen.findByTestId("account-detail-balance");
     expect(balance.textContent).toMatch(/₽/);
     expect(balance).toHaveAttribute("title", "Пересчитано по текущему курсу (на 19.07.2026)");
+  });
+
+  it("prints the converted balance in the currency the balance itself carries, not the session's", async () => {
+    // #106, in the shape the owner meets it: settings changes the base
+    // currency, the new session lands in the cache at once (useUpdateSpace
+    // writes it directly) and this account still holds a balance the server
+    // converted into the OLD one until its refetch comes back. Here the
+    // session says euros while the cached figure is in rubles, and the rubles
+    // must keep printing as rubles — a euro sign over them is not a
+    // mislabelling, it is a number wrong by the whole exchange rate with
+    // nothing on screen admitting it.
+    storeMode("base");
+    renderPage(makeSession({ base_currency: "EUR" }));
+
+    const balance = await screen.findByTestId("account-detail-balance");
+    expect(balance.textContent).toMatch(/₽/);
+    expect(balance.textContent).not.toContain("€");
   });
 
   it("says next to the positions that the figures are not this country's cost basis", async () => {

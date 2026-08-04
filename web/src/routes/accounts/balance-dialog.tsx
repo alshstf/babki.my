@@ -51,6 +51,19 @@ export function BalanceDialog({
   // a cause that is not the cause — see AmountRefusal.
   const refusal = amountRefusal(amount);
   const isLiability = account.type === "credit_card" || account.type === "loan";
+  // A balance is a statement about a day that has already happened, and the
+  // server refuses one dated later (parseAsOf in internal/account/http.go). The
+  // field's own `max` below only bounds the picker's arrows — a date typed into
+  // it goes through untouched — so before #95 the refusal came back from the
+  // server and was printed in its own words, in English. Compared as strings
+  // because both sides are YYYY-MM-DD, where lexical order IS calendar order.
+  //
+  // Against the LOCAL today, which is what `max` already promises the reader.
+  // The server's own bound is a day looser (it allows UTC-today + 1, so that
+  // every timezone can record its own today), so nothing this field accepts can
+  // be refused there for being in the future.
+  const today = localToday();
+  const futureDate = asOf !== "" && asOf > today;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -100,13 +113,25 @@ export function BalanceDialog({
               id="bal-date"
               type="date"
               value={asOf}
-              max={localToday()}
+              max={today}
               onChange={(e) => setAsOf(e.target.value)}
             />
+            {futureDate && (
+              <p className="text-xs text-red-500">
+                {t("accounts.balanceDialog.futureDate")}
+              </p>
+            )}
           </div>
+          {/* What the client knows about a refusal is that this save did not
+              happen. WHY is the server's own business: its message is English
+              prose written for a log, it is not part of the contract (only the
+              status is, see api/openapi.yaml), and nothing here can translate
+              a sentence it has never seen. The one cause a reader could act on
+              — a date in the future — is refused above, at the field, before
+              anything is sent. */}
           {setBalance.isError && (
             <Alert variant="destructive">
-              <AlertDescription>{setBalance.error.message}</AlertDescription>
+              <AlertDescription>{t("accounts.balanceDialog.saveError")}</AlertDescription>
             </Alert>
           )}
         </div>
@@ -115,7 +140,7 @@ export function BalanceDialog({
             {t("common.cancel")}
           </Button>
           <Button
-            disabled={parsed === null || !asOf || setBalance.isPending}
+            disabled={parsed === null || !asOf || futureDate || setBalance.isPending}
             onClick={() =>
               setBalance.mutate(
                 { id: account.id, asOf, amountMinor: parsed! },

@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react-query";
 import {
   RouterProvider,
   createRootRoute,
@@ -12,6 +12,46 @@ import "@/i18n";
 import { AppLayout } from "./app-layout";
 import { useReportScreenCurrencies } from "@/lib/screen-currencies";
 import type { SessionInfo } from "@/api/session";
+
+// The API client captures globalThis.fetch once, when @/api/client is first
+// imported (openapi-fetch: `fetch: baseFetch = globalThis.fetch`), so the double
+// has to be in place *before* that import — hence vi.hoisted, which runs ahead
+// of the import statements above.
+const fetchMock = vi.hoisted(() => {
+  const fn = vi.fn();
+  globalThis.fetch = fn as unknown as typeof fetch;
+  return fn;
+});
+
+// Serves the given endpoints (matched on the path's suffix) and 404s the rest,
+// so an unexpected request is loud rather than silently hanging. A fresh
+// Response per call: a single one handed to mockResolvedValue works once and
+// then throws, because a body can only be consumed once.
+//
+// `networkError` is what a browser with no connection does: fetch rejects, and
+// no status is ever read — the shape of a failure that carries no answer at all.
+function serve(
+  routes: Record<string, { status?: number; body?: unknown; networkError?: boolean }>,
+) {
+  const paths = Object.keys(routes);
+  fetchMock.mockImplementation((input: RequestInfo | URL) => {
+    const url = input instanceof Request ? input.url : String(input);
+    const path = new URL(url, "http://localhost").pathname;
+    const match = paths.find((route) => path.endsWith(route));
+    const route = match ? routes[match] : undefined;
+    if (route?.networkError) return Promise.reject(new TypeError("Failed to fetch"));
+    const status = route ? (route.status ?? 200) : 404;
+    // 204 is the sign-out's own success status, and a Response may not carry a
+    // body with it at all — JSON.stringify(null) there throws in undici.
+    if (status === 204) return Promise.resolve(new Response(null, { status }));
+    return Promise.resolve(
+      new Response(JSON.stringify(route?.body ?? null), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  });
+}
 
 // AppLayout renders <Outlet/> (needs a router context) and reads the
 // session via useSession (needs a QueryClient with ["session"] seeded —
@@ -37,13 +77,23 @@ function wrap(currencies: string[] | null, session: SessionInfo) {
     path: "/",
     component: () => <ScreenStub currencies={currencies} />,
   });
-  const routeTree = rootRoute.addChildren([indexRoute]);
+  // Where a completed sign-out lands. Present so that "did the screen believe
+  // the sign-out happened?" is answerable by what is on screen.
+  const loginRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/login",
+    component: () => <div data-testid="login-screen" />,
+  });
+  const routeTree = rootRoute.addChildren([indexRoute, loginRoute]);
   const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: ["/"] }) });
-  return render(
+  render(
     <QueryClientProvider client={qc}>
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
+  // The client comes back so a test can ask what this browser still holds after
+  // a sign-out.
+  return qc;
 }
 
 function makeSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
@@ -65,22 +115,137 @@ function makeSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
   };
 }
 
+const signOutButton = () => screen.getByRole("button", { name: "Выйти" });
+
+afterEach(() => {
+  fetchMock.mockReset();
+  onlineManager.setOnline(true);
+});
+
 describe("AppLayout — display-currency toggle visibility", () => {
   it("hides the toggle when the mounted screen never reports currencies", async () => {
+    serve({ "/api/v1/auth/me": { body: makeSession() } });
     wrap(null, makeSession());
     await screen.findByTestId("screen-stub");
     expect(screen.queryByRole("group", { name: /показывать суммы/i })).not.toBeInTheDocument();
   });
 
   it("hides the toggle when the mounted screen reports exactly one currency", async () => {
+    serve({ "/api/v1/auth/me": { body: makeSession() } });
     wrap(["RUB"], makeSession());
     await screen.findByTestId("screen-stub");
     expect(screen.queryByRole("group", { name: /показывать суммы/i })).not.toBeInTheDocument();
   });
 
   it("shows the toggle when the mounted screen reports more than one currency", async () => {
+    serve({ "/api/v1/auth/me": { body: makeSession() } });
     wrap(["RUB", "USD"], makeSession());
     await screen.findByTestId("screen-stub");
     expect(screen.getByRole("group", { name: /показывать суммы/i })).toBeInTheDocument();
+  });
+});
+
+// #88: sign-out was the one mutation in this application that never looked at
+// its own answer. Whatever the server said — 500, a dropped connection, nothing
+// at all — the screen cleared its caches and went to the login form, and the
+// session on the server went on living (handleLogout in internal/family/http.go
+// only destroys it when it is actually reached). Someone walks away from a
+// shared computer believing they are out.
+describe("AppLayout — sign-out", () => {
+  it("says so when the server did not confirm, and does not leave for the login screen", async () => {
+    serve({
+      "/api/v1/auth/me": { body: makeSession() },
+      "/api/v1/auth/logout": { status: 500, body: { error: "internal error" } },
+    });
+    wrap(null, makeSession());
+    await screen.findByTestId("screen-stub");
+
+    fireEvent.click(signOutButton());
+
+    expect(await screen.findByText(/сервер не подтвердил выход/i)).toBeInTheDocument();
+    // The login screen is the picture of a completed sign-out. It must not be
+    // the picture of a failed one.
+    expect(screen.queryByTestId("login-screen")).not.toBeInTheDocument();
+  });
+
+  it("goes to the login screen when the server confirms", async () => {
+    serve({
+      "/api/v1/auth/me": { body: makeSession() },
+      "/api/v1/auth/logout": { status: 204 },
+    });
+    wrap(null, makeSession());
+    await screen.findByTestId("screen-stub");
+
+    fireEvent.click(signOutButton());
+
+    expect(await screen.findByTestId("login-screen")).toBeInTheDocument();
+    expect(screen.queryByText(/сервер не подтвердил выход/i)).not.toBeInTheDocument();
+  });
+
+  it("says so when the browser reports no connection, and lets the reader try again", async () => {
+    // The state this whole branch taught the gate and the picker to recognise,
+    // in the one place where recognising it matters most. react-query's default
+    // for mutations, networkMode "online", would PAUSE this one: nothing sent,
+    // isError false so the banner above never appears, and isPending true so
+    // the button that would try again is disabled until the connection returns
+    // — at which point the held request goes out and the app leaves for the
+    // login screen on its own. useLogout runs with networkMode "always" so that
+    // a dead connection is an ordinary failure, said out loud, at once.
+    onlineManager.setOnline(false);
+    serve({
+      "/api/v1/auth/me": { body: makeSession() },
+      "/api/v1/auth/logout": { networkError: true },
+    });
+    wrap(null, makeSession());
+    await screen.findByTestId("screen-stub");
+    fetchMock.mockClear();
+
+    fireEvent.click(signOutButton());
+
+    expect(await screen.findByText(/сервер не подтвердил выход/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("login-screen")).not.toBeInTheDocument();
+    // Attempted, not held: the browser's own idea of being offline does not get
+    // to decide this one, and it is the request that reports the answer.
+    expect(fetchMock).toHaveBeenCalled();
+    // And the reader can try again — a locked button is the same silence.
+    expect(signOutButton()).not.toBeDisabled();
+  });
+
+  it("does not leave the previous person's data in this browser", async () => {
+    serve({
+      "/api/v1/auth/me": { body: makeSession() },
+      "/api/v1/auth/logout": { status: 204 },
+    });
+    const qc = wrap(null, makeSession());
+    // Something only the person now signing out was allowed to see, already
+    // read and sitting in the cache. Nothing in this tree asks for it, so the
+    // sign-out is the only thing that can remove it — and if it does not, the
+    // next person at a shared computer is shown it from memory, before any
+    // refetch can come back 401.
+    qc.setQueryData(["accounts"], [{ id: "acc-1", name: "Брокерский счёт" }]);
+    await screen.findByTestId("screen-stub");
+
+    fireEvent.click(signOutButton());
+
+    await screen.findByTestId("login-screen");
+    expect(qc.getQueryData(["accounts"])).toBeUndefined();
+  });
+
+  it("counts a session the server no longer knows as signed out", async () => {
+    // 401 from this endpoint means RequireAuth found no usable session to
+    // destroy (internal/family/session.go) — there is nothing left to sign out
+    // of, so refusing to leave the screen would report a failure that did not
+    // happen. useSession already reads 401 on /auth/me the same way.
+    serve({
+      "/api/v1/auth/me": { body: makeSession() },
+      "/api/v1/auth/logout": { status: 401, body: { error: "authentication required" } },
+    });
+    wrap(null, makeSession());
+    await screen.findByTestId("screen-stub");
+
+    fireEvent.click(signOutButton());
+
+    expect(await screen.findByTestId("login-screen")).toBeInTheDocument();
+    expect(screen.queryByText(/сервер не подтвердил выход/i)).not.toBeInTheDocument();
   });
 });

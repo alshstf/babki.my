@@ -27,8 +27,32 @@ function formatWith(
   return `${num} ${currency}`;
 }
 
+// How many fraction digits a money amount is written with in full, and in the
+// compact form the summary cards use. Two numbers rather than two literals
+// scattered about, because formatMinorCompact below is defined in terms of
+// BOTH: it is the full form it falls back to.
+const FULL_FRACTION_DIGITS = 2;
+const COMPACT_FRACTION_DIGITS = 0;
+
 export function formatMinor(amountMinor: number, currency: string): string {
-  return formatWith(amountMinor, currency, 2);
+  return formatWith(amountMinor, currency, FULL_FRACTION_DIGITS);
+}
+
+// Whether the compact form would render this amount's MAGNITUDE the way it
+// renders zero — asked of the formatter itself rather than worked out from a
+// threshold of its own. A threshold ("under half a major unit") would be a
+// second copy of Intl's rounding rule kept here, correct only for as long as
+// that rule is halfExpand, and wrong silently if it ever were not.
+//
+// Asked on the magnitude because a small negative renders as «-0 ₽», which is
+// a fake zero wearing a sign and would not compare equal to «0 ₽» — the one
+// shape this check must not miss, since formatWith's own -0 guard only catches
+// an amount that IS zero, not one that merely rounds to it.
+function compactWouldReadAsZero(amountMinor: number, currency: string): boolean {
+  return (
+    formatWith(Math.abs(amountMinor), currency, COMPACT_FRACTION_DIGITS) ===
+    formatWith(0, currency, COMPACT_FRACTION_DIGITS)
+  );
 }
 
 // The most fraction digits a quantity or a price may carry: the scale the
@@ -48,8 +72,35 @@ export function isPositiveDecimal(value: string): boolean {
   return DECIMAL_RE.test(value) && Number(value) > 0;
 }
 
+// formatMinorCompact writes a money amount without its minor units: 1 385
+// 000,00 ₽ as «1 385 000 ₽». It is what the summary cards use, where the
+// kopecks of a seven-figure total are noise.
+//
+// A ZERO IT PRINTS IS A ZERO (#107). Dropping the minor units used to drop
+// them for a sum that is nothing BUT minor units too: forty kopecks printed as
+// «0 ₽», a number that is neither the sum nor zero — and on the headline total
+// card that arrived paired with signClass, so the reader was shown a green
+// zero, a figure and a colour contradicting each other. A small debt was worse
+// still: −40 rendered «-0 ₽», a fake zero wearing a sign, which formatWith's
+// own -0 guard does not catch because it only normalises an amount that IS
+// zero, not one that merely rounds to one.
+//
+// This is the same fake zero formatPrice already refuses for a sub-cent quote,
+// and it is refused the same way — by rendering the value rather than a zero.
+// The remedy differs from formatPrice's because the two quantities differ:
+// a price is an unbounded decimal and needs a significant-digit rendering with
+// no natural floor, while a money amount IS an integer number of minor units,
+// so its full form is always exactly FULL_FRACTION_DIGITS wide and is the whole
+// truth about it. Falling back to the full form is therefore not an
+// approximation of the compact one — it is the same number, written out.
+//
+// Rounding the amount is not on the table and never was: this function
+// formats, it does not compute, and the sum it is handed is the published one.
 export function formatMinorCompact(amountMinor: number, currency: string): string {
-  return formatWith(amountMinor, currency, 0);
+  if (amountMinor !== 0 && compactWouldReadAsZero(amountMinor, currency)) {
+    return formatWith(amountMinor, currency, FULL_FRACTION_DIGITS);
+  }
+  return formatWith(amountMinor, currency, COMPACT_FRACTION_DIGITS);
 }
 
 // A quote below a hundredth, but not zero: whole part 0 — possibly written

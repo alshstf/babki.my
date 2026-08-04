@@ -7,9 +7,13 @@ import type { ResolvedAmount } from "@/lib/display-amount";
 
 // Renders one already-resolved money amount (see resolveDisplayAmount in
 // lib/display-amount.ts): the formatted number, plus — only when
-// `resolved.noRate` — a small tooltipped indicator explaining that this
-// figure could not be converted (no fx rate was available) and is shown in
-// its native currency instead. Shared by every table/detail cell that shows
+// `resolved.noRate` — a small tooltipped indicator saying that this figure
+// could not be shown in the base currency and is shown in its native one
+// instead. WHY it could not is the caller's sentence, never this component's:
+// a missing fx rate is one cause among several (a purchase date nobody
+// recorded is another), and only the server knows which one it stopped on —
+// see notConvertedTitle below and ResolvedAmount.noRate. Shared by every
+// table/detail cell that shows
 // a money amount alongside an optional in_base/balance_in_base
 // counterpart, so this branching and markup lives in exactly one place
 // instead of being repeated per screen.
@@ -25,11 +29,11 @@ import type { ResolvedAmount } from "@/lib/display-amount";
 // A third, independent thing a cell can carry is a caveat about WHAT the
 // number is rather than about which currency it is in (`caveatTitle`). The
 // two travel together on the same figure often enough that they need separate
-// indicators: "this is shown in dollars because no rate was found" and "this
-// is a cost basis your country's rules would have picked differently" are two
-// statements, and folding them into one tooltip would be the same conflation
-// this component already avoids between "was it converted" and "what date is
-// it captioned with".
+// indicators: "this figure could not be converted to the base currency" and
+// "this is a cost basis your country's rules would have picked differently"
+// are two statements, and folding them into one tooltip would be the same
+// conflation this component already avoids between "was it converted" and
+// "what date is it captioned with".
 export function MoneyCell({
   resolved,
   className,

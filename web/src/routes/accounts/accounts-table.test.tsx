@@ -69,6 +69,24 @@ describe("AccountsTable", () => {
     expect(screen.queryByTestId("account-balance-acc-1-not-converted")).not.toBeInTheDocument();
   });
 
+  it("prints the converted balance in the currency the balance itself carries, not the session's", async () => {
+    // #106, in the shape the owner meets it: settings changes the base
+    // currency, the session's new answer lands in the cache at once
+    // (useUpdateSpace writes it directly), and this list still holds figures
+    // the server converted into the OLD base currency until its refetch comes
+    // back. The rubles must keep printing as rubles for that window — a euro
+    // sign over them is not a mislabelling, it is a number wrong by the whole
+    // exchange rate with nothing on screen admitting it.
+    const account = makeAccount({
+      balance_in_base: { amount_minor: 900_000, currency: "RUB", rate_on: "2026-07-20" },
+    });
+    wrap(<AccountsTable accounts={[account]} mode="base" baseCurrency="EUR" />);
+
+    const amount = await screen.findByTestId("account-balance-acc-1");
+    expect(norm(amount.textContent ?? "")).toBe(norm(formatMinor(900_000, "RUB")));
+    expect(amount.textContent).not.toContain("€");
+  });
+
   it("discloses the fx rate date of a converted balance in the cell's tooltip, not as text", async () => {
     const account = makeAccount({
       balance_in_base: { amount_minor: 900_000, currency: "RUB", rate_on: "2026-07-19" },

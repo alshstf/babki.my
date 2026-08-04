@@ -191,9 +191,17 @@ export function AccountDialog({
               </SelectContent>
             </Select>
           </div>
+          {/* Two sentences, because this dialog does two things and only one of
+              them was attempted: «не удалось создать» over a form that was
+              editing an existing account would name an event nobody asked for.
+              Neither sentence tries to say WHY — the server's message is
+              English prose written for a log, and the contract this client is
+              written against promises statuses, not wording (api/openapi.yaml). */}
           {mutation.isError && (
             <Alert variant="destructive">
-              <AlertDescription>{mutation.error.message}</AlertDescription>
+              <AlertDescription>
+                {isEdit ? t("accounts.dialog.saveError") : t("accounts.dialog.createError")}
+              </AlertDescription>
             </Alert>
           )}
         </div>

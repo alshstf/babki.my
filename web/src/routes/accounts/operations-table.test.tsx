@@ -196,6 +196,45 @@ describe("OperationsTable", () => {
     expect(amount).not.toHaveAttribute("title");
   });
 
+  it("prints both converted figures of a row in the currency that row's in_base carries, not the session's", async () => {
+    // #106, in the shape the owner meets it: settings changes the base
+    // currency, the session's new answer lands in the cache at once
+    // (useUpdateSpace writes it directly), and this journal still holds
+    // figures the server converted into the OLD base currency until its
+    // refetch comes back. The rubles must keep printing as rubles for that
+    // window — a euro sign over them is not a mislabelling, it is a number
+    // wrong by the whole exchange rate with nothing on screen admitting it.
+    //
+    // Both cells are checked: the amount and the fee are converted and
+    // rounded independently and are resolved by two separate calls, so either
+    // could have been left reading the session.
+    renderTable({
+      operations: [
+        makeOperation({
+          currency: "USD",
+          amount_minor: 100_00,
+          fee_minor: 5_00,
+          in_base: inBase({
+            amount_minor: 655_000,
+            fee_minor: 32_750,
+            currency: "RUB",
+            rate_on: "2019-03-13",
+            dated_on: "2019-03-14",
+          }),
+        }),
+      ],
+      mode: "base",
+      baseCurrency: "EUR",
+    });
+
+    const amount = await screen.findByTestId("operation-amount");
+    expect(norm(amount.textContent ?? "")).toBe(norm(formatMinor(655_000, "RUB")));
+    expect(amount.textContent).not.toContain("€");
+    const fee = screen.getByTestId("operation-fee");
+    expect(norm(fee.textContent ?? "")).toBe(norm(formatMinor(32_750, "RUB")));
+    expect(fee.textContent).not.toContain("€");
+  });
+
   it("shows no conversion marker in native mode even for an operation that could not be converted", async () => {
     renderTable({
       operations: [makeOperation({ currency: "USD", in_base: null })],
@@ -569,7 +608,7 @@ describe("OperationsTable", () => {
       // foreign-currency operation can sit on a base-currency account.
       expect(screen.getByTestId("operation-amount-not-converted")).toHaveAttribute(
         "title",
-        "Нет курса на дату операции, а сумма считается по курсу того дня. Курс появится при обновлении курсов, и операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
+        "Нет курса на дату операции, а сумма считается по курсу того дня. Если курс появится при обновлении курсов, операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
       );
       // FINDING 2 of the caption-truth review: nothing previously pinned the
       // fee cell to the SAME per-cause sentence as the amount cell. in_base is
@@ -580,7 +619,7 @@ describe("OperationsTable", () => {
       // amount cell next to it keeps the specific, true one.
       expect(screen.getByTestId("operation-fee-not-converted")).toHaveAttribute(
         "title",
-        "Нет курса на дату операции, а сумма считается по курсу того дня. Курс появится при обновлении курсов, и операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
+        "Нет курса на дату операции, а сумма считается по курсу того дня. Если курс появится при обновлении курсов, операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
       );
       // No conversion happened, so no rate date may be claimed.
       expect(amount).not.toHaveAttribute("title");
@@ -705,6 +744,22 @@ describe("OperationsTable", () => {
   // stopped on (Operation.in_base_gap) and this table says what the server
   // said, exactly as the positions screen does.
   describe("the unconverted caption", () => {
+    // The one sentence here that is not the server's answer but the absence of
+    // one. Spelled out in full rather than read back out of ru.json, like every
+    // other caption in this file: what is being tested is WHICH sentence a
+    // marker gets, and a test that fetched it through the component's own
+    // lookup would agree with the component whatever it picked.
+    //
+    // Its twin on the positions screen (CAPTION.general there) says the same
+    // thing about a position, in the same two clauses and the same order. The
+    // two differ only where they must — «операция»/«позиция», and each naming
+    // its own screen's native currency, exactly as the four named sentences
+    // already differ between the two tables. They are edited together for the
+    // reason the components' own comments give: both tables are stacked on one
+    // account page, so a reader meets both wordings in one glance.
+    const GENERAL_CAPTION =
+      "В базовой валюте эта операция не посчиталась, а причина не названа. Поэтому числа этой строки показаны в валюте операции";
+
     // Everything below is the same unconverted row seen in base mode; only the
     // cause differs, which is the whole point.
     const unconverted = (overrides: Partial<Operation>): Operation =>
@@ -743,7 +798,7 @@ describe("OperationsTable", () => {
       });
 
       expect(title).toBe(
-        "Сумма этой строки — стоимость покупок, и каждая её часть считается по курсу на день своей покупки. Нет курса на день одной из этих покупок. Курс появится при обновлении курсов, и операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
+        "Сумма этой строки — стоимость покупок, и каждая её часть считается по курсу на день своей покупки. Нет курса на день одной из этих покупок. Если курс появится при обновлении курсов, операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
       );
       // Deliberately NOT «покупок, сделанных в другие дни»: a parcel can hold
       // a piece bought on the transfer's own day, and this row's rate is
@@ -757,7 +812,7 @@ describe("OperationsTable", () => {
 
     it("names the operation's own day when that is the day the server stopped on", async () => {
       expect(await captionFor({ in_base_gap: "no_rate_operation_date" })).toBe(
-        "Нет курса на дату операции, а сумма считается по курсу того дня. Курс появится при обновлении курсов, и операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
+        "Нет курса на дату операции, а сумма считается по курсу того дня. Если курс появится при обновлении курсов, операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
       );
     });
 
@@ -785,11 +840,20 @@ describe("OperationsTable", () => {
         in_base_gap: "undated_lot",
       });
       expect(undated).toContain("уже неоткуда");
-      expect(undated).not.toContain("Курс появится");
+      expect(undated.toLowerCase()).not.toContain("курс появится");
 
+      // #105's second half, worded exactly as the positions screen words it
+      // (see the twin assertion there for the whole argument): the rate's
+      // ARRIVAL is not this program's to promise — one source, its own list of
+      // currencies, and a pair it publishes no leg of never gets a rate — so
+      // the sentence states the consequence conditionally instead. Both
+      // screens carry the same «Если», because a reader who sees the two
+      // tables stacked on one account page reads one condition, not two.
       for (const gap of ["no_rate_operation_date", "no_rate_lot_date"] as const) {
         const temporary = await captionFor({ in_base_gap: gap });
-        expect(temporary).toContain("Курс появится при обновлении курсов");
+        expect(temporary).toContain("Если курс появится при обновлении курсов");
+        // The bare promise, in the exact shape it had.
+        expect(temporary).not.toContain("Курс появится при обновлении курсов");
         expect(temporary).not.toContain("уже неоткуда");
       }
     });
@@ -813,7 +877,7 @@ describe("OperationsTable", () => {
       expect(title).not.toContain("уже неоткуда");
     });
 
-    it("degrades to the general phrase for a cause this build cannot name", async () => {
+    it("degrades to a phrase that names no cause at all for one this build cannot name", async () => {
       // A server newer than this client. The value is not in the union this
       // build was compiled against, and the row must still explain itself:
       // vague but true beats a blank tooltip, and beats a thrown render even
@@ -822,18 +886,30 @@ describe("OperationsTable", () => {
         in_base_gap: "no_rate_next_tuesday" as Operation["in_base_gap"],
       });
 
-      expect(title).toBe("Нет курса — показано в валюте операции");
+      expect(title).toBe(GENERAL_CAPTION);
       // Vague on purpose: an unnameable cause may be about any day at all, so
       // the fallback names none.
       expect(title).not.toContain("дату операции");
       expect(title).not.toContain("покуп");
+      // #105, and the reason this sentence changed. It used to open «Нет
+      // курса», naming a RATE — on the one path that is reached precisely
+      // because the cause is unknown to this build. `undated_lot` is in
+      // TODAY's enum and is not about a rate at all, so the next date-shaped
+      // cause the server adds would read «нет курса» on every client one
+      // release behind: the defect (#66) the four named sentences exist to
+      // end, returning through the path built to degrade safely. Checked both
+      // as the old opening verbatim and as the word in any form, since what
+      // must be absent is the CAUSE, not one phrasing of it.
+      expect(title).not.toContain("Нет курса");
+      expect(title.toLowerCase()).not.toContain("курс");
+      expect(title).toContain("не посчиталась");
     });
 
-    it("degrades to the general phrase for a server that publishes no cause", async () => {
+    it("degrades to the same phrase for a server that publishes no cause", async () => {
       // An older server: the field is absent from the payload entirely.
       const title = await captionFor({});
 
-      expect(title).toBe("Нет курса — показано в валюте операции");
+      expect(title).toBe(GENERAL_CAPTION);
     });
   });
 

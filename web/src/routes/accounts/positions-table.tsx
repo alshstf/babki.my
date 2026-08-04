@@ -60,10 +60,21 @@ function rowGapTitle(t: (key: string) => string, gap: InBaseGap | null): string 
       // The contract publishes a cause whenever in_base is null and the
       // currency differs from the base one, so a row with a marker and no
       // cause should not occur. It is not left to crash or to say nothing:
-      // the general phrase is vague but true — some rate is missing
-      // somewhere — and it is what an older server's payload deserves.
+      // the general phrase says only what the payload itself shows — the
+      // base-currency figures were withheld — and it is what an older
+      // server's payload deserves.
       return t("positions.notConverted");
     default:
+      // The other way to reach that phrase, and the one that decided how it
+      // is worded (#105). A server NEWER than this build sends a value outside
+      // the union above; the sentence shown then may claim nothing about the
+      // cause, because not knowing the cause is the very condition that brings
+      // it here. «Нет курса», which is what it used to say, claims exactly
+      // that — and would be false of a value shaped like `undated_lot`, which
+      // is in TODAY's enum and is about a date nobody recorded rather than
+      // about a rate. So a client one release behind a server that adds
+      // another date-shaped cause would caption it «нет курса»: #66's defect,
+      // reappearing through the path built to prevent it.
       return unnameableGap(gap, t("positions.notConverted"));
   }
 }
@@ -319,13 +330,29 @@ export function PositionsTable({
           // unrealized_pnl_minor whenever the valuation could not be
           // expressed in the position's currency, so cost and profit do not
           // always resolve the same way.
+          // One term of the row's converted block, welded to the currency that
+          // block says its figures are in (PositionInBase.currency, required
+          // by the contract) — never to the session's base currency, which is
+          // a second answer to the same question and comes apart from this one
+          // whenever a cached row outlives a change of base currency (#106).
+          // The term is picked by a function of the block rather than passed
+          // in, so a caller cannot hand over the position's OWN figure by
+          // mistake and have it printed under the base currency's sign.
+          const inBase = position.in_base;
+          const convertedTerm = (
+            term: (block: NonNullable<typeof inBase>) => number | null | undefined,
+          ) =>
+            inBase && {
+              amountMinor: term(inBase),
+              currency: inBase.currency,
+              rateOn: inBase.rate_on,
+            };
           const resolvedCost = resolveDisplayAmount(
             mode,
             position.currency,
             position.cost_minor,
             baseCurrency,
-            position.in_base?.cost_minor,
-            position.in_base?.rate_on,
+            convertedTerm((block) => block.cost_minor),
           );
           const resolvedMarketValue = hasMarketValue
             ? resolveDisplayAmount(
@@ -333,8 +360,7 @@ export function PositionsTable({
                 marketValueCurrency,
                 marketValueMinor,
                 baseCurrency,
-                position.in_base?.market_value_minor,
-                position.in_base?.rate_on,
+                convertedTerm((block) => block.market_value_minor),
               )
             : null;
           const resolvedUnrealized = hasUnrealized
@@ -343,8 +369,7 @@ export function PositionsTable({
                 position.currency,
                 unrealizedMinor,
                 baseCurrency,
-                position.in_base?.unrealized_pnl_minor,
-                position.in_base?.rate_on,
+                convertedTerm((block) => block.unrealized_pnl_minor),
               )
             : null;
           const resolvedIncome = resolveDisplayAmount(
@@ -352,8 +377,7 @@ export function PositionsTable({
             position.currency,
             position.income_minor,
             baseCurrency,
-            position.in_base?.income_minor,
-            position.in_base?.rate_on,
+            convertedTerm((block) => block.income_minor),
           );
           const unrealizedPct =
             resolvedUnrealized && resolvedUnrealized.currency === resolvedCost.currency
@@ -369,8 +393,8 @@ export function PositionsTable({
           // The currency named is the one the ratio was actually computed in
           // (resolvedCost's — the guard above already proved the profit's
           // equal to it), not the one the mode asked for: in base mode with
-          // no fx rate both figures stay native, and the label has to follow
-          // the numbers.
+          // no converted figure available both figures stay native, and the
+          // label has to follow the numbers.
           const unrealizedPctTitle = t("positions.profitPercentIn", {
             currency: resolvedCost.currency,
           });

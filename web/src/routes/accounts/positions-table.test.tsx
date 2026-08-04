@@ -25,17 +25,28 @@ const norm = (s: string) => s.replace(/[\u00A0\u202F]/g, " ");
 // and a test that fetched the sentence through the same lookup the component
 // uses would agree with the component no matter which one it picked.
 const CAPTION = {
-  general: "\u041D\u0435\u0442 \u043A\u0443\u0440\u0441\u0430 \u2014 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
-  // #66's wording fix: the old ending (\u00AB\u0441\u0442\u0440\u043E\u043A\u0430 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442\u0441\u044F \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435
-  // \u0446\u0435\u043B\u0438\u043A\u043E\u043C \u0438\u043B\u0438 \u043D\u0438\u043A\u0430\u043A\u00BB) stated a rule about how EVERY row displays, and a row
+  // The one sentence here that is not the server's answer but the absence of
+  // one, and #105 is about what it may therefore claim. It used to open «Нет
+  // курса», which names a RATE as the cause — and this build reaches it exactly
+  // when it does not know the cause: the value off the wire is outside the
+  // union it was compiled against. `undated_lot` is already in today's enum and
+  // is not about a rate at all, so the next date-shaped cause the server adds
+  // would be captioned «нет курса» by every client one release behind — the
+  // very defect (#66) the named sentences above exist to end, coming back in
+  // through the path built to degrade safely. The replacement states only what
+  // the payload itself shows: the base-currency figures were withheld.
+  general:
+    "В базовой валюте эта позиция не посчиталась, а причина не названа. Поэтому числа этой строки показаны в исходной валюте",
+  // #66's wording fix: the old ending («строка показывается в базовой валюте
+  // целиком или никак») stated a rule about how EVERY row displays, and a row
   // with in_base present plus its own market_value_gap breaks it (cost/income
   // in rubles, valuation in euros, on the same row). The new ending is scoped
   // to the row this caption sits on and stays true regardless of what a
   // different row is doing.
   undatedLot:
-    "\u0423 \u043E\u0434\u043D\u043E\u0439 \u0438\u0437 \u043F\u0430\u0440\u0442\u0438\u0439 \u043D\u0435 \u0437\u0430\u043F\u0438\u0441\u0430\u043D\u0430 \u0434\u0430\u0442\u0430 \u043F\u043E\u043A\u0443\u043F\u043A\u0438, \u0430 \u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u043F\u043E \u043A\u0443\u0440\u0441\u0443 \u043D\u0430 \u0434\u0435\u043D\u044C \u043F\u043E\u043A\u0443\u043F\u043A\u0438 \u2014 \u0438 \u0432\u043E\u0441\u0441\u0442\u0430\u043D\u043E\u0432\u0438\u0442\u044C \u044D\u0442\u0443 \u0434\u0430\u0442\u0443 \u0443\u0436\u0435 \u043D\u0435\u043E\u0442\u043A\u0443\u0434\u0430: \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435 \u044D\u0442\u0430 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u0441\u0430\u043C\u0430 \u043D\u0435 \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F. \u041F\u043E\u044D\u0442\u043E\u043C\u0443 \u043D\u0438 \u043E\u0434\u043D\u043E \u0447\u0438\u0441\u043B\u043E \u044D\u0442\u043E\u0439 \u0441\u0442\u0440\u043E\u043A\u0438 \u043D\u0435 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+    "У одной из партий не записана дата покупки, а стоимость считается по курсу на день покупки — и восстановить эту дату уже неоткуда: в базовой валюте эта позиция сама не посчитается. Поэтому ни одно число этой строки не показано в базовой валюте",
   noRateLotDate:
-    "\u041D\u0435\u0442 \u043A\u0443\u0440\u0441\u0430 \u043D\u0430 \u0434\u0435\u043D\u044C \u043F\u043E\u043A\u0443\u043F\u043A\u0438 \u043E\u0434\u043D\u043E\u0439 \u0438\u0437 \u043F\u0430\u0440\u0442\u0438\u0439, \u0430 \u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u043F\u043E \u043A\u0443\u0440\u0441\u0443 \u0442\u043E\u0433\u043E \u0434\u043D\u044F. \u041A\u0443\u0440\u0441 \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438 \u043A\u0443\u0440\u0441\u043E\u0432, \u0438 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0441\u0430\u043C\u0430. \u041F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430 \u043D\u0438 \u043E\u0434\u043D\u043E \u0447\u0438\u0441\u043B\u043E \u044D\u0442\u043E\u0439 \u0441\u0442\u0440\u043E\u043A\u0438 \u043D\u0435 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+    "Нет курса на день покупки одной из партий, а стоимость считается по курсу того дня. Если курс появится при обновлении курсов, позиция посчитается сама. Поэтому пока ни одно число этой строки не показано в базовой валюте",
   // These two are the only sentences on the screen that say anything about a
   // step that did NOT fail, and they are worded around what the server
   // actually did. It stops at the first term it cannot value, so reaching the
@@ -47,11 +58,11 @@ const CAPTION = {
   // «курсы на дни покупок нашлись» was not, and was one more instance of the
   // very defect this branch exists to end.
   noRateIncomeDate:
-    "\u0414\u0435\u043B\u043E \u043D\u0435 \u0432 \u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u0438: \u043D\u0435\u0442 \u043A\u0443\u0440\u0441\u0430 \u043D\u0430 \u0434\u0435\u043D\u044C \u043E\u0434\u043D\u043E\u0439 \u0438\u0437 \u0432\u044B\u043F\u043B\u0430\u0442 \u2014 \u0434\u0438\u0432\u0438\u0434\u0435\u043D\u0434\u0430, \u043A\u0443\u043F\u043E\u043D\u0430 \u0438\u043B\u0438 \u043D\u0430\u043B\u043E\u0433\u0430, \u2014 \u0430 \u0434\u043E\u0445\u043E\u0434 \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u043F\u043E \u043A\u0443\u0440\u0441\u0443 \u0442\u043E\u0433\u043E \u0434\u043D\u044F. \u041A\u0443\u0440\u0441 \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438 \u043A\u0443\u0440\u0441\u043E\u0432, \u0438 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0441\u0430\u043C\u0430. \u041F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430 \u043D\u0438 \u043E\u0434\u043D\u043E \u0447\u0438\u0441\u043B\u043E \u044D\u0442\u043E\u0439 \u0441\u0442\u0440\u043E\u043A\u0438 \u043D\u0435 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+    "Дело не в стоимости: нет курса на день одной из выплат — дивиденда, купона или налога, — а доход считается по курсу того дня. Если курс появится при обновлении курсов, позиция посчитается сама. Поэтому пока ни одно число этой строки не показано в базовой валюте",
   noRateToday:
-    "\u0414\u0435\u043B\u043E \u043D\u0435 \u0432 \u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u0438 \u0438 \u043D\u0435 \u0432 \u0434\u043E\u0445\u043E\u0434\u0435: \u043D\u0435\u0442 \u043A\u0443\u0440\u0441\u0430 \u043D\u0430 \u0441\u0435\u0433\u043E\u0434\u043D\u044F \u2014 \u0434\u043B\u044F \u0432\u0430\u043B\u044E\u0442\u044B, \u0432 \u043A\u043E\u0442\u043E\u0440\u043E\u0439 \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0440\u044B\u043D\u043E\u0447\u043D\u0430\u044F \u043E\u0446\u0435\u043D\u043A\u0430, \u2014 \u0430 \u043E\u0446\u0435\u043D\u043A\u0430 \u0431\u0435\u0440\u0451\u0442\u0441\u044F \u043F\u043E \u0442\u0435\u043A\u0443\u0449\u0435\u043C\u0443 \u043A\u0443\u0440\u0441\u0443. \u041A\u0443\u0440\u0441 \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438 \u043A\u0443\u0440\u0441\u043E\u0432, \u0438 \u043F\u043E\u0437\u0438\u0446\u0438\u044F \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0441\u0430\u043C\u0430. \u041F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430 \u043D\u0438 \u043E\u0434\u043D\u043E \u0447\u0438\u0441\u043B\u043E \u044D\u0442\u043E\u0439 \u0441\u0442\u0440\u043E\u043A\u0438 \u043D\u0435 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u043E \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+    "Дело не в стоимости и не в доходе: нет курса на сегодня — для валюты, в которой считается рыночная оценка, — а оценка берётся по текущему курсу. Если курс появится при обновлении курсов, позиция посчитается сама. Поэтому пока ни одно число этой строки не показано в базовой валюте",
   valuationCurrency:
-    "\u041E\u0446\u0435\u043D\u043A\u0430 \u043F\u043E\u043B\u0443\u0447\u0438\u043B\u0430\u0441\u044C \u0432 \u0434\u0440\u0443\u0433\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435, \u0447\u0435\u043C \u043F\u043E\u0437\u0438\u0446\u0438\u044F, \u0430 \u043A\u0443\u0440\u0441\u0430 \u043E\u0442 \u043D\u0435\u0451 \u0434\u043E \u0432\u0430\u043B\u044E\u0442\u044B \u043F\u043E\u0437\u0438\u0446\u0438\u0438 \u043D\u0435\u0442: \u0441\u0440\u0430\u0432\u043D\u0438\u0442\u044C \u0435\u0451 \u0441\u043E \u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C\u044E \u043F\u043E\u0437\u0438\u0446\u0438\u0438 \u043D\u0435\u043B\u044C\u0437\u044F. \u041F\u043E\u043A\u0430 \u043E\u0446\u0435\u043D\u043A\u0430 \u043D\u0435 \u0432\u044B\u0440\u0430\u0436\u0435\u043D\u0430 \u0432 \u0432\u0430\u043B\u044E\u0442\u0435 \u043F\u043E\u0437\u0438\u0446\u0438\u0438, \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u0430 \u043D\u0435 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442 \u0435\u0451 \u0438 \u0432 \u0431\u0430\u0437\u043E\u0432\u043E\u0439. \u041F\u043E\u044D\u0442\u043E\u043C\u0443 \u043F\u043E\u043A\u0430\u0437\u0430\u043D\u0430 \u0432 \u0438\u0441\u0445\u043E\u0434\u043D\u043E\u0439 \u0432\u0430\u043B\u044E\u0442\u0435",
+    "Оценка получилась в другой валюте, чем позиция, а курса от неё до валюты позиции нет: сравнить её со стоимостью позиции нельзя. Пока оценка не выражена в валюте позиции, программа не показывает её и в базовой. Поэтому показана в исходной валюте",
 } as const;
 
 // The two sentences the price line's tooltip carries under the date, spelled
@@ -181,6 +192,50 @@ describe("PositionsTable", () => {
     expect(screen.getByTestId("position-price").getAttribute("title")).toBe(
       `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${PRICE_VALUATION_NOTE}`,
     );
+  });
+
+  it("prints every converted figure of a row in the currency that row's in_base carries, not the session's", () => {
+    // #106, in the shape the owner meets it: settings changes the base
+    // currency, the session's new answer lands in the cache at once
+    // (useUpdateSpace writes it directly), and this screen still holds figures
+    // the server converted into the OLD base currency until its refetch comes
+    // back. The rubles must keep printing as rubles for that window — a euro
+    // sign over them is not a mislabelling, it is a number wrong by the whole
+    // exchange rate with nothing on screen admitting it.
+    //
+    // All four money cells of the row are checked, because all four read the
+    // one block and each could have been left reading the session instead.
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            currency: "USD",
+            income_minor: 1_000,
+            in_base: {
+              cost_minor: 2_275_000,
+              market_value_minor: 2_780_050,
+              unrealized_pnl_minor: 227_500,
+              income_minor: 9_100,
+              currency: "RUB",
+              rate_on: "2026-07-22",
+            },
+          }),
+        ]}
+        mode="base"
+        baseCurrency="EUR"
+      />,
+    );
+
+    for (const [testId, minor] of [
+      ["position-cost", 2_275_000],
+      ["position-market-value", 2_780_050],
+      ["position-profit-amount", 227_500],
+      ["position-income", 9_100],
+    ] as const) {
+      const cell = screen.getByTestId(testId);
+      expect(norm(cell.textContent ?? "")).toBe(norm(formatMinor(minor, "RUB")));
+      expect(cell.textContent).not.toContain("€");
+    }
   });
 
   it("dates the price by price_on and the conversion by rate_on — two fields, two dates, one format", () => {
@@ -773,17 +828,31 @@ describe("PositionsTable", () => {
         }
       });
 
-      it("promises the figure will appear for every closeable cause, and for no other", () => {
+      it("makes the figure's return conditional on the rate for every closeable cause, and offers it for no other", () => {
         // The whole user value of naming the term: «подтянется само» versus
-        // «само не подтянется» — the closeable causes promise the figure will
-        // appear on its own, the permanent one (undated_lot) promises only
-        // that nothing will fix it automatically, never that it can't be
-        // fixed at all. Asserted as a property of the four sentences rather
-        // than case by case, so a new cause worded without either half fails
-        // here.
+        // «само не подтянется» — the closeable causes say the figure appears
+        // on its own once the rate is there, the permanent one (undated_lot)
+        // says only that nothing will fix it automatically, never that it
+        // can't be fixed at all. Asserted as a property of the four sentences
+        // rather than case by case, so a new cause worded without either half
+        // fails here.
+        //
+        // #105's second half is the «Если»: the rate's ARRIVAL is not this
+        // program's to promise. Rates come from one source whose list of
+        // currencies is its own, so a pair it publishes no leg of never gets
+        // one, and «Курс появится при обновлении курсов» told such a row to
+        // wait for something that is never coming. Which rows those are, the
+        // client cannot know — the contract names no source and lists no
+        // currencies — so it may not qualify the sentence by pair either. What
+        // it can state is the consequence, and only as a consequence: IF the
+        // rate turns up, the figure follows. That much this program does
+        // guarantee, since every request recomputes from whatever rates exist
+        // at the time.
         for (const gap of ["no_rate_lot_date", "no_rate_income_date", "no_rate_today"] as const) {
           const [cost] = captionsFor(gap);
-          expect(cost).toContain("появится при обновлении курсов");
+          expect(cost).toContain("Если курс появится при обновлении курсов");
+          // The bare promise, in the exact shape it had.
+          expect(cost).not.toContain("Курс появится при обновлении курсов");
           expect(cost).not.toContain("никогда");
         }
         const [undated] = captionsFor("undated_lot");
@@ -841,11 +910,11 @@ describe("PositionsTable", () => {
       expect(flagOff).toHaveAttribute("title", CAPTION.undatedLot);
     });
 
-    it("falls back to the general phrase for a cause this build cannot name", () => {
+    it("falls back to a phrase that names no cause at all for one this build cannot name", () => {
       // A server newer than the client sends a value outside the union this
-      // build knows. That must degrade to today's vague-but-true sentence —
-      // not to a blank tooltip, not to a thrown render, and not to one of the
-      // four specific sentences, which would name a cause the server did not
+      // build knows. That must degrade to a vague-but-true sentence — not to a
+      // blank tooltip, not to a thrown render, and not to one of the four
+      // specific sentences, which would name a cause the server did not
       // state. The second row is the same requirement for a payload with no
       // cause at all (an older server, or one breaking its own contract).
       wrap(
@@ -874,6 +943,16 @@ describe("PositionsTable", () => {
       for (const marker of screen.getAllByTestId("position-cost-not-converted")) {
         expect(marker).toHaveAttribute("title", CAPTION.general);
       }
+      // #105, asserted as the property and not only as the string. The
+      // fallback must blame nothing: not a rate, not a date, not a currency.
+      // «Нет курса» is checked in the exact shape it had, because that is what
+      // this sentence used to open with, and «курс» in any form is checked
+      // because the point is the CAUSE named, not one phrasing of it — a
+      // rate-shaped cause is precisely the one the client cannot know is the
+      // right one, `undated_lot` being in today's own enum.
+      expect(CAPTION.general).not.toContain("Нет курса");
+      expect(CAPTION.general.toLowerCase()).not.toContain("курс");
+      expect(CAPTION.general).toContain("не посчиталась");
       // Still marked, still showing the native figure: degrading the wording
       // must not degrade the disclosure.
       expect(screen.getAllByTestId("position-income-not-converted")).toHaveLength(2);

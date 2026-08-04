@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@/i18n";
@@ -17,11 +17,20 @@ const fetchMock = vi.hoisted(() => {
 
 // A fresh Response per call: a single one handed to mockResolvedValue works once
 // and then throws, because a body can only be consumed once.
-fetchMock.mockImplementation(() =>
-  Promise.resolve(
-    new Response("null", { status: 200, headers: { "Content-Type": "application/json" } }),
-  ),
-);
+function serve(status: number, body: unknown) {
+  fetchMock.mockImplementation(() =>
+    Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ),
+  );
+}
+
+beforeEach(() => {
+  serve(200, null);
+});
 
 const account: AccountWithBalance = {
   id: "acc-1",
@@ -44,6 +53,7 @@ function open() {
 }
 
 const amountField = () => screen.getByLabelText(/Сумма/);
+const dateField = () => screen.getByLabelText("На дату");
 const saveButton = () => screen.getByRole("button", { name: "Сохранить" });
 
 function typeAmount(value: string) {
@@ -112,5 +122,42 @@ describe("BalanceDialog: a sum too large to record", () => {
 
     expect(saveButton()).not.toBeDisabled();
     expect(screen.queryByText(/Слишком большая сумма/)).toBeNull();
+  });
+});
+
+// #95: the server's refusal was printed exactly as it came — «as_of must not be
+// in the future» in a red panel, English at a Russian-speaking reader, in an
+// application where every other visible string goes through t(). Reachable
+// without any trickery: the date field's `max` stops the picker's arrows and
+// nothing else, and the dialog validated nothing before sending.
+describe("BalanceDialog: a date the account cannot have had", () => {
+  it("does not send a date in the future, and says why at the field", () => {
+    open();
+    typeAmount("1000");
+    fireEvent.change(dateField(), { target: { value: "2099-01-01" } });
+
+    expect(saveButton()).toBeDisabled();
+    expect(screen.getByText("Дата не может быть в будущем")).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("says nothing about the date the dialog opened on", () => {
+    open();
+    typeAmount("1000");
+
+    expect(saveButton()).not.toBeDisabled();
+    expect(screen.queryByText("Дата не может быть в будущем")).toBeNull();
+  });
+});
+
+describe("BalanceDialog: a refusal that came back anyway", () => {
+  it("says it in Russian and does not repeat the server's own words", async () => {
+    serve(400, { error: "as_of must not be in the future" });
+    open();
+    typeAmount("1000");
+    fireEvent.click(saveButton());
+
+    expect(await screen.findByText("Не удалось сохранить баланс")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("as_of");
   });
 });

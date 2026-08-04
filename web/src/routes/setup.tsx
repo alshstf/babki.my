@@ -10,6 +10,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { isConflict } from "@/api/operations";
 import { useSetup } from "@/api/session";
 
 export function SetupPage() {
@@ -82,8 +83,18 @@ export function SetupPage() {
             </div>
             {setup.isError && (
               <Alert variant="destructive">
+                {/* By status, not by the server's sentence. 409 is what this
+                    endpoint answers when the instance already has a user
+                    (ErrAlreadySetUp, mapped in internal/family/http.go), and it
+                    is a documented answer for it (api/openapi.yaml); the
+                    English prose beside it is promised nowhere and can be
+                    reworded at any time, silently turning this into the generic
+                    message. There is one other way to a 409 here — two setups
+                    racing, where the loser's username was taken a moment ago by
+                    the winner — and the sentence holds there too: the instance
+                    is set up, and reloading to sign in is exactly what to do. */}
                 <AlertDescription>
-                  {setup.error.message.includes("already set up")
+                  {isConflict(setup.error)
                     ? t("setup.alreadySetUp")
                     : t("setup.genericError")}
                 </AlertDescription>

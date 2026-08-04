@@ -159,9 +159,15 @@ export function FamilyPage() {
           <p className="text-sm text-muted-foreground">
             {t("family.removeConfirm", { name: removeTarget?.display_name ?? "" })}
           </p>
+          {/* Names the action that did not happen, and nothing else: the
+              server's own message is English prose written for a log, and it is
+              not part of the contract this client is written against (only the
+              status is — see api/openapi.yaml). The one refusal that would tell
+              a reader something — the owner cannot be removed — has no button
+              to arrive from: canRemove above never offers one. */}
           {removeMember.isError && (
             <Alert variant="destructive">
-              <AlertDescription>{removeMember.error.message}</AlertDescription>
+              <AlertDescription>{t("family.removeError")}</AlertDescription>
             </Alert>
           )}
           <DialogFooter>

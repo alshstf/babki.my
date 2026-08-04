@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useLogin } from "@/api/session";
+import { isUnauthorized } from "@/api/operations";
 
 export function LoginPage() {
   const { t } = useTranslation();
@@ -53,8 +54,25 @@ export function LoginPage() {
               />
             </div>
             {login.isError && (
+              // Two sentences, chosen by the status the contract declares. 401
+              // is the only refusal this endpoint publishes (see
+              // /api/v1/auth/login in the API contract) and it is the one case
+              // where naming the cause is naming what the server named.
+              // Anything else — a dead connection, which useLogin now lets
+              // through rather than holding silently, or a server that broke
+              // its own contract — is a failure whose cause this screen has not
+              // been told, so it says what it does know: the sign-in did not
+              // happen, and pressing the button again is worth doing.
+              //
+              // Written as two literal-key branches rather than t(cond ? a : b)
+              // so both keys stay verifiable by scripts/check-i18n.mjs, which
+              // only reads literals.
               <Alert variant="destructive">
-                <AlertDescription>{t("auth.invalidCredentials")}</AlertDescription>
+                <AlertDescription>
+                  {isUnauthorized(login.error)
+                    ? t("auth.invalidCredentials")
+                    : t("auth.signInFailed")}
+                </AlertDescription>
               </Alert>
             )}
             <Button

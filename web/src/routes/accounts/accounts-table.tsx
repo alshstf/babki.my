@@ -93,8 +93,16 @@ export function AccountsTable({
                         account.currency,
                         account.balance.amount_minor,
                         baseCurrency,
-                        account.balance_in_base?.amount_minor,
-                        account.balance_in_base?.rate_on,
+                        // The converted balance is printed in the currency it
+                        // itself carries (MoneyInBase.currency, required by
+                        // the contract), never in the session's answer to the
+                        // same question — which this cached row may already
+                        // have outlived (#106).
+                        account.balance_in_base && {
+                          amountMinor: account.balance_in_base.amount_minor,
+                          currency: account.balance_in_base.currency,
+                          rateOn: account.balance_in_base.rate_on,
+                        },
                       )}
                       className="font-medium tabular-nums"
                       testId={`account-balance-${account.id}`}

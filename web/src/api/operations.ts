@@ -29,6 +29,17 @@ export function isConflict(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409;
 }
 
+// Whether the server refused for want of a valid identity — the sign-in form's
+// twin of isConflict, and the same rule: a screen picks its Russian sentence by
+// the status the contract declares, never by the English one the server wrote
+// for its log. It is false for a failure that carries no status at all (a
+// rejected fetch, which is what a dead connection is), and that is the point:
+// «Неверный логин или пароль» over a connection failure names a cause the
+// client has no way to know.
+export function isUnauthorized(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 401;
+}
+
 // Shared error helper: unwraps the typed error body (if any) into an
 // ApiError carrying the response status. Used across operations, positions
 // and instruments hooks so all API errors are branchable by status code.
