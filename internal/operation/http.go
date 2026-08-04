@@ -646,11 +646,14 @@ func rateQueries(ops []Operation, baseCurrency string) []marketdata.RateQuery {
 // warm a memo this way (see marketdata.Rates.Answered); only the key an answer
 // is filed under is this package's own.
 //
-// KNOWN BLIND SPOT, the same one portfolio.Handler.prewarmRates carries: a
-// failure specific to the BATCH statement is met by nothing, because the
-// per-pair fallback then succeeds. The page is correct and slow, and no one is
-// told the optimization stopped working. No handler here holds a logger, so
-// closing it is a change of shape rather than a line, and it is filed.
+// The error is dropped here and reported one layer down. A failure specific to
+// the BATCH statement leaves the page correct and slow — rateFor resolves every
+// figure per pair — so there is nothing for this handler to tell the user, and
+// an error page would be a worse outcome than a slow one. But there IS something
+// to tell whoever runs this: the optimization has stopped working and no request
+// will ever say so. That warning is written where the batch actually dies, which
+// is the only place all four survivors of such a failure pass through
+// (marketdata.Converter.fetchRates, #70).
 func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQuery, cache map[rateKey]*rateLookup) {
 	if len(queries) == 0 {
 		return

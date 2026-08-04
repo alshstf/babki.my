@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -340,6 +341,46 @@ type fxRateRows interface {
 // ConvertMany's own set.
 func (c *Converter) rows() fxRateRows { return storeRows{store: c.store} }
 
+// fetchRates is the one place a batch of rate rows is fetched, and therefore the
+// one place a failure of the batch STATEMENT — a timeout on the large query, a
+// problem encoding its array arguments — can be reported (#70).
+//
+// IT IS REPORTED BECAUSE NOBODY ELSE WILL. Both callers survive this failure by
+// design, and so does everyone above them: prewarm below returns the
+// un-prefetched row source and ConvertMany converts through per-pair lookups
+// exactly as it did before batching existed, while RatesOn returns the error to
+// three HTTP handlers that each drop it on the floor on purpose (an error page
+// would be a worse outcome than a slow correct one — see their prewarmRates).
+// The result is the failure this line exists for: the screen is right, the
+// screen is slow, and every trace of the optimization having died is gone. The
+// per-pair path is between one and six statements per pair, so what is lost is
+// not a rounding error in the request's cost — it is the whole of what batching
+// bought.
+//
+// WARN, deliberately, and not either neighbour. It is not an ERROR: nothing the
+// user asked for failed, and ERROR is what family.WriteError writes when a
+// request really did fail — spending it here would blunt it there. It is not
+// INFO or DEBUG either: this application runs at INFO by default (see
+// config.Config.LogLevel), so DEBUG would not be printed at all, which is
+// indistinguishable from the silence being fixed, and INFO would put a dead
+// optimization in the same stream as every ordinary request. The level is
+// pinned, structurally, by TestRatesOnLogsADeadBatchAsAWarning and its
+// ConvertMany twin.
+//
+// slog.Default rather than a logger of its own: a Converter is built in three
+// places and threaded through as many handlers, and cmd/babki installs the
+// configured logger as the default precisely so code that holds none can still
+// be heard (see cmd/babki/runtime.go and family.WriteError, the other user of
+// that arrangement).
+func (c *Converter) fetchRates(ctx context.Context, keys []FxRateKey) (map[FxRateKey]FxRate, error) {
+	rows, err := c.store.FxRatesOn(ctx, keys)
+	if err != nil {
+		slog.Default().Warn("batched fx rate lookup failed", "keys", len(keys), "err", err.Error())
+		return nil, err
+	}
+	return rows, nil
+}
+
 // prewarm resolves, in one round trip, the rows converting every currency in
 // amounts is about to consult, and returns a source that answers from them.
 //
@@ -375,8 +416,12 @@ func (c *Converter) prewarm(ctx context.Context, amounts map[string]int64, to st
 		// for no rows would be a round trip bought for nothing.
 		return store
 	}
-	rows, err := c.store.FxRatesOn(ctx, candidates.keys)
+	rows, err := c.fetchRates(ctx, candidates.keys)
 	if err != nil {
+		// Survived here and reported by fetchRates, which is the only place that
+		// can: from this line on the failure is gone for good, since the loop
+		// that follows resolves every rate itself and returns no trace of the
+		// batch having been tried at all.
 		return store
 	}
 	return warmRows{asked: candidates.seen, rows: rows, fallback: store}
@@ -722,7 +767,7 @@ func (c *Converter) RatesOn(ctx context.Context, queries []RateQuery) (Rates, er
 		_, _, _ = rateVia(ctx, candidates, q.From, q.To, q.On)
 	}
 
-	rows, err := c.store.FxRatesOn(ctx, candidates.keys)
+	rows, err := c.fetchRates(ctx, candidates.keys)
 	if err != nil {
 		return Rates{}, err
 	}
