@@ -29,11 +29,11 @@ import type { ResolvedAmount } from "@/lib/display-amount";
 // A third, independent thing a cell can carry is a caveat about WHAT the
 // number is rather than about which currency it is in (`caveatTitle`). The
 // two travel together on the same figure often enough that they need separate
-// indicators: "this is shown in dollars because no rate was found" and "this
-// is a cost basis your country's rules would have picked differently" are two
-// statements, and folding them into one tooltip would be the same conflation
-// this component already avoids between "was it converted" and "what date is
-// it captioned with".
+// indicators: "this figure could not be converted to the base currency" and
+// "this is a cost basis your country's rules would have picked differently"
+// are two statements, and folding them into one tooltip would be the same
+// conflation this component already avoids between "was it converted" and
+// "what date is it captioned with".
 export function MoneyCell({
   resolved,
   className,

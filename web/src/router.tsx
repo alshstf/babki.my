@@ -122,7 +122,22 @@ export function Gate({
   // in", and answering it with a login form would be the same guess in the
   // other direction. Only the session is asked again: the setup status has
   // already answered.
-  if (session.isError) {
+  //
+  // `isError` alone is not "we never learned the answer" — react-query sets
+  // it whenever the LAST attempt failed, even when an earlier one already
+  // succeeded and the cache still holds it (`session.data` survives a failed
+  // refetch untouched). `data === undefined` is what "never answered" looks
+  // like; `null` already means "answered: nobody is signed in". Without the
+  // second half, a signed-in reader's background refresh failing — the
+  // laptop waking from sleep, `online` firing while the server is still
+  // coming up, or the owner restarting the docker stand with the tab open —
+  // replaced the whole app with this notice, and the notice would have been
+  // false: the client did know a moment ago and still holds the answer, it
+  // just failed to refresh it. This was a regression: the guard this
+  // replaced, `isLoading`, is `isPending && isFetching` and so goes false
+  // once data exists, which let a failed refresh fall through and render
+  // from cache correctly, by accident, on the base commit.
+  if (session.isError && session.data === undefined) {
     return (
       <StartupNotice
         message={t("app.sessionUnknown")}

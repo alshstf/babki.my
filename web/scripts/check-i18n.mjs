@@ -158,6 +158,18 @@ const MESSAGE_READS = [
 // where English belongs.
 //
 // What this CANNOT see, said plainly rather than papered over:
+//   - the same English reaching the screen without ever touching `.message`:
+//     coercing the whole error to a string (`String(err)`, `` `${err}` ``)
+//     runs Error.prototype.toString(), which is "Error: " followed by the
+//     server's own sentence — the identical defect in a spelling MESSAGE_READS
+//     does not match. Catching it reliably would mean knowing `err` names an
+//     Error, and this script has no type information, only text; guessing
+//     from the variable's name (`err`, `error`, `e`) would both miss a
+//     renamed catch variable and flag ordinary values like `String(id)`,
+//     which is exactly the false confidence this project has been burned by
+//     before (see CLAUDE.md's "тихая неверность прячется в подписи"). Left as
+//     a gap, not papered over with a heuristic that would claim more
+//     precision than it has;
 //   - an English literal typed straight into JSX;
 //   - an error's text read in a .ts file, where reading it is allowed, and
 //     handed to a component as a plain string: by then the .tsx holds a string

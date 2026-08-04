@@ -393,8 +393,8 @@ export function PositionsTable({
           // The currency named is the one the ratio was actually computed in
           // (resolvedCost's — the guard above already proved the profit's
           // equal to it), not the one the mode asked for: in base mode with
-          // no fx rate both figures stay native, and the label has to follow
-          // the numbers.
+          // no converted figure available both figures stay native, and the
+          // label has to follow the numbers.
           const unrealizedPctTitle = t("positions.profitPercentIn", {
             currency: resolvedCost.currency,
           });

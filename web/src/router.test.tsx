@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react-query";
 import {
   Outlet,
@@ -62,6 +62,10 @@ function makeSession(): SessionInfo {
 // The gate under a router that has the three destinations it can send a reader
 // to, each reduced to a marker: what the gate decided is then simply which
 // marker is on screen.
+//
+// Returns the QueryClient alongside the render result so a test can drive a
+// refetch directly (`qc.refetchQueries`) instead of only ever observing the
+// gate's first answer.
 function renderGate(wants: "app" | "login" | "setup" = "app") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -88,11 +92,14 @@ function renderGate(wants: "app" | "login" | "setup" = "app") {
     routeTree: rootRoute.addChildren([indexRoute, loginRoute, setupRoute]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
-  return render(
-    <QueryClientProvider client={qc}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
-  );
+  return {
+    ...render(
+      <QueryClientProvider client={qc}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    ),
+    qc,
+  };
 }
 
 afterEach(() => {
@@ -217,5 +224,47 @@ describe("Gate — what it does once it knows", () => {
     renderGate();
 
     expect(await screen.findByTestId("app-screen")).toBeInTheDocument();
+  });
+});
+
+// A regression on the base commit: the gate's guard there was
+// `session.isLoading`, which goes false the moment data exists, so a failed
+// background refresh fell straight through it and rendered from cache — by
+// accident, not by a check that said so. `session.isError` alone is not that
+// check either: react-query sets it whenever the LAST attempt failed, even
+// with an earlier success still sitting in the cache, so a naive fix here
+// would throw a signed-in reader out over a refresh failing — the laptop
+// waking from sleep and firing `online` while the server is still coming up,
+// or the owner restarting the docker stand with the tab open — with a caption
+// that is false in exactly this state: the client did know a moment ago and
+// still holds the answer.
+describe("Gate — a failed refresh does not discard what it already knows", () => {
+  it("keeps a signed-in reader on screen when a background refresh of the session fails", async () => {
+    serve({
+      "/api/v1/setup/status": { body: { setup_needed: false } },
+      "/api/v1/auth/me": { body: makeSession() },
+    });
+    const { qc } = renderGate();
+    expect(await screen.findByTestId("app-screen")).toBeInTheDocument();
+
+    // The cache now holds a successful answer. Fail the next attempt without
+    // touching that cache entry, then trigger the same refetch a background
+    // refresh performs.
+    serve({
+      "/api/v1/setup/status": { body: { setup_needed: false } },
+      "/api/v1/auth/me": { status: 500, body: { error: "internal error" } },
+    });
+    await qc.refetchQueries({ queryKey: ["session"] });
+
+    // The refetch's rejection is handled by a subscriber callback the query
+    // client notifies asynchronously, so the re-render it may trigger has not
+    // necessarily landed yet the instant the promise above settles — hence
+    // `waitFor` rather than a synchronous assertion, which would pass here
+    // even against the bug this pins simply by observing the DOM before React
+    // caught up.
+    await waitFor(() => {
+      expect(screen.getByTestId("app-screen")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/не удалось узнать, выполнен ли вход/i)).not.toBeInTheDocument();
   });
 });

@@ -103,7 +103,8 @@ export interface ResolvedAmount {
 //   case either, so this check must come first): show the native amount.
 // - "base" mode with a converted figure available: show it, in the currency
 //   THAT FIGURE says it is in.
-// - "base" mode with no converted figure (no fx rate was resolvable): show
+// - "base" mode with no converted figure (the server published none, for a
+//   reason this function is not told — see ResolvedAmount.noRate): show
 //   the native amount, flagged `noRate`.
 export function resolveDisplayAmount(
   mode: DisplayCurrencyMode,
