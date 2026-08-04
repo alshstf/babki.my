@@ -495,6 +495,24 @@ func TestUpdateRefusesAFaceValueOnAnythingButABond(t *testing.T) {
 	if pair.FaceValueMinor != nil || pair.FaceCurrency != nil {
 		t.Errorf("face pair after the refusal = %+v, want both still null", pair)
 	}
+
+	// HALF a pair pins the ORDER handleUpdate's two blocks run in, not just
+	// their outcomes. The type check has to run before the mention check: a
+	// share sent one half of the pair alone belongs to neither rule's row, and
+	// checkFaceType is what says "belongs to a bond" rather than checkFaceUpdate
+	// saying "send both" — which would tell a client to send MORE of a field it
+	// may not send at all, exactly what checkFaceType's own doc comment names as
+	// the reason the two are ordered this way. Swapping the two blocks in
+	// handleUpdate leaves every other case in this file green; only this one
+	// would answer with faceMentionRule instead.
+	wantFaceRefusal(t, do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
+		`{"face_value_minor":100000}`),
+		faceBondOnlyRule("share"), "patch a face value alone onto a share")
+
+	pair = readFacePair(t, url, c, id)
+	if pair.FaceValueMinor != nil || pair.FaceCurrency != nil {
+		t.Errorf("face pair after the refusal = %+v, want both still null", pair)
+	}
 }
 
 // TestUpdateStillClearsAFaceValueRecordedBeforeTheRule is the repair path, and

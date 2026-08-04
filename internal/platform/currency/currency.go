@@ -2,15 +2,24 @@
 // currency at a write.
 //
 // It is a package of its own for the reason money.MaxAmountMinor is: the rule
-// was written out four times, in four packages — an account's currency
+// was written out four times, in four Go packages — an account's currency
 // (internal/account), an instrument's and its face value's
 // (internal/instrument), an operation's (internal/operation) and the space's
 // base currency (internal/family) — and four statements of one rule are four
-// things that can drift apart. They also have to agree with a fifth statement
-// that is not Go at all: api/openapi.yaml declares the same shape as a `pattern`
-// so a client can validate a request before sending it, and
-// TestTheContractStatesTheCurrencyShapeTheServerEnforces compares the document
-// against Pattern below rather than against a copy of it.
+// things that can drift apart. Those four now call Valid below instead of
+// restating it, but that was never the whole count. api/openapi.yaml declares
+// the same shape as a `pattern` on every currency field a client can validate a
+// request against, and TestTheContractStatesTheCurrencyShapeTheServerEnforces
+// (contract_sites_test.go) compares the document against Pattern below rather
+// than against a copy of it. And three more copies live in the frontend, each
+// deciding whether a Save button is even enabled before any request is sent —
+// web/src/routes/settings/index.tsx, web/src/routes/accounts/account-dialog.tsx
+// and web/src/routes/accounts/instrument-picker.tsx — tied to Pattern the same
+// way money.MaxAmountMinor's own frontend copy is tied
+// (internal/platform/money/bound_sites_test.go) by
+// TestTheCurrencyFormsRefuseAtTheShapeTheServerEnforces (frontend_sites_test.go).
+// Eight statements of one rule, not five, and every one of them either imports
+// this package or is a test away from silently drifting from it.
 //
 // WHAT IT CHECKS IS THE SHAPE, NOT THE REGISTER. Three uppercase ASCII letters
 // is what an ISO-4217 alphabetic code looks like; whether the three letters name

@@ -323,14 +323,19 @@ func checkFacePair(value nullable.Nullable[int64], code nullable.Nullable[string
 // up with it.
 //
 // It is a rule about the REQUEST rather than about the row the request lands on,
-// and that is the deliberate part. Judging the RESULT would mean reading the
-// stored row first and then writing — and between the read and the write another
-// PATCH can move the half this one is not touching, so two requests that each
-// looked sound against what they read leave a broken pair behind. Reading the
-// request alone cannot be raced. Creation cannot break this particular rule at
-// all — there is no stored half for it to leave behind — so between the two
-// doors every accepted write leaves the pair whole, and every row is whole by
-// induction from a catalog that starts whole (migration 0012).
+// and that is the deliberate part — though the row is not unread here: handleUpdate
+// reads it just above this call, for its TYPE, before checkFaceType. That read
+// cannot be raced, because a type is not a column any writer in this program can
+// ever change. The PAIR is different, and it is what this comment is about:
+// judging the RESULT would mean reading the pair's own two columns before
+// writing them — and between that read and the write another PATCH can move the
+// half this one is not touching, so two requests that each looked sound against
+// what they read would leave a broken pair behind. This rule reads neither half
+// of the pair; it judges the request alone, so it cannot be raced that way.
+// Creation cannot break this particular rule at all — there is no stored half
+// for it to leave behind — so between the two doors every accepted write leaves
+// the pair whole, and every row is whole by induction from a catalog that starts
+// whole (migration 0012).
 //
 // What it costs: a client changing only the face value of a bond has to repeat
 // its currency. No screen does this today — nothing in the frontend PATCHes an
