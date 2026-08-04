@@ -17,12 +17,17 @@ import (
 	"babki.my/babki/internal/platform/money"
 )
 
-// This file covers #27 where it reaches this screen. A quantity is validated
-// as positive and nothing bounds it from above, a price is whatever the market
-// data says, and their product can leave int64 without either input looking in
-// the least unusual. decimal.IntPart() does not fail there — it wraps, to a
-// small figure of arbitrary sign — so a holding could be published as worth
-// minus a few kopecks.
+// This file covers #27 where it reaches this screen. A price is whatever the
+// market data says, an fx rate likewise, and a product can leave int64 without
+// any one input looking in the least unusual. decimal.IntPart() does not fail
+// there — it wraps, to a small figure of arbitrary sign — so a holding could be
+// published as worth minus a few kopecks.
+//
+// A quantity and a price ARE now bounded where they are written
+// (operation.maxQuantity, #84), and the fixtures below still reach these guards
+// through inputs no write-time bound covers: a quote's price, an fx rate, a
+// position built from several operations, and journals written before that bound
+// existed. That is the whole reason the read side keeps its own guards.
 //
 // Every refusal here is an ERROR and not a null. The screen has nulls, and
 // they mean something specific: no quote, no rate, no purchase date — data
@@ -51,14 +56,56 @@ func (c fixedRateConverter) RatesOn(context.Context, []marketdata.RateQuery) (ma
 	panic("fixedRateConverter: RatesOn not used")
 }
 
+// The quantity here is 10^15 — a hundred times what a write accepts (see
+// operation.maxQuantity, 10^13) — and the price an unremarkable 100. A position
+// reaches this size without any single write being unusual: one accepted buy at
+// a time, or a split multiplying the whole holding by a ratio, or a row written
+// before the bound existed. Their product is not an int64 of cents, which is the
+// point: the write-side bound moves the wrapping figure out of easy reach, it
+// does not make it impossible.
 func TestMarketValueRefusesAShareValuationThatWouldWrap(t *testing.T) {
 	q := marketdata.Quote{Price: dec("100"), Currency: "USD"}
-	minor, currency, ok, err := marketValue(instrument.TypeShare, nil, nil, dec("1e17"), q)
+	minor, currency, ok, err := marketValue(instrument.TypeShare, nil, nil, dec("1e15"), q)
 	if !errors.Is(err, money.ErrOverflow) {
-		t.Fatalf("marketValue(share) = (%d, %q, %v), err = %v; want ErrOverflow: 1e17 shares at 100 is not an int64 of cents", minor, currency, ok, err)
+		t.Fatalf("marketValue(share) = (%d, %q, %v), err = %v; want ErrOverflow: 1e15 shares at 100 is not an int64 of cents", minor, currency, ok, err)
 	}
 	if ok {
 		t.Error("marketValue reported ok alongside the refusal; the caller would publish a wrapped figure")
+	}
+}
+
+// TestMarketValuePublishesTheLargestQuantityAWriteAccepts is the test above's
+// necessary other half, and the one that keeps the two sides of the program from
+// contradicting each other. The write side accepts a quantity of at most 10^13
+// (operation.maxQuantity); this screen has to be able to VALUE what the write
+// side lets in, or the bound over there is a refusal that changed nothing.
+//
+// It failed to be true once. The bound was first set at 10^15, and at 10^15 a
+// quote of 92.24 — less than an ordinary share costs — already overflowed here:
+// the two halves of the same branch stated their verdicts on 10^15 side by side,
+// one accepting and one refusing, and neither mentioned the other. So this test
+// names the number the write side promises and the largest whole-currency quote
+// that survives it, and its twin over there
+// (operation.TestQuantityExactlyAtTheBoundIsAccepted) asserts the same pair
+// through money.Minor. Whichever bound moves, one of the two reddens.
+func TestMarketValuePublishesTheLargestQuantityAWriteAccepts(t *testing.T) {
+	q := marketdata.Quote{Price: dec("9223"), Currency: "USD"}
+	minor, _, ok, err := marketValue(instrument.TypeShare, nil, nil, dec("1e13"), q)
+	if err != nil || !ok {
+		t.Fatalf("marketValue(1e13 at 9223) = (%d, %v), err = %v; want it published: a quantity the write accepts must be valuable at an ordinary quote",
+			minor, ok, err)
+	}
+	if minor != 9_223_000_000_000_000_000 {
+		t.Errorf("marketValue = %d, want 9223000000000000000 cents", minor)
+	}
+
+	// One unit of money more per share does not fit. The margin is that narrow
+	// by construction — 10^13 is the largest quantity for which an ordinary
+	// quote fits at all — so a bound loosened even slightly over there stops
+	// being the bound this test is describing.
+	q.Price = dec("9224")
+	if _, _, ok, err := marketValue(instrument.TypeShare, nil, nil, dec("1e13"), q); !errors.Is(err, money.ErrOverflow) || ok {
+		t.Errorf("marketValue(1e13 at 9224): ok = %v, err = %v; want ErrOverflow", ok, err)
 	}
 }
 
@@ -146,6 +193,151 @@ func TestSumInBaseOverflowIsNotAMissingRate(t *testing.T) {
 	}
 }
 
+// The four tests below are about SUMS rather than products (#83). Plan 10 put a
+// guard on every decimal that becomes money, and left the arithmetic done on the
+// results: an account's realized totals are accumulated with +=, and an
+// unrealized figure is a subtraction. Each term is an int64 already — it had to
+// be, to get this far — and int64 addition in Go wraps exactly as silently as
+// decimal.IntPart() does. The guard belongs on the PUBLISHED figure, and the
+// published figure is the sum. It is the argument this package already applied
+// to sumInBase and to marketdata.ConvertMany, reaching the last places it had
+// not been applied to.
+
+// TestRealizedTotalsRefusesANativeTotalThatWouldWrap: two positions in one
+// currency, each realized result an ordinary int64, and only their sum outside
+// the range. The by-currency total is published as it stands — nothing converts
+// it and nothing rounds it — so a wrapped sum would be a plausible-looking
+// figure of the wrong sign under a header that says «итого».
+func TestRealizedTotalsRefusesANativeTotalThatWouldWrap(t *testing.T) {
+	rt := newRealizedTotals("RUB")
+	none := nullable.NewNullNullable[int64]()
+	if err := rt.add("USD", math.MaxInt64, none, gapNoRate); err != nil {
+		t.Fatalf("first position: %v — maxint64 is a figure, and one of them fits", err)
+	}
+	err := rt.add("USD", 1, none, gapNoRate)
+	if !errors.Is(err, money.ErrOverflow) {
+		t.Fatalf("second position: err = %v, want ErrOverflow — maxint64 + 1 is not a total", err)
+	}
+	if rt.byCurrency["USD"] != math.MaxInt64 {
+		t.Errorf("USD total = %d after the refusal, want maxint64 left as it was: a refused term must not be half-added", rt.byCurrency["USD"])
+	}
+}
+
+// TestRealizedTotalsRefusesABaseTotalThatWouldWrap is the same for the other
+// accumulator. The two positions are in different currencies so that only the
+// base-currency total is in question here, and each term is a figure realizedInBase
+// already converted, rounded and found publishable on its own.
+func TestRealizedTotalsRefusesABaseTotalThatWouldWrap(t *testing.T) {
+	rt := newRealizedTotals("RUB")
+	big := nullable.NewNullableWithValue(int64(math.MaxInt64))
+	if err := rt.add("USD", 0, big, gapNone); err != nil {
+		t.Fatalf("first position: %v", err)
+	}
+	err := rt.add("EUR", 0, big, gapNone)
+	if !errors.Is(err, money.ErrOverflow) {
+		t.Fatalf("second position: err = %v, want ErrOverflow", err)
+	}
+	if rt.inBaseMinor != math.MaxInt64 {
+		t.Errorf("base total = %d after the refusal, want maxint64 left as it was", rt.inBaseMinor)
+	}
+}
+
+// TestRealizedTotalsOverflowIsNotAGap keeps this refusal out of the pile it must
+// never join, exactly as TestSumInBaseOverflowIsNotAMissingRate does one screen
+// element up. `undated` and `no_rate` are the account total's two ways of saying
+// "a term could not be valued": one closes when the fx backfill catches up, the
+// other never closes but is at least true about the data. An overflow filed
+// under either would put a caption about missing data over a figure whose terms
+// are all present and one of which is broken.
+func TestRealizedTotalsOverflowIsNotAGap(t *testing.T) {
+	rt := newRealizedTotals("RUB")
+	big := nullable.NewNullableWithValue(int64(math.MaxInt64))
+	if err := rt.add("USD", 0, big, gapNone); err != nil {
+		t.Fatalf("first position: %v", err)
+	}
+	if err := rt.add("EUR", 0, big, gapNone); err == nil {
+		t.Fatal("the overflowing total was accepted; there is nothing to publish and nothing was said")
+	}
+	if rt.undated || rt.noRate {
+		t.Errorf("overflow recorded as a gap (undated=%v, no_rate=%v); the account header would then explain a broken total as data that has yet to arrive",
+			rt.undated, rt.noRate)
+	}
+}
+
+// TestToAPIRefusesAnUnrealizedFigureThatWouldWrap covers the subtraction. Both
+// operands are int64 and in the same currency — the guard above this line has
+// just made sure of that — and a difference still leaves the range when they
+// have opposite signs.
+//
+// A NEGATIVE market value is what makes it reachable, and this test reaches it
+// the cheapest way available: an Instrument built directly in memory with a
+// negative face value, rather than through the HTTP write path. checkFacePair
+// (internal/instrument/http.go) now refuses a face value that is not positive
+// (#93), so this exact construction can no longer occur through a POST or a
+// PATCH. The guard below stays regardless — a broken face value was never the
+// only door to a negative basis: Position.CostMinor and RealizedPnLMinor are
+// both accumulated with a bare += in the engine (addLot at engine.go:702,
+// realize at engine.go:212), each term individually valid and none of them
+// carrying a broken field, so a long enough run of ordinary buys (about 4612
+// at the write side's own cap) wraps the running total negative with nothing
+// to catch it before it reaches this subtraction. This test exercises that
+// same guarded subtraction through the shorter path — a face value set
+// directly — rather than assembling four thousand operations to reach it.
+// Swallowing this refusal publishes an unrealized profit of +8446744073709551616
+// kopecks, which is what -10^19 wraps to: a broken row reading as an enormous
+// gain, beside a market value that says the opposite.
+func TestToAPIRefusesAnUnrealizedFigureThatWouldWrap(t *testing.T) {
+	id := uuid.New()
+	face := int64(-9_000_000_000_000_000_000)
+	faceCurrency := "RUB"
+	p := &Position{InstrumentID: id, Currency: "RUB", Quantity: dec("1"), CostMinor: 1_000_000_000_000_000_000}
+	inst := instrument.Instrument{
+		ID: id, Type: instrument.TypeBond, Currency: "RUB",
+		FaceValueMinor: &face, FaceCurrency: &faceCurrency,
+	}
+	// 100% of face, so the valuation is the face value itself: -9e18, an int64.
+	quotes := map[uuid.UUID]marketdata.Quote{id: {InstrumentID: id, Price: dec("100"), Currency: "RUB"}}
+
+	out, err := (&Handler{}).toAPI(context.Background(), p, inst, quotes, time.Now(), map[rateKey]*rateLookup{})
+	if !errors.Is(err, money.ErrOverflow) {
+		t.Fatalf("toAPI = %+v, err = %v; want ErrOverflow: -9e18 minus 1e18 is not an int64, and the wrapped answer is a small positive profit", out, err)
+	}
+	if out.Quantity != "" {
+		t.Errorf("toAPI returned a position (%+v) alongside the refusal, want the zero value", out)
+	}
+}
+
+// TestPositionInBaseRefusesAnUnrealizedFigureThatWouldWrap is the same
+// subtraction in the base currency, where both operands have been converted
+// first. The basis converts perfectly well and the valuation fits after its own
+// conversion; only the difference does not.
+func TestPositionInBaseRefusesAnUnrealizedFigureThatWouldWrap(t *testing.T) {
+	acquired := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	p := &Position{
+		Currency:  "USD",
+		Quantity:  dec("1"),
+		CostMinor: 1_000_000_000_000_000_000,
+		Lots:      []Lot{{Quantity: dec("1"), CostMinor: 1_000_000_000_000_000_000, AcquiredOn: &acquired}},
+	}
+	apiPos := apitypes.Position{
+		MarketValueMinor:    nullable.NewNullableWithValue(int64(-9_000_000_000_000_000_000)),
+		MarketValueCurrency: nullable.NewNullableWithValue("USD"),
+	}
+	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(1)}}
+
+	out, gap, err := h.positionInBase(context.Background(), p, apiPos, nil, "RUB",
+		nullable.NewNullNullable[int64](), time.Now(), map[rateKey]*rateLookup{})
+	if !errors.Is(err, money.ErrOverflow) {
+		t.Fatalf("positionInBase = %+v, err = %v; want ErrOverflow: -9e18 minus 1e18 is not an int64 of kopecks", out, err)
+	}
+	if out != nil {
+		t.Errorf("positionInBase returned %+v alongside the refusal, want nil", out)
+	}
+	if gap != inBaseStruck {
+		t.Errorf("positionInBase named gap %v beside the refusal, want none: an overflow fails the request, it is not a gap to caption", gap)
+	}
+}
+
 // The three tests below stand at the CALL SITES rather than at the guards.
 // Each guard above is only as good as the `if err != nil` that reads it, and
 // that `if` is code like any other: neutered, every one of them let the request
@@ -166,13 +358,13 @@ func TestSumInBaseOverflowIsNotAMissingRate(t *testing.T) {
 // handler needs no converter at all.
 func TestToAPIRefusesToPublishAPositionWhoseValuationCannotBeStruck(t *testing.T) {
 	id := uuid.New()
-	p := &Position{InstrumentID: id, Currency: "USD", Quantity: dec("1e17")}
+	p := &Position{InstrumentID: id, Currency: "USD", Quantity: dec("1e15")}
 	inst := instrument.Instrument{ID: id, Type: instrument.TypeShare, Currency: "USD"}
 	quotes := map[uuid.UUID]marketdata.Quote{id: {InstrumentID: id, Price: dec("100"), Currency: "USD"}}
 
 	out, err := (&Handler{}).toAPI(context.Background(), p, inst, quotes, time.Now(), map[rateKey]*rateLookup{})
 	if !errors.Is(err, money.ErrOverflow) {
-		t.Fatalf("toAPI = %+v, err = %v; want ErrOverflow: 1e17 shares at 100 is not an int64 of cents, and a position published here would show a null market value instead", out, err)
+		t.Fatalf("toAPI = %+v, err = %v; want ErrOverflow: 1e15 shares at 100 is not an int64 of cents, and a position published here would show a null market value instead", out, err)
 	}
 	if out.Quantity != "" {
 		t.Errorf("toAPI returned a position (%+v) alongside the refusal, want the zero value", out)
@@ -242,5 +434,52 @@ func TestPositionInBaseRefusesAValuationThatCannotBeStruckInTheBaseCurrency(t *t
 	// nobody is in.
 	if gap != inBaseStruck {
 		t.Errorf("positionInBase named gap %v beside the refusal, want none: an overflow fails the request, it is not a gap to caption", gap)
+	}
+}
+
+// TestMarketValueNeedsBothHalvesOfTheFacePair pins the read-side guard that a
+// bond is valued from BOTH its face value and the currency that value is in, or
+// not at all. A bare number with no currency on it would be worse than no
+// valuation: the positions screen would print a figure nobody could say the unit
+// of.
+//
+// It used to be an end-to-end test (portfolio.TestPositions...), because
+// PATCHing face_currency to null was how the state was reached. #93 closed that
+// door at the write, and migration 0012 makes the state unstorable, so the
+// arguments are handed to marketValue directly now — its contract is about what
+// it is CALLED with, not about what the catalog happens to hold, and the guard
+// stays for the same reason every read-side guard here does.
+func TestMarketValueNeedsBothHalvesOfTheFacePair(t *testing.T) {
+	face := int64(100_000)
+	faceCurrency := "RUB"
+	q := marketdata.Quote{Price: dec("95.20"), Currency: "RUB"} // 95.20% of face
+
+	for _, tc := range []struct {
+		name     string
+		face     *int64
+		currency *string
+	}{
+		{"a face value with no currency to state it in", &face, nil},
+		{"a face currency with no value under it", nil, &faceCurrency},
+		{"neither half recorded", nil, nil},
+	} {
+		minor, currency, ok, err := marketValue(instrument.TypeBond, tc.face, tc.currency, dec("100"), q)
+		if err != nil {
+			t.Errorf("marketValue with %s: err = %v, want a plain refusal to value", tc.name, err)
+		}
+		if ok || minor != 0 || currency != "" {
+			t.Errorf("marketValue with %s = (%d, %q, %v), want no valuation at all", tc.name, minor, currency, ok)
+		}
+	}
+
+	// And with both halves it values as usual, so the guard above is about the
+	// missing half and not about bonds.
+	minor, currency, ok, err := marketValue(instrument.TypeBond, &face, &faceCurrency, dec("100"), q)
+	if err != nil || !ok {
+		t.Fatalf("marketValue of a whole pair = (%d, %q, %v), err = %v; want it valued", minor, currency, ok, err)
+	}
+	// 100 bonds at 95.20% of a 1 000,00 ₽ face.
+	if minor != 9_520_000 || currency != "RUB" {
+		t.Errorf("marketValue = (%d, %q), want (9520000, \"RUB\")", minor, currency)
 	}
 }

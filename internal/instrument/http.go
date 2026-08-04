@@ -1,6 +1,8 @@
 package instrument
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
+	"babki.my/babki/internal/platform/money"
 )
 
 var currencyRe = regexp.MustCompile(`^[A-Z]{3}$`)
@@ -109,6 +112,163 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, out)
 }
 
+// What a face value has to be, in one place, so that the two doors into those
+// two columns — creation and update — cannot come to refuse different things or
+// in different words (#93). Creation checked only that the pair arrived whole,
+// which let a face value of ZERO and a currency of "" through; the update
+// checked nothing whatsoever, so a PATCH could clear the currency and leave the
+// value behind. Everything they can BOTH break is stated once, below; the update
+// adds one rule of its own, which only it can break (see checkFaceUpdate).
+//
+// None of those states is cosmetic. An exchange quotes a bond as a PERCENTAGE OF FACE
+// (see portfolio.marketValue, and bondPriceFromPercent in the frontend), so the
+// face value is the factor that turns a quote into money. At zero the whole
+// holding is valued at 0,00 — a published figure that is not the truth, which is
+// the one thing this program refuses to do — and a negative one would value it
+// below nothing. Half a pair is milder, because every reader requires both
+// halves before it values anything, but it is still a bond that silently cannot
+// be priced.
+//
+// A face value had no UPPER bound either, until this paragraph's own sweep
+// found it: creation and update both stopped at "positive", so math.MaxInt64
+// went in as readily as a real bond's 1 000,00. That is every other money
+// field this branch bounds — an operation's amount and price×quantity, an
+// account's balance — and this one was the single field of its own subject
+// the branch had left open. Verified end to end: POST an instrument with
+// face_value_minor = math.MaxInt64, 201; buy two of it at par, 201; GET the
+// account's positions, 500 forever — portfolio.marketValue multiplies the
+// face value by a price and a quantity, and money.Minor refuses a product
+// that does not fit in an int64 of minor units (#27) rather than publish a
+// wrapped figure, so the position that holds it can never be drawn again
+// without deleting the row by hand. Bounded at money.MaxAmountMinor, the same
+// cap and the same reasoning as the operation amount and the account balance
+// (see its doc comment): far above any bond ever issued, far enough below
+// math.MaxInt64 that this factor cannot be the reason a valuation overflows on
+// its own, and one constant instead of a fourth copy of a figure that has
+// already drifted apart from itself once in this codebase.
+//
+// DELIBERATELY NOT A CHECK CONSTRAINT, unlike the pair-and-sign rule migration
+// 0012 added for this same column. That constraint exists because a broken
+// pair or a non-positive value makes EVERY reader of the row wrong in the same
+// way, with no per-query way to guard against it — the database is the only
+// place such an invariant can be made to hold for certain. This bound is a
+// different kind of rule: neither operation.amount_minor nor
+// account_balances.amount_minor, the two fields it is copied from, carries a
+// matching CHECK either, and for the same reason — it is a write-time ceiling
+// on ordinary input, not an invariant a reader depends on to be correct, and
+// money.MaxAmountMinor already lives in exactly one place (this package's
+// import of it). A CHECK restating it in SQL would be a second spelling of the
+// same number, the very drift this constant exists to prevent one of.
+//
+
+// It also closes a second, related gap the sweep found but did not need a
+// fix of its own for: face_value_minor is the only money field in this API
+// that could have exceeded JavaScript's Number.MAX_SAFE_INTEGER (2^53-1), and
+// the frontend's bond price↔percent conversion (bondPriceFromPercent /
+// bondPercentFromPrice in web/src/lib/money.ts) both refuse to convert a face
+// value that fails Number.isSafeInteger — so no WRONG number could have come
+// of it — but nothing in trade-dialog.tsx's faceGapOf named that as a reason
+// the field is disabled, so a bond carrying such a value would have shown an
+// enabled percent field that simply produced nothing, with no caption saying
+// why. money.MaxAmountMinor is, by construction, safely below
+// MAX_SAFE_INTEGER (web/src/lib/money.ts's own MAX_AMOUNT_MINOR doc comment
+// states the same property for the identical constant), so bounding
+// face_value_minor here at the one door that writes it makes that state
+// unreachable rather than merely silent: no instrument can ever carry a face
+// value the browser cannot represent exactly, and no case needs adding to
+// faceGapOf for a state the write side no longer produces. This was never
+// live — the upper bound this comment adds and the missing bound it replaces
+// were both introduced on this same unmerged branch (e9daddf), so no row in
+// any deployed instance was ever written through the unbounded door.
+//
+// A currency that names no currency is the same failure wearing a value. The
+// contract calls face_currency ISO-4217 and the readers take it at its word: a
+// bond's market value is denominated in it (portfolio.marketValue), so an empty
+// string there publishes a bare number with no currency on it, and the trade
+// dialog writes «Номинал в , а сделка в RUB». The instrument's own currency has
+// been held to currencyRe at this same door all along; its face value's currency
+// simply was not — and since an empty string is not NULL, neither the pair check
+// here nor the CHECK constraint behind it ever looked.
+//
+// The messages name the fields and the rule. The API is the only way to reach
+// any of these states (no screen writes a face value, and nothing in the
+// frontend PATCHes an instrument at all), so an importer's log is where these
+// will be read.
+var (
+	errFacePair     = errors.New("face_value_minor and face_currency must be set together or not at all")
+	errFaceMention  = errors.New("face_value_minor and face_currency must be sent together, even to change one")
+	errFacePositive = errors.New("face_value_minor must be positive")
+	errFaceTooLarge = fmt.Errorf("face_value_minor must be at most %d", money.MaxAmountMinor)
+	errFaceCurrency = errors.New("face_currency must be ISO-4217 uppercase")
+)
+
+// checkFacePair judges the pair as the request STATES it, and is what both doors
+// share: the value and its currency are present together or not at all, a
+// present value is within (0, money.MaxAmountMinor], and a present currency is
+// a currency code. "Present" means carrying a value — an omitted field and an
+// explicit null both count as absent, which is what they mean on a creation.
+//
+// The value's own rules are tried before its currency's, so that the field a
+// reader is told about is the one nearer the money: a face value of zero prices
+// the whole holding at nothing and one past the cap breaks the very screen that
+// reads it (see the doc comment above), while a misspelled currency merely
+// stops it being priced at all. Between the value's own two rules, positive is
+// tried first because it is the cheaper mistake to make — a negative or zero
+// face value is one keystroke away from an ordinary one, math.MaxInt64 is not.
+func checkFacePair(value nullable.Nullable[int64], currency nullable.Nullable[string]) error {
+	valuePresent := value.IsSpecified() && !value.IsNull()
+	currencyPresent := currency.IsSpecified() && !currency.IsNull()
+	if valuePresent != currencyPresent {
+		return errFacePair
+	}
+	if valuePresent && value.MustGet() <= 0 {
+		return errFacePositive
+	}
+	if valuePresent && value.MustGet() > money.MaxAmountMinor {
+		return errFaceTooLarge
+	}
+	if currencyPresent && !currencyRe.MatchString(currency.MustGet()) {
+		return errFaceCurrency
+	}
+	return nil
+}
+
+// checkFaceUpdate is checkFacePair plus the one rule that only an update can
+// break: on a PATCH, MENTIONING a field is itself an action — an explicit null
+// clears the column while an omitted field leaves it alone — so the two halves
+// have to be mentioned together as well as valued together. Without this,
+// {"face_currency": null} reads as "both absent", passes the shared rule, and
+// clears one half of a stored pair.
+//
+// It refuses in a sentence of its own, and that is not decoration. Answering
+// {"face_value_minor": 200000} on a bond that already stores "RUB" with the
+// shared rule's "must be set together or not at all" states something TRUE of
+// that row before the request and after it, which leaves the client no wiser
+// about why it was turned away; what it has to do is resend the currency, and
+// only a rule about the REQUEST can say so. The contract has described the
+// mention rule correctly on the field all along — this is the runtime catching
+// up with it.
+//
+// It is a rule about the REQUEST rather than about the row the request lands on,
+// and that is the deliberate part. Judging the RESULT would mean reading the
+// stored row first and then writing — and between the read and the write another
+// PATCH can move the half this one is not touching, so two requests that each
+// looked sound against what they read leave a broken pair behind. Reading the
+// request alone cannot be raced. Creation cannot break this particular rule at
+// all — there is no stored half for it to leave behind — so between the two
+// doors every accepted write leaves the pair whole, and every row is whole by
+// induction from a catalog that starts whole (migration 0012).
+//
+// What it costs: a client changing only the face value of a bond has to repeat
+// its currency. No screen does this today — nothing in the frontend PATCHes an
+// instrument — and the contract says so on the field.
+func checkFaceUpdate(value nullable.Nullable[int64], currency nullable.Nullable[string]) error {
+	if value.IsSpecified() != currency.IsSpecified() {
+		return errFaceMention
+	}
+	return checkFacePair(value, currency)
+}
+
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var req apitypes.CreateInstrumentRequest
 	if httpjson.Decode(w, r, &req) != nil {
@@ -119,13 +279,12 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 			"name is required, type must be valid, currency must be ISO-4217 uppercase")
 		return
 	}
-	hasFaceValue := req.FaceValueMinor.IsSpecified() && !req.FaceValueMinor.IsNull()
-	hasFaceCurrency := req.FaceCurrency.IsSpecified() && !req.FaceCurrency.IsNull()
-	if hasFaceValue != hasFaceCurrency {
-		httpjson.Error(w, http.StatusBadRequest,
-			"face_value_minor and face_currency must be set together or not at all")
+	if err := checkFacePair(req.FaceValueMinor, req.FaceCurrency); err != nil {
+		httpjson.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	hasFaceValue := req.FaceValueMinor.IsSpecified() && !req.FaceValueMinor.IsNull()
+	hasFaceCurrency := req.FaceCurrency.IsSpecified() && !req.FaceCurrency.IsNull()
 	inst := Instrument{
 		Type:     Type(req.Type),
 		Name:     req.Name,
@@ -167,6 +326,10 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name != nil && *req.Name == "" {
 		httpjson.Error(w, http.StatusBadRequest, "name must not be empty")
+		return
+	}
+	if err := checkFaceUpdate(req.FaceValueMinor, req.FaceCurrency); err != nil {
+		httpjson.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	upd := Update{

@@ -104,3 +104,62 @@ func TestMinorDecidesAfterRounding(t *testing.T) {
 		t.Errorf("Minor(maxint64 + 0.6) err = %v, want ErrOverflow — it rounds up past the maximum", err)
 	}
 }
+
+// TestAddRefusesATotalThatWouldWrap and its neighbours are about figures that
+// are ALREADY int64 minor units. Go's + and - on int64 wrap exactly as quietly
+// as decimal.IntPart() does past its range, and the terms of a total are each
+// perfectly ordinary by construction — they had to survive Minor to become
+// int64 at all. The guard therefore belongs on the total, which is the figure
+// that gets published (#83).
+func TestAddRefusesATotalThatWouldWrap(t *testing.T) {
+	// Through a variable: the same expression written with constants does not
+	// compile, which is precisely why this wrap is invisible in real code — the
+	// values there are variables.
+	largest := int64(math.MaxInt64)
+	if wrapped := largest + 1; wrapped != math.MinInt64 {
+		t.Fatalf("maxint64 + 1 = %d, want %d — the wrapping this guard exists for has changed shape", wrapped, int64(math.MinInt64))
+	}
+	got, err := money.Add(math.MaxInt64, 1)
+	if !errors.Is(err, money.ErrOverflow) {
+		t.Fatalf("Add(maxint64, 1) = %d, err = %v; want ErrOverflow", got, err)
+	}
+	if got != 0 {
+		t.Errorf("Add returned %d alongside the refusal, want 0", got)
+	}
+}
+
+// TestAddPublishesTheLargestTotalThatFits is the other side of the same edge: a
+// total landing exactly on the last int64 is a real figure and must be handed
+// back, not refused one unit early.
+func TestAddPublishesTheLargestTotalThatFits(t *testing.T) {
+	got, err := money.Add(math.MaxInt64-1, 1)
+	if err != nil {
+		t.Fatalf("Add(maxint64-1, 1): %v — the total is exactly maxint64 and is a figure", err)
+	}
+	if got != math.MaxInt64 {
+		t.Errorf("Add(maxint64-1, 1) = %d, want %d", got, int64(math.MaxInt64))
+	}
+}
+
+// TestSubRefusesADifferenceThatWouldWrap covers the other operator. It is not
+// Add with a negated argument: negating math.MinInt64 overflows on its own, so
+// a difference is taken as a difference.
+func TestSubRefusesADifferenceThatWouldWrap(t *testing.T) {
+	got, err := money.Sub(math.MinInt64, 1)
+	if !errors.Is(err, money.ErrOverflow) {
+		t.Fatalf("Sub(minint64, 1) = %d, err = %v; want ErrOverflow", got, err)
+	}
+	if got != 0 {
+		t.Errorf("Sub returned %d alongside the refusal, want 0", got)
+	}
+	// The term that cannot be negated, subtracted rather than added. -1 minus
+	// minint64 is exactly maxint64 — a figure, and this must hand it back — while
+	// negating minint64 first overflows on its own and would refuse it.
+	fits, err := money.Sub(-1, math.MinInt64)
+	if err != nil {
+		t.Fatalf("Sub(-1, minint64): %v — the difference is maxint64 and is a figure; only Add(a, -b) fails here", err)
+	}
+	if fits != math.MaxInt64 {
+		t.Errorf("Sub(-1, minint64) = %d, want %d", fits, int64(math.MaxInt64))
+	}
+}

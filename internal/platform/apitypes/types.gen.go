@@ -376,14 +376,18 @@ type CreateAccountRequest struct {
 
 // CreateInstrumentRequest defines model for CreateInstrumentRequest.
 type CreateInstrumentRequest struct {
-	Currency       string                    `json:"currency"`
-	FaceCurrency   nullable.Nullable[string] `json:"face_currency,omitempty"`
-	FaceValueMinor nullable.Nullable[int64]  `json:"face_value_minor,omitempty"`
-	Figi           *string                   `json:"figi,omitempty"`
-	Isin           *string                   `json:"isin,omitempty"`
-	Name           string                    `json:"name"`
-	Ticker         *string                   `json:"ticker,omitempty"`
-	Type           InstrumentType            `json:"type"`
+	Currency string `json:"currency"`
+
+	// FaceCurrency The currency face_value_minor is denominated in: an ISO-4217 code in uppercase, and the pattern is enforced, not merely described. An empty string is refused with 400 like any other non-code — it passes a presence check and a NOT NULL alike while denominating the face value in nothing, which leaves a bond priced as a bare number with no currency beside it. Given together with face_value_minor or not at all — see it.
+	FaceCurrency nullable.Nullable[string] `json:"face_currency,omitempty"`
+
+	// FaceValueMinor A bond's face value in face_currency's minor units. Must be POSITIVE, no larger than ten trillion minor units, and must be given TOGETHER with face_currency — both set, or neither. Past any rule, 400 naming the field. Zero is refused rather than stored because an exchange quotes a bond as a percentage of face: a face value of zero turns every price into no money at all, and the position it values into 0,00. The upper bound is the same cap every other money field in this API is written against (see amount_minor on SetBalanceRequest): far above any bond ever issued, and far enough below an int64's own range that multiplying it by a price and a quantity (portfolio.marketValue) cannot by itself be the reason a position's valuation overflows. A bond may be created without a face value; it simply cannot be priced until one is recorded.
+	FaceValueMinor nullable.Nullable[int64] `json:"face_value_minor,omitempty"`
+	Figi           *string                  `json:"figi,omitempty"`
+	Isin           *string                  `json:"isin,omitempty"`
+	Name           string                   `json:"name"`
+	Ticker         *string                  `json:"ticker,omitempty"`
+	Type           InstrumentType           `json:"type"`
 }
 
 // CreateMemberRequest defines model for CreateMemberRequest.
@@ -406,14 +410,14 @@ type CreateOperationRequest struct {
 	// OccurredOn Date YYYY-MM-DD
 	OccurredOn string `json:"occurred_on"`
 
-	// Price Decimal as string
+	// Price Decimal as string: money per unit, in MAJOR currency units. |price| must not exceed 10^13 (10000000000000) — one unit may not cost more than a whole operation is allowed to be for — and see quantity for the bound on the two multiplied together. Past either, 400.
 	Price nullable.Nullable[string] `json:"price,omitempty"`
 
-	// Quantity Decimal as string
+	// Quantity Decimal as string. Bounded from above as well as below: |quantity| must not exceed 10^13 (10000000000000) and, when a price is given too, |price × quantity| must not exceed 10^15 minor units — the same cap amount_minor carries, because it is the same money. Past either, 400. The bound is the money cap read as a count of units, one whole major unit apiece, and it is set there so that what the write accepts the positions screen can still value: at 10^13 units a quote of up to ~9223 per unit still fits in an int64 of minor units, which is above an ordinary share, bond or ETF. More than 10^13 units of something worth less than a whole rouble apiece is refused, deliberately — a figure no ordinary price can value is better refused as a field than discovered later by the screen that cannot render it. Rows written before the bound existed are untouched and are still returned as they stand.
 	Quantity  nullable.Nullable[string] `json:"quantity,omitempty"`
 	SettledOn nullable.Nullable[string] `json:"settled_on,omitempty"`
 
-	// SplitRatio Decimal as string
+	// SplitRatio Decimal as string: how many units one unit becomes. Must be positive and strictly less than 10^10 (10000000000) — the first value the column cannot hold — or 400. A split multiplies the whole position's quantity, so a ratio that is a mis-scaled field rather than a corporate action carries an ordinary holding past what any screen can value; the bound refuses it by name instead of letting the database answer with an overflow.
 	SplitRatio nullable.Nullable[string] `json:"split_ratio,omitempty"`
 	Type       OperationType             `json:"type"`
 }
@@ -438,16 +442,20 @@ type InBaseGap string
 
 // Instrument defines model for Instrument.
 type Instrument struct {
-	Currency       string                    `json:"currency"`
-	FaceCurrency   nullable.Nullable[string] `json:"face_currency,omitempty"`
-	FaceValueMinor nullable.Nullable[int64]  `json:"face_value_minor,omitempty"`
-	Figi           string                    `json:"figi"`
-	Frozen         bool                      `json:"frozen"`
-	Id             openapi_types.UUID        `json:"id"`
-	Isin           string                    `json:"isin"`
-	Name           string                    `json:"name"`
-	Ticker         string                    `json:"ticker"`
-	Type           InstrumentType            `json:"type"`
+	Currency string `json:"currency"`
+
+	// FaceCurrency The currency face_value_minor is denominated in, which need not be the instrument's own currency. Null exactly when face_value_minor is null — see it. An ISO-4217 code, never an empty string: the writes enforce the pattern and a CHECK constraint keeps the empty string out (migration 0012). A face value denominated in nothing is what makes a valuation come back as a bare number with no currency on it.
+	FaceCurrency nullable.Nullable[string] `json:"face_currency,omitempty"`
+
+	// FaceValueMinor What one bond is worth at redemption, in face_currency's minor units. Null for anything that is not a bond, and for a bond whose face value has not been recorded. Never zero, never negative, never above ten trillion minor units, and never present without face_currency: the two are written together or not at all, and the writes enforce it (see the same field on CreateInstrumentRequest). All were reachable states before, and the pair is what a bond's price MEANS — an exchange quotes a bond as a percentage of face, so a face value of zero prices the whole holding at nothing, and one large enough overflows the very valuation it prices (portfolio.marketValue) and leaves the position unreadable. The bounds state in schema what that sentence promises in prose, so a client that validates against this document can check the guarantee rather than take it on trust.
+	FaceValueMinor nullable.Nullable[int64] `json:"face_value_minor,omitempty"`
+	Figi           string                   `json:"figi"`
+	Frozen         bool                     `json:"frozen"`
+	Id             openapi_types.UUID       `json:"id"`
+	Isin           string                   `json:"isin"`
+	Name           string                   `json:"name"`
+	Ticker         string                   `json:"ticker"`
+	Type           InstrumentType           `json:"type"`
 }
 
 // InstrumentType defines model for InstrumentType.
@@ -673,6 +681,7 @@ type SessionInfo struct {
 
 // SetBalanceRequest defines model for SetBalanceRequest.
 type SetBalanceRequest struct {
+	// AmountMinor Negative for a debt: a credit card or a loan carries what is owed as a negative balance. Bounded at ±10^15 minor units — ten trillion whole roubles or dollars — the SAME cap Operation.amount_minor carries, because it is the same money in the same currency on the same screen. Past it, 400. The bound is far above any real balance and far enough below int64 that the accounts screen can still convert what it accepts: at the largest balance taken here an fx rate of up to ~9223 still fits in an int64 of minor units, which is above any rate this program will meet. A balance that cannot be converted is not a wrong figure on the screen — the server refuses to publish one — it is an accounts list that cannot be drawn at all until the row is overwritten, which is why the refusal is at the write. Rows written before the bound existed are untouched and are still returned as they stand.
 	AmountMinor int64 `json:"amount_minor"`
 
 	// AsOf Date YYYY-MM-DD
@@ -719,7 +728,7 @@ type TransferRequest struct {
 	// OccurredOn Date YYYY-MM-DD
 	OccurredOn string `json:"occurred_on"`
 
-	// Quantity Decimal as string
+	// Quantity Decimal as string. |quantity| must not exceed 10^13 (10000000000000), as on an operation — this writes the same column, on two rows. A position CAN hold more than that, having grown one accepted operation at a time; such a holding has to be moved in several transfers.
 	Quantity    string             `json:"quantity"`
 	ToAccountId openapi_types.UUID `json:"to_account_id"`
 }
@@ -740,13 +749,16 @@ type UpdateAccountRequest struct {
 
 // UpdateInstrumentRequest defines model for UpdateInstrumentRequest.
 type UpdateInstrumentRequest struct {
-	FaceCurrency   nullable.Nullable[string] `json:"face_currency,omitempty"`
-	FaceValueMinor nullable.Nullable[int64]  `json:"face_value_minor,omitempty"`
-	Figi           *string                   `json:"figi,omitempty"`
-	Frozen         *bool                     `json:"frozen,omitempty"`
-	Isin           *string                   `json:"isin,omitempty"`
-	Name           *string                   `json:"name,omitempty"`
-	Ticker         *string                   `json:"ticker,omitempty"`
+	// FaceCurrency The currency face_value_minor is denominated in: an ISO-4217 code in uppercase, enforced as on creation — an empty string comes back 400, not stored. Sent together with face_value_minor or not at all — see it.
+	FaceCurrency nullable.Nullable[string] `json:"face_currency,omitempty"`
+
+	// FaceValueMinor Same rules as on creation, and they apply to the REQUEST rather than to the row it lands on: to touch either half of the pair, send both — either two values, or two nulls to clear the pair. Sending one alone is refused even when the stored row would make the result well formed, so that an accepted PATCH always leaves the pair whole without this endpoint having to read the row first and race a concurrent write. That refusal carries a sentence of its own — `face_value_minor and face_currency must be sent together, even to change one` — because creation's `set together or not at all` is true of the stored row both before such a PATCH and after it, and so names nothing the client could do about it. Omitting both leaves the pair exactly as it was.
+	FaceValueMinor nullable.Nullable[int64] `json:"face_value_minor,omitempty"`
+	Figi           *string                  `json:"figi,omitempty"`
+	Frozen         *bool                    `json:"frozen,omitempty"`
+	Isin           *string                  `json:"isin,omitempty"`
+	Name           *string                  `json:"name,omitempty"`
+	Ticker         *string                  `json:"ticker,omitempty"`
 }
 
 // UpdateMemberRequest defines model for UpdateMemberRequest.

@@ -557,3 +557,56 @@ func TestRealizedTotalIsTheSumOfTheFiguresItStandsOver(t *testing.T) {
 		t.Errorf("in_base = %d, want 2234446 (1117223 + 1117223)", *got.InBase)
 	}
 }
+
+// TestRealizedTotalRefusesToPublishASumThatWouldWrap stands at the CALL SITE of
+// the guard on realizedTotals.add, which the guard is only as good as: neutered,
+// the addition wraps, the request finishes 200, and the account header shows a
+// figure of the wrong magnitude and quite possibly the wrong sign — over rows
+// that are each perfectly correct.
+//
+// The fixture is deliberately built in two steps. One position proves the term
+// itself is publishable: ~5×10^18 kopecks is an ordinary int64 and the response
+// carries it. The second position is its identical twin, and only their sum
+// leaves the range — which is the whole claim, that a total of publishable
+// figures need not be publishable.
+//
+// The rate is 5000 ₽/$ and no such rate exists. It is the shortest way to reach
+// the edge from amounts the journal accepts: an operation is capped at 10^15
+// minor units (operation.maxAmountMinor) and an fx rate is capped at nothing, so
+// this is what the arithmetic actually looks like when the two meet. Real
+// hyperinflation would take longer to write down and would fail here in exactly
+// the same place.
+func TestRealizedTotalRefusesToPublishASumThatWouldWrap(t *testing.T) {
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := fxRateAPI(t, quotes, datedRate{earlyRateOn, "5000"})
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	acme := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
+	beta := createInstrument(t, c, url, `{"type":"share","name":"Бета","ticker":"BETA","currency":"USD"}`)
+
+	// No price on either leg: what this test is about is amount_minor, and a
+	// price would only have to be kept consistent with it (see
+	// operation.maxPrice) without changing anything here.
+	sellAndBuy := func(instrumentID string) {
+		createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+			"occurred_on":%q,"quantity":"1","amount_minor":-12345,"currency":"USD"}`, acc.ID, instrumentID, earlyBuyOn))
+		createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
+			"occurred_on":%q,"quantity":"1","amount_minor":1000000000000000,"currency":"USD"}`, acc.ID, instrumentID, lateBuyOn))
+	}
+
+	sellAndBuy(acme.ID)
+	// (1_000_000_000_000_000 - 12_345) × 5000
+	const onePosition = 4_999_999_999_938_275_000
+	if got := accountPositions(t, c, url, acc.ID).RealizedTotal; got.InBase == nil || *got.InBase != onePosition {
+		t.Fatalf("one position: in_base = %s, want %d — the fixture is not testing what it means to unless a single term is publishable",
+			gapOf(got), int64(onePosition))
+	}
+
+	sellAndBuy(beta.ID)
+	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	if resp.StatusCode != http.StatusInternalServerError {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("two positions summing past int64: GET positions = %d, want 500 — twice %d is not an int64 of kopecks, and the 200 carries a wrapped total under a header the owner reads as their money: %s",
+			resp.StatusCode, int64(onePosition), b)
+	}
+}

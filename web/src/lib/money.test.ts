@@ -7,7 +7,9 @@ import {
   formatPrice,
   multiplyToMinor,
   parseToMinor,
+  amountRefusal,
   isPositiveDecimal,
+  MAX_AMOUNT_MINOR,
 } from "./money";
 
 // NBSP-insensitive compare: Intl uses non-breaking spaces.
@@ -56,6 +58,83 @@ describe("parseToMinor", () => {
   });
   it.each([["abc"], [""], ["12,34,56"], ["1.2.3"]])("rejects %s", (input) => {
     expect(parseToMinor(input)).toBeNull();
+  });
+});
+
+// #89: this parser fed the one endpoint that bounded nothing, PUT
+// /accounts/{id}/balance. Its sibling multiplyToMinor has refused a product past
+// Number.MAX_SAFE_INTEGER from the day it was written; this one computed a
+// magnitude as a double and returned whatever came out — so a sum too large to
+// be exact was quietly turned into a DIFFERENT number and sent as if it were the
+// one typed. The server now refuses past MAX_AMOUNT_MINOR, which is the bound
+// that matters; the field refuses at the keystroke so nobody learns it from a
+// red box.
+describe("parseToMinor at the bound", () => {
+  it("takes the largest sum there is, exactly", () => {
+    // On the bound, both signs: a debt of ten trillion is as recordable as an
+    // asset of it. Exactly, not approximately — the whole point is that what is
+    // sent is what was typed.
+    expect(parseToMinor("10000000000000")).toBe(MAX_AMOUNT_MINOR);
+    expect(parseToMinor("-10000000000000")).toBe(-MAX_AMOUNT_MINOR);
+    expect(parseToMinor("9999999999999,99")).toBe(MAX_AMOUNT_MINOR - 1);
+  });
+
+  it("refuses one kopeck past it, either sign", () => {
+    expect(parseToMinor("10000000000000,01")).toBeNull();
+    expect(parseToMinor("-10000000000000,01")).toBeNull();
+  });
+
+  it("refuses a sum a double could not carry", () => {
+    // 10^17 kopecks: past Number.MAX_SAFE_INTEGER, where the old parser stopped
+    // being exact and started inventing.
+    expect(parseToMinor("1000000000000000")).toBeNull();
+    // And a whole part no double can hold at all, which computes to Infinity.
+    expect(parseToMinor("9".repeat(400))).toBeNull();
+  });
+
+  it("stays below the point where a double stops being exact", () => {
+    // Not a restatement of the constant: this is the property the bound is
+    // CHOSEN for. Every value the parser returns is an exact integer, so the
+    // number sent is the number typed.
+    expect(MAX_AMOUNT_MINOR).toBeLessThan(Number.MAX_SAFE_INTEGER);
+  });
+});
+
+describe("amountRefusal", () => {
+  it("tells a number that cannot be sent from text that is not a number", () => {
+    // The two refusals are different sentences to the person typing, and a
+    // field that answers "не удалось разобрать" to a well-formed sum states
+    // something false.
+    expect(amountRefusal("10000000000000,01")).toBe("tooLarge");
+    expect(amountRefusal("abc")).toBe("malformed");
+    expect(amountRefusal("")).toBe("malformed");
+  });
+
+  it("is null for everything parseToMinor accepts", () => {
+    for (const good of ["0", "-0", "1 234,56", "-92 000", "10000000000000"]) {
+      expect(amountRefusal(good)).toBeNull();
+      expect(parseToMinor(good)).not.toBeNull();
+    }
+  });
+
+  it("never disagrees with parseToMinor", () => {
+    // The two are derived from one parse; this is what that buys. A field asks
+    // both — one to decide whether it may send, one to say why not — and a
+    // disagreement would be a disabled button with no explanation beside it, or
+    // an explanation beside a button that works.
+    for (const input of [
+      "0",
+      "abc",
+      "1 234,56",
+      "10000000000000",
+      "10000000000000,01",
+      "-10000000000000,01",
+      "1.2.3",
+      "",
+      "9".repeat(400),
+    ]) {
+      expect(parseToMinor(input) === null).toBe(amountRefusal(input) !== null);
+    }
   });
 });
 

@@ -114,19 +114,75 @@ export function formatPrice(value: string): string | null {
   }).format(num);
 }
 
-// parseToMinor accepts "1 234,56" / "1234.56" / "-92 000"; returns null on junk.
-export function parseToMinor(input: string): number | null {
+// MAX_AMOUNT_MINOR is the largest sum of money, in minor units, any field here
+// will hand to the server: 10^15 — ten trillion whole roubles or dollars — which
+// is the figure the server itself refuses past (money.MaxAmountMinor in Go, one
+// number for the balance a user records and the operation he enters, because
+// they are the same money on the same screen). The server's copy is the one that
+// matters; this one exists so the field refuses at the keystroke instead of
+// after a round trip.
+//
+// It also settles what the parser below could not say before. Its magnitude is
+// computed as a double, and a double stops being exact above
+// Number.MAX_SAFE_INTEGER (≈9.007×10^15): past that the parser returned a number
+// that was NOT what had been typed and handed it on as if it were — the silent
+// falsification multiplyToMinor already refuses to commit. This bound sits below
+// MAX_SAFE_INTEGER, so every value the parser now returns is exact, and no
+// separate safe-integer check is needed to make that true.
+export const MAX_AMOUNT_MINOR = 1_000_000_000_000_000;
+
+// Why an amount field cannot send what was typed. "malformed" — the text is not
+// a number of the shape the field takes at all; "tooLarge" — it is one, and it
+// is past MAX_AMOUNT_MINOR.
+//
+// They are two different sentences to the person typing, and telling them apart
+// is the whole reason this type exists: a field answering «не удалось разобрать
+// сумму» to a perfectly well-formed number states something false, and a caption
+// naming a cause that is not the cause is the mistake this codebase has been
+// caught by more than once. Callers pick the wording; this only says which.
+export type AmountRefusal = "malformed" | "tooLarge";
+
+// parseAmount is the one parser behind both exports below, so what counts as an
+// acceptable amount is stated once. Two parsers, one answering with the number
+// and one with the reason, would eventually disagree about a value — and would
+// disagree silently, the field refusing while the caption explained why it had
+// not.
+function parseAmount(input: string): { minor: number } | { refusal: AmountRefusal } {
   const cleaned = input.replace(/\s/g, "").replace(",", "."); // \s matches NBSP (U+00A0) too
   if (!/^-?\d+(\.\d{1,2})?$/.test(cleaned)) {
-    return null;
+    return { refusal: "malformed" };
   }
   const [whole, frac = ""] = cleaned.split(".");
   const fracPadded = (frac + "00").slice(0, 2);
   const sign = whole.startsWith("-") ? -1 : 1;
   const wholeAbs = whole.replace("-", "");
-  // Compute magnitude first to avoid IEEE -0; integer exactness holds below Number.MAX_SAFE_INTEGER
+  // Compute magnitude first to avoid IEEE -0; integer exactness holds below
+  // Number.MAX_SAFE_INTEGER, and the bound checked immediately below keeps every
+  // value this returns well inside that.
   const magnitude = Number(wholeAbs) * 100 + Number(fracPadded);
-  return magnitude === 0 ? 0 : sign * magnitude;
+  // Compared as a magnitude, so a debt of the same size is refused exactly as an
+  // asset of it is. A whole part of hundreds of digits makes this Infinity,
+  // which is past the bound like anything else.
+  if (magnitude > MAX_AMOUNT_MINOR) {
+    return { refusal: "tooLarge" };
+  }
+  return { minor: magnitude === 0 ? 0 : sign * magnitude };
+}
+
+// parseToMinor accepts "1 234,56" / "1234.56" / "-92 000"; returns null on junk
+// and on a sum past MAX_AMOUNT_MINOR — anything it does not return a number for,
+// the field must not send. amountRefusal says which of the two it was.
+export function parseToMinor(input: string): number | null {
+  const parsed = parseAmount(input);
+  return "minor" in parsed ? parsed.minor : null;
+}
+
+// amountRefusal reports why an amount field cannot send `input`, or null when it
+// can — the companion of parseToMinor returning null, and derived from the same
+// parse so the two cannot come to different verdicts.
+export function amountRefusal(input: string): AmountRefusal | null {
+  const parsed = parseAmount(input);
+  return "refusal" in parsed ? parsed.refusal : null;
 }
 
 export function signClass(amountMinor: number): string {

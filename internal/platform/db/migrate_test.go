@@ -192,6 +192,167 @@ func TestMigrate_DuplicatesOutsideTheTradableSetDoNotStopTheUpgrade(t *testing.T
 	}
 }
 
+// faceValueMigration is the version that makes an instrument's face value and
+// its currency an all-or-nothing, positive pair.
+const faceValueMigration = 12
+
+// TestMigrate_UnsoundFaceValuesStopTheUpgradeAndSayWhatToDo is #93's answer to
+// the rows that are already there. A face value of zero, or one without the
+// currency it is denominated in, was writable until the handler learned to
+// refuse it — and a write-side rule that leaves such rows behind is not an
+// invariant, it is an intention: every reader would still have to derive the
+// check, which is exactly what moving it to the write was for.
+//
+// So the upgrade stops, names the instruments, and says what to do. Repairing
+// them is not on the table for the reason migration 0011 refuses to merge
+// duplicate tickers: a face value decides what every position in that bond is
+// worth, and clearing the pair discards a number somebody entered.
+//
+// This test pins all three: that it stops, that the message is actionable, and
+// that fixing the rows lets the very same upgrade through — a wall with no door
+// would be no better than a crash.
+func TestMigrate_UnsoundFaceValuesStopTheUpgradeAndSayWhatToDo(t *testing.T) {
+	pool := testdb.NewEmpty(t)
+	ctx := context.Background()
+
+	upTo(t, ctx, pool, faceValueMigration-1)
+	// Every shape, because they are separate rules and a migration that caught
+	// only some would leave the rest in the database. The zero is what creation
+	// let through by never checking the value; the empty currency is what it let
+	// through by checking the currency's presence and never its shape — and it is
+	// the one an IS NULL test cannot see, since '' IS NULL is false; the half pair
+	// is what the update let through by checking nothing at all.
+	staged := []struct{ name, face string }{
+		{"ОФЗ с нулевым номиналом", "0, 'RUB'"},
+		{"ОФЗ с пустой валютой номинала", "100000, ''"},
+		{"ОФЗ без валюты номинала", "100000, NULL"},
+	}
+	ids := make(map[string]string, len(staged))
+	for _, s := range staged {
+		var id string
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO instruments (type, name, ticker, currency, face_value_minor, face_currency)
+			 VALUES ('bond', $1, '', 'RUB', `+s.face+`) RETURNING id`, s.name).Scan(&id); err != nil {
+			t.Fatalf("insert %q: %v", s.name, err)
+		}
+		ids[s.name] = id
+	}
+
+	err := db.Migrate(ctx, pool)
+	if err == nil {
+		t.Fatal("Migrate succeeded on a catalog holding a face value that is not one; want it to stop")
+	}
+	// The whole diagnosis has to be in the error MESSAGE: pgconn.PgError.Error()
+	// prints neither DETAIL nor HINT.
+	msg := err.Error()
+	want := []string{"face value", "start the application again"}
+	// Every row, by id and by name — either alone leaves the operator hunting
+	// for which entries are meant.
+	for name, id := range ids {
+		want = append(want, name, id)
+	}
+	for _, want := range want {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the migration failure does not mention %q, so it does not say what to fix:\n%s", want, msg)
+		}
+	}
+
+	// Refused, not half-applied: both rows are untouched and the constraint is
+	// absent.
+	var rows int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM instruments
+		  WHERE face_value_minor = 0 OR face_currency IS NULL OR face_currency = ''`).Scan(&rows); err != nil {
+		t.Fatalf("count instruments: %v", err)
+	}
+	if rows != len(staged) {
+		t.Errorf("unsound instruments left = %d, want %d: a migration that refuses must change nothing", rows, len(staged))
+	}
+	if constraintExists(t, ctx, pool, "instruments_face_value_sound") {
+		t.Error("the constraint exists although the migration refused to run")
+	}
+
+	// And it is not a dead end: both repairs the message offers work.
+	if _, err := pool.Exec(ctx,
+		`UPDATE instruments SET face_value_minor = 100000 WHERE face_value_minor = 0`); err != nil {
+		t.Fatalf("record a real face value: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE instruments SET face_currency = 'RUB' WHERE face_currency = ''`); err != nil {
+		t.Fatalf("name the currency the face value is in: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE instruments SET face_value_minor = NULL WHERE face_currency IS NULL`); err != nil {
+		t.Fatalf("clear the half pair: %v", err)
+	}
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate after the catalog was fixed: %v", err)
+	}
+	if !constraintExists(t, ctx, pool, "instruments_face_value_sound") {
+		t.Error("the constraint is missing after a successful migration")
+	}
+}
+
+// TestMigrate_SoundFaceValuesDoNotStopTheUpgrade is the other self-hoster, the
+// one the refusal must not touch: an instrument with no face value at all is the
+// ordinary case (every share, every fund, and a bond nobody has recorded one
+// for), and it must go through untouched.
+//
+// The second half is what the constraint is FOR. A rule that only guarded the
+// upgrade would leave the running application free to write the same state back
+// the moment a handler forgot to check.
+func TestMigrate_SoundFaceValuesDoNotStopTheUpgrade(t *testing.T) {
+	pool := testdb.NewEmpty(t)
+	ctx := context.Background()
+
+	upTo(t, ctx, pool, faceValueMigration-1)
+	for _, r := range []struct{ kind, name, face string }{
+		{"bond", "ОФЗ 26238", "100000, 'RUB'"},
+		{"bond", "Облигация без номинала", "NULL, NULL"},
+		{"bond", "Номинал в один минорный юнит", "1, 'USD'"},
+		{"share", "Сбербанк", "NULL, NULL"},
+		{"custom", "Наличные", "NULL, NULL"},
+	} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO instruments (type, name, ticker, currency, face_value_minor, face_currency)
+			 VALUES ($1, $2, '', 'RUB', `+r.face+`)`, r.kind, r.name); err != nil {
+			t.Fatalf("insert %q: %v", r.name, err)
+		}
+	}
+
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v\nnothing here is a broken pair, so nothing here may stop the upgrade", err)
+	}
+	var left int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM instruments`).Scan(&left); err != nil {
+		t.Fatalf("count instruments: %v", err)
+	}
+	if left != 5 {
+		t.Errorf("instruments left = %d, want 5: the migration must not remove or change anything", left)
+	}
+
+	// And the constraint goes on refusing what the handlers refuse, which is
+	// what the running application writes against.
+	// "100000, ''" is the one no IS NULL test catches: an empty string is not
+	// null, so the pairing equality alone reads it as a whole pair while it
+	// denominates the face value in nothing.
+	for _, face := range []string{"0, 'RUB'", "-1, 'RUB'", "100000, NULL", "NULL, 'RUB'", "100000, ''"} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO instruments (type, name, ticker, currency, face_value_minor, face_currency)
+			 VALUES ('bond', 'Сломанная', '', 'RUB', `+face+`)`); err == nil {
+			t.Errorf("the database accepted a face value of (%s) after the migration", face)
+		}
+	}
+	// While the sound shapes stay writable.
+	for _, face := range []string{"1, 'RUB'", "NULL, NULL"} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO instruments (type, name, ticker, currency, face_value_minor, face_currency)
+			 VALUES ('bond', 'Целая', '', 'RUB', `+face+`)`); err != nil {
+			t.Errorf("the database refused a face value of (%s), which is a sound one: %v", face, err)
+		}
+	}
+}
+
 // upTo brings pool's schema to exactly the given migration version, so a test
 // can set up the state a later migration has to deal with.
 func upTo(t *testing.T, ctx context.Context, pool *pgxpool.Pool, version int64) {
@@ -205,6 +366,16 @@ func upTo(t *testing.T, ctx context.Context, pool *pgxpool.Pool, version int64) 
 	if err := goose.UpToContext(ctx, sqlDB, "migrations", version); err != nil {
 		t.Fatalf("goose up to %d: %v", version, err)
 	}
+}
+
+func constraintExists(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) bool {
+	t.Helper()
+	var exists bool
+	if err := pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = $1)`, name).Scan(&exists); err != nil {
+		t.Fatalf("look up constraint %s: %v", name, err)
+	}
+	return exists
 }
 
 func indexExists(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) bool {
