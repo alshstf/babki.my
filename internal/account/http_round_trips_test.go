@@ -107,10 +107,11 @@ func (c *countingConverter) RatesOn(ctx context.Context, queries []marketdata.Ra
 }
 
 // newAPIOnPool wires the family and account modules onto pool with conv as the
-// account handler's fx converter, and returns the server URL, a logged-in
-// client and the pool itself — newAPIWithConverter plus the two handles a
-// round-trip test needs (the pool to count acquisitions on, the converter to
-// ask what fell back).
+// account handler's fx converter, and returns the server URL and a logged-in
+// client. It differs from newAPIWithConverter by taking the pool rather than
+// making its own, which is what lets a round-trip test count acquisitions on
+// the very pool the handler uses while the converter it passed in reports what
+// fell back.
 func newAPIOnPool(t *testing.T, pool *pgxpool.Pool, conv *countingConverter) (string, *http.Client) {
 	t.Helper()
 	famStore := family.NewStore(pool)

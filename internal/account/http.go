@@ -214,8 +214,9 @@ func needsRate(a WithBalance, baseCurrency string) bool {
 // on, using cache to memoize the underlying marketdata.Converter.Rate lookup
 // across accounts that share a's currency within a single handleList request: N
 // accounts denominated in the same non-base currency resolve that currency's
-// rate once, not N times (cache, keyed by currency, lives for the lifetime of
-// one request — see handleList). Applying the same cached rate to each
+// rate once, not N times (cache, keyed by the (from, to, day) triple, lives
+// for the lifetime of one request — see rateKey and handleList). Applying the
+// same cached rate to each
 // account's own amountMinor via decimal.Mul(...).Round(0) reproduces
 // exactly what calling Converter.Convert per account would, per Rate's doc.
 //
@@ -349,9 +350,12 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 // answer read as the loop's — and that cannot happen, for the reason above.
 func rateQueries(accounts []WithBalance, baseCurrency string, on time.Time) []marketdata.RateQuery {
 	var out []marketdata.RateQuery
-	// Keyed by the currency alone — the same identity the memo itself uses,
-	// rather than a second, independent notion of "the same query" that could
-	// disagree with it.
+	// Deduplicated by the memo's own key — the whole triple, built by the same
+	// newRateKey the loop below files its answers under — rather than by a
+	// second, independent notion of "the same query" that could disagree with
+	// it. On this screen the target and the date are the same for every
+	// account, so the currency alone would dedupe identically today; using the
+	// memo's key means the two cannot come apart the day that stops being true.
 	seen := make(map[rateKey]bool, len(accounts))
 	for _, a := range accounts {
 		key := newRateKey(a.Currency, baseCurrency, on)
@@ -399,9 +403,13 @@ func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQue
 			// res.Err instead (see marketdata.Rates.For). Leaving the memo cold
 			// for it is the honest treatment: balanceInBase asks the store
 			// itself and the figure comes out the same, one round trip dearer.
-			// Filing res anyway would file a zero rate under an entry that reads
-			// as answered, and a zero rate is a plausible-looking 0,00 beside an
-			// account's real balance.
+			//
+			// Filing res anyway would not publish a wrong number — Rates.For puts
+			// the same error in res.Err as well, so the entry would carry it and
+			// balanceInBase would surface it. It would publish an ERROR PAGE: a
+			// mistake in this enumeration would fail every request instead of
+			// costing it a lookup, which is the opposite of the arrangement the
+			// paragraph above describes.
 			continue
 		}
 		cache[newRateKey(q.From, q.To, q.On)] = &rateLookup{rate: res.Rate, date: res.RateDate, err: res.Err}
