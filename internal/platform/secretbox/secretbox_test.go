@@ -218,13 +218,17 @@ func TestOpenRejectsWrongKey(t *testing.T) {
 	}
 }
 
-// TestOpenTruncatedInputErrorsNotPanics covers input shorter than the
-// nonce itself — the case most likely to panic on a naive slice split
-// (sealed[:nonceSize]) instead of failing cleanly.
+// TestOpenTruncatedInputErrorsNotPanics covers both arithmetic boundaries
+// inside Open, not just the first: 0, 1, 5, 11 are shorter than the 12-byte
+// nonce itself, the case most likely to panic on a naive slice split
+// (sealed[:nonceSize]). 12 and 20 are the second boundary — a full nonce but
+// a ciphertext shorter than GCM's 16-byte authentication tag (12 leaves a
+// zero-byte ciphertext, 20 leaves 8 bytes) — which sealed[:nonceSize] cannot
+// panic on but b.aead.Open must still reject rather than accept or panic on.
 func TestOpenTruncatedInputErrorsNotPanics(t *testing.T) {
 	b := mustBox(t)
 
-	for _, n := range []int{0, 1, 5, 11} { // GCM's standard nonce is 12 bytes
+	for _, n := range []int{0, 1, 5, 11, 12, 20} {
 		sealed := make([]byte, n)
 		if _, err := b.Open(sealed); err == nil {
 			t.Errorf("Open(%d-byte input) succeeded, want an error", n)

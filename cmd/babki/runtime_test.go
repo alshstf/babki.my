@@ -9,7 +9,21 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"babki.my/babki/internal/platform/config"
+	"babki.my/babki/internal/platform/secretbox"
 )
+
+// validHexKey is a literal 64-character hex string (32 bytes) — an
+// AES-256-valid BABKI_ENCRYPTION_KEY — used wherever a test needs *a* key
+// that secretbox.ParseKey accepts and does not care which bytes it decodes
+// to. Mirrors internal/platform/secretbox/secretbox_test.go's constant of
+// the same name; the two packages cannot share one without an import this
+// value is too small to justify.
+const validHexKey = "0123456789abcdef" +
+	"0123456789abcdef" +
+	"0123456789abcdef" +
+	"0123456789abcdef"
 
 // TestSetupInstallsTheConfiguredLoggerAsTheDefault pins the slog.SetDefault
 // call in setup. Nothing else pinned it: deleting the line left the whole
@@ -133,6 +147,102 @@ func TestSetupRefusesToStartWithoutEncryptionKeyWhenRequired(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "openssl rand -hex 32") {
 		t.Errorf("error does not give the exact command to generate a key: %v", err)
+	}
+}
+
+// TestSetupKeylessRolesReachDatabaseConnectWithoutAKey covers the migrate
+// role's own shape directly: setup(ctx, false, false).
+//
+// The pre-existing end-to-end coverage for "migrate and seed work without a
+// key" is TestSeedDemo (cmd/babki/seed_test.go) — but that test calls
+// seedDemo directly against a container-provided pool, never setup, so it
+// cannot see whether setup's requireEncryptionKey=false path actually skips
+// secretbox.ParseKey. The only thing standing between "migrate and seed work
+// without a key" and "every role requires one" is two boolean literals at
+// setup's two keyless call sites (newMigrateCmd in root.go, newSeedCmd in
+// seed.go); flipping either back to true would leave the whole suite green
+// without this test, because nothing else calls setup with both arguments
+// false. This pins the fact at the unit that does the gating.
+//
+// BABKI_DATABASE_URL points at 127.0.0.1:1 — a port nothing can be listening
+// on, since binding a listener there needs root — rather than the
+// port-5432-but-unreachable style DSN used above, on purpose: this test's
+// point is the OPPOSITE of that one's. setup(ctx, true, true) must fail on
+// the key WITHOUT reaching db.Connect; setup(ctx, false, false) must reach
+// db.Connect and fail there instead. No Docker is needed either way — the
+// connection is refused immediately rather than timing out.
+func TestSetupKeylessRolesReachDatabaseConnectWithoutAKey(t *testing.T) {
+	ctx := context.Background()
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	t.Setenv("BABKI_DATABASE_URL", "postgres://u:p@127.0.0.1:1/babki")
+	t.Setenv("BABKI_ENCRYPTION_KEY", "")
+
+	_, err := setup(ctx, false, false)
+	if err == nil {
+		t.Fatal("setup(ctx, false, false) succeeded against an unreachable database; want a connection error")
+	}
+	if strings.Contains(err.Error(), "BABKI_ENCRYPTION_KEY") {
+		t.Fatalf("setup(ctx, false, false) failed on the encryption key (%v); migrate and seed must never require one", err)
+	}
+}
+
+// TestBuildBoxCarriesTheValidatedKeyIntoOneBox pins buildBox's whole reason
+// to exist: the *secretbox.Box it returns when the key is required is built
+// from the SAME key material cfg.EncryptionKey decodes to — not a stray
+// zero value, and not some other key that merely happens to round-trip
+// against itself. A Seal-then-Open on buildBox's own Box alone would not
+// tell the two apart (any working Box round-trips against itself
+// regardless of which key it holds), so this instead builds a second,
+// independent Box straight from secretbox.ParseKey/New — bypassing buildBox
+// entirely — and requires each Box to be able to open what the OTHER
+// sealed. That only holds if both were built from the same key.
+func TestBuildBoxCarriesTheValidatedKeyIntoOneBox(t *testing.T) {
+	cfg := &config.Config{EncryptionKey: validHexKey}
+	box, err := buildBox(cfg, true)
+	if err != nil {
+		t.Fatalf("buildBox(requireEncryptionKey=true, valid key): %v", err)
+	}
+	if box == nil {
+		t.Fatal("buildBox(requireEncryptionKey=true, valid key) returned a nil Box")
+	}
+
+	key, err := secretbox.ParseKey(validHexKey)
+	if err != nil {
+		t.Fatalf("secretbox.ParseKey(validHexKey): %v", err)
+	}
+	reference, err := secretbox.New(key)
+	if err != nil {
+		t.Fatalf("secretbox.New: %v", err)
+	}
+
+	plaintext := []byte("t.buildBox-key-identity-proof")
+	got, err := reference.Open(box.Seal(plaintext))
+	if err != nil {
+		t.Fatalf("a Box built directly from validHexKey could not open what buildBox's Box sealed: %v — "+
+			"buildBox is not using the key it was given", err)
+	}
+	if string(got) != string(plaintext) {
+		t.Errorf("roundtrip via the independently-built reference Box = %q, want %q", got, plaintext)
+	}
+}
+
+// TestBuildBoxNilWhenKeyNotRequired covers the migrate/seed/version shape at
+// the unit that decides it: requireEncryptionKey=false must return a nil Box
+// and no error, without even looking at whether cfg.EncryptionKey parses.
+// The empty key here is deliberate — the zero value config.Config.Load
+// produces when BABKI_ENCRYPTION_KEY is unset — so a regression that started
+// validating the key regardless of requireEncryptionKey would fail on the
+// returned error, not silently hand back a Box nobody asked for.
+func TestBuildBoxNilWhenKeyNotRequired(t *testing.T) {
+	cfg := &config.Config{EncryptionKey: ""}
+	box, err := buildBox(cfg, false)
+	if err != nil {
+		t.Fatalf("buildBox(requireEncryptionKey=false): %v", err)
+	}
+	if box != nil {
+		t.Fatal("buildBox(requireEncryptionKey=false) returned a non-nil Box; migrate/seed/version must never build one")
 	}
 }
 

@@ -39,8 +39,16 @@ const keyHelp = "set BABKI_ENCRYPTION_KEY to 64 hex characters (32 bytes); gener
 // AES-256 key. s must be exactly 64 hex characters. Hex rather than base64:
 // it can be read aloud or typed by hand without a case-sensitivity mistake.
 func ParseKey(s string) ([]byte, error) {
+	// len(s) counts bytes, not characters. That is the honest count to
+	// report here: a valid value is required to be hex, i.e. plain ASCII,
+	// so bytes and characters agree for every value that could ever pass
+	// this check, and the one case where they would not — a non-ASCII value
+	// — is exactly the case a "characters" claim would get wrong. Counting
+	// runes to say something true about a string this function is about to
+	// reject as invalid anyway would be effort spent on the wrong half of
+	// the check.
 	if len(s) != hexKeyLen {
-		return nil, fmt.Errorf("secretbox: BABKI_ENCRYPTION_KEY is %d characters long, want exactly %d; %s",
+		return nil, fmt.Errorf("secretbox: BABKI_ENCRYPTION_KEY is %d bytes long, want exactly %d; %s",
 			len(s), hexKeyLen, keyHelp)
 	}
 	key, err := hex.DecodeString(s)
@@ -51,6 +59,13 @@ func ParseKey(s string) ([]byte, error) {
 }
 
 // Box seals and opens secrets with AES-256-GCM under one fixed key.
+//
+// A Box is safe for concurrent use by multiple goroutines. cipher.AEAD's own
+// documentation makes no such promise, but the standard library's GCM
+// implementation keeps no mutable state between calls — every Seal and Open
+// runs entirely on the arguments it is given — which is what lets a single
+// Box be shared between the hourly background worker and the HTTP handlers
+// that read the same secret, with no lock of its own.
 type Box struct {
 	aead cipher.AEAD
 }
@@ -76,15 +91,13 @@ func New(key []byte) (*Box, error) {
 // call, so sealing the same plaintext twice never produces the same output.
 func (b *Box) Seal(plaintext []byte) []byte {
 	nonce := make([]byte, b.aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		// crypto/rand.Read only fails when the OS entropy source itself is
-		// broken — a condition this codebase has no recovery path for, and
-		// Seal's signature (no error return, fixed by the callers this
-		// primitive serves) leaves no way to report it upward. Every other
-		// caller of crypto/rand.Read in the standard library treats this the
-		// same way.
-		panic("secretbox: reading a random nonce: " + err.Error())
-	}
+	// crypto/rand.Read cannot return a non-nil error: per its own doc
+	// (verified against the go1.26 toolchain this module's go.mod requires),
+	// it either fills nonce completely or crashes the process irrecoverably
+	// inside crypto/rand before Read ever returns. There is therefore no
+	// error path left for Seal to report, and the return values are
+	// discarded rather than checked against a condition that cannot happen.
+	_, _ = rand.Read(nonce)
 	return b.aead.Seal(nonce, nonce, plaintext, nil)
 }
 
