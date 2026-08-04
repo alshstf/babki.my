@@ -55,7 +55,14 @@ func serve(t *testing.T, routes map[string]route) (*httptest.Server, map[string]
 		}
 		body, err := readRequestBody(r)
 		if err != nil {
-			t.Fatalf("read request body: %v", err)
+			// t.Fatal/t.Fatalf must only ever be called from the test's own
+			// goroutine (testing's own documented rule): this handler runs
+			// on an httptest.Server connection goroutine, where Fatal's
+			// runtime.Goexit would unwind the wrong stack instead of ending
+			// the test, risking a hang or a false pass rather than a clean
+			// failure.
+			t.Errorf("read request body: %v", err)
+			return
 		}
 		gotBodies[r.URL.Path] = body
 		for k, vs := range rt.header {
@@ -182,7 +189,10 @@ func TestOperationsAll_WalksTwoPages(t *testing.T) {
 		}
 		var reqBody map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-			t.Fatalf("decode request body: %v", err)
+			// See serve()'s identical comment: Fatal from a server handler
+			// goroutine is not safe, only from the test's own goroutine.
+			t.Errorf("decode request body: %v", err)
+			return
 		}
 		requests = append(requests, reqBody)
 
@@ -349,13 +359,98 @@ func TestOperationsAll_StuckCursorErrorsRatherThanLoopingForever(t *testing.T) {
 	c := NewClient(srv.Client(), srv.URL, "tok", nil)
 	items, err := c.OperationsAll(context.Background(), "acc", time.Time{})
 	if err == nil {
-		t.Fatalf("OperationsAll returned no error (items=%+v), want an error about the cursor not advancing", items)
+		t.Fatalf("OperationsAll returned no error (items=%+v), want an error about the cursor repeating", items)
 	}
-	if !strings.Contains(err.Error(), "cursor did not advance") {
-		t.Errorf("error = %q, want it to mention the cursor not advancing", err)
+	if !strings.Contains(err.Error(), "repeats an earlier page") {
+		t.Errorf("error = %q, want it to mention the cursor repeating an earlier page", err)
 	}
 	if requestCount != 1 {
 		t.Errorf("made %d requests, want exactly 1 (the guard must catch this on the very first response)", requestCount)
+	}
+}
+
+// TestOperationsAll_TwoCursorCycleErrorsRatherThanLoopingForever reproduces
+// a gateway bug the single-previous-cursor check alone would miss: the
+// cursor alternates A -> B -> A -> B -> ... instead of repeating the same
+// one twice in a row. A guard that only compares against the immediately
+// preceding cursor would never catch this — cursor B always differs from
+// whatever came right before it — and would spin until the context's own
+// deadline, accumulating items in memory the whole time. The seen-cursors
+// set this test exercises catches it on the first repeat regardless of the
+// cycle's length.
+func TestOperationsAll_TwoCursorCycleErrorsRatherThanLoopingForever(t *testing.T) {
+	const forcedStopAfter = 6
+	var requestCount int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if requestCount >= forcedStopAfter {
+			_, _ = w.Write([]byte(`{"hasNext":false,"nextCursor":"","items":[]}`))
+			return
+		}
+		// Alternates: request 1 (cursor "") answers nextCursor "A"; request 2
+		// (cursor "A") answers nextCursor "B"; request 3 (cursor "B") answers
+		// nextCursor "A" again — a two-step cycle, never repeating the
+		// immediately preceding cursor.
+		if requestCount%2 == 1 {
+			_, _ = w.Write([]byte(`{"hasNext":true,"nextCursor":"A","items":[]}`))
+		} else {
+			_, _ = w.Write([]byte(`{"hasNext":true,"nextCursor":"B","items":[]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(srv.Client(), srv.URL, "tok", nil)
+	items, err := c.OperationsAll(context.Background(), "acc", time.Time{})
+	if err == nil {
+		t.Fatalf("OperationsAll returned no error (items=%+v), want an error about the cursor cycling", items)
+	}
+	if !strings.Contains(err.Error(), "repeats an earlier page") {
+		t.Errorf("error = %q, want it to mention the cursor repeating an earlier page", err)
+	}
+	// Cycle: "" -> A (req 1) -> B (req 2) -> A again, caught on req 3 before
+	// a 4th request is ever made.
+	if requestCount != 3 {
+		t.Errorf("made %d requests, want exactly 3 (the guard must catch the cycle on its first repeat, not loop through it)", requestCount)
+	}
+}
+
+// TestOperationsAll_ErrorOnSecondPageReturnsErrorNotPartialResult closes the
+// main risk in a multi-page walk: silently truncating history because a
+// later page failed. The first page succeeds and would, on its own, be a
+// perfectly good (if incomplete) result; the second page 500s. The whole
+// call must fail — not return the one good page as if it were everything.
+func TestOperationsAll_ErrorOnSecondPageReturnsErrorNotPartialResult(t *testing.T) {
+	page1 := readFixture(t, "operations_page1.json")
+
+	var requestCount int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if requestCount == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(page1)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("internal error"))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(srv.Client(), srv.URL, "tok", nil)
+	items, err := c.OperationsAll(context.Background(), "2000000001", time.Time{})
+	if err == nil {
+		t.Fatalf("OperationsAll returned no error (items=%+v), want the second page's error surfaced", items)
+	}
+	if items != nil {
+		t.Errorf("OperationsAll returned %d items alongside the error, want nil (no partial result)", len(items))
+	}
+	if requestCount != 2 {
+		t.Errorf("made %d requests, want exactly 2 (page 1 succeeding, page 2 failing)", requestCount)
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error = %q, want it to mention the second page's status code", err)
 	}
 }
 
@@ -490,36 +585,59 @@ func TestInstrumentByUID_ParsesFixture(t *testing.T) {
 	}
 }
 
-// TestInstrumentByUID_NominalDecodesWhenPresent proves the defensive
-// nominal/blocked decoding actually works, even though (per wireInstrument's
-// doc comment) the real gateway's GetInstrumentBy response never carries
-// these fields today: if it ever did, this client must not silently drop
-// them.
-func TestInstrumentByUID_NominalDecodesWhenPresent(t *testing.T) {
-	body := `{"instrument":{"uid":"uid-bond","figi":"F1","isin":"I1","ticker":"BOND1",
-		"name":"Bond","currency":"rub","instrumentType":"bond",
-		"nominal":{"currency":"rub","units":"1000","nano":0},"blocked":true}}`
+// -------------------------------------------------------------------------
+// BondNominalByUID
+// -------------------------------------------------------------------------
+
+func TestBondNominalByUID_ParsesFixture(t *testing.T) {
+	var gotBody map[string]any
+	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(body))
+		_, _ = w.Write(readFixture(t, "bond.json"))
 	}))
 	t.Cleanup(srv.Close)
 
 	c := NewClient(srv.Client(), srv.URL, "tok", nil)
-	got, err := c.InstrumentByUID(context.Background(), "uid-bond")
+	got, err := c.BondNominalByUID(context.Background(), "2dd3b003-aca2-4920-89ce-8d827c637372")
 	if err != nil {
-		t.Fatalf("InstrumentByUID: %v", err)
+		t.Fatalf("BondNominalByUID: %v", err)
 	}
-	if !got.Blocked {
-		t.Errorf("Blocked = false, want true")
+
+	wantPath := "/tinkoff.public.invest.api.contract.v1.InstrumentsService/BondBy"
+	if gotPath != wantPath {
+		t.Errorf("request path = %q, want %q", gotPath, wantPath)
 	}
+	if gotBody["idType"] != "INSTRUMENT_ID_TYPE_UID" {
+		t.Errorf("request idType = %v, want INSTRUMENT_ID_TYPE_UID", gotBody["idType"])
+	}
+	if gotBody["id"] != "2dd3b003-aca2-4920-89ce-8d827c637372" {
+		t.Errorf("request id = %v, want the requested uid", gotBody["id"])
+	}
+
 	wantNominal := decimal.RequireFromString("1000")
-	if !got.Nominal.Decimal().Equal(wantNominal) {
-		t.Errorf("Nominal.Decimal() = %s, want %s", got.Nominal.Decimal(), wantNominal)
+	if !got.Decimal().Equal(wantNominal) {
+		t.Errorf("nominal.Decimal() = %s, want %s", got.Decimal(), wantNominal)
 	}
-	if got.Nominal.Currency != "RUB" {
-		t.Errorf("Nominal.Currency = %q, want RUB", got.Nominal.Currency)
+	if got.Currency != "RUB" {
+		t.Errorf("nominal.Currency = %q, want RUB (lowercase \"rub\" in the fixture must be upper-cased)", got.Currency)
+	}
+}
+
+func TestBondNominalByUID_PropagatesTransportError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("internal error"))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(srv.Client(), srv.URL, "tok", nil)
+	_, err := c.BondNominalByUID(context.Background(), "uid-bond")
+	if err == nil {
+		t.Fatalf("BondNominalByUID returned no error for a 500 response")
 	}
 }
 
@@ -560,7 +678,38 @@ func TestGetAccounts_401WithEmptyBodyStillReturnsErrTokenInvalid(t *testing.T) {
 
 func TestGetAccounts_NonAuthStatusWithDescription40003ReturnsErrTokenInvalid(t *testing.T) {
 	// Defensive branch: description 40003 arriving under some status other
-	// than 401 must still be recognized.
+	// than 401 must still be recognized. The body uses the QUOTED-STRING
+	// form of description ("40003", not 40003 unquoted) — that is the shape
+	// a live 400 response actually carried when this client was exercised
+	// against the real gateway (invest-public-api.tinkoff.ru; see
+	// task-3-report.md), even though the published OpenAPI spec declares
+	// this field a bare integer. wireError.Description is json.Number
+	// specifically so both forms parse; this is the one this test proves
+	// against real-world evidence, not just the spec's own examples.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"code":16,"message":"authentication token is missing or invalid","description":"40003"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(srv.Client(), srv.URL, "tok", nil)
+	_, err := c.GetAccounts(context.Background())
+	if !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("GetAccounts error = %v, want ErrTokenInvalid", err)
+	}
+}
+
+func TestGetAccounts_NonAuthStatusWithNumericDescription40003ReturnsErrTokenInvalid(t *testing.T) {
+	// Same defensive branch, but with description as a bare (unquoted)
+	// JSON number — the form the published OpenAPI spec actually declares
+	// for this field (ErrorResponse.description: type "integer"; every one
+	// of the spec's own ~400 example error bodies uses this unquoted form,
+	// checked 2026-08-05 against RussianInvestments/investAPI's openapi.yaml).
+	// Kept as a second, separate test from the quoted-string one above
+	// rather than folded into it, since the two exercise different branches
+	// of json.Number's own parsing (see literalStore in encoding/json) and
+	// a regression in either one should fail on its own.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -701,8 +850,12 @@ func TestParseRateLimitReset(t *testing.T) {
 		{"one second", "1", 1 * time.Second},
 		{"missing header defaults to the cap", "", 65 * time.Second},
 		{"unparsable defaults to the cap", "soon", 65 * time.Second},
-		{"zero defaults to the cap", "0", 65 * time.Second},
-		{"negative defaults to the cap", "-5", 65 * time.Second},
+		// An explicit "0"/negative is the gateway answering "already clear",
+		// not the gateway saying nothing — it must get the small floor, not
+		// the full 65s cap a missing/garbled header gets (see
+		// minRateLimitWait's own doc comment).
+		{"explicit zero gets the floor, not the cap", "0", minRateLimitWait},
+		{"explicit negative gets the floor, not the cap", "-5", minRateLimitWait},
 		{"excessive value is capped", "100000", 65 * time.Second},
 		{"just over the cap", "66", 65 * time.Second},
 	}
@@ -815,9 +968,6 @@ func TestNewClient_Defaults(t *testing.T) {
 	}
 	if c.http.Timeout != 30*time.Second {
 		t.Errorf("http client Timeout = %s, want 30s", c.http.Timeout)
-	}
-	if c.http.Timeout <= 0 {
-		t.Errorf("http client Timeout = %s, want a positive bound (0 means unbounded)", c.http.Timeout)
 	}
 	if c.sleep == nil {
 		t.Errorf("sleep = nil, want ctxSleep")
@@ -937,10 +1087,16 @@ func TestEmbeddedCert_FingerprintMatchesWhatWasVerifiedOutOfBand(t *testing.T) {
 	}
 	got := strings.Join(hexParts, ":")
 
-	// Literal, independently re-derivable value (not the russianTrustedRootCAFingerprint
-	// constant this same file's other code also declares): reproduced with
-	// `openssl x509 -in russian_trusted_root_ca.pem -noout -fingerprint -sha256`
-	// against the file actually embedded in this package, 2026-08-04.
+	// Literal on purpose, not a shared constant with russianTrustedRootCAPEM's
+	// own doc comment (client.go): that value was verified out-of-band, with
+	// `openssl x509 -in russian_trusted_root_ca.pem -noout -fingerprint
+	// -sha256` run against the file actually embedded in this package,
+	// 2026-08-04 — this test's whole point is to catch a future re-embedding
+	// (rotation, or someone swapping the file) that silently changes what
+	// gets trusted. Pulling the expected value from a constant computed by
+	// this package's own code would make the test compare the code against
+	// itself and pass no matter what the file changed to; it has to stay an
+	// independent, hand-copied number to mean anything.
 	const want = "D2:6D:2D:02:31:B7:C3:9F:92:CC:73:85:12:BA:54:10:35:19:E4:40:5D:68:B5:BD:70:3E:97:88:CA:8E:CF:31"
 	if got != want {
 		t.Fatalf("embedded certificate fingerprint = %s, want %s", got, want)

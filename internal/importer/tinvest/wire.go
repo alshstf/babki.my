@@ -84,15 +84,26 @@ func (w wireQuotation) parse() (Quotation, error) {
 }
 
 // wireError mirrors the REST gateway's error body (components/schemas/
-// ErrorResponse in the published OpenAPI spec, pulled 2026-08-04): Code is
-// the gRPC status code, Message is human text, and Description is the
-// broker's own numeric business error code — e.g. 40003, "authentication
-// token is missing or invalid", which the spec's own documented example
-// pairs with HTTP 401 and gRPC code 16 (Unauthenticated).
+// ErrorResponse in the published OpenAPI spec, re-checked 2026-08-05
+// against RussianInvestments/investAPI's src/docs/swagger-ui/openapi.yaml):
+// Code is the gRPC status code, Message is human text, and Description is
+// the broker's own numeric business error code — e.g. 40003,
+// "authentication token is missing or invalid", which the spec's own
+// documented example pairs with HTTP 401 and gRPC code 16 (Unauthenticated).
+//
+// The spec declares Description's JSON type as a bare integer — every one
+// of its ~400 example error bodies shows it unquoted (e.g. `description:
+// 30011`) — but the live gateway does not honor that: a real 400 response
+// captured against invest-public-api.tinkoff.ru during this package's own
+// sandbox testing (see task-3-report.md) carried `"description":"30079"`,
+// a quoted string, and json.Unmarshal into an int field fails outright on
+// that shape. json.Number accepts either wire form as-is (it stores
+// whatever text arrived and parses it on demand via Int64()), so this field
+// uses that type instead of plain int.
 type wireError struct {
-	Code        int    `json:"code"`
-	Message     string `json:"message"`
-	Description int    `json:"description"`
+	Code        int         `json:"code"`
+	Message     string      `json:"message"`
+	Description json.Number `json:"description"`
 }
 
 // tokenInvalidDescription is the broker's business error code for an
@@ -291,31 +302,37 @@ const instrumentIDTypeUID = "INSTRUMENT_ID_TYPE_UID"
 // wireInstrument mirrors the REST gateway's v1Instrument — the base
 // Instrument message InstrumentsService/GetInstrumentBy actually returns.
 //
-// Nominal and Blocked are decoded defensively even though v1Instrument, as
-// published in the gateway's own OpenAPI spec (pulled 2026-08-04), carries
-// neither field: a bond's or currency pair's nominal lives on the separate
-// Bond/Currency messages returned by GetBondBy/GetCurrencyBy, which this
-// client does not call (out of scope for task 3; not in the brief). If the
-// live gateway ever does send "nominal" or "blocked" here, they parse. This
-// is checked against the published OpenAPI spec only — InstrumentByUID has
-// not been exercised against the live or sandbox gateway in this task (only
-// against an httptest fixture), so whether a real response ever adds these
-// fields anyway is not verified, just documented as absent-per-spec.
-// InstrumentBrief.Nominal/.Blocked come back zero-value today either way;
-// this is a known, stated gap, not a silent one.
+// It carries no nominal and no blocked field. Checked two ways: the
+// published OpenAPI spec (RussianInvestments/investAPI's
+// src/docs/swagger-ui/openapi.yaml, schema v1Instrument, re-checked
+// 2026-08-05 — no "nominal" or "blocked" property; the only blocked-shaped
+// field on this message is "blockedTcaFlag", a service-contract lock, not
+// the sanctions freeze this codebase's own "frozen" flag means), and a live
+// sandbox GetInstrumentBy call for a bond, whose response carried no
+// "nominal" key at all (this task's own review, not re-run in this fix). A
+// bond's nominal lives on the separate Bond message — see
+// BondNominalByUID (client.go).
 type wireInstrument struct {
-	UID            string         `json:"uid"`
-	FIGI           string         `json:"figi"`
-	ISIN           string         `json:"isin"`
-	Ticker         string         `json:"ticker"`
-	Name           string         `json:"name"`
-	Currency       string         `json:"currency"`
-	InstrumentType string         `json:"instrumentType"`
-	Nominal        wireMoneyValue `json:"nominal"`
-	Blocked        bool           `json:"blocked"`
+	UID            string `json:"uid"`
+	FIGI           string `json:"figi"`
+	ISIN           string `json:"isin"`
+	Ticker         string `json:"ticker"`
+	Name           string `json:"name"`
+	Currency       string `json:"currency"`
+	InstrumentType string `json:"instrumentType"`
 }
 
 // wireInstrumentResponse mirrors InstrumentResponse.
 type wireInstrumentResponse struct {
 	Instrument wireInstrument `json:"instrument"`
+}
+
+// wireBondResponse mirrors BondResponse (InstrumentsService/BondBy), trimmed
+// to the one field BondNominalByUID (client.go) needs: the wire schema
+// (v1BondResponse -> v1Bond, per the published OpenAPI spec) nests it under
+// "instrument", same as wireInstrumentResponse does for GetInstrumentBy.
+type wireBondResponse struct {
+	Instrument struct {
+		Nominal wireMoneyValue `json:"nominal"`
+	} `json:"instrument"`
 }

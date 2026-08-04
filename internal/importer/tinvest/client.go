@@ -59,12 +59,15 @@ const defaultHTTPTimeout = 30 * time.Second
 var russianTrustedRootCAPEM []byte
 
 // NewHTTPClient returns an *http.Client trusted to reach the T-Invest REST
-// gateway: the machine's system certificate pool plus the embedded Russian
-// Trusted Root CA, on this client's transport only — the process-wide
-// system trust store is never modified. The gateway's certificate chains
-// through an intermediate ("Russian Trusted Sub CA") up to this root, which
-// is not present in typical system trust stores, so without it every
-// request would fail TLS verification.
+// gateway, on this client's transport only — the process-wide system trust
+// store is never modified. Normally that means the machine's system
+// certificate pool plus the embedded Russian Trusted Root CA; if the
+// platform reports no usable system pool (see the fallback in the body
+// below), only the embedded root is trusted, since there is no system pool
+// to add it to. The gateway's certificate chains through an intermediate
+// ("Russian Trusted Sub CA") up to this root, which is not present in
+// typical system trust stores, so without it every request would fail TLS
+// verification.
 //
 // timeout bounds every request this client makes; see defaultHTTPTimeout
 // for the reasoning NewClient uses when picking one.
@@ -135,7 +138,8 @@ func NewClient(hc *http.Client, baseURL, token string, log *slog.Logger) *Client
 		hc, err = NewHTTPClient(defaultHTTPTimeout)
 		if err != nil {
 			// NewHTTPClient can only fail if the embedded certificate does
-			// not parse, and TestEmbeddedCertParses/TestEmbeddedCertFingerprint
+			// not parse, and TestEmbeddedCert_ParsesAndIsNotExpired /
+			// TestEmbeddedCert_FingerprintMatchesWhatWasVerifiedOutOfBand
 			// already prove it does on every build of this package. A
 			// caller passing nil is trusting that default to work exactly
 			// as those tests already showed it does; silently falling back
@@ -254,6 +258,17 @@ const operationsPageLimit = 1000
 func (c *Client) OperationsAll(ctx context.Context, brokerAccountID string, from time.Time) ([]OperationItem, error) {
 	var all []OperationItem
 	cursor := ""
+	// seenCursors guards against the gateway cycling cursors (A -> B -> A ->
+	// B -> ...), not just repeating the immediately preceding one: a check
+	// against only the previous cursor would spin through a longer cycle
+	// like that until ctx's own deadline cut it off, accumulating items in
+	// memory the whole time. Every cursor this loop has already requested
+	// goes in here before it is requested again, so any repeat — one step
+	// back or many steps around a cycle — is caught on the request that
+	// would repeat it. The set grows with the number of distinct pages
+	// actually walked, the same order as `all` itself, so it adds no memory
+	// growth risk beyond what a long legitimate history already costs.
+	seenCursors := map[string]bool{cursor: true}
 	for {
 		req := getOperationsByCursorRequest{
 			AccountID: brokerAccountID,
@@ -284,20 +299,40 @@ func (c *Client) OperationsAll(ctx context.Context, brokerAccountID string, from
 		if !resp.HasNext {
 			return all, nil
 		}
-		if resp.NextCursor == cursor {
+		if seenCursors[resp.NextCursor] {
 			// Guards against an infinite loop if the gateway ever answers
-			// hasNext=true without the cursor actually advancing: a loud,
-			// diagnosable error beats a sync job stuck forever on a
-			// "current" cursor page.
+			// hasNext=true with a cursor this loop has already requested —
+			// whether that's the immediately preceding one or an earlier
+			// page in a longer cycle: a loud, diagnosable error beats a
+			// sync job stuck forever re-walking the same pages.
 			return nil, fmt.Errorf(
-				"tinvest: OperationsService/GetOperationsByCursor: hasNext=true but cursor did not advance past %q",
-				cursor)
+				"tinvest: OperationsService/GetOperationsByCursor: hasNext=true but cursor %q repeats an earlier page",
+				resp.NextCursor)
 		}
+		seenCursors[resp.NextCursor] = true
 		cursor = resp.NextCursor
 	}
 }
 
 // PortfolioPosition is one holding from OperationsService/GetPortfolio.
+//
+// Quantity and Blocked answer two different questions, confirmed 2026-08-05
+// against the published proto comments (RussianInvestments/investAPI,
+// operations.proto, message PortfolioPosition):
+//
+//   - Quantity ("Количество инструмента в портфеле в штуках") is the whole
+//     position: everything this account holds, full stop. The wire format
+//     documents no "free" vs "reserved" split on this field, so it already
+//     includes any units currently reserved by an open sell order — that
+//     reservation is a separate field, blocked_lots (a quantity), which
+//     this client does not decode. A reconciliation against the journal
+//     must compare Quantity as-is; there is no separate blocked quantity on
+//     this type to add to it.
+//   - Blocked ("Заблокировано на бирже") is not a quantity at all — it is a
+//     bool flagging that the position is halted at the depository/exchange
+//     level (the broker's own FAQ: "отражает, заблокирован ли инструмент
+//     депозитарием"). It is unrelated to blocked_lots and must not be
+//     combined with Quantity in any arithmetic.
 type PortfolioPosition struct {
 	InstrumentUID, FIGI, InstrumentType string
 	Quantity                            Quotation
@@ -383,16 +418,12 @@ func (c *Client) GetPositions(ctx context.Context, brokerAccountID string) ([]Mo
 // InstrumentBrief is InstrumentsService/GetInstrumentBy's answer, trimmed to
 // the fields this package's callers need.
 //
-// Nominal and Blocked are always zero-value: see wireInstrument's doc
-// comment for what has actually been verified about GetInstrumentBy's
-// response shape. They are kept on this type (rather than dropped) because
-// a bond's nominal and a currency pair's nominal are real, needed facts —
-// just not ones this endpoint supplies; a future task adding GetBondBy/
-// GetCurrencyBy can populate them without changing this type's shape.
+// It has no Nominal or Blocked field: GetInstrumentBy does not supply a
+// nominal (see wireInstrument's doc comment for what that claim is checked
+// against), and there is nothing to populate it with here, honestly zero or
+// not. A bond's nominal lives on a different call — BondNominalByUID.
 type InstrumentBrief struct {
 	UID, FIGI, ISIN, Ticker, Name, Currency, InstrumentType string
-	Nominal                                                 MoneyValue
-	Blocked                                                 bool
 }
 
 // InstrumentByUID calls InstrumentsService/GetInstrumentBy with
@@ -404,11 +435,6 @@ func (c *Client) InstrumentByUID(ctx context.Context, uid string) (InstrumentBri
 		return InstrumentBrief{}, err
 	}
 
-	nominal, err := resp.Instrument.Nominal.parse()
-	if err != nil {
-		return InstrumentBrief{}, fmt.Errorf("tinvest: InstrumentsService/GetInstrumentBy: nominal: %w", err)
-	}
-
 	return InstrumentBrief{
 		UID:            resp.Instrument.UID,
 		FIGI:           resp.Instrument.FIGI,
@@ -417,9 +443,33 @@ func (c *Client) InstrumentByUID(ctx context.Context, uid string) (InstrumentBri
 		Name:           resp.Instrument.Name,
 		Currency:       strings.ToUpper(resp.Instrument.Currency),
 		InstrumentType: resp.Instrument.InstrumentType,
-		Nominal:        nominal,
-		Blocked:        resp.Instrument.Blocked,
 	}, nil
+}
+
+// BondNominalByUID calls InstrumentsService/BondBy with
+// id_type=INSTRUMENT_ID_TYPE_UID and returns the bond's nominal — the one
+// value InstrumentByUID's GetInstrumentBy call cannot supply (see
+// InstrumentBrief's doc comment). This task's review checked the shape live
+// against the sandbox gateway for bond uid
+// 2dd3b003-aca2-4920-89ce-8d827c637372: its BondBy response carried
+// "nominal": {"currency": "rub", "units": "1000", "nano": 0} under
+// "instrument" (that call is not re-run by this fix; the fixture-based
+// tests below are what run on every build). The name is deliberately
+// narrow: this method returns exactly the bond's nominal and nothing else
+// about the instrument, so a caller cannot mistake it for a general
+// instrument lookup.
+func (c *Client) BondNominalByUID(ctx context.Context, uid string) (MoneyValue, error) {
+	req := instrumentByRequest{IDType: instrumentIDTypeUID, ID: uid}
+	var resp wireBondResponse
+	if err := c.do(ctx, "InstrumentsService/BondBy", req, &resp); err != nil {
+		return MoneyValue{}, err
+	}
+
+	nominal, err := resp.Instrument.Nominal.parse()
+	if err != nil {
+		return MoneyValue{}, fmt.Errorf("tinvest: InstrumentsService/BondBy: nominal: %w", err)
+	}
+	return nominal, nil
 }
 
 // rateLimitError signals a 429 response; do() catches it with errors.As to
@@ -447,15 +497,32 @@ const rateLimitResetHeader = "x-ratelimit-reset"
 // to sleep a sync job for a day.
 const maxRateLimitWait = 65 * time.Second
 
-// parseRateLimitReset reads rateLimitResetHeader's value. A missing or
-// unparsable header, or a non-positive one, is treated as "wait the full
-// cap" — the conservative reading, since the alternative (wait 0 and
-// immediately retry into the same limit) is the one failure mode a rate
-// limiter's whole purpose is to prevent.
+// minRateLimitWait is what parseRateLimitReset returns for an explicit
+// non-positive header value (e.g. "0"). The gateway saying "0" is a
+// concrete answer — "already clear" — not the absence of one, so it must
+// not be treated the same as a missing/garbled header: sleeping
+// maxRateLimitWait (65s) on an explicit "0" would idle an hourly sync job
+// for a reason the gateway never gave. A small positive floor rather than 0
+// outright still guarantees do()'s single retry is not fired back-to-back
+// into the same window.
+const minRateLimitWait = 1 * time.Second
+
+// parseRateLimitReset reads rateLimitResetHeader's value.
+//   - Missing or unparsable: treated as "wait the full cap"
+//     (maxRateLimitWait) — the conservative reading, since the alternative
+//     (wait 0 and immediately retry into the same limit) is the one
+//     failure mode a rate limiter's whole purpose is to prevent, and there
+//     is no concrete number here to trust instead.
+//   - An explicit zero or negative value: treated as minRateLimitWait, not
+//     the cap — see minRateLimitWait's own comment.
+//   - Any other positive value: used as given, capped at maxRateLimitWait.
 func parseRateLimitReset(raw string) time.Duration {
 	secs, err := strconv.Atoi(raw)
-	if err != nil || secs <= 0 {
+	if err != nil {
 		return maxRateLimitWait
+	}
+	if secs <= 0 {
+		return minRateLimitWait
 	}
 	d := time.Duration(secs) * time.Second
 	if d > maxRateLimitWait {
@@ -533,8 +600,10 @@ func (c *Client) doOnce(ctx context.Context, rpc string, reqBody, respBody any) 
 		return ErrTokenInvalid
 	case resp.StatusCode != http.StatusOK:
 		var wErr wireError
-		if json.Unmarshal(body, &wErr) == nil && wErr.Description == tokenInvalidDescription {
-			return ErrTokenInvalid
+		if json.Unmarshal(body, &wErr) == nil {
+			if n, convErr := wErr.Description.Int64(); convErr == nil && n == tokenInvalidDescription {
+				return ErrTokenInvalid
+			}
 		}
 		return fmt.Errorf("tinvest: %s: status %d: %s", rpc, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
