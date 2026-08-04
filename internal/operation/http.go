@@ -107,12 +107,19 @@ func writeError(w http.ResponseWriter, err error) {
 // than left to be inferred from in_base coming back null.
 //
 // It is the journal's twin of portfolio.hasUndatedLots, and it is here for the
-// same reason: null has two causes and they are not the same news. A missing fx
-// rate is a gap the backfill job closes on its own; an unrecorded purchase date
-// never resolves. On a journal row the difference is sharper than on a position
-// — a transfer's own date usually HAS a rate — so a screen that says "no rate
-// for the operation's date" over this case names a cause that is not the cause
-// and promises a number that will never come.
+// same reason: null has several causes and they are not the same news. A missing
+// fx rate is a gap the backfill job closes on its own; an unrecorded purchase
+// date never resolves. On a journal row the difference is sharper than on a
+// position — a transfer's own date usually HAS a rate — so a screen that says
+// "no rate for the operation's date" over this case names a cause that is not
+// the cause and promises a number that will never come.
+//
+// inBaseGap draws that line finer still, separating a missing rate for the
+// operation's own date from one for a PURCHASE date (#79), and it is the field a
+// journal row is captioned from. This one stays because it answers a different
+// question — is amount_minor a cost basis with unknown dates? — for every
+// response that returns an operation, including the two that convert nothing and
+// publish no gap at all.
 //
 // Only a transfer can be in this state. Every other operation's amount is money
 // that moved on the day the row is dated, which is a date it always has.
@@ -281,6 +288,89 @@ func (h *Handler) rateFor(ctx context.Context, currency, baseCurrency string, on
 	return rl
 }
 
+// inBaseGap names WHICH TERM stopped an operation's whole in_base object, and
+// is what the contract's Operation.in_base_gap publishes.
+//
+// It is the journal's twin of portfolio.inBaseGap and names terms for the same
+// reason: there is exactly one operation here, and the terms are the very
+// figures standing side by side in its row. The vocabulary differs because the
+// terms do — a journal row's amount is either money that moved on its own date
+// or a cost basis assembled from purchases on other days, and those are the two
+// kinds of date whose rate can be missing.
+type inBaseGap uint8
+
+const (
+	// inBaseStruck: nothing was missing; there is an object.
+	inBaseStruck inBaseGap = iota
+	// inBaseSameCurrency: the operation is already denominated in the base
+	// currency, so there is no object and nothing to explain either — its own
+	// amounts ARE the base-currency ones. Named separately from inBaseStruck
+	// purely for readability at the call site (see operationInBase's early
+	// return): nothing downstream tells the two apart — apiInBaseGap maps both
+	// to "no cause published" and handleListByAccount separates "struck" from
+	// "nothing to convert" by checking the *OperationInBase pointer, never this
+	// value.
+	inBaseSameCurrency
+	// inBaseUndatedLot: the amount is the cost basis of a transferred parcel
+	// and at least one piece of it does not know when it was bought (see
+	// amountTerms). The one member that never resolves on its own.
+	inBaseUndatedLot
+	// inBaseNoRateOperationDate: the amount is money that moved on the day the
+	// row is dated, and the fx table has no rate for that day nor for any
+	// earlier one.
+	inBaseNoRateOperationDate
+	// inBaseNoRateLotDate: the amount is a basis assembled from a stored
+	// breakdown whose every piece IS dated, and the fx table has no rate for
+	// one of those PURCHASE days nor for any earlier one. The transfer's own
+	// day is not the day at issue and usually has a rate — it is just not one
+	// that may value shares bought on other days (#79).
+	inBaseNoRateLotDate
+)
+
+// apiInBaseGap maps a gap onto the contract's vocabulary. ok is false for the
+// two members that are not gaps at all (inBaseStruck, inBaseSameCurrency),
+// which publish no cause: one has a figure and the other has nothing to
+// convert, and the client tells those apart by comparing the operation's
+// currency with the base one.
+//
+// EXACTLY ONE CAUSE IS EVER PUBLISHED, and the order is load-bearing in one
+// place only. inBaseUndatedLot is settled before any rate is asked for (see
+// operationInBase), so a row that has both an undated piece and an unreachable
+// fx table reports the piece — the one cause no backfill will ever close, and
+// therefore the one that does not promise a figure that is not coming. The two
+// no-rate members need no order between them: they cannot both arise on one
+// row, because an amount is either money that moved on the operation's own date
+// or a basis assembled from a stored breakdown, never both, so its terms are
+// all dated the one way or all the other (see amountTerms).
+func apiInBaseGap(g inBaseGap) (apitypes.OperationInBaseGap, bool) {
+	switch g {
+	case inBaseUndatedLot:
+		return apitypes.OperationInBaseGapUndatedLot, true
+	case inBaseNoRateOperationDate:
+		return apitypes.OperationInBaseGapNoRateOperationDate, true
+	case inBaseNoRateLotDate:
+		return apitypes.OperationInBaseGapNoRateLotDate, true
+	default:
+		return "", false
+	}
+}
+
+// rateDate is one date this conversion needs an fx rate for, carrying the gap
+// to publish if the fx table cannot reach it.
+//
+// THE GAP TRAVELS WITH THE DATE RATHER THAN BEING WORKED OUT BESIDE THE
+// FAILURE, which is the whole point of the second field. Whoever chooses the
+// date knows what kind of date it is — the day the money moved, or the day a
+// piece of a parcel was bought — and that is exactly what the caption has to
+// say. Deciding it again at the lookup, from the operation's type or from
+// whether a breakdown exists, would be a second computation of one answer, and
+// this codebase's own history says those drift: the caption would then name one
+// cause while the figure is missing for another.
+type rateDate struct {
+	on  time.Time
+	gap inBaseGap
+}
+
 // datedMinor is one amount denominated in the operation's own currency,
 // together with the date whose fx rate values it. An ordinary operation is a
 // single such amount dated on the day it happened; a transfer carrying a
@@ -289,7 +379,7 @@ func (h *Handler) rateFor(ctx context.Context, currency, baseCurrency string, on
 // way and for the same reason.
 type datedMinor struct {
 	minor int64
-	on    time.Time
+	date  rateDate
 }
 
 // amountTerms decides what an operation's amount_minor is a sum OF, for the
@@ -368,7 +458,7 @@ type datedMinor struct {
 // either leg: a breakdown that ever drifted from its sum would fail loudly
 // on the receiver's positions screen while silently misleading every reader
 // of the journal, on both accounts, forever.
-func amountTerms(o Operation) (terms []datedMinor, headline time.Time, ok bool, err error) {
+func amountTerms(o Operation) (terms []datedMinor, headline rateDate, ok bool, err error) {
 	if len(o.TransferLots) == 0 {
 		if o.Type == TypeTransferIn || o.Type == TypeTransferOut {
 			// No breakdown at all: the basis was given by hand, or the
@@ -380,12 +470,16 @@ func amountTerms(o Operation) (terms []datedMinor, headline time.Time, ok bool, 
 			// to o.OccurredOn here would value that same undated basis at a
 			// rate the position built from it refuses to use. ok is false, on
 			// both legs, for the same reason a dateless piece below is false.
-			return nil, time.Time{}, false, nil
+			return nil, rateDate{}, false, nil
 		}
-		return []datedMinor{{minor: o.AmountMinor, on: o.OccurredOn}}, o.OccurredOn, true, nil
+		// The one term of an ordinary row, dated on the day its money moved:
+		// a missing rate for it is a missing rate for the operation's own date,
+		// which is the only row where that sentence is the true one.
+		own := rateDate{on: o.OccurredOn, gap: inBaseNoRateOperationDate}
+		return []datedMinor{{minor: o.AmountMinor, date: own}}, own, true, nil
 	}
 	if err := portfolio.CheckTransferLots(o); err != nil {
-		return nil, time.Time{}, false, err
+		return nil, rateDate{}, false, err
 	}
 	terms = make([]datedMinor, 0, len(o.TransferLots))
 	for _, pc := range o.TransferLots {
@@ -403,11 +497,15 @@ func amountTerms(o Operation) (terms []datedMinor, headline time.Time, ok bool, 
 			// these same pieces goes null for the identical reason (see
 			// portfolio.Handler.positionInBase), so the two screens agree about
 			// what they do not know.
-			return nil, time.Time{}, false, nil
+			return nil, rateDate{}, false, nil
 		}
-		terms = append(terms, datedMinor{minor: pc.CostMinor, on: *pc.AcquiredOn})
-		if len(terms) == 1 || pc.AcquiredOn.After(headline) {
-			headline = *pc.AcquiredOn
+		// Every piece of a parcel is dated by the day it was BOUGHT, so a
+		// missing rate for any of them is a missing rate for a purchase date —
+		// never for the transfer's own, which is not asked about here at all.
+		bought := rateDate{on: *pc.AcquiredOn, gap: inBaseNoRateLotDate}
+		terms = append(terms, datedMinor{minor: pc.CostMinor, date: bought})
+		if len(terms) == 1 || bought.on.After(headline.on) {
+			headline = bought
 		}
 	}
 	return terms, headline, true, nil
@@ -439,13 +537,23 @@ func amountTerms(o Operation) (terms []datedMinor, headline time.Time, ok bool, 
 // appreciation or depreciation since each purchase ends up baked into the
 // base-currency profit.
 //
-// rate_on is the date of a rate ACTUALLY used, which is o.OccurredOn only
+// rate_on is the date of a rate ACTUALLY used, which is the date asked for only
 // when a rate exists for that exact day. The CBR publishes nothing on
 // weekends and holidays, so Store.FxRateOn resolves the nearest EARLIER date
-// and Rate reports it back here; publishing o.OccurredOn instead would claim
-// a rate that never existed, and the journal's tooltip reads this field
-// verbatim. For a transfer converted piece by piece it is the newest of the
-// several rates that make up the figure — see amountTerms.
+// and Rate reports it back here; publishing the date asked for instead would
+// claim a rate that never existed. For a transfer converted piece by piece it
+// is the newest of the several rates that make up the figure — see amountTerms.
+//
+// dated_on is the other half of that pair: the date the headline rate was asked
+// FOR, which is o.OccurredOn on an ordinary row and the newest purchase in the
+// parcel on a transfer. It is published because rate_on alone cannot be read as
+// a date anything happened on, and the journal's tooltip used to read it as
+// exactly that — naming a Friday for a Saturday purchase, about a third of the
+// calendar (#80). With both dates present the screen can say which day the
+// figure belongs to AND whether its rate came from an earlier one. Before this,
+// the only anchor a client had was o.OccurredOn, which is the right one for an
+// ordinary row and meaningless on a transfer, where it names the very day whose
+// rate was deliberately not used.
 //
 // The amount and the fee are converted and rounded independently
 // (decimal.Mul(rate).Round(0), the exact step marketdata.Converter.Convert
@@ -461,7 +569,7 @@ func amountTerms(o Operation) (terms []datedMinor, headline time.Time, ok bool, 
 // follows rate_on's rate; a transfer carries no broker fee, so this term is in
 // practice zero times whatever rate names it.)
 //
-// It returns (nil, nil) — render in_base as null, the WHOLE object, never
+// It returns no object — render in_base as null, the WHOLE object, never
 // partially populated — in exactly three cases: the operation is already
 // denominated in baseCurrency (nothing to convert), no rate could be resolved
 // for one of the dates it needs nor any earlier one (marketdata.ErrNoRate), or
@@ -471,6 +579,18 @@ func amountTerms(o Operation) (terms []datedMinor, headline time.Time, ok bool, 
 // from only the pieces that happened to convert, would be worse than an
 // honest "can't convert this one".
 //
+// EVERY RETURN NAMES THE GAP AND THE OBJECT AT ONCE, which is the point of the
+// second result rather than a flag computed beside the call: the sentence the
+// reader is shown and the figure they are not shown leave this function in one
+// statement, so the caption cannot come to describe a failure other than the one
+// that happened. Mirrors portfolio.Handler.positionInBase, and for the same
+// reason. The missing-rate branches take their value from the very date the
+// lookup was made for (rateDate.gap), so the two no-rate causes are told apart
+// by what the date IS rather than by re-reading the operation afterwards —
+// which is what makes «нет курса на дату операции» impossible to print over a
+// missing PURCHASE-date rate (#79). handleListByAccount closes the loop from the
+// other end: it publishes a cause only when this function reports one.
+//
 // A non-nil error means a genuine failure — a DB error, a canceled context,
 // or (see amountTerms) a transfer's stored breakdown no longer summing to
 // the operation it describes — that the caller must surface as a request
@@ -478,38 +598,47 @@ func amountTerms(o Operation) (terms []datedMinor, headline time.Time, ok bool, 
 // from a broken breakdown. An outage read as "no rate that far back" and
 // corrupted data read as a plausible ruble figure are the same category of
 // mistake: both hide a genuine failure behind an answer that looks routine.
-func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency string, cache map[rateKey]*rateLookup) (*apitypes.OperationInBase, error) {
+// The gap returned beside such an error is inBaseStruck and means nothing: an
+// outage is not one of the causes this vocabulary describes, and
+// handleListByAccount reads the error first.
+func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency string, cache map[rateKey]*rateLookup) (*apitypes.OperationInBase, inBaseGap, error) {
 	if o.Currency == baseCurrency {
-		return nil, nil
+		return nil, inBaseSameCurrency, nil
 	}
 	terms, headline, ok, err := amountTerms(o)
 	if err != nil {
-		return nil, err
+		return nil, inBaseStruck, err
 	}
 	if !ok {
 		// The amount cannot be broken into terms that all carry a date, so
 		// there is no honest set of rates to strike it at (see amountTerms).
-		return nil, nil
+		// That is the function's ONLY reason to answer ok=false, which is what
+		// lets one constant stand for it here: a parcel — or a piece of one —
+		// that does not know when it was bought. Nothing has been asked of the
+		// fx table at this point, and that is what settles a row where both
+		// this and a missing rate are true: the cause reported is the one no
+		// backfill will close (see apiInBaseGap).
+		return nil, inBaseUndatedLot, nil
 	}
 
 	// The headline rate values the fee and supplies rate_on, so without it
 	// there is no object to publish at all.
-	rl := h.rateFor(ctx, o.Currency, baseCurrency, headline, cache)
+	rl := h.rateFor(ctx, o.Currency, baseCurrency, headline.on, cache)
 	if rl.err != nil {
 		if errors.Is(rl.err, marketdata.ErrNoRate) {
-			return nil, nil
+			return nil, headline.gap, nil
 		}
-		return nil, rl.err
+		return nil, inBaseStruck, rl.err
 	}
 
 	amount := decimal.Zero
 	for _, t := range terms {
-		tr := h.rateFor(ctx, o.Currency, baseCurrency, t.on, cache)
+		tr := h.rateFor(ctx, o.Currency, baseCurrency, t.date.on, cache)
 		if tr.err != nil {
 			if errors.Is(tr.err, marketdata.ErrNoRate) {
-				return nil, nil
+				return nil, t.date.gap, nil
 			}
-			return nil, tr.err
+			return nil, inBaseStruck, tr.err
 		}
 		amount = amount.Add(decimal.NewFromInt(t.minor).Mul(tr.rate))
 	}
@@ -524,23 +653,31 @@ func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency
 	//
 	// Each figure is rounded once and refused rather than wrapped if it does
 	// not fit an int64 of minor units (money.ErrOverflow, #27). The refusal is
-	// an error and not the (nil, nil) above: that null says this row has no
+	// an error and not one of the published gaps above: such a gap says this row has no
 	// rate yet, which the backfill fixes, and an amount too large to state is
 	// not waiting for anything.
 	amountMinor, err := money.Minor(amount)
 	if err != nil {
-		return nil, fmt.Errorf("%w: amount of operation %s in %s", err, o.ID, baseCurrency)
+		return nil, inBaseStruck, fmt.Errorf("%w: amount of operation %s in %s", err, o.ID, baseCurrency)
 	}
 	feeMinor, err := money.Minor(decimal.NewFromInt(o.FeeMinor).Mul(rl.rate))
 	if err != nil {
-		return nil, fmt.Errorf("%w: fee of operation %s in %s", err, o.ID, baseCurrency)
+		return nil, inBaseStruck, fmt.Errorf("%w: fee of operation %s in %s", err, o.ID, baseCurrency)
 	}
 	return &apitypes.OperationInBase{
 		AmountMinor: amountMinor,
 		FeeMinor:    feeMinor,
 		Currency:    baseCurrency,
 		RateOn:      rl.date.Format("2006-01-02"),
-	}, nil
+		// The date the headline rate was ASKED for, beside the date it came
+		// from. They are equal only when that very day had a rate; the CBR
+		// publishes none at weekends and holidays, so rate_on is routinely an
+		// earlier day, and a caption that read it as the day the money moved —
+		// or as the day a parcel was bought — would name a day nothing happened
+		// on (#80). Taken from the same headline the rate above was resolved
+		// for, so the pair cannot come to describe two different lookups.
+		DatedOn: headline.on.Format("2006-01-02"),
+	}, inBaseStruck, nil
 }
 
 // rateQueries enumerates every fx rate the loop in handleListByAccount is
@@ -617,9 +754,9 @@ func rateQueries(ops []Operation, baseCurrency string) []marketdata.RateQuery {
 		// terms. It does today, on both branches, which is why the seen set
 		// swallows this line's query every time; that is the redundancy being
 		// paid for, and it is a line of code, not a round trip.
-		add(o.Currency, headline)
+		add(o.Currency, headline.on)
 		for _, t := range terms {
-			add(o.Currency, t.on)
+			add(o.Currency, t.date.on)
 		}
 	}
 	return out
@@ -833,7 +970,7 @@ func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {
 	out := make([]apitypes.Operation, 0, len(ops))
 	for _, o := range ops {
 		api := toAPI(o)
-		inBase, err := h.operationInBase(r.Context(), o, sp.BaseCurrency, rates)
+		inBase, gap, err := h.operationInBase(r.Context(), o, sp.BaseCurrency, rates)
 		if err != nil {
 			family.WriteError(w, err)
 			return
@@ -842,6 +979,15 @@ func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {
 			api.InBase = nullable.NewNullableWithValue(*inBase)
 		} else {
 			api.InBase = nullable.NewNullNullable[apitypes.OperationInBase]()
+		}
+		// The cause is published only when operationInBase reports one, so a
+		// row that HAS a figure — and a row that never needed one, being in the
+		// base currency already — carries no «not converted» caption at all
+		// (see apiInBaseGap).
+		if apiGap, missing := apiInBaseGap(gap); missing {
+			api.InBaseGap = nullable.NewNullableWithValue(apiGap)
+		} else {
+			api.InBaseGap = nullable.NewNullNullable[apitypes.OperationInBaseGap]()
 		}
 		out = append(out, api)
 	}

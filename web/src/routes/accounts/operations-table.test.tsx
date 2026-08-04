@@ -142,7 +142,13 @@ describe("OperationsTable", () => {
           currency: "USD",
           amount_minor: 100_00,
           fee_minor: 5_00,
-          in_base: inBase({ amount_minor: 655_000, fee_minor: 32_750, currency: "RUB", rate_on: "2019-03-13" }),
+          in_base: inBase({
+            amount_minor: 655_000,
+            fee_minor: 32_750,
+            currency: "RUB",
+            rate_on: "2019-03-13",
+            dated_on: "2019-03-14",
+          }),
         }),
       ],
       mode: "native",
@@ -186,6 +192,7 @@ describe("OperationsTable", () => {
               fee_minor: 32_750,
               currency: "RUB",
               rate_on: "2019-03-13",
+              dated_on: "2019-03-14",
             }),
           }),
         ],
@@ -214,8 +221,10 @@ describe("OperationsTable", () => {
               amount_minor: 655_000,
               fee_minor: 32_750,
               currency: "RUB",
-              // A rate was found exactly on the operation's own date.
+              // A rate was found exactly on the operation's own date, so the
+              // date asked for and the date it came from are the same.
               rate_on: "2019-03-14",
+              dated_on: "2019-03-14",
             }),
           }),
         ],
@@ -260,6 +269,7 @@ describe("OperationsTable", () => {
               // "on the operation's date" here would be false, and the Date
               // column right next to it (14.03.2019) would contradict it.
               rate_on: "2019-03-12",
+              dated_on: "2019-03-14",
             }),
           }),
         ],
@@ -315,6 +325,9 @@ describe("OperationsTable", () => {
               // date and NOT a fallback for a missing rate: 2026-07-20 has a
               // rate of its own and it was deliberately not used.
               rate_on: "2026-06-15",
+              // The purchase this figure is dated by. Equal to rate_on here
+              // because that day had a rate of its own.
+              dated_on: "2026-06-15",
             }),
           }),
         ],
@@ -353,6 +366,7 @@ describe("OperationsTable", () => {
               fee_minor: 0,
               currency: "RUB",
               rate_on: "2026-07-20",
+              dated_on: "2026-07-20",
             }),
           }),
         ],
@@ -461,6 +475,7 @@ describe("OperationsTable", () => {
               fee_minor: 32_750,
               currency: "RUB",
               rate_on: "2019-13-99",
+              dated_on: "2019-03-14",
             }),
           }),
         ],
@@ -497,7 +512,13 @@ describe("OperationsTable", () => {
           makeOperation({
             currency: "USD",
             fee_minor: 0,
-            in_base: inBase({ amount_minor: 655_000, fee_minor: 0, currency: "RUB", rate_on: "2019-03-13" }),
+            in_base: inBase({
+              amount_minor: 655_000,
+              fee_minor: 0,
+              currency: "RUB",
+              rate_on: "2019-03-13",
+              dated_on: "2019-03-14",
+            }),
           }),
         ],
         mode: "base",
@@ -531,6 +552,7 @@ describe("OperationsTable", () => {
           fee_minor: 0,
           currency: "RUB",
           rate_on: "2026-06-15",
+          dated_on: "2026-06-15",
         }),
         ...overrides,
       });

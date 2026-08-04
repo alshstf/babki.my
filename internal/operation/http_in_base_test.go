@@ -21,6 +21,12 @@ type operationInBase struct {
 	FeeMinor    int64  `json:"fee_minor"`
 	Currency    string `json:"currency"`
 	RateOn      string `json:"rate_on"`
+	// DatedOn is the date the headline rate was asked FOR, which RateOn is only
+	// equal to when that very day had a rate (see the API contract). The two are
+	// decoded separately here because a test that read one for the other could
+	// not tell a weekend's fallback from an exact hit — the confusion #80 is
+	// about.
+	DatedOn string `json:"dated_on"`
 }
 
 // journalItem is the subset of apitypes.Operation these tests care about. A
@@ -43,6 +49,11 @@ type journalItem struct {
 	// from a stored breakdown — a fact about the operation, published here
 	// regardless of whether in_base exists at all (#67; see the API contract).
 	AssembledFromLots bool `json:"assembled_from_lots"`
+	// InBaseGap names WHICH term stopped the conversion, sharper than
+	// HasUndatedLots (#79). Decoded as a plain string rather than the generated
+	// enum so a test can assert on the wire value and would notice a rename of
+	// the constant that never reached the contract.
+	InBaseGap string `json:"in_base_gap"`
 }
 
 // listJournal fetches GET .../operations and decodes it, failing the test on
