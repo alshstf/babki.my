@@ -1,0 +1,10 @@
+{
+  "accountId": "2000000001",
+  "money": [
+    {"currency": "rub", "units": "10500", "nano": 250000000},
+    {"currency": "usd", "units": "42", "nano": 0}
+  ],
+  "blocked": [
+    {"currency": "rub", "units": "100", "nano": 0}
+  ]
+}

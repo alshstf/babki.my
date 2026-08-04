@@ -1,0 +1,24 @@
+{
+  "accounts": [
+    {
+      "id": "2000000001",
+      "type": "ACCOUNT_TYPE_TINKOFF",
+      "name": "Брокерский счет",
+      "status": "ACCOUNT_STATUS_OPEN",
+      "openedDate": "2021-03-15T00:00:00Z"
+    },
+    {
+      "id": "2000000002",
+      "type": "ACCOUNT_TYPE_TINKOFF_IIS",
+      "name": "ИИС",
+      "status": "ACCOUNT_STATUS_OPEN",
+      "openedDate": "2022-07-01T09:30:00Z"
+    },
+    {
+      "id": "2000000003",
+      "type": "ACCOUNT_TYPE_INVEST_BOX",
+      "name": "Копилка",
+      "status": "ACCOUNT_STATUS_NEW"
+    }
+  ]
+}
