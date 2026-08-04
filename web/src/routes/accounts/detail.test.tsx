@@ -509,7 +509,7 @@ describe("AccountDetailPage", () => {
               // chose and the caveat is true of it. The fixture used to be a
               // parcel with NO breakdown (has_undated_lots alone), where the
               // caveat's «её выбрало то же правило очереди» is false — see
-              // publishesACostBasis and #81.
+              // wasAssembledFromLots and #81.
               assembled_from_lots: true,
             }),
           ],

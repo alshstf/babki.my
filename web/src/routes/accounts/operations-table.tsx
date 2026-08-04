@@ -91,7 +91,7 @@ import type { CostBasisRules } from "@/api/tax-residencies";
 // a missing rate, not a missing date, just silence. Moving the field onto the
 // operation removed that hole without adding a client-side list of types — and
 // it is what lets this predicate stand on that field alone now.
-function publishesACostBasis(operation: Operation): boolean {
+function wasAssembledFromLots(operation: Operation): boolean {
   return operation.assembled_from_lots;
 }
 
@@ -101,7 +101,7 @@ function publishesACostBasis(operation: Operation): boolean {
 // and cannot disagree with it — both derive from one server-side predicate —
 // but a caption assembled from two sources is a caption that will eventually
 // be assembled from two sources that have drifted. With #81 that field stopped
-// deciding the cost basis caveat as well (see publishesACostBasis), so nothing
+// deciding the cost basis caveat as well (see wasAssembledFromLots), so nothing
 // on this screen reads it any more — it remains in the contract as a standing
 // fact about an operation, published on the create and transfer responses where
 // no gap exists at all, and this client simply has no question left that it is
@@ -551,7 +551,7 @@ export function OperationsTable({
                     // cost basis. The fee below is a broker's charge on the
                     // day it was charged, no rule picked it out of anything,
                     // and the rows around this one are money that moved.
-                    caveatTitle={publishesACostBasis(operation) ? costBasisTitle : undefined}
+                    caveatTitle={wasAssembledFromLots(operation) ? costBasisTitle : undefined}
                     testId="operation-amount"
                   />
                 </TableCell>

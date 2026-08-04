@@ -87,6 +87,49 @@ const ENUM_NAMESPACE_TO_TYPE = {
   "costBasis.perimeters": "CostBasisPerimeter",
 };
 
+/**
+ * Returns a boolean array, one entry per character of `src` (which must
+ * already be comment-blanked, so `//` and `/* ` inside a real string are not
+ * mistaken for the start of a comment), true wherever that character sits
+ * inside a string or template literal — the quote characters themselves
+ * included.
+ *
+ * Used to keep `callRe` below from mistaking a `t(...)`-shaped run of text
+ * that appears INSIDE somebody else's string literal for a real call: the
+ * key-coverage rule is about code, and a string like
+ * `"call it with t(\"positions.title\") please"` contains no call for that
+ * rule to check. Before this existed, blankComments' deliberate choice to
+ * leave literals untouched (needed so MESSAGE_READS below can still see
+ * `err["message"]` spelled out) meant such a fixture failed the build citing
+ * a call that was never there — the exact false positive this closes.
+ */
+function stringLiteralMask(src) {
+  const mask = new Array(src.length).fill(false);
+  let state = "code"; // "code" | '"' | "'" | "`"
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (state === "code") {
+      if (c === '"' || c === "'" || c === "`") {
+        state = c;
+        mask[i] = true;
+      }
+    } else {
+      mask[i] = true;
+      if (c === "\\") {
+        if (i + 1 < src.length) mask[i + 1] = true;
+        i++;
+      } else if (c === state) {
+        state = "code";
+      } else if (c === "\n" && state !== "`") {
+        // Unterminated literal: do not let it swallow the rest of the file.
+        state = "code";
+        mask[i] = false;
+      }
+    }
+  }
+  return mask;
+}
+
 // The offending call, quoted back at its author so the report names something
 // he can search for. Cut at the first ")" — a key never contains one, so for
 // every shape this reports that is the end of the call — and otherwise at one
@@ -254,9 +297,16 @@ function main() {
     // verified against the real tree, where it changes none of the 320 keys
     // found and removes all nine comment-only matches.
     const src = blankComments(readFileSync(file, "utf8"));
+    const mask = stringLiteralMask(src);
     const relPath = relative(webRoot, file);
     let m;
     while ((m = callRe.exec(src)) !== null) {
+      if (mask[m.index]) {
+        // This "t(" is text sitting inside someone else's string literal —
+        // there is no call here for the key-coverage rule to check, and
+        // reporting one would name a defect that does not exist.
+        continue;
+      }
       const line = src.slice(0, m.index).split("\n").length;
       const literal = literalRe.exec(src.slice(m.index + m[0].length));
       if (!literal) {
@@ -272,6 +322,24 @@ function main() {
       const raw = literal[1];
       const quote = raw[0];
       const inner = raw.slice(1, -1);
+
+      // A literal glued to more text with "+" (t("a" + b), t("positions." +
+      // name)) is a COMPUTED key wearing a literal's opening quote — the
+      // regex above matches only the leading segment, so without this check
+      // it either passed silently (when that segment happens to name a real
+      // key, e.g. t("positions.title" + suffix)) or was reported as a
+      // missing key for a fragment nobody meant as one (e.g. "positions."
+      // from t("positions." + name)). Both are wrong for the same reason:
+      // the key is not this literal, so neither "found" nor "missing" is a
+      // question this script can answer, and it belongs with the other
+      // unverifiable shapes instead.
+      const afterLiteral = src.slice(m.index + m[0].length + raw.length).trimStart();
+      if (afterLiteral.startsWith("+")) {
+        unverifiable.push(
+          `${relPath}:${line}: ${callExcerpt(src, m.index)} — the key is built with string concatenation, so its coverage cannot be checked; use a literal key or the verified t(\`namespace.\${expr}\`) shape`,
+        );
+        continue;
+      }
 
       if (quote === "`" && inner.includes("${")) {
         // Dynamic key: only support the `namespace.${expr}` shape used in
