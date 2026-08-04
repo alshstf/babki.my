@@ -361,9 +361,11 @@ const inventedQuoteDateMigration = 13
 // provider stamped a quote with the caller's clock while the price it carried
 // was the previous session's, so the stored date named a day the price does not
 // belong to. Most such rows heal by themselves — the next refresh overwrites
-// them — but an instrument that STOPS being quoted is never written again, and
-// the owner holds exactly that shape in his frozen FinEx and SPB paper. Its row
-// would name the wrong day for as long as the database exists.
+// them — but an instrument that STOPS being quoted is never written again, so
+// its row would name the wrong day for as long as the database exists. The
+// ordinary way into that shape is a bond redeemed off TQOB or TQCB, or a share
+// delisted from TQBR — not the owner's frozen FinEx and SPB paper, which this
+// provider has never priced at all (see the migration's own comment).
 //
 // The migration deletes every quote the moex provider wrote, and this pins both
 // halves of that: the provider's rows go, and rows from any other source stay.

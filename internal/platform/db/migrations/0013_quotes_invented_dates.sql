@@ -14,9 +14,17 @@
 -- is overwritten. But an instrument that STOPS being quoted is never written
 -- again — the job stores nothing for a ticker it gets no price for and deletes
 -- nothing — so its row survives with the invented date for as long as this
--- database exists. That is not a hypothetical: the owner holds frozen FinEx and
--- SPB paper, which is precisely that shape, and the positions screen would
--- caption it «Цена на …» with the wrong day until the end of time.
+-- database exists, and the positions screen would caption it «Цена на …» with
+-- the wrong day until the end of time.
+--
+-- That shape is ordinary rather than exotic: a bond redeemed off TQOB or TQCB,
+-- a share delisted from TQBR. Thousands of bond issues turn over on those two
+-- boards. It is NOT the owner's frozen FinEx and SPB paper, which an earlier
+-- draft of this comment named — no version of this provider has ever priced
+-- those: it queries four boards (TQBR, TQOB, TQCB, TQRD), FinEx funds are
+-- listed only on boards ISS reports as not traded and which return no rows at
+-- all, and SPB-listed paper is not on MOEX ISS in any form. Those positions
+-- show no price today and will show none after this migration.
 --
 -- WHY ALL OF THEM AND NOT JUST THE GUILTY ONES. Because there is no way to tell
 -- them apart. The only evidence of the bug is the date itself, and an invented
