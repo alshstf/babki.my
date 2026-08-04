@@ -60,10 +60,21 @@ function rowGapTitle(t: (key: string) => string, gap: InBaseGap | null): string 
       // The contract publishes a cause whenever in_base is null and the
       // currency differs from the base one, so a row with a marker and no
       // cause should not occur. It is not left to crash or to say nothing:
-      // the general phrase is vague but true — some rate is missing
-      // somewhere — and it is what an older server's payload deserves.
+      // the general phrase says only what the payload itself shows — the
+      // base-currency figures were withheld — and it is what an older
+      // server's payload deserves.
       return t("positions.notConverted");
     default:
+      // The other way to reach that phrase, and the one that decided how it
+      // is worded (#105). A server NEWER than this build sends a value outside
+      // the union above; the sentence shown then may claim nothing about the
+      // cause, because not knowing the cause is the very condition that brings
+      // it here. «Нет курса», which is what it used to say, claims exactly
+      // that — and would be false of a value shaped like `undated_lot`, which
+      // is in TODAY's enum and is about a date nobody recorded rather than
+      // about a rate. So a client one release behind a server that adds
+      // another date-shaped cause would caption it «нет курса»: #66's defect,
+      // reappearing through the path built to prevent it.
       return unnameableGap(gap, t("positions.notConverted"));
   }
 }

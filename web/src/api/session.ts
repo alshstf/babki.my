@@ -30,20 +30,38 @@ export function useSetupStatus() {
   });
 }
 
+// useLogin trades a username and a password for a session.
+//
+// It runs with networkMode "always" for the same reason useLogout does, and
+// against the same defect: react-query's default, networkMode "online", PAUSES
+// a mutation while the browser reports itself offline. Nothing is sent, nothing
+// fails, isError stays false — so the form's alert has nothing to show — and
+// isPending stays true, which disables the button that would try again. The
+// reader presses «Войти», sees nothing happen and nothing said, and cannot tell
+// a dead connection from a slow one; then, whenever the connection returns, the
+// held request goes out and the app signs in on its own, long after anyone
+// asked. Signing in is worth only what it is worth AT THE MOMENT it is asked
+// for, so it is attempted whatever the browser believes about the network — a
+// belief that is wrong behind a captive portal and wrong again on a connection
+// that is up but going nowhere — and a dead connection becomes an ordinary
+// failure the screen already knows how to report.
+//
+// The failure is raised as an ApiError so the form can tell the ONE refusal
+// this endpoint declares (401 — the credentials were wrong) from everything
+// else, by status rather than by the sentence the server happened to write. It
+// used to raise a bare Error and the form captioned every failure «Неверный
+// логин или пароль», which for a dead connection or a broken server sends the
+// reader to change a password that was never wrong.
 export function useLogin() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   return useMutation({
+    networkMode: "always",
     mutationFn: async (body: { username: string; password: string }) => {
       const { data, error, response } = await api.POST("/api/v1/auth/login", {
         body,
       });
-      if (!data) {
-        throw new Error(
-          (error as { error?: string } | undefined)?.error ??
-            `login failed: ${response.status}`,
-        );
-      }
+      if (!data) throw apiError(response, error);
       return data;
     },
     onSuccess: (data) => {
