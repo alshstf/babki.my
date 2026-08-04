@@ -30,6 +30,15 @@ function makeSummary(overrides: Partial<Summary> = {}): Summary {
   };
 }
 
+// The stale-rates icon's tooltip, pinned in full. It is a claim about
+// Summary.rates_on, and what that field IS decides what the sentence may say:
+// the OLDEST fx rate date used across every currency the total was converted
+// from (ConvertMany in internal/marketdata/converter.go keeps the minimum), on
+// a total that is struck one currency at a time. The singular «курс от …» it
+// used to say described a single rate the server never claimed to have used.
+const RATES_ON =
+  "Валюты пересчитаны каждая по своему курсу, и самый старый из этих курсов — от 20.07.2026";
+
 describe("SummaryCards", () => {
   it("shows the total with no context row when everything converted and rates are fresh", () => {
     const summary = makeSummary();
@@ -39,7 +48,7 @@ describe("SummaryCards", () => {
       norm(formatMinorCompact(summary.total_in_base_minor!, summary.base_currency)),
     );
     expect(screen.queryByText(/не учтены/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/курс от/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/курс/)).not.toBeInTheDocument();
     // Fresh rates -> no stale-rates indicator icon at all.
     expect(screen.queryByTestId("summary-rates-stale-icon")).not.toBeInTheDocument();
   });
@@ -53,15 +62,48 @@ describe("SummaryCards", () => {
   it("shows the rates date only in the stale-rates icon's tooltip, not as text", () => {
     wrap(<SummaryCards summary={makeSummary({ rates_on: "2026-07-20" })} mode="native" />);
 
-    expect(screen.queryByText(/курс от/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/20\.07\.2026/)).not.toBeInTheDocument();
     const icon = screen.getByTestId("summary-rates-stale-icon");
-    expect(icon).toHaveAttribute("title", "курс от 20.07.2026");
+    expect(icon).toHaveAttribute("title", RATES_ON);
+  });
+
+  // #109.3. Summary.rates_on is the date of the OLDEST rate used across every
+  // converted currency — ConvertMany keeps the minimum
+  // (internal/marketdata/converter.go), and the total is struck from one rate
+  // per currency, not from one rate. «курс от 20.07.2026» named a single rate
+  // that does not exist: on a screen with dollars, euros and tenge behind the
+  // total, three rates stand behind it and this date belongs to whichever of
+  // them is furthest back. The reader was left to conclude the whole total was
+  // valued on that day, which understates how current it is and, worse, is a
+  // claim the server never made.
+  it("says the named rate is the oldest of several, not the one rate behind the total", () => {
+    wrap(
+      <SummaryCards
+        summary={makeSummary({
+          totals: [
+            { currency: "RUB", assets_minor: 100_000, liabilities_minor: 0, net_minor: 100_000 },
+            { currency: "USD", assets_minor: 200_000, liabilities_minor: 0, net_minor: 200_000 },
+            { currency: "EUR", assets_minor: 300_000, liabilities_minor: 0, net_minor: 300_000 },
+          ],
+          rates_on: "2026-07-20",
+        })}
+        mode="native"
+      />,
+    );
+
+    const title = screen.getByTestId("summary-rates-stale-icon").getAttribute("title") ?? "";
+    expect(title).toBe(RATES_ON);
+    // The two claims, each asserted on its own: that there is a rate per
+    // currency, and that the date shown is the oldest of them. Dropping
+    // either one puts the caption back to describing a single rate.
+    expect(title).toContain("каждая по своему курсу");
+    expect(title).toContain("самый старый");
   });
 
   it("hides the rates date and the stale-rates icon when rates are today or yesterday", () => {
     const today = localToday();
     wrap(<SummaryCards summary={makeSummary({ rates_on: today })} mode="native" />);
-    expect(screen.queryByText(/курс от/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/курс/)).not.toBeInTheDocument();
     expect(screen.queryByTestId("summary-rates-stale-icon")).not.toBeInTheDocument();
   });
 
@@ -109,9 +151,9 @@ describe("SummaryCards", () => {
       <SummaryCards summary={makeSummary({ rates_on: "garbage" })} mode="native" />,
     );
 
-    // Ensure the rate date fragment is not present (no "курс от" text), and
-    // no stale-rates icon either since there's no valid date to show in it.
-    expect(screen.queryByText(/курс от/)).not.toBeInTheDocument();
+    // Ensure the rate date fragment is not present (no rates wording at all),
+    // and no stale-rates icon either since there's no valid date to show in it.
+    expect(screen.queryByText(/курс/)).not.toBeInTheDocument();
     expect(screen.queryByTestId("summary-rates-stale-icon")).not.toBeInTheDocument();
   });
 

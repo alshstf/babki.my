@@ -36,6 +36,25 @@ import { InstrumentPicker } from "./instrument-picker";
 const INCOME_TYPES: OperationType[] = ["dividend", "coupon", "amortization"];
 const REQUIRES_INSTRUMENT = new Set<OperationType>(["amortization"]);
 
+// The one type this form records that the ledger does not treat as income
+// (#109). A dividend and a coupon add to Position.IncomeMinor; an
+// amortization is written as a DISPOSAL instead — the engine calls
+// p.realize() with the returned principal as proceeds and the basis it
+// retires as the released pieces, and never touches IncomeMinor (the
+// TypeAmortization branch in internal/portfolio/engine.go). So it never
+// reaches the «Доход» column of the positions table, at any size, and this
+// dialog used to be titled «Доход по инструменту» over a picker offering it.
+//
+// The remedy is a narrowing plus a sentence, not a second dialog. The title
+// now says «Выплата», which is true of all three — a dividend, a coupon and a
+// return of principal are all money the issuer pays out — and the note below
+// appears for the one type whose destination would otherwise be guessed
+// wrong. It says where the entry GOES rather than what it will be worth: an
+// amortization's result in the position's own currency is the excess over
+// whatever basis is left, which is usually zero, so promising a figure would
+// be its own false caption.
+const NOT_INCOME = new Set<OperationType>(["amortization"]);
+
 export function IncomeDialog({
   open,
   onOpenChange,
@@ -112,6 +131,14 @@ export function IncomeDialog({
                 ))}
               </SelectContent>
             </Select>
+            {NOT_INCOME.has(type) && (
+              <p
+                data-testid="income-amortization-note"
+                className="text-xs text-muted-foreground"
+              >
+                {t("income.amortizationNote")}
+              </p>
+            )}
           </div>
           <div className="grid gap-2">
             <div className="flex items-center justify-between">

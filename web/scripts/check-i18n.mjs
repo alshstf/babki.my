@@ -9,6 +9,18 @@
 //    a missing translation for a valid backend enum value is caught even though
 //    the key itself isn't a static string literal.
 //
+//    AND A t() CALL WHOSE KEY THIS SCRIPT CANNOT READ IS A FAILURE, not a
+//    silence. It used to match only calls that OPEN with a quote, so
+//    `t(cond ? "a" : "b")`, `t(key)` and `t("a" + b)` produced no finding of
+//    any kind — no missing key, no warning — and the coverage of those keys
+//    simply stopped being checked with nothing saying so. Four call sites
+//    already carry a comment claiming literal keys are "the only shape
+//    scripts/check-i18n.mjs can verify"; that was a convention four authors
+//    kept by hand, and this is it enforced. The escape hatch for a genuinely
+//    dynamic key is the `namespace.${expr}` shape above, which IS verified —
+//    so the rule is "write the key in a shape that can be checked", never
+//    "do not compute keys".
+//
 // 2. THE SERVER'S OWN WORDS. See checkErrorTextInMarkup below — key coverage
 //    says nothing about a string that reaches the markup without a key at all,
 //    and that is exactly how English got onto four screens (#95).
@@ -74,6 +86,17 @@ const ENUM_NAMESPACE_TO_TYPE = {
   "costBasis.methods": "CostBasisMethod",
   "costBasis.perimeters": "CostBasisPerimeter",
 };
+
+// The offending call, quoted back at its author so the report names something
+// he can search for. Cut at the first ")" — a key never contains one, so for
+// every shape this reports that is the end of the call — and otherwise at one
+// line or 60 characters, whichever comes first, with an ellipsis to say the
+// text was cut rather than that the call ends there.
+function callExcerpt(src, index) {
+  const line = src.slice(index, index + 60).split("\n")[0];
+  const close = line.indexOf(")");
+  return close >= 0 ? line.slice(0, close + 1) : `${line}…`;
+}
 
 function extractEnumMembers(schemaSrc, typeName) {
   const re = new RegExp(`\\b${typeName}:\\s*((?:"[^"]*"\\s*\\|?\\s*)+);`);
@@ -212,18 +235,41 @@ function main() {
   const schemaSrc = readFileSync(schemaPath, "utf8");
 
   const files = collectSourceFiles(srcRoot);
-  // Matches t("literal"), t('literal') and t(`literal`) / t(`prefix.${expr}`)
-  const callRe = /\bt\(\s*(`[^`]*`|"[^"]*"|'[^']*')/g;
+  // Every t() call, whatever its argument turns out to be — the two regexes
+  // are split precisely so that "the argument is not a literal" is a case this
+  // script reaches rather than a match it never makes.
+  const callRe = /\bt\(\s*/g;
+  // Matches t("literal"), t('literal') and t(`literal`) / t(`prefix.${expr}`),
+  // anchored at the argument's first character.
+  const literalRe = /^(`[^`]*`|"[^"]*"|'[^']*')/;
 
   const missing = [];
-  const unresolved = [];
+  const unverifiable = [];
 
   for (const file of files) {
-    const src = readFileSync(file, "utf8");
+    // Comments are not code, and a comment DESCRIBING an unverifiable call is
+    // exactly what four files carry — the same reason checkErrorTextInMarkup
+    // blanks them before applying its own rule. Blanking preserves length and
+    // newlines, so both the keys and the line numbers below are unaffected;
+    // verified against the real tree, where it changes none of the 320 keys
+    // found and removes all nine comment-only matches.
+    const src = blankComments(readFileSync(file, "utf8"));
     const relPath = relative(webRoot, file);
     let m;
     while ((m = callRe.exec(src)) !== null) {
-      const raw = m[1];
+      const line = src.slice(0, m.index).split("\n").length;
+      const literal = literalRe.exec(src.slice(m.index + m[0].length));
+      if (!literal) {
+        // The key is computed, so nothing here can say whether ru.json has it.
+        // Reported rather than skipped: an unchecked key is the state this
+        // script exists to make impossible, and passing over it in silence
+        // leaves the hole with nothing to find it by.
+        unverifiable.push(
+          `${relPath}:${line}: ${callExcerpt(src, m.index)} — the key is not a literal, so its coverage cannot be checked; use a literal key (a switch or an if over literals) or the verified t(\`namespace.\${expr}\`) shape`,
+        );
+        continue;
+      }
+      const raw = literal[1];
       const quote = raw[0];
       const inner = raw.slice(1, -1);
 
@@ -233,7 +279,15 @@ function main() {
         // and nothing else).
         const dynMatch = inner.match(/^([a-zA-Z0-9_.]*)\.\$\{[^}]*\}$/);
         if (!dynMatch) {
-          unresolved.push(`${relPath}: t(${raw}) — cannot statically verify this key`);
+          // A template with an interpolation somewhere other than at the end
+          // of a dotted prefix. Same standing as a non-literal argument above,
+          // and reported in the same list: the key cannot be resolved here, so
+          // nothing can say whether ru.json holds it. It used to be a warning,
+          // which is what an unchecked key looks like when nobody reads the
+          // build log.
+          unverifiable.push(
+            `${relPath}:${line}: t(${raw}) — only the t(\`namespace.\${expr}\`) shape can be resolved statically`,
+          );
           continue;
         }
         const ns = dynMatch[1];
@@ -264,10 +318,12 @@ function main() {
     }
   }
 
-  if (unresolved.length) {
-    console.warn("Could not statically verify the following t() calls (manual check needed):");
-    for (const line of unresolved) console.warn(`  ${line}`);
-    console.warn("");
+  if (unverifiable.length) {
+    console.error(
+      `i18n:check failed — ${unverifiable.length} t() call(s) whose key cannot be checked:`,
+    );
+    for (const line of unverifiable) console.error(`  ${line}`);
+    process.exit(1);
   }
 
   if (missing.length) {
@@ -284,7 +340,7 @@ function main() {
   }
 
   console.log(
-    `i18n:check OK — verified keys across ${files.length} files against ru.json, and no .tsx reads an error's message.`,
+    `i18n:check OK — every t() key across ${files.length} files is one this script could read and ru.json holds, and no .tsx reads an error's message.`,
   );
 }
 

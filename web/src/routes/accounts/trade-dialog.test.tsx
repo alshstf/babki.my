@@ -404,7 +404,7 @@ describe("TradeDialog: a fee too large to record", () => {
     expect(screen.getByRole("button", { name: "Покупка" })).toBeDisabled();
   });
 
-  it("names the largest fee it would take, in the account's currency", async () => {
+  it("names the largest fee it would take, in the currency the fee is recorded in", async () => {
     await openWith(share());
     typeInto(feeField(), "10000000000000.01"); // one kopeck past the bound
 
@@ -413,6 +413,42 @@ describe("TradeDialog: a fee too large to record", () => {
       " ",
     );
     expect(hint).toContain("10 000 000 000 000 ₽");
+  });
+
+  // #109.4. The fee travels on the operation this dialog posts, and that
+  // operation's currency follows the INSTRUMENT, never the account — a
+  // USD-denominated fund is perfectly ordinary inside a RUB brokerage account,
+  // and submit() sends `currency: instrument.currency` for exactly that reason
+  // (a position's currency is fixed by its first operation). The ceiling was
+  // formatted in the account's currency all the same, so the field refused a
+  // dollar fee by naming a limit in rubles: the right number wearing the wrong
+  // sign, which on a screen about money is a different number.
+  it("names the ceiling in the instrument's currency, not the account's", async () => {
+    await openWith(share({ currency: "USD" }));
+    typeInto(feeField(), "10000000000000.01");
+
+    const hint = norm(screen.getByText(/Слишком большая сумма/).textContent ?? "").replace(
+      /\s/g,
+      " ",
+    );
+    expect(hint).toContain("10 000 000 000 000 $");
+    // The account is in rubles and says nothing about this fee.
+    expect(hint).not.toContain("₽");
+  });
+
+  // And when there is no instrument yet there is no currency yet either, so
+  // the sentence names none. Reachable: the fee field is enabled from the
+  // moment the dialog opens, and nothing makes the instrument picker come
+  // first. Falling back to the account's currency here would be the same
+  // wrong sign, just harder to notice.
+  it("names no currency at all while no instrument has been picked", async () => {
+    await openCatalog([share({ currency: "USD" })]);
+    typeInto(feeField(), "10000000000000.01");
+
+    const hint = norm(screen.getByText(/Слишком большая сумма/).textContent ?? "");
+    expect(hint).toContain("Комиссия записывается в валюте инструмента");
+    expect(hint).not.toContain("₽");
+    expect(hint).not.toContain("$");
   });
 
   it("still tells its author to check a fee that is not a number", async () => {

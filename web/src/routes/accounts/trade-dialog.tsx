@@ -108,6 +108,41 @@ function faceGapMessage(
   }
 }
 
+// What the fee field says when the sum typed into it is past the bound, and
+// the whole of it is WHICH CURRENCY the bound is named in (#109).
+//
+// The bound itself is currency-agnostic — MAX_AMOUNT_MINOR is 10^15 minor
+// units of whatever the operation is denominated in, and the server refuses
+// past the same figure (money.MaxAmountMinor) — so naming a currency here is a
+// claim about the fee, not about the limit. The fee travels on the operation
+// this dialog posts, and that operation's currency follows the INSTRUMENT
+// rather than the account: a USD-denominated fund inside a RUB brokerage
+// account is ordinary, and submit() sends `currency: instrument.currency`
+// because a position's currency is fixed by its first operation. Formatting
+// the ceiling in the account's currency therefore refused a dollar fee by
+// naming a limit in rubles — the right number wearing the wrong sign, which on
+// a screen about money is a different number.
+//
+// With no instrument picked there IS no currency yet, and the second sentence
+// says so instead of guessing one. Reachable: the fee field is enabled from
+// the moment the dialog opens and nothing forces the picker to come first. The
+// account's currency is available and is exactly the wrong answer; a
+// currency-free rendering of the number would leave the reader to guess
+// whether it was units or kopecks. So the message names the number's owner
+// instead — pick an instrument and the limit will be named in its currency.
+//
+// Two literal keys rather than one call with a computed key, so both stay
+// verifiable by scripts/check-i18n.mjs.
+function feeCeilingMessage(
+  t: (key: string, opts?: Record<string, string>) => string,
+  instrument: Instrument | null,
+): string {
+  if (!instrument) return t("trade.feeTooLargeNoInstrument");
+  return t("common.amountTooLarge", {
+    max: formatMinorCompact(MAX_AMOUNT_MINOR, instrument.currency),
+  });
+}
+
 export function TradeDialog({
   open,
   onOpenChange,
@@ -372,9 +407,7 @@ export function TradeDialog({
             {fee !== "" && !feeValid && (
               <p className="text-xs text-red-500">
                 {feeRefusal === "tooLarge"
-                  ? t("common.amountTooLarge", {
-                      max: formatMinorCompact(MAX_AMOUNT_MINOR, account.currency),
-                    })
+                  ? feeCeilingMessage(t, instrument)
                   : t("trade.badFee")}
               </p>
             )}
