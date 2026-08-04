@@ -41,10 +41,11 @@ function StartupNotice({ message, onRetry }: { message: string; onRetry?: () => 
 
 // Gate decides between setup wizard, login and the app shell.
 //
-// Two answers are needed for that: whether this instance has been set up, and
-// whether this browser is signed in. Until both are in, the gate shows that it
-// is waiting — it may not fall back to a default, because every default here is
-// a claim about the server. `setup_needed ?? false` was one: it said "no setup
+// Up to two answers are needed for that: whether this instance has been set up
+// and — only if it has been — whether this browser is signed in. Until the
+// answer it actually needs is in, the gate shows that it is waiting; it may not
+// fall back to a default, because every default here is a claim about the
+// server. `setup_needed ?? false` was one: it said "no setup
 // needed" about an instance nobody had managed to ask, and a brand-new instance
 // answered a login form for an account that does not exist yet, with nothing on
 // screen to suggest the setup wizard was the screen wanted (#88).
@@ -61,31 +62,35 @@ export function Gate({
   const setupStatus = useSetupStatus();
   const session = useSession();
 
-  // Nothing has answered yet — and the two ways of not having answered are not
-  // the same news. "paused" is react-query holding a request because the
+  // The two questions are asked in order, because the answer to the first can
+  // make the second beside the point — and a gate that waits for, or gives up
+  // over, an answer it does not need is guessing in its own way: it says it does
+  // not know when it does.
+
+  // FIRST: has this instance been set up? Until that is in, no screen here can
+  // be shown honestly. "paused" is react-query holding the request because the
   // browser reports itself offline (networkMode "online", the default): it has
   // not been sent, no server has failed, and it will go out on its own when the
   // connection returns. It is also invisible to isLoading, which is
   // isPending && isFetching and therefore FALSE while paused — so the gate this
   // one replaced fell straight past it into the guess.
-  if (setupStatus.isPending || session.isPending) {
-    const paused =
-      setupStatus.fetchStatus === "paused" || session.fetchStatus === "paused";
-    return paused ? <StartupNotice message={t("app.startupOffline")} /> : <FullScreenLoader />;
+  if (setupStatus.isPending) {
+    return setupStatus.fetchStatus === "paused" ? (
+      <StartupNotice message={t("app.startupOffline")} />
+    ) : (
+      <FullScreenLoader />
+    );
   }
 
-  // Read out rather than inferred from the checks above: react-query's result
-  // is a union discriminated by `status`, and one `||` over two of them narrows
-  // neither. Past the pending branch, an undefined here means the query failed
-  // (useSetupStatus throws unless the body arrived), which is exactly what this
-  // branch is for. A failed session query lands here too: "we could not ask
-  // whether you are signed in" is not "you are not signed in", and answering it
-  // with a login form would be the same guess in the other direction.
+  // Read out rather than inferred from the check above: react-query's result is
+  // a union discriminated by `status`, and the pending check narrows it only
+  // for this exact expression. Past it, an undefined means the query failed
+  // (useSetupStatus throws unless the body arrived).
   const status = setupStatus.data;
-  if (status === undefined || session.isError) {
+  if (status === undefined) {
     return (
       <StartupNotice
-        message={t("app.startupUnknown")}
+        message={t("app.setupUnknown")}
         onRetry={() => {
           void setupStatus.refetch();
           void session.refetch();
@@ -94,11 +99,45 @@ export function Gate({
     );
   }
 
-  const setupNeeded = status.setup_needed;
+  // An instance nobody has set up yet has exactly one screen it can show: the
+  // wizard. There is no account to sign in to, so whether this browser is
+  // signed in is a question with no bearing — and the gate must not stall, or
+  // give up, over the answer to it. Reaching /setup ITSELF is the one case that
+  // renders rather than redirects.
+  if (status.setup_needed) {
+    return wants === "setup" ? <>{children}</> : <Navigate to="/setup" />;
+  }
+
+  // SECOND: is this browser signed in? Only now does it matter — and only now
+  // may not knowing stop anything.
+  if (session.isPending) {
+    return session.fetchStatus === "paused" ? (
+      <StartupNotice message={t("app.startupOffline")} />
+    ) : (
+      <FullScreenLoader />
+    );
+  }
+
+  // "We could not ask whether you are signed in" is not "you are not signed
+  // in", and answering it with a login form would be the same guess in the
+  // other direction. Only the session is asked again: the setup status has
+  // already answered.
+  if (session.isError) {
+    return (
+      <StartupNotice
+        message={t("app.sessionUnknown")}
+        onRetry={() => {
+          void session.refetch();
+        }}
+      />
+    );
+  }
+
   const authed = Boolean(session.data);
 
-  if (setupNeeded && wants !== "setup") return <Navigate to="/setup" />;
-  if (!setupNeeded && wants === "setup") return <Navigate to="/login" />;
+  // Past the branch above the instance IS set up, so the wizard has nothing
+  // left to do here whoever is asking for it.
+  if (wants === "setup") return <Navigate to="/login" />;
   if (!authed && wants === "app") return <Navigate to="/login" />;
   if (authed && wants === "login") return <Navigate to="/" />;
   return <>{children}</>;

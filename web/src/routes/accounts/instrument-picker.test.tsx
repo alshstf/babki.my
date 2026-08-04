@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react-query";
 import "@/i18n";
 import { InstrumentPicker } from "./instrument-picker";
@@ -60,6 +60,71 @@ describe("InstrumentPicker — a search that did not answer", () => {
 
     expect(await screen.findByText("Ничего не найдено")).toBeInTheDocument();
     expect(screen.queryByText(/не удалось получить список инструментов/i)).not.toBeInTheDocument();
+  });
+
+  // The three below start from an answer already on screen, which is what the
+  // first version of this fix could not see: it went offline BEFORE the first
+  // render, so there was no previous answer for the next query to inherit, and
+  // a picker keyed on `data === undefined` alone passed. useInstruments hands
+  // the previous key's rows to the next key (placeholderData: keepPreviousData),
+  // so from the second search onwards there is always something in `data`.
+  it("does not carry an empty answer over to a request the browser never sent", async () => {
+    serve(200, []);
+    renderPicker();
+    expect(await screen.findByText("Ничего не найдено")).toBeInTheDocument();
+
+    onlineManager.setOnline(false);
+    fetchMock.mockClear();
+    fireEvent.change(screen.getByPlaceholderText("Поиск инструмента"), {
+      target: { value: "SBERBANK" },
+    });
+
+    expect(await screen.findByText(/список инструментов не загружен/i)).toBeInTheDocument();
+    expect(screen.queryByText("Ничего не найдено")).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not carry an empty answer over to a search that is still in flight", async () => {
+    serve(200, []);
+    renderPicker();
+    expect(await screen.findByText("Ничего не найдено")).toBeInTheDocument();
+
+    // The refined search never comes back, so the window between the keystroke
+    // and the answer — milliseconds online, and enough of them to click
+    // «Создать инструмент» in — stays open for the assertion.
+    fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+    fireEvent.change(screen.getByPlaceholderText("Поиск инструмента"), {
+      target: { value: "SBERBANK" },
+    });
+
+    expect(await screen.findByText(/загрузка/i)).toBeInTheDocument();
+    expect(screen.queryByText("Ничего не найдено")).not.toBeInTheDocument();
+  });
+
+  it("keeps the rows of the previous search on screen while the next one is in flight", async () => {
+    // The other half of the decision: rows carried over are not a verdict, but
+    // they are real instruments and picking one is right whatever query fetched
+    // them, so they stay rather than flashing away on every keystroke.
+    serve(200, [
+      {
+        id: "11111111-1111-1111-1111-111111111111",
+        type: "share",
+        name: "Сбербанк",
+        ticker: "SBER",
+        isin: "",
+        figi: "",
+        currency: "RUB",
+      },
+    ]);
+    renderPicker();
+    expect(await screen.findByText("Сбербанк")).toBeInTheDocument();
+
+    fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+    fireEvent.change(screen.getByPlaceholderText("Поиск инструмента"), {
+      target: { value: "SBERBANK" },
+    });
+
+    expect(screen.getByText("Сбербанк")).toBeInTheDocument();
   });
 
   it("does not call a request the browser never sent «ничего не найдено»", async () => {

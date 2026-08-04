@@ -23,6 +23,14 @@ export function useInstruments(query: string) {
     // Keep the previous result list visible while a new query (e.g. each
     // keystroke in the picker's search box) is in flight, instead of
     // collapsing to a loading state and flashing the list away.
+    //
+    // What that means for whoever reads the result: the rows arrive under the
+    // NEW query key while belonging to the previous one, so `data !== undefined`
+    // no longer means "this query has answered". react-query flags them with
+    // isPlaceholderData, and the picker decides its two verdicts — «ничего не
+    // найдено» and the offline notice — off that flag rather than off `data`,
+    // because both verdicts are about the query in the box now
+    // (instrument-picker.tsx).
     placeholderData: keepPreviousData,
   });
 }

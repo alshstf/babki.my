@@ -69,6 +69,13 @@ export function AppLayout() {
                 <span className="text-sm">{session.user.display_name}</span>
                 <Badge variant="secondary">{t(`roles.${session.role}`)}</Badge>
                 <HeaderCurrencyToggle />
+                {/* Disabled only while a request is actually in flight, which
+                    is the whole of isPending now that this mutation runs with
+                    networkMode "always" (useLogout): with the default it also
+                    covered a request react-query was holding because the
+                    browser said it was offline, and that state ends only when
+                    the connection comes back — a button locked for as long as
+                    the reader has no way to try again. */}
                 <Button
                   variant="ghost"
                   size="icon"

@@ -115,6 +115,10 @@ describe("Gate — what it does before it knows", () => {
     expect(await screen.findByText(/не знает, с какого экрана начать/i)).toBeInTheDocument();
     expect(screen.queryByTestId("login-screen")).not.toBeInTheDocument();
     expect(screen.queryByTestId("setup-screen")).not.toBeInTheDocument();
+    // …and does not say the server was silent about it. The server answered
+    // this test — with a 500. The reason in a notice has to be the real reason,
+    // or the notice is the same kind of invention as the screen it prevents.
+    expect(screen.queryByText(/сервер не ответил/i)).not.toBeInTheDocument();
   });
 
   it("does not decide nobody is signed in when the session query failed", async () => {
@@ -124,8 +128,26 @@ describe("Gate — what it does before it knows", () => {
     });
     renderGate();
 
-    expect(await screen.findByText(/не знает, с какого экрана начать/i)).toBeInTheDocument();
+    // Which screen is unknown here is only the second one: whether the instance
+    // is set up HAS been answered, so the notice may not say the choice starts
+    // at «первый запуск».
+    expect(await screen.findByText(/не удалось узнать, выполнен ли вход/i)).toBeInTheDocument();
     expect(screen.queryByTestId("login-screen")).not.toBeInTheDocument();
+  });
+
+  it("still goes to the wizard when the session query failed on a fresh instance", async () => {
+    // Both answers are in, and they are not both needed: an instance with no
+    // owner yet has one screen it can show whatever the session says, because
+    // there is no account to be signed in to. Saying «не знает, с какого экрана
+    // начать» here would be a false caption over a decision already made.
+    serve({
+      "/api/v1/setup/status": { body: { setup_needed: true } },
+      "/api/v1/auth/me": { status: 500, body: { error: "internal error" } },
+    });
+    renderGate();
+
+    expect(await screen.findByTestId("setup-screen")).toBeInTheDocument();
+    expect(screen.queryByText(/не удалось узнать/i)).not.toBeInTheDocument();
   });
 
   it("does not decide anything while the browser is offline", async () => {

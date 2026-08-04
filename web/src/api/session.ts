@@ -98,10 +98,30 @@ export function useLogout() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   return useMutation({
+    // The one mutation here that may not be queued. react-query's default,
+    // networkMode "online", PAUSES a mutation while the browser reports itself
+    // offline: nothing is sent, nothing fails, isError stays false — so the
+    // banner in AppLayout has nothing to show — and isPending stays true, which
+    // disables the button that would try again. The reader clicks «Выйти», sees
+    // nothing happen and nothing said, and walks away from a session that is
+    // still open. Then, whenever the connection returns, the held request goes
+    // out and the app leaves for /login on its own, long after anyone asked.
+    //
+    // Signing out is worth only what it is worth AT THE MOMENT it is asked for,
+    // so it is attempted whatever the browser believes about the network, and a
+    // dead connection becomes an ordinary failure the screen already knows how
+    // to report. That the browser's own flag is a belief and not a fact — it is
+    // wrong behind a captive portal, and wrong again on a connection that is up
+    // but going nowhere — is the second reason to let the request decide.
+    networkMode: "always",
     mutationFn: async () => {
       const { error, response } = await api.POST("/api/v1/auth/logout");
       if (!response.ok && response.status !== 401) throw apiError(response, error);
     },
+    // Only after the server confirms. Everything this browser holds belongs to
+    // the person who just left: accounts, family, positions. Without the clear
+    // they stay in the cache, and the next person at a shared computer is shown
+    // them — rendered from memory, before any refetch can come back 401.
     onSuccess: () => {
       queryClient.clear();
       void navigate({ to: "/login" });
