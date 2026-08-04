@@ -65,12 +65,16 @@ func (c fixedRateConverter) RatesOn(context.Context, []marketdata.RateQuery) (ma
 // does not make it impossible.
 func TestMarketValueRefusesAShareValuationThatWouldWrap(t *testing.T) {
 	q := marketdata.Quote{Price: dec("100"), Currency: "USD"}
-	minor, currency, ok, err := marketValue(instrument.TypeShare, nil, nil, dec("1e15"), q)
+	minor, currency, gap, err := marketValue(instrument.TypeShare, nil, nil, dec("1e15"), q, true)
 	if !errors.Is(err, money.ErrOverflow) {
-		t.Fatalf("marketValue(share) = (%d, %q, %v), err = %v; want ErrOverflow: 1e15 shares at 100 is not an int64 of cents", minor, currency, ok, err)
+		t.Fatalf("marketValue(share) = (%d, %q, %v), err = %v; want ErrOverflow: 1e15 shares at 100 is not an int64 of cents", minor, currency, gap, err)
 	}
-	if ok {
-		t.Error("marketValue reported ok alongside the refusal; the caller would publish a wrapped figure")
+	// And no gap beside it. A refusal is a figure this server cannot state; the
+	// gaps are figures it does not have. Naming one here would let the caller
+	// caption a broken journal as absent market data — the very confusion the
+	// error is kept separate from the gap to prevent.
+	if _, named := apiMarketValueGap(gap); named {
+		t.Error("marketValue named a gap alongside the refusal; the caller would publish it as an honest absence")
 	}
 }
 
@@ -90,10 +94,10 @@ func TestMarketValueRefusesAShareValuationThatWouldWrap(t *testing.T) {
 // through money.Minor. Whichever bound moves, one of the two reddens.
 func TestMarketValuePublishesTheLargestQuantityAWriteAccepts(t *testing.T) {
 	q := marketdata.Quote{Price: dec("9223"), Currency: "USD"}
-	minor, _, ok, err := marketValue(instrument.TypeShare, nil, nil, dec("1e13"), q)
-	if err != nil || !ok {
+	minor, _, gap, err := marketValue(instrument.TypeShare, nil, nil, dec("1e13"), q, true)
+	if err != nil || gap != valuationStruck {
 		t.Fatalf("marketValue(1e13 at 9223) = (%d, %v), err = %v; want it published: a quantity the write accepts must be valuable at an ordinary quote",
-			minor, ok, err)
+			minor, gap, err)
 	}
 	if minor != 9_223_000_000_000_000_000 {
 		t.Errorf("marketValue = %d, want 9223000000000000000 cents", minor)
@@ -104,8 +108,8 @@ func TestMarketValuePublishesTheLargestQuantityAWriteAccepts(t *testing.T) {
 	// quote fits at all — so a bound loosened even slightly over there stops
 	// being the bound this test is describing.
 	q.Price = dec("9224")
-	if _, _, ok, err := marketValue(instrument.TypeShare, nil, nil, dec("1e13"), q); !errors.Is(err, money.ErrOverflow) || ok {
-		t.Errorf("marketValue(1e13 at 9224): ok = %v, err = %v; want ErrOverflow", ok, err)
+	if _, _, gap, err := marketValue(instrument.TypeShare, nil, nil, dec("1e13"), q, true); !errors.Is(err, money.ErrOverflow) || gap != valuationStruck {
+		t.Errorf("marketValue(1e13 at 9224): gap = %v, err = %v; want ErrOverflow and no gap", gap, err)
 	}
 }
 
@@ -116,12 +120,12 @@ func TestMarketValueRefusesABondValuationThatWouldWrap(t *testing.T) {
 	face := int64(1_000_000_000_000_000)
 	faceCurrency := "RUB"
 	q := marketdata.Quote{Price: dec("100"), Currency: "RUB"} // 100% of face
-	minor, currency, ok, err := marketValue(instrument.TypeBond, &face, &faceCurrency, dec("1e5"), q)
+	minor, currency, gap, err := marketValue(instrument.TypeBond, &face, &faceCurrency, dec("1e5"), q, true)
 	if !errors.Is(err, money.ErrOverflow) {
-		t.Fatalf("marketValue(bond) = (%d, %q, %v), err = %v; want ErrOverflow", minor, currency, ok, err)
+		t.Fatalf("marketValue(bond) = (%d, %q, %v), err = %v; want ErrOverflow", minor, currency, gap, err)
 	}
-	if ok {
-		t.Error("marketValue reported ok alongside the refusal")
+	if _, named := apiMarketValueGap(gap); named {
+		t.Error("marketValue named a gap alongside the refusal")
 	}
 }
 
@@ -133,17 +137,17 @@ func TestMarketValueRefusesABondValuationThatWouldWrap(t *testing.T) {
 func TestMarketValuePublishesTheLargestValuationThatFits(t *testing.T) {
 	// price * quantity * 100 == math.MaxInt64, exactly.
 	q := marketdata.Quote{Price: dec("92233720368547758.07"), Currency: "USD"}
-	minor, currency, ok, err := marketValue(instrument.TypeShare, nil, nil, dec("1"), q)
-	if err != nil || !ok {
-		t.Fatalf("marketValue at exactly maxint64 = (%d, %q, %v), err = %v; want it published", minor, currency, ok, err)
+	minor, currency, gap, err := marketValue(instrument.TypeShare, nil, nil, dec("1"), q, true)
+	if err != nil || gap != valuationStruck {
+		t.Fatalf("marketValue at exactly maxint64 = (%d, %q, %v), err = %v; want it published", minor, currency, gap, err)
 	}
 	if minor != math.MaxInt64 {
 		t.Errorf("marketValue = %d, want %d", minor, int64(math.MaxInt64))
 	}
 
 	q.Price = dec("92233720368547758.08") // one kopeck further
-	if _, _, ok, err := marketValue(instrument.TypeShare, nil, nil, dec("1"), q); !errors.Is(err, money.ErrOverflow) || ok {
-		t.Errorf("marketValue one kopeck past maxint64: ok = %v, err = %v; want ErrOverflow", ok, err)
+	if _, _, gap, err := marketValue(instrument.TypeShare, nil, nil, dec("1"), q, true); !errors.Is(err, money.ErrOverflow) || gap != valuationStruck {
+		t.Errorf("marketValue one kopeck past maxint64: gap = %v, err = %v; want ErrOverflow and no gap", gap, err)
 	}
 }
 
@@ -463,20 +467,20 @@ func TestMarketValueNeedsBothHalvesOfTheFacePair(t *testing.T) {
 		{"a face currency with no value under it", nil, &faceCurrency},
 		{"neither half recorded", nil, nil},
 	} {
-		minor, currency, ok, err := marketValue(instrument.TypeBond, tc.face, tc.currency, dec("100"), q)
+		minor, currency, gap, err := marketValue(instrument.TypeBond, tc.face, tc.currency, dec("100"), q, true)
 		if err != nil {
 			t.Errorf("marketValue with %s: err = %v, want a plain refusal to value", tc.name, err)
 		}
-		if ok || minor != 0 || currency != "" {
-			t.Errorf("marketValue with %s = (%d, %q, %v), want no valuation at all", tc.name, minor, currency, ok)
+		if gap != valuationNoFaceValue || minor != 0 || currency != "" {
+			t.Errorf("marketValue with %s = (%d, %q, %v), want no valuation at all and the gap naming the face value", tc.name, minor, currency, gap)
 		}
 	}
 
 	// And with both halves it values as usual, so the guard above is about the
 	// missing half and not about bonds.
-	minor, currency, ok, err := marketValue(instrument.TypeBond, &face, &faceCurrency, dec("100"), q)
-	if err != nil || !ok {
-		t.Fatalf("marketValue of a whole pair = (%d, %q, %v), err = %v; want it valued", minor, currency, ok, err)
+	minor, currency, gap, err := marketValue(instrument.TypeBond, &face, &faceCurrency, dec("100"), q, true)
+	if err != nil || gap != valuationStruck {
+		t.Fatalf("marketValue of a whole pair = (%d, %q, %v), err = %v; want it valued", minor, currency, gap, err)
 	}
 	// 100 bonds at 95.20% of a 1 000,00 ₽ face.
 	if minor != 9_520_000 || currency != "RUB" {

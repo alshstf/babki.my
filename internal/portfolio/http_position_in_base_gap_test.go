@@ -556,12 +556,20 @@ func TestPositionMarketValueGapNamesTheValuationCurrency(t *testing.T) {
 	}
 }
 
-// TestPositionMarketValueGapNullWhenNothingWasWithheld is the negative half:
-// the field is null on a row whose valuation converted (it was already in the
-// position's currency) and on a row that has no valuation at all. The second is
-// the case worth stating — market_value_minor is null there too, but nothing
-// was kept back, and there is no cell for a caption to sit on.
-func TestPositionMarketValueGapNullWhenNothingWasWithheld(t *testing.T) {
+// TestPositionMarketValueGapNullOnlyWhenTheValuationIsThere is the negative
+// half, and half of it stopped being negative with #78. The field is null on a
+// row whose valuation converted — it was already in the position's currency, so
+// nothing about that cell went wrong and there is nothing to explain.
+//
+// THE ROW WITH NO VALUATION IS NOT THAT CASE, and this test used to assert that
+// it was, on the ground that "nothing was kept back, and there is no cell for a
+// caption to sit on". Both halves of that ground were false: the client renders
+// a dash in that cell and captions it, and for want of a published cause the
+// caption it chose was «Нет котировки» over every empty valuation — including
+// the two kinds of row where a quote is present and is not what is missing. So
+// the unquoted row here now carries `no_quote`, which on THIS fixture — a share,
+// with a complete catalog row — is exactly what is true of it.
+func TestPositionMarketValueGapNullOnlyWhenTheValuationIsThere(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes, datedRate{earlyRateOn, "90"})
 
@@ -613,8 +621,8 @@ func TestPositionMarketValueGapNullWhenNothingWasWithheld(t *testing.T) {
 	if withoutQuote.MarketValueMinor != nil {
 		t.Fatalf("market_value_minor = %s, want null — the fixture seeds no quote for this instrument", formatMinor(withoutQuote.MarketValueMinor))
 	}
-	if withoutQuote.MarketValueGap != nil {
-		t.Errorf("market_value_gap = %s, want null: there is no valuation at all here, so nothing was kept back and there is no cell to explain",
+	if withoutQuote.MarketValueGap == nil || *withoutQuote.MarketValueGap != "no_quote" {
+		t.Errorf("market_value_gap = %s, want no_quote: the dash this row renders needs the reason it is there, and for a priced type with a complete catalog row the reason is the price",
 			gapText(withoutQuote.MarketValueGap))
 	}
 }

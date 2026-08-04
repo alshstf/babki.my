@@ -50,22 +50,37 @@ import type { CostBasisRules } from "@/api/tax-residencies";
 // bug this whole caveat exists to prevent, reintroduced by the code that
 // renders it.
 //
-// Two published fields answer, both properties of the OPERATION itself and
-// both present whether or not in_base is (see Operation.has_undated_lots and
-// Operation.assembled_from_lots in the API contract):
+// ONE published field answers: assembled_from_lots, a property of the
+// OPERATION itself and present whether or not in_base is (see the API
+// contract). It says the amount was built piece by piece out of the purchases
+// behind it, each at its own day's rate — and the pieces are the ones the
+// source account's queue released, so "a rule picked this out of earlier
+// purchases" is precisely what it reports. The server sets it from the presence
+// of a stored breakdown, not from the row's type, so a new type that carries
+// one is covered the day it appears.
 //
-//   - assembled_from_lots says the amount was built piece by piece out of the
-//     purchases behind it, each at its own day's rate. The server sets it
-//     from the presence of a stored breakdown, not from the row's type, so a
-//     new type that carries one is covered the day it appears.
-//   - has_undated_lots says this amount is a cost basis whose purchase dates
-//     are not all known — a missing or partial breakdown.
+// has_undated_lots USED TO BE THE OTHER HALF OF THIS, and #81 is why it no
+// longer is. That flag covers two different parcels at once: a breakdown with a
+// dateless piece among dated ones (assembled_from_lots is true as well there,
+// so nothing is lost by dropping it) and a transfer with NO breakdown — a basis
+// someone typed in by hand at POST /operations/transfer, or one recorded before
+// breakdowns were kept. On that second kind the caveat's own opening sentence
+// («её выбрало то же правило очереди, что и стоимость позиций») is false: no
+// release happened, no lots stand behind the number, nobody's rule chose it.
+// The country notices that follow it are then a paragraph about a computation
+// this figure never went through — a warning hung over a row it is not about,
+// which is the same defect the caveat was moved off the table header to end.
 //
-// Together they are exhaustive: every transfer_in/transfer_out has EITHER a
-// stored breakdown (assembled_from_lots true) OR none/a partial one
-// (has_undated_lots true) — a breakdown with one dateless piece among dated
-// ones makes both true at once, which is fine, since either alone is enough
-// to show the caveat. Neither ordinary operation ever sets either field.
+// A LEGACY TRANSFER'S BASIS WAS CHOSEN BY THE QUEUE, and it loses the caveat
+// here too. That is deliberate rather than overlooked: the wire cannot tell it
+// from a hand-typed one — neither can the database, which stores an absent
+// breakdown identically either way — so a caveat shown on those rows would be
+// a claim this program has no way to check. Saying nothing about how a figure
+// arose is honest; crediting a rule that may not have run is not.
+//
+// Dropping the flag from here changes nothing about its other job on this
+// screen: a transferred parcel with no breakdown still reports its own dateless
+// state through in_base_gap, and still gets the sentence that says so.
 //
 // Until #67, assembled_from_lots lived INSIDE in_base and vanished the moment
 // the conversion block did — including for the most ordinary reason a
@@ -74,9 +89,10 @@ import type { CostBasisRules } from "@/api/tax-residencies";
 // product owner's own case) has a complete, dated breakdown and nothing to
 // convert, so it used to publish nothing about being a cost basis at all: not
 // a missing rate, not a missing date, just silence. Moving the field onto the
-// operation removed that hole without adding a client-side list of types.
-function publishesACostBasis(operation: Operation): boolean {
-  return operation.has_undated_lots || operation.assembled_from_lots;
+// operation removed that hole without adding a client-side list of types — and
+// it is what lets this predicate stand on that field alone now.
+function wasAssembledFromLots(operation: Operation): boolean {
+  return operation.assembled_from_lots;
 }
 
 // The one sentence that captions BOTH money cells of a row, chosen from the
@@ -84,10 +100,12 @@ function publishesACostBasis(operation: Operation): boolean {
 // only source: has_undated_lots answers the first of these causes on its own
 // and cannot disagree with it — both derive from one server-side predicate —
 // but a caption assembled from two sources is a caption that will eventually
-// be assembled from two sources that have drifted. That field keeps its other
-// job on this screen (whether the amount IS a cost basis, which it answers on
-// the create and transfer responses too, where no gap is published at all);
-// it simply no longer decides what the row says about a missing rate.
+// be assembled from two sources that have drifted. With #81 that field stopped
+// deciding the cost basis caveat as well (see wasAssembledFromLots), so nothing
+// on this screen reads it any more — it remains in the contract as a standing
+// fact about an operation, published on the create and transfer responses where
+// no gap exists at all, and this client simply has no question left that it is
+// the right answer to.
 //
 // Each sentence explains why the whole row carries no base-currency figures,
 // which is what makes it true over the amount cell and the fee cell alike:
@@ -533,7 +551,7 @@ export function OperationsTable({
                     // cost basis. The fee below is a broker's charge on the
                     // day it was charged, no rule picked it out of anything,
                     // and the rows around this one are money that moved.
-                    caveatTitle={publishesACostBasis(operation) ? costBasisTitle : undefined}
+                    caveatTitle={wasAssembledFromLots(operation) ? costBasisTitle : undefined}
                     testId="operation-amount"
                   />
                 </TableCell>

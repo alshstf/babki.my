@@ -116,3 +116,62 @@ describe("IncomeDialog: a sum too large to record", () => {
     expect(screen.queryByText(/Слишком большая сумма/)).toBeNull();
   });
 });
+
+// #109.2. This form records three operation types and the engine treats them
+// as two different things: dividend and coupon add to Position.IncomeMinor,
+// while amortization is written as a DISPOSAL — p.realize(...) with the
+// returned principal as proceeds, the retired basis as its released pieces,
+// and IncomeMinor untouched (the TypeAmortization branch in
+// internal/portfolio/engine.go). So an amortization never appears in the
+// «Доход» column of the positions table, no matter how large it is, and a
+// form that called it «Доход по инструменту» promised a figure that is not
+// coming.
+const AMORTIZATION_NOTE =
+  "Амортизация — это возврат части номинала. Программа записывает её как выбытие, а не как доход: в колонке «Доход» она не появится";
+
+describe("IncomeDialog: an amortization is not income", () => {
+  const typeSelect = () => screen.getByRole("combobox");
+
+  function chooseType(label: string) {
+    // jsdom implements no layout, so Element.prototype.scrollIntoView simply
+    // does not exist — and Radix's Select calls it on the selected item when
+    // the list opens. The stub fills a hole in the environment, not in the
+    // component: nothing below asserts anything about scrolling, and without
+    // it the list cannot be opened at all.
+    Element.prototype.scrollIntoView = () => {};
+    fireEvent.click(typeSelect());
+    fireEvent.click(screen.getByText(label));
+  }
+
+  it("does not call the whole form income", () => {
+    open();
+
+    // «Выплата» is true of all three: a dividend, a coupon and a return of
+    // principal are all money the issuer pays out. «Доход» was true of two.
+    expect(screen.getByText("Выплата по инструменту")).toBeInTheDocument();
+    expect(screen.queryByText("Доход по инструменту")).toBeNull();
+  });
+
+  it("says where an amortization actually lands, once one is chosen", () => {
+    open();
+    chooseType("амортизация");
+
+    expect(screen.getByTestId("income-amortization-note").textContent).toBe(AMORTIZATION_NOTE);
+  });
+
+  it("says nothing of the sort for a dividend, which is income", () => {
+    open();
+
+    expect(screen.queryByTestId("income-amortization-note")).toBeNull();
+  });
+
+  it("takes the note away again when the type moves off an amortization", () => {
+    open();
+    chooseType("амортизация");
+    expect(screen.getByTestId("income-amortization-note")).toBeInTheDocument();
+
+    chooseType("купон");
+
+    expect(screen.queryByTestId("income-amortization-note")).toBeNull();
+  });
+});

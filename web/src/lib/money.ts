@@ -4,6 +4,29 @@
 const knownCurrency = (currency: string) =>
   ["RUB", "USD", "EUR", "KZT", "GBP", "CHF", "CNY"].includes(currency);
 
+// Writes a number in a currency, however many digits the caller's own rule
+// asks for. It is the ONE place a currency becomes a sign or a code, shared by
+// formatWith below (an amount in minor units) and formatPriceIn (a quote, which
+// is a decimal string and not minor units at all) — so a dollar reads as «$» in
+// a money cell and as «$» in the price line under it, and a currency this
+// program does not style reads as its bare code in both. Two renderings of one
+// currency on one screen is exactly the drift this codebase keeps paying for.
+//
+// The digit options come from the caller because the two quantities genuinely
+// differ: an amount is an integer number of minor units and is always written
+// with the same fixed width, while a price is an unbounded decimal that picks
+// its own scale below a hundredth (see formatPrice).
+function withCurrency(
+  value: number,
+  currency: string,
+  digits: Intl.NumberFormatOptions,
+): string {
+  if (knownCurrency(currency)) {
+    return new Intl.NumberFormat("ru-RU", { ...digits, style: "currency", currency }).format(value);
+  }
+  return `${new Intl.NumberFormat("ru-RU", digits).format(value)} ${currency}`;
+}
+
 function formatWith(
   amountMinor: number,
   currency: string,
@@ -11,20 +34,10 @@ function formatWith(
 ): string {
   // Normalize -0 to +0 to prevent "-0,00" formatting
   const normalized = amountMinor === 0 ? 0 : amountMinor;
-  const major = normalized / 100;
-  if (knownCurrency(currency)) {
-    return new Intl.NumberFormat("ru-RU", {
-      style: "currency",
-      currency,
-      minimumFractionDigits: fractionDigits,
-      maximumFractionDigits: fractionDigits,
-    }).format(major);
-  }
-  const num = new Intl.NumberFormat("ru-RU", {
+  return withCurrency(normalized / 100, currency, {
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits,
-  }).format(major);
-  return `${num} ${currency}`;
+  });
 }
 
 // How many fraction digits a money amount is written with in full, and in the
@@ -145,6 +158,21 @@ const SUB_CENT_SIGNIFICANT_DIGITS = 3;
 // Returns null on unparseable input so callers can skip the hint entirely
 // rather than render garbage — an honest omission over a fake display.
 export function formatPrice(value: string): string | null {
+  const parsed = parsePrice(value);
+  return parsed && new Intl.NumberFormat("ru-RU", parsed.digits).format(parsed.num);
+}
+
+// The decision formatPrice and formatPriceIn share: is this string a price at
+// all, and how many digits of it are worth showing. ONE function rather than
+// two copies of the rule, because the two renderings of a quote differ only in
+// whether a currency is named beside it — a sub-cent quote that kept its
+// significant digits bare and lost them the moment it gained a «$» would be
+// #30 reopened by #76's own fix, and nothing about the number would say so.
+//
+// Null means there is nothing honest to render: input outside the shape a
+// price takes, or a value that underflows the double to exactly zero (see
+// below).
+function parsePrice(value: string): { num: number; digits: Intl.NumberFormatOptions } | null {
   if (!/^\d+(\.\d+)?$/.test(value)) return null;
   const num = Number(value);
   if (!Number.isFinite(num)) return null;
@@ -155,14 +183,34 @@ export function formatPrice(value: string): string | null {
     // non-zero is 1e-10 — but this function's contract is the regex above,
     // and "0" is not an answer it is allowed to give.
     if (num === 0) return null;
-    return new Intl.NumberFormat("ru-RU", {
-      maximumSignificantDigits: SUB_CENT_SIGNIFICANT_DIGITS,
-    }).format(num);
+    return { num, digits: { maximumSignificantDigits: SUB_CENT_SIGNIFICANT_DIGITS } };
   }
-  return new Intl.NumberFormat("ru-RU", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(num);
+  return { num, digits: { minimumFractionDigits: 2, maximumFractionDigits: 2 } };
+}
+
+// formatPriceIn is formatPrice with the currency the price is quoted in said
+// out loud: "305.5" in USD as «305,50 $».
+//
+// This is #76. A quote is money per unit for a share or an ETF, and the number
+// alone does not say in which money. Under the position's own currency that
+// went unnoticed, because the amount above it carried the same sign; in the
+// base-currency display mode the amount above converts and this number does
+// not — it is the quote, published exactly as quoted — so a foreign share
+// printed «274 950,00 ₽» with a bare «305,50» underneath, and nothing on the
+// row said the second figure was dollars. #32 had already fixed the same shape
+// for bonds by adding «%» and left this half open.
+//
+// It formats and computes nothing: the currency is a code read off the payload
+// (Position.market_value_source_currency, else market_value_currency — see the
+// contract's description of Position.price) and the number is the wire's own
+// string. Deriving a per-unit money figure for a bond WOULD be arithmetic, and
+// is refused elsewhere for that reason.
+//
+// Null exactly when formatPrice is null, and for the same reasons: one parse
+// answers both.
+export function formatPriceIn(value: string, currency: string): string | null {
+  const parsed = parsePrice(value);
+  return parsed && withCurrency(parsed.num, currency, parsed.digits);
 }
 
 // MAX_AMOUNT_MINOR is the largest sum of money, in minor units, any field here

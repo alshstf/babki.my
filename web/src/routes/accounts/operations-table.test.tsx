@@ -1025,11 +1025,18 @@ describe("OperationsTable", () => {
       expect(await screen.findByTestId("operation-amount-caveat")).toBeInTheDocument();
     });
 
-    it("still qualifies a parcel whose purchase dates were never recorded", async () => {
-      // Nothing converts here, so in_base is absent. has_undated_lots — a
-      // property of the operation, not of in_base — says the amount is a
-      // cost basis all the same, on every row whether or not a conversion was
-      // attempted.
+    it("does not credit a queue rule with a figure no queue produced (#81)", async () => {
+      // The parcel arrived with no breakdown at all: someone typed what it was
+      // worth (POST /operations/transfer's `cost_minor`), nothing was released
+      // from the source to make that number, and no rule of any kind chose it.
+      // The caveat says the opposite in as many words — «её выбрало то же
+      // правило очереди, что и стоимость позиций» — so on this row it is a
+      // sentence about a computation that did not happen, sitting under a
+      // heading about the country whose computation it is not.
+      //
+      // This row USED to carry it, on the strength of has_undated_lots alone.
+      // That flag is true here and true of a breakdown with one dateless piece
+      // in it, and only the second of those was ever picked by the queue.
       renderTable({
         operations: [
           makeOperation({
@@ -1038,6 +1045,7 @@ describe("OperationsTable", () => {
             currency: "USD",
             in_base: null,
             has_undated_lots: true,
+            assembled_from_lots: false,
             in_base_gap: "undated_lot",
           }),
         ],
@@ -1046,13 +1054,47 @@ describe("OperationsTable", () => {
         costBasisRules: britain,
       });
 
-      expect(await screen.findByTestId("operation-amount-caveat")).toBeInTheDocument();
-      // Two separate statements about one figure, each with its own indicator:
-      // which currency it is shown in, and what the number is.
-      expect(screen.getByTestId("operation-amount-not-converted")).toHaveAttribute(
+      // The row's OTHER indicator is untouched and still says what it always
+      // said: the two are separate statements about one figure — which
+      // currency it is shown in, and what the number is — and only the second
+      // was ever wrong. Awaited rather than asserted straight off, so the
+      // caveat's absence below is checked on a rendered row rather than on an
+      // empty screen.
+      expect(await screen.findByTestId("operation-amount-not-converted")).toHaveAttribute(
         "title",
         "Не записано, когда куплена эта партия или часть её, а её стоимость считается по курсам на дни покупок. Восстановить эти даты уже неоткуда: в базовой валюте эта операция сама не посчитается. Поэтому числа этой строки показаны в валюте операции",
       );
+      expect(screen.queryByTestId("operation-amount-caveat")).not.toBeInTheDocument();
+    });
+
+    it("keeps it on a breakdown that merely contains a dateless piece", async () => {
+      // The other half of has_undated_lots, and the reason the fix above is a
+      // narrowing rather than a deletion. This parcel DOES have a stored
+      // breakdown — the source account's queue picked every piece of it — and
+      // one of those pieces came in through an earlier undated transfer, so
+      // both flags are true at once. The queue rule produced this figure, the
+      // country's rule would have produced another, and the caveat is exactly
+      // true of it.
+      renderTable({
+        operations: [
+          makeOperation({
+            id: "op-transfer-mixed",
+            type: "transfer_in",
+            currency: "USD",
+            in_base: null,
+            has_undated_lots: true,
+            assembled_from_lots: true,
+            in_base_gap: "undated_lot",
+          }),
+        ],
+        mode: "base",
+        baseCurrency: "RUB",
+        costBasisRules: britain,
+      });
+
+      const title = (await screen.findByTestId("operation-amount-caveat")).getAttribute("title");
+      expect(title).toContain("правило очереди");
+      expect(title).toContain("не самая ранняя покупка");
     });
 
     it("still qualifies a parcel that has a full breakdown but is already in the base currency (#67)", async () => {

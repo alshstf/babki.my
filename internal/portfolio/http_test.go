@@ -625,6 +625,12 @@ func TestPositionsMarketValuation(t *testing.T) {
 	if noQuotePos.MarketValueMinor != nil || noQuotePos.MarketValueCurrency != nil || noQuotePos.Price != nil || noQuotePos.PriceOn != nil || noQuotePos.UnrealizedPnlMinor != nil {
 		t.Errorf("noQuote position = %+v, want market_value_minor/market_value_currency/price/price_on/unrealized_pnl_minor all null", noQuotePos)
 	}
+	// And the empty cell says which of the three absences it is (#78). This is
+	// the one the word «котировка» is true of: a share, with everything else
+	// the valuation needs already in the catalog.
+	if noQuotePos.MarketValueGap == nil || *noQuotePos.MarketValueGap != "no_quote" {
+		t.Errorf("noQuote market_value_gap = %v, want no_quote", noQuotePos.MarketValueGap)
+	}
 
 	customPos, ok := byID[custom.ID]
 	if !ok {
@@ -632,6 +638,12 @@ func TestPositionsMarketValuation(t *testing.T) {
 	}
 	if customPos.MarketValueMinor != nil || customPos.MarketValueCurrency != nil || customPos.Price != nil || customPos.PriceOn != nil || customPos.UnrealizedPnlMinor != nil {
 		t.Errorf("custom position (quote present, unsupported type) = %+v, want market_value_minor/market_value_currency/price/price_on/unrealized_pnl_minor all null", customPos)
+	}
+	// The same nulls as the row above, for a reason that is its opposite: the
+	// quote seeded for this instrument is present and fresh, and this program
+	// computes no value from it. Saying «no quote» over this row is #78.
+	if customPos.MarketValueGap == nil || *customPos.MarketValueGap != "type_not_priced" {
+		t.Errorf("custom market_value_gap = %v, want type_not_priced: a quote exists for this instrument", customPos.MarketValueGap)
 	}
 }
 

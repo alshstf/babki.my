@@ -5,6 +5,7 @@ import {
   formatMinor,
   formatMinorCompact,
   formatPrice,
+  formatPriceIn,
   multiplyToMinor,
   parseToMinor,
   amountRefusal,
@@ -268,6 +269,47 @@ describe("formatPrice", () => {
   // other input it cannot render.
   it("omits the hint entirely for a price too small to have any digits left", () => {
     expect(formatPrice("0." + "0".repeat(400) + "1")).toBeNull();
+  });
+});
+
+// formatPriceIn is formatPrice with the currency the price is quoted in said
+// out loud (#76). Every digit rule above is shared rather than restated, and
+// these cases exist to prove that: the same value must not read one way with a
+// sign on it and another way without.
+describe("formatPriceIn", () => {
+  it.each([
+    ["305.5", "USD", "305,50 $"],
+    ["274.49", "RUB", "274,49 ₽"],
+    ["1234.5", "EUR", "1 234,50 €"],
+  ])("writes %s in %s as %s", (input, currency, want) => {
+    expect(norm(formatPriceIn(input, currency) ?? "")).toBe(want);
+  });
+
+  // The sub-cent branch survives the currency style. It is not a hypothetical:
+  // the demo stand's WeWork is quoted at $0.0025 (cmd/babki/seed.go), and a
+  // currency-styled formatter left to its own devices would give that quote
+  // USD's own two fraction digits and print «0,00 $» — the fake zero #30 was
+  // about, reintroduced by the fix for #76.
+  it("keeps the significant digits of a sub-cent price and still names the currency", () => {
+    const got = norm(formatPriceIn("0.0025", "USD") ?? "");
+    expect(got).toBe("0,0025 $");
+    expect(got).not.toBe("0,00 $");
+  });
+
+  // The same guard formatMinor has: a code this build has no business handing
+  // to Intl is appended as a code rather than styled. Intl would accept any
+  // three well-formed letters and quietly invent a symbol-less rendering of
+  // its own; the point of the shared list is that one currency reads the same
+  // in a price line and in a money cell.
+  it("appends the plain code for a currency the money formatter does not style", () => {
+    expect(norm(formatPriceIn("305.5", "JPY") ?? "")).toBe("305,50 JPY");
+  });
+
+  // Refusal is inherited too: an input formatPrice will not render is one this
+  // will not render either, sign or no sign. The caller drops the whole hint.
+  it.each([[""], ["-5"], ["abc"], ["1,5"]])("rejects %s exactly as formatPrice does", (input) => {
+    expect(formatPriceIn(input, "USD")).toBeNull();
+    expect(formatPrice(input)).toBeNull();
   });
 });
 

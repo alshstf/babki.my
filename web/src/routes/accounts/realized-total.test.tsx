@@ -23,6 +23,21 @@ function makeTotal(overrides: Partial<RealizedTotalPayload> = {}): RealizedTotal
   };
 }
 
+// The label's tooltip, pinned as one exact string. What it says about the
+// rates is a claim about internal/portfolio/http.go's realizedTerms, and the
+// only way a wrong claim shows up is by reading the sentence against that
+// function — so the sentence lives here in full rather than being sampled by
+// substring, and a rewording has to come past this test.
+//
+// #109.1 is the clause about the FEE. realizedTerms emits a disposal's fee as
+// {minor: -e.FeeMinor, on: e.OccurredOn} — the day of the disposal, the same
+// day as its proceeds — while the purchase dates value the retired basis and
+// nothing else. The caption used to put every expense «по курсам на дни
+// покупок», which is false of a commission the broker charged on the day of
+// the sale.
+const REALIZED_HINT =
+  "Результат уже закрытых сделок — он больше не изменится. Стоимость проданного взята по курсам на дни покупок, а выручка и комиссия продажи — по курсу на день продажи, поэтому в базовой валюте сюда входит и изменение курса. Прибыль в таблице — про другое: это переоценка того, что ещё не продано";
+
 describe("RealizedTotal", () => {
   it("shows the figure under its own label", () => {
     render(<RealizedTotal total={makeTotal()} mode="native" />);
@@ -45,6 +60,18 @@ describe("RealizedTotal", () => {
     expect(hint).toContain("изменение курса");
     // The label itself stays a label; the mechanics are not printed as text.
     expect(screen.getByTestId("realized-total-label").textContent).toBe("Зафиксировано");
+  });
+
+  it("dates a sale's fee on the sale day, as the server does, not on the purchase days", () => {
+    render(<RealizedTotal total={makeTotal()} mode="native" />);
+
+    expect(screen.getByTestId("realized-total-label").getAttribute("title")).toBe(REALIZED_HINT);
+    // The specific thing that was false: an expense clause that swept the fee
+    // in with the basis. Both halves are asserted, so neither "the fee moved
+    // to the sale day" nor "the basis stayed on the purchase days" can be
+    // dropped without this failing.
+    expect(REALIZED_HINT).toContain("комиссия продажи — по курсу на день продажи");
+    expect(REALIZED_HINT).toContain("Стоимость проданного взята по курсам на дни покупок");
   });
 
   it("shows each currency's figure separately rather than one meaningless number", () => {

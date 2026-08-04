@@ -65,6 +65,36 @@ const CAPTION = {
     "Оценка получилась в другой валюте, чем позиция, а курса от неё до валюты позиции нет: сравнить её со стоимостью позиции нельзя. Пока оценка не выражена в валюте позиции, программа не показывает её и в базовой. Поэтому показана в исходной валюте",
 } as const;
 
+// The sentences for an EMPTY valuation cell, one per value of
+// Position.market_value_gap that says no valuation was struck, plus the general
+// one for a cause this build cannot name. Spelled out in full for the same
+// reason CAPTION is: which sentence lands on the dash is the whole of #78, and
+// a test reading them back through the component's own lookup would agree with
+// whatever it picked.
+//
+// The three named ones are three different pieces of news and are worded to be
+// unmistakable for one another. Only ONE of them mentions a quote as the thing
+// that is missing, and it is the only one where a quote IS the thing that is
+// missing. The other two are about a row that may well have a perfectly good
+// quote — and neither of them may claim that it HAS one either: the server
+// reports both of them whether a quote exists or not, because the ordering rule
+// puts the cause a quote would not close first (see MarketValueGap in the API
+// contract).
+const NO_VALUATION = {
+  noQuote: "Котировки пока нет. Если она появится, рыночная оценка посчитается сама",
+  typeNotPriced:
+    "Рыночную оценку для этого вида активов программа не считает — такого расчёта в ней нет. Котировка тут ничего не меняет: даже когда она есть, оценки не будет, и ждать её не нужно",
+  noFaceValue:
+    "У этой облигации не записан номинал, а котируется она в процентах от номинала: брать процент не от чего. Котировка тут ничего не меняет — пока номинала нет, оценки не будет",
+  general: "Рыночной оценки нет, а причина не названа",
+} as const;
+
+// What the PROFIT dash adds in front of the valuation's sentence. The profit
+// column's own dash needs its own first line: the sentences above explain why
+// there is no valuation, and this is why that leaves the profit cell empty
+// too.
+const PROFIT_NEEDS_VALUATION = "Прибыль — это рыночная оценка минус стоимость, а оценки нет";
+
 // The two sentences the price line's tooltip carries under the date, spelled
 // out here in full for the same reason the captions above are: what this is
 // about is WHICH sentence sits beside the number, and a test that fetched it
@@ -174,8 +204,8 @@ describe("PositionsTable", () => {
       norm(formatMinor(305_50, "USD")),
     );
     // Price is shown as text...
-    const priceLine = screen.getByText("305,50");
-    expect(priceLine).toBeInTheDocument();
+    const priceLine = screen.getByTestId("position-price");
+    expect(norm(priceLine.textContent ?? "")).toBe("305,50 $");
     // ...but the date is not — it moved into the title tooltip.
     expect(screen.queryByText(/20\.07\.2026/)).not.toBeInTheDocument();
     expect(priceLine.getAttribute("title")).toContain("Цена на 20.07.2026");
@@ -287,6 +317,10 @@ describe("PositionsTable", () => {
             market_value_currency: null,
             price: null,
             price_on: null,
+            // The contract publishes a cause on every row with no valuation
+            // (#78), and this fixture is the one the phrase «нет котировки» is
+            // actually true of: an ordinary share whose price has not arrived.
+            market_value_gap: "no_quote",
           }),
         ]}
         mode="native"
@@ -296,7 +330,7 @@ describe("PositionsTable", () => {
 
     const dash = screen.getByTestId("position-no-quote");
     expect(dash).toHaveTextContent("—");
-    expect(dash).toHaveAttribute("title", "Нет котировки");
+    expect(dash).toHaveAttribute("title", NO_VALUATION.noQuote);
     // "not preceded by a digit" excludes legitimate non-zero amounts that
     // happen to end in "0,00" (e.g. "500,00"), while still catching a real
     // fake-zero amount ("0,00").
@@ -376,6 +410,7 @@ describe("PositionsTable", () => {
             market_value_minor: null,
             market_value_currency: null,
             unrealized_pnl_minor: null,
+            market_value_gap: "no_quote",
           }),
         ]}
         mode="native"
@@ -385,7 +420,14 @@ describe("PositionsTable", () => {
 
     const dash = screen.getByTestId("position-profit-dash");
     expect(dash).toHaveTextContent("—");
-    expect(dash).toHaveAttribute("title", "Нет котировки");
+    // The profit is missing BECAUSE the valuation is, so this cell says that
+    // and then hands over to the valuation's own reason. It used to print
+    // «Нет котировки» flat, which on two of the three kinds of row that reach
+    // here is false (see the describe block below).
+    expect(dash).toHaveAttribute(
+      "title",
+      `${PROFIT_NEEDS_VALUATION}\n${NO_VALUATION.noQuote}`,
+    );
     expect(screen.queryByTestId("position-profit-amount")).not.toBeInTheDocument();
     expect(screen.queryByTestId("position-profit-percent")).not.toBeInTheDocument();
   });
@@ -416,6 +458,161 @@ describe("PositionsTable", () => {
     expect(screen.queryByTestId("position-profit-percent")).not.toBeInTheDocument();
   });
 
+  describe("the empty valuation cell says WHICH absence it is", () => {
+    // Issue #78. Three different things leave a position with no market
+    // valuation, and this screen used to put «Нет котировки» over all three.
+    // On two of them a quote exists and is not what is missing — the program
+    // has no valuation model for the instrument's type, or the bond's face
+    // value was never recorded — so the reader was sent off to wait for data
+    // that was already there. Only the server knows which of the three
+    // happened, and since #78 it says so in Position.market_value_gap.
+    //
+    // Every test here pins the EXACT sentence and, where it matters, asserts
+    // that the other ones are not the one shown: a caption that is merely
+    // different is not the property under test, the right cause is.
+    const withNoValuation = (gap: Position["market_value_gap"]) =>
+      makePosition({
+        market_value_minor: null,
+        market_value_currency: null,
+        price: null,
+        price_on: null,
+        unrealized_pnl_minor: null,
+        market_value_gap: gap,
+      });
+
+    it("says a quote is missing only where a quote is what is missing", () => {
+      wrap(
+        <PositionsTable
+          positions={[withNoValuation("no_quote")]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(screen.getByTestId("position-no-quote")).toHaveAttribute(
+        "title",
+        NO_VALUATION.noQuote,
+      );
+    });
+
+    it("does not blame a missing quote for a type it does not price", () => {
+      wrap(
+        <PositionsTable
+          positions={[withNoValuation("type_not_priced")]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const dash = screen.getByTestId("position-no-quote");
+      expect(dash).toHaveAttribute("title", NO_VALUATION.typeNotPriced);
+      // The two things this sentence is forbidden to do, both of them the
+      // reason the value exists at all. It may not send the reader off after a
+      // quote — the row may already have one, and a new one changes nothing —
+      // and it may not promise the figure is coming, because no decision to
+      // write such a valuation has been taken.
+      expect(dash.getAttribute("title")).not.toBe(NO_VALUATION.noQuote);
+      expect(dash.getAttribute("title")).not.toMatch(/появится|посчитается сама|пока нет/);
+    });
+
+    it("does not blame a missing quote for a bond with no face value", () => {
+      wrap(
+        <PositionsTable
+          positions={[withNoValuation("no_face_value")]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const dash = screen.getByTestId("position-no-quote");
+      expect(dash).toHaveAttribute("title", NO_VALUATION.noFaceValue);
+      expect(dash.getAttribute("title")).not.toBe(NO_VALUATION.noQuote);
+      expect(dash.getAttribute("title")).not.toBe(NO_VALUATION.typeNotPriced);
+    });
+
+    it("claims no cause for one it cannot name, and none for one the server did not send", () => {
+      // The #105 rule on this cell: a server NEWER than this build sends a
+      // value outside the union, and an OLDER one sends null where the
+      // contract now requires a cause. Neither may be captioned «Нет
+      // котировки» — that is a claim about a quote, and the condition that
+      // brings us here is not knowing anything about one.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              instrument: { ...makePosition().instrument, id: "instr-unnameable" },
+              market_value_minor: null,
+              market_value_currency: null,
+              unrealized_pnl_minor: null,
+              market_value_gap:
+                "no_lunar_settlement_price" as Position["market_value_gap"],
+            }),
+            makePosition({
+              instrument: { ...makePosition().instrument, id: "instr-no-cause" },
+              market_value_minor: null,
+              market_value_currency: null,
+              unrealized_pnl_minor: null,
+              market_value_gap: null,
+            }),
+          ]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const [unnameable, noCause] = screen.getAllByTestId("position-no-quote");
+      expect(unnameable).toHaveAttribute("title", NO_VALUATION.general);
+      expect(noCause).toHaveAttribute("title", NO_VALUATION.general);
+    });
+
+    it("gives the profit dash the valuation's cause, not «нет котировки»", () => {
+      // The second cell #78 lands on. The profit is a dash because the
+      // valuation is, so the reason for one is the reason for the other — and
+      // this cell said «Нет котировки» over a crypto row just as the valuation
+      // cell did.
+      wrap(
+        <PositionsTable
+          positions={[withNoValuation("type_not_priced")]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const dash = screen.getByTestId("position-profit-dash");
+      expect(dash).toHaveAttribute(
+        "title",
+        `${PROFIT_NEEDS_VALUATION}\n${NO_VALUATION.typeNotPriced}`,
+      );
+      expect(dash.getAttribute("title")).not.toContain(NO_VALUATION.noQuote);
+    });
+
+    it("keeps the currency-mismatch sentence on the profit dash of a row that HAS a valuation", () => {
+      // The other half of the profit dash, unchanged and asserted here beside
+      // its neighbour: with a valuation present the profit is missing for a
+      // different reason entirely, and the valuation's absence sentences say
+      // nothing true about it.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "RUB",
+              market_value_minor: 952_00,
+              market_value_currency: "USD",
+              unrealized_pnl_minor: null,
+              market_value_gap: "no_rate_valuation_currency",
+            }),
+          ]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const dash = screen.getByTestId("position-profit-dash");
+      expect(dash).toHaveAttribute("title", "Оценка в другой валюте — прибыль не рассчитывается");
+      expect(dash.getAttribute("title")).not.toContain(PROFIT_NEEDS_VALUATION);
+    });
+  });
+
   it("adds a tooltip note with the pre-conversion amount when the market value was converted from another currency", () => {
     wrap(
       <PositionsTable
@@ -443,7 +640,7 @@ describe("PositionsTable", () => {
     // ...and the source amount appears only in the tooltip, never as text.
     const sourceAmount = formatMinor(2_800_00, "RUB");
     expect(screen.queryByText(sourceAmount)).not.toBeInTheDocument();
-    const priceLine = screen.getByText("305,50");
+    const priceLine = screen.getByTestId("position-price");
     expect(norm(priceLine.getAttribute("title") ?? "")).toBe(
       norm(
         `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${PRICE_VALUATION_NOTE}\nПересчитано из ${sourceAmount}`,
@@ -454,7 +651,7 @@ describe("PositionsTable", () => {
   it("omits the converted-from tooltip line when the market value has no source currency/amount", () => {
     wrap(<PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />);
 
-    const priceLine = screen.getByText("305,50");
+    const priceLine = screen.getByTestId("position-price");
     expect(priceLine.getAttribute("title")).toBe(
       `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${PRICE_VALUATION_NOTE}`,
     );
@@ -516,6 +713,12 @@ describe("PositionsTable", () => {
     // from a plain one that would let "%" wrap onto its own line — pin the
     // raw character too, unnormalized, against ru.json's pricePercent key.
     expect(priceLine.textContent).toBe("95,20 %");
+    // And NOT a currency sign, which is the other half of #76: a bond's quote
+    // is a percentage of face value, not money, so it is denominated in
+    // nothing — even though this row's valuation right above it IS in rubles
+    // and market_value_currency says so, which is the field a share's price
+    // reads its own currency from.
+    expect(priceLine.textContent).not.toContain("₽");
     // The session note sits under the date it explains and ABOVE the
     // percentage note, and the valuation note under both: a reader learns what
     // the date means, then what the number is, then what was computed from it.
@@ -527,7 +730,7 @@ describe("PositionsTable", () => {
   });
 
   it.each([["share"], ["etf"]] as const)(
-    "leaves a %s's price bare — its quote really is money per unit",
+    "writes a %s's price in the currency it is quoted in, never as a percentage",
     (type) => {
       wrap(
         <PositionsTable
@@ -542,7 +745,7 @@ describe("PositionsTable", () => {
       );
 
       const priceLine = screen.getByTestId("position-price");
-      expect(norm(priceLine.textContent ?? "")).toBe("305,50");
+      expect(norm(priceLine.textContent ?? "")).toBe("305,50 $");
       expect(priceLine.textContent).not.toContain("%");
       expect(priceLine.getAttribute("title")).toBe(
         `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${PRICE_VALUATION_NOTE}`,
@@ -550,6 +753,125 @@ describe("PositionsTable", () => {
       expect(priceLine.getAttribute("title")).not.toContain(BOND_PRICE_NOTE);
     },
   );
+
+  // #76, IN THE SHAPE THE OWNER MEETS IT. The valuation cell converts with the
+  // display-currency toggle and this price line does not — it is the quote,
+  // published exactly as quoted — so in base mode a foreign share printed a
+  // ruble amount with a bare dollar figure under it, and nothing on the row
+  // said which of the two was which. #32 fixed the same shape for bonds by
+  // adding «%» and left this one open, because a share's price needed a
+  // currency rather than a unit.
+  //
+  // 10 × $305,50 = $3 055,00, which at 90 ₽/$ is the 274 950,00 ₽ above it.
+  // Those two numbers are deliberately far apart: a sign that only ever
+  // appeared where the figures already agreed would prove nothing.
+  it("names the currency of a share's price under a base-currency valuation", () => {
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            currency: "USD",
+            in_base: {
+              cost_minor: 22_500_000,
+              market_value_minor: 27_495_000,
+              unrealized_pnl_minor: 4_995_000,
+              income_minor: 0,
+              currency: "RUB",
+              rate_on: "2026-07-20",
+            },
+          }),
+        ]}
+        mode="base"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(norm(screen.getByTestId("position-market-value").textContent ?? "")).toBe(
+      norm(formatMinor(27_495_000, "RUB")),
+    );
+    const priceLine = screen.getByTestId("position-price");
+    expect(norm(priceLine.textContent ?? "")).toBe("305,50 $");
+    // The one wrong sign that would look plausible: the valuation's own, taken
+    // from the cell above instead of from the field that describes the price.
+    expect(priceLine.textContent).not.toContain("₽");
+  });
+
+  // WHICH FIELD describes the price, on the one row where the two candidates
+  // disagree. A quote carries a currency of its own, and where it differs from
+  // the position's the server converts the VALUATION into the position's
+  // currency and discloses the original in market_value_source_currency —
+  // while Position.price stays exactly as quoted (see its description in the
+  // API contract). So the price's currency is the SOURCE one here, and
+  // market_value_currency — the currency of the figure above — is the wrong
+  // answer that would look right on every other row.
+  it("takes a share price's currency from the quote, not from the converted valuation", () => {
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            currency: "USD",
+            market_value_minor: 105_777,
+            market_value_currency: "USD",
+            market_value_source_currency: "RUB",
+            market_value_source_minor: 9_520_000,
+          }),
+        ]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const priceLine = screen.getByTestId("position-price");
+    expect(norm(priceLine.textContent ?? "")).toBe("305,50 ₽");
+    expect(priceLine.textContent).not.toContain("$");
+  });
+
+  // The digit rules and the currency are one rendering, not two that meet
+  // later: the seed's WeWork is quoted at $0.0025 after its bankruptcy, and
+  // «0,00 $» would be a fake zero wearing a currency sign — #30 undone by
+  // #76's own fix.
+  it("keeps a sub-cent quote's digits when it gains a currency sign", () => {
+    wrap(
+      <PositionsTable
+        positions={[makePosition({ price: "0.0025", market_value_minor: 2 })]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const priceLine = screen.getByTestId("position-price");
+    expect(norm(priceLine.textContent ?? "")).toBe("0,0025 $");
+    expect(norm(priceLine.textContent ?? "")).not.toBe("0,00 $");
+  });
+
+  // A type this build cannot read a price for gets no currency claimed on its
+  // behalf. Today's server never sends such a row — it publishes no valuation
+  // and no price for anything but share, etf and bond (marketValue in
+  // internal/portfolio/http.go), so `hasMarketValue` is false and this hint is
+  // not rendered at all — and that is exactly why the branch is written and
+  // pinned rather than folded into the share/etf one: the day a NEWER server
+  // prices a new type, what its Position.price means will be decided there,
+  // and a client one release behind must not answer that question with the
+  // valuation's currency. It is the same rule the gap captions follow (#105):
+  // what is true stays said, what is not known stays unsaid.
+  it("claims no currency for a priced type this build does not know", () => {
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            instrument: { ...makePosition().instrument, type: "crypto" },
+          }),
+        ]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const priceLine = screen.getByTestId("position-price");
+    expect(norm(priceLine.textContent ?? "")).toBe("305,50");
+    expect(priceLine.textContent).not.toContain("$");
+    expect(priceLine.textContent).not.toContain("%");
+  });
 
   it("keeps the converted-from line alongside the percentage note on a bond", () => {
     const sourceAmount = formatMinor(9_520_000, "RUB");
@@ -571,6 +893,11 @@ describe("PositionsTable", () => {
 
     const priceLine = screen.getByTestId("position-price");
     expect(norm(priceLine.textContent ?? "")).toBe("95,20 %");
+    // The row where a bond has BOTH candidate currencies filled in — the
+    // position's own on the valuation, the face value's on the source — and
+    // the price belongs to neither of them (#76). It is still a percentage.
+    expect(priceLine.textContent).not.toContain("$");
+    expect(priceLine.textContent).not.toContain("₽");
     expect(norm(priceLine.getAttribute("title") ?? "")).toBe(
       norm(
         `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${BOND_PRICE_NOTE}\n${PRICE_VALUATION_NOTE}\nПересчитано из ${sourceAmount}`,
