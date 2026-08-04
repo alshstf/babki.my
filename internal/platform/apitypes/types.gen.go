@@ -409,11 +409,11 @@ type CreateOperationRequest struct {
 	// Price Decimal as string: money per unit, in MAJOR currency units. |price| must not exceed 10^13 (10000000000000) — one unit may not cost more than a whole operation is allowed to be for — and see quantity for the bound on the two multiplied together. Past either, 400.
 	Price nullable.Nullable[string] `json:"price,omitempty"`
 
-	// Quantity Decimal as string. Bounded from above as well as below: |quantity| must not exceed 10^15 (1000000000000000) and, when a price is given too, |price × quantity| must not exceed 10^15 minor units — the same cap amount_minor carries, because it is the same money. Past either, 400. The bounds exist so that a figure no price can value is refused as a field rather than discovered later by the screen that cannot render it; rows written before they existed are untouched and are still returned as they stand.
+	// Quantity Decimal as string. Bounded from above as well as below: |quantity| must not exceed 10^13 (10000000000000) and, when a price is given too, |price × quantity| must not exceed 10^15 minor units — the same cap amount_minor carries, because it is the same money. Past either, 400. The bound is the money cap read as a count of units, one whole major unit apiece, and it is set there so that what the write accepts the positions screen can still value: at 10^13 units a quote of up to ~9223 per unit still fits in an int64 of minor units, which is above an ordinary share, bond or ETF. More than 10^13 units of something worth less than a whole rouble apiece is refused, deliberately — a figure no ordinary price can value is better refused as a field than discovered later by the screen that cannot render it. Rows written before the bound existed are untouched and are still returned as they stand.
 	Quantity  nullable.Nullable[string] `json:"quantity,omitempty"`
 	SettledOn nullable.Nullable[string] `json:"settled_on,omitempty"`
 
-	// SplitRatio Decimal as string
+	// SplitRatio Decimal as string: how many units one unit becomes. Must be positive and strictly less than 10^10 (10000000000) — the first value the column cannot hold — or 400. A split multiplies the whole position's quantity, so a ratio that is a mis-scaled field rather than a corporate action carries an ordinary holding past what any screen can value; the bound refuses it by name instead of letting the database answer with an overflow.
 	SplitRatio nullable.Nullable[string] `json:"split_ratio,omitempty"`
 	Type       OperationType             `json:"type"`
 }
@@ -719,7 +719,7 @@ type TransferRequest struct {
 	// OccurredOn Date YYYY-MM-DD
 	OccurredOn string `json:"occurred_on"`
 
-	// Quantity Decimal as string. |quantity| must not exceed 10^15 (1000000000000000), as on an operation — this writes the same column, on two rows. A position CAN hold more than that, having grown one accepted operation at a time; such a holding has to be moved in several transfers.
+	// Quantity Decimal as string. |quantity| must not exceed 10^13 (10000000000000), as on an operation — this writes the same column, on two rows. A position CAN hold more than that, having grown one accepted operation at a time; such a holding has to be moved in several transfers.
 	Quantity    string             `json:"quantity"`
 	ToAccountId openapi_types.UUID `json:"to_account_id"`
 }

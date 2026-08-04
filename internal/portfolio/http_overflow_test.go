@@ -56,10 +56,13 @@ func (c fixedRateConverter) RatesOn(context.Context, []marketdata.RateQuery) (ma
 	panic("fixedRateConverter: RatesOn not used")
 }
 
-// The quantity here is 10^15 — exactly the largest a write accepts (see
-// operation.maxQuantity) — and the price an unremarkable 100. Their product is
-// still not an int64 of cents, which is the point: the write-side bound moves
-// the wrapping figure out of easy reach, it does not make it impossible.
+// The quantity here is 10^15 — a hundred times what a write accepts (see
+// operation.maxQuantity, 10^13) — and the price an unremarkable 100. A position
+// reaches this size without any single write being unusual: one accepted buy at
+// a time, or a split multiplying the whole holding by a ratio, or a row written
+// before the bound existed. Their product is not an int64 of cents, which is the
+// point: the write-side bound moves the wrapping figure out of easy reach, it
+// does not make it impossible.
 func TestMarketValueRefusesAShareValuationThatWouldWrap(t *testing.T) {
 	q := marketdata.Quote{Price: dec("100"), Currency: "USD"}
 	minor, currency, ok, err := marketValue(instrument.TypeShare, nil, nil, dec("1e15"), q)
@@ -68,6 +71,41 @@ func TestMarketValueRefusesAShareValuationThatWouldWrap(t *testing.T) {
 	}
 	if ok {
 		t.Error("marketValue reported ok alongside the refusal; the caller would publish a wrapped figure")
+	}
+}
+
+// TestMarketValuePublishesTheLargestQuantityAWriteAccepts is the test above's
+// necessary other half, and the one that keeps the two sides of the program from
+// contradicting each other. The write side accepts a quantity of at most 10^13
+// (operation.maxQuantity); this screen has to be able to VALUE what the write
+// side lets in, or the bound over there is a refusal that changed nothing.
+//
+// It failed to be true once. The bound was first set at 10^15, and at 10^15 a
+// quote of 92.24 — less than an ordinary share costs — already overflowed here:
+// the two halves of the same branch stated their verdicts on 10^15 side by side,
+// one accepting and one refusing, and neither mentioned the other. So this test
+// names the number the write side promises and the largest whole-currency quote
+// that survives it, and its twin over there
+// (operation.TestQuantityExactlyAtTheBoundIsAccepted) asserts the same pair
+// through money.Minor. Whichever bound moves, one of the two reddens.
+func TestMarketValuePublishesTheLargestQuantityAWriteAccepts(t *testing.T) {
+	q := marketdata.Quote{Price: dec("9223"), Currency: "USD"}
+	minor, _, ok, err := marketValue(instrument.TypeShare, nil, nil, dec("1e13"), q)
+	if err != nil || !ok {
+		t.Fatalf("marketValue(1e13 at 9223) = (%d, %v), err = %v; want it published: a quantity the write accepts must be valuable at an ordinary quote",
+			minor, ok, err)
+	}
+	if minor != 9_223_000_000_000_000_000 {
+		t.Errorf("marketValue = %d, want 9223000000000000000 cents", minor)
+	}
+
+	// One unit of money more per share does not fit. The margin is that narrow
+	// by construction — 10^13 is the largest quantity for which an ordinary
+	// quote fits at all — so a bound loosened even slightly over there stops
+	// being the bound this test is describing.
+	q.Price = dec("9224")
+	if _, _, ok, err := marketValue(instrument.TypeShare, nil, nil, dec("1e13"), q); !errors.Is(err, money.ErrOverflow) || ok {
+		t.Errorf("marketValue(1e13 at 9224): ok = %v, err = %v; want ErrOverflow", ok, err)
 	}
 }
 

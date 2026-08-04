@@ -443,13 +443,26 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 	//
 	// It is a GUARDED subtraction all the same (#83). Both operands fit in an
 	// int64 and a difference of two such figures need not, once their signs
-	// differ — and a negative valuation is reachable without any market
-	// misbehaving at all: a bond is valued at face value × price, and
-	// face_value_minor is a plain BIGINT that nothing checks for sign on the way
-	// in (#93). The wrapped answer would be an enormous PROFIT on a row that is
-	// merely broken, which is exactly the kind of figure this screen must not
-	// invent. Refused rather than published, and never as one of the nulls
-	// beside it: those mean data has yet to arrive (see money.ErrOverflow).
+	// differ, and there is more than one way for the signs to differ.
+	//
+	// The valuation goes negative when a bond's face value does: a bond is valued
+	// at face value × price, and face_value_minor is a plain BIGINT that nothing
+	// checks for sign on the way in (#93). THE BASIS GOES NEGATIVE WITH NO
+	// BROKEN FIELD ANYWHERE, which is why this guard does not retire when #93 is
+	// closed: Position.CostMinor is accumulated with a bare += in the engine (see
+	// addLot), each buy adding at most its amount plus its fee — 2×10^15 minor
+	// units, the largest the write side admits of either — so about 4612 buys of
+	// the same instrument, every one of them individually valid and none of them
+	// carrying a broken field, take the running total past math.MaxInt64 and wrap
+	// it into a large negative basis. Position's
+	// realized total accumulates the same way (see realize). Neither is this
+	// package's to fix in passing: the engine is a pure fold and changing what it
+	// answers is a change to every figure derived from it.
+	//
+	// The wrapped answer would be an enormous PROFIT on a row that is merely
+	// broken, which is exactly the kind of figure this screen must not invent.
+	// Refused rather than published, and never as one of the nulls beside it:
+	// those mean data has yet to arrive (see money.ErrOverflow).
 	if currency == p.Currency {
 		unrealized, err := money.Sub(minor, p.CostMinor)
 		if err != nil {

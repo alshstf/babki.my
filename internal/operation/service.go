@@ -44,59 +44,101 @@ const maxAmountMinor int64 = 1_000_000_000_000_000
 // portfolio.centsPerUnit.
 const minorUnitScale = 2
 
-// maxQuantity and maxPrice bound the two factors of one product, and validate
-// bounds the product itself. All three come from one place — what has to fit in
-// an int64 of minor units — rather than from a guess at how many shares a person
-// might sensibly own.
+// maxQuantity, maxPrice and maxSplitRatio bound the three decimal fields an
+// operation carries. Not one of them is money, and all three decide how much
+// money the row stands for, so each comes from what has to fit — an int64 of
+// minor units, or the column that holds the value — rather than from a guess at
+// how many shares a person might sensibly own.
 //
-// THE PRODUCT FIRST, because it is the only one of the three that is money.
-// price × quantity is what the trade was for, which is the same money
-// amount_minor carries on the very same row, so it is capped where that already
-// is: maxAmountMinor. Two fields describing one sum of money must not disagree
-// about how much money can exist. That cap is ~9223 times below math.MaxInt64,
-// and that ratio is the room to spare an fx rate needs on the way out — a
-// valuation is struck in the position's currency and then converted, and no rate
-// is bounded from above.
+// THE QUANTITY IS THE ONE THE SCREEN BREAKS ON, so it is the one to read first.
+// Everything that later reads the journal multiplies a quantity by a QUOTE's
+// price and then by an fx rate, and the result has to be an int64 of minor
+// units. A quantity this program accepted and no ordinary quote can value is a
+// positions screen answering 500 for as long as the row exists (#84) — the whole
+// reason there is a write-time bound at all.
 //
-// THE FACTORS SEPARATELY, because the product cannot always be checked: price is
-// optional, and the read path multiplies the quantity by a QUOTE's price rather
-// than by this operation's, so a quantity arrives at the screen with no
-// companion at all.
+//   - maxQuantity is the money cap read as a COUNT of units: at one MAJOR unit
+//     apiece — a whole rouble or dollar for a single unit — 10^13 units are
+//     worth exactly maxAmountMinor. What the bound LEAVES is the number that
+//     matters: math.MaxInt64 / 100 / 10^13 ≈ 9223 units of money per unit of
+//     instrument can still be published at the largest quantity accepted here,
+//     which is above an ordinary share, bond or ETF unit. Read as a count of
+//     MINOR units instead — one kopeck apiece, 10^15 units — the same cap leaves
+//     92.24, BELOW the price of most securities: the bound would then admit a
+//     quantity that breaks the screen at an entirely ordinary quote, which is
+//     the failure it exists to prevent rather than a smaller version of it.
+//     What the read side actually refuses is a VALUATION above ~9.2×10^16 major
+//     units of money, however the price and the quantity divide it, and no
+//     bound on one factor can promise anything about that product (a share of
+//     the priciest kind there is, ~7×10^5 dollars, still reaches it at 10^13
+//     units — a holding worth 7×10^18 dollars). The bound's job is narrower and
+//     achievable: that the largest quantity accepted here is not by itself the
+//     reason an ordinary quote cannot be valued.
+//   - maxPrice is the money cap read as a PRICE per unit: one unit may not cost
+//     more than a whole operation is allowed to be for. It comes out at the same
+//     10^13, both being the cap expressed in major units. They are two constants
+//     and not one because they are two different quantities — a count of units
+//     and a sum of money per unit — that happen to coincide, and nothing may
+//     rest on the coincidence. Their refusals do print the same digits today,
+//     which is exactly why the tests compare refusals WHOLE rather than looking
+//     for a bound inside a message (see service_bounds_test.go).
+//   - maxSplitRatio is a ratio read as a quantity — a ratio of R turns one unit
+//     into R units — which would put it at maxQuantity as well, except that
+//     split_ratio is NUMERIC(20,10) and keeps ten integer digits: 10^10 is the
+//     first value the column cannot hold. The narrower ceiling wins. A ratio at
+//     or above it is refused as a named field instead of arriving as a database
+//     error about numeric overflow, which no importer can act on.
 //
-//   - maxPrice is the money cap read as a price: one unit may not cost more than
-//     a whole operation is allowed to be for. maxAmountMinor minor units, i.e.
-//     10^13 major ones — orders of magnitude above the priciest security there
-//     is (a Berkshire A share, ~7×10^5 dollars) and above any hyperinflated
-//     currency's version of it.
-//   - maxQuantity is the same cap read as a count: at one minor unit apiece —
-//     the price at which a single unit is still worth a whole kopeck — 10^15
-//     units are worth exactly maxAmountMinor. Above that, a holding is worth more
-//     than the journal admits money can exist unless every unit is worth less
-//     than a kopeck.
+// THE PRODUCT of the two factors is bounded as well, and NOT as an overflow
+// guard: an operation's own price is consumed in no money arithmetic anywhere in
+// this program. Nothing computes with its VALUE except the checks below — the
+// store carries it to and from its column, the handler echoes it back as a
+// string (see toAPI in http.go), and the engine values a buy from amount_minor
+// without ever reading a price at all. The product bound is a
+// DATA-CONSISTENCY one — price × quantity is what the trade was for, which is
+// the same money amount_minor carries on the very same row, so it is capped
+// where that already is: two fields describing one sum of money must not
+// disagree about how much money can exist.
 //
-// WHAT THAT LAST BOUND REFUSES THAT IS REAL: a position of more than 10^15 units
-// of something priced far below a kopeck — the quantities meme tokens are held
-// in. Nothing else comes close; a mis-scaled import column (#84, source
-// IN ('manual','csv','tinvest')) does. The refusal names the field and the
-// bound, and the bound is one line to move.
+// THE FACTORS ARE BOUNDED SEPARATELY TOO, because the product cannot always be
+// checked: price is optional and many broker exports carry none, and the read
+// path multiplies the quantity by a QUOTE's price rather than by this
+// operation's, so a quantity commonly arrives at the screen with no companion at
+// all. That is the shape #84 actually arrives in.
+//
+// WHAT THESE REFUSE THAT IS REAL: more than 10^13 units of an instrument worth
+// less than a whole rouble apiece — the quantities meme tokens are held in, and
+// what a hyperinflated currency's cash row would look like. The trade is
+// deliberate and one-sided: this program prices neither of those today
+// (portfolio.marketValue values shares, ETFs and bonds and nothing else), the
+// holdings it is built for are shares, bonds and ETFs at Russian and global
+// brokers, and a screen that cannot render is worse than a refusal a holder of
+// sub-rouble units could hit. Should such a holding ever appear, maxQuantity is
+// one line to revisit and the refusal already names the field and the number.
 //
 // NONE OF THIS LETS THE READ-SIDE GUARDS GO (portfolio.marketValue,
 // rateLookup.applyTo, sumInBase, and money.Minor behind them all). What fitted
 // when it was written can stop fitting later: a quote's price and an fx rate are
 // both unbounded from above and both arrive after the fact, a position is the
-// sum of many operations and can pass the bound one accepted buy at a time, and
-// the rows written before this bound existed are still in the journal — no
+// sum of many operations and can pass the bound one accepted buy at a time, a
+// split multiplies a whole position by a ratio no per-operation bound can size,
+// and the rows written before this bound existed are still in the journal — no
 // migration comes with it (see TestRowsWrittenBeforeTheBoundAreStillWorkable).
 // A write-time bound cannot promise the product fits; it only stops one factor
 // from being the reason it does not.
-// All three are DERIVED from maxAmountMinor rather than written out beside it,
-// so that moving the money cap moves them with it. maxQuantity comes out
-// numerically equal to it and is a different quantity all the same — a count of
-// units, not a sum of money — which is why it is named separately instead of
-// being one constant used twice.
+//
+// maxQuantity and maxPrice are DERIVED from maxAmountMinor rather than written
+// out beside it, so that moving the money cap moves them with it. maxSplitRatio
+// is not: it is the column's ceiling, and the column is what would have to move
+// first.
 var (
-	maxQuantity = decimal.NewFromInt(maxAmountMinor)
+	maxQuantity = decimal.NewFromInt(maxAmountMinor).Shift(-minorUnitScale)
 	maxPrice    = decimal.NewFromInt(maxAmountMinor).Shift(-minorUnitScale)
+
+	// maxSplitRatio is the first ratio split_ratio cannot store, so the check
+	// against it refuses the value ON it rather than past it — unlike every
+	// other bound here, which admits its own edge.
+	maxSplitRatio = decimal.New(1, 10)
 
 	// maxAmountMinorDec is maxAmountMinor itself as a decimal, so the product
 	// above is compared against it exactly rather than through an int64
@@ -182,13 +224,24 @@ func validate(o Operation) error {
 	if o.FeeMinor > maxAmountMinor {
 		return fmt.Errorf("%w: fee_minor must be <= %d", family.ErrValidation, maxAmountMinor)
 	}
-	// The two factors and their product (see maxQuantity). Checked here rather
-	// than in the buy/sell branch below: nothing stops any other type from
-	// carrying a quantity or a price, and the columns are the same columns
-	// whichever type wrote them. Magnitudes, not signed values, because these
-	// bounds are about size — a sign that has no business being negative is the
-	// business of the per-type rules below, which is where it is already caught
-	// for buy and sell.
+	// The two factors, their product, and the ratio (see maxQuantity). Checked
+	// here rather than in the per-type branches below: nothing stops any other
+	// type from carrying a quantity, a price or a ratio, and the columns are the
+	// same columns whichever type wrote them. Magnitudes, not signed values,
+	// because these bounds are about size — a sign that has no business being
+	// negative is the business of the per-type rules below, which is where it is
+	// already caught for buy, sell and split.
+	//
+	// A conversion is checked with everything else, though its row never reaches
+	// a position: the engine skips the type before it touches one, so the product
+	// check can only ever refuse there and cannot protect a valuation. It is kept
+	// because the bound is not a claim about the engine — it is the row's two
+	// money fields agreeing with each other, and the row is published in the
+	// journal whether or not a position was built from it. Exempting one type
+	// would also put back the per-type reasoning this block exists to avoid, on
+	// the very type most likely to grow a price one day: a conversion's rate is a
+	// price per unit in all but name. Keeping the check costs a refusal nothing
+	// would have read; dropping it costs a special case to remember.
 	if o.Quantity != nil {
 		if err := checkQuantityBound(*o.Quantity); err != nil {
 			return err
@@ -201,6 +254,14 @@ func validate(o Operation) error {
 		if notional := o.Price.Mul(*o.Quantity).Abs().Shift(minorUnitScale); notional.GreaterThan(maxAmountMinorDec) {
 			return fmt.Errorf("%w: price × quantity must be within ±%d minor units", family.ErrValidation, maxAmountMinor)
 		}
+	}
+	// The ratio is the one field whose damage is done to a position rather than
+	// to its own row: applySplit multiplies the WHOLE holding, so a ratio no
+	// larger than this can still carry a position built one accepted buy at a
+	// time past anything the read side can value. That is not a reason to leave
+	// it unbounded — it is the reason the read-side guards stay.
+	if o.SplitRatio != nil && o.SplitRatio.Abs().GreaterThanOrEqual(maxSplitRatio) {
+		return fmt.Errorf("%w: split_ratio must be less than %s", family.ErrValidation, maxSplitRatio)
 	}
 
 	switch o.Type {
