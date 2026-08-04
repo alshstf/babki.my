@@ -482,6 +482,357 @@ func TestMigrate_AnEmptyQuotesTableSurvivesTheCleanup(t *testing.T) {
 	}
 }
 
+// tinvestImportMigration is the version that creates the five tables behind
+// the T-Invest mirror-and-projection import: a connection (one read-only
+// token per space), the accounts it feeds, the raw operation mirror, the
+// instrument id map, and the sync run log.
+const tinvestImportMigration = 14
+
+// TestMigrate_TinvestConnectionDeleteCascadesEverythingButTheAccount pins the
+// first half of the deletion story the design settled on: a connection owns
+// its links, its mirror rows, its instrument map and its sync runs, and
+// removing it must take all four with it — that is what "the link breaks" is
+// supposed to mean when the owner disconnects. It must NOT take the babki
+// account or the instrument catalog entry, because neither is owned by the
+// connection: an account is a first-class thing the owner created (or the
+// import created on their behalf) and can go on holding manually-entered
+// operations after the connection is gone, and the instrument catalog is
+// shared across the whole instance.
+func TestMigrate_TinvestConnectionDeleteCascadesEverythingButTheAccount(t *testing.T) {
+	pool := testdb.NewEmpty(t)
+	ctx := context.Background()
+
+	upTo(t, ctx, pool, tinvestImportMigration-1)
+	spaceID := insertTinvestSpace(t, ctx, pool)
+	accountID := insertTinvestAccount(t, ctx, pool, spaceID, "Т-Инвестиции")
+	var instrumentID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO instruments (type, name, ticker, currency) VALUES ('share', 'Сбербанк', 'SBER', 'RUB') RETURNING id`).
+		Scan(&instrumentID); err != nil {
+		t.Fatalf("insert instrument: %v", err)
+	}
+
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	connectionID := insertTinvestConnection(t, ctx, pool, spaceID)
+	linkID := insertTinvestLink(t, ctx, pool, connectionID, spaceID, accountID, "2000000001")
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO tinvest_operations_mirror
+		    (connection_id, link_id, broker_operation_id, op_type, state, occurred_at, currency, payment, raw, content_key, last_confirmed_at)
+		 VALUES ($1, $2, 'op-1', 'buy', 'executed', now(), 'RUB', 100.5, '{}'::jsonb, 'key-1', now())`,
+		connectionID, linkID); err != nil {
+		t.Fatalf("insert mirror row: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO tinvest_instrument_map (connection_id, instrument_id, instrument_uid) VALUES ($1, $2, 'uid-1')`,
+		connectionID, instrumentID); err != nil {
+		t.Fatalf("insert instrument map row: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO tinvest_sync_runs (connection_id, link_id, trigger, status) VALUES ($1, $2, 'initial', 'ok')`,
+		connectionID, linkID); err != nil {
+		t.Fatalf("insert sync run: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, `DELETE FROM tinvest_connections WHERE id = $1`, connectionID); err != nil {
+		t.Fatalf("delete connection: %v", err)
+	}
+
+	for _, tbl := range []string{
+		"tinvest_account_links", "tinvest_operations_mirror",
+		"tinvest_instrument_map", "tinvest_sync_runs",
+	} {
+		var count int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM `+tbl+` WHERE connection_id = $1`, connectionID).
+			Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", tbl, err)
+		}
+		if count != 0 {
+			t.Errorf("%s left = %d after the connection was deleted, want 0: deleting a connection must cascade to everything it owns", tbl, count)
+		}
+	}
+
+	var accounts, instruments int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM accounts WHERE id = $1`, accountID).Scan(&accounts); err != nil {
+		t.Fatalf("count accounts: %v", err)
+	}
+	if accounts != 1 {
+		t.Errorf("accounts left = %d, want 1: deleting a tinvest connection must not touch the account it fed", accounts)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM instruments WHERE id = $1`, instrumentID).Scan(&instruments); err != nil {
+		t.Fatalf("count instruments: %v", err)
+	}
+	if instruments != 1 {
+		t.Errorf("instruments left = %d, want 1: deleting a tinvest connection must not touch the shared catalog", instruments)
+	}
+}
+
+// TestMigrate_TinvestAccountDeleteCascadesTheLinkButLeavesTheConnection is the
+// other direction: the owner can delete an account (a first-class thing of
+// its own) without that reaching back into the connection or any of its other
+// links. Only the one link that named this account goes.
+func TestMigrate_TinvestAccountDeleteCascadesTheLinkButLeavesTheConnection(t *testing.T) {
+	pool := testdb.NewEmpty(t)
+	ctx := context.Background()
+
+	upTo(t, ctx, pool, tinvestImportMigration-1)
+	spaceID := insertTinvestSpace(t, ctx, pool)
+	accountID := insertTinvestAccount(t, ctx, pool, spaceID, "Т-Инвестиции")
+
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	connectionID := insertTinvestConnection(t, ctx, pool, spaceID)
+	insertTinvestLink(t, ctx, pool, connectionID, spaceID, accountID, "2000000001")
+
+	if _, err := pool.Exec(ctx, `DELETE FROM accounts WHERE id = $1`, accountID); err != nil {
+		t.Fatalf("delete account: %v", err)
+	}
+
+	var links int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM tinvest_account_links WHERE connection_id = $1`, connectionID).
+		Scan(&links); err != nil {
+		t.Fatalf("count links: %v", err)
+	}
+	if links != 0 {
+		t.Errorf("links left = %d after the account was deleted, want 0", links)
+	}
+
+	var connections int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM tinvest_connections WHERE id = $1`, connectionID).
+		Scan(&connections); err != nil {
+		t.Fatalf("count connections: %v", err)
+	}
+	if connections != 1 {
+		t.Errorf("connections left = %d, want 1: deleting an account must not touch the connection it was linked to", connections)
+	}
+}
+
+// TestMigrate_TinvestConnectionStatusCheckRejectsUnknownValues pins the CHECK
+// on tinvest_connections.status: only the three states the sync worker knows
+// how to act on ('active', 'token_revoked', 'disabled') are storable.
+func TestMigrate_TinvestConnectionStatusCheckRejectsUnknownValues(t *testing.T) {
+	pool := testdb.NewEmpty(t)
+	ctx := context.Background()
+
+	upTo(t, ctx, pool, tinvestImportMigration-1)
+	spaceID := insertTinvestSpace(t, ctx, pool)
+
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO tinvest_connections (space_id, status, token_ciphertext, token_last4) VALUES ($1, 'bogus', $2, '1234')`,
+		spaceID, []byte{0x01}); err == nil {
+		t.Error("the database accepted a connection status of 'bogus'")
+	}
+
+	for _, status := range []string{"active", "token_revoked", "disabled"} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO tinvest_connections (space_id, status, token_ciphertext, token_last4) VALUES ($1, $2, $3, '1234')`,
+			spaceID, status, []byte{0x01}); err != nil {
+			t.Errorf("the database refused a connection status of %q, which is a valid one: %v", status, err)
+		}
+	}
+}
+
+// TestMigrate_TinvestSyncRunCheckedColumnsRejectUnknownValues covers all three
+// CHECK constraints on tinvest_sync_runs at once: trigger, status and
+// reconcile_status are each a closed set the sync worker and the reconciler
+// hand-code against, and a stray value in any one of them is exactly as
+// dangerous as in the others.
+func TestMigrate_TinvestSyncRunCheckedColumnsRejectUnknownValues(t *testing.T) {
+	pool := testdb.NewEmpty(t)
+	ctx := context.Background()
+
+	upTo(t, ctx, pool, tinvestImportMigration-1)
+	spaceID := insertTinvestSpace(t, ctx, pool)
+	accountID := insertTinvestAccount(t, ctx, pool, spaceID, "Т-Инвестиции")
+
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	connectionID := insertTinvestConnection(t, ctx, pool, spaceID)
+	linkID := insertTinvestLink(t, ctx, pool, connectionID, spaceID, accountID, "2000000001")
+
+	for _, c := range []struct{ trigger, status, reconcile string }{
+		{"bogus", "ok", "not_checked"},
+		{"schedule", "bogus", "not_checked"},
+		{"schedule", "ok", "bogus"},
+	} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO tinvest_sync_runs (connection_id, link_id, trigger, status, reconcile_status)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			connectionID, linkID, c.trigger, c.status, c.reconcile); err == nil {
+			t.Errorf("the database accepted a sync run with trigger=%q status=%q reconcile_status=%q", c.trigger, c.status, c.reconcile)
+		}
+	}
+
+	for _, c := range []struct{ trigger, status, reconcile string }{
+		{"schedule", "running", "not_checked"},
+		{"manual", "ok", "matched"},
+		{"initial", "failed", "mismatched"},
+	} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO tinvest_sync_runs (connection_id, link_id, trigger, status, reconcile_status)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			connectionID, linkID, c.trigger, c.status, c.reconcile); err != nil {
+			t.Errorf("the database refused a sync run with trigger=%q status=%q reconcile_status=%q, which is valid: %v", c.trigger, c.status, c.reconcile, err)
+		}
+	}
+}
+
+// TestMigrate_TinvestMirrorContentKeyIsNotUnique pins the one property the
+// mirror design most depends on getting right: content_key identifies what an
+// operation SAYS, not which operation it is, and two broker operations can
+// legitimately say the same thing (e.g. two identical top-ups in one minute).
+// A unique index here would silently drop the second one — exactly the kind
+// of silent loss "honesty over silence" rules out. The mirror is a multiset.
+func TestMigrate_TinvestMirrorContentKeyIsNotUnique(t *testing.T) {
+	pool := testdb.NewEmpty(t)
+	ctx := context.Background()
+
+	upTo(t, ctx, pool, tinvestImportMigration-1)
+	spaceID := insertTinvestSpace(t, ctx, pool)
+	accountID := insertTinvestAccount(t, ctx, pool, spaceID, "Т-Инвестиции")
+
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	connectionID := insertTinvestConnection(t, ctx, pool, spaceID)
+	linkID := insertTinvestLink(t, ctx, pool, connectionID, spaceID, accountID, "2000000001")
+
+	for _, opID := range []string{"op-1", "op-2"} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO tinvest_operations_mirror
+			    (connection_id, link_id, broker_operation_id, op_type, state, occurred_at, currency, payment, raw, content_key, last_confirmed_at)
+			 VALUES ($1, $2, $3, 'buy', 'executed', now(), 'RUB', 100.5, '{}'::jsonb, 'same-content-key', now())`,
+			connectionID, linkID, opID); err != nil {
+			t.Fatalf("insert mirror row %s: %v", opID, err)
+		}
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM tinvest_operations_mirror WHERE content_key = 'same-content-key'`).Scan(&count); err != nil {
+		t.Fatalf("count mirror rows: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("mirror rows sharing the content key = %d, want 2: content_key must not be unique", count)
+	}
+}
+
+// TestMigrate_TinvestAccountLinkUniqueConstraints pins both uniqueness rules
+// on tinvest_account_links at once, because they guard two different
+// failures: UNIQUE(account_id) keeps one babki account from being fed by two
+// links (which would make "the account this operation belongs to" ambiguous),
+// and UNIQUE(connection_id, broker_account_id) keeps one broker account from
+// being imported twice under the same connection (which would double every
+// operation in it).
+func TestMigrate_TinvestAccountLinkUniqueConstraints(t *testing.T) {
+	pool := testdb.NewEmpty(t)
+	ctx := context.Background()
+
+	upTo(t, ctx, pool, tinvestImportMigration-1)
+	spaceID := insertTinvestSpace(t, ctx, pool)
+	account1 := insertTinvestAccount(t, ctx, pool, spaceID, "Т-Инвестиции 1")
+	account2 := insertTinvestAccount(t, ctx, pool, spaceID, "Т-Инвестиции 2")
+
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	connectionID := insertTinvestConnection(t, ctx, pool, spaceID)
+	insertTinvestLink(t, ctx, pool, connectionID, spaceID, account1, "2000000001")
+
+	// account_id UNIQUE: the same babki account cannot be fed by a second link,
+	// even under a different broker account number.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO tinvest_account_links (connection_id, space_id, account_id, broker_account_id, broker_account_name, broker_account_type)
+		 VALUES ($1, $2, $3, '2000000002', 'Другой счёт', 'brokerage')`,
+		connectionID, spaceID, account1); err == nil {
+		t.Error("the database accepted a second link feeding the same account")
+	}
+
+	// UNIQUE(connection_id, broker_account_id): the same broker account cannot
+	// be linked twice under one connection, even to a different babki account.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO tinvest_account_links (connection_id, space_id, account_id, broker_account_id, broker_account_name, broker_account_type)
+		 VALUES ($1, $2, $3, '2000000001', 'Дубль по номеру брокера', 'brokerage')`,
+		connectionID, spaceID, account2); err == nil {
+		t.Error("the database accepted a second link with the same broker account id under one connection")
+	}
+
+	// A genuinely different account under a genuinely different broker account
+	// id must go through — the two checks above must not overlap into refusing
+	// this.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO tinvest_account_links (connection_id, space_id, account_id, broker_account_id, broker_account_name, broker_account_type)
+		 VALUES ($1, $2, $3, '2000000002', 'Второй счёт', 'brokerage')`,
+		connectionID, spaceID, account2); err != nil {
+		t.Errorf("the database refused a genuinely new link: %v", err)
+	}
+}
+
+// insertTinvestSpace inserts a bare space for the tinvest migration tests to
+// hang connections and accounts off of.
+func insertTinvestSpace(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {
+	t.Helper()
+	var id string
+	if err := pool.QueryRow(ctx, `INSERT INTO spaces (name) VALUES ('T-Invest test space') RETURNING id`).
+		Scan(&id); err != nil {
+		t.Fatalf("insert space: %v", err)
+	}
+	return id
+}
+
+// insertTinvestAccount inserts a brokerage account under spaceID, the kind an
+// account link points at.
+func insertTinvestAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, spaceID, name string) string {
+	t.Helper()
+	var id string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO accounts (space_id, name, type, currency) VALUES ($1, $2, 'brokerage', 'RUB') RETURNING id`,
+		spaceID, name).Scan(&id); err != nil {
+		t.Fatalf("insert account %q: %v", name, err)
+	}
+	return id
+}
+
+// insertTinvestConnection inserts a connection with a throwaway ciphertext —
+// its content is never asserted on in these migration tests, only its
+// presence and its NOT NULL shape.
+func insertTinvestConnection(t *testing.T, ctx context.Context, pool *pgxpool.Pool, spaceID string) string {
+	t.Helper()
+	var id string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO tinvest_connections (space_id, token_ciphertext, token_last4) VALUES ($1, $2, '1234') RETURNING id`,
+		spaceID, []byte{0x01, 0x02, 0x03}).Scan(&id); err != nil {
+		t.Fatalf("insert connection: %v", err)
+	}
+	return id
+}
+
+// insertTinvestLink inserts an account link under connectionID pointing at
+// accountID, with brokerAccountID as the broker's own account number.
+func insertTinvestLink(t *testing.T, ctx context.Context, pool *pgxpool.Pool, connectionID, spaceID, accountID, brokerAccountID string) string {
+	t.Helper()
+	var id string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO tinvest_account_links (connection_id, space_id, account_id, broker_account_id, broker_account_name, broker_account_type)
+		 VALUES ($1, $2, $3, $4, 'Брокерский счёт', 'brokerage') RETURNING id`,
+		connectionID, spaceID, accountID, brokerAccountID).Scan(&id); err != nil {
+		t.Fatalf("insert account link %q: %v", brokerAccountID, err)
+	}
+	return id
+}
+
 // upTo brings pool's schema to exactly the given migration version, so a test
 // can set up the state a later migration has to deal with.
 func upTo(t *testing.T, ctx context.Context, pool *pgxpool.Pool, version int64) {
