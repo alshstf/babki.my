@@ -57,7 +57,7 @@ CREATE TABLE tinvest_account_links (
 );
 
 CREATE TABLE tinvest_operations_mirror (
-    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),  -- external_id проекции
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),  -- becomes the journal operation's external_id when projected
     connection_id       UUID NOT NULL REFERENCES tinvest_connections(id) ON DELETE CASCADE,
     link_id             UUID NOT NULL REFERENCES tinvest_account_links(id) ON DELETE CASCADE,
     broker_operation_id TEXT NOT NULL,            -- attribute, NOT a key (broker ids drift)
@@ -88,11 +88,13 @@ CREATE TABLE tinvest_operations_mirror (
 CREATE INDEX tinvest_mirror_link_key_idx ON tinvest_operations_mirror (link_id, content_key);
 CREATE INDEX tinvest_mirror_unparsed_idx ON tinvest_operations_mirror (connection_id)
     WHERE unparsed_reason <> '';
--- content_key is NOT unique: two legitimate identical operations both live (multiset).
--- A unique index here would let Postgres itself silently drop the second of
--- two genuinely distinct broker operations that happen to say the same thing
--- (e.g. two identical top-ups made the same minute) — exactly the silent loss
--- "honesty over silence" rules out everywhere else in this codebase.
+-- content_key is NOT unique: the mirror is a multiset. Two broker operations
+-- can legitimately be identical in every column that feeds content_key — one
+-- instrument, one second, one amount (e.g. two identical top-ups made in the
+-- same minute) — and both are real operations that have to exist as their
+-- own row. A unique index on content_key would not merge them: Postgres
+-- would reject the second INSERT outright with a uniqueness violation, and
+-- that rejected insert is how a real, distinct operation would be lost.
 
 CREATE TABLE tinvest_instrument_map (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),

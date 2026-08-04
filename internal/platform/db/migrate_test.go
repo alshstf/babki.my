@@ -780,6 +780,59 @@ func TestMigrate_TinvestAccountLinkUniqueConstraints(t *testing.T) {
 	}
 }
 
+// TestMigrate_TinvestInstrumentMapUniqueConstraint pins UNIQUE(connection_id,
+// instrument_uid) on tinvest_instrument_map: the broker's instrument_uid must
+// resolve to exactly one catalog entry per connection, which is what the
+// instrument resolver (a later task) depends on to look the mapping up
+// without ambiguity.
+func TestMigrate_TinvestInstrumentMapUniqueConstraint(t *testing.T) {
+	pool := testdb.NewEmpty(t)
+	ctx := context.Background()
+
+	upTo(t, ctx, pool, tinvestImportMigration-1)
+	spaceID := insertTinvestSpace(t, ctx, pool)
+	var instrument1, instrument2 string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO instruments (type, name, ticker, currency) VALUES ('share', 'Сбербанк', 'SBER', 'RUB') RETURNING id`).
+		Scan(&instrument1); err != nil {
+		t.Fatalf("insert instrument: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO instruments (type, name, ticker, currency) VALUES ('share', 'Газпром', 'GAZP', 'RUB') RETURNING id`).
+		Scan(&instrument2); err != nil {
+		t.Fatalf("insert instrument: %v", err)
+	}
+
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	connectionID := insertTinvestConnection(t, ctx, pool, spaceID)
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO tinvest_instrument_map (connection_id, instrument_id, instrument_uid) VALUES ($1, $2, 'uid-1')`,
+		connectionID, instrument1); err != nil {
+		t.Fatalf("insert instrument map row: %v", err)
+	}
+
+	// Same connection, same broker instrument_uid: a second mapping would make
+	// "which catalog entry does this broker id resolve to" ambiguous — even
+	// pointing at a genuinely different instrument must not be allowed to
+	// create that ambiguity.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO tinvest_instrument_map (connection_id, instrument_id, instrument_uid) VALUES ($1, $2, 'uid-1')`,
+		connectionID, instrument2); err == nil {
+		t.Error("the database accepted a second instrument map row with the same (connection_id, instrument_uid)")
+	}
+
+	// Same connection, a genuinely different broker instrument_uid: must go
+	// through — the constraint above must not overlap into refusing this.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO tinvest_instrument_map (connection_id, instrument_id, instrument_uid) VALUES ($1, $2, 'uid-2')`,
+		connectionID, instrument2); err != nil {
+		t.Errorf("the database refused a genuinely new instrument map row: %v", err)
+	}
+}
+
 // insertTinvestSpace inserts a bare space for the tinvest migration tests to
 // hang connections and accounts off of.
 func insertTinvestSpace(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {
