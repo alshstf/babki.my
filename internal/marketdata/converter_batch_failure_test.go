@@ -23,7 +23,13 @@ import (
 // positions handlers, all three through Converter.RatesOn, and Converter.prewarm
 // inside ConvertMany, which swallows it outright and hands back the un-prefetched
 // row source. All four go through one batched fetch, and that is where the
-// warning is written, so all four are covered by the two tests below.
+// warning is written, so the two tests below cover THAT FETCH — the one place
+// the four have in common. They execute no handler code: the handlers are
+// reached by inference, from the fetch being warned about here plus each
+// handler's own test pinning that it makes exactly one batched call. Pinning it
+// end to end from a handler package is possible — a decorator over the pool
+// failing only the batched statement — and was deliberately not done, because it
+// would widen this package's exported surface for a chain that is already tight.
 //
 // WHAT IS UNDER TEST IS THE LEVEL, not that some line was written. A substring
 // match against a log buffer cannot tell a Warn from a Debug — a Debug is
@@ -188,8 +194,8 @@ func deadBatchConverter(boom error) *marketdata.Converter {
 	}))
 }
 
-// TestRatesOnLogsADeadBatchAsAWarning covers the three HTTP handlers at once:
-// each of them warms its memo through RatesOn and drops the error on the floor
+// TestRatesOnLogsADeadBatchAsAWarning covers the path all three HTTP handlers
+// take: each of them warms its memo through RatesOn and drops the error on the floor
 // by design, because the per-pair fallback below it answers correctly and an
 // error page would be a worse outcome than a slow one. That deliberate silence
 // is what left the failure undetectable, and this is the line that ends it.

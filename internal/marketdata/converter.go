@@ -367,11 +367,14 @@ func (c *Converter) rows() fxRateRows { return storeRows{store: c.store} }
 // pinned, structurally, by TestRatesOnLogsADeadBatchAsAWarning and its
 // ConvertMany twin.
 //
-// slog.Default rather than a logger of its own: a Converter is built in three
-// places and threaded through as many handlers, and cmd/babki installs the
-// configured logger as the default precisely so code that holds none can still
-// be heard (see cmd/babki/runtime.go and family.WriteError, the other user of
-// that arrangement).
+// slog.Default rather than a logger of its own: a Converter is built once in
+// production (cmd/babki, mountModules) and threaded through three handlers, so
+// the obstacle is not the wiring — it is that a logger parameter on
+// NewConverter would have to be supplied by every test that builds one, and
+// there are about twenty. cmd/babki installs the configured logger as the
+// default precisely so code that holds none can still be heard (see
+// cmd/babki/runtime.go and family.WriteError, the other user of that
+// arrangement).
 func (c *Converter) fetchRates(ctx context.Context, keys []FxRateKey) (map[FxRateKey]FxRate, error) {
 	rows, err := c.store.FxRatesOn(ctx, keys)
 	if err != nil {

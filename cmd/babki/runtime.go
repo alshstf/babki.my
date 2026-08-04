@@ -30,7 +30,9 @@ func setup(ctx context.Context, migrate bool) (*rt, error) {
 	// default is installed for the code that has none and cannot be given one
 	// without threading a logger through forty-odd call sites — today that is
 	// family.WriteError, which logs the error behind every 500 so a failure is
-	// diagnosable at all (see its doc). Installing it here rather than reaching
+	// diagnosable at all (see its doc), and marketdata.Converter.fetchRates,
+	// which reports a batched rate lookup that died while its per-pair fallback
+	// carried on answering correctly. Installing it here rather than reaching
 	// for a package-level global is what keeps that line inside the configured
 	// level and format instead of a second, differently shaped stream.
 	slog.SetDefault(log)
