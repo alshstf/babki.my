@@ -2,6 +2,7 @@ package portfolio_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -61,11 +62,30 @@ func formatText(p *string) string {
 // passing them on — an enumeration with a hole in it, which is what
 // TestPositionsIncompletePrewarmCostsTripsNotNumbers needs and no real
 // converter would ever do.
+//
+// batchErr, when set, fails the batch and only the batch: every one-pair lookup
+// still answers from the real converter. That is the failure #70 is about — a
+// timeout on the one large statement, an array-encoding problem — as opposed to
+// an outage, which takes the fallback down with it and is what failingConverter
+// stands in for.
 type countingConverter struct {
-	inner *marketdata.Converter
-	keep  func(marketdata.RateQuery) bool
-	rate  int
-	batch int
+	inner    *marketdata.Converter
+	keep     func(marketdata.RateQuery) bool
+	batchErr error
+	rate     int
+	batch    int
+}
+
+// dropping and failingBatch are the two ways positionsScreen bends the converter
+// double: an enumeration with a hole in it, and a batch statement that dies on
+// its own. Both are passed as a tune rather than set on the fixture's own line,
+// so the helper takes one parameter however many failure modes the double grows.
+func dropping(pred func(marketdata.RateQuery) bool) func(*countingConverter) {
+	return func(c *countingConverter) { c.keep = pred }
+}
+
+func failingBatch(err error) func(*countingConverter) {
+	return func(c *countingConverter) { c.batchErr = err }
 }
 
 func (c *countingConverter) Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error) {
@@ -75,6 +95,12 @@ func (c *countingConverter) Rate(ctx context.Context, from, to string, on time.T
 
 func (c *countingConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
 	c.batch++
+	if c.batchErr != nil {
+		// The zero Rates alongside the error, which is what
+		// marketdata.RatesOn itself returns on a failure and what the handler
+		// must be able to survive being handed.
+		return marketdata.Rates{}, c.batchErr
+	}
 	if c.keep == nil {
 		return c.inner.RatesOn(ctx, queries)
 	}
@@ -174,11 +200,11 @@ func (c screenCost) String() string {
 // positionsScreen builds an account of the given size (see seedPositions),
 // fetches its positions once, and reports what that one request cost.
 //
-// keep, when non-nil, is applied to the prefetch: only the queries it accepts
-// are resolved in the batch, so a test can simulate an enumeration that has
-// fallen behind the rules and check what that costs — and, more importantly,
-// what it does NOT change.
-func positionsScreen(t *testing.T, size int, keep func(marketdata.RateQuery) bool) screenCost {
+// tune, when non-nil, bends the converter double before the screen is fetched:
+// dropping() gives the prefetch a hole in it, failingBatch() kills the batch
+// statement outright. Both let a test check what a degraded prefetch costs and —
+// more importantly — what it does NOT change.
+func positionsScreen(t *testing.T, size int, tune func(*countingConverter)) screenCost {
 	t.Helper()
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
@@ -197,7 +223,10 @@ func positionsScreen(t *testing.T, size int, keep func(marketdata.RateQuery) boo
 	}
 
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
-	conv := &countingConverter{inner: marketdata.NewConverter(mdStore), keep: keep}
+	conv := &countingConverter{inner: marketdata.NewConverter(mdStore)}
+	if tune != nil {
+		tune(conv)
+	}
 	var instruments *countingInstruments
 	var journal *countingJournal
 	var spaces *countingSpaces
@@ -214,7 +243,7 @@ func positionsScreen(t *testing.T, size int, keep func(marketdata.RateQuery) boo
 	// the journal on every write with stores of its own — but the counters
 	// are zeroed here anyway, so what they hold afterwards can only be the
 	// one GET below.
-	*conv = countingConverter{inner: conv.inner, keep: conv.keep}
+	*conv = countingConverter{inner: conv.inner, keep: conv.keep, batchErr: conv.batchErr}
 	instruments.calls, journal.calls, spaces.calls, quotes.calls = 0, 0, 0, 0
 	before := poolTrips(pool)
 
@@ -434,7 +463,7 @@ func TestPositionsIncompletePrewarmCostsTripsNotNumbers(t *testing.T) {
 		{"nothing is prewarmed", func(marketdata.RateQuery) bool { return false }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			partial := positionsScreen(t, 2, tc.keep)
+			partial := positionsScreen(t, 2, dropping(tc.keep))
 
 			// The two runs are separate databases, so the instrument ids
 			// differ by construction; everything else — every figure, every
@@ -455,6 +484,110 @@ func TestPositionsIncompletePrewarmCostsTripsNotNumbers(t *testing.T) {
 				t.Fatalf("prewarm dropped queries but the request cost no more: %s (complete prewarm: %s)", partial, full)
 			}
 		})
+	}
+}
+
+// TestPositionsFailedBatchCostsTripsNotNumbers is the neighbouring property,
+// and the one the shared walk must not quietly lose: the batch STATEMENT dies —
+// timed out, or refused for how its array argument was encoded — while the
+// database is otherwise perfectly well, so every one-pair lookup still answers.
+//
+// The screen must come out identical to the one a working batch produces, paid
+// for with the round trips the batch was there to save. What must NOT happen is
+// an error page: the failure is the optimization's, not the answer's, and a
+// handler that surfaced it would turn every request the fallback could serve
+// correctly into a 500. (An outage that takes the fallback down too is the
+// opposite case and does fail the request — see
+// TestPositionsRealRateErrorFailsRequest.)
+func TestPositionsFailedBatchCostsTripsNotNumbers(t *testing.T) {
+	full := positionsScreen(t, 2, nil)
+	assertScreenIsFullyWorked(t, full.body)
+
+	dead := positionsScreen(t, 2, failingBatch(errors.New("statement timeout on the batched fx lookup")))
+	assertScreenIsFullyWorked(t, dead.body)
+
+	// The two runs are separate databases, so the instrument ids differ by
+	// construction; everything else — every figure, every currency, every date
+	// — must match exactly.
+	blankIDs := func(r positionsResp) positionsResp {
+		for i := range r.Positions {
+			r.Positions[i].Instrument.Id = ""
+		}
+		return r
+	}
+	if !reflect.DeepEqual(blankIDs(dead.body), blankIDs(full.body)) {
+		t.Fatalf("a failed batch changed the answer:\n got %+v\nwant %+v", dead.body, full.body)
+	}
+	if dead.rate <= full.rate {
+		t.Fatalf("the batch failed but nothing fell back: %s (working batch: %s) — the double is not failing what it claims to", dead, full)
+	}
+	if dead.trips <= full.trips {
+		t.Fatalf("the batch failed but the request cost no more: %s (working batch: %s)", dead, full)
+	}
+}
+
+// TestPositionsGapIsFiledNotAskedAgain pins the other half of what the walk
+// hands back. A lot date the rate table does not reach back to comes out of the
+// batch as a resolved query carrying marketdata.ErrNoRate — an honest answer,
+// not a miss — and the memo must take it as one.
+//
+// Nothing on screen can tell the difference: filed or not, in_base is null for
+// that position either way, because the per-pair fallback would ask the store
+// and be told the same thing. The only trace is the cost, which is why this test
+// asserts on the fallback count and not only on the payload. Without it, a walk
+// that dropped every entry carrying an error would leave every figure right and
+// every gap paying for a second lookup, forever, with nothing to show for it.
+func TestPositionsGapIsFiledNotAskedAgain(t *testing.T) {
+	pool := testdb.New(t)
+	mdStore := marketdata.NewStore(pool)
+	// The rate table starts at lateRateOn, so the earlyBuyOn lot has nothing on
+	// or before its date while the lateBuyOn lot and today both resolve.
+	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: mustDate(t, lateRateOn), Rate: decimal.RequireFromString("90"), Source: "test"},
+	}); err != nil {
+		t.Fatalf("seed fx rates: %v", err)
+	}
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	conv := &countingConverter{inner: marketdata.NewConverter(mdStore)}
+	url, c := setupAPI(t, pool, quotes, conv)
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	gapped := createInstrument(t, c, url, `{"type":"share","name":"Старая","ticker":"OLD","currency":"USD"}`)
+	fine := createInstrument(t, c, url, `{"type":"share","name":"Новая","ticker":"NEW","currency":"USD"}`)
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, acc.ID, gapped.ID, earlyBuyOn))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","price":"200",
+		"amount_minor":-200000,"currency":"USD"}`, acc.ID, fine.ID, lateBuyOn))
+
+	// The fixture was built through the same HTTP stack, so the counters are
+	// zeroed here: what they hold afterwards can only be the one GET below.
+	*conv = countingConverter{inner: conv.inner}
+	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET positions = %d, want 200", resp.StatusCode)
+	}
+	var body positionsResp
+	decodeJSON(t, resp, &body)
+
+	var gaps, converted int
+	for _, p := range body.Positions {
+		if p.InBase == nil {
+			gaps++
+			continue
+		}
+		converted++
+	}
+	if gaps != 1 || converted != 1 {
+		t.Fatalf("screen shows %d gap(s) and %d converted positions, want 1 and 1 — the fixture is not exercising a gap beside a working conversion", gaps, converted)
+	}
+	if conv.batch != 1 {
+		t.Fatalf("the screen made %d batched rate resolutions, want exactly 1", conv.batch)
+	}
+	if conv.rate != 0 {
+		t.Fatalf("the screen fell back to %d one-pair lookups — the batch answered «no rate» for the %s lot and that answer must be filed in the memo, not thrown away and asked for again",
+			conv.rate, earlyBuyOn)
 	}
 }
 

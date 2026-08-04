@@ -1482,6 +1482,14 @@ func dedupeQueries(queries []marketdata.RateQuery) []marketdata.RateQuery {
 // judgement to a place that cannot make it, and would turn into an error page
 // every request the fallback could have served correctly.
 //
+// WHICH ANSWERS GET FILED IS NOT DECIDED HERE. Rates.Answered walks the
+// queries and hands back only the ones the batch resolved, so a query it never
+// answered leaves no entry and rateFor resolves it itself, while a query
+// answered with "no rate" arrives carrying marketdata.ErrNoRate and is filed as
+// the honest gap it is. That rule is one statement for all three screens that
+// warm a memo this way (see marketdata.Rates.Answered); only the key an answer
+// is filed under is this package's own.
+//
 // KNOWN BLIND SPOT: a failure specific to the BATCH statement — a timeout on
 // the one large query, say — is met by nothing, because the per-pair fallback
 // then succeeds. The page is correct and slow, and no one is told the
@@ -1496,18 +1504,7 @@ func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQue
 	if err != nil {
 		return
 	}
-	for _, q := range queries {
-		res, err := resolved.For(q.From, q.To, q.On)
-		if err != nil {
-			// The batch did not answer a query it was handed — a bug in the
-			// batch or in this loop, never a missing rate, which arrives as
-			// res.Err instead (see marketdata.Rates.For). Leaving the memo cold
-			// for it is the honest treatment: rateFor asks the store itself and
-			// the figure comes out the same, one round trip dearer. Filing res
-			// anyway would file a zero rate under an entry that reads as
-			// answered, and a zero rate is a plausible-looking 0,00 on screen.
-			continue
-		}
+	for q, res := range resolved.Answered(queries) {
 		cache[newRateKey(q.From, q.To, q.On)] = &rateLookup{rate: res.Rate, date: res.RateDate, err: res.Err}
 	}
 }

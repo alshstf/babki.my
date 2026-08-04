@@ -425,9 +425,16 @@ func TestListOperationInBaseRealRateErrorFailsRequest(t *testing.T) {
 // passing them on — an enumeration with a hole in it, which is what
 // TestJournalIncompletePrewarmCostsTripsNotNumbers needs and no real converter
 // would ever do.
+//
+// batchErr, when set, fails the batch and only the batch: every one-pair lookup
+// still answers from the real converter. That is the failure #70 is about — a
+// timeout on the one large statement, an array-encoding problem — as opposed to
+// an outage, which takes the fallback down with it and is what failingConverter
+// stands in for.
 type countingConverter struct {
-	inner *marketdata.Converter
-	keep  func(marketdata.RateQuery) bool
+	inner    *marketdata.Converter
+	keep     func(marketdata.RateQuery) bool
+	batchErr error
 	// rate counts one-pair lookups (the fallback), batch counts calls to the
 	// batched resolution, and queries counts the individual rates handed to
 	// those batches — as the handler asked for them, before keep drops any.
@@ -444,6 +451,12 @@ func (c *countingConverter) Rate(ctx context.Context, from, to string, on time.T
 func (c *countingConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
 	c.batch.Add(1)
 	c.queries.Add(int64(len(queries)))
+	if c.batchErr != nil {
+		// The zero Rates alongside the error, which is what
+		// marketdata.RatesOn itself returns on a failure and what the handler
+		// must be able to survive being handed.
+		return marketdata.Rates{}, c.batchErr
+	}
 	if c.keep == nil {
 		return c.inner.RatesOn(ctx, queries)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"sort"
 	"time"
 
@@ -621,6 +622,51 @@ func (r Rates) For(from, to string, on time.Time) (RateResult, error) {
 // day normalization, so an exact duplicate and two spellings of one day each
 // count once.
 func (r Rates) Len() int { return len(r.byKey) }
+
+// Answered walks queries in the order given and hands back only the ones this
+// batch actually resolved. It is the one statement of how a prefetch is
+// consumed, shared by every caller that warms a memo from RatesOn — the
+// accounts screen, the journal page and the positions screen (see their
+// prewarmRates). Their memo keys are three different unexported types, so what
+// they can share is the WALK and not the filing: each still writes its own entry
+// under its own key, from the pair this yields.
+//
+// A query the batch never answered is SKIPPED, not handed back. For reports that
+// as ErrNotRequested, which says the enumeration that built the queries and the
+// batch that resolved them disagree — a bug in the calling code, never a gap in
+// the data. Handing it to a caller that files whatever it is given would put
+// that bug in the memo, where it reads as an answer. Skipping it leaves the memo
+// cold, and the caller's own per-pair fallback resolves the very same figure one
+// round trip dearer. That is the whole arrangement a prefetch here rests on: it
+// can cost round trips and it cannot cost a number.
+//
+// A query that resolved to no rate IS handed back, carrying ErrNoRate in
+// RateResult.Err. That is an honest domain answer — nothing connects this pair
+// on this date — and filing it is what makes the figure it belongs to come out
+// as the gap it should be, without a second lookup that could only reach the
+// same conclusion. Skipping it would change no number and would quietly cost a
+// round trip per gap, which is why the distinction is pinned by a test of its
+// own (TestAnsweredHandsBackAGenuineGapAsAnAnswer) rather than left to the
+// handlers' figures to reveal.
+//
+// A batch that failed outright never reaches here as anything but the zero
+// Rates, which answers every For with ErrNotRequested — so the walk yields
+// nothing, no entry is filed, and every figure falls back. Callers still check
+// RatesOn's error in their own right; this makes the one that forgets cost round
+// trips rather than numbers.
+func (r Rates) Answered(queries []RateQuery) iter.Seq2[RateQuery, RateResult] {
+	return func(yield func(RateQuery, RateResult) bool) {
+		for _, q := range queries {
+			res, err := r.For(q.From, q.To, q.On)
+			if err != nil {
+				continue
+			}
+			if !yield(q, res) {
+				return
+			}
+		}
+	}
+}
 
 // RateResult is what Rate would have returned for one RateQuery: the rate,
 // the date of the fx_rates row(s) behind it, and the resolution error.

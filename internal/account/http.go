@@ -381,6 +381,14 @@ func rateQueries(accounts []WithBalance, baseCurrency string, on time.Time) []ma
 // that judgement to a place that cannot make it, and would turn into an error
 // page every request the fallback could have served correctly.
 //
+// WHICH ANSWERS GET FILED IS NOT DECIDED HERE. Rates.Answered walks the
+// queries and hands back only the ones the batch resolved, so a query it never
+// answered leaves no entry and balanceInBase resolves it itself, while a query
+// answered with "no rate" arrives carrying marketdata.ErrNoRate and is filed as
+// the honest gap it is. That rule is one statement for all three screens that
+// warm a memo this way (see marketdata.Rates.Answered); only the key an answer
+// is filed under is this package's own.
+//
 // KNOWN BLIND SPOT, the same one operation.Handler.prewarmRates and
 // portfolio.Handler.prewarmRates carry: a failure specific to the BATCH
 // statement is met by nothing, because the per-pair fallback then succeeds. The
@@ -395,23 +403,7 @@ func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQue
 	if err != nil {
 		return
 	}
-	for _, q := range queries {
-		res, err := resolved.For(q.From, q.To, q.On)
-		if err != nil {
-			// The batch did not answer a query it was handed — a bug in the
-			// batch or in this loop, never a missing rate, which arrives as
-			// res.Err instead (see marketdata.Rates.For). Leaving the memo cold
-			// for it is the honest treatment: balanceInBase asks the store
-			// itself and the figure comes out the same, one round trip dearer.
-			//
-			// Filing res anyway would not publish a wrong number — Rates.For puts
-			// the same error in res.Err as well, so the entry would carry it and
-			// balanceInBase would surface it. It would publish an ERROR PAGE: a
-			// mistake in this enumeration would fail every request instead of
-			// costing it a lookup, which is the opposite of the arrangement the
-			// paragraph above describes.
-			continue
-		}
+	for q, res := range resolved.Answered(queries) {
 		cache[newRateKey(q.From, q.To, q.On)] = &rateLookup{rate: res.Rate, date: res.RateDate, err: res.Err}
 	}
 }

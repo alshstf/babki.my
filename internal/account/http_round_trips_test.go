@@ -3,6 +3,7 @@ package account_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -76,11 +77,31 @@ var screenCurrencies = []string{"USD", "EUR", "GBP", "CHF", "CNY", "KZT", "TRY",
 // passing them on — an enumeration with a hole in it, which is what
 // TestAccountsIncompletePrewarmCostsTripsNotNumbers needs and no real converter
 // would ever do.
+//
+// batchErr, when set, fails the batch and only the batch: every one-pair lookup
+// still answers from the real converter. That is the failure #70 is about — a
+// timeout on the one large statement, an array-encoding problem — as opposed to
+// an outage, which takes the fallback down with it and is what failingConverter
+// stands in for.
 type countingConverter struct {
-	inner *marketdata.Converter
-	keep  func(marketdata.RateQuery) bool
-	rate  atomic.Int64
-	batch atomic.Int64
+	inner    *marketdata.Converter
+	keep     func(marketdata.RateQuery) bool
+	batchErr error
+	rate     atomic.Int64
+	batch    atomic.Int64
+}
+
+// dropping and failingBatch are the two ways the screens below bend the
+// converter double: an enumeration with a hole in it, and a batch statement that
+// dies on its own. Both are passed as a tune rather than set on the fixture's
+// own line, so a screen helper takes one parameter however many failure modes
+// the double grows.
+func dropping(pred func(marketdata.RateQuery) bool) func(*countingConverter) {
+	return func(c *countingConverter) { c.keep = pred }
+}
+
+func failingBatch(err error) func(*countingConverter) {
+	return func(c *countingConverter) { c.batchErr = err }
 }
 
 func (c *countingConverter) ConvertMany(ctx context.Context, amounts map[string]int64, to string, on time.Time) (int64, []string, time.Time, error) {
@@ -94,6 +115,12 @@ func (c *countingConverter) Rate(ctx context.Context, from, to string, on time.T
 
 func (c *countingConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
 	c.batch.Add(1)
+	if c.batchErr != nil {
+		// The zero Rates alongside the error, which is what
+		// marketdata.RatesOn itself returns on a failure and what the handler
+		// must be able to survive being handed.
+		return marketdata.Rates{}, c.batchErr
+	}
 	if c.keep == nil {
 		return c.inner.RatesOn(ctx, queries)
 	}
@@ -144,14 +171,17 @@ func newAPIOnPool(t *testing.T, pool *pgxpool.Pool, conv *countingConverter) (st
 // number of distinct CURRENCIES rather than the number of rows: the memo
 // already collapses same-currency accounts onto one lookup, and a fixture with
 // one account each could not tell the two axes apart.
-func accountsFixture(t *testing.T, currencies int, keep func(marketdata.RateQuery) bool) (string, *http.Client, *pgxpool.Pool, *countingConverter) {
+func accountsFixture(t *testing.T, currencies int, tune func(*countingConverter)) (string, *http.Client, *pgxpool.Pool, *countingConverter) {
 	t.Helper()
 	if currencies > len(screenCurrencies) {
 		t.Fatalf("fixture asks for %d currencies, only %d are defined", currencies, len(screenCurrencies))
 	}
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
-	conv := &countingConverter{inner: marketdata.NewConverter(mdStore), keep: keep}
+	conv := &countingConverter{inner: marketdata.NewConverter(mdStore)}
+	if tune != nil {
+		tune(conv)
+	}
 	url, c := newAPIOnPool(t, pool, conv)
 
 	on := pastOn()
@@ -212,18 +242,18 @@ func getScreen(t *testing.T, url, path string, c *http.Client, pool *pgxpool.Poo
 
 // accountsScreen builds a space of `currencies` distinct currencies and reports
 // what one GET /accounts cost and answered.
-func accountsScreen(t *testing.T, currencies int, keep func(marketdata.RateQuery) bool) (screenCost, []accountListItem) {
+func accountsScreen(t *testing.T, currencies int, tune func(*countingConverter)) (screenCost, []accountListItem) {
 	t.Helper()
-	url, c, pool, conv := accountsFixture(t, currencies, keep)
+	url, c, pool, conv := accountsFixture(t, currencies, tune)
 	var body []accountListItem
 	cost := getScreen(t, url, "/api/v1/accounts", c, pool, conv, &body)
 	return cost, body
 }
 
 // summaryScreen is accountsScreen's twin for GET /summary.
-func summaryScreen(t *testing.T, currencies int, keep func(marketdata.RateQuery) bool) (screenCost, summaryResponse) {
+func summaryScreen(t *testing.T, currencies int, tune func(*countingConverter)) (screenCost, summaryResponse) {
 	t.Helper()
-	url, c, pool, conv := accountsFixture(t, currencies, keep)
+	url, c, pool, conv := accountsFixture(t, currencies, tune)
 	var body summaryResponse
 	cost := getScreen(t, url, "/api/v1/summary", c, pool, conv, &body)
 	return cost, body
@@ -347,7 +377,7 @@ func TestAccountsIncompletePrewarmCostsTripsNotNumbers(t *testing.T) {
 		{"nothing is prewarmed", func(marketdata.RateQuery) bool { return false }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			partial, partialBody := accountsScreen(t, 3, tc.keep)
+			partial, partialBody := accountsScreen(t, 3, dropping(tc.keep))
 
 			// The two runs are separate databases, so the account ids differ by
 			// construction; everything else — every figure, every currency,
@@ -363,6 +393,87 @@ func TestAccountsIncompletePrewarmCostsTripsNotNumbers(t *testing.T) {
 				t.Fatalf("prewarm dropped queries but the request cost no more: %s (complete prewarm: %s)", partial, full)
 			}
 		})
+	}
+}
+
+// TestAccountsFailedBatchCostsTripsNotNumbers is the neighbouring property, and
+// the one the shared walk must not quietly lose: the batch STATEMENT dies —
+// timed out, or refused for how its array argument was encoded — while the
+// database is otherwise perfectly well, so every one-pair lookup still answers.
+//
+// The screen must come out identical to the one a working batch produces, paid
+// for with the round trips the batch was there to save. What must NOT happen is
+// an error page: the failure is the optimization's, not the answer's, and a
+// handler that surfaced it would turn every request the fallback could serve
+// correctly into a 500. (An outage that takes the fallback down too is the
+// opposite case and does fail the request — see TestListRealRateErrorFailsRequest.)
+func TestAccountsFailedBatchCostsTripsNotNumbers(t *testing.T) {
+	full, fullBody := accountsScreen(t, 3, nil)
+	assertAccountsAreFullyWorked(t, fullBody, 3)
+
+	dead, deadBody := accountsScreen(t, 3, failingBatch(errors.New("statement timeout on the batched fx lookup")))
+	assertAccountsAreFullyWorked(t, deadBody, 3)
+
+	// The two runs are separate databases, so the account ids differ by
+	// construction; everything else — every figure, every currency, every date
+	// — must match exactly.
+	if !reflect.DeepEqual(blankAccountIDs(deadBody), blankAccountIDs(fullBody)) {
+		t.Fatalf("a failed batch changed the answer:\n got %+v\nwant %+v", deadBody, fullBody)
+	}
+	if dead.rate <= full.rate {
+		t.Fatalf("the batch failed but nothing fell back: %s (working batch: %s) — the double is not failing what it claims to",
+			dead, full)
+	}
+	if dead.trips <= full.trips {
+		t.Fatalf("the batch failed but the request cost no more: %s (working batch: %s)", dead, full)
+	}
+}
+
+// TestAccountsGapIsFiledNotAskedAgain pins the other half of what the walk hands
+// back. A currency the rate provider does not cover comes out of the batch as a
+// resolved query carrying marketdata.ErrNoRate — an honest answer, not a miss —
+// and the memo must take it as one.
+//
+// Nothing on screen can tell the difference: filed or not, balance_in_base is
+// null for that account either way, because the per-pair fallback would ask the
+// store and be told the same thing. The only trace is the cost, which is why
+// this test asserts on the fallback count and not only on the payload. Without
+// it, a walk that dropped every entry carrying an error would leave every figure
+// right and every gap paying for a second lookup, forever, with nothing to show
+// for it.
+func TestAccountsGapIsFiledNotAskedAgain(t *testing.T) {
+	// Two currencies with rates, plus one the fixture deliberately leaves
+	// unseeded — screenCurrencies beyond the first two are not given rate rows.
+	url, c, pool, conv := accountsFixture(t, 2, nil)
+	unrated := screenCurrencies[len(screenCurrencies)-1]
+	id := mkAccount(t, url, c, unrated+" счёт", unrated)
+	setBalance(t, url, c, id, 500000)
+
+	var body []accountListItem
+	cost := getScreen(t, url, "/api/v1/accounts", c, pool, conv, &body)
+	t.Logf("%d currencies, one of them unrated: %s", 3, cost)
+
+	var gaps, converted int
+	for _, a := range body {
+		switch {
+		case a.Currency == unrated && a.BalanceInBase == nil:
+			gaps++
+		case a.Currency != unrated && a.BalanceInBase != nil:
+			converted++
+		default:
+			t.Fatalf("account in %s published balance_in_base %v: every currency but %s has a rate seeded, and %s has none",
+				a.Currency, a.BalanceInBase, unrated, unrated)
+		}
+	}
+	if gaps != 1 || converted != 4 {
+		t.Fatalf("screen shows %d gap(s) and %d converted rows, want 1 and 4 — the fixture is not exercising a gap beside working conversions", gaps, converted)
+	}
+	if cost.batch != 1 {
+		t.Fatalf("the screen made %d batched rate resolutions, want exactly 1: %s", cost.batch, cost)
+	}
+	if cost.rate != 0 {
+		t.Fatalf("the screen fell back to %d one-pair lookups: %s — the batch answered «no rate» for %s and that answer must be filed in the memo, not thrown away and asked for again",
+			cost.rate, cost, unrated)
 	}
 }
 
