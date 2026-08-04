@@ -367,6 +367,34 @@ func (c *Converter) rows() fxRateRows { return storeRows{store: c.store} }
 // pinned, structurally, by TestRatesOnLogsADeadBatchAsAWarning and its
 // ConvertMany twin.
 //
+// A CANCELED REQUEST IS NOT THIS NEWS AND DOES NOT GET THIS LINE (#98). The
+// reader navigated away, the request context was canceled, and the batch
+// statement died with it — the same branch, and a completely different event.
+// Nothing degraded, because there was no longer a request to be slow: the whole
+// harm this warning reports is "the screen came out right and dear", and there
+// is no screen. Writing it up as a breakage would put an alarm nobody can act on
+// beside the one that matters, and a stream of false alarms is how a line added
+// to be noticed stops being read. So a cancellation goes to DEBUG under its own
+// message: still there for whoever turns the level up while chasing an abandoned
+// request, absent from the stream the warning lives in.
+//
+// Only context.Canceled, and NOT context.DeadlineExceeded. A deadline that
+// expired is the program's own limit running out — precisely the slowness this
+// warning exists to reveal, and the batch failure most worth hearing about.
+// Pinned by TestRatesOnStillWarnsWhenADeadlineExpires.
+//
+// THAT RULE IS NOT MADE GENERAL, and the omission is deliberate: there is no
+// cancellation convention in this codebase, and family.WriteError logs ERROR for
+// a canceled request too. The two lines answer different questions, so one rule
+// would not fit both. This one asks "did the optimization die?", to which a
+// cancellation is not a lesser yes but a no. WriteError's asks "did a request
+// this server accepted fail to be answered?", to which a cancellation is a
+// truthful yes; whether that deserves ERROR is a judgement about that handler's
+// own taxonomy, made in the same switch that picks the 500 a departed client
+// will never read, and changing it is changing a status-code decision from
+// inside a marketdata fix. Left as it is, on purpose, rather than spread from
+// here.
+//
 // slog.Default rather than a logger of its own: a Converter is built once in
 // production (cmd/babki, mountModules) and threaded through three handlers, so
 // the obstacle is not the wiring — it is that a logger parameter on
@@ -378,10 +406,29 @@ func (c *Converter) rows() fxRateRows { return storeRows{store: c.store} }
 func (c *Converter) fetchRates(ctx context.Context, keys []FxRateKey) (map[FxRateKey]FxRate, error) {
 	rows, err := c.store.FxRatesOn(ctx, keys)
 	if err != nil {
-		slog.Default().Warn("batched fx rate lookup failed", "keys", len(keys), "err", err.Error())
+		if canceled(ctx, err) {
+			slog.Default().Debug("batched fx rate lookup canceled", "keys", len(keys), "err", err.Error())
+		} else {
+			slog.Default().Warn("batched fx rate lookup failed", "keys", len(keys), "err", err.Error())
+		}
 		return nil, err
 	}
 	return rows, nil
+}
+
+// canceled reports whether a lookup failed because the caller had already gone
+// away, rather than because anything is wrong.
+//
+// Both the error and the context are consulted, and they are asked different
+// questions. The error is the ordinary route — pgx reports a statement killed by
+// its context with the context's own error, so errors.Is finds it. The context
+// is asked as well because a driver is free to report the same event in words of
+// its own ("conn closed") once the connection is torn down underneath it, and
+// then the error alone would not say. Asking both errs toward silence, which is
+// the right direction here: a warning missed while nobody was waiting costs
+// nothing, and a false one costs the credibility of every true one.
+func canceled(ctx context.Context, err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)
 }
 
 // prewarm resolves, in one round trip, the rows converting every currency in
@@ -784,11 +831,37 @@ func (c *Converter) RatesOn(ctx context.Context, queries []RateQuery) (Rates, er
 // failure: ErrNoRate rides along in the query's own result, anything else
 // fails the call and voids the whole batch.
 //
-// Over a prefetched source, "anything else" can only be errNotPrefetched —
-// the two passes of RatesOn disagreeing about what resolution consults. That
-// is a bug in this file, and the one outcome it must not have is to pass for
-// a missing rate on one row of a page that otherwise looks perfectly fine.
-func resolveQueries(ctx context.Context, rows fxRateRows, queries []RateQuery) (Rates, error) {
+// "Anything else" can only be errNotPrefetched — the two passes of RatesOn
+// disagreeing about what resolution consults. That is a bug in this file, and
+// the one outcome it must not have is to pass for a missing rate on one row of
+// a page that otherwise looks perfectly fine.
+//
+// The parameter is prefetchedRows and not the fxRateRows interface for exactly
+// that sentence's sake (#97). It is what makes the sentence TRUE rather than
+// merely intended: a source that queries a database could fail for a dozen
+// ordinary reasons, and the error line below — which says a bug happened — would
+// then be saying it about a database having a bad day. The type is the argument.
+//
+// AND IT SAYS SO OUT LOUD, because nobody above will. RatesOn hands this error
+// back beside the zero Rates, and the three HTTP handlers that call it drop it
+// on the floor by design (an error page is a worse outcome than a slow correct
+// one — see their prewarmRates). The memo then stays cold and every figure on
+// the page falls back to a lookup of its own: symptom for symptom the dead batch
+// #70 closed, and before this line just as invisible.
+//
+// ERROR, and here the neighbour that is wrong is WARN. The dead batch is warned
+// about because the database may be perfectly well tomorrow; this cannot come
+// right on its own — the code is wrong, the next request degrades exactly as
+// this one did, and it will go on doing so until somebody reads this line. That
+// is the same distinction money.ErrOverflow draws against a missing rate: data
+// that is absent will come back, code that is wrong will not. The level is
+// pinned by TestResolveQueriesLogsAnUncoveredQueryAsAnError, and its silence on
+// a healthy batch by the sibling test beside it.
+//
+// A canceled request cannot reach this line: prefetchedRows answers from a map
+// and never touches ctx, so the cancellation rule fetchRates states has nothing
+// to do here.
+func resolveQueries(ctx context.Context, rows prefetchedRows, queries []RateQuery) (Rates, error) {
 	out := Rates{byKey: make(map[rateLookupKey]RateResult, len(queries))}
 	for _, q := range queries {
 		rate, rateDate, err := rateVia(ctx, rows, q.From, q.To, q.On)
@@ -798,6 +871,14 @@ func resolveQueries(ctx context.Context, rows fxRateRows, queries []RateQuery) (
 		case errors.Is(err, ErrNoRate):
 			out.byKey[q.lookupKey()] = RateResult{Err: err}
 		default:
+			// The error already names the pair and the date it was asked for
+			// (see prefetchedRows.rateOn); the query names what the caller
+			// wanted, which is not always the same triple once a bridge is
+			// involved. Both, because chasing this bug means knowing which
+			// branch of the resolution reached past the enumeration.
+			slog.Default().Error("fx rate prefetch did not cover the resolution",
+				"query", fmt.Sprintf("%s -> %s on %s", q.From, q.To, q.On.Format("2006-01-02")),
+				"err", err.Error())
 			return Rates{}, err
 		}
 	}

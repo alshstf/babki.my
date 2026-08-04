@@ -357,19 +357,14 @@ function fractionDigitsOf(value: string): number {
 // fraction of a kopeck can be dropped is the total — once, exactly as it
 // always was for a share.
 //
-// Where the two part company is that last step, and the comment stops short of
-// claiming otherwise: the server's money.Minor
-// (internal/platform/money/money.go) rounds half away from zero, while
-// multiplyToMinor truncates. 98,0005 % of a 1 000,00 ₽ face, one bond, is
-// 980,005 ₽ exactly — from which this side takes 98 000 kopecks and the
-// server's valuation of the same holding takes 98 001. That difference is
-// older than bonds (a share's total truncates the same way), it is a kopeck
-// on a sub-kopeck remainder, and the two figures are answers to different
-// questions anyway: what this trade cost versus what the position is worth
-// today. It is written down here so that "agrees" is not read as "agrees to
-// the kopeck", not as a defect this function may quietly fix — a client that
-// started rounding money differently from the rest of its own path would be
-// a worse problem than the kopeck.
+// That last step now rounds the same way on both sides (#94): multiplyToMinor
+// rounds half away from zero, which is what the server's money.Minor
+// (internal/platform/money/money.go) has always done. 98,0005 % of a
+// 1 000,00 ₽ face, one bond, is 980,005 ₽ exactly, and both sides make 98 001
+// kopecks of it. The two figures still answer different questions — what this
+// trade cost versus what the position is worth today — so they are free to
+// differ for honest reasons, such as a quote that moved; what they are no
+// longer free to do is differ because one of them truncated.
 //
 // Returns null rather than a number whenever there is no conversion to
 // publish. A malformed percentage, a percentage of exactly zero, or a face
@@ -458,12 +453,35 @@ export function bondPercentFromPrice(pricePerUnit: string, faceValueMinor: numbe
 //
 // Algorithm: parse each operand into a BigInt mantissa + decimal-digit count,
 // multiply the mantissas as BigInt (exact — no float rounding is possible),
-// then reduce the combined decimal-digit count down to 2 (minor units) by
-// truncating the excess digits. Sub-minor-unit remainders are dropped
-// (truncation, not rounding): e.g. 1 × 0.001 = 0.001 of a unit, which
-// truncates to 0 minor units. Returns null on malformed input or on overflow
-// past Number.MAX_SAFE_INTEGER (BigInt math can't silently lose precision
-// the way float math would, so overflow is detected exactly).
+// then reduce the combined decimal-digit count down to 2 (minor units).
+//
+// THE REDUCTION ROUNDS HALF AWAY FROM ZERO, WHICH IS THE SERVER'S RULE (#94).
+// money.Minor in Go (internal/platform/money/money.go) rounds every figure the
+// server publishes that way — decimal.Decimal.Round(0)'s own behaviour — and
+// this is the same arithmetic on the same money, so it has to reach the same
+// integer. It used to truncate: 98,0005 % of a 1 000,00 ₽ face is 980,005 ₽
+// for one bond, from which this side took 98 000 kopecks while the server's
+// valuation of that identical holding took 98 001. One kopeck, always, and
+// invisible — which is exactly the shape this codebase names as the defect
+// that eventually bites: two independent computations of one value.
+//
+// Half away from zero rather than half up, because the two differ on the
+// negative side and this program's rule is the first: a debt's magnitude is
+// never shrunk by rounding. Both operands here are non-negative by contract
+// (the caller negates the result for a buy — see trade-dialog.tsx), so what is
+// computed below is a MAGNITUDE, and rounding a magnitude away from zero and
+// negating afterwards is precisely half away from zero on the signed figure.
+//
+// Written as (2n + d) / 2d so the halving happens in integers and no double is
+// created on the way — the same form bondPercentFromPrice uses, and for the
+// same reason. Sub-minor-unit remainders below a half still vanish: 1 × 0.001
+// is 0,1 of a kopeck and rounds to 0 minor units.
+//
+// Returns null on malformed input or on overflow past Number.MAX_SAFE_INTEGER
+// (BigInt math can't silently lose precision the way float math would, so
+// overflow is detected exactly). The bound is checked AFTER the rounding, on
+// the figure actually returned, for the reason money.Minor gives for checking
+// its own after rounding: the rounded figure is the one that gets published.
 export function multiplyToMinor(qty: string, price: string): number | null {
   const q = parseDecimalString(qty);
   const p = parseDecimalString(price);
@@ -479,9 +497,11 @@ export function multiplyToMinor(qty: string, price: string): number | null {
   } else if (totalDecimals < MINOR_DECIMALS) {
     minorBig = productMantissa * 10n ** BigInt(MINOR_DECIMALS - totalDecimals);
   } else {
-    // BigInt division truncates toward zero, which is exactly "truncate the
-    // excess digits" for the non-negative values this function accepts.
-    minorBig = productMantissa / 10n ** BigInt(totalDecimals - MINOR_DECIMALS);
+    // floor(n/d + 1/2) — half away from zero for the non-negative n this
+    // function accepts, since BigInt division of a non-negative numerator
+    // truncates toward zero and so is a floor.
+    const divisor = 10n ** BigInt(totalDecimals - MINOR_DECIMALS);
+    minorBig = (2n * productMantissa + divisor) / (2n * divisor);
   }
 
   if (minorBig > BigInt(Number.MAX_SAFE_INTEGER)) return null;

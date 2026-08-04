@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -23,7 +21,7 @@ import (
 // positions handlers, all three through Converter.RatesOn, and Converter.prewarm
 // inside ConvertMany, which swallows it outright and hands back the un-prefetched
 // row source. All four go through one batched fetch, and that is where the
-// warning is written, so the two tests below cover THAT FETCH — the one place
+// warning is written, so the tests below cover THAT FETCH — the one place
 // the four have in common. They execute no handler code: the handlers are
 // reached by inference, from the fetch being warned about here plus each
 // handler's own test pinning that it makes exactly one batched call. Pinning it
@@ -31,128 +29,38 @@ import (
 // failing only the batched statement — and was deliberately not done, because it
 // would widen this package's exported surface for a chain that is already tight.
 //
+// It also covers #98, which is about the same fetch NOT warning: a request the
+// reader abandoned kills the batch statement through its context, and that used
+// to be written up as a breakage beside the genuine ones. See the last two tests
+// and fetchRates' own doc for where the line between the two is drawn.
+//
 // WHAT IS UNDER TEST IS THE LEVEL, not that some line was written. A substring
 // match against a log buffer cannot tell a Warn from a Debug — a Debug is
 // invisible at this application's default level, which is the very silence #70
 // is about — and this repository has already shipped one test that passed for
 // exactly that reason. So records are captured structurally and the level is
-// read off the record.
+// read off the record, through the helpers in logcapture_test.go that every
+// level assertion in this package shares.
 
 // deadBatchMessage is the line an operator greps for. Naming it here rather
 // than matching loosely means a silent rename is a red test with a list of what
 // WAS logged, not a test that quietly stops watching anything.
 const deadBatchMessage = "batched fx rate lookup failed"
 
-// logCapture is an slog.Handler that keeps every record whole.
+// assertOneWarning fails unless exactly one record carries deadBatchMessage,
+// that record was written at WARN, and it names the cause.
 //
-// Enabled answers true for EVERY level on purpose. The point is to observe the
-// level a line was written at, and a handler that filtered by level would make a
-// line demoted to Debug simply disappear — the assertion below would then fail
-// with "no such record" instead of "wrong level", which is the same colour for
-// the wrong reason and would hide a genuine rename behind a genuine demotion.
-type logCapture struct {
-	mu      sync.Mutex
-	records []slog.Record
-}
-
-func (c *logCapture) Enabled(context.Context, slog.Level) bool { return true }
-
-func (c *logCapture) Handle(_ context.Context, r slog.Record) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.records = append(c.records, r.Clone())
-	return nil
-}
-
-func (c *logCapture) WithAttrs([]slog.Attr) slog.Handler { return c }
-func (c *logCapture) WithGroup(string) slog.Handler      { return c }
-
-// all returns a snapshot of everything captured so far.
-func (c *logCapture) all() []slog.Record {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]slog.Record, len(c.records))
-	copy(out, c.records)
-	return out
-}
-
-// captureLogs installs a recording handler as the process default for the rest
-// of the test, and restores the previous one afterwards. slog.Default is where
-// the code under test writes, for the same reason family.WriteError does: it
-// holds no logger of its own and cmd/babki installs the configured one there
-// (see runtime.go). Nothing in this package's tests runs in parallel, so one
-// default at a time is enough.
-func captureLogs(t *testing.T) *logCapture {
-	t.Helper()
-	c := &logCapture{}
-	previous := slog.Default()
-	slog.SetDefault(slog.New(c))
-	t.Cleanup(func() { slog.SetDefault(previous) })
-	return c
-}
-
-// assertOneWarning fails unless exactly one record carries msg, that record was
-// written at WARN, and it names the cause.
+// Both neighbours are wrong and for opposite reasons: DEBUG (or INFO) is
+// invisible at the level this application runs at, which is the silence being
+// fixed, and ERROR is what family.WriteError writes when a request actually
+// failed — a batch that died while its fallback answered correctly must not
+// read like a user who got no answer.
 //
-// The level is compared for equality rather than "at least WARN". Both
-// neighbours are wrong and for opposite reasons: DEBUG (or INFO) is invisible at
-// the level this application runs at, which is the silence being fixed, and
-// ERROR is what family.WriteError writes when a request actually failed — a
-// batch that died while its fallback answered correctly must not read like a
-// user who got no answer.
-func assertOneWarning(t *testing.T, capture *logCapture, cause string) {
+// The capture machinery it stands on lives in logcapture_test.go, shared with
+// the tests that read the other two levels this package writes.
+func assertOneWarning(t *testing.T, capture *marketdata.LogCapture, cause string) {
 	t.Helper()
-	records := capture.all()
-	var matched []slog.Record
-	for _, r := range records {
-		if r.Message == deadBatchMessage {
-			matched = append(matched, r)
-		}
-	}
-	if len(matched) != 1 {
-		t.Fatalf("%d records say %q, want exactly 1; everything captured: %s",
-			len(matched), deadBatchMessage, describeRecords(records))
-	}
-	if matched[0].Level != slog.LevelWarn {
-		t.Fatalf("%q was logged at %s, want %s — a dead batch is not a failed request (the answer is right) and not routine (the optimization is dead), and at %s it would not be printed at all under the default level",
-			deadBatchMessage, matched[0].Level, slog.LevelWarn, matched[0].Level)
-	}
-	if got := attrsOf(matched[0]); !strings.Contains(got, cause) {
-		t.Fatalf("%q carried %s, which does not name the cause %q — a warning nobody can act on is barely better than silence",
-			deadBatchMessage, got, cause)
-	}
-}
-
-// describeRecords renders captured records for a failure message: level and
-// message, which is everything needed to tell a rename from a demotion.
-func describeRecords(records []slog.Record) string {
-	if len(records) == 0 {
-		return "(nothing at all was logged)"
-	}
-	var b strings.Builder
-	for i, r := range records {
-		if i > 0 {
-			b.WriteString("; ")
-		}
-		b.WriteString(r.Level.String())
-		b.WriteString(" ")
-		b.WriteString(r.Message)
-	}
-	return b.String()
-}
-
-// attrsOf flattens one record's attributes into a single string for the
-// contains check above.
-func attrsOf(r slog.Record) string {
-	var b strings.Builder
-	r.Attrs(func(a slog.Attr) bool {
-		b.WriteString(a.Key)
-		b.WriteString("=")
-		b.WriteString(a.Value.String())
-		b.WriteString(" ")
-		return true
-	})
-	return b.String()
+	marketdata.AssertOneRecordAt(t, capture, deadBatchMessage, slog.LevelWarn, cause)
 }
 
 // deadBatch is a source of rows whose BATCH query fails while single-row lookups
@@ -202,7 +110,7 @@ func deadBatchConverter(boom error) *marketdata.Converter {
 func TestRatesOnLogsADeadBatchAsAWarning(t *testing.T) {
 	boom := errors.New("canceling statement due to statement timeout")
 	conv := deadBatchConverter(boom)
-	capture := captureLogs(t)
+	capture := marketdata.CaptureLogs(t)
 
 	got, err := conv.RatesOn(context.Background(), []marketdata.RateQuery{
 		{From: "USD", To: "RUB", On: date("2026-07-01")},
@@ -229,7 +137,7 @@ func TestRatesOnLogsADeadBatchAsAWarning(t *testing.T) {
 func TestConvertManyLogsADeadBatchAsAWarning(t *testing.T) {
 	boom := errors.New("canceling statement due to statement timeout")
 	conv := deadBatchConverter(boom)
-	capture := captureLogs(t)
+	capture := marketdata.CaptureLogs(t)
 
 	converted, missing, ratesOn, err := conv.ConvertMany(context.Background(),
 		map[string]int64{"USD": 10000}, "RUB", date("2026-07-01"))
@@ -246,4 +154,58 @@ func TestConvertManyLogsADeadBatchAsAWarning(t *testing.T) {
 		t.Fatalf("ConvertMany rates_on = %v, want 2026-06-30 (the row the fallback found)", ratesOn)
 	}
 	assertOneWarning(t, capture, "statement timeout")
+}
+
+// canceledBatchMessage is the line a canceled batch writes instead of the
+// warning. It is a DIFFERENT message rather than the same one at a lower level,
+// because it reports a different event: not "the optimization died" but "nobody
+// is waiting for this any more". An operator grepping for a dead batch must not
+// find these, and one asking why a request stopped half-way must be able to.
+const canceledBatchMessage = "batched fx rate lookup canceled"
+
+// TestRatesOnDoesNotSoundTheAlarmForACanceledRequest is #98. A reader who
+// navigates away cancels the request context, the batch statement dies with it,
+// and until now that landed in the same branch as a statement timeout and was
+// written up as a breakage. It is not one: nothing degraded, because there was
+// no longer a request to be slow. False alarms devalue the very line #70 added
+// to be noticed, so this one goes to DEBUG — present for whoever turns the level
+// up, absent from the stream the warning lives in.
+//
+// Both halves are asserted. That the cancellation is recorded at DEBUG, and that
+// the dead-batch warning is NOT written — the second being the whole point, and
+// the one a test asserting only the first would let regress.
+func TestRatesOnDoesNotSoundTheAlarmForACanceledRequest(t *testing.T) {
+	// A context the reader has already abandoned, and a batch statement failing
+	// the way pgx fails one: with the context's own error.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	conv := deadBatchConverter(context.Canceled)
+	capture := marketdata.CaptureLogs(t)
+
+	if _, err := conv.RatesOn(ctx, []marketdata.RateQuery{
+		{From: "USD", To: "RUB", On: date("2026-07-01")},
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("RatesOn err = %v, want context.Canceled — a cancellation still fails the call, it just is not news", err)
+	}
+	marketdata.AssertOneRecordAt(t, capture, canceledBatchMessage, slog.LevelDebug, "context canceled")
+	marketdata.AssertNoRecord(t, capture, deadBatchMessage)
+}
+
+// TestRatesOnStillWarnsWhenADeadlineExpires draws the line the cancellation rule
+// stops at, and it is deliberate: only context.Canceled is routine.
+// context.DeadlineExceeded is the server's OWN limit running out, which is the
+// slowness the warning exists to reveal — demoting it would silence the batch
+// failure most worth hearing about. The reader who leaves cancels; a deadline
+// that expires is the program failing to be quick enough.
+func TestRatesOnStillWarnsWhenADeadlineExpires(t *testing.T) {
+	conv := deadBatchConverter(context.DeadlineExceeded)
+	capture := marketdata.CaptureLogs(t)
+
+	if _, err := conv.RatesOn(context.Background(), []marketdata.RateQuery{
+		{From: "USD", To: "RUB", On: date("2026-07-01")},
+	}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RatesOn err = %v, want context.DeadlineExceeded", err)
+	}
+	assertOneWarning(t, capture, "deadline exceeded")
+	marketdata.AssertNoRecord(t, capture, canceledBatchMessage)
 }

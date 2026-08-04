@@ -353,6 +353,135 @@ func TestMigrate_SoundFaceValuesDoNotStopTheUpgrade(t *testing.T) {
 	}
 }
 
+// inventedQuoteDateMigration is the version that drops the quotes whose date
+// was the day they were fetched rather than the session they belong to.
+const inventedQuoteDateMigration = 13
+
+// TestMigrate_QuotesWithAnInventedDateAreDropped is #92. Until #96 the moex
+// provider stamped a quote with the caller's clock while the price it carried
+// was the previous session's, so the stored date named a day the price does not
+// belong to. Most such rows heal by themselves — the next refresh overwrites
+// them — but an instrument that STOPS being quoted is never written again, so
+// its row would name the wrong day for as long as the database exists. The
+// ordinary way into that shape is a bond redeemed off TQOB or TQCB, or a share
+// delisted from TQBR — not the owner's frozen FinEx and SPB paper, which this
+// provider has never priced at all (see the migration's own comment).
+//
+// The migration deletes every quote the moex provider wrote, and this pins both
+// halves of that: the provider's rows go, and rows from any other source stay.
+// The second half is what keeps the demo stand and any hand-recorded price
+// alive — a provider can refetch what it owns, and nothing can refetch what it
+// does not.
+func TestMigrate_QuotesWithAnInventedDateAreDropped(t *testing.T) {
+	pool := testdb.NewEmpty(t)
+	ctx := context.Background()
+
+	upTo(t, ctx, pool, inventedQuoteDateMigration-1)
+	var instrumentID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO instruments (type, name, ticker, currency)
+		 VALUES ('share', 'ФинЭкс', 'FXUS', 'RUB') RETURNING id`).Scan(&instrumentID); err != nil {
+		t.Fatalf("insert instrument: %v", err)
+	}
+	// One row per source, all for the one instrument, each on its own day —
+	// (instrument_id, on_date) is the primary key, so one instrument cannot hold
+	// two sources on one date. Two moex rows, because "delete the provider's
+	// quotes" must not be satisfied by deleting the newest one and leaving the
+	// history behind it.
+	staged := []struct{ on, source string }{
+		{"2026-07-20", "moex"},
+		{"2026-07-17", "moex"},
+		{"2026-07-16", "seed"},
+		{"2026-07-15", "manual"},
+	}
+	for _, s := range staged {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO quotes (instrument_id, on_date, price, currency, source)
+			 VALUES ($1, $2, 305.50, 'RUB', $3)`, instrumentID, s.on, s.source); err != nil {
+			t.Fatalf("insert a %s quote on %s: %v", s.source, s.on, err)
+		}
+	}
+
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	var left []string
+	rows, err := pool.Query(ctx, `SELECT source || ' ' || on_date::text FROM quotes ORDER BY source, on_date`)
+	if err != nil {
+		t.Fatalf("read the quotes back: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var row string
+		if err := rows.Scan(&row); err != nil {
+			t.Fatalf("scan a quote: %v", err)
+		}
+		left = append(left, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read the quotes back: %v", err)
+	}
+	want := []string{"manual 2026-07-15", "seed 2026-07-16"}
+	if strings.Join(left, ", ") != strings.Join(want, ", ") {
+		t.Errorf("quotes left = [%s], want [%s]\nevery moex row must go (its date may name a day its price does not belong to, and nothing in the row says which), and no other row may — the provider refetches what it owns and nothing refetches the rest",
+			strings.Join(left, ", "), strings.Join(want, ", "))
+	}
+
+	// The instrument itself is not collateral. Deleting a price must not delete
+	// the paper it was a price of.
+	var instruments int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM instruments`).Scan(&instruments); err != nil {
+		t.Fatalf("count instruments: %v", err)
+	}
+	if instruments != 1 {
+		t.Errorf("instruments left = %d, want 1", instruments)
+	}
+
+	// And the table goes on accepting what the provider will write back on its
+	// next refresh: the migration is a one-off cleanup, not a rule.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO quotes (instrument_id, on_date, price, currency, source)
+		 VALUES ($1, '2026-07-21', 306.00, 'RUB', 'moex')`, instrumentID); err != nil {
+		t.Errorf("the database refused a fresh moex quote after the migration: %v", err)
+	}
+}
+
+// TestMigrate_AnEmptyQuotesTableSurvivesTheCleanup is the self-hoster who has
+// never run the quotes job — a fresh install, or one tracking nothing the moex
+// provider covers. A DELETE that matches nothing must be an ordinary no-op, not
+// a stumble on the way up. TestMigrate covers the same claim from the other end
+// (the whole chain over a database with no tables at all); this one puts real
+// rows in the table and leaves every one of them there.
+func TestMigrate_AnEmptyQuotesTableSurvivesTheCleanup(t *testing.T) {
+	pool := testdb.NewEmpty(t)
+	ctx := context.Background()
+
+	upTo(t, ctx, pool, inventedQuoteDateMigration-1)
+	var instrumentID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO instruments (type, name, ticker, currency)
+		 VALUES ('share', 'Сбербанк', 'SBER', 'RUB') RETURNING id`).Scan(&instrumentID); err != nil {
+		t.Fatalf("insert instrument: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO quotes (instrument_id, on_date, price, currency, source)
+		 VALUES ($1, '2026-07-20', 305.50, 'RUB', 'seed')`, instrumentID); err != nil {
+		t.Fatalf("insert a seed quote: %v", err)
+	}
+
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v\nnothing here was written by a provider, so nothing here may be touched", err)
+	}
+	var left int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM quotes`).Scan(&left); err != nil {
+		t.Fatalf("count quotes: %v", err)
+	}
+	if left != 1 {
+		t.Errorf("quotes left = %d, want 1", left)
+	}
+}
+
 // upTo brings pool's schema to exactly the given migration version, so a test
 // can set up the state a later migration has to deal with.
 func upTo(t *testing.T, ctx context.Context, pool *pgxpool.Pool, version int64) {

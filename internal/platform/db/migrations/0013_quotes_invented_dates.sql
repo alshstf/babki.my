@@ -1,0 +1,79 @@
+-- +goose Up
+-- Delete every quote the moex provider wrote, because some unknown number of
+-- them are dated to a day their price does not belong to (#92).
+--
+-- WHAT WENT WRONG. Until #96 the provider read PREVPRICE — a price from an
+-- earlier session — and stored it under the date of the FETCH, taken from the
+-- caller's clock. The number was real and the day beside it was invented. On a
+-- Monday morning the screen showed Friday's price captioned as Monday's, and
+-- nothing downstream could tell, because a wrong date looks exactly like a right
+-- one.
+--
+-- WHY THE ROWS DO NOT ALL HEAL. Most do: the quotes job refetches, writes the
+-- row under its true session date, and once the session catches up the stale one
+-- is overwritten. But an instrument that STOPS being quoted is never written
+-- again — the job stores nothing for a ticker it gets no price for and deletes
+-- nothing — so its row survives with the invented date for as long as this
+-- database exists, and the positions screen would caption it «Цена на …» with
+-- the wrong day until the end of time.
+--
+-- That shape is ordinary rather than exotic: a bond redeemed off TQOB or TQCB,
+-- a share delisted from TQBR. Thousands of bond issues turn over on those two
+-- boards. It is NOT the owner's frozen FinEx and SPB paper, which an earlier
+-- draft of this comment named — no version of this provider has ever priced
+-- those: it queries four boards (TQBR, TQOB, TQCB, TQRD), FinEx funds are
+-- listed only on boards ISS reports as not traded and which return no rows at
+-- all, and SPB-listed paper is not on MOEX ISS in any form. Those positions
+-- show no price today and will show none after this migration.
+--
+-- WHY ALL OF THEM AND NOT JUST THE GUILTY ONES. Because there is no way to tell
+-- them apart. The only evidence of the bug is the date itself, and an invented
+-- date is a perfectly ordinary date — no column records how it was arrived at,
+-- and no cutoff separates the two, since a database may hold rows written both
+-- before and after the fixed provider was deployed. Every predicate narrower
+-- than "all of them" would therefore be a guess, and a guess that spares a row
+-- spares it forever: the rows most likely to be missed are the never-refetched
+-- ones, which are exactly the rows this migration exists for. Deleting more than
+-- strictly necessary costs a refetch. Deleting less costs the bug.
+--
+-- WHY THIS IS SAFE. A quote is not something a person recorded — it is a copy of
+-- what an exchange published, and the provider fetches the full set on its next
+-- run (marketdata.quotesWorker, every refresh interval), writing price, currency,
+-- session date and source together. So this is a cleanup and not a loss: within
+-- one refresh the table holds the same prices under their true dates. In the
+-- meantime a position with no quote shows a dash and says it has no price, which
+-- is this program's ordinary treatment of a figure it cannot vouch for — and a
+-- better answer than a price stamped with a day it did not come from.
+--
+-- An instrument that has stopped being quoted does NOT get its row back, and
+-- that is the intended outcome rather than a side effect. Its price could not be
+-- trusted to be what it claimed anyway: for a security that did not trade,
+-- PREVPRICE is a carried figure that can be weeks older than the session it was
+-- filed under (measured against live ISS in #96). A dash on such a row is the
+-- truth; the old row was a real number wearing a fabricated day.
+--
+-- WHY ONLY source = 'moex'. Not because those rows are the convictable ones —
+-- see above, none are — but because they are the RESTORABLE ones. Only a
+-- provider can refetch what a provider wrote. Quotes from any other source are
+-- not automatically replaced by anything: the demo seed writes its own under
+-- source 'seed' (cmd/babki/seed.go), and deleting those would leave the stand
+-- priceless until somebody reseeded it by hand. moex is also the only quote
+-- provider this program has ever had, so it is the only source that could have
+-- carried #90's invented date in the first place.
+--
+-- The source is spelled out as a literal rather than read from anywhere. A
+-- migration is a record of one moment, and the moment it records is the one when
+-- the rows written by the provider then called 'moex' had to go; a later rename
+-- must not silently change what this file did.
+DELETE FROM quotes WHERE source = 'moex';
+
+-- +goose Down
+-- Nothing. A deletion of data has no inverse — the rows are gone and this file
+-- never held them — and inventing one would be worse than admitting it: rows
+-- restored from anywhere would carry the very dates the Up removed.
+--
+-- Downgrading is not a dead end all the same. The provider refills the table on
+-- its next run either way, so the state this migration leaves behind is the
+-- state an older binary would have reached by itself within one refresh
+-- interval.
+SELECT 1;

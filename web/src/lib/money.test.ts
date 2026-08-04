@@ -344,16 +344,60 @@ describe("multiplyToMinor", () => {
     expect(multiplyToMinor(qty, price)).toBe(want);
   });
 
-  it("truncates many fractional digits instead of rounding", () => {
-    // 1 × 0.129999999999 = 0.129999999999 of a unit → truncates to 12 minor
-    // units, not 13 — confirms truncation semantics hold beyond 2 combined
-    // decimal digits of input.
-    expect(multiplyToMinor("1", "0.129999999999")).toBe(12);
+  it("rounds many fractional digits up rather than dropping them", () => {
+    // 1 × 0.129999999999 = 12,9999999999 kopecks. Under the rule this file
+    // now shares with the server that is 13, not the 12 truncation used to
+    // give — the same figure decimal.Decimal.Round(0) produces in Go. This
+    // expectation moved with the rule, not to fit the code: a remainder of
+    // 0,9999999999 of a kopeck is nearer to the next kopeck than to this one
+    // by every definition of nearer.
+    expect(multiplyToMinor("1", "0.129999999999")).toBe(13);
+  });
+
+  // THE case from #94, digit for digit. An exchange quotes an OFZ at
+  // 98,0005 % of its 1 000,00 ₽ face; bondPriceFromPercent turns that into
+  // 980,005 ₽ per bond exactly, and one bond of it is 98 000,5 kopecks — a
+  // figure sitting exactly on the half. The server's own valuation of that
+  // same holding (money.Minor, half away from zero) says 98 001. Anything but
+  // 98 001 here is the client and the server rounding one number two ways.
+  it("rounds a half kopeck the way the server rounds it", () => {
+    const price = bondPriceFromPercent("98.0005", 100_000);
+    expect(price).toBe("980.005");
+    expect(multiplyToMinor("1", price ?? "")).toBe(98_001);
+  });
+
+  it.each([
+    // Exactly half a minor unit, away from zero — the whole rule in one case.
+    ["1", "0.005", 1],
+    // Just under and just over it, so "away from zero" is not satisfied by a
+    // rule that simply rounds everything up.
+    ["1", "0.0049", 0],
+    ["1", "0.0051", 1],
+    // Half a kopeck on top of a whole one: 1,5 kopecks → 2, not 1.
+    ["1", "0.015", 2],
+    // The half rule survives the sub-minor-unit floor: 0,005 of a kopeck is
+    // still nowhere near half of one.
+    ["1", "0.00005", 0],
+  ])("rounds %s × %s half away from zero", (qty, price, want) => {
+    expect(multiplyToMinor(qty, price)).toBe(want);
+  });
+
+  // The sell side of a trade sends this magnitude as it is; the buy side sends
+  // it negated (trade-dialog.tsx). Rounding the MAGNITUDE half away from zero
+  // and negating afterwards is what "half away from zero" means for the signed
+  // figure — 98 000,5 kopecks of debt becomes −98 001, never −98 000 — so the
+  // magnitude of a debt is never shrunk by the rounding. This is the same
+  // guarantee money.Minor states in Go, reached from the other direction
+  // because this function's operands are non-negative by contract.
+  it("never shrinks the magnitude a buy will negate", () => {
+    const magnitude = multiplyToMinor("1", "980.005");
+    expect(magnitude).toBe(98_001);
+    expect(-(magnitude ?? 0)).toBe(-98_001);
   });
 
   it("handles many decimal digits on both operands without precision loss", () => {
     // Exact BigInt math: 0.123456789 × 0.000000001 = 0.000000000123456789,
-    // far below one minor unit — truncates to 0, not NaN/Infinity as float
+    // far below HALF a minor unit — rounds to 0, not NaN/Infinity as float
     // multiplication of such small magnitudes might risk.
     expect(multiplyToMinor("0.123456789", "0.000000001")).toBe(0);
   });
