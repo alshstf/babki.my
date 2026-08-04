@@ -3,6 +3,8 @@ package marketdata_test
 import (
 	"context"
 	"errors"
+	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -756,6 +758,121 @@ func TestRatesOnCostsOneRoundTripWhateverTheCount(t *testing.T) {
 		if after := pool.Stat().AcquireCount(); after-before != 1 {
 			t.Fatalf("RatesOn(%d queries) acquired %d connections, want exactly 1", len(queries), after-before)
 		}
+	}
+}
+
+// TestConvertManyCostsOneRoundTripWhateverTheCurrencies is ConvertMany's own
+// end of #72: what a summary pays must not grow with the number of currencies
+// it holds. The screen it backs has one row per currency and nothing else, so
+// the currencies ARE its size — which is why memoizing by currency, the fix
+// that served the positions and journal screens, buys nothing here.
+//
+// Two runs of different width rather than one magic number: what must be true
+// is not "one", it is "the same however many". One is asserted too, because
+// here — unlike at the HTTP level, where a request makes statements of its own
+// — the whole call is the batch and there is nothing else to count.
+func TestConvertManyCostsOneRoundTripWhateverTheCurrencies(t *testing.T) {
+	conv, store, pool, ctx := newConverterFixtureWithPool(t)
+	on := date("2026-07-03")
+
+	// A direct <currency>/RUB row each, so every one of them converts and the
+	// unbatched cost would be exactly one lookup per currency.
+	currencies := []string{"USD", "EUR", "CHF", "GBP", "SEK", "TRY"}
+	rates := make([]marketdata.FxRate, 0, len(currencies))
+	for i, currency := range currencies {
+		rates = append(rates, marketdata.FxRate{
+			Base: currency, Quote: "RUB", On: on,
+			Rate: decimal.NewFromInt(int64(10 + i)), Source: "cbr",
+		})
+	}
+	if err := store.UpsertFxRates(ctx, rates); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	for _, width := range []int{2, len(currencies)} {
+		amounts := make(map[string]int64, width)
+		for i, currency := range currencies[:width] {
+			amounts[currency] = int64(1000 + i)
+		}
+
+		before := pool.Stat().AcquireCount()
+		_, missing, _, err := conv.ConvertMany(ctx, amounts, "RUB", on)
+		if err != nil {
+			t.Fatalf("ConvertMany(%d currencies): %v", width, err)
+		}
+		// Otherwise the cheapest call is the one that converts nothing, and a
+		// cost assertion would be satisfied by a total that answers nothing.
+		if len(missing) != 0 {
+			t.Fatalf("ConvertMany(%d currencies) left %v unconverted, so the trips below bought less than the whole total", width, missing)
+		}
+		if trips := pool.Stat().AcquireCount() - before; trips != 1 {
+			t.Fatalf("ConvertMany(%d currencies) acquired %d connections, want exactly 1", width, trips)
+		}
+	}
+}
+
+// TestConvertManyMatchesConvertOneAtATime is the differential that keeps
+// ConvertMany's batched resolution honest: every entry must come out exactly as
+// converting it on its own would, across all four ways a rate resolves.
+//
+// A batch is the easiest place in this package to change a number by accident,
+// because the change would be uniform — every row on the screen shifted the same
+// way, with nothing beside it to disagree. The fixture therefore covers the
+// direct row, the inverse of a reverse row, a RUB bridge and a pair nothing
+// connects, and checks the SUM against the same amounts run through Convert one
+// by one.
+func TestConvertManyMatchesConvertOneAtATime(t *testing.T) {
+	conv, store, ctx := newConverterFixture(t)
+	on := date("2026-07-03")
+
+	// USD and EUR quote against the hub; converting into GBP therefore bridges
+	// through it, RUB->GBP resolves by inversion of the seeded GBP/RUB row, and
+	// KZT has nothing at all.
+	if err := store.UpsertFxRates(ctx, []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: on, Rate: dec("91.2"), Source: "cbr"},
+		{Base: "EUR", Quote: "RUB", On: date("2026-07-01"), Rate: dec("100"), Source: "cbr"},
+		{Base: "GBP", Quote: "RUB", On: on, Rate: dec("120"), Source: "cbr"},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	amounts := map[string]int64{
+		"USD": 123456, // bridged: USD -> RUB -> GBP
+		"EUR": -50000, // bridged too, and negative, where rounding is directional
+		"RUB": 777777, // inverse: no RUB/GBP row exists, only GBP/RUB
+		"GBP": 42,     // identity: no rate resolved at all
+		"KZT": 999,    // nothing connects it: belongs in missing, not in the sum
+	}
+
+	var wantTotal int64
+	var wantMissing []string
+	for currency, amountMinor := range amounts {
+		got, err := conv.Convert(ctx, amountMinor, currency, "GBP", on)
+		if errors.Is(err, marketdata.ErrNoRate) {
+			wantMissing = append(wantMissing, currency)
+			continue
+		}
+		if err != nil {
+			t.Fatalf("Convert(%s): %v", currency, err)
+		}
+		wantTotal += got
+	}
+	sort.Strings(wantMissing)
+
+	converted, missing, _, err := conv.ConvertMany(ctx, amounts, "GBP", on)
+	if err != nil {
+		t.Fatalf("ConvertMany: %v", err)
+	}
+	if converted != wantTotal {
+		t.Fatalf("ConvertMany = %d, want %d — the sum of the very same amounts converted one at a time", converted, wantTotal)
+	}
+	if !reflect.DeepEqual(missing, wantMissing) {
+		t.Fatalf("ConvertMany missing = %v, want %v", missing, wantMissing)
+	}
+	// A total equal to zero would match a batch that converted nothing, so the
+	// fixture has to be one that actually adds up to something.
+	if wantTotal == 0 {
+		t.Fatal("the fixture totals zero, which any broken batch would also produce")
 	}
 }
 

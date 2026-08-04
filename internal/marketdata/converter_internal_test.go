@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 // TestPrefetchEnumeratesExactlyWhatTheAllAbsentWalkConsults guards the one way
@@ -85,6 +87,114 @@ func TestPrefetchedRowsTellsAbsenceApartFromIgnorance(t *testing.T) {
 	}
 	if err == nil || errors.Is(err, ErrNoRate) {
 		t.Fatalf("un-prefetched key: err = %v, want a loud error that is not ErrNoRate", err)
+	}
+}
+
+// recordedRows is an fxRateRows that answers with one fixed row and remembers
+// every key it was asked for. It stands in for the store under warmRows, so the
+// fallback can be observed without a database: what matters is WHETHER the
+// question was passed on, not what came back.
+type recordedRows struct {
+	row  FxRate
+	ok   bool
+	seen []FxRateKey
+}
+
+func (r *recordedRows) rateOn(_ context.Context, base, quote string, on time.Time) (FxRate, bool, error) {
+	r.seen = append(r.seen, FxRateKey{Base: base, Quote: quote, On: on})
+	return r.row, r.ok, nil
+}
+
+// TestWarmRowsAsksTheStoreOnlyForWhatWasNotPrefetched pins the property that
+// makes ConvertMany's prewarm safe to have at all: it is a cache, so a row it
+// does not hold costs a query and never a wrong answer.
+//
+// The two halves are opposites and both matter:
+//
+//   - a key that WAS prefetched is answered from the batch, absent or present,
+//     and the store is never asked. Retrying an absent-but-requested key would
+//     undo the whole saving, one query per pair that legitimately has no rate;
+//   - a key that was NOT prefetched is passed to the store. Answering it as
+//     absent — which is what prefetchedRows' shape would do here — would turn a
+//     hole in the enumeration into a currency reported as having no rate, and
+//     that is a figure quietly missing from a total rather than an error.
+//
+// No database: this is about which source gets the question.
+func TestWarmRowsAsksTheStoreOnlyForWhatWasNotPrefetched(t *testing.T) {
+	ctx := context.Background()
+	on := time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)
+	present := FxRateKey{Base: "USD", Quote: "RUB", On: on}
+	absent := FxRateKey{Base: "EUR", Quote: "RUB", On: on}
+	unasked := FxRateKey{Base: "CHF", Quote: "RUB", On: on}
+
+	prefetched := FxRate{Base: "USD", Quote: "RUB", On: on, Rate: decimal.NewFromInt(90)}
+	fromStore := FxRate{Base: "CHF", Quote: "RUB", On: on, Rate: decimal.NewFromInt(95)}
+	fallback := &recordedRows{row: fromStore, ok: true}
+	w := warmRows{
+		asked:    map[FxRateKey]struct{}{present: {}, absent: {}},
+		rows:     map[FxRateKey]FxRate{present: prefetched},
+		fallback: fallback,
+	}
+
+	got, ok, err := w.rateOn(ctx, present.Base, present.Quote, present.On)
+	if err != nil || !ok || !got.Rate.Equal(prefetched.Rate) {
+		t.Fatalf("prefetched key: (%v, %v, %v), want the batch's own row %s", got.Rate, ok, err, prefetched.Rate)
+	}
+	if _, ok, err = w.rateOn(ctx, absent.Base, absent.Quote, absent.On); ok || err != nil {
+		t.Fatalf("prefetched-but-empty key: ok = %v, err = %v, want an honest absence and no error", ok, err)
+	}
+	if len(fallback.seen) != 0 {
+		t.Fatalf("the store was asked for %v, but both keys were prefetched — a batched pair must never cost a query", fallback.seen)
+	}
+
+	got, ok, err = w.rateOn(ctx, unasked.Base, unasked.Quote, unasked.On)
+	if err != nil || !ok || !got.Rate.Equal(fromStore.Rate) {
+		t.Fatalf("un-prefetched key: (%v, %v, %v), want the store's row %s — a hole in the enumeration must cost a query, not an answer",
+			got.Rate, ok, err, fromStore.Rate)
+	}
+	if len(fallback.seen) != 1 || fallback.seen[0] != unasked {
+		t.Fatalf("the store was asked for %v, want exactly [%v]", fallback.seen, unasked)
+	}
+}
+
+// TestPrewarmEnumeratesEveryCurrencyItIsGiven checks the half of ConvertMany's
+// prewarm that decides what the one round trip is for: every non-identity
+// currency in the map must put its whole resolution tree into the batch, and an
+// identity conversion must put nothing there at all.
+//
+// It matters because the enumeration is what the round-trip count rests on: a
+// currency left out of it is not a wrong number (warmRows asks the store) but
+// it is a query per screen, which is exactly what #72 is about, and nothing
+// else in this package would notice.
+func TestPrewarmEnumeratesEveryCurrencyItIsGiven(t *testing.T) {
+	ctx := context.Background()
+	on := time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)
+
+	candidates := &recordingRows{}
+	for _, currency := range []string{"USD", "EUR", "RUB"} {
+		_, _, _ = rateVia(ctx, candidates, currency, "RUB", on)
+	}
+
+	// USD->RUB and EUR->RUB each walk direct then inverse against the hub; the
+	// from->RUB bridge leg then collapses onto those same two keys because the
+	// target IS the hub, and the RUB->to leg becomes RUB/RUB, which
+	// resolveRate asks for in earnest (only rateVia short-circuits an identity,
+	// and the bridge does not go through it). RUB->RUB as a whole conversion
+	// does short-circuit, and records nothing of its own.
+	want := []FxRateKey{
+		{Base: "USD", Quote: "RUB", On: on},
+		{Base: "RUB", Quote: "USD", On: on},
+		{Base: "RUB", Quote: "RUB", On: on},
+		{Base: "EUR", Quote: "RUB", On: on},
+		{Base: "RUB", Quote: "EUR", On: on},
+	}
+	if len(candidates.keys) != len(want) {
+		t.Fatalf("enumeration recorded %v, want exactly %v", candidates.keys, want)
+	}
+	for _, k := range want {
+		if _, ok := candidates.seen[k]; !ok {
+			t.Fatalf("enumeration recorded %v, missing %v", candidates.keys, k)
+		}
 	}
 }
 
