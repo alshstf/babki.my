@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
@@ -482,6 +483,98 @@ func TestRunsRecordTheOutcomeAndPaginate(t *testing.T) {
 
 	if _, _, err := f.store.RunsByConnection(f.ctx, f.conn.ID, 0, 0); err == nil {
 		t.Errorf("a limit of zero was accepted; it asks for the probe row alone")
+	}
+}
+
+// finishedRun opens a run for one link and closes it with the given outcome,
+// returning the run as it was started (its id is what the assertions name).
+func (f fixture) finishedRun(t *testing.T, linkID uuid.UUID, outcome RunOutcome) SyncRun {
+	t.Helper()
+	run, err := f.store.StartRun(f.ctx, f.conn.ID, linkID, TriggerSchedule)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if err := f.store.FinishRun(f.ctx, run.ID, outcome); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+	return run
+}
+
+// A VERDICT BELONGS TO THE ACCOUNT IT WAS MADE FOR. A run is made for one
+// (connection, link) pair and the check happens inside it, so its verdict says
+// nothing about the connection's other accounts. The arrangement below is the
+// one that used to be published as the connection's own answer: the account
+// that differs is checked FIRST, the account that agrees a moment later —
+// so "the newest check of this connection" is the tick, and the difference
+// never surfaces.
+func TestTheLastCheckIsKeptPerLinkedAccount(t *testing.T) {
+	f := newFixture(t)
+	second := f.secondLink(t)
+
+	differs := f.finishedRun(t, f.link.ID, RunOutcome{Status: RunOK, Reconcile: ReconcileResult{
+		Status: ReconcileMismatched,
+		Mismatches: []ReconcileMismatch{{
+			Kind: MismatchCurrency, Label: "RUB",
+			Broker: decimal.RequireFromString("1000.50"), Journal: decimal.Zero,
+		}},
+	}})
+	agrees := f.finishedRun(t, second.ID, RunOutcome{
+		Status: RunOK, Reconcile: ReconcileResult{Status: ReconcileMatched},
+	})
+
+	byLink, err := f.store.LastReconcileByLink(f.ctx, f.conn.ID)
+	if err != nil {
+		t.Fatalf("LastReconcileByLink: %v", err)
+	}
+	if len(byLink) != 2 {
+		t.Fatalf("%d verdicts for 2 checked accounts: %+v", len(byLink), byLink)
+	}
+	if got := byLink[f.link.ID]; got.ID != differs.ID || got.ReconcileStatus != ReconcileMismatched {
+		t.Errorf("the account that differs carries run %s / %q, want %s / %q",
+			got.ID, got.ReconcileStatus, differs.ID, ReconcileMismatched)
+	}
+	if got := byLink[second.ID]; got.ID != agrees.ID || got.ReconcileStatus != ReconcileMatched {
+		t.Errorf("the account that agrees carries run %s / %q, want %s / %q",
+			got.ID, got.ReconcileStatus, agrees.ID, ReconcileMatched)
+	}
+	// The differing account's own verdict is intact even though a LATER check
+	// of a different account agreed — the erasure this read exists to prevent.
+	if len(byLink[f.link.ID].ReconcileMismatches) == 0 {
+		t.Errorf("the differing account lost its list of differences")
+	}
+	if at := byLink[f.link.ID].ReconciledAt; at == nil {
+		t.Errorf("a checked account has no time of the check")
+	}
+}
+
+// A link nobody checked is ABSENT rather than present with an empty verdict:
+// "no entry" is what the caller turns into `not_checked`, and a run that
+// failed before it could look leaves the previous check of ITS OWN account
+// standing.
+func TestAnUncheckedAccountHasNoVerdictAndAFailedRunErasesNone(t *testing.T) {
+	f := newFixture(t)
+	second := f.secondLink(t)
+
+	matched := f.finishedRun(t, f.link.ID, RunOutcome{
+		Status: RunOK, Reconcile: ReconcileResult{Status: ReconcileMatched},
+	})
+	// The same account, later, dying before it could check anything.
+	f.finishedRun(t, f.link.ID, RunOutcome{Status: RunFailed, Error: "брокер ответил 429"})
+	// And the second account: a run that succeeded but reconciled nothing.
+	f.finishedRun(t, second.ID, RunOutcome{Status: RunOK, ReadCount: 3})
+
+	byLink, err := f.store.LastReconcileByLink(f.ctx, f.conn.ID)
+	if err != nil {
+		t.Fatalf("LastReconcileByLink: %v", err)
+	}
+	if len(byLink) != 1 {
+		t.Fatalf("%d verdicts, want only the one account that was ever checked: %+v", len(byLink), byLink)
+	}
+	if got, ok := byLink[f.link.ID]; !ok || got.ID != matched.ID {
+		t.Errorf("the checked account carries %+v, want run %s — a later failed run erased it", got, matched.ID)
+	}
+	if _, ok := byLink[second.ID]; ok {
+		t.Errorf("an account nothing ever reconciled carries a verdict")
 	}
 }
 

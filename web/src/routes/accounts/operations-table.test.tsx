@@ -1469,6 +1469,28 @@ describe("OperationsTable", () => {
       expect(screen.queryByRole("button", { name: "Удалить" })).not.toBeInTheDocument();
     });
 
+    // WHAT IS TRUE OF EVERY IMPORTED ROW is that this program will not delete
+    // it. That it comes BACK afterwards is true of the T-Invest import alone,
+    // which rebuilds its rows from the broker's mirror; nothing rebuilds a
+    // 'csv' row, and the shared hint used to promise that one would return.
+    it("promises a rebuild only where something rebuilds", async () => {
+      renderTable({ canDelete: true, operations: [makeOperation({ source: "tinvest" })] });
+
+      expect(await screen.findByText("Т-Инвестиции")).toHaveAttribute(
+        "title",
+        "Эту операцию записал импорт из Т-Инвестиций, а не человек: удалить её здесь нельзя — при следующей загрузке она соберётся заново",
+      );
+    });
+
+    it("tells a row nothing rebuilds only that it cannot be deleted", async () => {
+      renderTable({ canDelete: true, operations: [makeOperation({ source: "csv" })] });
+
+      expect(await screen.findByText("Загружено извне")).toHaveAttribute(
+        "title",
+        "Эту операцию записал импорт, а не человек: удалить её здесь нельзя",
+      );
+    });
+
     it("keeps the source visible to a viewer, who has no delete column at all", async () => {
       renderTable({
         canDelete: false,

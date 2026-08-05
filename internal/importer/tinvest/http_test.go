@@ -472,8 +472,8 @@ func TestCreatingAConnectionMakesRubleBrokerageAccountsAndQueuesTheFirstSync(t *
 			BrokerAccountType string    `json:"broker_account_type"`
 			OpenedOn          *string   `json:"opened_on"`
 		} `json:"accounts"`
-		LastSuccessfulSyncAt *string   `json:"last_successful_sync_at"`
-		LastReconcile        *struct{} `json:"last_reconcile"`
+		LastSuccessfulSyncAt *string            `json:"last_successful_sync_at"`
+		Reconciles           []accountReconcile `json:"reconciles"`
 	}
 	if err := json.Unmarshal([]byte(body), &out); err != nil {
 		t.Fatalf("decode %s: %v", body, err)
@@ -492,9 +492,18 @@ func TestCreatingAConnectionMakesRubleBrokerageAccountsAndQueuesTheFirstSync(t *
 	if out.Accounts[0].OpenedOn == nil || *out.Accounts[0].OpenedOn != "2019-03-14" {
 		t.Errorf("first link opened_on = %v, want 2019-03-14 from the broker", out.Accounts[0].OpenedOn)
 	}
-	if out.LastSuccessfulSyncAt != nil || out.LastReconcile != nil {
-		t.Errorf("a brand new connection claims a sync (%v) or a check (%v); it has had neither",
-			out.LastSuccessfulSyncAt, out.LastReconcile)
+	if out.LastSuccessfulSyncAt != nil {
+		t.Errorf("a brand new connection claims a sync at %v; it has had none", out.LastSuccessfulSyncAt)
+	}
+	// A verdict for each account it imports, and every one of them saying that
+	// nobody has checked yet — which is what a brand new connection knows.
+	if len(out.Reconciles) != 2 {
+		t.Fatalf("verdicts = %d, want one per linked account (2)", len(out.Reconciles))
+	}
+	for i, rec := range out.Reconciles {
+		if rec.Status != "not_checked" || rec.At != nil {
+			t.Errorf("account %d claims a check: %+v", i, rec)
+		}
 	}
 
 	queued := api.inserter.queued()
@@ -1257,44 +1266,148 @@ func TestARunNobodyCheckedIsNotARunThatFoundNothing(t *testing.T) {
 		t.Errorf("link_id = %s, want the connection's only link %s", newest.LinkID, links[0].ID)
 	}
 
-	// And the connection keeps the verdict the older run reached, rather than
-	// reporting the newest run's silence as "nobody has checked".
-	var conn struct {
-		LastReconcile *struct {
-			At         time.Time         `json:"at"`
-			Status     string            `json:"status"`
-			Mismatches []json.RawMessage `json:"mismatches"`
-		} `json:"last_reconcile"`
+	// And the account keeps the verdict the older run of it reached, rather
+	// than reporting the newest run's silence as "nobody has checked".
+	conn := connectionReconciles(t, api, id)
+	if len(conn) != 1 {
+		t.Fatalf("%d verdicts for a connection with one account: %+v", len(conn), conn)
 	}
-	code, body = do(t, api.owner, "GET", api.url+"/api/v1/tinvest/connections/"+id.String(), "")
+	if conn[0].Status != "matched" || len(conn[0].Mismatches) != 0 || conn[0].At == nil {
+		t.Errorf("the account says %+v, want the matched verdict with an empty list and a time", conn[0])
+	}
+	if conn[0].LinkID != links[0].ID {
+		t.Errorf("the verdict names link %s, want %s", conn[0].LinkID, links[0].ID)
+	}
+}
+
+// accountReconcile is TinvestAccountReconcile as the wire carries it, decoded
+// by hand: what this file checks is the JSON the owner's browser receives, not
+// the Go value the handler assembled.
+type accountReconcile struct {
+	LinkID            uuid.UUID         `json:"link_id"`
+	AccountID         uuid.UUID         `json:"account_id"`
+	BrokerAccountName string            `json:"broker_account_name"`
+	At                *time.Time        `json:"at"`
+	Status            string            `json:"status"`
+	Mismatches        []json.RawMessage `json:"mismatches"`
+}
+
+func connectionReconciles(t *testing.T, api *testAPI, id uuid.UUID) []accountReconcile {
+	t.Helper()
+	code, body := do(t, api.owner, "GET", api.url+"/api/v1/tinvest/connections/"+id.String(), "")
 	if code != http.StatusOK {
 		t.Fatalf("status %d, body %s", code, body)
+	}
+	var conn struct {
+		Reconciles []accountReconcile `json:"reconciles"`
 	}
 	if err := json.Unmarshal([]byte(body), &conn); err != nil {
 		t.Fatalf("decode %s: %v", body, err)
 	}
-	if conn.LastReconcile == nil {
-		t.Fatalf("last_reconcile is null, but a check did happen: %s", body)
+	return conn.Reconciles
+}
+
+// THE CASE A SINGLE CONNECTION-WIDE VERDICT GOT WRONG. Two accounts checked in
+// one sync: the first differs, the second agrees a moment later. Publishing the
+// connection's newest check drew a tick over the difference, and — because the
+// differing account's check is forever the older of the two — its verdict could
+// never be seen at all.
+func TestEachLinkedAccountCarriesItsOwnVerdict(t *testing.T) {
+	api := newTestAPI(t)
+	ctx := context.Background()
+	code, body := do(t, api.owner, "POST", api.url+"/api/v1/tinvest/connections",
+		`{"token":"`+demoToken+`","accounts":[`+
+			`{"broker_account_id":"2000000001","account_name":"Т-Банк брокерский"},`+
+			`{"broker_account_id":"2000000002","account_name":"Т-Банк ИИС"}]}`)
+	if code != http.StatusCreated {
+		t.Fatalf("create connection: status %d, body %s", code, body)
 	}
-	if conn.LastReconcile.Status != "matched" || len(conn.LastReconcile.Mismatches) != 0 {
-		t.Errorf("last_reconcile = %+v, want the matched verdict with an empty list", conn.LastReconcile)
+	var created struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(body), &created); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	links, err := api.store.LinksByConnection(ctx, created.ID)
+	if err != nil || len(links) != 2 {
+		t.Fatalf("links = %d, %v", len(links), err)
+	}
+
+	finish := func(linkID uuid.UUID, rec ReconcileResult) {
+		t.Helper()
+		run, err := api.store.StartRun(ctx, created.ID, linkID, TriggerSchedule)
+		if err != nil {
+			t.Fatalf("start run: %v", err)
+		}
+		if err := api.store.FinishRun(ctx, run.ID, RunOutcome{Status: RunOK, Reconcile: rec}); err != nil {
+			t.Fatalf("finish run: %v", err)
+		}
+	}
+	finish(links[0].ID, ReconcileResult{
+		Status: ReconcileMismatched,
+		Mismatches: []ReconcileMismatch{{
+			Kind: MismatchCurrency, Label: "RUB",
+			Broker: decimal.RequireFromString("1000.50"), Journal: decimal.Zero,
+		}},
+	})
+	finish(links[1].ID, ReconcileResult{Status: ReconcileMatched})
+
+	got := connectionReconciles(t, api, created.ID)
+	if len(got) != 2 {
+		t.Fatalf("%d verdicts for 2 accounts: %+v", len(got), got)
+	}
+	// One entry per linked account, in the order the accounts are listed in.
+	if got[0].LinkID != links[0].ID || got[1].LinkID != links[1].ID {
+		t.Fatalf("verdicts are not in the accounts' own order: %+v", got)
+	}
+	if got[0].Status != "mismatched" || len(got[0].Mismatches) != 1 {
+		t.Errorf("the differing account says %+v, want mismatched with its one difference", got[0])
+	}
+	if got[1].Status != "matched" || len(got[1].Mismatches) != 0 {
+		t.Errorf("the agreeing account says %+v, want matched with an empty list", got[1])
+	}
+	// Each verdict names whose it is, without the reader joining anything.
+	if got[0].AccountID != links[0].AccountID || got[0].BrokerAccountName != links[0].BrokerAccountName {
+		t.Errorf("the first verdict names account %s / %q, want %s / %q",
+			got[0].AccountID, got[0].BrokerAccountName, links[0].AccountID, links[0].BrokerAccountName)
+	}
+	if got[1].AccountID != links[1].AccountID || got[1].BrokerAccountName != links[1].BrokerAccountName {
+		t.Errorf("the second verdict names account %s / %q, want %s / %q",
+			got[1].AccountID, got[1].BrokerAccountName, links[1].AccountID, links[1].BrokerAccountName)
+	}
+	if got[0].At == nil || got[1].At == nil {
+		t.Fatalf("a checked account carries no time of its check: %+v", got)
+	}
+	// The agreeing account was checked LAST — which is exactly why a single
+	// newest-first verdict for the connection reported agreement.
+	if !got[1].At.After(*got[0].At) {
+		t.Errorf("the fixture did not check the agreeing account last: %v then %v", got[0].At, got[1].At)
 	}
 }
 
-func TestAConnectionThatWasNeverCheckedSaysSoWithNull(t *testing.T) {
+func TestAnAccountNoRunEverCheckedSaysNotCheckedRatherThanNothing(t *testing.T) {
 	api := newTestAPI(t)
 	id, _ := api.createConnection(t)
+
+	got := connectionReconciles(t, api, id)
+	if len(got) != 1 {
+		t.Fatalf("%d verdicts for a connection with one account: %+v", len(got), got)
+	}
+	// Present and saying not_checked, rather than absent: a missing entry and a
+	// checked-and-agreed one look the same to anyone counting ticks.
+	if got[0].Status != "not_checked" || got[0].At != nil || len(got[0].Mismatches) != 0 {
+		t.Errorf("an unchecked account says %+v, want not_checked with no time and no differences", got[0])
+	}
+
 	var conn struct {
-		LastReconcile        json.RawMessage `json:"last_reconcile"`
 		LastSuccessfulSyncAt json.RawMessage `json:"last_successful_sync_at"`
 	}
 	_, body := do(t, api.owner, "GET", api.url+"/api/v1/tinvest/connections/"+id.String(), "")
 	if err := json.Unmarshal([]byte(body), &conn); err != nil {
 		t.Fatalf("decode %s: %v", body, err)
 	}
-	if string(conn.LastReconcile) != "null" || string(conn.LastSuccessfulSyncAt) != "null" {
-		t.Errorf("last_reconcile=%s last_successful_sync_at=%s, want both an explicit null",
-			conn.LastReconcile, conn.LastSuccessfulSyncAt)
+	if string(conn.LastSuccessfulSyncAt) != "null" {
+		t.Errorf("last_successful_sync_at=%s, want an explicit null", conn.LastSuccessfulSyncAt)
 	}
 }
 

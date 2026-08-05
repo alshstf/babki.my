@@ -943,6 +943,27 @@ type TinvestAccountPick struct {
 	BrokerAccountId string `json:"broker_account_id"`
 }
 
+// TinvestAccountReconcile The most recent check against the broker FOR ONE LINKED BROKER ACCOUNT. A sync run is made for the pair (connection, link) and the reconciliation is made inside it, so a verdict is a statement about ONE broker account and about no other. A connection importing two of them therefore has two verdicts which can differ and can be reached at different moments; publishing whichever of them is newest as the connection's own would draw one account's tick over the other account's difference, and the older account's verdict would never be seen at all. Nothing here is a connection-wide claim: a client that wants one derives it from all of these.
+type TinvestAccountReconcile struct {
+	// AccountId The babki account behind that link, so a reader can be sent to it without joining anything.
+	AccountId openapi_types.UUID `json:"account_id"`
+
+	// At When that check was made. Null exactly when `status` is `not_checked` — both are written by the same statement that closes a run (see Store.FinishRun), so a time without a verdict, or a verdict without a time, cannot arrive.
+	At nullable.Nullable[time.Time] `json:"at"`
+
+	// BrokerAccountName What the broker called the account WHEN THE LINK WAS MADE, the same frozen label TinvestLinkedAccount carries and read from the same link row in the same query — the two cannot disagree, and a reader of a verdict needs to be told whose it is without looking it up.
+	BrokerAccountName string `json:"broker_account_name"`
+
+	// LinkId Which link this verdict belongs to — the same id as the matching TinvestLinkedAccount.link_id, and the same one a run carries.
+	LinkId openapi_types.UUID `json:"link_id"`
+
+	// Mismatches What differed for THIS account. Empty when `status` is `matched` — the verdict is derived from this list and never kept beside it — and empty again when `status` is `not_checked`, where it means nobody looked. `status` is what tells those two apart.
+	Mismatches []TinvestReconcileMismatch `json:"mismatches"`
+
+	// Status All three values occur here, and `not_checked` is the one this shape exists to keep sayable: it is what an account carries when NO run of it ever reconciled — a fresh link, or one whose every run failed. It is not «сходится» and not «расхождений нет».
+	Status TinvestReconcileStatus `json:"status"`
+}
+
 // TinvestBrokerAccount One T-Invest account a token can see, as the broker describes it. Only the kinds this program can import are listed — a regular brokerage account and an ИИС; savings, card and «инвесткопилка» accounts are left out, because nothing here knows how to read them. Accounts are listed WHATEVER their status, closed ones included: a closed account's history is exactly as real as an open one's, and its settled results are the part of it worth importing.
 type TinvestBrokerAccount struct {
 	// BrokerAccountId The broker's own id for the account. Sent back in CreateTinvestConnectionRequest to say which accounts to import.
@@ -964,11 +985,11 @@ type TinvestConnection struct {
 	Accounts []TinvestLinkedAccount `json:"accounts"`
 	Id       openapi_types.UUID     `json:"id"`
 
-	// LastReconcile The connection's most recent check against the broker, or null when none of its runs ever made one. It survives a later failed run: a sync that died before reconciling does not erase what the previous check found, and reporting «not checked» in that case would say something false about a check that did happen.
-	LastReconcile nullable.Nullable[TinvestReconcileSnapshot] `json:"last_reconcile,omitempty"`
-
 	// LastSuccessfulSyncAt When this connection's last successful run STARTED, or null if it never had one. Two things about it are easy to assume the other way round and are not: it is the run's start rather than its finish, so it is not the moment the mirror became current; and it is keyed by the connection while runs are made per account, so for a connection with several broker accounts it means at least one of them synced then, never all of them.
 	LastSuccessfulSyncAt nullable.Nullable[time.Time] `json:"last_successful_sync_at,omitempty"`
+
+	// Reconciles The last check against the broker FOR EACH of the accounts above — one entry per entry in `accounts`, in the same order, and never fewer: an account no run ever reconciled is present here saying `not_checked` rather than being left out, because a missing entry and a checked-and-agreed one look the same to a reader counting ticks. Each entry survives a later failed run of its own account: a sync that died before reconciling does not erase what the previous check of that account found. THERE IS NO CONNECTION-WIDE VERDICT IN THIS RESPONSE, and that absence is deliberate — «this connection agrees with the broker» is true only when every one of these says `matched`, so it is derived from all of them by whoever needs it and never guessed from the newest one.
+	Reconciles []TinvestAccountReconcile `json:"reconciles"`
 
 	// Status Where a connection to T-Invest stands. `active`: the token works as far as anyone knows, and the hourly schedule syncs this connection. `token_revoked`: the broker refused the stored token, and only a new one fixes it — THE SERVER'S OWN VERDICT, reached by asking the broker, which is why UpdateTinvestConnectionRequest.status will not accept it. `disabled`: the owner switched the connection off; the mirror of what the broker already said stays exactly as it is, and the scheduler passes it by.
 	Status TinvestConnectionStatus `json:"status"`
@@ -1022,18 +1043,6 @@ type TinvestReconcileMismatch struct {
 
 // TinvestReconcileMismatchKind What kind of difference the check found. `instrument`: a security's quantity differs, or one side names a security the other does not — which usually means some of the broker's operations did not become journal entries, so the unparsed list is where to look. `currency`: a cash balance in one currency differs. `unsupported`: the broker holds an asset of a kind this program does not account for at all (a future, an option), which no amount of re-importing will change — a separate value precisely so it is not read as the first one and does not send a reader hunting for missing operations.
 type TinvestReconcileMismatchKind string
-
-// TinvestReconcileSnapshot The most recent check against the broker that this connection actually had, whichever of its accounts it was for. Absent when no run ever reconciled — which is not the same as a check that found nothing, and is why this whole object is nullable rather than being flattened into a status field that would have to say `not_checked` for both.
-type TinvestReconcileSnapshot struct {
-	// At When that check was made.
-	At time.Time `json:"at"`
-
-	// Mismatches What differed. Empty exactly when `status` is `matched`; the two are one fact published once, since the verdict is derived from this list and never kept beside it.
-	Mismatches []TinvestReconcileMismatch `json:"mismatches"`
-
-	// Status `matched` or `mismatched`. `not_checked` is a member of the enum — it is what every unreconciled run carries — but it cannot appear HERE: this object is built only from runs that made a check, and its absence is what «never checked» looks like.
-	Status TinvestReconcileStatus `json:"status"`
-}
 
 // TinvestReconcileStatus What the check against the broker said about a run. `not_checked` is NOT `matched`, and the difference is the reason this enum has three values rather than a boolean: a run that was never reconciled — because it failed, or because our own side could not be computed — makes no claim at all, and a screen that could not tell the two apart would draw a tick over a check that never happened. `matched`: every security's quantity and every currency's balance agreed, and the broker named no asset this program cannot hold. `mismatched`: at least one did not, and the mismatch list says which.
 type TinvestReconcileStatus string

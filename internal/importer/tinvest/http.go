@@ -261,17 +261,32 @@ func connectionAPI(v ConnectionView) (apitypes.TinvestConnection, error) {
 	for _, l := range v.Links {
 		out.Accounts = append(out.Accounts, linkAPI(l))
 	}
-	out.LastReconcile = nullable.NewNullNullable[apitypes.TinvestReconcileSnapshot]()
-	if v.LastReconcile != nil && v.LastReconcile.ReconciledAt != nil {
-		mismatches, err := mismatchesAPI(v.LastReconcile.ReconcileMismatches)
-		if err != nil {
-			return apitypes.TinvestConnection{}, err
+	// ONE VERDICT PER LINKED ACCOUNT, WALKED OFF THE LINKS THEMSELVES, so the
+	// two lists are the same accounts in the same order by construction and an
+	// account nobody checked cannot go missing: it is written out as
+	// not_checked — the verdict it has — rather than being left for a reader to
+	// notice was absent. Both lists take the account's name from the same link
+	// row read once, so they cannot come to disagree about it.
+	out.Reconciles = make([]apitypes.TinvestAccountReconcile, 0, len(v.Links))
+	for _, l := range v.Links {
+		item := apitypes.TinvestAccountReconcile{
+			LinkId:            l.ID,
+			AccountId:         l.AccountID,
+			BrokerAccountName: l.BrokerAccountName,
+			Status:            apitypes.TinvestReconcileStatus(ReconcileNotChecked),
+			At:                nullable.NewNullNullable[time.Time](),
+			Mismatches:        []apitypes.TinvestReconcileMismatch{},
 		}
-		out.LastReconcile = nullable.NewNullableWithValue(apitypes.TinvestReconcileSnapshot{
-			At:         *v.LastReconcile.ReconciledAt,
-			Status:     apitypes.TinvestReconcileStatus(v.LastReconcile.ReconcileStatus),
-			Mismatches: mismatches,
-		})
+		if run, ok := v.LastReconcileByLink[l.ID]; ok {
+			mismatches, err := mismatchesAPI(run.ReconcileMismatches)
+			if err != nil {
+				return apitypes.TinvestConnection{}, err
+			}
+			item.Status = apitypes.TinvestReconcileStatus(run.ReconcileStatus)
+			item.At = timeOrNull(run.ReconciledAt)
+			item.Mismatches = mismatches
+		}
+		out.Reconciles = append(out.Reconciles, item)
 	}
 	return out, nil
 }

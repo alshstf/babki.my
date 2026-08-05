@@ -12,7 +12,8 @@ export type CreateConnectionBody = components["schemas"]["CreateTinvestConnectio
 export type UpdateConnectionBody = components["schemas"]["UpdateTinvestConnectionRequest"];
 export type TinvestLinkedAccount = components["schemas"]["TinvestLinkedAccount"];
 export type TinvestReconcileMismatch = components["schemas"]["TinvestReconcileMismatch"];
-export type TinvestReconcileSnapshot = components["schemas"]["TinvestReconcileSnapshot"];
+export type TinvestAccountReconcile = components["schemas"]["TinvestAccountReconcile"];
+export type TinvestReconcileStatus = components["schemas"]["TinvestReconcileStatus"];
 export type TinvestSyncAcceptedResponse = components["schemas"]["TinvestSyncAcceptedResponse"];
 export type TinvestSyncRun = components["schemas"]["TinvestSyncRun"];
 export type TinvestSyncRunStatus = components["schemas"]["TinvestSyncRunStatus"];
@@ -175,6 +176,7 @@ export function useDeleteConnection() {
 // through their own copy, not through a caption this hook invents.
 export function useTriggerSync() {
   const invalidate = useInvalidateConnections();
+  const queryClient = useQueryClient();
   return useMutation({
     networkMode: "always",
     mutationFn: async (id: string): Promise<TinvestSyncAcceptedResponse> => {
@@ -185,7 +187,17 @@ export function useTriggerSync() {
       if (!data) throw apiError(response, error);
       return data;
     },
-    onSuccess: () => invalidate(),
+    // The connection AND its run log: the log is where a queued sync becomes
+    // visible, and it is keyed by ["tinvest-sync-runs", id, …] — a prefix the
+    // connections key above does not cover, so without this line the screen
+    // kept showing the log it had loaded and the new run appeared only after a
+    // page reload. What the refetch finds is the worker's business: the row is
+    // written when the run STARTS, so a log that comes back unchanged means the
+    // job is still waiting, which is exactly what the log should then show.
+    onSuccess: (_data, id) => {
+      invalidate();
+      void queryClient.invalidateQueries({ queryKey: ["tinvest-sync-runs", id] });
+    },
   });
 }
 

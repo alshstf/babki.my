@@ -35,7 +35,13 @@ export function UnparsedList({ connectionId }: { connectionId: string }) {
         <CardTitle>{t("connections.detail.unparsed.title")}</CardTitle>
       </CardHeader>
       <CardContent className="grid gap-3">
-        <p className="text-sm text-muted-foreground">{t("connections.detail.unparsed.intro")}</p>
+        {/* «Брокер ИХ отдал, программа сохранила ИХ как есть» — a sentence about
+            the rows, printed only where there are rows for it to be about. Over
+            an empty list it introduced nothing, and «Неразобранных операций
+            нет» directly underneath answered it. */}
+        {list.length > 0 && (
+          <p className="text-sm text-muted-foreground">{t("connections.detail.unparsed.intro")}</p>
+        )}
         {unparsed.isPending && (
           <p className="text-sm text-muted-foreground">{t("app.loading")}</p>
         )}

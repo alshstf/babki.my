@@ -395,7 +395,9 @@ export interface paths {
         /**
          * @description Withdraws the connection to the broker. Owner-only.
          *
-         *     THE ACCOUNTS AND THE OPERATIONS STAY. What goes is everything about the connection itself — the stored token, the links, the mirror of what the broker said, the instrument map and the run log. The babki accounts it created and the journal operations the import wrote into them are the owner's data and are left exactly as they are; they simply stop being updated. Deleting them is a separate act, done on the accounts screen.
+         *     THE ACCOUNTS AND THE OPERATIONS STAY. What goes is everything about the connection itself — the stored token, the links, the mirror of what the broker said, the instrument map and the run log. The babki accounts it created and the journal operations the import wrote into them are the owner's data and are left exactly as they are; they simply stop being updated.
+         *
+         *     AND NOTHING HERE OFFERS A WAY TO REMOVE THEM AFTERWARDS, which this description used to promise. An account is ARCHIVED and never deleted (archiveAccount is the only endpoint that retires one), and an imported operation cannot be deleted at all: deleteOperation refuses every row whose `source` is not `manual`. Withdrawing the connection is therefore the end of the matter, not the first half of it.
          */
         delete: operations["deleteTinvestConnection"];
         options?: never;
@@ -1053,16 +1055,28 @@ export interface components {
             /** @description Decimal as string — what this program's journal computes for the same thing, in the same units. */
             journal: string;
         };
-        /** @description The most recent check against the broker that this connection actually had, whichever of its accounts it was for. Absent when no run ever reconciled — which is not the same as a check that found nothing, and is why this whole object is nullable rather than being flattened into a status field that would have to say `not_checked` for both. */
-        TinvestReconcileSnapshot: {
+        /** @description The most recent check against the broker FOR ONE LINKED BROKER ACCOUNT. A sync run is made for the pair (connection, link) and the reconciliation is made inside it, so a verdict is a statement about ONE broker account and about no other. A connection importing two of them therefore has two verdicts which can differ and can be reached at different moments; publishing whichever of them is newest as the connection's own would draw one account's tick over the other account's difference, and the older account's verdict would never be seen at all. Nothing here is a connection-wide claim: a client that wants one derives it from all of these. */
+        TinvestAccountReconcile: {
+            /**
+             * Format: uuid
+             * @description Which link this verdict belongs to — the same id as the matching TinvestLinkedAccount.link_id, and the same one a run carries.
+             */
+            link_id: string;
+            /**
+             * Format: uuid
+             * @description The babki account behind that link, so a reader can be sent to it without joining anything.
+             */
+            account_id: string;
+            /** @description What the broker called the account WHEN THE LINK WAS MADE, the same frozen label TinvestLinkedAccount carries and read from the same link row in the same query — the two cannot disagree, and a reader of a verdict needs to be told whose it is without looking it up. */
+            broker_account_name: string;
             /**
              * Format: date-time
-             * @description When that check was made.
+             * @description When that check was made. Null exactly when `status` is `not_checked` — both are written by the same statement that closes a run (see Store.FinishRun), so a time without a verdict, or a verdict without a time, cannot arrive.
              */
-            at: string;
-            /** @description `matched` or `mismatched`. `not_checked` is a member of the enum — it is what every unreconciled run carries — but it cannot appear HERE: this object is built only from runs that made a check, and its absence is what «never checked» looks like. */
+            at: string | null;
+            /** @description All three values occur here, and `not_checked` is the one this shape exists to keep sayable: it is what an account carries when NO run of it ever reconciled — a fresh link, or one whose every run failed. It is not «сходится» and not «расхождений нет». */
             status: components["schemas"]["TinvestReconcileStatus"];
-            /** @description What differed. Empty exactly when `status` is `matched`; the two are one fact published once, since the verdict is derived from this list and never kept beside it. */
+            /** @description What differed for THIS account. Empty when `status` is `matched` — the verdict is derived from this list and never kept beside it — and empty again when `status` is `not_checked`, where it means nobody looked. `status` is what tells those two apart. */
             mismatches: components["schemas"]["TinvestReconcileMismatch"][];
         };
         TinvestConnection: {
@@ -1078,8 +1092,8 @@ export interface components {
              * @description When this connection's last successful run STARTED, or null if it never had one. Two things about it are easy to assume the other way round and are not: it is the run's start rather than its finish, so it is not the moment the mirror became current; and it is keyed by the connection while runs are made per account, so for a connection with several broker accounts it means at least one of them synced then, never all of them.
              */
             last_successful_sync_at?: string | null;
-            /** @description The connection's most recent check against the broker, or null when none of its runs ever made one. It survives a later failed run: a sync that died before reconciling does not erase what the previous check found, and reporting «not checked» in that case would say something false about a check that did happen. */
-            last_reconcile?: components["schemas"]["TinvestReconcileSnapshot"] | null;
+            /** @description The last check against the broker FOR EACH of the accounts above — one entry per entry in `accounts`, in the same order, and never fewer: an account no run ever reconciled is present here saying `not_checked` rather than being left out, because a missing entry and a checked-and-agreed one look the same to a reader counting ticks. Each entry survives a later failed run of its own account: a sync that died before reconciling does not erase what the previous check of that account found. THERE IS NO CONNECTION-WIDE VERDICT IN THIS RESPONSE, and that absence is deliberate — «this connection agrees with the broker» is true only when every one of these says `matched`, so it is derived from all of them by whoever needs it and never guessed from the newest one. */
+            reconciles: components["schemas"]["TinvestAccountReconcile"][];
         };
         /** @description Every connection of the space, whole. An envelope with no `has_more` and no paging, unlike the run log and the unparsed list beneath it: a space holds a handful of connections and this list is never truncated, so there is no question for a flag to answer. The envelope is kept all the same — it costs one key and leaves somewhere to put a fact about the list itself, which a bare array (the shape the members list still has) has nowhere to carry. */
         TinvestConnectionsResponse: {

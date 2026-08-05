@@ -205,11 +205,20 @@ function isImported(operation: Operation): boolean {
 function SourceBadge({ operation }: { operation: Operation }) {
   const { t } = useTranslation();
   if (!isImported(operation)) return null;
+  const tinvest = operation.source === "tinvest";
   return (
-    <Badge variant="outline" title={t("operations.importedTitle")}>
-      {operation.source === "tinvest"
-        ? t("connections.tinvest")
-        : t("operations.importedElsewhere")}
+    // THE HINT BRANCHES WHERE THE LABEL DOES, and for the same reason. What is
+    // true of every imported row is that this program will not delete it; that
+    // it is WRITTEN AGAIN afterwards is true of the T-Invest import alone,
+    // which rebuilds its rows from the broker's mirror. A 'csv' row (migration
+    // 0005 allows the value, nothing writes it today) has nothing behind it to
+    // rebuild from, so promising that one comes back would be inventing a
+    // machine that does not exist.
+    <Badge
+      variant="outline"
+      title={tinvest ? t("operations.importedTinvestTitle") : t("operations.importedTitle")}
+    >
+      {tinvest ? t("connections.tinvest") : t("operations.importedElsewhere")}
     </Badge>
   );
 }

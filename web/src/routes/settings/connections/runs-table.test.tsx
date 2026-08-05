@@ -112,7 +112,12 @@ describe("RunsTable — what a run is allowed to report", () => {
     renderTable();
 
     expect(await screen.findByText("Ошибка")).toBeInTheDocument();
-    expect(screen.getByText(/Причина отказа/)).toBeInTheDocument();
+    // THE CAUSE ITSELF, not the word in front of it: an assertion on «Причина
+    // отказа» alone stays green while the row stops printing what the server
+    // said, which is the whole of what this cell is for.
+    expect(
+      screen.getByText("Причина отказа: tinvest: broker answered 500"),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/Не разобрано всего по этому счёту/)).not.toBeInTheDocument();
     // The three that WERE measured stay: a pass that rolled back genuinely
     // read, added and lost nothing.

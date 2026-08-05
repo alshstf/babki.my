@@ -34,7 +34,8 @@ function serve(status: number, body: unknown) {
 }
 
 function makeConnection(): TinvestConnection {
-  return { id: "conn-1", status: "active", token_last4: "3456", accounts: [] };
+  // No accounts, so no verdicts: the server sends one per linked account.
+  return { id: "conn-1", status: "active", token_last4: "3456", accounts: [], reconciles: [] };
 }
 
 function newClient() {

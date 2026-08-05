@@ -228,7 +228,7 @@ type RunOutcome struct {
 // from the rest by looking rather than by remembering:
 //
 //   - reads: LinksByConnection, MirrorRowsByLink, UnparsedByConnection,
-//     RunsByConnection, LastSuccessfulSyncAt, LastReconcile, connectionForSync,
+//     RunsByConnection, LastSuccessfulSyncAt, LastReconcileByLink, connectionForSync,
 //     unparsedCountByLink. ListActiveConnections takes no space either and is a
 //     wider thing still — see its own note.
 //   - writes: UpdateConnectionStatus, SyncMirror, StartRun, FinishRun,
@@ -808,30 +808,51 @@ func (s *Store) LastSuccessfulSyncAt(ctx context.Context, connID uuid.UUID) (*ti
 	return &at, nil
 }
 
-// LastReconcile returns the connection's most recent run that actually made a
-// check against the broker, or nil when none of them ever did.
+// LastReconcileByLink returns, for each of the connection's links, the most
+// recent run OF THAT LINK which actually made a check against the broker. A
+// link nothing ever reconciled is absent from the map, and that absence is the
+// caller's "not checked".
 //
-// IT IS NOT "THE NEWEST RUN'S VERDICT". Runs that fail — and runs whose own
-// side the engine refused to compute — finish at ReconcileNotChecked, and
-// reading the newest run alone would let one of those erase what a check made
-// an hour earlier had found. "We checked and found nothing" would then be
-// published as "nobody has checked", which is precisely the pair this program's
-// three-valued verdict exists to keep apart.
+// A VERDICT BELONGS TO ONE ACCOUNT. A run is made for the pair (connection,
+// link) and the reconciliation happens inside it, so what it found is a
+// statement about one broker account and about no other. A single verdict for
+// the whole connection — the connection's newest reconciled run, whichever
+// account it was for — is therefore not a fact about the connection at all: two
+// accounts checked in one sync, the differing one first and the agreeing one a
+// moment later, would publish agreement, and the differing account's verdict,
+// being older, would never appear.
+//
+// IT IS NOT "THE NEWEST RUN'S VERDICT" within a link either. Runs that fail —
+// and runs whose own side the engine refused to compute — finish at
+// ReconcileNotChecked, and reading the newest run of the link alone would let
+// one of those erase what a check made an hour earlier had found. "We checked
+// and found nothing" would then be published as "nobody has checked", which is
+// precisely the pair this program's three-valued verdict exists to keep apart.
 //
 // Like every other read in this list it takes no space and checks none; see the
 // note on Store. A request path reaches it only after ConnectionByID has
 // established the connection is the caller's.
-func (s *Store) LastReconcile(ctx context.Context, connID uuid.UUID) (*SyncRun, error) {
-	r, err := scanRun(s.pool.QueryRow(ctx, `SELECT `+runCols+` FROM tinvest_sync_runs
+func (s *Store) LastReconcileByLink(ctx context.Context, connID uuid.UUID) (map[uuid.UUID]SyncRun, error) {
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT ON (link_id) `+runCols+`
+		FROM tinvest_sync_runs
 		WHERE connection_id = $1 AND reconcile_status <> $2
-		ORDER BY reconciled_at DESC, id LIMIT 1`, connID, ReconcileNotChecked))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
+		ORDER BY link_id, reconciled_at DESC, id`, connID, ReconcileNotChecked)
 	if err != nil {
-		return nil, fmt.Errorf("tinvest: read last reconcile: %w", err)
+		return nil, fmt.Errorf("tinvest: read last reconcile per account: %w", err)
 	}
-	return &r, nil
+	defer rows.Close()
+	out := map[uuid.UUID]SyncRun{}
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, fmt.Errorf("tinvest: read last reconcile per account: %w", err)
+		}
+		out[r.LinkID] = r
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tinvest: read last reconcile per account: %w", err)
+	}
+	return out, nil
 }
 
 // mapMatch is one hit of the connection's instrument map, joined against the

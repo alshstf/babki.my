@@ -116,10 +116,17 @@ function LinkedAccountRow({
         >
           {t("connections.detail.brokerAccount", { name: link.broker_account_name })}
         </span>
-        <span className="text-xs text-muted-foreground">
-          {/* The broker's own classification word, kept verbatim as the
-              evidence of what was connected (ACCOUNT_TYPE_TINKOFF_IIS and the
-              like). Not translated: it is the broker's vocabulary, not ours. */}
+        {/* The broker's own classification word, kept verbatim as the evidence
+            of what was connected (ACCOUNT_TYPE_TINKOFF_IIS and the like). Not
+            translated: it is the broker's vocabulary, not ours. FROZEN EXACTLY
+            AS THE NAME ABOVE IS — both are written when the link is made and
+            neither is re-read on any sync (nothing updates tinvest_account_links
+            at all) — so it carries the same warning rather than reading as
+            today's classification because only its neighbour was qualified. */}
+        <span
+          className="text-xs text-muted-foreground"
+          title={t("connections.detail.brokerAccountTypeFrozen")}
+        >
           {t("connections.detail.brokerAccountType", { type: link.broker_account_type })}
         </span>
         {openedOn !== "" && (
@@ -187,7 +194,17 @@ export function ConnectionDetailPage() {
   const accountName = (accountId: string) =>
     accounts.data?.find((account) => account.id === accountId)?.name;
 
+  // WHAT THE «СИНХРОНИЗАЦИЯ ПОСТАВЛЕНА В ОЧЕРЕДЬ» LINE IS ABOUT: the press
+  // that produced it, and nothing after. react-query keeps a mutation's result
+  // until something resets it, so the line used to stay on screen for the rest
+  // of the visit — over a new token, over the connection being switched off,
+  // over a queue that had long since emptied — saying «поставлена» about a
+  // state of affairs that had moved on. Every other action on this card clears
+  // it, and the run log below is where the sync itself is then reported.
+  const forgetSyncMessage = () => triggerSync.reset();
+
   const submitToken = () => {
+    forgetSyncMessage();
     replaceToken.mutate(
       { id: data.id, body: { token } },
       {
@@ -255,9 +272,10 @@ export function ConnectionDetailPage() {
               <Button
                 variant="outline"
                 disabled={toggleConnection.isPending}
-                onClick={() =>
-                  toggleConnection.mutate({ id: data.id, body: { status: "disabled" } })
-                }
+                onClick={() => {
+                  forgetSyncMessage();
+                  toggleConnection.mutate({ id: data.id, body: { status: "disabled" } });
+                }}
               >
                 {t("connections.detail.disable")}
               </Button>
@@ -266,9 +284,10 @@ export function ConnectionDetailPage() {
               <Button
                 variant="outline"
                 disabled={toggleConnection.isPending}
-                onClick={() =>
-                  toggleConnection.mutate({ id: data.id, body: { status: "active" } })
-                }
+                onClick={() => {
+                  forgetSyncMessage();
+                  toggleConnection.mutate({ id: data.id, body: { status: "active" } });
+                }}
               >
                 {t("connections.detail.enable")}
               </Button>
@@ -278,11 +297,16 @@ export function ConnectionDetailPage() {
               onClick={() => {
                 setTokenFormOpen((open) => !open);
                 replaceToken.reset();
+                forgetSyncMessage();
               }}
             >
               {t("connections.detail.newToken")}
             </Button>
-            <Button variant="outline" className="text-red-500" onClick={() => setDeleteOpen(true)}>
+            {/* The screen's own destructive look, the one the confirmation
+                dialog's button already uses — not a colour class painted onto
+                an outline button, which is the same intent said in a way
+                nothing else on the page shares. */}
+            <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
               {t("connections.detail.delete")}
             </Button>
           </div>
@@ -405,7 +429,7 @@ export function ConnectionDetailPage() {
         </CardContent>
       </Card>
 
-      <ReconcilePanel connectionId={data.id} snapshot={data.last_reconcile} />
+      <ReconcilePanel connectionId={data.id} reconciles={data.reconciles} />
       <RunsTable connectionId={data.id} links={data.accounts} />
       <UnparsedList connectionId={data.id} />
 

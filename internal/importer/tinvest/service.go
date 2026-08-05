@@ -126,18 +126,26 @@ type ConnectionUpdate struct {
 
 // ConnectionView is one connection with everything a screen shows about it:
 // the connection row, the broker accounts it imports, when it last synced
-// successfully and what the last check against the broker said.
+// successfully and what the last check against the broker said about EACH of
+// those accounts.
 //
-// LastSuccessfulSyncAt and LastReconcile are both nil-able and mean different
-// absences: never synced successfully, and never reconciled. Neither is derived
-// from the other — a run can succeed without reconciling, and a reconciliation
+// LastReconcileByLink IS KEYED BY LINK BECAUSE A VERDICT IS. A run reconciles
+// one broker account, so "what the check found" is as many answers as there are
+// accounts; there is no single one to hold here, and holding the newest of them
+// would be holding one account's answer under a name that reads as the
+// connection's (see Store.LastReconcileByLink). A link missing from the map is
+// an account nothing ever checked.
+//
+// LastSuccessfulSyncAt is nil-able and means a different absence still: never
+// synced successfully. It is not derived from the map and the map is not
+// derived from it — a run can succeed without reconciling, and a reconciliation
 // belongs to a run that succeeded — so they are read separately and published
 // separately.
 type ConnectionView struct {
 	Connection           Connection
 	Links                []AccountLink
 	LastSuccessfulSyncAt *time.Time
-	LastReconcile        *SyncRun
+	LastReconcileByLink  map[uuid.UUID]SyncRun
 }
 
 // Service is the request path of the T-Invest importer: everything a person
@@ -576,7 +584,7 @@ func (s *Service) view(ctx context.Context, conn Connection) (ConnectionView, er
 	if err != nil {
 		return ConnectionView{}, err
 	}
-	lastReconcile, err := s.store.LastReconcile(ctx, conn.ID)
+	reconciles, err := s.store.LastReconcileByLink(ctx, conn.ID)
 	if err != nil {
 		return ConnectionView{}, err
 	}
@@ -584,7 +592,7 @@ func (s *Service) view(ctx context.Context, conn Connection) (ConnectionView, er
 		Connection:           conn,
 		Links:                links,
 		LastSuccessfulSyncAt: lastSync,
-		LastReconcile:        lastReconcile,
+		LastReconcileByLink:  reconciles,
 	}, nil
 }
 

@@ -118,6 +118,25 @@ describe("UnparsedList", () => {
     renderList();
 
     expect(await screen.findByText("Неразобранных операций нет")).toBeInTheDocument();
+    // «Брокер ИХ отдал, программа сохранила ИХ как есть» is a sentence about
+    // rows, and over an empty list «их» has no subject — it was printed
+    // directly above «Неразобранных операций нет», which answers it.
+    expect(
+      screen.queryByText(
+        "Брокер их отдал, программа сохранила их как есть — но записями журнала они не стали: ни позиции, ни прибыль их не учитывают",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("introduces the list where there is a list to introduce", async () => {
+    serve([makeOperation({ id: "u-1" })]);
+    renderList();
+
+    expect(
+      await screen.findByText(
+        "Брокер их отдал, программа сохранила их как есть — но записями журнала они не стали: ни позиции, ни прибыль их не учитывают",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("fetches the next page on demand", async () => {

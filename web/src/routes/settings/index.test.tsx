@@ -364,6 +364,7 @@ describe("SettingsPage", () => {
         status: "active",
         token_last4: "3456",
         accounts: [],
+        reconciles: [],
         ...overrides,
       };
     }

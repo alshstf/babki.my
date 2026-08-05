@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Outlet,
@@ -71,6 +71,15 @@ async function bodiesSent(path: string, method: string): Promise<Record<string, 
   );
 }
 
+// Requests to a path that carries a query string — the run log is fetched with
+// limit and offset on it, so `endsWith` on the whole URL would never match.
+function requestsTo(pathSuffix: string): number {
+  return fetchMock.mock.calls.filter(([input]) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
+    return url.pathname.endsWith(pathSuffix);
+  }).length;
+}
+
 function callCount(path: string, method: string): number {
   return fetchMock.mock.calls.filter(([input, init]) => {
     const url = input instanceof Request ? input.url : String(input);
@@ -116,7 +125,18 @@ function makeConnection(overrides: Partial<TinvestConnection> = {}): TinvestConn
       },
     ],
     last_successful_sync_at: "2026-08-04T09:15:00Z",
-    last_reconcile: null,
+    // One verdict per linked account, the shape the server always sends: an
+    // account nothing ever checked is present here saying so.
+    reconciles: [
+      {
+        link_id: "link-1",
+        account_id: "acc-1",
+        broker_account_name: "Брокерский счёт",
+        at: null,
+        status: "not_checked",
+        mismatches: [],
+      },
+    ],
     ...overrides,
   };
 }
@@ -189,6 +209,16 @@ function renderPage(session: SessionInfo = makeSession()) {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
+}
+
+// The card that lists the linked accounts. The screen names an account in two
+// places — here, and beside that account's own reconcile verdict — so an
+// assertion about this card is scoped to it rather than to the whole page.
+async function accountsCard(): Promise<HTMLElement> {
+  const title = await screen.findByText("Связанные счета");
+  const card = title.closest("[data-slot=card]");
+  if (!card) throw new Error("the linked-accounts card is not a card");
+  return card as HTMLElement;
 }
 
 beforeEach(() => {
@@ -280,13 +310,32 @@ describe("ConnectionDetailPage — the header", () => {
   it("names both ends of a link without borrowing one name for the other", async () => {
     renderPage();
 
+    const card = await accountsCard();
+    expect(within(card).getByRole("link", { name: "Т-Инвестиции: брокерский" })).toHaveAttribute(
+      "href",
+      "/accounts/acc-1",
+    );
+    expect(within(card).getByText("У брокера: Брокерский счёт")).toBeInTheDocument();
     expect(
-      await screen.findByRole("link", { name: "Т-Инвестиции: брокерский" }),
-    ).toHaveAttribute("href", "/accounts/acc-1");
-    expect(screen.getByText("У брокера: Брокерский счёт")).toBeInTheDocument();
-    expect(
-      screen.getByText("Тип счёта у брокера: ACCOUNT_TYPE_TINKOFF"),
+      within(card).getByText("Тип счёта у брокера: ACCOUNT_TYPE_TINKOFF"),
     ).toBeInTheDocument();
+  });
+
+  // Both labels are written when the link is made and neither is re-read on a
+  // sync, so the warning belongs to both. It used to be on the name alone,
+  // which left the type reading as what the broker calls it today.
+  it("says of the type, as of the name, that it is what the broker said then", async () => {
+    renderPage();
+
+    const card = await accountsCard();
+    expect(within(card).getByText("У брокера: Брокерский счёт")).toHaveAttribute(
+      "title",
+      "Так брокер называл счёт в момент подключения. С тех пор счёт мог быть переименован",
+    );
+    expect(within(card).getByText("Тип счёта у брокера: ACCOUNT_TYPE_TINKOFF")).toHaveAttribute(
+      "title",
+      "Так брокер классифицировал счёт в момент подключения. Эта запись больше не обновляется: если тип у брокера изменится, здесь останется прежний",
+    );
   });
 });
 
@@ -447,6 +496,54 @@ describe("ConnectionDetailPage — the sync button", () => {
     expect(screen.queryByText("Синхронизация поставлена в очередь")).not.toBeInTheDocument();
   });
 
+  // The queued run only becomes visible in the log below, so the log is what
+  // has to be asked again: without that the owner presses the button, is told
+  // the sync is queued, and sees a log that stays exactly as it was until the
+  // page is reloaded.
+  it("asks the run log again after queueing a sync", async () => {
+    serveConnection(makeConnection(), [
+      {
+        path: "/api/v1/tinvest/connections/conn-1/sync",
+        method: "POST",
+        status: 202,
+        body: { queued: true },
+      },
+    ]);
+    renderPage();
+
+    await screen.findByText("Синхронизаций ещё не было");
+    const before = requestsTo("/runs");
+    fireEvent.click(screen.getByRole("button", { name: "Синхронизировать сейчас" }));
+
+    await waitFor(() => {
+      expect(requestsTo("/runs")).toBeGreaterThan(before);
+    });
+  });
+
+  // «Поставлена в очередь» is about the press that produced it. It used to
+  // stay on screen for the rest of the visit — including over a replaced
+  // token, where it says something about a queue nobody has looked at since.
+  it("stops saying a sync was queued once another action is taken", async () => {
+    serveConnection(makeConnection(), [
+      {
+        path: "/api/v1/tinvest/connections/conn-1/sync",
+        method: "POST",
+        status: 202,
+        body: { queued: true },
+      },
+    ]);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Синхронизировать сейчас" }));
+    expect(await screen.findByText("Синхронизация поставлена в очередь")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Вставить новый токен" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Синхронизация поставлена в очередь")).not.toBeInTheDocument();
+    });
+  });
+
   it("reports a 409 as the connection no longer being active", async () => {
     serveConnection(makeConnection(), [
       {
@@ -507,13 +604,18 @@ describe("ConnectionDetailPage — the panels below", () => {
   it("shows the reconcile verdict, the run log and the unparsed list together", async () => {
     serveConnection(
       makeConnection({
-        last_reconcile: {
-          at: "2026-08-04T09:16:00Z",
-          status: "mismatched",
-          mismatches: [
-            { kind: "instrument", instrument_id: "i-1", label: "SBER", broker: "150", journal: "100" },
-          ],
-        },
+        reconciles: [
+          {
+            link_id: "link-1",
+            account_id: "acc-1",
+            broker_account_name: "Брокерский счёт",
+            at: "2026-08-04T09:16:00Z",
+            status: "mismatched",
+            mismatches: [
+              { kind: "instrument", instrument_id: "i-1", label: "SBER", broker: "150", journal: "100" },
+            ],
+          },
+        ],
       }),
       [
         {
@@ -578,5 +680,62 @@ describe("ConnectionDetailPage — the panels below", () => {
     ).toBeInTheDocument();
     // The counter beside the verdict reads the very list printed below it.
     expect(screen.getByText("Неразобранных операций: 1")).toBeInTheDocument();
+  });
+
+  // THE CASE THE SCREEN USED TO GET WRONG, end to end. Two broker accounts:
+  // one differs, the other agrees and was checked a moment later. A single
+  // verdict for the connection was the newest of the two, so the screen drew a
+  // tick and «Сходится с брокером» — while the run log two cards below showed
+  // the differing account's run saying «Расхождение».
+  it("shows a verdict per account and claims no agreement when one of them differs", async () => {
+    serveConnection(
+      makeConnection({
+        accounts: [
+          ...makeConnection().accounts,
+          {
+            link_id: "link-2",
+            account_id: "acc-2",
+            broker_account_id: "b-2",
+            broker_account_name: "ИИС",
+            broker_account_type: "ACCOUNT_TYPE_TINKOFF_IIS",
+            opened_on: null,
+          },
+        ],
+        reconciles: [
+          {
+            link_id: "link-1",
+            account_id: "acc-1",
+            broker_account_name: "Брокерский счёт",
+            at: "2026-08-04T09:15:00Z",
+            status: "mismatched",
+            mismatches: [
+              { kind: "currency", instrument_id: null, label: "RUB", broker: "1000.5", journal: "0" },
+            ],
+          },
+          {
+            link_id: "link-2",
+            account_id: "acc-2",
+            broker_account_name: "ИИС",
+            at: "2026-08-04T09:16:00Z",
+            status: "matched",
+            mismatches: [],
+          },
+        ],
+      }),
+    );
+    renderPage();
+
+    // Both verdicts are on screen, each beside the account it was made for.
+    expect(await screen.findByText("Расходится с брокером")).toBeInTheDocument();
+    expect(screen.getByText("Сходится с брокером")).toBeInTheDocument();
+    expect(screen.getAllByText("У брокера: Брокерский счёт").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("У брокера: ИИС").length).toBeGreaterThan(0);
+    // The differing account's own figures, which the old screen never reached.
+    expect(screen.getByText("1000.5")).toBeInTheDocument();
+    // And no claim that the connection as a whole agrees.
+    expect(screen.getByText("Есть расхождения с брокером")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Все счета сверены и сходятся с брокером"),
+    ).not.toBeInTheDocument();
   });
 });
