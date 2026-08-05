@@ -49,9 +49,8 @@ import (
 //   - the instrument: instrument_uid if there is one, else figi, else
 //     nothing. Both are absent on operations that have no paper at all (a
 //     top-up, a service fee), and an empty field there is a fact, not a gap.
-//   - the currency, upper case. It arrives lower case ("rub") and the client
-//     upper-cases it; doing so here too means a change on that path could
-//     never split one operation into two mirror rows.
+//   - the currency, upper case — see upperCurrency for why this package
+//     normalizes a code the client has already normalized.
 //   - the amount, as a decimal string. Built by ADDING units and nano rather
 //     than by pasting them together, which is what makes the broker's
 //     "negative zero" split (units "-0", nano -200000000, meaning -0.2) read
@@ -70,11 +69,30 @@ func contentKey(it OperationItem) string {
 		it.Date.UTC().Format(time.RFC3339Nano),
 		it.Type,
 		instrument,
-		strings.ToUpper(it.Payment.Currency),
+		upperCurrency(it.Payment.Currency),
 		it.Payment.Decimal().String(),
 		strconv.FormatInt(it.Quantity, 10),
 	}, "|")
 }
+
+// upperCurrency normalizes a currency code this package is about to key on or
+// store.
+//
+// THE AUTHORITY ON THE CASE OF A CURRENCY CODE IS THE CLIENT, and this
+// function is not a second one. wireMoneyValue.parse upper-cases every code
+// that comes off the wire, and MoneyValue's own documentation states the
+// field is always upper case, so on the live path there is nothing here to
+// do. It is a guard for the one path that does not go through the client at
+// all: an OperationItem assembled by hand, which is how every test in this
+// package builds one and how any future caller assembling an item would.
+//
+// The guard earns its keep because it is called both where the key is built
+// and where the row is written. Without it a hand-built "rub" would key as
+// "rub" and sit in a column the schema documents as normalized upper case,
+// and the first sync that brought the same operation in through the client
+// would compute a different key, mark the stored row disappeared and write a
+// second row for one operation.
+func upperCurrency(code string) string { return strings.ToUpper(code) }
 
 // dedupInPage collapses the rows one read of the broker's history repeated,
 // keeping the first copy of each broker id.
@@ -131,6 +149,17 @@ type mirrorMatch struct {
 // SyncMirror brings the mirror of one broker account into agreement with what
 // the broker just said, and returns what it changed.
 //
+// PRECONDITION: fetched MUST BE THE FULL CURRENT HISTORY OF THIS LINK — every
+// operation the broker returns for link.BrokerAccountID, from the account's
+// opening to now, in one slice. It is not a batch, not a page and not a
+// window. Everything the mirror holds for this link and does not find in
+// fetched is marked disappeared, so handing this a window of recent
+// operations would mark the entire history before that window as gone on the
+// first run — the exact opposite of what the mirror is for. There is no
+// bounded-fetch mode and none is planned: the broker rewrites old operations
+// after the fact, which is why the comparison is by content and why it has to
+// see everything to be a comparison at all.
+//
 // THE COMPARISON IS A MULTISET COMPARISON BY CONTENT. Rows are matched by
 // content key WITH MULTIPLICITY: three fetched operations sharing a key
 // against two stored rows adds one row, not three and not none; one fetched
@@ -145,10 +174,35 @@ type mirrorMatch struct {
 // already marked is not marked again — the mark records when the broker
 // dropped the operation, and that moment does not move.
 //
+// A MATCHED ROW IS REWRITTEN FROM WHAT THE BROKER SAYS NOW. The content key
+// answers "which row is this"; it does not freeze the row's attributes at the
+// first sighting. Every field the broker sends that the key is not built from
+// — the state, the price, the commission and its currency, the accrued
+// interest, the figi, the position and asset uids, the instrument type, the
+// description, the parent operation id, the raw document and the broker's own
+// operation id — is set to the value in this fetch. What a refresh leaves
+// alone is the row's own id and where it is filed (the journal points at the
+// id), first_seen_at, the unparsed reason (the projection's verdict, not a
+// sync's), and the key together with the fields it was built from, which
+// cannot change without the operation becoming a different one. See
+// mirrorConfirmSQL, which lists it column by column.
+//
+// Without this, a broker that corrected a commission would leave the mirror
+// wrong for good, and an operation first seen in progress would stay in
+// progress for good and never reach the journal at all.
+//
 // THE WHOLE COMPARISON HAPPENS UNDER A LOCK ON THE CONNECTION, taken as the
 // transaction's first statement. Two runs of the same connection therefore
 // serialize: without the lock both would compute their difference against the
-// same stored state and both would insert the same new rows. The lock covers
+// same stored state and both would insert the same new rows.
+//
+// FIRST is load-bearing and not tidiness. Reading the mirror before taking
+// the lock leaves the run waiting with a stale answer in hand: at READ
+// COMMITTED the read that ran before the wait saw the mirror as it was
+// BEFORE the other run committed, and acting on it inserts rows that are
+// already there. The statement below must stay above readMirrorMatches; see
+// TestSyncMirrorTakesTheLockBeforeItReadsTheMirror, which is what tells the
+// two orders apart (the waiting test alone passes under either). The lock covers
 // the comparison and the writes and nothing else — fetched is asked for as an
 // argument, not read here, so that the caller does its talking to the broker
 // before this transaction opens rather than inside it.
@@ -167,7 +221,7 @@ func (s *Store) SyncMirror(ctx context.Context, connID uuid.UUID, link AccountLi
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return MirrorSyncStats{}, err
+		return MirrorSyncStats{}, fmt.Errorf("tinvest: sync mirror: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -178,7 +232,7 @@ func (s *Store) SyncMirror(ctx context.Context, connID uuid.UUID, link AccountLi
 		if errors.Is(err, pgx.ErrNoRows) {
 			return MirrorSyncStats{}, fmt.Errorf("%w: %s", ErrConnectionNotFound, connID)
 		}
-		return MirrorSyncStats{}, fmt.Errorf("lock connection: %w", err)
+		return MirrorSyncStats{}, fmt.Errorf("tinvest: lock connection: %w", err)
 	}
 
 	existing, err := readMirrorMatches(ctx, tx, link.ID)
@@ -197,10 +251,9 @@ func (s *Store) SyncMirror(ctx context.Context, connID uuid.UUID, link AccountLi
 	}
 
 	var (
-		confirmedIDs       []uuid.UUID
-		confirmedBrokerIDs []string
-		consumed           = make(map[uuid.UUID]bool, len(existing))
-		toInsert           []OperationItem
+		confirmed []confirmation
+		consumed  = make(map[uuid.UUID]bool, len(existing))
+		toInsert  []OperationItem
 	)
 	for _, it := range items {
 		key := contentKey(it)
@@ -212,10 +265,9 @@ func (s *Store) SyncMirror(ctx context.Context, connID uuid.UUID, link AccountLi
 		match := bucket[0]
 		buckets[key] = bucket[1:]
 		consumed[match.id] = true
-		confirmedIDs = append(confirmedIDs, match.id)
-		// The broker's identifier follows the broker: it is an attribute of
-		// a row that is already identified by its content.
-		confirmedBrokerIDs = append(confirmedBrokerIDs, it.ID)
+		// The whole item, not just its identifier: the row keeps its identity
+		// and takes on this fetch's attributes.
+		confirmed = append(confirmed, confirmation{id: match.id, item: it})
 	}
 
 	var toDisappear []uuid.UUID
@@ -233,20 +285,14 @@ func (s *Store) SyncMirror(ctx context.Context, connID uuid.UUID, link AccountLi
 	// a row the database refuses is refused after the other two have really
 	// executed, and what the test then sees restored could only have been
 	// restored by rolling them back.
-	if len(confirmedIDs) > 0 {
-		if _, err := tx.Exec(ctx, `
-			UPDATE tinvest_operations_mirror m
-			SET last_confirmed_at = $3, disappeared_at = NULL, broker_operation_id = u.broker_id
-			FROM unnest($1::uuid[], $2::text[]) AS u(id, broker_id)
-			WHERE m.id = u.id`, confirmedIDs, confirmedBrokerIDs, now); err != nil {
-			return MirrorSyncStats{}, fmt.Errorf("confirm mirror rows: %w", err)
-		}
+	if err := confirmMirrorRows(ctx, tx, confirmed, now); err != nil {
+		return MirrorSyncStats{}, err
 	}
 	if len(toDisappear) > 0 {
 		if _, err := tx.Exec(ctx, `
 			UPDATE tinvest_operations_mirror SET disappeared_at = $2
 			WHERE id = ANY($1)`, toDisappear, now); err != nil {
-			return MirrorSyncStats{}, fmt.Errorf("mark mirror rows gone: %w", err)
+			return MirrorSyncStats{}, fmt.Errorf("tinvest: mark mirror rows gone: %w", err)
 		}
 	}
 	if len(toInsert) > 0 {
@@ -256,7 +302,7 @@ func (s *Store) SyncMirror(ctx context.Context, connID uuid.UUID, link AccountLi
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return MirrorSyncStats{}, err
+		return MirrorSyncStats{}, fmt.Errorf("tinvest: sync mirror: %w", err)
 	}
 	return MirrorSyncStats{
 		Read:        len(items),
@@ -277,18 +323,98 @@ func readMirrorMatches(ctx context.Context, tx pgx.Tx, linkID uuid.UUID) ([]mirr
 		WHERE link_id = $1
 		ORDER BY (disappeared_at IS NOT NULL), first_seen_at, id`, linkID)
 	if err != nil {
-		return nil, fmt.Errorf("read mirror: %w", err)
+		return nil, fmt.Errorf("tinvest: read mirror: %w", err)
 	}
 	defer rows.Close()
 	var out []mirrorMatch
 	for rows.Next() {
 		var m mirrorMatch
 		if err := rows.Scan(&m.id, &m.contentKey, &m.disappeared); err != nil {
-			return nil, fmt.Errorf("read mirror: %w", err)
+			return nil, fmt.Errorf("tinvest: read mirror: %w", err)
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tinvest: read mirror: %w", err)
+	}
+	return out, nil
+}
+
+// confirmation pairs a mirror row that the fetch matched with the item it was
+// matched to. Both halves are needed: the id says which row keeps its
+// identity, the item says what that row now holds.
+type confirmation struct {
+	id   uuid.UUID
+	item OperationItem
+}
+
+// mirrorConfirmSQL rewrites one matched row from the fetch it was matched to.
+//
+// What it does NOT set is as deliberate as what it does. id, connection_id
+// and link_id stay because the journal's operations point at the id and the
+// row's filing is not the broker's to change. occurred_at, op_type, currency,
+// payment and quantity stay because the content key is built from them: an
+// item differing in any one of those does not match this row in the first
+// place, so there is nothing here to update. first_seen_at stays because it
+// records the first sighting and this is not one. unparsed_reason stays
+// because it is the projection's verdict, written by SetUnparsedReasons, and
+// a sync has no opinion on it.
+//
+// instrument_uid is absent for a subtler reason than the rest: it is what the
+// key was built from — or figi was, when the broker named no uid — so an item
+// naming a different instrument computes a different key, does not match this
+// row and never reaches this statement. The one corner where a match could
+// survive a change to the column is the broker moving one and the same string
+// between figi and instrument_uid; a FIGI code and a uuid are not the same
+// shape, so it has not been seen, and it is named here rather than left for a
+// reader to wonder about. figi IS set, because an operation that names an
+// instrument_uid keyed on that and left its figi free to be corrected.
+const mirrorConfirmSQL = `
+	UPDATE tinvest_operations_mirror SET
+		broker_operation_id = $2, parent_operation_id = $3, state = $4,
+		price = $5, commission = $6, commission_currency = $7, accrued_int = $8,
+		figi = $9, position_uid = $10, asset_uid = $11, instrument_type = $12,
+		description = $13, raw = $14,
+		last_confirmed_at = $15, disappeared_at = NULL
+	WHERE id = $1`
+
+// confirmMirrorRows rewrites every matched row, as ONE batch for the reason
+// insertMirrorRows gives.
+//
+// EVERY CONFIRMED ROW IS REWRITTEN ON EVERY SYNC, whether anything about it
+// changed or not: the statement carries no "where something differs" clause,
+// because telling apart "the broker sent the same values" from "the broker
+// sent different ones" would mean comparing thirteen columns per row to save
+// a write. For a personal instance with tens of thousands of operations that
+// trade is the right way round and was weighed deliberately — the whole
+// history is a few tens of thousands of rows, rewritten hourly in one batch
+// inside one transaction. It is a decision, not an oversight; an instance
+// with a hundred times that much would want it revisited.
+func confirmMirrorRows(ctx context.Context, tx pgx.Tx, confirmed []confirmation, now time.Time) error {
+	if len(confirmed) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for _, c := range confirmed {
+		it := c.item
+		batch.Queue(mirrorConfirmSQL, c.id, it.ID, it.ParentOperationID, it.State,
+			moneyOrNothing(it.Price), moneyOrNothing(it.Commission),
+			upperCurrency(it.Commission.Currency), moneyOrNothing(it.AccruedInt),
+			it.FIGI, it.PositionUID, it.AssetUID, it.InstrumentType,
+			it.Description, rawDocument(it.Raw), now)
+	}
+	br := tx.SendBatch(ctx, batch)
+	for i, c := range confirmed {
+		if _, err := br.Exec(); err != nil {
+			_ = br.Close()
+			return fmt.Errorf("tinvest: confirm mirror row %d (row %s, broker id %q): %w",
+				i, c.id, c.item.ID, err)
+		}
+	}
+	if err := br.Close(); err != nil {
+		return fmt.Errorf("tinvest: confirm mirror rows: %w", err)
+	}
+	return nil
 }
 
 const mirrorInsertSQL = `
@@ -318,11 +444,11 @@ func insertMirrorRows(ctx context.Context, tx pgx.Tx, connID, linkID uuid.UUID, 
 	for i, it := range items {
 		if _, err := br.Exec(); err != nil {
 			_ = br.Close()
-			return fmt.Errorf("insert mirror row %d (broker id %q): %w", i, it.ID, err)
+			return fmt.Errorf("tinvest: insert mirror row %d (broker id %q): %w", i, it.ID, err)
 		}
 	}
 	if err := br.Close(); err != nil {
-		return fmt.Errorf("insert mirror rows: %w", err)
+		return fmt.Errorf("tinvest: insert mirror rows: %w", err)
 	}
 	return nil
 }
@@ -330,9 +456,9 @@ func insertMirrorRows(ctx context.Context, tx pgx.Tx, connID, linkID uuid.UUID, 
 func mirrorInsertArgs(connID, linkID uuid.UUID, it OperationItem, now time.Time) []any {
 	return []any{
 		connID, linkID, it.ID, it.ParentOperationID,
-		it.Type, it.State, it.Date.UTC(), strings.ToUpper(it.Payment.Currency),
+		it.Type, it.State, it.Date.UTC(), upperCurrency(it.Payment.Currency),
 		it.Payment.Decimal(), moneyOrNothing(it.Price), moneyOrNothing(it.Commission),
-		strings.ToUpper(it.Commission.Currency), moneyOrNothing(it.AccruedInt),
+		upperCurrency(it.Commission.Currency), moneyOrNothing(it.AccruedInt),
 		it.Quantity, it.FIGI, it.InstrumentUID,
 		it.PositionUID, it.AssetUID, it.InstrumentType, it.Description, rawDocument(it.Raw),
 		contentKey(it), now, now,

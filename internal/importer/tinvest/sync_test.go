@@ -538,6 +538,212 @@ func TestSyncMirrorReissuedBrokerIDDoesNotCreateASecondRow(t *testing.T) {
 	}
 }
 
+// A mirror row carries the LAST thing the broker said about the operation,
+// not the first. The content key answers "which row is this"; everything
+// outside the key is what the broker says about it now, and a broker that
+// corrects a commission must not leave the mirror wrong for good.
+//
+// Every attribute a confirmation may refresh is corrected here at once, so
+// that dropping any single one of them from the confirming statement shows up
+// as a failure. What must survive is checked too: the row's own id (the
+// journal points at it), the moment it was first seen, the content key, and
+// the unparsed reason, which belongs to the projection and not to this.
+func TestSyncMirrorRefreshesEveryAttributeTheBrokerCorrected(t *testing.T) {
+	f := newFixture(t)
+	first := wireTime(t, "2026-03-16T00:00:00Z")
+	second := wireTime(t, "2026-03-16T01:00:00Z")
+
+	before := OperationItem{
+		ID:                "op-before",
+		ParentOperationID: "parent-before",
+		Type:              "OPERATION_TYPE_BUY",
+		State:             "OPERATION_STATE_PROGRESS",
+		Date:              wireTime(t, "2026-03-14T07:30:15Z"),
+		InstrumentUID:     "uid-1",
+		FIGI:              "BBG000B9XRY4",
+		PositionUID:       "pos-before",
+		AssetUID:          "asset-before",
+		InstrumentType:    "share",
+		Payment:           MoneyValue{Currency: "RUB", Units: -15230, Nano: -500000000},
+		Price:             MoneyValue{Currency: "RUB", Units: 1523, Nano: 50000000},
+		Commission:        MoneyValue{Currency: "RUB", Units: -7, Nano: -600000000},
+		AccruedInt:        MoneyValue{Currency: "RUB", Units: 3, Nano: 250000000},
+		Quantity:          10,
+		Description:       "Покупка ЦБ",
+		Raw:               json.RawMessage(`{"id":"op-before"}`),
+	}
+	if _, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link, []OperationItem{before}, first); err != nil {
+		t.Fatalf("first SyncMirror: %v", err)
+	}
+	original := rowsByPayment(t, f)["-15230.5"]
+	if err := f.store.SetUnparsedReasons(f.ctx, map[uuid.UUID]string{original.ID: "unknown_type"}); err != nil {
+		t.Fatalf("SetUnparsedReasons: %v", err)
+	}
+
+	// Everything outside the content key, corrected at once. The key's own
+	// fields — the instant, the operation type, the instrument uid, the
+	// currency, the payment and the quantity — are left as they were, because
+	// changing one of them makes it a different operation, and this test would
+	// then be about something else. FIGI is free to move because this
+	// operation names an instrument uid, which is what the key took.
+	after := before
+	after.ID = "op-after"
+	after.ParentOperationID = "parent-after"
+	after.State = "OPERATION_STATE_EXECUTED"
+	after.FIGI = "BBG000B9XRY5"
+	after.PositionUID = "pos-after"
+	after.AssetUID = "asset-after"
+	after.InstrumentType = "bond"
+	after.Price = MoneyValue{Currency: "RUB", Units: 1600, Nano: 250000000}
+	after.Commission = MoneyValue{Currency: "USD", Units: -9, Nano: -900000000}
+	after.AccruedInt = MoneyValue{Currency: "RUB", Units: 4, Nano: 750000000}
+	after.Description = "Покупка ценных бумаг"
+	after.Raw = json.RawMessage(`{"id":"op-after"}`)
+
+	stats, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link, []OperationItem{after}, second)
+	if err != nil {
+		t.Fatalf("second SyncMirror: %v", err)
+	}
+	if want := (MirrorSyncStats{Read: 1, Added: 0, Disappeared: 0}); stats != want {
+		t.Fatalf("stats = %+v, want %+v — a corrected attribute is the same operation", stats, want)
+	}
+	if n := mirrorCount(t, f); n != 1 {
+		t.Fatalf("mirror holds %d rows, want 1", n)
+	}
+	row := rowsByPayment(t, f)["-15230.5"]
+
+	if row.BrokerOperationID != "op-after" {
+		t.Errorf("broker id = %q, want op-after", row.BrokerOperationID)
+	}
+	if row.ParentOperationID != "parent-after" {
+		t.Errorf("parent id = %q, want parent-after", row.ParentOperationID)
+	}
+	if row.State != "OPERATION_STATE_EXECUTED" {
+		t.Errorf("state = %q, want OPERATION_STATE_EXECUTED", row.State)
+	}
+	if row.FIGI != "BBG000B9XRY5" {
+		t.Errorf("figi = %q, want BBG000B9XRY5", row.FIGI)
+	}
+	if row.PositionUID != "pos-after" {
+		t.Errorf("position uid = %q, want pos-after", row.PositionUID)
+	}
+	if row.AssetUID != "asset-after" {
+		t.Errorf("asset uid = %q, want asset-after", row.AssetUID)
+	}
+	if row.InstrumentType != "bond" {
+		t.Errorf("instrument type = %q, want bond", row.InstrumentType)
+	}
+	if row.Price == nil || row.Price.String() != "1600.25" {
+		t.Errorf("price = %v, want 1600.25", row.Price)
+	}
+	if row.Commission == nil || row.Commission.String() != "-9.9" {
+		t.Errorf("commission = %v, want -9.9", row.Commission)
+	}
+	if row.CommissionCurrency != "USD" {
+		t.Errorf("commission currency = %q, want USD", row.CommissionCurrency)
+	}
+	if row.AccruedInt == nil || row.AccruedInt.String() != "4.75" {
+		t.Errorf("accrued interest = %v, want 4.75", row.AccruedInt)
+	}
+	if row.Description != "Покупка ценных бумаг" {
+		t.Errorf("description = %q, want Покупка ценных бумаг", row.Description)
+	}
+	var raw map[string]string
+	if err := json.Unmarshal(row.Raw, &raw); err != nil {
+		t.Fatalf("raw did not come back as a document: %v (%s)", err, row.Raw)
+	}
+	if raw["id"] != "op-after" {
+		t.Errorf("raw = %v, want the document the broker sent this time", raw)
+	}
+	if !row.LastConfirmedAt.Equal(second) {
+		t.Errorf("confirmed %s, want %s", row.LastConfirmedAt, second)
+	}
+
+	// And what a refresh may not touch.
+	if row.ID != original.ID {
+		t.Errorf("the row's id changed (%s -> %s); the journal points at it", original.ID, row.ID)
+	}
+	if !row.FirstSeenAt.Equal(first) {
+		t.Errorf("first seen %s, want %s — it was first seen on the first run", row.FirstSeenAt, first)
+	}
+	if row.ContentKey != original.ContentKey {
+		t.Errorf("content key = %q, want %q", row.ContentKey, original.ContentKey)
+	}
+	if row.UnparsedReason != "unknown_type" {
+		t.Errorf("unparsed reason = %q, want unknown_type — a confirmation does not decide it", row.UnparsedReason)
+	}
+	if row.InstrumentUID != "uid-1" {
+		t.Errorf("instrument uid = %q, want uid-1", row.InstrumentUID)
+	}
+	if row.Currency != "RUB" || row.Payment.String() != "-15230.5" || row.Quantity != 10 {
+		t.Errorf("a field of the key moved: %q / %s / %d", row.Currency, row.Payment, row.Quantity)
+	}
+}
+
+// The broker returns an operation before it has settled and again once it
+// has. If the mirror kept the state it first saw, that operation would read
+// "in progress" for good and never reach the journal at all, since the
+// projection takes only executed ones.
+func TestSyncMirrorFollowsAnOperationOutOfProgressIntoExecuted(t *testing.T) {
+	f := newFixture(t)
+	first := wireTime(t, "2026-03-16T00:00:00Z")
+	second := wireTime(t, "2026-03-16T01:00:00Z")
+
+	inProgress := op("op-1", "OPERATION_TYPE_BUY", "uid-1", wireTime(t, "2026-03-14T07:30:15Z"), "RUB", -15230, -500000000, 10)
+	inProgress.State = "OPERATION_STATE_PROGRESS"
+	if _, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link, []OperationItem{inProgress}, first); err != nil {
+		t.Fatalf("first SyncMirror: %v", err)
+	}
+	if got := rowsByPayment(t, f)["-15230.5"]; got.State != "OPERATION_STATE_PROGRESS" {
+		t.Fatalf("the operation was mirrored as %q, so its settling cannot be tested", got.State)
+	}
+
+	executed := inProgress
+	executed.State = "OPERATION_STATE_EXECUTED"
+	stats, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link, []OperationItem{executed}, second)
+	if err != nil {
+		t.Fatalf("second SyncMirror: %v", err)
+	}
+	if want := (MirrorSyncStats{Read: 1, Added: 0, Disappeared: 0}); stats != want {
+		t.Fatalf("stats = %+v, want %+v — settling is not a new operation", stats, want)
+	}
+	if got := rowsByPayment(t, f)["-15230.5"]; got.State != "OPERATION_STATE_EXECUTED" {
+		t.Errorf("state = %q, want OPERATION_STATE_EXECUTED", got.State)
+	}
+}
+
+// raw promises what the broker actually sent. The broker's identifier is
+// refreshed on every confirmation, so leaving raw at the first document seen
+// would put the two side by side saying different things about one row.
+func TestSyncMirrorRefreshesRawSoItCannotContradictTheIDBesideIt(t *testing.T) {
+	f := newFixture(t)
+	first := wireTime(t, "2026-03-16T00:00:00Z")
+	second := wireTime(t, "2026-03-16T01:00:00Z")
+	at := wireTime(t, "2026-03-14T07:30:15Z")
+
+	if _, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link,
+		[]OperationItem{op("id-before", "OPERATION_TYPE_BUY", "uid-1", at, "RUB", -100, 0, 1)}, first); err != nil {
+		t.Fatalf("first SyncMirror: %v", err)
+	}
+	if _, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link,
+		[]OperationItem{op("id-after", "OPERATION_TYPE_BUY", "uid-1", at, "RUB", -100, 0, 1)}, second); err != nil {
+		t.Fatalf("second SyncMirror: %v", err)
+	}
+
+	row := rowsByPayment(t, f)["-100"]
+	var raw map[string]string
+	if err := json.Unmarshal(row.Raw, &raw); err != nil {
+		t.Fatalf("raw did not come back as a document: %v (%s)", err, row.Raw)
+	}
+	if row.BrokerOperationID != "id-after" {
+		t.Fatalf("broker id = %q, want id-after", row.BrokerOperationID)
+	}
+	if raw["id"] != "id-after" {
+		t.Errorf("raw says the operation is %q while the column beside it says %q",
+			raw["id"], row.BrokerOperationID)
+	}
+}
+
 func TestSyncMirrorMarksAMissingOperationWithoutDeletingIt(t *testing.T) {
 	f := newFixture(t)
 	first := wireTime(t, "2026-03-16T00:00:00Z")
@@ -969,6 +1175,98 @@ func TestSyncMirrorWaitsForAnotherRunOfTheSameConnection(t *testing.T) {
 	}
 	if n := mirrorCount(t, f); n != 1 {
 		t.Errorf("mirror holds %d rows, want 1", n)
+	}
+}
+
+// waitUntilBlocked waits until n backends of this test's own database are
+// stopped on a lock. Every test database is private to its test, so nothing
+// else can be counted here by mistake.
+//
+// It exists so that "both runs have reached the gate" is observed rather than
+// assumed: a sleep long enough on this machine today is too short on a loaded
+// one tomorrow, and a run that had not yet reached the gate would let the
+// wrong order through green.
+func (f fixture) waitUntilBlocked(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var blocked int
+		if err := f.pool.QueryRow(f.ctx, `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&blocked); err != nil {
+			t.Fatalf("read pg_stat_activity: %v", err)
+		}
+		if blocked >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d of %d runs are waiting on the lock", blocked, n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// THE LOCK IS TAKEN BEFORE THE MIRROR IS READ, and this is the test that
+// tells that order apart from the other one. The test above proves only that
+// a second run WAITS, which it does either way — move the lock down past the
+// read and it stays green. What the order decides is whether a run that
+// waited then acts on what it read BEFORE it waited.
+//
+// PostgreSQL reads at READ COMMITTED here, so each statement takes its own
+// snapshot. With the read first, both runs see the empty mirror while the
+// gate is shut and each then inserts the operation it believes is new: two
+// rows for one operation, on every pair of runs that overlap. With the lock
+// first, neither has read anything while it waits, so the second run reads
+// the mirror the first one left behind and confirms that row instead.
+//
+// The gate is a lock the test itself holds, so that both runs are demonstrably
+// inside SyncMirror and stopped at the same statement before either is let on.
+// FOR NO KEY UPDATE for the reason the test above spells out: it conflicts
+// with the sync's FOR UPDATE and not with the FOR KEY SHARE that an insert's
+// foreign-key check takes.
+func TestSyncMirrorTakesTheLockBeforeItReadsTheMirror(t *testing.T) {
+	f := newFixture(t)
+	item := op("op-1", "OPERATION_TYPE_BUY", "uid-1", wireTime(t, "2026-03-14T07:30:15Z"), "RUB", -100, 0, 1)
+
+	gate, err := f.pool.Begin(f.ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = gate.Rollback(f.ctx) }()
+	var locked uuid.UUID
+	if err := gate.QueryRow(f.ctx,
+		`SELECT id FROM tinvest_connections WHERE id = $1 FOR NO KEY UPDATE`, f.conn.ID).Scan(&locked); err != nil {
+		t.Fatalf("shut the gate: %v", err)
+	}
+
+	done := make(chan error, 2)
+	for _, now := range []time.Time{
+		wireTime(t, "2026-03-16T00:00:00Z"),
+		wireTime(t, "2026-03-16T00:00:01Z"),
+	} {
+		go func(now time.Time) {
+			_, err := f.store.SyncMirror(context.Background(), f.conn.ID, f.link, []OperationItem{item}, now)
+			done <- err
+		}(now)
+	}
+	f.waitUntilBlocked(t, 2)
+
+	if err := gate.Commit(f.ctx); err != nil {
+		t.Fatalf("open the gate: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("SyncMirror once the gate opened: %v", err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatalf("a run never finished after the gate opened")
+		}
+	}
+
+	if n := mirrorCount(t, f); n != 1 {
+		t.Errorf("mirror holds %d rows after two simultaneous runs of one operation, want 1", n)
 	}
 }
 

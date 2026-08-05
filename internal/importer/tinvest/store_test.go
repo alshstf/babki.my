@@ -299,6 +299,65 @@ func TestCreateLinkAndLinksByConnection(t *testing.T) {
 	}
 }
 
+// A link names three things — a space, a connection and a babki account — and
+// the space it names has to be the space the other two are in. Neither of
+// those two carries the space it belongs to on the argument, so nothing but
+// this check stands between a mistaken caller and a link that files one
+// space's broker operations into another's account.
+func TestCreateLinkRefusesToCrossSpaces(t *testing.T) {
+	f := newFixture(t)
+
+	fam := family.NewStore(f.pool)
+	stranger, err := fam.CreateUser(f.ctx, "petr", "Пётр", "hash")
+	if err != nil {
+		t.Fatalf("create the other user: %v", err)
+	}
+	otherSpace, err := fam.CreateSpaceWithOwner(f.ctx, "Чужая семья", stranger.ID)
+	if err != nil {
+		t.Fatalf("create the other space: %v", err)
+	}
+	otherConn, err := f.store.CreateConnection(f.ctx, otherSpace.ID, []byte("nonce||other"), "0000")
+	if err != nil {
+		t.Fatalf("CreateConnection in the other space: %v", err)
+	}
+	otherAccount, err := account.NewStore(f.pool).Create(f.ctx, otherSpace.ID, nil,
+		"Чужой счёт", account.TypeBrokerage, "RUB", "Т-Банк")
+	if err != nil {
+		t.Fatalf("create the other account: %v", err)
+	}
+	mine, err := account.NewStore(f.pool).Create(f.ctx, f.spaceID, nil,
+		"Второй", account.TypeBrokerage, "RUB", "Т-Банк")
+	if err != nil {
+		t.Fatalf("create a second account of my own: %v", err)
+	}
+
+	// The connection belongs to the other space.
+	if _, err := f.store.CreateLink(f.ctx, AccountLink{
+		ConnectionID: otherConn.ID, SpaceID: f.spaceID, AccountID: mine.ID,
+		BrokerAccountID: "2000000009", BrokerAccountName: "Чужое подключение",
+		BrokerAccountType: "ACCOUNT_TYPE_TINKOFF",
+	}); !errors.Is(err, ErrLinkOutsideSpace) {
+		t.Errorf("a connection of another space was linked: err = %v, want ErrLinkOutsideSpace", err)
+	}
+
+	// The account belongs to the other space.
+	if _, err := f.store.CreateLink(f.ctx, AccountLink{
+		ConnectionID: f.conn.ID, SpaceID: f.spaceID, AccountID: otherAccount.ID,
+		BrokerAccountID: "2000000010", BrokerAccountName: "Чужой счёт",
+		BrokerAccountType: "ACCOUNT_TYPE_TINKOFF",
+	}); !errors.Is(err, ErrLinkOutsideSpace) {
+		t.Errorf("an account of another space was linked: err = %v, want ErrLinkOutsideSpace", err)
+	}
+
+	links, err := f.store.LinksByConnection(f.ctx, f.conn.ID)
+	if err != nil {
+		t.Fatalf("LinksByConnection: %v", err)
+	}
+	if len(links) != 1 {
+		t.Errorf("connection has %d links, want the 1 the fixture made", len(links))
+	}
+}
+
 func TestRunsRecordTheOutcomeAndPaginate(t *testing.T) {
 	f := newFixture(t)
 
@@ -342,10 +401,9 @@ func TestRunsRecordTheOutcomeAndPaginate(t *testing.T) {
 		t.Errorf("a finished run has no finishing time")
 	}
 
-	// "Last successful sync" is the START of that run, deliberately: an
-	// operation the broker recorded while the run was in flight can be dated
-	// before the run finished, and a next fetch bounded by the finish time
-	// would step over it.
+	// "Last successful sync" is the START of that run, not its finish. It is
+	// what the owner is shown as "the import last worked at"; nothing bounds a
+	// fetch by it, because SyncMirror is given the whole history every time.
 	at, err := f.store.LastSuccessfulSyncAt(f.ctx, f.conn.ID)
 	if err != nil {
 		t.Fatalf("LastSuccessfulSyncAt: %v", err)

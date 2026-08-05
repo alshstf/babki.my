@@ -34,6 +34,13 @@ var ErrLinkNotInConnection = errors.New("tinvest: account link belongs to anothe
 // leave a projection half-marked and silent about it.
 var ErrUnparsedRowsMissing = errors.New("tinvest: some mirror rows named for an unparsed reason are not there")
 
+// ErrLinkOutsideSpace means CreateLink was asked to file a connection or a
+// babki account that is not in the space the link names. The same fault
+// SyncMirror refuses with ErrLinkNotInConnection, one step earlier: a link
+// written across spaces would put one household's broker operations into
+// another household's account, and no later read could tell that it happened.
+var ErrLinkOutsideSpace = errors.New("tinvest: the connection or the account is not in that space")
+
 // ConnectionStatus is the state of one space's link to the broker. It is the
 // status column's CHECK constraint expressed in Go; the database refuses
 // anything else.
@@ -51,24 +58,37 @@ const (
 	StatusDisabled ConnectionStatus = "disabled"
 )
 
-// Trigger values for a sync run: what caused it to start.
+// SyncTrigger is what caused a sync run to start. Like ConnectionStatus it is
+// a named type and not a bare string, so that a misspelling is a compile
+// error here rather than a CHECK constraint violation at run time, from
+// inside a worker, on the one run that used it.
+type SyncTrigger string
+
 const (
-	TriggerSchedule = "schedule"
-	TriggerManual   = "manual"
-	TriggerInitial  = "initial"
+	TriggerSchedule SyncTrigger = "schedule"
+	TriggerManual   SyncTrigger = "manual"
+	TriggerInitial  SyncTrigger = "initial"
 )
 
-// Status values for a sync run.
+// RunStatus is where one sync run stands. Named for the reason SyncTrigger
+// is.
+type RunStatus string
+
 const (
-	RunRunning = "running"
-	RunOK      = "ok"
-	RunFailed  = "failed"
+	RunRunning RunStatus = "running"
+	RunOK      RunStatus = "ok"
+	RunFailed  RunStatus = "failed"
 )
+
+// ReconcileStatus is the reconciler's verdict on a run. Named for the reason
+// SyncTrigger is; the values beyond the one below belong to the reconciler
+// and arrive with it.
+type ReconcileStatus string
 
 // ReconcileNotChecked is the reconcile status a run carries until the
 // reconciler has looked at it. "Not checked" is not "agrees" — the two are
 // deliberately different values, and this is the one a run starts life with.
-const ReconcileNotChecked = "not_checked"
+const ReconcileNotChecked ReconcileStatus = "not_checked"
 
 // Connection is one space's read-only token for the broker. The token itself
 // is never here in the clear: TokenCiphertext is what
@@ -92,8 +112,15 @@ type AccountLink struct {
 	OpenedOn                                              *time.Time
 }
 
-// MirrorRow is one row of the mirror: one operation as the broker described
-// it, plus what this program knows about the row itself.
+// MirrorRow is one row of the mirror: one operation as the broker describes
+// it NOW, plus what this program knows about the row itself.
+//
+// A ROW CARRIES THE LATEST OBSERVATION, NOT THE FIRST. Every attribute the
+// broker sends is rewritten on each sync that finds the operation still
+// there. What survives a refresh untouched is ID and where the row is filed,
+// FirstSeenAt, UnparsedReason, and ContentKey together with the fields it was
+// built from — which cannot change without the operation becoming a different
+// one. See SyncMirror and mirrorConfirmSQL.
 //
 // Payment, Price, Commission and AccruedInt are decimal, not minor units:
 // the mirror stores the broker's own numbers unconverted, exactly as they
@@ -106,7 +133,10 @@ type AccountLink struct {
 // Raw is the broker's element, not its bytes. The column is jsonb, so
 // PostgreSQL normalizes whitespace, key order and duplicate keys on the way
 // in. Nothing in this program computes anything from Raw; it is there for a
-// person asking what the broker actually sent.
+// person asking what the broker actually sent — which is why it is refreshed
+// along with everything else rather than frozen at the first sighting. A Raw
+// left at the first document while BrokerOperationID beside it followed the
+// broker would be two answers to one question.
 //
 // BrokerOperationID is an ATTRIBUTE, never a key: the broker's own
 // documentation says an operation's id may change over time. ContentKey is
@@ -153,8 +183,8 @@ type MirrorRow struct {
 // the log the reconciler later writes its verdict onto.
 type SyncRun struct {
 	ID, ConnectionID, LinkID uuid.UUID
-	Trigger                  string
-	Status                   string
+	Trigger                  SyncTrigger
+	Status                   RunStatus
 	StartedAt                time.Time
 	FinishedAt               *time.Time
 
@@ -164,7 +194,7 @@ type SyncRun struct {
 	UnparsedCount    int
 	Error            string
 
-	ReconcileStatus     string
+	ReconcileStatus     ReconcileStatus
 	ReconciledAt        *time.Time
 	ReconcileMismatches json.RawMessage
 }
@@ -173,7 +203,7 @@ type SyncRun struct {
 // RunOK / RunFailed; the database refuses anything else (a run cannot finish
 // as "running").
 type RunOutcome struct {
-	Status           string
+	Status           RunStatus
 	ReadCount        int
 	AddedCount       int
 	DisappearedCount int
@@ -183,12 +213,25 @@ type RunOutcome struct {
 
 // Store is the data access layer of the T-Invest importer.
 //
-// The reads that take a connection or a link but no space (LinksByConnection,
-// MirrorRowsByLink, UnparsedByConnection, RunsByConnection,
-// LastSuccessfulSyncAt, UpdateConnectionStatus, SyncMirror) are for the
-// background worker, which has a job's arguments and no principal. A request
-// path must establish that the connection is the caller's — ConnectionByID
-// with the caller's space does exactly that — before reaching for any of them.
+// SOME METHODS HERE TAKE NO SPACE AND CHECK NONE. They are the background
+// worker's: it runs from a job's arguments and has no principal to check
+// against. A request path must establish that the connection is the caller's
+// — ConnectionByID with the caller's space does exactly that — before
+// reaching any of them. The full list, so that a reader can tell it apart
+// from the rest by looking rather than by remembering:
+//
+//   - reads: LinksByConnection, MirrorRowsByLink, UnparsedByConnection,
+//     RunsByConnection, LastSuccessfulSyncAt. ListActiveConnections takes no
+//     space either and is a wider thing still — see its own note.
+//   - writes: UpdateConnectionStatus, SyncMirror, StartRun, FinishRun,
+//     SetUnparsedReasons.
+//
+// SetUnparsedReasons is the sharpest of them and is called out on purpose: it
+// takes bare mirror-row ids with no connection and no space anywhere in the
+// statement, so it will mark ANY row in the table that an id names. A future
+// handler that took those ids from a request body would be marking strangers'
+// rows, and nothing in the SQL would stop it. Its ids must come from a read
+// this program already scoped — UnparsedByConnection — and from nowhere else.
 type Store struct{ pool *pgxpool.Pool }
 
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
@@ -207,10 +250,25 @@ func scanConnection(row pgx.Row) (Connection, error) {
 	return c, err
 }
 
+// EVERY ERROR THIS PACKAGE RETURNS CARRIES ITS NAME. An error coming off the
+// driver is wrapped with the package and the operation that failed —
+// "tinvest: read connection: ..." — and the named sentinels above spell
+// "tinvest:" out themselves. This is a rule and not a habit because the
+// package had both kinds side by side, and a bare driver error says nothing
+// about where it came from once it has been passed up two layers.
+//
+// Wrapping with %w leaves errors.Is working, so callers looking for
+// pgx.ErrNoRows still find it. The "Returns pgx.ErrNoRows" notes below mean
+// it in that sense: the error IS one, it is no longer the bare one.
+
 func (s *Store) CreateConnection(ctx context.Context, spaceID uuid.UUID, tokenCiphertext []byte, tokenLast4 string) (Connection, error) {
-	return scanConnection(s.pool.QueryRow(ctx, `
+	c, err := scanConnection(s.pool.QueryRow(ctx, `
 		INSERT INTO tinvest_connections (space_id, token_ciphertext, token_last4)
 		VALUES ($1, $2, $3) RETURNING `+connectionCols, spaceID, tokenCiphertext, tokenLast4))
+	if err != nil {
+		return Connection{}, fmt.Errorf("tinvest: create connection: %w", err)
+	}
+	return c, nil
 }
 
 // ConnectionByID reads one connection of the caller's space. Returns
@@ -218,12 +276,16 @@ func (s *Store) CreateConnection(ctx context.Context, spaceID uuid.UUID, tokenCi
 // also the answer for a connection that exists in another one, deliberately:
 // a stranger learns nothing about whether the id names anything.
 func (s *Store) ConnectionByID(ctx context.Context, spaceID, id uuid.UUID) (Connection, error) {
-	return scanConnection(s.pool.QueryRow(ctx,
+	c, err := scanConnection(s.pool.QueryRow(ctx,
 		`SELECT `+connectionCols+` FROM tinvest_connections WHERE id = $1 AND space_id = $2`, id, spaceID))
+	if err != nil {
+		return Connection{}, fmt.Errorf("tinvest: read connection: %w", err)
+	}
+	return c, nil
 }
 
 func (s *Store) ListConnections(ctx context.Context, spaceID uuid.UUID) ([]Connection, error) {
-	return s.listConnections(ctx,
+	return s.listConnections(ctx, "list connections",
 		`SELECT `+connectionCols+` FROM tinvest_connections WHERE space_id = $1 ORDER BY created_at, id`, spaceID)
 }
 
@@ -232,25 +294,28 @@ func (s *Store) ListConnections(ctx context.Context, spaceID uuid.UUID) ([]Conne
 // for the instance and has no space of its own, so this one deliberately does
 // not take a space and must never be reached from a request path.
 func (s *Store) ListActiveConnections(ctx context.Context) ([]Connection, error) {
-	return s.listConnections(ctx,
+	return s.listConnections(ctx, "list active connections",
 		`SELECT `+connectionCols+` FROM tinvest_connections WHERE status = $1 ORDER BY created_at, id`, StatusActive)
 }
 
-func (s *Store) listConnections(ctx context.Context, sql string, args ...any) ([]Connection, error) {
+func (s *Store) listConnections(ctx context.Context, what, sql string, args ...any) ([]Connection, error) {
 	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tinvest: %s: %w", what, err)
 	}
 	defer rows.Close()
 	out := []Connection{}
 	for rows.Next() {
 		c, err := scanConnection(rows)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("tinvest: %s: %w", what, err)
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tinvest: %s: %w", what, err)
+	}
+	return out, nil
 }
 
 // UpdateConnectionToken replaces the stored secret and nothing else. The
@@ -264,10 +329,13 @@ func (s *Store) UpdateConnectionToken(ctx context.Context, spaceID, id uuid.UUID
 	ct, err := s.pool.Exec(ctx, `UPDATE tinvest_connections
 		SET token_ciphertext = $3, token_last4 = $4, updated_at = now()
 		WHERE id = $1 AND space_id = $2`, id, spaceID, tokenCiphertext, tokenLast4)
-	if err == nil && ct.RowsAffected() == 0 {
-		return pgx.ErrNoRows
+	if err != nil {
+		return fmt.Errorf("tinvest: replace connection token: %w", err)
 	}
-	return err
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("tinvest: replace connection token: %w", pgx.ErrNoRows)
+	}
+	return nil
 }
 
 // UpdateConnectionStatus is the worker's write: the sync job learns from the
@@ -278,10 +346,13 @@ func (s *Store) UpdateConnectionToken(ctx context.Context, spaceID, id uuid.UUID
 func (s *Store) UpdateConnectionStatus(ctx context.Context, id uuid.UUID, status ConnectionStatus) error {
 	ct, err := s.pool.Exec(ctx, `UPDATE tinvest_connections
 		SET status = $2, updated_at = now() WHERE id = $1`, id, status)
-	if err == nil && ct.RowsAffected() == 0 {
-		return pgx.ErrNoRows
+	if err != nil {
+		return fmt.Errorf("tinvest: set connection status: %w", err)
 	}
-	return err
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("tinvest: set connection status: %w", pgx.ErrNoRows)
+	}
+	return nil
 }
 
 // DeleteConnection removes the owner's connection to the broker, and with it
@@ -298,10 +369,13 @@ func (s *Store) UpdateConnectionStatus(ctx context.Context, id uuid.UUID, status
 func (s *Store) DeleteConnection(ctx context.Context, spaceID, id uuid.UUID) error {
 	ct, err := s.pool.Exec(ctx,
 		`DELETE FROM tinvest_connections WHERE id = $1 AND space_id = $2`, id, spaceID)
-	if err == nil && ct.RowsAffected() == 0 {
-		return pgx.ErrNoRows
+	if err != nil {
+		return fmt.Errorf("tinvest: delete connection: %w", err)
 	}
-	return err
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("tinvest: delete connection: %w", pgx.ErrNoRows)
+	}
+	return nil
 }
 
 const linkCols = `id, connection_id, space_id, account_id, broker_account_id,
@@ -316,31 +390,61 @@ func scanLink(row pgx.Row) (AccountLink, error) {
 
 // CreateLink files one broker account against one babki account. link.ID is
 // ignored — the table hands out its own.
+//
+// THE SPACE IS CHECKED HERE, on both of the other two things the link names:
+// the connection has to be in link.SpaceID and so does the account. The
+// foreign keys cannot do it — each of the three columns points at a valid row
+// on its own, and nothing in the schema says the three have to agree — so a
+// caller that mixed up two spaces would write a link that files one
+// household's broker operations into another household's account. Returns
+// ErrLinkOutsideSpace when they do not agree; SyncMirror refuses the same
+// class of mismatch with ErrLinkNotInConnection one step later.
+//
+// It is one statement rather than a read followed by a write on purpose: two
+// statements would leave a window in which the connection is deleted between
+// the check and the insert, and the insert would then fail on the foreign key
+// with an error that says something else entirely.
 func (s *Store) CreateLink(ctx context.Context, link AccountLink) (AccountLink, error) {
-	return scanLink(s.pool.QueryRow(ctx, `
+	l, err := scanLink(s.pool.QueryRow(ctx, `
 		INSERT INTO tinvest_account_links (connection_id, space_id, account_id,
 			broker_account_id, broker_account_name, broker_account_type, opened_on)
-		VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING `+linkCols,
+		SELECT $1::uuid, $2::uuid, $3::uuid, $4::text, $5::text, $6::text, $7::date
+		WHERE EXISTS (SELECT 1 FROM tinvest_connections WHERE id = $1 AND space_id = $2)
+		  AND EXISTS (SELECT 1 FROM accounts WHERE id = $3 AND space_id = $2)
+		RETURNING `+linkCols,
 		link.ConnectionID, link.SpaceID, link.AccountID, link.BrokerAccountID,
 		link.BrokerAccountName, link.BrokerAccountType, link.OpenedOn))
+	if errors.Is(err, pgx.ErrNoRows) {
+		// The insert wrote nothing, and the only thing that can stop it
+		// writing is the WHERE above.
+		return AccountLink{}, fmt.Errorf("%w: connection %s, account %s, space %s",
+			ErrLinkOutsideSpace, link.ConnectionID, link.AccountID, link.SpaceID)
+	}
+	if err != nil {
+		return AccountLink{}, fmt.Errorf("tinvest: create account link: %w", err)
+	}
+	return l, nil
 }
 
 func (s *Store) LinksByConnection(ctx context.Context, connID uuid.UUID) ([]AccountLink, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+linkCols+` FROM tinvest_account_links WHERE connection_id = $1 ORDER BY created_at, id`, connID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tinvest: list account links: %w", err)
 	}
 	defer rows.Close()
 	out := []AccountLink{}
 	for rows.Next() {
 		l, err := scanLink(rows)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("tinvest: list account links: %w", err)
 		}
 		out = append(out, l)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tinvest: list account links: %w", err)
+	}
+	return out, nil
 }
 
 const mirrorCols = `id, connection_id, link_id, broker_operation_id,
@@ -360,21 +464,24 @@ func scanMirrorRow(row pgx.Row) (MirrorRow, error) {
 	return m, err
 }
 
-func (s *Store) listMirrorRows(ctx context.Context, sql string, args ...any) ([]MirrorRow, error) {
+func (s *Store) listMirrorRows(ctx context.Context, what, sql string, args ...any) ([]MirrorRow, error) {
 	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tinvest: %s: %w", what, err)
 	}
 	defer rows.Close()
 	out := []MirrorRow{}
 	for rows.Next() {
 		m, err := scanMirrorRow(rows)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("tinvest: %s: %w", what, err)
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tinvest: %s: %w", what, err)
+	}
+	return out, nil
 }
 
 // MirrorRowsByLink returns everything the mirror holds for one broker
@@ -383,7 +490,7 @@ func (s *Store) listMirrorRows(ctx context.Context, sql string, args ...any) ([]
 // projection reads all of them: a row that vanished is a fact about the
 // journal it produced, not something to hide.
 func (s *Store) MirrorRowsByLink(ctx context.Context, linkID uuid.UUID) ([]MirrorRow, error) {
-	return s.listMirrorRows(ctx,
+	return s.listMirrorRows(ctx, "list mirror rows",
 		`SELECT `+mirrorCols+` FROM tinvest_operations_mirror
 		 WHERE link_id = $1 ORDER BY first_seen_at, id`, linkID)
 }
@@ -405,7 +512,7 @@ func (s *Store) UnparsedByConnection(ctx context.Context, connID uuid.UUID, limi
 	if limit < 1 {
 		return nil, false, fmt.Errorf("tinvest: list unparsed: limit must be positive, got %d", limit)
 	}
-	rows, err := s.listMirrorRows(ctx,
+	rows, err := s.listMirrorRows(ctx, "list unparsed",
 		`SELECT `+mirrorCols+` FROM tinvest_operations_mirror
 		 WHERE connection_id = $1 AND unparsed_reason <> ''
 		 ORDER BY occurred_at DESC, id LIMIT $2 OFFSET $3`, connID, limit+1, offset)
@@ -441,7 +548,7 @@ func (s *Store) SetUnparsedReasons(ctx context.Context, reasons map[uuid.UUID]st
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("tinvest: set unparsed reasons: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -451,12 +558,15 @@ func (s *Store) SetUnparsedReasons(ctx context.Context, reasons map[uuid.UUID]st
 		FROM unnest($1::uuid[], $2::text[]) AS u(id, reason)
 		WHERE m.id = u.id`, ids, texts)
 	if err != nil {
-		return err
+		return fmt.Errorf("tinvest: set unparsed reasons: %w", err)
 	}
 	if int(ct.RowsAffected()) != len(reasons) {
 		return fmt.Errorf("%w: %d of %d", ErrUnparsedRowsMissing, ct.RowsAffected(), len(reasons))
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("tinvest: set unparsed reasons: %w", err)
+	}
+	return nil
 }
 
 const runCols = `id, connection_id, link_id, trigger, status, started_at,
@@ -476,10 +586,14 @@ func scanRun(row pgx.Row) (SyncRun, error) {
 // A run that never reaches FinishRun stays "running" for good, and that is
 // the point: a crash mid-sync is visible as one, rather than as nothing
 // having happened.
-func (s *Store) StartRun(ctx context.Context, connID, linkID uuid.UUID, trigger string) (SyncRun, error) {
-	return scanRun(s.pool.QueryRow(ctx, `
+func (s *Store) StartRun(ctx context.Context, connID, linkID uuid.UUID, trigger SyncTrigger) (SyncRun, error) {
+	r, err := scanRun(s.pool.QueryRow(ctx, `
 		INSERT INTO tinvest_sync_runs (connection_id, link_id, trigger, status)
-		VALUES ($1, $2, $3, '`+RunRunning+`') RETURNING `+runCols, connID, linkID, trigger))
+		VALUES ($1, $2, $3, $4) RETURNING `+runCols, connID, linkID, trigger, RunRunning))
+	if err != nil {
+		return SyncRun{}, fmt.Errorf("tinvest: start sync run: %w", err)
+	}
+	return r, nil
 }
 
 // FinishRun closes the log entry. The reconcile columns are left alone: what
@@ -494,10 +608,13 @@ func (s *Store) FinishRun(ctx context.Context, runID uuid.UUID, outcome RunOutco
 		    disappeared_count = $5, unparsed_count = $6, error = $7
 		WHERE id = $1`, runID, outcome.Status, outcome.ReadCount, outcome.AddedCount,
 		outcome.DisappearedCount, outcome.UnparsedCount, outcome.Error)
-	if err == nil && ct.RowsAffected() == 0 {
-		return pgx.ErrNoRows
+	if err != nil {
+		return fmt.Errorf("tinvest: finish sync run: %w", err)
 	}
-	return err
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("tinvest: finish sync run: %w", pgx.ErrNoRows)
+	}
+	return nil
 }
 
 // RunsByConnection returns the connection's run log, newest first, one page
@@ -511,19 +628,19 @@ func (s *Store) RunsByConnection(ctx context.Context, connID uuid.UUID, limit, o
 		WHERE connection_id = $1 ORDER BY started_at DESC, id LIMIT $2 OFFSET $3`,
 		connID, limit+1, offset)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("tinvest: list sync runs: %w", err)
 	}
 	defer rows.Close()
 	out := []SyncRun{}
 	for rows.Next() {
 		r, err := scanRun(rows)
 		if err != nil {
-			return nil, false, err
+			return nil, false, fmt.Errorf("tinvest: list sync runs: %w", err)
 		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("tinvest: list sync runs: %w", err)
 	}
 	hasMore := len(out) > limit
 	if hasMore {
@@ -532,17 +649,28 @@ func (s *Store) RunsByConnection(ctx context.Context, connID uuid.UUID, limit, o
 	return out, hasMore, nil
 }
 
-// LastSuccessfulSyncAt returns when the connection last synced successfully,
-// or nil if it never has. There is no last_sync_at column: two independent
-// computations of one value diverge eventually, so this one is derived from
-// the run log (see migration 0014).
+// LastSuccessfulSyncAt returns the moment the connection's last successful
+// run STARTED, or nil if it never had one. There is no last_sync_at column:
+// two independent computations of one value diverge eventually, so this one
+// is derived from the run log (see migration 0014).
 //
-// It is the START of that run, deliberately, not its finish. An operation the
-// broker recorded while the run was in flight can carry a timestamp earlier
-// than the moment the run ended, so a next fetch bounded by the finish time
-// would step over it and never come back for it. Bounded by the start, the
-// worst case is re-reading operations already mirrored — which costs a
-// comparison and nothing else, because the mirror is matched on content.
+// IT IS FOR SHOWING THE OWNER WHEN THE IMPORT LAST WORKED, and for nothing
+// else. Two things about it have to be said plainly, because both are easy to
+// assume the other way round:
+//
+//   - It is the run's START, not its finish. A caller reading it as "the
+//     mirror is up to date as of this instant" would be reading it wrong by
+//     however long that run took.
+//   - It is keyed by CONNECTION, while runs are made per (connection, link).
+//     For a connection with several broker accounts it therefore means "at
+//     least one of them synced successfully at that moment", never "all of
+//     them did". A link whose every run has failed leaves no trace here.
+//
+// In particular it is NOT a lower bound for the next fetch of history.
+// SyncMirror compares against the FULL history of the link and marks
+// everything it does not find as disappeared, so a fetch bounded by this
+// value would mark the whole history before the bound as gone on the very
+// first run. See the precondition on SyncMirror.
 func (s *Store) LastSuccessfulSyncAt(ctx context.Context, connID uuid.UUID) (*time.Time, error) {
 	var at time.Time
 	err := s.pool.QueryRow(ctx, `SELECT started_at FROM tinvest_sync_runs
@@ -552,7 +680,7 @@ func (s *Store) LastSuccessfulSyncAt(ctx context.Context, connID uuid.UUID) (*ti
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tinvest: read last successful sync: %w", err)
 	}
 	return &at, nil
 }
