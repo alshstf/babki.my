@@ -1,11 +1,19 @@
-import type { ReactElement } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  Outlet,
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
 import "@/i18n";
 import { SettingsPage } from "./index";
 import type { SessionInfo } from "@/api/session";
 import type { CostBasisRules } from "@/api/tax-residencies";
+import type { TinvestConnection } from "@/api/connections";
 
 // openapi-fetch captures globalThis.fetch at import time
 // (`fetch: baseFetch = globalThis.fetch`), so the double has to be installed
@@ -110,10 +118,43 @@ function makeSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
 // so seeding ["session"] directly is the whole setup; the country list is
 // served over the network like the real thing, because "the list comes from
 // the server" is one of the things under test.
-function wrap(ui: ReactElement, session: SessionInfo) {
+//
+// Wrapped in a router because the connections section links to
+// /settings/connections/new and to each connection's own screen — the two
+// sibling routes below stand in for them (stubs, since what they render is
+// not this page's concern), the same pattern detail.test.tsx and
+// accounts/index.test.tsx use for a page that links elsewhere.
+function wrap(session: SessionInfo) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(["session"], session);
-  return { qc, ...render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>) };
+  const rootRoute = createRootRoute({ component: () => <Outlet /> });
+  const settingsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings",
+    component: SettingsPage,
+  });
+  const connectRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings/connections/new",
+    component: () => null,
+  });
+  const connectionDetailRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings/connections/$connectionId",
+    component: () => null,
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([settingsRoute, connectRoute, connectionDetailRoute]),
+    history: createMemoryHistory({ initialEntries: ["/settings"] }),
+  });
+  return {
+    qc,
+    ...render(
+      <QueryClientProvider client={qc}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    ),
+  };
 }
 
 const currencySelect = () => screen.getByRole("combobox", { name: "Базовая валюта" });
@@ -127,21 +168,22 @@ describe("SettingsPage", () => {
     serve({
       "/api/v1/auth/me": { body: makeSession() },
       "/api/v1/tax-residencies": { body: [RU_RULES, GB_RULES, DE_RULES] },
+      "/api/v1/tinvest/connections": { body: { connections: [] } },
     });
   });
 
-  it("shows the base currency form for an owner with Save disabled until something changes", () => {
-    wrap(<SettingsPage />, makeSession({ base_currency: "RUB" }));
+  it("shows the base currency form for an owner with Save disabled until something changes", async () => {
+    wrap(makeSession({ base_currency: "RUB" }));
 
-    expect(screen.getByText("Базовая валюта")).toBeInTheDocument();
+    expect(await screen.findByText("Базовая валюта")).toBeInTheDocument();
     expect(currencySelect()).toBeInTheDocument();
     expect(saveButton()).toBeDisabled();
   });
 
-  it("enables Save once a different currency is selected", () => {
-    wrap(<SettingsPage />, makeSession({ base_currency: "RUB" }));
+  it("enables Save once a different currency is selected", async () => {
+    wrap(makeSession({ base_currency: "RUB" }));
 
-    fireEvent.click(currencySelect());
+    fireEvent.click(await screen.findByRole("combobox", { name: "Базовая валюта" }));
     fireEvent.click(screen.getByText("USD"));
 
     expect(saveButton()).toBeEnabled();
@@ -155,14 +197,15 @@ describe("SettingsPage", () => {
     serve({
       "/api/v1/auth/me": { body: makeSession() },
       "/api/v1/tax-residencies": { body: [RU_RULES, GB_RULES, DE_RULES] },
+      "/api/v1/tinvest/connections": { body: { connections: [] } },
       "/api/v1/space": { body: makeSession({ base_currency: "USD" }) },
     });
 
-    const { qc } = wrap(<SettingsPage />, makeSession({ base_currency: "RUB" }));
+    const { qc } = wrap(makeSession({ base_currency: "RUB" }));
     qc.setQueryData(["accounts"], []);
     qc.setQueryData(["summary"], null);
 
-    fireEvent.click(currencySelect());
+    fireEvent.click(await screen.findByRole("combobox", { name: "Базовая валюта" }));
     fireEvent.click(screen.getByText("USD"));
     fireEvent.click(saveButton());
 
@@ -185,14 +228,15 @@ describe("SettingsPage", () => {
     serve({
       "/api/v1/auth/me": { body: makeSession() },
       "/api/v1/tax-residencies": { body: [RU_RULES, GB_RULES, DE_RULES] },
+      "/api/v1/tinvest/connections": { body: { connections: [] } },
       "/api/v1/space": { body: makeSession({ base_currency: "USD" }) },
     });
 
-    const { qc } = wrap(<SettingsPage />, makeSession({ base_currency: "RUB" }));
+    const { qc } = wrap(makeSession({ base_currency: "RUB" }));
     qc.setQueryData(["operations", "acc-1", 50, 0], []);
     qc.setQueryData(["positions", "acc-1"], []);
 
-    fireEvent.click(currencySelect());
+    fireEvent.click(await screen.findByRole("combobox", { name: "Базовая валюта" }));
     fireEvent.click(screen.getByText("USD"));
     fireEvent.click(saveButton());
 
@@ -202,11 +246,11 @@ describe("SettingsPage", () => {
     expect(qc.getQueryState(["positions", "acc-1"])?.isInvalidated).toBe(true);
   });
 
-  it("shows an owner-only message and no form for a non-owner", () => {
-    wrap(<SettingsPage />, makeSession({ role: "editor" }));
+  it("shows an owner-only message and no form for a non-owner", async () => {
+    wrap(makeSession({ role: "editor" }));
 
     expect(
-      screen.getByText("Настройки доступны только владельцу пространства"),
+      await screen.findByText("Настройки доступны только владельцу пространства"),
     ).toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Сохранить" })).not.toBeInTheDocument();
@@ -218,7 +262,7 @@ describe("SettingsPage", () => {
       // first time a country is added there — offering one the server
       // rejects, or hiding one it accepts. So the options must come from the
       // response and nowhere else.
-      wrap(<SettingsPage />, makeSession({ tax_residency: "RU" }));
+      wrap(makeSession({ tax_residency: "RU" }));
 
       await waitFor(() => expect(countrySelect()).toBeEnabled());
       fireEvent.click(countrySelect());
@@ -228,7 +272,7 @@ describe("SettingsPage", () => {
     });
 
     it("states what the selected country means for the figures before it is saved", async () => {
-      wrap(<SettingsPage />, makeSession({ tax_residency: "RU" }));
+      wrap(makeSession({ tax_residency: "RU" }));
 
       // The saved country is one the application does compute for, and it
       // says so rather than staying silent: the owner asked a question by
@@ -270,8 +314,9 @@ describe("SettingsPage", () => {
       serve({
         "/api/v1/auth/me": { body: stored },
         "/api/v1/tax-residencies": { body: [RU_RULES, GB_RULES, DE_RULES] },
+        "/api/v1/tinvest/connections": { body: { connections: [] } },
       });
-      wrap(<SettingsPage />, stored);
+      wrap(stored);
 
       await waitFor(() => expect(countrySelect()).toBeEnabled());
       expect(countrySelect().textContent).toContain("Франция");
@@ -286,12 +331,13 @@ describe("SettingsPage", () => {
       serve({
         "/api/v1/auth/me": { body: makeSession() },
         "/api/v1/tax-residencies": { body: [RU_RULES, GB_RULES, DE_RULES] },
+        "/api/v1/tinvest/connections": { body: { connections: [] } },
         "/api/v1/space": {
           body: makeSession({ tax_residency: "GB", cost_basis_rules: GB_RULES }),
         },
       });
 
-      const { qc } = wrap(<SettingsPage />, makeSession({ tax_residency: "RU" }));
+      const { qc } = wrap(makeSession({ tax_residency: "RU" }));
       qc.setQueryData(["positions", "acc-1"], []);
 
       await waitFor(() => expect(countrySelect()).toBeEnabled());
@@ -308,6 +354,53 @@ describe("SettingsPage", () => {
       // Only what changed is sent: picking a country must not rewrite the
       // base currency as a side effect.
       expect(await patchBodies()).toEqual([{ tax_residency: "GB" }]);
+    });
+  });
+
+  describe("connections", () => {
+    function makeConnection(overrides: Partial<TinvestConnection> = {}): TinvestConnection {
+      return {
+        id: "conn-1",
+        status: "active",
+        token_last4: "3456",
+        accounts: [],
+        ...overrides,
+      };
+    }
+
+    it("shows an empty state with a way to connect T-Invest", async () => {
+      wrap(makeSession());
+
+      expect(
+        await screen.findByText("Пока нет ни одного подключения к брокеру"),
+      ).toBeInTheDocument();
+      const connect = screen.getByRole("link", { name: "Подключить Т-Инвестиции" });
+      expect(connect).toHaveAttribute("href", "/settings/connections/new");
+    });
+
+    it("lists an existing connection with its status and the last four token characters, linking to its own screen", async () => {
+      serve({
+        "/api/v1/auth/me": { body: makeSession() },
+        "/api/v1/tax-residencies": { body: [RU_RULES, GB_RULES, DE_RULES] },
+        "/api/v1/tinvest/connections": {
+          body: {
+            connections: [makeConnection({ status: "token_revoked", token_last4: "wxyz" })],
+          },
+        },
+      });
+
+      wrap(makeSession());
+
+      expect(await screen.findByText("Токен ···wxyz")).toBeInTheDocument();
+      // token_revoked, not active — the badge names the SERVER's own verdict
+      // (see TinvestConnectionStatus in the API contract), not a guess this
+      // screen would have to keep in sync with it by hand.
+      expect(screen.getByText("Токен отозван")).toBeInTheDocument();
+
+      const links = screen.getAllByRole("link");
+      const row = links.find((l) => l.getAttribute("href") === "/settings/connections/conn-1");
+      expect(row).toBeDefined();
+      expect(row).toHaveTextContent("Т-Инвестиции");
     });
   });
 });

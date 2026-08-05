@@ -85,6 +85,16 @@ const ENUM_NAMESPACE_TO_TYPE = {
   // values, so every one of them has to have Russian wording here.
   "costBasis.methods": "CostBasisMethod",
   "costBasis.perimeters": "CostBasisPerimeter",
+  // T-Invest connections (see api/openapi.yaml, paths under /api/v1/tinvest).
+  // Only `connections.statuses` is read dynamically by this task's own code
+  // (the settings screen's status badge); the other three are read by the
+  // connection screen a later task adds (run log, reconcile snapshot,
+  // unparsed list) and are wired in now so ru.json already carries every
+  // member the server can send.
+  "connections.statuses": "TinvestConnectionStatus",
+  "connections.runStatuses": "TinvestSyncRunStatus",
+  "connections.reconcileStatuses": "TinvestReconcileStatus",
+  "connections.unparsedReasons": "TinvestUnparsedReason",
 };
 
 /**
