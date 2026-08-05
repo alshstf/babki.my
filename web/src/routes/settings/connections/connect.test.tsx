@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Outlet,
@@ -283,6 +283,51 @@ describe("ConnectWizardPage — token check errors", () => {
   });
 });
 
+describe("ConnectWizardPage — an answer that arrives late", () => {
+  it("does not move the wizard forward once the owner has gone back", async () => {
+    // The check is held open so the owner can leave the step it was started
+    // from — the ordinary case of a slow broker, not a contrived one. The
+    // «Назад» button is not disabled while the check runs, so leaving is
+    // something the screen invites.
+    let answer: (r: Response) => void = () => {};
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+
+    renderWizard();
+    await goToTokenStep();
+    fireEvent.change(await screen.findByLabelText("Токен"), { target: { value: "abc123" } });
+    fireEvent.click(screen.getByRole("button", { name: "Проверить токен" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Назад" }));
+    expect(await screen.findByText("Шаг 1 из 3. Выпустите токен у брокера")).toBeInTheDocument();
+
+    await act(async () => {
+      answer(
+        new Response(JSON.stringify({ accounts: BROKER_ACCOUNTS }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    // The owner is where they put themselves. A late answer that walks the
+    // wizard two steps forward reads as the screen having a mind of its own.
+    expect(screen.getByText("Шаг 1 из 3. Выпустите токен у брокера")).toBeInTheDocument();
+    expect(screen.queryByText("Шаг 3 из 3. Выберите счета для импорта")).not.toBeInTheDocument();
+
+    // Going forward is still going forward: the wizard walks its own steps in
+    // order, and the next one is the token, not the accounts the late answer
+    // happened to carry.
+    fireEvent.click(screen.getByRole("button", { name: "Далее" }));
+    expect(await screen.findByText("Шаг 2 из 3. Вставьте токен")).toBeInTheDocument();
+    expect(screen.queryByText("Шаг 3 из 3. Выберите счета для импорта")).not.toBeInTheDocument();
+  });
+});
+
 describe("ConnectWizardPage — the accounts step", () => {
   it("keeps Подключить disabled until at least one account is checked", async () => {
     serve([
@@ -319,6 +364,78 @@ describe("ConnectWizardPage — the accounts step", () => {
     expect(
       await screen.findByText("Этот токен не видит ни одного счёта, который можно импортировать"),
     ).toBeInTheDocument();
+  });
+
+  // The two refusals create can answer that both used to be one 400. The
+  // pair is checked together, and each leg asserts the OTHER sentence is
+  // absent: a screen that showed both, or showed the token's sentence for
+  // either, would pass a test that only looked for the one it expected.
+  it("names the changed account list for a 422, and does not blame the token", async () => {
+    serve([
+      {
+        path: "/api/v1/tinvest/token-check",
+        method: "POST",
+        status: 200,
+        body: { accounts: BROKER_ACCOUNTS },
+      },
+      {
+        path: "/api/v1/tinvest/connections",
+        method: "POST",
+        status: 422,
+        body: { error: "the token does not see that broker account" },
+      },
+    ]);
+
+    renderWizard();
+    await goToAccountsStep();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Брокерский счёт" }));
+    fireEvent.click(screen.getByRole("button", { name: "Подключить" }));
+
+    expect(
+      await screen.findByText(
+        "Список счетов у брокера изменился: выбранного счёта в нём больше нет. " +
+          "Вернитесь на шаг назад, проверьте токен заново и выберите счета из свежего списка",
+      ),
+    ).toBeInTheDocument();
+    // The token in this request is the one the broker just accepted at the
+    // check. Telling the owner to re-issue it sends them to fix what is not
+    // broken — the whole reason the server stopped answering 400 here.
+    expect(
+      screen.queryByText(
+        "Брокер не принял токен. Проверьте, что он скопирован целиком, не просрочен и выпущен с доступом на чтение",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("still blames the token for a 400 from create, and not the account list", async () => {
+    serve([
+      {
+        path: "/api/v1/tinvest/token-check",
+        method: "POST",
+        status: 200,
+        body: { accounts: BROKER_ACCOUNTS },
+      },
+      {
+        path: "/api/v1/tinvest/connections",
+        method: "POST",
+        status: 400,
+        body: { error: "the broker refused this token" },
+      },
+    ]);
+
+    renderWizard();
+    await goToAccountsStep();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Брокерский счёт" }));
+    fireEvent.click(screen.getByRole("button", { name: "Подключить" }));
+
+    expect(
+      await screen.findByText(
+        "Брокер не принял токен. Проверьте, что он скопирован целиком, не просрочен и выпущен с доступом на чтение",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Список счетов у брокера изменился/),
+    ).not.toBeInTheDocument();
   });
 
   it("names a broker account already claimed by another connection on a 409 from create", async () => {

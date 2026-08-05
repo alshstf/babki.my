@@ -402,5 +402,37 @@ describe("SettingsPage", () => {
       expect(row).toBeDefined();
       expect(row).toHaveTextContent("Т-Инвестиции");
     });
+
+    it("draws a revoked token as a problem, apart from a connection merely switched off", async () => {
+      serve({
+        "/api/v1/auth/me": { body: makeSession() },
+        "/api/v1/tax-residencies": { body: [RU_RULES, GB_RULES, DE_RULES] },
+        "/api/v1/tinvest/connections": {
+          body: {
+            connections: [
+              makeConnection({ id: "conn-1", status: "active" }),
+              makeConnection({ id: "conn-2", status: "token_revoked" }),
+              makeConnection({ id: "conn-3", status: "disabled" }),
+            ],
+          },
+        },
+      });
+
+      wrap(makeSession());
+
+      const revoked = await screen.findByText("Токен отозван");
+      const off = screen.getByText("Отключено");
+      const active = screen.getByText("Активно");
+
+      // `token_revoked` is the server's own verdict and the connection has
+      // stopped importing until the owner pastes a new token; `disabled` is
+      // the owner's own doing and asks nothing of anyone. The two must not
+      // read alike, which is what they did — both quiet grey, the one waiting
+      // for a person indistinguishable from the one waiting for nobody.
+      expect(revoked).toHaveAttribute("data-variant", "destructive");
+      expect(off).toHaveAttribute("data-variant", "secondary");
+      expect(active).toHaveAttribute("data-variant", "default");
+      expect(revoked.getAttribute("data-variant")).not.toBe(off.getAttribute("data-variant"));
+    });
   });
 });

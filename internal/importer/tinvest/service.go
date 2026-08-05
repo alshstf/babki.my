@@ -46,6 +46,10 @@ var ErrBrokerAccountAlreadyLinked = errors.New("tinvest: that broker account is 
 // importableAccountTypes). Refused rather than linked-and-ignored: a link this
 // program cannot read would sync forever and produce nothing, while looking on
 // screen exactly like one that works.
+//
+// It is answered with 422 and not with ErrTokenRejected's 400, because the two
+// arrive on one path and mean opposite things about the token — see writeError
+// in http.go for what a client does with the difference.
 var ErrBrokerAccountNotImportable = errors.New("tinvest: the token does not see that broker account, or it is not of a kind this program imports")
 
 // importableAccountTypes is which of the broker's account kinds this program

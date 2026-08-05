@@ -79,16 +79,30 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 // writeError maps this package's own sentinels onto status codes and hands
 // everything else to family.WriteError.
 //
-// THE THREE PAIRS BELOW ARE THE WHOLE POINT OF HAVING SENTINELS AT ALL. A
+// THE FOUR SEPARATIONS BELOW ARE THE WHOLE POINT OF HAVING SENTINELS AT ALL. A
 // refused token (400) and an unreachable broker (502) are opposite advice —
 // paste a new token, or wait — and a client can only tell them apart by the
 // code, since the text is prose. A connection that is switched off (409) is not
-// a missing one (404). And a broker account already imported (409) is not a
-// malformed request (400).
+// a missing one (404). A broker account already imported (409) is not a
+// malformed request (400). And a picked broker account this token cannot import
+// (422) is not a refused token (400).
+//
+// THAT LAST ONE USED TO BE A 400 BESIDE THE REFUSED TOKEN, and the two share a
+// path: POST /api/v1/tinvest/connections asks the broker for its account list
+// afresh, so a list that changed since the wizard's token-check — an account
+// closed, a token's access narrowed — refuses the create with a request that is
+// perfectly well formed and a token that still works. Under one status code the
+// client had to caption it as a refused token, telling the owner to check and
+// re-issue a token that never stopped working; 422 says the other thing this
+// call can mean, which is that the request was understood and cannot be carried
+// out. Only this path can produce it (Service.CreateConnection), which is why
+// only this path declares it in api/openapi.yaml.
 func writeError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, ErrTokenRejected), errors.Is(err, ErrBrokerAccountNotImportable):
+	case errors.Is(err, ErrTokenRejected):
 		httpjson.Error(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrBrokerAccountNotImportable):
+		httpjson.Error(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, ErrConnectionNotActive), errors.Is(err, ErrBrokerAccountAlreadyLinked):
 		httpjson.Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrBrokerUnreachable):

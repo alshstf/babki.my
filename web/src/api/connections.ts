@@ -42,11 +42,16 @@ export function useConnection(id: string) {
   });
 }
 
+// useInvalidateConnections refetches everything keyed on connections: the list
+// AND every single connection, because react-query matches a query key by
+// PREFIX unless told otherwise, and ["tinvest-connections"] is the prefix of
+// ["tinvest-connections", id]. Naming the second key as well would invalidate
+// nothing the first did not, while reading as though one connection needed its
+// own line.
 function useInvalidateConnections() {
   const queryClient = useQueryClient();
-  return (id?: string) => {
+  return () => {
     void queryClient.invalidateQueries({ queryKey: ["tinvest-connections"] });
-    if (id) void queryClient.invalidateQueries({ queryKey: ["tinvest-connections", id] });
   };
 }
 
@@ -97,9 +102,21 @@ export function useCreateConnection() {
   });
 }
 
+// useUpdateConnection replaces the token, switches the connection on or off, or
+// both (PATCH .../connections/{id}).
+//
+// networkMode "always" for the reason useCheckToken documents, and this is the
+// place it matters most: replacing a token is a REPAIR — it is reached from a
+// connection the server has already parked at `token_revoked` — so it is used
+// exactly when something is known to be broken. react-query's default would
+// park the request while the browser believes itself offline: nothing sent,
+// isError false, isPending true, and a screen where pressing the button does
+// nothing at all and says nothing about why. That is #111 on the setup form,
+// and there is no reason it should read differently here.
 export function useUpdateConnection() {
   const invalidate = useInvalidateConnections();
   return useMutation({
+    networkMode: "always",
     mutationFn: async ({
       id,
       body,
@@ -114,13 +131,22 @@ export function useUpdateConnection() {
       if (!data) throw apiError(response, error);
       return data;
     },
-    onSuccess: (data) => invalidate(data.id),
+    onSuccess: () => invalidate(),
   });
 }
 
+// useDeleteConnection withdraws the connection (DELETE .../connections/{id}).
+// The accounts and their operations stay — see the contract; what goes is the
+// stored token and everything the import kept beside it.
+//
+// networkMode "always" for the same reason as useUpdateConnection: the owner
+// pressed a button and is waiting for it to be over, and a request parked until
+// the browser changes its mind about the network leaves the screen saying
+// nothing while the connection is still there.
 export function useDeleteConnection() {
   const invalidate = useInvalidateConnections();
   return useMutation({
+    networkMode: "always",
     mutationFn: async (id: string): Promise<void> => {
       const { response, error } = await api.DELETE(
         "/api/v1/tinvest/connections/{connectionId}",
@@ -128,7 +154,7 @@ export function useDeleteConnection() {
       );
       if (!response.ok) throw apiError(response, error);
     },
-    onSuccess: (_data, id) => invalidate(id),
+    onSuccess: () => invalidate(),
   });
 }
 
@@ -155,7 +181,7 @@ export function useTriggerSync() {
       if (!data) throw apiError(response, error);
       return data;
     },
-    onSuccess: (_data, id) => invalidate(id),
+    onSuccess: () => invalidate(),
   });
 }
 
@@ -219,6 +245,24 @@ export function useUnparsed(connectionId: string, pageSize = UNPARSED_PAGE_SIZE)
 // retrying, the other needs a different token.
 export function isTokenRejected(err: unknown): boolean {
   return err instanceof ApiError && err.status === 400;
+}
+
+// isBrokerAccountNotImportable: a broker account that was picked is not one this
+// token can import (422, and POST /api/v1/tinvest/connections is the only path
+// that declares it — no other call takes picks).
+//
+// IT IS THE ONE ANSWER FROM THIS CALL THAT SAYS THE TOKEN IS FINE. The broker's
+// account list moved under the wizard — an account closed, or a token's access
+// narrowed, between the token-check and the create, which asks for that list
+// afresh. It used to arrive as the same 400 a refused token does, where the only
+// sentence a screen could show sent the owner to re-issue a token that never
+// stopped working.
+//
+// Nothing about the ORDER of the checks at a call site rides on this: 400 and
+// 422 are different codes, so isTokenRejected and this one can never both be
+// true of one error. What rides on it is that the two get different sentences.
+export function isBrokerAccountNotImportable(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 422;
 }
 
 // isBrokerUnreachable: this server could not reach T-Invest, or could not use

@@ -371,6 +371,8 @@ export interface paths {
          *     THE ACCOUNTS IT CREATES ARE RUBLE BROKERAGE ACCOUNTS AT «Т-Банк», and the currency is load-bearing rather than a default: after every successful sync the reconciliation writes the broker's own ruble balance onto the account as a balance mark, and it refuses to write that mark onto an account kept in any other currency.
          *
          *     The token is checked against the broker before anything is written, so a token the broker refuses creates nothing (400). A broker account already imported by another connection of this space is refused too (409): importing one broker account twice would produce two babki accounts holding the same operations.
+         *
+         *     422 AND NOT 400 WHEN A PICKED BROKER ACCOUNT IS NOT ONE THIS TOKEN CAN IMPORT — the token works and the request is well formed, but the account list the broker answered with does not hold what was picked, or holds it as a kind this program does not import. THIS CALL ASKS FOR THAT LIST AFRESH, so it can differ from the one POST /api/v1/tinvest/token-check returned a minute earlier: an account closed in between, or a token whose access was narrowed, is enough. Sharing 400 with a refused token would leave a client no way to tell the two apart, and the sentence it would then show — check the token, it may be truncated or expired — sends the owner to re-issue a token that never stopped working. 400 on this path stays what it has always been: the token, or the request's own shape.
          */
         post: operations["createTinvestConnection"];
         delete?: never;
@@ -1871,6 +1873,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             502: components["responses"]["Error"];
         };
     };

@@ -524,14 +524,20 @@ func TestCreatingAConnectionRefusesWhatItCannotImport(t *testing.T) {
 		mustSay    string
 	}{
 		{
+			// 422 AND NOT 400, and the difference is the whole reason this row
+			// is here twice over: the token in this request is the demo token,
+			// which works, and the body is exactly the shape the contract
+			// declares. What is wrong is the account, and a client told 400
+			// would caption it as a refused token and send the owner to
+			// re-issue one that never stopped working (see writeError).
 			"an account the token cannot see",
 			`{"token":"` + demoToken + `","accounts":[{"broker_account_id":"9999","account_name":"X"}]}`,
-			http.StatusBadRequest, "",
+			http.StatusUnprocessableEntity, "",
 		},
 		{
 			"an account of a kind this program does not import",
 			`{"token":"` + demoToken + `","accounts":[{"broker_account_id":"2000000003","account_name":"X"}]}`,
-			http.StatusBadRequest, "",
+			http.StatusUnprocessableEntity, "",
 		},
 		{
 			"the same broker account twice",
@@ -588,6 +594,47 @@ func TestCreatingAConnectionRefusesWhatItCannotImport(t *testing.T) {
 	}
 	if got := api.inserter.queued(); len(got) != 0 {
 		t.Errorf("queued %d syncs after seven refusals, want 0", len(got))
+	}
+}
+
+// TestCreateTellsARefusedTokenFromAnAccountItCannotImport is the pair a client
+// branches on, both legs of it on ONE endpoint and with everything else held
+// still. It is the whole reason ErrBrokerAccountNotImportable stopped sharing
+// ErrTokenRejected's 400.
+//
+// Why the second leg is not a made-up case: creating a connection asks the
+// broker for its account list AFRESH, and that list is a live answer. An account
+// closed between the wizard's token-check and its create, or a token whose
+// access was narrowed, produces exactly this — a request whose token still
+// works, naming an account the broker no longer offers. Under one status code
+// the client had to caption that as a refused token and send the owner off to
+// re-issue a working one.
+func TestCreateTellsARefusedTokenFromAnAccountItCannotImport(t *testing.T) {
+	api := newTestAPI(t)
+	base := api.url + "/api/v1/tinvest/connections"
+	pick := func(id string) string {
+		return `{"token":"` + demoToken + `","accounts":[{"broker_account_id":"` + id +
+			`","account_name":"X"}]}`
+	}
+
+	// The broker refuses the token. The account picked is a real, importable
+	// one, so the ONLY thing wrong is the token.
+	api.broker.set(http.StatusUnauthorized, `{"code":16,"message":"unauthenticated","description":"40003"}`)
+	if code, body := do(t, api.owner, "POST", base, pick("2000000001")); code != http.StatusBadRequest {
+		t.Errorf("a refused token: status %d (body %s), want 400", code, body)
+	}
+
+	// The same endpoint, the same token, the broker answering normally again.
+	// Now the token works and the request is well formed, and the only thing
+	// wrong is the account — which must NOT be answered with the token's code.
+	api.broker.set(0, "")
+	code, body := do(t, api.owner, "POST", base, pick("9999"))
+	if code == http.StatusBadRequest {
+		t.Fatalf("an account the token cannot see: status 400 (body %s) — the same answer as a "+
+			"refused token, which leaves a client telling the owner to re-issue a token that works", body)
+	}
+	if code != http.StatusUnprocessableEntity {
+		t.Fatalf("an account the token cannot see: status %d (body %s), want 422", code, body)
 	}
 }
 

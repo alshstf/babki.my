@@ -17,7 +17,7 @@ import {
 import { useSession } from "@/api/session";
 import { useUpdateSpace, type UpdateSpaceBody } from "@/api/space";
 import { useTaxResidencies } from "@/api/tax-residencies";
-import { useConnections } from "@/api/connections";
+import { useConnections, type TinvestConnectionStatus } from "@/api/connections";
 import { ApiError } from "@/api/operations";
 import { CostBasisNotice } from "@/components/cost-basis-notice";
 import { countryName } from "@/lib/country";
@@ -198,6 +198,21 @@ export function SettingsPage() {
   );
 }
 
+// statusVariant picks how a connection's state is drawn. A switch over the
+// contract's own three values rather than a two-way test, so a fourth state
+// added there arrives here as a type error instead of quietly rendering as
+// «everything is fine» or as «nothing to do».
+function statusVariant(status: TinvestConnectionStatus): "default" | "secondary" | "destructive" {
+  switch (status) {
+    case "active":
+      return "default";
+    case "token_revoked":
+      return "destructive";
+    case "disabled":
+      return "secondary";
+  }
+}
+
 // ConnectionsSection lists the space's broker connections (T-Invest is the
 // only broker there is one of today) and the way to add another. It reads
 // GET /api/v1/tinvest/connections itself rather than depending on anything
@@ -240,7 +255,15 @@ function ConnectionsSection() {
                       {t("connections.tokenLast4", { last4: connection.token_last4 })}
                     </span>
                   </div>
-                  <Badge variant={connection.status === "active" ? "default" : "secondary"}>
+                  {/* Three states, three looks, because two of them are not
+                      the same news. `token_revoked` is a verdict the server
+                      reached by asking the broker: this connection has stopped
+                      importing and will not start again until the owner pastes
+                      a new token. `disabled` is the owner's own doing and needs
+                      nothing from anyone. Drawn alike — both quiet grey — the
+                      one that is waiting for a person looks exactly like the
+                      one that is waiting for nobody. */}
+                  <Badge variant={statusVariant(connection.status)}>
                     {t(`connections.statuses.${connection.status}`)}
                   </Badge>
                 </Link>

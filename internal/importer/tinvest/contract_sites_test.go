@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -63,10 +64,19 @@ type contractSchema struct {
 	Properties    map[string]contractProperty `yaml:"properties"`
 }
 
+// contractOperation is one verb of one path: the parameters it takes and the
+// status codes it says it can answer with. The statuses are read as a bare map
+// because nothing here looks inside a response — only at which codes are named.
+type contractOperation struct {
+	Parameters []contractParam `yaml:"parameters"`
+	Responses  map[string]any  `yaml:"responses"`
+}
+
 type contractPath struct {
-	Get struct {
-		Parameters []contractParam `yaml:"parameters"`
-	} `yaml:"get"`
+	Get    contractOperation `yaml:"get"`
+	Post   contractOperation `yaml:"post"`
+	Patch  contractOperation `yaml:"patch"`
+	Delete contractOperation `yaml:"delete"`
 }
 
 type contractDoc struct {
@@ -149,6 +159,66 @@ func TestTheContractStatesThePageBoundsTheServerEnforces(t *testing.T) {
 		if offset.Schema.Default == nil || *offset.Schema.Default != 0 {
 			t.Errorf("GET %s offset.default = %s, want 0", path, shown(offset.Schema.Default))
 		}
+	}
+}
+
+// TestTheContractStatesWhichPathCanAnswer422 ties the one status code this
+// module answers on a single path to the document that declares it.
+//
+// 422 is the answer to a picked broker account this token cannot import, and
+// ONLY POST /api/v1/tinvest/connections can produce it: it is the only call that
+// takes picks (Service.CreateConnection, ErrBrokerAccountNotImportable). Two
+// things could go wrong silently, and this checks both. The create path could
+// stop declaring what it answers, leaving a client with no name for the code it
+// meets. Or a later path could copy the declaration without being able to
+// produce it — a promise nothing keeps, which is #120's whole lesson in reverse.
+//
+// The count is asserted for the reason goConstantValues asserts its own: a
+// renamed prefix or a moved path would otherwise leave this test iterating over
+// nothing and passing.
+func TestTheContractStatesWhichPathCanAnswer422(t *testing.T) {
+	doc := readContract(t)
+	const createPath = "/api/v1/tinvest/connections"
+	const wantOperations = 9 // what Handler.Mount registers
+
+	seen := 0
+	for path, item := range doc.Paths {
+		if !strings.HasPrefix(path, "/api/v1/tinvest/") {
+			continue
+		}
+		for verb, op := range map[string]contractOperation{
+			"GET": item.Get, "POST": item.Post, "PATCH": item.Patch, "DELETE": item.Delete,
+		} {
+			if len(op.Responses) == 0 {
+				continue
+			}
+			seen++
+			_, declares422 := op.Responses["422"]
+			isCreate := verb == "POST" && path == createPath
+			if isCreate && !declares422 {
+				t.Errorf("%s %s declares no 422, but writeError answers one for "+
+					"ErrBrokerAccountNotImportable: a client meeting it has nothing to read it by",
+					verb, path)
+			}
+			if !isCreate && declares422 {
+				t.Errorf("%s %s declares a 422 it cannot answer: only the create path takes "+
+					"broker account picks, so no other one can refuse them", verb, path)
+			}
+			if isCreate {
+				// The other leg of the same split, declared beside it: a refused
+				// token stays a 400 here, and a document naming only one of the
+				// two would leave the pair looking like one answer.
+				if _, ok := op.Responses["400"]; !ok {
+					t.Errorf("%s %s declares no 400, but a token the broker refuses is answered "+
+						"with one (ErrTokenRejected)", verb, path)
+				}
+			}
+		}
+	}
+	if seen != wantOperations {
+		t.Fatalf("found %d operations under /api/v1/tinvest/ in the contract, want %d "+
+			"(what Handler.Mount registers): if a route was added or moved, say so here rather "+
+			"than leaving this test looking at a set it no longer covers", seen, wantOperations)
 	}
 }
 

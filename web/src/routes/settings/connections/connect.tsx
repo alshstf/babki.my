@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { isConflict } from "@/api/operations";
 import { useSession } from "@/api/session";
 import {
+  isBrokerAccountNotImportable,
   isBrokerUnreachable,
   isTokenRejected,
   useCheckToken,
@@ -17,10 +18,18 @@ import {
   type TinvestBrokerAccount,
 } from "@/api/connections";
 
-// Where T-Invest lets an owner issue an API token. Read-only navigation, never
-// pre-filled with anything of the owner's — just the page the instructions
-// step sends them to.
-const TOKEN_SETTINGS_URL = "https://www.tbank.ru/invest/settings/api/";
+// The T-Invest settings page an owner issues an API token from. Read-only
+// navigation, never pre-filled with anything of the owner's — just the page the
+// instructions step sends them to.
+//
+// THIS EXACT ADDRESS AND NOT A DEEPER ONE, because a deeper one cannot be
+// checked: the broker's host answers 200 to ANY path under it, so a wrong guess
+// would never show up as a broken link — the owner would simply land somewhere
+// else with nothing saying so. This is the address the broker's own developer
+// documentation gives for issuing a token, which is why the link is captioned
+// as the investment settings rather than as an API section: what the page holds
+// beyond that is not something this file can verify.
+const TOKEN_SETTINGS_URL = "https://www.tbank.ru/invest/settings/";
 
 type Step = "instructions" | "token" | "accounts";
 
@@ -28,11 +37,20 @@ type Step = "instructions" | "token" | "accounts";
 // read the instructions, paste a read-only token and have it checked against
 // the broker, then pick which of the accounts it can see to import.
 //
-// The token lives ONLY in this component's own state (`token` below) for as
-// long as the wizard is open. It is never put in the URL, router state or any
-// browser storage, and this file never logs it — it goes exactly twice, both
-// times as a request body: once to token-check (which stores nothing) and
-// once, if the owner goes through with it, to create the connection.
+// WHERE THE TOKEN LIVES, both places. Chiefly in this component's own state
+// (`token` below), for as long as the wizard is open. But a mutation keeps the
+// variables it was called with, so a copy also sits in react-query's cache —
+// which outlives this screen, since the cache belongs to the app and not to the
+// wizard, until the mutation is garbage-collected or the tab is closed.
+//
+// Both places are memory of this one page load, and neither survives the tab.
+// What does NOT happen, and is what would matter: it never goes into the URL,
+// never into router state, never into browser storage — the one key this
+// application keeps there is the display-currency preference, written from
+// lib/display-currency.ts and nowhere near this screen — and this file never
+// logs it. It leaves the browser only as a request body, and only to the two
+// endpoints below: token-check, which stores nothing, and — if the owner goes
+// through with it — the one that creates the connection.
 export function ConnectWizardPage() {
   const { t } = useTranslation();
   const { data: session } = useSession();
@@ -67,15 +85,27 @@ export function ConnectWizardPage() {
         setAccounts(data.accounts);
         setSelected(initialSelected);
         setNames(initialNames);
-        setStep("accounts");
+        // Only if the wizard is still where the check was started from. The
+        // answer can arrive after the owner has pressed «Назад», and moving
+        // them forward then is the screen deciding on its own to leave the page
+        // they chose — read as a step, not as a late answer. The functional
+        // form is what makes this the CURRENT step rather than the one captured
+        // when the request went out.
+        setStep((current) => (current === "token" ? "accounts" : current));
       },
     });
   };
 
+  // One guarded read of `names` for both the rule that enables the button and
+  // what the button then sends. They used to differ — the rule guarded the
+  // missing key, the send did not — and two readings of one map are two
+  // readings that can disagree.
+  const nameOf = (id: string) => (names[id] ?? "").trim();
+
   const pickedIds = accounts
     .map((account) => account.broker_account_id)
     .filter((id) => selected[id]);
-  const namesFilled = pickedIds.every((id) => (names[id] ?? "").trim() !== "");
+  const namesFilled = pickedIds.every((id) => nameOf(id) !== "");
   const canCreate = pickedIds.length > 0 && namesFilled && !createConnection.isPending;
 
   const submitCreate = () => {
@@ -83,7 +113,7 @@ export function ConnectWizardPage() {
       token,
       accounts: pickedIds.map((id) => ({
         broker_account_id: id,
-        account_name: names[id].trim(),
+        account_name: nameOf(id),
       })),
     });
   };
@@ -224,21 +254,29 @@ export function ConnectWizardPage() {
               </div>
             )}
             {/* Same rule as the token step's error above: status, not prose.
-                409 here means one of the picked broker accounts is already
-                imported by another connection (isConflict — the journal's own
-                helper, since it is the same status code checked the same
-                way); the token-specific captions cover the two ways create
-                can also refuse the token itself. */}
+                409 means one of the picked broker accounts is already imported
+                by another connection (isConflict — the journal's own helper,
+                since it is the same status code checked the same way). 422
+                means the token is fine and the broker's account list is no
+                longer the one this step is showing: creating asks for it
+                afresh, so an account closed since the check, or a token whose
+                access was narrowed, lands here. It is captioned as what it is
+                and NOT as a refused token — that was one 400 for both, and the
+                owner was told to re-issue a token that never stopped working.
+                The token captions below still cover the two ways creating can
+                refuse the token itself. */}
             {createConnection.isError && (
               <Alert variant="destructive">
                 <AlertDescription>
                   {isConflict(createConnection.error)
                     ? t("connections.wizard.createConflict")
-                    : isTokenRejected(createConnection.error)
-                      ? t("connections.wizard.tokenRejected")
-                      : isBrokerUnreachable(createConnection.error)
-                        ? t("connections.wizard.brokerUnreachable")
-                        : t("app.error")}
+                    : isBrokerAccountNotImportable(createConnection.error)
+                      ? t("connections.wizard.accountsChanged")
+                      : isTokenRejected(createConnection.error)
+                        ? t("connections.wizard.tokenRejected")
+                        : isBrokerUnreachable(createConnection.error)
+                          ? t("connections.wizard.brokerUnreachable")
+                          : t("app.error")}
                 </AlertDescription>
               </Alert>
             )}

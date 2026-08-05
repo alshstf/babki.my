@@ -86,15 +86,24 @@ const ENUM_NAMESPACE_TO_TYPE = {
   "costBasis.methods": "CostBasisMethod",
   "costBasis.perimeters": "CostBasisPerimeter",
   // T-Invest connections (see api/openapi.yaml, paths under /api/v1/tinvest).
-  // Only `connections.statuses` is read dynamically by this task's own code
-  // (the settings screen's status badge); the other three are read by the
-  // connection screen a later task adds (run log, reconcile snapshot,
-  // unparsed list) and are wired in now so ru.json already carries every
-  // member the server can send.
+  //
+  // OF THE SIX BELOW, EXACTLY ONE IS CROSS-CHECKED TODAY: `connections.statuses`.
+  // An entry in this map is not a check on its own — the enum comparison runs
+  // only where a KEY IS BUILT DYNAMICALLY, at a t(`namespace.${expr}`) call
+  // site, and connections have exactly one of those so far (the settings
+  // screen's status badge). The other five are wired in ahead of the connection
+  // screen a later task adds — the run log, the reconcile snapshot, the
+  // mismatch list, the unparsed list — so that ru.json already carries Russian
+  // for every member the server can send. Until that screen renders them
+  // through the dynamic shape they assert NOTHING, and a new member added on
+  // the server would not fail this build. Said plainly rather than left to
+  // read as five guarantees this script does not give.
   "connections.statuses": "TinvestConnectionStatus",
   "connections.runStatuses": "TinvestSyncRunStatus",
   "connections.reconcileStatuses": "TinvestReconcileStatus",
   "connections.unparsedReasons": "TinvestUnparsedReason",
+  "connections.triggers": "TinvestSyncTrigger",
+  "connections.mismatchKinds": "TinvestReconcileMismatchKind",
 };
 
 /**
