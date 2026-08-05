@@ -155,8 +155,10 @@ func TestProjectRowBuyIsRecordedOnTheMoscowDay(t *testing.T) {
 	if op.Note != "Покупка 100 шт." {
 		t.Errorf("note = %q, want the broker's own description", op.Note)
 	}
-	if op.ExternalID == nil || *op.ExternalID != "11111111-1111-4111-8111-111111111111" {
-		t.Errorf("external_id = %v, want the mirror row's id with no suffix", op.ExternalID)
+	// The suffix is on a single-entry row too: see withExternalIDs for why a
+	// bare id would rename itself the day this trade grew a second entry.
+	if op.ExternalID == nil || *op.ExternalID != "11111111-1111-4111-8111-111111111111/1" {
+		t.Errorf("external_id = %v, want the mirror row's id with /1", op.ExternalID)
 	}
 	// The space is the account's, filled in by the write path (see
 	// operation.insertSQL); stating it here would be a second copy of it.
@@ -243,6 +245,15 @@ func TestProjectRowSplitsOffACommissionChargedInAnotherCurrency(t *testing.T) {
 // rows, because nothing in the mirror row names the currency that was bought.
 // It refuses even when a caller passes a resolved instrument, since the
 // resolver must never be asked for a currency in the first place.
+//
+// IT INSISTS ON currency_trade RATHER THAN ON "some refusal", and that is the
+// whole point of the reason having its own code. With the branch deleted, a
+// currency trade with nothing resolved still refuses — instrumentRefusal gets
+// there by another road and says unsupported_type, the reason a futures trade
+// gets — so a test that only asked for "a refusal", or for that shared code,
+// would stay green with the rule gone. The two statements are different: a
+// future is not accounted for at all, a currency conversion is not imported
+// YET and for the reason projection.go names.
 func TestProjectRowCurrencyTradeStaysUnparsed(t *testing.T) {
 	row := mirrorRowFor(t, "currency_buy.json")
 	for _, resolved := range []*Resolved{nil, resolvedShare()} {
@@ -253,8 +264,8 @@ func TestProjectRowCurrencyTradeStaysUnparsed(t *testing.T) {
 		if refusal == nil {
 			t.Fatal("a currency trade was projected instead of being refused")
 		}
-		if refusal.Reason != ReasonUnsupportedType {
-			t.Errorf("reason = %q, want unsupported_type", refusal.Reason)
+		if refusal.Reason != ReasonCurrencyTrade {
+			t.Errorf("reason = %q, want currency_trade — not the code a kind of asset this program does not account for gets", refusal.Reason)
 		}
 	}
 }
@@ -301,41 +312,40 @@ func TestProjectRowCashOperations(t *testing.T) {
 			if op.Quantity != nil || op.Price != nil || op.FeeMinor != 0 {
 				t.Errorf("a cash operation carried quantity/price/fee: %+v", op)
 			}
-			if op.ExternalID == nil || *op.ExternalID != fixtureRowID.String() {
-				t.Errorf("external_id = %v, want the bare row id", op.ExternalID)
+			if op.ExternalID == nil || *op.ExternalID != fixtureRowID.String()+"/1" {
+				t.Errorf("external_id = %v, want the row id with /1", op.ExternalID)
 			}
 		})
 	}
 }
 
-// TestProjectRowTaxRefundBecomesADepositThatSaysSo pins decision 8: the
-// journal's tax is money leaving (operation.validateByType refuses a tax whose
-// amount is not negative), so a correction that gave money back is recorded as
-// what it factually is — money arriving — and the note says which money.
-func TestProjectRowTaxRefundBecomesADepositThatSaysSo(t *testing.T) {
+// TestProjectRowTaxRefundStaysUnparsed pins the controller's decision: a tax
+// the broker gave back becomes a VISIBLE unparsed row of its own, and not a
+// journal entry of some other type.
+//
+// The alternative it replaces — booking it as a deposit with a note — moved two
+// published figures at once: the position's income stays understated by the
+// refund for good (the engine adds a tax to IncomeMinor and never sees an
+// account-level deposit), and the journal grows a top-up the owner never made.
+func TestProjectRowTaxRefundStaysUnparsed(t *testing.T) {
 	row := mirrorRowFor(t, "tax_correction_refund.json")
-	op := projectOne(t, row, nil)
-
-	if op.Type != operation.TypeDeposit {
-		t.Errorf("type = %s, want deposit", op.Type)
-	}
-	if op.AmountMinor != 32000 {
-		t.Errorf("amount_minor = %d, want 32000", op.AmountMinor)
-	}
-	if op.Note != "Корректировка налога — возврат налога" {
-		t.Errorf("note = %q, want the description plus the tax-refund mark", op.Note)
-	}
-	// The row names a share and the deposit still carries no instrument: the
-	// engine refuses a deposit that names one. The attribution is lost and
-	// the note is what is left of it — see projectCash.
-	if op.InstrumentID != nil {
-		t.Errorf("instrument_id = %v, want none", op.InstrumentID)
+	for _, resolved := range []*Resolved{nil, resolvedShare()} {
+		ops, refusal := ProjectRow(row, fixtureAccountID, resolved)
+		if len(ops) != 0 {
+			t.Fatalf("got %d operations, want none — a refund has no journal shape", len(ops))
+		}
+		if refusal == nil {
+			t.Fatal("a tax refund was projected instead of being refused")
+		}
+		if refusal.Reason != ReasonTaxRefund {
+			t.Errorf("reason = %q, want tax_refund", refusal.Reason)
+		}
 	}
 }
 
 // TestProjectRowTaxKeepsItsSignWhenItIsATax is the other half of the rule
-// above: an ordinary tax stays a tax, so the refund branch cannot be mistaken
-// for "corrections are always deposits".
+// above: an ordinary tax stays a tax, so the refusal cannot be mistaken for
+// "corrections are never projected".
 func TestProjectRowTaxKeepsItsSignWhenItIsATax(t *testing.T) {
 	row := mirrorRowFor(t, "tax_correction_refund.json")
 	row.Payment = decimal.RequireFromString("-320")
@@ -352,6 +362,24 @@ func TestProjectRowTaxKeepsItsSignWhenItIsATax(t *testing.T) {
 	}
 	if op.InstrumentID == nil {
 		t.Error("instrument_id = nil, want the resolved share — a tax is attributed to its position")
+	}
+}
+
+// TestProjectRowTaxOfNothingIsHandedToTheJournal pins the sentence projectCash
+// writes about a zero: it is not money given back, so calling it a refund would
+// be a reason that is not the true one. It goes to the journal as a tax, and the
+// journal's own refusal (which this projection does not pre-empt) is what the
+// owner will read.
+func TestProjectRowTaxOfNothingIsHandedToTheJournal(t *testing.T) {
+	row := mirrorRowFor(t, "tax_correction_refund.json")
+	row.Payment = decimal.Zero
+	op := projectOne(t, row, resolvedShare())
+
+	if op.Type != operation.TypeTax {
+		t.Errorf("type = %s, want tax", op.Type)
+	}
+	if op.AmountMinor != 0 {
+		t.Errorf("amount_minor = %d, want 0", op.AmountMinor)
 	}
 }
 
@@ -392,6 +420,69 @@ func TestProjectRowFullRedemptionIsASale(t *testing.T) {
 	if op.Price == nil || op.Price.String() != "1000" {
 		t.Errorf("price = %v, want 1000", op.Price)
 	}
+}
+
+// TestProjectRowFullRedemptionKeepsItsCommission pins that a redemption's
+// commission is carried exactly the way a trade's is — into FeeMinor when it is
+// the row's own currency, into an entry of its own when it is not. A redemption
+// that dropped it would make that money disappear from the journal AND from the
+// unparsed list, which is the one thing this file forbids.
+func TestProjectRowFullRedemptionKeepsItsCommission(t *testing.T) {
+	bond := &Resolved{InstrumentID: fixtureInstrID, Type: instrument.TypeBond}
+
+	t.Run("the row's own currency goes into fee_minor", func(t *testing.T) {
+		op := projectOne(t, mirrorRowFor(t, "bond_repayment_full_with_fee.json"), bond)
+		if op.Type != operation.TypeSell {
+			t.Errorf("type = %s, want sell", op.Type)
+		}
+		if op.AmountMinor != 1000000 {
+			t.Errorf("amount_minor = %d, want 1000000", op.AmountMinor)
+		}
+		if op.FeeMinor != 300 {
+			t.Errorf("fee_minor = %d, want 300 — the broker's 3 roubles", op.FeeMinor)
+		}
+	})
+
+	t.Run("another currency becomes an entry of its own", func(t *testing.T) {
+		row := mirrorRowFor(t, "bond_repayment_full_with_fee.json")
+		row.CommissionCurrency = "USD"
+		ops, refusal := ProjectRow(row, fixtureAccountID, bond)
+		if refusal != nil {
+			t.Fatalf("refused: %v", refusal)
+		}
+		if len(ops) != 2 {
+			t.Fatalf("got %d operations, want 2", len(ops))
+		}
+		sale, fee := ops[0], ops[1]
+		if sale.FeeMinor != 0 {
+			t.Errorf("sale fee_minor = %d, want 0 — the commission is another currency's number", sale.FeeMinor)
+		}
+		if fee.Type != operation.TypeFee || fee.Currency != "USD" || fee.AmountMinor != -300 {
+			t.Errorf("fee leg = %s %s %d, want fee USD -300", fee.Type, fee.Currency, fee.AmountMinor)
+		}
+		if fee.InstrumentID != nil {
+			t.Errorf("fee leg names an instrument (%v); a fee in another currency must stay cash-level", fee.InstrumentID)
+		}
+		if sale.ExternalID == nil || *sale.ExternalID != "11111111-1111-4111-8111-111111111111/1" {
+			t.Errorf("sale external_id = %v, want /1", sale.ExternalID)
+		}
+		if fee.ExternalID == nil || *fee.ExternalID != "11111111-1111-4111-8111-111111111111/2" {
+			t.Errorf("fee external_id = %v, want /2", fee.ExternalID)
+		}
+	})
+
+	t.Run("a commission the broker gave back is refused, not flipped", func(t *testing.T) {
+		row := mirrorRowFor(t, "bond_repayment_full_with_fee.json")
+		back := decimal.RequireFromString("3")
+		row.Commission = &back
+		ops, refusal := ProjectRow(row, fixtureAccountID, bond)
+		if len(ops) != 0 {
+			t.Fatalf("got %d operations, want none", len(ops))
+		}
+		if refusal == nil || refusal.Reason != ReasonCommissionRefund {
+			t.Fatalf("refusal = %v, want commission_refund", refusal)
+		}
+	})
 }
 
 // TestProjectRowFullRedemptionWithoutQuantityIsRefused pins decision 7: an
@@ -528,6 +619,9 @@ func TestProjectRowTransferBetweenOwnAccountsReadsItsDirectionFromTheQuantity(t 
 	}
 }
 
+// TestProjectRowTransferOfNothingIsRefused pins the reason as well as the
+// refusal: a zero is perfectly representable, and what is missing is the
+// DIRECTION — the only thing that says which side of the move this row is.
 func TestProjectRowTransferOfNothingIsRefused(t *testing.T) {
 	row := mirrorRowFor(t, "trans_bs_bs_in.json")
 	row.Quantity = 0
@@ -539,8 +633,67 @@ func TestProjectRowTransferOfNothingIsRefused(t *testing.T) {
 	if refusal == nil {
 		t.Fatal("a transfer of zero units was projected instead of being refused")
 	}
-	if refusal.Reason != ReasonUnrepresentableQty {
-		t.Errorf("reason = %q, want unrepresentable_quantity", refusal.Reason)
+	if refusal.Reason != ReasonTransferDirectionUnknown {
+		t.Errorf("reason = %q, want transfer_direction_unknown — a zero is representable, a direction is what is missing", refusal.Reason)
+	}
+}
+
+// TestProjectRowShapeWithNoBranchRefusesInsteadOfVanishing pins the switch's
+// default arm — the one case in this file that cannot be reached through any
+// input, because it is reached through a change to the code instead: a shape
+// added to the mapping table tomorrow with no branch built for it.
+//
+// It is checked by putting exactly that in the table for the length of this
+// test. Without the default arm the row projects to nothing at all and says
+// nothing about why, which is the silent drop the file's own heading forbids.
+// TestBrokerOpTypesPairShapeWithDirection checks the mapping table's one
+// cross-field invariant: a transfer kind belongs to a transfer shape and to no
+// other, in both directions. A securities move without a kind would fall
+// through projectSecuritiesTransfer's switch to transfer_in and file a
+// departure as an arrival; a kind on any other shape would be a direction
+// nothing reads, quietly suggesting the row was thought about as a transfer.
+func TestBrokerOpTypesPairShapeWithDirection(t *testing.T) {
+	moves := 0
+	for opType, r := range brokerOpTypes {
+		isMove := r.how == asSecuritiesTransfer
+		if isMove {
+			moves++
+		}
+		if isMove && r.transfer == transferNone {
+			t.Errorf("%s is a securities move with no direction", opType)
+		}
+		if !isMove && r.transfer != transferNone {
+			t.Errorf("%s is not a securities move but carries direction %d", opType, r.transfer)
+		}
+	}
+	// The four the broker has: in, out, and the two between the owner's own
+	// accounts. Typed out so that a fifth added without a direction, or a
+	// fourth deleted, fails here.
+	if moves != 4 {
+		t.Errorf("%d securities-move types in the table, want 4", moves)
+	}
+}
+
+func TestProjectRowShapeWithNoBranchRefusesInsteadOfVanishing(t *testing.T) {
+	const opType = "OPERATION_TYPE_A_SHAPE_ADDED_WITHOUT_A_BRANCH"
+	if _, taken := brokerOpTypes[opType]; taken {
+		t.Fatalf("%s is a real broker type; pick another name for this test", opType)
+	}
+	brokerOpTypes[opType] = rule{how: shape(200), journal: operation.TypeDeposit}
+	defer delete(brokerOpTypes, opType)
+
+	row := mirrorRowFor(t, "input.json")
+	row.OpType = opType
+	ops, refusal := ProjectRow(row, fixtureAccountID, nil)
+
+	if len(ops) != 0 {
+		t.Fatalf("got %d operations, want none", len(ops))
+	}
+	if refusal == nil {
+		t.Fatal("a shape with no branch produced nothing and no reason — the silent drop")
+	}
+	if refusal.Reason != ReasonProjectionIncomplete {
+		t.Errorf("reason = %q, want projection_incomplete", refusal.Reason)
 	}
 }
 
@@ -661,6 +814,62 @@ func TestProjectRowRefusesACommissionItCannotExpress(t *testing.T) {
 	if refusal == nil || refusal.Reason != ReasonUnrepresentableAmount {
 		t.Fatalf("refusal = %v, want unrepresentable_amount", refusal)
 	}
+}
+
+// TestProjectRowCommissionSign pins that the SIGN of a commission is read
+// rather than discarded.
+//
+// The magnitude is what FeeMinor holds — the journal's own rule — so a
+// commission the broker sent back, i.e. positive, would be recorded as a
+// commission charged: the owner would be shown a fee where a refund happened,
+// wrong by twice the money and with nothing anywhere saying so. It refuses with
+// a reason of its own instead. A zero is an ordinary trade with no commission.
+func TestProjectRowCommissionSign(t *testing.T) {
+	t.Run("money leaving is the fee", func(t *testing.T) {
+		op := projectOne(t, mirrorRowFor(t, "buy.json"), resolvedShare())
+		if op.FeeMinor != 825 {
+			t.Errorf("fee_minor = %d, want 825", op.FeeMinor)
+		}
+	})
+
+	t.Run("money coming back is refused", func(t *testing.T) {
+		row := mirrorRowFor(t, "buy.json")
+		back := decimal.RequireFromString("8.25")
+		row.Commission = &back
+		ops, refusal := ProjectRow(row, fixtureAccountID, resolvedShare())
+		if len(ops) != 0 {
+			t.Fatalf("got %d operations, want none — a returned commission is not a charge", len(ops))
+		}
+		if refusal == nil || refusal.Reason != ReasonCommissionRefund {
+			t.Fatalf("refusal = %v, want commission_refund", refusal)
+		}
+	})
+
+	t.Run("money coming back in another currency is refused too", func(t *testing.T) {
+		row := mirrorRowFor(t, "buy_fee_in_another_currency.json")
+		back := decimal.RequireFromString("95.40")
+		row.Commission = &back
+		ops, refusal := ProjectRow(row, fixtureAccountID, resolvedShare())
+		if len(ops) != 0 {
+			t.Fatalf("got %d operations, want none", len(ops))
+		}
+		if refusal == nil || refusal.Reason != ReasonCommissionRefund {
+			t.Fatalf("refusal = %v, want commission_refund", refusal)
+		}
+	})
+
+	t.Run("no commission at all is an ordinary trade", func(t *testing.T) {
+		row := mirrorRowFor(t, "buy.json")
+		zero := decimal.Zero
+		row.Commission = &zero
+		op := projectOne(t, row, resolvedShare())
+		if op.FeeMinor != 0 {
+			t.Errorf("fee_minor = %d, want 0", op.FeeMinor)
+		}
+		if op.AmountMinor != -2750000 {
+			t.Errorf("amount_minor = %d, want -2750000 — a zero commission changes nothing else", op.AmountMinor)
+		}
+	})
 }
 
 func TestProjectRowInstrumentRules(t *testing.T) {
@@ -849,8 +1058,7 @@ func TestAcceptsInstrumentAgreesWithTheEngine(t *testing.T) {
 	for typ, tpl := range candidates {
 		t.Run(string(typ), func(t *testing.T) {
 			op := tpl
-			op.AccountID, op.InstrumentID, op.Type, op.OccurredOn, op.Currency =
-				fixtureAccountID, &instrumentID, typ, on, "RUB"
+			op.AccountID, op.InstrumentID, op.Type, op.OccurredOn, op.Currency = fixtureAccountID, &instrumentID, typ, on, "RUB"
 			_, err := portfolio.Compute([]operation.Operation{opening, op})
 			engineTakesIt := err == nil
 			if engineTakesIt != acceptsInstrument(typ) {
@@ -936,23 +1144,42 @@ func TestProjectedOperationsFoldThroughTheEngine(t *testing.T) {
 	}
 }
 
-// TestJournalQuantity pins what the scale guard does today, which is nothing:
-// the mirror's quantity is a whole number of units, so truncating it to the
-// journal's ten decimal places cannot change it and cannot refuse it. The
-// guard is there for a mirror whose quantity became a decimal, and this test
-// is what says out loud that no fixture reaches its refusal — the one place
-// ReasonUnrepresentableQty is actually produced is a transfer of zero units
-// (see TestProjectRowTransferOfNothingIsRefused).
+// TestJournalQuantity pins what the quantization does, and says plainly what
+// this test does NOT do.
+//
+// IT DOES NOT REACH THE REFUSAL, AND NOTHING CAN. journalQuantity takes an
+// int64, and truncating a whole number to ten decimal places returns the same
+// whole number for every value the type holds, the extremes included — so
+// `units > 0 && !q.IsPositive()` has no input that satisfies it, and deleting
+// the refusal would leave this file green. That is a statement about the
+// parameter's type rather than about the test's thoroughness, which is why it
+// is written here instead of being papered over with a case that only looks
+// like it exercises the branch. Why the refusal is nonetheless kept is in
+// journalQuantity's own note; ReasonUnrepresentableQty is a live code because
+// it is what a positive quantity truncated to nothing WOULD be called.
+//
+// The extremes are typed out rather than computed so that a change of scale
+// (portfolio.QuantityScale) cannot drag the expectation along with it.
 func TestJournalQuantity(t *testing.T) {
-	q, refusal := journalQuantity(100)
-	if refusal != nil {
-		t.Fatalf("journalQuantity(100) refused: %v", refusal)
+	cases := []struct {
+		units int64
+		want  string
+	}{
+		{100, "100"},
+		{1, "1"},
+		{0, "0"},
+		{-5, "-5"},
+		{9223372036854775807, "9223372036854775807"},
+		{-9223372036854775808, "-9223372036854775808"},
 	}
-	if q.String() != "100" {
-		t.Fatalf("journalQuantity(100) = %s, want 100", q)
-	}
-	if q, refusal := journalQuantity(0); refusal != nil || !q.IsZero() {
-		t.Fatalf("journalQuantity(0) = %s, %v; want 0 and no refusal — a zero is the caller's to judge", q, refusal)
+	for _, c := range cases {
+		q, refusal := journalQuantity(c.units)
+		if refusal != nil {
+			t.Fatalf("journalQuantity(%d) refused: %v", c.units, refusal)
+		}
+		if q.String() != c.want {
+			t.Fatalf("journalQuantity(%d) = %s, want %s", c.units, q, c.want)
+		}
 	}
 }
 

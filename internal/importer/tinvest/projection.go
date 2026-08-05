@@ -30,11 +30,12 @@ import (
 //   - It does not enforce the journal's own per-type rules. Those live in
 //     operation.validateImported and portfolio.Compute, and their refusal is
 //     the one worth showing: it names the actual rule that was broken. This
-//     function refuses only what it cannot TURN INTO a journal row at all —
-//     an operation type it does not know, an amount or a quantity the journal
-//     cannot express, a security that was not resolved. Everything it can
-//     express, it hands over, and a refusal downstream comes back as
-//     ReasonEngineRefused with the journal's own words in it.
+//     function refuses only what it cannot TURN INTO a journal row at all, and
+//     the UnparsedReason list below is that whole set — every entry there but
+//     ReasonEngineRefused, which is the downstream refusal and is never
+//     produced here. Everything it can express, it hands over, and a refusal
+//     downstream comes back as ReasonEngineRefused with the journal's own
+//     words in it.
 //
 // NOTHING IS EVER DROPPED IN SILENCE. Every row either becomes journal
 // entries, or becomes an *UnparsedError whose Reason the owner is shown next
@@ -116,10 +117,16 @@ const (
 	// ReasonAmountOutOfBounds: the sum is beyond money.MaxAmountMinor, the
 	// magnitude every sum in this program is bounded by.
 	ReasonAmountOutOfBounds UnparsedReason = "amount_out_of_bounds"
-	// ReasonUnrepresentableQty: the number of units cannot become a journal
-	// quantity — it is finer than the ten decimal places the journal keeps,
-	// or it is a zero where the journal needs a positive number of units.
+	// ReasonUnrepresentableQty: the number of units is finer than the ten
+	// decimal places the journal keeps, so quantizing it to the journal's
+	// scale would leave a positive count at nothing. See journalQuantity,
+	// including what it says about no input reaching this today.
 	ReasonUnrepresentableQty UnparsedReason = "unrepresentable_quantity"
+	// ReasonTransferDirectionUnknown: a move between the owner's own accounts
+	// whose quantity is zero. The count is representable perfectly well —
+	// what is missing is the DIRECTION, which the sign of that count is the
+	// only carrier of. See projectSecuritiesTransfer.
+	ReasonTransferDirectionUnknown UnparsedReason = "transfer_direction_unknown"
 	// ReasonInstrumentUnresolved: the operation names a security and no
 	// catalog row was matched to it. Distinct from ReasonUnsupportedType: the
 	// asset is one this program accounts for, the matching is what failed.
@@ -134,6 +141,50 @@ const (
 	// about how many bonds it redeemed. See projectRedemption for why that
 	// cannot be booked as anything.
 	ReasonRedemptionWithoutQty UnparsedReason = "redemption_without_quantity"
+	// ReasonCurrencyTrade: a purchase or sale of currency. NOT the same
+	// statement as ReasonUnsupportedType, which says this program does not
+	// account for a kind of asset at all: a currency conversion is a thing the
+	// journal has a type for (operation.TypeConversion), and what is missing
+	// is the data to build the second leg from.
+	//
+	// TWO THINGS ARE MISSING, and each alone is enough. First, the mirror row
+	// never names the currency that was TRADED: its currency field belongs to
+	// its own payment, which is the other side of the exchange (the money
+	// handed over on a purchase, the money received on a sale), and the traded
+	// currency itself appears only as the broker's opaque identifiers for the
+	// pair. Second, the broker's currency instruments carry a
+	// NOMINAL PER UNIT that is not always one: one unit of the Kyrgyz som
+	// instrument is a hundred som, one unit of the Uzbek sum instrument ten
+	// thousand sum (checked against the broker's live instrument service
+	// during this branch's review, 2026-08-05). So the received leg's amount
+	// would have to be quantity × nominal, and that formula has never been
+	// checked against a single live conversion. (Neither is inferable from a
+	// figi table without this program inventing the answer.)
+	//
+	// Getting it wrong is not a small error: with a nominal of a hundred it is
+	// wrong by exactly a hundredfold, which is the shape of the most expensive
+	// defect this program currently has open (#87, a missing nominal in the
+	// central bank's rate inflating a rate by exactly that). A visible unparsed
+	// row is the honest answer until the acquired currency and the nominal are
+	// carried into this function — which changes its inputs and is the owner's
+	// decision, not a detail to slip in here.
+	ReasonCurrencyTrade UnparsedReason = "currency_trade"
+	// ReasonCommissionRefund: the broker's commission on this operation is
+	// POSITIVE, i.e. money that came back. FeeMinor is a magnitude by the
+	// journal's own rule, so recording this one would turn a refund into a
+	// charge. See tradeCommission.
+	ReasonCommissionRefund UnparsedReason = "commission_refund"
+	// ReasonTaxRefund: a tax operation whose amount is positive, i.e. a tax
+	// the broker gave back. The journal has no shape for it — see projectCash,
+	// which also says why the substitutes are worse than the refusal.
+	ReasonTaxRefund UnparsedReason = "tax_refund"
+	// ReasonProjectionIncomplete: this program has a rule for the broker's
+	// operation type and no code that carries the rule out — a shape added to
+	// brokerOpTypes with no branch built for it. It cannot be produced by any
+	// broker data, only by a change to this file, and it exists so that such a
+	// change is a visible unparsed row rather than a row that projects to
+	// nothing and says nothing. See ProjectRow's switch.
+	ReasonProjectionIncomplete UnparsedReason = "projection_incomplete"
 )
 
 // UnparsedError is one refusal: the code that will be stored and shown, and a
@@ -250,6 +301,12 @@ const (
 type transferKind uint8
 
 const (
+	// transferNone is the zero value, and it is what every rule in
+	// brokerOpTypes that is not a securities move carries — not because it was
+	// set, but because the field was left alone. It is named rather than
+	// spelled `_` so that the absence has a word, and the pairing it implies
+	// (a transfer shape iff a transfer kind) is checked by
+	// TestBrokerOpTypesPairShapeWithDirection rather than trusted.
 	transferNone transferKind = iota
 	// transferFromAnotherBroker: shares arrived from outside this program's
 	// knowledge (INPUT_SECURITIES). Nothing will ever pair with such a leg.
@@ -371,8 +428,6 @@ const (
 	// noteDividendToCard marks both legs of a dividend the broker paid
 	// straight to a card — see projectDividendToCard.
 	noteDividendToCard = "выплата на карту, минуя брокерский счёт"
-	// noteTaxRefund marks a tax the broker gave back — see projectCash.
-	noteTaxRefund = "возврат налога"
 	// noteBasisUnknown marks shares that arrived from another broker with no
 	// cost behind them. It is put ONLY on that case (INPUT_SECURITIES): a leg
 	// of a move between the owner's own accounts may yet be paired with its
@@ -398,11 +453,15 @@ const (
 // left unset: the write path takes it from the account itself (see
 // operation.insertSQL), so stating it here would be a second copy of one fact.
 func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, *UnparsedError) {
-	// The double door. The caller filters these out too — projecting a
-	// cancelled order or one the broker has taken back would put money in the
-	// journal that never moved — and the check is repeated here because it
-	// costs nothing and because this function is the one that would be
-	// reused, one day, by a caller that forgot.
+	// Projecting a cancelled order, or one the broker has taken back, would put
+	// money in the journal that never moved. The check stands here, in the
+	// rule itself, so that it holds however the function is called.
+	//
+	// A CALLER IS EXPECTED TO SKIP THESE ROWS BEFORE ASKING — there is no
+	// point resolving an instrument for an order that did not happen — but no
+	// caller exists yet: task 8's rebuild will be the first, and this sentence
+	// is where that expectation is written down rather than a claim about code
+	// that is already there.
 	if row.State != stateExecuted || row.DisappearedAt != nil {
 		return nil, nil
 	}
@@ -421,31 +480,21 @@ func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]opera
 
 	// A currency trade is refused before anything else looks at it, and it is
 	// refused even if the caller passed a resolved instrument (which it never
-	// should — the resolver deliberately does not resolve currencies).
+	// should — the resolver deliberately does not resolve currencies, see
+	// brokerInstrumentTypes).
 	//
-	// The plan's mapping table calls for two "conversion" rows here: the
-	// money paid in one currency and the money received in the other. THE
-	// SECOND ROW CANNOT BE BUILT. A conversion row is a sum in a currency,
-	// and nothing in the mirror names the currency that was bought: the
-	// operation's own currency is the one that was PAID, the resolver is
-	// deliberately never called for a currency instrument (see
-	// brokerInstrumentTypes, where leaving currency out prevented a duplicate
-	// catalog row per connection per currency), and the broker's identifiers
-	// for the paper are opaque strings. Guessing the code from a figi table
-	// would be this program inventing a currency, which is exactly the class
-	// of invention the whole importer is built to avoid; projecting only the
-	// paid leg would say money left the account and nothing came back.
-	//
-	// So a currency trade becomes a visible unparsed row with the broker's
-	// own document next to it, under the same reason the resolver would have
-	// given for the same instrument — this program does not account for that
-	// kind of asset. Making these projectable needs the acquired currency
-	// carried into the projection, which changes this function's inputs and
-	// is a decision for the owner, not a detail to slip in here.
+	// The plan's mapping table calls for two "conversion" rows here: the money
+	// paid in one currency and the money received in the other. THE SECOND ROW
+	// CANNOT BE BUILT from what the mirror holds, and projecting only the paid
+	// leg would say money left the account and nothing came back. The two
+	// things missing, and why guessing either would be expensive, are written
+	// out at ReasonCurrencyTrade — which is a reason of its own precisely
+	// because "not yet, and here is what it would take" is a different
+	// statement from "this program does not account for that kind of asset".
 	if r.how == asTrade && row.InstrumentType == brokerCurrencyInstrumentType {
 		return nil, &UnparsedError{
-			Reason: ReasonUnsupportedType,
-			Detail: "a currency trade: the mirror does not name the currency that was bought, so the receiving leg cannot be built",
+			Reason: ReasonCurrencyTrade,
+			Detail: "a currency trade: the mirror names neither the traded currency nor its nominal per unit, so the second leg cannot be built",
 		}
 	}
 
@@ -470,6 +519,17 @@ func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]opera
 		// Reached only with projectBrokerFee on, when the broker's separate
 		// fee operation is NOT the same money as a trade's commission field.
 		ops, refusal = projectCash(row, accountID, resolved, r.journal)
+	default:
+		// Unreachable from any broker data: every shape in brokerOpTypes has
+		// a branch above. It is reachable from a change to this file — a
+		// shape added to the table tomorrow and left without one — and that
+		// is the whole point. Falling out of the switch would return no
+		// entries and no reason, which is the one outcome this file's heading
+		// forbids in capitals.
+		refusal = &UnparsedError{
+			Reason: ReasonProjectionIncomplete,
+			Detail: fmt.Sprintf("broker operation type %q maps to projection shape %d, which nothing in this file builds", row.OpType, r.how),
+		}
 	}
 	if refusal != nil {
 		return nil, refusal
@@ -503,11 +563,24 @@ func base(row MirrorRow, accountID uuid.UUID, t operation.Type) operation.Operat
 // The QUANTITY is in units, not lots — the broker's own documentation for
 // this field — so it goes into the journal as it is.
 //
+// THE ACCRUED INTEREST OF A BOND TRADE IS NOT READ, and that is an assumption
+// rather than a decision. The mirror carries the broker's accrued_int into a
+// column and reads it back out (MirrorRow.AccruedInt), and that is the whole
+// of its life in this program: no rule anywhere, here or downstream, computes
+// anything from it. What makes that right is the payment being the WHOLE
+// money that moved,
+// coupon interest included — in which case adding accrued_int to it would
+// count the same money twice. If the payment instead excludes it, every bond
+// purchase understates the position's cost by exactly that interest, and the
+// money reaches neither the journal nor the unparsed list: the silent loss
+// this file exists to prevent. It is task 14's first question, settled against
+// the owner's own broker report.
+//
 // Whether a bond's price arrives as money per bond or as a percent of par is
-// NOT verified here or anywhere in this session; it is a question for task
-// 14's live run. Nothing computed from this row depends on the answer: the
-// amount is the broker's payment, and the price is an annotation the engine
-// never reads.
+// NOT verified here or anywhere in this session; it is another question for
+// task 14's live run. Nothing computed from this row depends on the answer:
+// the amount is the broker's payment, and the price is an annotation the
+// engine never reads.
 func projectTrade(row MirrorRow, accountID uuid.UUID, resolved *Resolved, t operation.Type) ([]operation.Operation, *UnparsedError) {
 	amount, refusal := minorFromDecimal(row.Payment)
 	if refusal != nil {
@@ -544,6 +617,18 @@ func projectTrade(row MirrorRow, accountID uuid.UUID, resolved *Resolved, t oper
 // never reads it, the amount does not come from it — while
 // operation.validateByType refuses a non-positive one outright, so passing it
 // on would cost the whole trade over a field nothing is computed from.
+//
+// THE PRICE IS A BARE NUMBER WITH NO CURRENCY ON IT, and reading it as the
+// row's own currency is an assumption this names rather than hides. The broker
+// sends the price as a MoneyValue with a currency of its own, and the mirror
+// does not keep that currency at all (there is a `price` column and no
+// `price_currency` — migration 0014), so a price quoted in something other
+// than what was paid arrives here indistinguishable from one that was not.
+// The journal's price column is equally currencyless, which is why the same
+// gap is already open against the journal's own screen (#114, a per-unit price
+// shown without its currency). Nothing computed moves either way: the amount
+// is the broker's payment and the engine never reads a price. A person reading
+// the journal does.
 func tradePrice(row MirrorRow) *decimal.Decimal {
 	if row.Price == nil || !row.Price.IsPositive() {
 		return nil
@@ -566,11 +651,23 @@ func tradePrice(row MirrorRow) *decimal.Decimal {
 // currency attached to the same instrument would make the whole account
 // unreadable rather than record a fee.
 //
-// The commission's SIGN is not used, only its magnitude: FeeMinor is a
-// magnitude by the journal's own rule (fee_minor >= 0), and a fee entry's
-// amount is negative by that rule. The broker is believed to report a
-// commission as money leaving, i.e. negative — not verified live, and nothing
-// here depends on it being so.
+// THE COMMISSION'S SIGN IS READ, and a positive one is refused. FeeMinor is a
+// magnitude by the journal's own rule (fee_minor >= 0) and a fee entry's
+// amount is negative by that rule, so both places this money can go hold a
+// charge and neither can hold a refund. Taking the magnitude of a commission
+// the broker gave back would therefore record a charge where money came in —
+// wrong by twice the sum, and wrong in silence: fee_minor only has to be
+// non-negative and a fee entry's amount only has to be negative, so the
+// journal would take the flipped number without a word and nothing downstream
+// could tell it from a real charge. So it becomes a visible unparsed row
+// (ReasonCommissionRefund) and the whole operation waits for the owner. That
+// the broker reports a commission as money leaving, i.e. negative, is believed
+// and not verified live (task 14); this is what happens when the belief turns
+// out to be wrong.
+//
+// A ZERO IS AN ORDINARY CASE, not a refusal: it is a trade the broker charged
+// nothing for, and it is the one commission value that means the same thing
+// with or without a sign.
 //
 // A commission with an amount but no currency is treated as being in the
 // operation's own currency. It is malformed either way (the gateway's
@@ -588,9 +685,13 @@ func tradeCommission(row MirrorRow, accountID uuid.UUID) (int64, *operation.Oper
 	if amount == 0 {
 		return 0, nil, nil
 	}
-	if amount < 0 {
-		amount = -amount
+	if amount > 0 {
+		return 0, nil, &UnparsedError{
+			Reason: ReasonCommissionRefund,
+			Detail: fmt.Sprintf("the commission of %s came back rather than being charged, and neither fee_minor nor a fee entry can hold money arriving", *row.Commission),
+		}
 	}
+	amount = -amount
 	currency := row.CommissionCurrency
 	if currency == "" {
 		currency = row.Currency
@@ -609,17 +710,39 @@ func tradeCommission(row MirrorRow, accountID uuid.UUID) (int64, *operation.Oper
 // journal entry for it: a top-up, a withdrawal, income, a tax, a fee, an
 // interest payment.
 //
-// A TAX THAT GAVE MONEY BACK IS NOT A TAX ROW. The journal's tax is money
-// leaving — operation.validateByType refuses a tax whose amount is not
-// negative — while the broker's corrections (TAX_CORRECTION and its family)
-// are refunds and arrive positive. Rather than invent a rule the journal does
-// not have, such a row is recorded as what it factually is on the account:
-// money arriving, a deposit, marked in the note as a tax refund. The cost of
-// that choice, stated plainly: a deposit carries no instrument (the engine
-// refuses one — see acceptsInstrument), so a refund is not attributed to the
-// position the tax was taken from. Whether the broker's corrections really
-// arrive positive is task 14's live check; a negative one is booked as an
-// ordinary tax by this same code.
+// A TAX THAT GAVE MONEY BACK BECOMES A VISIBLE UNPARSED ROW, not a journal
+// entry of some other type. The journal's tax is money leaving —
+// operation.validateByType, `case TypeWithdrawal, TypeFee, TypeTax`, refuses
+// an amount that is not negative, and it is the one branch both write paths
+// share (validateImported delegates to it) — while the broker's corrections
+// (TAX_CORRECTION and its family) are believed to arrive positive when they
+// are refunds.
+//
+// EVERY SUBSTITUTE MOVES A FIGURE THIS PROGRAM PUBLISHES, which is why there
+// is none. Booked as a deposit, the refund becomes an account-level operation
+// and leaves the position for good: the engine subtracts a tax from a
+// position's income (portfolio.Compute, `case TypeTax`) but skips an operation
+// that names no instrument before it reaches that switch at all, and a deposit
+// that DOES name one is refused — so the income of the position the tax came
+// out of would stay understated by the refund for as long as the account
+// exists, while the journal grew a top-up the owner never made. Booked as
+// income, it would inflate dividends that were never paid. So the row stays
+// visible with a reason of its own and the owner decides what it is.
+//
+// A NEGATIVE correction is an ordinary tax, booked by this same code. A ZERO
+// is handed to the journal as a tax too, and the journal refuses it in its own
+// words: a zero is not money given back, and calling it a refund would be a
+// reason that is not the true one. Whether the broker's corrections really
+// arrive positive is task 14's live check.
+//
+// NO SIGN IS RESCUED ANYWHERE, and the tax was the last place that tried. A
+// withdrawal that arrived positive, a dividend that arrived negative and a fee
+// operation that arrived positive are all handed to the journal exactly as the
+// broker sent them, and the journal's own refusal is what the owner reads
+// (ReasonEngineRefused). The one sign this file judges for itself is an
+// operation's commission FIELD (see tradeCommission), and only because the
+// journal would take a flipped commission in silence where it refuses every
+// one of these outright.
 //
 // A commission field on a cash operation is NOT projected. The broker's own
 // fee operations are types of their own (SERVICE_FEE and the rest), and a
@@ -632,15 +755,15 @@ func projectCash(row MirrorRow, accountID uuid.UUID, resolved *Resolved, t opera
 		return nil, refusal
 	}
 
-	note := row.Description
 	if t == operation.TypeTax && amount > 0 {
-		t = operation.TypeDeposit
-		note = withNote(row.Description, noteTaxRefund)
+		return nil, &UnparsedError{
+			Reason: ReasonTaxRefund,
+			Detail: fmt.Sprintf("a tax of %s came back rather than being taken, and the journal's tax is money leaving", row.Payment),
+		}
 	}
 
 	op := base(row, accountID, t)
 	op.AmountMinor = amount
-	op.Note = note
 	if refusal := attachInstrument(&op, row, resolved); refusal != nil {
 		return nil, refusal
 	}
@@ -679,6 +802,15 @@ func projectAmortization(row MirrorRow, accountID uuid.UUID, resolved *Resolved)
 // amortization would leave the bonds in the position for good, since nothing
 // would ever remove them, and inventing "all of what is held" would be this
 // program deciding how many bonds the broker redeemed.
+//
+// A COMMISSION ON IT IS KEPT, by the same rule a trade's is (tradeCommission):
+// into this entry's FeeMinor when the broker charged it in this row's
+// currency, into an entry of its own when it did not, and refused outright
+// when it came back rather than being charged. The journal makes no
+// distinction between this sale and any other, so neither does this; and a
+// commission dropped here would be money vanishing from the journal AND from
+// the unparsed list at once. Whether the broker ever charges one on a
+// redemption is not known — the sale is booked the same way either way.
 func projectRedemption(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, *UnparsedError) {
 	if row.Quantity <= 0 {
 		return nil, &UnparsedError{
@@ -701,7 +833,16 @@ func projectRedemption(row MirrorRow, accountID uuid.UUID, resolved *Resolved) (
 	if refusal := attachInstrument(&op, row, resolved); refusal != nil {
 		return nil, refusal
 	}
-	return []operation.Operation{op}, nil
+
+	feeMinor, feeLeg, refusal := tradeCommission(row, accountID)
+	if refusal != nil {
+		return nil, refusal
+	}
+	op.FeeMinor = feeMinor
+	if feeLeg == nil {
+		return []operation.Operation{op}, nil
+	}
+	return []operation.Operation{op, *feeLeg}, nil
 }
 
 // projectDividendToCard turns a dividend the broker paid straight to a card
@@ -770,8 +911,8 @@ func projectSecuritiesTransfer(row MirrorRow, accountID uuid.UUID, resolved *Res
 			t = operation.TypeTransferOut
 		default:
 			return nil, &UnparsedError{
-				Reason: ReasonUnrepresentableQty,
-				Detail: "a transfer between accounts of zero units: the journal records no transfer of nothing, and nothing else in the row says which way it went",
+				Reason: ReasonTransferDirectionUnknown,
+				Detail: "a transfer between accounts of zero units: nothing in the row says which way it went",
 			}
 		}
 	}
@@ -886,13 +1027,23 @@ func instrumentRefusal(row MirrorRow) *UnparsedError {
 // one, and for the same reason: a quantity accepted at one value and stored
 // at another once broke an account's positions screen for good.
 //
-// Truncation cannot change anything while the mirror's quantity is a whole
-// number of units, which it is (MirrorRow.Quantity is an int64 and the broker
-// reports units, not lots), so the refusal below is unreachable through
-// ProjectRow today. That is not a reason to leave it out: it is the guard
-// that keeps a mirror whose quantity became a decimal from slipping past
-// silently, and it refuses on the same condition the write path does — a
-// positive quantity that the scale leaves at nothing (see
+// THE TRUNCATION IS A NO-OP TODAY AND THE REFUSAL IS UNREACHABLE — not "no
+// fixture reaches it", but no input can. The parameter is an int64, and
+// truncating a whole number to ten decimal places returns that same whole
+// number for every value the type holds; so `q` always equals `units` and the
+// condition below is never true. Deleting the refusal would leave every test
+// in this package green, which is said here rather than left for the next
+// reader to discover (see TestJournalQuantity, which says it too).
+//
+// IT IS KEPT BECAUSE IT IS THE OTHER HALF OF THE QUANTIZATION, not because it
+// catches anything. Quantizing at all is what stops "accepted at one value,
+// stored at another" — the accident that once broke an account's positions
+// screen for good — and the day the mirror's quantity stops being an integer
+// (a broker that reports fractional units, a column widened to NUMERIC), the
+// truncation starts changing values on the first line and this is the line
+// that keeps a positive count from silently becoming a zero. Keeping the pair
+// together means that change is one type away rather than one rule away. It
+// refuses on the same condition the write path does (see
 // operation.normalizeForStorage).
 func journalQuantity(units int64) (decimal.Decimal, *UnparsedError) {
 	q := decimal.NewFromInt(units).Truncate(portfolio.QuantityScale)
@@ -909,17 +1060,23 @@ func journalQuantity(units int64) (decimal.Decimal, *UnparsedError) {
 // deduplication index over (account, source, external_id) can tell them
 // apart.
 //
-// ONE ENTRY TAKES THE ROW'S OWN ID; two take it with "/1" and "/2". The
-// suffixes are assigned here and nowhere else, from the order the entries
-// were built in, which is fixed for each kind of row (income then withdrawal;
-// trade then its commission) — so a rebuild of an unchanged mirror produces
-// the same names and updates rather than duplicates.
+// EVERY ENTRY IS SUFFIXED, INCLUDING A LONE ONE: "/1", then "/2". The
+// suffixes are assigned here and nowhere else, from the order the entries were
+// built in, which is fixed for each kind of row (income then withdrawal; trade
+// then its commission) — so a rebuild of an unchanged mirror produces the same
+// names and updates rather than duplicates.
+//
+// THE LONE ENTRY IS SUFFIXED BECAUSE THE ROW CAN CHANGE SHAPE. A mirror row
+// holds the broker's LATEST observation of an operation, and mirrorConfirmSQL
+// rewrites commission and commission_currency on every sync while the row's
+// own id stays — so a trade that produces one entry today produces two the
+// moment the broker reports its commission in another currency. Were a lone
+// entry to take the bare id, that revision would RENAME it from "<id>" to
+// "<id>/1"; and the name is part of the journal's deduplication key (account,
+// source, external_id), to which a renamed entry is not the same record
+// changed but one record vanished and another never seen before. A fixed
+// shape costs one suffix nobody reads.
 func withExternalIDs(rowID uuid.UUID, ops []operation.Operation) []operation.Operation {
-	if len(ops) == 1 {
-		id := rowID.String()
-		ops[0].ExternalID = &id
-		return ops
-	}
 	for i := range ops {
 		id := fmt.Sprintf("%s/%d", rowID, i+1)
 		ops[i].ExternalID = &id

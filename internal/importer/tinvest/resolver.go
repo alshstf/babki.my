@@ -114,12 +114,16 @@ type passportSource interface {
 // IS the refusal (ErrUnsupportedInstrumentType) — there is deliberately no
 // second list of excluded types to keep in step with this one.
 //
-// CURRENCY IS NOT HERE, AND THAT IS THE POINT rather than an omission. Buying
-// and selling currency projects into journal rows of type "conversion", and
-// the engine skips a conversion whole — portfolio.Compute moves on to the
-// next operation before it ever asks which instrument the row names (engine.go,
-// `if o.Type == TypeConversion { continue }`) — so a currency operation needs
-// no instrument at all and this resolver must never be called for one.
+// CURRENCY IS NOT HERE, AND THAT IS THE POINT rather than an omission. A
+// currency trade needs no instrument from this resolver either way. It does
+// not reach the journal at all today — ProjectRow refuses it with
+// ReasonCurrencyTrade, because the mirror names neither the traded currency
+// nor its nominal per unit — and the journal type it would reach if that
+// changed is "conversion", which the engine skips whole, moving on to the next
+// operation before it ever asks which instrument the row names (engine.go,
+// `if o.Type == TypeConversion { continue }`). So this resolver must never be
+// called for a currency, under the rule that stands now and under the one that
+// would replace it.
 //
 // Listing currency here would have made a wrong call silent and expensive
 // instead. Neither lookup below can find a currency row: ByTickerTradable
