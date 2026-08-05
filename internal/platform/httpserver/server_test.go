@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -49,6 +50,37 @@ func TestHealthzDegraded(t *testing.T) {
 
 	if rec.Code != 503 {
 		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+}
+
+// TestRoutesListsWhatWasMounted covers the three things Routes promises, since
+// tests elsewhere derive their coverage from it: that a mounted pattern comes
+// back with its method attached, that the framework's own routes are not in the
+// list, and that the list handed out is a copy.
+func TestRoutesListsWhatWasMounted(t *testing.T) {
+	pool := testdb.New(t)
+	srv := httpserver.New(slog.Default(), pool)
+	nothing := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+
+	if got := srv.Routes(); len(got) != 0 {
+		t.Errorf("a fresh server reports %v, want nothing: the healthcheck and the "+
+			"/api/ catch-all are the framework's own and are not mounted routes", got)
+	}
+
+	srv.Mount("POST /api/v1/things", nothing)
+	srv.Mount("GET /api/v1/things/{id}", nothing)
+	want := []string{"POST /api/v1/things", "GET /api/v1/things/{id}"}
+	got := srv.Routes()
+	if !slices.Equal(got, want) {
+		t.Fatalf("Routes() = %v, want %v", got, want)
+	}
+
+	// A caller writing into what it got back does not rewrite the router's own
+	// record. Written in place rather than appended to, because appending to a
+	// slice of exact capacity copies it whether or not Routes did.
+	got[0] = "DELETE /api/v1/everything"
+	if again := srv.Routes(); !slices.Equal(again, want) {
+		t.Errorf("Routes() = %v after a caller overwrote an earlier result, want %v", again, want)
 	}
 }
 

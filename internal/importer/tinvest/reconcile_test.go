@@ -1136,7 +1136,7 @@ func TestReconcileLinkReadsTheMapOfItsOwnConnection(t *testing.T) {
 	f := newFixture(t)
 	inst := f.seedMapped(t, "uid-sber", "SBER")
 
-	otherConn, err := f.store.CreateConnection(f.ctx, f.spaceID, []byte("x"), "0000")
+	otherConn, err := f.store.CreateConnection(f.ctx, f.spaceID, []byte("x"), "0000", StatusActive)
 	if err != nil {
 		t.Fatalf("CreateConnection: %v", err)
 	}

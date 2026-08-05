@@ -198,12 +198,9 @@ func seedTinvestDemo(ctx context.Context, pool *pgxpool.Pool, spaceID, accountID
 	if _, err := rand.Read(ciphertext); err != nil {
 		return fmt.Errorf("seed tinvest connection: %w", err)
 	}
-	conn, err := store.CreateConnection(ctx, spaceID, ciphertext, "0000")
+	conn, err := store.CreateConnection(ctx, spaceID, ciphertext, "0000", tinvest.StatusDisabled)
 	if err != nil {
 		return fmt.Errorf("seed tinvest connection: %w", err)
-	}
-	if err := store.UpdateConnectionStatus(ctx, conn.ID, tinvest.StatusDisabled); err != nil {
-		return fmt.Errorf("seed tinvest connection status: %w", err)
 	}
 	openedOn := d("2019-03-14")
 	link, err := store.CreateLink(ctx, tinvest.AccountLink{

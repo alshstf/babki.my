@@ -1063,7 +1063,7 @@ func (r *recordingInserter) Insert(_ context.Context, args river.JobArgs, opts *
 // every hour for as long as it existed.
 func TestDispatchWorkerQueuesOneJobForEachActiveConnection(t *testing.T) {
 	f := newFixture(t)
-	parked, err := f.store.CreateConnection(f.ctx, f.spaceID, []byte("sealed"), "1234")
+	parked, err := f.store.CreateConnection(f.ctx, f.spaceID, []byte("sealed"), "1234", StatusActive)
 	if err != nil {
 		t.Fatalf("CreateConnection: %v", err)
 	}

@@ -274,10 +274,22 @@ func scanConnection(row pgx.Row) (Connection, error) {
 // pgx.ErrNoRows still find it. The "Returns pgx.ErrNoRows" notes below mean
 // it in that sense: the error IS one, it is no longer the bare one.
 
-func (s *Store) CreateConnection(ctx context.Context, spaceID uuid.UUID, tokenCiphertext []byte, tokenLast4 string) (Connection, error) {
+// CreateConnection files one connection to the broker.
+//
+// THE STATUS IS THE CALLER'S TO STATE and is not left to the column's default,
+// which is 'active'. Creating the connection is the first of several writes that
+// make up a working connection — accounts, links, the first sync — and a row
+// that is active from its first instant is one the hourly scheduler may pick up
+// while the rest is still being written, or one that stays behind fully armed if
+// the rest fails and the cleanup fails too. Service.CreateConnection therefore
+// asks for StatusDisabled here and switches the connection on when everything
+// else is in place; see its own doc for what each failure leaves behind.
+func (s *Store) CreateConnection(ctx context.Context, spaceID uuid.UUID, tokenCiphertext []byte,
+	tokenLast4 string, status ConnectionStatus,
+) (Connection, error) {
 	c, err := scanConnection(s.pool.QueryRow(ctx, `
-		INSERT INTO tinvest_connections (space_id, token_ciphertext, token_last4)
-		VALUES ($1, $2, $3) RETURNING `+connectionCols, spaceID, tokenCiphertext, tokenLast4))
+		INSERT INTO tinvest_connections (space_id, token_ciphertext, token_last4, status)
+		VALUES ($1, $2, $3, $4) RETURNING `+connectionCols, spaceID, tokenCiphertext, tokenLast4, status))
 	if err != nil {
 		return Connection{}, fmt.Errorf("tinvest: create connection: %w", err)
 	}

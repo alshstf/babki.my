@@ -121,10 +121,28 @@ type jobInserter interface {
 // parked until its next attempt. A caller turning this into a sentence for the
 // owner must say "already queued", not "running now": the second reading would
 // be a lie for as long as that backoff lasts.
+//
+// A NON-NIL RESULT COMES WITH A NIL ERROR, AND THAT IS THIS FUNCTION'S PROMISE
+// rather than River's alone, so no caller has to guard the dereference. The
+// River this module pins does keep it — Client.Insert returns `res[0], nil`
+// after checking the error, and returns nil only alongside one (v0.41.0,
+// client.go, func (c *Client[TTx]) Insert) — but an inserter is an interface
+// here, and a stub that answered (nil, nil) would otherwise panic in whichever
+// caller dereferenced first. Turning that into an error means both callers can
+// read the result plainly, and the two of them cannot disagree about whether it
+// needs a nil check: they used to.
 func EnqueueSync(ctx context.Context, inserter jobInserter, connectionID uuid.UUID, trigger SyncTrigger) (
 	*rivertype.JobInsertResult, error,
 ) {
-	return inserter.Insert(ctx, SyncArgs{ConnectionID: connectionID, Trigger: string(trigger)}, SyncInsertOpts())
+	res, err := inserter.Insert(ctx, SyncArgs{ConnectionID: connectionID, Trigger: string(trigger)}, SyncInsertOpts())
+	if err != nil {
+		return nil, err
+	}
+	if res == nil {
+		return nil, fmt.Errorf("tinvest: queue a sync for connection %s: the queue answered "+
+			"neither a result nor an error", connectionID)
+	}
+	return res, nil
 }
 
 // ErrUnknownTrigger means a sync job named a trigger the run log cannot store.
@@ -241,7 +259,7 @@ func (w *dispatchWorker) Work(ctx context.Context, _ *river.Job[SyncDispatchArgs
 			logAt(ctx, w.log, err, "tinvest: queue a sync failed", "connection", conn.ID, "err", err)
 			return err
 		}
-		if res != nil && res.UniqueSkippedAsDuplicate {
+		if res.UniqueSkippedAsDuplicate {
 			// The previous hour's sync is still going. Nothing is lost: that
 			// run reads the whole history anyway, so it will carry whatever
 			// this one would have.

@@ -68,7 +68,7 @@ func (c *countingCatalog) Update(ctx context.Context, id uuid.UUID, upd instrume
 // TestResolve_PassportCacheServesASecondConnection).
 func (f fixture) secondConnection(t *testing.T) Connection {
 	t.Helper()
-	conn, err := f.store.CreateConnection(f.ctx, f.spaceID, []byte("nonce||ciphertext-2"), "7b1e")
+	conn, err := f.store.CreateConnection(f.ctx, f.spaceID, []byte("nonce||ciphertext-2"), "7b1e", StatusActive)
 	if err != nil {
 		t.Fatalf("CreateConnection (second): %v", err)
 	}

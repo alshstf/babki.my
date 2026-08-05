@@ -3,23 +3,27 @@ package tinvest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/secretbox"
 	"babki.my/babki/internal/platform/testdb"
@@ -115,15 +119,19 @@ func (f *fakeInserter) queued() []SyncArgs {
 // three signed-in members of one space, and doubles for the two things this
 // package must not reach in a test — the broker and the job queue.
 type testAPI struct {
-	url      string
-	owner    *http.Client
-	editor   *http.Client
-	viewer   *http.Client
-	store    *Store
-	accounts *account.Store
-	broker   *fakeBroker
-	inserter *fakeInserter
-	spaceID  uuid.UUID
+	url       string
+	owner     *http.Client
+	editor    *http.Client
+	viewer    *http.Client
+	pool      *pgxpool.Pool
+	srv       *httpserver.Server
+	store     *Store
+	accounts  *account.Store
+	broker    *fakeBroker
+	brokerURL string
+	box       *secretbox.Box
+	inserter  *fakeInserter
+	spaceID   uuid.UUID
 }
 
 func newTestAPI(t *testing.T) *testAPI {
@@ -174,8 +182,9 @@ func newTestAPI(t *testing.T) *testAPI {
 	t.Cleanup(ts.Close)
 
 	api := &testAPI{
-		url: ts.URL, store: store, accounts: accStore,
-		broker: broker, inserter: inserter, spaceID: ownerP.SpaceID,
+		url: ts.URL, pool: pool, srv: srv, store: store, accounts: accStore,
+		broker: broker, brokerURL: brokerSrv.URL, box: box,
+		inserter: inserter, spaceID: ownerP.SpaceID,
 	}
 	api.owner = login(t, ts.URL, "owner")
 	api.editor = login(t, ts.URL, "editor")
@@ -246,29 +255,65 @@ func (a *testAPI) createConnection(t *testing.T) (uuid.UUID, string) {
 // the owner-only rule, on every single endpoint
 // -------------------------------------------------------------------------
 
-// endpoint is one route of this module, spelled with a connection id already
-// filled in. Every one of them is listed by hand rather than discovered from the
-// router, so that a route added tomorrow without a line here is a route this
-// test never looked at — and the count below is what says so out loud.
+// endpoint is one request to this module: a method, a path with the connection
+// id already filled in, and a body the handler will accept.
 type endpoint struct {
 	method, path, body string
 }
 
-func allEndpoints(id uuid.UUID) []endpoint {
+// tinvestPathPrefix is what tells this module's routes from the rest of the
+// server's in mountedRoutes below.
+const tinvestPathPrefix = "/api/v1/tinvest/"
+
+// mountedRoutes is every route THIS MODULE mounted, taken from the router the
+// test server was built with. See httpserver.Server.Routes: the patterns come
+// back with their method attached, which is how net/http spells a route and how
+// guardedRequests keys them.
+func (a *testAPI) mountedRoutes(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, pattern := range a.srv.Routes() {
+		_, path, ok := strings.Cut(pattern, " ")
+		if !ok {
+			continue // no method in the pattern: not one of this module's
+		}
+		if strings.HasPrefix(path, tinvestPathPrefix) {
+			out = append(out, pattern)
+		}
+	}
+	return out
+}
+
+// guardedRequests is one request per route this module mounts, keyed by the
+// pattern Handler.Mount registers that route under.
+//
+// IT IS NOT THE LIST OF ROUTES UNDER TEST, and the difference is the whole point
+// of the arrangement. That list comes from the router (mountedRoutes above): a
+// list of routes typed into a test goes on looking complete the day another
+// route is mounted without a line added here, and the one route nobody thought
+// about would be the one nobody checked. What this map adds is the only part a
+// router cannot supply — a body the handler will get past its own decoding, and
+// a real connection id in place of the {connectionId} the pattern carries. A
+// route mounted with no entry here has no request to send, and the test says so
+// and fails rather than skipping it.
+//
+// The method is NOT repeated in the value: it is read off the key, so the two
+// cannot come to disagree.
+func guardedRequests(id uuid.UUID) map[string]struct{ path, body string } {
 	conn := "/api/v1/tinvest/connections/" + id.String()
-	return []endpoint{
-		{"POST", "/api/v1/tinvest/token-check", `{"token":"` + demoToken + `"}`},
-		{"GET", "/api/v1/tinvest/connections", ""},
-		{
-			"POST", "/api/v1/tinvest/connections",
+	return map[string]struct{ path, body string }{
+		"POST /api/v1/tinvest/token-check": {"/api/v1/tinvest/token-check", `{"token":"` + demoToken + `"}`},
+		"GET /api/v1/tinvest/connections":  {"/api/v1/tinvest/connections", ""},
+		"POST /api/v1/tinvest/connections": {
+			"/api/v1/tinvest/connections",
 			`{"token":"` + demoToken + `","accounts":[{"broker_account_id":"2000000002","account_name":"ИИС"}]}`,
 		},
-		{"GET", conn, ""},
-		{"PATCH", conn, `{"status":"disabled"}`},
-		{"DELETE", conn, ""},
-		{"POST", conn + "/sync", ""},
-		{"GET", conn + "/runs", ""},
-		{"GET", conn + "/unparsed", ""},
+		"GET /api/v1/tinvest/connections/{connectionId}":          {conn, ""},
+		"PATCH /api/v1/tinvest/connections/{connectionId}":        {conn, `{"status":"disabled"}`},
+		"DELETE /api/v1/tinvest/connections/{connectionId}":       {conn, ""},
+		"POST /api/v1/tinvest/connections/{connectionId}/sync":    {conn + "/sync", ""},
+		"GET /api/v1/tinvest/connections/{connectionId}/runs":     {conn + "/runs", ""},
+		"GET /api/v1/tinvest/connections/{connectionId}/unparsed": {conn + "/unparsed", ""},
 	}
 }
 
@@ -276,24 +321,39 @@ func TestEveryEndpointRefusesAnEditorAndAViewer(t *testing.T) {
 	api := newTestAPI(t)
 	id, _ := api.createConnection(t)
 
-	endpoints := allEndpoints(id)
-	// Nine routes are mounted (see Handler.Mount) and nine are listed above.
-	// Stated as a literal so that mounting a tenth without listing it here fails
-	// rather than passing quietly on the nine it does cover.
-	if len(endpoints) != 9 {
-		t.Fatalf("this test covers %d endpoints, but the module mounts 9", len(endpoints))
+	mounted := api.mountedRoutes(t)
+	// Not a count of routes — that is exactly what this test must not state for
+	// itself — but proof that the filter matched the module at all. A prefix that
+	// matched nothing would leave the loop below with nothing to do, and a test
+	// that checks nothing passes.
+	if len(mounted) == 0 {
+		t.Fatalf("no route of this module was found among the router's %v", api.srv.Routes())
 	}
 
-	for _, who := range []struct {
-		name string
-		c    *http.Client
-	}{{"editor", api.editor}, {"viewer", api.viewer}} {
-		for _, e := range endpoints {
-			code, body := do(t, who.c, e.method, api.url+e.path, e.body)
+	requests := guardedRequests(id)
+	for _, pattern := range mounted {
+		method, _, _ := strings.Cut(pattern, " ")
+		req, ok := requests[pattern]
+		if !ok {
+			t.Fatalf("%q is mounted and no request for it is written down: add one to "+
+				"guardedRequests, so this test can watch that route refuse an editor and a viewer",
+				pattern)
+		}
+		for _, who := range []struct {
+			name string
+			c    *http.Client
+		}{{"editor", api.editor}, {"viewer", api.viewer}} {
+			code, body := do(t, who.c, method, api.url+req.path, req.body)
 			if code != http.StatusForbidden {
-				t.Errorf("%s %s as %s: status %d (body %s), want 403",
-					e.method, e.path, who.name, code, body)
+				t.Errorf("%s as %s: status %d (body %s), want 403", pattern, who.name, code, body)
 			}
+		}
+	}
+	// And the other way round, so a route removed from Mount does not leave a
+	// request here quietly addressing nothing.
+	for pattern := range requests {
+		if !slices.Contains(mounted, pattern) {
+			t.Errorf("guardedRequests names %q, which Handler.Mount does not mount", pattern)
 		}
 	}
 
@@ -456,45 +516,64 @@ func TestCreatingAConnectionMakesRubleBrokerageAccountsAndQueuesTheFirstSync(t *
 func TestCreatingAConnectionRefusesWhatItCannotImport(t *testing.T) {
 	api := newTestAPI(t)
 	base := api.url + "/api/v1/tinvest/connections"
+	// mustSay is set where the status code alone cannot tell this refusal from
+	// the one that would answer the same request if this one were gone.
 	for _, c := range []struct {
 		name, body string
 		want       int
+		mustSay    string
 	}{
 		{
 			"an account the token cannot see",
 			`{"token":"` + demoToken + `","accounts":[{"broker_account_id":"9999","account_name":"X"}]}`,
-			http.StatusBadRequest,
+			http.StatusBadRequest, "",
 		},
 		{
 			"an account of a kind this program does not import",
 			`{"token":"` + demoToken + `","accounts":[{"broker_account_id":"2000000003","account_name":"X"}]}`,
-			http.StatusBadRequest,
+			http.StatusBadRequest, "",
 		},
 		{
 			"the same broker account twice",
 			`{"token":"` + demoToken + `","accounts":[` +
 				`{"broker_account_id":"2000000001","account_name":"A"},` +
 				`{"broker_account_id":"2000000001","account_name":"B"}]}`,
-			http.StatusBadRequest,
+			http.StatusBadRequest, "",
 		},
 		{
 			"no accounts at all",
-			`{"token":"` + demoToken + `","accounts":[]}`, http.StatusBadRequest,
+			`{"token":"` + demoToken + `","accounts":[]}`, http.StatusBadRequest, "",
 		},
 		{
 			"an empty account name",
 			`{"token":"` + demoToken + `","accounts":[{"broker_account_id":"2000000001","account_name":""}]}`,
-			http.StatusBadRequest,
+			http.StatusBadRequest, "",
+		},
+		{
+			// The REASON and not just the code: an empty broker account id is
+			// also one the token cannot see, so deleting validatePicks' refusal
+			// of it would leave the next check answering — with the same 400, and
+			// with a sentence telling the owner to pick a different account
+			// rather than that they sent an empty field. A test reading the
+			// status alone would stay green through that deletion; this one does
+			// not, and the emptiness is a bound the contract publishes
+			// (TinvestAccountPick.broker_account_id, minLength 1).
+			"an empty broker account id",
+			`{"token":"` + demoToken + `","accounts":[{"broker_account_id":"","account_name":"X"}]}`,
+			http.StatusBadRequest, "broker_account_id must not be empty",
 		},
 		{
 			"an empty token",
 			`{"token":"","accounts":[{"broker_account_id":"2000000001","account_name":"X"}]}`,
-			http.StatusBadRequest,
+			http.StatusBadRequest, "",
 		},
 	} {
 		code, body := do(t, api.owner, "POST", base, c.body)
 		if code != c.want {
 			t.Errorf("%s: status %d (body %s), want %d", c.name, code, body, c.want)
+		}
+		if c.mustSay != "" && !strings.Contains(body, c.mustSay) {
+			t.Errorf("%s: body %s, want it to say %q", c.name, body, c.mustSay)
 		}
 	}
 
@@ -505,10 +584,109 @@ func TestCreatingAConnectionRefusesWhatItCannotImport(t *testing.T) {
 		t.Fatalf("list accounts: %v", err)
 	}
 	if len(accounts) != 0 {
-		t.Errorf("accounts = %d after six refusals, want 0", len(accounts))
+		t.Errorf("accounts = %d after seven refusals, want 0", len(accounts))
 	}
 	if got := api.inserter.queued(); len(got) != 0 {
-		t.Errorf("queued %d syncs after six refusals, want 0", len(got))
+		t.Errorf("queued %d syncs after seven refusals, want 0", len(got))
+	}
+}
+
+// TestAnEmptyTokenIsRefusedBeforeTheBrokerIsAsked covers the other end of the
+// same class: the token check's own refusal of an empty token. The broker
+// refusing a token is a 400 as well (see
+// TestARefusedTokenAndAnUnreachableBrokerAreDifferentAnswers), so the status
+// code cannot tell the two apart — what can is that this one never left the
+// process.
+func TestAnEmptyTokenIsRefusedBeforeTheBrokerIsAsked(t *testing.T) {
+	api := newTestAPI(t)
+
+	code, body := do(t, api.owner, "POST", api.url+"/api/v1/tinvest/token-check", `{"token":""}`)
+	if code != http.StatusBadRequest {
+		t.Fatalf("status %d (body %s), want 400", code, body)
+	}
+	if !strings.Contains(body, "token must not be empty") {
+		t.Errorf("body = %s, want it to name the empty token rather than the broker's verdict", body)
+	}
+	if seen := api.broker.seen(); len(seen) != 0 {
+		t.Errorf("the broker was asked %v, want not to have been asked at all: an empty token is "+
+			"refused here, and sending it would be one pointless call per empty field", seen)
+	}
+}
+
+// strayAccountCreator answers with an account that exists nowhere, which makes
+// the NEXT write — the link onto it — fail with ErrLinkOutsideSpace. That is a
+// failure in the middle of the writes rather than before them, which is the
+// only way to reach the state the test below is about.
+type strayAccountCreator struct{}
+
+func (strayAccountCreator) Create(_ context.Context, _ uuid.UUID, _ *uuid.UUID,
+	name string, _ account.Type, _, _ string,
+) (account.Account, error) {
+	return account.Account{ID: uuid.New(), Name: name}, nil
+}
+
+// TestAHalfBuiltConnectionThatCouldNotBeRemovedIsNotScheduled is the fourth
+// outcome CreateConnection's doc names: a write fails, and the compensating
+// removal fails too (it is a best effort — undoConnection logs its own failure
+// and returns the original one). What survives must be a connection the
+// scheduler passes over, because an active one would be synced hourly, with a
+// working token, into accounts the owner was told had not been made.
+//
+// Read through ListActiveConnections and not through the space's own list: that
+// is the read the hourly dispatcher makes, and it is the one whose answer
+// decides whether the leftover is dangerous.
+func TestAHalfBuiltConnectionThatCouldNotBeRemovedIsNotScheduled(t *testing.T) {
+	api := newTestAPI(t)
+	ctx := context.Background()
+
+	// The cleanup cannot succeed: the DELETE is refused by the database itself.
+	// Nothing in the schema produces that on its own, and a stubbed store would
+	// prove only that a stub was called.
+	for _, stmt := range []string{
+		`CREATE FUNCTION refuse_the_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+			BEGIN RAISE EXCEPTION 'the cleanup cannot remove this connection'; END $$`,
+		`CREATE TRIGGER refuse_connection_delete BEFORE DELETE ON tinvest_connections
+			FOR EACH ROW EXECUTE FUNCTION refuse_the_delete()`,
+	} {
+		if _, err := api.pool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("install the refusing trigger: %v", err)
+		}
+	}
+
+	svc := NewService(api.store, strayAccountCreator{}, api.box,
+		func(token string) (*Client, error) {
+			return NewClient(http.DefaultClient, api.brokerURL, token, slog.Default()), nil
+		}, api.inserter, slog.New(&logCapture{}))
+
+	_, err := svc.CreateConnection(ctx,
+		family.Principal{SpaceID: api.spaceID, Role: family.RoleOwner}, demoToken,
+		[]AccountPick{{BrokerAccountID: "2000000001", AccountName: "Брокерский"}})
+	// The failure is the one this test set up — a link that could not be written
+	// — and not something that happened before the first write, which would make
+	// the state below prove nothing.
+	if !errors.Is(err, ErrLinkOutsideSpace) {
+		t.Fatalf("CreateConnection failed with %v, want %v", err, ErrLinkOutsideSpace)
+	}
+
+	// It did survive — otherwise this would be a test of the cleanup working.
+	all, err := api.store.ListConnections(ctx, api.spaceID)
+	if err != nil {
+		t.Fatalf("list connections: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("connections = %d, want the half-built one left behind by the refused delete", len(all))
+	}
+	if all[0].Status != StatusDisabled {
+		t.Errorf("the leftover connection is %q, want %q", all[0].Status, StatusDisabled)
+	}
+
+	active, err := api.store.ListActiveConnections(ctx)
+	if err != nil {
+		t.Fatalf("list active connections: %v", err)
+	}
+	if len(active) != 0 {
+		t.Errorf("the hourly dispatcher sees %d connection(s), want 0: a half-built connection "+
+			"it can see is one it imports from, into accounts the owner was told were not created", len(active))
 	}
 }
 
@@ -714,6 +892,29 @@ func TestSwitchingAConnectionOffAsksTheBrokerNothing(t *testing.T) {
 	}
 }
 
+// seedImportedOperation writes one journal operation of the kind the import
+// writes — this importer's own source, on the account a link feeds — through
+// the journal's own store. Without it the test below would check half of its
+// own title: an account with no operations in it says nothing about whether
+// operations survive a disconnect.
+func (a *testAPI) seedImportedOperation(t *testing.T, accountID uuid.UUID) uuid.UUID {
+	t.Helper()
+	externalID := "seeded-operation"
+	op, err := operation.NewStore(a.pool).Create(context.Background(), a.spaceID, operation.Operation{
+		AccountID:   accountID,
+		Type:        operation.TypeDeposit,
+		OccurredOn:  time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC),
+		AmountMinor: 250_000,
+		Currency:    "RUB",
+		Source:      Source,
+		ExternalID:  &externalID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("seed an imported operation: %v", err)
+	}
+	return op.ID
+}
+
 func TestDeletingAConnectionLeavesTheAccountsAndTheirOperations(t *testing.T) {
 	api := newTestAPI(t)
 	ctx := context.Background()
@@ -722,6 +923,7 @@ func TestDeletingAConnectionLeavesTheAccountsAndTheirOperations(t *testing.T) {
 	if err != nil || len(before) != 1 {
 		t.Fatalf("accounts before = %d, %v; want 1", len(before), err)
 	}
+	opID := api.seedImportedOperation(t, before[0].ID)
 
 	if code, body := do(t, api.owner, "DELETE", api.url+"/api/v1/tinvest/connections/"+id.String(), ""); code != http.StatusNoContent {
 		t.Fatalf("status %d, body %s", code, body)
@@ -734,6 +936,17 @@ func TestDeletingAConnectionLeavesTheAccountsAndTheirOperations(t *testing.T) {
 	if len(after) != 1 || after[0].ID != before[0].ID {
 		t.Errorf("accounts after the disconnect = %+v, want the same one: an account is the "+
 			"owner's data and withdrawing a token does not take it away", after)
+	}
+	// And what the import wrote INTO that account is the owner's data too. The
+	// migration's cascades reach the mirror, the links and the run log; they must
+	// not reach the journal, which holds no foreign key back to the connection.
+	ops, _, err := operation.NewStore(api.pool).ListByAccount(ctx, api.spaceID, before[0].ID, 10, 0)
+	if err != nil {
+		t.Fatalf("list operations: %v", err)
+	}
+	if len(ops) != 1 || ops[0].ID != opID {
+		t.Errorf("operations after the disconnect = %+v, want the one the import wrote (%s): "+
+			"the journal is the owner's record of what happened, not the connection's", ops, opID)
 	}
 	conns, err := api.store.ListConnections(ctx, api.spaceID)
 	if err != nil {

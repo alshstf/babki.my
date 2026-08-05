@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,9 +17,10 @@ import (
 )
 
 type Server struct {
-	log  *slog.Logger
-	pool *pgxpool.Pool
-	mux  *http.ServeMux
+	log    *slog.Logger
+	pool   *pgxpool.Pool
+	mux    *http.ServeMux
+	routes []string
 }
 
 func New(log *slog.Logger, pool *pgxpool.Pool) *Server {
@@ -35,6 +37,28 @@ func New(log *slog.Logger, pool *pgxpool.Pool) *Server {
 // Mount adds a handler (domain modules, UI).
 func (s *Server) Mount(pattern string, h http.Handler) {
 	s.mux.Handle(pattern, h)
+	s.routes = append(s.routes, pattern)
+}
+
+// Routes lists the patterns Mount has registered, in registration order.
+//
+// THE METHOD IS PART OF A PATTERN ("POST /api/v1/..."), because that is how
+// net/http spells one and two methods on one path are two routes. The routes
+// New registers on itself — the healthcheck and the JSON 404 for unmatched
+// /api/ paths — are not here: they go to the mux directly and belong to the
+// framework rather than to a module.
+//
+// It exists for the tests that have to cover EVERY route of a module: a list of
+// routes typed into a test goes on looking complete the day a route is mounted
+// without a line added there, and the test then passes on the routes it does
+// know while the new one is asked nothing at all. Taking the list from the
+// router turns that into a failure (see
+// TestEveryEndpointRefusesAnEditorAndAViewer in internal/importer/tinvest).
+//
+// The slice is a copy, so a caller appending to what it gets back cannot teach
+// the router a route.
+func (s *Server) Routes() []string {
+	return slices.Clone(s.routes)
 }
 
 // Handler returns the root handler with all middleware.

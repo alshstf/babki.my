@@ -170,7 +170,7 @@ func TestStartingTheQueueQueuesASyncForAnActiveConnection(t *testing.T) {
 	}
 	deps := stubTinvestDeps(t, pool)
 	conn, err := tinvest.NewStore(pool).CreateConnection(ctx, space.ID,
-		deps.Box.Seal([]byte("t.a-read-only-token")), "oken")
+		deps.Box.Seal([]byte("t.a-read-only-token")), "oken", tinvest.StatusActive)
 	if err != nil {
 		t.Fatalf("CreateConnection: %v", err)
 	}

@@ -49,7 +49,7 @@ func newFixture(t *testing.T) fixture {
 	}
 
 	st := NewStore(pool)
-	conn, err := st.CreateConnection(ctx, sp.ID, []byte("nonce||ciphertext"), "9f3a")
+	conn, err := st.CreateConnection(ctx, sp.ID, []byte("nonce||ciphertext"), "9f3a", StatusActive)
 	if err != nil {
 		t.Fatalf("CreateConnection: %v", err)
 	}
@@ -117,7 +117,8 @@ func TestCreateConnectionStoresWhatItWasGiven(t *testing.T) {
 		t.Errorf("space = %s, want %s", f.conn.SpaceID, f.spaceID)
 	}
 	if f.conn.Status != StatusActive {
-		t.Errorf("status = %q, want %q — a new connection is active", f.conn.Status, StatusActive)
+		t.Errorf("status = %q, want %q — the fixture asked for an active connection",
+			f.conn.Status, StatusActive)
 	}
 	if string(f.conn.TokenCiphertext) != "nonce||ciphertext" {
 		t.Errorf("ciphertext = %q", f.conn.TokenCiphertext)
@@ -127,6 +128,33 @@ func TestCreateConnectionStoresWhatItWasGiven(t *testing.T) {
 	}
 	if f.conn.CreatedAt.IsZero() || f.conn.UpdatedAt.IsZero() {
 		t.Errorf("timestamps = %s / %s", f.conn.CreatedAt, f.conn.UpdatedAt)
+	}
+}
+
+// TestAConnectionIsCreatedWithTheStatusItWasAskedFor is the storage half of the
+// parking Service.CreateConnection depends on. The column's own default is
+// 'active', so an INSERT that left the status out would still write a row — a
+// row the hourly dispatcher picks up — and only asking for the other status and
+// reading it back says which of the two the statement actually used.
+func TestAConnectionIsCreatedWithTheStatusItWasAskedFor(t *testing.T) {
+	f := newFixture(t)
+
+	parked, err := f.store.CreateConnection(f.ctx, f.spaceID, []byte("nonce||parked"), "0000", StatusDisabled)
+	if err != nil {
+		t.Fatalf("CreateConnection: %v", err)
+	}
+	if parked.Status != StatusDisabled {
+		t.Errorf("status = %q, want %q", parked.Status, StatusDisabled)
+	}
+
+	// And the scheduler's own read agrees: the fixture's connection is active,
+	// this one is not.
+	active, err := f.store.ListActiveConnections(f.ctx)
+	if err != nil {
+		t.Fatalf("ListActiveConnections: %v", err)
+	}
+	if len(active) != 1 || active[0].ID != f.conn.ID {
+		t.Errorf("the scheduler sees %+v, want only the active connection %s", active, f.conn.ID)
 	}
 }
 
@@ -316,7 +344,7 @@ func TestCreateLinkRefusesToCrossSpaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create the other space: %v", err)
 	}
-	otherConn, err := f.store.CreateConnection(f.ctx, otherSpace.ID, []byte("nonce||other"), "0000")
+	otherConn, err := f.store.CreateConnection(f.ctx, otherSpace.ID, []byte("nonce||other"), "0000", StatusActive)
 	if err != nil {
 		t.Fatalf("CreateConnection in the other space: %v", err)
 	}

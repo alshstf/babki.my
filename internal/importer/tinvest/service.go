@@ -227,16 +227,54 @@ func (s *Service) CheckToken(ctx context.Context, p family.Principal, token stri
 // picks is already imported — so a token the broker rejects, a duplicate pick
 // and an account already connected all leave the space exactly as it was.
 //
-// WHAT A FAILURE PART-WAY THROUGH LEAVES BEHIND, stated plainly because it is
-// not nothing: once the writes begin, a failure removes the connection (which
-// takes its links with it, by the migration's own cascade) but NOT the babki
-// accounts already created for it. Deleting an account is something this
-// program never does behind the owner's back — the same rule that makes
-// DeleteConnection leave accounts standing — so what is left is one or more
-// empty accounts on the accounts screen, which the owner can archive. The
-// alternative, one transaction spanning three stores, is not available here:
+// THE CONNECTION IS BORN SWITCHED OFF AND IS SWITCHED ON ONLY ONCE ITS ACCOUNTS
+// AND LINKS ARE WRITTEN. A connection that is active is one the hourly scheduler
+// will sync, and until the links exist there is nothing to sync into — so
+// "active" is a statement about a connection that is otherwise complete, rather
+// than the state it is created in. Exactly one step follows the switch-on,
+// queueing the first import, and outcome 4 below says why it is on that side.
+//
+// WHAT A FAILURE PART-WAY THROUGH LEAVES BEHIND. Once the writes begin there are
+// four outcomes, and all four are named here because the cleanup is a best
+// effort and not a guarantee (see undoConnection, which logs its own failure and
+// returns the original one):
+//
+//  1. a write fails and the cleanup succeeds: the connection and its links are
+//     gone. The babki accounts already created are NOT — deleting an account is
+//     something this program never does behind the owner's back, the same rule
+//     that makes DeleteConnection leave accounts standing — so what is left is
+//     one or more empty accounts on the accounts screen, which the owner can
+//     archive.
+//  2. a write fails and the cleanup fails too: a half-built connection stays,
+//     and it stays SWITCHED OFF. The scheduler passes it over and nothing offers
+//     its token to the broker of its own accord; the owner sees a disabled
+//     connection they can delete. This is the outcome the parking above exists
+//     for: the same leftover with status active would have been imported from,
+//     hourly, into accounts the owner was told had not been made.
+//  3. switching it on fails: same as 2 — it was never on.
+//  4. queueing the first sync fails (the only step after the connection is on)
+//     and the cleanup fails too: what stays is a COMPLETE, active connection
+//     whose owner was told the request failed. The hourly dispatcher syncs it
+//     within the hour, into the accounts and links made for it, which is what
+//     would have happened had the request succeeded; the owner's screen shows
+//     the connection, which they can delete. The queueing is deliberately after the
+//     switch-on and not before: a job queued for a connection the scheduler is
+//     not yet allowed to touch is one the worker drops on sight (see
+//     connectionNotActiveMessage), and the first import would then wait for the
+//     next hour for no reason.
+//
+// The alternative, one transaction spanning three stores, is not available here:
 // each store owns its own statement and none of them takes a transaction from
 // outside.
+//
+// THE "ALREADY IMPORTED" CHECK ABOVE IS NOT RACE-PROOF, and no constraint is
+// behind it. Neither unique index on tinvest_account_links covers the rule: the
+// one on (connection_id, broker_account_id) says nothing about two DIFFERENT
+// connections naming one broker account, and the one on account_id is about the
+// babki account, of which two such connections would make two. Two creations
+// racing each other would therefore both pass the check and both be written. One
+// person clicking one button cannot do it, which is why it is left as it is —
+// but a reader must not take this check for a constraint.
 func (s *Service) CreateConnection(ctx context.Context, p family.Principal,
 	token string, picks []AccountPick,
 ) (ConnectionView, error) {
@@ -272,7 +310,8 @@ func (s *Service) CreateConnection(ctx context.Context, p family.Principal,
 		}
 	}
 
-	conn, err := s.store.CreateConnection(ctx, p.SpaceID, s.box.Seal([]byte(token)), tokenLast4(token))
+	conn, err := s.store.CreateConnection(ctx, p.SpaceID, s.box.Seal([]byte(token)),
+		tokenLast4(token), StatusDisabled)
 	if err != nil {
 		return ConnectionView{}, err
 	}
@@ -301,6 +340,18 @@ func (s *Service) CreateConnection(ctx context.Context, p family.Principal,
 		links = append(links, link)
 	}
 
+	// Everything the connection needs is written, so it may be switched on. The
+	// row is read back rather than patched in memory: what this answers with is
+	// then the row as stored, and a status that failed to stick cannot be
+	// published as though it had.
+	if err := s.store.UpdateConnectionStatus(ctx, conn.ID, StatusActive); err != nil {
+		return ConnectionView{}, s.undoConnection(p.SpaceID, conn.ID, err)
+	}
+	active, err := s.store.ConnectionByID(ctx, p.SpaceID, conn.ID)
+	if err != nil {
+		return ConnectionView{}, s.undoConnection(p.SpaceID, conn.ID, err)
+	}
+
 	// THROUGH EnqueueSync AND NOT BY BUILDING THE INSERT HERE. The hourly
 	// schedule and the owner's button go through the same helper so that all
 	// three ways of starting a sync land in one class of uniqueness; two places
@@ -309,13 +360,18 @@ func (s *Service) CreateConnection(ctx context.Context, p family.Principal,
 	if _, err := EnqueueSync(ctx, s.inserter, conn.ID, TriggerInitial); err != nil {
 		return ConnectionView{}, s.undoConnection(p.SpaceID, conn.ID, err)
 	}
-	return ConnectionView{Connection: conn, Links: links}, nil
+	return ConnectionView{Connection: active, Links: links}, nil
 }
 
 // undoConnection removes a connection whose setup failed part-way and returns
 // the failure that caused it. The cleanup's own error is logged rather than
 // returned: the caller asked about the original failure, and replacing it with
 // "and then the cleanup failed too" would hide the thing that went wrong first.
+//
+// IT IS A BEST EFFORT AND NOT A GUARANTEE — a log line is all a failed removal
+// produces — which is why the connection it removes was created switched off.
+// What a failure here leaves standing is a connection the scheduler passes over,
+// rather than one it syncs from; CreateConnection's own doc names every outcome.
 //
 // The context is deliberately NOT the request's. A failure here is very often a
 // canceled request, and a cleanup running on that same context would be
