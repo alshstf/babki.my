@@ -1,0 +1,17 @@
+{
+  "_note": "shape taken from the published API documentation; the cursor method returns cancelled operations too, which is why the mirror holds them and the projection has to skip them",
+  "id": "op-cancelled-1",
+  "parentOperationId": "",
+  "name": "Покупка ценных бумаг",
+  "date": "2026-03-14T21:30:00Z",
+  "type": "OPERATION_TYPE_BUY",
+  "description": "Покупка 100 шт.",
+  "state": "OPERATION_STATE_CANCELED",
+  "instrumentUid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
+  "figi": "BBG004730N88",
+  "instrumentType": "share",
+  "payment": {"currency": "rub", "units": "-27500", "nano": 0},
+  "price": {"currency": "rub", "units": "275", "nano": 0},
+  "commission": {"currency": "rub", "units": "-8", "nano": -250000000},
+  "quantity": "100"
+}

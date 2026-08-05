@@ -1,0 +1,15 @@
+{
+  "_note": "shape taken from the published API documentation; not confirmed against a live account — task 14",
+  "id": "op-overnight-1",
+  "parentOperationId": "",
+  "name": "Овернайт",
+  "date": "2026-04-10T20:00:00Z",
+  "type": "OPERATION_TYPE_OVERNIGHT",
+  "description": "Доход от овернайта",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
+  "figi": "BBG004730N88",
+  "instrumentType": "share",
+  "payment": {"currency": "rub", "units": "12", "nano": 340000000},
+  "quantity": "0"
+}

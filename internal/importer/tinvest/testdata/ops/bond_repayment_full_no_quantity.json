@@ -1,0 +1,15 @@
+{
+  "_note": "shape taken from the published API documentation; the case this fixture is for — a full redemption reporting no quantity — is exactly what task 14 has to look at on live data",
+  "id": "op-repay-2",
+  "parentOperationId": "",
+  "name": "Погашение облигации",
+  "date": "2026-09-01T09:00:00Z",
+  "type": "OPERATION_TYPE_BOND_REPAYMENT_FULL",
+  "description": "Погашение облигации",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "00e0a5a6-3f9a-4b26-bdb9-95cbbaa1c0f2",
+  "figi": "BBG00T22WKV5",
+  "instrumentType": "bond",
+  "payment": {"currency": "rub", "units": "10000", "nano": 0},
+  "quantity": "0"
+}

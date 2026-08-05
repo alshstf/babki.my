@@ -1,0 +1,20 @@
+{
+  "_note": "shape taken from the published API documentation; not confirmed against a live account — task 14",
+  "id": "op-sell-1",
+  "parentOperationId": "",
+  "name": "Продажа ценных бумаг",
+  "date": "2026-05-20T07:05:00Z",
+  "type": "OPERATION_TYPE_SELL",
+  "description": "Продажа 100 шт.",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
+  "figi": "BBG004730N88",
+  "positionUid": "41eb2102-5333-4713-bf15-72b204c4bf7b",
+  "assetUid": "40d89385-a03a-4659-bf4e-d3ecba011782",
+  "instrumentType": "share",
+  "payment": {"currency": "rub", "units": "31200", "nano": 0},
+  "price": {"currency": "rub", "units": "312", "nano": 0},
+  "commission": {"currency": "rub", "units": "-9", "nano": -360000000},
+  "accruedInt": {"currency": "rub", "units": "0", "nano": 0},
+  "quantity": "100"
+}

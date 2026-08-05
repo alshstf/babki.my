@@ -1,0 +1,15 @@
+{
+  "_note": "shape taken from the published API documentation; the SIGN OF THE QUANTITY as the direction of a move between the owner's own accounts is this projection's assumption and is what task 14 has to confirm on live data",
+  "id": "op-trans-2",
+  "parentOperationId": "",
+  "name": "Перевод ценных бумаг на другой счёт",
+  "date": "2026-05-05T11:00:00Z",
+  "type": "OPERATION_TYPE_TRANS_BS_BS",
+  "description": "Перевод бумаг между счетами",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
+  "figi": "BBG004730N88",
+  "instrumentType": "share",
+  "payment": {"currency": "rub", "units": "0", "nano": 0},
+  "quantity": "-5"
+}

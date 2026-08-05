@@ -1,0 +1,16 @@
+{
+  "_note": "shape taken from the published API documentation; not confirmed against a live account — task 14",
+  "id": "op-coupon-1",
+  "parentOperationId": "",
+  "name": "Выплата купонов",
+  "date": "2026-07-15T09:00:00Z",
+  "type": "OPERATION_TYPE_COUPON",
+  "description": "Купон",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "00e0a5a6-3f9a-4b26-bdb9-95cbbaa1c0f2",
+  "figi": "BBG00T22WKV5",
+  "instrumentType": "bond",
+  "payment": {"currency": "rub", "units": "41", "nano": 490000000},
+  "accruedInt": {"currency": "rub", "units": "0", "nano": 0},
+  "quantity": "0"
+}

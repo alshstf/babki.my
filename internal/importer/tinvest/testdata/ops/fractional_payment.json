@@ -1,0 +1,15 @@
+{
+  "_note": "constructed for this test: a payment with nano digits finer than a kopeck. The gateway's MoneyValue carries nine decimal places, so the shape is legal; whether such an amount ever arrives is not known (task 14)",
+  "id": "op-fraction-1",
+  "parentOperationId": "",
+  "name": "Пополнение брокерского счёта",
+  "date": "2026-01-09T12:00:00Z",
+  "type": "OPERATION_TYPE_INPUT",
+  "description": "Пополнение счёта",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "",
+  "figi": "",
+  "instrumentType": "",
+  "payment": {"currency": "rub", "units": "10", "nano": 123456789},
+  "quantity": "0"
+}

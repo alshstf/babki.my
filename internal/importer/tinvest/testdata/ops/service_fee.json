@@ -1,0 +1,15 @@
+{
+  "_note": "shape taken from the published API documentation; not confirmed against a live account — task 14",
+  "id": "op-fee-1",
+  "parentOperationId": "",
+  "name": "Удержание комиссии за обслуживание",
+  "date": "2026-03-01T21:00:00Z",
+  "type": "OPERATION_TYPE_SERVICE_FEE",
+  "description": "Комиссия за обслуживание счёта",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "",
+  "figi": "",
+  "instrumentType": "",
+  "payment": {"currency": "rub", "units": "-299", "nano": 0},
+  "quantity": "0"
+}
