@@ -128,6 +128,7 @@ function renderTable({
   mode = "native",
   baseCurrency = "RUB",
   costBasisRules,
+  canDelete = false,
 }: {
   operations: Operation[];
   // The catalog page the table looks names and types up in. Empty by default,
@@ -142,6 +143,9 @@ function renderTable({
   // Omitted by every test that is not about the cost basis caveat, exactly as
   // the screen omits it while the session is still loading.
   costBasisRules?: CostBasisRules;
+  // The role gate on the delete action (editor+). False by default, which is
+  // what a viewer sees; only the tests about who may delete a row turn it on.
+  canDelete?: boolean;
 }) {
   serve({
     "/operations": { body: { operations, has_more: hasMore } },
@@ -154,7 +158,7 @@ function renderTable({
         <ToggleProbe />
         <OperationsTable
           accountId="acc-1"
-          canDelete={false}
+          canDelete={canDelete}
           mode={mode}
           baseCurrency={baseCurrency}
           costBasisRules={costBasisRules}
@@ -1418,6 +1422,61 @@ describe("OperationsTable", () => {
 
       await screen.findByTestId("operation-amount");
       expect(screen.getByTestId("toggle")).toHaveTextContent("hidden");
+    });
+  });
+
+  // The server refuses to delete anything whose source is not "manual" (see
+  // Service.Delete): such a row is a projection of the broker's own records and
+  // is written again the next time the projection is rebuilt. The journal must
+  // not offer an action that cannot happen.
+  describe("rows an import wrote", () => {
+    it("says where an imported row came from and offers no way to delete it", async () => {
+      renderTable({
+        canDelete: true,
+        operations: [
+          makeOperation({ id: "op-imported", source: "tinvest" }),
+          makeOperation({ id: "op-manual", source: "manual" }),
+        ],
+      });
+
+      expect(await screen.findByText("Т-Инвестиции")).toBeInTheDocument();
+      // One delete button for two rows: the hand-entered one.
+      expect(screen.getAllByRole("button", { name: "Удалить" })).toHaveLength(1);
+    });
+
+    it("leaves a hand-entered row unlabelled and deletable", async () => {
+      renderTable({
+        canDelete: true,
+        operations: [makeOperation({ source: "manual" })],
+      });
+
+      expect(await screen.findByRole("button", { name: "Удалить" })).toBeInTheDocument();
+      expect(screen.queryByText("Т-Инвестиции")).not.toBeInTheDocument();
+      expect(screen.queryByText("Загружено извне")).not.toBeInTheDocument();
+    });
+
+    // 'csv' is the third value the column allows (migration 0005) and nothing
+    // writes it today. It is not Т-Инвестиции, and it is not deletable either:
+    // the rule is the server's — "manual" and nothing else.
+    it("does not put another importer's rows under the T-Invest name, nor make them deletable", async () => {
+      renderTable({
+        canDelete: true,
+        operations: [makeOperation({ source: "csv" })],
+      });
+
+      expect(await screen.findByText("Загружено извне")).toBeInTheDocument();
+      expect(screen.queryByText("Т-Инвестиции")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Удалить" })).not.toBeInTheDocument();
+    });
+
+    it("keeps the source visible to a viewer, who has no delete column at all", async () => {
+      renderTable({
+        canDelete: false,
+        operations: [makeOperation({ source: "tinvest" })],
+      });
+
+      expect(await screen.findByText("Т-Инвестиции")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Удалить" })).not.toBeInTheDocument();
     });
   });
 });

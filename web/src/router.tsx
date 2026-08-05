@@ -231,8 +231,9 @@ const connectWizardRoute = createRoute({
   component: ConnectWizardPage,
 });
 
-// Stub for now — see ConnectionDetailPage. A later task fills this in with
-// the run log, the reconcile snapshot and the unparsed-operations list.
+// One connection's own screen: its state and the buttons that change it, the
+// accounts it feeds, the last check against the broker, the run log and the
+// operations the import could not read (see ConnectionDetailPage).
 const connectionDetailRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/settings/connections/$connectionId",

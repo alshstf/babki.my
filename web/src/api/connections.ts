@@ -10,8 +10,12 @@ export type TinvestBrokerAccount = components["schemas"]["TinvestBrokerAccount"]
 export type TinvestTokenCheckResponse = components["schemas"]["TinvestTokenCheckResponse"];
 export type CreateConnectionBody = components["schemas"]["CreateTinvestConnectionRequest"];
 export type UpdateConnectionBody = components["schemas"]["UpdateTinvestConnectionRequest"];
+export type TinvestLinkedAccount = components["schemas"]["TinvestLinkedAccount"];
+export type TinvestReconcileMismatch = components["schemas"]["TinvestReconcileMismatch"];
+export type TinvestReconcileSnapshot = components["schemas"]["TinvestReconcileSnapshot"];
 export type TinvestSyncAcceptedResponse = components["schemas"]["TinvestSyncAcceptedResponse"];
 export type TinvestSyncRun = components["schemas"]["TinvestSyncRun"];
+export type TinvestSyncRunStatus = components["schemas"]["TinvestSyncRunStatus"];
 export type TinvestSyncRunsPage = components["schemas"]["TinvestSyncRunsResponse"];
 export type TinvestUnparsedOperation = components["schemas"]["TinvestUnparsedOperation"];
 export type TinvestUnparsedPage = components["schemas"]["TinvestUnparsedResponse"];
@@ -263,6 +267,15 @@ export function isTokenRejected(err: unknown): boolean {
 // true of one error. What rides on it is that the two get different sentences.
 export function isBrokerAccountNotImportable(err: unknown): boolean {
   return err instanceof ApiError && err.status === 422;
+}
+
+// isConnectionMissing: there is no such connection in the caller's space (404 —
+// every path under a connection id declares it). Its own sentence rather than
+// the general one, because it is the one failure that is not a fault: a
+// connection deleted in another tab, or a link followed after it was withdrawn,
+// leaves nothing to fix and nothing to retry.
+export function isConnectionMissing(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404;
 }
 
 // isBrokerUnreachable: this server could not reach T-Invest, or could not use

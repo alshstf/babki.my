@@ -87,17 +87,17 @@ const ENUM_NAMESPACE_TO_TYPE = {
   "costBasis.perimeters": "CostBasisPerimeter",
   // T-Invest connections (see api/openapi.yaml, paths under /api/v1/tinvest).
   //
-  // OF THE SIX BELOW, EXACTLY ONE IS CROSS-CHECKED TODAY: `connections.statuses`.
-  // An entry in this map is not a check on its own — the enum comparison runs
-  // only where a KEY IS BUILT DYNAMICALLY, at a t(`namespace.${expr}`) call
-  // site, and connections have exactly one of those so far (the settings
-  // screen's status badge). The other five are wired in ahead of the connection
-  // screen a later task adds — the run log, the reconcile snapshot, the
-  // mismatch list, the unparsed list — so that ru.json already carries Russian
-  // for every member the server can send. Until that screen renders them
-  // through the dynamic shape they assert NOTHING, and a new member added on
-  // the server would not fail this build. Said plainly rather than left to
-  // read as five guarantees this script does not give.
+  // ALL SIX ARE CROSS-CHECKED TODAY, each by at least one call site that builds
+  // its key dynamically — which is the only thing that makes an entry here a
+  // check at all: `connections.statuses` on the settings list and the
+  // connection screen's own badge, `connections.runStatuses`,
+  // `connections.triggers` and `connections.reconcileStatuses` in the run log,
+  // `connections.mismatchKinds` in the reconcile panel, and
+  // `connections.unparsedReasons` in the unparsed list. Adding a member to any
+  // of those enums on the server therefore fails this build until ru.json has
+  // Russian for it. (Five of the six were wired in ahead of that screen and
+  // asserted nothing until it existed; the note saying so is gone because the
+  // screen is here.)
   "connections.statuses": "TinvestConnectionStatus",
   "connections.runStatuses": "TinvestSyncRunStatus",
   "connections.reconcileStatuses": "TinvestReconcileStatus",
