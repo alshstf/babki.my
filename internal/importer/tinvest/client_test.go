@@ -479,6 +479,12 @@ func TestGetPortfolio_ParsesFixture(t *testing.T) {
 	if share.FIGI != "BBG004730N88" || share.InstrumentUID != "uid-sber" || share.InstrumentType != "share" {
 		t.Fatalf("positions[0] = %+v, unexpected", share)
 	}
+	// The ticker is decoded because a position that resolves to no instrument
+	// of ours has to be NAMED, and the other two identifiers are a UUID and a
+	// figi (see brokerLabel).
+	if share.Ticker != "SBER" {
+		t.Errorf("positions[0].Ticker = %q, want %q", share.Ticker, "SBER")
+	}
 	if share.Blocked {
 		t.Errorf("positions[0].Blocked = true, want false")
 	}

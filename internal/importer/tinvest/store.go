@@ -899,9 +899,17 @@ func (s *Store) saveMap(ctx context.Context, connectionID, instrumentID uuid.UUI
 }
 
 // instrumentMap is everything this connection has already learned about the
-// broker's instruments, in the two shapes the reconciliation needs: the
-// catalog instrument each broker instrument_uid resolves to, and a label per
-// catalog instrument for saying WHICH security a difference is about.
+// broker's instruments, in the two shapes the reconciliation needs: an
+// InstrumentIndex saying which catalog instrument each of the broker's
+// identifiers stands for, and a label per catalog instrument for saying WHICH
+// security a difference is about.
+//
+// BOTH IDENTIFIERS ARE READ, not the instrument_uid alone, because the
+// broker's identifiers drift: the resolver looks its own map up by
+// instrument_uid and then by figi for exactly that reason (see
+// (*Resolver).lookupMap), and a reconciliation that knew only the first would
+// report a drifted position as two differences that are both false. See
+// InstrumentIndex.
 //
 // It is one read of the whole table rather than a lookup per position, because
 // the caller compares every position of the account at once and the two
@@ -912,34 +920,64 @@ func (s *Store) saveMap(ctx context.Context, connectionID, instrumentID uuid.UUI
 // one). Chosen here rather than in SQL so that the one place it is decided is
 // readable next to what it is for.
 //
-// A ROW WITH NO instrument_uid IS SKIPPED. saveMap's only caller never writes
-// one (see Resolve's guard), and a "" key would answer for every broker
-// position that arrived without an identifier — resolving them all to one
-// instrument. The lookups above refuse the same key for the same reason.
-func (s *Store) instrumentMap(ctx context.Context, connectionID uuid.UUID) (map[string]uuid.UUID, map[uuid.UUID]string, error) {
+// AN EMPTY IDENTIFIER IS NOT INDEXED — neither an empty instrument_uid nor an
+// empty figi, though the row's label is kept either way. saveMap's only caller
+// never writes a row without an instrument_uid (see Resolve's guard) but does
+// write rows without a figi, and a "" key would answer for every broker
+// position that arrived without that identifier — resolving them all to one
+// instrument. mapByInstrumentUID and mapByFIGI above refuse the same key for
+// the same reason.
+//
+// A FIGI TWO ROWS DISAGREE ABOUT ANSWERS FOR NEITHER, and this is the one
+// place where this index deliberately says less than mapByFIGI would. Two
+// rows carrying one figi is what a drifted instrument_uid leaves behind, and
+// they normally name the same instrument, which is no disagreement at all.
+// When they do not, mapByFIGI still returns one (`ORDER BY updated_at DESC
+// LIMIT 1`) because a resolution has to end somewhere, while what this index
+// answers goes straight onto a screen as "the broker's 100 against your 0" —
+// so a wrong confident match here is worse than none, and none means the
+// position is shown as a difference, which is what "we could not match this"
+// is supposed to look like. Keeping whichever row arrived last would be worse
+// than both: rows come back in no particular order, so the answer would
+// depend on how the database felt like returning them, and one run would
+// match a position where the next reported it, with nothing changed between.
+func (s *Store) instrumentMap(ctx context.Context, connectionID uuid.UUID) (InstrumentIndex, map[uuid.UUID]string, error) {
+	fail := func(err error) (InstrumentIndex, map[uuid.UUID]string, error) {
+		return InstrumentIndex{}, nil, fmt.Errorf("tinvest: read instrument map: %w", err)
+	}
+
 	rows, err := s.pool.Query(ctx, `
-		SELECT im.instrument_uid, im.instrument_id, i.ticker, i.name
+		SELECT im.instrument_uid, im.figi, im.instrument_id, i.ticker, i.name
 		FROM tinvest_instrument_map im
 		JOIN instruments i ON i.id = im.instrument_id
 		WHERE im.connection_id = $1`, connectionID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("tinvest: read instrument map: %w", err)
+		return fail(err)
 	}
 	defer rows.Close()
 
-	byUID := map[string]uuid.UUID{}
+	index := InstrumentIndex{ByUID: map[string]uuid.UUID{}, ByFIGI: map[string]uuid.UUID{}}
+	contested := map[string]bool{}
 	labels := map[uuid.UUID]string{}
 	for rows.Next() {
 		var (
-			uid          string
+			uid, figi    string
 			id           uuid.UUID
 			ticker, name string
 		)
-		if err := rows.Scan(&uid, &id, &ticker, &name); err != nil {
-			return nil, nil, fmt.Errorf("tinvest: read instrument map: %w", err)
+		if err := rows.Scan(&uid, &figi, &id, &ticker, &name); err != nil {
+			return fail(err)
 		}
 		if uid != "" {
-			byUID[uid] = id
+			index.ByUID[uid] = id
+		}
+		if figi != "" && !contested[figi] {
+			if seen, ok := index.ByFIGI[figi]; ok && seen != id {
+				delete(index.ByFIGI, figi)
+				contested[figi] = true
+			} else {
+				index.ByFIGI[figi] = id
+			}
 		}
 		if ticker != "" {
 			labels[id] = ticker
@@ -948,7 +986,7 @@ func (s *Store) instrumentMap(ctx context.Context, connectionID uuid.UUID) (map[
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("tinvest: read instrument map: %w", err)
+		return fail(err)
 	}
-	return byUID, labels, nil
+	return index, labels, nil
 }

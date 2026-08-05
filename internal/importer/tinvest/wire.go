@@ -256,12 +256,20 @@ type accountIDRequest struct {
 // wirePortfolioPosition mirrors PortfolioPosition (OperationsService/
 // GetPortfolio's response). Only the fields PortfolioPosition (client.go)
 // surfaces are modeled; the response carries many more (average price,
-// expected yield, ticker, ...) that no caller of this package needs yet.
+// expected yield, ...) that no caller of this package needs yet.
+//
+// Ticker is decoded because the reconciliation has to NAME a position that
+// resolves to no instrument of ours, and the two identifiers that always
+// arrive are a UUID and a twelve-character figi — neither of which a person
+// reads. The gateway sends it on a portfolio position (seen on a live sandbox
+// response, 2026-08-05, on a position this program does not account for at
+// all), and an absent ticker is simply an empty string here.
 type wirePortfolioPosition struct {
 	FIGI           string        `json:"figi"`
 	InstrumentType string        `json:"instrumentType"`
 	Quantity       wireQuotation `json:"quantity"`
 	InstrumentUID  string        `json:"instrumentUid"`
+	Ticker         string        `json:"ticker"`
 	Blocked        bool          `json:"blocked"`
 }
 
@@ -274,6 +282,7 @@ func (w wirePortfolioPosition) parse() (PortfolioPosition, error) {
 		InstrumentUID:  w.InstrumentUID,
 		FIGI:           w.FIGI,
 		InstrumentType: w.InstrumentType,
+		Ticker:         w.Ticker,
 		Quantity:       qty,
 		Blocked:        w.Blocked,
 	}, nil

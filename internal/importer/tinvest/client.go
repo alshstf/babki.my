@@ -352,10 +352,23 @@ func (c *Client) OperationsAll(ctx context.Context, brokerAccountID string, from
 //     level (the broker's own FAQ: "отражает, заблокирован ли инструмент
 //     депозитарием"). It is unrelated to blocked_lots and must not be
 //     combined with Quantity in any arithmetic.
+//
+// InstrumentType is the broker's own word for what kind of asset this is, the
+// same vocabulary InstrumentBrief.InstrumentType carries ("share", "bond",
+// "etf" are the three this program accounts for; see brokerInstrumentTypes).
+// IT IS NOT ALWAYS A SECURITY: a live sandbox account that was only ever
+// topped up with rubles, holding nothing, came back with exactly one
+// position, of type "currency" (checked 2026-08-05; the response is
+// testdata/portfolio_cash_only.json). Whoever compares these positions
+// against a portfolio of securities has to read this field first — see
+// compareInstruments.
+//
+// Ticker is what a person calls the instrument, and is empty when the gateway
+// sent none.
 type PortfolioPosition struct {
-	InstrumentUID, FIGI, InstrumentType string
-	Quantity                            Quotation
-	Blocked                             bool
+	InstrumentUID, FIGI, InstrumentType, Ticker string
+	Quantity                                    Quotation
+	Blocked                                     bool
 }
 
 // GetPortfolio calls OperationsService/GetPortfolio and returns the

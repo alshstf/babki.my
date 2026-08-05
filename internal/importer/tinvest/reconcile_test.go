@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,6 +82,13 @@ func aTransferIn(instrumentID uuid.UUID, qty string, basisMinor int64, currency 
 
 func rub(s string) decimal.Decimal { return decimal.RequireFromString(s) }
 
+// byUID is the instrument index of a connection where nothing has drifted:
+// every instrument found under the broker's instrument_uid, the figi side
+// present and empty. Tests about drift build the index by hand instead.
+func byUID(m map[string]uuid.UUID) InstrumentIndex {
+	return InstrumentIndex{ByUID: m, ByFIGI: map[string]uuid.UUID{}}
+}
+
 // -------------------------------------------------------------------------
 // CompareHoldings: the securities side
 // -------------------------------------------------------------------------
@@ -94,7 +102,7 @@ func TestCompareHoldingsSaysMatchedWhenBothSidesAgree(t *testing.T) {
 			aCashEntry(operation.TypeDeposit, 1_000_000, "RUB"),
 			aBuy(inst, "100", -100_000, 10, "RUB"),
 		},
-		map[string]uuid.UUID{"uid-sber": inst},
+		byUID(map[string]uuid.UUID{"uid-sber": inst}),
 		map[uuid.UUID]string{inst: "SBER"},
 	)
 
@@ -125,7 +133,7 @@ func TestABlockedPositionCountsAsItsWholeQuantity(t *testing.T) {
 			aCashEntry(operation.TypeDeposit, 10_000, "RUB"),
 			aBuy(inst, "10", -10_000, 0, "RUB"),
 		},
-		map[string]uuid.UUID{"uid-frozen": inst},
+		byUID(map[string]uuid.UUID{"uid-frozen": inst}),
 		map[uuid.UUID]string{inst: "FXUS"},
 	)
 
@@ -144,7 +152,7 @@ func TestAQuantityMismatchCarriesBothFigures(t *testing.T) {
 			aCashEntry(operation.TypeDeposit, 90_000, "RUB"),
 			aBuy(inst, "90", -90_000, 0, "RUB"),
 		},
-		map[string]uuid.UUID{"uid-sber": inst},
+		byUID(map[string]uuid.UUID{"uid-sber": inst}),
 		map[uuid.UUID]string{inst: "SBER"},
 	)
 
@@ -173,16 +181,20 @@ func TestAQuantityMismatchCarriesBothFigures(t *testing.T) {
 }
 
 // TestAnUnmappedBrokerPositionIsAMismatch pins decision 2 of the brief: the
-// broker's instruments are matched against ours ONLY through the map the
-// resolver has already built, and a position that is not in it is a
-// difference with an honest label — never a silent skip. It is also the best
-// evidence there is that operations went unparsed.
+// broker's instruments are matched against ours ONLY through the index the
+// resolver has already built, and a SECURITY THIS PROGRAM ACCOUNTS FOR that is
+// not in it is a difference with an honest label — never a silent skip. It is
+// also the best evidence there is that operations went unparsed, which is
+// exactly what MismatchInstrument means and why the kind is checked here.
 func TestAnUnmappedBrokerPositionIsAMismatch(t *testing.T) {
 	res := CompareHoldings(
-		[]PortfolioPosition{{InstrumentUID: "uid-unknown", FIGI: "BBG000000000", Quantity: Quotation{Units: 7}}},
+		[]PortfolioPosition{{
+			InstrumentUID: "uid-unknown", FIGI: "BBG000000000", InstrumentType: "share",
+			Ticker: "TSLA", Quantity: Quotation{Units: 7},
+		}},
 		nil,
 		nil,
-		map[string]uuid.UUID{},
+		byUID(map[string]uuid.UUID{}),
 		map[uuid.UUID]string{},
 	)
 
@@ -193,14 +205,238 @@ func TestAnUnmappedBrokerPositionIsAMismatch(t *testing.T) {
 		t.Fatalf("mismatches = %+v, want exactly one", res.Mismatches)
 	}
 	m := res.Mismatches[0]
+	if m.Kind != MismatchInstrument {
+		t.Errorf("kind = %q, want %q — a share IS a thing this program accounts for, so what this says is "+
+			"that some of its operations did not reach the journal", m.Kind, MismatchInstrument)
+	}
 	if m.InstrumentID != nil {
 		t.Errorf("instrument = %v, want none — nothing here is ours to name", m.InstrumentID)
 	}
-	if m.Label != "uid-unknown" {
-		t.Errorf("label = %q, want the broker's own identifier %q", m.Label, "uid-unknown")
+	if m.Label != "TSLA" {
+		t.Errorf("label = %q, want the broker's own ticker %q", m.Label, "TSLA")
 	}
 	if !m.Broker.Equal(decimal.NewFromInt(7)) || !m.Journal.IsZero() {
 		t.Errorf("broker/journal = %s/%s, want 7/0", m.Broker, m.Journal)
+	}
+}
+
+// TestCashIsNotAPhantomSecurity is the sharpest test of the securities side.
+// THE BROKER'S LIST OF POSITIONS IS NOT A LIST OF SECURITIES — the account's
+// own cash stands in it, as a position of type "currency" (see
+// testdata/portfolio_cash_only.json, a live sandbox account topped up with
+// 50 000 ₽ and never traded, whose portfolio came back holding exactly that
+// one position). Compared as a security it resolves to nothing of ours, so
+// every account would carry a permanent phantom position under an unreadable
+// label, could never reach "agrees", and would show the owner the very
+// complaint this whole comparison was written to answer.
+func TestCashIsNotAPhantomSecurity(t *testing.T) {
+	res := CompareHoldings(
+		[]PortfolioPosition{{
+			InstrumentUID:  "a92e2e25-a698-45cc-a781-167cf465257c",
+			FIGI:           "RUB000UTSTOM",
+			InstrumentType: "currency",
+			Ticker:         "RUB000UTSTOM",
+			Quantity:       Quotation{Units: 50_000},
+		}},
+		[]MoneyBalance{{Currency: "RUB", Value: rub("50000")}},
+		[]operation.Operation{aCashEntry(operation.TypeDeposit, 5_000_000, "RUB")},
+		byUID(map[string]uuid.UUID{}),
+		nil,
+	)
+
+	if res.Status != ReconcileMatched {
+		t.Fatalf("status = %q, want %q — the rubles are the account's cash, which the money half of this "+
+			"comparison already checked and found right: %+v", res.Status, ReconcileMatched, res.Mismatches)
+	}
+}
+
+// TestCashIsStillComparedAsCash: passing a currency position over is a
+// division of labour and not a blind spot. The same 50 000 ₽ the securities
+// side ignores is compared by the money side, and disagreeing about it is a
+// difference — otherwise the skip above would be a hole rather than a
+// handover.
+func TestCashIsStillComparedAsCash(t *testing.T) {
+	res := CompareHoldings(
+		[]PortfolioPosition{{
+			InstrumentUID: "a92e2e25", FIGI: "RUB000UTSTOM", InstrumentType: "currency",
+			Ticker: "RUB000UTSTOM", Quantity: Quotation{Units: 50_000},
+		}},
+		[]MoneyBalance{{Currency: "RUB", Value: rub("50000")}},
+		[]operation.Operation{aCashEntry(operation.TypeDeposit, 4_000_000, "RUB")},
+		byUID(map[string]uuid.UUID{}),
+		nil,
+	)
+
+	if len(res.Mismatches) != 1 {
+		t.Fatalf("mismatches = %+v, want exactly one", res.Mismatches)
+	}
+	m := res.Mismatches[0]
+	if m.Kind != MismatchCurrency || m.Label != "RUB" {
+		t.Errorf("mismatch = %+v, want the currency row for RUB", m)
+	}
+	if !m.Broker.Equal(rub("50000")) || !m.Journal.Equal(rub("40000")) {
+		t.Errorf("broker/journal = %s/%s, want 50000/40000", m.Broker, m.Journal)
+	}
+}
+
+// TestAnAssetThisProgramCannotHoldIsItsOwnKindOfDifference: a future is not a
+// share whose operations went missing. The owner really does hold it and this
+// program really does not account for it, so passing it over would be silence
+// where the comparison promises honesty — but calling it MismatchInstrument
+// would send him looking for operations that are not missing. It gets its own
+// kind so the screen can say the other sentence.
+//
+// The exact word "futures" is not what is being pinned here and was not
+// checked against the live API: what decides the answer is that the type is
+// not in brokerInstrumentTypes, and any word outside that table behaves the
+// same way.
+func TestAnAssetThisProgramCannotHoldIsItsOwnKindOfDifference(t *testing.T) {
+	res := CompareHoldings(
+		[]PortfolioPosition{{
+			InstrumentUID:  "uid-futures",
+			FIGI:           "FUTSBRF06250",
+			InstrumentType: "futures",
+			Ticker:         "SBRF-6.25",
+			Quantity:       Quotation{Units: 4},
+		}},
+		nil, nil,
+		byUID(map[string]uuid.UUID{}),
+		nil,
+	)
+
+	if len(res.Mismatches) != 1 {
+		t.Fatalf("mismatches = %+v, want exactly one", res.Mismatches)
+	}
+	m := res.Mismatches[0]
+	if m.Kind != MismatchUnsupported {
+		t.Errorf("kind = %q, want %q", m.Kind, MismatchUnsupported)
+	}
+	if m.Label != "SBRF-6.25" {
+		t.Errorf("label = %q, want the ticker a person recognizes", m.Label)
+	}
+	if !m.Broker.Equal(decimal.NewFromInt(4)) || !m.Journal.IsZero() {
+		t.Errorf("broker/journal = %s/%s, want 4/0", m.Broker, m.Journal)
+	}
+	if res.Status != ReconcileMismatched {
+		t.Errorf("status = %q, want %q — an asset the program cannot hold is still a difference",
+			res.Status, ReconcileMismatched)
+	}
+}
+
+// TestBrokerLabelPrefersWhatAPersonReads: the fallbacks, in order. A row about
+// a position that is not ours is the one row on this screen with no name of
+// OURS behind it, so the broker's own naming is all there is — and an
+// instrument_uid is a bare UUID.
+func TestBrokerLabelPrefersWhatAPersonReads(t *testing.T) {
+	cases := []struct {
+		name string
+		p    PortfolioPosition
+		want string
+	}{
+		{
+			"ticker wins",
+			PortfolioPosition{Ticker: "SBER", FIGI: "BBG004730N88", InstrumentUID: "uid", InstrumentType: "share"},
+			"SBER",
+		},
+		{
+			"figi when there is no ticker",
+			PortfolioPosition{FIGI: "BBG004730N88", InstrumentUID: "uid", InstrumentType: "share"},
+			"BBG004730N88",
+		},
+		{
+			"the uid when there is no figi either",
+			PortfolioPosition{InstrumentUID: "uid", InstrumentType: "share"},
+			"uid",
+		},
+		{
+			"the type when the broker identified nothing",
+			PortfolioPosition{InstrumentType: "option"},
+			"option",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := brokerLabel(c.p); got != c.want {
+				t.Errorf("brokerLabel = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestAPositionWhoseUIDDriftedIsFoundByItsFIGI pins the second identifier.
+// The broker's instrument_uid on old operations has been seen to change,
+// which is why the resolver looks its map up by instrument_uid and then by
+// figi — so the operations behind this position were matched by figi and the
+// journal is in perfect order. A comparison that knew only the first
+// identifier would answer with TWO false lines: a phantom under the new uid
+// and a "the broker has none of it" under our own instrument.
+func TestAPositionWhoseUIDDriftedIsFoundByItsFIGI(t *testing.T) {
+	inst := uuid.New()
+	res := CompareHoldings(
+		[]PortfolioPosition{{
+			InstrumentUID:  "uid-sber-NEW",
+			FIGI:           "BBG004730N88",
+			InstrumentType: "share",
+			Ticker:         "SBER",
+			Quantity:       Quotation{Units: 100},
+		}},
+		nil,
+		[]operation.Operation{
+			aCashEntry(operation.TypeDeposit, 100_000, "RUB"),
+			aBuy(inst, "100", -100_000, 0, "RUB"),
+		},
+		InstrumentIndex{
+			ByUID:  map[string]uuid.UUID{"uid-sber-OLD": inst},
+			ByFIGI: map[string]uuid.UUID{"BBG004730N88": inst},
+		},
+		map[uuid.UUID]string{inst: "SBER"},
+	)
+
+	if res.Status != ReconcileMatched {
+		t.Fatalf("status = %q, want %q — 100 against 100, matched by figi after the uid drifted: %+v",
+			res.Status, ReconcileMatched, res.Mismatches)
+	}
+}
+
+// TestTheUIDIsTriedBeforeTheFIGI: the order is the resolver's own
+// ((*Resolver).lookupMap), so a position and the operations behind it resolve
+// to the same instrument. Both identifiers hit here, and they name different
+// instruments, so which one wins is visible.
+func TestTheUIDIsTriedBeforeTheFIGI(t *testing.T) {
+	byTheUID, byTheFIGI := uuid.New(), uuid.New()
+	res := CompareHoldings(
+		[]PortfolioPosition{{
+			InstrumentUID: "uid", FIGI: "figi", InstrumentType: "share", Ticker: "SBER",
+			Quantity: Quotation{Units: 1},
+		}},
+		nil, nil,
+		InstrumentIndex{
+			ByUID:  map[string]uuid.UUID{"uid": byTheUID},
+			ByFIGI: map[string]uuid.UUID{"figi": byTheFIGI},
+		},
+		map[uuid.UUID]string{byTheUID: "BY-UID", byTheFIGI: "BY-FIGI"},
+	)
+
+	if len(res.Mismatches) != 1 {
+		t.Fatalf("mismatches = %+v, want exactly one", res.Mismatches)
+	}
+	if got := res.Mismatches[0].InstrumentID; got == nil || *got != byTheUID {
+		t.Errorf("instrument = %v, want the one found by instrument_uid (%v)", got, byTheUID)
+	}
+}
+
+// TestAPositionWithNoIdentifiersMatchesNothing: an entry under "" in either
+// map would answer for every position that arrived without that identifier,
+// resolving them all to a single instrument.
+func TestAPositionWithNoIdentifiersMatchesNothing(t *testing.T) {
+	inst := uuid.New()
+	_, ok := InstrumentIndex{
+		ByUID:  map[string]uuid.UUID{"": inst},
+		ByFIGI: map[string]uuid.UUID{"": inst},
+	}.lookup(PortfolioPosition{InstrumentType: "share", Quantity: Quotation{Units: 1}})
+
+	if ok {
+		t.Error("a position carrying no identifier at all was matched to an instrument")
 	}
 }
 
@@ -213,7 +449,7 @@ func TestAPositionTheBrokerDoesNotReportIsAMismatch(t *testing.T) {
 			aCashEntry(operation.TypeDeposit, 5_000, "RUB"),
 			aBuy(inst, "5", -5_000, 0, "RUB"),
 		},
-		map[string]uuid.UUID{"uid-sber": inst},
+		byUID(map[string]uuid.UUID{"uid-sber": inst}),
 		map[uuid.UUID]string{inst: "SBER"},
 	)
 
@@ -245,7 +481,7 @@ func TestAClosedPositionIsNotAMismatch(t *testing.T) {
 			aBuy(inst, "10", -10_000, 0, "RUB"),
 			aSell(inst, "10", 11_000, 0, "RUB"),
 		},
-		map[string]uuid.UUID{"uid-sber": inst},
+		byUID(map[string]uuid.UUID{"uid-sber": inst}),
 		map[uuid.UUID]string{inst: "SBER"},
 	)
 
@@ -262,7 +498,7 @@ func TestAnInstrumentWithoutALabelIsNamedByItsID(t *testing.T) {
 		[]PortfolioPosition{{InstrumentUID: "uid-sber", Quantity: Quotation{Units: 1}}},
 		nil,
 		nil,
-		map[string]uuid.UUID{"uid-sber": inst},
+		byUID(map[string]uuid.UUID{"uid-sber": inst}),
 		nil,
 	)
 
@@ -330,7 +566,7 @@ func TestCashCountsFreeAndBlockedTogether(t *testing.T) {
 			aCashEntry(operation.TypeDeposit, 1_000_000, "RUB"),
 			aCashEntry(operation.TypeWithdrawal, -100_010, "RUB"),
 		},
-		nil, nil,
+		InstrumentIndex{}, nil,
 	)
 
 	if res.Status != ReconcileMatched {
@@ -343,7 +579,7 @@ func TestACurrencyMismatchCarriesBothFigures(t *testing.T) {
 		nil,
 		[]MoneyBalance{{Currency: "RUB", Value: rub("9000.00")}},
 		[]operation.Operation{aCashEntry(operation.TypeDeposit, 899_990, "RUB")},
-		nil, nil,
+		InstrumentIndex{}, nil,
 	)
 
 	if len(res.Mismatches) != 1 {
@@ -378,7 +614,7 @@ func TestACurrencyOnlyTheJournalKnowsIsAMismatch(t *testing.T) {
 		nil,
 		[]MoneyBalance{{Currency: "RUB", Value: rub("0")}},
 		[]operation.Operation{aCashEntry(operation.TypeDeposit, 4_200, "USD")},
-		nil, nil,
+		InstrumentIndex{}, nil,
 	)
 
 	if len(res.Mismatches) != 1 {
@@ -390,8 +626,17 @@ func TestACurrencyOnlyTheJournalKnowsIsAMismatch(t *testing.T) {
 	}
 }
 
+// TestMismatchesComeOutInAStableOrder must exercise the half of the walk that
+// is unstable to mean anything: the differences found by iterating the
+// ENGINE'S POSITIONS, which come out of a Go map whose iteration order is
+// randomized on purpose. CCC and DDD are there for that — two instruments the
+// journal holds and the broker does not report — because with the journal
+// side empty the engine's map is empty too, that loop never runs, and the
+// test would pin the order of the broker's slice alone, which was never in
+// doubt.
 func TestMismatchesComeOutInAStableOrder(t *testing.T) {
 	instA, instB := uuid.New(), uuid.New()
+	instC, instD := uuid.New(), uuid.New()
 	res := CompareHoldings(
 		[]PortfolioPosition{
 			{InstrumentUID: "uid-b", Quantity: Quotation{Units: 2}},
@@ -401,16 +646,22 @@ func TestMismatchesComeOutInAStableOrder(t *testing.T) {
 			{Currency: "USD", Value: rub("1.00")},
 			{Currency: "RUB", Value: rub("1.00")},
 		},
-		nil,
-		map[string]uuid.UUID{"uid-a": instA, "uid-b": instB},
-		map[uuid.UUID]string{instA: "AAA", instB: "BBB"},
+		[]operation.Operation{
+			aBuy(instC, "3", -300, 0, "RUB"),
+			aBuy(instD, "4", -400, 0, "RUB"),
+		},
+		byUID(map[string]uuid.UUID{"uid-a": instA, "uid-b": instB}),
+		map[uuid.UUID]string{instA: "AAA", instB: "BBB", instC: "CCC", instD: "DDD"},
 	)
 
 	var got []string
 	for _, m := range res.Mismatches {
 		got = append(got, m.Kind+":"+m.Label)
 	}
-	want := []string{"currency:RUB", "currency:USD", "instrument:AAA", "instrument:BBB"}
+	want := []string{
+		"currency:RUB", "currency:USD",
+		"instrument:AAA", "instrument:BBB", "instrument:CCC", "instrument:DDD",
+	}
 	if len(got) != len(want) {
 		t.Fatalf("mismatches = %v, want %v", got, want)
 	}
@@ -440,7 +691,7 @@ func TestAJournalTheEngineRefusesIsNotCheckedRatherThanMatched(t *testing.T) {
 	res := CompareHoldings(
 		[]PortfolioPosition{{InstrumentUID: "uid-sber", Quantity: Quotation{Units: 1}}},
 		nil, journal,
-		map[string]uuid.UUID{"uid-sber": inst},
+		byUID(map[string]uuid.UUID{"uid-sber": inst}),
 		map[uuid.UUID]string{inst: "SBER"},
 	)
 
@@ -463,9 +714,30 @@ type markedBalance struct {
 	amountMinor        int64
 }
 
+// recordingMarker stands in for *account.Store: it answers what currency the
+// account is kept in and records the marks written to it.
 type recordingMarker struct {
-	marks []markedBalance
-	err   error
+	// currency is what the account is kept in — the thing that decides
+	// whether the broker's rubles may be filed as its mark at all.
+	currency string
+	marks    []markedBalance
+	// err is what SetBalance refuses with; readErr is what ByID refuses with,
+	// which is this program's own database failing before any mark is written.
+	err, readErr error
+}
+
+// newMarker is a marker over an account kept in rubles, which is what a link
+// of this importer is required to name. Tests about the requirement set
+// currency themselves.
+func newMarker() *recordingMarker { return &recordingMarker{currency: "RUB"} }
+
+func (m *recordingMarker) ByID(_ context.Context, spaceID, id uuid.UUID) (account.WithBalance, error) {
+	if m.readErr != nil {
+		return account.WithBalance{}, m.readErr
+	}
+	return account.WithBalance{
+		Account: account.Account{ID: id, SpaceID: spaceID, Currency: m.currency},
+	}, nil
 }
 
 func (m *recordingMarker) SetBalance(_ context.Context, spaceID, accountID uuid.UUID, asOf time.Time, amountMinor int64) error {
@@ -522,7 +794,7 @@ func TestReconcileLinkMarksTheBalanceWithTheBrokersOwnRubles(t *testing.T) {
 	})
 	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
 
-	marker := &recordingMarker{}
+	marker := newMarker()
 	r := NewReconciler(f.store, fakeJournal{ops: []operation.Operation{
 		aCashEntry(operation.TypeDeposit, 1_000_000, "RUB"),
 		aBuy(inst, "100", -100_000, 10, "RUB"),
@@ -556,6 +828,43 @@ func TestReconcileLinkMarksTheBalanceWithTheBrokersOwnRubles(t *testing.T) {
 	}
 }
 
+// TestReconcileLinkAgreesWithAnAccountThatOnlyHoldsCash runs the owner's
+// simplest possible case end to end, through the client, from the response a
+// LIVE sandbox account actually returned: opened, topped up with 50 000 ₽,
+// nothing bought. The portfolio comes back holding one position — the rubles
+// themselves, of type "currency" — and the run must say the two sides agree.
+//
+// Before the securities side learned to tell cash from paper this returned
+// "differs" with a phantom position labelled by a UUID, on an account whose
+// whole history is one deposit. That is the complaint the whole import was
+// written to answer, reproduced by the import itself.
+func TestReconcileLinkAgreesWithAnAccountThatOnlyHoldsCash(t *testing.T) {
+	f := newFixture(t)
+
+	srv, _ := serve(t, map[string]route{
+		portfolioPath: {status: http.StatusOK, body: readFixture(t, "portfolio_cash_only.json")},
+		positionsPath: {status: http.StatusOK, body: []byte(
+			`{"money":[{"currency":"rub","units":"50000","nano":0}]}`)},
+	})
+	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
+
+	marker := newMarker()
+	r := NewReconciler(f.store, fakeJournal{ops: []operation.Operation{
+		aCashEntry(operation.TypeDeposit, 5_000_000, "RUB"),
+	}}, marker, nil)
+
+	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
+	if err != nil {
+		t.Fatalf("ReconcileLink: %v", err)
+	}
+	if res.Status != ReconcileMatched {
+		t.Fatalf("status = %q, want %q: %+v", res.Status, ReconcileMatched, res.Mismatches)
+	}
+	if len(marker.marks) != 1 || marker.marks[0].amountMinor != 5_000_000 {
+		t.Errorf("marks = %+v, want one of 5000000", marker.marks)
+	}
+}
+
 // TestReconcileLinkSaysNotCheckedWhenThePortfolioIsUnavailable is the other
 // half of the same honesty: a broker that did not answer leaves the run
 // saying "not checked", with the error going out and NO balance mark written
@@ -568,7 +877,7 @@ func TestReconcileLinkSaysNotCheckedWhenThePortfolioIsUnavailable(t *testing.T) 
 	})
 	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
 
-	marker := &recordingMarker{}
+	marker := newMarker()
 	r := NewReconciler(f.store, fakeJournal{}, marker, nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
@@ -596,7 +905,7 @@ func TestReconcileLinkSaysNotCheckedWhenTheCashIsUnavailable(t *testing.T) {
 	})
 	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
 
-	marker := &recordingMarker{}
+	marker := newMarker()
 	r := NewReconciler(f.store, fakeJournal{}, marker, nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
@@ -626,7 +935,7 @@ func TestReconcileLinkMarksTheBalanceEvenWhenTheSidesDisagree(t *testing.T) {
 	})
 	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
 
-	marker := &recordingMarker{}
+	marker := newMarker()
 	r := NewReconciler(f.store, fakeJournal{}, marker, nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
@@ -646,13 +955,177 @@ func TestReconcileLinkRefusesALinkOfAnotherConnection(t *testing.T) {
 	other := f.link
 	other.ConnectionID = uuid.New()
 
-	r := NewReconciler(f.store, fakeJournal{}, &recordingMarker{}, nil)
+	r := NewReconciler(f.store, fakeJournal{}, newMarker(), nil)
 	res, err := r.ReconcileLink(f.ctx, NewClient(nil, "", "token", nil), f.conn, other)
 	if !errors.Is(err, ErrLinkNotInConnection) {
 		t.Fatalf("error = %v, want %v", err, ErrLinkNotInConnection)
 	}
 	if res.Status != ReconcileNotChecked {
 		t.Errorf("status = %q, want %q", res.Status, ReconcileNotChecked)
+	}
+}
+
+// TestReconcileLinkRefusesALinkOfAnotherSpace: the link names the space its
+// journal is read from and its balance mark is filed under, so a link and a
+// connection that disagree about it would check one household's broker
+// account against another household's account. The client here has no server
+// behind it — reaching one would already be the failure.
+func TestReconcileLinkRefusesALinkOfAnotherSpace(t *testing.T) {
+	f := newFixture(t)
+	other := f.link
+	other.SpaceID = uuid.New()
+
+	marker := newMarker()
+	r := NewReconciler(f.store, fakeJournal{}, marker, nil)
+	res, err := r.ReconcileLink(f.ctx, NewClient(nil, "", "token", nil), f.conn, other)
+	if !errors.Is(err, ErrLinkOutsideSpace) {
+		t.Fatalf("error = %v, want %v", err, ErrLinkOutsideSpace)
+	}
+	if res.Status != ReconcileNotChecked {
+		t.Errorf("status = %q, want %q", res.Status, ReconcileNotChecked)
+	}
+	if len(marker.marks) != 0 {
+		t.Errorf("marks = %+v, want none", marker.marks)
+	}
+}
+
+// TestReconcileLinkMarksNothingWhenOurOwnJournalCannotBeRead pins the last
+// clause of ReconcileLink's promise about the mark: it is not written when
+// this program's own database refused a read on the way. A broker figure
+// nobody could compare anything against is still no reason to fail silently,
+// so the run says "not checked" and the previous mark is left standing.
+//
+// This is NOT the same case as a journal the engine refuses (which does get a
+// mark, since the broker's statement is true regardless): here the journal was
+// never read at all.
+func TestReconcileLinkMarksNothingWhenOurOwnJournalCannotBeRead(t *testing.T) {
+	f := newFixture(t)
+
+	srv, _ := serve(t, map[string]route{
+		portfolioPath: {status: http.StatusOK, body: []byte(`{"positions":[]}`)},
+		positionsPath: {status: http.StatusOK, body: []byte(
+			`{"money":[{"currency":"rub","units":"7","nano":0}]}`)},
+	})
+	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
+
+	dbDown := errors.New("connection refused")
+	marker := newMarker()
+	r := NewReconciler(f.store, fakeJournal{err: dbDown}, marker, nil)
+
+	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
+	if !errors.Is(err, dbDown) {
+		t.Fatalf("error = %v, want the database's own refusal", err)
+	}
+	if res.Status != ReconcileNotChecked {
+		t.Errorf("status = %q, want %q", res.Status, ReconcileNotChecked)
+	}
+	if len(marker.marks) != 0 {
+		t.Errorf("marks = %+v, want none: nothing was compared and nothing is marked", marker.marks)
+	}
+}
+
+// TestReconcileLinkRefusesToMarkANonRubleAccount pins the precondition this
+// program used to only write down. The mark is a bare int64 whose currency is
+// the account's own, and the figure being filed is the broker's RUBLES — so
+// putting it on an account kept in anything else would file one currency's
+// number under another's name, and nothing on the screen would say so. The
+// refusal is loud and the mark is not written.
+func TestReconcileLinkRefusesToMarkANonRubleAccount(t *testing.T) {
+	f := newFixture(t)
+
+	srv, _ := serve(t, map[string]route{
+		portfolioPath: {status: http.StatusOK, body: []byte(`{"positions":[]}`)},
+		positionsPath: {status: http.StatusOK, body: []byte(
+			`{"money":[{"currency":"rub","units":"8000","nano":0}]}`)},
+	})
+	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
+
+	marker := newMarker()
+	marker.currency = "USD"
+	r := NewReconciler(f.store, fakeJournal{}, marker, nil)
+
+	_, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
+	if !errors.Is(err, ErrAccountNotInRubles) {
+		t.Fatalf("error = %v, want %v", err, ErrAccountNotInRubles)
+	}
+	if len(marker.marks) != 0 {
+		t.Errorf("marks = %+v, want none: 8 000 ₽ under a dollar account is a wrong number", marker.marks)
+	}
+}
+
+// TestABalanceMarkFinerThanAKopeckIsRefusedForWhatItIs: the substance of the
+// refusal — a sum finer than a minor unit, which this program will not round
+// into place — is the projection's, but the ACTION that failed is not.
+// Nothing was being projected here; a balance mark was being written, and
+// that is what the refusal has to say. A caption naming the wrong action is
+// the failure this project has been bitten by four times.
+func TestABalanceMarkFinerThanAKopeckIsRefusedForWhatItIs(t *testing.T) {
+	f := newFixture(t)
+
+	srv, _ := serve(t, map[string]route{
+		portfolioPath: {status: http.StatusOK, body: []byte(`{"positions":[]}`)},
+		// 8 000,005 ₽ — half a kopeck, which no whole number of kopecks holds.
+		positionsPath: {status: http.StatusOK, body: []byte(
+			`{"money":[{"currency":"rub","units":"8000","nano":5000000}]}`)},
+	})
+	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
+
+	marker := newMarker()
+	r := NewReconciler(f.store, fakeJournal{}, marker, nil)
+
+	_, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
+	if !errors.Is(err, ErrBalanceMarkRefused) {
+		t.Fatalf("error = %v, want %v", err, ErrBalanceMarkRefused)
+	}
+	if strings.Contains(err.Error(), "not projected") {
+		t.Errorf("error = %q, but nothing was being projected: a balance mark was being written", err)
+	}
+	if !strings.Contains(err.Error(), "finer than a minor unit") {
+		t.Errorf("error = %q, want it to keep the reason the sum could not be stored", err)
+	}
+	if len(marker.marks) != 0 {
+		t.Errorf("marks = %+v, want none", marker.marks)
+	}
+}
+
+// TestBothRefusalsSurviveWhenBothHappened: our journal not computing and the
+// mark failing to be written are two independent accidents with two different
+// remedies. Returning only the second would leave whoever has to act on this
+// looking at half of what went wrong.
+func TestBothRefusalsSurviveWhenBothHappened(t *testing.T) {
+	f := newFixture(t)
+	inst := f.seedMapped(t, "uid-sber", "SBER")
+
+	srv, _ := serve(t, map[string]route{
+		portfolioPath: {status: http.StatusOK, body: []byte(`{"positions":[]}`)},
+		positionsPath: {status: http.StatusOK, body: []byte(
+			`{"money":[{"currency":"rub","units":"1","nano":0}]}`)},
+	})
+	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
+
+	// More sold than was ever held: the engine refuses this journal outright.
+	journal := []operation.Operation{
+		aBuy(inst, "1", -1_000, 0, "RUB"),
+		aSell(inst, "10", 11_000, 0, "RUB"),
+	}
+	if _, err := portfolio.Compute(journal); err == nil {
+		t.Fatal("this journal is supposed to be one the engine refuses; it did not")
+	}
+
+	markFailed := errors.New("the balance table is locked")
+	marker := newMarker()
+	marker.err = markFailed
+	r := NewReconciler(f.store, fakeJournal{ops: journal}, marker, nil)
+
+	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
+	if res.Status != ReconcileNotChecked {
+		t.Errorf("status = %q, want %q", res.Status, ReconcileNotChecked)
+	}
+	if !errors.Is(err, markFailed) {
+		t.Errorf("error = %v, want it to carry the failure to write the mark", err)
+	}
+	if !strings.Contains(err.Error(), "does not compute") {
+		t.Errorf("error = %q, want it to carry the engine's refusal as well — it is why nothing was checked", err)
 	}
 }
 
@@ -672,18 +1145,75 @@ func TestReconcileLinkReadsTheMapOfItsOwnConnection(t *testing.T) {
 		t.Fatalf("seed other map: %v", err)
 	}
 
-	byUID, labels, err := f.store.instrumentMap(f.ctx, f.conn.ID)
+	index, labels, err := f.store.instrumentMap(f.ctx, f.conn.ID)
 	if err != nil {
 		t.Fatalf("instrumentMap: %v", err)
 	}
-	if _, ok := byUID["uid-elsewhere"]; ok {
-		t.Errorf("map = %v, want no row of the other connection", byUID)
+	if _, ok := index.ByUID["uid-elsewhere"]; ok {
+		t.Errorf("map = %v, want no row of the other connection", index.ByUID)
 	}
-	if byUID["uid-sber"] != inst {
-		t.Errorf("uid-sber = %v, want %v", byUID["uid-sber"], inst)
+	if index.ByUID["uid-sber"] != inst {
+		t.Errorf("uid-sber = %v, want %v", index.ByUID["uid-sber"], inst)
 	}
 	if labels[inst] != "SBER" {
 		t.Errorf("label = %q, want %q", labels[inst], "SBER")
+	}
+}
+
+// TestTheInstrumentIndexCarriesTheFIGIToo: the second identifier is read out
+// of the same table the resolver writes, because a drifted instrument_uid is
+// exactly what it is there for. An index built from the first column alone
+// would leave the reconciliation unable to match a position the resolver
+// itself matches without trouble.
+func TestTheInstrumentIndexCarriesTheFIGIToo(t *testing.T) {
+	f := newFixture(t)
+	inst := f.seedMapped(t, "uid-sber", "SBER")
+
+	index, _, err := f.store.instrumentMap(f.ctx, f.conn.ID)
+	if err != nil {
+		t.Fatalf("instrumentMap: %v", err)
+	}
+	if index.ByFIGI["BBG004730N88"] != inst {
+		t.Errorf("figi BBG004730N88 = %v, want %v", index.ByFIGI["BBG004730N88"], inst)
+	}
+}
+
+// TestAFIGITwoRowsDisagreeAboutAnswersForNeither: when two rows of one
+// connection carry one figi against DIFFERENT instruments there is no honest
+// answer to give, and this index gives none — the position falls through to a
+// difference, which is what "we could not match this" is supposed to look
+// like. Keeping whichever row arrived last would be worse than that: rows come
+// back in no particular order, so the answer would depend on how the database
+// felt like returning them, and one run would match the position where the
+// next reported it, with nothing changed in between.
+func TestAFIGITwoRowsDisagreeAboutAnswersForNeither(t *testing.T) {
+	f := newFixture(t)
+	first := f.seedMapped(t, "uid-first", "SBER")
+
+	other, err := instrument.NewStore(f.pool).Create(f.ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Другая бумага", Ticker: "OTHER",
+		ISIN: "RU0009029541", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("seed catalog: %v", err)
+	}
+	if err := f.store.saveMap(f.ctx, f.conn.ID, other.ID,
+		InstrumentRef{InstrumentUID: "uid-second", FIGI: "BBG004730N88"}, other.ISIN, other.Ticker); err != nil {
+		t.Fatalf("seed second map row: %v", err)
+	}
+
+	index, _, err := f.store.instrumentMap(f.ctx, f.conn.ID)
+	if err != nil {
+		t.Fatalf("instrumentMap: %v", err)
+	}
+	if got, ok := index.ByFIGI["BBG004730N88"]; ok {
+		t.Errorf("figi BBG004730N88 = %v, want no answer at all: two rows claim it (%v and %v)",
+			got, first, other.ID)
+	}
+	// The instrument_uid side is untouched — each row still answers under its
+	// own, which is the identifier the uniqueness of the table is built on.
+	if index.ByUID["uid-first"] != first || index.ByUID["uid-second"] != other.ID {
+		t.Errorf("byUID = %v, want both rows under their own instrument_uid", index.ByUID)
 	}
 }
 
@@ -731,12 +1261,12 @@ func TestAMapRowWithoutAnInstrumentUIDAnswersForNothing(t *testing.T) {
 		t.Fatalf("seed map row: %v", err)
 	}
 
-	byUID, _, err := f.store.instrumentMap(f.ctx, f.conn.ID)
+	index, _, err := f.store.instrumentMap(f.ctx, f.conn.ID)
 	if err != nil {
 		t.Fatalf("instrumentMap: %v", err)
 	}
-	if _, ok := byUID[""]; ok {
-		t.Errorf("map = %v, want no answer under the empty identifier", byUID)
+	if _, ok := index.ByUID[""]; ok {
+		t.Errorf("map = %v, want no answer under the empty identifier", index.ByUID)
 	}
 }
 
