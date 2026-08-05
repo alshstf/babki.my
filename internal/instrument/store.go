@@ -109,7 +109,7 @@ func (s *Store) ByID(ctx context.Context, id uuid.UUID) (Instrument, error) {
 //
 // isin == "" returns pgx.ErrNoRows without querying at all, rather than
 // running the same comparison against an empty string. isin has no NOT
-// NULL/non-empty constraint, so `WHERE isin = ''` would match every
+// NULL/non-empty constraint, so `WHERE isin = ”` would match every
 // instrument nobody has ever set one on and hand back whichever is oldest —
 // a plausible-looking instrument that answers nothing about the empty ISIN
 // the caller asked for. Refusing before the query keeps that state

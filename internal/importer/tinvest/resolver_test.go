@@ -91,7 +91,10 @@ type raceCatalog struct {
 func (c *raceCatalog) Create(ctx context.Context, inst instrument.Instrument) (instrument.Instrument, error) {
 	if c.raceOnTicker != "" && inst.Ticker == c.raceOnTicker {
 		c.raceOnTicker = ""
-		if _, err := c.countingCatalog.Store.Create(ctx, c.racedWinner); err != nil {
+		// Straight to the embedded *instrument.Store, deliberately past both
+		// wrappers: seeding the winner is the test's own setup, not a call the
+		// resolver made, so it must not show up in createCalls.
+		if _, err := c.Store.Create(ctx, c.racedWinner); err != nil {
 			return instrument.Instrument{}, fmt.Errorf("raceCatalog: seed the winning row: %w", err)
 		}
 	}
@@ -810,7 +813,7 @@ func TestResolve_TickerRaceWinnerWithAContradictingISINIsRefused(t *testing.T) {
 	if catalog.updateCalls != 0 {
 		t.Errorf("catalog.Update called %d times, want 0 — the row that won the race is a different security and must not be written to", catalog.updateCalls)
 	}
-	winner, err := catalog.Store.ByTickerTradable(f.ctx, "T")
+	winner, err := catalog.ByTickerTradable(f.ctx, "T")
 	if err != nil {
 		t.Fatalf("ByTickerTradable: %v", err)
 	}
