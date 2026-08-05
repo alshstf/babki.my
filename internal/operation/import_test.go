@@ -2,6 +2,7 @@ package operation_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,12 +106,25 @@ func TestApplyImportDeltaIsolatesTheCandidateThatCannotApply(t *testing.T) {
 	}
 }
 
+// TestApplyImportDeltaRefusesASplitFromTheImporter pins that a split is
+// refused UNCONDITIONALLY by the import path itself (validateImported's own
+// TypeSplit case) — not merely because validateByType happens to refuse the
+// same candidate for some unrelated reason of its own.
+//
+// The candidate below carries no instrument, which validateByType's TypeSplit
+// case refuses first and for a completely different reason ("split requires
+// an instrument", checked before it ever looks at Source). Checking only
+// errors.Is(err, family.ErrValidation) cannot tell the two apart — both are
+// ErrValidation — so if validateImported ever stopped naming splits itself and
+// fell through to validateByType, this candidate would still be refused, just
+// for the wrong reason. The message is checked for the one phrase only the
+// import path's own refusal carries.
 func TestApplyImportDeltaRefusesASplitFromTheImporter(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
 
 	split := imported(operation.Operation{
-		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeSplit,
+		AccountID: f.accountID, Type: operation.TypeSplit,
 		OccurredOn: date("2026-07-01"), SplitRatio: dec("2"), AmountMinor: 0,
 		Currency: "RUB",
 	}, "op-split")
@@ -126,6 +140,12 @@ func TestApplyImportDeltaRefusesASplitFromTheImporter(t *testing.T) {
 	}
 	if len(refused) != 1 || !errors.Is(refused[0].Err, family.ErrValidation) {
 		t.Fatalf("refused = %+v, want one ErrValidation refusal", refused)
+	}
+	const reason = "does not record splits"
+	if !strings.Contains(refused[0].Err.Error(), reason) {
+		t.Errorf("refusal reason = %v, want it to name %q — the import path's own unconditional reason, "+
+			"not whatever validateByType would have said about this particular candidate (it carries no "+
+			"instrument, which validateByType refuses first, for an unrelated reason)", refused[0].Err, reason)
 	}
 }
 
@@ -299,6 +319,95 @@ func TestApplyImportDeltaLoneTransferInArrivesUndated(t *testing.T) {
 	}
 	if lots[0].CostMinor != 100_000 {
 		t.Errorf("lot cost = %d, want the declared basis 100000", lots[0].CostMinor)
+	}
+}
+
+// TestApplyImportDeltaTransfersPartOfAnUndatedLot covers a composition only
+// the import path can produce and nothing had exercised before: a lone
+// transfer_in with no acquisition date (see
+// TestApplyImportDeltaLoneTransferInArrivesUndated — shares that arrived from
+// a broker outside this program, which never says when they were bought),
+// followed by an ordinary import transfer PAIR that moves part of that very
+// lot on to a third account.
+//
+// The path is legal — migration 0008 dropped
+// operation_transfer_lots.acquired_on's NOT NULL, and portfolio.CheckTransferLots
+// admits an empty date outright — but nothing had reached it: the manual path
+// can only ever produce an undated lot through CostMinorOverride, never
+// through a transfer's own FIFO release, so every existing test of a real
+// release (TestApplyImportDeltaPairCarriesTheDatesItMoved,
+// TestApplyImportDeltaLoneTransferOutFreezesWhatLeft) starts from a dated buy.
+// It matters because a lot with no acquisition date is FIRST out of the FIFO
+// queue (see the portfolio package's own doc) — a mistake in carrying the
+// absence through a second transfer would misorder every later sale that
+// touches shares mirrored in from another broker.
+func TestApplyImportDeltaTransfersPartOfAnUndatedLot(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	arrival := imported(operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeTransferIn,
+		OccurredOn: date("2026-07-01"), Quantity: dec("10"), AmountMinor: 100_000,
+		Currency: "RUB",
+	}, "op-arrival")
+	applied, refused, err := svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{
+		Add: []operation.Operation{arrival},
+	})
+	if err != nil || len(refused) != 0 || len(applied) != 1 {
+		t.Fatalf("seed the undated arrival: applied %d, refused %+v, err %v", len(applied), refused, err)
+	}
+
+	out, in := pairOfLegs(f, uuid.New(), "4", "2026-07-15")
+	applied, refused, err = svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{
+		Add: []operation.Operation{out, in},
+	})
+	if err != nil {
+		t.Fatalf("ApplyImportDelta: %v", err)
+	}
+	if len(refused) != 0 || len(applied) != 2 {
+		t.Fatalf("applied %d, refused %+v, want both legs of the pair applied", len(applied), refused)
+	}
+
+	var storedIn operation.Operation
+	for _, o := range applied {
+		if o.Type == operation.TypeTransferIn {
+			storedIn = o
+		}
+	}
+	if len(storedIn.TransferLots) != 1 {
+		t.Fatalf("arriving leg carries %d pieces, want 1", len(storedIn.TransferLots))
+	}
+	piece := storedIn.TransferLots[0]
+	if piece.AcquiredOn != nil {
+		t.Errorf("piece acquired %s, want unknown — the lot it was released from never knew either",
+			acquired(piece.AcquiredOn))
+	}
+	if !piece.Quantity.Equal(*dec("4")) || piece.CostMinor != 40_000 {
+		t.Errorf("piece = %s/%d, want 4/40000 — a quarter of the arrival's 10 shares and 100000 basis", piece.Quantity, piece.CostMinor)
+	}
+
+	_, source := journalOf(t, f, f.accountID)
+	sourcePos := source[f.sberID]
+	if !sourcePos.Quantity.Equal(*dec("6")) {
+		t.Errorf("source quantity = %s, want 6", sourcePos.Quantity)
+	}
+	if sourcePos.CostMinor != 60_000 {
+		t.Errorf("source cost = %d, want 60000 — the basis left after 40000 of it moved on", sourcePos.CostMinor)
+	}
+	if len(sourcePos.Lots) != 1 || sourcePos.Lots[0].AcquiredOn != nil {
+		t.Errorf("source lot = %+v, want one lot still undated", sourcePos.Lots)
+	}
+
+	_, destination := journalOf(t, f, f.account2ID)
+	destPos := destination[f.sberID]
+	if !destPos.Quantity.Equal(*dec("4")) {
+		t.Errorf("destination quantity = %s, want 4", destPos.Quantity)
+	}
+	if destPos.CostMinor != 40_000 {
+		t.Errorf("destination cost = %d, want 40000", destPos.CostMinor)
+	}
+	if len(destPos.Lots) != 1 || destPos.Lots[0].AcquiredOn != nil {
+		t.Errorf("destination lot = %+v, want one lot still undated — the second broker never learns a date the first one never gave", destPos.Lots)
 	}
 }
 
@@ -760,5 +869,62 @@ func TestApplyImportDeltaFoldsACandidateAfterWhatItsDateAlreadyHolds(t *testing.
 	}
 	if pnl := positions[f.sberID].RealizedPnLMinor; pnl != 20_000 {
 		t.Errorf("realized = %d, want 20000", pnl)
+	}
+}
+
+// TestApplyImportDeltaBasesTimestampsOnWhatSurvivesRemoval pins that the row a
+// delta's own numbering starts AFTER (see base in ApplyImportDelta) is read
+// from the journal as the removals leave it, not as it stood before them. A
+// row this same delta is about to delete must not go on raising that floor —
+// it will not be there to share a date with anything once the delta commits.
+//
+// The seeded pair below makes the two readings disagree by two days: op-young
+// is stamped far in the future and is the one being removed, op-old is
+// stamped in the past and is the one left behind. Basing the floor on the
+// journal before removal would number the replacement row near op-young's
+// stamp, days from now; basing it on what survives numbers it near "now".
+func TestApplyImportDeltaBasesTimestampsOnWhatSurvivesRemoval(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	old := imported(operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit,
+		OccurredOn: date("2026-07-01"), AmountMinor: 1_000, Currency: "RUB",
+	}, "op-old")
+	old.CreatedAt = time.Now().UTC().Add(-24 * time.Hour)
+	young := imported(operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit,
+		OccurredOn: date("2026-07-01"), AmountMinor: 2_000, Currency: "RUB",
+	}, "op-young")
+	young.CreatedAt = time.Now().UTC().Add(48 * time.Hour)
+	stored, err := f.store.ApplyDelta(f.ctx, f.spaceID, []operation.Operation{old, young}, nil, nil)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	var youngID uuid.UUID
+	for _, o := range stored {
+		if o.AmountMinor == 2_000 {
+			youngID = o.ID
+		}
+	}
+
+	replacement := imported(operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit,
+		OccurredOn: date("2026-07-01"), AmountMinor: 3_000, Currency: "RUB",
+	}, "op-new")
+	before := time.Now().UTC()
+	applied, refused, err := svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{
+		Remove: []uuid.UUID{youngID},
+		Add:    []operation.Operation{replacement},
+	})
+	if err != nil {
+		t.Fatalf("ApplyImportDelta: %v", err)
+	}
+	if len(refused) != 0 || len(applied) != 1 {
+		t.Fatalf("applied %d, refused %+v, want the replacement applied", len(applied), refused)
+	}
+	if applied[0].CreatedAt.Before(before) || applied[0].CreatedAt.After(before.Add(time.Minute)) {
+		t.Errorf("new row created_at = %s, want within a minute of %s — the row being removed (stamped 48h ahead) must not raise the floor",
+			applied[0].CreatedAt, before)
 	}
 }

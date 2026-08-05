@@ -820,6 +820,12 @@ func TestApplyDeltaDeletesBeforeItInserts(t *testing.T) {
 // TestApplyDeltaRefusesARemovalItCannotFind pins that "remove these ids" means
 // all of them: a caller that computed its difference against a journal that has
 // since moved must be told, not quietly obeyed in part.
+//
+// The check is against ErrRemovalCountMismatch specifically, not merely
+// err != nil: any error at all used to satisfy this test, which could not
+// tell "the removal did not fully match" apart from an unrelated failure of
+// the write itself — exactly the kind of ambiguity later callers (see
+// Service.ApplyImportDelta) need to be able to rule out.
 func TestApplyDeltaRefusesARemovalItCannotFind(t *testing.T) {
 	f := newFixture(t)
 
@@ -828,11 +834,25 @@ func TestApplyDeltaRefusesARemovalItCannotFind(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	if _, err := f.store.ApplyDelta(f.ctx, f.spaceID, nil,
-		[]uuid.UUID{existing.ID, uuid.New()}, nil); err == nil {
-		t.Fatal("ApplyDelta with an id that is not there: want an error")
+		[]uuid.UUID{existing.ID, uuid.New()}, nil); !errors.Is(err, operation.ErrRemovalCountMismatch) {
+		t.Fatalf("ApplyDelta with an id that is not there: err = %v, want ErrRemovalCountMismatch", err)
 	}
 	if list, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID); err != nil || len(list) != 1 {
 		t.Errorf("journal = %d rows (%v), want the row left alone", len(list), err)
+	}
+}
+
+// TestApplyDeltaNamesAnAccountNotInTheSpace pins the sentinel behind an insert
+// whose account does not belong to the caller's own space — insertSQL's own
+// guard (see its doc), surfaced as a value later callers of ApplyDelta can
+// test for instead of a bare pgx.ErrNoRows that explains nothing on its own.
+func TestApplyDeltaNamesAnAccountNotInTheSpace(t *testing.T) {
+	f := newFixture(t)
+
+	if _, err := f.store.ApplyDelta(f.ctx, uuid.New(),
+		[]operation.Operation{importedDeposit(f, "op-1", "2026-07-01", 1_000)}, nil, nil,
+	); !errors.Is(err, operation.ErrAccountNotInSpace) {
+		t.Fatalf("ApplyDelta into a space the account is not in: err = %v, want ErrAccountNotInSpace", err)
 	}
 }
 

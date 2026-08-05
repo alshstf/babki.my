@@ -140,6 +140,12 @@ func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d Imp
 	// kept is every touched account's journal as the removals leave it — the
 	// ground the candidates are then judged against, and the ground the stored
 	// rows are confirmed against inside the transaction.
+	//
+	// youngest is tracked over that same survivors-only set: a row this delta
+	// is about to delete will not be in any journal by the time the write
+	// commits, so its created_at must not go on raising the floor new rows are
+	// numbered from (see base below) — that would number them after a row that
+	// no longer exists to share a date with anything.
 	kept := make(map[uuid.UUID][]Operation, len(accounts))
 	var youngest time.Time
 	for accountID := range accounts {
@@ -149,9 +155,10 @@ func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d Imp
 		}
 		remaining := make([]Operation, 0, len(journal))
 		for _, o := range journal {
-			if !removeIDs[o.ID] {
-				remaining = append(remaining, o)
+			if removeIDs[o.ID] {
+				continue
 			}
+			remaining = append(remaining, o)
 			if o.CreatedAt.After(youngest) {
 				youngest = o.CreatedAt
 			}
@@ -183,9 +190,10 @@ func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d Imp
 	// distinct is what the read path needs (see Store.ApplyDelta), and
 	// increasing in this order is what makes the order it reads back the order
 	// that was checked here.
-	// The base starts after the youngest row already in the touched journals,
-	// not merely at the current time, so that a candidate always folds AFTER
-	// everything its date already holds — the same place journalWith puts one.
+	// The base starts after the youngest row that SURVIVES this delta in the
+	// touched journals, not merely at the current time, so that a candidate
+	// always folds AFTER everything its date already holds — the same place
+	// journalWith puts one.
 	// The clock alone does not guarantee that: a delta spreads its rows a
 	// microsecond apart, so a large one reaches milliseconds past the moment it
 	// began, and a sync that follows it closely would otherwise start numbering

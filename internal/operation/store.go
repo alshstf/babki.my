@@ -2,6 +2,7 @@ package operation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,6 +12,23 @@ import (
 
 	"babki.my/babki/internal/portfolio"
 )
+
+// ErrAccountNotInSpace means an operation named an account id that insertSQL's
+// own WHERE clause could not find inside the caller's space (see insertSQL's
+// doc: zero rows back means the account is not in the caller's space). Named
+// so a caller can test for it instead of matching a bare pgx.ErrNoRows that,
+// on its own, says nothing about which of the statement's two tables failed
+// to produce a row.
+var ErrAccountNotInSpace = errors.New("account not found in space")
+
+// ErrRemovalCountMismatch means ApplyDelta's own DELETE found fewer rows than
+// removeIDs named. Service.importRemovals already checks every id belongs to
+// this space and is an importer's to remove before ApplyDelta ever runs (see
+// ErrImportContract, the same fault named one layer up), so reaching this in
+// practice means the journal moved between that check and this transaction.
+// Either way, writing the part of the removal that still holds would leave
+// half of a difference computed against a journal that no longer exists.
+var ErrRemovalCountMismatch = errors.New("asked to remove operations that are not all there")
 
 type Store struct{ pool *pgxpool.Pool }
 
@@ -66,7 +84,7 @@ func insertArgs(spaceID uuid.UUID, op Operation, createdAt *time.Time) []any {
 func scanInserted(row pgx.Row) (Operation, error) {
 	created, err := scan(row)
 	if err == pgx.ErrNoRows {
-		return Operation{}, fmt.Errorf("account not found in space: %w", pgx.ErrNoRows)
+		return Operation{}, fmt.Errorf("%w: %w", ErrAccountNotInSpace, pgx.ErrNoRows)
 	}
 	return created, err
 }
@@ -356,8 +374,8 @@ func (s *Store) ApplyDelta(ctx context.Context, spaceID uuid.UUID, add []Operati
 			return nil, fmt.Errorf("apply delta: %w", err)
 		}
 		if int(ct.RowsAffected()) != len(removeIDs) {
-			return nil, fmt.Errorf("apply delta: asked to remove %d operations, found %d",
-				len(removeIDs), ct.RowsAffected())
+			return nil, fmt.Errorf("%w: asked to remove %d operations, found %d",
+				ErrRemovalCountMismatch, len(removeIDs), ct.RowsAffected())
 		}
 	}
 
