@@ -748,6 +748,113 @@ func TestGetAccounts_GenericErrorStatusIsNotErrTokenInvalid(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
+// Errors: 404/50002, the instrument the broker does not have
+// -------------------------------------------------------------------------
+
+// TestInstrumentByUID_404ReturnsErrInstrumentNotFound pins the answer a live
+// gateway gave on 2026-08-05 for an unknown uid: HTTP 404 with
+// {"code":5,"message":"Instrument not found","description":"50002"}. It is
+// what makes "there is no such paper" a different outcome from "the broker
+// could not be reached", and a caller can only refuse one operation instead
+// of a whole run because the two are told apart here.
+func TestInstrumentByUID_404ReturnsErrInstrumentNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"code":5,"message":"Instrument not found","description":"50002"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(srv.Client(), srv.URL, "tok", nil)
+	_, err := c.InstrumentByUID(context.Background(), "uid-nobody-knows")
+	if !errors.Is(err, ErrInstrumentNotFound) {
+		t.Fatalf("InstrumentByUID error = %v, want ErrInstrumentNotFound", err)
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("error = %q, want it to keep the status the broker answered with", err)
+	}
+	if !strings.Contains(err.Error(), "Instrument not found") {
+		t.Errorf("error = %q, want it to keep the body the broker answered with", err)
+	}
+}
+
+// TestInstrumentByUID_404WithEmptyBodyStillReturnsErrInstrumentNotFound: the
+// status alone is enough, exactly as it is for a 401. A gateway that answers
+// 404 with nothing in the body has still said the instrument is not there.
+func TestInstrumentByUID_404WithEmptyBodyStillReturnsErrInstrumentNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(srv.Client(), srv.URL, "tok", nil)
+	_, err := c.InstrumentByUID(context.Background(), "uid-nobody-knows")
+	if !errors.Is(err, ErrInstrumentNotFound) {
+		t.Fatalf("InstrumentByUID error = %v, want ErrInstrumentNotFound", err)
+	}
+}
+
+// TestInstrumentByUID_Description50002UnderAnotherStatusIsStillNotFound is the
+// other half of the same rule the token sentinel already follows: the business
+// code is a statement of its own, whatever status carried it.
+func TestInstrumentByUID_Description50002UnderAnotherStatusIsStillNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"code":5,"message":"Instrument not found","description":50002}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(srv.Client(), srv.URL, "tok", nil)
+	_, err := c.InstrumentByUID(context.Background(), "uid-nobody-knows")
+	if !errors.Is(err, ErrInstrumentNotFound) {
+		t.Fatalf("InstrumentByUID error = %v, want ErrInstrumentNotFound", err)
+	}
+}
+
+// TestInstrumentByUID_GatewayFailureIsNotAMissingInstrument is the boundary
+// that gives the sentinel its meaning. A 500, a 502, a refused connection are
+// all reasons to try again later; if any of them read as "no such
+// instrument", an operation would be marked unreadable for ever because the
+// broker was briefly down.
+func TestInstrumentByUID_GatewayFailureIsNotAMissingInstrument(t *testing.T) {
+	for _, status := range []int{http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte("gateway trouble"))
+		}))
+		c := NewClient(srv.Client(), srv.URL, "tok", nil)
+		_, err := c.InstrumentByUID(context.Background(), "uid-sber")
+		if err == nil {
+			t.Errorf("InstrumentByUID returned no error for a %d response", status)
+		}
+		if errors.Is(err, ErrInstrumentNotFound) {
+			t.Errorf("InstrumentByUID error for a %d = %v, want anything but ErrInstrumentNotFound", status, err)
+		}
+		srv.Close()
+	}
+}
+
+// TestBondNominalByUID_404ReturnsErrInstrumentNotFound: a bond whose passport
+// the broker has and whose nominal it does not is the same news about the same
+// paper, and the caller that refuses one operation over it needs the same
+// sentinel from both calls.
+func TestBondNominalByUID_404ReturnsErrInstrumentNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"code":5,"message":"Instrument not found","description":"50002"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(srv.Client(), srv.URL, "tok", nil)
+	_, err := c.BondNominalByUID(context.Background(), "uid-nobody-knows")
+	if !errors.Is(err, ErrInstrumentNotFound) {
+		t.Fatalf("BondNominalByUID error = %v, want ErrInstrumentNotFound", err)
+	}
+}
+
+// -------------------------------------------------------------------------
 // 429 rate limiting
 // -------------------------------------------------------------------------
 

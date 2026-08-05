@@ -3,6 +3,8 @@ package tinvest
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -254,8 +256,22 @@ func TestRebuildOverAnUnchangedMirrorAsksForNothing(t *testing.T) {
 	if second != (RebuildStats{}) {
 		t.Errorf("second rebuild reported %+v, want a rebuild that changed nothing", second)
 	}
-	for id, now := range f.mirrorVersions(t) {
-		if was := versions[id]; now != was {
+	versionsNow := f.mirrorVersions(t)
+	// The count first: the loop below walks the rows that are there NOW and
+	// looks each one up among the rows that were there BEFORE, so a row the
+	// rebuild deleted would be invisible to it — the missing id is simply never
+	// asked about.
+	if len(versionsNow) != len(versions) {
+		t.Errorf("the mirror holds %d rows after a rebuild that changed nothing, and held %d before",
+			len(versionsNow), len(versions))
+	}
+	for id, now := range versionsNow {
+		was, existed := versions[id]
+		if !existed {
+			t.Errorf("mirror row %s appeared during a rebuild that changed nothing", id)
+			continue
+		}
+		if now != was {
 			t.Errorf("mirror row %s was written again by a rebuild that changed nothing (version %s, was %s)", id, now, was)
 		}
 	}
@@ -376,6 +392,14 @@ func TestRebuildPairsTwoLegsOfOneConnection(t *testing.T) {
 	if out.TransferGroupID == nil || in.TransferGroupID == nil || *out.TransferGroupID != *in.TransferGroupID {
 		t.Fatalf("legs carry groups %v and %v, want one group on both", out.TransferGroupID, in.TransferGroupID)
 	}
+	// The note is the broker's own wording and nothing else. A leg that can be
+	// paired never carries the mark saying its cost is unknown — the projection
+	// puts that only on shares arriving from outside — so there is nothing here
+	// for the pairing to take back, and a mark appearing on a leg whose basis
+	// the journal knows exactly would be a false caption on a true number.
+	if in.Note != "Перевод бумаг между счетами" {
+		t.Errorf("the paired arrival's note is %q, want the broker's own description alone", in.Note)
+	}
 	// The 100 shares cost 27508.25 — the 27500.00 paid plus the 8.25
 	// commission — so five of them carry 1375.4125, and the journal holds whole
 	// minor units. The broker says nothing about any of this; the journal
@@ -470,17 +494,28 @@ func TestRebuildLeavesAnUnpairedLegAlone(t *testing.T) {
 	}
 }
 
-// TestRebuildPairedArrivalDropsTheUnknownBasisNote pins a caption against the
-// number beside it. The projection marks shares arriving from another broker
-// with "the cost is unknown, the broker does not report it" — true of a leg
-// that stands alone, and false the moment the leg is paired, because then the
-// basis is released from the source account and is known exactly.
-func TestRebuildPairedArrivalDropsTheUnknownBasisNote(t *testing.T) {
+// TestRebuildDoesNotPairSharesCrossingToAndFromTheOutsideWorld is the sharp
+// case of "pair only what is one event". Shares leaving for a depositary
+// outside this program and shares arriving from one are, by the names of the
+// broker's own operation types, moves with the OUTSIDE WORLD — so two of them
+// that happen to agree on paper, count and day are two unrelated parcels, and
+// joining them would invent an event nobody reported.
+//
+// What that invention costs is why it is refused rather than merely doubted:
+// the arriving account would be handed a cost basis and acquisition dates
+// released from ANOTHER account's queue — a tax basis that is not its own —
+// and the honest mark saying the cost of those shares is unknown would be
+// wiped off in the bargain.
+//
+// If a broker turns out to report a move between two of the owner's own
+// accounts under these types after all (task 14 asks), the answer is two lone
+// legs with the honest mark on the arrival — the safe side of the mistake.
+func TestRebuildDoesNotPairSharesCrossingToAndFromTheOutsideWorld(t *testing.T) {
 	f := newRebuildFixture(t)
 	second := f.secondLink(t)
 
-	// The same day on both legs — the pairing needs one paper, one count, one
-	// day. The fixtures carry two different days, so the day is stated here.
+	// One paper, one count, one day, two accounts of one connection: everything
+	// the pairing looks at, and it must still refuse.
 	leaving := loadOperationItem(t, "output_securities.json")
 	leaving.Date = time.Date(2026, 6, 1, 8, 0, 0, 0, time.UTC)
 	arriving := loadOperationItem(t, "input_securities.json")
@@ -491,16 +526,65 @@ func TestRebuildPairedArrivalDropsTheUnknownBasisNote(t *testing.T) {
 	f.rebuild(t, f.link, second)
 
 	in := byExternalID(t, f.journalOf(t, second.AccountID), externalIDFor(f.mirrorRow(t, second, "op-insec-1"), 1))
-	if in.TransferGroupID == nil {
-		t.Fatal("the arrival was not paired with the departure, so this test would prove nothing")
+	if in.TransferGroupID != nil {
+		t.Errorf("the arrival was paired into group %s with a departure to a depositary outside this program", in.TransferGroupID)
 	}
-	if in.Note != "Перевод бумаг от другого брокера" {
-		t.Errorf("the paired arrival's note is %q, want the broker's own description alone: its cost basis is known exactly", in.Note)
+	if in.Note != "Перевод бумаг от другого брокера — стоимость приобретения неизвестна: брокер её не передаёт" {
+		t.Errorf("the arrival's note is %q, want the mark saying its cost is unknown — nobody here knows what those shares cost", in.Note)
+	}
+	if in.AmountMinor != 0 {
+		t.Errorf("the arrival declares a basis of %d, want 0 — a basis taken from the other account's queue would be somebody else's",
+			in.AmountMinor)
+	}
+	out := byExternalID(t, f.journalOf(t, f.accountID), externalIDFor(f.mirrorRow(t, f.link, "op-outsec-1"), 1))
+	if out.TransferGroupID != nil {
+		t.Errorf("the departure was paired into group %s", out.TransferGroupID)
 	}
 	// 40 of the 100 shares that cost 27508.25 — the payment plus the
-	// commission — is 11003.30.
-	if in.AmountMinor != 1_100_330 {
-		t.Errorf("the arrival carries a basis of %d, want 1100330", in.AmountMinor)
+	// commission — is 11003.30. The departing leg gives up its basis whether or
+	// not anything is paired with it.
+	if out.AmountMinor != 1_100_330 {
+		t.Errorf("the departure moved %d, want 1100330", out.AmountMinor)
+	}
+	if len(in.TransferLots) != 0 {
+		t.Errorf("the arrival carries %d lots, want none — no parcel was released to it", len(in.TransferLots))
+	}
+}
+
+// TestRebuildLeavesLegsOfDifferentCurrenciesAlone is the mild-failure case of
+// the pairing key. The write path requires the two legs of one transfer to
+// agree on currency as much as on paper, count and day (operation.pairedLegs),
+// and it does not refuse a pair politely: it refuses the WHOLE delta, so a
+// pairing this code made wrongly would cost the connection every other
+// operation in it, on this rebuild and on every rebuild after — with no
+// unparsed row anywhere naming a cause.
+func TestRebuildLeavesLegsOfDifferentCurrenciesAlone(t *testing.T) {
+	f := newRebuildFixture(t)
+	second := f.secondLink(t)
+
+	arriving := loadOperationItem(t, "trans_bs_bs_in.json")
+	arriving.Payment = MoneyValue{Currency: "usd"}
+	f.sync(t, f.link, loadOperationItem(t, "buy.json"), loadOperationItem(t, "trans_bs_bs_out.json"))
+	f.sync(t, second, arriving)
+
+	stats, err := f.reb.Rebuild(f.ctx, f.conn, []AccountLink{f.link, second}, f.src)
+	if err != nil {
+		t.Fatalf("Rebuild: %v — two legs the journal would not accept as a pair must be left as two lone legs, not taken down the whole connection", err)
+	}
+	if stats.Added != 3 {
+		t.Errorf("rebuild added %d operations, want 3 (a buy and two lone legs)", stats.Added)
+	}
+	out := byExternalID(t, f.journalOf(t, f.accountID), externalIDFor(f.mirrorRow(t, f.link, "op-trans-2"), 1))
+	in := byExternalID(t, f.journalOf(t, second.AccountID), externalIDFor(f.mirrorRow(t, second, "op-trans-1"), 1))
+	if out.TransferGroupID != nil || in.TransferGroupID != nil {
+		t.Errorf("legs carry groups %v and %v, want none on either — they are not one event",
+			out.TransferGroupID, in.TransferGroupID)
+	}
+	if in.Currency != "USD" || out.Currency != "RUB" {
+		t.Fatalf("legs are in %q and %q, want USD and RUB — this test proves nothing if they agree", in.Currency, out.Currency)
+	}
+	if in.AmountMinor != 0 {
+		t.Errorf("the arrival declares a basis of %d, want 0", in.AmountMinor)
 	}
 }
 
@@ -520,6 +604,142 @@ func TestRebuildKeepsTheUnknownBasisNoteOnALoneArrival(t *testing.T) {
 	}
 	if in.AmountMinor != 0 {
 		t.Errorf("the lone arrival declares a basis of %d, want 0 — nobody knows what those shares cost", in.AmountMinor)
+	}
+}
+
+// TestPairableLegIsOnlyAMoveBetweenTheOwnersOwnAccounts names the broker's own
+// operation types in full, as literals. The table test below drives the rule
+// with a boolean, so it says nothing about WHICH broker types set that boolean
+// — and a rule read out of the same table it is meant to pin would move with
+// it in silence.
+func TestPairableLegIsOnlyAMoveBetweenTheOwnersOwnAccounts(t *testing.T) {
+	want := map[string]bool{
+		"OPERATION_TYPE_TRANS_IIS_BS":      true,
+		"OPERATION_TYPE_TRANS_BS_BS":       true,
+		"OPERATION_TYPE_INPUT_SECURITIES":  false,
+		"OPERATION_TYPE_OUTPUT_SECURITIES": false,
+		"OPERATION_TYPE_BUY":               false,
+		"OPERATION_TYPE_DIV_EXT":           false,
+		"":                                 false,
+		"OPERATION_TYPE_SOMETHING_NEW":     false,
+	}
+	for opType, wantPairable := range want {
+		if got := pairableLeg(MirrorRow{OpType: opType}); got != wantPairable {
+			t.Errorf("pairableLeg(%q) = %v, want %v", opType, got, wantPairable)
+		}
+	}
+	// And nothing else the broker has: a type added to the mapping table
+	// tomorrow is not pairable until somebody says so here.
+	for opType := range brokerOpTypes {
+		if _, listed := want[opType]; listed {
+			continue
+		}
+		if pairableLeg(MirrorRow{OpType: opType}) {
+			t.Errorf("pairableLeg(%q) = true, and this test was never told that type may be paired", opType)
+		}
+	}
+}
+
+// TestPairTransfersJoinsOnlyWhatIsOneEvent walks the pairing rule one
+// condition at a time, straight over the function, with no database in the
+// way. The database tests above prove what the journal then does with a pair;
+// this proves the LIST — and the list is the thing that is easy to get one
+// short, because every item on it is a separate way for two legs that are not
+// one event to look like one.
+func TestPairTransfersJoinsOnlyWhatIsOneEvent(t *testing.T) {
+	accountA := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	accountB := uuid.MustParse("22222222-2222-4222-8222-222222222222")
+	sber := uuid.MustParse("33333333-3333-4333-8333-333333333333")
+	aapl := uuid.MustParse("44444444-4444-4444-8444-444444444444")
+	moved := day(t, "2026-05-05")
+
+	type legSpec struct {
+		account    uuid.UUID
+		typ        operation.Type
+		instrument uuid.UUID
+		quantity   string
+		day        time.Time
+		currency   string
+		pairable   bool
+	}
+	departure := legSpec{accountA, operation.TypeTransferOut, sber, "5", moved, "RUB", true}
+	arrival := legSpec{accountB, operation.TypeTransferIn, sber, "5", moved, "RUB", true}
+	with := func(spec legSpec, change func(*legSpec)) legSpec {
+		change(&spec)
+		return spec
+	}
+	build := func(spec legSpec, name string) desired {
+		q := decimal.RequireFromString(spec.quantity)
+		id := name
+		return desired{
+			op: operation.Operation{
+				AccountID: spec.account, InstrumentID: &spec.instrument, Type: spec.typ,
+				OccurredOn: spec.day, Quantity: &q, Currency: spec.currency,
+				Source: Source, ExternalID: &id,
+			},
+			pairable: spec.pairable,
+		}
+	}
+
+	cases := []struct {
+		name     string
+		out, in  legSpec
+		wantPair bool
+	}{
+		{"one move between the owner's own accounts", departure, arrival, true},
+		{
+			"the departure is a move with the outside world",
+			with(departure, func(s *legSpec) { s.pairable = false }), arrival, false,
+		},
+		{
+			"the arrival is a move with the outside world",
+			departure, with(arrival, func(s *legSpec) { s.pairable = false }), false,
+		},
+		{
+			"both are moves with the outside world",
+			with(departure, func(s *legSpec) { s.pairable = false }),
+			with(arrival, func(s *legSpec) { s.pairable = false }), false,
+		},
+		{
+			"different currencies",
+			departure, with(arrival, func(s *legSpec) { s.currency = "USD" }), false,
+		},
+		{
+			"different days",
+			departure, with(arrival, func(s *legSpec) { s.day = day(t, "2026-05-06") }), false,
+		},
+		{
+			"different quantities",
+			departure, with(arrival, func(s *legSpec) { s.quantity = "6" }), false,
+		},
+		{
+			"different instruments",
+			departure, with(arrival, func(s *legSpec) { s.instrument = aapl }), false,
+		},
+		{
+			"one and the same account",
+			departure, with(arrival, func(s *legSpec) { s.account = accountA }), false,
+		},
+		{
+			"two departures and no arrival",
+			departure, with(arrival, func(s *legSpec) { s.typ = operation.TypeTransferOut }), false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			want := []desired{build(c.out, "row-out/1"), build(c.in, "row-in/1")}
+			pairTransfers(want)
+			out, in := want[0].op.TransferGroupID, want[1].op.TransferGroupID
+			switch {
+			case c.wantPair && (out == nil || in == nil):
+				t.Fatalf("legs carry groups %v and %v, want one group on both", out, in)
+			case c.wantPair && *out != *in:
+				t.Errorf("legs carry different groups %s and %s, want one", out, in)
+			case !c.wantPair && (out != nil || in != nil):
+				t.Errorf("legs were joined into groups %v and %v, want neither — they are not one event", out, in)
+			}
+		})
 	}
 }
 
@@ -694,6 +914,17 @@ func TestRebuildAppliesBothEntriesOfOneRowOrNeither(t *testing.T) {
 	if stats.Added != 1 {
 		t.Errorf("rebuild added %d operations, want 1 — only the top-up survives", stats.Added)
 	}
+	// The commission WAS written and then taken back, and this run will do it
+	// again every hour for as long as the sale is refused. A summary that
+	// reported that hour as nothing at all would hide the one piece of work
+	// that keeps repeating.
+	if stats.Withdrawn != 1 {
+		t.Errorf("rebuild reports %d entries written and withdrawn, want 1 — the commission the journal took before refusing the sale",
+			stats.Withdrawn)
+	}
+	if stats.Removed != 0 {
+		t.Errorf("rebuild reports %d removed, want 0 — nothing that was in the journal before this rebuild is gone", stats.Removed)
+	}
 	journal := f.journalOf(t, f.accountID)
 	if len(journal) != 1 || journal[0].Type != operation.TypeDeposit {
 		for _, o := range journal {
@@ -703,6 +934,145 @@ func TestRebuildAppliesBothEntriesOfOneRowOrNeither(t *testing.T) {
 	}
 	if got := f.mirrorRow(t, f.link, "op-buy-2").UnparsedReason; got != string(ReasonEngineRefused) {
 		t.Errorf("the sale's reason is %q, want %q", got, ReasonEngineRefused)
+	}
+}
+
+// TestRebuildWithdrawsTheHalfOfAnEventItHadLeftInPlace is the case the
+// withdrawal above does NOT catch on its own, and the one that makes "whole or
+// not at all" a promise rather than a hope.
+//
+// The two entries of one mirror row are two units of the difference, and they
+// need not both be offered: when only ONE of them changes, the other matches
+// what the journal already holds and is left alone. If the changed one is then
+// refused, the untouched half is still sitting there — money leaving the
+// account for a dividend that is not in the journal. Nothing this rebuild
+// applied is involved, so a withdrawal that looks only at what it just wrote
+// leaves that half in place for ever.
+func TestRebuildWithdrawsTheHalfOfAnEventItHadLeftInPlace(t *testing.T) {
+	f := newRebuildFixture(t)
+	f.sync(t, f.link, loadOperationItem(t, "div_ext.json"))
+	if stats := f.rebuild(t); stats.Added != 2 {
+		t.Fatalf("the first rebuild added %d entries, want 2 — a dividend paid to a card is income and the money leaving", stats.Added)
+	}
+
+	// A rule that changes ONE of that row's two entries and leaves the other
+	// exactly as the journal holds it — which is what a corrected instrument
+	// match does in real life, since only the income entry names a security.
+	// The income entry becomes a move of shares the account never held, which
+	// the engine refuses; the withdrawal beside it is not offered at all.
+	inner := f.reb.project
+	f.reb.project = func(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, *UnparsedError) {
+		ops, refusal := inner(row, accountID, resolved)
+		for i := range ops {
+			if ops[i].Type != operation.TypeDividend {
+				continue
+			}
+			qty := decimal.RequireFromString("5")
+			ops[i].Type = operation.TypeTransferOut
+			ops[i].AmountMinor = 0
+			ops[i].Quantity = &qty
+		}
+		return ops, refusal
+	}
+
+	stats := f.rebuild(t)
+	journal := f.journalOf(t, f.accountID)
+	if len(journal) != 0 {
+		for _, o := range journal {
+			t.Logf("journal holds %s %d %s", o.Type, o.AmountMinor, o.Currency)
+		}
+		t.Fatalf("journal holds %d operations, want 0 — half of an event was left behind", len(journal))
+	}
+	if got := f.mirrorRow(t, f.link, "op-divext-1").UnparsedReason; got != string(ReasonEngineRefused) {
+		t.Errorf("the refused row's reason is %q, want %q", got, ReasonEngineRefused)
+	}
+	if stats.Added != 0 {
+		t.Errorf("rebuild reports %d added, want 0", stats.Added)
+	}
+	// Both: the income entry the difference asked to replace, and the
+	// withdrawal that was in the journal before this rebuild and is not now.
+	if stats.Removed != 2 {
+		t.Errorf("rebuild reports %d removed, want 2 — the entry the difference replaced and the half it took back", stats.Removed)
+	}
+}
+
+// TestRebuildResolvesASecurityWhoseTypeTheBrokerDidNotState: the gate in front
+// of the resolver reads a set of PASSPORT types, and what an operation row
+// carries is not a passport. The broker's own documentation warns that history
+// after a corporate action can be incomplete and that identifiers on old
+// operations have been rewritten, so a row whose instrument_type is empty —
+// and whose instrument_uid the broker will answer about perfectly well — must
+// reach the resolver rather than be refused with a type nobody stated.
+func TestRebuildResolvesASecurityWhoseTypeTheBrokerDidNotState(t *testing.T) {
+	f := newRebuildFixture(t)
+	purchase := loadOperationItem(t, "buy.json")
+	purchase.InstrumentType = ""
+	f.sync(t, f.link, purchase)
+	if got := f.mirrorRow(t, f.link, "op-buy-1").InstrumentType; got != "" {
+		t.Fatalf("the mirror row's instrument type is %q, want empty — this test proves nothing otherwise", got)
+	}
+
+	stats := f.rebuild(t)
+	if stats.Added != 1 || stats.Unparsed != 0 {
+		t.Errorf("rebuild added %d and left %d unparsed, want 1 and 0 — the passport says it is a share", stats.Added, stats.Unparsed)
+	}
+	if got := f.mirrorRow(t, f.link, "op-buy-1").UnparsedReason; got != "" {
+		t.Errorf("the purchase's reason is %q, want empty", got)
+	}
+	buy := byExternalID(t, f.journalOf(t, f.accountID), externalIDFor(f.mirrorRow(t, f.link, "op-buy-1"), 1))
+	if buy.InstrumentID == nil {
+		t.Error("the purchase carries no instrument, want the row the passport resolved to")
+	}
+	if calls := f.src.instrumentCalls[uidSber]; calls != 1 {
+		t.Errorf("the broker was asked %d times about the instrument, want 1", calls)
+	}
+}
+
+// TestRebuildRefusesOneRowWhenTheBrokerHasNoSuchInstrument: a delisted paper
+// the broker will never answer about again must cost the owner one visible
+// row. Taking the whole rebuild down over it would mean the connection never
+// synced again, for ever — and the broker says "no such instrument" plainly
+// enough to tell it from being briefly unreachable (see ErrInstrumentNotFound).
+func TestRebuildRefusesOneRowWhenTheBrokerHasNoSuchInstrument(t *testing.T) {
+	f := newRebuildFixture(t)
+	f.src.instrumentErrs[uidSber] = fmt.Errorf(
+		"tinvest: InstrumentsService/GetInstrumentBy: status 404: {\"code\":5,\"message\":\"Instrument not found\",\"description\":\"50002\"}: %w",
+		ErrInstrumentNotFound)
+	f.sync(t, f.link, loadOperationItem(t, "input.json"), loadOperationItem(t, "buy.json"))
+
+	stats := f.rebuild(t)
+	if stats.Added != 1 || stats.Unparsed != 1 {
+		t.Errorf("rebuild added %d and left %d unparsed, want 1 and 1 — the top-up is not about that paper", stats.Added, stats.Unparsed)
+	}
+	if got := f.mirrorRow(t, f.link, "op-buy-1").UnparsedReason; got != string(ReasonInstrumentUnresolved) {
+		t.Errorf("the purchase's reason is %q, want %q — the security was not matched, and that is what happened",
+			got, ReasonInstrumentUnresolved)
+	}
+	journal := f.journalOf(t, f.accountID)
+	if len(journal) != 1 || journal[0].Type != operation.TypeDeposit {
+		t.Fatalf("journal = %d rows, want 1 deposit", len(journal))
+	}
+}
+
+// TestRebuildFailsWhenAPassportCannotBeFetchedAtAll is the boundary of the
+// test above. A broker that could not be reached says nothing about the
+// instrument, and marking the row "the security was not matched" would blame
+// the operation for the network — a mark that would then sit there until
+// something happened to rebuild that row again. The run fails instead, and the
+// next one, which is likely to succeed, states everything afresh.
+func TestRebuildFailsWhenAPassportCannotBeFetchedAtAll(t *testing.T) {
+	f := newRebuildFixture(t)
+	f.src.instrumentErrs[uidSber] = errors.New("tinvest: InstrumentsService/GetInstrumentBy: request: dial tcp: connection refused")
+	f.sync(t, f.link, loadOperationItem(t, "input.json"), loadOperationItem(t, "buy.json"))
+
+	if _, err := f.reb.Rebuild(f.ctx, f.conn, []AccountLink{f.link}, f.src); err == nil {
+		t.Fatal("Rebuild succeeded while the broker was unreachable, want the run to fail")
+	}
+	if got := len(f.journalOf(t, f.accountID)); got != 0 {
+		t.Errorf("journal holds %d operations, want 0 — a failed run writes nothing", got)
+	}
+	if got := f.mirrorRow(t, f.link, "op-buy-1").UnparsedReason; got != "" {
+		t.Errorf("the purchase's reason is %q, want empty — a network failure is not news about the operation", got)
 	}
 }
 
@@ -838,23 +1208,85 @@ func TestRebuildRefusesALinkOfAnotherConnection(t *testing.T) {
 	}
 }
 
+// TestRebuildRefusesALinkOfAnotherSpace is the second half of that guard. A
+// link naming a space other than the connection's would have this rebuild
+// compute a difference against one space's journal and hand it to another's,
+// and the write path — which is told the space by the CONNECTION — would
+// remove rows it was never shown.
+func TestRebuildRefusesALinkOfAnotherSpace(t *testing.T) {
+	f := newRebuildFixture(t)
+	stranger := f.link
+	stranger.SpaceID = uuid.New()
+
+	if _, err := f.reb.Rebuild(f.ctx, f.conn, []AccountLink{stranger}, f.src); !errors.Is(err, ErrLinkOutsideSpace) {
+		t.Errorf("Rebuild with a link of another space = %v, want ErrLinkOutsideSpace", err)
+	}
+}
+
 // -------------------------------------------------------------------------
 // the comparison itself
 // -------------------------------------------------------------------------
 
-// TestSameJournalRowNoticesEveryFieldItCompares walks the fields one at a time.
-// A comparison that quietly stopped looking at one of them would leave the
-// journal holding a value the mirror no longer says, and nothing anywhere
-// would report a difference.
-func TestSameJournalRowNoticesEveryFieldItCompares(t *testing.T) {
-	instrumentA := uuid.MustParse("33333333-3333-4333-8333-333333333333")
+// comparedField is one change to a journal row that sameJournalRow has to
+// notice. field names the struct field of operation.Operation it touches,
+// which is what makes the list checkable against the type itself (see
+// TestSameJournalRowLooksAtEveryFieldAnOperationHas) rather than against
+// somebody's memory of what the type holds.
+type comparedField struct {
+	field  string
+	label  string
+	mutate func(*operation.Operation)
+}
+
+func comparedFields(t *testing.T) []comparedField {
+	t.Helper()
 	instrumentB := uuid.MustParse("44444444-4444-4444-8444-444444444444")
 	groupA := uuid.MustParse("55555555-5555-4555-8555-555555555555")
+	settled := day(t, "2026-03-16")
+	return []comparedField{
+		{"AccountID", "account", func(o *operation.Operation) { o.AccountID = uuid.New() }},
+		{"InstrumentID", "instrument", func(o *operation.Operation) { o.InstrumentID = &instrumentB }},
+		{"InstrumentID", "instrument dropped", func(o *operation.Operation) { o.InstrumentID = nil }},
+		{"Type", "type", func(o *operation.Operation) { o.Type = operation.TypeSell }},
+		{"OccurredOn", "day", func(o *operation.Operation) { o.OccurredOn = day(t, "2026-03-16") }},
+		{"SettledOn", "settlement day", func(o *operation.Operation) { o.SettledOn = &settled }},
+		{"Quantity", "quantity", func(o *operation.Operation) { q := decimal.RequireFromString("11"); o.Quantity = &q }},
+		{"Quantity", "quantity dropped", func(o *operation.Operation) { o.Quantity = nil }},
+		{"Price", "price", func(o *operation.Operation) { p := decimal.RequireFromString("276"); o.Price = &p }},
+		{"Price", "price dropped", func(o *operation.Operation) { o.Price = nil }},
+		{"AmountMinor", "amount", func(o *operation.Operation) { o.AmountMinor = -2_750_001 }},
+		{"Currency", "currency", func(o *operation.Operation) { o.Currency = "USD" }},
+		{"FeeMinor", "fee", func(o *operation.Operation) { o.FeeMinor = 826 }},
+		{"Note", "note", func(o *operation.Operation) { o.Note = "что-то другое" }},
+		{"Source", "source", func(o *operation.Operation) { o.Source = "csv" }},
+		{"TransferGroupID", "transfer group", func(o *operation.Operation) { o.TransferGroupID = &groupA }},
+		{"SplitRatio", "split ratio", func(o *operation.Operation) { r := decimal.RequireFromString("2"); o.SplitRatio = &r }},
+	}
+}
+
+// notComparedFields is every field of an operation that sameJournalRow
+// deliberately does NOT look at, each with the reason. A field is in here or
+// in comparedFields, never in neither and never in both — which is what the
+// reflection test below enforces.
+var notComparedFields = map[string]string{
+	"ID": "the journal's own identity, invented when the row was written; " +
+		"the projection never has one to compare",
+	"SpaceID": "the journal's own: a delta is applied to the space the CONNECTION names, " +
+		"and the projection never states it",
+	"ExternalID": "what the two rows were matched BY, so it is equal by construction",
+	"CreatedAt": "the journal's own numbering of the row within its day, " +
+		"assigned by the write path; the projection never has one",
+	"TransferLots": "the parcel the write path released from the source account's history — " +
+		"a property of the journal, and the projection never has it (operation.checkImportContract " +
+		"refuses one supplied)",
+}
+
+func sameJournalRowBase(t *testing.T) operation.Operation {
+	t.Helper()
+	instrumentA := uuid.MustParse("33333333-3333-4333-8333-333333333333")
 	qty := decimal.RequireFromString("10")
 	price := decimal.RequireFromString("275")
-	settled := day(t, "2026-03-16")
-
-	base := operation.Operation{
+	return operation.Operation{
 		AccountID:    uuid.MustParse("22222222-2222-4222-8222-222222222222"),
 		InstrumentID: &instrumentA,
 		Type:         operation.TypeBuy,
@@ -867,39 +1299,68 @@ func TestSameJournalRowNoticesEveryFieldItCompares(t *testing.T) {
 		Note:         "Покупка 100 шт.",
 		Source:       Source,
 	}
-	cases := []struct {
-		field  string
-		mutate func(*operation.Operation)
-	}{
-		{"account", func(o *operation.Operation) { o.AccountID = uuid.New() }},
-		{"instrument", func(o *operation.Operation) { o.InstrumentID = &instrumentB }},
-		{"instrument dropped", func(o *operation.Operation) { o.InstrumentID = nil }},
-		{"type", func(o *operation.Operation) { o.Type = operation.TypeSell }},
-		{"day", func(o *operation.Operation) { o.OccurredOn = day(t, "2026-03-16") }},
-		{"settlement day", func(o *operation.Operation) { o.SettledOn = &settled }},
-		{"quantity", func(o *operation.Operation) { q := decimal.RequireFromString("11"); o.Quantity = &q }},
-		{"quantity dropped", func(o *operation.Operation) { o.Quantity = nil }},
-		{"price", func(o *operation.Operation) { p := decimal.RequireFromString("276"); o.Price = &p }},
-		{"price dropped", func(o *operation.Operation) { o.Price = nil }},
-		{"amount", func(o *operation.Operation) { o.AmountMinor = -2_750_001 }},
-		{"currency", func(o *operation.Operation) { o.Currency = "USD" }},
-		{"fee", func(o *operation.Operation) { o.FeeMinor = 826 }},
-		{"note", func(o *operation.Operation) { o.Note = "что-то другое" }},
-		{"source", func(o *operation.Operation) { o.Source = "csv" }},
-		{"transfer group", func(o *operation.Operation) { o.TransferGroupID = &groupA }},
-		{"split ratio", func(o *operation.Operation) { r := decimal.RequireFromString("2"); o.SplitRatio = &r }},
-	}
+}
+
+// TestSameJournalRowNoticesEveryFieldItCompares walks the fields one at a time.
+// A comparison that quietly stopped looking at one of them would leave the
+// journal holding a value the mirror no longer says, and nothing anywhere
+// would report a difference.
+func TestSameJournalRowNoticesEveryFieldItCompares(t *testing.T) {
+	base := sameJournalRowBase(t)
 	if !sameJournalRow(base, base) {
 		t.Fatal("a row differs from itself")
 	}
-	for _, c := range cases {
+	for _, c := range comparedFields(t) {
 		changed := base
 		c.mutate(&changed)
 		if sameJournalRow(base, changed) {
-			t.Errorf("a row whose %s changed reads as unchanged", c.field)
+			t.Errorf("a row whose %s changed reads as unchanged", c.label)
 		}
 		if sameJournalRow(changed, base) {
-			t.Errorf("a row whose %s changed reads as unchanged the other way round", c.field)
+			t.Errorf("a row whose %s changed reads as unchanged the other way round", c.label)
+		}
+	}
+}
+
+// TestSameJournalRowLooksAtEveryFieldAnOperationHas is what makes the promise
+// in sameJournalRow's own documentation — "every column the projection could
+// set is compared" — checkable rather than merely stated.
+//
+// Both the comparison and the table above it are written and maintained BY
+// HAND. A field added to operation.Operation tomorrow would slip out of both
+// in the same silence: the mirror would stop being able to correct it, and a
+// broker's correction would stop reaching the journal with nothing anywhere
+// saying so. So the fields are read off the type itself, and every one of them
+// must be either exercised by a case above or named in notComparedFields with
+// the reason it is not.
+func TestSameJournalRowLooksAtEveryFieldAnOperationHas(t *testing.T) {
+	covered := map[string]bool{}
+	for _, c := range comparedFields(t) {
+		covered[c.field] = true
+	}
+
+	typ := reflect.TypeOf(operation.Operation{})
+	onTheType := map[string]bool{}
+	for i := 0; i < typ.NumField(); i++ {
+		name := typ.Field(i).Name
+		onTheType[name] = true
+		_, excused := notComparedFields[name]
+		switch {
+		case covered[name] && excused:
+			t.Errorf("operation.Operation.%s is both compared and listed as deliberately not compared — one of the two lists is wrong", name)
+		case !covered[name] && !excused:
+			t.Errorf("operation.Operation.%s is neither compared by sameJournalRow nor listed in notComparedFields: "+
+				"a rebuild cannot correct what it does not compare, so add a case for it or say in notComparedFields why the journal owns it", name)
+		}
+	}
+	for name := range covered {
+		if !onTheType[name] {
+			t.Errorf("a comparison case names field %q, which operation.Operation does not have", name)
+		}
+	}
+	for name := range notComparedFields {
+		if !onTheType[name] {
+			t.Errorf("notComparedFields names field %q, which operation.Operation does not have", name)
 		}
 	}
 }

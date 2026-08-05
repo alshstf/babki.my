@@ -104,9 +104,16 @@ func (c *raceCatalog) Create(ctx context.Context, inst instrument.Instrument) (i
 // fakePassportSource is an in-memory stand-in for *Client, satisfying
 // passportSource without a network call. It counts calls per method so
 // tests can assert the resolver's memoization actually happens.
+//
+// instrumentErrs answers one uid with a failure instead of a passport, which
+// is how a test says which KIND of failure the broker met — the broker
+// answering "no such instrument" and the broker not answering at all are two
+// different pieces of news, and callers act differently on them (see
+// ErrInstrumentNotFound).
 type fakePassportSource struct {
 	instruments      map[string]InstrumentBrief
 	nominals         map[string]MoneyValue
+	instrumentErrs   map[string]error
 	instrumentCalls  map[string]int
 	bondNominalCalls map[string]int
 }
@@ -115,6 +122,7 @@ func newFakePassportSource() *fakePassportSource {
 	return &fakePassportSource{
 		instruments:      map[string]InstrumentBrief{},
 		nominals:         map[string]MoneyValue{},
+		instrumentErrs:   map[string]error{},
 		instrumentCalls:  map[string]int{},
 		bondNominalCalls: map[string]int{},
 	}
@@ -122,6 +130,9 @@ func newFakePassportSource() *fakePassportSource {
 
 func (s *fakePassportSource) InstrumentByUID(_ context.Context, uid string) (InstrumentBrief, error) {
 	s.instrumentCalls[uid]++
+	if err, ok := s.instrumentErrs[uid]; ok {
+		return InstrumentBrief{}, err
+	}
 	brief, ok := s.instruments[uid]
 	if !ok {
 		return InstrumentBrief{}, fmt.Errorf("fakePassportSource: no instrument for uid %q", uid)

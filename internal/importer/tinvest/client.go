@@ -34,6 +34,25 @@ const SandboxBaseURL = "https://sandbox-invest-public-api.tinkoff.ru/rest"
 // signal that the token needs replacing, not that this one request failed.
 var ErrTokenInvalid = errors.New("tinvest: token invalid or revoked")
 
+// ErrInstrumentNotFound is returned when the broker says it has no such
+// instrument: HTTP 404, or a response carrying business error code 50002
+// ("Instrument not found" — see wireError). Verified against the live
+// gateway on 2026-08-05: asking InstrumentsService/GetInstrumentBy about an
+// unknown uid answers 404 with the body
+// {"code":5,"message":"Instrument not found","description":"50002"}, so
+// "there is no such paper" is DISTINGUISHABLE from a network or gateway
+// failure rather than being guessed at.
+//
+// That distinction is the whole point of the sentinel. A caller resolving an
+// instrument can refuse the one operation that names it and go on — which is
+// the only outcome that ever ends, for a delisted paper the broker will
+// never answer about again — while every other failure stays fatal, because
+// those are the ones the next run is likely to survive.
+//
+// The error this wraps still carries the rpc, the status and the body, so a
+// log line about it says what the broker actually answered.
+var ErrInstrumentNotFound = errors.New("tinvest: the broker has no such instrument")
+
 // defaultHTTPTimeout is the request timeout NewClient uses when the caller
 // passes a nil *http.Client. 30s: generous for a single unary REST call
 // (accounts, one page of operations, a portfolio snapshot), while still
@@ -565,9 +584,15 @@ func (c *Client) do(ctx context.Context, rpc string, reqBody, respBody any) erro
 // doOnce sends one POST request to rpc and decodes a 200 response into
 // respBody (skipped when respBody is nil). It returns *rateLimitError for a
 // 429 (letting do() decide whether to wait and retry), ErrTokenInvalid for
-// a 401 or a body whose Description is tokenInvalidDescription, and a
-// generic "tinvest: <rpc>: status <code>: <body>" error for anything else
-// that isn't 200.
+// a 401 or a body whose Description is tokenInvalidDescription, an error
+// wrapping ErrInstrumentNotFound for a 404 or a body whose Description is
+// instrumentNotFoundDescription, and a generic "tinvest: <rpc>: status
+// <code>: <body>" error for anything else that isn't 200.
+//
+// The two sentinels are returned differently on purpose: a token refusal is
+// the same statement whichever call met it, while "no such instrument" is
+// worth reading with the rpc, the status and the broker's own body attached,
+// so that one wraps the generic error rather than replacing it.
 func (c *Client) doOnce(ctx context.Context, rpc string, reqBody, respBody any) error {
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
@@ -599,13 +624,22 @@ func (c *Client) doOnce(ctx context.Context, rpc string, reqBody, respBody any) 
 	case resp.StatusCode == http.StatusUnauthorized:
 		return ErrTokenInvalid
 	case resp.StatusCode != http.StatusOK:
+		generic := fmt.Errorf("tinvest: %s: status %d: %s", rpc, resp.StatusCode, strings.TrimSpace(string(body)))
 		var wErr wireError
 		if json.Unmarshal(body, &wErr) == nil {
-			if n, convErr := wErr.Description.Int64(); convErr == nil && n == tokenInvalidDescription {
-				return ErrTokenInvalid
+			if n, convErr := wErr.Description.Int64(); convErr == nil {
+				switch n {
+				case tokenInvalidDescription:
+					return ErrTokenInvalid
+				case instrumentNotFoundDescription:
+					return fmt.Errorf("%w: %w", generic, ErrInstrumentNotFound)
+				}
 			}
 		}
-		return fmt.Errorf("tinvest: %s: status %d: %s", rpc, resp.StatusCode, strings.TrimSpace(string(body)))
+		if resp.StatusCode == http.StatusNotFound {
+			return fmt.Errorf("%w: %w", generic, ErrInstrumentNotFound)
+		}
+		return generic
 	}
 
 	if respBody == nil {

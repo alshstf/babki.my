@@ -110,6 +110,15 @@ type wireError struct {
 // unusable token (expired, revoked, or never valid) — see wireError.
 const tokenInvalidDescription = 40003
 
+// instrumentNotFoundDescription is the broker's business error code for an
+// instrument it does not know — see wireError. Captured from the live
+// gateway on 2026-08-05, asking InstrumentsService/GetInstrumentBy about an
+// unknown uid: HTTP 404 with
+// {"code":5,"message":"Instrument not found","description":"50002"}. Note
+// the QUOTED form the live gateway used here too, which is why
+// wireError.Description is a json.Number.
+const instrumentNotFoundDescription = 50002
+
 // wireAccount mirrors the REST gateway's Account (UsersService/GetAccounts
 // and GetSandboxAccounts): Type and Status are left as the enum's wire
 // strings (e.g. "ACCOUNT_TYPE_TINKOFF") rather than parsed further, exactly
