@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
+
+	"babki.my/babki/internal/instrument"
 )
 
 // ErrConnectionNotFound means the connection a sync was asked to run for is
@@ -683,4 +685,152 @@ func (s *Store) LastSuccessfulSyncAt(ctx context.Context, connID uuid.UUID) (*ti
 		return nil, fmt.Errorf("tinvest: read last successful sync: %w", err)
 	}
 	return &at, nil
+}
+
+// mapMatch is one hit of the connection's instrument map, joined against the
+// catalog's own type/isin/ticker columns (see (*Store).mapByInstrumentUID).
+// The join exists so a hit answers Resolve fully — id, type, and what
+// Resolve's own final write needs — without a second round trip through
+// instrumentCatalog: the entire point of checking this table before the
+// broker's passport is to skip that call, and paying for a catalog read here
+// would give back half the saving.
+type mapMatch struct {
+	InstrumentID uuid.UUID
+	Type         instrument.Type
+	ISIN, Ticker string
+}
+
+// mapByInstrumentUID and mapByFIGI are the resolver's two lookups into
+// tinvest_instrument_map, tried in that order by lookupMap. Both return
+// pgx.ErrNoRows on a miss (this package's usual wrapping — see the note
+// above scanConnection in store.go — leaves errors.Is working).
+//
+// A row can never dangle: instrument_id references instruments(id) ON
+// DELETE CASCADE (migration 0014), so a match here is always joinable.
+func (s *Store) mapByInstrumentUID(ctx context.Context, connectionID uuid.UUID, instrumentUID string) (mapMatch, error) {
+	if instrumentUID == "" {
+		// An empty instrument_uid is not something the table's own
+		// uniqueness (connection_id, instrument_uid) could ever narrow to
+		// one row on purpose — see Resolve's own guard on writing one.
+		// Refusing before the query keeps that from silently matching
+		// whatever row a previous empty-uid write happened to leave.
+		return mapMatch{}, fmt.Errorf("tinvest: instrument map by instrument_uid: %w", pgx.ErrNoRows)
+	}
+	var m mapMatch
+	err := s.pool.QueryRow(ctx, `
+		SELECT im.instrument_id, i.type, i.isin, i.ticker
+		FROM tinvest_instrument_map im
+		JOIN instruments i ON i.id = im.instrument_id
+		WHERE im.connection_id = $1 AND im.instrument_uid = $2`,
+		connectionID, instrumentUID).Scan(&m.InstrumentID, &m.Type, &m.ISIN, &m.Ticker)
+	if err != nil {
+		return mapMatch{}, fmt.Errorf("tinvest: instrument map by instrument_uid: %w", err)
+	}
+	return m, nil
+}
+
+// mapByFIGI is lookupMap's fallback for when the operation's instrument_uid
+// is not one this connection recognizes: an operation that predates
+// instrument_uid, or one where it has drifted since the last sync, may still
+// carry a figi this connection has already resolved.
+//
+// The index behind this query (tinvest_map_figi_idx) is not unique, so a
+// connection can hold more than one row for one figi — most plausibly an
+// older row an instrument_uid has since drifted away from. The most
+// recently updated one is taken, on the reasoning that a later write is the
+// more likely one to still be right about what this figi means today.
+func (s *Store) mapByFIGI(ctx context.Context, connectionID uuid.UUID, figi string) (mapMatch, error) {
+	if figi == "" {
+		// Every row this connection has never set a figi for shares the
+		// empty string; picking "most recently updated" among them would
+		// return an unrelated instrument, not "no match" — see the same
+		// guard on mapByInstrumentUID above.
+		return mapMatch{}, fmt.Errorf("tinvest: instrument map by figi: %w", pgx.ErrNoRows)
+	}
+	var m mapMatch
+	err := s.pool.QueryRow(ctx, `
+		SELECT im.instrument_id, i.type, i.isin, i.ticker
+		FROM tinvest_instrument_map im
+		JOIN instruments i ON i.id = im.instrument_id
+		WHERE im.connection_id = $1 AND im.figi = $2
+		ORDER BY im.updated_at DESC
+		LIMIT 1`,
+		connectionID, figi).Scan(&m.InstrumentID, &m.Type, &m.ISIN, &m.Ticker)
+	if err != nil {
+		return mapMatch{}, fmt.Errorf("tinvest: instrument map by figi: %w", err)
+	}
+	return m, nil
+}
+
+// saveMap records instrumentID as the answer for ref.InstrumentUID, along
+// with every other identifier ref carries and the catalog's own isin/ticker
+// for it (ON CONFLICT (connection_id, instrument_uid), migration 0014's own
+// uniqueness). It is called on every resolution Resolve completes, a map hit
+// as much as a freshly created row, so that a drift in
+// figi/position_uid/asset_uid ALONE — with instrument_uid unchanged, and so
+// still hitting mapByInstrumentUID on its own — is still captured rather
+// than left on a row nothing ever revisits again.
+//
+// AN EMPTY IDENTIFIER NEVER ERASES A STORED ONE, and this is the reason the
+// three broker identifiers are written through COALESCE(NULLIF(...)) instead
+// of being assigned. They are read off ONE OPERATION (see InstrumentRef),
+// while the row is what this connection has learned across ALL of them, so a
+// write that assigns makes the row weaker than the sum of what was observed —
+// and what it would erase first is the figi, which is the entire fallback that
+// lets a resolution survive an instrument_uid drifting (see mapByFIGI). The
+// mechanism built for the day an identifier changes would be destroyed by an
+// ordinary operation that merely failed to mention one.
+//
+// WHAT DOES NOT SUPPORT THIS, checked rather than repeated: this package's own
+// operation fixtures do not contain the "dividend without a figi" that the
+// review reported. Their dividend carries figi, positionUid and assetUid like
+// the trade does, and the one operation there with an empty figi is a broker
+// fee, which carries no instrument_uid either and so never reaches this
+// statement at all (see Resolve's guard). What the rule stands on instead is
+// the shape of the data — four independent strings, any of which can arrive
+// empty, as that same broker fee shows — and on what this row is for: it
+// accumulates what the connection has learned, and a write that can only be
+// built from one operation must not be allowed to subtract from it.
+//
+// isin and ticker ARE assigned outright, and the difference is where they come
+// from: they are the catalog's own columns as of this resolution, not
+// something one operation happened to mention, so an empty one is a true
+// statement about the catalog row rather than a gap in what the broker sent.
+//
+// NOTHING IS WRITTEN WHEN NOTHING CHANGED (the WHERE below). A full history
+// resolves the same instrument on every one of its operations, and an
+// unconditional DO UPDATE made every one of those a row write plus a fresh
+// updated_at, saying exactly what the row already said — one write per
+// operation for as long as the history is. Every column here is NOT NULL
+// (migration 0014), so plain
+// <> is enough and no three-valued surprise hides in it; the three broker
+// identifiers are compared only when the operation actually carries them, for
+// the same reason they are not assigned when it does not.
+//
+// Callers must not call this with ref.InstrumentUID == "" — see Resolve's
+// own guard, which is the only caller and never does.
+func (s *Store) saveMap(ctx context.Context, connectionID, instrumentID uuid.UUID, ref InstrumentRef, isin, ticker string) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO tinvest_instrument_map
+			(connection_id, instrument_id, figi, instrument_uid, position_uid, asset_uid, isin, ticker)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (connection_id, instrument_uid) DO UPDATE SET
+			instrument_id = EXCLUDED.instrument_id,
+			figi          = COALESCE(NULLIF(EXCLUDED.figi, ''), tinvest_instrument_map.figi),
+			position_uid  = COALESCE(NULLIF(EXCLUDED.position_uid, ''), tinvest_instrument_map.position_uid),
+			asset_uid     = COALESCE(NULLIF(EXCLUDED.asset_uid, ''), tinvest_instrument_map.asset_uid),
+			isin          = EXCLUDED.isin,
+			ticker        = EXCLUDED.ticker,
+			updated_at    = now()
+		WHERE tinvest_instrument_map.instrument_id <> EXCLUDED.instrument_id
+		   OR (EXCLUDED.figi         <> '' AND tinvest_instrument_map.figi         <> EXCLUDED.figi)
+		   OR (EXCLUDED.position_uid <> '' AND tinvest_instrument_map.position_uid <> EXCLUDED.position_uid)
+		   OR (EXCLUDED.asset_uid    <> '' AND tinvest_instrument_map.asset_uid    <> EXCLUDED.asset_uid)
+		   OR tinvest_instrument_map.isin   <> EXCLUDED.isin
+		   OR tinvest_instrument_map.ticker <> EXCLUDED.ticker`,
+		connectionID, instrumentID, ref.FIGI, ref.InstrumentUID, ref.PositionUID, ref.AssetUID, isin, ticker)
+	if err != nil {
+		return fmt.Errorf("tinvest: save instrument map: %w", err)
+	}
+	return nil
 }
