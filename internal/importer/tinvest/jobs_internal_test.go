@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -82,7 +83,11 @@ func (c *logCapture) all() []slog.Record {
 // compared for EQUALITY rather than "at least want": a demotion buries the line
 // under the production level and a promotion makes it read as news of a kind it
 // is not, and "at least" would pass for half of those.
-func assertOneRecordAt(t *testing.T, c *logCapture, msg string, want slog.Level, cause string) {
+//
+// It returns the record it matched, for callers that then have something to say
+// about a particular attribute — see assertAttrIs, and why a substring is not
+// enough for a number.
+func assertOneRecordAt(t *testing.T, c *logCapture, msg string, want slog.Level, cause string) slog.Record {
 	t.Helper()
 	records := c.all()
 	var matched []slog.Record
@@ -102,6 +107,32 @@ func assertOneRecordAt(t *testing.T, c *logCapture, msg string, want slog.Level,
 	if got := attrsOf(matched[0]); !strings.Contains(got, cause) {
 		t.Fatalf("%q carried %s, which does not name the cause %q — a line nobody can act on is barely better than silence",
 			msg, got, cause)
+	}
+	return matched[0]
+}
+
+// assertAttrIs fails unless the record carries key with exactly want.
+//
+// IT IS NOT assertOneRecordAt's SUBSTRING, and the difference matters wherever
+// the value is a number: "0" is a substring of "connections=10" as much as of
+// "connections=0", so a substring check on a count proves nothing at all. (This
+// project's own rules name that trap; it had already been walked into here.)
+func assertAttrIs(t *testing.T, r slog.Record, key, want string) {
+	t.Helper()
+	var got string
+	found := false
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == key {
+			got, found = a.Value.String(), true
+			return false
+		}
+		return true
+	})
+	if !found {
+		t.Fatalf("%q carries no %q attribute at all; it has %s", r.Message, key, attrsOf(r))
+	}
+	if got != want {
+		t.Fatalf("%q says %s=%q, want %q", r.Message, key, got, want)
 	}
 }
 
@@ -523,9 +554,10 @@ func TestSyncWorkerRebuildsTheWholeConnectionSoTransfersPair(t *testing.T) {
 	}
 
 	var out, in *operation.Operation
-	for i, o := range f.journal(t) {
-		if o.Type == operation.TypeTransferOut {
-			out = &f.journal(t)[i]
+	departures := f.journal(t)
+	for i := range departures {
+		if departures[i].Type == operation.TypeTransferOut {
+			out = &departures[i]
 		}
 	}
 	arrivals, err := f.ops.ListBySource(f.ctx, f.spaceID, second.AccountID, Source)
@@ -755,15 +787,93 @@ func TestSyncWorkerClosesEveryRunItStartedWhenALaterLinkFails(t *testing.T) {
 	}
 }
 
+// THE SUMMARY IS THE RECORD OF THE WORK, AND THE WORK HAPPENED. A run that
+// carried the whole history across and then could not close its own log entry
+// has done everything a sync is for; leaving it with no summary line would make
+// the one run that most needs explaining the only one that says nothing at all.
+//
+// The run's log row is deleted while the run waits at the broker's door — the
+// one moment it is certainly open and certainly not being written to — so that
+// closing it afterwards fails for a reason the worker cannot dodge.
+func TestSyncWorkerStillSummarisesARunWhoseLogEntryCannotBeClosed(t *testing.T) {
+	f := newWorkerFixture(t)
+	f.broker.answer(rpcOperations, http.StatusOK,
+		operationsPage(depositJSON("op-1", "2026-03-14T07:30:15Z", 1000)))
+	f.broker.answer(rpcPositions, http.StatusOK, moneyPositions("rub", 1000))
+	f.broker.mu.Lock()
+	f.broker.arrive = func(int) {
+		if _, err := f.pool.Exec(f.ctx, `DELETE FROM tinvest_sync_runs`); err != nil {
+			// t.Fatal must only be called from the test's own goroutine.
+			t.Errorf("delete the run rows: %v", err)
+		}
+	}
+	f.broker.mu.Unlock()
+
+	if err := f.work(t, "schedule"); err == nil {
+		t.Fatal("Work returned nil though the run's log entry could not be closed")
+	}
+
+	rec := assertOneRecordAt(t, f.logs, "tinvest: a sync run finished", slog.LevelInfo, f.conn.ID.String())
+	// The figures too: a summary that survived but reported nothing would be
+	// the same silence in a different shape.
+	assertAttrIs(t, rec, "read", "1")
+	assertAttrIs(t, rec, "added", "1")
+}
+
+// A FAILED RUN PUBLISHES THE UNPARSED COUNT IT TOOK, NOT THE ZERO IT STARTED
+// WITH. The figure is filled in by the reconciliation loop, and a run that
+// fails before that loop never reaches it — so a worker that simply wrote out
+// what it was holding would file "0 unreadable operations" on a run that never
+// counted any, in the same column, in the same shape, as a run that counted and
+// found none. That is the confusion the reconciliation has a whole "not
+// checked" verdict to avoid, and this column has no such state to hide in.
+//
+// The run below is stopped at the reconciliation — past the mirror and past the
+// rebuild, which is what marks a row unreadable in the first place — with one
+// operation of a type this program has never heard of already in it.
+func TestSyncWorkerRecordsTheUnparsedCountItTookOnARunThatFailed(t *testing.T) {
+	f := newWorkerFixture(t)
+	f.broker.answer(rpcOperations, http.StatusOK,
+		operationsPage(opJSON("op-x", "OPERATION_TYPE_MYSTERY", "2026-03-14T07:30:15Z", -100)))
+	f.broker.answer(rpcPortfolio, http.StatusInternalServerError, `{"code":13,"message":"internal"}`)
+
+	if err := f.work(t, "schedule"); err == nil {
+		t.Fatal("Work returned nil though the reconciliation failed")
+	}
+
+	runs := f.runs(t)
+	if len(runs) != 1 {
+		t.Fatalf("%d runs recorded, want 1", len(runs))
+	}
+	if runs[0].Status != RunFailed || runs[0].FinishedAt == nil {
+		t.Fatalf("run = {%s finished=%v}, want {failed, finished}", runs[0].Status, runs[0].FinishedAt)
+	}
+	if got := runs[0].UnparsedCount; got != 1 {
+		t.Errorf("the failed run reports %d unreadable operations, want 1 — the mirror holds one, "+
+			"and a zero here would be a measurement nobody made", got)
+	}
+	// The neighbouring figure, for contrast: the reconciliation says "not
+	// checked" rather than "everything agrees", which is the very distinction
+	// the count above now keeps as well.
+	if runs[0].ReconcileStatus != ReconcileNotChecked {
+		t.Errorf("reconcile = %q, want %q", runs[0].ReconcileStatus, ReconcileNotChecked)
+	}
+}
+
 // A trigger the run log's own CHECK constraint would refuse is refused before a
 // run is opened, rather than at the INSERT — where it would surface as a
 // database error from inside a worker, on the one run that used it.
-func TestSyncWorkerRefusesATriggerTheRunLogCannotStore(t *testing.T) {
+//
+// AND IT IS NOT HANDED TO THE RETRY MACHINE. A queued job's arguments never
+// change, so returning the error would buy two dozen further attempts at
+// exactly the same word, each one shouting at Error level, spread over River's
+// growing backoff — the same waste a refused token was singled out to avoid.
+// The line is written once and the job is let go.
+func TestSyncWorkerDropsAJobNamingATriggerTheRunLogCannotStore(t *testing.T) {
 	f := newWorkerFixture(t)
 
-	err := f.work(t, "whenever")
-	if !errors.Is(err, ErrUnknownTrigger) {
-		t.Fatalf("Work returned %v, want %v", err, ErrUnknownTrigger)
+	if err := f.work(t, "whenever"); err != nil {
+		t.Fatalf("Work returned %v, want nil — no retry can mend an argument that cannot change", err)
 	}
 	if n := f.broker.callCount(rpcOperations); n != 0 {
 		t.Errorf("the broker was called %d times on a job that could not be logged, want 0", n)
@@ -771,6 +881,12 @@ func TestSyncWorkerRefusesATriggerTheRunLogCannotStore(t *testing.T) {
 	if runs := f.runs(t); len(runs) != 0 {
 		t.Errorf("%d runs recorded, want 0", len(runs))
 	}
+	// Dropped is not the same as unnoticed: the one line about it has to be
+	// visible at the level this application runs at, and has to name the word
+	// nothing could read — it is the only record the job leaves anywhere.
+	assertOneRecordAt(t, f.logs,
+		"tinvest: a sync job names a trigger the run log cannot store, dropping it",
+		slog.LevelError, `unknown sync trigger: "whenever"`)
 }
 
 // A connection whose owner has not yet chosen which broker accounts to import
@@ -805,6 +921,39 @@ func TestSyncWorkerSaysNothingIsThereWhenTheConnectionIsGone(t *testing.T) {
 		t.Fatalf("Work returned %v, want nil — a deleted connection is nothing to retry", err)
 	}
 	assertOneRecordAt(t, f.logs, connectionGoneMessage, slog.LevelDebug, f.conn.ID.String())
+}
+
+// A PLANNED STOP IS NOT A BREAKAGE, AND NEITHER HALF OF THIS FILE MAY SAY IT
+// IS. Shutting the process down cancels the running job's context, and every
+// read underneath it fails at once — the dispatcher's listing of connections
+// and the sync worker's reading of one alike. At Error level those would be the
+// loudest lines of an ordinary restart, and would train the owner to read
+// "error" as "ignore".
+//
+// Both workers are exercised here because the rule lives in a helper each of
+// them has to remember to call, and a rule that has to be remembered gets
+// forgotten: these two lines are two of the several it had been forgotten at.
+func TestACancelledPassIsLoggedAsRoutineAndNotAsAFailure(t *testing.T) {
+	f := newWorkerFixture(t)
+	ctx, cancel := context.WithCancel(f.ctx)
+	cancel()
+
+	dispatchLogs := &logCapture{}
+	dispatcher := NewDispatchWorker(f.store, &recordingInserter{}, slog.New(dispatchLogs))
+	if err := dispatcher.Work(ctx, &river.Job[SyncDispatchArgs]{JobRow: &rivertype.JobRow{ID: 1}}); err == nil {
+		t.Fatal("the dispatcher returned nil though its context was cancelled")
+	}
+	assertOneRecordAt(t, dispatchLogs,
+		"tinvest: list the active connections failed", slog.LevelDebug, "context canceled")
+
+	if err := f.worker.Work(ctx, &river.Job[SyncArgs]{
+		JobRow: &rivertype.JobRow{ID: 1},
+		Args:   SyncArgs{ConnectionID: f.conn.ID, Trigger: "schedule"},
+	}); err == nil {
+		t.Fatal("the sync worker returned nil though its context was cancelled")
+	}
+	assertOneRecordAt(t, f.logs,
+		"tinvest: read the connection to sync failed", slog.LevelDebug, "context canceled")
 }
 
 // -------------------------------------------------------------------------
@@ -934,8 +1083,28 @@ func TestDispatchWorkerQueuesOneJobForEachActiveConnection(t *testing.T) {
 	if inserter.args[0] != (SyncArgs{ConnectionID: f.conn.ID, Trigger: "schedule"}) {
 		t.Errorf("queued %+v, want {%s schedule}", inserter.args[0], f.conn.ID)
 	}
-	if opts := inserter.opts[0]; opts == nil || !opts.UniqueOpts.ByArgs {
-		t.Errorf("queued with opts %+v, want the same unique opts the manual button uses", opts)
+	// THE WHOLE OPTIONS VALUE, not one flag of it. ByArgs alone says the job is
+	// unique by its arguments and says nothing about ACROSS WHICH STATES, which
+	// is where the entire schedule lives: River's default set includes
+	// `completed`, and a dispatcher that queued with the default would have
+	// every hour after the first skipped as a duplicate of a job long finished.
+	// A comparison that stopped at ByArgs would call that correct.
+	//
+	// AND WRITTEN OUT RATHER THAN TAKEN FROM SyncInsertOpts. Comparing what was
+	// queued against the very function that built it proves the dispatcher and
+	// the owner's button agree — and proves nothing whatever about what they
+	// agree ON, because a change to that function moves both sides together.
+	// Measured: with ByState deleted from SyncInsertOpts, a DeepEqual against
+	// SyncInsertOpts() stays green and this literal goes red.
+	want := &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
+		rivertype.JobStateAvailable,
+		rivertype.JobStatePending,
+		rivertype.JobStateRetryable,
+		rivertype.JobStateRunning,
+		rivertype.JobStateScheduled,
+	}}}
+	if opts := inserter.opts[0]; !reflect.DeepEqual(opts, want) {
+		t.Errorf("queued with opts %+v, want %+v — the very options the manual button uses", opts, want)
 	}
 }
 
@@ -956,7 +1125,8 @@ func TestDispatchWorkerSaysThereIsNothingToSyncWhenNoConnectionIsActive(t *testi
 	if len(inserter.args) != 0 {
 		t.Errorf("%d jobs queued, want 0", len(inserter.args))
 	}
-	assertOneRecordAt(t, logs, nothingToSyncMessage, slog.LevelDebug, "0")
+	rec := assertOneRecordAt(t, logs, nothingToSyncMessage, slog.LevelDebug, "connections")
+	assertAttrIs(t, rec, "connections", "0")
 }
 
 // A queue that will not take the job is this worker's own failure, so it comes

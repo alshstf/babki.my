@@ -112,10 +112,15 @@ type jobInserter interface {
 // different unique classes, which is exactly what SyncInsertOpts exists to
 // prevent.
 //
-// The result says whether the job was actually queued: a
-// UniqueSkippedAsDuplicate result means a sync for this connection is already
-// on its way, which is a perfectly good answer to give the owner rather than
-// an error.
+// The result says whether the job was actually queued. A
+// UniqueSkippedAsDuplicate result means a sync of this connection is already in
+// the queue, which is a perfectly good answer to give the owner rather than an
+// error — BUT IT DOES NOT MEAN ONE IS RUNNING THIS SECOND. syncUniqueStates
+// includes Retryable, and River's backoff between a job's attempts grows into
+// the hours, so the job the duplicate collided with may equally be a failed one
+// parked until its next attempt. A caller turning this into a sentence for the
+// owner must say "already queued", not "running now": the second reading would
+// be a lie for as long as that backoff lasts.
 func EnqueueSync(ctx context.Context, inserter jobInserter, connectionID uuid.UUID, trigger SyncTrigger) (
 	*rivertype.JobInsertResult, error,
 ) {
@@ -221,7 +226,7 @@ func NewDispatchWorker(store *Store, inserter jobInserter, log *slog.Logger) riv
 func (w *dispatchWorker) Work(ctx context.Context, _ *river.Job[SyncDispatchArgs]) error {
 	conns, err := w.store.ListActiveConnections(ctx)
 	if err != nil {
-		w.log.Error("tinvest: list the active connections failed", "err", err)
+		logAt(ctx, w.log, err, "tinvest: list the active connections failed", "err", err)
 		return err
 	}
 	if len(conns) == 0 {
@@ -233,7 +238,7 @@ func (w *dispatchWorker) Work(ctx context.Context, _ *river.Job[SyncDispatchArgs
 	for _, conn := range conns {
 		res, err := EnqueueSync(ctx, w.inserter, conn.ID, TriggerSchedule)
 		if err != nil {
-			w.log.Error("tinvest: queue a sync failed", "connection", conn.ID, "err", err)
+			logAt(ctx, w.log, err, "tinvest: queue a sync failed", "connection", conn.ID, "err", err)
 			return err
 		}
 		if res != nil && res.UniqueSkippedAsDuplicate {
@@ -327,9 +332,20 @@ func (w *syncWorker) Timeout(*river.Job[SyncArgs]) time.Duration { return syncTi
 func (w *syncWorker) Work(ctx context.Context, job *river.Job[SyncArgs]) error {
 	trigger, err := syncTrigger(job.Args.Trigger)
 	if err != nil {
-		w.log.Error("tinvest: a sync job names a trigger the run log cannot store",
+		// NOT RETURNED, for the reason a refused token is not returned: the
+		// arguments of a queued job never change, so every one of River's two
+		// dozen attempts would fail here again and shout about it again, hours
+		// apart, forever. Nil ends it after one Error line naming the word that
+		// nothing can read.
+		//
+		// No run is recorded failed either, and that is not a choice: the run
+		// log's own trigger column is a CHECK over exactly the three words this
+		// function accepts, so the entry that would say what went wrong is the
+		// one entry the log refuses. The line below is therefore the whole
+		// record of it.
+		w.log.Error("tinvest: a sync job names a trigger the run log cannot store, dropping it",
 			"connection", job.Args.ConnectionID, "trigger", job.Args.Trigger, "err", err)
-		return err
+		return nil
 	}
 
 	conn, err := w.store.connectionForSync(ctx, job.Args.ConnectionID)
@@ -341,7 +357,8 @@ func (w *syncWorker) Work(ctx context.Context, job *river.Job[SyncArgs]) error {
 		return nil
 	}
 	if err != nil {
-		w.log.Error("tinvest: read the connection to sync failed", "connection", job.Args.ConnectionID, "err", err)
+		logAt(ctx, w.log, err, "tinvest: read the connection to sync failed",
+			"connection", job.Args.ConnectionID, "err", err)
 		return err
 	}
 	if conn.Status != StatusActive {
@@ -366,7 +383,7 @@ func (w *syncWorker) Work(ctx context.Context, job *river.Job[SyncArgs]) error {
 
 	links, err := w.store.LinksByConnection(ctx, conn.ID)
 	if err != nil {
-		w.log.Error("tinvest: list the connection's account links failed", "connection", conn.ID, "err", err)
+		logAt(ctx, w.log, err, "tinvest: list the connection's account links failed", "connection", conn.ID, "err", err)
 		return err
 	}
 	if len(links) == 0 {
@@ -378,7 +395,9 @@ func (w *syncWorker) Work(ctx context.Context, job *river.Job[SyncArgs]) error {
 
 // linkRun is one link's run log entry and what this run has learned about it so
 // far. It is filled in as the pipeline goes, so that a failure halfway through
-// can still close every run with the counters it really achieved.
+// can still close every run with what its steps had recorded by then. Anything
+// a failure leaves unfilled must be taken before the entry is closed or left
+// out of it — see failed, which is where that rule is kept.
 type linkRun struct {
 	link      AccountLink
 	runID     uuid.UUID
@@ -460,24 +479,29 @@ func (w *syncWorker) sync(ctx context.Context, conn Connection, links []AccountL
 			// remaining runs open in the log as well. The run this one was for
 			// stays "running" for good, which is what the store's own doc
 			// describes an interrupted sync as looking like.
-			w.logAt(ctx, err, "tinvest: close a finished sync run failed, it will stay open in the log",
+			logAt(ctx, w.log, err, "tinvest: close a finished sync run failed, it will stay open in the log",
 				"connection", conn.ID, "run", lr.runID, "err", err)
 			if closeErr == nil {
 				closeErr = err
 			}
 		}
 	}
+	// SAID BEFORE THE REFUSAL IS RETURNED, and not after it. This line is the
+	// record of work that really happened — the broker was read, the journal
+	// was rebuilt, the accounts were reconciled — and a run log that would not
+	// take the entry says nothing about any of that. Ordered the other way
+	// round, the one run that most needs explaining is the one that leaves no
+	// summary at all.
+	w.log.Info("tinvest: a sync run finished",
+		"connection", conn.ID, "trigger", trigger, "links", len(links),
+		"read", read, "added", added, "disappeared", gone, "unparsed", unparsed,
+		"journal_added", rebuilt.Added, "journal_removed", rebuilt.Removed, "withdrawn", rebuilt.Withdrawn)
 	if closeErr != nil {
 		// The work itself is done and the retry will find it done; what failed
 		// is the log of it, and that is worth another attempt rather than a
 		// silent gap.
 		return closeErr
 	}
-
-	w.log.Info("tinvest: a sync run finished",
-		"connection", conn.ID, "trigger", trigger, "links", len(links),
-		"read", read, "added", added, "disappeared", gone, "unparsed", unparsed,
-		"journal_added", rebuilt.Added, "journal_removed", rebuilt.Removed, "withdrawn", rebuilt.Withdrawn)
 	return nil
 }
 
@@ -492,9 +516,20 @@ func (w *syncWorker) sync(ctx context.Context, conn Connection, links []AccountL
 // arrive are all things a later attempt can get past.
 //
 // Every run opened is closed, including the ones that had already succeeded
-// when a later link failed. Their counters are the ones they really achieved
-// and their status is failed all the same: the projection was never rebuilt and
-// nothing was reconciled, so the attempt did not do for them what a run is.
+// when a later link failed. Their status is failed all the same: the projection
+// was never rebuilt and nothing was reconciled, so the attempt did not do for
+// them what a run is.
+//
+// THE COUNTERS ARE MEASUREMENTS AND NOT LEFTOVERS. The mirror's three are what
+// the mirror pass of this attempt recorded, and a pass that did not finish
+// recorded nothing — its transaction rolled back — so their zero is the true
+// figure for it. The unparsed figure is not of that kind: it is a count of what
+// is in the mirror NOW rather than of anything this attempt did, and the loop
+// that takes it is the reconciliation loop, which a failure anywhere earlier
+// never reaches. Left as it came, it would publish "no unreadable operations"
+// on a run that never looked for any. So it is counted here instead. The one
+// zero on this path that still is not a measurement is a count that itself
+// failed, and that one is said out loud in the log.
 func (w *syncWorker) failed(ctx context.Context, conn Connection, runs []*linkRun, cause error) error {
 	revoked := errors.Is(cause, ErrTokenInvalid)
 
@@ -504,7 +539,7 @@ func (w *syncWorker) failed(ctx context.Context, conn Connection, runs []*linkRu
 			ReadCount:        lr.stats.Read,
 			AddedCount:       lr.stats.Added,
 			DisappearedCount: lr.stats.Disappeared,
-			UnparsedCount:    lr.unparsed,
+			UnparsedCount:    w.unparsedNow(ctx, conn, lr),
 			Error:            cause.Error(),
 			Reconcile:        lr.reconcile,
 		}); err != nil {
@@ -512,7 +547,7 @@ func (w *syncWorker) failed(ctx context.Context, conn Connection, runs []*linkRu
 			// describes as what an interrupted sync looks like. Said out loud
 			// rather than swallowed, because from here on the run log is
 			// telling the owner something slightly wrong.
-			w.logAt(ctx, err, "tinvest: close a failed sync run failed, it will stay open in the log",
+			logAt(ctx, w.log, err, "tinvest: close a failed sync run failed, it will stay open in the log",
 				"connection", conn.ID, "run", lr.runID, "err", err)
 		}
 	}
@@ -522,7 +557,7 @@ func (w *syncWorker) failed(ctx context.Context, conn Connection, runs []*linkRu
 			// The connection stays active and the schedule will try again in an
 			// hour, meeting the same refusal. Returned, so the queue retries
 			// this job and gets another chance to park it.
-			w.log.Error("tinvest: park a connection whose token the broker refused failed",
+			logAt(ctx, w.log, err, "tinvest: park a connection whose token the broker refused failed",
 				"connection", conn.ID, "err", err)
 			return err
 		}
@@ -531,20 +566,54 @@ func (w *syncWorker) failed(ctx context.Context, conn Connection, runs []*linkRu
 		return nil
 	}
 
-	w.logAt(ctx, cause, "tinvest: a sync run failed", "connection", conn.ID, "err", cause)
+	logAt(ctx, w.log, cause, "tinvest: a sync run failed", "connection", conn.ID, "err", cause)
 	return cause
+}
+
+// unparsedNow counts the link's unreadable mirror rows at this moment, for a
+// run about to be closed as failed.
+//
+// It is asked here because linkRun.unparsed is filled in by the reconciliation
+// loop, which a failure anywhere earlier never reaches — and the run row would
+// then publish a zero that means "never counted" as though it meant "counted,
+// found none". The design already refuses that trade for the neighbouring
+// figure: the reconciliation has a "not checked" verdict of its own precisely
+// so that "no differences" cannot be said by a run that never looked. This
+// column has no such state, so the count is simply taken.
+//
+// A count that fails leaves the zero and says so in the log, which is the only
+// place left to say it: the column holds a number and has no room for "not
+// counted" beside it.
+func (w *syncWorker) unparsedNow(ctx context.Context, conn Connection, lr *linkRun) int {
+	n, err := w.store.unparsedCountByLink(ctx, lr.link.ID)
+	if err != nil {
+		logAt(ctx, w.log, err,
+			"tinvest: count a failed run's unreadable operations failed, it is recorded as zero unparsed",
+			"connection", conn.ID, "run", lr.runID, "link", lr.link.ID, "err", err)
+		return 0
+	}
+	return n
 }
 
 // logAt writes msg at Error, or at Debug when the failure is nothing but the
 // caller having gone away — a shutdown cancelling the job's context, or the
-// job's own timeout. The rule is local to this worker and deliberately not made
-// general: this line answers "did the sync break?", and a cancelled run is not
-// a lesser yes but a no. (marketdata's Converter makes the same distinction for
-// the same reason, and says the same about not spreading it.)
-func (w *syncWorker) logAt(ctx context.Context, err error, msg string, args ...any) {
+// job's own timeout. The rule is local to this file's two workers and
+// deliberately not made general: these lines answer "did the import break?",
+// and a cancelled run is not a lesser yes but a no. (marketdata's Converter
+// makes the same distinction for the same reason, and says the same about not
+// spreading it.)
+//
+// IT IS FOR EVERY FAILURE THAT CAN BE A CANCELLATION, which here means every
+// one that came out of a call taking ctx: a database read, a queue insert, a
+// broker request. The three failures in this file that are logged WITHOUT it —
+// a trigger no vocabulary contains, a stored secret that will not decrypt, a
+// client factory that will not build one — cannot be a cancellation whatever
+// the process is doing, and passing them through here would only invite the
+// reader to think they might be.
+func logAt(ctx context.Context, log *slog.Logger, err error, msg string, args ...any) {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
-		w.log.Debug(msg, args...)
+		log.Debug(msg, args...)
 		return
 	}
-	w.log.Error(msg, args...)
+	log.Error(msg, args...)
 }

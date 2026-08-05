@@ -136,6 +136,13 @@ func NewWorkers(
 // above inserts through. The attaching happens HERE, and not at the call site,
 // because this is the moment the client first exists and there is then nothing
 // left for a caller to forget.
+//
+// THE ATTACHING IS COVERED, and it has to be: without it every dispatch of the
+// import answers "the job queue is not running yet", is retried, answers the
+// same, and no connection is ever synced — while the process looks perfectly
+// healthy. TestStartingTheQueueQueuesASyncForAnActiveConnection is what would
+// notice; deleting the line below turns it red, as does deleting the periodic
+// job that fires the dispatcher.
 func NewClient(pool *pgxpool.Pool, workers *river.Workers, enqueuer *Enqueuer, log *slog.Logger) (
 	*river.Client[pgx.Tx], error,
 ) {

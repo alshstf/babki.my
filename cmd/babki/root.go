@@ -90,7 +90,19 @@ func newTinvestDeps(r *rt, instStore *instrument.Store, opStore *operation.Store
 	store := tinvest.NewStore(r.pool)
 	hc, err := tinvest.NewHTTPClient(tinvestHTTPTimeout)
 	if err != nil {
-		return jobs.TinvestDeps{}, err
+		// THIS ONE FAILURE STOPS EVERY BACKGROUND JOB, not merely the import,
+		// and the text has to say so — the person reading it will be looking at
+		// missing exchange rates and stale quotes and wondering what those have
+		// to do with a broker they may not even have connected.
+		//
+		// It is left fatal all the same: the only way NewHTTPClient refuses is
+		// an embedded certificate that will not parse, which means the binary
+		// itself was built wrong. Starting anyway would hide a broken build
+		// behind a module that happens to be idle on this instance.
+		return jobs.TinvestDeps{}, fmt.Errorf(
+			"the T-Invest importer's HTTPS trust could not be built, so the background job "+
+				"queue does not start at all and nothing else it runs — exchange rates, quotes — "+
+				"will run either; nothing about this instance's configuration causes it: %w", err)
 	}
 	return jobs.TinvestDeps{
 		Store: store,
