@@ -1,19 +1,24 @@
 package jobs_test
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/jobs"
+	"babki.my/babki/internal/platform/secretbox"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -52,6 +57,36 @@ func (stubQuoteProvider) QuotesFor(context.Context, []string) ([]marketdata.Tick
 
 func (stubQuoteProvider) Name() string { return "stub-quotes" }
 
+// stubTinvestDeps is the T-Invest half of the same arrangement. The hourly
+// dispatcher is registered with RunOnStart: true, so client.Start fires it
+// immediately here too — it finds no active connection in this test's empty
+// database, logs that there is nothing to sync and returns, exactly as the
+// backfill job does. Nothing below is therefore ever called; they are here
+// because NewWorkers takes them, and the client factory fails loudly rather
+// than returning a client that would reach the live broker if this test's
+// database ever stopped being empty.
+func stubTinvestDeps(t *testing.T, pool *pgxpool.Pool) jobs.TinvestDeps {
+	t.Helper()
+	box, err := secretbox.New(bytes.Repeat([]byte{3}, secretbox.KeySize))
+	if err != nil {
+		t.Fatalf("secretbox.New: %v", err)
+	}
+	store := tinvest.NewStore(pool)
+	opStore := operation.NewStore(pool)
+	return jobs.TinvestDeps{
+		Store: store,
+		Box:   box,
+		NewClient: func(string) (*tinvest.Client, error) {
+			return nil, errors.New("stub: this test must never reach the broker")
+		},
+		NewRebuilder: func() *tinvest.Rebuilder {
+			return tinvest.NewRebuilder(store, tinvest.NewResolver(store, instrument.NewStore(pool), slog.Default()),
+				operation.NewService(opStore), opStore, slog.Default())
+		},
+		Reconciler: tinvest.NewReconciler(store, opStore, account.NewStore(pool), slog.Default()),
+	}
+}
+
 // TestHeartbeat verifies that the River client starts, the periodic
 // heartbeat job (RunOnStart) executes, and leaves a mark in meta.
 func TestHeartbeat(t *testing.T) {
@@ -63,9 +98,10 @@ func TestHeartbeat(t *testing.T) {
 	opStore := operation.NewStore(pool)
 	accStore := account.NewStore(pool)
 	famStore := family.NewStore(pool)
+	enqueuer := jobs.NewEnqueuer()
 	workers := jobs.NewWorkers(slog.Default(), pool, mdStore, instStore, opStore, accStore, famStore,
-		stubFxProvider{}, stubQuoteProvider{})
-	client, err := jobs.NewClient(pool, workers, slog.Default())
+		stubFxProvider{}, stubQuoteProvider{}, stubTinvestDeps(t, pool), enqueuer)
+	client, err := jobs.NewClient(pool, workers, enqueuer, slog.Default())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

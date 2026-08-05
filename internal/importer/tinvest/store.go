@@ -228,10 +228,16 @@ type RunOutcome struct {
 // from the rest by looking rather than by remembering:
 //
 //   - reads: LinksByConnection, MirrorRowsByLink, UnparsedByConnection,
-//     RunsByConnection, LastSuccessfulSyncAt. ListActiveConnections takes no
-//     space either and is a wider thing still — see its own note.
+//     RunsByConnection, LastSuccessfulSyncAt, connectionForSync,
+//     unparsedCountByLink. ListActiveConnections takes no space either and is a
+//     wider thing still — see its own note.
 //   - writes: UpdateConnectionStatus, SyncMirror, StartRun, FinishRun,
 //     SetUnparsedReasons.
+//
+// The last two reads are UNEXPORTED, and that is the whole of their protection:
+// they answer about any connection in the instance, so nothing outside this
+// package can reach them at all and no request path can grow a caller by
+// accident.
 //
 // SetUnparsedReasons is the sharpest of them and is called out on purpose: it
 // takes bare mirror-row ids with no connection and no space anywhere in the
@@ -287,6 +293,26 @@ func (s *Store) ConnectionByID(ctx context.Context, spaceID, id uuid.UUID) (Conn
 		`SELECT `+connectionCols+` FROM tinvest_connections WHERE id = $1 AND space_id = $2`, id, spaceID))
 	if err != nil {
 		return Connection{}, fmt.Errorf("tinvest: read connection: %w", err)
+	}
+	return c, nil
+}
+
+// connectionForSync reads one connection by its id alone. It is the sync
+// worker's read: a job carries a connection id and nothing else, and the worker
+// has no principal whose space it could be checked against — the space is what
+// this row is then read FROM (see Connection.SpaceID, which the rebuild and the
+// reconciliation both scope themselves by).
+//
+// Unexported deliberately; see the note on Store above. It differs from
+// ListActiveConnections in returning a connection WHATEVER its status, because
+// "this connection is switched off" is something the worker has to be able to
+// say — and to tell apart from "this connection is gone", which comes back as
+// pgx.ErrNoRows.
+func (s *Store) connectionForSync(ctx context.Context, id uuid.UUID) (Connection, error) {
+	c, err := scanConnection(s.pool.QueryRow(ctx,
+		`SELECT `+connectionCols+` FROM tinvest_connections WHERE id = $1`, id))
+	if err != nil {
+		return Connection{}, fmt.Errorf("tinvest: read connection for sync: %w", err)
 	}
 	return c, nil
 }
@@ -531,6 +557,26 @@ func (s *Store) UnparsedByConnection(ctx context.Context, connID uuid.UUID, limi
 		rows = rows[:limit]
 	}
 	return rows, hasMore, nil
+}
+
+// unparsedCountByLink counts the mirror rows of ONE broker account that the
+// projection could not read. The sync worker writes it onto that link's run.
+//
+// It exists because the rebuild's own Unparsed figure is for the whole
+// CONNECTION while a run belongs to one link, and a connection-wide number
+// filed under one account would be read as that account's own by every screen
+// that shows it — the caption that does not match the figure beside it, which
+// this project has been bitten by four times.
+//
+// Unexported deliberately; see the note on Store above.
+func (s *Store) unparsedCountByLink(ctx context.Context, linkID uuid.UUID) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM tinvest_operations_mirror
+		WHERE link_id = $1 AND unparsed_reason <> ''`, linkID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("tinvest: count the unparsed rows of a link: %w", err)
+	}
+	return n, nil
 }
 
 // SetUnparsedReasons records, for each mirror row named, why the projection

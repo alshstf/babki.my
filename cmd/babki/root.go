@@ -16,6 +16,7 @@ import (
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/cbr"
@@ -66,6 +67,47 @@ func newCbrHTTPClient() *http.Client {
 	return &http.Client{Timeout: cbrHTTPTimeout}
 }
 
+// tinvestHTTPTimeout bounds every request to the T-Invest REST gateway. It is
+// stated here rather than left to the package default so that the one client
+// this process builds has a timeout chosen where the rest of the process's
+// timeouts are (see cbrHTTPTimeout). 30s is generous for a single page of
+// operations and short enough that a stalled connection cannot eat much of the
+// sync job's fifteen-minute budget.
+const tinvestHTTPTimeout = 30 * time.Second
+
+// newTinvestDeps assembles what the T-Invest import jobs run on. The two factories
+// exist for reasons the types themselves state: a broker client is per token,
+// and a Rebuilder is per RUN, because the passport cache it carries is bounded
+// by the run and is not safe for concurrent use.
+//
+// The transport is built ONCE and shared by every client the factory makes: it
+// carries the certificate pool the gateway needs (see tinvest.NewHTTPClient) and
+// building one per run would rebuild that pool on every sync, per connection,
+// forever.
+func newTinvestDeps(r *rt, instStore *instrument.Store, opStore *operation.Store,
+	accStore *account.Store,
+) (jobs.TinvestDeps, error) {
+	store := tinvest.NewStore(r.pool)
+	hc, err := tinvest.NewHTTPClient(tinvestHTTPTimeout)
+	if err != nil {
+		return jobs.TinvestDeps{}, err
+	}
+	return jobs.TinvestDeps{
+		Store: store,
+		Box:   r.box,
+		NewClient: func(token string) (*tinvest.Client, error) {
+			// Base URL empty: the production gateway. Parameterized in the
+			// package for tests, not configured here.
+			return tinvest.NewClient(hc, "", token, r.log), nil
+		},
+		NewRebuilder: func() *tinvest.Rebuilder {
+			return tinvest.NewRebuilder(store, tinvest.NewResolver(store, instStore, r.log),
+				operation.NewService(opStore), opStore, r.log)
+		},
+		Reconciler: tinvest.NewReconciler(store, opStore, accStore, r.log),
+	}, nil
+}
+
 // startJobClient wires up the job workers and River client and starts it.
 // Shared by the "all" and "worker" roles. cbr and moex are used with their
 // default base URLs — no configuration knob is exposed for them yet. cbr's
@@ -75,6 +117,10 @@ func newCbrHTTPClient() *http.Client {
 // — it now makes one request per board. Nothing has replaced the reason: an
 // unbounded client on the quotes path is a gap, not a decision, and it is
 // filed rather than fixed here.
+//
+// r.box is dereferenced by the T-Invest sync worker, so this must only ever be
+// reached from a role that required the encryption key — which is exactly the
+// two roles that call it ("all" and "worker"; see setup's requireEncryptionKey).
 func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	mdStore := marketdata.NewStore(r.pool)
 	instStore := instrument.NewStore(r.pool)
@@ -83,9 +129,14 @@ func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	famStore := family.NewStore(r.pool)
 	fxProvider := cbr.New(newCbrHTTPClient(), "")
 	quoteProvider := moex.New(nil, "", r.log)
+	tinvestDeps, err := newTinvestDeps(r, instStore, opStore, accStore)
+	if err != nil {
+		return nil, err
+	}
+	enqueuer := jobs.NewEnqueuer()
 	workers := jobs.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, accStore, famStore,
-		fxProvider, quoteProvider)
-	client, err := jobs.NewClient(r.pool, workers, r.log)
+		fxProvider, quoteProvider, tinvestDeps, enqueuer)
+	client, err := jobs.NewClient(r.pool, workers, enqueuer, r.log)
 	if err != nil {
 		return nil, err
 	}

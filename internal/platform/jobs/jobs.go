@@ -4,6 +4,8 @@
 package jobs
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -11,12 +13,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/secretbox"
 )
 
 // refreshFxInterval and refreshQuotesInterval set how often the fx and
@@ -28,11 +33,70 @@ import (
 // currency's whole series in one request each, so it needs no continuation
 // and a daily tick is enough: it picks up history newly needed by a
 // backdated operation, and re-running simply overwrites the same rows.
+//
+// tinvestSyncInterval is how often the T-Invest importer looks for new
+// operations. Hourly is a deliberate middle: the products people compare this
+// one with sit either side of it (Intelinvest syncs a couple of times a day,
+// Snowball as often as every fifteen minutes), and personal portfolios do not
+// change faster than that in any way an hour's delay would misrepresent.
+//
+// It is affordable because a run costs so little: reading a whole account's
+// history is single-digit requests (a thousand operations to the page) against
+// a documented limit of 200 a minute for the operations service, and the rebuild
+// that follows makes no broker call at all for instruments it has already seen.
+// So the cadence is bounded by taste rather than by the broker.
 const (
 	refreshFxInterval     = 24 * time.Hour
 	refreshQuotesInterval = 30 * time.Minute
 	backfillFxInterval    = 24 * time.Hour
+	tinvestSyncInterval   = time.Hour
 )
+
+// TinvestDeps is everything the T-Invest import workers need, grouped rather
+// than added to NewWorkers' positional list — which is long enough already that
+// two arguments of the same type could be swapped and still compile.
+//
+// NewClient and NewRebuilder are factories and not instances, each for its own
+// reason: a broker client is per token, which is only known once a job has read
+// a connection; and a Rebuilder is per run, because the Resolver it carries
+// caches broker passports in a plain map and is not safe for concurrent use
+// (see tinvest.Rebuilder's own doc).
+type TinvestDeps struct {
+	Store        *tinvest.Store
+	Box          *secretbox.Box
+	NewClient    func(token string) (*tinvest.Client, error)
+	NewRebuilder func() *tinvest.Rebuilder
+	Reconciler   *tinvest.Reconciler
+}
+
+// Enqueuer is the queue as a worker that queues other jobs sees it.
+//
+// It exists because the T-Invest dispatcher and the River client genuinely need
+// each other: the dispatcher is a worker, workers are registered before a client
+// can be built, and the dispatcher's whole job is to insert through that client.
+// The indirection is filled in by NewClient below, at the one place a client
+// comes into existence, so no caller can forget to do it.
+//
+// Insert before that point is an error and never a nil dereference: a
+// dispatcher that somehow ran against an unattached Enqueuer must say so and be
+// retried, not crash the process.
+//
+// The field is written once, in NewClient, and read from worker goroutines. It
+// needs no lock: those goroutines do not exist until the client is started, and
+// starting it is what the caller does after NewClient has returned — so the
+// write happens before any goroutine that reads it is created.
+type Enqueuer struct{ client *river.Client[pgx.Tx] }
+
+func NewEnqueuer() *Enqueuer { return &Enqueuer{} }
+
+func (e *Enqueuer) Insert(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) (
+	*rivertype.JobInsertResult, error,
+) {
+	if e.client == nil {
+		return nil, errors.New("jobs: the job queue is not running yet, nothing can be enqueued")
+	}
+	return e.client.Insert(ctx, args, opts)
+}
 
 // NewWorkers registers all of the application's workers. mdStore,
 // instruments, operations, accounts and spaces back the marketdata jobs;
@@ -40,6 +104,8 @@ const (
 // (e.g. cbr and moex in production, fakes in tests). fxProvider is an
 // FxHistoryProvider rather than a plain FxProvider because the history
 // download needs a source that can deliver a whole date range at once.
+// tinvest and enqueuer back the T-Invest import jobs; enqueuer must be the same
+// one handed to NewClient, which is what fills it in.
 func NewWorkers(
 	log *slog.Logger,
 	pool *pgxpool.Pool,
@@ -50,6 +116,8 @@ func NewWorkers(
 	spaces *family.Store,
 	fxProvider marketdata.FxHistoryProvider,
 	quoteProvider marketdata.QuoteProvider,
+	tinvestDeps TinvestDeps,
+	enqueuer *Enqueuer,
 ) *river.Workers {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &heartbeatWorker{log: log, pool: pool})
@@ -57,11 +125,29 @@ func NewWorkers(
 	river.AddWorker(workers, marketdata.NewQuotesWorker(mdStore, instruments, quoteProvider, log))
 	river.AddWorker(workers, marketdata.NewBackfillFxWorker(
 		mdStore, operations, accounts, spaces, fxProvider, log))
+	river.AddWorker(workers, tinvest.NewDispatchWorker(tinvestDeps.Store, enqueuer, log))
+	river.AddWorker(workers, tinvest.NewSyncWorker(tinvestDeps.Store, tinvestDeps.Box,
+		tinvestDeps.NewClient, tinvestDeps.NewRebuilder, tinvestDeps.Reconciler, log))
 	return workers
 }
 
-// NewClient creates a River client with the given workers and periodic jobs.
-func NewClient(pool *pgxpool.Pool, workers *river.Workers, log *slog.Logger) (*river.Client[pgx.Tx], error) {
+// NewClient creates a River client with the given workers and periodic jobs,
+// and attaches it to enqueuer — the indirection the dispatch worker registered
+// above inserts through. The attaching happens HERE, and not at the call site,
+// because this is the moment the client first exists and there is then nothing
+// left for a caller to forget.
+func NewClient(pool *pgxpool.Pool, workers *river.Workers, enqueuer *Enqueuer, log *slog.Logger) (
+	*river.Client[pgx.Tx], error,
+) {
+	client, err := newClient(pool, workers, log)
+	if err != nil {
+		return nil, err
+	}
+	enqueuer.client = client
+	return client, nil
+}
+
+func newClient(pool *pgxpool.Pool, workers *river.Workers, log *slog.Logger) (*river.Client[pgx.Tx], error) {
 	return river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Logger:  log,
 		Workers: workers,
@@ -94,6 +180,13 @@ func NewClient(pool *pgxpool.Pool, workers *river.Workers, log *slog.Logger) (*r
 				river.PeriodicInterval(backfillFxInterval),
 				func() (river.JobArgs, *river.InsertOpts) {
 					return marketdata.BackfillFxArgs{}, nil
+				},
+				&river.PeriodicJobOpts{RunOnStart: true},
+			),
+			river.NewPeriodicJob(
+				river.PeriodicInterval(tinvestSyncInterval),
+				func() (river.JobArgs, *river.InsertOpts) {
+					return tinvest.SyncDispatchArgs{}, nil
 				},
 				&river.PeriodicJobOpts{RunOnStart: true},
 			),
