@@ -24,4 +24,8 @@
 //   - projection.go: the mirror turned into journal operations, as a pure
 //     function of one mirror row — no database, no clock — so the rules can
 //     change and the whole history be rebuilt without going near the API.
+//   - rebuild.go: the difference between the journal as it stands and the
+//     journal that projection now asks for, computed whole and applied.
+//   - reconcile.go: our own positions and cash checked against what the broker
+//     says it holds, and the balance mark that check leaves on the account.
 package tinvest

@@ -204,6 +204,10 @@ type SyncRun struct {
 // RunOutcome is what a finished run has to say for itself. Status is one of
 // RunOK / RunFailed; the database refuses anything else (a run cannot finish
 // as "running").
+//
+// Reconcile is the verdict of the check against the broker, and its ZERO VALUE
+// MEANS "NOT CHECKED": a caller that reconciled nothing leaves it alone and
+// the run keeps saying so. See FinishRun.
 type RunOutcome struct {
 	Status           RunStatus
 	ReadCount        int
@@ -211,6 +215,7 @@ type RunOutcome struct {
 	DisappearedCount int
 	UnparsedCount    int
 	Error            string
+	Reconcile        ReconcileResult
 }
 
 // Store is the data access layer of the T-Invest importer.
@@ -598,18 +603,37 @@ func (s *Store) StartRun(ctx context.Context, connID, linkID uuid.UUID, trigger 
 	return r, nil
 }
 
-// FinishRun closes the log entry. The reconcile columns are left alone: what
-// the reconciler found is its own write, and a sync that has not been checked
-// against the broker must keep saying "not checked" rather than borrow this
-// run's verdict.
+// FinishRun closes the log entry, carrying the reconciliation's verdict onto
+// it.
 //
-// Returns pgx.ErrNoRows when there is no such run.
+// A RUN NOBODY CHECKED KEEPS SAYING SO. The zero value of RunOutcome.Reconcile
+// is "not checked" (its Status is the empty string, which the column's own
+// CHECK would refuse), and it is written out as not_checked with a null
+// reconciled_at and a null list: "never looked" is a different statement from
+// "looked and found nothing", which is an EMPTY list. A screen that cannot
+// tell those apart draws a tick over a check that never happened, and this
+// program's whole reconciliation exists not to.
+//
+// reconciled_at is the database's own clock at this statement, the same
+// instant as finished_at: the check was made within this run, moments before
+// it was closed.
+//
+// Returns pgx.ErrNoRows when there is no such run, and
+// ErrReconcileVerdictContradictsItself when the verdict and the list disagree.
 func (s *Store) FinishRun(ctx context.Context, runID uuid.UUID, outcome RunOutcome) error {
+	status, mismatches, err := reconcileColumns(outcome.Reconcile)
+	if err != nil {
+		return err
+	}
 	ct, err := s.pool.Exec(ctx, `UPDATE tinvest_sync_runs
 		SET status = $2, finished_at = now(), read_count = $3, added_count = $4,
-		    disappeared_count = $5, unparsed_count = $6, error = $7
+		    disappeared_count = $5, unparsed_count = $6, error = $7,
+		    reconcile_status = $8,
+		    reconciled_at = CASE WHEN $8 = $9 THEN NULL ELSE now() END,
+		    reconcile_mismatches = $10
 		WHERE id = $1`, runID, outcome.Status, outcome.ReadCount, outcome.AddedCount,
-		outcome.DisappearedCount, outcome.UnparsedCount, outcome.Error)
+		outcome.DisappearedCount, outcome.UnparsedCount, outcome.Error,
+		status, ReconcileNotChecked, mismatches)
 	if err != nil {
 		return fmt.Errorf("tinvest: finish sync run: %w", err)
 	}
@@ -617,6 +641,45 @@ func (s *Store) FinishRun(ctx context.Context, runID uuid.UUID, outcome RunOutco
 		return fmt.Errorf("tinvest: finish sync run: %w", pgx.ErrNoRows)
 	}
 	return nil
+}
+
+// ErrReconcileVerdictContradictsItself means a run was asked to record a
+// verdict its own list of differences denies: "there are differences" with
+// nothing to show, or any other verdict — "everything agrees", "not checked" —
+// while carrying some.
+//
+// The column's CHECK constrains the word alone, and this is the pairing. It is
+// refused rather than repaired because either half could be the true one, and
+// a screen showing the wrong half is precisely the failure — a caption that
+// does not match the figures beside it — this project has been bitten by four
+// times.
+var ErrReconcileVerdictContradictsItself = errors.New("tinvest: the reconcile verdict and its list of differences disagree")
+
+// reconcileColumns turns a verdict into the two values the run log stores: the
+// status word, and the differences as jsonb (null when nothing was checked).
+func reconcileColumns(rec ReconcileResult) (ReconcileStatus, []byte, error) {
+	status := rec.Status
+	if status == "" {
+		status = ReconcileNotChecked
+	}
+	if (status == ReconcileMismatched) != (len(rec.Mismatches) > 0) {
+		return "", nil, fmt.Errorf("%w: %q with %d of them",
+			ErrReconcileVerdictContradictsItself, status, len(rec.Mismatches))
+	}
+	if status == ReconcileNotChecked {
+		return status, nil, nil
+	}
+	// Never nil: an agreement is an EMPTY list of differences, and json's null
+	// would say the same as a run nobody checked.
+	list := rec.Mismatches
+	if list == nil {
+		list = []ReconcileMismatch{}
+	}
+	encoded, err := json.Marshal(list)
+	if err != nil {
+		return "", nil, fmt.Errorf("tinvest: finish sync run: encode the differences found: %w", err)
+	}
+	return status, encoded, nil
 }
 
 // RunsByConnection returns the connection's run log, newest first, one page
@@ -833,4 +896,59 @@ func (s *Store) saveMap(ctx context.Context, connectionID, instrumentID uuid.UUI
 		return fmt.Errorf("tinvest: save instrument map: %w", err)
 	}
 	return nil
+}
+
+// instrumentMap is everything this connection has already learned about the
+// broker's instruments, in the two shapes the reconciliation needs: the
+// catalog instrument each broker instrument_uid resolves to, and a label per
+// catalog instrument for saying WHICH security a difference is about.
+//
+// It is one read of the whole table rather than a lookup per position, because
+// the caller compares every position of the account at once and the two
+// per-row lookups above would be that many round trips.
+//
+// The label is the catalog's ticker, or its name when it has no ticker (the
+// ticker column is optional and empty for anything that never traded under
+// one). Chosen here rather than in SQL so that the one place it is decided is
+// readable next to what it is for.
+//
+// A ROW WITH NO instrument_uid IS SKIPPED. saveMap's only caller never writes
+// one (see Resolve's guard), and a "" key would answer for every broker
+// position that arrived without an identifier — resolving them all to one
+// instrument. The lookups above refuse the same key for the same reason.
+func (s *Store) instrumentMap(ctx context.Context, connectionID uuid.UUID) (map[string]uuid.UUID, map[uuid.UUID]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT im.instrument_uid, im.instrument_id, i.ticker, i.name
+		FROM tinvest_instrument_map im
+		JOIN instruments i ON i.id = im.instrument_id
+		WHERE im.connection_id = $1`, connectionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("tinvest: read instrument map: %w", err)
+	}
+	defer rows.Close()
+
+	byUID := map[string]uuid.UUID{}
+	labels := map[uuid.UUID]string{}
+	for rows.Next() {
+		var (
+			uid          string
+			id           uuid.UUID
+			ticker, name string
+		)
+		if err := rows.Scan(&uid, &id, &ticker, &name); err != nil {
+			return nil, nil, fmt.Errorf("tinvest: read instrument map: %w", err)
+		}
+		if uid != "" {
+			byUID[uid] = id
+		}
+		if ticker != "" {
+			labels[id] = ticker
+		} else {
+			labels[id] = name
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("tinvest: read instrument map: %w", err)
+	}
+	return byUID, labels, nil
 }
