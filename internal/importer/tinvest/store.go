@@ -228,7 +228,7 @@ type RunOutcome struct {
 // from the rest by looking rather than by remembering:
 //
 //   - reads: LinksByConnection, MirrorRowsByLink, UnparsedByConnection,
-//     RunsByConnection, LastSuccessfulSyncAt, connectionForSync,
+//     RunsByConnection, LastSuccessfulSyncAt, LastReconcile, connectionForSync,
 //     unparsedCountByLink. ListActiveConnections takes no space either and is a
 //     wider thing still — see its own note.
 //   - writes: UpdateConnectionStatus, SyncMirror, StartRun, FinishRun,
@@ -794,6 +794,32 @@ func (s *Store) LastSuccessfulSyncAt(ctx context.Context, connID uuid.UUID) (*ti
 		return nil, fmt.Errorf("tinvest: read last successful sync: %w", err)
 	}
 	return &at, nil
+}
+
+// LastReconcile returns the connection's most recent run that actually made a
+// check against the broker, or nil when none of them ever did.
+//
+// IT IS NOT "THE NEWEST RUN'S VERDICT". Runs that fail — and runs whose own
+// side the engine refused to compute — finish at ReconcileNotChecked, and
+// reading the newest run alone would let one of those erase what a check made
+// an hour earlier had found. "We checked and found nothing" would then be
+// published as "nobody has checked", which is precisely the pair this program's
+// three-valued verdict exists to keep apart.
+//
+// Like every other read in this list it takes no space and checks none; see the
+// note on Store. A request path reaches it only after ConnectionByID has
+// established the connection is the caller's.
+func (s *Store) LastReconcile(ctx context.Context, connID uuid.UUID) (*SyncRun, error) {
+	r, err := scanRun(s.pool.QueryRow(ctx, `SELECT `+runCols+` FROM tinvest_sync_runs
+		WHERE connection_id = $1 AND reconcile_status <> $2
+		ORDER BY reconciled_at DESC, id LIMIT 1`, connID, ReconcileNotChecked))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("tinvest: read last reconcile: %w", err)
+	}
+	return &r, nil
 }
 
 // mapMatch is one hit of the connection's instrument map, joined against the

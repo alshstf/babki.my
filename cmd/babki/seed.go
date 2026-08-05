@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
@@ -149,7 +152,214 @@ func seedDemo(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := seedInstrumentsAndOperations(ctx, pool, owner.SpaceID, accIDs, d); err != nil {
 		return err
 	}
+	if err := seedTinvestDemo(ctx, pool, owner.SpaceID, accIDs["Брокерский Т-Банк"], d); err != nil {
+		return err
+	}
 	return nil
+}
+
+// seedTinvestDemo gives the demo instance a T-Invest connection with something
+// to show on every one of the importer's screens: the connection itself, the
+// broker account it feeds, a run log, a difference the reconciliation found and
+// operations the projection could not read.
+//
+// IT NEVER TOUCHES THE NETWORK, AND TWO THINGS TOGETHER GUARANTEE THAT. The
+// connection is created `disabled`, which the hourly dispatcher skips (it lists
+// active connections only) and which the «sync now» button refuses with a 409
+// before anything is decrypted; and its stored token is random bytes rather
+// than a sealed secret, so even a path that reached the decryption would stop
+// there rather than talk to a broker with something that happened to work.
+// Neither is load-bearing alone — together they mean the stand cannot make a
+// broker call however it is poked.
+//
+// EVERY FIGURE IN THE RUN LOG IS THE MIRROR'S OWN. The counters below are what
+// the two SyncMirror calls actually returned and what the unparsed rows
+// actually number, not numbers chosen to look busy: a demo whose caption its
+// own data contradicts is the exact failure this project keeps being bitten by,
+// and it would be on the screen built to make the importer trustworthy.
+//
+// Its dates are fixed like the rest of the seed, with one exception that cannot
+// be: a run's own started_at/finished_at are the database's clock at the moment
+// the row is written (see Store.StartRun and FinishRun, which take no time).
+// That is honest here rather than merely unavoidable — the run log answers "when
+// did this import run", and seeding IS when this demo import ran; the operations
+// it mirrors carry the fixed dates.
+func seedTinvestDemo(ctx context.Context, pool *pgxpool.Pool, spaceID, accountID uuid.UUID,
+	d func(string) time.Time,
+) error {
+	store := tinvest.NewStore(pool)
+
+	// Random bytes, and deliberately NOT secretbox.Seal of anything: this seed
+	// runs without BABKI_ENCRYPTION_KEY (see newSeedCmd), so there is no box to
+	// seal with — and a demo instance must not hold a decryptable broker token
+	// in any case. Sixty-four bytes so the column holds something of a
+	// plausible size; nothing anywhere reads it.
+	ciphertext := make([]byte, 64)
+	if _, err := rand.Read(ciphertext); err != nil {
+		return fmt.Errorf("seed tinvest connection: %w", err)
+	}
+	conn, err := store.CreateConnection(ctx, spaceID, ciphertext, "0000")
+	if err != nil {
+		return fmt.Errorf("seed tinvest connection: %w", err)
+	}
+	if err := store.UpdateConnectionStatus(ctx, conn.ID, tinvest.StatusDisabled); err != nil {
+		return fmt.Errorf("seed tinvest connection status: %w", err)
+	}
+	openedOn := d("2019-03-14")
+	link, err := store.CreateLink(ctx, tinvest.AccountLink{
+		ConnectionID:      conn.ID,
+		SpaceID:           spaceID,
+		AccountID:         accountID,
+		BrokerAccountID:   "2000123456",
+		BrokerAccountName: "Брокерский счёт",
+		BrokerAccountType: "ACCOUNT_TYPE_TINKOFF",
+		OpenedOn:          &openedOn,
+	})
+	if err != nil {
+		return fmt.Errorf("seed tinvest account link: %w", err)
+	}
+
+	// Three operations the projection has no rules for, which is what the
+	// unparsed screen exists to show: variation margin and an overnight repo
+	// (owner's decision 5 — futures, options, margin and repo stay visible as
+	// unparsed until there is live data to build rules from) and a purchase of
+	// currency, which is a refusal of its own rather than an unsupported type.
+	first := seedTinvestOperations(d)
+	firstRun, err := store.StartRun(ctx, conn.ID, link.ID, tinvest.TriggerInitial)
+	if err != nil {
+		return fmt.Errorf("seed tinvest first run: %w", err)
+	}
+	firstStats, err := store.SyncMirror(ctx, conn.ID, link, first, d("2026-07-20").Add(9*time.Hour))
+	if err != nil {
+		return fmt.Errorf("seed tinvest mirror: %w", err)
+	}
+	rows, err := store.MirrorRowsByLink(ctx, link.ID)
+	if err != nil {
+		return fmt.Errorf("seed tinvest mirror rows: %w", err)
+	}
+	reasons := map[uuid.UUID]string{}
+	for _, row := range rows {
+		reasons[row.ID] = seedTinvestReasons[row.BrokerOperationID]
+	}
+	if err := store.SetUnparsedReasons(ctx, reasons); err != nil {
+		return fmt.Errorf("seed tinvest unparsed reasons: %w", err)
+	}
+	if err := store.FinishRun(ctx, firstRun.ID, tinvest.RunOutcome{
+		Status:           tinvest.RunOK,
+		ReadCount:        firstStats.Read,
+		AddedCount:       firstStats.Added,
+		DisappearedCount: firstStats.Disappeared,
+		UnparsedCount:    len(reasons),
+	}); err != nil {
+		return fmt.Errorf("seed tinvest first run outcome: %w", err)
+	}
+
+	// A second run in which the broker no longer returns the overnight repo.
+	// The row is not deleted — it is marked, and it stays on the unparsed list,
+	// which is the behaviour the mirror was built for and the one hardest to
+	// believe without seeing it.
+	second := first[:len(first)-1]
+	secondRun, err := store.StartRun(ctx, conn.ID, link.ID, tinvest.TriggerSchedule)
+	if err != nil {
+		return fmt.Errorf("seed tinvest second run: %w", err)
+	}
+	secondStats, err := store.SyncMirror(ctx, conn.ID, link, second, d("2026-07-20").Add(10*time.Hour))
+	if err != nil {
+		return fmt.Errorf("seed tinvest mirror refresh: %w", err)
+	}
+	return store.FinishRun(ctx, secondRun.ID, tinvest.RunOutcome{
+		Status:           tinvest.RunOK,
+		ReadCount:        secondStats.Read,
+		AddedCount:       secondStats.Added,
+		DisappearedCount: secondStats.Disappeared,
+		UnparsedCount:    len(reasons),
+		// One difference, and a real one: the demo's Т-Банк account holds no
+		// futures position of its own in the journal, because the variation
+		// margin above never became a journal entry — which is exactly the
+		// story the unparsed list beside it tells.
+		Reconcile: tinvest.ReconcileResult{
+			Status: tinvest.ReconcileMismatched,
+			Mismatches: []tinvest.ReconcileMismatch{{
+				Kind:    tinvest.MismatchUnsupported,
+				Label:   "SiH6 (futures)",
+				Broker:  decimal.NewFromInt(2),
+				Journal: decimal.Zero,
+			}},
+		},
+	})
+}
+
+// seedTinvestReasons says why each seeded broker operation did not become a
+// journal entry, keyed by the broker's own operation id. It is a table beside
+// the operations rather than a field inside them because that is how the two
+// are actually written: the mirror takes what the broker said, and the
+// projection's verdict is recorded onto those rows afterwards (see
+// Store.SetUnparsedReasons).
+var seedTinvestReasons = map[string]string{
+	"seed-varmargin-1": string(tinvest.ReasonUnsupportedType),
+	"seed-fxbuy-1":     string(tinvest.ReasonCurrencyTrade),
+	"seed-overnight-1": string(tinvest.ReasonUnsupportedType),
+}
+
+// seedTinvestOperations is the broker's side of the demo import: what a
+// GetOperationsByCursor page would have carried. Raw is written out in full
+// because it is the whole point of the unparsed screen — a person asking what
+// the broker actually sent gets the broker's own document, not this program's
+// reading of it.
+func seedTinvestOperations(d func(string) time.Time) []tinvest.OperationItem {
+	return []tinvest.OperationItem{
+		{
+			ID:             "seed-varmargin-1",
+			Type:           "OPERATION_TYPE_WRITING_OFF_VARMARGIN",
+			State:          "OPERATION_STATE_EXECUTED",
+			Date:           d("2026-06-18").Add(19 * time.Hour),
+			InstrumentType: "futures",
+			InstrumentUID:  "9654c2dd-6993-427e-80fa-04e80a1cf4da",
+			FIGI:           "FUTSI0326000",
+			Payment:        tinvest.MoneyValue{Currency: "RUB", Units: -1240, Nano: -500_000_000},
+			Description:    "Списание вариационной маржи",
+			Raw: json.RawMessage(`{"id":"seed-varmargin-1","type":"OPERATION_TYPE_WRITING_OFF_VARMARGIN",` +
+				`"state":"OPERATION_STATE_EXECUTED","date":"2026-06-18T19:00:00Z",` +
+				`"instrumentType":"futures","instrumentUid":"9654c2dd-6993-427e-80fa-04e80a1cf4da",` +
+				`"figi":"FUTSI0326000","payment":{"currency":"rub","units":"-1240","nano":-500000000},` +
+				`"quantity":"0","description":"Списание вариационной маржи"}`),
+		},
+		{
+			ID:             "seed-fxbuy-1",
+			Type:           "OPERATION_TYPE_BUY",
+			State:          "OPERATION_STATE_EXECUTED",
+			Date:           d("2026-07-02").Add(12 * time.Hour),
+			InstrumentType: "currency",
+			InstrumentUID:  "a22a1263-8e1b-4546-a1aa-416463f104d3",
+			FIGI:           "BBG0013HGFT4",
+			Payment:        tinvest.MoneyValue{Currency: "RUB", Units: -78_450, Nano: 0},
+			Price:          tinvest.MoneyValue{Currency: "RUB", Units: 78, Nano: 450_000_000},
+			Quantity:       1000,
+			Description:    "Покупка USD/RUB",
+			Raw: json.RawMessage(`{"id":"seed-fxbuy-1","type":"OPERATION_TYPE_BUY",` +
+				`"state":"OPERATION_STATE_EXECUTED","date":"2026-07-02T12:00:00Z",` +
+				`"instrumentType":"currency","instrumentUid":"a22a1263-8e1b-4546-a1aa-416463f104d3",` +
+				`"figi":"BBG0013HGFT4","payment":{"currency":"rub","units":"-78450","nano":0},` +
+				`"price":{"currency":"rub","units":"78","nano":450000000},"quantity":"1000",` +
+				`"description":"Покупка USD/RUB"}`),
+		},
+		{
+			ID:             "seed-overnight-1",
+			Type:           "OPERATION_TYPE_OVERNIGHT",
+			State:          "OPERATION_STATE_EXECUTED",
+			Date:           d("2026-07-09").Add(21 * time.Hour),
+			InstrumentType: "share",
+			InstrumentUID:  "e6123145-9665-43e0-8413-cd61b8aa9b13",
+			FIGI:           "BBG004730N88",
+			Payment:        tinvest.MoneyValue{Currency: "RUB", Units: 31, Nano: 720_000_000},
+			Description:    "Доход от предоставления бумаг овернайт",
+			Raw: json.RawMessage(`{"id":"seed-overnight-1","type":"OPERATION_TYPE_OVERNIGHT",` +
+				`"state":"OPERATION_STATE_EXECUTED","date":"2026-07-09T21:00:00Z",` +
+				`"instrumentType":"share","instrumentUid":"e6123145-9665-43e0-8413-cd61b8aa9b13",` +
+				`"figi":"BBG004730N88","payment":{"currency":"rub","units":"31","nano":720000000},` +
+				`"quantity":"0","description":"Доход от предоставления бумаг овернайт"}`),
+		},
+	}
 }
 
 // seedInstrumentsAndOperations populates the global instrument catalog and

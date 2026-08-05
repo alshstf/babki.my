@@ -154,6 +154,23 @@ func NewClient(pool *pgxpool.Pool, workers *river.Workers, enqueuer *Enqueuer, l
 	return client, nil
 }
 
+// NewInsertOnlyClient builds a River client that can only ENQUEUE jobs, for the
+// "api" role: a process that serves requests and works nothing.
+//
+// NO QUEUES AND NO WORKERS, which is River's own documented shape for this ("an
+// insert-only client can be initialized by omitting Queues, and not calling
+// Start for the client"). It must therefore never be started, and there is
+// nothing to stop: with no queue configured it runs no goroutines of its own.
+//
+// Omitting Workers costs one check River would otherwise make — that a kind
+// being inserted has a worker registered for it — and it is omitted anyway,
+// because in this process the answer would always be no: it registers none. A
+// bundle listing kinds this binary cannot run would be a claim about the worker
+// process rather than about this one.
+func NewInsertOnlyClient(pool *pgxpool.Pool, log *slog.Logger) (*river.Client[pgx.Tx], error) {
+	return river.NewClient(riverpgxv5.New(pool), &river.Config{Logger: log})
+}
+
 func newClient(pool *pgxpool.Pool, workers *river.Workers, log *slog.Logger) (*river.Client[pgx.Tx], error) {
 	return river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Logger:  log,

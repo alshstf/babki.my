@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/operation"
@@ -1000,5 +1002,143 @@ func TestSeedDemo(t *testing.T) {
 	// second run refuses (instance not empty)
 	if err := seedDemo(ctx, pool); err == nil {
 		t.Fatal("second seedDemo: want error")
+	}
+}
+
+// TestSeedTinvestDemoIsSelfConsistentAndCannotReachTheBroker checks the two
+// things the demo connection has to be: honest about itself, and incapable of
+// making a broker call from a stand.
+//
+// The counters are compared against the mirror rather than against the numbers
+// written in seed.go. A run log whose figures its own data contradicts is
+// exactly the failure the importer's screens exist to make impossible, and it
+// would be sitting on the demo instance that is supposed to demonstrate them.
+func TestSeedTinvestDemoIsSelfConsistentAndCannotReachTheBroker(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	if err := seedDemo(ctx, pool); err != nil {
+		t.Fatalf("seedDemo: %v", err)
+	}
+	svc := family.NewService(family.NewStore(pool))
+	_, p, err := svc.Login(ctx, "demo", "demo1234")
+	if err != nil {
+		t.Fatalf("login demo: %v", err)
+	}
+	store := tinvest.NewStore(pool)
+
+	conns, err := store.ListConnections(ctx, p.SpaceID)
+	if err != nil || len(conns) != 1 {
+		t.Fatalf("connections = %d, %v; want 1", len(conns), err)
+	}
+	conn := conns[0]
+	if conn.Status != tinvest.StatusDisabled {
+		t.Errorf("status = %q, want %q: an active demo connection would be picked up by the "+
+			"hourly dispatcher and would go to the network from the stand", conn.Status, tinvest.StatusDisabled)
+	}
+	if conn.TokenLast4 != "0000" {
+		t.Errorf("token_last4 = %q, want 0000", conn.TokenLast4)
+	}
+	// The property behind "disabled", checked through the very read the
+	// scheduler makes rather than through the word on the row.
+	active, err := store.ListActiveConnections(ctx)
+	if err != nil {
+		t.Fatalf("list active connections: %v", err)
+	}
+	if len(active) != 0 {
+		t.Errorf("the scheduler would sync %d seeded connections, want 0", len(active))
+	}
+
+	links, err := store.LinksByConnection(ctx, conn.ID)
+	if err != nil || len(links) != 1 {
+		t.Fatalf("links = %d, %v; want 1", len(links), err)
+	}
+	accounts, err := account.NewStore(pool).ListWithBalance(ctx, p.SpaceID)
+	if err != nil {
+		t.Fatalf("list accounts: %v", err)
+	}
+	var linkedName string
+	for _, a := range accounts {
+		if a.ID == links[0].AccountID {
+			linkedName = a.Name
+		}
+	}
+	if linkedName != "Брокерский Т-Банк" {
+		t.Errorf("the demo link feeds account %q, want «Брокерский Т-Банк»", linkedName)
+	}
+
+	rows, err := store.MirrorRowsByLink(ctx, links[0].ID)
+	if err != nil {
+		t.Fatalf("mirror rows: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("mirror rows = %d, want 3", len(rows))
+	}
+	gone := 0
+	for _, r := range rows {
+		if r.UnparsedReason == "" {
+			t.Errorf("mirror row %s (%s) has no unparsed reason, so it claims to have become a "+
+				"journal entry — and the seed writes none", r.ID, r.BrokerOperationID)
+		}
+		if r.DisappearedAt != nil {
+			gone++
+		}
+	}
+	if gone != 1 {
+		t.Errorf("mirror rows the broker stopped returning = %d, want exactly 1: the demo exists "+
+			"to show that such a row is marked and kept rather than deleted", gone)
+	}
+
+	unparsed, hasMore, err := store.UnparsedByConnection(ctx, conn.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("unparsed: %v", err)
+	}
+	if len(unparsed) != 3 || hasMore {
+		t.Fatalf("unparsed = %d (has_more=%v), want 3 and false — including the one that "+
+			"disappeared", len(unparsed), hasMore)
+	}
+
+	runs, _, err := store.RunsByConnection(ctx, conn.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("runs: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("runs = %d, want 2", len(runs))
+	}
+	newest, oldest := runs[0], runs[1]
+	for _, r := range runs {
+		if r.Status != tinvest.RunOK {
+			t.Errorf("run %s finished %q, want ok", r.ID, r.Status)
+		}
+		if r.UnparsedCount != len(unparsed) {
+			t.Errorf("run %s says %d unparsed, but the connection holds %d",
+				r.ID, r.UnparsedCount, len(unparsed))
+		}
+	}
+	if oldest.Trigger != tinvest.TriggerInitial || oldest.ReadCount != 3 || oldest.AddedCount != 3 ||
+		oldest.DisappearedCount != 0 {
+		t.Errorf("the first run = %+v, want the initial import reading and adding all three",
+			[]int{oldest.ReadCount, oldest.AddedCount, oldest.DisappearedCount})
+	}
+	if newest.Trigger != tinvest.TriggerSchedule || newest.ReadCount != 2 || newest.AddedCount != 0 ||
+		newest.DisappearedCount != gone {
+		t.Errorf("the second run read=%d added=%d disappeared=%d, want 2/0/%d — the broker "+
+			"returned one operation fewer and nothing new", newest.ReadCount, newest.AddedCount,
+			newest.DisappearedCount, gone)
+	}
+	if newest.ReconcileStatus != tinvest.ReconcileMismatched || newest.ReconciledAt == nil {
+		t.Errorf("the second run's check = %q at %v, want a mismatched verdict with a date",
+			newest.ReconcileStatus, newest.ReconciledAt)
+	}
+	var mismatches []tinvest.ReconcileMismatch
+	if err := json.Unmarshal(newest.ReconcileMismatches, &mismatches); err != nil {
+		t.Fatalf("decode the seeded differences: %v", err)
+	}
+	if len(mismatches) != 1 || mismatches[0].Kind != tinvest.MismatchUnsupported {
+		t.Errorf("differences = %+v, want exactly one of kind %q", mismatches, tinvest.MismatchUnsupported)
+	}
+	if oldest.ReconcileStatus != tinvest.ReconcileNotChecked || oldest.ReconciledAt != nil {
+		t.Errorf("the first run's check = %q at %v, want not_checked with no date: nothing "+
+			"reconciled it, and «nobody looked» is not «everything agreed»",
+			oldest.ReconcileStatus, oldest.ReconciledAt)
 	}
 }

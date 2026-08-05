@@ -362,6 +362,257 @@ paths:
               schema: { $ref: "#/components/schemas/PositionsResponse" }
         "401": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /api/v1/tinvest/token-check:
+    post:
+      operationId: checkTinvestToken
+      description: >-
+        Asks the broker which of the caller's T-Invest accounts a read-only
+        token can see, so the owner can pick the ones to import before anything
+        is stored. NOTHING IS WRITTEN BY THIS CALL: the token is used for the
+        one request to the broker and dropped, so a token typed here and never
+        confirmed leaves no trace.
+
+
+        OWNER-ONLY, like every path under /api/v1/tinvest. The check lives in
+        the service rather than in the route, so an editor and a viewer both get
+        403 here exactly as they do on the writes below.
+
+
+        502 means the broker could not be reached, or answered with something
+        this server could not use. 400 covers the two ways a token can be no
+        good: one this server refuses before sending it anywhere (an empty
+        string is the only such case) and one the broker itself refused. Those
+        are different news from a 502 — one is worth retrying, the other needs a
+        different token — and the status code is the only place that difference
+        is stated, since the error text is prose a client must not read.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TinvestTokenCheckRequest" }
+      responses:
+        "200":
+          description: The importable accounts this token can see
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TinvestTokenCheckResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /api/v1/tinvest/connections:
+    get:
+      operationId: listTinvestConnections
+      description: >-
+        Every T-Invest connection of the caller's space. Owner-only.
+      responses:
+        "200":
+          description: The space's connections
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TinvestConnectionsResponse" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createTinvestConnection
+      description: >-
+        Connects a broker token and starts the first import. Owner-only.
+
+
+        ONE REQUEST DOES THREE THINGS. For each broker account picked it creates
+        a NEW babki account to import into — never an existing one, so nothing
+        hand-entered is ever mixed with imported history — then ties the two
+        together, and finally queues the first sync, which is what actually goes
+        and reads the history. The response therefore describes a connection
+        whose accounts are still empty; the run log (GET
+        /api/v1/tinvest/connections/{connectionId}/runs) is where the import
+        itself becomes visible.
+
+
+        THE ACCOUNTS IT CREATES ARE RUBLE BROKERAGE ACCOUNTS AT «Т-Банк», and
+        the currency is load-bearing rather than a default: after every
+        successful sync the reconciliation writes the broker's own ruble balance
+        onto the account as a balance mark, and it refuses to write that mark
+        onto an account kept in any other currency.
+
+
+        The token is checked against the broker before anything is written, so a
+        token the broker refuses creates nothing (400). A broker account already
+        imported by another connection of this space is refused too (409):
+        importing one broker account twice would produce two babki accounts
+        holding the same operations.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTinvestConnectionRequest" }
+      responses:
+        "201":
+          description: The connection, its linked accounts, and a queued first sync
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TinvestConnection" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /api/v1/tinvest/connections/{connectionId}:
+    get:
+      operationId: getTinvestConnection
+      description: One connection of the caller's space. Owner-only.
+      parameters:
+        - { name: connectionId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The connection
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TinvestConnection" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateTinvestConnection
+      description: >-
+        Replaces the connection's token, switches it on or off, or both.
+        Owner-only.
+
+
+        A NEW TOKEN IS CHECKED AGAINST THE BROKER BEFORE IT IS STORED, and a
+        connection parked at `token_revoked` comes back to `active` on a token
+        the broker accepts — that acceptance is the only evidence a token works,
+        and pasting one is not evidence of anything. A `status` sent in the same
+        request wins over that, so a token can be replaced without switching the
+        connection on.
+
+
+        `status` accepts only `active` and `disabled`. `token_revoked` is the
+        server's own verdict, reached by asking the broker; a client that could
+        set it would be able to state a fact nobody checked.
+      parameters:
+        - { name: connectionId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateTinvestConnectionRequest" }
+      responses:
+        "200":
+          description: The updated connection
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TinvestConnection" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteTinvestConnection
+      description: >-
+        Withdraws the connection to the broker. Owner-only.
+
+
+        THE ACCOUNTS AND THE OPERATIONS STAY. What goes is everything about the
+        connection itself — the stored token, the links, the mirror of what the
+        broker said, the instrument map and the run log. The babki accounts it
+        created and the journal operations the import wrote into them are the
+        owner's data and are left exactly as they are; they simply stop being
+        updated. Deleting them is a separate act, done on the accounts screen.
+      parameters:
+        - { name: connectionId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Disconnected; the accounts and their operations remain }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/tinvest/connections/{connectionId}/sync:
+    post:
+      operationId: syncTinvestConnection
+      description: >-
+        Asks for this connection to be synced now. Owner-only.
+
+
+        202 AND NOT 200: the sync is queued, not performed. The same queue and
+        the same uniqueness the hourly schedule uses, so a manual request and a
+        scheduled one can never run over one connection at the same time — see
+        TinvestSyncAcceptedResponse.queued for what happens when one is already
+        there.
+
+
+        409 when the connection is not `active`: a disabled connection is
+        skipped by the scheduler too, and one at `token_revoked` has no working
+        token to sync with. Both need an act from the owner (PATCH) rather than
+        a retry.
+      parameters:
+        - { name: connectionId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "202":
+          description: Queued, or already in the queue — see `queued`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TinvestSyncAcceptedResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/tinvest/connections/{connectionId}/runs:
+    get:
+      operationId: listTinvestSyncRuns
+      description: >-
+        The connection's sync log, newest first, one page at a time.
+        Owner-only.
+
+
+        A LIMIT ABOVE THE `maximum` BELOW IS REFUSED WITH 400, NOT QUIETLY
+        REDUCED. A ceiling the document states and the server does not apply is
+        not a rule at all (#118): the request would be answered as if it had
+        asked for something else, with nothing in the answer saying that the
+        number it sent was not the number applied.
+      parameters:
+        - { name: connectionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 50, minimum: 1, maximum: 200 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, default: 0, minimum: 0 } }
+      responses:
+        "200":
+          description: One page of the run log, saying whether there is more behind it
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TinvestSyncRunsResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/tinvest/connections/{connectionId}/unparsed:
+    get:
+      operationId: listTinvestUnparsedOperations
+      description: >-
+        The connection's broker operations that this program could not turn into
+        journal entries, newest first, one page at a time. Owner-only.
+
+
+        THEY ARE NOT LOST AND NOT HIDDEN: each carries the broker's own record
+        of the operation, including the raw element it sent, and a code saying
+        why the projection refused it. A limit above the maximum is refused with
+        400, for the reason the run log gives.
+      parameters:
+        - { name: connectionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 50, minimum: 1, maximum: 200 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, default: 0, minimum: 0 } }
+      responses:
+        "200":
+          description: One page of the unparsed operations, saying whether there is more behind it
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TinvestUnparsedResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 components:
   responses:
     Error:
@@ -894,3 +1145,250 @@ components:
           description: "What this account's closed deals have locked in, across all of the positions above. It sits on the response rather than being computed by the reader from `positions`, and rather than living on its own endpoint: it is an aggregate of exactly these rows, arrives with them in the one round trip the screen already makes, and — like cost_basis_rules — describes the whole list rather than any one row. Present even for an account with no positions, where by_currency is empty and in_base is a plain zero."
           allOf:
             - $ref: "#/components/schemas/RealizedTotal"
+    TinvestConnectionStatus:
+      type: string
+      description: "Where a connection to T-Invest stands. `active`: the token works as far as anyone knows, and the hourly schedule syncs this connection. `token_revoked`: the broker refused the stored token, and only a new one fixes it — THE SERVER'S OWN VERDICT, reached by asking the broker, which is why UpdateTinvestConnectionRequest.status will not accept it. `disabled`: the owner switched the connection off; the mirror of what the broker already said stays exactly as it is, and the scheduler passes it by."
+      enum: [active, token_revoked, disabled]
+    TinvestSyncTrigger:
+      type: string
+      description: "What caused a sync run. `initial`: the first import, queued by the request that created the connection. `schedule`: the hourly job. `manual`: the owner asked for one (POST .../sync)."
+      enum: [schedule, manual, initial]
+    TinvestSyncRunStatus:
+      type: string
+      description: "Where one sync run stands. `running`: it started and has not reported back — a run left in this state for good is a process that died mid-sync, which is visible as such rather than as nothing having happened. `ok`: it finished. `failed`: it stopped on an error, which TinvestSyncRun.error names."
+      enum: [running, ok, failed]
+    TinvestReconcileStatus:
+      type: string
+      description: "What the check against the broker said about a run. `not_checked` is NOT `matched`, and the difference is the reason this enum has three values rather than a boolean: a run that was never reconciled — because it failed, or because our own side could not be computed — makes no claim at all, and a screen that could not tell the two apart would draw a tick over a check that never happened. `matched`: every security's quantity and every currency's balance agreed, and the broker named no asset this program cannot hold. `mismatched`: at least one did not, and the mismatch list says which."
+      enum: [not_checked, matched, mismatched]
+    TinvestReconcileMismatchKind:
+      type: string
+      description: "What kind of difference the check found. `instrument`: a security's quantity differs, or one side names a security the other does not — which usually means some of the broker's operations did not become journal entries, so the unparsed list is where to look. `currency`: a cash balance in one currency differs. `unsupported`: the broker holds an asset of a kind this program does not account for at all (a future, an option), which no amount of re-importing will change — a separate value precisely so it is not read as the first one and does not send a reader hunting for missing operations."
+      enum: [instrument, currency, unsupported]
+    TinvestUnparsedReason:
+      type: string
+      description: >-
+        Why one broker operation did not become journal entries — a code, never
+        prose: the wording the owner reads is the interface's to translate, and
+        naming the wrong cause beside a right figure is the failure this whole
+        list exists to prevent. `unsupported_type`: the broker's operation type
+        is not one this program accounts for. `unrepresentable_amount`: the sum
+        carries a fraction finer than a minor unit. `amount_out_of_bounds`: the
+        sum is beyond what the journal can hold — a different accident from the
+        previous one, and not to be captioned as it. `unrepresentable_quantity`:
+        the number of units is finer than the journal's quantity scale.
+        `transfer_direction_unknown`: a move between the owner's own accounts
+        whose direction this program could not tell. `instrument_unresolved`:
+        the operation names a security and no catalog row was matched to it —
+        distinct from `unsupported_type`, which is about the OPERATION rather
+        than about the security. `engine_refused`: the journal itself would not
+        take the operation. `redemption_without_quantity`: a full bond
+        redemption that says nothing about how many bonds were redeemed.
+        `currency_trade`: a purchase or sale of currency. `commission_refund`: a
+        negative commission on the operation, i.e. money coming back.
+        `tax_refund`: a tax operation whose amount is positive.
+        `projection_incomplete`: this program has a rule for the broker's
+        operation type and the rule produced nothing — a gap in this program,
+        stated as one.
+      enum:
+        - unsupported_type
+        - unrepresentable_amount
+        - amount_out_of_bounds
+        - unrepresentable_quantity
+        - transfer_direction_unknown
+        - instrument_unresolved
+        - engine_refused
+        - redemption_without_quantity
+        - currency_trade
+        - commission_refund
+        - tax_refund
+        - projection_incomplete
+    TinvestTokenCheckRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          minLength: 1
+          description: "A read-only T-Invest API token. Sent to the broker and dropped; nothing about it is stored by this endpoint. Only its emptiness is checked here — its length, shape and alphabet are the broker's to judge, and this server holds no pattern it could honestly check them against. It appears in this request schema and in the two write requests below, and in NO RESPONSE SCHEMA ANYWHERE — the same way `password` does."
+    TinvestBrokerAccount:
+      type: object
+      required: [broker_account_id, name, type]
+      description: "One T-Invest account a token can see, as the broker describes it. Only the kinds this program can import are listed — a regular brokerage account and an ИИС; savings, card and «инвесткопилка» accounts are left out, because nothing here knows how to read them. Accounts are listed WHATEVER their status, closed ones included: a closed account's history is exactly as real as an open one's, and its settled results are the part of it worth importing."
+      properties:
+        broker_account_id: { type: string, description: "The broker's own id for the account. Sent back in CreateTinvestConnectionRequest to say which accounts to import." }
+        name: { type: string, description: "What the broker calls the account. Shown so the owner can tell one of their accounts from another; nothing is looked up by it." }
+        type: { type: string, description: "The broker's own account-type word, verbatim (e.g. ACCOUNT_TYPE_TINKOFF, ACCOUNT_TYPE_TINKOFF_IIS). Passed through rather than translated into a vocabulary of ours: it is the broker's classification and this program keeps it as evidence of what was connected." }
+        opened_on: { type: string, nullable: true, description: "Date YYYY-MM-DD the broker says the account was opened, or null when it sent none. It is where the first import starts reading history from." }
+    TinvestTokenCheckResponse:
+      type: object
+      required: [accounts]
+      properties:
+        accounts:
+          type: array
+          items: { $ref: "#/components/schemas/TinvestBrokerAccount" }
+          description: "The importable accounts, in the order the broker listed them. Empty means the token works and there is nothing to import through it — which is a different answer from a refused token (400) and must not be shown as one."
+    TinvestAccountPick:
+      type: object
+      required: [broker_account_id, account_name]
+      properties:
+        broker_account_id: { type: string, minLength: 1, description: "One `broker_account_id` from the token check. It must be among the accounts the token can see AND be one of the importable kinds; anything else is a 400, so a client cannot connect an account this program cannot read." }
+        account_name: { type: string, minLength: 1, description: "What to call the NEW babki account this broker account is imported into. A new account every time — never an existing one — so imported history is never mixed into anything hand-entered." }
+    CreateTinvestConnectionRequest:
+      type: object
+      required: [token, accounts]
+      properties:
+        token:
+          type: string
+          minLength: 1
+          description: "A read-only T-Invest API token. Checked against the broker before anything is written, then stored encrypted; only its last characters are ever published again (TinvestConnection.token_last4)."
+        accounts:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/TinvestAccountPick" }
+          description: "Which broker accounts to import, and what to call each one here. At least one — a connection that imports nothing would sync forever and produce nothing. Naming one broker account twice in one request is a 400."
+    UpdateTinvestConnectionRequest:
+      type: object
+      description: "Partial update of the connection. Both fields are optional and an omitted one is left unchanged, but at least one must be present — an empty body is refused rather than answered with an unchanged connection and a 200 that looks like success. minProperties states that in the schema itself, as UpdateSpaceRequest does."
+      minProperties: 1
+      properties:
+        token:
+          type: string
+          minLength: 1
+          description: "A replacement read-only token, checked against the broker before it is stored. A connection sitting at `token_revoked` returns to `active` when the broker accepts it — unless this request also names a `status`, which wins."
+        status:
+          description: "Switch the connection on or off. Only `active` and `disabled` are accepted here; `token_revoked` is refused with a 400, because it is a statement about what the broker said and a client saying it would be stating something nobody checked."
+          allOf:
+            - $ref: "#/components/schemas/TinvestConnectionStatus"
+    TinvestLinkedAccount:
+      type: object
+      required: [link_id, account_id, broker_account_id, broker_account_name, broker_account_type]
+      description: "One broker account tied to the one babki account it is imported into."
+      properties:
+        link_id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid, description: "The babki account this import feeds. It outlives the connection: deleting the connection leaves it, and its operations, alone." }
+        broker_account_id: { type: string }
+        broker_account_name: { type: string, description: "What the broker called the account WHEN THE LINK WAS MADE — a label kept as it was, not re-read on every sync, so it can differ from what the broker calls it today." }
+        broker_account_type: { type: string, description: "The broker's own account-type word as it was at that same moment (e.g. ACCOUNT_TYPE_TINKOFF)." }
+        opened_on: { type: string, nullable: true, description: "Date YYYY-MM-DD the broker said the account was opened, or null when it sent none — in which case history is read from a fixed floor instead." }
+    TinvestReconcileMismatch:
+      type: object
+      required: [kind, label, broker, journal]
+      description: "One thing the broker and this program's journal disagree about, carrying BOTH figures rather than their difference: a reader who sees only the gap cannot tell which side to go and look at."
+      properties:
+        kind: { $ref: "#/components/schemas/TinvestReconcileMismatchKind" }
+        instrument_id: { type: string, format: uuid, nullable: true, description: "The catalog instrument this row is about, or null when there is none to name: a currency row, an asset kind this program does not hold, and a security the broker named that nothing of ours matched. That last null is itself the news." }
+        label: { type: string, description: "What a person reads: our instrument's ticker or name when the row is about one of ours, the broker's own naming when it is about a position that is not, and a currency code on a currency row." }
+        broker: { type: string, description: "Decimal as string — what the broker says is there. Units of the security, or an amount of the currency." }
+        journal: { type: string, description: "Decimal as string — what this program's journal computes for the same thing, in the same units." }
+    TinvestReconcileSnapshot:
+      type: object
+      required: [at, status, mismatches]
+      description: "The most recent check against the broker that this connection actually had, whichever of its accounts it was for. Absent when no run ever reconciled — which is not the same as a check that found nothing, and is why this whole object is nullable rather than being flattened into a status field that would have to say `not_checked` for both."
+      properties:
+        at: { type: string, format: date-time, description: "When that check was made." }
+        status:
+          description: "`matched` or `mismatched`. `not_checked` is a member of the enum — it is what every unreconciled run carries — but it cannot appear HERE: this object is built only from runs that made a check, and its absence is what «never checked» looks like."
+          allOf:
+            - $ref: "#/components/schemas/TinvestReconcileStatus"
+        mismatches:
+          type: array
+          items: { $ref: "#/components/schemas/TinvestReconcileMismatch" }
+          description: "What differed. Empty exactly when `status` is `matched`; the two are one fact published once, since the verdict is derived from this list and never kept beside it."
+    TinvestConnection:
+      type: object
+      required: [id, status, token_last4, accounts]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/TinvestConnectionStatus" }
+        token_last4: { type: string, description: "The last characters of the stored token — at most four, and fewer only if the token itself is shorter — so the owner can tell one token from another. THE TOKEN ITSELF IS NEVER PUBLISHED, by this field or any other: it appears in request schemas only, the way `password` does." }
+        accounts:
+          type: array
+          items: { $ref: "#/components/schemas/TinvestLinkedAccount" }
+          description: "The broker accounts this connection imports, in the order they were linked."
+        last_successful_sync_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: "When this connection's last successful run STARTED, or null if it never had one. Two things about it are easy to assume the other way round and are not: it is the run's start rather than its finish, so it is not the moment the mirror became current; and it is keyed by the connection while runs are made per account, so for a connection with several broker accounts it means at least one of them synced then, never all of them."
+        last_reconcile:
+          nullable: true
+          description: "The connection's most recent check against the broker, or null when none of its runs ever made one. It survives a later failed run: a sync that died before reconciling does not erase what the previous check found, and reporting «not checked» in that case would say something false about a check that did happen."
+          allOf:
+            - $ref: "#/components/schemas/TinvestReconcileSnapshot"
+    TinvestConnectionsResponse:
+      type: object
+      required: [connections]
+      description: "Every connection of the space, whole. An envelope with no `has_more` and no paging, unlike the run log and the unparsed list beneath it: a space holds a handful of connections and this list is never truncated, so there is no question for a flag to answer. The envelope is kept all the same — it costs one key and leaves somewhere to put a fact about the list itself, which a bare array (the shape the members list still has) has nowhere to carry."
+      properties:
+        connections:
+          type: array
+          items: { $ref: "#/components/schemas/TinvestConnection" }
+    TinvestSyncAcceptedResponse:
+      type: object
+      required: [queued]
+      properties:
+        queued:
+          type: boolean
+          description: >-
+            True when this request put a sync into the queue. FALSE MEANS ONE
+            WAS ALREADY THERE — and «there» is wider than «running right now».
+            A sync that failed and is waiting out its backoff occupies the same
+            slot, and that backoff grows into the hours, so a client that turned
+            `false` into «синхронизация уже идёт» would be saying something
+            false for as long as the wait lasts. «Уже запланирована» is true in
+            both cases, which is the sentence to write.
+    TinvestSyncRun:
+      type: object
+      required: [id, link_id, trigger, status, started_at, read_count, added_count,
+                 disappeared_count, unparsed_count, error, reconcile_status, mismatches]
+      description: "One attempt to bring ONE broker account up to date. A connection importing two broker accounts produces two runs per sync, one each."
+      properties:
+        id: { type: string, format: uuid }
+        link_id: { type: string, format: uuid, description: "Which of the connection's links this run was for — join it against TinvestConnection.accounts to name the broker account and the babki account behind it. THE LINK RATHER THAN THE ACCOUNT, so that this figure is read off the run's own row and never assembled from a second query whose answer could have moved on between the two." }
+        trigger: { $ref: "#/components/schemas/TinvestSyncTrigger" }
+        status: { $ref: "#/components/schemas/TinvestSyncRunStatus" }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time, nullable: true, description: "Null while the run is `running`, and permanently null for a run whose process died mid-sync." }
+        read_count: { type: integer, description: "How many operations the broker returned for this account." }
+        added_count: { type: integer, description: "How many of them the mirror had never seen before." }
+        disappeared_count: { type: integer, description: "How many mirror rows the broker stopped returning. Not a deletion: the row stays and is marked, because the broker rewriting its own history is a fact worth keeping." }
+        unparsed_count: { type: integer, description: "How many of THIS account's mirror rows the projection could not read, counted after this run — the account's own figure, not the connection's." }
+        error: { type: string, description: "What went wrong, empty on a run that did not fail. Prose for a person, never something a client branches on." }
+        reconcile_status: { $ref: "#/components/schemas/TinvestReconcileStatus" }
+        reconciled_at: { type: string, format: date-time, nullable: true, description: "When the check against the broker was made, or null when `reconcile_status` is `not_checked`." }
+        mismatches:
+          type: array
+          items: { $ref: "#/components/schemas/TinvestReconcileMismatch" }
+          description: "What that check found. EMPTY IN TWO DIFFERENT SITUATIONS — the check found nothing, and no check was made — and `reconcile_status` is what tells them apart. It is not restated here as a nullable list, because one fact published in two fields is one fact that can eventually disagree with itself."
+    TinvestSyncRunsResponse:
+      type: object
+      required: [runs, has_more]
+      properties:
+        runs:
+          type: array
+          items: { $ref: "#/components/schemas/TinvestSyncRun" }
+          description: "The page itself, newest first, at most `limit` long."
+        has_more: { type: boolean, description: "Whether the log holds at least one more run beyond this page. The server's to answer: the page's own length cannot, and here it especially cannot be inferred from a short page, since an over-large `limit` is refused rather than clamped. Fetched — one row beyond the page is asked for and its arrival IS this answer — never derived by comparing lengths afterwards." }
+    TinvestUnparsedOperation:
+      type: object
+      required: [id, occurred_at, op_type, payment, currency, description, reason, raw]
+      description: "One broker operation the projection could not turn into journal entries. Rows the broker has since stopped returning stay on this list: they are still operations this program could not read, and dropping them would be the silence the list exists to replace."
+      properties:
+        id: { type: string, format: uuid, description: "The mirror row's id — this program's own, not the broker's, whose operation ids are documented to change over time and are an attribute here rather than a key." }
+        occurred_at: { type: string, format: date-time, description: "When the broker says the operation happened." }
+        op_type: { type: string, description: "The broker's own operation-type word, verbatim (e.g. OPERATION_TYPE_BUY)." }
+        payment: { type: string, description: "Decimal as string — the broker's own amount, exactly as it arrived, unconverted and unrounded. Not minor units: an amount too fine or too large for this program's money is one of the reasons a row lands on this list, and rendering it in minor units would be impossible for exactly those rows." }
+        currency: { type: string, description: "ISO-4217, upper case." }
+        description: { type: string, description: "The broker's own free-text description of the operation, empty when it sent none." }
+        reason: { $ref: "#/components/schemas/TinvestUnparsedReason" }
+        raw: { description: "The broker's own JSON element for this operation, as it arrived — every field, including the ones this program does not model. Untyped on purpose: it is evidence for a person asking what the broker actually sent, and nothing here computes from it." }
+    TinvestUnparsedResponse:
+      type: object
+      required: [operations, has_more]
+      properties:
+        operations:
+          type: array
+          items: { $ref: "#/components/schemas/TinvestUnparsedOperation" }
+          description: "The page itself, newest first, at most `limit` long."
+        has_more: { type: boolean, description: "Whether there is at least one more unparsed operation beyond this page. Fetched rather than inferred, for the reason TinvestSyncRunsResponse.has_more gives." }

@@ -12,16 +12,16 @@ import (
 
 // Defines values for AccountStatus.
 const (
-	Active   AccountStatus = "active"
-	Archived AccountStatus = "archived"
+	AccountStatusActive   AccountStatus = "active"
+	AccountStatusArchived AccountStatus = "archived"
 )
 
 // Valid indicates whether the value is a known member of the AccountStatus enum.
 func (e AccountStatus) Valid() bool {
 	switch e {
-	case Active:
+	case AccountStatusActive:
 		return true
-	case Archived:
+	case AccountStatusArchived:
 		return true
 	default:
 		return false
@@ -165,31 +165,31 @@ func (e InBaseGap) Valid() bool {
 
 // Defines values for InstrumentType.
 const (
-	Bond     InstrumentType = "bond"
-	Crypto   InstrumentType = "crypto"
-	Currency InstrumentType = "currency"
-	Custom   InstrumentType = "custom"
-	Etf      InstrumentType = "etf"
-	Metal    InstrumentType = "metal"
-	Share    InstrumentType = "share"
+	InstrumentTypeBond     InstrumentType = "bond"
+	InstrumentTypeCrypto   InstrumentType = "crypto"
+	InstrumentTypeCurrency InstrumentType = "currency"
+	InstrumentTypeCustom   InstrumentType = "custom"
+	InstrumentTypeEtf      InstrumentType = "etf"
+	InstrumentTypeMetal    InstrumentType = "metal"
+	InstrumentTypeShare    InstrumentType = "share"
 )
 
 // Valid indicates whether the value is a known member of the InstrumentType enum.
 func (e InstrumentType) Valid() bool {
 	switch e {
-	case Bond:
+	case InstrumentTypeBond:
 		return true
-	case Crypto:
+	case InstrumentTypeCrypto:
 		return true
-	case Currency:
+	case InstrumentTypeCurrency:
 		return true
-	case Custom:
+	case InstrumentTypeCustom:
 		return true
-	case Etf:
+	case InstrumentTypeEtf:
 		return true
-	case Metal:
+	case InstrumentTypeMetal:
 		return true
-	case Share:
+	case InstrumentTypeShare:
 		return true
 	default:
 		return false
@@ -337,6 +337,159 @@ func (e Role) Valid() bool {
 	}
 }
 
+// Defines values for TinvestConnectionStatus.
+const (
+	TinvestConnectionStatusActive       TinvestConnectionStatus = "active"
+	TinvestConnectionStatusDisabled     TinvestConnectionStatus = "disabled"
+	TinvestConnectionStatusTokenRevoked TinvestConnectionStatus = "token_revoked"
+)
+
+// Valid indicates whether the value is a known member of the TinvestConnectionStatus enum.
+func (e TinvestConnectionStatus) Valid() bool {
+	switch e {
+	case TinvestConnectionStatusActive:
+		return true
+	case TinvestConnectionStatusDisabled:
+		return true
+	case TinvestConnectionStatusTokenRevoked:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TinvestReconcileMismatchKind.
+const (
+	TinvestReconcileMismatchKindCurrency    TinvestReconcileMismatchKind = "currency"
+	TinvestReconcileMismatchKindInstrument  TinvestReconcileMismatchKind = "instrument"
+	TinvestReconcileMismatchKindUnsupported TinvestReconcileMismatchKind = "unsupported"
+)
+
+// Valid indicates whether the value is a known member of the TinvestReconcileMismatchKind enum.
+func (e TinvestReconcileMismatchKind) Valid() bool {
+	switch e {
+	case TinvestReconcileMismatchKindCurrency:
+		return true
+	case TinvestReconcileMismatchKindInstrument:
+		return true
+	case TinvestReconcileMismatchKindUnsupported:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TinvestReconcileStatus.
+const (
+	Matched    TinvestReconcileStatus = "matched"
+	Mismatched TinvestReconcileStatus = "mismatched"
+	NotChecked TinvestReconcileStatus = "not_checked"
+)
+
+// Valid indicates whether the value is a known member of the TinvestReconcileStatus enum.
+func (e TinvestReconcileStatus) Valid() bool {
+	switch e {
+	case Matched:
+		return true
+	case Mismatched:
+		return true
+	case NotChecked:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TinvestSyncRunStatus.
+const (
+	Failed  TinvestSyncRunStatus = "failed"
+	Ok      TinvestSyncRunStatus = "ok"
+	Running TinvestSyncRunStatus = "running"
+)
+
+// Valid indicates whether the value is a known member of the TinvestSyncRunStatus enum.
+func (e TinvestSyncRunStatus) Valid() bool {
+	switch e {
+	case Failed:
+		return true
+	case Ok:
+		return true
+	case Running:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TinvestSyncTrigger.
+const (
+	Initial  TinvestSyncTrigger = "initial"
+	Manual   TinvestSyncTrigger = "manual"
+	Schedule TinvestSyncTrigger = "schedule"
+)
+
+// Valid indicates whether the value is a known member of the TinvestSyncTrigger enum.
+func (e TinvestSyncTrigger) Valid() bool {
+	switch e {
+	case Initial:
+		return true
+	case Manual:
+		return true
+	case Schedule:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TinvestUnparsedReason.
+const (
+	AmountOutOfBounds         TinvestUnparsedReason = "amount_out_of_bounds"
+	CommissionRefund          TinvestUnparsedReason = "commission_refund"
+	CurrencyTrade             TinvestUnparsedReason = "currency_trade"
+	EngineRefused             TinvestUnparsedReason = "engine_refused"
+	InstrumentUnresolved      TinvestUnparsedReason = "instrument_unresolved"
+	ProjectionIncomplete      TinvestUnparsedReason = "projection_incomplete"
+	RedemptionWithoutQuantity TinvestUnparsedReason = "redemption_without_quantity"
+	TaxRefund                 TinvestUnparsedReason = "tax_refund"
+	TransferDirectionUnknown  TinvestUnparsedReason = "transfer_direction_unknown"
+	UnrepresentableAmount     TinvestUnparsedReason = "unrepresentable_amount"
+	UnrepresentableQuantity   TinvestUnparsedReason = "unrepresentable_quantity"
+	UnsupportedType           TinvestUnparsedReason = "unsupported_type"
+)
+
+// Valid indicates whether the value is a known member of the TinvestUnparsedReason enum.
+func (e TinvestUnparsedReason) Valid() bool {
+	switch e {
+	case AmountOutOfBounds:
+		return true
+	case CommissionRefund:
+		return true
+	case CurrencyTrade:
+		return true
+	case EngineRefused:
+		return true
+	case InstrumentUnresolved:
+		return true
+	case ProjectionIncomplete:
+		return true
+	case RedemptionWithoutQuantity:
+		return true
+	case TaxRefund:
+		return true
+	case TransferDirectionUnknown:
+		return true
+	case UnrepresentableAmount:
+		return true
+	case UnrepresentableQuantity:
+		return true
+	case UnsupportedType:
+		return true
+	default:
+		return false
+	}
+}
+
 // AccountStatus defines model for AccountStatus.
 type AccountStatus string
 
@@ -457,6 +610,15 @@ type CreateOperationRequest struct {
 	// SplitRatio Decimal as string: how many units one unit becomes. Must be positive and strictly less than 10^10 (10000000000) — the first value the column cannot hold — or 400. A split multiplies the whole position's quantity, so a ratio that is a mis-scaled field rather than a corporate action carries an ordinary holding past what any screen can value; the bound refuses it by name instead of letting the database answer with an overflow.
 	SplitRatio nullable.Nullable[string] `json:"split_ratio,omitempty"`
 	Type       OperationType             `json:"type"`
+}
+
+// CreateTinvestConnectionRequest defines model for CreateTinvestConnectionRequest.
+type CreateTinvestConnectionRequest struct {
+	// Accounts Which broker accounts to import, and what to call each one here. At least one — a connection that imports nothing would sync forever and produce nothing. Naming one broker account twice in one request is a 400.
+	Accounts []TinvestAccountPick `json:"accounts"`
+
+	// Token A read-only T-Invest API token. Checked against the broker before anything is written, then stored encrypted; only its last characters are ever published again (TinvestConnection.token_last4).
+	Token string `json:"token"`
 }
 
 // CurrencyTotal defines model for CurrencyTotal.
@@ -772,6 +934,223 @@ type Summary struct {
 	Unconverted []string `json:"unconverted"`
 }
 
+// TinvestAccountPick defines model for TinvestAccountPick.
+type TinvestAccountPick struct {
+	// AccountName What to call the NEW babki account this broker account is imported into. A new account every time — never an existing one — so imported history is never mixed into anything hand-entered.
+	AccountName string `json:"account_name"`
+
+	// BrokerAccountId One `broker_account_id` from the token check. It must be among the accounts the token can see AND be one of the importable kinds; anything else is a 400, so a client cannot connect an account this program cannot read.
+	BrokerAccountId string `json:"broker_account_id"`
+}
+
+// TinvestBrokerAccount One T-Invest account a token can see, as the broker describes it. Only the kinds this program can import are listed — a regular brokerage account and an ИИС; savings, card and «инвесткопилка» accounts are left out, because nothing here knows how to read them. Accounts are listed WHATEVER their status, closed ones included: a closed account's history is exactly as real as an open one's, and its settled results are the part of it worth importing.
+type TinvestBrokerAccount struct {
+	// BrokerAccountId The broker's own id for the account. Sent back in CreateTinvestConnectionRequest to say which accounts to import.
+	BrokerAccountId string `json:"broker_account_id"`
+
+	// Name What the broker calls the account. Shown so the owner can tell one of their accounts from another; nothing is looked up by it.
+	Name string `json:"name"`
+
+	// OpenedOn Date YYYY-MM-DD the broker says the account was opened, or null when it sent none. It is where the first import starts reading history from.
+	OpenedOn nullable.Nullable[string] `json:"opened_on,omitempty"`
+
+	// Type The broker's own account-type word, verbatim (e.g. ACCOUNT_TYPE_TINKOFF, ACCOUNT_TYPE_TINKOFF_IIS). Passed through rather than translated into a vocabulary of ours: it is the broker's classification and this program keeps it as evidence of what was connected.
+	Type string `json:"type"`
+}
+
+// TinvestConnection defines model for TinvestConnection.
+type TinvestConnection struct {
+	// Accounts The broker accounts this connection imports, in the order they were linked.
+	Accounts []TinvestLinkedAccount `json:"accounts"`
+	Id       openapi_types.UUID     `json:"id"`
+
+	// LastReconcile The connection's most recent check against the broker, or null when none of its runs ever made one. It survives a later failed run: a sync that died before reconciling does not erase what the previous check found, and reporting «not checked» in that case would say something false about a check that did happen.
+	LastReconcile nullable.Nullable[TinvestReconcileSnapshot] `json:"last_reconcile,omitempty"`
+
+	// LastSuccessfulSyncAt When this connection's last successful run STARTED, or null if it never had one. Two things about it are easy to assume the other way round and are not: it is the run's start rather than its finish, so it is not the moment the mirror became current; and it is keyed by the connection while runs are made per account, so for a connection with several broker accounts it means at least one of them synced then, never all of them.
+	LastSuccessfulSyncAt nullable.Nullable[time.Time] `json:"last_successful_sync_at,omitempty"`
+
+	// Status Where a connection to T-Invest stands. `active`: the token works as far as anyone knows, and the hourly schedule syncs this connection. `token_revoked`: the broker refused the stored token, and only a new one fixes it — THE SERVER'S OWN VERDICT, reached by asking the broker, which is why UpdateTinvestConnectionRequest.status will not accept it. `disabled`: the owner switched the connection off; the mirror of what the broker already said stays exactly as it is, and the scheduler passes it by.
+	Status TinvestConnectionStatus `json:"status"`
+
+	// TokenLast4 The last characters of the stored token — at most four, and fewer only if the token itself is shorter — so the owner can tell one token from another. THE TOKEN ITSELF IS NEVER PUBLISHED, by this field or any other: it appears in request schemas only, the way `password` does.
+	TokenLast4 string `json:"token_last4"`
+}
+
+// TinvestConnectionStatus Where a connection to T-Invest stands. `active`: the token works as far as anyone knows, and the hourly schedule syncs this connection. `token_revoked`: the broker refused the stored token, and only a new one fixes it — THE SERVER'S OWN VERDICT, reached by asking the broker, which is why UpdateTinvestConnectionRequest.status will not accept it. `disabled`: the owner switched the connection off; the mirror of what the broker already said stays exactly as it is, and the scheduler passes it by.
+type TinvestConnectionStatus string
+
+// TinvestConnectionsResponse Every connection of the space, whole. An envelope with no `has_more` and no paging, unlike the run log and the unparsed list beneath it: a space holds a handful of connections and this list is never truncated, so there is no question for a flag to answer. The envelope is kept all the same — it costs one key and leaves somewhere to put a fact about the list itself, which a bare array (the shape the members list still has) has nowhere to carry.
+type TinvestConnectionsResponse struct {
+	Connections []TinvestConnection `json:"connections"`
+}
+
+// TinvestLinkedAccount One broker account tied to the one babki account it is imported into.
+type TinvestLinkedAccount struct {
+	// AccountId The babki account this import feeds. It outlives the connection: deleting the connection leaves it, and its operations, alone.
+	AccountId       openapi_types.UUID `json:"account_id"`
+	BrokerAccountId string             `json:"broker_account_id"`
+
+	// BrokerAccountName What the broker called the account WHEN THE LINK WAS MADE — a label kept as it was, not re-read on every sync, so it can differ from what the broker calls it today.
+	BrokerAccountName string `json:"broker_account_name"`
+
+	// BrokerAccountType The broker's own account-type word as it was at that same moment (e.g. ACCOUNT_TYPE_TINKOFF).
+	BrokerAccountType string             `json:"broker_account_type"`
+	LinkId            openapi_types.UUID `json:"link_id"`
+
+	// OpenedOn Date YYYY-MM-DD the broker said the account was opened, or null when it sent none — in which case history is read from a fixed floor instead.
+	OpenedOn nullable.Nullable[string] `json:"opened_on,omitempty"`
+}
+
+// TinvestReconcileMismatch One thing the broker and this program's journal disagree about, carrying BOTH figures rather than their difference: a reader who sees only the gap cannot tell which side to go and look at.
+type TinvestReconcileMismatch struct {
+	// Broker Decimal as string — what the broker says is there. Units of the security, or an amount of the currency.
+	Broker string `json:"broker"`
+
+	// InstrumentId The catalog instrument this row is about, or null when there is none to name: a currency row, an asset kind this program does not hold, and a security the broker named that nothing of ours matched. That last null is itself the news.
+	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id,omitempty"`
+
+	// Journal Decimal as string — what this program's journal computes for the same thing, in the same units.
+	Journal string `json:"journal"`
+
+	// Kind What kind of difference the check found. `instrument`: a security's quantity differs, or one side names a security the other does not — which usually means some of the broker's operations did not become journal entries, so the unparsed list is where to look. `currency`: a cash balance in one currency differs. `unsupported`: the broker holds an asset of a kind this program does not account for at all (a future, an option), which no amount of re-importing will change — a separate value precisely so it is not read as the first one and does not send a reader hunting for missing operations.
+	Kind TinvestReconcileMismatchKind `json:"kind"`
+
+	// Label What a person reads: our instrument's ticker or name when the row is about one of ours, the broker's own naming when it is about a position that is not, and a currency code on a currency row.
+	Label string `json:"label"`
+}
+
+// TinvestReconcileMismatchKind What kind of difference the check found. `instrument`: a security's quantity differs, or one side names a security the other does not — which usually means some of the broker's operations did not become journal entries, so the unparsed list is where to look. `currency`: a cash balance in one currency differs. `unsupported`: the broker holds an asset of a kind this program does not account for at all (a future, an option), which no amount of re-importing will change — a separate value precisely so it is not read as the first one and does not send a reader hunting for missing operations.
+type TinvestReconcileMismatchKind string
+
+// TinvestReconcileSnapshot The most recent check against the broker that this connection actually had, whichever of its accounts it was for. Absent when no run ever reconciled — which is not the same as a check that found nothing, and is why this whole object is nullable rather than being flattened into a status field that would have to say `not_checked` for both.
+type TinvestReconcileSnapshot struct {
+	// At When that check was made.
+	At time.Time `json:"at"`
+
+	// Mismatches What differed. Empty exactly when `status` is `matched`; the two are one fact published once, since the verdict is derived from this list and never kept beside it.
+	Mismatches []TinvestReconcileMismatch `json:"mismatches"`
+
+	// Status `matched` or `mismatched`. `not_checked` is a member of the enum — it is what every unreconciled run carries — but it cannot appear HERE: this object is built only from runs that made a check, and its absence is what «never checked» looks like.
+	Status TinvestReconcileStatus `json:"status"`
+}
+
+// TinvestReconcileStatus What the check against the broker said about a run. `not_checked` is NOT `matched`, and the difference is the reason this enum has three values rather than a boolean: a run that was never reconciled — because it failed, or because our own side could not be computed — makes no claim at all, and a screen that could not tell the two apart would draw a tick over a check that never happened. `matched`: every security's quantity and every currency's balance agreed, and the broker named no asset this program cannot hold. `mismatched`: at least one did not, and the mismatch list says which.
+type TinvestReconcileStatus string
+
+// TinvestSyncAcceptedResponse defines model for TinvestSyncAcceptedResponse.
+type TinvestSyncAcceptedResponse struct {
+	// Queued True when this request put a sync into the queue. FALSE MEANS ONE WAS ALREADY THERE — and «there» is wider than «running right now». A sync that failed and is waiting out its backoff occupies the same slot, and that backoff grows into the hours, so a client that turned `false` into «синхронизация уже идёт» would be saying something false for as long as the wait lasts. «Уже запланирована» is true in both cases, which is the sentence to write.
+	Queued bool `json:"queued"`
+}
+
+// TinvestSyncRun One attempt to bring ONE broker account up to date. A connection importing two broker accounts produces two runs per sync, one each.
+type TinvestSyncRun struct {
+	// AddedCount How many of them the mirror had never seen before.
+	AddedCount int `json:"added_count"`
+
+	// DisappearedCount How many mirror rows the broker stopped returning. Not a deletion: the row stays and is marked, because the broker rewriting its own history is a fact worth keeping.
+	DisappearedCount int `json:"disappeared_count"`
+
+	// Error What went wrong, empty on a run that did not fail. Prose for a person, never something a client branches on.
+	Error string `json:"error"`
+
+	// FinishedAt Null while the run is `running`, and permanently null for a run whose process died mid-sync.
+	FinishedAt nullable.Nullable[time.Time] `json:"finished_at,omitempty"`
+	Id         openapi_types.UUID           `json:"id"`
+
+	// LinkId Which of the connection's links this run was for — join it against TinvestConnection.accounts to name the broker account and the babki account behind it. THE LINK RATHER THAN THE ACCOUNT, so that this figure is read off the run's own row and never assembled from a second query whose answer could have moved on between the two.
+	LinkId openapi_types.UUID `json:"link_id"`
+
+	// Mismatches What that check found. EMPTY IN TWO DIFFERENT SITUATIONS — the check found nothing, and no check was made — and `reconcile_status` is what tells them apart. It is not restated here as a nullable list, because one fact published in two fields is one fact that can eventually disagree with itself.
+	Mismatches []TinvestReconcileMismatch `json:"mismatches"`
+
+	// ReadCount How many operations the broker returned for this account.
+	ReadCount int `json:"read_count"`
+
+	// ReconcileStatus What the check against the broker said about a run. `not_checked` is NOT `matched`, and the difference is the reason this enum has three values rather than a boolean: a run that was never reconciled — because it failed, or because our own side could not be computed — makes no claim at all, and a screen that could not tell the two apart would draw a tick over a check that never happened. `matched`: every security's quantity and every currency's balance agreed, and the broker named no asset this program cannot hold. `mismatched`: at least one did not, and the mismatch list says which.
+	ReconcileStatus TinvestReconcileStatus `json:"reconcile_status"`
+
+	// ReconciledAt When the check against the broker was made, or null when `reconcile_status` is `not_checked`.
+	ReconciledAt nullable.Nullable[time.Time] `json:"reconciled_at,omitempty"`
+	StartedAt    time.Time                    `json:"started_at"`
+
+	// Status Where one sync run stands. `running`: it started and has not reported back — a run left in this state for good is a process that died mid-sync, which is visible as such rather than as nothing having happened. `ok`: it finished. `failed`: it stopped on an error, which TinvestSyncRun.error names.
+	Status TinvestSyncRunStatus `json:"status"`
+
+	// Trigger What caused a sync run. `initial`: the first import, queued by the request that created the connection. `schedule`: the hourly job. `manual`: the owner asked for one (POST .../sync).
+	Trigger TinvestSyncTrigger `json:"trigger"`
+
+	// UnparsedCount How many of THIS account's mirror rows the projection could not read, counted after this run — the account's own figure, not the connection's.
+	UnparsedCount int `json:"unparsed_count"`
+}
+
+// TinvestSyncRunStatus Where one sync run stands. `running`: it started and has not reported back — a run left in this state for good is a process that died mid-sync, which is visible as such rather than as nothing having happened. `ok`: it finished. `failed`: it stopped on an error, which TinvestSyncRun.error names.
+type TinvestSyncRunStatus string
+
+// TinvestSyncRunsResponse defines model for TinvestSyncRunsResponse.
+type TinvestSyncRunsResponse struct {
+	// HasMore Whether the log holds at least one more run beyond this page. The server's to answer: the page's own length cannot, and here it especially cannot be inferred from a short page, since an over-large `limit` is refused rather than clamped. Fetched — one row beyond the page is asked for and its arrival IS this answer — never derived by comparing lengths afterwards.
+	HasMore bool `json:"has_more"`
+
+	// Runs The page itself, newest first, at most `limit` long.
+	Runs []TinvestSyncRun `json:"runs"`
+}
+
+// TinvestSyncTrigger What caused a sync run. `initial`: the first import, queued by the request that created the connection. `schedule`: the hourly job. `manual`: the owner asked for one (POST .../sync).
+type TinvestSyncTrigger string
+
+// TinvestTokenCheckRequest defines model for TinvestTokenCheckRequest.
+type TinvestTokenCheckRequest struct {
+	// Token A read-only T-Invest API token. Sent to the broker and dropped; nothing about it is stored by this endpoint. Only its emptiness is checked here — its length, shape and alphabet are the broker's to judge, and this server holds no pattern it could honestly check them against. It appears in this request schema and in the two write requests below, and in NO RESPONSE SCHEMA ANYWHERE — the same way `password` does.
+	Token string `json:"token"`
+}
+
+// TinvestTokenCheckResponse defines model for TinvestTokenCheckResponse.
+type TinvestTokenCheckResponse struct {
+	// Accounts The importable accounts, in the order the broker listed them. Empty means the token works and there is nothing to import through it — which is a different answer from a refused token (400) and must not be shown as one.
+	Accounts []TinvestBrokerAccount `json:"accounts"`
+}
+
+// TinvestUnparsedOperation One broker operation the projection could not turn into journal entries. Rows the broker has since stopped returning stay on this list: they are still operations this program could not read, and dropping them would be the silence the list exists to replace.
+type TinvestUnparsedOperation struct {
+	// Currency ISO-4217, upper case.
+	Currency string `json:"currency"`
+
+	// Description The broker's own free-text description of the operation, empty when it sent none.
+	Description string `json:"description"`
+
+	// Id The mirror row's id — this program's own, not the broker's, whose operation ids are documented to change over time and are an attribute here rather than a key.
+	Id openapi_types.UUID `json:"id"`
+
+	// OccurredAt When the broker says the operation happened.
+	OccurredAt time.Time `json:"occurred_at"`
+
+	// OpType The broker's own operation-type word, verbatim (e.g. OPERATION_TYPE_BUY).
+	OpType string `json:"op_type"`
+
+	// Payment Decimal as string — the broker's own amount, exactly as it arrived, unconverted and unrounded. Not minor units: an amount too fine or too large for this program's money is one of the reasons a row lands on this list, and rendering it in minor units would be impossible for exactly those rows.
+	Payment string `json:"payment"`
+
+	// Raw The broker's own JSON element for this operation, as it arrived — every field, including the ones this program does not model. Untyped on purpose: it is evidence for a person asking what the broker actually sent, and nothing here computes from it.
+	Raw interface{} `json:"raw"`
+
+	// Reason Why one broker operation did not become journal entries — a code, never prose: the wording the owner reads is the interface's to translate, and naming the wrong cause beside a right figure is the failure this whole list exists to prevent. `unsupported_type`: the broker's operation type is not one this program accounts for. `unrepresentable_amount`: the sum carries a fraction finer than a minor unit. `amount_out_of_bounds`: the sum is beyond what the journal can hold — a different accident from the previous one, and not to be captioned as it. `unrepresentable_quantity`: the number of units is finer than the journal's quantity scale. `transfer_direction_unknown`: a move between the owner's own accounts whose direction this program could not tell. `instrument_unresolved`: the operation names a security and no catalog row was matched to it — distinct from `unsupported_type`, which is about the OPERATION rather than about the security. `engine_refused`: the journal itself would not take the operation. `redemption_without_quantity`: a full bond redemption that says nothing about how many bonds were redeemed. `currency_trade`: a purchase or sale of currency. `commission_refund`: a negative commission on the operation, i.e. money coming back. `tax_refund`: a tax operation whose amount is positive. `projection_incomplete`: this program has a rule for the broker's operation type and the rule produced nothing — a gap in this program, stated as one.
+	Reason TinvestUnparsedReason `json:"reason"`
+}
+
+// TinvestUnparsedReason Why one broker operation did not become journal entries — a code, never prose: the wording the owner reads is the interface's to translate, and naming the wrong cause beside a right figure is the failure this whole list exists to prevent. `unsupported_type`: the broker's operation type is not one this program accounts for. `unrepresentable_amount`: the sum carries a fraction finer than a minor unit. `amount_out_of_bounds`: the sum is beyond what the journal can hold — a different accident from the previous one, and not to be captioned as it. `unrepresentable_quantity`: the number of units is finer than the journal's quantity scale. `transfer_direction_unknown`: a move between the owner's own accounts whose direction this program could not tell. `instrument_unresolved`: the operation names a security and no catalog row was matched to it — distinct from `unsupported_type`, which is about the OPERATION rather than about the security. `engine_refused`: the journal itself would not take the operation. `redemption_without_quantity`: a full bond redemption that says nothing about how many bonds were redeemed. `currency_trade`: a purchase or sale of currency. `commission_refund`: a negative commission on the operation, i.e. money coming back. `tax_refund`: a tax operation whose amount is positive. `projection_incomplete`: this program has a rule for the broker's operation type and the rule produced nothing — a gap in this program, stated as one.
+type TinvestUnparsedReason string
+
+// TinvestUnparsedResponse defines model for TinvestUnparsedResponse.
+type TinvestUnparsedResponse struct {
+	// HasMore Whether there is at least one more unparsed operation beyond this page. Fetched rather than inferred, for the reason TinvestSyncRunsResponse.has_more gives.
+	HasMore bool `json:"has_more"`
+
+	// Operations The page itself, newest first, at most `limit` long.
+	Operations []TinvestUnparsedOperation `json:"operations"`
+}
+
 // TransferRequest defines model for TransferRequest.
 type TransferRequest struct {
 	// CostMinor Cost basis override; default is FIFO carryover from the source account. A basis is what the shares COST, so it is never negative: the floor is 0 and not the -10^15 an amount gets, and the ceiling is the same 10^15 minor units every other money field here is written against. Past either end, 400. Sending one has a second consequence that is not about its size: a basis given by hand replaces the parcel of purchases the queue would have released, so the shares arrive knowing no acquisition date at all — see Operation.has_undated_lots, which is what such a transfer then reports for good.
@@ -830,6 +1209,15 @@ type UpdateSpaceRequest struct {
 	TaxResidency *string `json:"tax_residency,omitempty"`
 }
 
+// UpdateTinvestConnectionRequest Partial update of the connection. Both fields are optional and an omitted one is left unchanged, but at least one must be present — an empty body is refused rather than answered with an unchanged connection and a 200 that looks like success. minProperties states that in the schema itself, as UpdateSpaceRequest does.
+type UpdateTinvestConnectionRequest struct {
+	// Status Switch the connection on or off. Only `active` and `disabled` are accepted here; `token_revoked` is refused with a 400, because it is a statement about what the broker said and a client saying it would be stating something nobody checked.
+	Status *TinvestConnectionStatus `json:"status,omitempty"`
+
+	// Token A replacement read-only token, checked against the broker before it is stored. A connection sitting at `token_revoked` returns to `active` when the broker accepts it — unless this request also names a `status`, which wins.
+	Token *string `json:"token,omitempty"`
+}
+
 // UserInfo defines model for UserInfo.
 type UserInfo struct {
 	DisplayName string             `json:"display_name"`
@@ -850,6 +1238,18 @@ type ListAccountOperationsParams struct {
 type SearchInstrumentsParams struct {
 	Query *string `form:"query,omitempty" json:"query,omitempty"`
 	Limit *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListTinvestSyncRunsParams defines parameters for ListTinvestSyncRuns.
+type ListTinvestSyncRunsParams struct {
+	Limit  *int `form:"limit,omitempty" json:"limit,omitempty"`
+	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
+// ListTinvestUnparsedOperationsParams defines parameters for ListTinvestUnparsedOperations.
+type ListTinvestUnparsedOperationsParams struct {
+	Limit  *int `form:"limit,omitempty" json:"limit,omitempty"`
+	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
 // CreateAccountJSONRequestBody defines body for CreateAccount for application/json ContentType.
@@ -887,3 +1287,12 @@ type PerformSetupJSONRequestBody = SetupRequest
 
 // UpdateSpaceJSONRequestBody defines body for UpdateSpace for application/json ContentType.
 type UpdateSpaceJSONRequestBody = UpdateSpaceRequest
+
+// CreateTinvestConnectionJSONRequestBody defines body for CreateTinvestConnection for application/json ContentType.
+type CreateTinvestConnectionJSONRequestBody = CreateTinvestConnectionRequest
+
+// UpdateTinvestConnectionJSONRequestBody defines body for UpdateTinvestConnection for application/json ContentType.
+type UpdateTinvestConnectionJSONRequestBody = UpdateTinvestConnectionRequest
+
+// CheckTinvestTokenJSONRequestBody defines body for CheckTinvestToken for application/json ContentType.
+type CheckTinvestTokenJSONRequestBody = TinvestTokenCheckRequest

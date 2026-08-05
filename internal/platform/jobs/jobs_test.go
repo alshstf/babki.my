@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
@@ -220,5 +221,54 @@ func TestStartingTheQueueQueuesASyncForAnActiveConnection(t *testing.T) {
 				"the hourly dispatch is not reaching the queue")
 		}
 		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// TestAnInsertOnlyClientQueuesWithoutWorkingAnything is what stands behind the
+// "api" role's «синхронизировать сейчас» button. That process registers no
+// workers and starts no queue, and a client built that way is easy to assume
+// cannot insert either — River's own documentation says otherwise and this is
+// the measurement of it.
+//
+// It also checks the second half of the claim: that nothing is worked. The job
+// is still sitting in the queue, unclaimed, a moment later — which is the whole
+// point of the role, since the worker process is what must pick it up.
+func TestAnInsertOnlyClientQueuesWithoutWorkingAnything(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+
+	client, err := jobs.NewInsertOnlyClient(pool, slog.Default())
+	if err != nil {
+		t.Fatalf("NewInsertOnlyClient: %v", err)
+	}
+	connID := uuid.New()
+	res, err := tinvest.EnqueueSync(ctx, client, connID, tinvest.TriggerManual)
+	if err != nil {
+		t.Fatalf("EnqueueSync through an insert-only client: %v", err)
+	}
+	if res.UniqueSkippedAsDuplicate {
+		t.Fatal("the first sync of a connection was skipped as a duplicate")
+	}
+
+	var raw []byte
+	var state string
+	if err := pool.QueryRow(ctx,
+		`SELECT args, state FROM river_job WHERE kind = 'tinvest.sync'`).Scan(&raw, &state); err != nil {
+		t.Fatalf("read river_job: %v", err)
+	}
+	var args struct {
+		ConnectionID string `json:"connection_id"`
+		Trigger      string `json:"trigger"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		t.Fatalf("decode the queued job's args %s: %v", raw, err)
+	}
+	if args.ConnectionID != connID.String() || args.Trigger != "manual" {
+		t.Fatalf("queued %+v, want {%s manual}", args, connID)
+	}
+	// Available, not running and not completed: this process inserted the work
+	// and left it for whoever works the queue.
+	if state != "available" {
+		t.Errorf("the job is %q, want available: an api process must not work the jobs it queues", state)
 	}
 }
