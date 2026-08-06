@@ -277,6 +277,13 @@ export function useUnparsed(connectionId: string, pageSize = UNPARSED_PAGE_SIZE)
         ? allPages.reduce((rows, page) => rows + page.operations.length, 0)
         : undefined,
     enabled: connectionId !== "",
+    // Polled with the connection and the run log, and for a sharper reason than
+    // either: the counters beside this list DO refresh, so a list that does not
+    // ends up contradicting them on the same screen — «не разобрано: 148» above
+    // «Неразобранных операций нет». That is what happened on the first real
+    // import: the page was opened while the sync was still running, this query
+    // answered "none" truthfully at that instant, and then never asked again.
+    refetchInterval: CONNECTION_POLL_MS,
   });
 }
 
