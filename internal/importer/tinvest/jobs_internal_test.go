@@ -1302,3 +1302,34 @@ func TestSyncWorkerAsksForMoreThanTheDefaultMinute(t *testing.T) {
 // method: a signature moving under it is a compile error here rather than a
 // wiring failure in cmd/babki.
 var _ jobInserter = (*river.Client[pgx.Tx])(nil)
+
+// A token that will not decrypt is a different fault from a token the broker
+// refused — the key changed under the ciphertext, most plainly when a database
+// backup is restored onto a host whose BABKI_ENCRYPTION_KEY was generated
+// afresh. The REMEDY is the same one, though: a token pasted now is sealed with
+// the key this process holds. So the connection is parked where a revoked token
+// parks, which is the only state the screen offers the owner a new token from.
+//
+// Before this, the worker returned the error and left the connection "active":
+// the queue retried hourly for a key it could not conjure, and every screen
+// went on saying the import was fine while it had silently stopped.
+func TestSyncWorkerParksAConnectionWhoseTokenWillNotDecrypt(t *testing.T) {
+	f := newWorkerFixture(t)
+
+	other, err := secretbox.New(bytes.Repeat([]byte{9}, secretbox.KeySize))
+	if err != nil {
+		t.Fatalf("secretbox.New: %v", err)
+	}
+	if err := f.store.UpdateConnectionToken(f.ctx, f.spaceID, f.conn.ID,
+		other.Seal([]byte(testToken)), "oken"); err != nil {
+		t.Fatalf("reseal the token under a key the worker does not hold: %v", err)
+	}
+
+	if err := f.work(t, "schedule"); err != nil {
+		t.Fatalf("Work returned %v, want nil — no retry can recover a key the process does not have", err)
+	}
+	if got := f.status(t); got != StatusTokenRevoked {
+		t.Errorf("connection status = %q, want %q — otherwise nothing on any screen says the import stopped",
+			got, StatusTokenRevoked)
+	}
+}

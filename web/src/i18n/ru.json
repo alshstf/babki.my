@@ -302,7 +302,7 @@
     "tokenLast4": "Токен ···{{last4}}",
     "statuses": {
       "active": "Активно",
-      "token_revoked": "Токен отозван",
+      "token_revoked": "Нужен новый токен",
       "disabled": "Отключено"
     },
     "runStatuses": {

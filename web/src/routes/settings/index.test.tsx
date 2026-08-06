@@ -396,7 +396,7 @@ describe("SettingsPage", () => {
       // token_revoked, not active — the badge names the SERVER's own verdict
       // (see TinvestConnectionStatus in the API contract), not a guess this
       // screen would have to keep in sync with it by hand.
-      expect(screen.getByText("Токен отозван")).toBeInTheDocument();
+      expect(screen.getByText("Нужен новый токен")).toBeInTheDocument();
 
       const links = screen.getAllByRole("link");
       const row = links.find((l) => l.getAttribute("href") === "/settings/connections/conn-1");
@@ -421,7 +421,7 @@ describe("SettingsPage", () => {
 
       wrap(makeSession());
 
-      const revoked = await screen.findByText("Токен отозван");
+      const revoked = await screen.findByText("Нужен новый токен");
       const off = screen.getByText("Отключено");
       const active = screen.getByText("Активно");
 

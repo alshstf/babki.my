@@ -387,11 +387,23 @@ func (w *syncWorker) Work(ctx context.Context, job *river.Job[SyncArgs]) error {
 	token, err := w.box.Open(conn.TokenCiphertext)
 	if err != nil {
 		// The stored secret will not decrypt — a changed or corrupted
-		// encryption key, not a broker problem. Returned so the failure is
-		// visible in the queue, and NOT parked as token_revoked: that word
-		// would tell the owner to paste a new token, which would not help.
+		// encryption key, not a broker problem. Parked in the same state a
+		// revoked token reaches, because the remedy is genuinely the same one:
+		// a token pasted now is sealed with the key this process is holding,
+		// so the next run opens it. (An earlier version of this comment said
+		// pasting would not help. It does; UpdateConnection re-seals with the
+		// current box, and nothing keeps the old key around to disagree.)
+		//
+		// Returning nil rather than the error for the same reason a revoked
+		// token does: retrying cannot find a key the process does not have, and
+		// an hourly job failing forever buries the one run record that says what
+		// happened. The parked status is what the owner sees; the log line is
+		// what tells an operator it was the key and not the broker.
 		w.log.Error("tinvest: decrypt the stored broker token failed", "connection", conn.ID, "err", err)
-		return err
+		if err := w.store.UpdateConnectionStatus(ctx, conn.ID, StatusTokenRevoked); err != nil {
+			return fmt.Errorf("tinvest: park a connection whose token will not decrypt: %w", err)
+		}
+		return nil
 	}
 	client, err := w.newClient(string(token))
 	if err != nil {
