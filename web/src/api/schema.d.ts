@@ -836,6 +836,16 @@ export interface components {
             out: components["schemas"]["Operation"];
             in: components["schemas"]["Operation"];
         };
+        /** @description One currency's worth of a position's income (see Position.income_by_currency, which is the list of these). */
+        PositionCurrencyIncome: {
+            /** @description ISO-4217 of the currency these payments ARRIVED in. Not necessarily the position's own `currency`, which is what its cost and quantity are denominated in — a paper bought for yuan may be paid in rubles. */
+            currency: string;
+            /**
+             * Format: int64
+             * @description Income received in `currency`'s minor units: the dividends and coupons paid in it, less the taxes withheld in it. An exact sum — every term is an int64 of minor units of this one currency, so nothing is converted and nothing is rounded here. May be 0 (a coupon and the tax withheld from it cancelling to the minor unit) or negative (a tax withheld in a currency no payment of this position arrived in, or one on a payment older than this journal); neither is a defect, and neither says the same thing as having no entry at all.
+             */
+            income_minor: number;
+        };
         Position: {
             instrument: components["schemas"]["Instrument"];
             /** @description Decimal as string */
@@ -844,8 +854,13 @@ export interface components {
             cost_minor: number;
             /** Format: int64 */
             realized_pnl_minor: number;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Income denominated in the position's own `currency`, AND ONLY THAT: the dividends and coupons that arrived in `currency`, less the taxes withheld in `currency`. IT IS ONE TERM OF `income_by_currency` — that list's entry for `currency`, and 0 when the list holds no entry for it — never a summary of the list, and a reader who takes this field for «the position's income» is shown an incomplete answer on every position paid in more than one currency. It is published beside `currency` and rendered under that sign, which is the whole reason it can carry nothing else: adding another currency's minor units into it would denominate the result in nothing, and converting them needs a rate this object neither has nor publishes. A paper's payments need not arrive in the currency it was bought in — a yuan bond's coupons and a dollar share's dividend, tax included, routinely come in rubles from a Russian broker — so on such a position this field is a plain 0: true to the minor unit, and by itself indistinguishable on screen from a paper that has never paid anything. `income_by_currency` beside it is the complete answer with nothing converted; `in_base.income_minor` is the complete answer as ONE number, every payment converted at the rate of its own date, and it exists only where that object does.
+             */
             income_minor: number;
+            /** @description The position's income KEPT PER CURRENCY, and the complete answer to what this paper has paid: one entry per currency the payments actually arrived in, ordered by currency code. NOTHING IS CONVERTED AND NO TWO ENTRIES ARE EVER ADDED — the calculating core holds no fx rates by design (see portfolio.Position.IncomeByCurrency), and one integer made of kopecks and fen is denominated in nothing; `in_base.income_minor` is where this becomes a single figure, each payment converted at the rate of its own date. The order is the server's own and is a property of the money rather than of the journal: two accounts holding the same payments recorded in a different order publish the same list. `income_minor` above is this list's entry for `currency` alone — one of these terms, not their sum. EMPTY EXACTLY WHEN THE POSITION HAS RECEIVED NO INCOME AT ALL, which is what tells that apart from an entry of 0: a coupon and its tax cancelling exactly is not the statement that nothing was ever paid. */
+            income_by_currency: components["schemas"]["PositionCurrencyIncome"][];
             /** Format: int64 */
             fees_minor: number;
             currency: string;
@@ -901,7 +916,7 @@ export interface components {
             unrealized_pnl_minor?: number | null;
             /**
              * Format: int64
-             * @description Income in currency: every income operation of the position (dividend, coupon, tax) converted at the fx rate of the date it occurred, summed as decimals and rounded once at the end — not Position.income_minor times today's rate
+             * @description Income in currency: every income operation of the position (dividend, coupon, tax) converted at the fx rate of the date it occurred, summed as decimals and rounded once at the end — not Position.income_minor times today's rate. EVERY operation means every one, whatever currency it arrived in: a payment is converted out of the currency it was actually paid in, so this figure covers the whole of Position.income_by_currency in one number, while Position.income_minor beside it carries only the entry already denominated in the position's own currency. This is the only single figure that answers for all of them, and it exists only where this object does
              */
             income_minor: number;
             /**

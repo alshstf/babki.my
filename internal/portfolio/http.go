@@ -392,6 +392,32 @@ func hasUndatedRealizations(p *Position) bool {
 	return anyUndatedRealization(p.Realizations)
 }
 
+// incomeByCurrencyToAPI publishes a position's income exactly as the engine
+// kept it: one entry per currency the payments arrived in, in the engine's own
+// order, each figure in its own currency's minor units.
+//
+// IT CONVERTS NOTHING, SUMS NOTHING AND REORDERS NOTHING, and each of the three
+// would be this function answering a question the engine deliberately left
+// alone. Converting needs rates the engine has never held; summing puts two
+// currencies' minor units in one int64; and the order is already the property
+// the engine maintains it for — by currency code, so that the same payments
+// recorded in a different journal order draw the same row (see
+// Position.IncomeByCurrency).
+//
+// An empty income is published as an empty ARRAY, never as null. The contract
+// requires the field, and "no payment of any kind" is a statement a reader is
+// entitled to, distinct from an entry that happens to be zero.
+func incomeByCurrencyToAPI(income []CurrencyMinor) []apitypes.PositionCurrencyIncome {
+	out := make([]apitypes.PositionCurrencyIncome, 0, len(income))
+	for _, e := range income {
+		out = append(out, apitypes.PositionCurrencyIncome{
+			Currency:    e.Currency,
+			IncomeMinor: e.Minor,
+		})
+	}
+	return out
+}
+
 // toAPI builds one position's API representation, including its market
 // valuation and — when that valuation isn't already in the position's own
 // currency — an fx conversion into it (a rate is only ever asked for when that
@@ -432,19 +458,23 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 		// puts kopecks under a yuan sign, and converting them needs a rate this
 		// object neither has nor publishes.
 		//
-		// SO INCOME IN ANOTHER CURRENCY IS NOT PUBLISHED HERE AT ALL, and a
-		// position that received only such income shows zero. That is an
+		// SO INCOME IN ANOTHER CURRENCY IS NOT IN THIS FIGURE AT ALL, and a
+		// position that received only such income has a zero here. That is an
 		// omission rather than a false figure — every kopeck this number
-		// contains really is in `currency` — but it IS an omission, and closing
-		// it means giving the contract a per-currency field, which is a piece of
-		// work of its own. In the meantime the base-currency figure beside it is
-		// complete WHERE IT EXISTS: in_base.income_minor converts every payment
-		// out of the currency it actually arrived in (see positionInBase), so a
-		// row carrying that object shows the whole income in the base currency.
-		// A row that does not carry it — because the position's currency IS the
-		// base one, or because some other term of the object could not be
-		// valued — shows only what this field holds.
+		// contains really is in `currency` — and it is no longer an omission
+		// from the RESPONSE: IncomeByCurrency below publishes the whole income
+		// unconverted, one entry per currency, and the contract says in as many
+		// words that this field is one of its terms rather than a summary of it.
+		// The base-currency figure is the other complete answer, WHERE IT
+		// EXISTS: in_base.income_minor converts every payment out of the
+		// currency it actually arrived in (see positionInBase), so a row
+		// carrying that object shows the whole income as a single number. A row
+		// that does not carry it — because the position's currency IS the base
+		// one, or because some other term of the object could not be valued —
+		// has the per-currency list and this field, and nothing is hidden by
+		// either absence.
 		IncomeMinor:            p.IncomeMinorIn(p.Currency),
+		IncomeByCurrency:       incomeByCurrencyToAPI(p.IncomeByCurrency),
 		FeesMinor:              p.FeesMinor,
 		HasUndatedLots:         hasUndatedLots(p),
 		HasUndatedRealizations: hasUndatedRealizations(p),

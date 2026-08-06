@@ -288,6 +288,41 @@ function priceHint(
   return { price, title };
 }
 
+// The income this position received in currencies OTHER than its own, each
+// figure formatted in the currency it actually arrived in and joined with the
+// same "·" the realized total uses for the same purpose. Returns null when
+// there is none, which is the ordinary row.
+//
+// WHY THE COLUMN NEEDS A SECOND LINE AT ALL. Position.income_minor is only the
+// entry of income_by_currency denominated in the position's own currency (the
+// contract says so in as many words), and a Russian broker routinely pays a
+// yuan bond's coupon and a dollar share's dividend in rubles. On such a row
+// that field is 0 — true to the kopeck, and on its own indistinguishable from a
+// paper that has never paid anything. The whole point of this line is that the
+// money paid in the other currency is DRAWN rather than left out of a figure
+// that then reads as "nothing was paid": it is on the row, not behind a hover.
+//
+// NOTHING IS ADDED HERE, and this is where it would be tempting: two currencies
+// summed into one number are denominated in nothing, and converting them needs
+// rates the browser does not have and this project does not do in the browser
+// anyway. So the entries stay side by side, each under its own sign — the
+// server's order, which is by currency code and is the same for two accounts
+// holding the same payments in a different journal order.
+//
+// The position's own currency is filtered out because the figure above already
+// carries it. Comparing the two codes is not inferring anything the server
+// withheld: `income_minor` IS defined as the entry for `currency`, so the
+// filter removes exactly what is already on screen and nothing else.
+function otherCurrencyIncome(position: Position): string | null {
+  const others = position.income_by_currency.filter(
+    (entry) => entry.currency !== position.currency,
+  );
+  if (others.length === 0) return null;
+  return others
+    .map((entry) => formatMinor(entry.income_minor, entry.currency))
+    .join(" · ");
+}
+
 // Formats the unrealized P&L as a percentage of cost ("+12,3 %" / "-12,3 %").
 // This is a *display* ratio, not a money amount, so it's computed with plain
 // number arithmetic here rather than routed through money.ts (per project
@@ -453,6 +488,31 @@ export function PositionsTable({
             baseCurrency,
             convertedTerm((block) => block.income_minor),
           );
+          // The second line under the income, and WHETHER it is drawn is
+          // decided by what the cell above ended up showing rather than by
+          // which mode the toggle is in — the two are not the same question,
+          // and using the mode would be wrong in both directions.
+          //
+          // The converted figure (in_base.income_minor) is the whole income
+          // already, every payment brought out of the currency it arrived in,
+          // so listing those payments a second time beneath it would show the
+          // same money twice and invite the reader to add it to a sum that
+          // already contains it.
+          //
+          // Everything else shows the position's OWN figure, which carries one
+          // currency and cannot carry the rest — and that is three situations,
+          // not one: the toggle asks for the position's currency; the toggle
+          // asks for the base currency and the row's block could not be struck
+          // (`noRate`, captioned by the row's own sentence); or the position's
+          // currency IS the base currency, so the server publishes no block at
+          // all and never had to. That last one is the case this line exists
+          // for above all: a ruble paper paid a dollar dividend has no
+          // conversion object in EITHER mode, so before this its row showed a
+          // ruble zero in both, with nothing on it saying a dividend had been
+          // paid at all. (The journal below still listed the payment itself —
+          // this is about the position's own row, which is where a reader asks
+          // what the paper has earned.)
+          const otherIncome = resolvedIncome.converted ? null : otherCurrencyIncome(position);
           const unrealizedPct =
             resolvedUnrealized && resolvedUnrealized.currency === resolvedCost.currency
               ? unrealizedPercent(resolvedUnrealized.amountMinor, resolvedCost.amountMinor)
@@ -585,6 +645,15 @@ export function PositionsTable({
                   convertedTitle={incomeConvertedTitle}
                   testId="position-income"
                 />
+                {otherIncome && (
+                  <div
+                    data-testid="position-income-other-currency"
+                    className="text-xs font-normal text-muted-foreground"
+                    title={t("positions.incomeOtherCurrencyHint")}
+                  >
+                    {t("positions.incomeOtherCurrency", { amounts: otherIncome })}
+                  </div>
+                )}
               </TableCell>
             </TableRow>
           );

@@ -107,6 +107,10 @@ function makePosition({
     cost_minor: 250_000,
     realized_pnl_minor: 0,
     income_minor: 0,
+    // Required by the contract and always sent, empty here: this position was
+    // never paid anything, and the table reads the list itself to draw the
+    // income arriving in a currency other than the position's.
+    income_by_currency: [],
     fees_minor: 0,
     currency: "USD",
     has_undated_lots: false,
