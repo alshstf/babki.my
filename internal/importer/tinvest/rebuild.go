@@ -102,7 +102,7 @@ type RebuildStats struct{ Added, Removed, Withdrawn, Unparsed int }
 // so that a test can put another rule in its place and watch the journal follow
 // — which is the property this whole file exists for, and one that cannot be
 // demonstrated by calling the only rule there is.
-type projection func(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, *UnparsedError)
+type projection func(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, Deferred, *UnparsedError)
 
 // Rebuilder turns one connection's mirror into journal operations. Build one
 // per sync run: the Resolver it carries caches the broker's instrument
@@ -165,6 +165,12 @@ func (r *Rebuilder) Rebuild(ctx context.Context, conn Connection, links []Accoun
 		return RebuildStats{}, err
 	}
 	sortDesired(p.want)
+	// After the sort and before anything reads the entries: the number a
+	// redemption is waiting for is the position built by the entries in front
+	// of it, and that is only a number once they are in order.
+	if err := r.closeRedemptions(p); err != nil {
+		return RebuildStats{}, err
+	}
 	pairTransfers(p.want)
 
 	delta, keptByRow, err := r.difference(ctx, conn.SpaceID, accountsOf(links), p.want)
@@ -211,6 +217,11 @@ type desired struct {
 	// transfer_in is what shares arriving from a stranger's depositary and
 	// shares arriving from the owner's other account both become.
 	pairable bool
+	// deferred is what this entry is still missing and the journal owes it (see
+	// Deferred). It is carried per entry rather than per row because a row's
+	// entries are not one thing: a redemption's sale waits for a count, and the
+	// commission beside it does not.
+	deferred Deferred
 }
 
 // projected is everything one pass over the mirror produced.
@@ -287,9 +298,12 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 			if err != nil {
 				return nil, err
 			}
-			var ops []operation.Operation
+			var (
+				ops      []operation.Operation
+				deferred Deferred
+			)
 			if refusal == nil {
-				ops, refusal = r.project(row, link.AccountID, resolved)
+				ops, deferred, refusal = r.project(row, link.AccountID, resolved)
 			}
 			if refusal != nil {
 				// The detail goes to the mirror as well as to the log. It is the
@@ -307,8 +321,15 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 					return nil, fmt.Errorf("tinvest: the projection produced an entry with no external id for mirror row %s", row.ID)
 				}
 				p.rowOf[*ops[i].ExternalID] = row.ID
+				// A deferral is about the FIRST entry — the projection's own
+				// convention, stated at Deferred and not re-derived here.
+				owed := DeferredNothing
+				if i == 0 {
+					owed = deferred
+				}
 				p.want = append(p.want, desired{
-					op: ops[i], rowID: row.ID, at: row.OccurredAt, leg: i, pairable: pairableLeg(row),
+					op: ops[i], rowID: row.ID, at: row.OccurredAt, leg: i,
+					pairable: pairableLeg(row), deferred: owed,
 				})
 			}
 			// Every row that reaches here is one the projection READ: one that
@@ -416,6 +437,180 @@ func sortDesired(want []desired) {
 		}
 		return want[i].leg < want[j].leg
 	})
+}
+
+// errHoldingUnreadable is a rebuild that stopped because it would otherwise
+// have closed a redemption with a count taken through an entry whose effect on
+// a position it cannot state. It is unexported because nothing outside this
+// package can act on it differently — the sync run fails and says so — and it
+// is a sentinel rather than a phrase because a test must be able to tell this
+// failure from any other without reading its wording.
+var errHoldingUnreadable = errors.New("tinvest: a position this rebuild cannot count")
+
+// holdingKey is one position as this file counts it: one security on one
+// account.
+type holdingKey struct{ account, instrument uuid.UUID }
+
+// holding is how many units of one security the entries so far have put on one
+// account, and whether that number can be trusted at all.
+type holding struct {
+	units decimal.Decimal
+	// unreadable: one of the entries changed the count in a way unitsMoved
+	// cannot state, so the total below it means nothing. Once set it stays
+	// set — everything after such an entry is counted from an unknown base.
+	unreadable bool
+}
+
+// closeRedemptions gives every entry that was projected without a quantity the
+// one the journal holds for it, or takes its row off the list with a reason.
+//
+// WHAT IT IS FOR: the broker reports a bond's full redemption as a payment and
+// nothing else — no quantity, no price (see projectRedemption, and the live
+// run that found 23 of them). The count of bonds it retired is the position
+// the account holds at that moment, which is a fact about the whole journal
+// and not about the row, so the projection names what it needs and this is
+// where the number comes from.
+//
+// THE ORDER IS THE JOURNAL'S OWN. sortDesired has already put the entries in
+// the order the write path files them — the broker's instant, then the mirror
+// row's id, then the leg — and the journal folds a day in the order its rows
+// were filed (operation.importCandidates, and the engine's own walk). So the
+// running total below is the same number the engine will have in front of it
+// when it reaches the sale, computed from the same entries in the same order.
+// It also makes the number a function of the mirror alone: the same mirror
+// sorts the same way and yields the same count on every rebuild, which is what
+// keeps a rebuild that changed nothing from rewriting the sale.
+//
+// WHERE THAT AGREEMENT ENDS, said rather than glossed over: a journal row keeps
+// the stamp it was first written with, so an operation the broker only reported
+// after its neighbours were already in the journal sits at the END of its day
+// there, while this walk puts it where its instant says. The two orders can
+// therefore differ inside ONE day, and only for such a late arrival. Nothing is
+// silent when they do: if this walk counted a purchase the journal has after
+// the sale, the sale is bigger than the position the engine has and the engine
+// refuses it, which the owner reads on the row.
+//
+// PRECONDITION, the same one the head of this file states: the accounts these
+// links feed are fed by this import and by nothing else. A purchase entered by
+// hand into one of them is not in this set — it is not even read, since the
+// difference below reads only what this source wrote — so the sale built here
+// would close the part of the position this import knows about and leave the
+// hand-entered bonds in the journal after the bond had been redeemed. Nothing
+// checks it here, for the reason given there.
+func (r *Rebuilder) closeRedemptions(p *projected) error {
+	held := map[holdingKey]holding{}
+	// The rows whose entries have to go: a redemption with nothing to redeem is
+	// an unparsed row, and an unparsed row leaves NO journal entry — not even
+	// the commission beside it, which alone would be a fee for a sale that is
+	// not there.
+	refused := map[uuid.UUID]bool{}
+	for i := range p.want {
+		d := &p.want[i]
+		if d.op.InstrumentID == nil {
+			continue
+		}
+		key := holdingKey{account: d.op.AccountID, instrument: *d.op.InstrumentID}
+		if d.deferred == DeferredRedeemedQuantity {
+			h := held[key]
+			if h.unreadable {
+				// Not reachable from any broker data: every entry this
+				// projection builds is one unitsMoved reads. It is reachable
+				// from a change to this program — a shape that moves units
+				// another way — and then a redemption of that security would
+				// otherwise close a number counted from an unknown base. The
+				// whole rebuild stops instead, the same answer this file gives
+				// an entry with no external id.
+				return fmt.Errorf(
+					"%w: mirror row %s is a full redemption waiting for the position on account %s, "+
+						"and an entry before it changes that position in a way this rebuild cannot read",
+					errHoldingUnreadable, d.rowID, d.op.AccountID)
+			}
+			if !h.units.IsPositive() {
+				p.verdicts[d.rowID] = UnparsedVerdict{
+					Reason: string(ReasonRedemptionNothingHeld),
+					Detail: fmt.Sprintf(
+						"a full bond redemption with nothing to close: this connection has put %s units of the security on the account by %s",
+						h.units, d.op.OccurredOn.Format("2006-01-02")),
+				}
+				r.log.Debug("tinvest: a full redemption found nothing to redeem",
+					"mirror_row", d.rowID, "account", d.op.AccountID, "held", h.units)
+				refused[d.rowID] = true
+				continue
+			}
+			// The whole position, which is what a FULL redemption retires. The
+			// copy is so the entry does not point at this walk's own running
+			// total.
+			qty := h.units
+			d.op.Quantity = &qty
+		}
+		// The sale just completed goes through this the same as any other: one
+		// place decides what an entry does to a position, so a filled-in
+		// redemption cannot be counted by a rule of its own.
+		moved, readable := unitsMoved(d.op)
+		h := held[key]
+		if readable {
+			h.units = h.units.Add(moved)
+		} else {
+			h.unreadable = true
+		}
+		held[key] = h
+	}
+	if len(refused) == 0 {
+		return nil
+	}
+	kept := p.want[:0]
+	for _, d := range p.want {
+		if refused[d.rowID] {
+			// The name goes too: nothing may offer this entry, so nothing may
+			// look it up as one the journal answered about.
+			delete(p.rowOf, *d.op.ExternalID)
+			continue
+		}
+		kept = append(kept, d)
+	}
+	p.want = kept
+	return nil
+}
+
+// unitsMoved is what one journal entry does to the number of units of a
+// security an account holds, and whether this file can say at all.
+//
+// IT IS A SECOND STATEMENT OF WHAT THE ENGINE DOES, which this codebase avoids
+// where it can and cannot avoid here: portfolio exposes no answer to ask. What
+// keeps the two from drifting is a test that folds a journal through the ENGINE
+// and compares the position it hands back with the sum of this — see
+// TestUnitsMovedAgreesWithTheEngine.
+//
+// A TYPE IT CANNOT READ IS NOT A ZERO. A split multiplies a position instead of
+// adding to it, and the rounding it does that with is the engine's rule rather
+// than this file's; copying it here would be a second implementation of one
+// rule, and calling it "moves nothing" would leave a redemption after a split
+// closing a pre-split number of bonds. No shape in this package produces one
+// today. The honest answer is "cannot say", and the caller treats a position
+// built through such an entry as unusable rather than as a number.
+//
+// The types that move nothing are listed rather than defaulted for the same
+// reason: a dividend, a coupon, a tax, a fee and an amortization can all carry
+// an instrument and none of them moves a unit — the engine's own arms say so,
+// and an amortization says it loudest (it deliberately carries no quantity at
+// all, see projectAmortization).
+func unitsMoved(op operation.Operation) (decimal.Decimal, bool) {
+	switch op.Type {
+	case operation.TypeBuy, operation.TypeTransferIn:
+		if op.Quantity == nil {
+			return decimal.Zero, false
+		}
+		return *op.Quantity, true
+	case operation.TypeSell, operation.TypeTransferOut:
+		if op.Quantity == nil {
+			return decimal.Zero, false
+		}
+		return op.Quantity.Neg(), true
+	case operation.TypeDividend, operation.TypeCoupon, operation.TypeTax,
+		operation.TypeFee, operation.TypeAmortization:
+		return decimal.Zero, true
+	}
+	return decimal.Zero, false
 }
 
 // transferPair is the description of one parcel, as far as recognizing the two

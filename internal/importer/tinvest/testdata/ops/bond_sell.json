@@ -1,0 +1,16 @@
+{
+  "_note": "part of the bond bought in bond_buy.json sold before it was redeemed, so that what the redemption closes is neither of the two counts written anywhere in these fixtures. Shape as in sell.json.",
+  "id": "op-bond-sell-1",
+  "parentOperationId": "",
+  "name": "Продажа облигаций",
+  "date": "2026-05-15T07:00:00Z",
+  "type": "OPERATION_TYPE_SELL",
+  "description": "Продажа 2 шт.",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "00e0a5a6-3f9a-4b26-bdb9-95cbbaa1c0f2",
+  "figi": "BBG00T22WKV5",
+  "instrumentType": "bond",
+  "payment": {"currency": "rub", "units": "2100", "nano": 0},
+  "price": {"currency": "rub", "units": "1050", "nano": 0},
+  "quantity": "2"
+}

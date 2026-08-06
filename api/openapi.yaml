@@ -1228,7 +1228,15 @@ components:
         distinct from `unsupported_type`, which is about the OPERATION rather
         than about the security. `engine_refused`: the journal itself would not
         take the operation. `redemption_without_quantity`: a full bond
-        redemption that says nothing about how many bonds were redeemed.
+        redemption that said nothing about how many bonds were redeemed — NO
+        LONGER PRODUCED, since such a redemption now takes its count from the
+        journal (the position it closes); it is declared because rows ruled
+        before that change carry it until their connection is next rebuilt.
+        `redemption_nothing_held`: a full bond redemption on an account whose
+        journal holds none of that bond by the day it happened, so there is
+        nothing to close — a different fault from the previous one, and a
+        different thing to go looking for: there the broker said nothing, here
+        the purchase is missing from this program's own journal.
         `currency_trade`: a purchase or sale of currency. `commission_refund`: a
         negative commission on the operation, i.e. money coming back.
         `tax_refund`: a tax operation whose amount is positive.
@@ -1244,6 +1252,7 @@ components:
         - instrument_unresolved
         - engine_refused
         - redemption_without_quantity
+        - redemption_nothing_held
         - currency_trade
         - commission_refund
         - tax_refund

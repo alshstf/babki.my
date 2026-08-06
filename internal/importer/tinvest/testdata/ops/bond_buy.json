@@ -1,0 +1,18 @@
+{
+  "_note": "the purchase that puts the bond of bond_repayment_full_no_quantity.json into the journal. A full redemption closes the position the journal holds, so the position has to come from somewhere, and this is where. Shape as in buy.json.",
+  "id": "op-bond-buy-1",
+  "parentOperationId": "",
+  "name": "Покупка облигаций",
+  "date": "2026-04-10T07:00:00Z",
+  "type": "OPERATION_TYPE_BUY",
+  "description": "Покупка 8 шт.",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "00e0a5a6-3f9a-4b26-bdb9-95cbbaa1c0f2",
+  "figi": "BBG00T22WKV5",
+  "instrumentType": "bond",
+  "payment": {"currency": "rub", "units": "-8000", "nano": 0},
+  "price": {"currency": "rub", "units": "1000", "nano": 0},
+  "quantity": "8",
+  "quantityRest": "0",
+  "quantityDone": "8"
+}

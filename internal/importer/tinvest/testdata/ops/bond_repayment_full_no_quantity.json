@@ -1,9 +1,9 @@
 {
-  "_note": "shape taken from the published API documentation; the case this fixture is for — a full redemption reporting no quantity — is exactly what task 14 has to look at on live data",
+  "_note": "a full redemption reporting no quantity — the shape all 23 of them arrived in on the owner's own account: quantity 0, quantityDone 0, price 0, a payment and nothing else (a price of zero and no price at all are the same thing to the projection, so this fixture simply omits it). The day is the one Быстроденьги was really redeemed on.",
   "id": "op-repay-2",
   "parentOperationId": "",
   "name": "Погашение облигации",
-  "date": "2026-09-01T09:00:00Z",
+  "date": "2026-06-03T09:00:00Z",
   "type": "OPERATION_TYPE_BOND_REPAYMENT_FULL",
   "description": "Погашение облигации",
   "state": "OPERATION_STATE_EXECUTED",

@@ -37,6 +37,7 @@ const (
 	uidAAPL    = "9654c2dd-6993-427e-80fa-04e80a1cf4da"
 	uidFutures = "b0e1a5f2-1a3c-4f0e-9b7a-9d6a6f4c1a11"
 	uidUSDRUB  = "a22a1263-8e1b-4546-a1aa-416463f104d3"
+	uidBond    = "00e0a5a6-3f9a-4b26-bdb9-95cbbaa1c0f2"
 )
 
 // recordingDelta wraps the real operation.Service and remembers every delta it
@@ -90,6 +91,16 @@ func newRebuildFixture(t *testing.T) *rebuildFixture {
 		UID: uidUSDRUB, FIGI: "BBG0013HGFT4", Ticker: "USDRUB_TOM",
 		Name: "Доллар США", Currency: "RUB", InstrumentType: "currency",
 	}
+	// The bond the redemption fixtures redeem, drawn from the owner's own
+	// account: denominated in yuan and traded and redeemed in roubles. The two
+	// currencies are the point rather than colour — they are why the count of
+	// bonds cannot be divided out of the payment, and why it has to come from
+	// the journal.
+	src.instruments[uidBond] = InstrumentBrief{
+		UID: uidBond, FIGI: "BBG00T22WKV5", ISIN: "RU000A1075J3",
+		Ticker: "RU000A1075J3", Name: "МФК Быстроденьги", Currency: "CNY", InstrumentType: "bond",
+	}
+	src.nominals[uidBond] = MoneyValue{Currency: "CNY", Units: 100}
 	ops := operation.NewStore(f.pool)
 	applier := &recordingDelta{inner: operation.NewService(ops)}
 	return &rebuildFixture{
@@ -1138,8 +1149,8 @@ func TestRebuildWithdrawsTheHalfOfAnEventItHadLeftInPlace(t *testing.T) {
 	// The income entry becomes a move of shares the account never held, which
 	// the engine refuses; the withdrawal beside it is not offered at all.
 	inner := f.reb.project
-	f.reb.project = func(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, *UnparsedError) {
-		ops, refusal := inner(row, accountID, resolved)
+	f.reb.project = func(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, Deferred, *UnparsedError) {
+		ops, deferred, refusal := inner(row, accountID, resolved)
 		for i := range ops {
 			if ops[i].Type != operation.TypeDividend {
 				continue
@@ -1149,7 +1160,7 @@ func TestRebuildWithdrawsTheHalfOfAnEventItHadLeftInPlace(t *testing.T) {
 			ops[i].AmountMinor = 0
 			ops[i].Quantity = &qty
 		}
-		return ops, refusal
+		return ops, deferred, refusal
 	}
 
 	stats := f.rebuild(t)
@@ -1342,6 +1353,229 @@ func TestRebuildProducesNothingFromAnOperationThatDidNotHappen(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
+// a full redemption closes the position the journal holds
+// -------------------------------------------------------------------------
+
+// TestRebuildClosesAFullRedemptionWithThePositionTheJournalHolds is the
+// property this whole path exists for. The broker reports a bond's full
+// redemption as a payment and nothing else — no count, no price — so the
+// number of bonds it retires is the position the journal holds when it
+// happens, and only the rebuild can know that.
+//
+// THE COUNT IS NOWHERE IN THE FIXTURES. Eight bonds were bought and two sold,
+// so the redemption closes six — a number no fixture carries and no row of the
+// mirror holds. Nor can it be divided out of the money: the payment is 10 000 ₽
+// and the bond's nominal is 100 CNY, so payment over nominal answers 100, which
+// looks like a count of bonds and is not one.
+func TestRebuildClosesAFullRedemptionWithThePositionTheJournalHolds(t *testing.T) {
+	f := newRebuildFixture(t)
+	f.sync(t, f.link,
+		loadOperationItem(t, "bond_buy.json"),
+		loadOperationItem(t, "bond_sell.json"),
+		loadOperationItem(t, "bond_repayment_full_no_quantity.json"))
+
+	stats := f.rebuild(t)
+	if stats.Added != 3 {
+		t.Fatalf("rebuild added %d operations, want 3 — the purchase, the sale and the redemption", stats.Added)
+	}
+	if stats.Unparsed != 0 {
+		t.Errorf("rebuild left %d rows unparsed, want 0", stats.Unparsed)
+	}
+	if got := f.mirrorRow(t, f.link, "op-repay-2").UnparsedReason; got != "" {
+		t.Errorf("the redemption's reason is %q, want none", got)
+	}
+
+	journal := f.journalOf(t, f.accountID)
+	redemption := byExternalID(t, journal, externalIDFor(f.mirrorRow(t, f.link, "op-repay-2"), 1))
+	if redemption.Type != operation.TypeSell {
+		t.Errorf("the redemption is a %s, want sell", redemption.Type)
+	}
+	if redemption.Quantity == nil || redemption.Quantity.String() != "6" {
+		t.Fatalf("the redemption closes %v bonds, want 6 — eight bought less two sold", redemption.Quantity)
+	}
+	if redemption.AmountMinor != 1_000_000 {
+		t.Errorf("the redemption's amount is %d, want 1000000 — the broker's own payment", redemption.AmountMinor)
+	}
+	if !redemption.OccurredOn.Equal(day(t, "2026-06-03")) {
+		t.Errorf("the redemption's day is %s, want 2026-06-03", redemption.OccurredOn.Format("2006-01-02"))
+	}
+
+	// What the owner sees afterwards, which is the whole complaint this fixes:
+	// a redeemed bond that stays in the journal shows up as a position that no
+	// longer exists at the broker.
+	positions, err := portfolio.Compute(mustListForEngine(t, f, f.accountID))
+	if err != nil {
+		t.Fatalf("the journal that was written does not replay when read back: %v", err)
+	}
+	if len(positions) != 1 {
+		t.Fatalf("the account holds %d positions, want 1", len(positions))
+	}
+	bond := positions[*redemption.InstrumentID]
+	if bond == nil {
+		t.Fatalf("the account holds no position in the redeemed bond at all")
+	}
+	if !bond.Quantity.IsZero() {
+		t.Errorf("the bond's position is %s after it was redeemed, want 0", bond.Quantity)
+	}
+
+	// Idempotence, on the entry whose number this rebuild worked out for
+	// itself: the count is derived from the same rows in the same order every
+	// time, so a rebuild over an unchanged mirror must ask for nothing.
+	mark := len(f.applier.deltas)
+	if second := f.rebuild(t); second != (RebuildStats{}) {
+		t.Errorf("the second rebuild reported %+v, want a rebuild that changed nothing", second)
+	}
+	for i, d := range f.deltasSince(mark) {
+		if len(d.Add) != 0 || len(d.Remove) != 0 {
+			t.Errorf("the second rebuild's delta %d asks to add %d and remove %d, want an empty delta",
+				i, len(d.Add), len(d.Remove))
+		}
+	}
+	after := f.journalOf(t, f.accountID)
+	if len(after) != len(journal) {
+		t.Fatalf("journal holds %d operations after the second rebuild, want %d", len(after), len(journal))
+	}
+	for i := range journal {
+		if journal[i].ID != after[i].ID {
+			t.Errorf("operation %d is row %s after the second rebuild and was %s before", i, after[i].ID, journal[i].ID)
+		}
+	}
+}
+
+// TestRebuildLeavesARedemptionOfNothingUnparsed is the honest refusal beside
+// the rule above. When the journal holds none of the bond — the purchase is
+// older than the window this connection imports, or stayed unparsed for a
+// reason of its own — there is no count to take, and the alternatives are a
+// sale of nothing and a number this program made up.
+//
+// THE REASON MUST BE THE NEW ONE. "The broker named no quantity" and "this
+// program's journal has nothing to close" are different faults with different
+// things to go and look at, and this repository has been caught four times
+// printing a true figure under a false cause.
+func TestRebuildLeavesARedemptionOfNothingUnparsed(t *testing.T) {
+	f := newRebuildFixture(t)
+	f.sync(t, f.link, loadOperationItem(t, "bond_repayment_full_no_quantity.json"))
+
+	stats := f.rebuild(t)
+	if stats.Added != 0 {
+		t.Errorf("rebuild added %d operations, want 0", stats.Added)
+	}
+	if stats.Unparsed != 1 {
+		t.Errorf("rebuild reports %d unparsed rows, want 1", stats.Unparsed)
+	}
+	if got := len(f.journalOf(t, f.accountID)); got != 0 {
+		t.Fatalf("journal holds %d operations, want 0 — there was nothing to redeem", got)
+	}
+	row := f.mirrorRow(t, f.link, "op-repay-2")
+	if row.UnparsedReason != "redemption_nothing_held" {
+		t.Errorf("the redemption's reason is %q, want redemption_nothing_held", row.UnparsedReason)
+	}
+	if row.UnparsedDetail == "" {
+		t.Error("the redemption's detail is empty: the code says what kind of fault it is, the detail says which row")
+	}
+}
+
+// TestRebuildStopsRatherThanCountAPositionItCannotRead pins the one thing
+// worse than refusing: closing a redemption with a number counted through an
+// entry whose effect on the position this rebuild cannot state. A split
+// multiplies a position instead of adding to it, and no shape in this package
+// produces one — so this is reachable only from a change to this program, and
+// what it must do then is stop rather than guess.
+func TestRebuildStopsRatherThanCountAPositionItCannotRead(t *testing.T) {
+	f := newRebuildFixture(t)
+	f.sync(t, f.link,
+		loadOperationItem(t, "bond_buy.json"),
+		loadOperationItem(t, "bond_sell.json"),
+		loadOperationItem(t, "bond_repayment_full_no_quantity.json"))
+
+	// A rule that turns the sale of two bonds into a split of the same bond —
+	// the shape a later change to this package could add.
+	inner := f.reb.project
+	f.reb.project = func(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, Deferred, *UnparsedError) {
+		ops, deferred, refusal := inner(row, accountID, resolved)
+		for i := range ops {
+			if ops[i].Type != operation.TypeSell || ops[i].Quantity == nil {
+				continue
+			}
+			ratio := decimal.RequireFromString("2")
+			ops[i].Type = operation.TypeSplit
+			ops[i].SplitRatio = &ratio
+			ops[i].AmountMinor = 0
+		}
+		return ops, deferred, refusal
+	}
+
+	_, err := f.reb.Rebuild(f.ctx, f.conn, []AccountLink{f.link}, f.src)
+	if !errors.Is(err, errHoldingUnreadable) {
+		t.Fatalf("Rebuild returned %v, want errHoldingUnreadable", err)
+	}
+	if got := len(f.journalOf(t, f.accountID)); got != 0 {
+		t.Errorf("journal holds %d operations, want 0 — the rebuild stopped before it wrote anything", got)
+	}
+}
+
+// TestUnitsMovedAgreesWithTheEngine is what keeps this file's second statement
+// of the engine's arithmetic from drifting from the engine's own. The journal
+// below is folded by portfolio.Compute — the code every screen and every tax
+// figure comes from — and the position it hands back is compared with the sum
+// of unitsMoved over the very same entries.
+//
+// It is a differential test and it is not blind: the two sides share no code
+// at all, so a sign or a type dropped from unitsMoved moves one and not the
+// other. The literal at the end is written out rather than derived for the
+// same reason.
+func TestUnitsMovedAgreesWithTheEngine(t *testing.T) {
+	instrumentID := uuid.MustParse("33333333-3333-4333-8333-333333333333")
+	accountID := uuid.MustParse("22222222-2222-4222-8222-222222222222")
+	qty := func(s string) *decimal.Decimal {
+		d := decimal.RequireFromString(s)
+		return &d
+	}
+	entry := func(typ operation.Type, on string, amount int64, quantity *decimal.Decimal) operation.Operation {
+		return operation.Operation{
+			AccountID: accountID, InstrumentID: &instrumentID, Type: typ,
+			OccurredOn: day(t, on), AmountMinor: amount, Quantity: quantity,
+			Currency: "RUB", Source: Source,
+		}
+	}
+	ops := []operation.Operation{
+		entry(operation.TypeBuy, "2026-01-10", -1_000_000, qty("100")),
+		entry(operation.TypeDividend, "2026-02-01", 50_000, nil),
+		entry(operation.TypeCoupon, "2026-02-02", 30_000, nil),
+		entry(operation.TypeTax, "2026-02-03", -10_000, nil),
+		entry(operation.TypeFee, "2026-02-04", -5_000, nil),
+		entry(operation.TypeAmortization, "2026-03-01", 20_000, nil),
+		entry(operation.TypeSell, "2026-04-01", 400_000, qty("30")),
+		entry(operation.TypeTransferIn, "2026-05-01", 50_000, qty("5")),
+		entry(operation.TypeTransferOut, "2026-06-01", 0, qty("2")),
+	}
+
+	positions, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("the engine refused this journal, so it cannot be compared against: %v", err)
+	}
+	held := positions[instrumentID]
+	if held == nil {
+		t.Fatalf("the engine returned no position for the instrument every entry names")
+	}
+
+	sum := decimal.Zero
+	for _, o := range ops {
+		moved, readable := unitsMoved(o)
+		if !readable {
+			t.Fatalf("unitsMoved cannot read a %s, which the engine folds into a position", o.Type)
+		}
+		sum = sum.Add(moved)
+	}
+	if !sum.Equal(held.Quantity) {
+		t.Errorf("unitsMoved sums to %s and the engine holds %s", sum, held.Quantity)
+	}
+	if !sum.Equal(decimal.RequireFromString("73")) {
+		t.Errorf("unitsMoved sums to %s, want 73 — bought 100, sold 30, five arrived, two left", sum)
+	}
+}
+
+// -------------------------------------------------------------------------
 // changing the rule
 // -------------------------------------------------------------------------
 
@@ -1360,14 +1594,14 @@ func TestRebuildChangesTheJournalWhenTheRuleChanges(t *testing.T) {
 	// A new rule: every top-up is recorded with a note of its own. Nothing else
 	// about the run changes — no mirror row, no broker call.
 	inner := f.reb.project
-	f.reb.project = func(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, *UnparsedError) {
-		ops, refusal := inner(row, accountID, resolved)
+	f.reb.project = func(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, Deferred, *UnparsedError) {
+		ops, deferred, refusal := inner(row, accountID, resolved)
 		for i := range ops {
 			if ops[i].Type == operation.TypeDeposit {
 				ops[i].Note = "переведено по новому правилу"
 			}
 		}
-		return ops, refusal
+		return ops, deferred, refusal
 	}
 
 	stats := f.rebuild(t)

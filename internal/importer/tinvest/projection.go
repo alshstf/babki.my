@@ -32,10 +32,15 @@ import (
 //     the one worth showing: it names the actual rule that was broken. This
 //     function refuses only what it cannot TURN INTO a journal row at all, and
 //     the UnparsedReason list below is that whole set — every entry there but
-//     ReasonEngineRefused, which is the downstream refusal and is never
-//     produced here. Everything it can express, it hands over, and a refusal
-//     downstream comes back as ReasonEngineRefused with the journal's own
-//     words in it.
+//     the two the REBUILD produces (ReasonEngineRefused, the downstream
+//     refusal, and ReasonRedemptionNothingHeld, which is about the journal
+//     rather than about the row). Everything it can express, it hands over, and
+//     a refusal downstream comes back as ReasonEngineRefused with the journal's
+//     own words in it.
+//   - It does not look up what the account holds. One shape needs that — a
+//     bond's full redemption, which the broker reports as a payment and
+//     nothing else — and it says so with a Deferred rather than by guessing or
+//     refusing. See projectRedemption.
 //
 // NOTHING IS EVER DROPPED IN SILENCE. Every row either becomes journal
 // entries, or becomes an *UnparsedError whose Reason the owner is shown next
@@ -138,10 +143,27 @@ const (
 	// here: this function does not second-guess the journal's rules, so that
 	// the reason the owner reads is the one the journal actually gave.
 	ReasonEngineRefused UnparsedReason = "engine_refused"
-	// ReasonRedemptionWithoutQty: a full bond redemption that says nothing
-	// about how many bonds it redeemed. See projectRedemption for why that
-	// cannot be booked as anything.
+	// ReasonRedemptionWithoutQty: a full bond redemption that said nothing
+	// about how many bonds it redeemed.
+	//
+	// NOTHING PRODUCES IT ANY MORE, and it is declared anyway. Such a
+	// redemption now takes its count from the journal — the position it closes
+	// — instead of being refused (see projectRedemption and
+	// Rebuilder.closeRedemptions), so this code is only ever READ: the mirror
+	// carries it on every row ruled before that change, and goes on carrying it
+	// until that connection is rebuilt. The contract declares what the server
+	// can return, the server returns what those rows say, and the interface has
+	// to have a sentence for it.
 	ReasonRedemptionWithoutQty UnparsedReason = "redemption_without_quantity"
+	// ReasonRedemptionNothingHeld: a full bond redemption on an account whose
+	// journal holds none of that bond by the time it happens — a purchase
+	// outside the window this connection imports, or one that stayed unparsed
+	// for a reason of its own. NOT the same statement as the one above: there
+	// the broker said nothing, here this program's own journal has nothing to
+	// close, and the two send the owner looking in different places. Produced
+	// by the rebuild (Rebuilder.closeRedemptions), never here — this function
+	// sees one row and the position is a property of all of them.
+	ReasonRedemptionNothingHeld UnparsedReason = "redemption_nothing_held"
 	// ReasonCurrencyTrade: a purchase or sale of currency. NOT the same
 	// statement as ReasonUnsupportedType, which says this program does not
 	// account for a kind of asset at all: a currency conversion is a thing the
@@ -212,6 +234,49 @@ type UnparsedError struct {
 func (e *UnparsedError) Error() string {
 	return fmt.Sprintf("tinvest: not projected (%s): %s", e.Reason, e.Detail)
 }
+
+// Deferred is a piece of a journal entry that the mirror row does not carry
+// and the JOURNAL does.
+//
+// It is not a refusal. The broker's row was read perfectly well; what is
+// missing is a number that exists only in the history the entry is about to
+// join, which a pure function of one row cannot see and the rebuild can (it
+// holds every row of the connection, in the order the journal will fold them).
+// So the projection builds the entry it can and names what is still owed, and
+// the rebuild either supplies it or refuses the row with a reason of its own.
+//
+// IT IS A VALUE RATHER THAN A ZERO STANDING IN FOR A SIGNAL. A quantity of
+// zero is a quantity, and a reader that took one for "ask the journal" could
+// not tell a redemption the broker said nothing about from one it said nothing
+// happened in — the same confusion between an absent figure and a figure of
+// nought this package refuses everywhere else.
+//
+// IT SPEAKS ABOUT THE FIRST ENTRY of the projection: the one every shape here
+// builds first (a redemption's sale before the commission charged in another
+// currency, income before the withdrawal that follows it) and the one the
+// external ids are numbered from. Nothing has ever needed to defer anything on
+// a later entry; a shape that does would have to say WHICH, and this type is
+// where that would be said.
+type Deferred uint8
+
+const (
+	// DeferredNothing: the entries are complete as they stand. The zero value,
+	// and what every shape but one returns.
+	DeferredNothing Deferred = iota
+	// DeferredRedeemedQuantity: the first entry is the sale a bond's full
+	// redemption is, and it carries NO QUANTITY because the row carries none
+	// either. The number of bonds it retires is the position the account holds
+	// when it happens — see projectRedemption for why the money cannot be
+	// divided into it, and Rebuilder.closeRedemptions for where the number
+	// comes from.
+	//
+	// A caller that ignores this does not get a wrong number: the entry reaches
+	// the journal with no quantity, and the journal refuses a sale without one
+	// rather than booking a sale of nothing — its own per-type validation
+	// first (operation.validateByType, "sell requires positive quantity") and
+	// the engine's replay behind it.
+	DeferredRedeemedQuantity
+)
 
 // minorUnitScale is how many decimal places a major currency unit is split
 // into — the same 2 the operations service uses, and the same the frontend
@@ -453,7 +518,8 @@ const (
 )
 
 // ProjectRow turns one mirror row into the journal entries it means: none,
-// one, or two.
+// one, or two — and, for the one shape that cannot be finished from a single
+// row, says what the journal still owes it (see Deferred).
 //
 // resolved is the catalog instrument for the security the row names, or nil
 // when the row names none — or when the caller could not resolve it, in which
@@ -465,7 +531,7 @@ const (
 // accountID is the babki account the broker account is linked to. SpaceID is
 // left unset: the write path takes it from the account itself (see
 // operation.insertSQL), so stating it here would be a second copy of one fact.
-func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, *UnparsedError) {
+func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, Deferred, *UnparsedError) {
 	// Projecting a cancelled order, or one the broker has taken back, would put
 	// money in the journal that never moved. The check stands here, in the
 	// rule itself, so that it holds however the function is called.
@@ -476,19 +542,19 @@ func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]opera
 	// is where that expectation is written down rather than a claim about code
 	// that is already there.
 	if row.State != stateExecuted || row.DisappearedAt != nil {
-		return nil, nil
+		return nil, DeferredNothing, nil
 	}
 
 	r, ok := brokerOpTypes[row.OpType]
 	if !ok {
-		return nil, &UnparsedError{
+		return nil, DeferredNothing, &UnparsedError{
 			Reason: ReasonUnsupportedType,
 			Detail: fmt.Sprintf("broker operation type %q", row.OpType),
 		}
 	}
 
 	if r.how == asBrokerFee && !projectBrokerFee {
-		return nil, nil
+		return nil, DeferredNothing, nil
 	}
 
 	// A currency trade is refused before anything else looks at it, and it is
@@ -505,15 +571,16 @@ func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]opera
 	// because "not yet, and here is what it would take" is a different
 	// statement from "this program does not account for that kind of asset".
 	if r.how == asTrade && row.InstrumentType == brokerCurrencyInstrumentType {
-		return nil, &UnparsedError{
+		return nil, DeferredNothing, &UnparsedError{
 			Reason: ReasonCurrencyTrade,
 			Detail: "a currency trade: the mirror names neither the traded currency nor its nominal per unit, so the second leg cannot be built",
 		}
 	}
 
 	var (
-		ops     []operation.Operation
-		refusal *UnparsedError
+		ops      []operation.Operation
+		deferred Deferred
+		refusal  *UnparsedError
 	)
 	switch r.how {
 	case asTrade:
@@ -523,7 +590,7 @@ func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]opera
 	case asAmortization:
 		ops, refusal = projectAmortization(row, accountID, resolved)
 	case asRedemption:
-		ops, refusal = projectRedemption(row, accountID, resolved)
+		ops, deferred, refusal = projectRedemption(row, accountID, resolved)
 	case asDividendToCard:
 		ops, refusal = projectDividendToCard(row, accountID, resolved)
 	case asSecuritiesTransfer:
@@ -545,9 +612,9 @@ func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]opera
 		}
 	}
 	if refusal != nil {
-		return nil, refusal
+		return nil, DeferredNothing, refusal
 	}
-	return withExternalIDs(row.ID, ops), nil
+	return withExternalIDs(row.ID, ops), deferred, nil
 }
 
 // base is everything a journal entry gets from the mirror row regardless of
@@ -811,12 +878,30 @@ func projectAmortization(row MirrorRow, accountID uuid.UUID, resolved *Resolved)
 // bonds leave the position and the money arrives, which is what redemption is
 // and what the journal has a shape for.
 //
-// A REDEMPTION THAT NAMES NO QUANTITY IS REFUSED, with a reason of its own.
-// What such an operation actually is, is unknown — task 14's live run is
-// where that gets settled — and neither guess is safe: booking it as an
-// amortization would leave the bonds in the position for good, since nothing
-// would ever remove them, and inventing "all of what is held" would be this
-// program deciding how many bonds the broker redeemed.
+// A REDEMPTION THAT NAMES NO QUANTITY IS BUILT WITHOUT ONE and asks the
+// journal for it (DeferredRedeemedQuantity). That is what the broker sends: on
+// the owner's own account, every one of the 23 full redemptions arrived as a
+// purely monetary event — quantity 0, quantityDone 0, price 0, a payment and
+// nothing else (live run, 2026-08-07). Refusing them, which this rule used to
+// do, left every redeemed bond in the journal for good and made the check
+// against the broker read "1 here, 0 there" for ever.
+//
+// THE COUNT CANNOT BE DIVIDED OUT OF THE MONEY, and that is not a guess: МФК
+// Быстроденьги is denominated in yuan (a nominal of 100 CNY) and was redeemed
+// in roubles, 7 403,34 ₽ at that day's rate. Payment over nominal is then two
+// currencies over one another, and the answer is not even a whole number of
+// bonds. So the only true source of the count is the position the account
+// holds when the redemption happens — which is a property of the whole
+// journal, not of this row, and is filled in by Rebuilder.closeRedemptions.
+//
+// The entry therefore leaves here INCOMPLETE, and deliberately so: a quantity
+// invented here would be this program deciding how many bonds the broker
+// redeemed, and booking the money as an amortization instead would leave the
+// bonds in the position with nothing to ever remove them — the two guesses
+// this rule refused before, and it still refuses them.
+//
+// A REDEMPTION THAT DOES NAME A QUANTITY IS UNCHANGED: it is a complete sale
+// and no one is asked for anything.
 //
 // A COMMISSION ON IT IS KEPT, by the same rule a trade's is (tradeCommission):
 // into this entry's FeeMinor when the broker charged it in this row's
@@ -826,38 +911,42 @@ func projectAmortization(row MirrorRow, accountID uuid.UUID, resolved *Resolved)
 // commission dropped here would be money vanishing from the journal AND from
 // the unparsed list at once. Whether the broker ever charges one on a
 // redemption is not known — the sale is booked the same way either way.
-func projectRedemption(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, *UnparsedError) {
-	if row.Quantity <= 0 {
-		return nil, &UnparsedError{
-			Reason: ReasonRedemptionWithoutQty,
-			Detail: fmt.Sprintf("a full bond redemption of %d units says nothing about how many bonds were redeemed", row.Quantity),
-		}
-	}
+func projectRedemption(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, Deferred, *UnparsedError) {
 	amount, refusal := minorFromDecimal(row.Payment)
 	if refusal != nil {
-		return nil, refusal
-	}
-	qty, refusal := journalQuantity(row.Quantity)
-	if refusal != nil {
-		return nil, refusal
+		return nil, DeferredNothing, refusal
 	}
 	op := base(row, accountID, operation.TypeSell)
 	op.AmountMinor = amount
-	op.Quantity = &qty
 	op.Price = tradePrice(row)
+
+	// A count of nought and a count below nought are answered the same way, and
+	// the answer is right for both: neither is a number of bonds this operation
+	// retired, and what a full redemption retires is the position either way.
+	// Only what the broker actually sends — a plain zero — has been seen.
+	deferred := DeferredNothing
+	if row.Quantity > 0 {
+		qty, refusal := journalQuantity(row.Quantity)
+		if refusal != nil {
+			return nil, DeferredNothing, refusal
+		}
+		op.Quantity = &qty
+	} else {
+		deferred = DeferredRedeemedQuantity
+	}
 	if refusal := attachInstrument(&op, row, resolved); refusal != nil {
-		return nil, refusal
+		return nil, DeferredNothing, refusal
 	}
 
 	feeMinor, feeLeg, refusal := tradeCommission(row, accountID)
 	if refusal != nil {
-		return nil, refusal
+		return nil, DeferredNothing, refusal
 	}
 	op.FeeMinor = feeMinor
 	if feeLeg == nil {
-		return []operation.Operation{op}, nil
+		return []operation.Operation{op}, deferred, nil
 	}
-	return []operation.Operation{op, *feeLeg}, nil
+	return []operation.Operation{op, *feeLeg}, deferred, nil
 }
 
 // projectDividendToCard turns a dividend the broker paid straight to a card
