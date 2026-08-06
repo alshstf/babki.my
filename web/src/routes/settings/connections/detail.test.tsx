@@ -296,13 +296,13 @@ describe("ConnectionDetailPage — the header", () => {
 
   // Deleting a babki account takes its link with it and leaves the connection
   // standing, so a connection with no accounts left is reachable.
-  it("says a connection has nowhere left to import into", async () => {
+  it("says a connection has nowhere to import into, without claiming it once had", async () => {
     serveConnection(makeConnection({ accounts: [] }));
     renderPage();
 
     expect(
       await screen.findByText(
-        "Связанных счетов не осталось: этому подключению больше некуда загружать операции",
+        "Связанных счетов нет: этому подключению некуда загружать операции",
       ),
     ).toBeInTheDocument();
   });

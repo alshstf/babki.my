@@ -290,12 +290,12 @@ describe("ReconcilePanel — the connection's own line is derived", () => {
     ).toBeInTheDocument();
   });
 
-  it("says there is nothing to reconcile when no accounts are left", async () => {
+  it("says there is nothing to reconcile when there are no accounts", async () => {
     renderPanel([]);
 
     expect(
       await screen.findByText(
-        "Сверять нечего: связанных счетов у этого подключения не осталось",
+        "Сверять нечего: у этого подключения нет связанных счетов",
       ),
     ).toBeInTheDocument();
     expect(

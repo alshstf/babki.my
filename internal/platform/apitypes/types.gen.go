@@ -220,6 +220,27 @@ func (e MarketValueGap) Valid() bool {
 	}
 }
 
+// Defines values for OperationSource.
+const (
+	OperationSourceCsv     OperationSource = "csv"
+	OperationSourceManual  OperationSource = "manual"
+	OperationSourceTinvest OperationSource = "tinvest"
+)
+
+// Valid indicates whether the value is a known member of the OperationSource enum.
+func (e OperationSource) Valid() bool {
+	switch e {
+	case OperationSourceCsv:
+		return true
+	case OperationSourceManual:
+		return true
+	case OperationSourceTinvest:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OperationInBaseGap.
 const (
 	OperationInBaseGapNoRateLotDate       OperationInBaseGap = "no_rate_lot_date"
@@ -423,19 +444,19 @@ func (e TinvestSyncRunStatus) Valid() bool {
 
 // Defines values for TinvestSyncTrigger.
 const (
-	Initial  TinvestSyncTrigger = "initial"
-	Manual   TinvestSyncTrigger = "manual"
-	Schedule TinvestSyncTrigger = "schedule"
+	TinvestSyncTriggerInitial  TinvestSyncTrigger = "initial"
+	TinvestSyncTriggerManual   TinvestSyncTrigger = "manual"
+	TinvestSyncTriggerSchedule TinvestSyncTrigger = "schedule"
 )
 
 // Valid indicates whether the value is a known member of the TinvestSyncTrigger enum.
 func (e TinvestSyncTrigger) Valid() bool {
 	switch e {
-	case Initial:
+	case TinvestSyncTriggerInitial:
 		return true
-	case Manual:
+	case TinvestSyncTriggerManual:
 		return true
-	case Schedule:
+	case TinvestSyncTriggerSchedule:
 		return true
 	default:
 		return false
@@ -725,13 +746,18 @@ type Operation struct {
 
 	// SettledOn Date YYYY-MM-DD
 	SettledOn nullable.Nullable[string] `json:"settled_on,omitempty"`
-	Source    string                    `json:"source"`
+
+	// Source Who wrote this row. `manual` is a person, through this API; anything else is an importer, and the set is closed by a CHECK constraint on the column rather than only by the code that writes it, which is why it is enumerated on a response at all. It is not decoration: an operation whose source is not `manual` cannot be deleted (see deleteOperation) because the importer that owns it would write it back on its next rebuild, so a client must not offer a delete control on such a row.
+	Source OperationSource `json:"source"`
 
 	// SplitRatio Decimal as string
 	SplitRatio      nullable.Nullable[string]             `json:"split_ratio,omitempty"`
 	TransferGroupId nullable.Nullable[openapi_types.UUID] `json:"transfer_group_id,omitempty"`
 	Type            OperationType                         `json:"type"`
 }
+
+// OperationSource Who wrote this row. `manual` is a person, through this API; anything else is an importer, and the set is closed by a CHECK constraint on the column rather than only by the code that writes it, which is why it is enumerated on a response at all. It is not decoration: an operation whose source is not `manual` cannot be deleted (see deleteOperation) because the importer that owns it would write it back on its next rebuild, so a client must not offer a delete control on such a row.
+type OperationSource string
 
 // OperationInBase defines model for OperationInBase.
 type OperationInBase struct {
@@ -939,7 +965,7 @@ type TinvestAccountPick struct {
 	// AccountName What to call the NEW babki account this broker account is imported into. A new account every time — never an existing one — so imported history is never mixed into anything hand-entered.
 	AccountName string `json:"account_name"`
 
-	// BrokerAccountId One `broker_account_id` from the token check. It must be among the accounts the token can see AND be one of the importable kinds; anything else is a 400, so a client cannot connect an account this program cannot read.
+	// BrokerAccountId One `broker_account_id` from the token check. It must be among the accounts the token can see AND be one of the importable kinds; anything else is a 422 (NOT a 400 — a 400 here means the token itself was refused), so a client cannot connect an account this program cannot read. The two are separate because the account list can change between the token check and this call, and a client that blames the token for that sends its owner to re-issue a working credential.
 	BrokerAccountId string `json:"broker_account_id"`
 }
 

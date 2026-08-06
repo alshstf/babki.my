@@ -173,15 +173,21 @@ func assembledFromLots(o Operation) bool {
 
 func toAPI(o Operation) apitypes.Operation {
 	out := apitypes.Operation{
-		Id:                o.ID,
-		AccountId:         o.AccountID,
-		Type:              apitypes.OperationType(o.Type),
-		OccurredOn:        o.OccurredOn.Format("2006-01-02"),
-		AmountMinor:       o.AmountMinor,
-		Currency:          o.Currency,
-		FeeMinor:          o.FeeMinor,
-		Note:              o.Note,
-		Source:            o.Source,
+		Id:          o.ID,
+		AccountId:   o.AccountID,
+		Type:        apitypes.OperationType(o.Type),
+		OccurredOn:  o.OccurredOn.Format("2006-01-02"),
+		AmountMinor: o.AmountMinor,
+		Currency:    o.Currency,
+		FeeMinor:    o.FeeMinor,
+		Note:        o.Note,
+		// The contract enumerates source because the column's CHECK constraint
+		// closes the set; the conversion is not a claim that o.Source is one of
+		// them, only that the row came from a column that cannot hold anything
+		// else. A value outside the set would have to survive the constraint
+		// first, and then it would reach a client as itself rather than as a
+		// substitute — which is the honest failure of the two.
+		Source:            apitypes.OperationSource(o.Source),
 		CreatedAt:         o.CreatedAt,
 		HasUndatedLots:    hasUndatedLots(o),
 		AssembledFromLots: assembledFromLots(o),

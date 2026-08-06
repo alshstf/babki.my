@@ -21,6 +21,18 @@ export type TinvestSyncRunsPage = components["schemas"]["TinvestSyncRunsResponse
 export type TinvestUnparsedOperation = components["schemas"]["TinvestUnparsedOperation"];
 export type TinvestUnparsedPage = components["schemas"]["TinvestUnparsedResponse"];
 
+/**
+ * How often the connection screen re-asks the server while it is open.
+ *
+ * Fifteen seconds is chosen against what the screen waits for, not against
+ * what feels responsive: a sync is a background job that takes minutes, so a
+ * faster poll would only ask more often for the same answer. It is slow enough
+ * that an idle tab costs four requests a minute against one household's own
+ * server, and fast enough that nobody watching the page has to wonder whether
+ * it is broken or merely still.
+ */
+const CONNECTION_POLL_MS = 15_000;
+
 export function useConnections() {
   return useQuery({
     queryKey: ["tinvest-connections"],
@@ -44,6 +56,16 @@ export function useConnection(id: string) {
       return data;
     },
     enabled: id !== "",
+    // The screen this feeds is the only place an import reports on itself, and
+    // the work it reports on happens in a background worker minutes after the
+    // owner arrives — the wizard lands here while the first sync is still
+    // queued. Without a poll every sentence on the page ("синхронизаций ещё не
+    // было", "сверки ещё не было") stays frozen at what was true on arrival and
+    // is quietly false for the rest of the session; refetchOnWindowFocus is off
+    // globally, so even leaving and returning does not repair it. The interval
+    // is deliberately slower than a person's patience rather than faster: this
+    // is one household's own instance, and the run it waits for takes minutes.
+    refetchInterval: CONNECTION_POLL_MS,
   });
 }
 
@@ -225,6 +247,14 @@ export function useSyncRuns(connectionId: string, pageSize = SYNC_RUNS_PAGE_SIZE
         ? allPages.reduce((rows, page) => rows + page.runs.length, 0)
         : undefined,
     enabled: connectionId !== "",
+    // Polled for the same reason the connection itself is: a queued run appears
+    // here minutes after the owner pressed the button, and a log frozen at
+    // "синхронизаций ещё не было" is the screen lying about the only evidence
+    // it exists to show. This refetches every page already loaded, not just the
+    // newest — acceptable because a reader is almost always on the first page,
+    // and the alternative (refetching the head alone) would renumber the offsets
+    // under the pages below it.
+    refetchInterval: CONNECTION_POLL_MS,
   });
 }
 

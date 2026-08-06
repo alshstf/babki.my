@@ -340,7 +340,12 @@ paths:
   /api/v1/operations/{operationId}:
     delete:
       operationId: deleteOperation
-      description: Deletes the operation (whole pair for transfers). Rejected if the remaining journal becomes inconsistent (oversell).
+      description: >-
+        Deletes the operation (whole pair for transfers). Rejected if the remaining journal
+        becomes inconsistent (oversell), and rejected outright when `source` is not `manual`:
+        an imported operation belongs to the importer, which would write it back on its next
+        rebuild, so "deleted" would be a lie. Retire such an operation by deleting its
+        connection instead — that stops the updates and leaves the history in place.
       parameters:
         - { name: operationId, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -967,7 +972,10 @@ components:
         note: { type: string }
         transfer_group_id: { type: string, format: uuid, nullable: true }
         split_ratio: { type: string, nullable: true, description: "Decimal as string" }
-        source: { type: string }
+        source:
+          type: string
+          enum: [manual, csv, tinvest]
+          description: "Who wrote this row. `manual` is a person, through this API; anything else is an importer, and the set is closed by a CHECK constraint on the column rather than only by the code that writes it, which is why it is enumerated on a response at all. It is not decoration: an operation whose source is not `manual` cannot be deleted (see deleteOperation) because the importer that owns it would write it back on its next rebuild, so a client must not offer a delete control on such a row."
         created_at: { type: string, format: date-time }
         has_undated_lots:
           type: boolean
@@ -1255,7 +1263,7 @@ components:
       type: object
       required: [broker_account_id, account_name]
       properties:
-        broker_account_id: { type: string, minLength: 1, description: "One `broker_account_id` from the token check. It must be among the accounts the token can see AND be one of the importable kinds; anything else is a 400, so a client cannot connect an account this program cannot read." }
+        broker_account_id: { type: string, minLength: 1, description: "One `broker_account_id` from the token check. It must be among the accounts the token can see AND be one of the importable kinds; anything else is a 422 (NOT a 400 — a 400 here means the token itself was refused), so a client cannot connect an account this program cannot read. The two are separate because the account list can change between the token check and this call, and a client that blames the token for that sends its owner to re-issue a working credential." }
         account_name: { type: string, minLength: 1, description: "What to call the NEW babki account this broker account is imported into. A new account every time — never an existing one — so imported history is never mixed into anything hand-entered." }
     CreateTinvestConnectionRequest:
       type: object
