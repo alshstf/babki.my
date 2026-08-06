@@ -42,6 +42,7 @@ function makeOperation(overrides: Partial<TinvestUnparsedOperation> = {}): Tinve
     currency: "RUB",
     description: "Вариационная маржа",
     reason: "unsupported_type",
+    detail: 'broker operation type "OPERATION_TYPE_FUTURES_VARIATION_MARGIN"',
     raw: { id: "broker-op-1", operation_type: "OPERATION_TYPE_FUTURES_VARIATION_MARGIN" },
     ...overrides,
   };
@@ -89,6 +90,45 @@ describe("UnparsedList", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Сумма точнее минимальной денежной единицы")).toBeInTheDocument();
     expect(screen.getByText("Операцию отклонил движок журнала")).toBeInTheDocument();
+  });
+
+  // «Операцию отклонил движок журнала» is the same sentence over a sale with
+  // nothing behind it, an amount the journal will not hold, and a transfer whose
+  // other leg failed. The detail is the only thing that tells one such row from
+  // the next — 134 of the owner's rows carried that code and nothing else, and
+  // none of them could be acted on.
+  it("prints what refused the row, beside the name of the refusal", async () => {
+    serve([
+      makeOperation({
+        id: "u-1",
+        reason: "engine_refused",
+        detail: "operation: selling 100 units leaves the position at -40",
+      }),
+    ]);
+    renderList();
+
+    expect(await screen.findByText("Операцию отклонил движок журнала")).toBeInTheDocument();
+    expect(
+      screen.getByText("operation: selling 100 units leaves the position at -40"),
+    ).toBeInTheDocument();
+  });
+
+  // A row refused before the server kept details carries none, which is an
+  // ordinary state rather than a fault: the name of the reason stands on its
+  // own, and a blank line under it would read as something still loading.
+  //
+  // Asserted on the SHAPE of the cell and not on its text, because the defect
+  // this pins — rendering the detail unconditionally — puts an EMPTY element on
+  // the screen, and no query by text can see one.
+  it("adds nothing under the reason when nothing was written down", async () => {
+    serve([makeOperation({ id: "u-1", reason: "engine_refused", detail: "" })]);
+    renderList();
+
+    const reason = await screen.findByText("Операцию отклонил движок журнала");
+    const stack = reason.parentElement;
+    // The reason itself and the broker's own document; no third line.
+    expect(stack?.children).toHaveLength(2);
+    expect(stack?.lastElementChild?.tagName).toBe("DETAILS");
   });
 
   // An amount finer than a minor unit is one of the reasons a row is on this

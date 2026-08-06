@@ -28,7 +28,7 @@ var ErrConnectionNotFound = errors.New("tinvest: connection not found")
 // another's connection — a fault no later read could untangle.
 var ErrLinkNotInConnection = errors.New("tinvest: account link belongs to another connection")
 
-// ErrUnparsedRowsMissing means SetUnparsedReasons named mirror rows that are
+// ErrUnparsedRowsMissing means SetUnparsedVerdicts named mirror rows that are
 // not there. Its caller read those ids out of this very table moments before,
 // and mirror rows are never deleted, so reaching this means the caller is
 // working from ids that were never the mirror's — or the whole connection went
@@ -179,6 +179,12 @@ type MirrorRow struct {
 	// UnparsedReason is empty for a row the projection could turn into a
 	// journal operation, and otherwise names, in a code, why it could not.
 	UnparsedReason string
+	// UnparsedDetail is what the refuser said in its own words, and it is
+	// EMPTY FOR TWO DIFFERENT ROWS: one that was read successfully (there is
+	// no refusal to detail) and one refused with nothing to add beyond its
+	// code. UnparsedReason is what tells those apart, and it is the only field
+	// of the pair anything may compute from — see UnparsedVerdict.
+	UnparsedDetail string
 }
 
 // SyncRun is one attempt to bring the mirror up to date with the broker, and
@@ -232,14 +238,14 @@ type RunOutcome struct {
 //     unparsedCountByLink. ListActiveConnections takes no space either and is a
 //     wider thing still — see its own note.
 //   - writes: UpdateConnectionStatus, SyncMirror, StartRun, FinishRun,
-//     SetUnparsedReasons.
+//     SetUnparsedVerdicts.
 //
 // The last two reads are UNEXPORTED, and that is the whole of their protection:
 // they answer about any connection in the instance, so nothing outside this
 // package can reach them at all and no request path can grow a caller by
 // accident.
 //
-// SetUnparsedReasons is the sharpest of them and is called out on purpose: it
+// SetUnparsedVerdicts is the sharpest of them and is called out on purpose: it
 // takes bare mirror-row ids with no connection and no space anywhere in the
 // statement, so it will mark ANY row in the table that an id names. A future
 // handler that took those ids from a request body would be marking strangers'
@@ -496,7 +502,8 @@ const mirrorCols = `id, connection_id, link_id, broker_operation_id,
 	parent_operation_id, op_type, state, occurred_at, currency, payment, price,
 	commission, commission_currency, accrued_int, quantity, figi,
 	instrument_uid, position_uid, asset_uid, instrument_type, description, raw,
-	content_key, first_seen_at, last_confirmed_at, disappeared_at, unparsed_reason`
+	content_key, first_seen_at, last_confirmed_at, disappeared_at, unparsed_reason,
+	unparsed_detail`
 
 func scanMirrorRow(row pgx.Row) (MirrorRow, error) {
 	var m MirrorRow
@@ -505,7 +512,7 @@ func scanMirrorRow(row pgx.Row) (MirrorRow, error) {
 		&m.Payment, &m.Price, &m.Commission, &m.CommissionCurrency, &m.AccruedInt,
 		&m.Quantity, &m.FIGI, &m.InstrumentUID, &m.PositionUID, &m.AssetUID,
 		&m.InstrumentType, &m.Description, &m.Raw, &m.ContentKey, &m.FirstSeenAt,
-		&m.LastConfirmedAt, &m.DisappearedAt, &m.UnparsedReason)
+		&m.LastConfirmedAt, &m.DisappearedAt, &m.UnparsedReason, &m.UnparsedDetail)
 	return m, err
 }
 
@@ -591,8 +598,30 @@ func (s *Store) unparsedCountByLink(ctx context.Context, linkID uuid.UUID) (int,
 	return n, nil
 }
 
-// SetUnparsedReasons records, for each mirror row named, why the projection
-// could not read it — or clears the mark, when the reason is empty.
+// UnparsedVerdict is what one pass over the mirror decided about one row: the
+// CODE that says which refusal it was, and the refuser's own words about this
+// particular row.
+//
+// The two are not one field on purpose. Reason is a closed set — every value
+// is declared in the contract, and the interface chooses the sentence the
+// owner reads from it and from nothing else, so it is the half that may be
+// computed from. Detail is prose from whatever refused (the journal's
+// validation, the engine replaying an account, the resolver failing to match a
+// security): it names the security, the quantity, the figure that made this row
+// impossible, and it exists for the person reading ONE row. Nothing may branch
+// on its wording, and no caption may be picked out of it.
+//
+// The zero value is the verdict for a row that was read: no code, and nothing
+// to detail. A refused row always carries a Reason and MAY carry an empty
+// Detail — plenty of codes are the whole story by themselves.
+type UnparsedVerdict struct {
+	Reason string
+	Detail string
+}
+
+// SetUnparsedVerdicts records, for each mirror row named, why the projection
+// could not read it and what the refuser said — or clears the mark, when the
+// verdict is the zero value.
 //
 // All of them in one statement, and that statement inside a transaction that
 // is thrown away unless every named row was there. Both halves are needed: one
@@ -600,36 +629,43 @@ func (s *Store) unparsedCountByLink(ctx context.Context, linkID uuid.UUID) (int,
 // stopping, and the transaction is what makes the refusal mean something —
 // without it the rows that did match would keep their new reasons while the
 // caller was told the write failed. See ErrUnparsedRowsMissing.
-func (s *Store) SetUnparsedReasons(ctx context.Context, reasons map[uuid.UUID]string) error {
-	if len(reasons) == 0 {
+//
+// The two columns move TOGETHER, in one assignment, and that is the whole
+// guarantee against the fault this project keeps meeting: a detail left over
+// from a refusal that no longer applies, sitting under a code that now says
+// something else, is a caption disagreeing with the figure beside it.
+func (s *Store) SetUnparsedVerdicts(ctx context.Context, verdicts map[uuid.UUID]UnparsedVerdict) error {
+	if len(verdicts) == 0 {
 		return nil
 	}
-	ids := make([]uuid.UUID, 0, len(reasons))
-	texts := make([]string, 0, len(reasons))
-	for id, reason := range reasons {
+	ids := make([]uuid.UUID, 0, len(verdicts))
+	reasons := make([]string, 0, len(verdicts))
+	details := make([]string, 0, len(verdicts))
+	for id, v := range verdicts {
 		ids = append(ids, id)
-		texts = append(texts, reason)
+		reasons = append(reasons, v.Reason)
+		details = append(details, v.Detail)
 	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("tinvest: set unparsed reasons: %w", err)
+		return fmt.Errorf("tinvest: set unparsed verdicts: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	ct, err := tx.Exec(ctx, `
 		UPDATE tinvest_operations_mirror m
-		SET unparsed_reason = u.reason
-		FROM unnest($1::uuid[], $2::text[]) AS u(id, reason)
-		WHERE m.id = u.id`, ids, texts)
+		SET unparsed_reason = u.reason, unparsed_detail = u.detail
+		FROM unnest($1::uuid[], $2::text[], $3::text[]) AS u(id, reason, detail)
+		WHERE m.id = u.id`, ids, reasons, details)
 	if err != nil {
-		return fmt.Errorf("tinvest: set unparsed reasons: %w", err)
+		return fmt.Errorf("tinvest: set unparsed verdicts: %w", err)
 	}
-	if int(ct.RowsAffected()) != len(reasons) {
-		return fmt.Errorf("%w: %d of %d", ErrUnparsedRowsMissing, ct.RowsAffected(), len(reasons))
+	if int(ct.RowsAffected()) != len(verdicts) {
+		return fmt.Errorf("%w: %d of %d", ErrUnparsedRowsMissing, ct.RowsAffected(), len(verdicts))
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("tinvest: set unparsed reasons: %w", err)
+		return fmt.Errorf("tinvest: set unparsed verdicts: %w", err)
 	}
 	return nil
 }

@@ -67,6 +67,7 @@ function makeUnparsed(id: string): TinvestUnparsedOperation {
     currency: "RUB",
     description: "",
     reason: "unsupported_type",
+    detail: 'broker operation type "OPERATION_TYPE_FUTURES"',
     raw: { id: "broker-1" },
   };
 }

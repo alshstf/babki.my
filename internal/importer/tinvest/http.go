@@ -475,6 +475,10 @@ func (h *Handler) handleUnparsed(w http.ResponseWriter, r *http.Request) {
 			Currency:    m.Currency,
 			Description: m.Description,
 			Reason:      apitypes.TinvestUnparsedReason(m.UnparsedReason),
+			// The refuser's own words, handed on as they were written. The
+			// interface still chooses what to SAY from Reason alone; this is
+			// shown, never read.
+			Detail: m.UnparsedDetail,
 			// The broker's own bytes, handed on rather than re-encoded: nothing
 			// here computes from them, and re-modelling them would be a second
 			// reading of a document this program deliberately keeps unread.

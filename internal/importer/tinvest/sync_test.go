@@ -576,8 +576,10 @@ func TestSyncMirrorRefreshesEveryAttributeTheBrokerCorrected(t *testing.T) {
 		t.Fatalf("first SyncMirror: %v", err)
 	}
 	original := rowsByPayment(t, f)["-15230.5"]
-	if err := f.store.SetUnparsedReasons(f.ctx, map[uuid.UUID]string{original.ID: "unknown_type"}); err != nil {
-		t.Fatalf("SetUnparsedReasons: %v", err)
+	if err := f.store.SetUnparsedVerdicts(f.ctx, map[uuid.UUID]UnparsedVerdict{
+		original.ID: {Reason: "unknown_type", Detail: "nothing here reads OPERATION_TYPE_FUTURES"},
+	}); err != nil {
+		t.Fatalf("SetUnparsedVerdicts: %v", err)
 	}
 
 	// Everything outside the content key, corrected at once. The key's own
@@ -671,6 +673,10 @@ func TestSyncMirrorRefreshesEveryAttributeTheBrokerCorrected(t *testing.T) {
 	}
 	if row.UnparsedReason != "unknown_type" {
 		t.Errorf("unparsed reason = %q, want unknown_type — a confirmation does not decide it", row.UnparsedReason)
+	}
+	if row.UnparsedDetail != "nothing here reads OPERATION_TYPE_FUTURES" {
+		t.Errorf("unparsed detail = %q, want the projection's own words — a confirmation does not decide them either",
+			row.UnparsedDetail)
 	}
 	if row.InstrumentUID != "uid-1" {
 		t.Errorf("instrument uid = %q, want uid-1", row.InstrumentUID)

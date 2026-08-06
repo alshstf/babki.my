@@ -606,11 +606,13 @@ func TestUnparsedRowsAreListedSetAndCleared(t *testing.T) {
 		t.Fatalf("a freshly synced mirror lists %d unparsed rows, want 0", len(rows))
 	}
 
-	if err := f.store.SetUnparsedReasons(f.ctx, map[uuid.UUID]string{
-		byPayment["-100"].ID: "unknown_type",
-		byPayment["-300"].ID: "unknown_type",
+	// One with something to add about its own row and one without: both are
+	// verdicts, and the empty detail is not a row that was read.
+	if err := f.store.SetUnparsedVerdicts(f.ctx, map[uuid.UUID]UnparsedVerdict{
+		byPayment["-100"].ID: {Reason: "unknown_type", Detail: "broker operation type \"OPERATION_TYPE_FUTURES\""},
+		byPayment["-300"].ID: {Reason: "unknown_type"},
 	}); err != nil {
-		t.Fatalf("SetUnparsedReasons: %v", err)
+		t.Fatalf("SetUnparsedVerdicts: %v", err)
 	}
 
 	rows, hasMore, err = f.store.UnparsedByConnection(f.ctx, f.conn.ID, 10, 0)
@@ -629,6 +631,14 @@ func TestUnparsedRowsAreListedSetAndCleared(t *testing.T) {
 			t.Errorf("%s: reason = %q", r.BrokerOperationID, r.UnparsedReason)
 		}
 	}
+	// The detail comes back with the row that was given one, and does not
+	// wander onto the row that was not.
+	if got := rows[1].UnparsedDetail; got != `broker operation type "OPERATION_TYPE_FUTURES"` {
+		t.Errorf("op-1's detail = %q, want the words it was written with", got)
+	}
+	if got := rows[0].UnparsedDetail; got != "" {
+		t.Errorf("op-3 was given no detail and came back with %q", got)
+	}
 
 	page, hasMore, err := f.store.UnparsedByConnection(f.ctx, f.conn.ID, 1, 0)
 	if err != nil {
@@ -638,9 +648,11 @@ func TestUnparsedRowsAreListedSetAndCleared(t *testing.T) {
 		t.Fatalf("first page = %d rows, hasMore %v; want 1, true", len(page), hasMore)
 	}
 
-	// An empty reason clears the mark.
-	if err := f.store.SetUnparsedReasons(f.ctx, map[uuid.UUID]string{byPayment["-100"].ID: ""}); err != nil {
-		t.Fatalf("SetUnparsedReasons clearing: %v", err)
+	// The zero verdict clears the mark — and clears the detail with it. A
+	// sentence explaining a refusal that is no longer being made would be
+	// waiting for the next code to sit under.
+	if err := f.store.SetUnparsedVerdicts(f.ctx, map[uuid.UUID]UnparsedVerdict{byPayment["-100"].ID: {}}); err != nil {
+		t.Fatalf("SetUnparsedVerdicts clearing: %v", err)
 	}
 	rows, _, err = f.store.UnparsedByConnection(f.ctx, f.conn.ID, 10, 0)
 	if err != nil {
@@ -649,20 +661,29 @@ func TestUnparsedRowsAreListedSetAndCleared(t *testing.T) {
 	if len(rows) != 1 || rows[0].BrokerOperationID != "op-3" {
 		t.Errorf("after clearing, %d rows remain unparsed", len(rows))
 	}
+	cleared, err := f.store.MirrorRowsByLink(f.ctx, f.link.ID)
+	if err != nil {
+		t.Fatalf("MirrorRowsByLink: %v", err)
+	}
+	for _, r := range cleared {
+		if r.BrokerOperationID == "op-1" && r.UnparsedDetail != "" {
+			t.Errorf("the cleared row kept the detail %q of a refusal it no longer carries", r.UnparsedDetail)
+		}
+	}
 
-	if err := f.store.SetUnparsedReasons(f.ctx, nil); err != nil {
-		t.Errorf("SetUnparsedReasons(nil) = %v, want nil", err)
+	if err := f.store.SetUnparsedVerdicts(f.ctx, nil); err != nil {
+		t.Errorf("SetUnparsedVerdicts(nil) = %v, want nil", err)
 	}
 	if _, _, err := f.store.UnparsedByConnection(f.ctx, f.conn.ID, 0, 0); err == nil {
 		t.Errorf("a limit of zero was accepted")
 	}
 }
 
-// The ids handed to SetUnparsedReasons were read from this very table a
+// The ids handed to SetUnparsedVerdicts were read from this very table a
 // moment ago. One that no longer matches a row means the mirror moved under
 // the caller, and writing the part that still matches would leave a projection
 // half-marked.
-func TestSetUnparsedReasonsRefusesAnIDThatIsNotThere(t *testing.T) {
+func TestSetUnparsedVerdictsRefusesAnIDThatIsNotThere(t *testing.T) {
 	f := newFixture(t)
 	now := wireTime(t, "2026-03-16T00:00:00Z")
 	if _, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link,
@@ -672,12 +693,12 @@ func TestSetUnparsedReasonsRefusesAnIDThatIsNotThere(t *testing.T) {
 	}
 	real := rowsByPayment(t, f)["-100"].ID
 
-	err := f.store.SetUnparsedReasons(f.ctx, map[uuid.UUID]string{
-		real:       "unknown_type",
-		uuid.New(): "unknown_type",
+	err := f.store.SetUnparsedVerdicts(f.ctx, map[uuid.UUID]UnparsedVerdict{
+		real:       {Reason: "unknown_type"},
+		uuid.New(): {Reason: "unknown_type"},
 	})
 	if !errors.Is(err, ErrUnparsedRowsMissing) {
-		t.Fatalf("SetUnparsedReasons = %v, want ErrUnparsedRowsMissing", err)
+		t.Fatalf("SetUnparsedVerdicts = %v, want ErrUnparsedRowsMissing", err)
 	}
 	rows, _, err := f.store.UnparsedByConnection(f.ctx, f.conn.ID, 10, 0)
 	if err != nil {
@@ -700,10 +721,10 @@ func TestUnparsedByConnectionStillListsARowTheBrokerDropped(t *testing.T) {
 		first); err != nil {
 		t.Fatalf("SyncMirror: %v", err)
 	}
-	if err := f.store.SetUnparsedReasons(f.ctx, map[uuid.UUID]string{
-		rowsByPayment(t, f)["-100"].ID: "unknown_type",
+	if err := f.store.SetUnparsedVerdicts(f.ctx, map[uuid.UUID]UnparsedVerdict{
+		rowsByPayment(t, f)["-100"].ID: {Reason: "unknown_type"},
 	}); err != nil {
-		t.Fatalf("SetUnparsedReasons: %v", err)
+		t.Fatalf("SetUnparsedVerdicts: %v", err)
 	}
 	if _, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link, nil, second); err != nil {
 		t.Fatalf("second SyncMirror: %v", err)

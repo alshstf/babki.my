@@ -356,9 +356,9 @@ type confirmation struct {
 // payment and quantity stay because the content key is built from them: an
 // item differing in any one of those does not match this row in the first
 // place, so there is nothing here to update. first_seen_at stays because it
-// records the first sighting and this is not one. unparsed_reason stays
-// because it is the projection's verdict, written by SetUnparsedReasons, and
-// a sync has no opinion on it.
+// records the first sighting and this is not one. unparsed_reason and
+// unparsed_detail stay because together they are the projection's verdict,
+// written by SetUnparsedVerdicts, and a sync has no opinion on it.
 //
 // instrument_uid is absent for a subtler reason than the rest: it is what the
 // key was built from — or figi was, when the broker named no uid — so an item

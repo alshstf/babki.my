@@ -103,6 +103,36 @@ export function UnparsedList({ connectionId }: { connectionId: string }) {
                   <TableCell>
                     <div className="grid gap-1">
                       <span>{t(`connections.unparsedReasons.${operation.reason}`)}</span>
+                      {/* What refused this row said about THIS row, printed
+                          under the Russian name of the code. The code is what
+                          chooses the sentence above — this is only shown, never
+                          read: nothing here branches on it, and no wording is
+                          matched.
+
+                          Untranslated, like the broker's own type word and the
+                          document under «Что прислал брокер» two lines below.
+                          The i18n rule is that what this program SAYS is
+                          Russian and comes from ru.json; this is not something
+                          it says, it is a piece of the record being shown, and
+                          a Russian paraphrase of it would be this screen
+                          claiming to have understood a refusal it only carries.
+
+                          The rule that a .tsx may not render the server's own
+                          words is about an ERROR's `message`, built from a
+                          failed response's body for a log. This is a field of a
+                          successful answer, declared in the contract
+                          (TinvestUnparsedOperation.detail) and carried for
+                          exactly this purpose: «Операцию отклонил движок
+                          журнала» was the whole story for 134 of the owner's
+                          rows, and none of them could be acted on.
+
+                          Printed only when there is something to print. An
+                          empty detail is an ordinary state — a row refused
+                          before the server kept details — and an empty line
+                          under the reason would suggest something is loading. */}
+                      {operation.detail !== "" && (
+                        <span className="text-xs text-muted-foreground">{operation.detail}</span>
+                      )}
                       <details>
                         <summary className="cursor-pointer text-xs text-muted-foreground">
                           {t("connections.detail.unparsed.raw")}

@@ -234,19 +234,19 @@ func seedTinvestDemo(ctx context.Context, pool *pgxpool.Pool, spaceID, accountID
 	if err != nil {
 		return fmt.Errorf("seed tinvest mirror rows: %w", err)
 	}
-	reasons := map[uuid.UUID]string{}
+	verdicts := map[uuid.UUID]tinvest.UnparsedVerdict{}
 	for _, row := range rows {
-		reasons[row.ID] = seedTinvestReasons[row.BrokerOperationID]
+		verdicts[row.ID] = seedTinvestVerdicts[row.BrokerOperationID]
 	}
-	if err := store.SetUnparsedReasons(ctx, reasons); err != nil {
-		return fmt.Errorf("seed tinvest unparsed reasons: %w", err)
+	if err := store.SetUnparsedVerdicts(ctx, verdicts); err != nil {
+		return fmt.Errorf("seed tinvest unparsed verdicts: %w", err)
 	}
 	if err := store.FinishRun(ctx, firstRun.ID, tinvest.RunOutcome{
 		Status:           tinvest.RunOK,
 		ReadCount:        firstStats.Read,
 		AddedCount:       firstStats.Added,
 		DisappearedCount: firstStats.Disappeared,
-		UnparsedCount:    len(reasons),
+		UnparsedCount:    len(verdicts),
 	}); err != nil {
 		return fmt.Errorf("seed tinvest first run outcome: %w", err)
 	}
@@ -269,7 +269,7 @@ func seedTinvestDemo(ctx context.Context, pool *pgxpool.Pool, spaceID, accountID
 		ReadCount:        secondStats.Read,
 		AddedCount:       secondStats.Added,
 		DisappearedCount: secondStats.Disappeared,
-		UnparsedCount:    len(reasons),
+		UnparsedCount:    len(verdicts),
 		// One difference, and a real one: the demo's Т-Банк account holds no
 		// futures position of its own in the journal, because the variation
 		// margin above never became a journal entry — which is exactly the
@@ -286,16 +286,34 @@ func seedTinvestDemo(ctx context.Context, pool *pgxpool.Pool, spaceID, accountID
 	})
 }
 
-// seedTinvestReasons says why each seeded broker operation did not become a
+// seedTinvestVerdicts says why each seeded broker operation did not become a
 // journal entry, keyed by the broker's own operation id. It is a table beside
 // the operations rather than a field inside them because that is how the two
 // are actually written: the mirror takes what the broker said, and the
 // projection's verdict is recorded onto those rows afterwards (see
-// Store.SetUnparsedReasons).
-var seedTinvestReasons = map[string]string{
-	"seed-varmargin-1": string(tinvest.ReasonUnsupportedType),
-	"seed-fxbuy-1":     string(tinvest.ReasonCurrencyTrade),
-	"seed-overnight-1": string(tinvest.ReasonUnsupportedType),
+// Store.SetUnparsedVerdicts).
+//
+// EACH DETAIL IS THE SENTENCE THE PROJECTION ITSELF WRITES for that shape,
+// copied from ProjectRow rather than composed for the demo. The seed does not
+// run the projection — it states the verdict the projection would have reached
+// — so a detail invented here would put words on the stand that the program
+// never says, which is the same fault as a caption that does not match its
+// figure. The two unsupported types differ only in the operation named, and
+// that IS the point of the column: one code, two rows, two different reasons a
+// person can act on.
+var seedTinvestVerdicts = map[string]tinvest.UnparsedVerdict{
+	"seed-varmargin-1": {
+		Reason: string(tinvest.ReasonUnsupportedType),
+		Detail: `broker operation type "OPERATION_TYPE_WRITING_OFF_VARMARGIN"`,
+	},
+	"seed-fxbuy-1": {
+		Reason: string(tinvest.ReasonCurrencyTrade),
+		Detail: "a currency trade: the mirror names neither the traded currency nor its nominal per unit, so the second leg cannot be built",
+	},
+	"seed-overnight-1": {
+		Reason: string(tinvest.ReasonUnsupportedType),
+		Detail: `broker operation type "OPERATION_TYPE_OVERNIGHT"`,
+	},
 }
 
 // seedTinvestOperations is the broker's side of the demo import: what a

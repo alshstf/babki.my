@@ -1097,12 +1097,12 @@ func (a *testAPI) seedRunsAndUnparsed(t *testing.T, connID uuid.UUID, runs, unpa
 		if err != nil {
 			t.Fatalf("read mirror: %v", err)
 		}
-		reasons := map[uuid.UUID]string{}
+		verdicts := map[uuid.UUID]UnparsedVerdict{}
 		for _, r := range rows {
-			reasons[r.ID] = string(ReasonUnsupportedType)
+			verdicts[r.ID] = UnparsedVerdict{Reason: string(ReasonUnsupportedType)}
 		}
-		if err := a.store.SetUnparsedReasons(ctx, reasons); err != nil {
-			t.Fatalf("seed unparsed reasons: %v", err)
+		if err := a.store.SetUnparsedVerdicts(ctx, verdicts); err != nil {
+			t.Fatalf("seed unparsed verdicts: %v", err)
 		}
 	}
 
@@ -1166,6 +1166,94 @@ func TestBothListsSayWhetherThereIsMoreBehindThePage(t *testing.T) {
 		}
 		if got := len(page.Runs) + len(page.Ops); got != 1 || page.HasMore {
 			t.Errorf("%s last page: %d items, has_more=%v; want 1 and false", c.what, got, page.HasMore)
+		}
+	}
+}
+
+// TestUnparsedOperationsCarryTheWordsOfWhatRefusedThem: the code alone was the
+// whole answer for 134 of the owner's rows, and «Операцию отклонил движок
+// журнала» is the same sentence over a sale with nothing behind it, an amount
+// the journal will not hold and a transfer whose other leg failed. The detail
+// is what tells them apart, so it has to travel the whole way — mirror column,
+// service, response body — and not stop at a log line.
+//
+// The empty case is asserted from the SAME response and matters as much: the
+// field is required by the contract, so a row with nothing written down must
+// come back as "" rather than be left out, which is what a client rendering it
+// conditionally depends on.
+func TestUnparsedOperationsCarryTheWordsOfWhatRefusedThem(t *testing.T) {
+	api := newTestAPI(t)
+	id, _ := api.createConnection(t)
+	ctx := context.Background()
+	links, err := api.store.LinksByConnection(ctx, id)
+	if err != nil || len(links) == 0 {
+		t.Fatalf("links = %d, %v", len(links), err)
+	}
+	link := links[0]
+
+	const detail = "operation: selling 100 units leaves the position at -40"
+	items := []OperationItem{
+		{
+			ID: "op-refused", Type: "OPERATION_TYPE_SELL", State: "OPERATION_STATE_EXECUTED",
+			Date:    time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC),
+			Payment: MoneyValue{Currency: "RUB", Units: 100}, Raw: json.RawMessage(`{"id":"op-refused"}`),
+		},
+		{
+			ID: "op-silent", Type: "OPERATION_TYPE_SELL", State: "OPERATION_STATE_EXECUTED",
+			Date:    time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
+			Payment: MoneyValue{Currency: "RUB", Units: 200}, Raw: json.RawMessage(`{"id":"op-silent"}`),
+		},
+	}
+	if _, err := api.store.SyncMirror(ctx, id, link, items, time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("seed mirror: %v", err)
+	}
+	rows, err := api.store.MirrorRowsByLink(ctx, link.ID)
+	if err != nil {
+		t.Fatalf("read mirror: %v", err)
+	}
+	verdicts := map[uuid.UUID]UnparsedVerdict{}
+	for _, r := range rows {
+		v := UnparsedVerdict{Reason: string(ReasonEngineRefused)}
+		if r.BrokerOperationID == "op-refused" {
+			v.Detail = detail
+		}
+		verdicts[r.ID] = v
+	}
+	if err := api.store.SetUnparsedVerdicts(ctx, verdicts); err != nil {
+		t.Fatalf("seed unparsed verdicts: %v", err)
+	}
+
+	code, body := do(t, api.owner, "GET",
+		api.url+"/api/v1/tinvest/connections/"+id.String()+"/unparsed", "")
+	if code != http.StatusOK {
+		t.Fatalf("status %d, body %s", code, body)
+	}
+	var page struct {
+		Operations []struct {
+			OpType string  `json:"op_type"`
+			Reason string  `json:"reason"`
+			Detail *string `json:"detail"`
+		} `json:"operations"`
+	}
+	if err := json.Unmarshal([]byte(body), &page); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	if len(page.Operations) != 2 {
+		t.Fatalf("the list holds %d operations, want 2 (%s)", len(page.Operations), body)
+	}
+	// Newest first: op-refused happened on the 2nd, op-silent on the 1st.
+	for i, want := range []string{detail, ""} {
+		got := page.Operations[i]
+		if got.Reason != string(ReasonEngineRefused) {
+			t.Errorf("operation %d: reason %q, want %q", i, got.Reason, ReasonEngineRefused)
+		}
+		// A pointer, so that "the field was left out" is a different answer
+		// from "the field is empty" — the contract requires it either way.
+		if got.Detail == nil {
+			t.Fatalf("operation %d carries no detail field at all: %s", i, body)
+		}
+		if *got.Detail != want {
+			t.Errorf("operation %d: detail %q, want %q", i, *got.Detail, want)
 		}
 	}
 }

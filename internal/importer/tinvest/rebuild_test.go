@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -910,11 +911,30 @@ func TestRebuildRecordsTheJournalsOwnRefusalAgainstTheMirrorRow(t *testing.T) {
 	if len(journal) != 1 || journal[0].Type != operation.TypeDeposit {
 		t.Fatalf("journal = %d rows, first %s, want 1 deposit", len(journal), journal[0].Type)
 	}
-	if got := f.mirrorRow(t, f.link, "op-sell-1").UnparsedReason; got != string(ReasonEngineRefused) {
+	refused := f.mirrorRow(t, f.link, "op-sell-1")
+	if got := refused.UnparsedReason; got != string(ReasonEngineRefused) {
 		t.Errorf("the refused row's reason is %q, want %q", got, ReasonEngineRefused)
+	}
+	// AND WHAT THE JOURNAL SAID, not only that it said no. The code is the same
+	// over a sale with nothing behind it, an amount the journal will not hold,
+	// and a transfer whose other leg failed: the owner met 134 rows carrying it
+	// and could act on none of them, because the sentence behind it went to a
+	// log line and nowhere else.
+	//
+	// The assertion is that the words are THERE and say something the code does
+	// not, never that they read one particular way — nothing may depend on their
+	// wording, this test least of all.
+	if refused.UnparsedDetail == "" {
+		t.Errorf("the refused row's detail is empty — the journal's own words about it were dropped")
+	}
+	if got := refused.UnparsedDetail; got == string(ReasonEngineRefused) {
+		t.Errorf("the detail is the code spelled out again (%q), which adds nothing to it", got)
 	}
 	if got := f.mirrorRow(t, f.link, "op-input-1").UnparsedReason; got != "" {
 		t.Errorf("the top-up's reason is %q, want empty", got)
+	}
+	if got := f.mirrorRow(t, f.link, "op-input-1").UnparsedDetail; got != "" {
+		t.Errorf("the top-up was read successfully and carries the detail %q", got)
 	}
 }
 
@@ -926,8 +946,12 @@ func TestRebuildClearsAReasonThatStoppedBeingTrue(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link, loadOperationItem(t, "sell.json"))
 	f.rebuild(t)
-	if got := f.mirrorRow(t, f.link, "op-sell-1").UnparsedReason; got != string(ReasonEngineRefused) {
+	first := f.mirrorRow(t, f.link, "op-sell-1")
+	if got := first.UnparsedReason; got != string(ReasonEngineRefused) {
 		t.Fatalf("the sale's reason is %q, want %q — this test starts from a refusal", got, ReasonEngineRefused)
+	}
+	if first.UnparsedDetail == "" {
+		t.Fatalf("the sale carries no detail — this test starts from a refusal that explained itself")
 	}
 
 	// The buy the broker had not reported yet.
@@ -939,8 +963,16 @@ func TestRebuildClearsAReasonThatStoppedBeingTrue(t *testing.T) {
 	if stats.Unparsed != 0 {
 		t.Errorf("rebuild left %d rows unparsed, want 0", stats.Unparsed)
 	}
-	if got := f.mirrorRow(t, f.link, "op-sell-1").UnparsedReason; got != "" {
+	now := f.mirrorRow(t, f.link, "op-sell-1")
+	if got := now.UnparsedReason; got != "" {
 		t.Errorf("the sale's reason is %q, want empty — the journal takes it now", got)
+	}
+	// AND THE WORDS GO WITH THE CODE. A sentence explaining a refusal that is
+	// no longer being made is the exact shape this project keeps being bitten
+	// by: it would sit under whatever code lands on this row next, describing
+	// something else entirely, and it would read as current.
+	if got := now.UnparsedDetail; got != "" {
+		t.Errorf("the sale still carries %q, the detail of a refusal that has stopped being true", got)
 	}
 }
 
@@ -1179,18 +1211,31 @@ func TestRebuildResolvesASecurityWhoseTypeTheBrokerDidNotState(t *testing.T) {
 // enough to tell it from being briefly unreachable (see ErrInstrumentNotFound).
 func TestRebuildRefusesOneRowWhenTheBrokerHasNoSuchInstrument(t *testing.T) {
 	f := newRebuildFixture(t)
-	f.src.instrumentErrs[uidSber] = fmt.Errorf(
-		"tinvest: InstrumentsService/GetInstrumentBy: status 404: {\"code\":5,\"message\":\"Instrument not found\",\"description\":\"50002\"}: %w",
-		ErrInstrumentNotFound)
+	const brokersWords = "tinvest: InstrumentsService/GetInstrumentBy: status 404: " +
+		`{"code":5,"message":"Instrument not found","description":"50002"}`
+	f.src.instrumentErrs[uidSber] = fmt.Errorf("%s: %w", brokersWords, ErrInstrumentNotFound)
 	f.sync(t, f.link, loadOperationItem(t, "input.json"), loadOperationItem(t, "buy.json"))
 
 	stats := f.rebuild(t)
 	if stats.Added != 1 || stats.Unparsed != 1 {
 		t.Errorf("rebuild added %d and left %d unparsed, want 1 and 1 — the top-up is not about that paper", stats.Added, stats.Unparsed)
 	}
-	if got := f.mirrorRow(t, f.link, "op-buy-1").UnparsedReason; got != string(ReasonInstrumentUnresolved) {
+	refused := f.mirrorRow(t, f.link, "op-buy-1")
+	if got := refused.UnparsedReason; got != string(ReasonInstrumentUnresolved) {
 		t.Errorf("the purchase's reason is %q, want %q — the security was not matched, and that is what happened",
 			got, ReasonInstrumentUnresolved)
+	}
+	// AND WHICH OF THE THREE WAYS IT WAS NOT MATCHED. One code covers a paper
+	// the broker has never heard of, a passport too incomplete to file, and a
+	// catalog row that carries this ticker for a DIFFERENT security — three
+	// faults with three different remedies. The words that tell them apart are
+	// the resolver's, and they have to reach the row.
+	//
+	// The expectation is this test's own input rather than any production
+	// wording, so what is pinned is that the sentence travels, not how it reads.
+	if !strings.Contains(refused.UnparsedDetail, brokersWords) {
+		t.Errorf("the refused row's detail is %q, want it to carry what the resolver said (%q)",
+			refused.UnparsedDetail, brokersWords)
 	}
 	journal := f.journalOf(t, f.accountID)
 	if len(journal) != 1 || journal[0].Type != operation.TypeDeposit {

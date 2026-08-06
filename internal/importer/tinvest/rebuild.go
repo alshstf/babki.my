@@ -144,10 +144,10 @@ func NewRebuilder(store *Store, resolver *Resolver, ops journalDelta, reader jou
 // known makes no broker call at all.
 //
 // It is not one transaction. The journal's difference is applied in one (the
-// write path's own), and the mirror's reasons are written in another, so a
-// crash between them leaves a journal that is right and a reason that is stale
+// write path's own), and the mirror's verdicts are written in another, so a
+// crash between them leaves a journal that is right and a verdict that is stale
 // — which the next rebuild corrects, because it computes everything from the
-// mirror again and states every reason afresh.
+// mirror again and states every verdict afresh.
 func (r *Rebuilder) Rebuild(ctx context.Context, conn Connection, links []AccountLink, src passportSource) (RebuildStats, error) {
 	for _, link := range links {
 		if link.ConnectionID != conn.ID {
@@ -176,7 +176,7 @@ func (r *Rebuilder) Rebuild(ctx context.Context, conn Connection, links []Accoun
 	if err != nil {
 		return RebuildStats{}, err
 	}
-	if err := r.writeReasons(ctx, p); err != nil {
+	if err := r.writeVerdicts(ctx, p); err != nil {
 		return RebuildStats{}, err
 	}
 
@@ -216,15 +216,17 @@ type desired struct {
 // projected is everything one pass over the mirror produced.
 type projected struct {
 	want []desired
-	// reasons is the verdict for the mirror rows this rebuild RULED ON: the
-	// empty string for a row that became journal entries, a code for one that
+	// verdicts is what this rebuild decided about the mirror rows it RULED ON:
+	// the zero verdict for a row that became journal entries, a code — and,
+	// where the refuser had more to say than its code, that too — for one that
 	// could not. A row that is not in here was not ruled on and keeps whatever
-	// it carries — see projectAll.
-	reasons map[uuid.UUID]string
-	// stored is every mirror row's reason as it stands in the database, for
+	// it carries, detail included, because that pair is still a true statement
+	// about it — see projectAll.
+	verdicts map[uuid.UUID]UnparsedVerdict
+	// stored is every mirror row's verdict as it stands in the database, for
 	// every row read. It is what makes "write only what changed" possible, and
-	// what Unparsed is counted over.
-	stored map[uuid.UUID]string
+	// its Reason is what Unparsed is counted over.
+	stored map[uuid.UUID]UnparsedVerdict
 	// rowOf maps a journal entry's external id back to the mirror row it came
 	// from. The mapping is REMEMBERED rather than parsed back out of the name:
 	// the name's shape is the projection's business, and a second reader of it
@@ -236,11 +238,11 @@ type projected struct {
 func (p *projected) unparsed() int {
 	n := 0
 	for rowID, was := range p.stored {
-		reason, ruled := p.reasons[rowID]
+		verdict, ruled := p.verdicts[rowID]
 		if !ruled {
-			reason = was
+			verdict = was
 		}
-		if reason != "" {
+		if verdict.Reason != "" {
 			n++
 		}
 	}
@@ -260,9 +262,9 @@ func (p *projected) unparsed() int {
 // keeps them for. If it carries none, there is nothing to say.
 func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []AccountLink, src passportSource) (*projected, error) {
 	p := &projected{
-		reasons: map[uuid.UUID]string{},
-		stored:  map[uuid.UUID]string{},
-		rowOf:   map[string]uuid.UUID{},
+		verdicts: map[uuid.UUID]UnparsedVerdict{},
+		stored:   map[uuid.UUID]UnparsedVerdict{},
+		rowOf:    map[string]uuid.UUID{},
 	}
 	// One run's answers about instruments. The Resolver caches the broker's
 	// passports; this caches the resolutions themselves, so a history that
@@ -277,7 +279,7 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 			return nil, err
 		}
 		for _, row := range rows {
-			p.stored[row.ID] = row.UnparsedReason
+			p.stored[row.ID] = UnparsedVerdict{Reason: row.UnparsedReason, Detail: row.UnparsedDetail}
 			if row.State != stateExecuted || row.DisappearedAt != nil {
 				continue
 			}
@@ -290,7 +292,12 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 				ops, refusal = r.project(row, link.AccountID, resolved)
 			}
 			if refusal != nil {
-				p.reasons[row.ID] = string(refusal.Reason)
+				// The detail goes to the mirror as well as to the log. It is the
+				// difference between "the engine refused this" — which 134 of the
+				// owner's rows said, and which no one could act on — and the
+				// engine's own sentence about the one row in front of the reader.
+				// A log line answers that only for whoever still has the log.
+				p.verdicts[row.ID] = UnparsedVerdict{Reason: string(refusal.Reason), Detail: refusal.Detail}
 				r.log.Debug("tinvest: a broker operation did not become journal entries",
 					"mirror_row", row.ID, "op_type", row.OpType, "reason", refusal.Reason, "detail", refusal.Detail)
 				continue
@@ -308,8 +315,10 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 			// became journal entries, or one it turns into nothing on purpose
 			// (a BROKER_FEE, which is the same money as a trade's commission
 			// field). Neither is a row this program failed to read, so whatever
-			// reason either carried goes.
-			p.reasons[row.ID] = ""
+			// reason either carried goes — and the detail with it, in the same
+			// verdict, since a detail outliving its code would explain a refusal
+			// that is no longer being made.
+			p.verdicts[row.ID] = UnparsedVerdict{}
 		}
 	}
 	return p, nil
@@ -901,7 +910,14 @@ func (r *Rebuilder) apply(ctx context.Context, spaceID uuid.UUID, delta operatio
 				ref.ExternalID, ref.Err)
 		}
 		refusedRows[rowID] = true
-		p.reasons[rowID] = string(ReasonEngineRefused)
+		// The journal's OWN sentence, kept rather than reduced to the code
+		// beside it: "engine_refused" is true of a sale with nothing behind it,
+		// of an amount the journal will not hold and of a transfer whose other
+		// leg failed alike, and the owner staring at one of 134 such rows has no
+		// way to tell which. What goes in is an error this program's own journal
+		// wrote about its own journal — no broker token, no request, nothing
+		// that ever met a credential (see operation.ImportRefusal).
+		p.verdicts[rowID] = UnparsedVerdict{Reason: string(ReasonEngineRefused), Detail: ref.Err.Error()}
 		r.log.Warn("tinvest: the journal refused an operation the projection built",
 			"mirror_row", rowID, "external_id", ref.ExternalID, "err", ref.Err)
 	}
@@ -928,26 +944,30 @@ func (r *Rebuilder) apply(ctx context.Context, spaceID uuid.UUID, delta operatio
 	return written{added: len(applied) - fresh, withdrawn: fresh, retracted: len(orphans) - fresh}, nil
 }
 
-// writeReasons records the projection's verdicts on the mirror, and writes only
+// writeVerdicts records the projection's verdicts on the mirror, and writes only
 // the ones that changed.
 //
 // Only what changed, because the whole history is stated afresh on every
 // rebuild and an unconditional write would rewrite every row of a decade-old
 // account every hour to say what it already said. The comparison is against the
-// value read at the start of this same rebuild, which is sound because the
-// column has exactly one writer — this, through SetUnparsedReasons — and runs
+// value read at the start of this same rebuild, which is sound because the two
+// columns have exactly one writer — this, through SetUnparsedVerdicts — and runs
 // of one connection do not overlap.
-func (r *Rebuilder) writeReasons(ctx context.Context, p *projected) error {
-	changed := map[uuid.UUID]string{}
-	for rowID, reason := range p.reasons {
-		if p.stored[rowID] != reason {
-			changed[rowID] = reason
+//
+// CHANGED MEANS EITHER HALF CHANGED. A row whose code stands and whose detail
+// now names a different security is a row whose stored answer is wrong, and
+// comparing codes alone would leave that stale sentence under it for ever.
+func (r *Rebuilder) writeVerdicts(ctx context.Context, p *projected) error {
+	changed := map[uuid.UUID]UnparsedVerdict{}
+	for rowID, verdict := range p.verdicts {
+		if p.stored[rowID] != verdict {
+			changed[rowID] = verdict
 		}
 	}
 	if len(changed) == 0 {
 		return nil
 	}
-	if err := r.store.SetUnparsedReasons(ctx, changed); err != nil {
+	if err := r.store.SetUnparsedVerdicts(ctx, changed); err != nil {
 		r.log.Error("tinvest: recording why operations could not be read failed", "rows", len(changed), "err", err)
 		return err
 	}

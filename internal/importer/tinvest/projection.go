@@ -90,8 +90,9 @@ const brokerCurrencyInstrumentType = "currency"
 // UnparsedReason is why a mirror row did not become journal entries, as a
 // code rather than as prose: it is stored in the mirror
 // (tinvest_operations_mirror.unparsed_reason), shown to the owner through the
-// interface, and will be declared in the contract, so it has to be a value a
-// client can branch on.
+// interface, and declared in the contract, so it has to be a value a client can
+// branch on. The prose that goes with it is UnparsedError.Detail, which is
+// stored in its own column and is the half nothing may branch on.
 //
 // EACH ONE NAMES A DIFFERENT FAULT and they must not be used
 // interchangeably — this project has been caught four times printing a true
@@ -187,10 +188,22 @@ const (
 	ReasonProjectionIncomplete UnparsedReason = "projection_incomplete"
 )
 
-// UnparsedError is one refusal: the code that will be stored and shown, and a
-// detail for the person reading a log or a report. Detail is not stored
-// anywhere — the mirror has a column for the reason only — so nothing may
-// depend on its wording.
+// UnparsedError is one refusal: the code that is stored and shown, and a
+// detail about THIS row that is stored and shown beside it.
+//
+// Both halves reach the mirror (tinvest_operations_mirror, one column each)
+// and the owner's screen, and they are still not the same kind of thing.
+// Reason is a closed set declared in the contract, and it is the half a
+// client may branch on. Detail is free text — this file writes it for its own
+// refusals, the journal and the resolver write it for theirs — and NOTHING may
+// depend on its wording: not a caption, not a translation, not a test looking
+// for a phrase. It is there for the person reading one row and asking which
+// security, and how much of it.
+//
+// It must therefore stay free of anything secret. Every Detail written in this
+// package is built from the broker's own operation, an instrument passport or
+// this program's own journal; the token is a request header and appears in no
+// error message anywhere (see Client.doOnce).
 type UnparsedError struct {
 	Reason UnparsedReason
 	Detail string

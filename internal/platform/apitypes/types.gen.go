@@ -1155,6 +1155,15 @@ type TinvestUnparsedOperation struct {
 	// Description The broker's own free-text description of the operation, empty when it sent none.
 	Description string `json:"description"`
 
+	// Detail What refused this operation said about THIS row, in its own words — free text written for a person and NOT FOR A PARSER. `reason` above is what a client decides anything by: the sentence the owner reads is chosen from that code and from nothing else, and matching on a phrase in here would be exactly the dependency on unpromised wording that this contract refuses to make elsewhere. Show it, do not read it.
+	//
+	// IT IS NOT TRANSLATED and is not promised to be in any one language. The server writes these in English and may quote the broker inside them, so a client that displays it displays it verbatim, the way it already does with `op_type` and `raw`. Neither is a message a client may compose a Russian sentence out of.
+	//
+	// MAY BE EMPTY, AND EMPTY IS NOT AN ERROR — it means "nothing more was written down", never "the operation was fine": a row is on this list because it was refused, and `reason` says so on its own. What is empty today are the rows refused before the server kept details at all; those are not re-explained after the fact, because the words that would go here are gone. Every refusal the server makes now does write one, and that is deliberately NOT promised here: a client that treated an empty detail as a fault would break on the first refusal that has nothing to add.
+	//
+	// The words come from this program's own journal, its instrument resolver or its projection rules, so they may name internal things — an operation type, an account's own balance, a catalog row. They never carry a credential: the broker token travels as a request header and appears in no message this program builds.
+	Detail string `json:"detail"`
+
 	// Id The mirror row's id — this program's own, not the broker's, whose operation ids are documented to change over time and are an attribute here rather than a key.
 	Id openapi_types.UUID `json:"id"`
 
