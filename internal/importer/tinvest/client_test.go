@@ -1258,3 +1258,35 @@ func TestWireMoneyValue_CurrencyIsUppercased(t *testing.T) {
 		t.Errorf("Currency = %q, want RUB", got.Currency)
 	}
 }
+
+// A redeemed bond is quoted with a nominal of zero: the face value has been
+// paid back, so none of it is outstanding. Refusing such an instrument costs
+// the owner every purchase, coupon and redemption it ever had — on the first
+// real import that was 349 operations across 23 bonds, which is most of the
+// mismatch the reconciliation then reported. The face value is not lost,
+// though: initialNominal keeps what the bond was issued at.
+//
+// Checked live against the gateway: МФК Быстроденьги Ю002Р-01 (matured
+// 2026-06-03) answers nominal 0 with initialNominal 100 CNY, and ОФЗ 29014
+// (matured 2026-03-25) answers 0 with 1000 RUB, while a bond maturing in 2030
+// answers 1000 for both. This fixture is the first of those.
+func TestBondNominalByUID_RedeemedBondFallsBackToWhatItWasIssuedAt(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(readFixture(t, "bond_redeemed.json"))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(srv.Client(), srv.URL, "tok", nil)
+	got, err := c.BondNominalByUID(context.Background(), "0a4e5ec0-289f-446f-8b5a-f5f828089ab6")
+	if err != nil {
+		t.Fatalf("BondNominalByUID: %v", err)
+	}
+	if want := decimal.RequireFromString("100"); !got.Decimal().Equal(want) {
+		t.Errorf("nominal = %s, want %s — a redeemed bond keeps its issued face value", got.Decimal(), want)
+	}
+	if got.Currency != "CNY" {
+		t.Errorf("currency = %q, want CNY", got.Currency)
+	}
+}

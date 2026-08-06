@@ -501,7 +501,31 @@ func (c *Client) BondNominalByUID(ctx context.Context, uid string) (MoneyValue, 
 	if err != nil {
 		return MoneyValue{}, fmt.Errorf("tinvest: InstrumentsService/BondBy: nominal: %w", err)
 	}
-	return nominal, nil
+	if !nominal.Decimal().IsZero() {
+		return nominal, nil
+	}
+
+	// A redeemed bond is quoted with a nominal of zero — the face value has
+	// been paid back, so none of it is outstanding — while initialNominal
+	// keeps what the bond was issued at. Checked live against the gateway on
+	// three bonds: МФК Быстроденьги Ю002Р-01 (matured 2026-06-03) and ОФЗ
+	// 29014 (matured 2026-03-25) both answer nominal 0 with initialNominal
+	// 100 CNY and 1000 RUB; Республика Казахстан 11 (matures 2030) answers
+	// 1000 for both.
+	//
+	// The order matters and is not interchangeable. An AMORTIZING bond that
+	// is still alive has repaid part of its face and carries a nominal
+	// smaller than the initial one; taking the initial there would overstate
+	// every valuation of it, since a bond is quoted as a percent of nominal.
+	// The fallback is reachable only at zero, which is the state where there
+	// is no live position left to overstate — and where the history still
+	// needs a face value, because refusing the instrument outright drops
+	// every purchase, coupon and redemption the bond ever had.
+	initial, err := resp.Instrument.InitialNominal.parse()
+	if err != nil {
+		return MoneyValue{}, fmt.Errorf("tinvest: InstrumentsService/BondBy: initial nominal: %w", err)
+	}
+	return initial, nil
 }
 
 // rateLimitError signals a 429 response; do() catches it with errors.As to

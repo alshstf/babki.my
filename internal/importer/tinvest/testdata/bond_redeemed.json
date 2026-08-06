@@ -1,0 +1,19 @@
+{
+  "instrument": {
+    "figi": "TCS99A105N25",
+    "ticker": "RU000A105N25",
+    "classCode": "TQCB",
+    "isin": "RU000A105N25",
+    "lot": 1,
+    "currency": "cny",
+    "name": "Пример погашенной облигации",
+    "exchange": "MOEX",
+    "instrumentType": "bond",
+    "uid": "0a4e5ec0-289f-446f-8b5a-f5f828089ab6",
+    "assetUid": "asset-bond-redeemed",
+    "maturityDate": "2026-06-03T00:00:00Z",
+    "amortizationFlag": false,
+    "nominal": {"currency": "cny", "units": "0", "nano": 0},
+    "initialNominal": {"currency": "cny", "units": "100", "nano": 0}
+  }
+}

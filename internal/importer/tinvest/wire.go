@@ -351,6 +351,7 @@ type wireInstrumentResponse struct {
 // "instrument", same as wireInstrumentResponse does for GetInstrumentBy.
 type wireBondResponse struct {
 	Instrument struct {
-		Nominal wireMoneyValue `json:"nominal"`
+		Nominal        wireMoneyValue `json:"nominal"`
+		InitialNominal wireMoneyValue `json:"initialNominal"`
 	} `json:"instrument"`
 }
