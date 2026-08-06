@@ -65,10 +65,16 @@
 // follows it, the position keeps a basis it can no longer sell. Writing that
 // basis off would treat a split as a disposal, which it is not.
 //
-// A position's currency is fixed by the first operation that touches the
-// instrument in that account; every later operation for the same instrument
-// must repeat it. Minor amounts of different currencies are never mixed into
-// one int64.
+// A POSITION'S COST AND ITS INCOME ARE TWO FIGURES AND MAY BE IN TWO
+// CURRENCIES. The cost currency is settled by the first operation that touches
+// cost, quantity or fees, and every later such operation must repeat it: those
+// figures are single int64s of minor units, and mixing two currencies inside
+// one is corruption nothing downstream could detect. Income is under no such
+// rule — it is kept per currency (see Position.IncomeByCurrency) — because a
+// yuan bond pays its coupons in rubles and a dollar share's dividend and
+// withheld tax arrive in rubles, which is what Russian brokers do rather than
+// what broken data looks like. Minor amounts of different currencies are still
+// never mixed into one int64; there is simply more than one int64 now.
 //
 // No double counting with account summaries: positions computed here are
 // NOT part of GET /api/v1/summary. Account summaries are still built
@@ -85,6 +91,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -153,16 +160,64 @@ type Lot struct {
 	AcquiredOn *time.Time
 }
 
+// CurrencyMinor is an amount of minor units together with the currency they
+// are units of. It exists because one figure of a position — its income — is
+// not necessarily denominated in the position's own currency, and minor units
+// of two currencies must never meet inside one int64 (see
+// Position.IncomeByCurrency).
+type CurrencyMinor struct {
+	Currency string
+	Minor    int64
+}
+
 // Position is the running state of one instrument within one account.
 // Closed positions (zero quantity) are kept: realized P&L and income
 // remain meaningful history.
 type Position struct {
-	InstrumentID     uuid.UUID
+	InstrumentID uuid.UUID
+	// Currency is the currency of the position's COST AND QUANTITY: of
+	// CostMinor, of every lot's cost, of FeesMinor, and of everything a
+	// Realization is made of. It is NOT "the one currency of the position" —
+	// income can arrive in another one, and on a Russian broker routinely does
+	// (see IncomeByCurrency).
+	//
+	// It is settled by the first operation that touches any of those figures
+	// (see Type.mustMatchPositionCurrency), and every later such operation must
+	// repeat it. A position that has so far seen nothing but income carries the
+	// currency of the payment that created it, until such an operation arrives
+	// and settles it for good.
 	Currency         string
 	Quantity         decimal.Decimal
 	CostMinor        int64 // remaining FIFO cost basis (fees capitalized on buy)
 	RealizedPnLMinor int64
-	IncomeMinor      int64 // dividends + coupons − instrument-attributed taxes
+	// IncomeByCurrency is what the paper PAID — dividends and coupons received,
+	// less the taxes attributed to this instrument — KEPT PER CURRENCY, ordered
+	// by currency code.
+	//
+	// Per currency because income and cost need not be denominated alike. A
+	// yuan bond is bought for yuan and pays its coupons in rubles, converted by
+	// the broker on the day of the payment; a dollar share's dividend and the
+	// tax withheld on it arrive in rubles too. That is ordinary Russian
+	// brokerage practice rather than damaged data, and adding the two into one
+	// int64 of minor units — the shape this field replaced — is exactly the
+	// silent corruption the currency rule exists to prevent. So the cost stays
+	// in the currency the paper was paid for and the income stays in the
+	// currency it arrived in, and neither is converted here: the engine knows no
+	// exchange rates and must not (see the package doc).
+	//
+	// ONE ENTRY PER CURRENCY, ORDERED BY CURRENCY CODE — a property of the money
+	// rather than of the journal. Two accounts holding the same payments listed
+	// in a different order must render and compare identically, so the order
+	// cannot be the arrival order; and it is a slice rather than a map because
+	// Go's map iteration is deliberately random and these figures go onto a
+	// screen. addIncome is the only thing that writes it, and it maintains both
+	// properties.
+	//
+	// An entry can be zero or negative, and neither is a defect: a coupon and
+	// the tax withheld from it cancelling exactly is not the same statement as
+	// no income at all, and a tax on a payment made before this account's
+	// journal begins leaves a negative one.
+	IncomeByCurrency []CurrencyMinor
 	FeesMinor        int64
 	// Lots are the acquisitions still held, ordered by the day each was
 	// ACQUIRED — oldest first — which is the order releases consume them
@@ -210,6 +265,43 @@ type Position struct {
 func (p *Position) realize(r Realization) {
 	p.Realizations = append(p.Realizations, r)
 	p.RealizedPnLMinor += r.PnLMinor()
+}
+
+// addIncome books minor units of income in the currency they arrived in. It is
+// the only thing that writes IncomeByCurrency, and it keeps that slice ordered
+// by currency code with one entry per currency — see the field for why the
+// order is not the journal's.
+//
+// The insertion point comes from a binary search over the very order the slice
+// is kept in, so "where this currency belongs" and "where it would be found"
+// are one answer rather than two that must agree. A position holds a handful of
+// currencies at most; the search is for the invariant, not for speed.
+func (p *Position) addIncome(currency string, minor int64) {
+	at, found := slices.BinarySearchFunc(p.IncomeByCurrency, currency, func(e CurrencyMinor, c string) int {
+		return strings.Compare(e.Currency, c)
+	})
+	if found {
+		p.IncomeByCurrency[at].Minor += minor
+		return
+	}
+	p.IncomeByCurrency = slices.Insert(p.IncomeByCurrency, at, CurrencyMinor{Currency: currency, Minor: minor})
+}
+
+// IncomeMinorIn is the income booked in one currency, and zero when the
+// position received none in it.
+//
+// Zero is therefore two answers at once — no payment ever arrived in this
+// currency, or the payments that did cancel out — and a caller that must tell
+// them apart reads IncomeByCurrency itself. Callers that publish this figure
+// have to say which currency it is in; it is not "the position's income" unless
+// the position received income in nothing else.
+func (p *Position) IncomeMinorIn(currency string) int64 {
+	for _, e := range p.IncomeByCurrency {
+		if e.Currency == currency {
+			return e.Minor
+		}
+	}
+	return 0
 }
 
 func badOp(o Operation, msg string) error {
@@ -705,20 +797,53 @@ func (p *Position) addLot(qty decimal.Decimal, costMinor int64, acquiredOn *time
 // Compute folds the journal into positions. See package doc for semantics.
 func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 	positions := make(map[uuid.UUID]*Position)
+	// settled names the instruments whose currency has been fixed, i.e. that
+	// have already seen an operation touching cost, quantity or fees. It is the
+	// fold's own state rather than a field on Position: it says how far this
+	// walk has got, not what the position is.
+	settled := make(map[uuid.UUID]bool)
 	// get returns the position for the operation's instrument, creating it on
-	// first sight. The currency of that first operation becomes the position's
-	// currency and every later operation must match it: minor amounts of two
+	// first sight, and enforces the currency rule.
+	//
+	// THE RULE IS ABOUT COST, NOT ABOUT THE PAPER. Minor amounts of two
 	// currencies summed into one int64 would be silent corruption, and the
-	// service layer only validates the ISO-4217 shape, not consistency.
+	// service layer only validates the ISO-4217 shape, not consistency — so
+	// every operation whose amount lands in CostMinor, in a lot, in FeesMinor or
+	// in a realization must repeat the currency of the first such operation
+	// (Type.mustMatchPositionCurrency lists them, and says why a fee is among
+	// them). Income does not have to: a dividend, a coupon or the tax withheld
+	// from either may arrive in any currency and is booked in the currency it
+	// arrived in (see Position.IncomeByCurrency).
+	//
+	// INCOME DOES NOT SETTLE THE CURRENCY EITHER, which is the same rule seen
+	// from the other end and not a separate kindness. A ruble coupon on a yuan
+	// bond is no statement that the position is in rubles; taking it for one
+	// would refuse the yuan purchase that follows — the very refusal this
+	// removes, merely moved to another journal order, and journals do open with
+	// a payment (the paper was bought before the import window, or arrived by
+	// transfer). So a position created by income carries that payment's currency
+	// provisionally and the first cost-touching operation replaces it.
+	//
+	// Nothing computed can be invalidated by that replacement, and the reason is
+	// checkable rather than a matter of care: until it happens the position has
+	// no cost, no lot, no fee and no realization, because every operation that
+	// could make one settles the currency itself.
 	get := func(o Operation) (*Position, error) {
 		p, ok := positions[*o.InstrumentID]
 		if !ok {
 			p = &Position{InstrumentID: *o.InstrumentID, Currency: o.Currency}
 			positions[*o.InstrumentID] = p
+		}
+		if !o.Type.mustMatchPositionCurrency() {
+			return p, nil
+		}
+		if !settled[*o.InstrumentID] {
+			p.Currency = o.Currency
+			settled[*o.InstrumentID] = true
 			return p, nil
 		}
 		if o.Currency != p.Currency {
-			return nil, badOp(o, fmt.Sprintf("currency %s does not match position currency %s for instrument %s",
+			return nil, badOp(o, fmt.Sprintf("currency %s does not match the %s this position's cost is in, for instrument %s: only a dividend, a coupon or a tax may arrive in another currency",
 				o.Currency, p.Currency, o.InstrumentID))
 		}
 		return p, nil
@@ -779,9 +904,11 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			})
 			p.FeesMinor += o.FeeMinor
 		case TypeDividend, TypeCoupon:
-			p.IncomeMinor += o.AmountMinor
+			// In the currency the payment ARRIVED in, which need not be the one
+			// the paper is priced in — see Position.IncomeByCurrency.
+			p.addIncome(o.Currency, o.AmountMinor)
 		case TypeTax:
-			p.IncomeMinor += o.AmountMinor // negative
+			p.addIncome(o.Currency, o.AmountMinor) // negative, and in its own currency
 		case TypeFee:
 			p.FeesMinor += -o.AmountMinor // amount negative → positive fee
 		case TypeAmortization:

@@ -325,8 +325,9 @@ func TestProjectRowCashOperations(t *testing.T) {
 //
 // The alternative it replaces — booking it as a deposit with a note — moved two
 // published figures at once: the position's income stays understated by the
-// refund for good (the engine adds a tax to IncomeMinor and never sees an
-// account-level deposit), and the journal grows a top-up the owner never made.
+// refund for good (the engine subtracts a tax from the position's income in the
+// currency the tax was charged in, and never sees an account-level deposit),
+// and the journal grows a top-up the owner never made.
 func TestProjectRowTaxRefundStaysUnparsed(t *testing.T) {
 	row := mirrorRowFor(t, "tax_correction_refund.json")
 	for _, resolved := range []*Resolved{nil, resolvedShare()} {
@@ -1076,8 +1077,10 @@ func TestAcceptsInstrumentAgreesWithTheEngine(t *testing.T) {
 // numbers describe.
 //
 // It is the test that would fail if the foreign-currency commission leg ever
-// carried an instrument: the engine holds one currency per position, so such a
-// leg makes the whole account unreadable rather than recording a fee.
+// carried an instrument: the engine holds a position's cost and its fees in one
+// currency — income is the one figure exempt from that, and a commission is not
+// income — so such a leg makes the whole account unreadable rather than
+// recording a fee.
 func TestProjectedOperationsFoldThroughTheEngine(t *testing.T) {
 	rub := resolvedShare()
 	usd := &Resolved{InstrumentID: otherInstrID, Type: instrument.TypeShare}
@@ -1117,8 +1120,8 @@ func TestProjectedOperationsFoldThroughTheEngine(t *testing.T) {
 	if rubPos.FeesMinor != 1761 {
 		t.Errorf("fees_minor = %d, want 1761 — 8.25 on the purchase and 9.36 on the sale", rubPos.FeesMinor)
 	}
-	if rubPos.IncomeMinor != 135075 {
-		t.Errorf("income_minor = %d, want 135075 — the gross dividend", rubPos.IncomeMinor)
+	if got := rubPos.IncomeMinorIn("RUB"); got != 135075 {
+		t.Errorf("income in RUB = %d, want 135075 — the gross dividend", got)
 	}
 	if rubPos.Currency != "RUB" {
 		t.Errorf("currency = %q, want RUB", rubPos.Currency)

@@ -671,8 +671,9 @@ func TestRebuildDoesNotPairSharesCrossingToAndFromTheOutsideWorld(t *testing.T) 
 // The broker attaches a currency to the zero payment of a securities transfer,
 // and the documented shape attaches roubles to it whatever the paper is. Taken
 // as the leg's currency, that is not merely untidy: the engine fixes a
-// position's currency by the first operation on the instrument and refuses
-// every later one that disagrees. The dollar purchase and the rouble leg below
+// position's currency by the first operation on the instrument that touches
+// cost or quantity — a transfer leg is one — and refuses every later such
+// operation that disagrees. The dollar purchase and the rouble leg below
 // are the same paper in the same account, so one of the two would be refused —
 // the owner reading "the journal refused this" and nothing anywhere saying that
 // the currency had been read off the wrong field.

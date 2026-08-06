@@ -659,9 +659,11 @@ func tradePrice(row MirrorRow) *decimal.Decimal {
 // added to this row's. So it becomes a second entry, in ITS currency, and the
 // trade keeps a zero fee.
 //
-// That second entry carries NO INSTRUMENT, deliberately: the engine holds one
-// currency per position (portfolio.Compute's get), so a fee in another
-// currency attached to the same instrument would make the whole account
+// That second entry carries NO INSTRUMENT, deliberately: the engine keeps a
+// position's cost AND ITS FEES in one currency (portfolio.Compute's get, and
+// portfolio.Type.mustMatchPositionCurrency for why a commission is on the
+// strict side of that rule while a dividend or a tax is not), so a fee in
+// another currency attached to the same instrument would make the whole account
 // unreadable rather than record a fee.
 //
 // THE COMMISSION'S SIGN IS READ, and a positive one is refused. FeeMinor is a
@@ -901,8 +903,9 @@ func projectDividendToCard(row MirrorRow, accountID uuid.UUID, resolved *Resolve
 // may be denominated in anything.
 //
 // Taking it would be more than untidy. The engine fixes a position's currency
-// by the FIRST operation on that instrument and refuses every later one that
-// disagrees, so a rouble leg on a dollar paper either makes the position
+// by the FIRST operation on that instrument that touches cost or quantity — a
+// transfer leg is one — and refuses every later such operation that disagrees,
+// so a rouble leg on a dollar paper either makes the position
 // roubles and then refuses every purchase after it, or is itself refused — and
 // the owner would read "the journal refused this" with nothing anywhere naming
 // the real cause. The instrument's own currency is taken instead: the broker's

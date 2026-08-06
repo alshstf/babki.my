@@ -36,8 +36,9 @@ type InstrumentRef struct {
 // Currency is the catalog's, which is the broker's passport for a row this
 // import created and a person's own entry for one it matched. It is what a
 // journal entry about the PAPER rather than about a payment has to use: the
-// engine fixes a position's currency by the first operation on that
-// instrument, and a securities transfer moves no money, so the currency
+// engine fixes a position's currency by the first operation on that instrument
+// that touches cost or quantity, and a securities transfer moves no money
+// while being exactly such an operation, so the currency
 // standing beside its zero payment says nothing about the paper (see
 // projectSecuritiesTransfer).
 type Resolved struct {

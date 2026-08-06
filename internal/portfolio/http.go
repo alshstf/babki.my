@@ -408,12 +408,33 @@ func hasUndatedRealizations(p *Position) bool {
 // handled outcome (see below), not a request failure.
 func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instrument, quotes map[uuid.UUID]marketdata.Quote, now time.Time, cache map[rateKey]*rateLookup) (apitypes.Position, error) {
 	out := apitypes.Position{
-		Instrument:             instrumentToAPI(inst),
-		Quantity:               p.Quantity.String(),
-		CostMinor:              p.CostMinor,
-		Currency:               p.Currency,
-		RealizedPnlMinor:       p.RealizedPnLMinor,
-		IncomeMinor:            p.IncomeMinor,
+		Instrument:       instrumentToAPI(inst),
+		Quantity:         p.Quantity.String(),
+		CostMinor:        p.CostMinor,
+		Currency:         p.Currency,
+		RealizedPnlMinor: p.RealizedPnLMinor,
+		// INCOME IN THE POSITION'S OWN CURRENCY, AND NOTHING ELSE. This is one
+		// int64 published beside `currency`, and the screen renders it under
+		// that sign — so the only figure it can carry honestly is the one
+		// denominated in that currency. A position's income may arrive in
+		// several (see Position.IncomeByCurrency: a yuan bond pays rubles), and
+		// neither answer to "what else could go here" is available: summing them
+		// puts kopecks under a yuan sign, and converting them needs a rate this
+		// object neither has nor publishes.
+		//
+		// SO INCOME IN ANOTHER CURRENCY IS NOT PUBLISHED HERE AT ALL, and a
+		// position that received only such income shows zero. That is an
+		// omission rather than a false figure — every kopeck this number
+		// contains really is in `currency` — but it IS an omission, and closing
+		// it means giving the contract a per-currency field, which is a piece of
+		// work of its own. In the meantime the base-currency figure beside it is
+		// complete WHERE IT EXISTS: in_base.income_minor converts every payment
+		// out of the currency it actually arrived in (see positionInBase), so a
+		// row carrying that object shows the whole income in the base currency.
+		// A row that does not carry it — because the position's currency IS the
+		// base one, or because some other term of the object could not be
+		// valued — shows only what this field holds.
+		IncomeMinor:            p.IncomeMinorIn(p.Currency),
 		FeesMinor:              p.FeesMinor,
 		HasUndatedLots:         hasUndatedLots(p),
 		HasUndatedRealizations: hasUndatedRealizations(p),
@@ -671,12 +692,21 @@ func (rl *rateLookup) applyTo(amountMinor int64) (int64, error) {
 	return minor, nil
 }
 
-// datedMinor is one amount denominated in the position's own currency,
-// together with the date whose fx rate values it: a lot's remaining cost with
-// the day that lot was acquired, an income operation's amount with the day it
-// occurred.
+// datedMinor is one amount, the currency it is denominated in, and the date
+// whose fx rate values it: a lot's remaining cost with the day that lot was
+// acquired, an income payment's amount with the day it occurred.
+//
+// THE CURRENCY TRAVELS WITH THE TERM rather than being one argument for the
+// whole sum, because one sum's terms need not share it. A position's income can
+// arrive in several currencies at once — a dollar share paying a ruble dividend
+// with a ruble tax withheld (see portfolio.Position.IncomeByCurrency) — and
+// converting those payments out of the position's currency would apply a dollar
+// rate to an amount of rubles. The basis and the disposals are in the position's
+// own currency by construction, and their terms say so one by one like every
+// other.
 type datedMinor struct {
 	minor int64
+	from  string
 	on    time.Time
 }
 
@@ -704,8 +734,9 @@ func (h *Handler) rateFor(ctx context.Context, from, to string, on time.Time, ca
 	return rl
 }
 
-// sumInBase converts every amount at the fx rate of its OWN date and returns
-// the total in currency to. Every amount is multiplied as a decimal and only
+// sumInBase converts every amount at the fx rate of its OWN date, out of its
+// OWN currency, and returns the total in currency to. Every amount is
+// multiplied as a decimal and only
 // the total is rounded, once, half-away-from-zero — the same final step
 // marketdata.Converter.Convert applies to a single amount. Rounding each term
 // instead could drift from the true total by a minor unit per term, and the
@@ -723,10 +754,10 @@ func (h *Handler) rateFor(ctx context.Context, from, to string, on time.Time, ca
 // exists at all — ok=false is answered with a null the screen reads as data
 // that has yet to arrive, and a sum too large to state is not waiting for
 // anything.
-func (h *Handler) sumInBase(ctx context.Context, amounts []datedMinor, from, to string, cache map[rateKey]*rateLookup) (minor int64, ok bool, err error) {
+func (h *Handler) sumInBase(ctx context.Context, amounts []datedMinor, to string, cache map[rateKey]*rateLookup) (minor int64, ok bool, err error) {
 	total := decimal.Zero
 	for _, a := range amounts {
-		rl := h.rateFor(ctx, from, to, a.on, cache)
+		rl := h.rateFor(ctx, a.from, to, a.on, cache)
 		if rl.err != nil {
 			if errors.Is(rl.err, marketdata.ErrNoRate) {
 				return 0, false, nil
@@ -767,21 +798,34 @@ func (h *Handler) sumInBase(ctx context.Context, amounts []datedMinor, from, to 
 // one predicate rather than two that must agree (see anyUndatedLot). The
 // dereference below is safe for exactly that reason, and a broken predicate
 // would panic here rather than quietly value a lot at a date it does not have.
-func lotTerms(lots []Lot) (terms []datedMinor, dated bool) {
+func lotTerms(lots []Lot, currency string) (terms []datedMinor, dated bool) {
 	if anyUndatedLot(lots) {
 		return nil, false
 	}
 	terms = make([]datedMinor, 0, len(lots))
 	for _, l := range lots {
-		terms = append(terms, datedMinor{minor: l.CostMinor, on: *l.AcquiredOn})
+		// The position's currency, passed in: a lot's cost is what was paid for
+		// the paper, and Position.Currency is exactly the currency that was paid
+		// (every operation that adds a lot settles it — see
+		// Type.mustMatchPositionCurrency).
+		terms = append(terms, datedMinor{minor: l.CostMinor, from: currency, on: *l.AcquiredOn})
 	}
 	return terms, true
 }
 
 // incomeTerms flattens a position's income operations into the terms of ONE
-// sum, each at the rate of the day it occurred (see incomeByInstrument for
-// which operations those are, and positionInBase for why not one rate for the
-// total).
+// sum, each at the rate of the day it occurred and OUT OF THE CURRENCY IT
+// ARRIVED IN (see incomeByInstrument for which operations those are, and
+// positionInBase for why not one rate for the total).
+//
+// The currency is read off each operation rather than taken from the position,
+// and that is the difference between this and its two sibling functions. A
+// position's payments need not share the currency its cost is in — a yuan bond
+// pays its coupons in rubles, a dollar share's dividend and the tax withheld on
+// it arrive in rubles (see portfolio.Position.IncomeByCurrency) — so one sum
+// here can hold terms in three currencies, each converted out of its own. Using
+// the position's currency for all of them would multiply an amount of rubles by
+// a dollar rate and publish the product.
 //
 // There is no undated case: an operation always has the day it occurred on.
 // Like lotTerms and realizedTerms, it is called both by the sum and by the
@@ -789,7 +833,7 @@ func lotTerms(lots []Lot) (terms []datedMinor, dated bool) {
 func incomeTerms(income []Operation) []datedMinor {
 	terms := make([]datedMinor, 0, len(income))
 	for _, o := range income {
-		terms = append(terms, datedMinor{minor: o.AmountMinor, on: o.OccurredOn})
+		terms = append(terms, datedMinor{minor: o.AmountMinor, from: o.Currency, on: o.OccurredOn})
 	}
 	return terms
 }
@@ -824,18 +868,23 @@ func incomeTerms(income []Operation) []datedMinor {
 // the answer published as has_undated_realizations and the answer published
 // as RealizedTotal's `undated` gap are one predicate rather than two that must
 // agree. The dereference below is safe for exactly that reason.
-func realizedTerms(events []Realization) (terms []datedMinor, dated bool) {
+func realizedTerms(events []Realization, currency string) (terms []datedMinor, dated bool) {
 	if anyUndatedRealization(events) {
 		return nil, false
 	}
 	terms = make([]datedMinor, 0, len(events)*2)
 	for _, e := range events {
+		// The position's currency for every term, passed in: proceeds, fee and
+		// retired basis all come from operations that settle it (a sale, an
+		// amortization, the purchases behind the parcel — see
+		// Type.mustMatchPositionCurrency). Only income escapes that rule, and no
+		// income is realized.
 		terms = append(terms,
-			datedMinor{minor: e.ProceedsMinor, on: e.OccurredOn},
-			datedMinor{minor: -e.FeeMinor, on: e.OccurredOn},
+			datedMinor{minor: e.ProceedsMinor, from: currency, on: e.OccurredOn},
+			datedMinor{minor: -e.FeeMinor, from: currency, on: e.OccurredOn},
 		)
 		for _, r := range e.Released {
-			terms = append(terms, datedMinor{minor: -r.CostMinor, on: *r.AcquiredOn})
+			terms = append(terms, datedMinor{minor: -r.CostMinor, from: currency, on: *r.AcquiredOn})
 		}
 	}
 	return terms, true
@@ -981,11 +1030,11 @@ func (h *Handler) realizedInBase(ctx context.Context, p *Position, to string, ca
 		// total would silently lose a real term if this answered otherwise.
 		return nullable.NewNullableWithValue(p.RealizedPnLMinor), gapNone, nil
 	}
-	terms, dated := realizedTerms(p.Realizations)
+	terms, dated := realizedTerms(p.Realizations, p.Currency)
 	if !dated {
 		return nullable.NewNullNullable[int64](), gapUndated, nil
 	}
-	minor, ok, err := h.sumInBase(ctx, terms, p.Currency, to, cache)
+	minor, ok, err := h.sumInBase(ctx, terms, to, cache)
 	if err != nil {
 		return nullable.Nullable[int64]{}, gapNone, err
 	}
@@ -1115,19 +1164,21 @@ func (rt *realizedTotals) result() apitypes.RealizedTotal {
 }
 
 // incomeByInstrument groups the journal's instrument-attributed income
-// operations by instrument, so each position's income can be converted
-// payment by payment at each payment's own rate — Position.IncomeMinor is a
-// single total that has already lost the dates and could only ever be
-// converted at one of them.
+// operations by instrument, so each position's income can be converted payment
+// by payment — at each payment's own rate, and out of each payment's own
+// currency. Position.IncomeByCurrency answers neither question: it has kept the
+// currencies but summed the dates away, and a total per currency could only
+// ever be converted at one date of the many behind it.
 //
 // The type list must stay in lockstep with the engine's own notion of income
-// (Compute: dividend and coupon add to IncomeMinor, tax subtracts from it via
-// its negative amount; entries without an instrument are cash-level and never
-// reach a position). The sum of each group therefore equals that position's
-// IncomeMinor exactly, and TestPositionInBaseIncomeUsesEachOperationsOwnRate
-// exercises all three types, so a list that drifts from the engine's fails
-// there instead of silently publishing a base income smaller than the income
-// the same row reports in its own currency.
+// (Compute: dividend, coupon and tax all book income, the tax through its
+// negative amount; entries without an instrument are cash-level and never reach
+// a position). Group by group and currency by currency, these operations
+// therefore add up to exactly that position's IncomeByCurrency, and
+// TestPositionInBaseIncomeUsesEachOperationsOwnRate exercises all three types,
+// so a list that drifts from the engine's fails there instead of silently
+// publishing a base income smaller than the income the same row reports in its
+// own currency.
 func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 	out := make(map[uuid.UUID][]Operation)
 	for _, o := range ops {
@@ -1156,8 +1207,12 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 //     base-currency profit as nothing but position-currency profit times a
 //     rate.
 //   - income_minor sums the position's income operations, each at the rate of
-//     the day it occurred (income, unlike the lots, is passed in: see
-//     incomeByInstrument).
+//     the day it occurred AND out of the currency that payment arrived in,
+//     which need not be the position's: a yuan bond pays its coupons in rubles
+//     (see Position.IncomeByCurrency). Income, unlike the lots, is passed in —
+//     see incomeByInstrument. This figure is therefore the position's WHOLE
+//     income, unlike the position's own income_minor beside it, which can only
+//     carry the part denominated in the position's currency (see toAPI).
 //   - market_value_minor uses TODAY's rate, from the currency the valuation is
 //     REALLY denominated in — a bond's face currency when the row had to
 //     convert it (market_value_source_currency), the position's own otherwise.
@@ -1184,9 +1239,11 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // fees_minor is deliberately excluded (owner feedback — not carried into
 // PositionInBase at all, see the API contract).
 //
-// EVERY FIGURE IS CONVERTED FROM THE CURRENCY IT IS ACTUALLY IN, ONCE. cost
-// and income are in the position's own currency and always were. The market
-// valuation may not be: a bond's is born in its face currency and toAPI brings
+// EVERY FIGURE IS CONVERTED FROM THE CURRENCY IT IS ACTUALLY IN, ONCE. cost is
+// in the position's own currency and always was. Income is in whichever
+// currency each payment arrived in — one sum here can hold rubles, dollars and
+// yuan, each term converted out of its own (see incomeTerms). The market
+// valuation may be in a third: a bond's is born in its face currency and toAPI brings
 // it into the position's so the row can compare it with cost_minor (see
 // toAPI). This object does NOT continue from that converted figure — it goes
 // back to the original, market_value_source_minor in
@@ -1209,11 +1266,16 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // failed, which in a RUB-quoted table means F->RUB is missing or P->RUB is. A
 // pair the table cannot resolve today it cannot resolve for any earlier day
 // either (Store.FxRateOn takes the nearest EARLIER row), so a missing P->RUB
-// has already taken cost_minor or income_minor down with it and this function
-// returned nil far above, before the rule was reached at all. What is left is a
+// has already taken cost_minor down with it and this function returned nil far
+// above, before the rule was reached at all. What is left is a
 // missing F->RUB — and then F->baseCurrency has no route either, whatever the
 // base currency is. The figure is absent because there is none, not because one
 // is being kept back.
+//
+// cost_minor is named alone there, and income_minor is not named beside it any
+// more: a payment is converted out of the currency it arrived in, so a
+// position's income need never touch P at all (see incomeTerms). It is the
+// lots, whose costs are in P by construction, that carry the argument.
 //
 // The rule is nevertheless written out rather than left to that argument,
 // because the argument is about the rate TABLE rather than about this function.
@@ -1229,11 +1291,13 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // too. Contrapositive: no answer today means no answer on any lot date either,
 // and cost_minor was unstrikable before this branch was reached.
 //
-// ONE row still slips through, and the written-out rule covers it. A position
-// holding no lot and having received no income sums nothing, needs no rate to do
-// it, and so survives a missing P->RUB — for it, F->RUB may well exist and the
-// base-currency valuation is genuinely computable. What the rule withholds there
-// is the zero of a closed row.
+// SOME ROWS STILL SLIP THROUGH, and the written-out rule covers them. A
+// position holding no lot asks for no rate on P at all, and neither does its
+// income unless a payment happened to arrive in P — so such a row survives a
+// missing P->RUB, and for it F->RUB may well exist and the base-currency
+// valuation be genuinely computable. What the rule withholds there is the zero
+// of a closed row: with no lot there is no quantity (the lots' quantities sum to
+// Position.Quantity), and a valuation is a price times nothing.
 //
 // Asymmetry between this object and the position's own figures is ordinary, not
 // something this rule prevents: realized_pnl_minor goes null here while
@@ -1241,6 +1305,18 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // this whole object while every native figure stays. Null here is honest in all
 // of those cases: the frontend falls back to showing the raw amount in its own
 // currency with a "not converted" marker.
+//
+// WHEN p.Currency IS THE BASE CURRENCY THIS OBJECT IS NOT BUILT, and that is
+// where widening income leaves a hole in the screen rather than filling one.
+// Such a row has nothing to convert about its cost — its own figures ARE the
+// base-currency ones — but it can still have received a payment in another
+// currency, and this object is the only place a payment is ever converted. That
+// payment then appears nowhere at all: not in the position's own income_minor,
+// which carries the position's currency alone (see toAPI), and not here,
+// because there is no here. What decides it is the shape of the contract: this
+// object is specified as null on such a row, and income_minor is a single
+// int64. Closing it means giving a position a per-currency income field, which
+// is the next piece of work and not a decision this function may take alone.
 //
 // It returns no object — render in_base as null, the WHOLE object, never
 // partially populated — together with the inBaseGap naming the term that
@@ -1302,7 +1378,7 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		return nil, inBaseSameCurrency, nil
 	}
 
-	lots, dated := lotTerms(p.Lots)
+	lots, dated := lotTerms(p.Lots, p.Currency)
 	if !dated {
 		// One lot does not know when it was acquired, so its basis cannot be
 		// valued at all (see lotTerms). The whole object goes, exactly as it
@@ -1317,7 +1393,7 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		// rate: the permanent cause is the one reported (see apiInBaseGap).
 		return nil, inBaseUndatedLot, nil
 	}
-	costMinor, ok, err := h.sumInBase(ctx, lots, p.Currency, baseCurrency, cache)
+	costMinor, ok, err := h.sumInBase(ctx, lots, baseCurrency, cache)
 	if err != nil {
 		return nil, inBaseStruck, err
 	}
@@ -1325,7 +1401,11 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		return nil, inBaseNoRateLotDate, nil
 	}
 
-	incomeMinor, ok, err := h.sumInBase(ctx, incomeTerms(income), p.Currency, baseCurrency, cache)
+	// Each payment out of the currency IT arrived in (see incomeTerms), which
+	// is why this sum takes no source currency: a position's income can hold
+	// three currencies at once and the position's own is not necessarily one of
+	// them.
+	incomeMinor, ok, err := h.sumInBase(ctx, incomeTerms(income), baseCurrency, cache)
 	if err != nil {
 		return nil, inBaseStruck, err
 	}
@@ -1522,6 +1602,12 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 // computations of one value drift apart, and a prefetch is the worst place for
 // it, since the two disagree in silence.
 //
+// THE SOURCE CURRENCIES COME OFF THE SAME TERMS, and now they must: a term
+// carries the currency it is denominated in (see datedMinor), so a position's
+// income — which need not be in the position's currency at all — enumerates one
+// pair per payment, in whatever currency that payment arrived, without this
+// function having to know that income is the sum which behaves so.
+//
 // ONE thing is not derived, and it is a DATE rather than a pair: the two
 // valuation queries below are written `now` by hand. toAPI and positionInBase
 // both value a holding at today's rate as a flat decision rather than by
@@ -1617,22 +1703,25 @@ func rateQueries(
 			// realizedInBase both short-circuit on it.
 			continue
 		}
-		if lots, dated := lotTerms(p.Lots); dated {
-			out = appendTermQueries(out, lots, p.Currency, baseCurrency)
+		if lots, dated := lotTerms(p.Lots, p.Currency); dated {
+			out = appendTermQueries(out, lots, baseCurrency)
 		}
-		out = appendTermQueries(out, incomeTerms(income[p.InstrumentID]), p.Currency, baseCurrency)
-		if realized, dated := realizedTerms(p.Realizations); dated {
-			out = appendTermQueries(out, realized, p.Currency, baseCurrency)
+		out = appendTermQueries(out, incomeTerms(income[p.InstrumentID]), baseCurrency)
+		if realized, dated := realizedTerms(p.Realizations, p.Currency); dated {
+			out = appendTermQueries(out, realized, baseCurrency)
 		}
 	}
 	return dedupeQueries(out)
 }
 
-// appendTermQueries asks for the rate of every term's own date — which is what
-// sumInBase will do with the same terms, one at a time.
-func appendTermQueries(dst []marketdata.RateQuery, terms []datedMinor, from, to string) []marketdata.RateQuery {
+// appendTermQueries asks for the rate of every term's own date, out of every
+// term's own currency — which is what sumInBase will do with the same terms,
+// one at a time. Both halves come off the term itself, so a sum whose terms are
+// in three currencies prefetches three pairs without this function knowing that
+// income is the sum that does it.
+func appendTermQueries(dst []marketdata.RateQuery, terms []datedMinor, to string) []marketdata.RateQuery {
 	for _, t := range terms {
-		dst = append(dst, marketdata.RateQuery{From: from, To: to, On: t.on})
+		dst = append(dst, marketdata.RateQuery{From: t.from, To: to, On: t.on})
 	}
 	return dst
 }
