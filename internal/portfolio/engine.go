@@ -96,6 +96,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
+
+	"babki.my/babki/internal/platform/money"
 )
 
 var (
@@ -183,9 +185,31 @@ type Position struct {
 	//
 	// It is settled by the first operation that touches any of those figures
 	// (see Type.mustMatchPositionCurrency), and every later such operation must
-	// repeat it. A position that has so far seen nothing but income carries the
-	// currency of the payment that created it, until such an operation arrives
-	// and settles it for good.
+	// repeat it. Until one arrives, a position that has seen nothing but income
+	// carries a currency PROVISIONALLY, and the first such operation replaces
+	// it.
+	//
+	// A POSITION THAT NEVER SEES ONE — every payment recorded, no purchase, no
+	// transfer leg, no commission, which is how a paper bought before the
+	// import window or received by transfer looks — KEEPS THAT PROVISIONAL
+	// VALUE, AND THEN THIS FIELD IS A CONVENTION FOR DRAWING THE ROW, NOT A
+	// FACT ABOUT WHAT WAS PAID. There is no cost, no lot, no fee and no
+	// realization for it to be the currency OF — every operation that makes one
+	// settles this field, so that is checkable rather than a matter of care —
+	// and the paper's own currency is simply not in this journal to be found. A
+	// caller must therefore not read it as the currency the paper is priced in,
+	// and must not put a figure under it that is not itself in it: the income
+	// beside it may be in that currency, in another, or in several at once, and
+	// IncomeByCurrency is where that question is answered.
+	//
+	// The value chosen is the LOWEST CURRENCY CODE among the payments received,
+	// which is the very order the income is kept in, so it is always
+	// IncomeByCurrency[0].Currency. It is borrowed from the income and is no
+	// summary of it. Determinism is the whole requirement: two accounts holding
+	// the same payments listed in a different order must draw the same row, and
+	// taking the currency from whichever payment the journal happened to list
+	// first drew a dollar share under a ruble sign in one order and under a
+	// dollar sign in the other.
 	Currency         string
 	Quantity         decimal.Decimal
 	CostMinor        int64 // remaining FIFO cost basis (fees capitalized on buy)
@@ -267,24 +291,54 @@ func (p *Position) realize(r Realization) {
 	p.RealizedPnLMinor += r.PnLMinor()
 }
 
+// findIncome locates a currency in IncomeByCurrency by a binary search over the
+// very order that slice is kept in, and reports where it is — or, when it is
+// absent, where it would have to go to keep that order.
+//
+// BOTH LOOKUPS BY CURRENCY GO THROUGH IT — addIncome's and IncomeMinorIn's,
+// which are all there are — and that is the point of it being a function:
+// "where this currency belongs" and "where this currency is found" are then one
+// answer rather than two that must agree, and the ordering is written down
+// once. A position holds a handful of currencies at most, so this is for the
+// invariant and not for speed.
+func (p *Position) findIncome(currency string) (int, bool) {
+	return slices.BinarySearchFunc(p.IncomeByCurrency, currency, func(e CurrencyMinor, c string) int {
+		return strings.Compare(e.Currency, c)
+	})
+}
+
 // addIncome books minor units of income in the currency they arrived in. It is
 // the only thing that writes IncomeByCurrency, and it keeps that slice ordered
 // by currency code with one entry per currency — see the field for why the
 // order is not the journal's.
 //
-// The insertion point comes from a binary search over the very order the slice
-// is kept in, so "where this currency belongs" and "where it would be found"
-// are one answer rather than two that must agree. A position holds a handful of
-// currencies at most; the search is for the invariant, not for speed.
-func (p *Position) addIncome(currency string, minor int64) {
-	at, found := slices.BinarySearchFunc(p.IncomeByCurrency, currency, func(e CurrencyMinor, c string) int {
-		return strings.Compare(e.Currency, c)
-	})
-	if found {
-		p.IncomeByCurrency[at].Minor += minor
-		return
+// THE ADDITION IS GUARDED, and Go's int64 + is what it is guarded against: it
+// wraps silently past the range, and a wrapped total is a plausible-looking sum
+// of money of the wrong magnitude and often the wrong sign. Every payment
+// arriving here is an ordinary figure — it had to survive money.Minor to be an
+// int64 at all — and a total of ordinary figures need not be, so the guard
+// belongs on the total (the same argument money.Add itself is written on).
+// Whether a journal can actually reach it is not the test: the alternative is a
+// silently wrong figure, and this one is a named refusal.
+//
+// Nothing is half-booked by a refusal. The only path that can fail is the one
+// adding to an entry that already exists, and it fails before the assignment —
+// a currency seen for the first time is simply inserted, its amount being an
+// int64 already — so a refused payment leaves the slice exactly as it found it.
+func (p *Position) addIncome(currency string, minor int64) error {
+	at, found := p.findIncome(currency)
+	if !found {
+		p.IncomeByCurrency = slices.Insert(p.IncomeByCurrency, at, CurrencyMinor{Currency: currency, Minor: minor})
+		return nil
 	}
-	p.IncomeByCurrency = slices.Insert(p.IncomeByCurrency, at, CurrencyMinor{Currency: currency, Minor: minor})
+	sum, err := money.Add(p.IncomeByCurrency[at].Minor, minor)
+	if err != nil {
+		// money.Add names no figure by design, so the context that says WHICH
+		// total failed is added here.
+		return fmt.Errorf("%w: income in %s, adding %d to %d", err, currency, minor, p.IncomeByCurrency[at].Minor)
+	}
+	p.IncomeByCurrency[at].Minor = sum
+	return nil
 }
 
 // IncomeMinorIn is the income booked in one currency, and zero when the
@@ -296,12 +350,11 @@ func (p *Position) addIncome(currency string, minor int64) {
 // have to say which currency it is in; it is not "the position's income" unless
 // the position received income in nothing else.
 func (p *Position) IncomeMinorIn(currency string) int64 {
-	for _, e := range p.IncomeByCurrency {
-		if e.Currency == currency {
-			return e.Minor
-		}
+	at, found := p.findIncome(currency)
+	if !found {
+		return 0
 	}
-	return 0
+	return p.IncomeByCurrency[at].Minor
 }
 
 func badOp(o Operation, msg string) error {
@@ -821,13 +874,24 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 	// would refuse the yuan purchase that follows — the very refusal this
 	// removes, merely moved to another journal order, and journals do open with
 	// a payment (the paper was bought before the import window, or arrived by
-	// transfer). So a position created by income carries that payment's currency
-	// provisionally and the first cost-touching operation replaces it.
+	// transfer). So a position that has seen only income carries a currency
+	// provisionally — which one is the next paragraph's business — and the first
+	// cost-touching operation replaces it.
 	//
 	// Nothing computed can be invalidated by that replacement, and the reason is
 	// checkable rather than a matter of care: until it happens the position has
 	// no cost, no lot, no fee and no realization, because every operation that
 	// could make one settles the currency itself.
+	//
+	// AND WHILE IT IS PROVISIONAL IT IS STILL THE LOWEST CURRENCY CODE SEEN, not
+	// the first one listed. A journal that never settles it is an ordinary
+	// journal — a paper bought before the import window pays its dividends, has
+	// tax withheld from them, and is never purchased here at all — so that
+	// provisional value is what its row ends up being drawn under (see
+	// Position.Currency). Taking it from the earliest payment made the same two
+	// payments draw two different rows depending on which of them the journal
+	// listed first; the lowest code is the order the income itself is kept in,
+	// so there is one order here and not a second one to keep in step with it.
 	get := func(o Operation) (*Position, error) {
 		p, ok := positions[*o.InstrumentID]
 		if !ok {
@@ -835,6 +899,13 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			positions[*o.InstrumentID] = p
 		}
 		if !o.Type.mustMatchPositionCurrency() {
+			// While unsettled, and only there. Past that point this field is
+			// the currency of CostMinor, of the lots and of FeesMinor, and a
+			// payment arriving in a lower-coded one would rename those figures
+			// without touching them.
+			if !settled[*o.InstrumentID] {
+				p.Currency = min(p.Currency, o.Currency)
+			}
 			return p, nil
 		}
 		if !settled[*o.InstrumentID] {
@@ -903,12 +974,20 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 				Released:      pieces,
 			})
 			p.FeesMinor += o.FeeMinor
-		case TypeDividend, TypeCoupon:
+		case TypeDividend, TypeCoupon, TypeTax:
 			// In the currency the payment ARRIVED in, which need not be the one
-			// the paper is priced in — see Position.IncomeByCurrency.
-			p.addIncome(o.Currency, o.AmountMinor)
-		case TypeTax:
-			p.addIncome(o.Currency, o.AmountMinor) // negative, and in its own currency
+			// the paper is priced in — see Position.IncomeByCurrency. A tax
+			// arrives here too, through its negative amount, and in its own
+			// currency like any other payment.
+			//
+			// The refusal this can return says a TOTAL left the int64 range,
+			// not that the entry is bad, so it is wrapped the way a release's
+			// is (see the sell branch): the type, instrument and date that
+			// name the entry which reached the edge, over the error that says
+			// what the edge was.
+			if err := p.addIncome(o.Currency, o.AmountMinor); err != nil {
+				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
+			}
 		case TypeFee:
 			p.FeesMinor += -o.AmountMinor // amount negative → positive fee
 		case TypeAmortization:

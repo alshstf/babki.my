@@ -2,11 +2,14 @@ package portfolio_test
 
 import (
 	"errors"
+	"math"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"babki.my/babki/internal/platform/money"
 	"babki.my/babki/internal/portfolio"
 )
 
@@ -197,6 +200,132 @@ func TestAFeeSettlesThePositionCurrencyBeforeAnyPurchase(t *testing.T) {
 	})
 	if !errors.Is(err, portfolio.ErrBadOperation) {
 		t.Fatalf("err = %v, want ErrBadOperation", err)
+	}
+}
+
+// TestAPositionWithNoCostIsTheSameWhateverOrderItsPayoutsArrived. A paper
+// bought before the import window, or one that arrived by transfer, can leave a
+// journal holding NOTHING BUT PAYMENTS: no purchase, no transfer leg, no fee —
+// nothing that settles the position's currency. Such a position still has to be
+// drawn, and what it is drawn under must not depend on which payment the
+// journal happens to list first, or two accounts holding the same money would
+// render as two different rows.
+//
+// The two journals below are the same two payments in the two possible orders.
+// The dollar dividend is the larger money and arrives later; the ruble tax is
+// listed first in one of them. Taking the currency from whichever payment came
+// first put a DOLLAR share under a ruble sign in one order and under a dollar
+// sign in the other, from the same two facts.
+//
+// The figures are literals rather than the fixtures' own numbers, and the two
+// results are ALSO compared against each other: agreeing on a wrong answer
+// would satisfy only half of this test.
+func TestAPositionWithNoCostIsTheSameWhateverOrderItsPayoutsArrived(t *testing.T) {
+	share := uuid.New()
+	taxFirst := []portfolio.Operation{
+		opIn(portfolio.TypeTax, 4, &share, "RUB", "", -39_000),
+		opIn(portfolio.TypeDividend, 5, &share, "USD", "", 5_000),
+	}
+	dividendFirst := []portfolio.Operation{
+		opIn(portfolio.TypeDividend, 5, &share, "USD", "", 5_000),
+		opIn(portfolio.TypeTax, 4, &share, "RUB", "", -39_000),
+	}
+
+	var got [2]*portfolio.Position
+	for i, ops := range [2][]portfolio.Operation{taxFirst, dividendFirst} {
+		pos, err := portfolio.Compute(ops)
+		if err != nil {
+			t.Fatalf("Compute(journal %d): %v", i, err)
+		}
+		p := pos[share]
+		wantIncome(t, p, []portfolio.CurrencyMinor{
+			{Currency: "RUB", Minor: -39_000},
+			{Currency: "USD", Minor: 5_000},
+		})
+		// RUB, and not because a ruble was paid first: it is the lower currency
+		// code of the two, which is the order the income itself is kept in. In
+		// the second journal the dollar arrives first and the answer is the
+		// same one.
+		if p.Currency != "RUB" {
+			t.Errorf("journal %d: currency = %q, want RUB — chosen by currency code, not by which payment the journal lists first", i, p.Currency)
+		}
+		// And it is chosen by THAT order rather than by an order of its own —
+		// the claim Position.Currency makes about itself: the currency a
+		// position with no cost carries is the first entry of its own income.
+		// (wantIncome above has already established there is one.)
+		if p.Currency != p.IncomeByCurrency[0].Currency {
+			t.Errorf("journal %d: currency = %q but income starts at %q — the two orders have drifted apart",
+				i, p.Currency, p.IncomeByCurrency[0].Currency)
+		}
+		// The currency above is a convention for drawing the row, and these
+		// four figures are why it can be one: nothing that would have to be
+		// denominated in it exists (see Position.Currency).
+		if p.CostMinor != 0 || len(p.Lots) != 0 || p.FeesMinor != 0 || len(p.Realizations) != 0 {
+			t.Errorf("journal %d: cost %d, %d lots, fees %d, %d realizations — a position with no cost-touching operation must have none of these, or the currency it carries would be a claim about them",
+				i, p.CostMinor, len(p.Lots), p.FeesMinor, len(p.Realizations))
+		}
+		got[i] = p
+	}
+
+	if !reflect.DeepEqual(got[0], got[1]) {
+		t.Errorf("the same two payments in two orders gave two positions:\n%+v\n%+v", got[0], got[1])
+	}
+}
+
+// TestAFeeSettlesTheCurrencyAPaymentOnlyLentIt is the receiving half of the
+// boundary TestAFeeSettlesThePositionCurrencyBeforeAnyPurchase draws — the half
+// that must be ACCEPTED, and that the engine refused before income stopped
+// settling the currency.
+//
+// A ruble coupon opens the journal, a yuan commission follows it and a yuan
+// purchase follows that. The coupon lends the position a currency it does not
+// own: the commission settles it for good, and the purchase then agrees with
+// the commission rather than with the payment. Pinning only the refusing order
+// would leave the rule half-covered — a change making a payment settle the
+// currency again would be caught by nothing here, and it is exactly the change
+// that refused 131 of the owner's operations.
+func TestAFeeSettlesTheCurrencyAPaymentOnlyLentIt(t *testing.T) {
+	bond := uuid.New()
+	pos, err := portfolio.Compute([]portfolio.Operation{
+		opIn(portfolio.TypeCoupon, 1, &bond, "RUB", "", 123_456),
+		opIn(portfolio.TypeFee, 2, &bond, "CNY", "", -300),
+		opIn(portfolio.TypeBuy, 3, &bond, "CNY", "10", -70_000),
+	})
+	if err != nil {
+		t.Fatalf("Compute: %v — a ruble coupon must not make a yuan commission and a yuan purchase illegal", err)
+	}
+	p := pos[bond]
+	if p.Currency != "CNY" {
+		t.Errorf("currency = %q, want CNY — the commission settled it, the coupon only lent one", p.Currency)
+	}
+	if p.FeesMinor != 300 {
+		t.Errorf("fees = %d, want 300 (fen)", p.FeesMinor)
+	}
+	if p.CostMinor != 70_000 {
+		t.Errorf("cost = %d, want 70000 (fen)", p.CostMinor)
+	}
+	wantIncome(t, p, []portfolio.CurrencyMinor{{Currency: "RUB", Minor: 123_456}})
+}
+
+// TestIncomeThatLeavesTheRangeIsRefusedRatherThanWrapped. The payments are each
+// an ordinary int64 and their total is not, which is the one shape Go's + turns
+// into a plausible-looking figure of the wrong magnitude and the wrong sign
+// — here, one kopeck of income where nine quintillion arrived. The write path
+// caps a single amount far below this (money.MaxAmountMinor), so a journal
+// reaching it is damaged rather than merely large; the guard is on the total
+// regardless, because the alternative to a named refusal is a wrong number
+// nobody can spot.
+func TestIncomeThatLeavesTheRangeIsRefusedRatherThanWrapped(t *testing.T) {
+	share := uuid.New()
+	_, err := portfolio.Compute([]portfolio.Operation{
+		opIn(portfolio.TypeDividend, 1, &share, "RUB", "", math.MaxInt64),
+		opIn(portfolio.TypeDividend, 2, &share, "RUB", "", 1),
+	})
+	if !errors.Is(err, money.ErrOverflow) {
+		t.Fatalf("err = %v, want ErrOverflow — maxint64 + 1 kopeck is not a sum of money", err)
+	}
+	if !strings.Contains(err.Error(), "RUB") {
+		t.Errorf("refusal %q does not say which income total left the range", err)
 	}
 }
 

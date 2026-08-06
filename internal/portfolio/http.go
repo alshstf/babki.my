@@ -408,9 +408,19 @@ func hasUndatedRealizations(p *Position) bool {
 // handled outcome (see below), not a request failure.
 func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instrument, quotes map[uuid.UUID]marketdata.Quote, now time.Time, cache map[rateKey]*rateLookup) (apitypes.Position, error) {
 	out := apitypes.Position{
-		Instrument:       instrumentToAPI(inst),
-		Quantity:         p.Quantity.String(),
-		CostMinor:        p.CostMinor,
+		Instrument: instrumentToAPI(inst),
+		Quantity:   p.Quantity.String(),
+		CostMinor:  p.CostMinor,
+		// The currency of the position's cost, and on ONE KIND OF ROW a
+		// convention rather than a fact: a position whose journal holds nothing
+		// but payments — the paper was bought before the import window, or
+		// arrived by transfer — never learned what it was priced in, and
+		// carries the lowest currency code among those payments so that the
+		// same money always draws the same row (see Position.Currency, which
+		// spells out both halves). Published as-is either way: the contract has
+		// one currency field and no way to say "this one is only a label", so
+		// widening it is a change to the contract rather than something this
+		// function may decide.
 		Currency:         p.Currency,
 		RealizedPnlMinor: p.RealizedPnLMinor,
 		// INCOME IN THE POSITION'S OWN CURRENCY, AND NOTHING ELSE. This is one
