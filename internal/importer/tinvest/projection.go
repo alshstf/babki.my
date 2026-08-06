@@ -879,6 +879,37 @@ func projectDividendToCard(row MirrorRow, accountID uuid.UUID, resolved *Resolve
 // is an account this program also mirrors is not something the row says, and
 // pairing two legs into one transfer group is the rebuild's job (task 8).
 //
+// THE CURRENCY IS THE PAPER'S, NOT THE PAYMENT'S, and this is the one entry
+// where those two part company. Every other shape here books money the broker
+// moved, so the currency beside that money is the currency of the entry. A
+// securities transfer moves no money at all: its payment is zero, and the
+// currency the broker attaches to a zero is whatever it attaches — the
+// documented shape of these operations carries "rub" for a move of shares that
+// may be denominated in anything.
+//
+// Taking it would be more than untidy. The engine fixes a position's currency
+// by the FIRST operation on that instrument and refuses every later one that
+// disagrees, so a rouble leg on a dollar paper either makes the position
+// roubles and then refuses every purchase after it, or is itself refused — and
+// the owner would read "the journal refused this" with nothing anywhere naming
+// the real cause. The instrument's own currency is taken instead: the broker's
+// passport for a row this import created, the catalog's for one it matched (see
+// Resolved).
+//
+// THAT LEAVES ONE ASSUMPTION where there were two, and it is the smaller one:
+// that a paper's passport currency is the currency its trades are paid in,
+// which is what makes this leg agree with the purchases around it. Unverified
+// against a live account like the rest of this file (task 14) — but a passport
+// says something about the paper, while the currency beside a zero payment says
+// nothing about anything.
+//
+// A leg whose instrument was not resolved keeps the row's currency and is
+// refused a few lines below rather than written: both transfer types require an
+// instrument, so attachInstrument turns it into an unparsed row (see
+// portfolio.Type.RequiresInstrument). The nil guard below is written anyway
+// rather than left to that order — a refusal that moved would otherwise become
+// a nil dereference in the middle of a sync.
+//
 // THE COST BASIS IS NOT SET HERE, and it is zero for a reason on each side.
 // A departing leg's basis is released from the source account's own journal
 // by the write path itself — operation.checkImportContract refuses a supplied
@@ -931,6 +962,9 @@ func projectSecuritiesTransfer(row MirrorRow, accountID uuid.UUID, resolved *Res
 	// amount as a cost basis, not as cash, and refuses a negative one.
 	op.AmountMinor = 0
 	op.Quantity = &qty
+	if resolved != nil {
+		op.Currency = resolved.Currency
+	}
 	if kind == transferFromAnotherBroker {
 		op.Note = withNote(row.Description, noteBasisUnknown)
 	}

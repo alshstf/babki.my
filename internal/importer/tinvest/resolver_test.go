@@ -1022,6 +1022,13 @@ func TestResolve_IncompletePassportCreatesNothing(t *testing.T) {
 // the other door into this column). Refusing here names the bond and what was
 // wrong with its nominal.
 //
+// The two fractional nominals are the third shape, and they are two rather than
+// one because rounding them fails differently: a tenth of a kopeck ON TOP of a
+// whole nominal would be quietly rounded off and nobody would ever know, while
+// a nominal SMALLER than half a kopeck would round to zero and land on the same
+// constraint violation as the zero above — from a bond the broker did report a
+// nominal for.
+//
 // The failure of the CALL is pinned alongside them because it was covered by
 // nothing: BondNominalByUID is the one request in this file whose answer
 // creation cannot proceed without.
@@ -1043,6 +1050,14 @@ func TestResolve_BondNominalRefusals(t *testing.T) {
 	src.nominals["uid-nominal-no-currency"] = MoneyValue{Units: 1000}
 	src.instruments["uid-nominal-huge"] = bond("uid-nominal-huge", "BOND4")
 	src.nominals["uid-nominal-huge"] = MoneyValue{Currency: "RUB", Units: money.MaxAmountMinor}
+	// A tenth of a kopeck: representable on the wire, not in this program's
+	// money. Rounded, it would be a kopeck of face value nobody reported.
+	src.instruments["uid-nominal-fractional"] = bond("uid-nominal-fractional", "BOND5")
+	src.nominals["uid-nominal-fractional"] = MoneyValue{Currency: "RUB", Units: 1000, Nano: 1_000_000}
+	// Smaller than half a kopeck, which is the case rounding turns into a zero
+	// face value and hands to the database as a raw constraint violation.
+	src.instruments["uid-nominal-sliver"] = bond("uid-nominal-sliver", "BOND6")
+	src.nominals["uid-nominal-sliver"] = MoneyValue{Currency: "RUB", Nano: 1_000_000}
 
 	r := NewResolver(f.store, catalog, nil)
 
@@ -1052,7 +1067,10 @@ func TestResolve_BondNominalRefusals(t *testing.T) {
 		t.Errorf("Resolve err = %v, want it to name the bond it could not price", err)
 	}
 
-	for _, uid := range []string{"uid-nominal-zero", "uid-nominal-no-currency", "uid-nominal-huge"} {
+	for _, uid := range []string{
+		"uid-nominal-zero", "uid-nominal-no-currency", "uid-nominal-huge",
+		"uid-nominal-fractional", "uid-nominal-sliver",
+	} {
 		_, err := r.Resolve(f.ctx, f.conn.ID, src, InstrumentRef{InstrumentUID: uid})
 		if !errors.Is(err, ErrIncompletePassport) {
 			t.Errorf("Resolve(%s) err = %v, want ErrIncompletePassport", uid, err)

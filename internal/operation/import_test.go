@@ -663,6 +663,145 @@ func TestApplyImportDeltaBlamesTheRemovalThatBreaksTheJournal(t *testing.T) {
 	}
 }
 
+// TestApplyImportDeltaTakesACorrectionOfTheRowItRemoves is the fault that
+// wedged an import for good, and the reason the delta is judged by the journal
+// it would LEAVE rather than by the one that stands halfway through it.
+//
+// A broker that corrects an operation after the fact — a commission it
+// restated, a description it reworded — produces a difference that says "take
+// the old row out, put the corrected one in". Judging the removals on their own
+// asks a question nobody wanted answered: what would this journal be if the
+// purchase were simply gone? A sale with no purchase behind it is the answer,
+// so the engine refuses, and the refusal was fatal to the whole difference.
+// Nothing then reached the journal — not this hour and not any later one, since
+// every rebuild computes the same difference — and no unparsed row named a
+// cause. The owner could not even repair it by hand: an operation whose source
+// is not a person's own entry is not theirs to delete.
+func TestApplyImportDeltaTakesACorrectionOfTheRowItRemoves(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	buy := imported(operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-01-15"), Quantity: dec("100"),
+		AmountMinor: -3_000_000, Currency: "RUB",
+	}, "op-buy")
+	sell := imported(operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeSell,
+		OccurredOn: date("2026-03-10"), Quantity: dec("100"),
+		AmountMinor: 3_200_000, Currency: "RUB",
+	}, "op-sell")
+	applied, refused, err := svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{
+		Add: []operation.Operation{buy, sell},
+	})
+	if err != nil || len(refused) != 0 || len(applied) != 2 {
+		t.Fatalf("setup: applied %d, refused %+v, err %v", len(applied), refused, err)
+	}
+	var buyID uuid.UUID
+	for _, o := range applied {
+		if o.Type == operation.TypeBuy {
+			buyID = o.ID
+		}
+	}
+
+	// The broker restates the purchase's commission. Same record, same
+	// external id, so the row it corrects has to go before it can be written.
+	corrected := imported(operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-01-15"), Quantity: dec("100"),
+		AmountMinor: -3_000_000, FeeMinor: 12_500, Currency: "RUB",
+	}, "op-buy")
+	applied, refused, err = svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{
+		Remove: []uuid.UUID{buyID},
+		Add:    []operation.Operation{corrected},
+	})
+	if err != nil {
+		t.Fatalf("correcting the purchase the sale rests on: %v", err)
+	}
+	if len(refused) != 0 || len(applied) != 1 {
+		t.Fatalf("applied %d, refused %+v, want the correction applied", len(applied), refused)
+	}
+	ops, _ := journalOf(t, f, f.accountID)
+	if len(ops) != 2 {
+		t.Fatalf("journal holds %d operations, want the corrected purchase and the sale", len(ops))
+	}
+	if ops[0].Type != operation.TypeBuy || ops[0].FeeMinor != 12_500 {
+		t.Errorf("first row is %s with fee %d, want the buy with the corrected 12500",
+			ops[0].Type, ops[0].FeeMinor)
+	}
+}
+
+// TestApplyImportDeltaJudgesEveryCandidateBeforeBlamingOne is the same rule one
+// step further: the state that has to hold is the FINAL one, and no candidate
+// is blamed for a journal that only the middle of the difference ever holds.
+//
+// Two purchases cover one sale here, and the broker restates both of them at
+// once. Offering the candidates one at a time — each against the journal the
+// removals left — refuses both: the first replacement covers sixty of the
+// hundred sold, the second forty. Neither is at fault, and refusing them would
+// name a reason ("sold more than the account holds") that is true of no journal
+// this delta was ever going to produce.
+func TestApplyImportDeltaJudgesEveryCandidateBeforeBlamingOne(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	first := imported(operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-01-15"), Quantity: dec("60"),
+		AmountMinor: -1_800_000, Currency: "RUB",
+	}, "op-buy-1")
+	second := imported(operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-02-15"), Quantity: dec("40"),
+		AmountMinor: -1_320_000, Currency: "RUB",
+	}, "op-buy-2")
+	sell := imported(operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeSell,
+		OccurredOn: date("2026-03-10"), Quantity: dec("100"),
+		AmountMinor: 3_200_000, Currency: "RUB",
+	}, "op-sell")
+	applied, refused, err := svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{
+		Add: []operation.Operation{first, second, sell},
+	})
+	if err != nil || len(refused) != 0 || len(applied) != 3 {
+		t.Fatalf("setup: applied %d, refused %+v, err %v", len(applied), refused, err)
+	}
+	var buyIDs []uuid.UUID
+	for _, o := range applied {
+		if o.Type == operation.TypeBuy {
+			buyIDs = append(buyIDs, o.ID)
+		}
+	}
+	if len(buyIDs) != 2 {
+		t.Fatalf("seeded %d purchases, want 2", len(buyIDs))
+	}
+
+	firstAgain := first
+	firstAgain.Quantity = dec("60")
+	firstAgain.Note = "Покупка 60 шт."
+	secondAgain := second
+	secondAgain.Quantity = dec("40")
+	secondAgain.Note = "Покупка 40 шт."
+	applied, refused, err = svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{
+		Remove: buyIDs,
+		Add:    []operation.Operation{firstAgain, secondAgain},
+	})
+	if err != nil {
+		t.Fatalf("restating both purchases at once: %v", err)
+	}
+	if len(refused) != 0 || len(applied) != 2 {
+		t.Fatalf("applied %d, refused %+v, want both restatements applied", len(applied), refused)
+	}
+	ops, _ := journalOf(t, f, f.accountID)
+	if len(ops) != 3 {
+		t.Fatalf("journal holds %d operations, want 3", len(ops))
+	}
+	if ops[0].Note != "Покупка 60 шт." || ops[1].Note != "Покупка 40 шт." {
+		t.Errorf("journal notes are %q and %q, want the broker's restated wording on both",
+			ops[0].Note, ops[1].Note)
+	}
+}
+
 func TestApplyImportDeltaWillNotRemoveAManualOperation(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -926,5 +1065,93 @@ func TestApplyImportDeltaBasesTimestampsOnWhatSurvivesRemoval(t *testing.T) {
 	if applied[0].CreatedAt.Before(before) || applied[0].CreatedAt.After(before.Add(time.Minute)) {
 		t.Errorf("new row created_at = %s, want within a minute of %s — the row being removed (stamped 48h ahead) must not raise the floor",
 			applied[0].CreatedAt, before)
+	}
+}
+
+// TestApplyImportDeltaLetsARewrittenRowKeepItsPlace is the write path's half of
+// the rule the importer's rewrite rests on: a row put back in place of one this
+// same delta removes may inherit that row's created_at, and then it folds where
+// it folded before instead of at the end of its day.
+//
+// The two deposits below are one day apart in nothing but their stamps, and the
+// journal reads a day in stamp order. Replacing the FIRST of them without its
+// old stamp moves it behind the second.
+func TestApplyImportDeltaLetsARewrittenRowKeepItsPlace(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	early := imported(operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit,
+		OccurredOn: date("2026-07-01"), AmountMinor: 1_000, Currency: "RUB",
+	}, "op-early")
+	early.CreatedAt = time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
+	late := imported(operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit,
+		OccurredOn: date("2026-07-01"), AmountMinor: 2_000, Currency: "RUB",
+	}, "op-late")
+	late.CreatedAt = time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Microsecond)
+	stored, err := f.store.ApplyDelta(f.ctx, f.spaceID, []operation.Operation{early, late}, nil, nil)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	var earlyID uuid.UUID
+	var earlyAt time.Time
+	for _, o := range stored {
+		if o.AmountMinor == 1_000 {
+			earlyID, earlyAt = o.ID, o.CreatedAt
+		}
+	}
+
+	rewritten := imported(operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit,
+		OccurredOn: date("2026-07-01"), AmountMinor: 1_500, Currency: "RUB",
+	}, "op-early")
+	rewritten.CreatedAt = earlyAt
+	applied, refused, err := svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{
+		Remove: []uuid.UUID{earlyID},
+		Add:    []operation.Operation{rewritten},
+	})
+	if err != nil {
+		t.Fatalf("ApplyImportDelta: %v", err)
+	}
+	if len(refused) != 0 || len(applied) != 1 {
+		t.Fatalf("applied %d, refused %+v, want the rewrite applied", len(applied), refused)
+	}
+	if !applied[0].CreatedAt.Equal(earlyAt) {
+		t.Errorf("rewritten row created_at = %s, want the %s it inherited", applied[0].CreatedAt, earlyAt)
+	}
+	ops, _ := journalOf(t, f, f.accountID)
+	if len(ops) != 2 {
+		t.Fatalf("journal holds %d operations, want 2", len(ops))
+	}
+	if ops[0].AmountMinor != 1_500 || ops[1].AmountMinor != 2_000 {
+		t.Errorf("the day reads back as %d then %d, want 1500 then 2000 — the rewrite kept its place",
+			ops[0].AmountMinor, ops[1].AmountMinor)
+	}
+}
+
+// TestApplyImportDeltaRefusesATimestampItCannotHaveInherited pins the limit on
+// the rule above. A created_at that belongs to no row this delta removes is not
+// a rewrite keeping its place — it is an importer choosing where in a day an
+// operation folds, which decides which parcel a later sale consumes and
+// therefore what the realized profit is. It is the caller's own doing, so it is
+// fatal to the delta rather than a refusal of the candidate.
+func TestApplyImportDeltaRefusesATimestampItCannotHaveInherited(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	invented := imported(operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit,
+		OccurredOn: date("2026-07-01"), AmountMinor: 1_000, Currency: "RUB",
+	}, "op-invented")
+	invented.CreatedAt = time.Now().UTC().Add(-72 * time.Hour)
+	_, _, err := svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{
+		Add: []operation.Operation{invented},
+	})
+	if !errors.Is(err, operation.ErrImportContract) {
+		t.Fatalf("a stamp inherited from nothing: err = %v, want ErrImportContract", err)
+	}
+	if ops, _ := journalOf(t, f, f.accountID); len(ops) != 0 {
+		t.Errorf("journal holds %d operations, want none written", len(ops))
 	}
 }

@@ -400,6 +400,93 @@ func TestUniqueTickerCoversExactlyTheRowsListTradableReturns(t *testing.T) {
 	}
 }
 
+// TestByTickerTradableAnswersOnlyWhereOneRowIsGuaranteed carries the rule of
+// the test above onto the THIRD place that spells the same filter.
+//
+// ByTickerTradable returns a single row with no ORDER BY and no LIMIT, and it
+// may: its WHERE names the very types migration 0011's partial unique index
+// covers, so at most one row can match. That argument is the whole guarantee,
+// and it is an argument about a filter — nothing enforced it. Widen the method
+// by one type and it goes on compiling, goes on returning a row, and starts
+// returning WHICHEVER of several the planner reached first. The caller that
+// would live with that is tinvest's instrument resolver: it hands the broker's
+// ticker to this method and files the broker's trades against whatever comes
+// back, so a widened filter files them against an arbitrary paper.
+//
+// WHICH types are covered is not written out here — only that there are seven
+// of them. The split is read off ListTradable, as the test above reads it, so
+// this stays a comparison between what the reader returns and what this method
+// answers about rather than a fourth list of the covered types to drift. For a
+// type ListTradable does not return, two rows may share a ticker — and this
+// method must then answer nothing rather than one of them.
+func TestByTickerTradableAnswersOnlyWhereOneRowIsGuaranteed(t *testing.T) {
+	st, ctx, _ := newStore(t)
+
+	types := []instrument.Type{
+		instrument.TypeShare, instrument.TypeBond, instrument.TypeETF,
+		instrument.TypeCurrency, instrument.TypeCrypto, instrument.TypeMetal,
+		instrument.TypeCustom,
+	}
+	tickerOf := func(tp instrument.Type) string { return "TWO" + strings.ToUpper(string(tp)) }
+	duplicated := make(map[instrument.Type]bool, len(types))
+	for _, tp := range types {
+		if _, err := st.Create(ctx, instrument.Instrument{
+			Type: tp, Name: "первый " + string(tp), Ticker: tickerOf(tp), Currency: "RUB",
+		}); err != nil {
+			t.Fatalf("Create first %s: %v", tp, err)
+		}
+		_, err := st.Create(ctx, instrument.Instrument{
+			Type: tp, Name: "второй " + string(tp), Ticker: tickerOf(tp), Currency: "RUB",
+		})
+		switch {
+		case err == nil:
+			duplicated[tp] = true
+		case errors.Is(err, instrument.ErrTickerTaken):
+		default:
+			t.Fatalf("Create second %s: %v", tp, err)
+		}
+	}
+
+	tradable, err := st.ListTradable(ctx)
+	if err != nil {
+		t.Fatalf("ListTradable: %v", err)
+	}
+	returned := make(map[instrument.Type]bool, len(types))
+	for _, inst := range tradable {
+		returned[inst.Type] = true
+	}
+	if len(returned) == 0 {
+		t.Fatal("ListTradable returned nothing; there would be nothing to compare this method against")
+	}
+
+	for _, tp := range types {
+		found, err := st.ByTickerTradable(ctx, tickerOf(tp))
+		switch {
+		case returned[tp]:
+			// The index refused the second row, so exactly one exists and this
+			// method has to be the one that finds it.
+			if err != nil {
+				t.Errorf("ByTickerTradable(%q) = %v, want the single %s instrument ListTradable also returns",
+					tickerOf(tp), err, tp)
+				continue
+			}
+			if found.Type != tp {
+				t.Errorf("ByTickerTradable(%q) returned a %s, want a %s", tickerOf(tp), found.Type, tp)
+			}
+		default:
+			if !duplicated[tp] {
+				t.Fatalf("two %s instruments under one ticker were refused, though ListTradable does not return %s: "+
+					"this case cannot show what the method does with several rows", tp, tp)
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				t.Errorf("ByTickerTradable(%q) answered %q (err %v) though two %s instruments carry that ticker: "+
+					"outside the unique index the query has no single row to return, so it must return none",
+					tickerOf(tp), found.Name, err, tp)
+			}
+		}
+	}
+}
+
 func TestTypeValid(t *testing.T) {
 	if !instrument.TypeShare.Valid() || instrument.Type("nope").Valid() {
 		t.Error("Type.Valid broken")

@@ -14,6 +14,7 @@ import (
 
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/portfolio"
 )
 
 // These tests run against a real database and the REAL operation.Service —
@@ -129,6 +130,36 @@ func (f *rebuildFixture) journalOf(t *testing.T, accountID uuid.UUID) []operatio
 		t.Fatalf("ListBySource: %v", err)
 	}
 	return ops
+}
+
+// mustListForEngine reads one account's whole journal the way every later read
+// does — through the engine's own listing, not through what a rebuild returned.
+// Those two are exactly the pair this path must not let diverge.
+func mustListForEngine(t *testing.T, f *rebuildFixture, accountID uuid.UUID) []operation.Operation {
+	t.Helper()
+	ops, err := f.ops.ListForEngine(f.ctx, f.spaceID, accountID)
+	if err != nil {
+		t.Fatalf("ListForEngine: %v", err)
+	}
+	return ops
+}
+
+// realizedOf folds one account's WHOLE journal — read back through the engine's
+// own listing, not through what a rebuild returned — and sums the realized
+// profit over every position in it. It goes through portfolio.Compute because
+// that is what every screen and every tax figure is derived from: a number this
+// test could compute for itself would only prove this test's arithmetic.
+func (f *rebuildFixture) realizedOf(t *testing.T, accountID uuid.UUID) int64 {
+	t.Helper()
+	positions, err := portfolio.Compute(mustListForEngine(t, f, accountID))
+	if err != nil {
+		t.Fatalf("the journal that was written does not replay when read back: %v", err)
+	}
+	var total int64
+	for _, p := range positions {
+		total += p.RealizedPnLMinor
+	}
+	return total
 }
 
 func (f *rebuildFixture) mirrorRow(t *testing.T, link AccountLink, brokerOpID string) MirrorRow {
@@ -336,6 +367,88 @@ func TestRebuildRewritesAnOperationWhoseMirrorRowChanged(t *testing.T) {
 	}
 	if after[0].ID == before[0].ID {
 		t.Error("the journal row kept its id: a changed row is removed and written again, not updated in place")
+	}
+}
+
+// TestRebuildKeepsRealizedProfitWhenTheBrokerRewordsAPurchase is the reason a
+// rewritten row inherits the created_at of the row it replaces.
+//
+// A rewrite is a removal and an insertion, and an insertion stamped afresh is
+// the YOUNGEST row of its day — so a purchase the broker merely REWORDED moves
+// to the end of its own day. Within a day the journal's order is the order the
+// FIFO queue breaks ties in, and the queue is what a later sale consumes from.
+// So a description nobody asked about changes which parcel was sold, and the
+// realized profit — a tax figure, final once it is struck — moves with it.
+//
+// The numbers are literal and the two purchases are deliberately far apart in
+// price: ten shares at 30 000 ₽ in the morning, ten at 33 000 ₽ in the
+// afternoon of the SAME day, ten sold a month later for 32 000 ₽. Selling the
+// morning parcel realizes +200 000 kopecks; selling the afternoon one realizes
+// −100 000. The sale is never touched by the rebuild below — only the wording
+// of the morning purchase is — and the profit must not move at all.
+func TestRebuildKeepsRealizedProfitWhenTheBrokerRewordsAPurchase(t *testing.T) {
+	f := newRebuildFixture(t)
+
+	morning := loadOperationItem(t, "buy.json")
+	morning.ID = "op-buy-morning"
+	morning.Date = time.Date(2026, 3, 2, 7, 15, 0, 0, time.UTC) // 10:15 Moscow
+	morning.Description = "Покупка 10 шт."
+	morning.Payment = MoneyValue{Currency: "rub", Units: -30_000}
+	morning.Price = MoneyValue{Currency: "rub", Units: 3_000}
+	morning.Commission = MoneyValue{Currency: "rub"}
+	morning.Quantity = 10
+
+	afternoon := loadOperationItem(t, "buy.json")
+	afternoon.ID = "op-buy-afternoon"
+	afternoon.Date = time.Date(2026, 3, 2, 12, 40, 0, 0, time.UTC) // 15:40 Moscow
+	afternoon.Description = "Покупка 10 шт."
+	afternoon.Payment = MoneyValue{Currency: "rub", Units: -33_000}
+	afternoon.Price = MoneyValue{Currency: "rub", Units: 3_300}
+	afternoon.Commission = MoneyValue{Currency: "rub"}
+	afternoon.Quantity = 10
+
+	sale := loadOperationItem(t, "sell.json")
+	sale.Date = time.Date(2026, 4, 1, 7, 0, 0, 0, time.UTC)
+	sale.Payment = MoneyValue{Currency: "rub", Units: 32_000}
+	sale.Price = MoneyValue{Currency: "rub", Units: 3_200}
+	sale.Commission = MoneyValue{Currency: "rub"}
+	sale.Quantity = 10
+
+	f.sync(t, f.link, morning, afternoon, sale)
+	f.rebuild(t)
+	before := f.realizedOf(t, f.accountID)
+	if before != 200_000 {
+		t.Fatalf("realized profit before the rewording is %d, want 200000 — the morning parcel is the one FIFO sells", before)
+	}
+
+	// The broker rewords the MORNING purchase and says nothing new about
+	// anything else. The description is not part of the content key, so this is
+	// the same mirror row refreshed rather than a new one.
+	reworded := morning
+	reworded.Description = "Покупка ценных бумаг, 10 шт."
+	f.sync(t, f.link, reworded, afternoon, sale)
+
+	mark := len(f.applier.deltas)
+	stats := f.rebuild(t)
+	if stats.Added != 1 || stats.Removed != 1 {
+		t.Fatalf("rebuild added %d and removed %d, want 1 and 1 — only the reworded purchase changed", stats.Added, stats.Removed)
+	}
+	deltas := f.deltasSince(mark)
+	if len(deltas) != 1 || len(deltas[0].Add) != 1 || len(deltas[0].Remove) != 1 {
+		t.Fatalf("the rebuild asked for %+v, want one delta rewriting one row", deltas)
+	}
+
+	journal := f.journalOf(t, f.accountID)
+	if len(journal) != 3 {
+		t.Fatalf("journal holds %d operations, want 3", len(journal))
+	}
+	if journal[0].Note != "Покупка ценных бумаг, 10 шт." || journal[1].Note != "Покупка 10 шт." {
+		t.Errorf("the day reads back as %q then %q, want the reworded morning purchase first",
+			journal[0].Note, journal[1].Note)
+	}
+	if after := f.realizedOf(t, f.accountID); after != before {
+		t.Errorf("realized profit is %d after the rewording and was %d before — a wording the broker changed moved a tax figure",
+			after, before)
 	}
 }
 
@@ -551,40 +664,71 @@ func TestRebuildDoesNotPairSharesCrossingToAndFromTheOutsideWorld(t *testing.T) 
 	}
 }
 
-// TestRebuildLeavesLegsOfDifferentCurrenciesAlone is the mild-failure case of
-// the pairing key. The write path requires the two legs of one transfer to
-// agree on currency as much as on paper, count and day (operation.pairedLegs),
-// and it does not refuse a pair politely: it refuses the WHOLE delta, so a
-// pairing this code made wrongly would cost the connection every other
-// operation in it, on this rebuild and on every rebuild after — with no
-// unparsed row anywhere naming a cause.
-func TestRebuildLeavesLegsOfDifferentCurrenciesAlone(t *testing.T) {
+// TestRebuildTakesATransferLegsCurrencyFromThePaper pins the one entry whose
+// currency is not the currency of the money that moved, because no money moved.
+//
+// The broker attaches a currency to the zero payment of a securities transfer,
+// and the documented shape attaches roubles to it whatever the paper is. Taken
+// as the leg's currency, that is not merely untidy: the engine fixes a
+// position's currency by the first operation on the instrument and refuses
+// every later one that disagrees. The dollar purchase and the rouble leg below
+// are the same paper in the same account, so one of the two would be refused —
+// the owner reading "the journal refused this" and nothing anywhere saying that
+// the currency had been read off the wrong field.
+//
+// The pairing is asserted with it because the currency is part of the key two
+// legs are matched on (see transferPair): a leg that took roubles from the
+// payment and another that took dollars would fail to match and become two lone
+// legs, each with a cost basis nobody released.
+func TestRebuildTakesATransferLegsCurrencyFromThePaper(t *testing.T) {
 	f := newRebuildFixture(t)
 	second := f.secondLink(t)
 
+	// A dollar paper, bought in dollars, ten of which then move to the other
+	// account — with the broker calling the zero payment roubles on both legs.
+	purchase := loadOperationItem(t, "buy.json")
+	purchase.InstrumentUID = uidAAPL
+	purchase.FIGI = "BBG000BVPV84"
+	purchase.Date = time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	purchase.Payment = MoneyValue{Currency: "usd", Units: -2_000}
+	purchase.Price = MoneyValue{Currency: "usd", Units: 200}
+	purchase.Commission = MoneyValue{Currency: "usd"}
+	purchase.Quantity = 10
+
+	departing := loadOperationItem(t, "trans_bs_bs_out.json")
+	departing.InstrumentUID = uidAAPL
+	departing.FIGI = "BBG000BVPV84"
+	departing.Quantity = -10
 	arriving := loadOperationItem(t, "trans_bs_bs_in.json")
-	arriving.Payment = MoneyValue{Currency: "usd"}
-	f.sync(t, f.link, loadOperationItem(t, "buy.json"), loadOperationItem(t, "trans_bs_bs_out.json"))
+	arriving.InstrumentUID = uidAAPL
+	arriving.FIGI = "BBG000BVPV84"
+	arriving.Quantity = 10
+	if departing.Payment.Currency != "RUB" || arriving.Payment.Currency != "RUB" {
+		t.Fatalf("the fixtures price the move in %q and %q, want roubles on both — this test proves nothing otherwise",
+			departing.Payment.Currency, arriving.Payment.Currency)
+	}
+
+	f.sync(t, f.link, purchase, departing)
 	f.sync(t, second, arriving)
 
-	stats, err := f.reb.Rebuild(f.ctx, f.conn, []AccountLink{f.link, second}, f.src)
-	if err != nil {
-		t.Fatalf("Rebuild: %v — two legs the journal would not accept as a pair must be left as two lone legs, not taken down the whole connection", err)
-	}
-	if stats.Added != 3 {
-		t.Errorf("rebuild added %d operations, want 3 (a buy and two lone legs)", stats.Added)
+	stats := f.rebuild(t, f.link, second)
+	if stats.Added != 3 || stats.Unparsed != 0 {
+		t.Fatalf("rebuild added %d and left %d unparsed, want 3 and 0 — nothing here is unreadable",
+			stats.Added, stats.Unparsed)
 	}
 	out := byExternalID(t, f.journalOf(t, f.accountID), externalIDFor(f.mirrorRow(t, f.link, "op-trans-2"), 1))
 	in := byExternalID(t, f.journalOf(t, second.AccountID), externalIDFor(f.mirrorRow(t, second, "op-trans-1"), 1))
-	if out.TransferGroupID != nil || in.TransferGroupID != nil {
-		t.Errorf("legs carry groups %v and %v, want none on either — they are not one event",
-			out.TransferGroupID, in.TransferGroupID)
+	if out.Currency != "USD" || in.Currency != "USD" {
+		t.Errorf("legs are in %q and %q, want USD on both — the paper's money, not the money beside a zero payment",
+			out.Currency, in.Currency)
 	}
-	if in.Currency != "USD" || out.Currency != "RUB" {
-		t.Fatalf("legs are in %q and %q, want USD and RUB — this test proves nothing if they agree", in.Currency, out.Currency)
+	if out.TransferGroupID == nil || in.TransferGroupID == nil || *out.TransferGroupID != *in.TransferGroupID {
+		t.Fatalf("legs carry groups %v and %v, want one group on both", out.TransferGroupID, in.TransferGroupID)
 	}
-	if in.AmountMinor != 0 {
-		t.Errorf("the arrival declares a basis of %d, want 0", in.AmountMinor)
+	// The whole account still replays, which is the thing a rouble leg on a
+	// dollar position would have cost.
+	if _, err := portfolio.Compute(mustListForEngine(t, f, f.accountID)); err != nil {
+		t.Errorf("the account no longer replays: %v", err)
 	}
 }
 

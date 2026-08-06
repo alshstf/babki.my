@@ -47,6 +47,17 @@ var ErrImportContract = errors.New("import delta contradicts what the journal ex
 // in AmountMinor are worked out here, from the source account's own journal, by
 // the same release the manual transfer path uses. The caller cannot know them:
 // a FIFO basis is a property of the history, not of the broker's message.
+//
+// AN OPERATION MAY CARRY A CreatedAt, AND EXACTLY ONE THING MAY BE MEANT BY IT:
+// this row replaces one this same delta removes, and keeps its place. Within a
+// date the journal folds by created_at, and that order is the order the FIFO
+// queue breaks ties in — so a row restated by the broker and stamped afresh
+// would move to the end of its own day and change which parcel a later sale
+// consumes, which is a tax figure moving because a description was reworded.
+// The stamp is therefore checked against the rows being removed (see
+// checkInheritedStamps) rather than trusted: a caller free to invent one would
+// be free to choose where in a day an operation folds. A zero CreatedAt is the
+// ordinary case and is stamped here.
 type ImportDelta struct {
 	Add    []Operation
 	Remove []uuid.UUID
@@ -91,20 +102,38 @@ type candidate struct {
 // unable to replay, or any failure of the write itself, takes the whole call
 // down and writes nothing.
 //
-// THE CANDIDATES ARE CHECKED ONE AT A TIME, IN MEMORY, BEFORE THE TRANSACTION
-// OPENS, each against the journal as the ones already accepted leave it. That
-// is what makes isolation possible at all: the engine answers about a whole
-// journal, so the only way to learn WHICH operation a journal cannot hold is to
-// offer them one by one. They are offered in the order the engine folds them —
-// by date, and within a date in the order the caller listed them — so a sell
-// listed before the buy that covers it is still judged against the position it
-// actually had.
+// WHAT IS JUDGED IS THE JOURNAL THIS DELTA WOULD LEAVE, never a state that
+// only stands halfway through it, and that is the difference between an import
+// that survives a broker correcting its own history and one that wedges on it.
+// A correction is expressed as a removal and an insertion of the same record
+// (see Store.ApplyDelta), so asking whether the removals alone replay asks what
+// this account would be if a purchase were simply gone — and the answer, for
+// any purchase a later sale rests on, is that it does not replay at all. That
+// question is asked here only after the real one has failed:
+//
+//  1. the candidates are offered TOGETHER, over the journal the removals leave.
+//     If the engine takes that whole journal, every candidate the per-operation
+//     contract allows is accepted and nothing is isolated: no operation is at
+//     fault, so none is blamed.
+//  2. failing that, the removals have to replay on their own. If they do not,
+//     the candidates did not put right whatever they broke, and the delta is
+//     refused whole — blamed on the removals, or on a journal that would not
+//     replay before this delta touched it, exactly as it was before this order
+//     existed.
+//  3. failing only step 1, the candidates are offered ONE AT A TIME over that
+//     same ground, which is the only way to learn WHICH of them a journal
+//     cannot hold: the engine answers about a whole journal, not about a row.
+//
+// Either way they are offered in the order the engine folds them — by date, and
+// within a date in the order the caller listed them — so a sell listed before
+// the buy that covers it is still judged against the position it actually had.
 //
 // The order they are checked in is then the order they are WRITTEN with:
 // created_at is stated on every row rather than left to the column, because
 // now() is one timestamp for a whole transaction and rows of the same date
 // sharing it would leave every later read free to fold them in another order
-// than the one that was checked (see Store.ApplyDelta).
+// than the one that was checked (see Store.ApplyDelta). A row replacing one
+// this delta removes keeps that row's stamp instead (see ImportDelta).
 //
 // applied comes back in that same order, as the database stored the rows.
 func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d ImportDelta) (
@@ -120,6 +149,9 @@ func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d Imp
 	}
 	removals, err := s.importRemovals(ctx, spaceID, d.Remove)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := checkInheritedStamps(candidates, removals); err != nil {
 		return nil, nil, err
 	}
 
@@ -138,15 +170,21 @@ func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d Imp
 	}
 
 	// kept is every touched account's journal as the removals leave it — the
-	// ground the candidates are then judged against, and the ground the stored
-	// rows are confirmed against inside the transaction.
+	// ground the candidates are judged against, and the ground the stored rows
+	// are confirmed against inside the transaction. before is the same journal
+	// as it stands NOW, held only for the accounts this delta takes rows from,
+	// because the one thing it is read for is telling "the removals broke this"
+	// apart from "this was already broken".
 	//
-	// youngest is tracked over that same survivors-only set: a row this delta
-	// is about to delete will not be in any journal by the time the write
-	// commits, so its created_at must not go on raising the floor new rows are
-	// numbered from (see base below) — that would number them after a row that
-	// no longer exists to share a date with anything.
+	// youngest is tracked over the survivors: a row this delta is about to
+	// delete will not be in any journal by the time the write commits, so its
+	// created_at must not go on raising the floor new rows are numbered from
+	// (see base below) — that would number them after a row that no longer
+	// exists to share a date with anything. A stamp a replacement INHERITS is
+	// counted in below, for the opposite half of the same reason: that row is
+	// coming back, so nothing may be numbered on top of it.
 	kept := make(map[uuid.UUID][]Operation, len(accounts))
+	before := make(map[uuid.UUID][]Operation, len(losing))
 	var youngest time.Time
 	for accountID := range accounts {
 		journal, err := s.store.ListForEngine(ctx, spaceID, accountID)
@@ -163,27 +201,17 @@ func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d Imp
 				youngest = o.CreatedAt
 			}
 		}
-		// This state has to replay before a single candidate is offered against
-		// it, or every refusal below would name a cause that is not the cause:
-		// the first candidate would be blamed for damage the removals did, or
-		// for damage that was already there.
-		if _, err := portfolio.Compute(remaining); err != nil {
-			if losing[accountID] {
-				if _, before := portfolio.Compute(journal); before == nil {
-					return nil, nil, fmt.Errorf("%w: removing these operations leaves account %s unable to replay: %v",
-						ErrInconsistent, accountID, err)
-				}
-			}
-			return nil, nil, fmt.Errorf("%w: account %s does not replay even without this delta: %v",
-				ErrInconsistent, accountID, err)
+		if losing[accountID] {
+			before[accountID] = journal
 		}
 		kept[accountID] = remaining
 	}
-
-	// pending is that ground plus everything accepted so far.
-	pending := make(map[uuid.UUID][]Operation, len(kept))
-	for accountID, journal := range kept {
-		pending[accountID] = slices.Clone(journal)
+	for _, c := range candidates {
+		for _, leg := range c.legs {
+			if leg.CreatedAt.After(youngest) {
+				youngest = leg.CreatedAt
+			}
+		}
 	}
 
 	// One microsecond apart, from a base taken before any of them is checked:
@@ -200,36 +228,46 @@ func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d Imp
 	// underneath rows the previous sync had just written. A journal ordered one
 	// way when it is checked and another way when it is read is the fault this
 	// whole path is built to avoid.
+	//
+	// IT CAN THEREFORE REACH A SHADE PAST THE PRESENT — one microsecond per row
+	// stamped, so milliseconds for a delta of thousands. An operation a person
+	// enters by hand into that window, on the same day and the same account, is
+	// stamped by the column's own now() and lands BENEATH the rows this delta
+	// wrote, so it folds before them though it was entered after them. That much
+	// is merely surprising: the hand-entry path stamps its candidate with
+	// time.Now() when it checks it too (see journalWith), so check and read
+	// agree. What is not merely surprising is the sliver where they disagree —
+	// the check taken just under this delta's last stamp and the write's now()
+	// just over it, which reads back in an order the check never saw. Both
+	// windows are milliseconds wide, and the two paths do not share an account
+	// in the shape this program is built for: an import writes into accounts of
+	// its own (see the tinvest rebuild's precondition). That is why this is
+	// written down rather than defended against.
 	base := time.Now().UTC().Truncate(time.Microsecond)
 	if !youngest.Before(base) {
 		base = youngest.UTC().Truncate(time.Microsecond).Add(time.Microsecond)
 	}
-	seq := 0
-	var accepted []Operation
-	for _, c := range candidates {
-		legs := slices.Clone(c.legs)
-		for i := range legs {
-			legs[i].CreatedAt = base.Add(time.Duration(seq) * time.Microsecond)
-			seq++
-		}
-		if failed, err := prepareCandidate(legs, pending); err != nil {
-			for i, leg := range legs {
-				reason := err
-				if i != failed {
-					// True of the leg it is attached to, and it names the cause
-					// rather than inventing one of its own: this leg was fine,
-					// and a transfer is one event.
-					reason = fmt.Errorf("the other leg of this transfer was refused: %w", err)
+
+	accepted, refused, whole := offerTogether(candidates, kept, base)
+	if !whole {
+		// Step 2: the candidates could not carry the whole journal, so the
+		// ground they stand on has to hold on its own. Until this runs, every
+		// refusal below would name a cause that is not the cause: the first
+		// candidate would be blamed for damage the removals did, or for damage
+		// that was already there.
+		for accountID := range accounts {
+			if _, err := portfolio.Compute(kept[accountID]); err != nil {
+				if journal, ok := before[accountID]; ok {
+					if _, was := portfolio.Compute(journal); was == nil {
+						return nil, nil, fmt.Errorf("%w: removing these operations leaves account %s unable to replay: %v",
+							ErrInconsistent, accountID, err)
+					}
 				}
-				refused = append(refused, ImportRefusal{ExternalID: externalID(leg), Err: reason})
+				return nil, nil, fmt.Errorf("%w: account %s does not replay even without this delta: %v",
+					ErrInconsistent, accountID, err)
 			}
-			continue
 		}
-		for _, leg := range legs {
-			pending[leg.AccountID] = append(pending[leg.AccountID], leg)
-			sortJournal(pending[leg.AccountID])
-		}
-		accepted = append(accepted, legs...)
+		accepted, refused = offerOneAtATime(candidates, kept, base)
 	}
 
 	if len(accepted) == 0 && len(removals) == 0 {
@@ -261,6 +299,178 @@ func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d Imp
 		return nil, nil, mapImportWriteError(err)
 	}
 	return stored, refused, nil
+}
+
+// offerTogether is step 1 of ApplyImportDelta's order: every candidate written
+// over the journal the removals leave, and the engine asked about the RESULT.
+//
+// ACCEPTING THEM WHOLESALE IS NOT A WEAKER TEST THAN OFFERING THEM ONE BY ONE.
+// The engine folds a journal in order and stops at the first operation it
+// cannot fold, so a journal it accepts is one every prefix of which it would
+// have accepted too — a sale of shares nothing bought still fails when it is
+// surrounded by four thousand others. What the two differ on is only which
+// candidates are PRESENT while a given one is judged, and being judged among
+// all of them is the truer question: that is the journal this delta leaves.
+// (It is also the cheaper one — one fold per account rather than one per
+// candidate — but that is a side effect and not the reason.)
+//
+// It reports whole == false the moment that result is unknowable or unusable —
+// a parcel that cannot be released, an account whose final journal the engine
+// refuses — and reports nothing about WHY. That is deliberate: a failure here
+// says only that the difference is not good as a whole, which is not yet a
+// statement about any one candidate, and inventing one would name the first
+// operation the loop happened to reach. Whose fault it is, if it is anyone's,
+// is what offerOneAtATime finds out afterwards.
+//
+// A candidate refused by normalizeCandidate is a different matter and is
+// refused here as well as there. That check reads nothing but the operation
+// itself — a quantity finer than the journal records, a split an import may not
+// write — so its answer is the same whatever journal the row is offered
+// against, and letting one such row take the whole difference down to the
+// slower path would only reach the same refusal by a longer road.
+func offerTogether(candidates []candidate, kept map[uuid.UUID][]Operation, base time.Time) (
+	accepted []Operation, refused []ImportRefusal, whole bool,
+) {
+	pending := make(map[uuid.UUID][]Operation, len(kept))
+	for accountID, journal := range kept {
+		pending[accountID] = slices.Clone(journal)
+	}
+	seq := 0
+	for _, c := range candidates {
+		legs := stamped(c, base, &seq)
+		if failed, err := normalizeCandidate(legs); err != nil {
+			refused = append(refused, refusalsFor(legs, failed, err)...)
+			continue
+		}
+		if _, err := releaseBasis(legs, pending); err != nil {
+			return nil, nil, false
+		}
+		absorb(pending, legs)
+		accepted = append(accepted, legs...)
+	}
+	for accountID := range pending {
+		if _, err := portfolio.Compute(pending[accountID]); err != nil {
+			return nil, nil, false
+		}
+	}
+	return accepted, refused, true
+}
+
+// offerOneAtATime is step 3: the same candidates in the same order, each judged
+// against the journal the ones already accepted leave, so that the operation a
+// journal cannot hold is named on its own and the rest of a history still
+// loads. It is reached only when the whole difference was refused together and
+// the removals were shown to be blameless.
+func offerOneAtATime(candidates []candidate, kept map[uuid.UUID][]Operation, base time.Time) (
+	accepted []Operation, refused []ImportRefusal,
+) {
+	pending := make(map[uuid.UUID][]Operation, len(kept))
+	for accountID, journal := range kept {
+		pending[accountID] = slices.Clone(journal)
+	}
+	seq := 0
+	for _, c := range candidates {
+		legs := stamped(c, base, &seq)
+		if failed, err := prepareCandidate(legs, pending); err != nil {
+			refused = append(refused, refusalsFor(legs, failed, err)...)
+			continue
+		}
+		absorb(pending, legs)
+		accepted = append(accepted, legs...)
+	}
+	return accepted, refused
+}
+
+// stamped settles one candidate's created_at: the stamp a replacement inherited
+// from the row it replaces, or the next of this delta's own sequence.
+//
+// seq advances only where a stamp is handed out, and the candidates are walked
+// in one order, so the two passes above hand the same row the same stamp — the
+// order that was checked has to be the order that is written whichever pass did
+// the checking.
+func stamped(c candidate, base time.Time, seq *int) []Operation {
+	legs := slices.Clone(c.legs)
+	for i := range legs {
+		if !legs[i].CreatedAt.IsZero() {
+			continue
+		}
+		legs[i].CreatedAt = base.Add(time.Duration(*seq) * time.Microsecond)
+		*seq++
+	}
+	return legs
+}
+
+// absorb puts an accepted event into the journals it belongs to, each back in
+// engine order, so the candidate after it is judged against a journal that
+// already holds it.
+func absorb(pending map[uuid.UUID][]Operation, legs []Operation) {
+	for _, leg := range legs {
+		pending[leg.AccountID] = append(pending[leg.AccountID], leg)
+		sortJournal(pending[leg.AccountID])
+	}
+}
+
+// refusalsFor names one event's refusal on every leg it has. failed is the leg
+// the error is about; the other one is told the cause rather than a stand-in of
+// its own, because this leg was fine and a transfer is one event.
+func refusalsFor(legs []Operation, failed int, err error) []ImportRefusal {
+	out := make([]ImportRefusal, 0, len(legs))
+	for i, leg := range legs {
+		reason := err
+		if i != failed {
+			reason = fmt.Errorf("the other leg of this transfer was refused: %w", err)
+		}
+		out = append(out, ImportRefusal{ExternalID: externalID(leg), Err: reason})
+	}
+	return out
+}
+
+// checkInheritedStamps holds a supplied created_at to a place the account's
+// journal ALREADY HOLDS and this delta is about to vacate: it must be the stamp
+// of a row being removed from that same account.
+//
+// Anything else is refused as the caller's own mistake rather than as a
+// property of a broker record, because that is what it would be. A created_at
+// decides where within a date an operation folds, a date's order is the order
+// the FIFO queue breaks ties in, and the queue decides which parcel a sale
+// consumes — so a caller free to state one is a caller free to set the realized
+// profit of an account by choosing a number. A stamp already in that journal
+// chooses nothing: putting a row back where one stood is the whole point.
+//
+// WHAT IT DOES NOT CHECK is that the stamp came from the very row this one
+// replaces, and it cannot: which stored row a candidate replaces is the
+// importer's own matching (by external id, see the tinvest rebuild's
+// difference), and nothing here can see it. What it does keep out is the case
+// that matters — a stamp conjured from nowhere, which is the only way to reach
+// a position in a day that no row of this account occupies.
+//
+// The comparison is by UnixNano rather than by the time.Time itself: what the
+// database gives back carries a location and no monotonic reading, and equality
+// on time.Time is equality of those too. UnixNano is one number per instant
+// over any date this program will meet, so two stamps of one moment cannot miss
+// each other and two of different moments cannot collide.
+func checkInheritedStamps(candidates []candidate, removals []Operation) error {
+	type stamp struct {
+		accountID uuid.UUID
+		at        int64
+	}
+	inherited := make(map[stamp]bool, len(removals))
+	for _, o := range removals {
+		inherited[stamp{o.AccountID, o.CreatedAt.UnixNano()}] = true
+	}
+	for _, c := range candidates {
+		for _, leg := range c.legs {
+			if leg.CreatedAt.IsZero() {
+				continue
+			}
+			if !inherited[stamp{leg.AccountID, leg.CreatedAt.UnixNano()}] {
+				return fmt.Errorf(
+					"%w: record %q states a created_at of %s, which no row this delta removes from account %s carries — a place in a day is inherited from the row being replaced, never chosen",
+					ErrImportContract, externalID(leg), leg.CreatedAt.UTC().Format(time.RFC3339Nano), leg.AccountID)
+			}
+		}
+	}
+	return nil
 }
 
 // importCandidates groups the delta's operations into the events they describe
@@ -448,7 +658,27 @@ func (s *Service) importRemovals(ctx context.Context, spaceID uuid.UUID, ids []u
 // account's history — and offers it to the engine. It reports WHICH leg the
 // refusal is about, so that the other leg of a pair is not told a reason that
 // is not about it.
+//
+// The three stages are separate functions because the two passes over the
+// candidates need different amounts of it: offerTogether runs the first two and
+// asks the engine once, about the journal they all leave, while this runs all
+// three per event. Splitting them is what keeps the two passes from being two
+// statements of one rule.
 func prepareCandidate(legs []Operation, pending map[uuid.UUID][]Operation) (int, error) {
+	if failed, err := normalizeCandidate(legs); err != nil {
+		return failed, err
+	}
+	if failed, err := releaseBasis(legs, pending); err != nil {
+		return failed, err
+	}
+	return replayCandidate(legs, pending)
+}
+
+// normalizeCandidate is everything about one event that can be settled from the
+// event alone: quantities brought onto the scale the journal stores, and the
+// import path's per-operation contract. It reads no journal, so its answer is
+// the same wherever the event is offered.
+func normalizeCandidate(legs []Operation) (int, error) {
 	for i := range legs {
 		if err := normalizeForStorage(&legs[i]); err != nil {
 			return i, err
@@ -457,6 +687,13 @@ func prepareCandidate(legs []Operation, pending map[uuid.UUID][]Operation) (int,
 			return i, err
 		}
 	}
+	return -1, nil
+}
+
+// releaseBasis fills in the parcel a departing leg moves — the pieces of the
+// source account's FIFO queue and the basis they carry — and puts the same
+// parcel on the arriving leg.
+func releaseBasis(legs []Operation, pending map[uuid.UUID][]Operation) (int, error) {
 	for i := range legs {
 		if legs[i].Type != TypeTransferOut {
 			continue
@@ -477,7 +714,11 @@ func prepareCandidate(legs []Operation, pending map[uuid.UUID][]Operation) (int,
 		lots = quantizeLots(lots, *legs[i].Quantity)
 		cost := portfolio.LotsCost(lots)
 		if cost < 0 || cost > money.MaxAmountMinor {
-			return i, fmt.Errorf("%w: the basis this transfer would move is %d, outside ±%d",
+			// A basis is not a cash movement and has no sign to speak of, so the
+			// bound it has to fall inside is 0..max and not ±max. The manual
+			// transfer path says it that way (see Service.CreateTransfer), and
+			// one rule described two ways is one rule a reader has to guess at.
+			return i, fmt.Errorf("%w: the basis this transfer would move is %d, outside 0..%d",
 				family.ErrValidation, cost, money.MaxAmountMinor)
 		}
 		legs[i].TransferLots, legs[i].AmountMinor = lots, cost
@@ -490,6 +731,12 @@ func prepareCandidate(legs []Operation, pending map[uuid.UUID][]Operation) (int,
 			}
 		}
 	}
+	return -1, nil
+}
+
+// replayCandidate offers one event to the engine, account by account, over the
+// journal each of them already holds.
+func replayCandidate(legs []Operation, pending map[uuid.UUID][]Operation) (int, error) {
 	// Each touched account folds its own journal with this event in it. A pair's
 	// legs live on two accounts and each is checked against its own history.
 	for i := range legs {

@@ -362,6 +362,21 @@ func compareInstruments(brokerPositions []PortfolioPosition, positions map[uuid.
 // skipped: the broker's answer is a complete statement of its cash, so a
 // currency absent from it is a currency it holds none of, and our journal
 // claiming otherwise is exactly the kind of difference this exists to show.
+//
+// OUR SIDE IS THE WHOLE ACCOUNT, not the imported part of it. The journal
+// handed over is the account's entire journal (the reconciler reads it through
+// ListForEngine), so a deposit somebody typed in by hand on an imported account
+// stands in this sum, the broker knows nothing about it, and the currency shows
+// up here as a difference — with a label naming the currency and nothing about
+// where the extra money came from. That is right under the precondition this
+// whole importer is built on, which is the owner's own decision: an import
+// feeds ACCOUNTS OF ITS OWN, so everything in one of those accounts is
+// something the broker reported and the comparison is between two statements
+// about the same thing. Summing only the imported rows would be worse under
+// that precondition and no better without it: the sum would agree with the
+// broker while the account itself held money the broker never reported, and
+// nothing anywhere would say so. See the rebuild's own note on the precondition
+// and where it belongs (rebuild.go's heading).
 func compareCash(brokerBalances []MoneyBalance, journal []operation.Operation) []ReconcileMismatch {
 	broker := make(map[string]decimal.Decimal, len(brokerBalances))
 	for _, b := range brokerBalances {

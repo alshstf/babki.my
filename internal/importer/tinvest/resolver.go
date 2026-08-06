@@ -28,12 +28,22 @@ type InstrumentRef struct {
 }
 
 // Resolved is what Resolve found: this instance's catalog id for the
-// broker's instrument, and the catalog's own type for it. Type rides along
-// so a caller that branches on it (a projection deciding how to book a
-// trade) does not need a second round trip to get it.
+// broker's instrument, and the catalog's own type and currency for it. Both
+// ride along so a caller that needs them (a projection deciding how to book a
+// trade, or one stating what money a parcel of shares is denominated in) does
+// not need a second round trip to get them.
+//
+// Currency is the catalog's, which is the broker's passport for a row this
+// import created and a person's own entry for one it matched. It is what a
+// journal entry about the PAPER rather than about a payment has to use: the
+// engine fixes a position's currency by the first operation on that
+// instrument, and a securities transfer moves no money, so the currency
+// standing beside its zero payment says nothing about the paper (see
+// projectSecuritiesTransfer).
 type Resolved struct {
 	InstrumentID uuid.UUID
 	Type         instrument.Type
+	Currency     string
 }
 
 // ErrUnsupportedInstrumentType means this program cannot account for the
@@ -243,7 +253,7 @@ func (r *Resolver) resolveOne(ctx context.Context, connectionID uuid.UUID, src p
 		return Resolved{}, "", "", err
 	}
 	if ok {
-		return Resolved{InstrumentID: m.InstrumentID, Type: m.Type}, m.ISIN, m.Ticker, nil
+		return Resolved{InstrumentID: m.InstrumentID, Type: m.Type, Currency: m.Currency}, m.ISIN, m.Ticker, nil
 	}
 
 	brief, err := r.passport(ctx, src, ref.InstrumentUID)
@@ -269,7 +279,7 @@ func (r *Resolver) resolveOne(ctx context.Context, connectionID uuid.UUID, src p
 	if err != nil {
 		return Resolved{}, "", "", err
 	}
-	return Resolved{InstrumentID: inst.ID, Type: inst.Type}, inst.ISIN, inst.Ticker, nil
+	return Resolved{InstrumentID: inst.ID, Type: inst.Type, Currency: inst.Currency}, inst.ISIN, inst.Ticker, nil
 }
 
 // lookupMap is step 1: instrument_uid first, figi second. Both are guarded
@@ -572,6 +582,17 @@ func (r *Resolver) createInstrument(ctx context.Context, src passportSource, typ
 // broker answering "no nominal for this instrument" looks like once it has
 // been parsed into a MoneyValue, and it would otherwise reach the database as
 // a plain constraint failure in the middle of a sync.
+//
+// NOTHING HERE IS ROUNDED, for the reason the projection gives on the other
+// figures that arrive from this broker (see minorFromDecimal): the gateway's
+// MoneyValue carries nine decimal places, this program holds money in whole
+// minor units, and a program that quietly rounds the difference is a program
+// whose numbers nobody can check. A nominal finer than a minor unit is refused
+// by that name. Rounding it would also walk straight back into the failure this
+// function exists to prevent: a positive nominal below half a minor unit
+// rounds to zero, passes the positivity check above it — which asks about the
+// decimal, not about the result — and reaches the database as the very
+// constraint violation named at the top of this comment.
 func (r *Resolver) faceValue(nominal MoneyValue, brief InstrumentBrief) (int64, error) {
 	refuse := func(what string) error {
 		err := fmt.Errorf("%w: bond %s has a nominal of %s in %q, %s",
@@ -586,7 +607,11 @@ func (r *Resolver) faceValue(nominal MoneyValue, brief InstrumentBrief) (int64, 
 	if !currency.Valid(nominal.Currency) {
 		return 0, refuse("and a face value's currency has to be an ISO-4217 code")
 	}
-	faceMinor, err := money.Minor(nominal.Decimal().Mul(minorScale))
+	minor := nominal.Decimal().Mul(minorScale)
+	if !minor.Equal(minor.Truncate(0)) {
+		return 0, refuse("and it is finer than a minor unit, which this program does not round away")
+	}
+	faceMinor, err := money.Minor(minor)
 	if err != nil {
 		return 0, fmt.Errorf("tinvest: bond nominal %s: %w", brief.UID, err)
 	}

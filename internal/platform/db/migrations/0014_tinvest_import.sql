@@ -39,10 +39,23 @@ CREATE TABLE tinvest_connections (
 
 -- account_id is UNIQUE: a babki account fed by two links would make "which
 -- link owns this account's operations" ambiguous, so one account takes at
--- most one link. Deleting the account cascades to its link (ON DELETE
--- CASCADE on account_id) and stops there — the connection and its other
--- links are untouched, because the account was never what the connection
--- depends on to exist.
+-- most one link.
+--
+-- DELETING THE ACCOUNT REACHES FURTHER THAN THE LINK. The cascade on
+-- account_id takes the link, and the two tables below that reference the link
+-- cascade in their turn: every mirror row filed under it and every sync run
+-- recorded for it. So deleting one babki account destroys this program's whole
+-- copy of what the broker said about that account, and the history of every
+-- sync of it — including the rows this file's opening note calls never
+-- deleted, which is a rule about what the SYNC WORKER does and not a promise
+-- the schema makes to a DELETE issued from anywhere else. What survives is the
+-- connection itself, its other links, and everything filed under them.
+--
+-- Nothing in this program does that today: the DELETE endpoint for an account
+-- ARCHIVES it (account.Handler.handleArchive), and no statement anywhere
+-- deletes an accounts row. It is written down for the day somebody adds one,
+-- because at that point the choice is between re-mirroring the account's whole
+-- history from the broker and not being able to.
 CREATE TABLE tinvest_account_links (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     connection_id       UUID NOT NULL REFERENCES tinvest_connections(id) ON DELETE CASCADE,

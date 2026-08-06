@@ -856,15 +856,17 @@ func (s *Store) LastReconcileByLink(ctx context.Context, connID uuid.UUID) (map[
 }
 
 // mapMatch is one hit of the connection's instrument map, joined against the
-// catalog's own type/isin/ticker columns (see (*Store).mapByInstrumentUID).
-// The join exists so a hit answers Resolve fully — id, type, and what
-// Resolve's own final write needs — without a second round trip through
-// instrumentCatalog: the entire point of checking this table before the
-// broker's passport is to skip that call, and paying for a catalog read here
-// would give back half the saving.
+// catalog's own type/currency/isin/ticker columns (see
+// (*Store).mapByInstrumentUID). The join exists so a hit answers Resolve fully
+// — id, type, the money the paper is denominated in, and what Resolve's own
+// final write needs — without a second round trip through instrumentCatalog:
+// the entire point of checking this table before the broker's passport is to
+// skip that call, and paying for a catalog read here would give back half the
+// saving.
 type mapMatch struct {
 	InstrumentID uuid.UUID
 	Type         instrument.Type
+	Currency     string
 	ISIN, Ticker string
 }
 
@@ -886,11 +888,11 @@ func (s *Store) mapByInstrumentUID(ctx context.Context, connectionID uuid.UUID, 
 	}
 	var m mapMatch
 	err := s.pool.QueryRow(ctx, `
-		SELECT im.instrument_id, i.type, i.isin, i.ticker
+		SELECT im.instrument_id, i.type, i.currency, i.isin, i.ticker
 		FROM tinvest_instrument_map im
 		JOIN instruments i ON i.id = im.instrument_id
 		WHERE im.connection_id = $1 AND im.instrument_uid = $2`,
-		connectionID, instrumentUID).Scan(&m.InstrumentID, &m.Type, &m.ISIN, &m.Ticker)
+		connectionID, instrumentUID).Scan(&m.InstrumentID, &m.Type, &m.Currency, &m.ISIN, &m.Ticker)
 	if err != nil {
 		return mapMatch{}, fmt.Errorf("tinvest: instrument map by instrument_uid: %w", err)
 	}
@@ -917,13 +919,13 @@ func (s *Store) mapByFIGI(ctx context.Context, connectionID uuid.UUID, figi stri
 	}
 	var m mapMatch
 	err := s.pool.QueryRow(ctx, `
-		SELECT im.instrument_id, i.type, i.isin, i.ticker
+		SELECT im.instrument_id, i.type, i.currency, i.isin, i.ticker
 		FROM tinvest_instrument_map im
 		JOIN instruments i ON i.id = im.instrument_id
 		WHERE im.connection_id = $1 AND im.figi = $2
 		ORDER BY im.updated_at DESC
 		LIMIT 1`,
-		connectionID, figi).Scan(&m.InstrumentID, &m.Type, &m.ISIN, &m.Ticker)
+		connectionID, figi).Scan(&m.InstrumentID, &m.Type, &m.Currency, &m.ISIN, &m.Ticker)
 	if err != nil {
 		return mapMatch{}, fmt.Errorf("tinvest: instrument map by figi: %w", err)
 	}

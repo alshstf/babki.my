@@ -428,9 +428,18 @@ func sortDesired(want []desired) {
 // operation of the connection would be lost with it, on this rebuild and on
 // every rebuild after, with no unparsed row anywhere naming a cause. So a leg
 // that cannot be paired must fail to match HERE, where the answer is two lone
-// legs — which is what the day already does for a departure timestamped at
-// 23:59 and an arrival after midnight, and what the currency now does for two
-// legs the broker priced in different money.
+// legs — which is what the day does for a departure timestamped at 23:59 and an
+// arrival after midnight.
+//
+// THE CURRENCY CANNOT SEPARATE TWO LEGS OF ONE PAPER, and is in this key
+// anyway. A securities transfer takes its currency from the resolved
+// instrument rather than from the zero payment beside it (see
+// projectSecuritiesTransfer), and the instrument is already compared, so two
+// legs equal on paper are equal on currency too. It stays because this key's
+// job is to be pairedLegs' list of equalities and not a shorter one that
+// happens to imply it today: the day a leg's currency comes from somewhere
+// else again, the pairing has to notice by itself rather than hand the write
+// path a pair it refuses whole.
 //
 // The quantity is a string because a decimal is not a comparable value: two
 // decimals equal in value can differ in representation. String() is the
@@ -679,6 +688,28 @@ func (r *Rebuilder) difference(ctx context.Context, spaceID uuid.UUID, accounts 
 		for _, d := range unit {
 			if s, ok := byName[*d.op.ExternalID]; ok {
 				drop(s)
+				// THE REPLACEMENT KEEPS THE ROW'S PLACE IN ITS DAY. A rewrite is
+				// a removal and an insertion, and an insertion stamped afresh is
+				// the youngest row of its date — so an operation the broker
+				// merely reworded would move to the end of the day it happened
+				// on. The journal folds a day in stamp order, that order is how
+				// the FIFO queue breaks ties between parcels bought the same
+				// day, and the queue decides which parcel a later sale consumes.
+				// A description nobody asked about would then move the realized
+				// profit of the account, and the tax figure with it. The write
+				// path takes the stamp only because this row is one it is
+				// removing in the same breath (see operation.ImportDelta).
+				//
+				// Only from a row of the SAME account, which is what the write
+				// path will accept: a place in a day belongs to the journal it
+				// is a place in. The two agree today — an external id names a
+				// mirror row, a mirror row belongs to one link, and a link feeds
+				// one account — so this guard costs a comparison and never
+				// fires. It is here because the alternative to it firing is
+				// ErrImportContract taking the whole difference down.
+				if s.AccountID == d.op.AccountID {
+					d.op.CreatedAt = s.CreatedAt
+				}
 			}
 			add = append(add, d.op)
 		}

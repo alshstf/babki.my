@@ -131,7 +131,12 @@ func (s *Store) ByISIN(ctx context.Context, isin string) (Instrument, error) {
 // ErrTickerTaken (migration 0011) covers exactly the rows ListTradable
 // returns (see TestUniqueTickerCoversExactlyTheRowsListTradableReturns), and
 // this method's WHERE is that same set, so no ORDER BY/LIMIT tie-break is
-// needed the way ByISIN's is.
+// needed the way ByISIN's is. That sentence is an argument about a filter,
+// which is the shape that stops being true without anything failing: widen the
+// list below by one type and this goes on returning a row, now whichever of
+// several the planner reached first, and tinvest's resolver files a broker's
+// trades against it. TestByTickerTradableAnswersOnlyWhereOneRowIsGuaranteed is
+// what turns that red.
 //
 // ticker == "" returns pgx.ErrNoRows without querying, for the same reason
 // ByISIN("") does: the empty ticker is deliberately outside that index (see
@@ -208,13 +213,18 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]Instrume
 // an exchange. Currency/crypto/metal/custom instruments and tickerless rows
 // are excluded: there is no exchange ticker to fetch a quote for.
 //
-// The filter below is written a second time as the predicate of the partial
-// unique index on instruments.ticker (migration 0011), because every row this
-// reader can return has to be unique by ticker — the quotes job keys a map on
-// it. Widening this filter without widening that predicate reopens the silent
+// The filter below is written again as the predicate of the partial unique
+// index on instruments.ticker (migration 0011), because every row this reader
+// can return has to be unique by ticker — the quotes job keys a map on it.
+// Widening this filter without widening that predicate reopens the silent
 // overwrite the index closed; see
 // TestUniqueTickerCoversExactlyTheRowsListTradableReturns, which fails if the
 // two stop describing the same rows.
+//
+// ByTickerTradable is a third spelling of it, and it rests on the same
+// uniqueness for a different reason — it returns ONE row and needs there to be
+// only one. TestByTickerTradableAnswersOnlyWhereOneRowIsGuaranteed holds it to
+// this reader in the same way.
 func (s *Store) ListTradable(ctx context.Context) ([]Instrument, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+cols+` FROM instruments
