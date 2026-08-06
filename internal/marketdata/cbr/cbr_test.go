@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -530,5 +531,59 @@ func TestRatesRange_DateOrder(t *testing.T) {
 	_, err := c.RatesRange(context.Background(), "USD", "R01235", from, to)
 	if err == nil {
 		t.Fatal("RatesRange: want error when to is before from, got nil")
+	}
+}
+
+// A <Nominal> the feed did not send used to be read as zero and replaced with
+// 1. For the currencies the bank quotes per 1 unit that substitution is
+// invisible; for KZT, quoted per 100, it multiplies the rate by exactly a
+// hundred — and KZT is the currency of a real brokerage account here. The
+// inflated rate would reach fx_rates and from there balances, valuations, cost
+// basis and realized profit, looking like an ordinary number the whole way.
+//
+// So the missing element is refused rather than defaulted, and the refusal
+// names the currency: a rate nobody can tell apart from a real one is worse
+// than no rate, which the app already draws honestly as a gap.
+func TestRatesOn_MissingNominalIsRefusedRatherThanAssumedToBeOne(t *testing.T) {
+	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
+		`<ValCurs Date="28.07.2026" name="Foreign Currency Market">` +
+		`<Valute ID="R01235"><CharCode>USD</CharCode><Nominal>1</Nominal><Value>78,5012</Value></Valute>` +
+		`<Valute ID="R01335"><CharCode>KZT</CharCode><Value>16,3025</Value></Valute>` +
+		`</ValCurs>`)
+	srv, _ := serve(t, http.StatusOK, body)
+
+	c := cbr.New(srv.Client(), srv.URL)
+	rates, err := c.RatesOn(context.Background(), time.Now())
+	if err == nil {
+		t.Fatalf("RatesOn accepted a record with no <Nominal> and returned %d rates; "+
+			"KZT would have been published a hundred times too high", len(rates))
+	}
+	if !strings.Contains(err.Error(), "KZT") {
+		t.Errorf("error = %q, want it to name KZT — otherwise nobody can tell which record the feed broke", err)
+	}
+	if rates != nil {
+		t.Errorf("RatesOn returned %d rates alongside the error; a partial answer here is "+
+			"indistinguishable from a complete one", len(rates))
+	}
+}
+
+// The same rule on the history feed, which carries its own Nominal per record
+// because the bank re-scales how many units it quotes over the years.
+func TestRatesRange_MissingNominalIsRefused(t *testing.T) {
+	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
+		`<ValCurs ID="R01335" DateRange1="01.07.2026" DateRange2="02.07.2026" name="Foreign Currency Market">` +
+		`<Record Date="01.07.2026" Id="R01335"><Nominal>100</Nominal><Value>16,3025</Value></Record>` +
+		`<Record Date="02.07.2026" Id="R01335"><Value>16,4111</Value></Record>` +
+		`</ValCurs>`)
+	srv, _ := serve(t, http.StatusOK, body)
+
+	c := cbr.New(srv.Client(), srv.URL)
+	from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	rates, err := c.RatesRange(context.Background(), "R01335", "KZT", from, from.AddDate(0, 0, 1))
+	if err == nil {
+		t.Fatalf("RatesRange accepted a record with no <Nominal> and returned %d rates", len(rates))
+	}
+	if !strings.Contains(err.Error(), "KZT") {
+		t.Errorf("error = %q, want it to name KZT", err)
 	}
 }
