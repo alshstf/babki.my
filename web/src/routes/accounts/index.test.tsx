@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -43,10 +43,10 @@ function serve(routes: Record<string, { status?: number; body?: unknown }>) {
   });
 }
 
-function makeSession(): SessionInfo {
+function makeSession(role: SessionInfo["role"] = "owner"): SessionInfo {
   return {
     user: { id: "user-1", username: "alex", display_name: "Alex" },
-    role: "owner",
+    role,
     space_id: "space-1",
     space_name: "Family",
     base_currency: "RUB",
@@ -91,9 +91,9 @@ function makeSummary(overrides: Partial<Summary> = {}): Summary {
 // Renders AccountsPage the way AppLayout does: inside the screen-currency
 // provider (which the page reports into) and a router (its rows link to the
 // detail route).
-function renderPage() {
+function renderPage(role: SessionInfo["role"] = "owner") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  qc.setQueryData(["session"], makeSession());
+  qc.setQueryData(["session"], makeSession(role));
   const rootRoute = createRootRoute({
     component: () => (
       <ScreenCurrencyCountProvider>
@@ -258,5 +258,71 @@ describe("AccountsPage — an archive the server refused", () => {
 
     const reopened = await openArchive();
     expect(within(reopened).queryByText("Не удалось архивировать счет")).toBeNull();
+  });
+});
+
+// buttonNames is every button this screen currently offers, by the name a
+// person actually reads off it — the accessible name, so an icon-only control
+// is named by its aria-label rather than by an empty string.
+//
+// It exists so the assertions below can be about the DIFFERENCE between two
+// roles' screens instead of about a list of controls typed into a test. A
+// hand-written list goes on looking complete the day somebody adds a control it
+// does not mention, which is exactly the day the test stops being worth
+// anything; a diff cannot, because the new control turns up in it by itself
+// (the same reason the T-Invest role tests take their route list from the
+// router rather than from a literal — see internal/importer/tinvest).
+function buttonNames(): string[] {
+  return screen
+    .queryAllByRole("button")
+    .map((b) => (b.getAttribute("aria-label") ?? b.textContent ?? "").trim())
+    .filter((name) => name !== "")
+    .sort();
+}
+
+// #14: every one of these was verified by hand and by nothing else. A viewer is
+// a member who may read the family's money and change none of it, and the
+// server enforces that — but a screen offering controls that always fail is its
+// own defect, and nothing here noticed when one appeared.
+describe("AccountsPage — what a viewer may do", () => {
+  beforeEach(() => {
+    serve({
+      "/api/v1/accounts": { body: [makeAccount()] },
+      "/api/v1/summary": { body: makeSummary() },
+    });
+  });
+
+  it("offers a viewer exactly the owner's screen minus its write controls", async () => {
+    renderPage("owner");
+    await screen.findByTestId("account-balance-acc-1");
+    const asOwner = buttonNames();
+
+    cleanup();
+
+    renderPage("viewer");
+    await screen.findByTestId("account-balance-acc-1");
+    const asViewer = buttonNames();
+
+    // Written out rather than derived from the page: the point of the literal
+    // is that a control gated in a NEW place has to be added to it deliberately,
+    // by somebody who then has to say why it belongs there.
+    expect(asOwner.filter((name) => !asViewer.includes(name))).toEqual([
+      "Действия",
+      "Добавить счет",
+    ]);
+    // And nothing the other way round: a viewer must not be offered a control
+    // the owner is not, which is what a mis-negated condition looks like.
+    expect(asViewer.filter((name) => !asOwner.includes(name))).toEqual([]);
+    // The screen is still a screen: the figures a viewer came for are there.
+    expect(screen.getByText("Наличные")).toBeInTheDocument();
+  });
+
+  it("gives an editor the write controls a viewer does not get", async () => {
+    // Otherwise "a viewer sees no write controls" would also pass on a page
+    // that shows them to nobody at all.
+    renderPage("editor");
+    await screen.findByTestId("account-balance-acc-1");
+    expect(screen.getByRole("button", { name: "Добавить счет" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Действия" })).toBeInTheDocument();
   });
 });

@@ -1,9 +1,11 @@
 package operation
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +35,73 @@ var ErrRemovalCountMismatch = errors.New("asked to remove operations that are no
 type Store struct{ db db.Executor }
 
 func NewStore(x db.Executor) *Store { return &Store{db: x} }
+
+// accountLockSQL takes the lock that makes an account's journal one writer's at
+// a time, and doubles as the proof that the account is the caller's: no row back
+// means it is not in this space, the same thing insertSQL's own WHERE clause
+// says (see ErrAccountNotInSpace).
+//
+// FOR NO KEY UPDATE, not FOR UPDATE, and the difference is not cosmetic. Every
+// INSERT into operations takes a FOR KEY SHARE lock on the account row for its
+// foreign key, as does every balance written for that account — and FOR UPDATE
+// conflicts with FOR KEY SHARE while FOR NO KEY UPDATE does not. The stronger
+// mode would therefore have journal writers block anything that merely
+// REFERENCES the account, which is a great deal more than the mutual exclusion
+// wanted here. FOR NO KEY UPDATE conflicts with itself, which is exactly and
+// only what this needs.
+const accountLockSQL = `SELECT id FROM accounts WHERE space_id = $1 AND id = $2 FOR NO KEY UPDATE`
+
+// WithAccountsLocked runs fn inside ONE transaction that holds an exclusive
+// journal lock on each of accountIDs, with a Store bound to that transaction —
+// so a caller can read an account's journal, decide on it, and write, with
+// nothing able to slip in between.
+//
+// THAT WINDOW IS THE WHOLE REASON IT EXISTS (issue #17). The write paths judge a
+// request by replaying the account's journal through the engine, and until this
+// existed the replay ran on the pool, outside any transaction: two sells of the
+// same holding, submitted at once, each saw a journal without the other, each
+// was told it fitted, and both landed. The account then held a journal that no
+// longer replays at all — every later read of its positions answering 422, for
+// two requests that were each individually fine. Reading INSIDE the lock is what
+// makes the second request see the first, so it is refused exactly as it would
+// have been had the two arrived a second apart.
+//
+// The lock is taken one account at a time, in a sorted order, and both halves of
+// that matter. Sorted, because a transfer locks two accounts and two transfers
+// in opposite directions would otherwise take them in opposite orders and
+// deadlock. One statement at a time, because a single statement locking several
+// rows would have to rest on where the planner puts its locking step relative to
+// its sort — a claim about the planner that nothing here needs to make. Two
+// round trips is the most any caller of this package pays.
+//
+// fn's error is returned unchanged and rolls the transaction back: it is the
+// caller's own decision about the caller's own domain, and dressing it up here
+// would hide which of the two the failure was.
+func (s *Store) WithAccountsLocked(ctx context.Context, spaceID uuid.UUID, accountIDs []uuid.UUID, fn func(*Store) error) error {
+	ids := slices.Clone(accountIDs)
+	slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+	ids = slices.Compact(ids)
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	for _, id := range ids {
+		var locked uuid.UUID
+		if err := tx.QueryRow(ctx, accountLockSQL, spaceID, id).Scan(&locked); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("%w: %w", ErrAccountNotInSpace, pgx.ErrNoRows)
+			}
+			return err
+		}
+	}
+	if err := fn(NewStore(tx)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
 
 const cols = `id, space_id, account_id, instrument_id, type, occurred_on,
 	settled_on, quantity, price, amount_minor, currency, fee_minor, note,

@@ -65,6 +65,19 @@ func newFixture(t *testing.T) fixture {
 	}
 }
 
+// newAccount adds one more brokerage account to the fixture's space, for tests
+// that need an account nothing else has written to — a round of a concurrency
+// test, say, which must not be able to pass because an earlier round left a
+// position behind.
+func (f fixture) newAccount(t *testing.T) uuid.UUID {
+	t.Helper()
+	a, err := f.accStore.Create(f.ctx, f.spaceID, nil, "Брокер "+uuid.NewString(), account.TypeBrokerage, "RUB", "")
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+	return a.ID
+}
+
 // lotRows counts the transfer-lot rows persisted for one operation, reading
 // the table directly: whether the rows are really gone after a delete cannot
 // be observed through the store's own API once the operation itself is gone.

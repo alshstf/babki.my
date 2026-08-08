@@ -1690,3 +1690,109 @@ func TestRealizationsSumToRealizedPnL(t *testing.T) {
 		t.Error("no released piece came out undated — the fixture no longer exercises basis with no known purchase date")
 	}
 }
+
+// TestAmortizationOnAPaperNeverAcquiredIsRefused pins the refusal that closes
+// the phantom amortization of issue #17.
+//
+// The mechanics of the fault are two lines of arithmetic: with nothing acquired
+// there is no basis, the amortization retires min(amount, 0) = 0 of it, and the
+// event's result is the WHOLE payment. So a single mistyped instrument turned
+// 4 000,00 ₽ of somebody's coupon schedule into 4 000,00 ₽ of realized profit
+// under a position with no shares, no cost and no purchase behind it — a figure
+// that goes into a tax return, with nothing on any screen to tell it from a real
+// one.
+//
+// The literal below is the number the OLD engine published, written out rather
+// than derived: it is what the test is against, and computing it from the
+// fixture would let the fixture and the claim move together.
+func TestAmortizationOnAPaperNeverAcquiredIsRefused(t *testing.T) {
+	_, err := portfolio.Compute([]portfolio.Operation{
+		op(portfolio.TypeAmortization, 10, &ofz, "", "", 400_000, 0),
+	})
+	if !errors.Is(err, portfolio.ErrBadOperation) {
+		t.Fatalf("Compute = %v, want ErrBadOperation — 400000 minor would otherwise be realized profit on a paper nobody bought", err)
+	}
+	if !strings.Contains(err.Error(), "never acquired") {
+		t.Errorf("refusal = %q, want it to say the paper was never acquired", err)
+	}
+}
+
+// TestAmortizationIsAllowedWherePrincipalCanCome checks the three shapes the
+// refusal above must NOT reach, each of which is a journal this program itself
+// writes. A guard that refuses those is worse than the phantom it prevents: it
+// takes the whole account's positions screen down for healthy data.
+func TestAmortizationIsAllowedWherePrincipalCanCome(t *testing.T) {
+	// Same-day maturity: the redemption empties the position (quantity 0, cost
+	// 0) and the final partial repayment is folded AFTER it, because within one
+	// date the journal folds by the order it was recorded in. This is the shape
+	// the importer produces from what a broker sends on a maturity date.
+	redeemedThenRepaid := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &ofz, "10", "950", -950_000, 0),
+		op(portfolio.TypeSell, 10, &ofz, "10", "1000", 1_000_000, 0),
+		op(portfolio.TypeAmortization, 10, &ofz, "", "", 30_000, 0),
+	}
+	// A bond still held whose basis earlier amortizations have used up: further
+	// principal really is pure gain, and that is deliberately supported.
+	basisSpent := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &ofz, "10", "950", -950_000, 0),
+		op(portfolio.TypeAmortization, 5, &ofz, "", "", 950_000, 0),
+		op(portfolio.TypeAmortization, 6, &ofz, "", "", 40_000, 0),
+	}
+	// A parcel that arrived by transfer is an acquisition too — the account did
+	// not buy it here, but a lot of it exists and the principal has somewhere to
+	// come from.
+	arrivedByTransfer := []portfolio.Operation{
+		{
+			Type: portfolio.TypeTransferIn, OccurredOn: day(1), InstrumentID: &ofz,
+			Currency: "RUB", Quantity: dp("10"), AmountMinor: 950_000,
+		},
+		// Past the 950 000 the parcel carried, so the excess is realized and the
+		// figure below cannot come out right by the operation being ignored.
+		op(portfolio.TypeAmortization, 5, &ofz, "", "", 990_000, 0),
+	}
+	for name, tc := range map[string]struct {
+		ops          []portfolio.Operation
+		wantRealized int64
+	}{
+		// 50 000 from the sale, then the repayment is realized whole: the basis
+		// left after the redemption is nothing, which is the truth here.
+		"repayment folded after the same-day redemption": {redeemedThenRepaid, 50_000 + 30_000},
+		"basis already fully amortized":                  {basisSpent, 40_000},
+		"parcel acquired by transfer":                    {arrivedByTransfer, 40_000},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pos, err := portfolio.Compute(tc.ops)
+			if err != nil {
+				t.Fatalf("Compute: %v", err)
+			}
+			if pos[ofz].RealizedPnLMinor != tc.wantRealized {
+				t.Errorf("realized = %d, want %d", pos[ofz].RealizedPnLMinor, tc.wantRealized)
+			}
+		})
+	}
+}
+
+// TestPaymentsOnAPaperNeverAcquiredStayLegitimate is the other half of the
+// boundary: an amortization is the ONE payment the engine turns into a claim
+// about cost, and the refusal must not spread to the payments that make no such
+// claim. A dividend, a coupon and the tax withheld from either are booked as
+// income in the currency they arrived in and say nothing about what the paper
+// cost — a journal that opens with payments alone is ordinary (the paper was
+// bought before the import window, or arrived by a transfer nobody recorded).
+func TestPaymentsOnAPaperNeverAcquiredStayLegitimate(t *testing.T) {
+	pos, err := portfolio.Compute([]portfolio.Operation{
+		op(portfolio.TypeCoupon, 10, &ofz, "", "", 12_000, 0),
+		op(portfolio.TypeDividend, 11, &ofz, "", "", 3_000, 0),
+		op(portfolio.TypeTax, 12, &ofz, "", "", -1_500, 0),
+	})
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[ofz]
+	if p.IncomeMinorIn("RUB") != 12_000+3_000-1_500 {
+		t.Errorf("income = %d, want 13500", p.IncomeMinorIn("RUB"))
+	}
+	if p.RealizedPnLMinor != 0 {
+		t.Errorf("realized = %d, want 0 — payments claim nothing about cost", p.RealizedPnLMinor)
+	}
+}

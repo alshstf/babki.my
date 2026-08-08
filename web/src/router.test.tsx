@@ -10,7 +10,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import "@/i18n";
-import { Gate } from "./router";
+import { Gate, routeTree } from "./router";
 import type { SessionInfo } from "@/api/session";
 
 // openapi-fetch captures globalThis.fetch at import time
@@ -266,5 +266,43 @@ describe("Gate — a failed refresh does not discard what it already knows", () 
       expect(screen.getByTestId("app-screen")).toBeInTheDocument();
     });
     expect(screen.queryByText(/не удалось узнать, выполнен ли вход/i)).not.toBeInTheDocument();
+  });
+});
+
+// #15: the application was one file, so every screen — the whole T-Invest
+// connection wizard included — had to arrive before the login form could be
+// drawn. The screens are now fetched when they are first visited, and the risk
+// that introduces is not a bigger download but a screen that never appears: an
+// import path that resolves to nothing, an export named wrong, a boundary that
+// waits for ever.
+//
+// So this walks the APPLICATION'S OWN route tree rather than a stand-in built
+// out of eager components, which could not show the thing in question at all.
+describe("the router — screens fetched when they are visited", () => {
+  it("renders a screen that is not part of the first download", async () => {
+    serve({
+      "/api/v1/setup/status": { body: { setup_needed: false } },
+      "/api/v1/auth/me": { body: makeSession() },
+      "/api/v1/members": {
+        body: [{ id: "user-1", username: "alex", display_name: "Alex", role: "owner" }],
+      },
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createRouter({
+      routeTree,
+      history: createMemoryHistory({ initialEntries: ["/family"] }),
+    });
+    render(
+      <QueryClientProvider client={qc}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    // The family screen's own heading, from the family screen's own chunk.
+    expect(await screen.findByRole("heading", { name: "Семья" })).toBeInTheDocument();
+    // And the shell around it, which is NOT deferred: it is on the way to every
+    // signed-in screen, so putting it behind a second round trip would only
+    // delay the first one that matters.
+    expect(screen.getByRole("link", { name: /Счета/ })).toBeInTheDocument();
   });
 });

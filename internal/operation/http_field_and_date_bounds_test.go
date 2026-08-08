@@ -57,6 +57,50 @@ func TestTransferWithoutAnInstrumentNamesTheMissingField(t *testing.T) {
 	}
 }
 
+// TestTransferFromAnAccountThatIsNotThereSaysSo is the same lesson one field
+// along, and it arrived with the journal lock (#17): the write path now settles
+// which accounts it is about BEFORE it reads anything, so an account id that is
+// not this space's is answered as a missing account — 404 — rather than by
+// searching a journal that does not exist.
+//
+// It used to be answered with «no source history for instrument», 400: a
+// sentence about a paper the account has never held, said about an account that
+// is not there at all. A reader given that goes looking through a journal for a
+// row that was never the problem, exactly as in #19.
+func TestTransferFromAnAccountThatIsNotThereSaysSo(t *testing.T) {
+	url, c := newAPI(t)
+
+	resp := do(t, c, "POST", url+"/api/v1/accounts",
+		`{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
+	if resp.StatusCode != 201 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create account = %d: %s", resp.StatusCode, b)
+	}
+	var acc idResp
+	decodeJSON(t, resp, &acc)
+
+	resp = do(t, c, "POST", url+"/api/v1/instruments",
+		`{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`)
+	if resp.StatusCode != 201 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create instrument = %d: %s", resp.StatusCode, b)
+	}
+	var sber idResp
+	decodeJSON(t, resp, &sber)
+
+	body := fmt.Sprintf(`{"from_account_id":"11111111-1111-1111-1111-111111111111",
+		"to_account_id":%q,"instrument_id":%q,"quantity":"4","occurred_on":"2026-07-05"}`,
+		acc.ID, sber.ID)
+	resp = do(t, c, "POST", url+"/api/v1/operations/transfer", body)
+	got, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 404 {
+		t.Fatalf("transfer from an unknown account = %d, want 404: %s", resp.StatusCode, got)
+	}
+	if strings.Contains(string(got), "no source history") {
+		t.Errorf("refusal = %s, want it not to blame the source account's journal for an account that is not there", got)
+	}
+}
+
 // TestOccurredOnIsHeldToBothEndsOfItsRangeOnBothWritePaths pins the dates an
 // operation may carry, on the ordinary write path and on the transfer one
 // alike (#19).
