@@ -13,6 +13,15 @@ const fetchMock = vi.hoisted(() => {
   return fn;
 });
 
+// One page of the catalog as the endpoint answers it: an envelope saying
+// whether anything is behind this page, never the bare array it used to be
+// (#104). Spelled out here rather than defaulted inside `serve`, so that a
+// test about paging says what the server told the client and every other test
+// says «this is the whole catalog» out loud.
+function catalog(instruments: unknown[], hasMore = false) {
+  return { instruments, has_more: hasMore };
+}
+
 // A fresh Response per call: a single one handed to mockResolvedValue works
 // once and then throws, because a body can only be consumed once.
 function serve(status: number, body: unknown) {
@@ -55,7 +64,7 @@ describe("InstrumentPicker — a search that did not answer", () => {
   });
 
   it("still calls an empty answer «ничего не найдено»", async () => {
-    serve(200, []);
+    serve(200, catalog([]));
     renderPicker();
 
     expect(await screen.findByText("Ничего не найдено")).toBeInTheDocument();
@@ -69,7 +78,7 @@ describe("InstrumentPicker — a search that did not answer", () => {
   // the previous key's rows to the next key (placeholderData: keepPreviousData),
   // so from the second search onwards there is always something in `data`.
   it("does not carry an empty answer over to a request the browser never sent", async () => {
-    serve(200, []);
+    serve(200, catalog([]));
     renderPicker();
     expect(await screen.findByText("Ничего не найдено")).toBeInTheDocument();
 
@@ -85,7 +94,7 @@ describe("InstrumentPicker — a search that did not answer", () => {
   });
 
   it("does not carry an empty answer over to a search that is still in flight", async () => {
-    serve(200, []);
+    serve(200, catalog([]));
     renderPicker();
     expect(await screen.findByText("Ничего не найдено")).toBeInTheDocument();
 
@@ -105,17 +114,20 @@ describe("InstrumentPicker — a search that did not answer", () => {
     // The other half of the decision: rows carried over are not a verdict, but
     // they are real instruments and picking one is right whatever query fetched
     // them, so they stay rather than flashing away on every keystroke.
-    serve(200, [
-      {
-        id: "11111111-1111-1111-1111-111111111111",
-        type: "share",
-        name: "Сбербанк",
-        ticker: "SBER",
-        isin: "",
-        figi: "",
-        currency: "RUB",
-      },
-    ]);
+    serve(
+      200,
+      catalog([
+        {
+          id: "11111111-1111-1111-1111-111111111111",
+          type: "share",
+          name: "Сбербанк",
+          ticker: "SBER",
+          isin: "",
+          figi: "",
+          currency: "RUB",
+        },
+      ]),
+    );
     renderPicker();
     expect(await screen.findByText("Сбербанк")).toBeInTheDocument();
 
@@ -134,11 +146,114 @@ describe("InstrumentPicker — a search that did not answer", () => {
     // isPending && isFetching — is FALSE here, and a list keyed on isLoading
     // alone falls straight through to the empty caption.
     onlineManager.setOnline(false);
-    serve(200, []);
+    serve(200, catalog([]));
     renderPicker();
 
     expect(await screen.findByText(/список инструментов не загружен/i)).toBeInTheDocument();
     expect(screen.queryByText("Ничего не найдено")).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// #104: this list IS the catalog when the search box is empty, and it used to
+// stop dead at the first page with no way past it — the endpoint took no
+// `offset` at all. What made that expensive rather than merely annoying is the
+// control right underneath: «Создать инструмент», whose duplicate this
+// application can neither merge nor delete.
+describe("InstrumentPicker — a catalog longer than one page", () => {
+  // The catalog served by offset, so a request that ignored the offset would
+  // get page one again. The pages carry DIFFERENT instruments, so appending
+  // and replacing are told apart by what is on screen and not by a count.
+  function serveByOffset(pages: { instruments: unknown[]; has_more: boolean }[]) {
+    const asked: string[] = [];
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const params = new URL(url, "http://localhost").searchParams;
+      asked.push(params.get("offset") ?? "");
+      const index = Number(params.get("offset") ?? "0") / 2;
+      return Promise.resolve(
+        new Response(JSON.stringify(pages[index] ?? { instruments: [], has_more: false }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+    return asked;
+  }
+
+  function share(id: string, name: string) {
+    return { id, type: "share", name, ticker: "", isin: "", figi: "", currency: "RUB" };
+  }
+
+  it("reaches an instrument the first page does not hold", async () => {
+    const asked = serveByOffset([
+      { instruments: [share("i-1", "Алроса"), share("i-2", "Банк")], has_more: true },
+      { instruments: [share("i-3", "Ветер")], has_more: false },
+    ]);
+    renderPicker();
+
+    expect(await screen.findByText("Алроса")).toBeInTheDocument();
+    expect(screen.queryByText("Ветер")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Показать ещё" }));
+
+    // Both pages at once: the second is added to the first, not put in its
+    // place — the reader keeps what they were already looking at.
+    expect(await screen.findByText("Ветер")).toBeInTheDocument();
+    expect(screen.getByText("Алроса")).toBeInTheDocument();
+    // And the second request asked where the first page ended, which is the
+    // whole of what «offset» is for.
+    expect(asked).toEqual(["0", "2"]);
+  });
+
+  it("stops offering more once the server says there is none", async () => {
+    serveByOffset([
+      { instruments: [share("i-1", "Алроса"), share("i-2", "Банк")], has_more: true },
+      { instruments: [share("i-3", "Ветер")], has_more: false },
+    ]);
+    renderPicker();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Показать ещё" }));
+
+    expect(await screen.findByText("Ветер")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Показать ещё" })).not.toBeInTheDocument();
+  });
+
+  it("offers nothing more when the first page is the whole catalog", async () => {
+    // A full-looking page with nothing behind it. The client is told so and
+    // must not offer a control that would fetch an empty page — the same page
+    // length as the case above, and the opposite fact.
+    serveByOffset([{ instruments: [share("i-1", "Алроса"), share("i-2", "Банк")], has_more: false }]);
+    renderPicker();
+
+    expect(await screen.findByText("Алроса")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Показать ещё" })).not.toBeInTheDocument();
+  });
+
+  it("does not offer to page through a search nobody is running any more", async () => {
+    // Rows from the previous query stay on screen while the next keystroke is
+    // in flight (keepPreviousData), and «has_more» travels with them — but it
+    // is an answer about the OLD text in the box. Paging on it would fetch the
+    // second page of a search the reader has already typed past.
+    //
+    // The picker carries no guard for this: react-query reports no next page
+    // while the rows on screen are the previous query's, so the control is
+    // already gone. That is a property of the library rather than of this
+    // file, which is exactly why it is pinned here — if it ever stops holding,
+    // this goes red and the picker needs a guard of its own.
+    serveByOffset([
+      { instruments: [share("i-1", "Алроса"), share("i-2", "Банк")], has_more: true },
+    ]);
+    renderPicker();
+    expect(await screen.findByText("Алроса")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Показать ещё" })).toBeInTheDocument();
+
+    fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+    fireEvent.change(screen.getByPlaceholderText("Поиск инструмента"), {
+      target: { value: "Ветер" },
+    });
+
+    expect(screen.getByText("Алроса")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Показать ещё" })).not.toBeInTheDocument();
   });
 });

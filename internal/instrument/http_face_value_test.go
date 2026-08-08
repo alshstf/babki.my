@@ -95,14 +95,16 @@ func readFacePair(t *testing.T, url string, c *http.Client, id string) facePair 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list instruments = %d", resp.StatusCode)
 	}
-	var out []struct {
-		ID string `json:"id"`
-		facePair
+	var out struct {
+		Instruments []struct {
+			ID string `json:"id"`
+			facePair
+		} `json:"instruments"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode catalog: %v", err)
 	}
-	for _, i := range out {
+	for _, i := range out.Instruments {
 		if i.ID == id {
 			return i.facePair
 		}

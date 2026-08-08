@@ -35,7 +35,7 @@ import {
   type Operation,
   type OperationInBaseGap,
 } from "@/api/operations";
-import { useInstruments, type Instrument } from "@/api/instruments";
+import { useInstrumentIndex, type Instrument } from "@/api/instruments";
 import type { CostBasisRules } from "@/api/tax-residencies";
 
 // Whether this row's amount is not money that moved on the day it is dated but
@@ -253,11 +253,18 @@ export function OperationsTable({
   // backend returns a stable occurred_on/created_at DESC order, so consecutive
   // offsets partition the journal with nothing repeated and nothing skipped.
   const operations = useOperations(accountId, JOURNAL_PAGE_SIZE);
-  // Instrument catalog for name lookup, capped at 50 (see useInstruments) —
-  // enough for the MVP catalog. If it ever grows past 50, an operation whose
-  // instrument isn't in this page falls back to an id suffix below instead
-  // of failing to render; not worth an issue while the catalog stays small.
-  const instruments = useInstruments("");
+  // Instrument names, by id, for the whole catalog — not one page of it.
+  //
+  // This used to be the picker's own first-page query, and it carried a note
+  // saying that an instrument past the fiftieth would fall back to an id suffix
+  // and that this was not worth an issue while the catalog stayed small. The
+  // catalog is not small any more: one broker import brings in around a hundred
+  // papers and every sync adds to them, so from the fiftieth on — roughly half
+  // that catalog — the column had nothing to print but «#a1b2c3d4» (#104). A
+  // listing may honestly stop where the reader stopped scrolling; a lookup
+  // cannot, because nothing on the row says a name exists and simply was not
+  // fetched. See useInstrumentIndex for what the walk costs.
+  const instruments = useInstrumentIndex();
   const deleteOperation = useDeleteOperation();
   const [deleteTarget, setDeleteTarget] = useState<Operation | null>(null);
   const list = operations.data?.pages.flatMap((page) => page.operations) ?? [];
@@ -319,12 +326,11 @@ export function OperationsTable({
   // country's rule IS what is computed (see costBasisCaveat).
   const costBasisTitle = costBasisRules ? costBasisCaveat(t, costBasisRules) : undefined;
 
-  // The catalog entry behind a row, when the loaded page happens to hold it.
-  // Undefined for a row with no instrument at all (a deposit, a fee) and for
-  // one whose instrument sits past the fiftieth (see useInstruments), so every
+  // The catalog entry behind a row. Undefined for a row with no instrument at
+  // all (a deposit, a fee) and while the catalog is still being read, so every
   // caller has to work without it.
   const instrumentOf = (instrumentId: string | null | undefined): Instrument | undefined =>
-    instrumentId ? instruments.data?.find((instrument) => instrument.id === instrumentId) : undefined;
+    instrumentId ? instruments.get(instrumentId) : undefined;
 
   const instrumentName = (instrumentId: string | null | undefined) => {
     if (!instrumentId) return "—";

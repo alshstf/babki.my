@@ -254,7 +254,7 @@ describe("AccountDetailPage", () => {
         })),
       },
       "/operations": { body: { operations: [], has_more: false } },
-      "/api/v1/instruments": { body: { instruments: [] } },
+      "/api/v1/instruments": { body: { instruments: [], has_more: false } },
       // The space-wide summary is deliberately broken in every test here:
       // this page must not depend on it at all.
       "/api/v1/summary": { status: 500, body: { error: "internal error" } },
@@ -326,7 +326,7 @@ describe("AccountDetailPage", () => {
         }),
       },
       "/operations": { body: { operations: [], has_more: false } },
-      "/api/v1/instruments": { body: { instruments: [] } },
+      "/api/v1/instruments": { body: { instruments: [], has_more: false } },
     });
 
     renderPage();
@@ -370,7 +370,7 @@ describe("AccountDetailPage", () => {
         ),
       },
       "/operations": { body: { operations: [], has_more: false } },
-      "/api/v1/instruments": { body: { instruments: [] } },
+      "/api/v1/instruments": { body: { instruments: [], has_more: false } },
     });
 
     renderPage();
@@ -397,7 +397,7 @@ describe("AccountDetailPage", () => {
         ),
       },
       "/operations": { body: { operations: [], has_more: false } },
-      "/api/v1/instruments": { body: { instruments: [] } },
+      "/api/v1/instruments": { body: { instruments: [], has_more: false } },
     });
 
     renderPage();
@@ -456,7 +456,7 @@ describe("AccountDetailPage", () => {
           has_more: false,
         },
       },
-      "/api/v1/instruments": { body: [] },
+      "/api/v1/instruments": { body: { instruments: [], has_more: false } },
     });
 
     renderPage(makeSession({ tax_residency: "GB", cost_basis_rules: britain }));
@@ -484,7 +484,7 @@ describe("AccountDetailPage", () => {
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": { body: makePositionsBody(russia, [], makeRealizedTotal({ by_currency: [] })) },
       "/operations": { body: { operations: [makeOperation()], has_more: false } },
-      "/api/v1/instruments": { body: [] },
+      "/api/v1/instruments": { body: { instruments: [], has_more: false } },
     });
 
     renderPage(makeSession({ tax_residency: "GB", cost_basis_rules: britain }));
@@ -520,7 +520,7 @@ describe("AccountDetailPage", () => {
           has_more: false,
         },
       },
-      "/api/v1/instruments": { body: [] },
+      "/api/v1/instruments": { body: { instruments: [], has_more: false } },
     });
 
     renderPage(makeSession({ tax_residency: "GB", cost_basis_rules: britain }));
@@ -540,7 +540,7 @@ describe("AccountDetailPage", () => {
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": { body: makePositionsBody(makeSession().cost_basis_rules) },
       "/operations": { body: { operations: [], has_more: false } },
-      "/api/v1/instruments": { body: { instruments: [] } },
+      "/api/v1/instruments": { body: { instruments: [], has_more: false } },
     });
 
     renderPage();

@@ -32,7 +32,10 @@ function serve(instruments: Instrument[]) {
     const path = new URL(url, "http://localhost").pathname;
     if (path.endsWith("/api/v1/instruments")) {
       return Promise.resolve(
-        new Response(JSON.stringify(instruments), {
+        // The catalog endpoint answers an envelope, not a bare array (#104):
+        // `has_more` false says this fixture is the whole catalog, which is
+        // true of every test in this file.
+        new Response(JSON.stringify({ instruments, has_more: false }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         }),

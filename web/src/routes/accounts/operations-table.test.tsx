@@ -106,7 +106,7 @@ const britain: CostBasisRules = {
 
 // A catalog entry, as the instruments endpoint returns it. Only the price
 // tests need one: everything else renders operations with no instrument at
-// all, or lets the name fall back to an id suffix.
+// all, or lets the name fall back to an id suffix while the catalog loads.
 function makeInstrument(overrides: Partial<Instrument> = {}): Instrument {
   return {
     id: "instr-1",
@@ -131,9 +131,9 @@ function renderTable({
   canDelete = false,
 }: {
   operations: Operation[];
-  // The catalog page the table looks names and types up in. Empty by default,
-  // which is also what a real page looks like for an instrument past the
-  // fiftieth (see useInstruments).
+  // The catalog the table looks names and types up in, served as one whole
+  // page. Empty by default: most tests here render rows with no instrument on
+  // them at all.
   instruments?: Instrument[];
   // Whether the server says the journal continues past this page. Defaults to
   // false — every test that is not about paging is looking at a whole journal.
@@ -149,7 +149,7 @@ function renderTable({
 }) {
   serve({
     "/operations": { body: { operations, has_more: hasMore } },
-    "/instruments": { body: instruments },
+    "/instruments": { body: { instruments, has_more: false } },
   });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -1270,9 +1270,9 @@ describe("OperationsTable", () => {
       expect(title).not.toContain("номинал");
     });
 
-    it("still says what the number is when the catalog page has no such instrument", async () => {
-      // Past the fiftieth instrument the lookup finds nothing (see
-      // useInstruments), and the sentence that survives is the one true of
+    it("still says what the number is while the catalog has not answered for the row", async () => {
+      // Until the catalog is in hand the lookup finds nothing (see
+      // useInstrumentIndex), and the sentence that survives is the one true of
       // every priced row whatever the instrument turns out to be.
       renderTable({ operations: [trade({ instrument_id: "instr-off-page" })] });
 
@@ -1346,7 +1346,7 @@ describe("OperationsTable", () => {
         const parsed = new URL(url, "http://localhost");
         let body: unknown = null;
         if (parsed.pathname.endsWith("/instruments")) {
-          body = [];
+          body = { instruments: [], has_more: false };
         } else if (parsed.pathname.endsWith("/operations")) {
           asked.push({
             limit: parsed.searchParams.get("limit"),
@@ -1500,5 +1500,135 @@ describe("OperationsTable", () => {
       expect(await screen.findByText("Т-Инвестиции")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Удалить" })).not.toBeInTheDocument();
     });
+  });
+});
+
+// #104 on the journal. The instrument column is a LOOKUP, not a listing: it
+// holds an id and prints a name, and nothing on the row says a name exists and
+// was merely not fetched. While the catalog was a handful of instruments typed
+// in by hand, one page covered it and the fallback «#a1b2c3d4» was a corner
+// case; a broker import brings in around a hundred papers, so it became most of
+// the journal.
+describe("OperationsTable — an instrument the first page of the catalog does not hold", () => {
+  // The catalog served by offset, in pages the reader never sees: the table
+  // walks them itself. `asked` records the offsets so that "it walked" is
+  // checked rather than assumed from the name appearing.
+  function serveCatalogPages(pages: { instruments: Instrument[]; has_more: boolean }[]) {
+    const asked: string[] = [];
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const parsed = new URL(url, "http://localhost");
+      let body: unknown = null;
+      if (parsed.pathname.endsWith("/instruments")) {
+        const offset = parsed.searchParams.get("offset") ?? "0";
+        asked.push(offset);
+        body = pages[Number(offset)] ?? { instruments: [], has_more: false };
+      } else if (parsed.pathname.endsWith("/operations")) {
+        body = {
+          operations: [makeOperation({ type: "buy", instrument_id: "instr-late", quantity: "1" })],
+          has_more: false,
+        };
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+    return asked;
+  }
+
+  function renderJournal() {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <ScreenCurrencyCountProvider>
+          <OperationsTable accountId="acc-1" canDelete={false} mode="native" baseCurrency="RUB" />
+        </ScreenCurrencyCountProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("names it, instead of printing the tail of its id", async () => {
+    // The row's instrument is on the SECOND page, so a lookup that reads one
+    // page prints «#nstr-late» — a string that is not wrong, and tells the
+    // owner nothing about which paper they bought.
+    const asked = serveCatalogPages([
+      { instruments: [makeInstrument({ id: "instr-early", name: "Алроса" })], has_more: true },
+      { instruments: [makeInstrument({ id: "instr-late", name: "Ветер" })], has_more: false },
+    ]);
+    renderJournal();
+
+    expect(await screen.findByText("Ветер")).toBeInTheDocument();
+    expect(screen.queryByText(/^#/)).not.toBeInTheDocument();
+    // Both pages were asked for, the second at the offset where the first
+    // ended — and nothing was asked for after the server said there was no more.
+    await waitFor(() => expect(asked).toEqual(["0", "1"]));
+  });
+
+  it("stops asking when the server says the catalog is whole", async () => {
+    const asked = serveCatalogPages([
+      { instruments: [makeInstrument({ id: "instr-late", name: "Ветер" })], has_more: false },
+    ]);
+    renderJournal();
+
+    expect(await screen.findByText("Ветер")).toBeInTheDocument();
+    // One request, not a walk that keeps going against an endpoint answering
+    // empty pages for ever.
+    await waitFor(() => expect(asked).toEqual(["0"]));
+  });
+
+  it("does not hammer a catalog page that keeps failing", async () => {
+    // A page that fails does not clear «есть ещё» — the pages already in hand
+    // still say there is more behind them — and it does clear «идёт загрузка».
+    // A walk that reads only those two asks again the instant the failure
+    // lands, for ever, from a screen nobody has to touch.
+    const asked: string[] = [];
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const parsed = new URL(url, "http://localhost");
+      if (parsed.pathname.endsWith("/instruments")) {
+        const offset = parsed.searchParams.get("offset") ?? "0";
+        asked.push(offset);
+        if (offset !== "0") {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: "internal error" }), {
+              status: 500,
+              headers: { "Content-Type": "application/json" },
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              instruments: [makeInstrument({ id: "instr-early", name: "Алроса" })],
+              has_more: true,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            operations: [makeOperation({ type: "buy", instrument_id: "instr-early", quantity: "1" })],
+            has_more: false,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    });
+    renderJournal();
+
+    // What did arrive is drawn: the failure costs the names behind it, not the
+    // ones already in hand.
+    expect(await screen.findByText("Алроса")).toBeInTheDocument();
+    await waitFor(() => expect(asked).toEqual(["0", "1"]));
+
+    // And it stays two. Long enough that a loop firing on every render would
+    // have run many times over.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(asked).toEqual(["0", "1"]);
   });
 });

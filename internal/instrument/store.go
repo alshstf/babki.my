@@ -186,26 +186,69 @@ func (s *Store) ByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]Instr
 	return out, rows.Err()
 }
 
-// Search finds instruments by name/ticker/isin fragment (case-insensitive).
-// Empty query lists the whole catalog ordered by name.
-func (s *Store) Search(ctx context.Context, query string, limit int) ([]Instrument, error) {
+// Search returns one page of the catalog matching a name/ticker/isin fragment
+// (case-insensitive), and says whether the catalog holds anything beyond it.
+// An empty query lists the whole catalog.
+//
+// THE SECOND RESULT IS FETCHED, NOT INFERRED, exactly as operation.Store's
+// ListByAccount fetches its own: one row beyond the page is asked for, and
+// whether it arrives IS the answer; the trim below drops it again before
+// anything downstream can mistake it for part of the page. Comparing the page's
+// length against the limit would be a different claim — one that stops being
+// true the moment a caller reduces the limit it was given — and reading a short
+// page as the end of a list is what #86 was, and half of what #104 was.
+//
+// ORDER BY name, id AND NOT BY name ALONE, which is what makes offsets
+// partition the catalog. NOTHING IN THIS PROGRAM HOLDS INSTRUMENT NAMES UNIQUE:
+// migration 0011's index covers the ticker and only for tradable rows, neither
+// write door here looks at the name beyond refusing an empty one, and the
+// T-Invest resolver creates rows under whatever the broker calls a paper. So
+// equal names are a state the catalog can reach — and among them Postgres may
+// return rows in any order it likes, a different one per query, since nothing
+// in the query asks for one. Two pages read from such a catalog would then
+// repeat one instrument and skip another, with both pages looking perfectly
+// ordinary. id is arbitrary but total, which is all a tie-break has to be.
+//
+// limit must be positive and offset must not be negative, enforced here rather
+// than asked for: a limit of zero asks the query for the probe row alone and
+// then trims the page to nothing, publishing an empty page with hasMore true —
+// a list showing nothing behind a control that loads nothing however often it
+// is pressed — and a negative one panics on the same trim. A negative offset is
+// refused by Postgres itself; refusing it here names the parameter instead. The
+// refusals are plain errors, not validation ones: the handler in front of this
+// answers 400 on both before it ever gets here (see parsePage), so a bad bound
+// arriving means the program is wrong, not the person using it.
+func (s *Store) Search(ctx context.Context, query string, limit, offset int) ([]Instrument, bool, error) {
+	if limit < 1 {
+		return nil, false, fmt.Errorf("search instruments: limit must be positive, got %d", limit)
+	}
+	if offset < 0 {
+		return nil, false, fmt.Errorf("search instruments: offset must not be negative, got %d", offset)
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+cols+` FROM instruments
 		WHERE $1 = '' OR name ILIKE '%'||$1||'%' OR ticker ILIKE '%'||$1||'%' OR isin ILIKE '%'||$1||'%'
-		ORDER BY name LIMIT $2`, query, limit)
+		ORDER BY name, id LIMIT $2 OFFSET $3`, query, limit+1, offset)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
 	var out []Instrument
 	for rows.Next() {
 		i, err := scan(rows)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		out = append(out, i)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	return out, hasMore, nil
 }
 
 // ListTradable returns instruments of type share, bond, or etf that carry a

@@ -3,6 +3,7 @@ package instrument_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -54,16 +55,16 @@ func TestInstrumentLifecycle(t *testing.T) {
 	}
 
 	// search by ticker fragment, case-insensitive
-	found, err := st.Search(ctx, "sber", 10)
-	if err != nil || len(found) != 1 || found[0].ID != share.ID {
-		t.Fatalf("Search sber = %+v, %v", found, err)
+	found, hasMore, err := st.Search(ctx, "sber", 10, 0)
+	if err != nil || len(found) != 1 || found[0].ID != share.ID || hasMore {
+		t.Fatalf("Search sber = %+v, %v, %v", found, hasMore, err)
 	}
 	// search by name fragment
-	if found, _ = st.Search(ctx, "офз", 10); len(found) != 1 {
+	if found, _, _ = st.Search(ctx, "офз", 10, 0); len(found) != 1 {
 		t.Fatalf("Search офз = %+v", found)
 	}
 	// empty query returns all ordered by name
-	if found, _ = st.Search(ctx, "", 10); len(found) != 2 {
+	if found, _, _ = st.Search(ctx, "", 10, 0); len(found) != 2 {
 		t.Fatalf("Search all = %d", len(found))
 	}
 
@@ -85,6 +86,190 @@ func TestInstrumentLifecycle(t *testing.T) {
 
 	if _, err := st.ByID(ctx, share.ID); err != nil {
 		t.Fatalf("ByID: %v", err)
+	}
+}
+
+// makeCatalog writes n instruments whose names sort as "Бумага 01".."Бумага NN"
+// and hands back their ids in that same order, so a test can say which rows a
+// page ought to hold rather than only how many.
+func makeCatalog(t *testing.T, st *instrument.Store, ctx context.Context, n int) []uuid.UUID {
+	t.Helper()
+	ids := make([]uuid.UUID, 0, n)
+	for i := 1; i <= n; i++ {
+		created, err := st.Create(ctx, instrument.Instrument{
+			Type:     instrument.TypeShare,
+			Name:     fmt.Sprintf("Бумага %02d", i),
+			Currency: "RUB",
+		})
+		if err != nil {
+			t.Fatalf("Create %d: %v", i, err)
+		}
+		ids = append(ids, created.ID)
+	}
+	return ids
+}
+
+func idsOf(found []instrument.Instrument) []uuid.UUID {
+	out := make([]uuid.UUID, 0, len(found))
+	for _, i := range found {
+		out = append(out, i.ID)
+	}
+	return out
+}
+
+// TestSearchPagesPartitionTheCatalog is #104's own property: consecutive
+// offsets hand back the catalog in order, once each, and the flag says when to
+// stop. Before this, the endpoint took no offset at all and anything past the
+// first page was unreachable by any request that could be made.
+//
+// The page sizes are written out as literals (5 rows in pages of 2) rather than
+// derived from a constant, so that the arithmetic below is checked against
+// something and not against itself.
+func TestSearchPagesPartitionTheCatalog(t *testing.T) {
+	st, ctx, _ := newStore(t)
+	ids := makeCatalog(t, st, ctx, 5)
+
+	var walked []uuid.UUID
+	for offset, page := 0, 0; ; page++ {
+		found, hasMore, err := st.Search(ctx, "", 2, offset)
+		if err != nil {
+			t.Fatalf("Search offset %d: %v", offset, err)
+		}
+		walked = append(walked, idsOf(found)...)
+		if !hasMore {
+			// Three pages of 2, 2 and 1: the last one is short, and its
+			// shortness is not what ended the walk — hasMore is.
+			if page != 2 {
+				t.Errorf("catalog of 5 walked in %d pages of 2, want 3", page+1)
+			}
+			break
+		}
+		if page > 5 {
+			t.Fatal("hasMore never went false walking a catalog of 5 in pages of 2")
+		}
+		offset += len(found)
+	}
+	if !reflect.DeepEqual(walked, ids) {
+		t.Errorf("walking the catalog in pages of 2 gave %v, want %v (every instrument once, "+
+			"in name order): a page that repeats or skips one is what an offset with no total "+
+			"order behind it produces", walked, ids)
+	}
+}
+
+// TestSearchAnswersHasMoreFromTheCatalogAndNotFromThePagesLength pins the one
+// thing that cannot be derived afterwards. A full page at the very end of the
+// catalog and a full page with more behind it are the same length, so length
+// answers neither question; the probe row is what tells them apart.
+func TestSearchAnswersHasMoreFromTheCatalogAndNotFromThePagesLength(t *testing.T) {
+	st, ctx, _ := newStore(t)
+	makeCatalog(t, st, ctx, 4)
+
+	// A page that exactly exhausts the catalog: 4 rows asked for, 4 returned.
+	found, hasMore, err := st.Search(ctx, "", 4, 0)
+	if err != nil || len(found) != 4 {
+		t.Fatalf("Search(limit 4) = %d rows, %v", len(found), err)
+	}
+	if hasMore {
+		t.Errorf("hasMore = true on a page holding the whole catalog: nothing is behind it")
+	}
+
+	// The same length, one row short of the catalog: identical evidence to a
+	// reader counting rows, opposite answer.
+	found, hasMore, err = st.Search(ctx, "", 3, 0)
+	if err != nil || len(found) != 3 {
+		t.Fatalf("Search(limit 3) = %d rows, %v", len(found), err)
+	}
+	if !hasMore {
+		t.Errorf("hasMore = false with a fourth instrument behind the page: a client told this " +
+			"stops asking, and that instrument is then reachable by nothing")
+	}
+
+	// Past the end: an empty page is the end of the catalog, never "there may
+	// be more further on".
+	found, hasMore, err = st.Search(ctx, "", 2, 4)
+	if err != nil || len(found) != 0 || hasMore {
+		t.Errorf("Search past the end = %d rows, hasMore %v, %v; want 0, false, nil",
+			len(found), hasMore, err)
+	}
+}
+
+// TestSearchOrdersInstrumentsOfOneNameByID is the tie-break, and it is the part
+// of paging that fails invisibly. Nothing holds instrument names unique — the
+// broker importer writes whatever a paper is called — and among equal names an
+// ORDER BY that mentions only the name lets the database return rows in any
+// order it likes, a different one per query. Two pages read from such a catalog
+// repeat one row and skip another while both look perfectly ordinary.
+//
+// The two rows are written with ids CHOSEN so that id order is the reverse of
+// the order they are stored in, which is what makes this test able to tell the
+// two ORDER BYs apart at all: without the tie-break the rows come back in the
+// order they went in, which is the opposite of the one asserted.
+func TestSearchOrdersInstrumentsOfOneNameByID(t *testing.T) {
+	st, ctx, pool := newStore(t)
+
+	high := uuid.MustParse("ffffffff-ffff-4fff-8fff-ffffffffffff")
+	low := uuid.MustParse("00000000-0000-4000-8000-000000000000")
+	for _, id := range []uuid.UUID{high, low} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO instruments (id, type, name, currency) VALUES ($1, 'share', 'Дубль', 'RUB')`,
+			id); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+
+	found, _, err := st.Search(ctx, "", 10, 0)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if !reflect.DeepEqual(idsOf(found), []uuid.UUID{low, high}) {
+		t.Fatalf("two instruments named «Дубль» came back as %v, want %v (by id): "+
+			"with no tie-break the order is the database's to choose and may differ "+
+			"between two queries of the same catalog", idsOf(found), []uuid.UUID{low, high})
+	}
+
+	// And the consequence that matters: read one at a time, each row appears
+	// exactly once.
+	first, hasMore, err := st.Search(ctx, "", 1, 0)
+	if err != nil || len(first) != 1 || !hasMore {
+		t.Fatalf("first page = %+v, hasMore %v, %v", idsOf(first), hasMore, err)
+	}
+	second, _, err := st.Search(ctx, "", 1, 1)
+	if err != nil || len(second) != 1 {
+		t.Fatalf("second page = %+v, %v", idsOf(second), err)
+	}
+	if first[0].ID == second[0].ID {
+		t.Errorf("both pages returned %s: one instrument twice and the other never", first[0].ID)
+	}
+}
+
+// TestSearchRefusesBoundsItCannotHonour covers the two bounds the store
+// enforces for itself. The handler in front of it answers 400 on both, so
+// reaching here with either means the program is wrong — but a limit of zero
+// would otherwise fetch the probe row alone and then trim the page to nothing,
+// publishing an empty page with hasMore true: a list showing nothing behind a
+// control that loads nothing however often it is pressed.
+func TestSearchRefusesBoundsItCannotHonour(t *testing.T) {
+	st, ctx, _ := newStore(t)
+	makeCatalog(t, st, ctx, 2)
+
+	for _, bad := range []struct {
+		limit, offset int
+		want          string
+	}{
+		{0, 0, "limit"},
+		{-1, 0, "limit"},
+		{10, -1, "offset"},
+	} {
+		found, hasMore, err := st.Search(ctx, "", bad.limit, bad.offset)
+		if err == nil {
+			t.Errorf("Search(limit %d, offset %d) = %d rows, hasMore %v, no error",
+				bad.limit, bad.offset, len(found), hasMore)
+			continue
+		}
+		if !strings.Contains(err.Error(), bad.want) {
+			t.Errorf("Search(limit %d, offset %d) error = %q, want it to name %q",
+				bad.limit, bad.offset, err, bad.want)
+		}
 	}
 }
 

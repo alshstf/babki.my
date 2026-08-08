@@ -223,6 +223,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /**
+         * @description The instrument catalog, ordered by name, one page at a time. An absent or empty `query` lists the whole catalog; a non-empty one keeps the rows whose name, ticker or ISIN contains it, case-insensitively.
+         *
+         *     IT IS PAGED BY `offset`, AND UNTIL #104 IT WAS NOT. The endpoint took a `limit` alone, so the catalog past the ceiling could not be reached by any request at all — the interface offered a text search and nothing else, and an instrument nobody remembered the name of was simply not there. The order is total (name, then id), so consecutive offsets partition the catalog with nothing repeated and nothing skipped even when two instruments share a name.
+         *
+         *     A LIMIT ABOVE THE `maximum` BELOW IS REFUSED WITH 400, NOT QUIETLY REDUCED, the same as the two paged endpoints of the importer and for the same reason (#118): a ceiling the document states and the server does not apply is not a rule, and a client that sent 250 would be answered as though it had asked for 200 with nothing in the answer saying so.
+         */
         get: operations["searchInstruments"];
         put?: never;
         post: operations["createInstrument"];
@@ -677,6 +684,13 @@ export interface components {
             /** @description The currency face_value_minor is denominated in, which need not be the instrument's own currency. Null exactly when face_value_minor is null — see it. An ISO-4217 code, never an empty string: the writes enforce the pattern and a CHECK constraint keeps the empty string out (migration 0012). A face value denominated in nothing is what makes a valuation come back as a bare number with no currency on it. */
             face_currency?: string | null;
             frozen: boolean;
+        };
+        /** @description One page of the instrument catalog. It used to be a bare array, and the endpoint took no `offset` at all: past the ceiling the catalog was unreachable by any request that could be made, and a client had no way to tell a whole catalog from a clamped one either (#104). Both halves are gone — `offset` continues the listing, and `has_more` says whether there is anything to continue to. */
+        InstrumentsResponse: {
+            /** @description The page itself, ordered by name, at most `limit` long. Shorter than `limit` only at the end of the catalog: an over-large `limit` is refused rather than clamped here, so a short page has one meaning. */
+            instruments: components["schemas"]["Instrument"][];
+            /** @description Whether the catalog holds at least one more instrument beyond this page — i.e. at `offset + len(instruments)` and later. The server's to answer, and fetched rather than inferred: one row beyond the page is asked for and its arrival IS this answer, after which a statement of its own trims that row away so nothing downstream can mistake it for part of the page. A flag rather than a total, for the reason OperationsResponse.has_more gives. False on an empty page, which is the end of the catalog (or past it). */
+            has_more: boolean;
         };
         CreateInstrumentRequest: {
             type: components["schemas"]["InstrumentType"];
@@ -1636,6 +1650,7 @@ export interface operations {
             query?: {
                 query?: string;
                 limit?: number;
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -1643,15 +1658,16 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Matching instruments */
+            /** @description One page of the catalog, saying whether there is more behind it */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Instrument"][];
+                    "application/json": components["schemas"]["InstrumentsResponse"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
         };
     };

@@ -684,6 +684,15 @@ type Instrument struct {
 // InstrumentType defines model for InstrumentType.
 type InstrumentType string
 
+// InstrumentsResponse One page of the instrument catalog. It used to be a bare array, and the endpoint took no `offset` at all: past the ceiling the catalog was unreachable by any request that could be made, and a client had no way to tell a whole catalog from a clamped one either (#104). Both halves are gone — `offset` continues the listing, and `has_more` says whether there is anything to continue to.
+type InstrumentsResponse struct {
+	// HasMore Whether the catalog holds at least one more instrument beyond this page — i.e. at `offset + len(instruments)` and later. The server's to answer, and fetched rather than inferred: one row beyond the page is asked for and its arrival IS this answer, after which a statement of its own trims that row away so nothing downstream can mistake it for part of the page. A flag rather than a total, for the reason OperationsResponse.has_more gives. False on an empty page, which is the end of the catalog (or past it).
+	HasMore bool `json:"has_more"`
+
+	// Instruments The page itself, ordered by name, at most `limit` long. Shorter than `limit` only at the end of the catalog: an over-large `limit` is refused rather than clamped here, so a short page has one meaning.
+	Instruments []Instrument `json:"instruments"`
+}
+
 // LoginRequest defines model for LoginRequest.
 type LoginRequest struct {
 	Password string `json:"password"`
@@ -1297,8 +1306,9 @@ type ListAccountOperationsParams struct {
 
 // SearchInstrumentsParams defines parameters for SearchInstruments.
 type SearchInstrumentsParams struct {
-	Query *string `form:"query,omitempty" json:"query,omitempty"`
-	Limit *int    `form:"limit,omitempty" json:"limit,omitempty"`
+	Query  *string `form:"query,omitempty" json:"query,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+	Offset *int    `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
 // ListTinvestSyncRunsParams defines parameters for ListTinvestSyncRuns.
