@@ -517,9 +517,12 @@ func (s *Store) list(ctx context.Context, sql string, args ...any) ([]Operation,
 // for, and whether it arrives IS the answer: the query reads it, and the trim
 // three statements later drops it again before anything downstream can mistake
 // it for part of the page. Nothing may substitute a comparison of the page's
-// length against the limit for this: that comparison is right until the caller
-// clamps the limit it was given, and the handler does exactly that, which is how
-// a truncated journal came to present itself as a whole one (#86). Counting the
+// length against the limit for this: a full page is exactly where that
+// comparison has nothing to say, and it was wrong outright while the handler
+// clamped an over-large limit — which is how a truncated journal came to present
+// itself as a whole one (#86). The clamp is gone (#118) and the substitution is
+// still not available, because the full-page case is the one the flag is for.
+// Counting the
 // table instead would cost a second pass over rows just read, to publish a total
 // nothing displays and that a concurrent write could put at odds with the very
 // page it travels with.
@@ -530,8 +533,9 @@ func (s *Store) list(ctx context.Context, sql string, args ...any) ([]Operation,
 // page with hasMore true: a journal showing nothing behind a control that loads
 // nothing however often it is pressed, and a negative panics on the same trim.
 // The refusal is a plain error, not a validation one: today's caller defaults
-// and clamps before it reaches here (see handleListByAccount), so a bad limit
-// arriving means the program is wrong, not the person using it.
+// and refuses before it reaches here (parsePage, called from
+// handleListByAccount), so a bad limit arriving means the program is wrong, not
+// the person using it.
 func (s *Store) ListByAccount(ctx context.Context, spaceID, accountID uuid.UUID, limit, offset int) ([]Operation, bool, error) {
 	if limit < 1 {
 		return nil, false, fmt.Errorf("list operations: limit must be positive, got %d", limit)

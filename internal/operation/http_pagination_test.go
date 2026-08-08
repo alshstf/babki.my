@@ -156,26 +156,28 @@ func TestJournalSaysWhetherThereIsMore(t *testing.T) {
 	}
 }
 
-// TestJournalPastTheCeilingSaysThereIsMore is #86 itself, at the only place it
-// was ever reachable.
+// TestJournalAtTheCeilingSaysThereIsMore is #86 at the boundary the clamp used
+// to make unreachable.
 //
-// The endpoint clamps `limit` to 200. Ask for 250 with 201 entries recorded and
-// 200 come back — which the client read as "fewer than I asked for, so that is
-// everything", hid its «show more», and left the two-hundred-and-first entry
-// unreachable through the interface. The clamp is not what is being changed
-// here (raising it is #22); the silence about it is.
-func TestJournalPastTheCeilingSaysThereIsMore(t *testing.T) {
+// It used to ask for 250 against 201 entries and get 200 back, because the
+// server clamped: the client read "fewer than I asked for" as "that is
+// everything", hid its «показать ещё», and left the two-hundred-and-first entry
+// unreachable through the interface. That request is a 400 now (#118), so the
+// case is asked the way it survives: exactly at the ceiling, where the page is
+// FULL and its length says nothing at all. That is the case the flag is really
+// for, and the one no clamp can be blamed for.
+func TestJournalAtTheCeilingSaysThereIsMore(t *testing.T) {
 	pool, mdStore := newTestPool(t)
 	url, c := newAPIOn(t, pool, marketdata.NewConverter(mdStore))
 	acc := mkAccount(t, url, c, "Рублёвый брокер", "RUB")
 	seedDeposits(t, pool, mustAccountID(t, acc), 201)
 
-	page := getJournalPage(t, url, c, acc, "limit=250&offset=0")
+	page := getJournalPage(t, url, c, acc, "limit=200&offset=0")
 	if len(page.Operations) != 200 {
 		t.Fatalf("page holds %d operations, want 200 — the endpoint's ceiling, which this test is not raising", len(page.Operations))
 	}
 	if !page.HasMore {
-		t.Errorf("has_more = false on a page of 200 out of 201 entries. This is the whole of #86: the server silently clamped the request to its ceiling and the answer looked exactly like the end of the journal")
+		t.Errorf("has_more = false on a page of 200 out of 201 entries. This is the whole of #86: the page is full, its length cannot say whether the journal continues, and the answer looked exactly like the end of it")
 	}
 }
 
@@ -183,22 +185,70 @@ func TestJournalPastTheCeilingSaysThereIsMore(t *testing.T) {
 // journal that really does end there, and it is the assertion that keeps the
 // fix from becoming "always say there is more once the ceiling is hit".
 //
-// 200 entries, a request for 250: the page is short of what was asked for, for
-// the very reason the test above is about, and yet there is genuinely nothing
-// behind it. A «показать ещё» here would load the same two hundred rows again,
-// forever.
+// 200 entries, a request for 200: the page is exactly as long as what was asked
+// for, indistinguishable by length from the test above, and yet there is
+// genuinely nothing behind it. A «показать ещё» here would load the same two
+// hundred rows again, forever.
 func TestJournalAtTheCeilingWithNothingBehindIt(t *testing.T) {
 	pool, mdStore := newTestPool(t)
 	url, c := newAPIOn(t, pool, marketdata.NewConverter(mdStore))
 	acc := mkAccount(t, url, c, "Рублёвый брокер", "RUB")
 	seedDeposits(t, pool, mustAccountID(t, acc), 200)
 
-	page := getJournalPage(t, url, c, acc, "limit=250&offset=0")
+	page := getJournalPage(t, url, c, acc, "limit=200&offset=0")
 	if len(page.Operations) != 200 {
 		t.Fatalf("page holds %d operations, want all 200", len(page.Operations))
 	}
 	if page.HasMore {
-		t.Errorf("has_more = true on a page holding the entire 200-entry journal — the ceiling was reached and the journal ended at the same row, and the flag must answer about the journal, not about the clamp")
+		t.Errorf("has_more = true on a page holding the entire 200-entry journal — the ceiling was reached and the journal ended at the same row, and the flag must answer about the journal, not about the ceiling")
+	}
+}
+
+// TestJournalRefusesAPageItCannotHonour is #118 on the endpoint where #118 was
+// found. A ceiling the contract states and the server does not apply is not a
+// rule: the clamp this replaces answered a request for 250 as though it had
+// asked for 200, and everything else it could not read — a zero, a negative, a
+// word — fell through to the default and came back 200, a page of fifty rows
+// answering a question nobody asked.
+//
+// The bounds are written as literals here — 200, 1, 0 — rather than read from
+// the handler's constants, because a test that takes both sides of a comparison
+// from the same declaration moves with it and proves nothing.
+func TestJournalRefusesAPageItCannotHonour(t *testing.T) {
+	url, c, _ := newAPIWithConverter(t)
+	acc := mkAccount(t, url, c, "Рублёвый брокер", "RUB")
+
+	for _, bad := range []string{
+		"limit=201", // one past the ceiling the contract states
+		"limit=999999",
+		"limit=0",
+		"limit=-1",
+		"limit=fifty",
+		"offset=-1",
+		"offset=half",
+	} {
+		resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations?"+bad, "")
+		if resp.StatusCode != 400 {
+			b, _ := io.ReadAll(resp.Body)
+			t.Errorf("GET operations?%s = %d, want 400: %s", bad, resp.StatusCode, b)
+			continue
+		}
+		var refusal struct {
+			Error string `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&refusal); err != nil || refusal.Error == "" {
+			t.Errorf("GET operations?%s answered 400 with no reason in the body (%v)", bad, err)
+		}
+	}
+
+	// The bounds are refused PAST, not AT — and an absent parameter still
+	// defaults rather than being refused for not being there.
+	for _, good := range []string{"limit=200&offset=0", "limit=1", "offset=0", ""} {
+		page := getJournalPage(t, url, c, acc, good)
+		if len(page.Operations) != 0 || page.HasMore {
+			t.Errorf("GET operations?%s on an empty journal = %d rows, has_more %v; want an empty page saying there is nothing more",
+				good, len(page.Operations), page.HasMore)
+		}
 	}
 }
 
