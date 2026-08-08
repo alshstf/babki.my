@@ -1,0 +1,18 @@
+{
+  "instrument": {
+    "figi": "TCS00A106YF0",
+    "ticker": "RU000BOND1",
+    "classCode": "TQCB",
+    "isin": "RU000A106YF0",
+    "lot": 1,
+    "currency": "rub",
+    "name": "Пример облигации",
+    "exchange": "MOEX",
+    "instrumentType": "bond",
+    "uid": "2dd3b003-aca2-4920-89ce-8d827c637372",
+    "assetUid": "asset-bond",
+    "blockedTcaFlag": false,
+    "nominal": {"currency": "rub", "units": "1000", "nano": 0},
+    "initialNominal": {"currency": "rub", "units": "1500", "nano": 0}
+  }
+}

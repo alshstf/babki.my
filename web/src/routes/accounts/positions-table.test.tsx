@@ -165,6 +165,13 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     cost_minor: 250_000,
     realized_pnl_minor: 0,
     income_minor: 0,
+    // The ordinary row: nothing was ever paid, so the per-currency list is
+    // empty and income_minor's 0 is the whole story. A row whose income
+    // arrived in another currency sets both fields, and the two must agree —
+    // income_minor is defined as this list's entry for `currency` (see
+    // Position.income_minor in the API contract), so a fixture that set one
+    // without the other would describe a payload the server cannot send.
+    income_by_currency: [],
     fees_minor: 0,
     currency: "USD",
     market_value_minor: 305_50,
@@ -1858,6 +1865,225 @@ describe("PositionsTable", () => {
       expect(baseAmount.className).not.toContain("text-emerald-500");
       expect(norm(screen.getByTestId("position-profit-percent").textContent ?? "")).toBe(
         norm("-45,0 %"),
+      );
+    });
+  });
+
+  // THE INCOME A POSITION EARNED IN A CURRENCY THAT IS NOT ITS OWN.
+  //
+  // Position.income_minor carries the income denominated in the position's
+  // currency and nothing else — the contract says so in as many words — so a
+  // yuan bond whose coupons arrive in rubles, which is what a Russian broker
+  // ordinarily pays, has 0 in that field. Drawn alone that zero is
+  // indistinguishable from a paper that has never paid anything, and the
+  // rubles were on no screen at all. These tests pin what the column shows
+  // instead, over all four shapes the income can take.
+  describe("income arriving in another currency than the position's", () => {
+    // Spelled out in full rather than read back out of ru.json: which sentence
+    // sits beside the number is the whole point, and a test that fetched it
+    // through the component's own lookup would agree with the component
+    // whatever it picked (same rule as CAPTION above).
+    const OTHER_CURRENCY_HINT =
+      "Доход, пришедший не в валюте позиции: каждая сумма — в своей валюте. С суммой выше она не складывается и её пересчётом не является — это разные деньги. Сумма выше — это доход только в валюте позиции, и ноль в ней не значит, что дохода не было. По юаневой облигации купон может прийти рублями, по долларовой акции — дивиденд рублями: у российских брокеров это обычное дело. Отрицательная сумма — тоже ответ: удержанный налог вычитается в своей валюте, и если выплат в ней не было, остаётся минус";
+
+    it("draws the ruble coupons of a yuan bond instead of leaving a bare 0 ¥", () => {
+      // The live case from the owner's own account: bought for yuan, paid in
+      // rubles, so income_minor is 0 and income_by_currency holds the rubles.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "CNY",
+              income_minor: 0,
+              income_by_currency: [{ currency: "RUB", income_minor: 135_075 }],
+            }),
+          ]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
+        norm(formatMinor(0, "CNY")),
+      );
+      const other = screen.getByTestId("position-income-other-currency");
+      expect(norm(other.textContent ?? "")).toBe(norm(`ещё ${formatMinor(135_075, "RUB")}`));
+      expect(other).toHaveAttribute("title", OTHER_CURRENCY_HINT);
+      // The two figures are never welded into one: the cell above stays 0,00 ¥
+      // and the kopecks below keep the ruble sign. Printing them under the
+      // position's own sign instead — the one-character mistake this line
+      // guards — would put 135 075 kopecks behind a yuan sign and make the row
+      // a hundred-and-a-bit times richer than it is.
+      expect(norm(other.textContent ?? "")).not.toContain(norm(formatMinor(135_075, "CNY")));
+    });
+
+    it("lists two foreign currencies side by side, in the order the server sent them", () => {
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "CNY",
+              income_minor: 500,
+              income_by_currency: [
+                { currency: "CNY", income_minor: 500 },
+                { currency: "RUB", income_minor: 135_075 },
+                { currency: "USD", income_minor: 4_200 },
+              ],
+            }),
+          ]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
+        norm(formatMinor(500, "CNY")),
+      );
+      // The position's own currency is not repeated below the figure that
+      // already carries it, and the other two keep the server's order.
+      expect(norm(screen.getByTestId("position-income-other-currency").textContent ?? "")).toBe(
+        norm(`ещё ${formatMinor(135_075, "RUB")} · ${formatMinor(4_200, "USD")}`),
+      );
+    });
+
+    it("says nothing extra when every payment arrived in the position's own currency", () => {
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "USD",
+              income_minor: 5_000,
+              income_by_currency: [{ currency: "USD", income_minor: 5_000 }],
+            }),
+          ]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
+        norm(formatMinor(5_000, "USD")),
+      );
+      expect(screen.queryByTestId("position-income-other-currency")).toBeNull();
+    });
+
+    it("says nothing extra when the position was never paid anything", () => {
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({ currency: "USD", income_minor: 0, income_by_currency: [] }),
+          ]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
+        norm(formatMinor(0, "USD")),
+      );
+      expect(screen.queryByTestId("position-income-other-currency")).toBeNull();
+    });
+
+    it("drops the second line once the base-currency figure — which already contains it — is what is shown", () => {
+      // in_base.income_minor converts EVERY payment out of the currency it
+      // arrived in (see PositionInBase.income_minor in the API contract), so
+      // repeating the rubles beneath it would show the same money twice and
+      // invite a reader to add it to a sum that already holds it. 450 000 is
+      // the yuan part converted; 135 075 the rubles that needed no rate.
+      const position = makePosition({
+        currency: "CNY",
+        income_minor: 500,
+        income_by_currency: [
+          { currency: "CNY", income_minor: 500 },
+          { currency: "RUB", income_minor: 135_075 },
+        ],
+        in_base: {
+          cost_minor: 2_000_000,
+          market_value_minor: 2_200_000,
+          unrealized_pnl_minor: 200_000,
+          income_minor: 141_075,
+          currency: "RUB",
+          rate_on: "2026-07-20",
+        },
+      });
+
+      const { rerender } = wrap(
+        <PositionsTable positions={[position]} mode="native" baseCurrency="RUB" />,
+      );
+      expect(screen.getByTestId("position-income-other-currency")).toBeTruthy();
+
+      rerender(<PositionsTable positions={[position]} mode="base" baseCurrency="RUB" />);
+      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
+        norm(formatMinor(141_075, "RUB")),
+      );
+      expect(screen.queryByTestId("position-income-other-currency")).toBeNull();
+    });
+
+    it("keeps the second line in base mode when the position's own currency IS the base one", () => {
+      // The case this row could not show in either mode: a ruble paper paid a
+      // dollar dividend. Nothing needs converting, so the server publishes no
+      // in_base at all, and the cell shows the position's own figure — which
+      // carries rubles only. Deciding by the mode instead of by what the cell
+      // ended up showing would hide the dollars here and mark them with
+      // nothing.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "RUB",
+              income_minor: 0,
+              income_by_currency: [{ currency: "USD", income_minor: 5_000 }],
+              in_base: null,
+              in_base_gap: null,
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
+        norm(formatMinor(0, "RUB")),
+      );
+      expect(norm(screen.getByTestId("position-income-other-currency").textContent ?? "")).toBe(
+        norm(`ещё ${formatMinor(5_000, "USD")}`),
+      );
+      // Nothing was withheld here — there was nothing to convert — so the cell
+      // carries no "could not convert" marker to explain the second line
+      // away.
+      expect(screen.queryByTestId("position-income-not-converted")).toBeNull();
+    });
+
+    it("keeps the second line in base mode when the conversion could not be struck", () => {
+      // The fallback: base mode, no converted block, so the cell shows the
+      // position's own figure again — and that figure is once more the yuan
+      // part alone. The row's own caption explains why nothing is in rubles;
+      // it says nothing about the coupons, which is what this line is for.
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "CNY",
+              income_minor: 0,
+              income_by_currency: [{ currency: "RUB", income_minor: 135_075 }],
+              in_base: null,
+              in_base_gap: "no_rate_lot_date",
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
+        norm(formatMinor(0, "CNY")),
+      );
+      expect(norm(screen.getByTestId("position-income-other-currency").textContent ?? "")).toBe(
+        norm(`ещё ${formatMinor(135_075, "RUB")}`),
+      );
+      expect(screen.getByTestId("position-income-not-converted")).toHaveAttribute(
+        "title",
+        CAPTION.noRateLotDate,
       );
     });
   });

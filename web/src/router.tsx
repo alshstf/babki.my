@@ -16,6 +16,8 @@ import { AccountsPage } from "@/routes/accounts";
 import { AccountDetailPage } from "@/routes/accounts/detail";
 import { FamilyPage } from "@/routes/family";
 import { SettingsPage } from "@/routes/settings";
+import { ConnectWizardPage } from "@/routes/settings/connections/connect";
+import { ConnectionDetailPage } from "@/routes/settings/connections/detail";
 
 function FullScreenLoader() {
   const { t } = useTranslation();
@@ -220,6 +222,24 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+// Static segments ("new") take precedence over the sibling dynamic one
+// ($connectionId) regardless of declaration order — TanStack Router ranks a
+// literal path segment above a param segment when matching.
+const connectWizardRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: "/settings/connections/new",
+  component: ConnectWizardPage,
+});
+
+// One connection's own screen: its state and the buttons that change it, the
+// accounts it feeds, the last check against the broker, the run log and the
+// operations the import could not read (see ConnectionDetailPage).
+const connectionDetailRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: "/settings/connections/$connectionId",
+  component: ConnectionDetailPage,
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   setupRoute,
@@ -229,6 +249,8 @@ const routeTree = rootRoute.addChildren([
     accountDetailRoute,
     familyRoute,
     settingsRoute,
+    connectWizardRoute,
+    connectionDetailRoute,
   ]),
 ]);
 

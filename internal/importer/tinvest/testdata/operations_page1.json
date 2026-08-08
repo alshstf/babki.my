@@ -1,0 +1,47 @@
+{
+  "hasNext": true,
+  "nextCursor": "cursor-2",
+  "items": [
+    {
+      "cursor": "cursor-1a",
+      "brokerAccountId": "2000000001",
+      "id": "op-1",
+      "parentOperationId": "",
+      "name": "Покупка ЦБ",
+      "date": "2026-01-10T10:00:00Z",
+      "type": "OPERATION_TYPE_BUY",
+      "description": "Покупка: Сбер Банк",
+      "state": "OPERATION_STATE_EXECUTED",
+      "instrumentUid": "uid-sber",
+      "figi": "BBG004730N88",
+      "instrumentType": "share",
+      "positionUid": "pos-sber",
+      "ticker": "SBER",
+      "classCode": "TQBR",
+      "payment": {"currency": "rub", "units": "-15230", "nano": 0},
+      "price": {"currency": "rub", "units": "152", "nano": 300000000},
+      "commission": {"currency": "rub", "units": "-5", "nano": -500000000},
+      "accruedInt": {"currency": "rub", "units": "0", "nano": 0},
+      "quantity": "100",
+      "assetUid": "asset-sber"
+    },
+    {
+      "cursor": "cursor-1b",
+      "brokerAccountId": "2000000001",
+      "id": "op-2",
+      "parentOperationId": "op-1",
+      "name": "Удержание комиссии за операцию",
+      "date": "2026-01-10T10:00:01Z",
+      "type": "OPERATION_TYPE_BROKER_FEE",
+      "description": "Удержание комиссии за операцию",
+      "state": "OPERATION_STATE_EXECUTED",
+      "instrumentUid": "",
+      "figi": "",
+      "instrumentType": "",
+      "positionUid": "",
+      "payment": {"currency": "rub", "units": "-5", "nano": -500000000},
+      "quantity": "0",
+      "assetUid": ""
+    }
+  ]
+}

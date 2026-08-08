@@ -1,0 +1,17 @@
+{
+  "_note": "shape taken from the published API documentation; not confirmed against a live account — task 14",
+  "id": "op-input-1",
+  "parentOperationId": "",
+  "name": "Пополнение брокерского счёта",
+  "date": "2026-01-09T12:00:00Z",
+  "type": "OPERATION_TYPE_INPUT",
+  "description": "Пополнение счёта",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "",
+  "figi": "",
+  "positionUid": "",
+  "assetUid": "",
+  "instrumentType": "",
+  "payment": {"currency": "rub", "units": "50000", "nano": 0},
+  "quantity": "0"
+}

@@ -188,10 +188,24 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 // simply was not — and since an empty string is not NULL, neither the pair check
 // here nor the CHECK constraint behind it ever looked.
 //
-// The messages name the fields and the rule. The API is the only way to reach
-// any of these states (no screen writes a face value, and nothing in the
-// frontend PATCHes an instrument at all), so an importer's log is where these
-// will be read.
+// The messages name the fields and the rule. Nothing in the frontend writes a
+// face value or PATCHes an instrument at all, so whoever reads one of them is
+// holding a request they sent themselves.
+//
+// THIS DOOR IS NO LONGER THE ONLY WAY INTO THOSE COLUMNS, and the sentence that
+// used to stand here said it was. Store enforces none of the rules in this file
+// — not the name, not the currency, not any of the face-value ones — and the
+// T-Invest importer's resolver creates and updates catalog rows against Store
+// directly, with no handler anywhere on that path
+// (internal/importer/tinvest/resolver.go). It therefore
+// restates for itself the rules it could otherwise break: a passport with no
+// name or no ISO-4217 currency creates nothing, and a bond's nominal is held to
+// the same bounds this file holds a face value to. The database backs up only
+// part of that for every writer at once — migration 0012's CHECK covers the
+// pair, the sign and an empty face currency — while the upper bound and the
+// "a face value is a bond's" rule are deliberately not constraints (argued
+// above and just below the var block respectively), so they hold exactly where
+// they are written down and nowhere else.
 var (
 	errFacePair     = errors.New("face_value_minor and face_currency must be set together or not at all")
 	errFaceMention  = errors.New("face_value_minor and face_currency must be sent together, even to change one")

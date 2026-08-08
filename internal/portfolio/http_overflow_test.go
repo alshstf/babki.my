@@ -169,9 +169,9 @@ func TestApplyToRefusesAConvertedAmountThatWouldWrap(t *testing.T) {
 func TestSumInBaseRefusesATotalThatWouldWrap(t *testing.T) {
 	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(1)}}
 	on := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	terms := []datedMinor{{minor: math.MaxInt64, on: on}, {minor: math.MaxInt64, on: on}}
+	terms := []datedMinor{{minor: math.MaxInt64, from: "USD", on: on}, {minor: math.MaxInt64, from: "USD", on: on}}
 
-	minor, ok, err := h.sumInBase(context.Background(), terms, "USD", "RUB", map[rateKey]*rateLookup{})
+	minor, ok, err := h.sumInBase(context.Background(), terms, "RUB", map[rateKey]*rateLookup{})
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("sumInBase = (%d, %v), err = %v; want ErrOverflow", minor, ok, err)
 	}
@@ -190,9 +190,9 @@ func TestSumInBaseRefusesATotalThatWouldWrap(t *testing.T) {
 func TestSumInBaseOverflowIsNotAMissingRate(t *testing.T) {
 	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(1)}}
 	on := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	terms := []datedMinor{{minor: math.MaxInt64, on: on}, {minor: math.MaxInt64, on: on}}
+	terms := []datedMinor{{minor: math.MaxInt64, from: "USD", on: on}, {minor: math.MaxInt64, from: "USD", on: on}}
 
-	if _, _, err := h.sumInBase(context.Background(), terms, "USD", "RUB", map[rateKey]*rateLookup{}); err == nil {
+	if _, _, err := h.sumInBase(context.Background(), terms, "RUB", map[rateKey]*rateLookup{}); err == nil {
 		t.Fatal("sumInBase answered an overflow with a nil error, which this handler reads as a missing rate and renders as a gap")
 	}
 }

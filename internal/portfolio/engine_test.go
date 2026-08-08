@@ -198,8 +198,8 @@ func TestIncomeAndTaxes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compute: %v", err)
 	}
-	if pos[sber].IncomeMinor != 3_480-452 {
-		t.Errorf("income = %d", pos[sber].IncomeMinor)
+	if got := pos[sber].IncomeMinorIn("RUB"); got != 3_480-452 {
+		t.Errorf("income in RUB = %d", got)
 	}
 	if len(pos) != 1 {
 		t.Errorf("positions = %d, want 1", len(pos))
@@ -246,20 +246,32 @@ func TestClosedPositionKeptInResult(t *testing.T) {
 }
 
 // TestCurrencyMismatchRejected pins the per-position currency invariant: the
-// first operation fixes the currency, and mixing another one into the same
-// position would sum unrelated minor units into a single int64.
+// first operation that touches cost, quantity or fees fixes the currency, and
+// mixing another one into any of those figures would sum unrelated minor units
+// into a single int64.
+//
+// INCOME IS THE ONE EXEMPTION and is deliberately absent from the table below:
+// a dividend, a coupon or a tax may arrive in any currency and is kept in it
+// (see Position.IncomeByCurrency and engine_income_currency_test.go, where both
+// halves of the rule are pinned together). Every other type the engine folds
+// into a position is here, so an exemption widened by one case fails.
 func TestCurrencyMismatchRejected(t *testing.T) {
 	inCurrency := func(o portfolio.Operation, cur string) portfolio.Operation {
 		o.Currency = cur
 		return o
 	}
 	buyRUB := op(portfolio.TypeBuy, 1, &sber, "10", "100", -100_000, 0)
+	splitEUR := inCurrency(op(portfolio.TypeSplit, 6, &sber, "", "", 0, 0), "EUR")
+	splitEUR.SplitRatio = dp("2")
 
 	for name, bad := range map[string]portfolio.Operation{
-		"dividend in another currency": inCurrency(op(portfolio.TypeDividend, 2, &sber, "", "", 3_000, 0), "USD"),
-		"sell in another currency":     inCurrency(op(portfolio.TypeSell, 3, &sber, "10", "120", 120_000, 0), "EUR"),
-		"buy in another currency":      inCurrency(op(portfolio.TypeBuy, 4, &sber, "1", "100", -10_000, 0), "USD"),
-		"transfer_in another currency": inCurrency(op(portfolio.TypeTransferIn, 5, &sber, "1", "", 10_000, 0), "USD"),
+		"sell in another currency":         inCurrency(op(portfolio.TypeSell, 3, &sber, "10", "120", 120_000, 0), "EUR"),
+		"buy in another currency":          inCurrency(op(portfolio.TypeBuy, 4, &sber, "1", "100", -10_000, 0), "USD"),
+		"transfer_in another currency":     inCurrency(op(portfolio.TypeTransferIn, 5, &sber, "1", "", 10_000, 0), "USD"),
+		"transfer_out in another currency": inCurrency(op(portfolio.TypeTransferOut, 5, &sber, "1", "", 0, 0), "USD"),
+		"amortization in another currency": inCurrency(op(portfolio.TypeAmortization, 5, &sber, "", "", 1_000, 0), "USD"),
+		"fee in another currency":          inCurrency(op(portfolio.TypeFee, 5, &sber, "", "", -100, 0), "USD"),
+		"split in another currency":        splitEUR,
 	} {
 		_, err := portfolio.Compute([]portfolio.Operation{buyRUB, bad})
 		if !errors.Is(err, portfolio.ErrBadOperation) {

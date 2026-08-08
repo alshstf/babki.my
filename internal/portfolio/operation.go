@@ -59,6 +59,47 @@ func (t Type) RequiresInstrument() bool {
 	return false
 }
 
+// mustMatchPositionCurrency reports whether an operation of this type has to be
+// denominated in the currency of the position it touches — and, by the same
+// token, settles that currency when nothing has settled it yet (see Compute's
+// get, which is the only caller).
+//
+// TRUE FOR EVERYTHING THAT MOVES COST, QUANTITY OR FEES. A buy and a
+// transfer_in add a lot, a sell, a transfer_out and an amortization retire one,
+// a split rewrites quantities, and a fee lands in FeesMinor. Every one of those
+// figures is a single int64 of minor units, so two currencies inside it is
+// nonsense no rounding can rescue and no reader could detect.
+//
+// FALSE FOR DIVIDEND, COUPON AND TAX, which produce nothing but income — and
+// income is kept per currency (see Position.IncomeByCurrency), so there is no
+// single int64 for a second currency to corrupt. This is what lets a yuan bond
+// pay its coupons in rubles and a dollar share pay its dividend, and have its
+// tax withheld, in rubles: the broker converts on the day of the payment, the
+// paper stays priced in its own currency, and both facts are recorded as they
+// happened instead of one of them being refused.
+//
+// THE FEE IS ON THE STRICT SIDE DELIBERATELY, even though a commission is no
+// more part of an acquisition than a tax is. FeesMinor is one number in the
+// position's currency and is published as such, so admitting a second currency
+// there is a change to that figure and to everything showing it — not an
+// exemption from this rule. A commission charged in another currency therefore
+// stays a visible refusal, which is also what the T-Invest importer already
+// counts on when it keeps such a commission off the instrument
+// (tinvest.tradeCommission).
+//
+// The types the engine never folds into a position — deposit, withdrawal,
+// interest, conversion — answer true and it costs nothing: a conversion is
+// skipped before this is reached and the rest are refused by type moments
+// later. What the default buys is that a type added to the enum later is
+// treated strictly until somebody decides otherwise.
+func (t Type) mustMatchPositionCurrency() bool {
+	switch t {
+	case TypeDividend, TypeCoupon, TypeTax:
+		return false
+	}
+	return true
+}
+
 // Operation is one journal entry. AmountMinor is the signed cash effect on
 // the account (buy < 0, sell > 0, ...); for transfers it carries the moved
 // cost basis and has zero cash meaning; for splits it is 0.

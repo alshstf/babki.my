@@ -2,6 +2,7 @@ package operation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,6 +12,23 @@ import (
 
 	"babki.my/babki/internal/portfolio"
 )
+
+// ErrAccountNotInSpace means an operation named an account id that insertSQL's
+// own WHERE clause could not find inside the caller's space (see insertSQL's
+// doc: zero rows back means the account is not in the caller's space). Named
+// so a caller can test for it instead of matching a bare pgx.ErrNoRows that,
+// on its own, says nothing about which of the statement's two tables failed
+// to produce a row.
+var ErrAccountNotInSpace = errors.New("account not found in space")
+
+// ErrRemovalCountMismatch means ApplyDelta's own DELETE found fewer rows than
+// removeIDs named. Service.importRemovals already checks every id belongs to
+// this space and is an importer's to remove before ApplyDelta ever runs (see
+// ErrImportContract, the same fault named one layer up), so reaching this in
+// practice means the journal moved between that check and this transaction.
+// Either way, writing the part of the removal that still holds would leave
+// half of a difference computed against a journal that no longer exists.
+var ErrRemovalCountMismatch = errors.New("asked to remove operations that are not all there")
 
 type Store struct{ pool *pgxpool.Pool }
 
@@ -31,28 +49,55 @@ func scan(row pgx.Row) (Operation, error) {
 
 // insertSQL guards space ownership of the account in the same statement:
 // zero rows returned means the account is not in the caller's space.
+//
+// created_at is the one column of this statement a caller may either state or
+// leave alone: NULL — what every path but ApplyDelta passes — takes the table's
+// own default, and anything else is used as given. It became statable because
+// now() is the TRANSACTION's timestamp, identical on every row a single
+// transaction inserts, and a batch that writes a whole history in one
+// transaction would give rows of the same date one created_at between them: the
+// engine's listing orders by that column, so it would have nothing left to
+// order them by (see ApplyDelta).
 const insertSQL = `
 	INSERT INTO operations (space_id, account_id, instrument_id, type,
 		occurred_on, settled_on, quantity, price, amount_minor, currency,
-		fee_minor, note, transfer_group_id, split_ratio, source, external_id)
+		fee_minor, note, transfer_group_id, split_ratio, source, external_id,
+		created_at)
 	SELECT a.space_id, a.id, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-		COALESCE(NULLIF($15, ''), 'manual'), $16
+		COALESCE(NULLIF($15, ''), 'manual'), $16, COALESCE($17::timestamptz, now())
 	FROM accounts a WHERE a.id = $2 AND a.space_id = $1
 	RETURNING ` + cols
 
+// insertArgs is insertSQL's argument list, in one place because two callers
+// send that statement — one row at a time, and a whole delta as a batch.
+func insertArgs(spaceID uuid.UUID, op Operation, createdAt *time.Time) []any {
+	return []any{
+		spaceID, op.AccountID, op.InstrumentID, op.Type, op.OccurredOn,
+		op.SettledOn, op.Quantity, op.Price, op.AmountMinor, op.Currency,
+		op.FeeMinor, op.Note, op.TransferGroupID, op.SplitRatio,
+		op.Source, op.ExternalID, createdAt,
+	}
+}
+
+// scanInserted reads back one row insertSQL returned, naming the one thing its
+// WHERE clause can refuse: an account that is not the caller's.
+func scanInserted(row pgx.Row) (Operation, error) {
+	created, err := scan(row)
+	if err == pgx.ErrNoRows {
+		return Operation{}, fmt.Errorf("%w: %w", ErrAccountNotInSpace, pgx.ErrNoRows)
+	}
+	return created, err
+}
+
+// insertOne writes one operation and lets the table date it. The literal nil
+// is the point: the row-at-a-time paths (Create, CreatePair) leave created_at
+// to the database exactly as they always have, and cannot be made to state one
+// by an operation that happens to carry a CreatedAt from somewhere.
 func insertOne(ctx context.Context, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, spaceID uuid.UUID, op Operation,
 ) (Operation, error) {
-	created, err := scan(q.QueryRow(ctx, insertSQL,
-		spaceID, op.AccountID, op.InstrumentID, op.Type, op.OccurredOn,
-		op.SettledOn, op.Quantity, op.Price, op.AmountMinor, op.Currency,
-		op.FeeMinor, op.Note, op.TransferGroupID, op.SplitRatio,
-		op.Source, op.ExternalID))
-	if err == pgx.ErrNoRows {
-		return Operation{}, fmt.Errorf("account not found in space: %w", pgx.ErrNoRows)
-	}
-	return created, err
+	return scanInserted(q.QueryRow(ctx, insertSQL, insertArgs(spaceID, op, nil)...))
 }
 
 // Create inserts one operation and hands the row AS STORED to verify before
@@ -265,6 +310,179 @@ func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Opera
 	return cOut, cIn, tx.Commit(ctx)
 }
 
+// carriesOwnLots reports whether this operation's FIFO breakdown is stored next
+// to the operation itself.
+//
+// It is the WRITE side of attachTransferLots' carrier resolution and has to
+// stay its mirror: that query reads a departing leg's pieces off the arriving
+// leg it shares a group with, and falls back to the row itself only when there
+// is no such sibling. So a transfer_out that has a group stores nothing of its
+// own — the pieces would be written twice and read once, and two copies of one
+// fact eventually disagree — while a transfer_out with no sibling anywhere
+// (shares that left for another broker, which only an import can record) stores
+// its own, because it is then the only row that can hold them.
+func carriesOwnLots(op Operation) bool {
+	if len(op.TransferLots) == 0 {
+		return false
+	}
+	return op.Type == TypeTransferIn || op.TransferGroupID == nil
+}
+
+// ApplyDelta applies one importer's difference to the journal: removals first,
+// then every insertion as a single batch, then the caller's own look at the
+// result AS STORED, and only then a commit. All of it in ONE transaction, over
+// however many accounts of the space the difference touches.
+//
+// THE ORDER OF THE TWO HALVES IS PART OF THE CONTRACT. A broker record that was
+// corrected keeps its identity, so the row replacing it carries the very
+// external id the row being replaced still holds, and the journal's unique
+// index would refuse the pair of them. Removing first is what makes a
+// correction expressible at all.
+//
+// EVERY id IN removeIDs MUST BE THERE. A caller that asks to remove a row that
+// is gone computed its difference against a journal that has since moved, and
+// the rest of that difference cannot be trusted either; obeying the part that
+// still applies would write half of a stale decision.
+//
+// created_at is stated by the caller rather than left to the column (see
+// insertSQL). It is not decoration: now() is the transaction's timestamp, so
+// every row of a delta would otherwise share one, and two operations of the
+// same date sharing one created_at leave ListForEngine's ORDER BY nothing to
+// separate them by — the journal would fold in an order the database picks,
+// which is not necessarily the order the caller checked. That is the shape of
+// "accepted on write, refused on every later read" this package has met twice.
+//
+// verify is handed the rows AS STORED — from the INSERT's RETURNING, with the
+// breakdowns the lot table gave back — for the reason Create and CreatePair
+// both give: quantities are stored on a fixed scale, so what was checked in
+// memory is not necessarily what the columns kept, and a delta whose stored
+// form no longer replays must be rolled back on the sync that caused it rather
+// than break every later read. Its error is returned as-is: it describes a
+// disagreement between this program and its own storage, not a bad request.
+func (s *Store) ApplyDelta(ctx context.Context, spaceID uuid.UUID, add []Operation, removeIDs []uuid.UUID,
+	verify func(stored []Operation) error,
+) ([]Operation, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if len(removeIDs) > 0 {
+		ct, err := tx.Exec(ctx, `DELETE FROM operations WHERE space_id = $1 AND id = ANY($2)`, spaceID, removeIDs)
+		if err != nil {
+			return nil, fmt.Errorf("apply delta: %w", err)
+		}
+		if int(ct.RowsAffected()) != len(removeIDs) {
+			return nil, fmt.Errorf("%w: asked to remove %d operations, found %d",
+				ErrRemovalCountMismatch, len(removeIDs), ct.RowsAffected())
+		}
+	}
+
+	stored, err := insertBatch(ctx, tx, spaceID, add)
+	if err != nil {
+		return nil, err
+	}
+	if err := storeBreakdowns(ctx, tx, add, stored); err != nil {
+		return nil, err
+	}
+	if verify != nil {
+		if err := verify(stored); err != nil {
+			return nil, err
+		}
+	}
+	return stored, tx.Commit(ctx)
+}
+
+// insertBatch writes every operation of a delta as one batch and returns the
+// rows the database kept, in the order they were given.
+//
+// One batch and not one statement apiece: the first load of a broker's history
+// is thousands of operations, and a statement that waits for the one before it
+// makes that a thousand waits (the same argument writeTransferLots makes for
+// the pieces of one transfer). What the batch is not allowed to change is which
+// rows come back — each statement still RETURNS its stored row, and it is those
+// that travel on, never the arguments echoed back.
+//
+// A failure part way through behaves as a loop would: the caller gets the FIRST
+// error, naming the row that caused it, and the rows written before it go with
+// the transaction when it rolls back. See writeTransferLots for why the
+// statements queued behind the failing one cannot produce a competing error.
+func insertBatch(ctx context.Context, tx pgx.Tx, spaceID uuid.UUID, add []Operation) ([]Operation, error) {
+	if len(add) == 0 {
+		return nil, nil
+	}
+	batch := &pgx.Batch{}
+	for _, op := range add {
+		var createdAt *time.Time
+		if !op.CreatedAt.IsZero() {
+			at := op.CreatedAt
+			createdAt = &at
+		}
+		batch.Queue(insertSQL, insertArgs(spaceID, op, createdAt)...)
+	}
+	br := tx.SendBatch(ctx, batch)
+	stored := make([]Operation, 0, len(add))
+	for i := range add {
+		o, err := scanInserted(br.QueryRow())
+		if err != nil {
+			_ = br.Close()
+			return nil, fmt.Errorf("operation %d: %w", i, err)
+		}
+		stored = append(stored, o)
+	}
+	if err := br.Close(); err != nil {
+		return nil, fmt.Errorf("operations: %w", err)
+	}
+	return stored, nil
+}
+
+// storeBreakdowns writes the FIFO breakdown of every transfer in the delta that
+// owns one (see carriesOwnLots) and puts the STORED pieces on every row that
+// reads them — including the departing leg of a pair, whose pieces live next to
+// its sibling. Both halves matter to what verify then sees: the source account
+// folds the pieces the table gave back, not the ones that went in.
+func storeBreakdowns(ctx context.Context, tx pgx.Tx, add, stored []Operation) error {
+	byGroup := make(map[uuid.UUID][]ReleasedLot)
+	for i := range stored {
+		if !carriesOwnLots(add[i]) {
+			continue
+		}
+		back, err := writeTransferLots(ctx, tx, stored[i].ID, add[i].TransferLots)
+		if err != nil {
+			return err
+		}
+		stored[i].TransferLots = back
+		if err := portfolio.CheckTransferLots(stored[i]); err != nil {
+			// The rows are already in this transaction, so refusing here rolls
+			// them back. Same reasoning as CreatePair: a breakdown the storage
+			// cannot hold faithfully is a bug in this program, surfaced loudly
+			// now rather than on every future read.
+			return fmt.Errorf("transfer lots as stored: %w", err)
+		}
+		if stored[i].TransferGroupID != nil {
+			byGroup[*stored[i].TransferGroupID] = back
+		}
+	}
+	for i := range stored {
+		if len(stored[i].TransferLots) > 0 || stored[i].TransferGroupID == nil {
+			continue
+		}
+		if pieces, ok := byGroup[*stored[i].TransferGroupID]; ok {
+			stored[i].TransferLots = pieces
+			continue
+		}
+		if len(add[i].TransferLots) > 0 {
+			// A departing leg was given a breakdown but its arriving leg is not
+			// in this delta, so nothing stored those pieces and nothing will read
+			// them back. Silently dropping them would leave the row folding a
+			// fresh slice of the queue instead of the parcel that was checked.
+			return fmt.Errorf("operation %d carries a transfer breakdown but the leg that stores it is not in this delta", i)
+		}
+	}
+	return nil
+}
+
 func (s *Store) list(ctx context.Context, sql string, args ...any) ([]Operation, error) {
 	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
@@ -424,6 +642,48 @@ func (s *Store) attachTransferLots(ctx context.Context, spaceID uuid.UUID, ops [
 		ops[i].TransferLots = byOperation[ops[i].ID]
 	}
 	return nil
+}
+
+// ListBySource returns every operation of the account that came from the named
+// source, in engine order, with the FIFO breakdown attached — the journal side
+// of what an importer has to diff its own rows against.
+//
+// It carries the breakdown for the same reason ListForEngine does, and it is
+// not optional here either: these rows are folded to work out what the account
+// already holds, and a transfer that lost its pieces folds into a position with
+// no acquisition dates and a basis nothing can convert, while nothing about the
+// row says it came back incomplete.
+func (s *Store) ListBySource(ctx context.Context, spaceID, accountID uuid.UUID, source string) ([]Operation, error) {
+	ops, err := s.list(ctx, `SELECT `+cols+` FROM operations
+		WHERE space_id = $1 AND account_id = $2 AND source = $3
+		ORDER BY occurred_on ASC, created_at ASC`, spaceID, accountID, source)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.attachTransferLots(ctx, spaceID, ops); err != nil {
+		return nil, err
+	}
+	return ops, nil
+}
+
+// ByIDs returns the operations of the space with the given ids, in engine
+// order, with the FIFO breakdown attached (see ListBySource for why that is not
+// optional). Ids that are not in the space simply do not come back: whether a
+// caller may act on a missing row is the caller's rule, not this query's.
+func (s *Store) ByIDs(ctx context.Context, spaceID uuid.UUID, ids []uuid.UUID) ([]Operation, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	ops, err := s.list(ctx, `SELECT `+cols+` FROM operations
+		WHERE space_id = $1 AND id = ANY($2)
+		ORDER BY occurred_on ASC, created_at ASC`, spaceID, ids)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.attachTransferLots(ctx, spaceID, ops); err != nil {
+		return nil, err
+	}
+	return ops, nil
 }
 
 func (s *Store) ByID(ctx context.Context, spaceID, id uuid.UUID) (Operation, error) {

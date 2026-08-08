@@ -1,0 +1,15 @@
+{
+  "_note": "shape taken from the published API documentation; not confirmed against a live account — task 14",
+  "id": "op-amort-1",
+  "parentOperationId": "",
+  "name": "Частичное погашение облигации",
+  "date": "2026-08-01T09:00:00Z",
+  "type": "OPERATION_TYPE_BOND_REPAYMENT",
+  "description": "Амортизация облигации",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "00e0a5a6-3f9a-4b26-bdb9-95cbbaa1c0f2",
+  "figi": "BBG00T22WKV5",
+  "instrumentType": "bond",
+  "payment": {"currency": "rub", "units": "200", "nano": 0},
+  "quantity": "10"
+}

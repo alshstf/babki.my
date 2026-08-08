@@ -37,10 +37,10 @@ const INCOME_TYPES: OperationType[] = ["dividend", "coupon", "amortization"];
 const REQUIRES_INSTRUMENT = new Set<OperationType>(["amortization"]);
 
 // The one type this form records that the ledger does not treat as income
-// (#109). A dividend and a coupon add to Position.IncomeMinor; an
+// (#109). A dividend and a coupon add to Position.IncomeByCurrency; an
 // amortization is written as a DISPOSAL instead — the engine calls
 // p.realize() with the returned principal as proceeds and the basis it
-// retires as the released pieces, and never touches IncomeMinor (the
+// retires as the released pieces, and never touches income (the
 // TypeAmortization branch in internal/portfolio/engine.go). So it never
 // reaches the «Доход» column of the positions table, at any size, and this
 // dialog used to be titled «Доход по инструменту» over a picker offering it.

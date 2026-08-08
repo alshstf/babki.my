@@ -18,5 +18,11 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: "./src/test-setup.ts",
+    // A fixed timezone, so that anything rendering an instant as a wall clock
+    // (formatDateTime — see src/lib/dates.ts) is testable against a written-out
+    // string instead of against a second call to the very function under test.
+    // Moscow because it is the audience's own zone and it has no daylight
+    // saving, so the offset is +03:00 on every date a test can pick.
+    env: { TZ: "Europe/Moscow" },
   },
 });

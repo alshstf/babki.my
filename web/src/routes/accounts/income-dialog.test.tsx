@@ -118,10 +118,10 @@ describe("IncomeDialog: a sum too large to record", () => {
 });
 
 // #109.2. This form records three operation types and the engine treats them
-// as two different things: dividend and coupon add to Position.IncomeMinor,
+// as two different things: dividend and coupon add to Position.IncomeByCurrency,
 // while amortization is written as a DISPOSAL — p.realize(...) with the
 // returned principal as proceeds, the retired basis as its released pieces,
-// and IncomeMinor untouched (the TypeAmortization branch in
+// and the income untouched (the TypeAmortization branch in
 // internal/portfolio/engine.go). So an amortization never appears in the
 // «Доход» column of the positions table, no matter how large it is, and a
 // form that called it «Доход по инструменту» promised a figure that is not

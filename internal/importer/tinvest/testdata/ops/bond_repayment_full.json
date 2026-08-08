@@ -1,0 +1,16 @@
+{
+  "_note": "shape taken from the published API documentation; whether a full redemption really carries a quantity is task 14's live question — this fixture is the case where it does",
+  "id": "op-repay-1",
+  "parentOperationId": "",
+  "name": "Погашение облигации",
+  "date": "2026-09-01T09:00:00Z",
+  "type": "OPERATION_TYPE_BOND_REPAYMENT_FULL",
+  "description": "Погашение облигации",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "00e0a5a6-3f9a-4b26-bdb9-95cbbaa1c0f2",
+  "figi": "BBG00T22WKV5",
+  "instrumentType": "bond",
+  "payment": {"currency": "rub", "units": "10000", "nano": 0},
+  "price": {"currency": "rub", "units": "1000", "nano": 0},
+  "quantity": "10"
+}

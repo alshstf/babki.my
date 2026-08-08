@@ -1,0 +1,19 @@
+{
+  "_note": "shape taken from the published API documentation; not confirmed against a live account — task 14. instrumentType \"currency\" is the broker's own value for a currency instrument",
+  "id": "op-cur-1",
+  "parentOperationId": "",
+  "name": "Покупка валюты",
+  "date": "2026-03-16T08:00:00Z",
+  "type": "OPERATION_TYPE_BUY",
+  "description": "Покупка USDRUB_TOM",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "a22a1263-8e1b-4546-a1aa-416463f104d3",
+  "figi": "BBG0013HGFT4",
+  "positionUid": "6e97aa9b-50b6-4738-bce7-17313f2b2cc2",
+  "assetUid": "c27b41a3-1a1a-4e93-a2b6-a4b3ee0bcbb0",
+  "instrumentType": "currency",
+  "payment": {"currency": "rub", "units": "-90000", "nano": 0},
+  "price": {"currency": "rub", "units": "90", "nano": 0},
+  "commission": {"currency": "rub", "units": "-27", "nano": 0},
+  "quantity": "1000"
+}

@@ -16,6 +16,7 @@ import (
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/cbr"
@@ -31,7 +32,18 @@ import (
 
 // mountModules builds each domain module and mounts its routes on srv.
 // Shared by the "all" and "api" roles so route wiring lives in one place.
-func mountModules(srv *httpserver.Server, r *rt) {
+//
+// inserter is how a request queues background work — today the "sync now"
+// button, which goes into the same River queue and the same class of uniqueness
+// the hourly schedule uses (see tinvest.EnqueueSync). It is passed in rather
+// than built here because the two roles get it from opposite places: "all"
+// hands over the client it already started to work jobs, and "api" builds an
+// insert-only one, since that process works no jobs at all.
+//
+// It returns an error because the T-Invest module needs an HTTPS transport
+// carrying the gateway's certificate, and building it can fail on a binary
+// whose embedded certificate will not parse (see newTinvestClientFactory).
+func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx]) error {
 	famStore := family.NewStore(r.pool)
 	famSvc := family.NewService(famStore)
 	famSM := family.NewSessionManager(r.pool)
@@ -39,12 +51,25 @@ func mountModules(srv *httpserver.Server, r *rt) {
 	family.NewHandler(famSvc, famStore, famAuth, famSM).Mount(srv)
 	mdStore := marketdata.NewStore(r.pool)
 	converter := marketdata.NewConverter(mdStore)
-	account.NewHandler(account.NewStore(r.pool), famStore, converter, famAuth, famSM).Mount(srv)
+	accStore := account.NewStore(r.pool)
+	account.NewHandler(accStore, famStore, converter, famAuth, famSM).Mount(srv)
 	instStore := instrument.NewStore(r.pool)
 	instrument.NewHandler(instStore, famAuth, famSM).Mount(srv)
 	opStore := operation.NewStore(r.pool)
 	operation.NewHandler(operation.NewService(opStore), opStore, famStore, converter, famAuth, famSM).Mount(srv)
 	portfolio.NewHandler(opStore, instStore, mdStore, converter, famStore, famAuth, famSM).Mount(srv)
+
+	newClient, err := newTinvestClientFactory(r)
+	if err != nil {
+		return err
+	}
+	// r.box is dereferenced whenever a token is stored or replaced, so this
+	// must only ever be reached from a role that required the encryption key —
+	// which is exactly the two roles that mount modules ("all" and "api"; see
+	// setup's requireEncryptionKey).
+	tinvestSvc := tinvest.NewService(tinvest.NewStore(r.pool), accStore, r.box, newClient, inserter, r.log)
+	tinvest.NewHandler(tinvestSvc, famAuth, famSM).Mount(srv)
+	return nil
 }
 
 // cbrHTTPTimeout bounds every request the cbr.ru client makes. The history
@@ -66,6 +91,76 @@ func newCbrHTTPClient() *http.Client {
 	return &http.Client{Timeout: cbrHTTPTimeout}
 }
 
+// tinvestHTTPTimeout bounds every request to the T-Invest REST gateway. It is
+// stated here rather than left to the package default so that the one client
+// this process builds has a timeout chosen where the rest of the process's
+// timeouts are (see cbrHTTPTimeout). 30s is generous for a single page of
+// operations and short enough that a stalled connection cannot eat much of the
+// sync job's fifteen-minute budget.
+const tinvestHTTPTimeout = 30 * time.Second
+
+// newTinvestDeps assembles what the T-Invest import jobs run on. The two factories
+// exist for reasons the types themselves state: a broker client is per token,
+// and a Rebuilder is per RUN, because the passport cache it carries is bounded
+// by the run and is not safe for concurrent use.
+//
+// The transport is built ONCE and shared by every client the factory makes: it
+// carries the certificate pool the gateway needs (see tinvest.NewHTTPClient) and
+// building one per run would rebuild that pool on every sync, per connection,
+// forever.
+func newTinvestDeps(r *rt, instStore *instrument.Store, opStore *operation.Store,
+	accStore *account.Store,
+) (jobs.TinvestDeps, error) {
+	store := tinvest.NewStore(r.pool)
+	newClient, err := newTinvestClientFactory(r)
+	if err != nil {
+		// THIS ONE FAILURE STOPS EVERY BACKGROUND JOB, not merely the import,
+		// and the text has to say so — the person reading it will be looking at
+		// missing exchange rates and stale quotes and wondering what those have
+		// to do with a broker they may not even have connected.
+		//
+		// It is left fatal all the same: the only way the factory refuses is an
+		// embedded certificate that will not parse, which means the binary
+		// itself was built wrong. Starting anyway would hide a broken build
+		// behind a module that happens to be idle on this instance.
+		return jobs.TinvestDeps{}, fmt.Errorf(
+			"the background job queue does not start at all and nothing else it runs — "+
+				"exchange rates, quotes — will run either; nothing about this instance's "+
+				"configuration causes it: %w", err)
+	}
+	return jobs.TinvestDeps{
+		Store:     store,
+		Box:       r.box,
+		NewClient: newClient,
+		NewRebuilder: func() *tinvest.Rebuilder {
+			return tinvest.NewRebuilder(store, tinvest.NewResolver(store, instStore, r.log),
+				operation.NewService(opStore), opStore, r.log)
+		},
+		Reconciler: tinvest.NewReconciler(store, opStore, accStore, r.log),
+	}, nil
+}
+
+// newTinvestClientFactory builds the per-token broker client factory that both
+// halves of the importer run on: the sync worker, which reads history, and the
+// request path, which checks a token before storing it.
+//
+// The transport is built ONCE per call and shared by every client the returned
+// factory makes: it carries the certificate pool the gateway needs (see
+// tinvest.NewHTTPClient), and building one per client would rebuild that pool on
+// every token check and every sync run, forever. The two callers get one
+// transport each, which is one per process role and not one per operation.
+func newTinvestClientFactory(r *rt) (func(token string) (*tinvest.Client, error), error) {
+	hc, err := tinvest.NewHTTPClient(tinvestHTTPTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("the T-Invest importer's HTTPS trust could not be built: %w", err)
+	}
+	return func(token string) (*tinvest.Client, error) {
+		// Base URL empty: the production gateway. Parameterized in the
+		// package for tests, not configured here.
+		return tinvest.NewClient(hc, "", token, r.log), nil
+	}, nil
+}
+
 // startJobClient wires up the job workers and River client and starts it.
 // Shared by the "all" and "worker" roles. cbr and moex are used with their
 // default base URLs — no configuration knob is exposed for them yet. cbr's
@@ -75,6 +170,10 @@ func newCbrHTTPClient() *http.Client {
 // — it now makes one request per board. Nothing has replaced the reason: an
 // unbounded client on the quotes path is a gap, not a decision, and it is
 // filed rather than fixed here.
+//
+// r.box is dereferenced by the T-Invest sync worker, so this must only ever be
+// reached from a role that required the encryption key — which is exactly the
+// two roles that call it ("all" and "worker"; see setup's requireEncryptionKey).
 func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	mdStore := marketdata.NewStore(r.pool)
 	instStore := instrument.NewStore(r.pool)
@@ -83,9 +182,14 @@ func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	famStore := family.NewStore(r.pool)
 	fxProvider := cbr.New(newCbrHTTPClient(), "")
 	quoteProvider := moex.New(nil, "", r.log)
+	tinvestDeps, err := newTinvestDeps(r, instStore, opStore, accStore)
+	if err != nil {
+		return nil, err
+	}
+	enqueuer := jobs.NewEnqueuer()
 	workers := jobs.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, accStore, famStore,
-		fxProvider, quoteProvider)
-	client, err := jobs.NewClient(r.pool, workers, r.log)
+		fxProvider, quoteProvider, tinvestDeps, enqueuer)
+	client, err := jobs.NewClient(r.pool, workers, enqueuer, r.log)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +246,7 @@ func newAllCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signalCtx()
 			defer stop()
-			r, err := setup(ctx, true)
+			r, err := setup(ctx, true, true)
 			if err != nil {
 				return err
 			}
@@ -153,7 +257,13 @@ func newAllCmd() *cobra.Command {
 				return err
 			}
 			srv := httpserver.New(r.log, r.pool)
-			mountModules(srv, r)
+			// The very client this process works jobs with is what its requests
+			// enqueue through: one queue, one class of uniqueness, so a manual
+			// sync and the hourly one cannot run over a connection at once.
+			if err := mountModules(srv, r, client); err != nil {
+				stopJobClient(client, r.log)
+				return err
+			}
 			srv.Mount("/", web.Handler())
 
 			// Sequenced shutdown: let the HTTP server fully drain in-flight
@@ -175,13 +285,24 @@ func newAPICmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signalCtx()
 			defer stop()
-			r, err := setup(ctx, true)
+			r, err := setup(ctx, true, true)
 			if err != nil {
 				return err
 			}
 			defer r.close()
+			// An INSERT-ONLY River client: this role works no jobs, and one
+			// that could would compete with the worker process for them. It is
+			// deliberately never Start()ed and never Stop()ped — a client with
+			// no queues configured does nothing in the background, so there is
+			// nothing to shut down (see jobs.NewInsertOnlyClient).
+			inserter, err := jobs.NewInsertOnlyClient(r.pool, r.log)
+			if err != nil {
+				return err
+			}
 			srv := httpserver.New(r.log, r.pool)
-			mountModules(srv, r)
+			if err := mountModules(srv, r, inserter); err != nil {
+				return err
+			}
 			srv.Mount("/", web.Handler())
 			return srv.Run(ctx, r.cfg.HTTPAddr)
 		},
@@ -195,7 +316,7 @@ func newWorkerCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signalCtx()
 			defer stop()
-			r, err := setup(ctx, true)
+			r, err := setup(ctx, true, true)
 			if err != nil {
 				return err
 			}
@@ -219,7 +340,10 @@ func newMigrateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, stop := signalCtx()
 			defer stop()
-			r, err := setup(ctx, false)
+			// requireEncryptionKey=false: migrate exists precisely so schema
+			// can be applied on a machine where secrets have not been
+			// provisioned yet.
+			r, err := setup(ctx, false, false)
 			if err != nil {
 				return err
 			}

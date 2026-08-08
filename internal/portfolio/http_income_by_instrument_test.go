@@ -12,7 +12,7 @@ import (
 // incomeByInstrument's hardcoded type switch drifting from Compute's own,
 // separate switch over the same Type enum (engine.go's TypeDividend/
 // TypeCoupon/TypeTax cases, which are the only ones that touch
-// Position.IncomeMinor). The two switches live in different files and
+// Position.IncomeByCurrency). The two switches live in different files and
 // nothing but this test ties them together — package portfolio's own test
 // suite (http_test.go, http_position_in_base_test.go) never notices a
 // mismatch because every fixture happens to use the same three types both
@@ -21,11 +21,11 @@ import (
 // For every operation Type in the enum, it builds one operation (with
 // whatever setup operations are needed for the engine to accept it, e.g. a
 // prior buy before a sell) and runs it through Compute, then checks that the
-// resulting position's IncomeMinor is nonzero if and only if
+// resulting position booked income if and only if
 // incomeByInstrument groups that same operation under its instrument. If a
 // reviewer ever widens engine.go's income-affecting switch (adds a case, or
 // folds another type into an existing one) without widening
-// incomeByInstrument's switch to match, Compute starts reporting income for
+// incomeByInstrument's switch to match, Compute starts booking income for
 // that type while incomeByInstrument silently keeps excluding it — the exact
 // drift the doc comment on incomeByInstrument warns about, and the exact
 // thing this test is built to turn red for. See that doc comment.
@@ -36,7 +36,7 @@ import (
 // them today, so attaching an instrument would make Compute itself fail with
 // ErrBadOperation, which is a pre-existing engine limitation unrelated to
 // this test's purpose. Left cash-level, they never reach an instrument's
-// IncomeMinor at all (Compute skips straight past them, and
+// income at all (Compute skips straight past them, and
 // incomeByInstrument skips any operation with a nil InstrumentID), so both
 // sides trivially agree — the four types are included here only so every
 // Type constant is accounted for.
@@ -148,13 +148,20 @@ func TestIncomeByInstrumentMatchesEngineIncomeTypes(t *testing.T) {
 			}
 			gotIncome := false
 			if p, ok := positions[id]; ok {
-				gotIncome = p.IncomeMinor != 0
+				// Whether income was BOOKED, not whether it came to a nonzero
+				// total: income is kept per currency, and an entry exists as
+				// soon as one payment lands in that currency — including one
+				// that cancels against another. That is the sharper question
+				// and it is the one this test wants, since a type folded into
+				// income for zero would still be a type incomeByInstrument has
+				// to know about.
+				gotIncome = len(p.IncomeByCurrency) > 0
 			}
 
 			wantIncome := len(incomeByInstrument(ops)[id]) > 0
 
 			if gotIncome != wantIncome {
-				t.Errorf("%s: Compute produced nonzero IncomeMinor=%v, but incomeByInstrument groups it as income=%v — the two switches disagree for this type",
+				t.Errorf("%s: Compute booked income=%v, but incomeByInstrument groups it as income=%v — the two switches disagree for this type",
 					tc.typ, gotIncome, wantIncome)
 			}
 		})

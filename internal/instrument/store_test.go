@@ -6,8 +6,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"babki.my/babki/internal/family"
@@ -398,8 +400,223 @@ func TestUniqueTickerCoversExactlyTheRowsListTradableReturns(t *testing.T) {
 	}
 }
 
+// TestByTickerTradableAnswersOnlyWhereOneRowIsGuaranteed carries the rule of
+// the test above onto the THIRD place that spells the same filter.
+//
+// ByTickerTradable returns a single row with no ORDER BY and no LIMIT, and it
+// may: its WHERE names the very types migration 0011's partial unique index
+// covers, so at most one row can match. That argument is the whole guarantee,
+// and it is an argument about a filter — nothing enforced it. Widen the method
+// by one type and it goes on compiling, goes on returning a row, and starts
+// returning WHICHEVER of several the planner reached first. The caller that
+// would live with that is tinvest's instrument resolver: it hands the broker's
+// ticker to this method and files the broker's trades against whatever comes
+// back, so a widened filter files them against an arbitrary paper.
+//
+// WHICH types are covered is not written out here — only that there are seven
+// of them. The split is read off ListTradable, as the test above reads it, so
+// this stays a comparison between what the reader returns and what this method
+// answers about rather than a fourth list of the covered types to drift. For a
+// type ListTradable does not return, two rows may share a ticker — and this
+// method must then answer nothing rather than one of them.
+func TestByTickerTradableAnswersOnlyWhereOneRowIsGuaranteed(t *testing.T) {
+	st, ctx, _ := newStore(t)
+
+	types := []instrument.Type{
+		instrument.TypeShare, instrument.TypeBond, instrument.TypeETF,
+		instrument.TypeCurrency, instrument.TypeCrypto, instrument.TypeMetal,
+		instrument.TypeCustom,
+	}
+	tickerOf := func(tp instrument.Type) string { return "TWO" + strings.ToUpper(string(tp)) }
+	duplicated := make(map[instrument.Type]bool, len(types))
+	for _, tp := range types {
+		if _, err := st.Create(ctx, instrument.Instrument{
+			Type: tp, Name: "первый " + string(tp), Ticker: tickerOf(tp), Currency: "RUB",
+		}); err != nil {
+			t.Fatalf("Create first %s: %v", tp, err)
+		}
+		_, err := st.Create(ctx, instrument.Instrument{
+			Type: tp, Name: "второй " + string(tp), Ticker: tickerOf(tp), Currency: "RUB",
+		})
+		switch {
+		case err == nil:
+			duplicated[tp] = true
+		case errors.Is(err, instrument.ErrTickerTaken):
+		default:
+			t.Fatalf("Create second %s: %v", tp, err)
+		}
+	}
+
+	tradable, err := st.ListTradable(ctx)
+	if err != nil {
+		t.Fatalf("ListTradable: %v", err)
+	}
+	returned := make(map[instrument.Type]bool, len(types))
+	for _, inst := range tradable {
+		returned[inst.Type] = true
+	}
+	if len(returned) == 0 {
+		t.Fatal("ListTradable returned nothing; there would be nothing to compare this method against")
+	}
+
+	for _, tp := range types {
+		found, err := st.ByTickerTradable(ctx, tickerOf(tp))
+		switch {
+		case returned[tp]:
+			// The index refused the second row, so exactly one exists and this
+			// method has to be the one that finds it.
+			if err != nil {
+				t.Errorf("ByTickerTradable(%q) = %v, want the single %s instrument ListTradable also returns",
+					tickerOf(tp), err, tp)
+				continue
+			}
+			if found.Type != tp {
+				t.Errorf("ByTickerTradable(%q) returned a %s, want a %s", tickerOf(tp), found.Type, tp)
+			}
+		default:
+			if !duplicated[tp] {
+				t.Fatalf("two %s instruments under one ticker were refused, though ListTradable does not return %s: "+
+					"this case cannot show what the method does with several rows", tp, tp)
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				t.Errorf("ByTickerTradable(%q) answered %q (err %v) though two %s instruments carry that ticker: "+
+					"outside the unique index the query has no single row to return, so it must return none",
+					tickerOf(tp), found.Name, err, tp)
+			}
+		}
+	}
+}
+
 func TestTypeValid(t *testing.T) {
 	if !instrument.TypeShare.Valid() || instrument.Type("nope").Valid() {
 		t.Error("Type.Valid broken")
+	}
+}
+
+// TestByISIN_ExactMatch pins that the lookup is an exact comparison, not a
+// substring search: Search already exists for "found something containing
+// this text" (ILIKE '%...%'), and an importer resolving a broker's ISIN
+// needs the one instrument that IS that ISIN, not every row whose ISIN
+// happens to contain it as a fragment.
+func TestByISIN_ExactMatch(t *testing.T) {
+	st, ctx, _ := newStore(t)
+
+	sber, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER",
+		ISIN: "RU0009029540", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("Create share: %v", err)
+	}
+
+	got, err := st.ByISIN(ctx, "RU0009029540")
+	if err != nil || got.ID != sber.ID {
+		t.Fatalf("ByISIN(exact) = %+v, %v, want %v", got, err, sber.ID)
+	}
+
+	// A substring of a real ISIN must not match — proves this is not built
+	// on ILIKE '%...%' the way Search is.
+	if _, err := st.ByISIN(ctx, "RU000902954"); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("ByISIN(substring) = %v, want pgx.ErrNoRows", err)
+	}
+
+	// An ISIN nothing carries at all.
+	if _, err := st.ByISIN(ctx, "US0000000000"); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("ByISIN(unknown) = %v, want pgx.ErrNoRows", err)
+	}
+
+	// The empty string is not "no filter" here (unlike Search's query
+	// parameter): the catalog carries no uniqueness on ISIN, so a bare
+	// `isin = ''` could match every instrument nobody has entered one for
+	// and hand back whichever is oldest — a plausible-looking wrong answer
+	// instead of the honest "no exact match" this refuses with instead.
+	if _, err := st.ByISIN(ctx, ""); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("ByISIN(\"\") = %v, want pgx.ErrNoRows", err)
+	}
+}
+
+// TestByISIN_DuplicateReturnsOldest pins the tie-break the doc comment
+// promises for the one case migration 0011 never covered: ISIN carries no
+// unique constraint (duplicates were entered by hand before this method
+// existed), so an importer resolving one still needs a single, deterministic
+// answer rather than whichever row Postgres happens to return first.
+func TestByISIN_DuplicateReturnsOldest(t *testing.T) {
+	st, ctx, _ := newStore(t)
+
+	first, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Дубль, первый", Ticker: "DUP1",
+		ISIN: "RU0000000001", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("Create first: %v", err)
+	}
+	// created_at is assigned by now() inside each INSERT's own implicit
+	// transaction; a short sleep keeps the two rows apart at whatever
+	// precision the column actually holds, rather than relying on two
+	// statements issued back to back always landing in different
+	// microseconds.
+	time.Sleep(5 * time.Millisecond)
+	if _, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Дубль, второй", Ticker: "DUP2",
+		ISIN: "RU0000000001", Currency: "RUB",
+	}); err != nil {
+		t.Fatalf("Create second: %v", err)
+	}
+
+	got, err := st.ByISIN(ctx, "RU0000000001")
+	if err != nil {
+		t.Fatalf("ByISIN: %v", err)
+	}
+	if got.ID != first.ID {
+		t.Fatalf("ByISIN(duplicate) = %q (%v), want the oldest, %q (%v)",
+			got.Name, got.ID, first.Name, first.ID)
+	}
+}
+
+// TestByTickerTradable pins the two things ByISIN's sibling method has to
+// get right: an exact match among share/bond/etf, and exclusion of exactly
+// what ListTradable excludes (currency/crypto and tickerless rows) — the
+// partial unique index behind "at most one" (migration 0011) only ever
+// covers the rows ListTradable returns, so this method's WHERE has to name
+// the identical set or its own "at most one" guarantee would not hold.
+func TestByTickerTradable(t *testing.T) {
+	st, ctx, _ := newStore(t)
+
+	share, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("Create share: %v", err)
+	}
+	if _, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeCurrency, Name: "Доллар США", Ticker: "USD000UTSTOM", Currency: "USD",
+	}); err != nil {
+		t.Fatalf("Create currency: %v", err)
+	}
+	if _, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeCrypto, Name: "Bitcoin", Ticker: "BTC", Currency: "USD",
+	}); err != nil {
+		t.Fatalf("Create crypto: %v", err)
+	}
+
+	got, err := st.ByTickerTradable(ctx, "SBER")
+	if err != nil || got.ID != share.ID {
+		t.Fatalf("ByTickerTradable(SBER) = %+v, %v, want %v", got, err, share.ID)
+	}
+
+	if _, err := st.ByTickerTradable(ctx, "USD000UTSTOM"); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("ByTickerTradable(currency ticker) = %v, want pgx.ErrNoRows (currency is not tradable)", err)
+	}
+	if _, err := st.ByTickerTradable(ctx, "BTC"); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("ByTickerTradable(crypto ticker) = %v, want pgx.ErrNoRows (crypto is not tradable)", err)
+	}
+	if _, err := st.ByTickerTradable(ctx, "NOPE"); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("ByTickerTradable(unknown) = %v, want pgx.ErrNoRows", err)
+	}
+	// Empty ticker: never "any tickerless row", for the same reason
+	// ByISIN("") refuses rather than picking one — and here there would be
+	// many candidates, since any number of instruments may carry no ticker.
+	if _, err := st.ByTickerTradable(ctx, ""); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("ByTickerTradable(\"\") = %v, want pgx.ErrNoRows", err)
 	}
 }

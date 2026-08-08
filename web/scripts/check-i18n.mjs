@@ -85,6 +85,25 @@ const ENUM_NAMESPACE_TO_TYPE = {
   // values, so every one of them has to have Russian wording here.
   "costBasis.methods": "CostBasisMethod",
   "costBasis.perimeters": "CostBasisPerimeter",
+  // T-Invest connections (see api/openapi.yaml, paths under /api/v1/tinvest).
+  //
+  // ALL SIX ARE CROSS-CHECKED TODAY, each by at least one call site that builds
+  // its key dynamically — which is the only thing that makes an entry here a
+  // check at all: `connections.statuses` on the settings list and the
+  // connection screen's own badge, `connections.runStatuses`,
+  // `connections.triggers` and `connections.reconcileStatuses` in the run log,
+  // `connections.mismatchKinds` in the reconcile panel, and
+  // `connections.unparsedReasons` in the unparsed list. Adding a member to any
+  // of those enums on the server therefore fails this build until ru.json has
+  // Russian for it. (Five of the six were wired in ahead of that screen and
+  // asserted nothing until it existed; the note saying so is gone because the
+  // screen is here.)
+  "connections.statuses": "TinvestConnectionStatus",
+  "connections.runStatuses": "TinvestSyncRunStatus",
+  "connections.reconcileStatuses": "TinvestReconcileStatus",
+  "connections.unparsedReasons": "TinvestUnparsedReason",
+  "connections.triggers": "TinvestSyncTrigger",
+  "connections.mismatchKinds": "TinvestReconcileMismatchKind",
 };
 
 /**

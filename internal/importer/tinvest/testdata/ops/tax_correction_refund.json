@@ -1,0 +1,15 @@
+{
+  "_note": "shape taken from the published API documentation; that a correction arrives POSITIVE (a refund) is the assumption this fixture is built on and it has not been confirmed live — task 14",
+  "id": "op-taxcorr-1",
+  "parentOperationId": "",
+  "name": "Корректировка налога",
+  "date": "2026-07-01T10:00:00Z",
+  "type": "OPERATION_TYPE_TAX_CORRECTION",
+  "description": "Корректировка налога",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
+  "figi": "BBG004730N88",
+  "instrumentType": "share",
+  "payment": {"currency": "rub", "units": "320", "nano": 0},
+  "quantity": "0"
+}

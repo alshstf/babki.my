@@ -208,23 +208,24 @@ type instrumentResp struct {
 }
 
 type positionResp struct {
-	Instrument                instrumentResp  `json:"instrument"`
-	Quantity                  string          `json:"quantity"`
-	CostMinor                 int64           `json:"cost_minor"`
-	Currency                  string          `json:"currency"`
-	RealizedPnlMinor          int64           `json:"realized_pnl_minor"`
-	IncomeMinor               int64           `json:"income_minor"`
-	FeesMinor                 int64           `json:"fees_minor"`
-	MarketValueMinor          *int64          `json:"market_value_minor"`
-	MarketValueCurrency       *string         `json:"market_value_currency"`
-	MarketValueSourceCurrency *string         `json:"market_value_source_currency"`
-	MarketValueSourceMinor    *int64          `json:"market_value_source_minor"`
-	Price                     *string         `json:"price"`
-	PriceOn                   *string         `json:"price_on"`
-	UnrealizedPnlMinor        *int64          `json:"unrealized_pnl_minor"`
-	HasUndatedLots            bool            `json:"has_undated_lots"`
-	HasUndatedRealizations    bool            `json:"has_undated_realizations"`
-	InBase                    *positionInBase `json:"in_base"`
+	Instrument                instrumentResp   `json:"instrument"`
+	Quantity                  string           `json:"quantity"`
+	CostMinor                 int64            `json:"cost_minor"`
+	Currency                  string           `json:"currency"`
+	RealizedPnlMinor          int64            `json:"realized_pnl_minor"`
+	IncomeMinor               int64            `json:"income_minor"`
+	IncomeByCurrency          []currencyIncome `json:"income_by_currency"`
+	FeesMinor                 int64            `json:"fees_minor"`
+	MarketValueMinor          *int64           `json:"market_value_minor"`
+	MarketValueCurrency       *string          `json:"market_value_currency"`
+	MarketValueSourceCurrency *string          `json:"market_value_source_currency"`
+	MarketValueSourceMinor    *int64           `json:"market_value_source_minor"`
+	Price                     *string          `json:"price"`
+	PriceOn                   *string          `json:"price_on"`
+	UnrealizedPnlMinor        *int64           `json:"unrealized_pnl_minor"`
+	HasUndatedLots            bool             `json:"has_undated_lots"`
+	HasUndatedRealizations    bool             `json:"has_undated_realizations"`
+	InBase                    *positionInBase  `json:"in_base"`
 	// InBaseGap and MarketValueGap are pointers so a test can tell an explicit
 	// null — nothing stopped the object, or nothing was withheld from the
 	// valuation — apart from a named cause, which the empty string could not:
@@ -232,6 +233,15 @@ type positionResp struct {
 	// contract requires both keys on every position.
 	InBaseGap      *string `json:"in_base_gap"`
 	MarketValueGap *string `json:"market_value_gap"`
+}
+
+// currencyIncome mirrors apitypes.PositionCurrencyIncome for decoding in tests
+// (see http_income_currency_test.go). The whole point of the field is that a
+// position's income need not be denominated in the position's own currency, so
+// a test asserts the pairs — the amount alone would say nothing.
+type currencyIncome struct {
+	Currency    string `json:"currency"`
+	IncomeMinor int64  `json:"income_minor"`
 }
 
 // positionInBase mirrors apitypes.PositionInBase for decoding in tests (see

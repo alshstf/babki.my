@@ -1,0 +1,17 @@
+{
+  "_note": "shape taken from the published API documentation; not confirmed against a live account — task 14. A Russian dividend arrives gross; its tax is a separate operation",
+  "id": "op-div-1",
+  "parentOperationId": "",
+  "name": "Выплата дивидендов",
+  "date": "2026-06-05T09:00:00Z",
+  "type": "OPERATION_TYPE_DIVIDEND",
+  "description": "Дивиденды",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
+  "figi": "BBG004730N88",
+  "positionUid": "41eb2102-5333-4713-bf15-72b204c4bf7b",
+  "assetUid": "40d89385-a03a-4659-bf4e-d3ecba011782",
+  "instrumentType": "share",
+  "payment": {"currency": "rub", "units": "1350", "nano": 750000000},
+  "quantity": "0"
+}

@@ -1,0 +1,15 @@
+{
+  "instrument": {
+    "figi": "BBG004730N88",
+    "ticker": "SBER",
+    "classCode": "TQBR",
+    "isin": "RU0009029540",
+    "lot": 10,
+    "currency": "rub",
+    "name": "Сбер Банк",
+    "exchange": "MOEX",
+    "instrumentType": "share",
+    "uid": "uid-sber",
+    "assetUid": "asset-sber"
+  }
+}

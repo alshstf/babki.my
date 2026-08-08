@@ -1,0 +1,15 @@
+{
+  "_note": "shape taken from the published API documentation; that this operation is the SAME money as the commission field of the trade it names in parentOperationId is the assumption behind projectBrokerFee and is what task 14 checks",
+  "id": "op-brokerfee-1",
+  "parentOperationId": "op-buy-1",
+  "name": "Удержание комиссии за операцию",
+  "date": "2026-03-14T21:30:00Z",
+  "type": "OPERATION_TYPE_BROKER_FEE",
+  "description": "Комиссия за сделку",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "",
+  "figi": "",
+  "instrumentType": "",
+  "payment": {"currency": "rub", "units": "-8", "nano": -250000000},
+  "quantity": "0"
+}

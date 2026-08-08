@@ -1,0 +1,20 @@
+{
+  "_note": "constructed for this test — a trade paid in one currency whose commission the broker charged in another; the shape is the documented one, the combination has not been seen live (task 14)",
+  "id": "op-buy-2",
+  "parentOperationId": "",
+  "name": "Покупка ценных бумаг",
+  "date": "2026-04-02T10:15:00Z",
+  "type": "OPERATION_TYPE_BUY",
+  "description": "Покупка 10 шт.",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "9654c2dd-6993-427e-80fa-04e80a1cf4da",
+  "figi": "BBG000BVPV84",
+  "positionUid": "e6123145-9665-43e0-8413-cd61b8aa9b14",
+  "assetUid": "40d89385-a03a-4659-bf4e-d3ecba011783",
+  "instrumentType": "share",
+  "payment": {"currency": "usd", "units": "-1200", "nano": -500000000},
+  "price": {"currency": "usd", "units": "120", "nano": 50000000},
+  "commission": {"currency": "rub", "units": "-95", "nano": -400000000},
+  "accruedInt": {"currency": "usd", "units": "0", "nano": 0},
+  "quantity": "10"
+}

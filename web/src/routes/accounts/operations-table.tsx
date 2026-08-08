@@ -181,6 +181,48 @@ function rowGapTitle(
   }
 }
 
+// WHO OWNS A JOURNAL ROW, answered exactly as the server answers it: the
+// service refuses to delete anything whose `source` is not "manual" (see
+// Service.Delete), because such a row is a projection of records held
+// elsewhere — the broker's own, kept in the import's mirror — and is written
+// again the next time the projection is rebuilt. A menu offering to delete it
+// would be offering something that cannot happen: the request is refused, and
+// even if it were not, the row would come back.
+//
+// The rule is spelled as the server spells it — "manual" and nothing else —
+// rather than as "not tinvest": the column allows a third value ('csv',
+// migration 0005) that nothing writes today, and a row carrying it must not
+// become deletable here merely because this file forgot it exists.
+function isImported(operation: Operation): boolean {
+  return operation.source !== "manual";
+}
+
+// Who wrote the row, drawn beside its type. Т-Инвестиции by name where the row
+// says so, and a plain «загружено извне» for any other non-manual source:
+// naming an unknown importer after the only one that exists today would be
+// stating where the data came from without having been told. Nothing at all on
+// a hand-entered row, which is the ordinary case and needs no label.
+function SourceBadge({ operation }: { operation: Operation }) {
+  const { t } = useTranslation();
+  if (!isImported(operation)) return null;
+  const tinvest = operation.source === "tinvest";
+  return (
+    // THE HINT BRANCHES WHERE THE LABEL DOES, and for the same reason. What is
+    // true of every imported row is that this program will not delete it; that
+    // it is WRITTEN AGAIN afterwards is true of the T-Invest import alone,
+    // which rebuilds its rows from the broker's mirror. A 'csv' row (migration
+    // 0005 allows the value, nothing writes it today) has nothing behind it to
+    // rebuild from, so promising that one comes back would be inventing a
+    // machine that does not exist.
+    <Badge
+      variant="outline"
+      title={tinvest ? t("operations.importedTinvestTitle") : t("operations.importedTitle")}
+    >
+      {tinvest ? t("connections.tinvest") : t("operations.importedElsewhere")}
+    </Badge>
+  );
+}
+
 export function OperationsTable({
   accountId,
   canDelete,
@@ -502,7 +544,10 @@ export function OperationsTable({
               <TableRow key={operation.id}>
                 <TableCell className="whitespace-nowrap">{formatDate(operation.occurred_on)}</TableCell>
                 <TableCell>
-                  <Badge variant="secondary">{t(`operationTypes.${operation.type}`)}</Badge>
+                  <div className="flex flex-wrap items-center gap-1">
+                    <Badge variant="secondary">{t(`operationTypes.${operation.type}`)}</Badge>
+                    <SourceBadge operation={operation} />
+                  </div>
                 </TableCell>
                 <TableCell>{instrumentName(operation.instrument_id)}</TableCell>
                 <TableCell
@@ -569,16 +614,22 @@ export function OperationsTable({
                     "—"
                   )}
                 </TableCell>
+                {/* The cell itself stays whenever the column does, so an
+                    imported row does not pull the ones below it a column to the
+                    left; what goes is the action inside it, on a row the server
+                    would refuse to delete (see isImported). */}
                 {canDelete && (
                   <TableCell>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label={t("operations.delete")}
-                      onClick={() => setDeleteTarget(operation)}
-                    >
-                      <Trash2 className="size-4" />
-                    </Button>
+                    {!isImported(operation) && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={t("operations.delete")}
+                        onClick={() => setDeleteTarget(operation)}
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    )}
                   </TableCell>
                 )}
               </TableRow>

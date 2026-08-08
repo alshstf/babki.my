@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "@tanstack/react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -15,6 +17,7 @@ import {
 import { useSession } from "@/api/session";
 import { useUpdateSpace, type UpdateSpaceBody } from "@/api/space";
 import { useTaxResidencies } from "@/api/tax-residencies";
+import { useConnections, type TinvestConnectionStatus } from "@/api/connections";
 import { ApiError } from "@/api/operations";
 import { CostBasisNotice } from "@/components/cost-basis-notice";
 import { countryName } from "@/lib/country";
@@ -190,6 +193,90 @@ export function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+      <ConnectionsSection />
     </div>
+  );
+}
+
+// statusVariant picks how a connection's state is drawn. A switch over the
+// contract's own three values rather than a two-way test, so a fourth state
+// added there arrives here as a type error instead of quietly rendering as
+// «everything is fine» or as «nothing to do».
+function statusVariant(status: TinvestConnectionStatus): "default" | "secondary" | "destructive" {
+  switch (status) {
+    case "active":
+      return "default";
+    case "token_revoked":
+      return "destructive";
+    case "disabled":
+      return "secondary";
+  }
+}
+
+// ConnectionsSection lists the space's broker connections (T-Invest is the
+// only broker there is one of today) and the way to add another. It reads
+// GET /api/v1/tinvest/connections itself rather than depending on anything
+// the currency/residency form above already fetched, so a failure or a slow
+// answer there never blanks this section out.
+function ConnectionsSection() {
+  const { t } = useTranslation();
+  const connections = useConnections();
+  const list = connections.data ?? [];
+
+  return (
+    <Card className="max-w-md">
+      <CardHeader>
+        <CardTitle>{t("connections.title")}</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {connections.isLoading && (
+          <p className="text-sm text-muted-foreground">{t("app.loading")}</p>
+        )}
+        {connections.isError && (
+          <Alert variant="destructive">
+            <AlertDescription>{t("app.error")}</AlertDescription>
+          </Alert>
+        )}
+        {!connections.isLoading && !connections.isError && list.length === 0 && (
+          <p className="text-sm text-muted-foreground">{t("connections.empty")}</p>
+        )}
+        {list.length > 0 && (
+          <ul className="grid gap-2">
+            {list.map((connection) => (
+              <li key={connection.id}>
+                <Link
+                  to="/settings/connections/$connectionId"
+                  params={{ connectionId: connection.id }}
+                  className="flex items-center justify-between rounded-lg border p-3 text-sm hover:bg-muted"
+                >
+                  <div className="grid gap-0.5">
+                    <span className="font-medium">{t("connections.tinvest")}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {t("connections.tokenLast4", { last4: connection.token_last4 })}
+                    </span>
+                  </div>
+                  {/* Three states, three looks, because two of them are not
+                      the same news. `token_revoked` is a verdict the server
+                      reached by asking the broker: this connection has stopped
+                      importing and will not start again until the owner pastes
+                      a new token. `disabled` is the owner's own doing and needs
+                      nothing from anyone. Drawn alike — both quiet grey — the
+                      one that is waiting for a person looks exactly like the
+                      one that is waiting for nobody. */}
+                  <Badge variant={statusVariant(connection.status)}>
+                    {t(`connections.statuses.${connection.status}`)}
+                  </Badge>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div>
+          <Button asChild>
+            <Link to="/settings/connections/new">{t("connections.connect")}</Link>
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

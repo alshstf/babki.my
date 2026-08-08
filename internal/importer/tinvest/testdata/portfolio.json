@@ -1,0 +1,21 @@
+{
+  "positions": [
+    {
+      "figi": "BBG004730N88",
+      "instrumentType": "share",
+      "quantity": {"units": "100", "nano": 0},
+      "averagePositionPrice": {"currency": "rub", "units": "150", "nano": 0},
+      "instrumentUid": "uid-sber",
+      "blocked": false,
+      "ticker": "SBER"
+    },
+    {
+      "figi": "TCS00A106YF0",
+      "instrumentType": "bond",
+      "quantity": {"units": "10", "nano": 500000000},
+      "instrumentUid": "uid-bond",
+      "blocked": true,
+      "ticker": "RU000BOND1"
+    }
+  ]
+}

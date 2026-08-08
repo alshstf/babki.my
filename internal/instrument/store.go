@@ -95,6 +95,63 @@ func (s *Store) ByID(ctx context.Context, id uuid.UUID) (Instrument, error) {
 		`SELECT `+cols+` FROM instruments WHERE id = $1`, id))
 }
 
+// ByISIN finds the instrument whose isin matches exactly — unlike Search,
+// which finds a fragment via ILIKE. It exists for a caller (the T-Invest
+// resolver) that has one authoritative ISIN from a broker and needs the one
+// catalog row it names, not every row that happens to contain it.
+//
+// The catalog carries NO uniqueness constraint on isin (migration 0011 only
+// covers ticker); duplicates exist today, entered by hand before this method
+// existed to notice them. Rather than surface that ambiguity to every
+// caller, this returns the OLDEST matching row (lowest created_at, ties
+// broken by id): the one most likely to be the original entry rather than a
+// later accidental copy, and a deterministic answer either way.
+//
+// isin == "" returns pgx.ErrNoRows without querying at all, rather than
+// running the same comparison against an empty string. isin has no NOT
+// NULL/non-empty constraint, so `WHERE isin = ”` would match every
+// instrument nobody has ever set one on and hand back whichever is oldest —
+// a plausible-looking instrument that answers nothing about the empty ISIN
+// the caller asked for. Refusing before the query keeps that state
+// unreachable instead of silently plausible.
+func (s *Store) ByISIN(ctx context.Context, isin string) (Instrument, error) {
+	if isin == "" {
+		return Instrument{}, pgx.ErrNoRows
+	}
+	return scan(s.pool.QueryRow(ctx,
+		`SELECT `+cols+` FROM instruments WHERE isin = $1 ORDER BY created_at, id LIMIT 1`, isin))
+}
+
+// ByTickerTradable finds the tradable instrument (share, bond, or etf; see
+// ListTradable) whose ticker matches exactly. It exists for the same reason
+// ByISIN does: a caller with one authoritative ticker needs the one row it
+// names.
+//
+// AT MOST ONE ROW CAN EVER MATCH — the partial unique index behind
+// ErrTickerTaken (migration 0011) covers exactly the rows ListTradable
+// returns (see TestUniqueTickerCoversExactlyTheRowsListTradableReturns), and
+// this method's WHERE is that same set, so no ORDER BY/LIMIT tie-break is
+// needed the way ByISIN's is. That sentence is an argument about a filter,
+// which is the shape that stops being true without anything failing: widen the
+// list below by one type and this goes on returning a row, now whichever of
+// several the planner reached first, and tinvest's resolver files a broker's
+// trades against it. TestByTickerTradableAnswersOnlyWhereOneRowIsGuaranteed is
+// what turns that red.
+//
+// ticker == "" returns pgx.ErrNoRows without querying, for the same reason
+// ByISIN("") does: the empty ticker is deliberately outside that index (see
+// ListTradable), so any number of rows could carry it, and "at most one"
+// would stop being true for the one input this method would otherwise
+// silently pick a row for.
+func (s *Store) ByTickerTradable(ctx context.Context, ticker string) (Instrument, error) {
+	if ticker == "" {
+		return Instrument{}, pgx.ErrNoRows
+	}
+	return scan(s.pool.QueryRow(ctx,
+		`SELECT `+cols+` FROM instruments
+		WHERE type IN ('share', 'bond', 'etf') AND ticker = $1`, ticker))
+}
+
 // ByIDs returns the instruments behind a whole set of ids in a single round
 // trip. Ids with no row are simply absent from the map — never zero-valued,
 // which would hand a caller an instrument with an empty name and an invalid
@@ -156,13 +213,18 @@ func (s *Store) Search(ctx context.Context, query string, limit int) ([]Instrume
 // an exchange. Currency/crypto/metal/custom instruments and tickerless rows
 // are excluded: there is no exchange ticker to fetch a quote for.
 //
-// The filter below is written a second time as the predicate of the partial
-// unique index on instruments.ticker (migration 0011), because every row this
-// reader can return has to be unique by ticker — the quotes job keys a map on
-// it. Widening this filter without widening that predicate reopens the silent
+// The filter below is written again as the predicate of the partial unique
+// index on instruments.ticker (migration 0011), because every row this reader
+// can return has to be unique by ticker — the quotes job keys a map on it.
+// Widening this filter without widening that predicate reopens the silent
 // overwrite the index closed; see
 // TestUniqueTickerCoversExactlyTheRowsListTradableReturns, which fails if the
 // two stop describing the same rows.
+//
+// ByTickerTradable is a third spelling of it, and it rests on the same
+// uniqueness for a different reason — it returns ONE row and needs there to be
+// only one. TestByTickerTradableAnswersOnlyWhereOneRowIsGuaranteed holds it to
+// this reader in the same way.
 func (s *Store) ListTradable(ctx context.Context) ([]Instrument, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+cols+` FROM instruments
