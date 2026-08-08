@@ -213,12 +213,17 @@ func seedDemoTx(ctx context.Context, tx pgx.Tx) error {
 // own data contradicts is the exact failure this project keeps being bitten by,
 // and it would be on the screen built to make the importer trustworthy.
 //
-// Its dates are fixed like the rest of the seed, with one exception that cannot
-// be: a run's own started_at/finished_at are the database's clock at the moment
-// the row is written (see Store.StartRun and FinishRun, which take no time).
-// That is honest here rather than merely unavoidable — the run log answers "when
-// did this import run", and seeding IS when this demo import ran; the operations
-// it mirrors carry the fixed dates.
+// ITS DATES ARE FIXED LIKE THE REST OF THE SEED, THE RUN LOG'S OWN INCLUDED,
+// and that took an extra step. Store.StartRun and FinishRun take no time and
+// leave started_at/finished_at to now(), which in production is right — each of
+// them is a statement of its own there, so the database's clock IS the instant
+// it ran. Here they are not: the whole seed runs under ONE transaction, and
+// now() is the TRANSACTION's timestamp, a single instant shared by every
+// statement in it. Both demo runs therefore came out stamped identically, and
+// the log is read newest-first with the row id as its only tie-break (see
+// Store.RunsByConnection) — so which run counted as the later one was decided by
+// a random uuid, differently from machine to machine. Each run is stamped
+// explicitly instead; see stampSeedRun.
 func seedTinvestDemo(ctx context.Context, tx pgx.Tx, spaceID, accountID uuid.UUID,
 	d func(string) time.Time,
 ) error {
@@ -257,11 +262,19 @@ func seedTinvestDemo(ctx context.Context, tx pgx.Tx, spaceID, accountID uuid.UUI
 	// unparsed until there is live data to build rules from) and a purchase of
 	// currency, which is a refusal of its own rather than an unsupported type.
 	first := seedTinvestOperations(d)
+	// The two runs' clocks, an hour apart, and each one is also the instant its
+	// own sync stamps on the mirror rows it touches: SyncMirror takes that
+	// instant as an argument so that a whole run stamps one moment, and a run
+	// log entry dated differently from the rows the run produced would be a
+	// caption disagreeing with its own figures.
+	firstAt := d("2026-07-20").Add(9 * time.Hour)
+	secondAt := d("2026-07-20").Add(10 * time.Hour)
+
 	firstRun, err := store.StartRun(ctx, conn.ID, link.ID, tinvest.TriggerInitial)
 	if err != nil {
 		return fmt.Errorf("seed tinvest first run: %w", err)
 	}
-	firstStats, err := store.SyncMirror(ctx, conn.ID, link, first, d("2026-07-20").Add(9*time.Hour))
+	firstStats, err := store.SyncMirror(ctx, conn.ID, link, first, firstAt)
 	if err != nil {
 		return fmt.Errorf("seed tinvest mirror: %w", err)
 	}
@@ -285,6 +298,9 @@ func seedTinvestDemo(ctx context.Context, tx pgx.Tx, spaceID, accountID uuid.UUI
 	}); err != nil {
 		return fmt.Errorf("seed tinvest first run outcome: %w", err)
 	}
+	if err := stampSeedRun(ctx, tx, firstRun.ID, firstAt); err != nil {
+		return err
+	}
 
 	// A second run in which the broker no longer returns the overnight repo.
 	// The row is not deleted — it is marked, and it stays on the unparsed list,
@@ -295,11 +311,11 @@ func seedTinvestDemo(ctx context.Context, tx pgx.Tx, spaceID, accountID uuid.UUI
 	if err != nil {
 		return fmt.Errorf("seed tinvest second run: %w", err)
 	}
-	secondStats, err := store.SyncMirror(ctx, conn.ID, link, second, d("2026-07-20").Add(10*time.Hour))
+	secondStats, err := store.SyncMirror(ctx, conn.ID, link, second, secondAt)
 	if err != nil {
 		return fmt.Errorf("seed tinvest mirror refresh: %w", err)
 	}
-	return store.FinishRun(ctx, secondRun.ID, tinvest.RunOutcome{
+	if err := store.FinishRun(ctx, secondRun.ID, tinvest.RunOutcome{
 		Status:           tinvest.RunOK,
 		ReadCount:        secondStats.Read,
 		AddedCount:       secondStats.Added,
@@ -318,7 +334,45 @@ func seedTinvestDemo(ctx context.Context, tx pgx.Tx, spaceID, accountID uuid.UUI
 				Journal: decimal.Zero,
 			}},
 		},
-	})
+	}); err != nil {
+		return err
+	}
+	return stampSeedRun(ctx, tx, secondRun.ID, secondAt)
+}
+
+// stampSeedRun gives one seeded run log entry the fixed clock its caller chose,
+// replacing the now() StartRun and FinishRun left on it.
+//
+// IT IS AN UPDATE OF ITS OWN RATHER THAN AN ARGUMENT TO THOSE TWO, and the
+// reason is that production has no use for such an argument: there each of them
+// is its own statement, so now() is genuinely the instant it ran, and only a
+// seed — whose whole point is that every date in it is stated rather than
+// observed — needs to say otherwise. That is also why this is the only non-test
+// code outside internal/importer/tinvest that writes a run log column directly.
+//
+// started_at and finished_at are given the SAME instant, the one the run's own
+// SyncMirror call stamped on every mirror row it touched — inserting them on the
+// first run, confirming them and marking the vanished one on the second. A
+// seeded run has no duration anybody measured, and inventing one would put a
+// figure on the stand that nothing produced; the run log's own table shows the
+// start and no duration at all.
+//
+// reconciled_at is moved only where there already is one. The run nobody
+// reconciled keeps its NULL, because "never looked" and "looked and agreed" are
+// different statements and the run log exists to keep them apart.
+func stampSeedRun(ctx context.Context, tx pgx.Tx, runID uuid.UUID, at time.Time) error {
+	ct, err := tx.Exec(ctx, `UPDATE tinvest_sync_runs
+		SET started_at = $2::timestamptz, finished_at = $2::timestamptz,
+		    reconciled_at = CASE WHEN reconciled_at IS NULL THEN NULL ELSE $2::timestamptz END
+		WHERE id = $1`, runID, at)
+	if err != nil {
+		return fmt.Errorf("seed tinvest run clock: %w", err)
+	}
+	if ct.RowsAffected() != 1 {
+		return fmt.Errorf("seed tinvest run clock: run %s matched %d rows, want 1",
+			runID, ct.RowsAffected())
+	}
+	return nil
 }
 
 // seedTinvestVerdicts says why each seeded broker operation did not become a

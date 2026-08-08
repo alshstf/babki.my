@@ -129,11 +129,12 @@ type candidate struct {
 // the buy that covers it is still judged against the position it actually had.
 //
 // The order they are checked in is then the order they are WRITTEN with:
-// created_at is stated on every row rather than left to the column, because
-// now() is one timestamp for a whole transaction and rows of the same date
-// sharing it would leave every later read free to fold them in another order
-// than the one that was checked (see Store.ApplyDelta). A row replacing one
-// this delta removes keeps that row's stamp instead (see ImportDelta).
+// created_at is stated on every row rather than left to the statement's clock,
+// because a delta's rows are written back to back in one batch and rows of the
+// same date that happened to share an instant would leave every later read free
+// to fold them in another order than the one that was checked (see
+// Store.ApplyDelta). A row replacing one this delta removes keeps that row's
+// stamp instead (see ImportDelta).
 //
 // applied comes back in that same order, as the database stored the rows.
 func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d ImportDelta) (
@@ -232,12 +233,12 @@ func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d Imp
 	// IT CAN THEREFORE REACH A SHADE PAST THE PRESENT — one microsecond per row
 	// stamped, so milliseconds for a delta of thousands. An operation a person
 	// enters by hand into that window, on the same day and the same account, is
-	// stamped by the column's own now() and lands BENEATH the rows this delta
+	// stamped by its own insert's clock and lands BENEATH the rows this delta
 	// wrote, so it folds before them though it was entered after them. That much
 	// is merely surprising: the hand-entry path stamps its candidate with
 	// time.Now() when it checks it too (see journalWith), so check and read
 	// agree. What is not merely surprising is the sliver where they disagree —
-	// the check taken just under this delta's last stamp and the write's now()
+	// the check taken just under this delta's last stamp and the write's clock
 	// just over it, which reads back in an order the check never saw. Both
 	// windows are milliseconds wide, and the two paths do not share an account
 	// in the shape this program is built for: an import writes into accounts of

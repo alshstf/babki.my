@@ -51,20 +51,29 @@ func scan(row pgx.Row) (Operation, error) {
 // zero rows returned means the account is not in the caller's space.
 //
 // created_at is the one column of this statement a caller may either state or
-// leave alone: NULL — what every path but ApplyDelta passes — takes the table's
-// own default, and anything else is used as given. It became statable because
-// now() is the TRANSACTION's timestamp, identical on every row a single
-// transaction inserts, and a batch that writes a whole history in one
-// transaction would give rows of the same date one created_at between them: the
-// engine's listing orders by that column, so it would have nothing left to
-// order them by (see ApplyDelta).
+// leave alone: NULL — what every path but ApplyDelta passes — takes this
+// statement's own clock, and anything else is used as given. It became statable
+// because a batch writes a whole history under one commit and the caller is the
+// only one who knows the order it checked that history in (see ApplyDelta).
+//
+// THE CLOCK IS clock_timestamp() AND NOT now(), which is the difference between
+// "when this row was written" and "when the enclosing transaction began". The
+// two agree, to within the moment it took, for a caller that writes one row per
+// transaction; they do not for one that writes several under one commit — a
+// transfer pair, or the demo seed, which writes its whole journal a row at a
+// time inside a single transaction. With now() every one of those rows claims
+// one and the same instant, and
+// two operations of the same date sharing one created_at leave the reads below
+// nothing to order them by: ListForEngine would fold them in an order the
+// database picks — in one of which a same-day sell precedes its buy and is an
+// oversell — and the paged listing would have no total order to page over.
 const insertSQL = `
 	INSERT INTO operations (space_id, account_id, instrument_id, type,
 		occurred_on, settled_on, quantity, price, amount_minor, currency,
 		fee_minor, note, transfer_group_id, split_ratio, source, external_id,
 		created_at)
 	SELECT a.space_id, a.id, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-		COALESCE(NULLIF($15, ''), 'manual'), $16, COALESCE($17::timestamptz, now())
+		COALESCE(NULLIF($15, ''), 'manual'), $16, COALESCE($17::timestamptz, clock_timestamp())
 	FROM accounts a WHERE a.id = $2 AND a.space_id = $1
 	RETURNING ` + cols
 
@@ -89,10 +98,13 @@ func scanInserted(row pgx.Row) (Operation, error) {
 	return created, err
 }
 
-// insertOne writes one operation and lets the table date it. The literal nil
-// is the point: the row-at-a-time paths (Create, CreatePair) leave created_at
-// to the database exactly as they always have, and cannot be made to state one
-// by an operation that happens to carry a CreatedAt from somewhere.
+// insertOne writes one operation and lets the database date it. The literal nil
+// is the point: the row-at-a-time paths (Create, CreatePair) leave created_at to
+// the statement's own clock, and cannot be made to state one by an operation
+// that happens to carry a CreatedAt from somewhere. What that leaves them is the
+// moment each row was actually written, rather than one moment shared by every
+// row a caller wrote under the same commit — see insertSQL on why the clock has
+// to be the statement's and not the transaction's.
 func insertOne(ctx context.Context, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, spaceID uuid.UUID, op Operation,
@@ -344,13 +356,16 @@ func carriesOwnLots(op Operation) bool {
 // the rest of that difference cannot be trusted either; obeying the part that
 // still applies would write half of a stale decision.
 //
-// created_at is stated by the caller rather than left to the column (see
-// insertSQL). It is not decoration: now() is the transaction's timestamp, so
-// every row of a delta would otherwise share one, and two operations of the
-// same date sharing one created_at leave ListForEngine's ORDER BY nothing to
-// separate them by — the journal would fold in an order the database picks,
-// which is not necessarily the order the caller checked. That is the shape of
-// "accepted on write, refused on every later read" this package has met twice.
+// created_at is stated by the caller rather than left to the statement's clock
+// (see insertSQL). It is not decoration. The rows of a delta go out as one
+// batch, back to back, and a clock read microseconds apart is not a promise
+// that two of them differ — while two operations of the same date sharing one
+// created_at leave ListForEngine's ORDER BY nothing to separate them by, so
+// the journal would fold in an order the database picks rather than the order
+// the caller checked. That is the shape of "accepted on write, refused on every
+// later read" this package has met twice. The caller is also the only one that
+// knows that order, and the only one that can put a rewritten row back where
+// the row it replaces stood (see ImportDelta).
 //
 // verify is handed the rows AS STORED — from the INSERT's RETURNING, with the
 // breakdowns the lot table gave back — for the reason Create and CreatePair

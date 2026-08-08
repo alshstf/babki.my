@@ -1137,7 +1137,24 @@ func TestSeedTinvestDemoIsSelfConsistentAndCannotReachTheBroker(t *testing.T) {
 	if len(runs) != 2 {
 		t.Fatalf("runs = %d, want 2", len(runs))
 	}
-	newest, oldest := runs[0], runs[1]
+	// The two runs are picked BY TRIGGER and not by position, so that every
+	// check below says which run it is about — and so that the log's ORDER gets
+	// a check of its own instead of being smuggled into all of them. Read
+	// positionally, a log handed back the wrong way round failed four assertions
+	// that have nothing to do with ordering — down to a JSON decode of the run
+	// that never reconciled anything — and not one of them named the cause.
+	byTrigger := map[tinvest.SyncTrigger]tinvest.SyncRun{}
+	for _, r := range runs {
+		byTrigger[r.Trigger] = r
+	}
+	first, ok := byTrigger[tinvest.TriggerInitial]
+	if !ok {
+		t.Fatalf("no initial run in the log, only %+v", runs)
+	}
+	second, ok := byTrigger[tinvest.TriggerSchedule]
+	if !ok {
+		t.Fatalf("no scheduled run in the log, only %+v", runs)
+	}
 	for _, r := range runs {
 		if r.Status != tinvest.RunOK {
 			t.Errorf("run %s finished %q, want ok", r.ID, r.Status)
@@ -1147,32 +1164,59 @@ func TestSeedTinvestDemoIsSelfConsistentAndCannotReachTheBroker(t *testing.T) {
 				r.ID, r.UnparsedCount, len(unparsed))
 		}
 	}
-	if oldest.Trigger != tinvest.TriggerInitial || oldest.ReadCount != 3 || oldest.AddedCount != 3 ||
-		oldest.DisappearedCount != 0 {
+
+	// THE TWO RUNS CARRY STATED INSTANTS, AN HOUR APART, AND NOT THE CLOCK THE
+	// SEED HAPPENED TO RUN AT. The whole seed is one transaction, and now() is
+	// that transaction's timestamp — one instant shared by every statement in
+	// it — so a run log left to the database's clock stamps both runs
+	// identically. RunsByConnection orders by started_at DESC with the row id as
+	// its only tie-break, so which of them counted as the later one was then
+	// decided by a random uuid: green here, red on the next machine. The times
+	// are written out in full rather than read back off the mirror rows, because
+	// a fixture that derives them from the same source as the code proves
+	// nothing about either.
+	wantFirst := time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC)
+	wantSecond := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
+	if !first.StartedAt.Equal(wantFirst) || !second.StartedAt.Equal(wantSecond) {
+		t.Errorf("the runs started at %s and %s, want %s and %s",
+			first.StartedAt.UTC(), second.StartedAt.UTC(), wantFirst, wantSecond)
+	}
+	for _, r := range runs {
+		if r.FinishedAt == nil || !r.FinishedAt.Equal(r.StartedAt) {
+			t.Errorf("run %q started at %s and finished at %v, want the same stated instant: a "+
+				"seeded run has no duration anybody measured", r.Trigger, r.StartedAt, r.FinishedAt)
+		}
+	}
+	if runs[0].Trigger != tinvest.TriggerSchedule {
+		t.Errorf("the log hands over the %q run first, want the later (%q) one — it is read "+
+			"newest first, and that order is what the demo's run table shows",
+			runs[0].Trigger, tinvest.TriggerSchedule)
+	}
+
+	if first.ReadCount != 3 || first.AddedCount != 3 || first.DisappearedCount != 0 {
 		t.Errorf("the first run = %+v, want the initial import reading and adding all three",
-			[]int{oldest.ReadCount, oldest.AddedCount, oldest.DisappearedCount})
+			[]int{first.ReadCount, first.AddedCount, first.DisappearedCount})
 	}
-	if newest.Trigger != tinvest.TriggerSchedule || newest.ReadCount != 2 || newest.AddedCount != 0 ||
-		newest.DisappearedCount != gone {
+	if second.ReadCount != 2 || second.AddedCount != 0 || second.DisappearedCount != gone {
 		t.Errorf("the second run read=%d added=%d disappeared=%d, want 2/0/%d — the broker "+
-			"returned one operation fewer and nothing new", newest.ReadCount, newest.AddedCount,
-			newest.DisappearedCount, gone)
+			"returned one operation fewer and nothing new", second.ReadCount, second.AddedCount,
+			second.DisappearedCount, gone)
 	}
-	if newest.ReconcileStatus != tinvest.ReconcileMismatched || newest.ReconciledAt == nil {
+	if second.ReconcileStatus != tinvest.ReconcileMismatched || second.ReconciledAt == nil {
 		t.Errorf("the second run's check = %q at %v, want a mismatched verdict with a date",
-			newest.ReconcileStatus, newest.ReconciledAt)
+			second.ReconcileStatus, second.ReconciledAt)
 	}
 	var mismatches []tinvest.ReconcileMismatch
-	if err := json.Unmarshal(newest.ReconcileMismatches, &mismatches); err != nil {
+	if err := json.Unmarshal(second.ReconcileMismatches, &mismatches); err != nil {
 		t.Fatalf("decode the seeded differences: %v", err)
 	}
 	if len(mismatches) != 1 || mismatches[0].Kind != tinvest.MismatchUnsupported {
 		t.Errorf("differences = %+v, want exactly one of kind %q", mismatches, tinvest.MismatchUnsupported)
 	}
-	if oldest.ReconcileStatus != tinvest.ReconcileNotChecked || oldest.ReconciledAt != nil {
+	if first.ReconcileStatus != tinvest.ReconcileNotChecked || first.ReconciledAt != nil {
 		t.Errorf("the first run's check = %q at %v, want not_checked with no date: nothing "+
 			"reconciled it, and «nobody looked» is not «everything agreed»",
-			oldest.ReconcileStatus, oldest.ReconciledAt)
+			first.ReconcileStatus, first.ReconciledAt)
 	}
 }
 
