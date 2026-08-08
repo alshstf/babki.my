@@ -219,7 +219,7 @@ func (s *Store) SyncMirror(ctx context.Context, connID uuid.UUID, link AccountLi
 	}
 	items := dedupInPage(fetched)
 
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return MirrorSyncStats{}, fmt.Errorf("tinvest: sync mirror: %w", err)
 	}

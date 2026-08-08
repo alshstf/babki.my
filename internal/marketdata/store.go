@@ -6,7 +6,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // querier is the part of *pgxpool.Pool this Store uses. It is an interface
@@ -16,8 +15,9 @@ import (
 // what lets the readers below be run against one that starts fine and then
 // breaks (see NewStoreForRows in export_test.go and store_truncated_test.go).
 //
-// Nothing in production passes anything but a pool, and NewStore still takes
-// one, so this changes no call site and no behavior.
+// It has a second use since: `babki seed` builds every store it writes through
+// on ONE open transaction, and pgx.Tx implements these three methods just as
+// the pool does. Everything else passes the pool.
 type querier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -26,7 +26,11 @@ type querier interface {
 
 type Store struct{ db querier }
 
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{db: pool} }
+// NewStore takes the querier above rather than a pool so a Store can also be
+// built on an open transaction (pgx.Tx implements all three methods) — which
+// is what `babki seed` does, writing its whole demo world under one commit.
+// Every other caller passes the pool.
+func NewStore(x querier) *Store { return &Store{db: x} }
 
 const fxRateCols = `base, quote, on_date, rate, source`
 

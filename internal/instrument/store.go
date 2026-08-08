@@ -8,9 +8,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/platform/db"
 )
 
 // pgUniqueViolation is the SQLSTATE code Postgres returns for a unique
@@ -61,9 +61,9 @@ func wrapTickerConflict(err error) error {
 	return err
 }
 
-type Store struct{ pool *pgxpool.Pool }
+type Store struct{ db db.Executor }
 
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+func NewStore(x db.Executor) *Store { return &Store{db: x} }
 
 const cols = `id, type, name, ticker, isin, figi, currency,
 	face_value_minor, face_currency, frozen, created_at, updated_at`
@@ -77,7 +77,7 @@ func scan(row pgx.Row) (Instrument, error) {
 }
 
 func (s *Store) Create(ctx context.Context, inst Instrument) (Instrument, error) {
-	created, err := scan(s.pool.QueryRow(ctx, `
+	created, err := scan(s.db.QueryRow(ctx, `
 		INSERT INTO instruments (type, name, ticker, isin, figi, currency,
 			face_value_minor, face_currency, frozen)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -91,7 +91,7 @@ func (s *Store) Create(ctx context.Context, inst Instrument) (Instrument, error)
 }
 
 func (s *Store) ByID(ctx context.Context, id uuid.UUID) (Instrument, error) {
-	return scan(s.pool.QueryRow(ctx,
+	return scan(s.db.QueryRow(ctx,
 		`SELECT `+cols+` FROM instruments WHERE id = $1`, id))
 }
 
@@ -118,7 +118,7 @@ func (s *Store) ByISIN(ctx context.Context, isin string) (Instrument, error) {
 	if isin == "" {
 		return Instrument{}, pgx.ErrNoRows
 	}
-	return scan(s.pool.QueryRow(ctx,
+	return scan(s.db.QueryRow(ctx,
 		`SELECT `+cols+` FROM instruments WHERE isin = $1 ORDER BY created_at, id LIMIT 1`, isin))
 }
 
@@ -147,7 +147,7 @@ func (s *Store) ByTickerTradable(ctx context.Context, ticker string) (Instrument
 	if ticker == "" {
 		return Instrument{}, pgx.ErrNoRows
 	}
-	return scan(s.pool.QueryRow(ctx,
+	return scan(s.db.QueryRow(ctx,
 		`SELECT `+cols+` FROM instruments
 		WHERE type IN ('share', 'bond', 'etf') AND ticker = $1`, ticker))
 }
@@ -170,7 +170,7 @@ func (s *Store) ByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]Instr
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.db.Query(ctx,
 		`SELECT `+cols+` FROM instruments WHERE id = ANY($1)`, ids)
 	if err != nil {
 		return nil, err
@@ -225,7 +225,7 @@ func (s *Store) Search(ctx context.Context, query string, limit, offset int) ([]
 	if offset < 0 {
 		return nil, false, fmt.Errorf("search instruments: offset must not be negative, got %d", offset)
 	}
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.db.Query(ctx, `
 		SELECT `+cols+` FROM instruments
 		WHERE $1 = '' OR name ILIKE '%'||$1||'%' OR ticker ILIKE '%'||$1||'%' OR isin ILIKE '%'||$1||'%'
 		ORDER BY name, id LIMIT $2 OFFSET $3`, query, limit+1, offset)
@@ -269,7 +269,7 @@ func (s *Store) Search(ctx context.Context, query string, limit, offset int) ([]
 // only one. TestByTickerTradableAnswersOnlyWhereOneRowIsGuaranteed holds it to
 // this reader in the same way.
 func (s *Store) ListTradable(ctx context.Context) ([]Instrument, error) {
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.db.Query(ctx, `
 		SELECT `+cols+` FROM instruments
 		WHERE type IN ('share', 'bond', 'etf') AND ticker <> ''
 		ORDER BY ticker`)
@@ -296,7 +296,7 @@ func doublePtr[T any](p **T) *T {
 }
 
 func (s *Store) Update(ctx context.Context, id uuid.UUID, upd Update) (Instrument, error) {
-	ct, err := s.pool.Exec(ctx, `
+	ct, err := s.db.Exec(ctx, `
 		UPDATE instruments SET
 			name             = COALESCE($2, name),
 			ticker           = COALESCE($3, ticker),

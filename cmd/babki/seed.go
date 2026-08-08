@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 	"github.com/spf13/cobra"
@@ -25,7 +26,7 @@ func newSeedCmd() *cobra.Command {
 		Use:   "seed",
 		Short: "Наполнить пустой инстанс демо-данными (демо-семья и счета)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, stop := signalCtx()
+			ctx, stop := signalCtx(cmd.Context())
 			defer stop()
 			// requireEncryptionKey=false: seed writes plain demo data and
 			// never touches an encrypted secret, so it must keep working on
@@ -45,8 +46,42 @@ func newSeedCmd() *cobra.Command {
 }
 
 // seedDemo populates an empty instance with a demo family and accounts.
+//
+// ONE TRANSACTION FOR THE WHOLE THING, and the reason is that a half-finished
+// seed used to be permanent. The first thing written is the space and its
+// owner; from that moment the instance holds a user, so the guard below — and
+// the /setup endpoint, and everything else that asks whether this instance has
+// been set up — say it is done. A failure at any later step (a duplicate ticker
+// in the catalogue, a rejected operation, a Ctrl-C) therefore left an instance
+// holding a fragment of the demo, which `babki seed` would refuse to touch ever
+// again and only manual surgery on the database could rescue. Written under one
+// commit, that same failure leaves the instance exactly as it was found, and the
+// command can simply be run again.
+//
+// The stores below are built on the transaction rather than on the pool, which
+// is what db.Executor exists for; the pool is still what this function is
+// handed, since beginning the transaction is its own job.
 func seedDemo(ctx context.Context, pool *pgxpool.Pool) error {
-	famStore := family.NewStore(pool)
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	// Rolled back on a context the interrupt cannot have cancelled: ctx is the
+	// signal context, and on Ctrl-C rolling back through it would be asking a
+	// cancelled context to send one last statement. The error is dropped
+	// because on the successful path this runs after Commit, where a rollback
+	// is a no-op returning pgx.ErrTxClosed; on the failing path the caller is
+	// already returning the failure that matters.
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	if err := seedDemoTx(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func seedDemoTx(ctx context.Context, tx pgx.Tx) error {
+	famStore := family.NewStore(tx)
 	svc := family.NewService(famStore)
 
 	needed, err := svc.SetupNeeded(ctx)
@@ -67,7 +102,7 @@ func seedDemo(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 
-	accStore := account.NewStore(pool)
+	accStore := account.NewStore(tx)
 	d := func(s string) time.Time {
 		t, err := time.Parse("2006-01-02", s)
 		if err != nil {
@@ -149,10 +184,10 @@ func seedDemo(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 	}
 
-	if err := seedInstrumentsAndOperations(ctx, pool, owner.SpaceID, accIDs, d); err != nil {
+	if err := seedInstrumentsAndOperations(ctx, tx, owner.SpaceID, accIDs, d); err != nil {
 		return err
 	}
-	if err := seedTinvestDemo(ctx, pool, owner.SpaceID, accIDs["Брокерский Т-Банк"], d); err != nil {
+	if err := seedTinvestDemo(ctx, tx, owner.SpaceID, accIDs["Брокерский Т-Банк"], d); err != nil {
 		return err
 	}
 	return nil
@@ -184,10 +219,10 @@ func seedDemo(ctx context.Context, pool *pgxpool.Pool) error {
 // That is honest here rather than merely unavoidable — the run log answers "when
 // did this import run", and seeding IS when this demo import ran; the operations
 // it mirrors carry the fixed dates.
-func seedTinvestDemo(ctx context.Context, pool *pgxpool.Pool, spaceID, accountID uuid.UUID,
+func seedTinvestDemo(ctx context.Context, tx pgx.Tx, spaceID, accountID uuid.UUID,
 	d func(string) time.Time,
 ) error {
-	store := tinvest.NewStore(pool)
+	store := tinvest.NewStore(tx)
 
 	// Random bytes, and deliberately NOT secretbox.Seal of anything: this seed
 	// runs without BABKI_ENCRYPTION_KEY (see newSeedCmd), so there is no box to
@@ -384,10 +419,10 @@ func seedTinvestOperations(d func(string) time.Time) []tinvest.OperationItem {
 // operations go through operation.Service so seed data is subject to the
 // same validation and journal-consistency checks as user-entered data.
 func seedInstrumentsAndOperations(
-	ctx context.Context, pool *pgxpool.Pool, spaceID uuid.UUID,
+	ctx context.Context, tx pgx.Tx, spaceID uuid.UUID,
 	accIDs map[string]uuid.UUID, d func(string) time.Time,
 ) error {
-	instStore := instrument.NewStore(pool)
+	instStore := instrument.NewStore(tx)
 
 	// The OFZ's face value: a thousand rubles, on a bond whose operations are
 	// in rubles too. Face currency and trade currency agreeing is exactly the
@@ -924,7 +959,7 @@ func seedInstrumentsAndOperations(
 		},
 	}
 
-	opSvc := operation.NewService(operation.NewStore(pool))
+	opSvc := operation.NewService(operation.NewStore(tx))
 	for _, op := range ops {
 		if _, err := opSvc.Create(ctx, spaceID, op); err != nil {
 			return fmt.Errorf("seed operation %s %s: %w", op.Type, op.OccurredOn.Format("2006-01-02"), err)
@@ -1189,7 +1224,7 @@ func seedInstrumentsAndOperations(
 		}
 	}
 
-	if err := seedMarketData(ctx, pool, instIDs, d); err != nil {
+	if err := seedMarketData(ctx, tx, instIDs, d); err != nil {
 		return err
 	}
 	return nil
@@ -1361,8 +1396,8 @@ var seededUSDRates = []struct{ on, rate string }{
 // KAZ32EUR, WEWKQ, INTC and AMZN are hand-seeded for the same kind of reason —
 // each carries a demonstration of its own that cannot be seen without a
 // valuation. See each quote below.
-func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]uuid.UUID, d func(string) time.Time) error {
-	mdStore := marketdata.NewStore(pool)
+func seedMarketData(ctx context.Context, tx pgx.Tx, instIDs map[string]uuid.UUID, d func(string) time.Time) error {
+	mdStore := marketdata.NewStore(tx)
 	// The demo's "now": the newest fx rate in the table, so every conversion
 	// struck at the current rate resolves here, and the same day as the newest
 	// account balance.

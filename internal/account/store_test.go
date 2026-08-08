@@ -127,6 +127,83 @@ func TestSummaryByCurrency(t *testing.T) {
 	}
 }
 
+// TestSummarySplitsEveryTypeTheWayIsLiabilitySays walks ALL SEVEN account
+// types through the summary in one currency and checks each one landed on the
+// side Type.IsLiability puts it on. It exists because that split lives in SQL,
+// where the Go method cannot be called: the query takes the list as a
+// parameter built by LiabilityTypes, and this is what would notice if the two
+// ever stopped agreeing — an account created, listed and edited perfectly, and
+// silently summed on the wrong side.
+//
+// The classification is WRITTEN OUT rather than derived from IsLiability, on
+// purpose: a table that asked the method what to expect would move with any
+// change to it and could never fail. Written out, it fails twice over —
+// LiabilityTypes stops matching the literal pair below, and the account whose
+// class changed lands in the wrong total.
+//
+// Every balance is a different number, so a type counted on the wrong side
+// moves both totals by an amount that names it.
+func TestSummarySplitsEveryTypeTheWayIsLiabilitySays(t *testing.T) {
+	st, spaceID, _, ctx := newStore(t)
+
+	if got, want := account.LiabilityTypes(), []string{"credit_card", "loan"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("LiabilityTypes() = %v, want %v", got, want)
+	}
+
+	cases := []struct {
+		typ       account.Type
+		liability bool
+		balance   int64
+	}{
+		{account.TypeBrokerage, false, 1_000_00},
+		{account.TypeChecking, false, 2_000_00},
+		{account.TypeSavings, false, 4_000_00},
+		{account.TypeDeposit, false, 8_000_00},
+		{account.TypeCash, false, 16_000_00},
+		{account.TypeCreditCard, true, -32_000_00},
+		{account.TypeLoan, true, -64_000_00},
+	}
+	var wantAssets, wantLiabilities int64
+	for _, c := range cases {
+		if !c.typ.Valid() {
+			t.Fatalf("%q is not a valid account type", c.typ)
+		}
+		if c.typ.IsLiability() != c.liability {
+			t.Fatalf("%q.IsLiability() = %v, want %v", c.typ, c.typ.IsLiability(), c.liability)
+		}
+		a, err := st.Create(ctx, spaceID, nil, string(c.typ), c.typ, "RUB", "")
+		if err != nil {
+			t.Fatalf("create %s: %v", c.typ, err)
+		}
+		if err := st.SetBalance(ctx, spaceID, a.ID, date("2026-07-20"), c.balance); err != nil {
+			t.Fatalf("balance %s: %v", c.typ, err)
+		}
+		if c.liability {
+			wantLiabilities += c.balance
+		} else {
+			wantAssets += c.balance
+		}
+	}
+
+	totals, err := st.SummaryByCurrency(ctx, spaceID)
+	if err != nil {
+		t.Fatalf("SummaryByCurrency: %v", err)
+	}
+	if len(totals) != 1 {
+		t.Fatalf("totals = %+v, want one currency", totals)
+	}
+	got := totals[0]
+	if got.AssetsMinor != wantAssets {
+		t.Errorf("assets = %d, want %d (every non-liability type, summed)", got.AssetsMinor, wantAssets)
+	}
+	if got.LiabilitiesMinor != wantLiabilities {
+		t.Errorf("liabilities = %d, want %d (credit card + loan, summed)", got.LiabilitiesMinor, wantLiabilities)
+	}
+	if got.NetMinor != wantAssets+wantLiabilities {
+		t.Errorf("net = %d, want %d", got.NetMinor, wantAssets+wantLiabilities)
+	}
+}
+
 func TestListWithBalanceOrdering(t *testing.T) {
 	st, spaceID, _, ctx := newStore(t)
 

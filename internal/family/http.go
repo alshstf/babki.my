@@ -148,16 +148,7 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, err)
 		return
 	}
-	if err := h.auth.SignIn(r.Context(), u.ID); err != nil {
-		WriteError(w, err)
-		return
-	}
-	info, err := h.sessionInfo(r, u, p)
-	if err != nil {
-		WriteError(w, err)
-		return
-	}
-	httpjson.Write(w, http.StatusCreated, info)
+	h.signInAndAnswer(w, r, u, p, http.StatusCreated)
 }
 
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +161,25 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, err)
 		return
 	}
+	h.signInAndAnswer(w, r, u, p, http.StatusOK)
+}
+
+// signInAndAnswer is the tail both doors that hand out a session share: start
+// the session, then answer with what the client needs to know about it. It is
+// one function because the two were the same eleven lines twice, and a session
+// established by one route but described differently by the other is the kind
+// of difference nobody would look for.
+//
+// The status differs and nothing else does: setup CREATED something, login did
+// not.
+//
+// A failure of SignIn after the account already exists leaves a created owner
+// with no cookie, and the answer is a 500 the client recovers from by logging
+// in — deliberately, since the alternative is deleting a real user because a
+// session store hiccuped. Setup's own writes are already atomic (see
+// Store.CreateSpaceWithOwner); what is not, and cannot be, is a session that
+// lives outside that transaction.
+func (h *Handler) signInAndAnswer(w http.ResponseWriter, r *http.Request, u User, p Principal, status int) {
 	if err := h.auth.SignIn(r.Context(), u.ID); err != nil {
 		WriteError(w, err)
 		return
@@ -179,7 +189,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, err)
 		return
 	}
-	httpjson.Write(w, http.StatusOK, info)
+	httpjson.Write(w, status, info)
 }
 
 func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {

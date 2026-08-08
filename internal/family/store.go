@@ -8,7 +8,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
+
+	"babki.my/babki/internal/platform/db"
 )
 
 // pgUniqueViolation is the SQLSTATE code Postgres returns for a unique
@@ -27,13 +28,13 @@ func wrapUsernameConflict(err error) error {
 }
 
 // Store is the data access layer of the family module.
-type Store struct{ pool *pgxpool.Pool }
+type Store struct{ db db.Executor }
 
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+func NewStore(x db.Executor) *Store { return &Store{db: x} }
 
 func (s *Store) CountUsers(ctx context.Context) (int, error) {
 	var n int
-	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&n)
+	err := s.db.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&n)
 	return n, err
 }
 
@@ -59,24 +60,24 @@ func scanSpace(row pgx.Row) (Space, error) {
 }
 
 func (s *Store) CreateUser(ctx context.Context, username, displayName, passwordHash string) (User, error) {
-	return scanUser(s.pool.QueryRow(ctx, `
+	return scanUser(s.db.QueryRow(ctx, `
 		INSERT INTO users (username, display_name, password_hash)
 		VALUES ($1, $2, $3) RETURNING `+userCols, username, displayName, passwordHash))
 }
 
 func (s *Store) UserByUsername(ctx context.Context, username string) (User, error) {
-	return scanUser(s.pool.QueryRow(ctx,
+	return scanUser(s.db.QueryRow(ctx,
 		`SELECT `+userCols+` FROM users WHERE username = $1`, username))
 }
 
 func (s *Store) UserByID(ctx context.Context, id uuid.UUID) (User, error) {
-	return scanUser(s.pool.QueryRow(ctx,
+	return scanUser(s.db.QueryRow(ctx,
 		`SELECT `+userCols+` FROM users WHERE id = $1`, id))
 }
 
 // CreateSpaceWithOwner creates the space and the owner membership atomically.
 func (s *Store) CreateSpaceWithOwner(ctx context.Context, name string, ownerID uuid.UUID) (Space, error) {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Space{}, err
 	}
@@ -99,7 +100,7 @@ func (s *Store) CreateSpaceWithOwner(ctx context.Context, name string, ownerID u
 // owner membership in a single transaction, so a mid-way failure can never
 // orphan a user row (which would otherwise permanently wedge SetupNeeded).
 func (s *Store) CreateFirstUserWithSpace(ctx context.Context, spaceName, username, displayName, passwordHash string) (User, Space, error) {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return User{}, Space{}, err
 	}
@@ -137,7 +138,7 @@ func (s *Store) CreateFirstUserWithSpace(ctx context.Context, spaceName, usernam
 // CreateUserInSpace creates a user and its membership in an existing space in
 // a single transaction, so a mid-way failure can never orphan a user row.
 func (s *Store) CreateUserInSpace(ctx context.Context, spaceID uuid.UUID, username, displayName, passwordHash string, role Role) (User, error) {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return User{}, err
 	}
@@ -167,7 +168,7 @@ func (s *Store) CreateUserInSpace(ctx context.Context, spaceID uuid.UUID, userna
 }
 
 func (s *Store) SpaceByID(ctx context.Context, id uuid.UUID) (Space, error) {
-	return scanSpace(s.pool.QueryRow(ctx, `SELECT `+spaceCols+` FROM spaces WHERE id = $1`, id))
+	return scanSpace(s.db.QueryRow(ctx, `SELECT `+spaceCols+` FROM spaces WHERE id = $1`, id))
 }
 
 // DistinctBaseCurrencies returns the sorted set of base currencies across
@@ -178,7 +179,7 @@ func (s *Store) SpaceByID(ctx context.Context, id uuid.UUID) (Space, error) {
 // spent in, and its rates are needed just the same. Returns an empty slice,
 // not an error, when there are no spaces yet.
 func (s *Store) DistinctBaseCurrencies(ctx context.Context) ([]string, error) {
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT base_currency FROM spaces ORDER BY base_currency`)
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT base_currency FROM spaces ORDER BY base_currency`)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +204,7 @@ func (s *Store) DistinctBaseCurrencies(ctx context.Context) ([]string, error) {
 // acceptable is decided in Service.UpdateSpace, alongside the role check.
 // Returns pgx.ErrNoRows if the space doesn't exist.
 func (s *Store) UpdateSpaceSettings(ctx context.Context, spaceID uuid.UUID, baseCurrency, taxResidency *string) error {
-	ct, err := s.pool.Exec(ctx, `UPDATE spaces
+	ct, err := s.db.Exec(ctx, `UPDATE spaces
 		SET base_currency = COALESCE($2, base_currency),
 		    tax_residency = COALESCE($3, tax_residency)
 		WHERE id = $1`, spaceID, baseCurrency, taxResidency)
@@ -213,22 +214,16 @@ func (s *Store) UpdateSpaceSettings(ctx context.Context, spaceID uuid.UUID, base
 	return err
 }
 
-func (s *Store) AddMember(ctx context.Context, spaceID, userID uuid.UUID, role Role) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO memberships (space_id, user_id, role)
-		VALUES ($1, $2, $3)`, spaceID, userID, role)
-	return err
-}
-
 // MembershipFor returns the caller's principal (first membership).
 func (s *Store) MembershipFor(ctx context.Context, userID uuid.UUID) (Principal, error) {
 	p := Principal{UserID: userID}
-	err := s.pool.QueryRow(ctx, `SELECT space_id, role FROM memberships
+	err := s.db.QueryRow(ctx, `SELECT space_id, role FROM memberships
 		WHERE user_id = $1 ORDER BY created_at LIMIT 1`, userID).Scan(&p.SpaceID, &p.Role)
 	return p, err
 }
 
 func (s *Store) ListMembers(ctx context.Context, spaceID uuid.UUID) ([]Member, error) {
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.db.Query(ctx, `
 		SELECT u.id, u.username, u.display_name, u.password_hash, u.created_at, m.role
 		FROM memberships m JOIN users u ON u.id = m.user_id
 		WHERE m.space_id = $1 ORDER BY m.created_at`, spaceID)
@@ -248,7 +243,7 @@ func (s *Store) ListMembers(ctx context.Context, spaceID uuid.UUID) ([]Member, e
 }
 
 func (s *Store) UpdateMemberRole(ctx context.Context, spaceID, userID uuid.UUID, role Role) error {
-	ct, err := s.pool.Exec(ctx, `UPDATE memberships SET role = $3
+	ct, err := s.db.Exec(ctx, `UPDATE memberships SET role = $3
 		WHERE space_id = $1 AND user_id = $2`, spaceID, userID, role)
 	if err == nil && ct.RowsAffected() == 0 {
 		return pgx.ErrNoRows
@@ -257,7 +252,7 @@ func (s *Store) UpdateMemberRole(ctx context.Context, spaceID, userID uuid.UUID,
 }
 
 func (s *Store) RemoveMember(ctx context.Context, spaceID, userID uuid.UUID) error {
-	ct, err := s.pool.Exec(ctx, `DELETE FROM memberships
+	ct, err := s.db.Exec(ctx, `DELETE FROM memberships
 		WHERE space_id = $1 AND user_id = $2`, spaceID, userID)
 	if err == nil && ct.RowsAffected() == 0 {
 		return pgx.ErrNoRows

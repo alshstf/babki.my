@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
@@ -270,5 +271,97 @@ func TestAnInsertOnlyClientQueuesWithoutWorkingAnything(t *testing.T) {
 	// and left it for whoever works the queue.
 	if state != "available" {
 		t.Errorf("the job is %q, want available: an api process must not work the jobs it queues", state)
+	}
+}
+
+// gracefulProbeArgs is a job kind that exists only inside the test below: it
+// runs, says so, and then reports how its own context ended.
+type gracefulProbeArgs struct{}
+
+func (gracefulProbeArgs) Kind() string { return "test.graceful_probe" }
+
+type gracefulProbeWorker struct {
+	river.WorkerDefaults[gracefulProbeArgs]
+	started   chan struct{}
+	cancelled chan struct{}
+	release   chan struct{}
+}
+
+func (w *gracefulProbeWorker) Work(ctx context.Context, _ *river.Job[gracefulProbeArgs]) error {
+	close(w.started)
+	select {
+	case <-ctx.Done():
+		close(w.cancelled)
+	case <-w.release:
+	}
+	return nil
+}
+
+// TestSigtermLeavesARunningJobItsGracefulWindow measures the one thing
+// jobs.SoftStopTimeout buys, and measures it as behaviour rather than as a
+// field: a job already running when the process is signalled keeps its context
+// for a while instead of losing it on the spot.
+//
+// THE SIGNAL IS MODELLED BY CANCELLING THE CONTEXT PASSED TO Start, because
+// that is precisely what a signal does in this program — cmd/babki's "all" and
+// "worker" roles both hand signal.NotifyContext's context to startJobClient,
+// which hands it to Start. Without SoftStopTimeout set, River makes that
+// context the parent of every job's context, so this cancellation reaches the
+// worker below within microseconds and is indistinguishable from
+// StopAndCancel; with it set, the work context is detached and the job runs on.
+//
+// The wait is a full second against a ten-second window — two orders of
+// magnitude short of the window and three above the microseconds an
+// inherited cancellation takes, so the assertion does not depend on the exact
+// value of either. Deleting SoftStopTimeout from the config turns this red.
+//
+// The job is released rather than left blocking, so the client can stop
+// normally afterwards and the test does not lean on the soft timeout firing.
+func TestSigtermLeavesARunningJobItsGracefulWindow(t *testing.T) {
+	pool := testdb.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	probe := &gracefulProbeWorker{
+		started:   make(chan struct{}),
+		cancelled: make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	enqueuer := jobs.NewEnqueuer()
+	workers := jobs.NewWorkers(slog.Default(), pool, marketdata.NewStore(pool), instrument.NewStore(pool),
+		operation.NewStore(pool), account.NewStore(pool), family.NewStore(pool),
+		stubFxProvider{}, stubQuoteProvider{}, stubTinvestDeps(t, pool), enqueuer)
+	river.AddWorker(workers, probe)
+
+	client, err := jobs.NewClient(pool, workers, enqueuer, slog.Default())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if err := client.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, err := client.Insert(ctx, gracefulProbeArgs{}, nil); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	select {
+	case <-probe.started:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the probe job never started")
+	}
+
+	cancel() // the SIGTERM
+
+	select {
+	case <-probe.cancelled:
+		t.Fatal("the running job's context was cancelled the moment the process was signalled: " +
+			"it got no graceful window at all, which is what jobs.SoftStopTimeout is set to prevent")
+	case <-time.After(time.Second):
+	}
+
+	close(probe.release)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer stopCancel()
+	if err := client.Stop(stopCtx); err != nil {
+		t.Fatalf("Stop after the job finished on its own: %v", err)
 	}
 }

@@ -25,7 +25,12 @@ set -euo pipefail
 BASE="${1:-http://localhost:8080}"
 JAR="$(mktemp)"
 STATUS_FILE="$(mktemp)"
-trap 'rm -f "$JAR" "$STATUS_FILE"' EXIT
+# BODY_FILE is a mktemp under the same trap as the other two, and not the fixed
+# /tmp/smoke-body it used to be: a fixed path in a world-writable directory is
+# one another user (or a second copy of this script) can own, replace with a
+# symlink, or read the session's responses out of.
+BODY_FILE="$(mktemp)"
+trap 'rm -f "$JAR" "$STATUS_FILE" "$BODY_FILE"' EXIT
 
 req() { # method path [body] -> body (stdout); status code written to $STATUS_FILE
 	# NB: status is written to a file, not a global var, because req() is
@@ -33,10 +38,10 @@ req() { # method path [body] -> body (stdout); status code written to $STATUS_FI
 	# subshell, so a plain `STATUS=...` assignment inside req() would be lost
 	# the moment that subshell exits.
 	local method="$1" path="$2" body="${3:-}"
-	local args=(-s -o /tmp/smoke-body -w '%{http_code}' -X "$method" -b "$JAR" -c "$JAR" "$BASE$path")
+	local args=(-s -o "$BODY_FILE" -w '%{http_code}' -X "$method" -b "$JAR" -c "$JAR" "$BASE$path")
 	[ -n "$body" ] && args+=(-H 'Content-Type: application/json' -d "$body")
 	curl "${args[@]}" >"$STATUS_FILE"
-	cat /tmp/smoke-body
+	cat "$BODY_FILE"
 }
 
 status() { cat "$STATUS_FILE"; }

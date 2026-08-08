@@ -1175,3 +1175,66 @@ func TestSeedTinvestDemoIsSelfConsistentAndCannotReachTheBroker(t *testing.T) {
 			oldest.ReconcileStatus, oldest.ReconciledAt)
 	}
 }
+
+// TestASeedThatFailsPartWayLeavesTheInstanceSeedableAgain is the regression
+// this command's transaction exists for.
+//
+// THE FAILURE IS PROVOKED WHERE IT HURTS: after the space and its two users
+// have been written and before the seed is anywhere near done. A row already
+// holding the ticker "SBER" makes the catalogue's first instrument collide with
+// migration 0011's unique index, so the seed stops with a real error of its own
+// making — no fake, no injected fault. Before the seed ran under one commit,
+// the users written a moment earlier survived that error, the instance stopped
+// being "empty", and `babki seed` refused it from then on: the only way back
+// was deleting rows by hand.
+//
+// The obstacle is then removed and the seed run again. That second run is the
+// whole assertion — it can only succeed if the first one left nothing behind,
+// and it fails on the very first line of seedDemo (the emptiness guard) if
+// anything was committed.
+func TestASeedThatFailsPartWayLeavesTheInstanceSeedableAgain(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+
+	blocker, err := instrument.NewStore(pool).Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Чужой Сбербанк", Ticker: "SBER", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("create the blocking instrument: %v", err)
+	}
+
+	if err := seedDemo(ctx, pool); err == nil {
+		t.Fatal("the seed succeeded although the ticker SBER was already taken; " +
+			"this test proves nothing unless that collision stops it")
+	}
+
+	// Nothing of the seed survived: no users, so the instance still reports it
+	// needs setting up, and no accounts either.
+	svc := family.NewService(family.NewStore(pool))
+	needed, err := svc.SetupNeeded(ctx)
+	if err != nil {
+		t.Fatalf("SetupNeeded after the failed seed: %v", err)
+	}
+	if !needed {
+		t.Error("the failed seed left users behind: the instance now claims to be set up, " +
+			"and no seed will ever run on it again")
+	}
+	var accounts int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM accounts`).Scan(&accounts); err != nil {
+		t.Fatalf("count accounts: %v", err)
+	}
+	if accounts != 0 {
+		t.Errorf("the failed seed left %d accounts behind, want none", accounts)
+	}
+
+	// Remove the obstacle and seed for real.
+	if _, err := pool.Exec(ctx, `DELETE FROM instruments WHERE id = $1`, blocker.ID); err != nil {
+		t.Fatalf("delete the blocking instrument: %v", err)
+	}
+	if err := seedDemo(ctx, pool); err != nil {
+		t.Fatalf("the second seed failed: %v", err)
+	}
+	if _, p, err := svc.Login(ctx, "demo", "demo1234"); err != nil || p.Role != family.RoleOwner {
+		t.Fatalf("login demo after the second seed: %v %+v", err, p)
+	}
+}

@@ -8,8 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
+	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/portfolio"
 )
 
@@ -30,9 +30,9 @@ var ErrAccountNotInSpace = errors.New("account not found in space")
 // half of a difference computed against a journal that no longer exists.
 var ErrRemovalCountMismatch = errors.New("asked to remove operations that are not all there")
 
-type Store struct{ pool *pgxpool.Pool }
+type Store struct{ db db.Executor }
 
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+func NewStore(x db.Executor) *Store { return &Store{db: x} }
 
 const cols = `id, space_id, account_id, instrument_id, type, occurred_on,
 	settled_on, quantity, price, amount_minor, currency, fee_minor, note,
@@ -121,9 +121,9 @@ func insertOne(ctx context.Context, q interface {
 // then, for tests exercising storage itself rather than the journal.
 func (s *Store) Create(ctx context.Context, spaceID uuid.UUID, op Operation, verify func(Operation) error) (Operation, error) {
 	if verify == nil {
-		return insertOne(ctx, s.pool, spaceID, op)
+		return insertOne(ctx, s.db, spaceID, op)
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Operation{}, err
 	}
@@ -258,7 +258,7 @@ func writeTransferLots(ctx context.Context, tx pgx.Tx, operationID uuid.UUID, lo
 // normalizeForStorage). A nil verify means the caller has nothing to confirm —
 // a plain insert, for tests exercising storage itself.
 func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Operation, verify func(out, in Operation) error) (Operation, Operation, error) {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Operation{}, Operation{}, err
 	}
@@ -362,7 +362,7 @@ func carriesOwnLots(op Operation) bool {
 func (s *Store) ApplyDelta(ctx context.Context, spaceID uuid.UUID, add []Operation, removeIDs []uuid.UUID,
 	verify func(stored []Operation) error,
 ) ([]Operation, error) {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -484,7 +484,7 @@ func storeBreakdowns(ctx context.Context, tx pgx.Tx, add, stored []Operation) er
 }
 
 func (s *Store) list(ctx context.Context, sql string, args ...any) ([]Operation, error) {
-	rows, err := s.pool.Query(ctx, sql, args...)
+	rows, err := s.db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -611,7 +611,7 @@ func (s *Store) attachTransferLots(ctx context.Context, spaceID uuid.UUID, ops [
 	for _, o := range ops {
 		ids = append(ids, o.ID)
 	}
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.db.Query(ctx, `
 		WITH carriers AS (
 			SELECT o.id, COALESCE(peer.id, o.id) AS carrier
 			FROM operations o
@@ -691,7 +691,7 @@ func (s *Store) ByIDs(ctx context.Context, spaceID uuid.UUID, ids []uuid.UUID) (
 }
 
 func (s *Store) ByID(ctx context.Context, spaceID, id uuid.UUID) (Operation, error) {
-	return scan(s.pool.QueryRow(ctx, `SELECT `+cols+` FROM operations
+	return scan(s.db.QueryRow(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND id = $2`, spaceID, id))
 }
 
@@ -709,7 +709,7 @@ func (s *Store) ByTransferGroup(ctx context.Context, spaceID, groupID uuid.UUID)
 // operations at all.
 func (s *Store) EarliestOccurredOn(ctx context.Context) (time.Time, error) {
 	var on *time.Time
-	err := s.pool.QueryRow(ctx, `SELECT MIN(occurred_on) FROM operations`).Scan(&on)
+	err := s.db.QueryRow(ctx, `SELECT MIN(occurred_on) FROM operations`).Scan(&on)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -730,7 +730,7 @@ func (s *Store) EarliestOccurredOn(ctx context.Context) (time.Time, error) {
 // EarliestOccurredOn, "no currencies in use" is itself a meaningful answer,
 // not a missing value.
 func (s *Store) DistinctCurrencies(ctx context.Context) ([]string, error) {
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT currency FROM operations ORDER BY currency`)
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT currency FROM operations ORDER BY currency`)
 	if err != nil {
 		return nil, err
 	}
@@ -749,7 +749,7 @@ func (s *Store) DistinctCurrencies(ctx context.Context) ([]string, error) {
 // Delete removes the operation; if it belongs to a transfer group, the whole
 // group is removed. Returns the number of deleted rows.
 func (s *Store) Delete(ctx context.Context, spaceID, id uuid.UUID) (int, error) {
-	ct, err := s.pool.Exec(ctx, `
+	ct, err := s.db.Exec(ctx, `
 		DELETE FROM operations
 		WHERE space_id = $1 AND (id = $2 OR transfer_group_id = (
 			SELECT transfer_group_id FROM operations
