@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@/i18n";
 import { FamilyPage } from "./index";
@@ -88,5 +88,27 @@ describe("FamilyPage — a removal the server refused", () => {
 
     expect(await within(dialog).findByText("Не удалось удалить участника")).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("cannot be removed");
+  });
+
+  // #21: the alert lives on the mutation, and Cancel is a plain button that
+  // clears removeTarget — Radix calls onOpenChange only for its OWN dismiss
+  // triggers, so the reset written there never ran on this path. The next
+  // confirmation therefore opened already claiming a removal had failed, about
+  // an attempt nobody had made yet, and for whichever member was picked next.
+  it("opens clean afterwards instead of carrying the refusal to the next member", async () => {
+    serve(400, { error: "validation: the owner cannot be removed" });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Удалить участника" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Удалить участника" }));
+    expect(await within(dialog).findByText("Не удалось удалить участника")).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Отмена" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Удалить участника" }));
+    const reopened = await screen.findByRole("dialog");
+    expect(within(reopened).queryByText("Не удалось удалить участника")).toBeNull();
   });
 });

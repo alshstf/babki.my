@@ -171,7 +171,22 @@ export function FamilyPage() {
             </Alert>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRemoveTarget(null)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                // Reset here too, not just in onOpenChange above: Radix calls
+                // onOpenChange only for its OWN dismiss triggers (Escape,
+                // overlay click, DialogClose), never when a plain button flips
+                // the controlled `open` prop by clearing removeTarget. Without
+                // this, a refused removal left its alert armed on the mutation,
+                // and the next member's confirmation opened already saying that
+                // member could not be removed — about an attempt that never
+                // happened (#21). Same fix, same reason, as
+                // accounts/operations-table.tsx.
+                setRemoveTarget(null);
+                removeMember.reset();
+              }}
+            >
               {t("common.cancel")}
             </Button>
             <Button
