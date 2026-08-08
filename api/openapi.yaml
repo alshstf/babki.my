@@ -1364,7 +1364,10 @@ components:
         sum is beyond what the journal can hold — a different accident from the
         previous one, and not to be captioned as it. `unrepresentable_quantity`:
         the number of units is finer than the journal's quantity scale.
-        `transfer_direction_unknown`: a move between the owner's own accounts
+        `trade_without_filled_quantity`: a purchase or sale that does not say
+        how much of its order was executed — the broker reports the order's
+        size and the executed part separately, and only the second one is the
+        trade. `transfer_direction_unknown`: a move between the owner's own accounts
         whose direction this program could not tell. `instrument_unresolved`:
         the operation names a security and no catalog row was matched to it —
         distinct from `unsupported_type`, which is about the OPERATION rather
@@ -1390,6 +1393,7 @@ components:
         - unrepresentable_amount
         - amount_out_of_bounds
         - unrepresentable_quantity
+        - trade_without_filled_quantity
         - transfer_direction_unknown
         - instrument_unresolved
         - engine_refused

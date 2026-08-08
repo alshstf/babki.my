@@ -11,5 +11,6 @@
   "figi": "FUTSI0323000",
   "instrumentType": "futures",
   "payment": {"currency": "rub", "units": "-15000", "nano": 0},
-  "quantity": "1"
+  "quantity": "1",
+  "quantityDone": "1"
 }

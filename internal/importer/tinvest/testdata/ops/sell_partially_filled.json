@@ -1,0 +1,23 @@
+{
+  "_note": "a REAL partially filled sale from the owner's own account (broker operation 75597536631, live run 2026-08-07), trimmed to the fields this package reads. An order of 190 bonds, 115 of them sold, 75 left; the money proves which number is the trade — 115 × 1036.98 + 7868.30 of accrued interest = 127121.00 exactly, and 190 × 1036.98 is not the payment at all. Reading `quantity` here is what put a sale of 190 into the journal and then refused the sale of the remaining 75 for want of bonds (#131).",
+  "cursor": "1770293126755372046",
+  "id": "75597536631",
+  "parentOperationId": "",
+  "name": "ОФЗ 29008",
+  "date": "2026-02-05T12:05:26.755Z",
+  "type": "OPERATION_TYPE_SELL",
+  "description": "Продажа 115 облигаций ОФЗ 29008",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
+  "figi": "BBG007Z5DZS2",
+  "positionUid": "41eb2102-5333-4713-bf15-72b204c4bf7b",
+  "assetUid": "7fea2179-7d66-49f2-bcda-ff5e2a5f540d",
+  "instrumentType": "bond",
+  "payment": {"currency": "rub", "units": "127121", "nano": 0},
+  "price": {"currency": "rub", "units": "1036", "nano": 980000000},
+  "commission": {"currency": "rub", "units": "-47", "nano": -700000000},
+  "accruedInt": {"currency": "rub", "units": "7868", "nano": 300000000},
+  "quantity": "190",
+  "quantityRest": "75",
+  "quantityDone": "115"
+}

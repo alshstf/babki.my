@@ -833,6 +833,79 @@ func TestMigrate_TinvestInstrumentMapUniqueConstraint(t *testing.T) {
 	}
 }
 
+const tinvestQuantityDoneMigration = 16
+
+// TestMigrate_TinvestExecutedQuantityIsRecoveredFromTheStoredPayload is the
+// upgrade half of #131. The mirror kept the broker's payload verbatim from the
+// first day, so an installation that already imported its history recovers
+// every executed size from what it stored — nobody has to go back to the broker
+// for a field that was in the bytes all along.
+//
+// The three rows are the three shapes the live mirror actually holds: a partly
+// filled order, a fully filled one, and an operation the broker sent no such
+// field for at all.
+func TestMigrate_TinvestExecutedQuantityIsRecoveredFromTheStoredPayload(t *testing.T) {
+	pool := testdb.NewEmpty(t)
+	ctx := context.Background()
+
+	upTo(t, ctx, pool, tinvestQuantityDoneMigration-1)
+	spaceID := insertTinvestSpace(t, ctx, pool)
+	accountID := insertTinvestAccount(t, ctx, pool, spaceID, "Т-Инвестиции")
+	connectionID := insertTinvestConnection(t, ctx, pool, spaceID)
+	linkID := insertTinvestLink(t, ctx, pool, connectionID, spaceID, accountID, "2000000001")
+
+	rows := []struct {
+		opID string
+		raw  string
+		want int64
+	}{
+		// The owner's own sale of 115 bonds out of an order for 190.
+		{"partly-filled", `{"quantity": "190", "quantityRest": "75", "quantityDone": "115"}`, 115},
+		{"fully-filled", `{"quantity": "100", "quantityRest": "0", "quantityDone": "100"}`, 100},
+		// A payload with no such field: zero, which the projection reads as
+		// "no executed size" and refuses rather than as a size of nothing.
+		{"no-such-field", `{"quantity": "1000"}`, 0},
+	}
+	for _, r := range rows {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO tinvest_operations_mirror
+			    (connection_id, link_id, broker_operation_id, op_type, state, occurred_at, currency, payment, quantity, raw, content_key, last_confirmed_at)
+			 VALUES ($1, $2, $3, 'OPERATION_TYPE_SELL', 'OPERATION_STATE_EXECUTED', now(), 'RUB', 127121, 190, $4::jsonb, $3, now())`,
+			connectionID, linkID, r.opID, r.raw); err != nil {
+			t.Fatalf("insert mirror row %s: %v", r.opID, err)
+		}
+	}
+
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	for _, r := range rows {
+		var got int64
+		if err := pool.QueryRow(ctx,
+			`SELECT quantity_done FROM tinvest_operations_mirror WHERE broker_operation_id = $1`, r.opID).
+			Scan(&got); err != nil {
+			t.Fatalf("read quantity_done of %s: %v", r.opID, err)
+		}
+		if got != r.want {
+			t.Errorf("%s: quantity_done = %d, want %d", r.opID, got, r.want)
+		}
+	}
+
+	// The key that identifies an operation across syncs is deliberately left
+	// alone: rebuilding it around the new column would make every row already
+	// in the mirror look like one that vanished and a new one that arrived.
+	var key string
+	if err := pool.QueryRow(ctx,
+		`SELECT content_key FROM tinvest_operations_mirror WHERE broker_operation_id = 'partly-filled'`).
+		Scan(&key); err != nil {
+		t.Fatalf("read content_key: %v", err)
+	}
+	if key != "partly-filled" {
+		t.Errorf("content_key = %q, want it untouched by the upgrade", key)
+	}
+}
+
 // insertTinvestSpace inserts a bare space for the tinvest migration tests to
 // hang connections and accounts off of.
 func insertTinvestSpace(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {

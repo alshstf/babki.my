@@ -128,6 +128,19 @@ const (
 	// scale would leave a positive count at nothing. See journalQuantity,
 	// including what it says about no input reaching this today.
 	ReasonUnrepresentableQty UnparsedReason = "unrepresentable_quantity"
+	// ReasonTradeWithoutFill: a purchase or sale that does not say how much of
+	// its order was executed. The broker keeps the order's size and the
+	// executed part in two different fields, and only the second one is the
+	// trade (see OperationItem.QuantityDone); a row without it is a trade of
+	// unknown size.
+	//
+	// FALLING BACK TO THE ORDER'S SIZE IS THE DEFECT THIS EXISTS AGAINST, not
+	// a lenient alternative to it. That is what this program used to do, and on
+	// the owner's own history it wrote fifteen trades at up to two and a half
+	// times their real size — a purchase of 6644 units recorded as 11100 for
+	// the same money, which is a cost per unit understated by forty percent
+	// with nothing on the screen to say so (#131).
+	ReasonTradeWithoutFill UnparsedReason = "trade_without_filled_quantity"
 	// ReasonTransferDirectionUnknown: a move between the owner's own accounts
 	// whose quantity is zero. The count is representable perfectly well —
 	// what is missing is the DIRECTION, which the sign of that count is the
@@ -640,8 +653,11 @@ func base(row MirrorRow, accountID uuid.UUID, t operation.Type) operation.Operat
 // cost of a purchase and subtracts from the proceeds of a sale. Adding the
 // commission into the amount as well would charge it twice.
 //
-// The QUANTITY is in units, not lots — the broker's own documentation for
-// this field — so it goes into the journal as it is.
+// The QUANTITY is the EXECUTED one, and it is in units rather than lots — the
+// broker's own documentation for the field — so it goes into the journal as it
+// is. The order's own size is the wrong number here and the mirror keeps it
+// only as a record of what was asked for (see OperationItem.QuantityDone,
+// which says how far apart the two can be).
 //
 // THE ACCRUED INTEREST OF A BOND TRADE IS NOT READ, and that is an assumption
 // rather than a decision. The mirror carries the broker's accrued_int into a
@@ -666,7 +682,13 @@ func projectTrade(row MirrorRow, accountID uuid.UUID, resolved *Resolved, t oper
 	if refusal != nil {
 		return nil, refusal
 	}
-	qty, refusal := journalQuantity(row.Quantity)
+	if row.QuantityDone <= 0 {
+		return nil, &UnparsedError{
+			Reason: ReasonTradeWithoutFill,
+			Detail: fmt.Sprintf("the broker reports an order of %d units and no executed part of it", row.Quantity),
+		}
+	}
+	qty, refusal := journalQuantity(row.QuantityDone)
 	if refusal != nil {
 		return nil, refusal
 	}
@@ -930,6 +952,13 @@ func projectRedemption(row MirrorRow, accountID uuid.UUID, resolved *Resolved) (
 	// the answer is right for both: neither is a number of bonds this operation
 	// retired, and what a full redemption retires is the position either way.
 	// Only what the broker actually sends — a plain zero — has been seen.
+	//
+	// The count read here is the ORDER's, unlike a trade's (see projectTrade
+	// and OperationItem.QuantityDone), and that is not an oversight: a
+	// redemption is not an order and has no fill to be partial. On the owner's
+	// history the broker sends zero in both fields for every one of them, so
+	// the two readings cannot differ on anything yet observed; what decides it
+	// is that the issuer redeems the whole holding, never a part of an order.
 	deferred := DeferredNothing
 	if row.Quantity > 0 {
 		qty, refusal := journalQuantity(row.Quantity)
@@ -1059,6 +1088,10 @@ func projectSecuritiesTransfer(row MirrorRow, accountID uuid.UUID, resolved *Res
 		}
 	}
 
+	// The order's count, and deliberately so (see OperationItem.QuantityDone):
+	// a transfer is not an order, the broker sends the same number in both
+	// fields for every one of them, and the direction above is read from THIS
+	// number's sign — nothing documents the executed field as signed.
 	units := row.Quantity
 	if units < 0 {
 		units = -units

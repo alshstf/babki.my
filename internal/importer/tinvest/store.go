@@ -159,7 +159,12 @@ type MirrorRow struct {
 	Commission         *decimal.Decimal
 	CommissionCurrency string
 	AccruedInt         *decimal.Decimal
-	Quantity           int64
+	// Quantity and QuantityDone are the broker's two counts — the order and
+	// the part of it that was executed. OperationItem says which belongs
+	// where and why; the mirror keeps both because it keeps what the broker
+	// sent.
+	Quantity     int64
+	QuantityDone int64
 
 	FIGI           string
 	InstrumentUID  string
@@ -500,7 +505,7 @@ func (s *Store) LinksByConnection(ctx context.Context, connID uuid.UUID) ([]Acco
 
 const mirrorCols = `id, connection_id, link_id, broker_operation_id,
 	parent_operation_id, op_type, state, occurred_at, currency, payment, price,
-	commission, commission_currency, accrued_int, quantity, figi,
+	commission, commission_currency, accrued_int, quantity, quantity_done, figi,
 	instrument_uid, position_uid, asset_uid, instrument_type, description, raw,
 	content_key, first_seen_at, last_confirmed_at, disappeared_at, unparsed_reason,
 	unparsed_detail`
@@ -510,7 +515,7 @@ func scanMirrorRow(row pgx.Row) (MirrorRow, error) {
 	err := row.Scan(&m.ID, &m.ConnectionID, &m.LinkID, &m.BrokerOperationID,
 		&m.ParentOperationID, &m.OpType, &m.State, &m.OccurredAt, &m.Currency,
 		&m.Payment, &m.Price, &m.Commission, &m.CommissionCurrency, &m.AccruedInt,
-		&m.Quantity, &m.FIGI, &m.InstrumentUID, &m.PositionUID, &m.AssetUID,
+		&m.Quantity, &m.QuantityDone, &m.FIGI, &m.InstrumentUID, &m.PositionUID, &m.AssetUID,
 		&m.InstrumentType, &m.Description, &m.Raw, &m.ContentKey, &m.FirstSeenAt,
 		&m.LastConfirmedAt, &m.DisappearedAt, &m.UnparsedReason, &m.UnparsedDetail)
 	return m, err

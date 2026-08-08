@@ -421,11 +421,11 @@ const mirrorInsertSQL = `
 	INSERT INTO tinvest_operations_mirror (
 		connection_id, link_id, broker_operation_id, parent_operation_id,
 		op_type, state, occurred_at, currency, payment, price, commission,
-		commission_currency, accrued_int, quantity, figi, instrument_uid,
-		position_uid, asset_uid, instrument_type, description, raw,
+		commission_currency, accrued_int, quantity, quantity_done, figi,
+		instrument_uid, position_uid, asset_uid, instrument_type, description, raw,
 		content_key, first_seen_at, last_confirmed_at)
 	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-		$16, $17, $18, $19, $20, $21, $22, $23, $24)`
+		$16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`
 
 // insertMirrorRows writes the new rows as ONE batch: a first import of a
 // decade-old account is thousands of operations, and one statement at a time
@@ -459,7 +459,7 @@ func mirrorInsertArgs(connID, linkID uuid.UUID, it OperationItem, now time.Time)
 		it.Type, it.State, it.Date.UTC(), upperCurrency(it.Payment.Currency),
 		it.Payment.Decimal(), moneyOrNothing(it.Price), moneyOrNothing(it.Commission),
 		upperCurrency(it.Commission.Currency), moneyOrNothing(it.AccruedInt),
-		it.Quantity, it.FIGI, it.InstrumentUID,
+		it.Quantity, it.QuantityDone, it.FIGI, it.InstrumentUID,
 		it.PositionUID, it.AssetUID, it.InstrumentType, it.Description, rawDocument(it.Raw),
 		contentKey(it), now, now,
 	}

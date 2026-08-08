@@ -1,0 +1,21 @@
+{
+  "_note": "an executed sale that reports no executed size. Shaped after the one operation on the owner's account whose payload carries no such field at all (a currency purchase, refused for a reason of its own before it ever reaches the trade rule) — this fixture puts that omission on a SHARE, where nothing else would stop it, so the refusal it earns can be pinned. Its payment says a trade happened, which is exactly why the order's 190 must not be taken for its size.",
+  "cursor": "Zmlyc3QtcGFnZQ==",
+  "id": "op-sell-nofill-1",
+  "parentOperationId": "",
+  "name": "Продажа ценных бумаг",
+  "date": "2026-02-05T12:05:26.755Z",
+  "type": "OPERATION_TYPE_SELL",
+  "description": "Продажа облигаций",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
+  "figi": "BBG004730N88",
+  "positionUid": "41eb2102-5333-4713-bf15-72b204c4bf7b",
+  "assetUid": "40d89385-a03a-4659-bf4e-d3ecba011782",
+  "instrumentType": "share",
+  "payment": {"currency": "rub", "units": "127121", "nano": 0},
+  "price": {"currency": "rub", "units": "1036", "nano": 980000000},
+  "commission": {"currency": "rub", "units": "0", "nano": 0},
+  "accruedInt": {"currency": "rub", "units": "0", "nano": 0},
+  "quantity": "190"
+}

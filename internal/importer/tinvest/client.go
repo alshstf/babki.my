@@ -252,9 +252,26 @@ type OperationItem struct {
 	Date                                                       time.Time
 	InstrumentUID, FIGI, PositionUID, AssetUID, InstrumentType string
 	Payment, Commission, AccruedInt, Price                     MoneyValue
-	Quantity                                                   int64
-	Description                                                string
-	Raw                                                        json.RawMessage
+	// Quantity is the size of the ORDER this operation belongs to, and
+	// QuantityDone how much of that order was executed. They differ on every
+	// partial fill, and the difference is not small: the broker has sent an
+	// order of 11100 units against a fill of 6644.
+	//
+	// ONLY AN ORDER CAN BE PARTIALLY EXECUTED, which is what decides where
+	// each of the two belongs. A trade takes its units from QuantityDone —
+	// the money the broker reports for the operation always divides by that
+	// one and never by Quantity (#131). A securities transfer is not an order
+	// and has no fill: the broker sends the same number in both fields, and
+	// the projection reads Quantity there, because a transfer between one's
+	// own accounts takes its DIRECTION from that number's sign and nothing
+	// documents QuantityDone as signed.
+	//
+	// QuantityDone is zero when the broker omits the field. That is not a
+	// size of zero and must not be read as one; a trade without it is refused
+	// rather than measured by its order (see projectTrade).
+	Quantity, QuantityDone int64
+	Description            string
+	Raw                    json.RawMessage
 }
 
 // operationsPageLimit is the page size OperationsAll requests. 1000 is the

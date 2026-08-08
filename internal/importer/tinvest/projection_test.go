@@ -82,6 +82,7 @@ func mirrorRowFor(t *testing.T, name string) MirrorRow {
 		CommissionCurrency: upperCurrency(it.Commission.Currency),
 		AccruedInt:         moneyOrNothing(it.AccruedInt),
 		Quantity:           it.Quantity,
+		QuantityDone:       it.QuantityDone,
 		FIGI:               it.FIGI,
 		InstrumentUID:      it.InstrumentUID,
 		PositionUID:        it.PositionUID,
@@ -191,6 +192,66 @@ func TestProjectRowSell(t *testing.T) {
 	}
 	if op.Price == nil || op.Price.String() != "312" {
 		t.Errorf("price = %v, want 312", op.Price)
+	}
+}
+
+// TestProjectRowPartialFillIsTheTradeNotTheOrder is the whole of #131 in one
+// row, and it is a row the broker really sent.
+//
+// The two numbers are pinned as LITERALS, not derived from the fixture: an
+// expectation computed from the same field the code reads would move with the
+// mistake instead of catching it. 115 is what was sold and 190 is what was
+// ordered; the payment agrees with the first and not with the second, which is
+// the reason the journal must take that one.
+func TestProjectRowPartialFillIsTheTradeNotTheOrder(t *testing.T) {
+	row := mirrorRowFor(t, "sell_partially_filled.json")
+	if row.Quantity != 190 || row.QuantityDone != 115 {
+		t.Fatalf("the fixture stopped being the case under test: order %d, filled %d, want 190 and 115",
+			row.Quantity, row.QuantityDone)
+	}
+
+	op := projectOne(t, row, resolvedShare())
+
+	if op.Quantity == nil || op.Quantity.String() != "115" {
+		t.Errorf("quantity = %v, want 115 — the bonds that were sold, not the 190 the order asked for", op.Quantity)
+	}
+	// The money is untouched by any of this: the payment is what the broker
+	// paid for the part it executed, so it is the whole sum either way. What
+	// the wrong count corrupts is the money PER UNIT, which is why the pair is
+	// checked together.
+	if op.AmountMinor != 12712100 {
+		t.Errorf("amount_minor = %d, want 12712100", op.AmountMinor)
+	}
+	if op.FeeMinor != 4770 {
+		t.Errorf("fee_minor = %d, want 4770", op.FeeMinor)
+	}
+}
+
+// TestProjectRowTradeWithoutAFilledQuantityIsRefused pins the other half: when
+// the broker says nothing about what was executed, the order's size is NOT
+// borrowed to stand in for it. Borrowing it is the defect — silently, and by
+// up to two and a half times.
+func TestProjectRowTradeWithoutAFilledQuantityIsRefused(t *testing.T) {
+	row := mirrorRowFor(t, "sell_without_fill.json")
+	if row.Quantity != 190 || row.QuantityDone != 0 {
+		t.Fatalf("the fixture stopped being the case under test: order %d, filled %d, want 190 and 0",
+			row.Quantity, row.QuantityDone)
+	}
+
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare())
+	if refusal == nil {
+		t.Fatalf("a sale of an unknown number of shares was projected into %d operations", len(ops))
+	}
+	if refusal.Reason != ReasonTradeWithoutFill {
+		t.Errorf("reason = %q, want %q", refusal.Reason, ReasonTradeWithoutFill)
+	}
+	if len(ops) != 0 {
+		t.Errorf("got %d operations alongside the refusal, want none", len(ops))
+	}
+	// The order's size belongs in the detail — it is what the owner will see
+	// in the broker's own app — and nowhere else.
+	if !strings.Contains(refusal.Detail, "190") {
+		t.Errorf("detail = %q, want it to name the order of 190 units", refusal.Detail)
 	}
 }
 
