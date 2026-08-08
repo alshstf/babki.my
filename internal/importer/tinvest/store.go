@@ -1020,11 +1020,17 @@ func (s *Store) mapByFIGI(ctx context.Context, connectionID uuid.UUID, figi stri
 //
 // Callers must not call this with ref.InstrumentUID == "" — see Resolve's
 // own guard, which is the only caller and never does.
-func (s *Store) saveMap(ctx context.Context, connectionID, instrumentID uuid.UUID, ref InstrumentRef, isin, ticker string) error {
+//
+// listingCurrency is what the broker's own passport says THIS LISTING is
+// denominated in, and it is treated like the three identifiers rather than like
+// isin/ticker: an empty one leaves whatever the row already holds. A resolution
+// that hit the map has no passport in hand and passes the empty string, which
+// must not blank a currency an earlier call learned.
+func (s *Store) saveMap(ctx context.Context, connectionID, instrumentID uuid.UUID, ref InstrumentRef, isin, ticker, listingCurrency string) error {
 	_, err := s.db.Exec(ctx, `
 		INSERT INTO tinvest_instrument_map
-			(connection_id, instrument_id, figi, instrument_uid, position_uid, asset_uid, isin, ticker)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			(connection_id, instrument_id, figi, instrument_uid, position_uid, asset_uid, isin, ticker, currency)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (connection_id, instrument_uid) DO UPDATE SET
 			instrument_id = EXCLUDED.instrument_id,
 			figi          = COALESCE(NULLIF(EXCLUDED.figi, ''), tinvest_instrument_map.figi),
@@ -1032,16 +1038,83 @@ func (s *Store) saveMap(ctx context.Context, connectionID, instrumentID uuid.UUI
 			asset_uid     = COALESCE(NULLIF(EXCLUDED.asset_uid, ''), tinvest_instrument_map.asset_uid),
 			isin          = EXCLUDED.isin,
 			ticker        = EXCLUDED.ticker,
+			currency      = COALESCE(NULLIF(EXCLUDED.currency, ''), tinvest_instrument_map.currency),
 			updated_at    = now()
 		WHERE tinvest_instrument_map.instrument_id <> EXCLUDED.instrument_id
 		   OR (EXCLUDED.figi         <> '' AND tinvest_instrument_map.figi         <> EXCLUDED.figi)
 		   OR (EXCLUDED.position_uid <> '' AND tinvest_instrument_map.position_uid <> EXCLUDED.position_uid)
 		   OR (EXCLUDED.asset_uid    <> '' AND tinvest_instrument_map.asset_uid    <> EXCLUDED.asset_uid)
+		   OR (EXCLUDED.currency     <> '' AND tinvest_instrument_map.currency     <> EXCLUDED.currency)
 		   OR tinvest_instrument_map.isin   <> EXCLUDED.isin
 		   OR tinvest_instrument_map.ticker <> EXCLUDED.ticker`,
-		connectionID, instrumentID, ref.FIGI, ref.InstrumentUID, ref.PositionUID, ref.AssetUID, isin, ticker)
+		connectionID, instrumentID, ref.FIGI, ref.InstrumentUID, ref.PositionUID, ref.AssetUID, isin, ticker,
+		upperCurrency(listingCurrency))
 	if err != nil {
 		return fmt.Errorf("tinvest: save instrument map: %w", err)
+	}
+	return nil
+}
+
+// QuotableInstrument is one broker listing this connection has mapped to a
+// catalog row, with everything needed to store a price for it: which catalog
+// instrument it stands for, which of the broker's identifiers to ask under, and
+// what the listing is denominated in.
+type QuotableInstrument struct {
+	InstrumentUID string
+	InstrumentID  uuid.UUID
+	// Currency is empty for a mapping written before the currency was
+	// recorded (migration 0017). Such a listing is not priced until something
+	// fills it in — see (*Store).SetMapCurrency.
+	Currency string
+}
+
+// QuotableByConnection is every listing this connection could ask a price for,
+// ordered by the broker's identifier so a run is reproducible.
+//
+// One row per (connection, instrument_uid), which is the table's own
+// uniqueness, so the SAME catalog instrument legitimately appears several times
+// — the broker's identifiers drift, and a paper delisted from one venue and
+// quoted on another carries two of them. Both are asked and both are stored;
+// which one ends up as the latest quote is decided by the day each price
+// belongs to, the same rule that already picks between two refreshes.
+func (s *Store) QuotableByConnection(ctx context.Context, connectionID uuid.UUID) ([]QuotableInstrument, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT instrument_uid, instrument_id, currency
+		FROM tinvest_instrument_map
+		WHERE connection_id = $1 AND instrument_uid <> ''
+		ORDER BY instrument_uid`, connectionID)
+	if err != nil {
+		return nil, fmt.Errorf("tinvest: list quotable instruments: %w", err)
+	}
+	defer rows.Close()
+	out := []QuotableInstrument{}
+	for rows.Next() {
+		var q QuotableInstrument
+		if err := rows.Scan(&q.InstrumentUID, &q.InstrumentID, &q.Currency); err != nil {
+			return nil, fmt.Errorf("tinvest: list quotable instruments: %w", err)
+		}
+		out = append(out, q)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tinvest: list quotable instruments: %w", err)
+	}
+	return out, nil
+}
+
+// SetMapCurrency records what a listing is denominated in, for a mapping
+// written before that was kept. It is how the rows migration 0017 left empty
+// are filled: the quotes worker asks the broker's passport once per such
+// listing and remembers the answer, so the next run costs nothing.
+func (s *Store) SetMapCurrency(ctx context.Context, connectionID uuid.UUID, instrumentUID, currency string) error {
+	if currency == "" {
+		return fmt.Errorf("tinvest: set map currency: refusing to record an empty currency for %s", instrumentUID)
+	}
+	_, err := s.db.Exec(ctx, `
+		UPDATE tinvest_instrument_map SET currency = $3, updated_at = now()
+		WHERE connection_id = $1 AND instrument_uid = $2`,
+		connectionID, instrumentUID, upperCurrency(currency))
+	if err != nil {
+		return fmt.Errorf("tinvest: set map currency: %w", err)
 	}
 	return nil
 }

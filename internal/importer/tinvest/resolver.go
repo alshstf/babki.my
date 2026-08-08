@@ -223,7 +223,7 @@ func NewResolver(store *Store, catalog instrumentCatalog, log *slog.Logger) *Res
 // see (*Store).saveMap, which is also the reason a resolution that changes
 // nothing writes nothing at all.
 func (r *Resolver) Resolve(ctx context.Context, connectionID uuid.UUID, src passportSource, ref InstrumentRef) (Resolved, error) {
-	resolved, isin, ticker, err := r.resolveOne(ctx, connectionID, src, ref)
+	resolved, isin, ticker, listingCurrency, err := r.resolveOne(ctx, connectionID, src, ref)
 	if err != nil {
 		return Resolved{}, err
 	}
@@ -234,7 +234,7 @@ func (r *Resolver) Resolve(ctx context.Context, connectionID uuid.UUID, src pass
 	// refs collide on the same row the next time either was resolved. Such a
 	// ref is resolved fresh on every call instead of remembered.
 	if ref.InstrumentUID != "" {
-		if err := r.store.saveMap(ctx, connectionID, resolved.InstrumentID, ref, isin, ticker); err != nil {
+		if err := r.store.saveMap(ctx, connectionID, resolved.InstrumentID, ref, isin, ticker, listingCurrency); err != nil {
 			return Resolved{}, err
 		}
 	}
@@ -248,18 +248,22 @@ func (r *Resolver) Resolve(ctx context.Context, connectionID uuid.UUID, src pass
 // mapMatch) — reading the catalog a second time just to learn them again
 // would be exactly the extra round trip checking the map first exists to
 // avoid.
-func (r *Resolver) resolveOne(ctx context.Context, connectionID uuid.UUID, src passportSource, ref InstrumentRef) (Resolved, string, string, error) {
+func (r *Resolver) resolveOne(ctx context.Context, connectionID uuid.UUID, src passportSource, ref InstrumentRef) (resolved Resolved, isin, ticker, listingCurrency string, err error) {
 	m, ok, err := r.lookupMap(ctx, connectionID, ref)
 	if err != nil {
-		return Resolved{}, "", "", err
+		return Resolved{}, "", "", "", err
 	}
 	if ok {
-		return Resolved{InstrumentID: m.InstrumentID, Type: m.Type, Currency: m.Currency}, m.ISIN, m.Ticker, nil
+		// No passport was fetched, so this call has nothing to say about the
+		// LISTING's currency and passes the empty string rather than the
+		// catalog row's — see (*Store).saveMap, which leaves the stored one
+		// alone, and the migration for why the two are not the same answer.
+		return Resolved{InstrumentID: m.InstrumentID, Type: m.Type, Currency: m.Currency}, m.ISIN, m.Ticker, "", nil
 	}
 
 	brief, err := r.passport(ctx, src, ref.InstrumentUID)
 	if err != nil {
-		return Resolved{}, "", "", err
+		return Resolved{}, "", "", "", err
 	}
 
 	typ, ok := brokerInstrumentTypes[brief.InstrumentType]
@@ -273,14 +277,18 @@ func (r *Resolver) resolveOne(ctx context.Context, connectionID uuid.UUID, src p
 		// (internal/marketdata/jobs.go).
 		r.log.Debug("tinvest: the broker's instrument type is not one this program accounts for",
 			"instrument_type", brief.InstrumentType, "ticker", brief.Ticker, "instrument_uid", brief.UID)
-		return Resolved{}, "", "", fmt.Errorf("%w: %s", ErrUnsupportedInstrumentType, brief.InstrumentType)
+		return Resolved{}, "", "", "", fmt.Errorf("%w: %s", ErrUnsupportedInstrumentType, brief.InstrumentType)
 	}
 
 	inst, err := r.findOrCreate(ctx, src, typ, brief)
 	if err != nil {
-		return Resolved{}, "", "", err
+		return Resolved{}, "", "", "", err
 	}
-	return Resolved{InstrumentID: inst.ID, Type: inst.Type, Currency: inst.Currency}, inst.ISIN, inst.Ticker, nil
+	// brief.Currency, not inst.Currency: the first is what THIS LISTING is
+	// denominated in and the second what the catalog row is. They agree on the
+	// row this call just created and need not on a row found by ISIN — one
+	// paper, two venues, two currencies.
+	return Resolved{InstrumentID: inst.ID, Type: inst.Type, Currency: inst.Currency}, inst.ISIN, inst.Ticker, brief.Currency, nil
 }
 
 // lookupMap is step 1: instrument_uid first, figi second. Both are guarded
