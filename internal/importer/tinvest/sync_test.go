@@ -325,6 +325,7 @@ func TestSyncMirrorStoresWhatTheBrokerSaid(t *testing.T) {
 		Commission:        MoneyValue{Currency: "USD", Units: -7, Nano: -600000000},
 		AccruedInt:        MoneyValue{Currency: "RUB", Units: 3, Nano: 250000000},
 		Quantity:          10,
+		QuantityDone:      4,
 		Description:       "Покупка ЦБ",
 		Raw:               json.RawMessage(`{"id":"op-1","name":"Сбер"}`),
 	}
@@ -374,8 +375,15 @@ func TestSyncMirrorStoresWhatTheBrokerSaid(t *testing.T) {
 	if r.AccruedInt == nil || r.AccruedInt.String() != "3.25" {
 		t.Errorf("accrued interest = %v, want 3.25", r.AccruedInt)
 	}
+	// Both counts survive the trip, and they are DIFFERENT numbers here on
+	// purpose: an order of 10 with 4 of it executed. A fixture that made them
+	// equal could not tell a column that stores the wrong one from a column
+	// that stores the right one (#131).
 	if r.Quantity != 10 {
-		t.Errorf("quantity = %d, want 10", r.Quantity)
+		t.Errorf("quantity = %d, want 10 — the size of the order", r.Quantity)
+	}
+	if r.QuantityDone != 4 {
+		t.Errorf("quantity_done = %d, want 4 — the part of it that was executed", r.QuantityDone)
 	}
 	if r.FIGI != "BBG000B9XRY4" || r.InstrumentUID != "uid-1" ||
 		r.PositionUID != "pos-1" || r.AssetUID != "asset-1" || r.InstrumentType != "share" {

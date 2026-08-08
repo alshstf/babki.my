@@ -334,6 +334,7 @@
       "unrepresentable_amount": "Сумма точнее минимальной денежной единицы",
       "amount_out_of_bounds": "Сумма выходит за допустимые пределы",
       "unrepresentable_quantity": "Количество точнее шкалы хранения",
+      "trade_without_filled_quantity": "Сделка без указания исполненного количества",
       "transfer_direction_unknown": "Не удалось определить направление перевода между своими счетами",
       "instrument_unresolved": "Бумага не найдена в каталоге инструментов",
       "engine_refused": "Операцию отклонил движок журнала",

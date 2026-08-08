@@ -13,5 +13,6 @@
   "payment": {"currency": "rub", "units": "-27500", "nano": 0},
   "price": {"currency": "rub", "units": "275", "nano": 0},
   "commission": {"currency": "rub", "units": "-8", "nano": -250000000},
-  "quantity": "100"
+  "quantity": "100",
+  "quantityDone": "0"
 }

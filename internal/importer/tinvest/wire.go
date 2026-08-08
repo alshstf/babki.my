@@ -153,9 +153,9 @@ type wireGetAccountsResponse struct {
 // (OperationsService/GetOperationsByCursor). Only the fields OperationItem
 // (client.go) surfaces are declared; the rest of the wire shape (name,
 // class_code, trades_info, child_operations, cancel_date_time/reason,
-// yield/yield_relative, quantity_rest/quantity_done, ...) is preserved
-// verbatim in OperationItem.Raw instead of being modeled here, since no
-// caller of this package needs it decoded yet.
+// yield/yield_relative, quantity_rest, ...) is preserved verbatim in
+// OperationItem.Raw instead of being modeled here, since no caller of this
+// package needs it decoded yet.
 type wireOperationItem struct {
 	ID                string         `json:"id"`
 	ParentOperationID string         `json:"parentOperationId"`
@@ -172,6 +172,7 @@ type wireOperationItem struct {
 	AccruedInt        wireMoneyValue `json:"accruedInt"`
 	Price             wireMoneyValue `json:"price"`
 	Quantity          string         `json:"quantity"`
+	QuantityDone      string         `json:"quantityDone"`
 	Description       string         `json:"description"`
 }
 
@@ -183,6 +184,10 @@ func (w wireOperationItem) parse(raw json.RawMessage) (OperationItem, error) {
 	quantity, err := parseWireInt64(w.Quantity)
 	if err != nil {
 		return OperationItem{}, fmt.Errorf("tinvest: parse OperationItem(%s).quantity %q: %w", w.ID, w.Quantity, err)
+	}
+	quantityDone, err := parseWireInt64(w.QuantityDone)
+	if err != nil {
+		return OperationItem{}, fmt.Errorf("tinvest: parse OperationItem(%s).quantityDone %q: %w", w.ID, w.QuantityDone, err)
 	}
 	payment, err := w.Payment.parse()
 	if err != nil {
@@ -217,6 +222,7 @@ func (w wireOperationItem) parse(raw json.RawMessage) (OperationItem, error) {
 		AccruedInt:        accruedInt,
 		Price:             price,
 		Quantity:          quantity,
+		QuantityDone:      quantityDone,
 		Description:       w.Description,
 		Raw:               raw,
 	}, nil

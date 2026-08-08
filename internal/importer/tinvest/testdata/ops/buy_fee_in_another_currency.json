@@ -16,5 +16,6 @@
   "price": {"currency": "usd", "units": "120", "nano": 50000000},
   "commission": {"currency": "rub", "units": "-95", "nano": -400000000},
   "accruedInt": {"currency": "usd", "units": "0", "nano": 0},
-  "quantity": "10"
+  "quantity": "10",
+  "quantityDone": "10"
 }
