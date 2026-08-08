@@ -168,7 +168,7 @@ func TestResolve_MapHitByInstrumentUID(t *testing.T) {
 		t.Fatalf("seed catalog: %v", err)
 	}
 	if err := f.store.saveMap(f.ctx, f.conn.ID, inst.ID,
-		InstrumentRef{InstrumentUID: "uid-sber", FIGI: "BBG004730N88"}, inst.ISIN, inst.Ticker); err != nil {
+		InstrumentRef{InstrumentUID: "uid-sber", FIGI: "BBG004730N88"}, inst.ISIN, inst.Ticker, "RUB"); err != nil {
 		t.Fatalf("seed map: %v", err)
 	}
 
@@ -208,7 +208,7 @@ func TestResolve_MapHitByFIGI(t *testing.T) {
 		t.Fatalf("seed catalog: %v", err)
 	}
 	if err := f.store.saveMap(f.ctx, f.conn.ID, inst.ID,
-		InstrumentRef{InstrumentUID: "uid-old", FIGI: "FIGI-STABLE"}, inst.ISIN, inst.Ticker); err != nil {
+		InstrumentRef{InstrumentUID: "uid-old", FIGI: "FIGI-STABLE"}, inst.ISIN, inst.Ticker, "RUB"); err != nil {
 		t.Fatalf("seed map: %v", err)
 	}
 
@@ -258,11 +258,11 @@ func TestResolve_MapLookupPrefersInstrumentUIDOverFIGI(t *testing.T) {
 		t.Fatalf("seed instrument B: %v", err)
 	}
 	if err := f.store.saveMap(f.ctx, f.conn.ID, instA.ID,
-		InstrumentRef{InstrumentUID: "uid-a", FIGI: "FIGI-A"}, "", "AAAA"); err != nil {
+		InstrumentRef{InstrumentUID: "uid-a", FIGI: "FIGI-A"}, "", "AAAA", "RUB"); err != nil {
 		t.Fatalf("seed map A: %v", err)
 	}
 	if err := f.store.saveMap(f.ctx, f.conn.ID, instB.ID,
-		InstrumentRef{InstrumentUID: "uid-target", FIGI: "FIGI-B"}, "", "BBBB"); err != nil {
+		InstrumentRef{InstrumentUID: "uid-target", FIGI: "FIGI-B"}, "", "BBBB", "RUB"); err != nil {
 		t.Fatalf("seed map B: %v", err)
 	}
 
@@ -296,7 +296,7 @@ func TestResolve_MapHitRefreshesDriftedAttributes(t *testing.T) {
 		t.Fatalf("seed catalog: %v", err)
 	}
 	if err := f.store.saveMap(f.ctx, f.conn.ID, inst.ID,
-		InstrumentRef{InstrumentUID: "uid-gazp", FIGI: "FIGI-OLD"}, "", "GAZP"); err != nil {
+		InstrumentRef{InstrumentUID: "uid-gazp", FIGI: "FIGI-OLD"}, "", "GAZP", "RUB"); err != nil {
 		t.Fatalf("seed map: %v", err)
 	}
 
@@ -1208,7 +1208,7 @@ func TestSaveMap_EmptyIdentifiersDoNotEraseStoredOnes(t *testing.T) {
 	// (Т-Технологии traded as TCSG before they were T) — while the operation
 	// still carries no figi of its own.
 	if err := f.store.saveMap(f.ctx, f.conn.ID, resolved.InstrumentID,
-		InstrumentRef{InstrumentUID: "uid-sber"}, "RU0009029540", "SBERX"); err != nil {
+		InstrumentRef{InstrumentUID: "uid-sber"}, "RU0009029540", "SBERX", "RUB"); err != nil {
 		t.Fatalf("saveMap with a renamed ticker: %v", err)
 	}
 	var ticker string
@@ -1299,7 +1299,7 @@ func TestInstrumentMapLookups_EmptyIdentifierIsNeverAMatch(t *testing.T) {
 	// A row that legitimately carries empty figi (never observed for this
 	// instrument) alongside a real instrument_uid.
 	if err := f.store.saveMap(f.ctx, f.conn.ID, inst.ID,
-		InstrumentRef{InstrumentUID: "uid-no-figi"}, "", ""); err != nil {
+		InstrumentRef{InstrumentUID: "uid-no-figi"}, "", "", "RUB"); err != nil {
 		t.Fatalf("seed map: %v", err)
 	}
 

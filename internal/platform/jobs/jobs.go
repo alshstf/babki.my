@@ -45,11 +45,22 @@ import (
 // a documented limit of 200 a minute for the operations service, and the rebuild
 // that follows makes no broker call at all for instruments it has already seen.
 // So the cadence is bounded by taste rather than by the broker.
+//
+// tinvestQuotesInterval paces the broker's own price feed, and it is the SAME
+// half hour the exchange feed uses on purpose: they price overlapping sets of
+// papers into one table, and two cadences would make which of them a row came
+// from depend on the minute the reader happened to look. What the broker adds
+// is the papers no exchange feed here covers — foreign shares and a delisted
+// fund quoted over the counter — and those move on the same clock as the rest.
+//
+// It costs one request per hundred instruments per connection, against a
+// documented limit for the market-data service far above that.
 const (
 	refreshFxInterval     = 24 * time.Hour
 	refreshQuotesInterval = 30 * time.Minute
 	backfillFxInterval    = 24 * time.Hour
 	tinvestSyncInterval   = time.Hour
+	tinvestQuotesInterval = 30 * time.Minute
 )
 
 // SoftStopTimeout is how long a job that is already running gets to finish
@@ -155,6 +166,8 @@ func NewWorkers(
 	river.AddWorker(workers, tinvest.NewDispatchWorker(tinvestDeps.Store, enqueuer, log))
 	river.AddWorker(workers, tinvest.NewSyncWorker(tinvestDeps.Store, tinvestDeps.Box,
 		tinvestDeps.NewClient, tinvestDeps.NewRebuilder, tinvestDeps.Reconciler, log))
+	river.AddWorker(workers, tinvest.NewQuotesWorker(tinvestDeps.Store, mdStore,
+		tinvestDeps.Box, tinvestDeps.NewClient, log, nil))
 	return workers
 }
 
@@ -239,6 +252,13 @@ func newClient(pool *pgxpool.Pool, workers *river.Workers, log *slog.Logger) (*r
 				river.PeriodicInterval(tinvestSyncInterval),
 				func() (river.JobArgs, *river.InsertOpts) {
 					return tinvest.SyncDispatchArgs{}, nil
+				},
+				&river.PeriodicJobOpts{RunOnStart: true},
+			),
+			river.NewPeriodicJob(
+				river.PeriodicInterval(tinvestQuotesInterval),
+				func() (river.JobArgs, *river.InsertOpts) {
+					return tinvest.RefreshQuotesArgs{}, nil
 				},
 				&river.PeriodicJobOpts{RunOnStart: true},
 			),

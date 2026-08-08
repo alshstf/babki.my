@@ -361,3 +361,42 @@ type wireBondResponse struct {
 		InitialNominal wireMoneyValue `json:"initialNominal"`
 	} `json:"instrument"`
 }
+
+// wireGetLastPricesResponse mirrors MarketDataService/GetLastPrices. The
+// response carries NO CURRENCY — see LastPrice and migration 0017 for where the
+// currency of a price comes from instead, and why it cannot be the catalog
+// row's.
+type wireGetLastPricesResponse struct {
+	LastPrices []wireLastPrice `json:"lastPrices"`
+}
+
+type wireLastPrice struct {
+	InstrumentUID string         `json:"instrumentUid"`
+	Price         *wireQuotation `json:"price"`
+	Time          string         `json:"time"`
+	LastPriceType string         `json:"lastPriceType"`
+}
+
+// parse reports ok=false for an entry the broker sent no price for, which it
+// really does send: the whole entry arrives with a uid and nothing else. A zero
+// would be a price of nothing and is not what that means.
+func (w wireLastPrice) parse() (LastPrice, bool, error) {
+	if w.Price == nil {
+		return LastPrice{}, false, nil
+	}
+	q, err := w.Price.parse()
+	if err != nil {
+		return LastPrice{}, false, fmt.Errorf("tinvest: LastPrice(%s).price: %w", w.InstrumentUID, err)
+	}
+	price := q.Decimal()
+	at, err := parseWireTime(w.Time)
+	if err != nil {
+		return LastPrice{}, false, fmt.Errorf("tinvest: parse LastPrice(%s).time: %w", w.InstrumentUID, err)
+	}
+	return LastPrice{
+		InstrumentUID: w.InstrumentUID,
+		Price:         price,
+		At:            at,
+		Dealer:        w.LastPriceType == "LAST_PRICE_DEALER",
+	}, true, nil
+}

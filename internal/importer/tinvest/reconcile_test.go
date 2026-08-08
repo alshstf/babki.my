@@ -769,7 +769,7 @@ func (f fixture) seedMapped(t *testing.T, uid, ticker string) uuid.UUID {
 		t.Fatalf("seed catalog: %v", err)
 	}
 	if err := f.store.saveMap(f.ctx, f.conn.ID, inst.ID,
-		InstrumentRef{InstrumentUID: uid, FIGI: "BBG004730N88"}, inst.ISIN, inst.Ticker); err != nil {
+		InstrumentRef{InstrumentUID: uid, FIGI: "BBG004730N88"}, inst.ISIN, inst.Ticker, "RUB"); err != nil {
 		t.Fatalf("seed map: %v", err)
 	}
 	return inst.ID
@@ -1141,7 +1141,7 @@ func TestReconcileLinkReadsTheMapOfItsOwnConnection(t *testing.T) {
 		t.Fatalf("CreateConnection: %v", err)
 	}
 	if err := f.store.saveMap(f.ctx, otherConn.ID, inst,
-		InstrumentRef{InstrumentUID: "uid-elsewhere"}, "RU0009029540", "SBER"); err != nil {
+		InstrumentRef{InstrumentUID: "uid-elsewhere"}, "RU0009029540", "SBER", "RUB"); err != nil {
 		t.Fatalf("seed other map: %v", err)
 	}
 
@@ -1198,7 +1198,7 @@ func TestAFIGITwoRowsDisagreeAboutAnswersForNeither(t *testing.T) {
 		t.Fatalf("seed catalog: %v", err)
 	}
 	if err := f.store.saveMap(f.ctx, f.conn.ID, other.ID,
-		InstrumentRef{InstrumentUID: "uid-second", FIGI: "BBG004730N88"}, other.ISIN, other.Ticker); err != nil {
+		InstrumentRef{InstrumentUID: "uid-second", FIGI: "BBG004730N88"}, other.ISIN, other.Ticker, "RUB"); err != nil {
 		t.Fatalf("seed second map row: %v", err)
 	}
 
@@ -1229,7 +1229,7 @@ func TestAnInstrumentWithoutATickerIsLabelledByItsName(t *testing.T) {
 		t.Fatalf("seed catalog: %v", err)
 	}
 	if err := f.store.saveMap(f.ctx, f.conn.ID, inst.ID,
-		InstrumentRef{InstrumentUID: "uid-frozen"}, "", ""); err != nil {
+		InstrumentRef{InstrumentUID: "uid-frozen"}, "", "", "RUB"); err != nil {
 		t.Fatalf("seed map: %v", err)
 	}
 
