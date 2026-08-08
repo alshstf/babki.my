@@ -1,5 +1,20 @@
 name: babki
 
+# POSTGRES_PASSWORD is required with `:?`, and the two places it appears must
+# keep saying so identically: without the guard compose only WARNS that the
+# variable is unset and substitutes a blank string, so the stack comes up with
+# the app holding a connection URL that carries no password and the database
+# holding none either. On a fresh volume the database then refuses to start at
+# all — "Database is uninitialized and superuser password is not specified" —
+# and that message names `docker run -e`, not this project's .env. The guard is
+# what turns a puzzle one layer down into a refusal from compose itself, before
+# anything starts, naming the file to edit.
+#
+# BABKI_ENCRYPTION_KEY deliberately carries no such guard: the application
+# already refuses to start without it and says which variable is missing and
+# which command generates a value it accepts (see secretbox.ParseKey and the
+# README). A second refusal here would only move the same message earlier.
+
 services:
   app:
     image: babki:local
@@ -9,7 +24,7 @@ services:
     ports:
       - "${BABKI_PORT:-8080}:8080"
     environment:
-      BABKI_DATABASE_URL: postgres://babki:${POSTGRES_PASSWORD}@postgres:5432/babki?sslmode=disable
+      BABKI_DATABASE_URL: postgres://babki:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/compose/.env — copy .env.example}@postgres:5432/babki?sslmode=disable
       BABKI_ENCRYPTION_KEY: ${BABKI_ENCRYPTION_KEY}
     depends_on:
       postgres:
@@ -19,13 +34,21 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+      # Nothing answers on this port until migrations have run and the job
+      # queue has started, and both happen before the HTTP listener binds. Every
+      # probe until then fails, and without start_period those failures count
+      # towards `retries` — three of them, 30s apart, and a container that is
+      # merely still starting is reported unhealthy. Inside start_period a
+      # failure counts for nothing and the first success ends the period early,
+      # so this costs a slow host nothing and a fast one nothing either.
+      start_period: 60s
 
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: babki
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/compose/.env — copy .env.example}
       POSTGRES_DB: babki
     volumes:
       - pgdata:/var/lib/postgresql/data

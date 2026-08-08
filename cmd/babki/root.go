@@ -201,6 +201,14 @@ func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 
 // stopJobClientTimeout bounds the graceful River stop; if it isn't done in
 // time we escalate to a forced cancel rather than hang the process shutdown.
+//
+// IT IS THE OUTER OF TWO BOUNDS and has to stay the longer one. The inner is
+// jobs.SoftStopTimeout, after which River cancels the contexts of jobs still
+// running; this one covers that escalation and the unwinding that follows it.
+// Were it the shorter, every shutdown that used the whole soft window would
+// report a graceful stop that "did not complete in time" and escalate to
+// StopAndCancel — killing the jobs the soft window exists to spare.
+// TestTheJobQueueIsGivenLessTimeToStopThanTheProcessWaitsForIt keeps the order.
 const stopJobClientTimeout = 15 * time.Second
 
 // stopJobClientForceTimeout bounds the forced StopAndCancel fallback.
@@ -235,8 +243,17 @@ func newRootCmd() *cobra.Command {
 	return root
 }
 
-func signalCtx() (context.Context, context.CancelFunc) {
-	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+// signalCtx derives the context every long-running role blocks on: cancelled
+// by SIGINT or SIGTERM, and also by whatever cancels the parent.
+//
+// THE PARENT IS THE COMMAND'S OWN CONTEXT, not context.Background, and that is
+// what makes a role runnable from a test at all: cobra's Execute installs
+// Background here, so signals behave in production exactly as before, while
+// ExecuteContext lets a caller hand in a context it can cancel — which is how
+// the role smoke tests shut a server down without raising a real signal at the
+// test binary.
+func signalCtx(parent context.Context) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 }
 
 func newAllCmd() *cobra.Command {
@@ -244,7 +261,7 @@ func newAllCmd() *cobra.Command {
 		Use:   "all",
 		Short: "API + worker в одном процессе (режим homelab)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, stop := signalCtx()
+			ctx, stop := signalCtx(cmd.Context())
 			defer stop()
 			r, err := setup(ctx, true, true)
 			if err != nil {
@@ -266,9 +283,13 @@ func newAllCmd() *cobra.Command {
 			}
 			srv.Mount("/", web.Handler())
 
-			// Sequenced shutdown: let the HTTP server fully drain in-flight
-			// requests first, then stop the job queue. This avoids cutting
-			// off jobs enqueued by a request that's still being handled.
+			// Sequenced shutdown: the HTTP server drains its in-flight
+			// requests first, and the job queue's bounded stop begins only
+			// after the last handler has returned. By then the signal has
+			// already stopped the producers FETCHING — that happens the
+			// moment ctx is cancelled — while jobs already running keep the
+			// window jobs.SoftStopTimeout gives them, so the two shutdowns
+			// overlap without either cutting the other short.
 			g, gctx := errgroup.WithContext(ctx)
 			g.Go(func() error { return srv.Run(gctx, r.cfg.HTTPAddr) })
 			err = g.Wait()
@@ -283,7 +304,7 @@ func newAPICmd() *cobra.Command {
 		Use:   "api",
 		Short: "Только HTTP API",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, stop := signalCtx()
+			ctx, stop := signalCtx(cmd.Context())
 			defer stop()
 			r, err := setup(ctx, true, true)
 			if err != nil {
@@ -314,7 +335,7 @@ func newWorkerCmd() *cobra.Command {
 		Use:   "worker",
 		Short: "Только фоновые задачи",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, stop := signalCtx()
+			ctx, stop := signalCtx(cmd.Context())
 			defer stop()
 			r, err := setup(ctx, true, true)
 			if err != nil {
@@ -338,7 +359,7 @@ func newMigrateCmd() *cobra.Command {
 		Use:   "migrate",
 		Short: "Накатить миграции и выйти",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, stop := signalCtx()
+			ctx, stop := signalCtx(cmd.Context())
 			defer stop()
 			// requireEncryptionKey=false: migrate exists precisely so schema
 			// can be applied on a machine where secrets have not been

@@ -832,13 +832,13 @@ func TestApplyImportDeltaWillNotRemoveAManualOperation(t *testing.T) {
 }
 
 // TestApplyImportDeltaOrdersWhatItWroteTheWayItCheckedIt is the batch's own
-// version of "what was checked is what is read back". Everything a single
-// transaction inserts would share one created_at if the column's default were
-// left to decide — now() is the TRANSACTION's timestamp — and two operations of
-// the same date sharing one created_at leave the read path's ORDER BY nothing to
-// order them by. The buy and the sell below would then fold in either order, and
-// in one of those orders the sell is an oversell: accepted on write, refused on
-// every later read, which is the fault this project has already met twice.
+// version of "what was checked is what is read back". A delta's rows go out
+// back to back in one batch, and a clock left to date them is not a promise
+// that two of them differ — while two operations of the same date sharing one
+// created_at leave the read path's ORDER BY nothing to order them by. The buy
+// and the sell below would then fold in either order, and in one of those
+// orders the sell is an oversell: accepted on write, refused on every later
+// read, which is the fault this project has already met twice.
 func TestApplyImportDeltaOrdersWhatItWroteTheWayItCheckedIt(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)

@@ -14,7 +14,7 @@ individual/corporate) — автоматизация через CLA Assistant б
 
 - Go ≥1.26, Node 22 LTS, Docker (для тестов с Postgres — testcontainers).
 - `make test` — юнит- и интеграционные тесты
-- `make test-all` — включая тесты встроенного UI (нужен `make ui`)
+- `make test-all` — включая тесты встроенного UI (соберёт фронт сам)
 - `make lint` — golangci-lint
 
 ## Правила

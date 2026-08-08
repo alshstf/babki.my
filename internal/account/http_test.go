@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
@@ -354,5 +355,53 @@ func TestListRealRateErrorFailsRequest(t *testing.T) {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET accounts with a failing rate lookup = %d, want 500 — a real outage must not be served as a 200 with balance_in_base: null: %s",
 			resp.StatusCode, b)
+	}
+}
+
+// TestAnUnknownOwnerIsA400OnBothDoors covers the mapping of the foreign key on
+// accounts.owner_user_id: a user id that names nobody is the client's mistake,
+// so it must come back as a 400 saying which field is wrong — not as the
+// "internal error" an untranslated 23503 produces, which blames the server for
+// a value the request chose.
+//
+// BOTH DOORS, because they fail in different places: create passes the id
+// straight to the INSERT, while patch reaches it through the tri-state that
+// tells "set the owner" apart from "leave it alone", and only one of the three
+// branches carries a value at all.
+//
+// The id is a well-formed random UUID, so nothing upstream can reject it on its
+// shape and the refusal can only come from the database not finding the row.
+func TestAnUnknownOwnerIsA400OnBothDoors(t *testing.T) {
+	url, c := newAPI(t)
+	stranger := uuid.New().String()
+
+	resp := do(t, c, "POST", url+"/api/v1/accounts",
+		`{"name":"Ничей","type":"cash","currency":"RUB","owner_user_id":"`+stranger+`"}`)
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 400 {
+		t.Errorf("create with an unknown owner = %d, want 400: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "owner_user_id") {
+		t.Errorf("create refused with %s, want a message naming owner_user_id", body)
+	}
+
+	resp = do(t, c, "POST", url+"/api/v1/accounts", `{"name":"Мой","type":"cash","currency":"RUB"}`)
+	if resp.StatusCode != 201 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create = %d: %s", resp.StatusCode, b)
+	}
+	var acc struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&acc)
+
+	resp = do(t, c, "PATCH", url+"/api/v1/accounts/"+acc.ID,
+		`{"owner_user_id":"`+stranger+`"}`)
+	body, _ = io.ReadAll(resp.Body)
+	if resp.StatusCode != 400 {
+		t.Errorf("patch to an unknown owner = %d, want 400: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "owner_user_id") {
+		t.Errorf("patch refused with %s, want a message naming owner_user_id", body)
 	}
 }

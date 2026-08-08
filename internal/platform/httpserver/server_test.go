@@ -1,13 +1,17 @@
 package httpserver_test
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
@@ -100,5 +104,110 @@ func TestAPINotFoundIsJSON(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"error"`) {
 		t.Fatalf("body is not JSON error: %s", rec.Body.String())
+	}
+}
+
+// freePort returns a TCP port nothing is listening on, by binding one and
+// letting go of it again. There is a gap between the release and Run's own
+// bind, and nothing can close it — (*Server).Run takes an address and does its
+// own Listen, so a test cannot hand it a listener. The gap is not silent,
+// which is what makes it acceptable: if something takes the port in between,
+// ListenAndServe fails and Run returns that error to the assertions below,
+// rather than the test hanging or passing on nothing.
+func freePort(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve a port: %v", err)
+	}
+	addr := l.Addr().String()
+	if err := l.Close(); err != nil {
+		t.Fatalf("release the reserved port: %v", err)
+	}
+	return addr
+}
+
+// TestRunDrainsInFlightRequestsAndReturnsNil covers (*Server).Run, which had
+// no test of its own: a real listener, a request still being handled when the
+// context is cancelled, and what the method hands back afterwards.
+//
+// THE IN-FLIGHT REQUEST IS THE POINT. Shutdown differs from Close in exactly
+// one visible way — it lets a handler that has already started finish and
+// answer — so the slow handler below is started, then the context is cancelled
+// while it is still inside, and its answer must arrive intact. Swapping
+// Shutdown for Close turns this red, and nothing else in the package notices.
+//
+// The other two claims are Run's own postconditions: it returns nil rather
+// than http.ErrServerClosed (the caller asked for the shutdown; it is not an
+// error), and it does not return until the listener is closed — checked by
+// dialling the port afterwards and requiring a refusal.
+func TestRunDrainsInFlightRequestsAndReturnsNil(t *testing.T) {
+	pool := testdb.New(t)
+	srv := httpserver.New(slog.Default(), pool)
+
+	entered := make(chan struct{})
+	srv.Mount("GET /api/v1/slow", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		time.Sleep(300 * time.Millisecond)
+		_, _ = w.Write([]byte("finished"))
+	}))
+
+	addr := freePort(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- srv.Run(ctx, addr) }()
+
+	// Wait for the listener to come up: Run starts it on a goroutine of its
+	// own, so there is no moment before this at which a request would arrive.
+	client := &http.Client{Timeout: 10 * time.Second}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		resp, err := client.Get("http://" + addr + "/api/healthz")
+		if err == nil {
+			_ = resp.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatalf("the server never accepted a connection on %s: %v", addr, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	slow := make(chan string, 1)
+	go func() {
+		resp, err := client.Get("http://" + addr + "/api/v1/slow")
+		if err != nil {
+			slow <- "request failed: " + err.Error()
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			slow <- "body failed: " + err.Error()
+			return
+		}
+		slow <- string(body)
+	}()
+
+	<-entered // the handler is inside; now pull the rug
+	cancel()
+
+	if got := <-slow; got != "finished" {
+		t.Errorf("the in-flight request answered %q, want \"finished\": "+
+			"a request already being handled must survive the shutdown", got)
+	}
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run returned %v, want nil: a shutdown the caller asked for is not an error", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled")
+	}
+
+	if conn, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+		_ = conn.Close()
+		t.Errorf("%s still accepts connections after Run returned", addr)
 	}
 }

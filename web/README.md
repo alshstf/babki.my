@@ -1,32 +1,71 @@
-# React + TypeScript + Vite
+# Фронтенд babki.my
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+SPA, которую отдаёт сам бинарник `babki`. Отдельного веб-сервера в проде нет:
+собранный `web/dist` вкомпилирован в исполняемый файл.
 
-Currently, two official plugins are available:
+## Стек
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+React 19 + TypeScript, сборка Vite. Маршрутизация — TanStack Router, серверное
+состояние — TanStack Query, запросы — `openapi-fetch` по типам, сгенерированным
+из контракта. Оформление — Tailwind и компоненты на radix-ui. Тексты — i18next.
+Тесты — Vitest с jsdom, линтер — oxlint.
 
-## React Compiler
+## Разработка
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm ci
+npm run dev     # Vite на :5173, /api проксируется на localhost:8080
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Бэкенд при этом поднимают отдельно (`go run ./cmd/babki all`) — без тега
+сборки `embedui` он отдаёт на `/` заглушку с 503 и подсказкой, а не интерфейс,
+так что смотреть надо именно на порт Vite.
+
+```bash
+npm run build       # tsc -b && vite build -> dist/
+npm run test        # vitest
+npm run lint        # oxlint
+npm run i18n:check  # проверка покрытия переводами
+npm run gen:api     # ../api/openapi.yaml -> src/api/schema.d.ts
+```
+
+## Встраивание в бинарник
+
+`make ui` из корня репозитория делает то же самое, что `npm ci && npm run
+build`, и кладёт результат в `web/dist`. Дальше `web/embed.go` (тег сборки
+`embedui`) вкомпилирует эту папку через `//go:embed all:dist` и отдаёт
+`index.html` на любой путь, для которого нет файла, — клиентская
+маршрутизация. Без тега работает `web/embed_stub.go` с тем самым 503.
+
+Важное следствие: `//go:embed` раскрывается на этапе КОМПИЛЯЦИИ, поэтому
+`go test -tags embedui ./web/` без собранного `web/dist` не проваливает тесты,
+а не собирается вовсе. Поэтому `make test-all` собирает фронт сам.
+
+## Два правила, которые здесь проверяет CI
+
+**Контракт первичен.** `src/api/schema.d.ts` не правят руками: он порождается
+из `api/openapi.yaml` командой `npm run gen:api` (она же — часть `make gen`).
+CI перегенерирует и падает на любом расхождении.
+
+**Ни одной видимой строки в коде.** Всё, что видит пользователь, живёт в
+`src/i18n/ru.json` и достаётся через `t()` с литеральным ключом — не
+вычисленным, иначе `npm run i18n:check` не сможет его прочитать и не пропустит
+изменение.
+
+## Почему в package.json есть `overrides`
+
+`openapi-typescript@7` объявляет peer-зависимость на `typescript` «^5.x», а
+проект держит TypeScript 6 ради его новых возможностей. Пара работает —
+генерация и сборка на TS 6 проходят, — но `npm ci` без подсказки падает с
+ERESOLVE. Подсказка сведена ровно к этой паре:
+
+```json
+"overrides": { "openapi-typescript": { "typescript": "$typescript" } }
+```
+
+Раньше на этом месте стоял `legacy-peer-deps=true` в `web/.npmrc`, и это было
+хуже: он выключает разрешение peer-зависимостей ЦЕЛИКОМ, так что следующий
+такой конфликт — уже настоящий, а не отставание апстрима — установился бы
+молча, без единого предупреждения. Точечное переопределение оставляет npm
+разбирать остальные peer-зависимости как обычно. Снять его можно будет тогда,
+когда `openapi-typescript` объявит поддержку TypeScript 6.

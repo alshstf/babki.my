@@ -45,13 +45,12 @@ func TestUserAndSpaceLifecycle(t *testing.T) {
 		t.Errorf("principal = %+v", p)
 	}
 
-	// second member
-	u2, err := st.CreateUser(ctx, "kate", "Kate", "hash2")
+	// second member, created the way production creates one: CreateUserInSpace
+	// writes the user and the membership together. The separate AddMember this
+	// used to call existed nowhere else and was removed with it.
+	u2, err := st.CreateUserInSpace(ctx, sp.ID, "kate", "Kate", "hash2", family.RoleEditor)
 	if err != nil {
-		t.Fatalf("CreateUser 2: %v", err)
-	}
-	if err := st.AddMember(ctx, sp.ID, u2.ID, family.RoleEditor); err != nil {
-		t.Fatalf("AddMember: %v", err)
+		t.Fatalf("CreateUserInSpace: %v", err)
 	}
 	members, err := st.ListMembers(ctx, sp.ID)
 	if err != nil || len(members) != 2 {

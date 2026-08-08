@@ -7,8 +7,34 @@ import (
 
 	pgxdecimal "github.com/jackc/pgx-shopspring-decimal"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// Executor is the part of *pgxpool.Pool the domain stores use. They take one
+// of these instead of a pool so that a store can be built on an OPEN
+// TRANSACTION as easily as on the pool — pgx.Tx implements exactly the same
+// four methods — and several stores can then share one transaction and commit
+// or roll back together.
+//
+// That is what `babki seed` needs and nothing else does yet: it writes a space,
+// two users, six accounts, their balances, a catalogue of instruments, a
+// journal of operations and a demo broker connection, and a failure anywhere
+// after the first of those used to leave an instance that could never be seeded
+// again (the users exist, so setup is no longer "needed", so the command
+// refuses). Everything in production still passes the pool, so this changes no
+// behaviour anywhere else.
+//
+// Begin is part of it because stores already open transactions of their own.
+// On a pool that is a transaction; on a pgx.Tx it is a savepoint — which is the
+// behaviour wanted here, since an inner failure must not take the whole seed
+// down without the outer rollback being what does it.
+type Executor interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
 
 // registerCodecs wires pgx type codecs shared by every connection in the
 // pool — currently the shopspring/decimal <-> NUMERIC codec, so

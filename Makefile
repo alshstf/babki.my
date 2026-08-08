@@ -26,7 +26,11 @@ build: ui
 		-ldflags "-X babki.my/babki/internal/platform/version.Version=$(VERSION)" \
 		-o babki ./cmd/babki
 
-test-all: test
+# `ui` is a prerequisite and not a hint in a comment: web/embed.go resolves
+# //go:embed all:dist AT COMPILE TIME, so without a populated web/dist the
+# command below does not fail its tests — it fails to build, with a message
+# about an embed pattern that says nothing about the frontend not being built.
+test-all: ui test
 	go test -tags embedui ./web/
 
 smoke:

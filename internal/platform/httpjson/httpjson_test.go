@@ -46,3 +46,33 @@ func TestDecode(t *testing.T) {
 		t.Fatalf("Decode unknown field: code=%d, want 400", rec.Code)
 	}
 }
+
+// TestDecodeRefusesABodyOverTheLimit covers Decode's 413 branch, which had no
+// test: the limit is a MaxBytesReader, so what proves it is a body that
+// actually exceeds it, not an assertion about the constant.
+//
+// The body is valid JSON for the destination type and is refused anyway — a
+// refusal on the size and not on the shape. It is written as one enormous
+// string field rather than as garbage so that a Decode which had lost its
+// MaxBytesReader would succeed and return 200 rather than fail on the parse and
+// return 400 by accident, which is the way this test could otherwise pass
+// without the branch existing.
+func TestDecodeRefusesABodyOverTheLimit(t *testing.T) {
+	type req struct {
+		Name string `json:"name"`
+	}
+	// 1MB is the limit; 2MB of payload is unambiguously over it.
+	body := `{"name":"` + strings.Repeat("a", 2<<20) + `"}`
+	r := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	var dst req
+	if err := httpjson.Decode(rec, r, &dst); err == nil {
+		t.Fatal("Decode accepted a 2MB body, want an error")
+	}
+	if rec.Code != 413 {
+		t.Fatalf("code = %d, want 413: an oversized body is not a malformed one", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "request body too large") {
+		t.Errorf("body = %s, want the too-large message", rec.Body.String())
+	}
+}

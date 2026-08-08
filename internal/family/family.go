@@ -21,9 +21,6 @@ var roleRank = map[Role]int{RoleViewer: 1, RoleEditor: 2, RoleOwner: 3}
 // AtLeast reports whether r grants at least the privileges of min.
 func (r Role) AtLeast(min Role) bool { return roleRank[r] >= roleRank[min] }
 
-// Valid reports whether r is a known role.
-func (r Role) Valid() bool { return roleRank[r] != 0 }
-
 type User struct {
 	ID           uuid.UUID
 	Username     string

@@ -3,6 +3,7 @@
 package account
 
 import (
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +30,32 @@ func (t Type) Valid() bool { return validTypes[t] }
 
 // IsLiability reports whether balances of this type count as debt.
 func (t Type) IsLiability() bool { return t == TypeCreditCard || t == TypeLoan }
+
+// LiabilityTypes lists every valid type IsLiability reports true for, as the
+// plain strings the `accounts.type` column stores.
+//
+// IT IS DERIVED AND NOT TYPED OUT, because SummaryByCurrency has to split
+// assets from debts inside SQL, where the method above cannot be called. That
+// split used to be a literal `('credit_card','loan')` in the query — a second
+// statement of the same rule, in another language, which a new liability type
+// would have left silently behind: the account would be created and listed
+// perfectly and would then be summed as an asset. Filtering the valid types
+// through IsLiability leaves one statement of the rule and makes the query's
+// list follow it.
+//
+// Sorted, so the value is the same on every call: Go randomizes map iteration,
+// and a query parameter that reordered between requests would make an
+// otherwise identical statement look different to anything reading logs.
+func LiabilityTypes() []string {
+	out := make([]string, 0, len(validTypes))
+	for t := range validTypes {
+		if t.IsLiability() {
+			out = append(out, string(t))
+		}
+	}
+	slices.Sort(out)
+	return out
+}
 
 type Status string
 

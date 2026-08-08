@@ -122,6 +122,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/MemberInfo" }
         "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/members/{userId}:
@@ -141,6 +142,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/MemberInfo" }
         "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
     delete:
@@ -150,6 +152,7 @@ paths:
       responses:
         "204": { description: Removed }
         "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/accounts:
@@ -178,6 +181,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/AccountWithBalance" }
         "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}:
     patch:
@@ -196,6 +200,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/AccountWithBalance" }
         "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
     delete:
@@ -205,6 +210,8 @@ paths:
         - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         "204": { description: Archived }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/balance:
@@ -225,6 +232,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/AccountWithBalance" }
         "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/summary:
@@ -286,6 +294,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Instrument" }
         "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
   /api/v1/instruments/{instrumentId}:
     patch:
@@ -304,6 +313,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Instrument" }
         "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/operations:
@@ -372,6 +382,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Operation" }
         "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
@@ -395,6 +406,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/TransferResponse" }
         "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
@@ -413,6 +425,7 @@ paths:
       responses:
         "204": { description: Deleted }
         "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }

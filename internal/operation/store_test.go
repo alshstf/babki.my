@@ -940,9 +940,10 @@ func TestApplyDeltaCostsTheSameWhateverItsSize(t *testing.T) {
 }
 
 // TestApplyDeltaKeepsTheCreatedAtItWasGiven pins the one column this path sets
-// by hand. Everything a transaction inserts shares one now(), and rows of the
-// same date sharing one created_at leave the engine's own listing nothing to
-// order them by — so the caller that checked them in an order gets to state it.
+// by hand. Rows of the same date sharing one created_at leave the engine's own
+// listing nothing to order them by, and a batch written back to back cannot
+// promise its clock separates them — so the caller that checked them in an
+// order gets to state it.
 func TestApplyDeltaKeepsTheCreatedAtItWasGiven(t *testing.T) {
 	f := newFixture(t)
 
@@ -976,6 +977,66 @@ func TestApplyDeltaKeepsTheCreatedAtItWasGiven(t *testing.T) {
 	}
 	if stored[0].CreatedAt.IsZero() {
 		t.Error("row written with no created_at came back with none, want the database's own")
+	}
+}
+
+// TestARunOfWritesInsideOneTransactionGetsAnInstantEach covers the shape the
+// demo seed has: a whole journal written ONE OPERATION AT A TIME, all of it
+// under a single commit (cmd/babki's seedDemo wraps the demo in one transaction
+// so that a half-written seed cannot survive a failure part way through).
+//
+// The row-at-a-time paths leave created_at to the database, and which clock the
+// database reads decides whether that shape works. now() is the TRANSACTION's
+// timestamp — one instant for every statement under the commit — so with it the
+// two rows below would claim the same moment, and ListForEngine, which orders by
+// occurred_on and then created_at with nothing after it, would be free to hand
+// the sell back first.
+//
+// THE SELL IS THE ASSERTION AND NOT DECORATION: folded before the buy that
+// covers it, it is an oversell of the whole position — accepted on write and
+// refused on every later read, which is the fault this package has met twice.
+func TestARunOfWritesInsideOneTransactionGetsAnInstantEach(t *testing.T) {
+	f := newFixture(t)
+
+	tx, err := f.pool.Begin(f.ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(f.ctx) }()
+	store := operation.NewStore(tx)
+
+	buy := operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-07-01"), Quantity: dec("10"),
+		AmountMinor: -100_000, Currency: "RUB",
+	}
+	sell := operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeSell,
+		OccurredOn: date("2026-07-01"), Quantity: dec("10"),
+		AmountMinor: 120_000, Currency: "RUB",
+	}
+	if _, err := store.Create(f.ctx, f.spaceID, buy, nil); err != nil {
+		t.Fatalf("create the buy: %v", err)
+	}
+	if _, err := store.Create(f.ctx, f.spaceID, sell, nil); err != nil {
+		t.Fatalf("create the sell: %v", err)
+	}
+	if err := tx.Commit(f.ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	ops, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
+	if err != nil || len(ops) != 2 {
+		t.Fatalf("ListForEngine = %+v, %v; want the two rows", ops, err)
+	}
+	if ops[0].CreatedAt.Equal(ops[1].CreatedAt) {
+		t.Fatalf("both rows were written at %s — two rows the engine's listing orders by "+
+			"created_at cannot share one, and one transaction's now() gives them exactly that",
+			ops[0].CreatedAt)
+	}
+	if ops[0].Type != operation.TypeBuy || ops[1].Type != operation.TypeSell {
+		t.Errorf("the journal reads back as %s then %s, want buy then sell — the order it was written in",
+			ops[0].Type, ops[1].Type)
 	}
 }
 

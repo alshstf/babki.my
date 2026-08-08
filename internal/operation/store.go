@@ -8,8 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
+	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/portfolio"
 )
 
@@ -30,9 +30,9 @@ var ErrAccountNotInSpace = errors.New("account not found in space")
 // half of a difference computed against a journal that no longer exists.
 var ErrRemovalCountMismatch = errors.New("asked to remove operations that are not all there")
 
-type Store struct{ pool *pgxpool.Pool }
+type Store struct{ db db.Executor }
 
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+func NewStore(x db.Executor) *Store { return &Store{db: x} }
 
 const cols = `id, space_id, account_id, instrument_id, type, occurred_on,
 	settled_on, quantity, price, amount_minor, currency, fee_minor, note,
@@ -51,20 +51,29 @@ func scan(row pgx.Row) (Operation, error) {
 // zero rows returned means the account is not in the caller's space.
 //
 // created_at is the one column of this statement a caller may either state or
-// leave alone: NULL — what every path but ApplyDelta passes — takes the table's
-// own default, and anything else is used as given. It became statable because
-// now() is the TRANSACTION's timestamp, identical on every row a single
-// transaction inserts, and a batch that writes a whole history in one
-// transaction would give rows of the same date one created_at between them: the
-// engine's listing orders by that column, so it would have nothing left to
-// order them by (see ApplyDelta).
+// leave alone: NULL — what every path but ApplyDelta passes — takes this
+// statement's own clock, and anything else is used as given. It became statable
+// because a batch writes a whole history under one commit and the caller is the
+// only one who knows the order it checked that history in (see ApplyDelta).
+//
+// THE CLOCK IS clock_timestamp() AND NOT now(), which is the difference between
+// "when this row was written" and "when the enclosing transaction began". The
+// two agree, to within the moment it took, for a caller that writes one row per
+// transaction; they do not for one that writes several under one commit — a
+// transfer pair, or the demo seed, which writes its whole journal a row at a
+// time inside a single transaction. With now() every one of those rows claims
+// one and the same instant, and
+// two operations of the same date sharing one created_at leave the reads below
+// nothing to order them by: ListForEngine would fold them in an order the
+// database picks — in one of which a same-day sell precedes its buy and is an
+// oversell — and the paged listing would have no total order to page over.
 const insertSQL = `
 	INSERT INTO operations (space_id, account_id, instrument_id, type,
 		occurred_on, settled_on, quantity, price, amount_minor, currency,
 		fee_minor, note, transfer_group_id, split_ratio, source, external_id,
 		created_at)
 	SELECT a.space_id, a.id, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-		COALESCE(NULLIF($15, ''), 'manual'), $16, COALESCE($17::timestamptz, now())
+		COALESCE(NULLIF($15, ''), 'manual'), $16, COALESCE($17::timestamptz, clock_timestamp())
 	FROM accounts a WHERE a.id = $2 AND a.space_id = $1
 	RETURNING ` + cols
 
@@ -89,10 +98,13 @@ func scanInserted(row pgx.Row) (Operation, error) {
 	return created, err
 }
 
-// insertOne writes one operation and lets the table date it. The literal nil
-// is the point: the row-at-a-time paths (Create, CreatePair) leave created_at
-// to the database exactly as they always have, and cannot be made to state one
-// by an operation that happens to carry a CreatedAt from somewhere.
+// insertOne writes one operation and lets the database date it. The literal nil
+// is the point: the row-at-a-time paths (Create, CreatePair) leave created_at to
+// the statement's own clock, and cannot be made to state one by an operation
+// that happens to carry a CreatedAt from somewhere. What that leaves them is the
+// moment each row was actually written, rather than one moment shared by every
+// row a caller wrote under the same commit — see insertSQL on why the clock has
+// to be the statement's and not the transaction's.
 func insertOne(ctx context.Context, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, spaceID uuid.UUID, op Operation,
@@ -121,9 +133,9 @@ func insertOne(ctx context.Context, q interface {
 // then, for tests exercising storage itself rather than the journal.
 func (s *Store) Create(ctx context.Context, spaceID uuid.UUID, op Operation, verify func(Operation) error) (Operation, error) {
 	if verify == nil {
-		return insertOne(ctx, s.pool, spaceID, op)
+		return insertOne(ctx, s.db, spaceID, op)
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Operation{}, err
 	}
@@ -258,7 +270,7 @@ func writeTransferLots(ctx context.Context, tx pgx.Tx, operationID uuid.UUID, lo
 // normalizeForStorage). A nil verify means the caller has nothing to confirm —
 // a plain insert, for tests exercising storage itself.
 func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Operation, verify func(out, in Operation) error) (Operation, Operation, error) {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Operation{}, Operation{}, err
 	}
@@ -344,13 +356,16 @@ func carriesOwnLots(op Operation) bool {
 // the rest of that difference cannot be trusted either; obeying the part that
 // still applies would write half of a stale decision.
 //
-// created_at is stated by the caller rather than left to the column (see
-// insertSQL). It is not decoration: now() is the transaction's timestamp, so
-// every row of a delta would otherwise share one, and two operations of the
-// same date sharing one created_at leave ListForEngine's ORDER BY nothing to
-// separate them by — the journal would fold in an order the database picks,
-// which is not necessarily the order the caller checked. That is the shape of
-// "accepted on write, refused on every later read" this package has met twice.
+// created_at is stated by the caller rather than left to the statement's clock
+// (see insertSQL). It is not decoration. The rows of a delta go out as one
+// batch, back to back, and a clock read microseconds apart is not a promise
+// that two of them differ — while two operations of the same date sharing one
+// created_at leave ListForEngine's ORDER BY nothing to separate them by, so
+// the journal would fold in an order the database picks rather than the order
+// the caller checked. That is the shape of "accepted on write, refused on every
+// later read" this package has met twice. The caller is also the only one that
+// knows that order, and the only one that can put a rewritten row back where
+// the row it replaces stood (see ImportDelta).
 //
 // verify is handed the rows AS STORED — from the INSERT's RETURNING, with the
 // breakdowns the lot table gave back — for the reason Create and CreatePair
@@ -362,7 +377,7 @@ func carriesOwnLots(op Operation) bool {
 func (s *Store) ApplyDelta(ctx context.Context, spaceID uuid.UUID, add []Operation, removeIDs []uuid.UUID,
 	verify func(stored []Operation) error,
 ) ([]Operation, error) {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -484,7 +499,7 @@ func storeBreakdowns(ctx context.Context, tx pgx.Tx, add, stored []Operation) er
 }
 
 func (s *Store) list(ctx context.Context, sql string, args ...any) ([]Operation, error) {
-	rows, err := s.pool.Query(ctx, sql, args...)
+	rows, err := s.db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -611,7 +626,7 @@ func (s *Store) attachTransferLots(ctx context.Context, spaceID uuid.UUID, ops [
 	for _, o := range ops {
 		ids = append(ids, o.ID)
 	}
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.db.Query(ctx, `
 		WITH carriers AS (
 			SELECT o.id, COALESCE(peer.id, o.id) AS carrier
 			FROM operations o
@@ -691,7 +706,7 @@ func (s *Store) ByIDs(ctx context.Context, spaceID uuid.UUID, ids []uuid.UUID) (
 }
 
 func (s *Store) ByID(ctx context.Context, spaceID, id uuid.UUID) (Operation, error) {
-	return scan(s.pool.QueryRow(ctx, `SELECT `+cols+` FROM operations
+	return scan(s.db.QueryRow(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND id = $2`, spaceID, id))
 }
 
@@ -709,7 +724,7 @@ func (s *Store) ByTransferGroup(ctx context.Context, spaceID, groupID uuid.UUID)
 // operations at all.
 func (s *Store) EarliestOccurredOn(ctx context.Context) (time.Time, error) {
 	var on *time.Time
-	err := s.pool.QueryRow(ctx, `SELECT MIN(occurred_on) FROM operations`).Scan(&on)
+	err := s.db.QueryRow(ctx, `SELECT MIN(occurred_on) FROM operations`).Scan(&on)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -730,7 +745,7 @@ func (s *Store) EarliestOccurredOn(ctx context.Context) (time.Time, error) {
 // EarliestOccurredOn, "no currencies in use" is itself a meaningful answer,
 // not a missing value.
 func (s *Store) DistinctCurrencies(ctx context.Context) ([]string, error) {
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT currency FROM operations ORDER BY currency`)
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT currency FROM operations ORDER BY currency`)
 	if err != nil {
 		return nil, err
 	}
@@ -749,7 +764,7 @@ func (s *Store) DistinctCurrencies(ctx context.Context) ([]string, error) {
 // Delete removes the operation; if it belongs to a transfer group, the whole
 // group is removed. Returns the number of deleted rows.
 func (s *Store) Delete(ctx context.Context, spaceID, id uuid.UUID) (int, error) {
-	ct, err := s.pool.Exec(ctx, `
+	ct, err := s.db.Exec(ctx, `
 		DELETE FROM operations
 		WHERE space_id = $1 AND (id = $2 OR transfer_group_id = (
 			SELECT transfer_group_id FROM operations

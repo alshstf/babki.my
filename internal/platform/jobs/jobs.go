@@ -52,6 +52,33 @@ const (
 	tinvestSyncInterval   = time.Hour
 )
 
+// SoftStopTimeout is how long a job that is already running gets to finish
+// after shutdown begins, before River cancels its context.
+//
+// WITHOUT IT SET, THERE IS NO SUCH WINDOW AT ALL, and the reason is a piece of
+// River's own semantics rather than anything visible at the call site: the
+// context handed to Start is the parent of the context every job runs under, so
+// cancelling it — which is exactly what SIGTERM does here, the signal context
+// being what "all" and "worker" pass to Start — cancels each running job on the
+// spot, indistinguishably from StopAndCancel. Setting any positive value
+// detaches the work context from the start context and turns that same
+// cancellation into a soft stop: producers stop fetching immediately, jobs
+// already in flight are left alone, and only when this elapses are they
+// cancelled. River states both halves in Config.SoftStopTimeout's own doc.
+//
+// It matters most for the longest-running jobs — the fx history download and a
+// broker sync — which do many external requests in one run and, killed mid-run,
+// leave the work to be redone from the start on the next tick.
+//
+// TEN SECONDS, AND IT MUST STAY BELOW cmd/babki's stopJobClientTimeout, which
+// bounds the graceful Stop that follows. If this were the longer of the two,
+// the outer bound would expire first on a job that was still inside its
+// window, and the process would report a graceful stop that "did not complete
+// in time" and escalate to StopAndCancel — cancelling the very jobs this value
+// exists to protect, on a schedule that would look like a race in the logs.
+// cmd/babki has a test that keeps the two ordered.
+const SoftStopTimeout = 10 * time.Second
+
 // TinvestDeps is everything the T-Invest import workers need, grouped rather
 // than added to NewWorkers' positional list — which is long enough already that
 // two arguments of the same type could be swapped and still compile.
@@ -173,8 +200,9 @@ func NewInsertOnlyClient(pool *pgxpool.Pool, log *slog.Logger) (*river.Client[pg
 
 func newClient(pool *pgxpool.Pool, workers *river.Workers, log *slog.Logger) (*river.Client[pgx.Tx], error) {
 	return river.NewClient(riverpgxv5.New(pool), &river.Config{
-		Logger:  log,
-		Workers: workers,
+		Logger:          log,
+		Workers:         workers,
+		SoftStopTimeout: SoftStopTimeout,
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 10},
 		},

@@ -9,10 +9,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/instrument"
+	"babki.my/babki/internal/platform/db"
 )
 
 // ErrConnectionNotFound means the connection a sync was asked to run for is
@@ -251,9 +251,9 @@ type RunOutcome struct {
 // handler that took those ids from a request body would be marking strangers'
 // rows, and nothing in the SQL would stop it. Its ids must come from a read
 // this program already scoped — UnparsedByConnection — and from nowhere else.
-type Store struct{ pool *pgxpool.Pool }
+type Store struct{ db db.Executor }
 
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+func NewStore(x db.Executor) *Store { return &Store{db: x} }
 
 // connectionCols and scanConnection exist so every place that reads a
 // connection reads the same columns into the same fields; see the same pair
@@ -293,7 +293,7 @@ func scanConnection(row pgx.Row) (Connection, error) {
 func (s *Store) CreateConnection(ctx context.Context, spaceID uuid.UUID, tokenCiphertext []byte,
 	tokenLast4 string, status ConnectionStatus,
 ) (Connection, error) {
-	c, err := scanConnection(s.pool.QueryRow(ctx, `
+	c, err := scanConnection(s.db.QueryRow(ctx, `
 		INSERT INTO tinvest_connections (space_id, token_ciphertext, token_last4, status)
 		VALUES ($1, $2, $3, $4) RETURNING `+connectionCols, spaceID, tokenCiphertext, tokenLast4, status))
 	if err != nil {
@@ -307,7 +307,7 @@ func (s *Store) CreateConnection(ctx context.Context, spaceID uuid.UUID, tokenCi
 // also the answer for a connection that exists in another one, deliberately:
 // a stranger learns nothing about whether the id names anything.
 func (s *Store) ConnectionByID(ctx context.Context, spaceID, id uuid.UUID) (Connection, error) {
-	c, err := scanConnection(s.pool.QueryRow(ctx,
+	c, err := scanConnection(s.db.QueryRow(ctx,
 		`SELECT `+connectionCols+` FROM tinvest_connections WHERE id = $1 AND space_id = $2`, id, spaceID))
 	if err != nil {
 		return Connection{}, fmt.Errorf("tinvest: read connection: %w", err)
@@ -327,7 +327,7 @@ func (s *Store) ConnectionByID(ctx context.Context, spaceID, id uuid.UUID) (Conn
 // say — and to tell apart from "this connection is gone", which comes back as
 // pgx.ErrNoRows.
 func (s *Store) connectionForSync(ctx context.Context, id uuid.UUID) (Connection, error) {
-	c, err := scanConnection(s.pool.QueryRow(ctx,
+	c, err := scanConnection(s.db.QueryRow(ctx,
 		`SELECT `+connectionCols+` FROM tinvest_connections WHERE id = $1`, id))
 	if err != nil {
 		return Connection{}, fmt.Errorf("tinvest: read connection for sync: %w", err)
@@ -350,7 +350,7 @@ func (s *Store) ListActiveConnections(ctx context.Context) ([]Connection, error)
 }
 
 func (s *Store) listConnections(ctx context.Context, what, sql string, args ...any) ([]Connection, error) {
-	rows, err := s.pool.Query(ctx, sql, args...)
+	rows, err := s.db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("tinvest: %s: %w", what, err)
 	}
@@ -377,7 +377,7 @@ func (s *Store) listConnections(ctx context.Context, what, sql string, args ...a
 //
 // Returns pgx.ErrNoRows when the connection is not the caller's.
 func (s *Store) UpdateConnectionToken(ctx context.Context, spaceID, id uuid.UUID, tokenCiphertext []byte, tokenLast4 string) error {
-	ct, err := s.pool.Exec(ctx, `UPDATE tinvest_connections
+	ct, err := s.db.Exec(ctx, `UPDATE tinvest_connections
 		SET token_ciphertext = $3, token_last4 = $4, updated_at = now()
 		WHERE id = $1 AND space_id = $2`, id, spaceID, tokenCiphertext, tokenLast4)
 	if err != nil {
@@ -395,7 +395,7 @@ func (s *Store) UpdateConnectionToken(ctx context.Context, spaceID, id uuid.UUID
 // reaches this only after ConnectionByID has established the connection is
 // the caller's.
 func (s *Store) UpdateConnectionStatus(ctx context.Context, id uuid.UUID, status ConnectionStatus) error {
-	ct, err := s.pool.Exec(ctx, `UPDATE tinvest_connections
+	ct, err := s.db.Exec(ctx, `UPDATE tinvest_connections
 		SET status = $2, updated_at = now() WHERE id = $1`, id, status)
 	if err != nil {
 		return fmt.Errorf("tinvest: set connection status: %w", err)
@@ -418,7 +418,7 @@ func (s *Store) UpdateConnectionStatus(ctx context.Context, id uuid.UUID, status
 //
 // Returns pgx.ErrNoRows when the connection is not the caller's.
 func (s *Store) DeleteConnection(ctx context.Context, spaceID, id uuid.UUID) error {
-	ct, err := s.pool.Exec(ctx,
+	ct, err := s.db.Exec(ctx,
 		`DELETE FROM tinvest_connections WHERE id = $1 AND space_id = $2`, id, spaceID)
 	if err != nil {
 		return fmt.Errorf("tinvest: delete connection: %w", err)
@@ -456,7 +456,7 @@ func scanLink(row pgx.Row) (AccountLink, error) {
 // the check and the insert, and the insert would then fail on the foreign key
 // with an error that says something else entirely.
 func (s *Store) CreateLink(ctx context.Context, link AccountLink) (AccountLink, error) {
-	l, err := scanLink(s.pool.QueryRow(ctx, `
+	l, err := scanLink(s.db.QueryRow(ctx, `
 		INSERT INTO tinvest_account_links (connection_id, space_id, account_id,
 			broker_account_id, broker_account_name, broker_account_type, opened_on)
 		SELECT $1::uuid, $2::uuid, $3::uuid, $4::text, $5::text, $6::text, $7::date
@@ -478,7 +478,7 @@ func (s *Store) CreateLink(ctx context.Context, link AccountLink) (AccountLink, 
 }
 
 func (s *Store) LinksByConnection(ctx context.Context, connID uuid.UUID) ([]AccountLink, error) {
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.db.Query(ctx,
 		`SELECT `+linkCols+` FROM tinvest_account_links WHERE connection_id = $1 ORDER BY created_at, id`, connID)
 	if err != nil {
 		return nil, fmt.Errorf("tinvest: list account links: %w", err)
@@ -517,7 +517,7 @@ func scanMirrorRow(row pgx.Row) (MirrorRow, error) {
 }
 
 func (s *Store) listMirrorRows(ctx context.Context, what, sql string, args ...any) ([]MirrorRow, error) {
-	rows, err := s.pool.Query(ctx, sql, args...)
+	rows, err := s.db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("tinvest: %s: %w", what, err)
 	}
@@ -590,7 +590,7 @@ func (s *Store) UnparsedByConnection(ctx context.Context, connID uuid.UUID, limi
 // Unexported deliberately; see the note on Store above.
 func (s *Store) unparsedCountByLink(ctx context.Context, linkID uuid.UUID) (int, error) {
 	var n int
-	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM tinvest_operations_mirror
+	err := s.db.QueryRow(ctx, `SELECT count(*) FROM tinvest_operations_mirror
 		WHERE link_id = $1 AND unparsed_reason <> ''`, linkID).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("tinvest: count the unparsed rows of a link: %w", err)
@@ -647,7 +647,7 @@ func (s *Store) SetUnparsedVerdicts(ctx context.Context, verdicts map[uuid.UUID]
 		details = append(details, v.Detail)
 	}
 
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("tinvest: set unparsed verdicts: %w", err)
 	}
@@ -688,7 +688,7 @@ func scanRun(row pgx.Row) (SyncRun, error) {
 // the point: a crash mid-sync is visible as one, rather than as nothing
 // having happened.
 func (s *Store) StartRun(ctx context.Context, connID, linkID uuid.UUID, trigger SyncTrigger) (SyncRun, error) {
-	r, err := scanRun(s.pool.QueryRow(ctx, `
+	r, err := scanRun(s.db.QueryRow(ctx, `
 		INSERT INTO tinvest_sync_runs (connection_id, link_id, trigger, status)
 		VALUES ($1, $2, $3, $4) RETURNING `+runCols, connID, linkID, trigger, RunRunning))
 	if err != nil {
@@ -719,7 +719,7 @@ func (s *Store) FinishRun(ctx context.Context, runID uuid.UUID, outcome RunOutco
 	if err != nil {
 		return err
 	}
-	ct, err := s.pool.Exec(ctx, `UPDATE tinvest_sync_runs
+	ct, err := s.db.Exec(ctx, `UPDATE tinvest_sync_runs
 		SET status = $2, finished_at = now(), read_count = $3, added_count = $4,
 		    disappeared_count = $5, unparsed_count = $6, error = $7,
 		    reconcile_status = $8,
@@ -783,7 +783,7 @@ func (s *Store) RunsByConnection(ctx context.Context, connID uuid.UUID, limit, o
 	if limit < 1 {
 		return nil, false, fmt.Errorf("tinvest: list runs: limit must be positive, got %d", limit)
 	}
-	rows, err := s.pool.Query(ctx, `SELECT `+runCols+` FROM tinvest_sync_runs
+	rows, err := s.db.Query(ctx, `SELECT `+runCols+` FROM tinvest_sync_runs
 		WHERE connection_id = $1 ORDER BY started_at DESC, id LIMIT $2 OFFSET $3`,
 		connID, limit+1, offset)
 	if err != nil {
@@ -832,7 +832,7 @@ func (s *Store) RunsByConnection(ctx context.Context, connID uuid.UUID, limit, o
 // first run. See the precondition on SyncMirror.
 func (s *Store) LastSuccessfulSyncAt(ctx context.Context, connID uuid.UUID) (*time.Time, error) {
 	var at time.Time
-	err := s.pool.QueryRow(ctx, `SELECT started_at FROM tinvest_sync_runs
+	err := s.db.QueryRow(ctx, `SELECT started_at FROM tinvest_sync_runs
 		WHERE connection_id = $1 AND status = $2
 		ORDER BY started_at DESC LIMIT 1`, connID, RunOK).Scan(&at)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -869,7 +869,7 @@ func (s *Store) LastSuccessfulSyncAt(ctx context.Context, connID uuid.UUID) (*ti
 // note on Store. A request path reaches it only after ConnectionByID has
 // established the connection is the caller's.
 func (s *Store) LastReconcileByLink(ctx context.Context, connID uuid.UUID) (map[uuid.UUID]SyncRun, error) {
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT ON (link_id) `+runCols+`
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT ON (link_id) `+runCols+`
 		FROM tinvest_sync_runs
 		WHERE connection_id = $1 AND reconcile_status <> $2
 		ORDER BY link_id, reconciled_at DESC, id`, connID, ReconcileNotChecked)
@@ -923,7 +923,7 @@ func (s *Store) mapByInstrumentUID(ctx context.Context, connectionID uuid.UUID, 
 		return mapMatch{}, fmt.Errorf("tinvest: instrument map by instrument_uid: %w", pgx.ErrNoRows)
 	}
 	var m mapMatch
-	err := s.pool.QueryRow(ctx, `
+	err := s.db.QueryRow(ctx, `
 		SELECT im.instrument_id, i.type, i.currency, i.isin, i.ticker
 		FROM tinvest_instrument_map im
 		JOIN instruments i ON i.id = im.instrument_id
@@ -954,7 +954,7 @@ func (s *Store) mapByFIGI(ctx context.Context, connectionID uuid.UUID, figi stri
 		return mapMatch{}, fmt.Errorf("tinvest: instrument map by figi: %w", pgx.ErrNoRows)
 	}
 	var m mapMatch
-	err := s.pool.QueryRow(ctx, `
+	err := s.db.QueryRow(ctx, `
 		SELECT im.instrument_id, i.type, i.currency, i.isin, i.ticker
 		FROM tinvest_instrument_map im
 		JOIN instruments i ON i.id = im.instrument_id
@@ -1016,7 +1016,7 @@ func (s *Store) mapByFIGI(ctx context.Context, connectionID uuid.UUID, figi stri
 // Callers must not call this with ref.InstrumentUID == "" — see Resolve's
 // own guard, which is the only caller and never does.
 func (s *Store) saveMap(ctx context.Context, connectionID, instrumentID uuid.UUID, ref InstrumentRef, isin, ticker string) error {
-	_, err := s.pool.Exec(ctx, `
+	_, err := s.db.Exec(ctx, `
 		INSERT INTO tinvest_instrument_map
 			(connection_id, instrument_id, figi, instrument_uid, position_uid, asset_uid, isin, ticker)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -1089,7 +1089,7 @@ func (s *Store) instrumentMap(ctx context.Context, connectionID uuid.UUID) (Inst
 		return InstrumentIndex{}, nil, fmt.Errorf("tinvest: read instrument map: %w", err)
 	}
 
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.db.Query(ctx, `
 		SELECT im.instrument_uid, im.figi, im.instrument_id, i.ticker, i.name
 		FROM tinvest_instrument_map im
 		JOIN instruments i ON i.id = im.instrument_id
