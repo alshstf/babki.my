@@ -2,6 +2,24 @@
 CREATE TABLE operations (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     space_id          UUID NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    -- WARNING BEFORE ANYONE ADDS A HARD DELETE FOR AN ACCOUNT (#19). This
+    -- cascade is safe only because no such delete exists: the API archives an
+    -- account (account.Store.Archive, reached by DELETE /accounts/{id}) and
+    -- never removes the row, so the cascade fires only when the whole space
+    -- goes, and a space takes both ends of every transfer with it.
+    --
+    -- A hard delete of ONE account would not. A transfer is a pair of rows in
+    -- two different accounts sharing a transfer_group_id, and cascading away
+    -- the account on one side leaves the other side's leg standing: shares
+    -- arriving from nowhere, or leaving for nowhere, with a cost basis that no
+    -- longer has a counterpart. The journal is this program's source of truth
+    -- and every position, valuation and profit is recomputed from it, so that
+    -- is not an orphaned row in a reporting table — it is a portfolio that
+    -- quietly stops adding up.
+    --
+    -- Whoever adds the delete owes it either a switch to RESTRICT here or an
+    -- explicit removal of both legs of every affected pair first (the same
+    -- thing operation.Store.Delete already does for a single transfer).
     account_id        UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     instrument_id     UUID REFERENCES instruments(id) ON DELETE RESTRICT,
     type              TEXT NOT NULL CHECK (type IN ('buy','sell','deposit','withdrawal','dividend','coupon','amortization','fee','tax','transfer_in','transfer_out','split','interest','conversion')),

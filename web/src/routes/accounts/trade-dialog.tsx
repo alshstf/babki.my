@@ -22,7 +22,7 @@ import {
   parseToMinor,
   isPositiveDecimal,
 } from "@/lib/money";
-import { localToday } from "@/lib/dates";
+import { EARLIEST_OPERATION_DATE, localToday } from "@/lib/dates";
 import { useCreateOperation, isConflict } from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
 import type { Instrument } from "@/api/instruments";
@@ -446,6 +446,7 @@ export function TradeDialog({
               id="trade-date"
               type="date"
               value={occurredOn}
+              min={EARLIEST_OPERATION_DATE}
               max={localToday()}
               onChange={(e) => setOccurredOn(e.target.value)}
             />

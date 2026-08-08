@@ -120,7 +120,18 @@ export function MoneyCell({
           className="inline-flex shrink-0 text-muted-foreground"
           title={notConvertedTitle ?? t("displayCurrency.notConverted")}
         >
-          <Info size={14} />
+          <Info size={14} aria-hidden="true" />
+          {/* The same sentence again, for a reader who is not looking at the
+              screen (#31). `title` alone does not reach them. This span has no
+              role and no text of its own — the icon is a decorative <svg> and
+              marked as one — so it is a generic container, and a tooltip on
+              one is not something assistive technology is obliged to announce;
+              nothing here can be focused either, so there is no keyboard route
+              to it at all. What that adds up to is not "the hint is awkward to
+              get at": the figure is announced as an ordinary number, with
+              nothing to say it is in a currency the reader did not ask for.
+              `title` stays for the pointer, where it does work. */}
+          <span className="sr-only">{notConvertedTitle ?? t("displayCurrency.notConverted")}</span>
         </span>
       )}
       {caveatTitle && (
@@ -132,7 +143,8 @@ export function MoneyCell({
           className="inline-flex shrink-0 text-muted-foreground"
           title={caveatTitle}
         >
-          <Scale size={14} />
+          <Scale size={14} aria-hidden="true" />
+          <span className="sr-only">{caveatTitle}</span>
         </span>
       )}
     </span>

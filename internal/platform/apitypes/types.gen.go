@@ -630,7 +630,7 @@ type CreateOperationRequest struct {
 	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id,omitempty"`
 	Note         *string                               `json:"note,omitempty"`
 
-	// OccurredOn Date YYYY-MM-DD
+	// OccurredOn Date YYYY-MM-DD. Held to both ends of a range, and past either it is a 400. NOT IN THE FUTURE, with one day of slack past the UTC day boundary: a date-only field carries no zone, so someone east of UTC must be able to record what they did this evening while the server is still on yesterday. AND NOT EARLIER THAN 1900-01-01, which is a typo guard and not a rule from anywhere — no law, no broker and no data source here names it, and it is in particular not a claim about the earliest date this server can value: an operation dated 1950 is accepted, and whether it can be shown in the base currency is a separate question about which fx rates exist. What the floor catches is a fumbled leading digit (1026 for 2026, one keystroke), which is the one date mistake that is silent rather than visible: the cost basis queue is ordered by acquisition date, so such a row sorts to the FRONT of it and the next sale releases it first, and nothing on any screen remarks on a date being old.
 	OccurredOn string `json:"occurred_on"`
 
 	// Price Decimal as string: money per unit, in MAJOR currency units. |price| must not exceed 10^13 (10000000000000) — one unit may not cost more than a whole operation is allowed to be for — and see quantity for the bound on the two multiplied together. Past either, 400.
@@ -1246,7 +1246,7 @@ type TransferRequest struct {
 	InstrumentId  openapi_types.UUID       `json:"instrument_id"`
 	Note          *string                  `json:"note,omitempty"`
 
-	// OccurredOn Date YYYY-MM-DD
+	// OccurredOn Date YYYY-MM-DD. Held to both ends of a range, and past either it is a 400. NOT IN THE FUTURE, with one day of slack past the UTC day boundary: a date-only field carries no zone, so someone east of UTC must be able to record what they did this evening while the server is still on yesterday. AND NOT EARLIER THAN 1900-01-01, which is a typo guard and not a rule from anywhere — no law, no broker and no data source here names it, and it is in particular not a claim about the earliest date this server can value: an operation dated 1950 is accepted, and whether it can be shown in the base currency is a separate question about which fx rates exist. What the floor catches is a fumbled leading digit (1026 for 2026, one keystroke), which is the one date mistake that is silent rather than visible: the cost basis queue is ordered by acquisition date, so such a row sorts to the FRONT of it and the next sale releases it first, and nothing on any screen remarks on a date being old.
 	OccurredOn string `json:"occurred_on"`
 
 	// Quantity Decimal as string. |quantity| must not exceed 10^13 (10000000000000), as on an operation — this writes the same column, on two rows. A position CAN hold more than that, having grown one accepted operation at a time; such a holding has to be moved in several transfers.

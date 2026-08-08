@@ -12,6 +12,7 @@ import "@/i18n";
 import { AccountsTable } from "./accounts-table";
 import type { AccountWithBalance } from "@/api/accounts";
 import { formatMinor } from "@/lib/money";
+import { announcedText, visibleText } from "@/test-utils";
 
 // AccountsTable renders row links via <Link to="/accounts/$accountId">,
 // which needs a real router context to render at all (throws otherwise) —
@@ -136,5 +137,28 @@ describe("AccountsTable", () => {
     await screen.findByText("Brokerage");
     expect(screen.getByText("—")).toBeInTheDocument();
     expect(screen.queryByTestId("account-balance-acc-1")).not.toBeInTheDocument();
+  });
+
+  // #31. This was the one missing figure on either of these two screens with
+  // no hint of any kind attached — not even a tooltip a pointer could find.
+  // Every other cell that cannot show a number says why; this one drew a dash
+  // and left it at that, to every reader alike.
+  //
+  // The sentence says what is absent rather than who failed to enter it: a
+  // broker import writes balance marks as well as a person does, so «не
+  // вносили» would be a guess about how the account got here. That there is no
+  // mark is the part that is certain, and it is the part that is said.
+  it("says a balance was never recorded, instead of an unexplained dash", async () => {
+    const account = makeAccount({ balance: undefined });
+    wrap(<AccountsTable accounts={[account]} mode="native" baseCurrency="RUB" />);
+
+    await screen.findByText("Brokerage");
+    const cell = screen.getByTestId("account-balance-acc-1-none");
+    // The eye still gets a dash and not a sentence in the balance column.
+    expect(visibleText(cell)).toBe("—");
+    // The ear gets the sentence and not a dash.
+    expect(announcedText(cell)).toBe("Баланс этого счёта ещё не записан");
+    // And a pointer finds it too.
+    expect(cell).toHaveAttribute("title", "Баланс этого счёта ещё не записан");
   });
 });

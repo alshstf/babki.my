@@ -16,6 +16,7 @@ import (
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/currency"
+	"babki.my/babki/internal/platform/dates"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/money"
@@ -121,13 +122,12 @@ func parseAsOf(s string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, fmt.Errorf("as_of must be YYYY-MM-DD")
 	}
-	// as_of is a date-only field with no timezone attached. A day of slack
-	// past the UTC "today" boundary is intentional: a user anywhere from
-	// UTC+3 to UTC+12 must be able to record "today" as of their own local
-	// date, and their tomorrow-in-UTC is still today somewhere on Earth.
-	// Anything further out than that is rejected as a genuine future date.
-	maxAllowedUTC := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)
-	if d.After(maxAllowedUTC) {
+	// as_of is a date-only field with no timezone attached, and the ceiling it
+	// is held to is the one every hand-entered date here is held to — a day of
+	// slack past the UTC "today" boundary, for the reason stated once in
+	// dates.LatestRecordable. It used to be spelled out here as well as in
+	// internal/operation, which is two copies of one rule (#19).
+	if d.After(dates.LatestRecordable()) {
 		return time.Time{}, fmt.Errorf("as_of must not be in the future")
 	}
 	return d, nil
