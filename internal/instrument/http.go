@@ -18,11 +18,22 @@ import (
 	"babki.my/babki/internal/platform/money"
 )
 
-// defaultSearchLimit/maxSearchLimit bound the GET /instruments listing.
-// A limit above maxSearchLimit is clamped down rather than rejected with
-// 400: a catalog search is a best-effort listing, and clamping lets a
-// client that asks for "everything" keep working instead of erroring on a
-// pagination detail it doesn't need to reason about.
+// defaultSearchLimit/maxSearchLimit bound the GET /instruments listing, and
+// they are the figures api/openapi.yaml states as `default` and `maximum` on it
+// (contract_sites_test.go is what keeps the two spellings in step).
+//
+// A LIMIT ABOVE THE MAXIMUM IS REFUSED, NOT CLAMPED, and this used to say the
+// opposite — that a catalog search is a best-effort listing a client should not
+// have to reason about. It was wrong twice over. A ceiling the contract states
+// and the server does not apply is not a rule at all (#118): a client that sent
+// 250 was answered as though it had asked for 200, with nothing in the answer
+// saying that the number it sent was not the number applied. And the answer it
+// got back was a bare array, so the same page also could not say whether
+// anything was left behind — which, on an endpoint that took no offset either,
+// made the catalog past this ceiling unreachable by any request at all (#104).
+// Refusing says it once, in the only channel a client may read — the status
+// code — and costs a round trip on a request that was outside the contract to
+// begin with.
 const (
 	defaultSearchLimit = 50
 	maxSearchLimit     = 200
@@ -87,18 +98,49 @@ func pathInstrumentID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) 
 	return id, true
 }
 
+// parsePage reads `limit` and `offset` and enforces the bounds the contract
+// states. See defaultSearchLimit for why an over-large limit is a 400 rather
+// than a quietly smaller page.
+//
+// It is written the same way as the importer's parsePage
+// (internal/importer/tinvest/http.go) rather than shared with it. What the two
+// have in common is a shape; what they do not have in common is the numbers,
+// and each package's ceiling is tied to its own contract path by its own
+// contract-site test. A shared parser would hold one set of bounds for both, so
+// raising one endpoint's ceiling would silently raise the other's.
+func parsePage(w http.ResponseWriter, r *http.Request) (limit, offset int, ok bool) {
+	limit = defaultSearchLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > maxSearchLimit {
+			httpjson.Error(w, http.StatusBadRequest,
+				fmt.Sprintf("limit must be a whole number from 1 to %d", maxSearchLimit))
+			return 0, 0, false
+		}
+		limit = n
+	}
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			httpjson.Error(w, http.StatusBadRequest, "offset must be a whole number of at least 0")
+			return 0, 0, false
+		}
+		offset = n
+	}
+	return limit, offset, true
+}
+
 func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("query")
-	limit := defaultSearchLimit
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			limit = n
-		}
+	limit, offset, ok := parsePage(w, r)
+	if !ok {
+		return
 	}
-	if limit > maxSearchLimit {
-		limit = maxSearchLimit
-	}
-	found, err := h.store.Search(r.Context(), query, limit)
+	// hasMore comes back from the query rather than from anything measured
+	// here: the page's own length answers a different question (see
+	// Store.Search), and taking it for this one is what left the catalog with
+	// no way to say it had been cut short.
+	found, hasMore, err := h.store.Search(r.Context(), query, limit, offset)
 	if err != nil {
 		family.WriteError(w, err)
 		return
@@ -107,7 +149,7 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	for _, i := range found {
 		out = append(out, toAPI(i))
 	}
-	httpjson.Write(w, http.StatusOK, out)
+	httpjson.Write(w, http.StatusOK, apitypes.InstrumentsResponse{Instruments: out, HasMore: hasMore})
 }
 
 // What a face value has to be, in one place, so that the two doors into those

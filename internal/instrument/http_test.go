@@ -2,6 +2,7 @@ package instrument_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -72,6 +73,32 @@ func do(t *testing.T, c *http.Client, method, url, body string) *http.Response {
 	return resp
 }
 
+// catalogPage is GET /api/v1/instruments as a client reads it: an envelope,
+// not the bare array it used to be. Decoded into a hand-written struct rather
+// than into apitypes so that a change to the generated types cannot quietly
+// change what this test asserts about the wire.
+type catalogPage struct {
+	Instruments []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"instruments"`
+	HasMore bool `json:"has_more"`
+}
+
+func searchCatalog(t *testing.T, c *http.Client, url string) catalogPage {
+	t.Helper()
+	resp := do(t, c, "GET", url, "")
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET %s = %d, want 200: %s", url, resp.StatusCode, b)
+	}
+	var page catalogPage
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		t.Fatalf("GET %s: decode: %v", url, err)
+	}
+	return page
+}
+
 func TestInstrumentsCatalog(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -112,41 +139,21 @@ func TestInstrumentsCatalog(t *testing.T) {
 	}
 
 	// search by ticker fragment finds the share
-	resp = do(t, c, "GET", url+"/api/v1/instruments?query=SBER", "")
-	var byTicker []struct {
-		Name string `json:"name"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&byTicker)
-	if resp.StatusCode != 200 || len(byTicker) != 1 || byTicker[0].Name != "Сбербанк" {
-		t.Fatalf("search by ticker = %d, %+v", resp.StatusCode, byTicker)
+	byTicker := searchCatalog(t, c, url+"/api/v1/instruments?query=SBER")
+	if len(byTicker.Instruments) != 1 || byTicker.Instruments[0].Name != "Сбербанк" {
+		t.Fatalf("search by ticker = %+v", byTicker)
 	}
 
 	// search by Cyrillic name fragment finds the share too
-	resp = do(t, c, "GET", url+"/api/v1/instruments?query="+neturl.QueryEscape("Сбер"), "")
-	var byName []struct {
-		Name string `json:"name"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&byName)
-	if resp.StatusCode != 200 || len(byName) != 1 || byName[0].Name != "Сбербанк" {
-		t.Fatalf("search by name = %d, %+v", resp.StatusCode, byName)
+	byName := searchCatalog(t, c, url+"/api/v1/instruments?query="+neturl.QueryEscape("Сбер"))
+	if len(byName.Instruments) != 1 || byName.Instruments[0].Name != "Сбербанк" {
+		t.Fatalf("search by name = %+v", byName)
 	}
 
-	// limit narrows the result set instead of erroring
-	resp = do(t, c, "GET", url+"/api/v1/instruments?limit=1", "")
-	var limited []struct {
-		Name string `json:"name"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&limited)
-	if resp.StatusCode != 200 || len(limited) != 1 {
-		t.Fatalf("search limit=1 = %d, %+v", resp.StatusCode, limited)
-	}
-
-	// a limit above the max is clamped rather than rejected: an oversized
-	// limit is a harmless client detail, not a validation failure.
-	resp = do(t, c, "GET", url+"/api/v1/instruments?limit=999999", "")
-	if resp.StatusCode != 200 {
-		b, _ := io.ReadAll(resp.Body)
-		t.Fatalf("search limit=999999 = %d, want 200 (clamped): %s", resp.StatusCode, b)
+	// limit narrows the result set instead of erroring, and the page says so
+	limited := searchCatalog(t, c, url+"/api/v1/instruments?limit=1")
+	if len(limited.Instruments) != 1 || !limited.HasMore {
+		t.Fatalf("search limit=1 = %+v, want one instrument and has_more true", limited)
 	}
 
 	// patch: freeze the bond
@@ -198,5 +205,91 @@ func TestInstrumentsCatalog(t *testing.T) {
 	if resp = do(t, vera, "POST", url+"/api/v1/instruments",
 		`{"type":"share","name":"X","currency":"RUB"}`); resp.StatusCode != 403 {
 		t.Errorf("vera create = %d, want 403", resp.StatusCode)
+	}
+}
+
+// TestCatalogPagingReachesPastTheFirstPage is #104 at the door a client
+// actually knocks on. The endpoint took no `offset` at all, so an instrument
+// past the ceiling could not be reached by any request that could be made — and
+// the frontend asked for fifty, which put the fifty-first out of reach of
+// everything but a text search of a name nobody had to remember.
+func TestCatalogPagingReachesPastTheFirstPage(t *testing.T) {
+	url, c := newAPI(t)
+
+	// Five instruments, named so that the order they come back in is known.
+	const catalogSize = 5
+	for i := 1; i <= catalogSize; i++ {
+		body := fmt.Sprintf(`{"type":"share","name":"Бумага %02d","currency":"RUB"}`, i)
+		if resp := do(t, c, "POST", url+"/api/v1/instruments", body); resp.StatusCode != 201 {
+			b, _ := io.ReadAll(resp.Body)
+			t.Fatalf("create %d = %d: %s", i, resp.StatusCode, b)
+		}
+	}
+
+	first := searchCatalog(t, c, url+"/api/v1/instruments?limit=2")
+	if len(first.Instruments) != 2 || !first.HasMore {
+		t.Fatalf("first page = %+v, want two instruments and has_more true", first)
+	}
+	if first.Instruments[0].Name != "Бумага 01" || first.Instruments[1].Name != "Бумага 02" {
+		t.Errorf("first page names = %+v, want Бумага 01 and Бумага 02", first.Instruments)
+	}
+
+	// The page nothing could reach before.
+	third := searchCatalog(t, c, url+"/api/v1/instruments?limit=2&offset=4")
+	if len(third.Instruments) != 1 || third.HasMore {
+		t.Fatalf("third page = %+v, want one instrument and has_more false", third)
+	}
+	if third.Instruments[0].Name != "Бумага 05" {
+		t.Errorf("third page = %q, want Бумага 05", third.Instruments[0].Name)
+	}
+
+	// The offset applies to a filtered listing too, not only to the whole
+	// catalog: a query and a page are independent of each other.
+	filtered := searchCatalog(t, c,
+		url+"/api/v1/instruments?query="+neturl.QueryEscape("Бумага")+"&limit=1&offset=2")
+	if len(filtered.Instruments) != 1 || filtered.Instruments[0].Name != "Бумага 03" || !filtered.HasMore {
+		t.Fatalf("filtered page = %+v, want Бумага 03 and has_more true", filtered)
+	}
+}
+
+// TestCatalogRefusesAPageItCannotHonour is #118 on the endpoint where #118 was
+// found. A ceiling the contract states and the server does not apply is not a
+// rule: the clamp this replaces answered a request for 250 as though it had
+// asked for 200, with nothing in the answer saying that the number sent was not
+// the number applied.
+//
+// The bounds are written as literals here — 200 and 1 — rather than read from
+// the handler's constants, because a test that takes both sides of a comparison
+// from the same declaration moves with it and proves nothing.
+func TestCatalogRefusesAPageItCannotHonour(t *testing.T) {
+	url, c := newAPI(t)
+
+	for _, bad := range []string{
+		"?limit=201", // one past the ceiling the contract states
+		"?limit=999999",
+		"?limit=0",
+		"?limit=-1",
+		"?limit=fifty",
+		"?offset=-1",
+		"?offset=half",
+	} {
+		resp := do(t, c, "GET", url+"/api/v1/instruments"+bad, "")
+		if resp.StatusCode != 400 {
+			b, _ := io.ReadAll(resp.Body)
+			t.Errorf("GET /api/v1/instruments%s = %d, want 400: %s", bad, resp.StatusCode, b)
+			continue
+		}
+		var refusal struct {
+			Error string `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&refusal); err != nil || refusal.Error == "" {
+			t.Errorf("GET /api/v1/instruments%s answered 400 with no reason in the body (%v)", bad, err)
+		}
+	}
+
+	// The ceiling itself is accepted: a bound is refused PAST, not AT.
+	atCeiling := searchCatalog(t, c, url+"/api/v1/instruments?limit=200&offset=0")
+	if atCeiling.HasMore {
+		t.Errorf("has_more = true on an empty catalog read at the ceiling")
 	}
 }
