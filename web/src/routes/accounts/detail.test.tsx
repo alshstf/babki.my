@@ -11,7 +11,10 @@ import {
 } from "@tanstack/react-router";
 import "@/i18n";
 import { AccountDetailPage } from "./detail";
-import { ScreenCurrencyCountProvider } from "@/lib/screen-currencies";
+import {
+  ScreenCurrencyCountProvider,
+  useHasMultipleScreenCurrencies,
+} from "@/lib/screen-currencies";
 import { useDisplayCurrency } from "@/lib/display-currency";
 import type { SessionInfo } from "@/api/session";
 import type { AccountWithBalance } from "@/api/accounts";
@@ -198,6 +201,15 @@ function makePositionsBody(
   return { positions, cost_basis_rules: rules, realized_total: realizedTotal };
 }
 
+// Stand-in for the header's display-currency toggle, mounted beside the page
+// under one provider exactly as AppLayout mounts the real one beside its
+// <Outlet/>: visible only when the provider says there is more than one
+// currency on the screen.
+function ToggleProbe() {
+  const visible = useHasMultipleScreenCurrencies();
+  return <div data-testid="toggle">{visible ? "visible" : "hidden"}</div>;
+}
+
 // Renders AccountDetailPage under the route id it reads its params from
 // ("/app/accounts/$accountId", see router.tsx), inside the screen-currency
 // provider AppLayout normally supplies.
@@ -210,6 +222,7 @@ function renderPage(session: SessionInfo = makeSession()) {
     id: "app",
     component: () => (
       <ScreenCurrencyCountProvider>
+        <ToggleProbe />
         <Outlet />
       </ScreenCurrencyCountProvider>
     ),
@@ -547,5 +560,109 @@ describe("AccountDetailPage", () => {
 
     expect(await screen.findByText("Test Corp")).toBeInTheDocument();
     expect(screen.queryByTestId("cost-basis-notice")).not.toBeInTheDocument();
+  });
+
+  // #48. This screen has TWO independent currency reporters — the page itself
+  // (its account and positions) and the operations journal, which owns its own
+  // paginated query and is a child component. Until now nothing exercised the
+  // pair: the provider's merge was covered with synthetic reporters in
+  // lib/screen-currencies.test.tsx, the journal was covered alone in
+  // operations-table.test.tsx with no second reporter in the tree, and every
+  // test on this screen served an empty journal, so its reporter never said
+  // anything at all.
+  //
+  // WHAT THESE TWO PIN is the wiring on the real screen: that each reporter's
+  // set genuinely reaches the mode the OTHER half is drawn in. Deleting either
+  // reporter's contribution turns one of them red.
+  //
+  // WHAT THEY DO NOT PIN is the merge rule itself, and the reason is worth
+  // writing down rather than being discovered again. A counter that replaced
+  // instead of merging would leave only the reporter that spoke LAST, and
+  // which one that is here depends on which of two fetches resolves last —
+  // measured on both fixtures, it is the one carrying two currencies, so both
+  // tests stay green with the merge removed. Making it deterministic is not
+  // available either: a reporter only speaks again when its own set CHANGES,
+  // and the one lever this screen offers for that — the journal's «Показать
+  // еще» — can only add currencies to a set, never take one out.
+  // Replacement is caught, decisively and by four tests, where the reporters
+  // are synthetic and their order is the test's to choose.
+  describe("two currency reporters on one screen", () => {
+    it("keeps the journal's currencies when the page reports only the base one", async () => {
+      // A ruble account, ruble base, no positions: everything the page itself
+      // knows about is one currency. The journal holds a dollar deposit, so
+      // the screen does have something to convert — and only the journal knows
+      // it.
+      serve({
+        "/api/v1/accounts": {
+          body: [
+            makeAccount({
+              currency: "RUB",
+              balance: { as_of: "2026-07-20", amount_minor: 500_000 },
+              balance_in_base: undefined,
+            }),
+          ],
+        },
+        "/positions": {
+          body: makePositionsBody(russia, [], makeRealizedTotal({ by_currency: [] })),
+        },
+        "/operations": {
+          body: {
+            operations: [
+              makeOperation({
+                currency: "USD",
+                amount_minor: 100_00,
+                in_base: {
+                  amount_minor: 785_000,
+                  fee_minor: 0,
+                  currency: "RUB",
+                  rate_on: "2026-07-20",
+                  dated_on: "2026-07-20",
+                },
+              }),
+            ],
+            has_more: false,
+          },
+        },
+        "/api/v1/instruments": { body: { instruments: [], has_more: false } },
+      });
+      storeMode("base");
+
+      renderPage();
+
+      await screen.findByTestId("operation-amount");
+      expect(screen.getByTestId("toggle")).toHaveTextContent("visible");
+      // Not just the toggle: the mode the page settles on is handed down to
+      // the journal, so the row the journal reported for is the row that gets
+      // converted. A count the page overwrote would leave this in dollars.
+      expect(norm(screen.getByTestId("operation-amount").textContent ?? "")).toContain("7 850,00 ₽");
+    });
+
+    it("keeps the page's currencies when the journal reports only the base one", async () => {
+      // The mirror: a dollar account against a ruble base, and a journal
+      // entirely in rubles. The journal's report is the narrower one, and it
+      // must not be able to take the account's dollars off the count.
+      serve({
+        "/api/v1/accounts": { body: [makeAccount()] },
+        "/positions": {
+          body: makePositionsBody(russia, [], makeRealizedTotal({ by_currency: [] })),
+        },
+        "/operations": {
+          body: {
+            operations: [makeOperation({ currency: "RUB", amount_minor: 100_000 })],
+            has_more: false,
+          },
+        },
+        "/api/v1/instruments": { body: { instruments: [], has_more: false } },
+      });
+      storeMode("base");
+
+      renderPage();
+
+      await screen.findByTestId("operation-amount");
+      expect(screen.getByTestId("toggle")).toHaveTextContent("visible");
+      // And the account balance, which is the page's own figure, converts.
+      const balance = screen.getByTestId("account-detail-balance");
+      expect(balance.textContent).toMatch(/\u20bd/);
+    });
   });
 });

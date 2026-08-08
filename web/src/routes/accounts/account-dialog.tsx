@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useSession } from "@/api/session";
+import { COMMON_CURRENCIES } from "@/lib/currencies";
 import {
   useCreateAccount,
   useUpdateAccount,
@@ -35,7 +36,6 @@ const ACCOUNT_TYPES: AccountType[] = [
   "loan",
   "cash",
 ];
-const COMMON_CURRENCIES = ["RUB", "USD", "EUR", "KZT"];
 
 export function AccountDialog({
   open,
@@ -142,9 +142,13 @@ export function AccountDialog({
                 </Select>
               </div>
               <div className="grid gap-2">
-                <Label>{t("accounts.dialog.currency")}</Label>
+                {/* Tied to the control by id, the way the fields above and
+                    below it already are: a bare <Label> beside a Radix trigger
+                    is text near a button and nothing more, so a screen reader
+                    announces this one as an unnamed combobox. */}
+                <Label htmlFor="acc-currency">{t("accounts.dialog.currency")}</Label>
                 <Select value={currency} onValueChange={setCurrency}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="acc-currency"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {COMMON_CURRENCIES.map((code) => (
                       <SelectItem key={code} value={code}>{code}</SelectItem>

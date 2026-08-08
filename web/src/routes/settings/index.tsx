@@ -21,8 +21,8 @@ import { useConnections, type TinvestConnectionStatus } from "@/api/connections"
 import { ApiError } from "@/api/operations";
 import { CostBasisNotice } from "@/components/cost-basis-notice";
 import { countryName } from "@/lib/country";
+import { COMMON_CURRENCIES } from "@/lib/currencies";
 
-const COMMON_CURRENCIES = ["RUB", "USD", "EUR", "KZT"];
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -184,6 +184,32 @@ export function SettingsPage() {
                   ? t("settings.forbidden")
                   : t("app.error")}
               </AlertDescription>
+            </Alert>
+          )}
+          {/* A saved setting has to say so here. Nothing else on this screen
+              does: the fields already held the new values before the request
+              went out, and the only thing that moved afterwards was the Save
+              button greying out — which is also what an unchanged form looks
+              like, and what a form the reader never touched looks like. The
+              settings themselves only become visible somewhere else entirely,
+              on /accounts (#33).
+
+              One neutral sentence, because this condition covers three
+              different saves — currency alone, country alone, or both — and a
+              wording that named a field would be false on two of them. It also
+              stops short of claiming the new figures are already on screen
+              elsewhere: the caches this save invalidates are still refetching
+              at the moment it appears.
+
+              role="status" rather than the Alert's own role="alert": this is
+              confirmation of something the reader just asked for, and screen
+              readers give "alert" the assertive treatment reserved for
+              problems. It is cleared by updateSpace.reset() the moment either
+              field is touched again, so it can never stand over a form that
+              has since changed. */}
+          {updateSpace.isSuccess && (
+            <Alert role="status" data-testid="settings-saved">
+              <AlertDescription>{t("settings.saved")}</AlertDescription>
             </Alert>
           )}
           <div>
