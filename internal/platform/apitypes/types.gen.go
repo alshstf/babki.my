@@ -750,7 +750,7 @@ type Operation struct {
 	// OccurredOn Date YYYY-MM-DD
 	OccurredOn string `json:"occurred_on"`
 
-	// Price Decimal as string
+	// Price Decimal as string: money per unit, denominated in THIS OPERATION'S OWN `currency` — the same currency `amount_minor` and `fee_minor` carry, and never the space's base currency. It is an ANNOTATION rather than a term of any computation: nothing values a trade from it (the engine reads `amount_minor`), so it is never converted and no display-currency mode touches it. That is precisely why a client drawing it beside converted amounts has to name `currency` on the number itself rather than let the neighbouring figures speak for it — in the base-currency mode those figures are roubles while this one is still dollars, and a bare number was read off them (#114). WHERE THE CLAIM COMES FROM, since the column stores no currency of its own: a manually written operation is held to it — `price` × `quantity` is bounded as the same money `amount_minor` is, see CreateOperationRequest.quantity — while the T-Invest import ASSUMES it and names the assumption, the broker sending a price with a currency of its own that the mirror keeps no column for (see tradePrice in internal/importer/tinvest/projection.go).
 	Price nullable.Nullable[string] `json:"price,omitempty"`
 
 	// Quantity Decimal as string

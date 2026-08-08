@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react-query";
 import {
   Outlet,
   RouterProvider,
@@ -34,6 +34,15 @@ function serve(status: number, body: unknown) {
   );
 }
 
+// What a browser with no connection does: fetch rejects and no status is ever
+// read — a failure that carries no answer at all. Separate from serve() above
+// rather than a flag on it, so the two existing callers stay as they read.
+function serveNetworkError() {
+  fetchMock.mockImplementation(() => Promise.reject(new TypeError("Failed to fetch")));
+}
+
+const createButton = () => screen.getByRole("button", { name: "Создать" });
+
 // The page navigates on success (useSetup), which needs a router in context.
 async function fillAndSubmit() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -64,6 +73,10 @@ async function fillAndSubmit() {
 }
 
 afterEach(() => {
+  // react-query's onlineManager is a module-level singleton, so a test that
+  // takes the browser offline has to put it back or every later test in the
+  // run inherits it.
+  onlineManager.setOnline(true);
   fetchMock.mockReset();
 });
 
@@ -89,5 +102,36 @@ describe("SetupPage — which refusal it recognises", () => {
     expect(await screen.findByText(/Не удалось выполнить настройку/)).toBeInTheDocument();
     expect(screen.queryByText(/Инстанс уже настроен/)).toBeNull();
     expect(document.body.textContent).not.toContain("at least 8 characters");
+  });
+});
+
+// Issue #111. This is the only screen a brand-new instance can show, and it was
+// the one mutation in session.ts left on react-query's default networkMode,
+// "online" — which PAUSES a mutation while the browser reports itself offline.
+describe("SetupPage — a browser that reports no connection", () => {
+  it("says so, sends the request anyway, and lets the reader try again", async () => {
+    // Held rather than failed was the whole defect: nothing went out, isError
+    // stayed false so the alert had nothing to show, and isPending stayed true
+    // so the button that would try again was disabled. The reader pressed
+    // «Создать», saw nothing happen and nothing said — and then, whenever the
+    // connection returned, the held request went out and the instance set
+    // itself up on its own, an arbitrary time after anyone asked.
+    onlineManager.setOnline(false);
+    serveNetworkError();
+
+    await fillAndSubmit();
+
+    // The sentence claims nothing about the cause, which is what makes it true
+    // here: «Проверьте поля», the wording until this fix, is a verdict on what
+    // was typed, and the fields are perfectly good on a dead connection.
+    // Compared whole so that reintroducing that clause reddens this.
+    expect(
+      await screen.findByText("Не удалось выполнить настройку. Попробуйте ещё раз"),
+    ).toBeInTheDocument();
+    // Attempted, not held: the browser's own idea of being offline does not get
+    // to decide this one, and it is the request that reports the answer.
+    expect(fetchMock).toHaveBeenCalled();
+    // And the reader can try again — a locked button is the same silence.
+    expect(createButton()).not.toBeDisabled();
   });
 });

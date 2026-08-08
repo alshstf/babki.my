@@ -71,10 +71,35 @@ export function useLogin() {
   });
 }
 
+// useSetup turns a brand-new instance into one with a space and an owner.
+//
+// It runs with networkMode "always" for the reason useLogin and useLogout do,
+// and against the same defect — the one screen that had been left out of it
+// (#111). react-query's default, networkMode "online", PAUSES a mutation while
+// the browser reports itself offline: nothing is sent, nothing fails, isError
+// stays false — so the alert below has nothing to show — and isPending stays
+// true, which disables the button that would try again. The reader presses
+// «Создать», sees nothing happen and nothing said, and cannot tell a dead
+// connection from a slow one. Then, whenever the connection returns, the held
+// request goes out and the instance sets itself up on its own, an arbitrary
+// time after anyone asked — with a space name, a login and a password that
+// were typed for a decision the reader may since have walked away from.
+//
+// Setting an instance up is worth only what it is worth AT THE MOMENT it is
+// asked for, so it is attempted whatever the browser believes about the
+// network — a belief that is wrong behind a captive portal and wrong again on
+// a connection that is up but going nowhere — and a dead connection becomes an
+// ordinary failure the page already knows how to report.
+//
+// The startup gate does read a PAUSED state and say so (see Gate in
+// router.tsx, app.startupOffline), and it is no help here: it gates on the
+// setup-status QUERY, which has already answered by the time this form is on
+// screen. Nothing watches the connection afterwards.
 export function useSetup() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   return useMutation({
+    networkMode: "always",
     mutationFn: async (body: {
       space_name: string;
       username: string;

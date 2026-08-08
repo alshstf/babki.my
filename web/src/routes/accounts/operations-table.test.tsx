@@ -1191,13 +1191,102 @@ describe("OperationsTable", () => {
 
     it("formats the price instead of printing the wire string", async () => {
       // A thousands separator and two fraction digits, as everywhere else a
-      // price is shown (formatPrice, the positions screen's quote). "1234.5"
-      // used to reach the screen exactly as typed here.
+      // price is shown (the positions screen's quote). "1234.5" used to reach
+      // the screen exactly as typed here.
       renderTable({ operations: [trade({ quantity: "1000", price: "1234.5" })] });
 
       const price = await screen.findByTestId("operation-price");
-      expect(norm(price.textContent ?? "")).toBe("1 234,50");
+      expect(norm(price.textContent ?? "")).toBe("1 234,50 ₽");
       expect(price.textContent).not.toContain("1234.5");
+    });
+
+    // Issue #114. The number is money per unit and nothing on the row says in
+    // WHICH money — the amount and the fee beside it convert with the display
+    // toggle and this figure does not, so in the base-currency mode a reader
+    // taking its currency from them takes the wrong one. The four cases the
+    // sign has to be right in are the four tests below.
+    it("names the currency the price is in, so it is not read off the neighbours", async () => {
+      // Case 1: the row's currency and the base currency are the same one, and
+      // nothing on this screen converts. The sign is said all the same — see
+      // the last of these four for why.
+      renderTable({ operations: [trade()], baseCurrency: "RUB", mode: "native" });
+
+      const price = await screen.findByTestId("operation-price");
+      expect(norm(price.textContent ?? "")).toBe("950,00 ₽");
+    });
+
+    it("keeps the price in the operation's currency while the amount beside it is converted", async () => {
+      // Case 2, and the reproduction: base-currency mode, a dollar buy whose
+      // amount the server converted. The amount is roubles, the price is
+      // dollars, and before #114 the price was a bare «950,00» standing under
+      // a rouble figure.
+      renderTable({
+        operations: [
+          trade({
+            currency: "USD",
+            amount_minor: -95_000_00,
+            fee_minor: 95_00,
+            in_base: inBase({
+              amount_minor: -8_550_000_00,
+              fee_minor: 8_550_00,
+              currency: "RUB",
+              rate_on: "2019-03-14",
+              dated_on: "2019-03-14",
+            }),
+          }),
+        ],
+        baseCurrency: "RUB",
+        mode: "base",
+      });
+
+      const price = await screen.findByTestId("operation-price");
+      expect(norm(price.textContent ?? "")).toBe("950,00 $");
+      // The amount really is in the other currency — otherwise this test would
+      // pass with the price labelled from the row's converted figure too.
+      expect(norm(screen.getByTestId("operation-amount").textContent ?? "")).toContain("₽");
+    });
+
+    it("names the operation's currency even where the row could not be converted at all", async () => {
+      // Case 3: base-currency mode, no in_base — the amount falls back to the
+      // row's own currency with a marker. The price is in that same currency,
+      // and it says so for its own reason rather than by agreeing with the
+      // cell beside it.
+      renderTable({
+        operations: [
+          trade({ currency: "USD", amount_minor: -95_000_00, in_base: null, in_base_gap: "no_rate_operation_date" }),
+        ],
+        baseCurrency: "RUB",
+        mode: "base",
+      });
+
+      const price = await screen.findByTestId("operation-price");
+      expect(norm(price.textContent ?? "")).toBe("950,00 $");
+      expect(screen.getByTestId("operation-amount-not-converted")).toBeInTheDocument();
+    });
+
+    it("says the same currency in both display modes", async () => {
+      // Case 4, and the reason the sign is unconditional. A currency that
+      // appeared only where the row's other figures disagreed with it would be
+      // two renderings of one number, each true only in the mode it was last
+      // read in — the decision the positions screen's quote made in #76.
+      const operation = trade({
+        currency: "USD",
+        amount_minor: -95_000_00,
+        in_base: inBase({
+          amount_minor: -8_550_000_00,
+          fee_minor: 0,
+          currency: "RUB",
+          rate_on: "2019-03-14",
+          dated_on: "2019-03-14",
+        }),
+      });
+
+      renderTable({ operations: [operation], baseCurrency: "RUB", mode: "native" });
+      expect(norm((await screen.findByTestId("operation-price")).textContent ?? "")).toBe("950,00 $");
+      cleanup();
+
+      renderTable({ operations: [operation], baseCurrency: "RUB", mode: "base" });
+      expect(norm((await screen.findByTestId("operation-price")).textContent ?? "")).toBe("950,00 $");
     });
 
     it("shows a sub-cent price as itself rather than as a fake zero", async () => {
@@ -1212,18 +1301,25 @@ describe("OperationsTable", () => {
       });
 
       const price = await screen.findByTestId("operation-price");
-      // Compared whole: «0,00» is a substring of the right answer too.
-      expect(norm(price.textContent ?? "")).toBe("0,0025");
+      // Compared whole: «0,00» is a substring of the right answer too. The
+      // significant digits survive the currency sign — one parse decides both,
+      // so #30 cannot be reopened by #114's own fix.
+      expect(norm(price.textContent ?? "")).toBe("0,0025 $");
     });
 
     it("keeps a price it cannot format rather than dropping the number", async () => {
-      // formatPrice answers null for anything outside a plain non-negative
+      // formatPriceIn answers null for anything outside a plain non-negative
       // decimal. Nothing on the wire is supposed to look like this, and if
       // something does, the row still records it: an unstyled number says more
       // than a dash, and hiding it would hide the operation's own data.
       renderTable({ operations: [trade({ price: "1e-12" })] });
 
-      expect((await screen.findByTestId("operation-price")).textContent).toBe("1e-12");
+      const price = await screen.findByTestId("operation-price");
+      expect(price.textContent).toBe("1e-12");
+      // And no currency is put on it: this program could not read the string
+      // as a price at all, so dressing it in a sign would vouch for a value it
+      // never checked.
+      expect(price.textContent).not.toContain("₽");
     });
 
     // FINDING 4 of the caption-truth review: the tooltip lives on the
@@ -1258,7 +1354,9 @@ describe("OperationsTable", () => {
       );
       // And the figure is the money one, untouched — never the percentage,
       // which this screen has no face value to derive and no business deriving.
-      expect(norm(price.textContent ?? "")).toBe("950,00");
+      // A percentage would be denominated in nothing and could carry no sign;
+      // this one is money in the operation's currency and carries it (#114).
+      expect(norm(price.textContent ?? "")).toBe("950,00 ₽");
     });
 
     it("says nothing about bonds over a share", async () => {

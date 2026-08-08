@@ -704,11 +704,17 @@ func projectTrade(row MirrorRow, accountID uuid.UUID, resolved *Resolved, t oper
 // does not keep that currency at all (there is a `price` column and no
 // `price_currency` — migration 0014), so a price quoted in something other
 // than what was paid arrives here indistinguishable from one that was not.
-// The journal's price column is equally currencyless, which is why the same
-// gap is already open against the journal's own screen (#114, a per-unit price
-// shown without its currency). Nothing computed moves either way: the amount
-// is the broker's payment and the engine never reads a price. A person reading
-// the journal does.
+// The journal's price column is equally currencyless, and since #114 the
+// journal's screen PRINTS this assumption rather than leaving it implicit: a
+// per-unit price is drawn with the operation's own currency on it. That is not
+// a new claim, it is this one made visible — the bare number the screen showed
+// before was read as being in whatever currency the converted amounts beside
+// it had landed in, which is this assumption plus an fx conversion nobody
+// applied. Should the mirror ever keep the broker's price currency (there is
+// no `price_currency` column to read today), this is the function that has to
+// compare the two. Nothing computed moves either way: the amount is the
+// broker's payment and the engine never reads a price. A person reading the
+// journal does.
 func tradePrice(row MirrorRow) *decimal.Decimal {
 	if row.Price == nil || !row.Price.IsPositive() {
 		return nil
