@@ -92,7 +92,23 @@ export function SetupPage() {
                     message. There is one other way to a 409 here — two setups
                     racing, where the loser's username was taken a moment ago by
                     the winner — and the sentence holds there too: the instance
-                    is set up, and reloading to sign in is exactly what to do. */}
+                    is set up, and reloading to sign in is exactly what to do.
+
+                    THE OTHER SENTENCE CLAIMS NOTHING ABOUT THE CAUSE, and it
+                    stopped claiming one with #111. It used to add «Проверьте
+                    поля», which reads as a verdict on what was typed; the
+                    failure that fix let through is a dead connection, where
+                    the fields are perfectly good and re-reading them is the
+                    one thing that cannot help. A 400 is the only failure the
+                    old wording was true of, and `valid` below is the server's
+                    own rule set written out — both names non-empty, the
+                    username matching [a-z0-9_]{3,32}, the password at least 8
+                    long (family.Setup and validateCredentials) — so this form
+                    does not submit anything a 400 answers, and reaching one
+                    would mean the two had come apart, which re-reading the
+                    fields does not settle either. What is left is what the
+                    client has actually been told: it did not work, and trying
+                    again is available. */}
                 <AlertDescription>
                   {isConflict(setup.error)
                     ? t("setup.alreadySetUp")

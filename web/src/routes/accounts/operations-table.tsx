@@ -19,7 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { formatPrice, signClass } from "@/lib/money";
+import { formatPriceIn, signClass } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { resolveDisplayAmount } from "@/lib/display-amount";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
@@ -356,10 +356,17 @@ export function OperationsTable({
   //     the grounds this project rejects it everywhere: it is money arithmetic
   //     in the browser (face value × percent, with a rounding decision of its
   //     own), and the journal has no face value on the wire to do it with.
-  //   - Put a currency on the number — «950,00 ₽». Rejected as noise: the
-  //     amount and the fee in this very row already carry the currency, so the
-  //     row reads as money without help, and a price is always denominated in
-  //     the operation's own currency.
+  //   - Put a currency on the number — «950,00 ₽». Rejected then as noise, on
+  //     a premise that does not hold: «the amount and the fee in this very row
+  //     already carry the currency». They carry A currency, and it is this
+  //     number's for certain only in the account-currency display mode. In the
+  //     base-currency one those two convert wherever a rate allows and this
+  //     one never does — it is the price as recorded — so a dollar buy printed
+  //     «305,50» under «-27 495,00 ₽», and the row's own figures were what
+  //     mislabelled it. The bare number was never unlabelled; it was labelled
+  //     by its neighbours, and they are not reliably the right label. That is
+  //     #114, and the number now says its currency itself — see the price cell
+  //     below, which is where the decision lives.
   //   - Name the unit, in the column header and in the cell's own tooltip.
   //     That is this. The header is visible without hovering anything and
   //     settles every row at once — a percentage of face is not «цена за
@@ -574,18 +581,54 @@ export function OperationsTable({
                     <>
                       {operation.quantity} ×{" "}
                       <span data-testid="operation-price">
-                        {/* formatPrice, not the wire string: a thousands
+                        {/* THE CURRENCY IS THE OPERATION'S, and it is on the
+                            number rather than left to the row (#114). The
+                            price is money per unit in Operation.currency —
+                            the currency amount_minor and fee_minor are in,
+                            said so in the contract — and it is published
+                            exactly as recorded: the server publishes no
+                            converted twin for it (OperationInBase carries an
+                            amount and a fee and no price), so no display mode
+                            can convert it and none does. In the base-currency
+                            mode the two cells to the right are therefore
+                            roubles wherever a rate allowed while this one is
+                            still dollars, and a reader taking its currency
+                            from them takes the wrong one.
+
+                            READ OFF THE OPERATION, never off `baseCurrency`
+                            or off the resolved amount beside it: those answer
+                            which currency the row's OTHER figures ended up
+                            in, and that is a different question. On a row the
+                            server could not convert they fall back to this
+                            one's currency and the two agree, for a reason
+                            that has nothing to do with the price — which is
+                            how a client reading them for this answer gets it
+                            right until the day it does not.
+
+                            SAID ON EVERY ROW, not only where the row's other
+                            figures differ from it. A sign that came and went
+                            with the toggle would be two renderings of one
+                            number, each correct only in the mode it was last
+                            read in — the same decision the positions screen's
+                            quote made in #76, and formatPriceIn is the helper
+                            it added.
+
+                            The number itself renders as before: a thousands
                             separator, two fraction digits, and the sub-cent
                             branch that keeps a $0,0025 quote from printing as
-                            «0,00» (#30) — the same rendering the positions
-                            screen gives a price, so one number does not look
-                            like two things on two screens. It answers null for
-                            anything outside a plain non-negative decimal,
-                            which nothing on the wire should be; the raw value
-                            is shown then rather than dropped, because an
-                            unstyled number is still the operation's own datum
-                            and a dash in its place would hide it. */}
-                        {formatPrice(operation.price) ?? operation.price}
+                            «0,00» (#30) — formatPrice and formatPriceIn share
+                            one parse, so a price does not look like two
+                            things on two screens and #30 cannot be reopened
+                            by #114's own fix. Null for anything outside a plain
+                            non-negative decimal, which nothing on the wire
+                            should be; the raw value is shown then rather than
+                            dropped, because an unstyled number is still the
+                            operation's own datum and a dash in its place
+                            would hide it — and it is shown WITHOUT a currency,
+                            since a sign on a string this program could not
+                            read as a price at all would dress up a value it
+                            never checked. */}
+                        {formatPriceIn(operation.price, operation.currency) ?? operation.price}
                       </span>
                     </>
                   ) : (
