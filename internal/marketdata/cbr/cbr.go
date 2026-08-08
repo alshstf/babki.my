@@ -305,11 +305,18 @@ func parseRate(raw string, nominal int, currency string) (decimal.Decimal, error
 	if err != nil {
 		return decimal.Decimal{}, fmt.Errorf("cbr: parse value %q for %s: %w", raw, currency, err)
 	}
-	if nominal == 0 {
-		// Defensive default: every real cbr.ru response sets Nominal, but a
-		// missing element unmarshals to the zero value and would otherwise
-		// divide by zero.
-		nominal = 1
+	if nominal <= 0 {
+		// A missing <Nominal> unmarshals to zero, and substituting 1 for it
+		// would publish a plausible number rather than refuse: the bank quotes
+		// KZT per 100 units and several currencies per 1000 or 10000, so the
+		// substitution inflates those rates by exactly that factor, silently,
+		// into fx_rates and from there into balances, valuations, cost basis
+		// and realized profit. Nothing downstream can tell such a rate from a
+		// real one — it is an ordinary-looking number — which is why this is an
+		// error and not a default. A non-positive nominal is refused by the
+		// same rule: it cannot be a divisor, and inventing one would be the
+		// same lie by another route.
+		return decimal.Decimal{}, fmt.Errorf("cbr: nominal %d for %s: the feed did not say how many units this rate is quoted per", nominal, currency)
 	}
 	return value.Div(decimal.NewFromInt(int64(nominal))), nil
 }
