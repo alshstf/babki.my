@@ -574,8 +574,10 @@ type CostBasisRules struct {
 // CreateAccountRequest defines model for CreateAccountRequest.
 type CreateAccountRequest struct {
 	// Currency ISO-4217 uppercase, e.g. RUB. Three uppercase letters is the SHAPE of a code and it is the whole of what the server checks: it holds no register, so a well-formed code it has never met is accepted, and a lowercase spelling or a currency's name is a 400. It cannot be changed afterwards — UpdateAccountRequest carries no currency — because the balance marks recorded against the account carry no currency of their own and are denominated in this one.
-	Currency    string                                `json:"currency"`
-	Institution *string                               `json:"institution,omitempty"`
+	Currency    string  `json:"currency"`
+	Institution *string `json:"institution,omitempty"`
+
+	// Name What to call the account. Refused EMPTY and nothing more (internal/account/http.go, handleCreate): the server compares against "" and does not trim, so a name of nothing but blanks is accepted. The floor is stated because a client validating against this document should not need a round trip to learn that "" is not a name; no ceiling and no shape are stated because the server checks neither.
 	Name        string                                `json:"name"`
 	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
 	Type        AccountType                           `json:"type"`
@@ -593,17 +595,24 @@ type CreateInstrumentRequest struct {
 	FaceValueMinor nullable.Nullable[int64] `json:"face_value_minor,omitempty"`
 	Figi           *string                  `json:"figi,omitempty"`
 	Isin           *string                  `json:"isin,omitempty"`
-	Name           string                   `json:"name"`
-	Ticker         *string                  `json:"ticker,omitempty"`
-	Type           InstrumentType           `json:"type"`
+
+	// Name What to call the instrument. Refused EMPTY and nothing more (internal/instrument/http.go, handleCreate): the server compares against "" and does not trim. Same floor and same reasoning as CreateAccountRequest.name — see it.
+	Name   string         `json:"name"`
+	Ticker *string        `json:"ticker,omitempty"`
+	Type   InstrumentType `json:"type"`
 }
 
-// CreateMemberRequest defines model for CreateMemberRequest.
+// CreateMemberRequest Adds a family member. Owner-only (403 otherwise). The three rules below are the second door user credentials are written through — internal/family/auth.go, CreateMember — and each of them is the same rule Setup applies, which is why each is declared in both places.
 type CreateMemberRequest struct {
+	// DisplayName What to call the person. Refused EMPTY and nothing more: the server compares against "" and does not trim, so a name of nothing but blanks is accepted here even though the member dialog's own Save button will not offer it.
 	DisplayName string `json:"display_name"`
-	Password    string `json:"password"`
-	Role        Role   `json:"role"`
-	Username    string `json:"username"`
+
+	// Password Same rule as SetupRequest.password — see it, including why the count is in code points and why LoginRequest carries none.
+	Password string `json:"password"`
+	Role     Role   `json:"role"`
+
+	// Username Same rule as SetupRequest.username — see it, including why LoginRequest carries none.
+	Username string `json:"username"`
 }
 
 // CreateOperationRequest defines model for CreateOperationRequest.
@@ -667,7 +676,7 @@ type InBaseGap string
 type Instrument struct {
 	Currency string `json:"currency"`
 
-	// FaceCurrency The currency face_value_minor is denominated in, which need not be the instrument's own currency. Null exactly when face_value_minor is null — see it. An ISO-4217 code, never an empty string: the writes enforce the pattern and a CHECK constraint keeps the empty string out (migration 0012). A face value denominated in nothing is what makes a valuation come back as a bare number with no currency on it.
+	// FaceCurrency The currency face_value_minor is denominated in, which need not be the instrument's own currency. Null exactly when face_value_minor is null — see it. NEVER AN EMPTY STRING, and that is a promise about every row already stored rather than about the next write: a CHECK constraint keeps '' out of this column (migration 0012), which is what makes `minLength: 1` above true of the whole table. It matters because '' does not look like a missing value — it satisfies a presence check and a NOT NULL alike while denominating the face value in nothing, and the valuation then comes back as a bare number with no currency on it. THE ISO-4217 SHAPE IS NOT DECLARED HERE, and the omission is the rule rather than an oversight (#119). Every writer does enforce it — the two HTTP doors (checkFacePair / checkFaceUpdate) and the T-Invest resolver, which creates catalog rows against the store with no handler on its path — but each enforces it separately, no such check predates #93, and migration 0012 states in as many words that it deliberately leaves the SHAPE to the writers and constrains only the emptiness. A row written earlier as "rub" would still be published from this field, and one writer losing the check tomorrow would put a fresh one there. A `pattern` on a request field says what the server will refuse today; the same `pattern` on a response field says no row this API can publish has any other shape, and that is a claim about the database, which nothing here backs. The line is the one already drawn on face_value_minor beside this field, which keeps `minimum: 1` because the same constraint backs it and drops the `maximum` its own write door enforces — and the one drawn for money, where SetBalanceRequest.amount_minor carries the cap and BalancePoint.amount_minor, the same figure coming back, carries none. Where a response CAN make such a claim it does: Operation.source is enumerated precisely because a CHECK constraint closes that column's set.
 	FaceCurrency nullable.Nullable[string] `json:"face_currency,omitempty"`
 
 	// FaceValueMinor What one bond is worth at redemption, in face_currency's minor units. Null for a bond whose face value has not been recorded, and null for anything that is not a bond — the writes refuse the pair on every other type, since a bond is the one instrument whose quote is a percentage of face and the only one for which this field answers anything (see the same field on CreateInstrumentRequest). Rows written before that rule are returned exactly as they stand: no migration clears them, because a face value on a share makes no published figure wrong — a share is valued at the quote's price per unit and this field is never read for one — and discarding a number somebody entered is not a migration's decision. Clearing the pair through PATCH is the repair, and it stays available on any type. Never zero, never negative, and never present without face_currency: the two are written together or not at all, and the writes enforce it (see the same field on CreateInstrumentRequest). Both are backed by the CHECK constraint migration 0012 added on this column, which is why `minimum: 1` above is a guarantee about every row already stored, not merely about what a future write will accept. There is no `maximum` here on purpose: the write doors also refuse a face value too large, because one large enough overflows the very valuation it prices (portfolio.marketValue) and leaves the position unreadable — but that ceiling is a write-time check with no CHECK constraint behind it, so, unlike the floor, it is not a claim this response can make about a row already stored. The same line is already drawn for money elsewhere in this document: SetBalanceRequest.amount_minor carries a maximum and BalancePoint.amount_minor, the same figure coming back, carries none.
@@ -693,7 +702,8 @@ type InstrumentsResponse struct {
 	Instruments []Instrument `json:"instruments"`
 }
 
-// LoginRequest defines model for LoginRequest.
+// LoginRequest NEITHER FIELD CARRIES THE RULE ITS TWIN ON SetupRequest CARRIES, and that is the point of this schema rather than an omission. Login reads the username straight out of the table and compares the password against the hash it finds (internal/family/auth.go, Login); no shape and no length is judged, and every failure — a malformed name, a name nobody has, a wrong password — comes back as the same 401, on purpose, so that a caller cannot enumerate users by the answers it gets.
+// A `pattern` or a `minLength` here would therefore describe a refusal that does not exist, and it would do real harm rather than merely be untrue. The password's own count changed with #117 — from bytes to code points — so a password accepted at setup as fourteen bytes of seven Cyrillic letters is a password `minLength: 8` now describes as too short. Declared here, it would lock that user out through his own client while the server stood ready to let him in. This document states what the server checks, and on this path it checks nothing.
 type LoginRequest struct {
 	Password string `json:"password"`
 	Username string `json:"username"`
@@ -795,12 +805,12 @@ type OperationInBaseGap string
 // OperationType defines model for OperationType.
 type OperationType string
 
-// OperationsResponse One page of an account's journal. It used to be the bare array `operations` still is, which left a reader no way to tell a complete journal from a truncated one: the server clamps `limit` to its ceiling without saying so, and a client that asked for 250 and counted 200 back concluded there was nothing more. At exactly the ceiling the journal therefore presented itself as whole while hiding everything older, and the interface offered no other route to those rows (#86).
+// OperationsResponse One page of an account's journal. It used to be the bare array `operations` still is, which left a reader no way to tell a complete journal from a truncated one: the server clamped `limit` to its ceiling without saying so, and a client that asked for 250 and counted 200 back concluded there was nothing more. At exactly the ceiling the journal therefore presented itself as whole while hiding everything older, and the interface offered no other route to those rows (#86). The clamp itself is gone as of #118 — an over-large `limit` is now refused with 400 — so that particular short page can no longer be produced at all; this envelope stays, because it answers a question a page of the RIGHT length still cannot.
 type OperationsResponse struct {
-	// HasMore Whether the journal holds at least one more entry beyond this page — i.e. at `offset + len(operations)` and later. THE ONLY HONEST ANSWER TO «is that all», and it is the server's to give: the page's own length cannot answer it, because a short page means either the end of the journal or a clamped `limit`, and those are opposite facts. A FLAG RATHER THAN A TOTAL OR A CURSOR. A total would cost a second count of a table the page has already been read from, publish a number no screen shows, and could disagree with the very page it travels with if a row were written in between; the question a reader is actually asking is binary. A cursor would be a second way of saying where to continue beside the `offset` this endpoint already takes and this client already sends, and it would still have to answer this same question separately. It is derived where the decision is made — one row beyond the page is fetched and its arrival IS this answer, after which a statement of its own trims that row away so nothing downstream can mistake it for part of the page — never by comparing the page's length against anything afterwards. False on an empty page, which is the end of the journal (or past it).
+	// HasMore Whether the journal holds at least one more entry beyond this page — i.e. at `offset + len(operations)` and later. THE ONLY HONEST ANSWER TO «is that all», and it is the server's to give. The page's own length cannot answer it: not because a short page is ambiguous — since #118 it is not, a limit past the ceiling being refused rather than clamped — but because a FULL page says nothing either way, and that is the case a «показать ещё» control has to decide. A FLAG RATHER THAN A TOTAL OR A CURSOR. A total would cost a second count of a table the page has already been read from, publish a number no screen shows, and could disagree with the very page it travels with if a row were written in between; the question a reader is actually asking is binary. A cursor would be a second way of saying where to continue beside the `offset` this endpoint already takes and this client already sends, and it would still have to answer this same question separately. It is derived where the decision is made — one row beyond the page is fetched and its arrival IS this answer, after which a statement of its own trims that row away so nothing downstream can mistake it for part of the page — never by comparing the page's length against anything afterwards. False on an empty page, which is the end of the journal (or past it).
 	HasMore bool `json:"has_more"`
 
-	// Operations The page itself, newest first, at most `limit` long — and shorter than `limit` whenever `limit` exceeded the ceiling this endpoint clamps to, which is the case that used to be indistinguishable from reaching the end.
+	// Operations The page itself, newest first, at most `limit` long. Shorter than `limit` only at the end of the journal: an over-large `limit` is refused rather than clamped (#118), so a short page has one meaning — which it did not have when this field was written.
 	Operations []Operation `json:"operations"`
 }
 
@@ -957,12 +967,19 @@ type SetBalanceRequest struct {
 	AsOf string `json:"as_of"`
 }
 
-// SetupRequest defines model for SetupRequest.
+// SetupRequest Creates the first user, the space and the owner membership, and only while the instance has no users at all — a second call is a 409. The four rules below are the ones internal/family/auth.go, Setup applies, and each of them is a 400.
 type SetupRequest struct {
+	// DisplayName What to call the person. Same rule and same reasoning as space_name above: refused empty, not trimmed, no ceiling and no shape.
 	DisplayName string `json:"display_name"`
-	Password    string `json:"password"`
-	SpaceName   string `json:"space_name"`
-	Username    string `json:"username"`
+
+	// Password At least eight CHARACTERS, counted as Unicode code points — which is what `minLength` counts here and what the server counts now. It used to count BYTES while its own refusal said «characters», so a seven-letter Cyrillic password was fourteen bytes and went through, and this document could not state the rule without stating one stricter than the code (#117). The count moved to code points rather than the sentence to bytes, because the sentence is what the person reads. No ceiling is declared because none is checked; the request body as a whole stops at 1 MB, answered 413. NOT DECLARED ON LoginRequest, which checks no length at all — see it.
+	Password string `json:"password"`
+
+	// SpaceName What to call the space. Refused EMPTY and nothing more: a name of one character is accepted, and so is one made of nothing but blanks — the server compares against "" and does not trim. The floor is declared because a client validating against this document should not have to send a request to learn that "" is not a name; the absence of a ceiling and of a shape is equally deliberate, since the server checks neither.
+	SpaceName string `json:"space_name"`
+
+	// Username Lowercase letters, digits and underscore, three to thirty-two of them. That is the WHOLE rule (family.UsernamePattern, applied in validateCredentials), and it is applied at both doors that create a user — here and on CreateMemberRequest — so the pattern is declared at both. Anything else is a 400. Taken already is a 409 rather than a 400: the name is well formed, the conflict is with a row that exists. NOT DECLARED ON LoginRequest, which checks no shape at all — see it.
+	Username string `json:"username"`
 }
 
 // SetupStatus defines model for SetupStatus.
@@ -1245,7 +1262,9 @@ type TransferResponse struct {
 
 // UpdateAccountRequest defines model for UpdateAccountRequest.
 type UpdateAccountRequest struct {
-	Institution *string                               `json:"institution,omitempty"`
+	Institution *string `json:"institution,omitempty"`
+
+	// Name Same rule as on creation — refused empty, not trimmed (internal/account/http.go, handleUpdate). OMITTING the field leaves the name as it stands; that is what a PATCH does with a field it does not carry, and it is a different thing from sending "", which is the refusal this floor states.
 	Name        *string                               `json:"name,omitempty"`
 	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
 	Status      *AccountStatus                        `json:"status,omitempty"`
@@ -1261,8 +1280,10 @@ type UpdateInstrumentRequest struct {
 	Figi           *string                  `json:"figi,omitempty"`
 	Frozen         *bool                    `json:"frozen,omitempty"`
 	Isin           *string                  `json:"isin,omitempty"`
-	Name           *string                  `json:"name,omitempty"`
-	Ticker         *string                  `json:"ticker,omitempty"`
+
+	// Name Same rule as on creation — refused empty, not trimmed (internal/instrument/http.go, handleUpdate). Omitting the field leaves the name as it stands; see UpdateAccountRequest.name.
+	Name   *string `json:"name,omitempty"`
+	Ticker *string `json:"ticker,omitempty"`
 }
 
 // UpdateMemberRequest defines model for UpdateMemberRequest.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/alexedwards/argon2id"
 	"github.com/google/uuid"
@@ -26,7 +27,41 @@ var (
 	ErrUsernameTaken = errors.New("username already taken")
 )
 
-var usernameRe = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
+// UsernamePattern is the shape of a username, as a regular expression source
+// rather than as a compiled one so the contract-site test can compare it against
+// the `pattern` api/openapi.yaml states on the two request schemas that carry a
+// username, and the frontend-site test against the regex literal the two dialogs
+// hold. Exported for the same reason currency.Pattern is: a rule written down in
+// three languages that nothing keeps in step is this codebase's recurring bug.
+//
+// It is NOT declared on LoginRequest, and that is deliberate: Login checks no
+// shape at all (see it), so declaring one there would describe a refusal that
+// does not exist.
+const UsernamePattern = `^[a-z0-9_]{3,32}$`
+
+// MinPasswordRunes is the shortest password the two doors that create a user
+// accept, counted in RUNES.
+//
+// IT USED TO BE COUNTED IN BYTES while the refusal beside it said «characters»,
+// and one of the two was necessarily wrong (#117). The count moved rather than
+// the sentence, because the sentence is what the person reads and because
+// `minLength` in JSON Schema counts characters too — so api/openapi.yaml can now
+// state this floor at all, which with a byte count it could not: «паролям» is
+// seven characters and fourteen bytes, and a document saying `minLength: 8`
+// would have refused what the server took.
+//
+// The interface said the same thing the refusal did, and was wrong in the same
+// way: setup.passwordHint reads «минимум 8 символов». It is true now.
+//
+// Runes rather than bytes therefore makes this door STRICTER, and only for
+// non-ASCII passwords. Nobody is locked out by it: Login never calls
+// validateCredentials — it compares against the stored hash and nothing else —
+// so a password accepted under the old count keeps working for good. What
+// changes is that setting a NEW one now needs eight characters however they are
+// spelled, which is what the refusal has claimed all along.
+const MinPasswordRunes = 8
+
+var usernameRe = regexp.MustCompile(UsernamePattern)
 
 // dummyHash is a precomputed argon2id hash (params: argon2id.DefaultParams,
 // passphrase "dummy-password-for-timing-safety") used to run a real
@@ -51,8 +86,10 @@ func validateCredentials(username, password string) error {
 	if !usernameRe.MatchString(username) {
 		return fmt.Errorf("%w: username must match [a-z0-9_]{3,32}", ErrValidation)
 	}
-	if len(password) < 8 {
-		return fmt.Errorf("%w: password must be at least 8 characters", ErrValidation)
+	// utf8.RuneCountInString, not len: see MinPasswordRunes for why the sentence
+	// below is the rule and the byte count was the bug.
+	if utf8.RuneCountInString(password) < MinPasswordRunes {
+		return fmt.Errorf("%w: password must be at least %d characters", ErrValidation, MinPasswordRunes)
 	}
 	return nil
 }

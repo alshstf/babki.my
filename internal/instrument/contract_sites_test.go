@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -60,7 +61,13 @@ type contractDoc struct {
 	} `yaml:"paths"`
 	Components struct {
 		Schemas map[string]struct {
-			Required []string `yaml:"required"`
+			Required   []string `yaml:"required"`
+			Properties map[string]struct {
+				Pattern   *string `yaml:"pattern"`
+				MinLength *int    `yaml:"minLength"`
+				Minimum   *int    `yaml:"minimum"`
+				Maximum   *int    `yaml:"maximum"`
+			} `yaml:"properties"`
 		} `yaml:"schemas"`
 	} `yaml:"components"`
 }
@@ -167,5 +174,97 @@ func TestTheContractStatesTheCatalogPageIsAnEnvelope(t *testing.T) {
 				"writes it, and a field a client has to treat as optional is a field it will "+
 				"read as false when it is missing", field, schema.Required)
 		}
+	}
+}
+
+// TestTheStoredInstrumentPromisesOnlyWhatTheTableGuarantees is #119, and it is
+// a rule about the DIRECTION a constraint travels rather than about any one
+// keyword.
+//
+// A `pattern` or a floor on a REQUEST field says what the server will refuse
+// today, and the doors are the whole of what makes it true. The same keyword on
+// a RESPONSE field says something much larger: that no row this API can publish
+// has any other shape — a claim about the table, which holds rows written before
+// the doors did, and rows the seed wrote through the store rather than through a
+// handler. Only a database constraint can make such a claim true.
+//
+// Instrument.face_currency carried `^[A-Z]{3}$` and nothing backed it. Every
+// writer does check that shape — the two doors here and the T-Invest resolver,
+// which writes catalog rows against Store with no handler on its path — but
+// each checks it separately, none of them from before #93, and migration 0012
+// says in as many words that it deliberately left the SHAPE to the writers and
+// constrained the emptiness alone. A row written earlier as "rub" would still
+// be published against a pattern promising it could not exist.
+//
+// What replaces it is the part the table really does guarantee. The line is the
+// one already drawn on face_value_minor beside it, which keeps `minimum: 1`
+// (CHECK: face_value_minor > 0) and drops the `maximum` its door alone
+// enforces.
+func TestTheStoredInstrumentPromisesOnlyWhatTheTableGuarantees(t *testing.T) {
+	doc := readContract(t)
+	stored, ok := doc.Components.Schemas["Instrument"]
+	if !ok {
+		t.Fatal("api/openapi.yaml has no Instrument schema")
+	}
+
+	face, ok := stored.Properties["face_currency"]
+	if !ok {
+		t.Fatal("api/openapi.yaml Instrument has no face_currency property")
+	}
+	if face.Pattern != nil {
+		t.Errorf("api/openapi.yaml Instrument.face_currency declares pattern %q, want none (#119): "+
+			"that is a promise about every row already stored, and only the write doors check the "+
+			"shape — migration 0012 constrains this column's emptiness and deliberately not its shape, "+
+			"so a row written before #93 as \"rub\" would be published against it",
+			*face.Pattern)
+	}
+	// The floor IS declarable, because migration 0012's CHECK keeps '' out of
+	// the column. Asserted rather than assumed: dropping the pattern and
+	// declaring nothing at all would lose a guarantee the table really gives.
+	if face.MinLength == nil || *face.MinLength != 1 {
+		t.Errorf("api/openapi.yaml Instrument.face_currency minLength = %s, want 1: "+
+			"migration 0012's CHECK (face_currency <> '') makes that true of every row in the table, "+
+			"and '' is the value that denominates a bond's face in nothing while passing every "+
+			"presence check", shown(face.MinLength))
+	}
+
+	// Its twin, which is the precedent this follows and would be a silent
+	// counter-example if it ever drifted.
+	value, ok := stored.Properties["face_value_minor"]
+	if !ok {
+		t.Fatal("api/openapi.yaml Instrument has no face_value_minor property")
+	}
+	if value.Minimum == nil || *value.Minimum != 1 {
+		t.Errorf("api/openapi.yaml Instrument.face_value_minor minimum = %s, want 1 "+
+			"(migration 0012's CHECK: face_value_minor > 0)", shown(value.Minimum))
+	}
+	if value.Maximum != nil {
+		t.Errorf("api/openapi.yaml Instrument.face_value_minor declares maximum %d, want none: "+
+			"the ceiling is a write-time check with no CHECK constraint behind it, so it is not "+
+			"something this response can say about a row already stored", *value.Maximum)
+	}
+}
+
+// TestTheMigrationStillBacksWhatTheResponsePromises reads the constraint the
+// test above rests its floor on.
+//
+// Without this, `minLength: 1` on a response is tied to a sentence in a comment.
+// Migration 0012 could have its empty-string clause dropped — the whole file
+// could be rewritten — and nothing in this repository would notice that the
+// contract had gone back to promising something about the table that the table
+// no longer enforces. That is #119 in the other direction, and it would be
+// invisible for exactly the same reason the first direction was.
+func TestTheMigrationStillBacksWhatTheResponsePromises(t *testing.T) {
+	const rel = "internal/platform/db/migrations/0012_instruments_face_value_sound.sql"
+	body := string(repoFile(t, rel))
+	// The clause as the migration writes it. Matched as text rather than parsed:
+	// this fails the way a human diff would, and the fix for a reformat is to
+	// teach this test the new spelling rather than to change any declaration.
+	const clause = "face_currency IS NULL OR face_currency <> ''"
+	if !strings.Contains(body, clause) {
+		t.Errorf("%s no longer contains %q. Instrument.face_currency declares minLength: 1, "+
+			"which is a promise about every row in the table and rests on this CHECK; if the "+
+			"constraint was reworded, teach this test its new spelling, and if it was DROPPED, "+
+			"the declaration has to go with it (#119)", rel, clause)
 	}
 }

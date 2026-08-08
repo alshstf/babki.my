@@ -23,16 +23,25 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// defaultListLimit/maxListLimit bound GET .../operations. A limit above
-// maxListLimit is clamped rather than rejected with 400, matching the
-// instrument catalog search: pagination is a best-effort detail, not
-// something a client should get an error for overshooting.
+// defaultListLimit/maxListLimit bound GET .../operations, and they are the
+// figures api/openapi.yaml states as `default` and `maximum` on it
+// (contract_sites_test.go is what keeps the two spellings in step).
 //
-// The clamp is still silent in the sense that nothing names it, and that is
-// now safe because the response says whether anything was left behind
-// (OperationsResponse.has_more). While it did not, a clamped page was
-// indistinguishable from the end of the journal, and the client read it as one
-// — which is why raising this ceiling (#22) was never what #86 needed.
+// A LIMIT ABOVE THE MAXIMUM IS REFUSED, NOT CLAMPED, and this used to say the
+// opposite — that pagination is a best-effort detail a client should not get an
+// error for overshooting, safe to clamp in silence because the envelope says
+// whether anything was left behind. The envelope does say that, and it is what
+// #86 needed; it is not what makes a clamp honest. A ceiling this contract
+// states and this server does not apply is not a rule at all (#118): a
+// schema-aware client would not SEND limit=250 that the server would have
+// answered, and one that sent it anyway was answered as though it had asked for
+// 200 with nothing in the answer saying that the number it sent was not the
+// number applied.
+//
+// The same goes for everything else parsePage now refuses. A limit of 0, of -1,
+// or of "fifty" used to fall through to the default and come back 200 — a page
+// of fifty rows answering a question nobody asked, which is the same silence in
+// a smaller coat. Refusing says it once, in the only channel a client may read.
 const (
 	defaultListLimit = 50
 	maxListLimit     = 200
@@ -852,6 +861,39 @@ func pathAccountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	return id, true
 }
 
+// parsePage reads `limit` and `offset` and enforces the bounds the contract
+// states. See defaultListLimit for why anything outside them is a 400 rather
+// than a quietly different page.
+//
+// It is written the same way as the instrument catalog's parsePage
+// (internal/instrument/http.go) and the importer's
+// (internal/importer/tinvest/http.go) rather than shared with them, for the
+// reason the catalog's own comment gives: what the three have in common is a
+// shape, and what they do not have in common is the numbers. A shared parser
+// would hold one ceiling for all of them, so raising one endpoint's would
+// silently raise the others'.
+func parsePage(w http.ResponseWriter, r *http.Request) (limit, offset int, ok bool) {
+	limit = defaultListLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > maxListLimit {
+			httpjson.Error(w, http.StatusBadRequest,
+				fmt.Sprintf("limit must be a whole number from 1 to %d", maxListLimit))
+			return 0, 0, false
+		}
+		limit = n
+	}
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			httpjson.Error(w, http.StatusBadRequest, "offset must be a whole number of at least 0")
+			return 0, 0, false
+		}
+		offset = n
+	}
+	return limit, offset, true
+}
+
 func pathOperationID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue("operationId"))
 	if err != nil {
@@ -942,27 +984,16 @@ func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit := defaultListLimit
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	if limit > maxListLimit {
-		limit = maxListLimit
-	}
-	offset := 0
-	if raw := r.URL.Query().Get("offset"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
-			offset = n
-		}
+	limit, offset, ok := parsePage(w, r)
+	if !ok {
+		return
 	}
 
 	// hasMore comes back from the query rather than from anything measured
-	// here. The clamp above is silent by design (see maxListLimit), so the page
-	// this handler returns can be shorter than what was asked for while the
-	// journal continues — the case a client comparing lengths reads as the end
-	// of the journal, and the whole of #86.
+	// here. A full page is the case it exists for: the page's own length cannot
+	// say whether the journal continues past it, and a client that took the
+	// length for that answer hid the only control that could have reached the
+	// older rows (#86).
 	ops, hasMore, err := h.store.ListByAccount(r.Context(), p.SpaceID, accountID, limit, offset)
 	if err != nil {
 		family.WriteError(w, err)

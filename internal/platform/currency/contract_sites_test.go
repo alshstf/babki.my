@@ -40,6 +40,13 @@ import (
 // seed wrote through the store rather than through a handler. The contract
 // already draws this line for money: SetBalanceRequest.amount_minor carries the
 // cap and BalancePoint.amount_minor, the same figure coming back, carries none.
+//
+// The document had one counter-example when this list was written —
+// Instrument.face_currency, a RESPONSE field carrying this pattern with nothing
+// but the write doors behind it — and #119 removed it. So the line is now true
+// of every currency in this contract, and the assertion keeping that response
+// field on the right side of it lives in
+// internal/instrument/contract_sites_test.go, beside the migration it rests on.
 var declaredOn = []struct {
 	schema, field string
 	door          string // the code that refuses at that door

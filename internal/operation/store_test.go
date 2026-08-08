@@ -175,9 +175,9 @@ func TestCreateListDelete(t *testing.T) {
 // ещё» button that loads nothing however many times it is pressed. Whether the
 // journal continues is the one thing this method exists to answer and the one
 // thing a caller cannot check for itself, so it refuses instead of answering
-// wrongly. Today's only caller defaults and clamps before it reaches here (see
-// handleListByAccount); this is the precondition being enforced rather than
-// merely written down for the next one.
+// wrongly. Today's only caller defaults and refuses before it reaches here
+// (parsePage, called from handleListByAccount); this is the precondition being
+// enforced rather than merely written down for the next one.
 func TestListByAccountRefusesNonPositiveLimit(t *testing.T) {
 	f := newFixture(t)
 

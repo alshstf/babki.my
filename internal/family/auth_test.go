@@ -75,6 +75,66 @@ func TestSetupValidation(t *testing.T) {
 	}
 }
 
+// TestPasswordLengthIsCountedInCharactersNotBytes is #117's half of the
+// password rule, at both doors that apply it.
+//
+// The refusal has always said «at least 8 characters» and the code counted
+// BYTES, so a seven-letter Cyrillic password was fourteen bytes and went
+// straight through — the server taking what its own sentence said it would
+// not. One of the two had to move, and it was the count (see
+// family.MinPasswordRunes), because the sentence is what the person reads and
+// because a byte count is not something api/openapi.yaml can state at all:
+// `minLength` counts characters, so declaring 8 while the server measured
+// bytes would have made the document refuse what the server accepted.
+//
+// The two literals below are written out, with their byte lengths asserted
+// rather than assumed. Deriving either from utf8.RuneCountInString would take
+// both sides of the comparison from the very function under test, and a test
+// that does that agrees with any counting rule at all.
+func TestPasswordLengthIsCountedInCharactersNotBytes(t *testing.T) {
+	svc, ctx := newService(t)
+
+	// Seven Cyrillic letters. Fourteen bytes — comfortably past a byte count of
+	// eight, which is exactly why it used to be accepted.
+	const sevenChars = "паролям"
+	// Eight of them, and the shortest password this door takes.
+	const eightChars = "паролями"
+	if len(sevenChars) != 14 || len(eightChars) != 16 {
+		t.Fatalf("the fixtures are not what this test is about: len(%q) = %d and len(%q) = %d, want 14 and 16 bytes",
+			sevenChars, len(sevenChars), eightChars, len(eightChars))
+	}
+
+	_, _, err := svc.Setup(ctx, family.SetupParams{
+		SpaceName: "S", Username: "alex", DisplayName: "A", Password: sevenChars,
+	})
+	if !errors.Is(err, family.ErrValidation) {
+		t.Fatalf("Setup with a seven-character password err = %v, want ErrValidation: "+
+			"%q is 7 characters and 14 bytes, and counting the bytes is what let a password "+
+			"the refusal calls too short through the door", err, sevenChars)
+	}
+	// The sentence the person reads, not merely some refusal: naming a count
+	// the code does not apply is the whole of #117.
+	if !strings.Contains(err.Error(), "at least 8 characters") {
+		t.Errorf("Setup refusal = %q, want it to say «at least 8 characters»", err)
+	}
+
+	_, owner, err := svc.Setup(ctx, family.SetupParams{
+		SpaceName: "S", Username: "alex", DisplayName: "A", Password: eightChars,
+	})
+	if err != nil {
+		t.Fatalf("Setup with an eight-character password: %v — the floor is refused BELOW, not AT", err)
+	}
+
+	// The second door applies the same rule; it is a separate call and has its
+	// own history of being forgotten.
+	if _, err := svc.CreateMember(ctx, owner, "kate", "Kate", sevenChars, family.RoleEditor); !errors.Is(err, family.ErrValidation) {
+		t.Errorf("CreateMember with a seven-character password err = %v, want ErrValidation", err)
+	}
+	if _, err := svc.CreateMember(ctx, owner, "kate", "Kate", eightChars, family.RoleEditor); err != nil {
+		t.Errorf("CreateMember with an eight-character password: %v", err)
+	}
+}
+
 func TestCreateMemberRoles(t *testing.T) {
 	svc, ctx := newService(t)
 	_, owner, err := svc.Setup(ctx, family.SetupParams{
