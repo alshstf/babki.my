@@ -215,7 +215,7 @@ function valuationGapTitle(
 // For a BOND the quote is a PERCENTAGE OF FACE VALUE (the MOEX convention):
 // the server publishes q.Price untouched in Position.price, and marketValue()
 // in internal/portfolio/http.go multiplies it as faceValueMinor × price/100 ×
-// quantity. The demo seed's OFZ26238 makes the gap concrete — face value
+// quantity. The demo seed's ОФЗ 26238 makes the gap concrete — face value
 // 1 000,00 ₽, quote 95.20, so one bond is worth 952 ₽ while the line under its
 // ruble valuation reads "95,20". Bare, that is a money figure ten times too
 // small, sitting under a money figure. It gets «%» and NO currency sign: a

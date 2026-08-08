@@ -16,10 +16,7 @@ import { useAccounts } from "@/api/accounts";
 import { usePositions } from "@/api/positions";
 import { formatDate } from "@/lib/dates";
 import { resolveDisplayAmount } from "@/lib/display-amount";
-import {
-  useEffectiveDisplayCurrencyMode,
-  useReportScreenCurrencies,
-} from "@/lib/screen-currencies";
+import { useScreenCurrencies } from "@/lib/screen-currencies";
 import { MoneyCell } from "@/components/money-cell";
 import { CostBasisNotice } from "@/components/cost-basis-notice";
 import { PositionsTable } from "./positions-table";
@@ -50,9 +47,6 @@ export function AccountDetailPage() {
   const isViewer = session?.role === "viewer";
   const [action, setAction] = useState<AddAction | undefined>(undefined);
   const closeAction = () => setAction(undefined);
-  // Effective, not stored: the mode only applies while the header toggle is
-  // on screen to switch it back off (see useEffectiveDisplayCurrencyMode).
-  const mode = useEffectiveDisplayCurrencyMode();
 
   // Reports the currencies in play on this screen so the header's toggle
   // can hide itself when there's nothing to convert (see
@@ -61,10 +55,14 @@ export function AccountDetailPage() {
   // conversion target — see the analogous comment in accounts/index.tsx for
   // why that belongs in the set too). The operations journal reports its own
   // currencies separately — it owns its query, including the "show more"
-  // window — and the provider counts the union of both reports. Must run
-  // unconditionally, before any of the early returns below, per the Rules of
-  // Hooks.
-  useReportScreenCurrencies([
+  // window — and the provider counts the union of both reports, so a mode
+  // this screen settles on from its own set alone can still change once the
+  // journal has spoken. It is handed down to the journal rather than read
+  // there, so the two halves of the screen always print in the same currency.
+  // Effective, not stored: it only applies while the header toggle is on
+  // screen to switch it back off. Must run unconditionally, before any of the
+  // early returns below, per the Rules of Hooks.
+  const mode = useScreenCurrencies([
     ...(account ? [account.currency] : []),
     ...(positions.data?.positions ?? []).map((p) => p.currency),
     ...(baseCurrency ? [baseCurrency] : []),

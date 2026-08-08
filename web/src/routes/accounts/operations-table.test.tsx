@@ -1344,7 +1344,7 @@ describe("OperationsTable", () => {
       // same screen. One word, two quantities, both on screen at once.
       renderTable({
         operations: [trade()],
-        instruments: [makeInstrument({ type: "bond", name: "ОФЗ 26238", ticker: "OFZ26238" })],
+        instruments: [makeInstrument({ type: "bond", name: "ОФЗ 26238", ticker: "SU26238RMFS4" })],
       });
 
       const price = await screen.findByTestId("operation-price");

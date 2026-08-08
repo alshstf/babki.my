@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -90,6 +91,38 @@ func TestSeedDemo(t *testing.T) {
 	opStore := operation.NewStore(pool)
 	instStore := instrument.NewStore(pool)
 
+	// WHAT THE QUOTES JOB WILL ACTUALLY ASK THE EXCHANGE FOR (#35). It sends
+	// the tickers of ListTradable to the provider verbatim (see
+	// marketdata.quotesWorker.Work), and MOEX answers by SECID, so a ticker
+	// that is not a SECID matches no row on any board this application queries
+	// and its instrument is never priced — not today and not ever. On this seed
+	// that read as a broken refresh job rather than as a typo, because SBER and
+	// LKOH beside it updated normally.
+	//
+	// The expected string is written out rather than derived from anything the
+	// seed itself holds, because the literal IS the decision (the same reason
+	// money_test.go spells its wrapped number out in full): it is the
+	// exchange's own security id for ОФЗ 26238, checked against iss.moex.com on
+	// 2026-08-08 — board bonds/TQOB, ISIN RU000A1038V6, SHORTNAME «ОФЗ 26238».
+	// "OFZ26238", which this seed carried until #35, is on none of the four
+	// boards. Nothing else can catch this: no test here may call the exchange.
+	//
+	// The other seeded instruments are foreign papers MOEX does not list at
+	// all, and they keep the tickers their own exchanges use; of the three the
+	// queried exchange can price, this was the only one it could not find.
+	tradable, err := instStore.ListTradable(ctx)
+	if err != nil {
+		t.Fatalf("ListTradable: %v", err)
+	}
+	askable := make([]string, 0, len(tradable))
+	for _, inst := range tradable {
+		askable = append(askable, inst.Ticker)
+	}
+	if !slices.Contains(askable, "SU26238RMFS4") {
+		t.Errorf("the tickers the quotes job would ask for are %v, and MOEX's own id for the demo's bond, %q, is not among them",
+			askable, "SU26238RMFS4")
+	}
+
 	positionsByTicker := func(accountID uuid.UUID) map[string]*portfolio.Position {
 		ops, err := opStore.ListForEngine(ctx, p.SpaceID, accountID)
 		if err != nil {
@@ -112,10 +145,10 @@ func TestSeedDemo(t *testing.T) {
 
 	tbankPositions := positionsByTicker(tbankID)
 	if len(tbankPositions) != 8 {
-		t.Fatalf("Т-Банк positions = %d, want 8 (SBER, LKOH, OFZ26238, FXUS + TSLA, NVDA, INTC and AMZN left closed by their transfers): %+v",
+		t.Fatalf("Т-Банк positions = %d, want 8 (SBER, LKOH, SU26238RMFS4, FXUS + TSLA, NVDA, INTC and AMZN left closed by their transfers): %+v",
 			len(tbankPositions), tbankPositions)
 	}
-	wantQty := map[string]string{"SBER": "300", "OFZ26238": "100", "FXUS": "30", "LKOH": "15"}
+	wantQty := map[string]string{"SBER": "300", "SU26238RMFS4": "100", "FXUS": "30", "LKOH": "15"}
 	for ticker, qty := range wantQty {
 		pos, ok := tbankPositions[ticker]
 		if !ok {
@@ -908,16 +941,16 @@ func TestSeedDemo(t *testing.T) {
 	// web/src/routes/accounts/trade-dialog.tsx). The eurobond above is the
 	// demo's other side of the same coin, where the two currencies differ and
 	// the dialog names the mismatch instead of producing a number.
-	ofz, ok := tbankPositions["OFZ26238"]
+	ofz, ok := tbankPositions["SU26238RMFS4"]
 	if !ok {
-		t.Fatal("missing Т-Банк position OFZ26238 — the seed no longer holds the bond whose price the trade dialog is demonstrated on")
+		t.Fatal("missing Т-Банк position SU26238RMFS4 — the seed no longer holds the bond whose price the trade dialog is demonstrated on")
 	}
 	ofzInst, err := instStore.ByID(ctx, ofz.InstrumentID)
 	if err != nil {
-		t.Fatalf("instrument ByID OFZ26238: %v", err)
+		t.Fatalf("instrument ByID SU26238RMFS4: %v", err)
 	}
 	if ofzInst.FaceValueMinor == nil || ofzInst.FaceCurrency == nil || *ofzInst.FaceCurrency != ofzInst.Currency {
-		t.Fatalf("OFZ26238 face = %v %v against instrument currency %s, want a face value denominated in the instrument's own currency: without that equality the trade dialog refuses the conversion and this row demonstrates nothing",
+		t.Fatalf("OFZ face = %v %v against instrument currency %s, want a face value denominated in the instrument's own currency: without that equality the trade dialog refuses the conversion and this row demonstrates nothing",
 			ofzInst.FaceValueMinor, ofzInst.FaceCurrency, ofzInst.Currency)
 	}
 	// The same two decimal shifts bondPriceFromPercent performs (see
@@ -936,22 +969,22 @@ func TestSeedDemo(t *testing.T) {
 		}
 		ofzBuys++
 		if op.Price == nil || op.Quantity == nil {
-			t.Errorf("OFZ26238 buy has price %v and quantity %v, want both recorded", op.Price, op.Quantity)
+			t.Errorf("OFZ buy has price %v and quantity %v, want both recorded", op.Price, op.Quantity)
 			continue
 		}
 		if !op.Price.Equal(wantOFZPrice) {
-			t.Errorf("OFZ26238 buy price = %s, want %s (95 %% of the seeded face value, in %s): the operation and the comment above it have to say the same thing",
+			t.Errorf("OFZ buy price = %s, want %s (95 %% of the seeded face value, in %s): the operation and the comment above it have to say the same thing",
 				op.Price.String(), wantOFZPrice.String(), ofzInst.Currency)
 			continue
 		}
 		// Quantity × price, which is exactly what the dialog's «Итого» shows
 		// and what it sends as amount_minor.
 		if want := op.Price.Mul(*op.Quantity).Shift(2).Round(0).IntPart(); -op.AmountMinor != want {
-			t.Errorf("OFZ26238 buy amount = %d, want %d (quantity × price)", -op.AmountMinor, want)
+			t.Errorf("OFZ buy amount = %d, want %d (quantity × price)", -op.AmountMinor, want)
 		}
 	}
 	if ofzBuys != 1 {
-		t.Errorf("OFZ26238 buys = %d, want exactly 1 — the arithmetic above is stated for a single purchase", ofzBuys)
+		t.Errorf("OFZ buys = %d, want exactly 1 — the arithmetic above is stated for a single purchase", ofzBuys)
 	}
 
 	// THE DEMO'S QUOTE DATES (#90). A quote's date is the trading SESSION its

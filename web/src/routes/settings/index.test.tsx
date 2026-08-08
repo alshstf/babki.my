@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Outlet,
@@ -14,6 +14,7 @@ import { SettingsPage } from "./index";
 import type { SessionInfo } from "@/api/session";
 import type { CostBasisRules } from "@/api/tax-residencies";
 import type { TinvestConnection } from "@/api/connections";
+import { AccountDialog } from "@/routes/accounts/account-dialog";
 
 // openapi-fetch captures globalThis.fetch at import time
 // (`fetch: baseFetch = globalThis.fetch`), so the double has to be installed
@@ -244,6 +245,99 @@ describe("SettingsPage", () => {
       expect(qc.getQueryState(["operations", "acc-1", 50, 0])?.isInvalidated).toBe(true);
     });
     expect(qc.getQueryState(["positions", "acc-1"])?.isInvalidated).toBe(true);
+  });
+
+  it("says the settings were saved, and stops saying it once the form changes again", async () => {
+    // #33. Nothing else on this screen reports a successful save: the fields
+    // already showed the new values before the request went out, and the Save
+    // button greying out afterwards is indistinguishable from a form nobody
+    // has touched. The settings themselves only become visible on another
+    // screen entirely.
+    serve({
+      "/api/v1/auth/me": { body: makeSession() },
+      "/api/v1/tax-residencies": { body: [RU_RULES, GB_RULES, DE_RULES] },
+      "/api/v1/tinvest/connections": { body: { connections: [] } },
+      "/api/v1/space": { body: makeSession({ base_currency: "USD" }) },
+    });
+
+    wrap(makeSession({ base_currency: "RUB" }));
+
+    fireEvent.click(await screen.findByRole("combobox", { name: "Базовая валюта" }));
+    fireEvent.click(screen.getByText("USD"));
+    expect(screen.queryByTestId("settings-saved")).not.toBeInTheDocument();
+
+    fireEvent.click(saveButton());
+
+    const saved = await screen.findByTestId("settings-saved");
+    expect(saved).toHaveTextContent("Сохранено");
+    // Announced as status, not as an alert: the Alert component's own
+    // role="alert" gets the assertive treatment screen readers reserve for
+    // problems, and this is confirmation of something the reader asked for.
+    expect(saved).toHaveAttribute("role", "status");
+
+    // Touching a field again makes the confirmation false — it would then be
+    // standing over a form holding something else — so it has to go.
+    fireEvent.click(screen.getByRole("combobox", { name: "Базовая валюта" }));
+    fireEvent.click(screen.getByText("EUR"));
+
+    expect(screen.queryByTestId("settings-saved")).not.toBeInTheDocument();
+  });
+
+  it("says nothing about a save that failed", async () => {
+    serve({
+      "/api/v1/auth/me": { body: makeSession() },
+      "/api/v1/tax-residencies": { body: [RU_RULES, GB_RULES, DE_RULES] },
+      "/api/v1/tinvest/connections": { body: { connections: [] } },
+      "/api/v1/space": { status: 500, body: { error: "internal error" } },
+    });
+
+    wrap(makeSession({ base_currency: "RUB" }));
+
+    fireEvent.click(await screen.findByRole("combobox", { name: "Базовая валюта" }));
+    fireEvent.click(screen.getByText("USD"));
+    fireEvent.click(saveButton());
+
+    expect(await screen.findByText("Что-то пошло не так")).toBeInTheDocument();
+    expect(screen.queryByTestId("settings-saved")).not.toBeInTheDocument();
+  });
+
+  // #33. The two selectors that offer a currency — the base currency here and
+  // an account's own in the account dialog — were two identical lists written
+  // out separately. What matters is not which codes they hold, which is a
+  // product decision the owner may change any day, but that ONE decision
+  // reaches both places: a code offered for an account and not for the base
+  // currency leaves a reader holding money the space cannot be totalled in.
+  //
+  // So both lists are read off the RENDERED options and compared with each
+  // other, never with the constant they come from. Comparing either one
+  // against COMMON_CURRENCIES would pass just as happily with a second copy of
+  // the list restored to one of the screens, which is the exact defect.
+  it("offers the same ready-made currencies the account dialog does", async () => {
+    const optionLabels = () =>
+      screen.getAllByRole("option").map((option) => option.textContent ?? "");
+
+    wrap(makeSession({ base_currency: "RUB" }));
+    fireEvent.click(await screen.findByRole("combobox", { name: "Базовая валюта" }));
+    const inSettings = optionLabels();
+    cleanup();
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(["session"], makeSession());
+    render(
+      <QueryClientProvider client={qc}>
+        <AccountDialog open onOpenChange={() => {}} />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole("combobox", { name: "Валюта" }));
+    const inAccountDialog = optionLabels();
+
+    // Both selectors end their list with the same «Другая…» escape hatch, so
+    // the comparison covers the offer as a whole: the ready-made codes, their
+    // order, and the fact that neither list is a limit.
+    expect(inSettings).toEqual(inAccountDialog);
+    expect(inSettings.at(-1)).toBe("Другая…");
+    // Not a tautology of two empty lists.
+    expect(inSettings.length).toBeGreaterThan(1);
   });
 
   it("shows an owner-only message and no form for a non-owner", async () => {

@@ -412,8 +412,29 @@ func seedInstrumentsAndOperations(
 	}{
 		{"SBER", instrument.Instrument{Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB"}},
 		{"LKOH", instrument.Instrument{Type: instrument.TypeShare, Name: "Лукойл", Ticker: "LKOH", Currency: "RUB"}},
-		{"OFZ26238", instrument.Instrument{
-			Type: instrument.TypeBond, Name: "ОФЗ 26238", Ticker: "OFZ26238", Currency: "RUB",
+		// The ticker is the exchange's own security id, "SU26238RMFS4", and not
+		// the "OFZ26238" a person would write. It has to be: the quotes job asks
+		// the provider for the catalog's tickers verbatim and MOEX answers by
+		// SECID (see moex.parseSecurities), so a ticker that is not a SECID
+		// matches no row on any board and the instrument is never priced — not
+		// today and not ever. On this seed that read as a broken refresh job
+		// rather than a typo, because SBER and LKOH beside it updated normally
+		// (#35).
+		//
+		// Checked against iss.moex.com on 2026-08-08: SU26238RMFS4 is on
+		// bonds/TQOB, one of the boards this application queries, quoting
+		// PREVPRICE 54.254 for the session PREVDATE 2026-08-07;
+		// /iss/securities/SU26238RMFS4.json gives its SHORTNAME as «ОФЗ 26238»
+		// and its ISIN as RU000A1038V6. "OFZ26238" is on none of the four
+		// boards.
+		//
+		// Every other instrument below is a foreign paper that MOEX does not
+		// list at all, so those keep the tickers their own exchanges use and
+		// stay on their seeded quotes until this application has a provider that
+		// covers them. Of the three the exchange we do query can price, this was
+		// the only one it could not find.
+		{"SU26238RMFS4", instrument.Instrument{
+			Type: instrument.TypeBond, Name: "ОФЗ 26238", Ticker: "SU26238RMFS4", Currency: "RUB",
 			FaceValueMinor: &faceValue, FaceCurrency: &faceCurrency,
 		}},
 		{"FXUS", instrument.Instrument{Type: instrument.TypeETF, Name: "FinEx FXUS", Ticker: "FXUS", Currency: "USD", Frozen: true}},
@@ -559,7 +580,7 @@ func seedInstrumentsAndOperations(
 		// NVDA and KAZ32EUR below carry no fee, so their own profit comments
 		// are the plain price difference and are unaffected by this.
 		{
-			AccountID: tbank, InstrumentID: inst("OFZ26238"), Type: operation.TypeBuy,
+			AccountID: tbank, InstrumentID: inst("SU26238RMFS4"), Type: operation.TypeBuy,
 			OccurredOn: d("2026-05-12"), Quantity: qty("100"), Price: price("950"),
 			AmountMinor: -9_500_000, FeeMinor: 9_500, Currency: "RUB",
 		},
@@ -792,7 +813,7 @@ func seedInstrumentsAndOperations(
 			AmountMinor: -300_000, Currency: "USD",
 		},
 		{
-			AccountID: tbank, InstrumentID: inst("OFZ26238"), Type: operation.TypeCoupon,
+			AccountID: tbank, InstrumentID: inst("SU26238RMFS4"), Type: operation.TypeCoupon,
 			OccurredOn: d("2026-06-18"), AmountMinor: 354_000, Currency: "RUB",
 		},
 		// NVDA's second parcel, bought at Freedom KZ itself — a month AFTER
@@ -1370,14 +1391,21 @@ func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]
 		return fmt.Errorf("seed fx rates: %w", err)
 	}
 
-	// OFZ26238's price is a percentage of face value (95.20 meaning 95.20%),
+	// The OFZ's price is a percentage of face value (95.20 meaning 95.20%),
 	// same convention as a real bond quote — see portfolio.marketValue. Against
 	// the 95,00 % this position was bought at, that is 952,00 ₽ a bond against
 	// 950,00 ₽ paid; the OFZ buy spells the whole comparison out.
+	//
+	// That comparison describes a freshly seeded instance and only that. The
+	// three Russian rows below — SBER, LKOH and the OFZ — carry tickers the
+	// exchange this application queries actually lists, so the first quotes
+	// refresh on a connected instance writes the exchange's own prices for a
+	// later session and LatestQuotes prefers those from then on. The seeded
+	// figures are where the demo starts, not where it stays.
 	quotes := []marketdata.Quote{
 		{InstrumentID: instIDs["SBER"], On: session, Price: rate("305.50"), Currency: "RUB", Source: "seed"},
 		{InstrumentID: instIDs["LKOH"], On: session, Price: rate("7550.00"), Currency: "RUB", Source: "seed"},
-		{InstrumentID: instIDs["OFZ26238"], On: session, Price: rate("95.20"), Currency: "RUB", Source: "seed"},
+		{InstrumentID: instIDs["SU26238RMFS4"], On: session, Price: rate("95.20"), Currency: "RUB", Source: "seed"},
 		{InstrumentID: instIDs["MSFT"], On: session, Price: rate("510.00"), Currency: "USD", Source: "seed"},
 		// NVDA is quoted at exactly the price the 2026-07-22 sale went off at,
 		// so the surviving parcel is valued at $2 000.00 against a $1 500.00
@@ -1393,7 +1421,7 @@ func seedMarketData(ctx context.Context, pool *pgxpool.Pool, instIDs map[string]
 		// denominated in the face value's currency, which is why marketValue
 		// reads FaceCurrency and not this field (see its doc comment). It is
 		// written as EUR rather than USD so the two say the same thing about
-		// the same bond, the way OFZ26238's RUB quote does above.
+		// the same bond, the way the OFZ's RUB quote does above.
 		{InstrumentID: instIDs["KAZ32EUR"], On: session, Price: rate("98.00"), Currency: "EUR", Source: "seed"},
 		// A price below a hundredth, and the only one in this seed: two fraction
 		// digits would print it as «0,00» (#30). See the WEWKQ buy.

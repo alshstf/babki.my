@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { memo, useState } from "react";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, renderHook, screen } from "@testing-library/react";
 import {
   ScreenCurrencyCountProvider,
-  useEffectiveDisplayCurrencyMode,
   useHasMultipleScreenCurrencies,
   useReportScreenCurrencies,
+  useScreenCurrencies,
 } from "./screen-currencies";
-import { useDisplayCurrency } from "./display-currency";
+import { useDisplayCurrency, type DisplayCurrencyMode } from "./display-currency";
 
 // Stand-in for a screen: reports whatever currency set it's given for as
 // long as it stays mounted.
@@ -187,14 +187,13 @@ describe("screen-currencies", () => {
     expect(screen.getByTestId("toggle")).toHaveTextContent("hidden");
   });
 
-  // The provider's context value must be referentially stable while `count`
-  // is unchanged. It isn't a cosmetic detail: `ctx` is a dependency of
-  // useReportScreenCurrencies' effect, so a fresh object on every render
-  // would tear down and re-run that effect (setting the count to 0 and back)
-  // on every unrelated re-render of AppLayout — and would re-render every
-  // consumer of the context along with it. This test pins that with a
-  // memoized consumer, which re-renders only if the context value's identity
-  // actually changed.
+  // The provider's contexts must be referentially stable while nothing a
+  // reporter said has changed. It isn't a cosmetic detail: the actions object
+  // is a dependency of every reporter's effect, so a fresh one on every render
+  // would tear that effect down and re-run it on every unrelated re-render of
+  // AppLayout — and would re-render every consumer of the context along with
+  // it. This test pins that with a memoized consumer, which re-renders only if
+  // the value's identity actually changed.
   it("does not re-render consumers on an unrelated parent re-render", async () => {
     let consumerRenders = 0;
     const CountingConsumer = memo(function CountingConsumer() {
@@ -229,11 +228,11 @@ describe("screen-currencies", () => {
   });
 });
 
-// Stand-in for a screen's money cells: shows the mode actually applied to
-// them, plus a button that writes the user's stored choice the way the
-// header toggle does.
-function ModeProbe() {
-  const effective = useEffectiveDisplayCurrencyMode();
+// Stand-in for a screen: reports the currencies it draws and shows the mode
+// actually applied to its money cells, plus a button that writes the user's
+// stored choice the way the header toggle does.
+function ModeProbe({ currencies = [] }: { currencies?: string[] }) {
+  const effective = useScreenCurrencies(currencies);
   const { mode, setMode } = useDisplayCurrency();
   return (
     <div>
@@ -244,18 +243,35 @@ function ModeProbe() {
   );
 }
 
-describe("useEffectiveDisplayCurrencyMode", () => {
+// Writes the user's stored choice the way the header toggle does, from
+// outside any component.
+//
+// It goes THROUGH the store rather than writing localStorage directly, and it
+// has to: the store reads localStorage once, when the module is first
+// imported, and a same-tab write fires no `storage` event for it to hear (that
+// event is delivered to other tabs only, by design — see display-currency.ts).
+// A test that seeded the key by hand would therefore be measuring whatever
+// mode the previous test in this file happened to leave behind, and would pass
+// or fail on test ORDER.
+function storeMode(mode: DisplayCurrencyMode) {
+  const { result, unmount } = renderHook(() => useDisplayCurrency());
+  act(() => result.current.setMode(mode));
+  unmount();
+}
+
+describe("useScreenCurrencies", () => {
   afterEach(() => {
     // The display-currency store is module-level and shared across tests in
-    // this file, so put it back the way a fresh page load would find it.
+    // this file, so put it back the way a fresh page load would find it —
+    // both halves of it, since the in-memory value outlives localStorage.
+    storeMode("native");
     window.localStorage.clear();
   });
 
   it("applies the stored base mode while the screen has more than one currency", async () => {
     render(
       <ScreenCurrencyCountProvider>
-        <ModeProbe />
-        <Reporter currencies={["RUB", "USD"]} />
+        <ModeProbe currencies={["RUB", "USD"]} />
       </ScreenCurrencyCountProvider>,
     );
 
@@ -267,8 +283,7 @@ describe("useEffectiveDisplayCurrencyMode", () => {
   it("falls back to native when the screen has fewer than two currencies, keeping the stored choice intact", async () => {
     const { rerender } = render(
       <ScreenCurrencyCountProvider>
-        <ModeProbe />
-        <Reporter currencies={["RUB", "USD"]} />
+        <ModeProbe currencies={["RUB", "USD"]} />
       </ScreenCurrencyCountProvider>,
     );
 
@@ -280,8 +295,7 @@ describe("useEffectiveDisplayCurrencyMode", () => {
     // user is stuck in a mode they can no longer switch off.
     rerender(
       <ScreenCurrencyCountProvider>
-        <ModeProbe />
-        <Reporter currencies={["RUB"]} />
+        <ModeProbe currencies={["RUB"]} />
       </ScreenCurrencyCountProvider>,
     );
     expect(screen.getByTestId("effective")).toHaveTextContent("native");
@@ -291,15 +305,62 @@ describe("useEffectiveDisplayCurrencyMode", () => {
 
     rerender(
       <ScreenCurrencyCountProvider>
-        <ModeProbe />
-        <Reporter currencies={["RUB", "EUR"]} />
+        <ModeProbe currencies={["RUB", "EUR"]} />
       </ScreenCurrencyCountProvider>,
     );
     expect(screen.getByTestId("effective")).toHaveTextContent("base");
   });
 
-  it("is native outside a provider, where no screen can report anything", () => {
-    render(<ModeProbe />);
+  // A screen's own set is not the whole of what it must convert: another
+  // section of the same screen (the operations journal) reports separately,
+  // and the mode the screen hands down to it has to account for that too.
+  it("applies the stored mode when only another section's currencies make the screen multi-currency", async () => {
+    render(
+      <ScreenCurrencyCountProvider>
+        <ModeProbe currencies={["RUB"]} />
+        <Reporter currencies={["USD"]} />
+      </ScreenCurrencyCountProvider>,
+    );
+
+    await act(async () => screen.getByRole("button").click());
+
+    expect(screen.getByTestId("effective")).toHaveTextContent("base");
+  });
+
+  it("is native outside a provider, where the header has no toggle to switch back", () => {
+    // Not a formality: outside a provider the screen still knows its own two
+    // currencies, so an implementation that counted only those would apply
+    // the stored mode here — on a screen whose header cannot render the
+    // control to leave it by.
+    storeMode("base");
+    render(<ModeProbe currencies={["RUB", "USD"]} />);
     expect(screen.getByTestId("effective")).toHaveTextContent("native");
+  });
+
+  // #41. The currency set travels to the provider through an effect, which
+  // runs after the render commits, so a screen that read its mode back out of
+  // the provider could not have it on the render that knew the currencies:
+  // the first frame was drawn in each row's own currency and the next one
+  // converted, and the sums visibly changed under a reader who had asked for
+  // the base currency. Every mode this screen renders with is recorded, not
+  // just the one it settles on, because settling correctly is exactly what
+  // the defect already did.
+  it("renders in the stored mode from its very first frame, never a native one first", () => {
+    storeMode("base");
+    const modes: DisplayCurrencyMode[] = [];
+    function RecordingScreen() {
+      const mode = useScreenCurrencies(["RUB", "USD"]);
+      modes.push(mode);
+      return null;
+    }
+
+    render(
+      <ScreenCurrencyCountProvider>
+        <RecordingScreen />
+      </ScreenCurrencyCountProvider>,
+    );
+
+    expect(modes[0]).toBe("base");
+    expect(modes).not.toContain("native");
   });
 });

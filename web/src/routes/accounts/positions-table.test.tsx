@@ -668,7 +668,7 @@ describe("PositionsTable", () => {
   // of the face value), and that percentage is what the server publishes in
   // Position.price — see marketValue() in internal/portfolio/http.go, where a
   // bond's valuation is faceValueMinor × price/100 × quantity. The demo seed's
-  // OFZ26238 is exactly this: face value 1 000,00 ₽, quote 95.20, so the money
+  // ОФЗ 26238 is exactly this: face value 1 000,00 ₽, quote 95.20, so the money
   // one bond is worth is 952 ₽ and the figure under the valuation is 95,20.
   // Printed bare beside a ruble amount that reading is off by a factor of ten
   // (#32), so the unit is stated. What is NOT done is deriving the 952 ₽:
@@ -689,7 +689,7 @@ describe("PositionsTable", () => {
         id: "instr-bond",
         type: "bond",
         name: "ОФЗ 26238",
-        ticker: "OFZ26238",
+        ticker: "SU26238RMFS4",
         isin: "RU000A1038V6",
         figi: "",
         currency: "RUB",
