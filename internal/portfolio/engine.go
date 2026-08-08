@@ -280,6 +280,20 @@ type Position struct {
 	// there is no term to remove and the sum above is untouched by the
 	// decision.
 	Realizations []Realization
+	// heldALot records that this account has, at some point in this journal,
+	// ACQUIRED the paper — that a lot was created for it, by a purchase or by a
+	// transfer bringing one in. It is fold state and not a fact for a caller, so
+	// it is unexported: nothing outside this package can read it, and the only
+	// thing it decides is whether an amortization is believable (see Compute's
+	// amortization branch).
+	//
+	// It is set by addLot rather than by the branches that call addLot, for the
+	// reason addLot's own doc gives about the queue's order: addLot is the one
+	// door a lot can enter a position through, so a branch added later cannot
+	// create a lot and forget to record that it did. Nothing ever clears it —
+	// selling everything, or transferring everything away, does not un-acquire
+	// what was acquired.
+	heldALot bool
 }
 
 // realize records one disposal and moves the running total by that very event's
@@ -845,6 +859,7 @@ func (p *Position) addLot(qty decimal.Decimal, costMinor int64, acquiredOn *time
 	p.Lots = slices.Insert(p.Lots, at, Lot{Quantity: qty, CostMinor: costMinor, AcquiredOn: acquiredOn})
 	p.Quantity = p.Quantity.Add(qty)
 	p.CostMinor += costMinor
+	p.heldALot = true
 }
 
 // Compute folds the journal into positions. See package doc for semantics.
@@ -1009,6 +1024,49 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			// contain.
 			if o.AmountMinor <= 0 {
 				return nil, badOp(o, "amortization amount must be positive")
+			}
+			// PRINCIPAL CANNOT COME BACK FROM A PAPER THIS ACCOUNT NEVER
+			// ACQUIRED, and until this refusal existed the engine said it did.
+			// With no basis to retire, reduce below is min(amount, 0) = 0, the
+			// realization releases nothing, and PnLMinor is the WHOLE payment:
+			// a mistyped instrument on one amortization credited the account
+			// with a gain of the entire sum, under a position with no shares,
+			// no cost and no purchase anywhere behind it. Nothing on any screen
+			// distinguishes that from a real result, and realized profit is a
+			// figure that goes into a tax return.
+			//
+			// THE TEST IS "WAS THIS PAPER EVER ACQUIRED HERE", not "does the
+			// position hold shares or basis now" (which is what issue #17
+			// proposed). The narrower test is not a weaker version of the
+			// broader one — the broader one refuses journals this program
+			// itself writes, which is the one thing a loud check must never do:
+			//
+			//   - A bond whose basis is fully amortized but which is still
+			//     held: quantity positive, cost 0. Further principal really is
+			//     pure gain there (see Realization), and that case is
+			//     deliberately supported.
+			//   - A bond redeemed on its maturity date with a final partial
+			//     repayment recorded the same day. Within a date the journal
+			//     folds by created_at, so the repayment can land AFTER the
+			//     redemption that emptied the position — quantity 0, cost 0 —
+			//     and the whole account's positions screen would then fail for
+			//     a history the importer wrote from what the broker sent.
+			//
+			// Both of those have a purchase (or an arriving transfer) behind
+			// them, so both pass here. What does not pass is the case the
+			// figure is actually meaningless in: no acquisition of this paper
+			// anywhere in this account's journal.
+			//
+			// A dividend or a coupon on such a paper stays legitimate and is
+			// deliberately not touched: a payment is booked as INCOME, in the
+			// currency it arrived in, and claims nothing about what was paid
+			// for the paper (see Position.IncomeByCurrency — a journal opening
+			// with payments alone is ordinary). An amortization is the one
+			// payment the engine turns into a claim about cost.
+			if !p.heldALot {
+				return nil, badOp(o, fmt.Sprintf(
+					"returns principal on instrument %s, which this account has never acquired: with no purchase behind it the whole payment would be recorded as realized profit; record how the paper was acquired (a buy, or a transfer carrying its basis) first",
+					o.InstrumentID))
 			}
 			reduce := min(o.AmountMinor, p.CostMinor)
 			p.CostMinor -= reduce

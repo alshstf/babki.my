@@ -3,21 +3,53 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  lazyRouteComponent,
   Navigate,
   Outlet,
 } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { useSession, useSetupStatus } from "@/api/session";
-import { LoginPage } from "@/routes/login";
-import { SetupPage } from "@/routes/setup";
 import { AppLayout } from "@/routes/app-layout";
-import { AccountsPage } from "@/routes/accounts";
-import { AccountDetailPage } from "@/routes/accounts/detail";
-import { FamilyPage } from "@/routes/family";
-import { SettingsPage } from "@/routes/settings";
-import { ConnectWizardPage } from "@/routes/settings/connections/connect";
-import { ConnectionDetailPage } from "@/routes/settings/connections/detail";
+
+// EVERY SCREEN IS FETCHED WHEN IT IS FIRST VISITED, not with the application
+// (#15). Built as one file the bundle had passed 660 kB — every dialog of every
+// screen, the whole T-Invest connection wizard and its run log included — and
+// all of it had to arrive before the login form could be drawn. Split by route
+// nobody pays for a screen they do not open, and the first paint carries the
+// gate, the shell and one screen.
+//
+// THE SHELL IS NOT AMONG THEM, deliberately: AppLayout is on the way to every
+// signed-in screen, so deferring it would only add a second round trip in front
+// of the first one that matters. Same for Gate below, which decides which screen
+// to ask for in the first place.
+//
+// lazyRouteComponent rather than React.lazy, because the router is what knows a
+// navigation has started: it loads a route's component as part of matching the
+// route, so the chunk is in hand by the time the screen renders rather than
+// being discovered while React is already drawing. Nothing here turns link
+// preloading on, so a chunk is fetched when a route is actually visited and not
+// when a link happens to be hovered.
+//
+// The second argument names the export, since none of these screens is a
+// default export.
+const LoginPage = lazyRouteComponent(() => import("@/routes/login"), "LoginPage");
+const SetupPage = lazyRouteComponent(() => import("@/routes/setup"), "SetupPage");
+const AccountsPage = lazyRouteComponent(() => import("@/routes/accounts"), "AccountsPage");
+const AccountDetailPage = lazyRouteComponent(
+  () => import("@/routes/accounts/detail"),
+  "AccountDetailPage",
+);
+const FamilyPage = lazyRouteComponent(() => import("@/routes/family"), "FamilyPage");
+const SettingsPage = lazyRouteComponent(() => import("@/routes/settings"), "SettingsPage");
+const ConnectWizardPage = lazyRouteComponent(
+  () => import("@/routes/settings/connections/connect"),
+  "ConnectWizardPage",
+);
+const ConnectionDetailPage = lazyRouteComponent(
+  () => import("@/routes/settings/connections/detail"),
+  "ConnectionDetailPage",
+);
 
 function FullScreenLoader() {
   const { t } = useTranslation();
@@ -240,7 +272,12 @@ const connectionDetailRoute = createRoute({
   component: ConnectionDetailPage,
 });
 
-const routeTree = rootRoute.addChildren([
+// Exported for the test that walks it. The application builds one router from
+// it, right below; a test needs its own, with a history it controls, and it has
+// to be THIS tree rather than a stand-in — the thing being checked is that a
+// screen fetched on demand really arrives, which a hand-built tree of eager
+// components cannot show.
+export const routeTree = rootRoute.addChildren([
   loginRoute,
   setupRoute,
   layoutRoute.addChildren([

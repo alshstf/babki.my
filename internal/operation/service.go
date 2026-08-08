@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/shopspring/decimal"
 
@@ -393,10 +394,15 @@ func validateByType(o Operation) error {
 // through the portfolio engine and reports whether it stays consistent.
 // Candidates in add get CreatedAt = time.Now() before sorting, so within
 // their occurred_on date they sort after any existing operation.
-func (s *Service) checkJournal(ctx context.Context, spaceID, accountID uuid.UUID,
+//
+// It takes the store rather than reading through the Service's own because
+// every caller runs it inside Store.WithAccountsLocked and must read through
+// THAT transaction's store: a journal read on the pool while a decision is being
+// made in a transaction is the very gap the lock was taken to close.
+func checkJournal(ctx context.Context, st *Store, spaceID, accountID uuid.UUID,
 	add []Operation, removeIDs map[uuid.UUID]bool,
 ) error {
-	ops, err := s.store.ListForEngine(ctx, spaceID, accountID)
+	ops, err := st.ListForEngine(ctx, spaceID, accountID)
 	if err != nil {
 		return err
 	}
@@ -609,9 +615,18 @@ func normalizeForStorage(op *Operation) error {
 // Create validates op, checks that appending it keeps the account's journal
 // consistent under the portfolio engine, and persists it.
 //
-// The journal is read once and folded twice: for the check that decides
-// whether the request is accepted, and — with the row as the database actually
-// stored it — for the confirmation that runs inside the write transaction. That
+// THE READ, THE CHECK AND THE WRITE ARE ONE TRANSACTION HOLDING THE ACCOUNT'S
+// JOURNAL LOCK (see Store.WithAccountsLocked). They were three separate steps
+// on the pool until issue #17: two sells of one holding submitted at the same
+// moment each replayed a journal without the other, each was told it fitted,
+// and both were written — leaving a journal that replays for nobody and a
+// positions screen answering 422 for good, out of two requests that were each
+// perfectly fine on their own. Under the lock the second request reads the
+// first one's row and is refused exactly as it would have been a second later.
+//
+// Inside it the journal is read once and folded twice: for the check that
+// decides whether the request is accepted, and — with the row as the database
+// actually stored it — for the confirmation that runs before the commit. That
 // second replay is what makes "what was checked is what was written" a property
 // of the code rather than an argument about rounding: if the two ever diverge
 // again, the write is rolled back on the request that caused it instead of
@@ -624,22 +639,30 @@ func (s *Service) Create(ctx context.Context, spaceID uuid.UUID, op Operation) (
 	if err := validate(op); err != nil {
 		return Operation{}, err
 	}
-	journal, err := s.store.ListForEngine(ctx, spaceID, op.AccountID)
-	if err != nil {
-		return Operation{}, err
-	}
-	if err := checkJournalOps(journal, []Operation{op}, nil); err != nil {
-		return Operation{}, err
-	}
-	created, err := s.store.Create(ctx, spaceID, op, func(stored Operation) error {
-		// Not wrapped in ErrInconsistent: the caller's journal was fine a
-		// moment ago and their request was accepted, so reaching this is a bug
-		// in this program, not something they did. It must read as a server
-		// failure rather than as "your history contradicts itself".
-		if _, err := portfolio.Compute(journalWith(journal, []Operation{stored}, nil)); err != nil {
-			return fmt.Errorf("the operation as stored no longer replays: %v", err)
+	var created Operation
+	err := s.store.WithAccountsLocked(ctx, spaceID, []uuid.UUID{op.AccountID}, func(st *Store) error {
+		journal, err := st.ListForEngine(ctx, spaceID, op.AccountID)
+		if err != nil {
+			return err
 		}
-		return nil
+		if err := checkJournalOps(journal, []Operation{op}, nil); err != nil {
+			return err
+		}
+		created, err = st.Create(ctx, spaceID, op, func(stored Operation) error {
+			// Not wrapped in ErrInconsistent: the caller's journal was fine a
+			// moment ago and their request was accepted, so reaching this is a
+			// bug in this program, not something they did. It must read as a
+			// server failure rather than as "your history contradicts itself".
+			// A COMPETING WRITE can no longer arrive here now that the check runs
+			// under the lock — it is refused by the check above instead. What is
+			// left for this to catch is the fault it was written for: a row the
+			// columns stored differently from the one that was checked.
+			if _, err := portfolio.Compute(journalWith(journal, []Operation{stored}, nil)); err != nil {
+				return fmt.Errorf("the operation as stored no longer replays: %v", err)
+			}
+			return nil
+		})
+		return err
 	})
 	if err != nil {
 		return Operation{}, mapWriteError(err)
@@ -649,6 +672,13 @@ func (s *Service) Create(ctx context.Context, spaceID uuid.UUID, op Operation) (
 
 // CreateTransfer moves an in-kind position between two accounts as an
 // atomic transfer_out/transfer_in pair sharing the moved cost basis.
+//
+// Everything that reads a journal, decides on it or writes runs inside ONE
+// transaction holding BOTH accounts' journal locks (see
+// Store.WithAccountsLocked) — the same closure of the check-then-write window
+// Create takes, and it needs it more: the source's FIFO release is resolved
+// against the journal as it stood on the transfer's date, and a sell landing
+// under that read would leave the pair naming lots that are no longer there.
 func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p TransferParams) (out, in Operation, err error) {
 	if p.FromAccountID == p.ToAccountID {
 		return Operation{}, Operation{}, fmt.Errorf("%w: from and to accounts must differ", family.ErrValidation)
@@ -692,113 +722,127 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 		return Operation{}, Operation{}, err
 	}
 
-	sourceJournal, err := s.store.ListForEngine(ctx, spaceID, p.FromAccountID)
-	if err != nil {
-		return Operation{}, Operation{}, err
-	}
-
-	currency := ""
-	for i := len(sourceJournal) - 1; i >= 0; i-- {
-		o := sourceJournal[i]
-		if o.InstrumentID != nil && *o.InstrumentID == p.InstrumentID {
-			currency = o.Currency
-			break
-		}
-	}
-	if currency == "" {
-		return Operation{}, Operation{}, fmt.Errorf("%w: no source history for instrument", family.ErrValidation)
-	}
-
-	cost := int64(0)
-	var lots []ReleasedLot
-	if p.CostMinorOverride != nil {
-		// A basis given by hand is not a release of anything: there are no
-		// source lots behind it and therefore no acquisition dates to carry.
-		// The destination lot gets no date at all — not the transfer's own —
-		// because a lot's date claims to say when its shares were bought, and
-		// nobody recorded that here (see portfolio.Lot.AcquiredOn and
-		// Compute's TypeTransferIn branch, which is where that lot is actually
-		// built). Inventing pieces, or a date, here would fabricate history.
-		cost = *p.CostMinorOverride
-		if cost < 0 || cost > money.MaxAmountMinor {
-			return Operation{}, Operation{}, fmt.Errorf("%w: cost_minor must be within 0..%d", family.ErrValidation, money.MaxAmountMinor)
-		}
-	} else {
-		// The basis must come from the journal as it stood on the transfer's
-		// own date, not from the end state: a backdated transfer is replayed
-		// by the engine at its chronological place, where the FIFO front is
-		// different. Folding the whole journal here would capture the basis
-		// of lots bought (or left over after sells) *after* the transfer and
-		// mint cost out of thin air. Same-date operations count as preceding,
-		// matching checkJournalOps, where the candidate sorts last within its
-		// own date.
-		//
-		// The pieces are taken, not just their total: the destination needs
-		// the day each one was bought to value it at that day's exchange
-		// rate. The carried basis is then the sum of these very pieces — it
-		// is never computed a second way, so the two cannot drift apart.
-		lots, err = portfolio.ReleasedLots(journalUpTo(sourceJournal, p.OccurredOn), p.InstrumentID, quantity)
+	var cOut, cIn Operation
+	err = s.store.WithAccountsLocked(ctx, spaceID, []uuid.UUID{p.FromAccountID, p.ToAccountID}, func(st *Store) error {
+		sourceJournal, err := st.ListForEngine(ctx, spaceID, p.FromAccountID)
 		if err != nil {
-			return Operation{}, Operation{}, fmt.Errorf("%w: %v", ErrInconsistent, err)
+			return err
 		}
-		// Quantized before the basis is summed, not after: quantizing can merge
-		// a piece too small to store into its neighbour, and the operation's
-		// amount must be the sum of the pieces that are actually written.
-		lots = quantizeLots(lots, quantity)
-		cost = portfolio.LotsCost(lots)
-	}
 
-	outOp := Operation{
-		AccountID: p.FromAccountID, InstrumentID: &p.InstrumentID, Type: TypeTransferOut,
-		OccurredOn: p.OccurredOn, Quantity: &quantity, AmountMinor: cost,
-		Currency: currency, Note: p.Note,
-		// The departing leg carries the breakdown as well, even though only
-		// the arriving one stores it (CreatePair writes in.TransferLots, and
-		// Store.attachTransferLots hands the same rows to both legs at every
-		// later read). It matters here and not merely for symmetry: the engine
-		// releases the lots this breakdown names rather than a fresh FIFO slice
-		// (see portfolio.Position.releaseRecorded), so a candidate without it
-		// is not the row the check below is supposed to be checking.
-		TransferLots: lots,
-	}
-	inOp := Operation{
-		AccountID: p.ToAccountID, InstrumentID: &p.InstrumentID, Type: TypeTransferIn,
-		OccurredOn: p.OccurredOn, Quantity: &quantity, AmountMinor: cost,
-		Currency: currency, Note: p.Note,
-		// The breakdown rides on the arriving leg: its account is the one
-		// that would otherwise lose the acquisition dates. CreatePair writes
-		// it in the same transaction as the pair itself.
-		TransferLots: lots,
-	}
-
-	// The two legs touch different accounts' journals, so each is checked
-	// independently: the source loses the position (checked against its own
-	// history), the destination gains a fresh lot (always consistent on its
-	// own, but checked for uniformity and to catch a same-account edge case
-	// earlier logic might have missed).
-	if err := checkJournalOps(sourceJournal, []Operation{outOp}, nil); err != nil {
-		return Operation{}, Operation{}, err
-	}
-	if err := s.checkJournal(ctx, spaceID, p.ToAccountID, []Operation{inOp}, nil); err != nil {
-		return Operation{}, Operation{}, err
-	}
-
-	// And the same pair once more, as the database actually kept it — the guard
-	// Create has always had for a single operation, now that the departing leg
-	// replays the STORED pieces rather than a fresh slice of the queue (see
-	// portfolio.Position.releaseRecorded). What was checked above is an
-	// in-memory candidate; what every later read of the source account folds is
-	// the row below, with the quantities the columns rounded to. Twice already a
-	// difference between those two was accepted with a 201 and then refused on
-	// every later read by someone else (see quantizeLots and normalizeForStorage),
-	// and the second leg's release is a third way in. Not wrapped in
-	// ErrInconsistent: the caller's journal was fine and their request was
-	// accepted, so reaching this is a bug in this program, not something they did.
-	cOut, cIn, err := s.store.CreatePair(ctx, spaceID, outOp, inOp, func(storedOut, _ Operation) error {
-		if _, err := portfolio.Compute(journalWith(sourceJournal, []Operation{storedOut}, nil)); err != nil {
-			return fmt.Errorf("the transfer as stored no longer replays on the source account: %v", err)
+		currency := ""
+		for i := len(sourceJournal) - 1; i >= 0; i-- {
+			o := sourceJournal[i]
+			if o.InstrumentID != nil && *o.InstrumentID == p.InstrumentID {
+				currency = o.Currency
+				break
+			}
 		}
-		return nil
+		if currency == "" {
+			return fmt.Errorf("%w: no source history for instrument", family.ErrValidation)
+		}
+
+		cost := int64(0)
+		var lots []ReleasedLot
+		if p.CostMinorOverride != nil {
+			// A basis given by hand is not a release of anything: there are no
+			// source lots behind it and therefore no acquisition dates to carry.
+			// The destination lot gets no date at all — not the transfer's own —
+			// because a lot's date claims to say when its shares were bought, and
+			// nobody recorded that here (see portfolio.Lot.AcquiredOn and
+			// Compute's TypeTransferIn branch, which is where that lot is actually
+			// built). Inventing pieces, or a date, here would fabricate history.
+			//
+			// THE DEPARTING LEG CARRIES THIS NUMBER TOO, and it is not the basis
+			// that leaves the source: the engine has no breakdown to release, so
+			// it gives up a fresh FIFO slice of the source's own queue and throws
+			// its cost away (see Compute's transfer_out branch). The two legs are
+			// deliberately not reconciled here — the owner said what the parcel
+			// was worth and the journal does not contradict them — and the API
+			// contract says so on both `TransferRequest.cost_minor` and
+			// `Operation.amount_minor` rather than describing every transfer's
+			// amount as one the queue produced (issue #17).
+			cost = *p.CostMinorOverride
+			if cost < 0 || cost > money.MaxAmountMinor {
+				return fmt.Errorf("%w: cost_minor must be within 0..%d", family.ErrValidation, money.MaxAmountMinor)
+			}
+		} else {
+			// The basis must come from the journal as it stood on the transfer's
+			// own date, not from the end state: a backdated transfer is replayed
+			// by the engine at its chronological place, where the FIFO front is
+			// different. Folding the whole journal here would capture the basis
+			// of lots bought (or left over after sells) *after* the transfer and
+			// mint cost out of thin air. Same-date operations count as preceding,
+			// matching checkJournalOps, where the candidate sorts last within its
+			// own date.
+			//
+			// The pieces are taken, not just their total: the destination needs
+			// the day each one was bought to value it at that day's exchange
+			// rate. The carried basis is then the sum of these very pieces — it
+			// is never computed a second way, so the two cannot drift apart.
+			lots, err = portfolio.ReleasedLots(journalUpTo(sourceJournal, p.OccurredOn), p.InstrumentID, quantity)
+			if err != nil {
+				return fmt.Errorf("%w: %v", ErrInconsistent, err)
+			}
+			// Quantized before the basis is summed, not after: quantizing can merge
+			// a piece too small to store into its neighbour, and the operation's
+			// amount must be the sum of the pieces that are actually written.
+			lots = quantizeLots(lots, quantity)
+			cost = portfolio.LotsCost(lots)
+		}
+
+		outOp := Operation{
+			AccountID: p.FromAccountID, InstrumentID: &p.InstrumentID, Type: TypeTransferOut,
+			OccurredOn: p.OccurredOn, Quantity: &quantity, AmountMinor: cost,
+			Currency: currency, Note: p.Note,
+			// The departing leg carries the breakdown as well, even though only
+			// the arriving one stores it (CreatePair writes in.TransferLots, and
+			// Store.attachTransferLots hands the same rows to both legs at every
+			// later read). It matters here and not merely for symmetry: the engine
+			// releases the lots this breakdown names rather than a fresh FIFO slice
+			// (see portfolio.Position.releaseRecorded), so a candidate without it
+			// is not the row the check below is supposed to be checking.
+			TransferLots: lots,
+		}
+		inOp := Operation{
+			AccountID: p.ToAccountID, InstrumentID: &p.InstrumentID, Type: TypeTransferIn,
+			OccurredOn: p.OccurredOn, Quantity: &quantity, AmountMinor: cost,
+			Currency: currency, Note: p.Note,
+			// The breakdown rides on the arriving leg: its account is the one
+			// that would otherwise lose the acquisition dates. CreatePair writes
+			// it in the same transaction as the pair itself.
+			TransferLots: lots,
+		}
+
+		// The two legs touch different accounts' journals, so each is checked
+		// independently: the source loses the position (checked against its own
+		// history), the destination gains a fresh lot (always consistent on its
+		// own, but checked for uniformity and to catch a same-account edge case
+		// earlier logic might have missed).
+		if err := checkJournalOps(sourceJournal, []Operation{outOp}, nil); err != nil {
+			return err
+		}
+		if err := checkJournal(ctx, st, spaceID, p.ToAccountID, []Operation{inOp}, nil); err != nil {
+			return err
+		}
+
+		// And the same pair once more, as the database actually kept it — the guard
+		// Create has always had for a single operation, now that the departing leg
+		// replays the STORED pieces rather than a fresh slice of the queue (see
+		// portfolio.Position.releaseRecorded). What was checked above is an
+		// in-memory candidate; what every later read of the source account folds is
+		// the row below, with the quantities the columns rounded to. Twice already a
+		// difference between those two was accepted with a 201 and then refused on
+		// every later read by someone else (see quantizeLots and normalizeForStorage),
+		// and the second leg's release is a third way in. Not wrapped in
+		// ErrInconsistent: the caller's journal was fine and their request was
+		// accepted, so reaching this is a bug in this program, not something they did.
+		cOut, cIn, err = st.CreatePair(ctx, spaceID, outOp, inOp, func(storedOut, _ Operation) error {
+			if _, err := portfolio.Compute(journalWith(sourceJournal, []Operation{storedOut}, nil)); err != nil {
+				return fmt.Errorf("the transfer as stored no longer replays on the source account: %v", err)
+			}
+			return nil
+		})
+		return err
 	})
 	if err != nil {
 		return Operation{}, Operation{}, mapWriteError(err)
@@ -818,39 +862,88 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 // this program told. Refusing says who owns the row instead; removing it for
 // real means removing what it is projected from, which goes through the
 // importer's own path (see ApplyImportDelta).
+//
+// IT TAKES THE SAME JOURNAL LOCK THE WRITE PATHS DO, and for the same reason
+// (issue #17 names Create; this is the identical shape). "Would this account
+// still replay without the row" is a question about the journal at a moment, and
+// answering it on the pool let a sell be recorded against the very buy being
+// deleted, each request seeing a journal the other had not touched yet and each
+// being told it was fine. Reading the affected journals under the lock makes the
+// second of the two see the first.
+//
+// The row and its group are read TWICE: once on the pool, only to learn which
+// accounts to lock, and then again inside the lock, where the answers are the
+// ones acted on. The first read decides nothing — a group's legs cannot change
+// accounts, so it can only name too few accounts if the group itself vanished
+// meanwhile, and then the second read finds nothing to delete either.
 func (s *Service) Delete(ctx context.Context, spaceID, id uuid.UUID) error {
-	op, err := s.store.ByID(ctx, spaceID, id)
+	accountIDs, err := s.deletionAccounts(ctx, spaceID, id)
 	if err != nil {
 		return err
 	}
-	if op.Source != "manual" {
-		return fmt.Errorf("%w: imported operations are managed by the importer", family.ErrValidation)
-	}
-
-	accounts := map[uuid.UUID]bool{op.AccountID: true}
-	removeIDs := map[uuid.UUID]bool{op.ID: true}
-	if op.TransferGroupID != nil {
-		// A transfer group's two legs live on two different accounts; both
-		// must be re-validated, and both must be excluded from either
-		// account's replayed journal.
-		group, err := s.store.ByTransferGroup(ctx, spaceID, *op.TransferGroupID)
+	return s.store.WithAccountsLocked(ctx, spaceID, accountIDs, func(st *Store) error {
+		op, err := st.ByID(ctx, spaceID, id)
 		if err != nil {
 			return err
 		}
-		for _, o := range group {
-			accounts[o.AccountID] = true
-			removeIDs[o.ID] = true
+		if op.Source != "manual" {
+			return fmt.Errorf("%w: imported operations are managed by the importer", family.ErrValidation)
 		}
-	}
 
-	for accountID := range accounts {
-		if err := s.checkJournal(ctx, spaceID, accountID, nil, removeIDs); err != nil {
-			return err
+		accounts := map[uuid.UUID]bool{op.AccountID: true}
+		removeIDs := map[uuid.UUID]bool{op.ID: true}
+		if op.TransferGroupID != nil {
+			// A transfer group's two legs live on two different accounts; both
+			// must be re-validated, and both must be excluded from either
+			// account's replayed journal.
+			group, err := st.ByTransferGroup(ctx, spaceID, *op.TransferGroupID)
+			if err != nil {
+				return err
+			}
+			for _, o := range group {
+				accounts[o.AccountID] = true
+				removeIDs[o.ID] = true
+			}
 		}
-	}
 
-	if _, err := s.store.Delete(ctx, spaceID, id); err != nil {
+		for accountID := range accounts {
+			if err := checkJournal(ctx, st, spaceID, accountID, nil, removeIDs); err != nil {
+				return err
+			}
+		}
+
+		_, err = st.Delete(ctx, spaceID, id)
 		return err
+	})
+}
+
+// deletionAccounts names every account Delete has to lock: the row's own, and —
+// when the row is one leg of a transfer — the other leg's as well. It is a read
+// with no decision in it, which is what lets it run outside the lock: locking
+// requires knowing which accounts to lock, and that cannot itself be learned
+// under the lock it is choosing.
+//
+// A row that is already gone yields no accounts and no error. The refusal for
+// that belongs to Delete's own read inside the lock, so that "no such operation"
+// is answered once, by the read whose answer is acted on.
+func (s *Service) deletionAccounts(ctx context.Context, spaceID, id uuid.UUID) ([]uuid.UUID, error) {
+	op, err := s.store.ByID(ctx, spaceID, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
 	}
-	return nil
+	if err != nil {
+		return nil, err
+	}
+	ids := []uuid.UUID{op.AccountID}
+	if op.TransferGroupID == nil {
+		return ids, nil
+	}
+	group, err := s.store.ByTransferGroup(ctx, spaceID, *op.TransferGroupID)
+	if err != nil {
+		return nil, err
+	}
+	for _, o := range group {
+		ids = append(ids, o.AccountID)
+	}
+	return ids, nil
 }
