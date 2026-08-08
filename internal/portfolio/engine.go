@@ -210,10 +210,9 @@ type Position struct {
 	// taking the currency from whichever payment the journal happened to list
 	// first drew a dollar share under a ruble sign in one order and under a
 	// dollar sign in the other.
-	Currency         string
-	Quantity         decimal.Decimal
-	CostMinor        int64 // remaining FIFO cost basis (fees capitalized on buy)
-	RealizedPnLMinor int64
+	Currency  string
+	Quantity  decimal.Decimal
+	CostMinor int64 // remaining FIFO cost basis (fees capitalized on buy)
 	// IncomeByCurrency is what the paper PAID — dividends and coupons received,
 	// less the taxes attributed to this instrument — KEPT PER CURRENCY, ordered
 	// by currency code.
@@ -242,7 +241,22 @@ type Position struct {
 	// no income at all, and a tax on a payment made before this account's
 	// journal begins leaves a negative one.
 	IncomeByCurrency []CurrencyMinor
-	FeesMinor        int64
+	// FeesByCurrency is what holding and trading this paper COST IN CHARGES —
+	// commissions capitalized into a purchase are not here, they are in the
+	// lots — kept per currency and ordered by currency code, exactly as the
+	// income above and for the same reason.
+	//
+	// A commission need not be denominated like the paper. The broker charges
+	// in the currency the money moved in: selling a yuan bond settles in
+	// rubles and the commission on that sale is charged in rubles too. One
+	// int64 for the pair would be the same silent corruption a single income
+	// figure was, so this is the same shape and shares its machinery
+	// (addToCurrencyList writes both).
+	//
+	// A commission on an ACQUISITION never reaches this list: it is added to
+	// the lot's cost, in the position's own currency, which the purchase had
+	// to be denominated in anyway (see Operation.mustMatchPositionCurrency).
+	FeesByCurrency []CurrencyMinor
 	// Lots are the acquisitions still held, ordered by the day each was
 	// ACQUIRED — oldest first — which is the order releases consume them
 	// (FIFO). Not by the order they entered this account: a transfer_in brings
@@ -294,15 +308,72 @@ type Position struct {
 	// selling everything, or transferring everything away, does not un-acquire
 	// what was acquired.
 	heldALot bool
+	// realizedPnLMinor and realizedInOneCurrency are what RealizedPnL returns,
+	// and they are unexported together so that no caller can reach the number
+	// without the answer to whether it is one. See finishRealized, which is the
+	// only thing that writes them.
+	realizedPnLMinor      int64
+	realizedInOneCurrency bool
 }
 
-// realize records one disposal and moves the running total by that very event's
-// result. Doing both here, and only here, is what makes RealizedPnLMinor a
-// CONSEQUENCE of the events instead of a second number kept alongside them —
-// see Position.Realizations for why this package will not keep two.
+// realize records one disposal. It does NOT move a running total: what the
+// disposals add up to is decided once, at the end of the fold, by
+// finishRealized — see there for why it cannot be decided here.
 func (p *Position) realize(r Realization) {
 	p.Realizations = append(p.Realizations, r)
-	p.RealizedPnLMinor += r.PnLMinor()
+}
+
+// RealizedPnL is what the position's closed deals came to, and whether that is
+// a figure at all.
+//
+// THE SECOND RESULT IS FALSE WHEN A DISPOSAL SETTLED IN ANOTHER CURRENCY, and
+// then there is no number to publish IN ANY CURRENCY — which is what makes this
+// unlike income and fees, and why those are lists and this is not. A yuan bond
+// redeemed for rubles has proceeds in rubles and a basis in yuan, and their
+// difference is not a quantity of either one: converting it needs a rate, the
+// engine holds none by design, and the only honest thing this package can do is
+// say so and let the layer that does hold rates strike the figure from the
+// disposals themselves (see Realization, which records what each was made of
+// for exactly that purpose).
+//
+// A position with no disposals returns 0 and true. Nothing was realized, and
+// nought is the whole of it — an answer, not an absence.
+func (p *Position) RealizedPnL() (minor int64, inOneCurrency bool) {
+	return p.realizedPnLMinor, p.realizedInOneCurrency
+}
+
+// finishRealized settles what RealizedPnL reports, once, after the whole
+// journal has been folded.
+//
+// IT CANNOT BE DONE WHILE FOLDING, and the reason is Position.Currency: until
+// the fold ends that field may still be provisional and may still change (see
+// its own doc), so a disposal compared against it mid-walk could be judged to
+// match a currency the position turns out not to be in. Deciding it here means
+// the comparison is against the final answer, whatever order the journal
+// happened to list its entries in.
+//
+// The addition is guarded for the reason addToCurrencyList's is: every term is
+// an ordinary figure and a total of ordinary figures need not be, and a wrapped
+// int64 is a plausible sum of the wrong magnitude and often the wrong sign.
+func (p *Position) finishRealized() error {
+	var sum int64
+	for _, r := range p.Realizations {
+		if r.Currency != p.Currency {
+			// One is enough: the total is not expressible, and a sum of the
+			// rest would be a figure smaller than the truth wearing the name
+			// of the whole.
+			p.realizedPnLMinor, p.realizedInOneCurrency = 0, false
+			return nil
+		}
+		next, err := money.Add(sum, r.PnLMinor())
+		if err != nil {
+			return fmt.Errorf("%w: realized result of instrument %s in %s, adding %d to %d",
+				err, p.InstrumentID, p.Currency, r.PnLMinor(), sum)
+		}
+		sum = next
+	}
+	p.realizedPnLMinor, p.realizedInOneCurrency = sum, true
+	return nil
 }
 
 // findIncome locates a currency in IncomeByCurrency by a binary search over the
@@ -315,10 +386,39 @@ func (p *Position) realize(r Realization) {
 // answer rather than two that must agree, and the ordering is written down
 // once. A position holds a handful of currencies at most, so this is for the
 // invariant and not for speed.
-func (p *Position) findIncome(currency string) (int, bool) {
-	return slices.BinarySearchFunc(p.IncomeByCurrency, currency, func(e CurrencyMinor, c string) int {
+func findInCurrencyList(list []CurrencyMinor, currency string) (int, bool) {
+	return slices.BinarySearchFunc(list, currency, func(e CurrencyMinor, c string) int {
 		return strings.Compare(e.Currency, c)
 	})
+}
+
+// addToCurrencyList books minor units into a per-currency list, keeping it
+// ordered by currency code with one entry per currency. It is the only thing
+// that writes IncomeByCurrency and FeesByCurrency, so the two lists cannot
+// drift into different orders or different notions of "an entry".
+//
+// what names the total for the error message; money.Add names no figure by
+// design, and "which total overflowed" is the part a reader needs.
+func addToCurrencyList(list []CurrencyMinor, currency string, minor int64, what string) ([]CurrencyMinor, error) {
+	at, found := findInCurrencyList(list, currency)
+	if !found {
+		return slices.Insert(list, at, CurrencyMinor{Currency: currency, Minor: minor}), nil
+	}
+	sum, err := money.Add(list[at].Minor, minor)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s in %s, adding %d to %d", err, what, currency, minor, list[at].Minor)
+	}
+	list[at].Minor = sum
+	return list, nil
+}
+
+// minorInCurrencyList is one currency's entry, and zero when the list has none.
+func minorInCurrencyList(list []CurrencyMinor, currency string) int64 {
+	at, found := findInCurrencyList(list, currency)
+	if !found {
+		return 0
+	}
+	return list[at].Minor
 }
 
 // addIncome books minor units of income in the currency they arrived in. It is
@@ -340,18 +440,23 @@ func (p *Position) findIncome(currency string) (int, bool) {
 // a currency seen for the first time is simply inserted, its amount being an
 // int64 already — so a refused payment leaves the slice exactly as it found it.
 func (p *Position) addIncome(currency string, minor int64) error {
-	at, found := p.findIncome(currency)
-	if !found {
-		p.IncomeByCurrency = slices.Insert(p.IncomeByCurrency, at, CurrencyMinor{Currency: currency, Minor: minor})
-		return nil
-	}
-	sum, err := money.Add(p.IncomeByCurrency[at].Minor, minor)
+	list, err := addToCurrencyList(p.IncomeByCurrency, currency, minor, "income")
 	if err != nil {
-		// money.Add names no figure by design, so the context that says WHICH
-		// total failed is added here.
-		return fmt.Errorf("%w: income in %s, adding %d to %d", err, currency, minor, p.IncomeByCurrency[at].Minor)
+		return err
 	}
-	p.IncomeByCurrency[at].Minor = sum
+	p.IncomeByCurrency = list
+	return nil
+}
+
+// addFee books minor units of commission in the currency it was charged in. It
+// is addIncome's twin in every way — see FeesByCurrency for what a fee in
+// another currency is and why it is not an error.
+func (p *Position) addFee(currency string, minor int64) error {
+	list, err := addToCurrencyList(p.FeesByCurrency, currency, minor, "fees")
+	if err != nil {
+		return err
+	}
+	p.FeesByCurrency = list
 	return nil
 }
 
@@ -364,11 +469,14 @@ func (p *Position) addIncome(currency string, minor int64) error {
 // have to say which currency it is in; it is not "the position's income" unless
 // the position received income in nothing else.
 func (p *Position) IncomeMinorIn(currency string) int64 {
-	at, found := p.findIncome(currency)
-	if !found {
-		return 0
-	}
-	return p.IncomeByCurrency[at].Minor
+	return minorInCurrencyList(p.IncomeByCurrency, currency)
+}
+
+// FeesMinorIn is the commission charged in one currency, and zero when none was
+// charged in it. IncomeMinorIn's twin, and the same caution applies: a caller
+// publishing this has to say which currency it is in.
+func (p *Position) FeesMinorIn(currency string) int64 {
+	return minorInCurrencyList(p.FeesByCurrency, currency)
 }
 
 func badOp(o Operation, msg string) error {
@@ -423,11 +531,32 @@ type Realization struct {
 	// and it dates NONE of the released basis — those days are the pieces' own.
 	OccurredOn time.Time
 	// ProceedsMinor is what came in: a sale's amount, an amortization's returned
-	// principal. Positive, in the position's currency.
+	// principal. Positive.
 	ProceedsMinor int64
+	// Currency is what the proceeds and the fee arrived in — NOT necessarily
+	// the currency the released basis is in, which is the position's.
+	//
+	// A yuan bond redeemed for rubles is the case this field exists for, and it
+	// is ordinary rather than damaged: the issuer settles in rubles at the day's
+	// rate while the bonds were bought for yuan. The two ends of the result then
+	// have different currencies and the difference between them is a quantity of
+	// neither, which is why the difference is not computed here at all — the
+	// terms are kept, dated and denominated, and whoever holds fx rates strikes
+	// the figure (see Position.RealizedPnL and the handler's realizedTerms).
+	//
+	// An AMORTIZATION always repeats the position's currency and cannot do
+	// otherwise: it retires basis BY AMOUNT, so how much of a yuan basis a ruble
+	// payment retires would have to be answered with a rate — and the answer
+	// would then live on in the remaining basis, changing every later result for
+	// that bond. A sale has no such problem: what it retires is decided by the
+	// QUANTITY sold, and the queue gives up the same parcels whatever currency
+	// the money arrived in. That asymmetry is the whole of why one is accepted
+	// and the other refused (see Operation.mustMatchPositionCurrency).
+	Currency string
 	// FeeMinor is what this disposal cost to make, valued at the same day as
-	// the proceeds. Zero for an amortization: the engine attributes no fee to
-	// one anywhere (see the amortization branch in Compute).
+	// the proceeds and denominated in Currency alongside them. Zero for an
+	// amortization: the engine attributes no fee to one anywhere (see the
+	// amortization branch in Compute).
 	FeeMinor int64
 	// Released is the basis given up, one piece per source lot, in the order
 	// the queue gave them up (see ReleasedLot). An amortization's pieces carry
@@ -913,7 +1042,7 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			p = &Position{InstrumentID: *o.InstrumentID, Currency: o.Currency}
 			positions[*o.InstrumentID] = p
 		}
-		if !o.Type.mustMatchPositionCurrency() {
+		if !o.mustMatchPositionCurrency() {
 			// While unsettled, and only there. Past that point this field is
 			// the currency of CostMinor, of the lots and of FeesMinor, and a
 			// payment arriving in a lower-coded one would rename those figures
@@ -973,7 +1102,9 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			// lot never aliases the journal entry it came from.
 			boughtOn := o.OccurredOn
 			p.addLot(*o.Quantity, -o.AmountMinor+o.FeeMinor, &boughtOn)
-			p.FeesMinor += o.FeeMinor
+			if err := p.addFee(o.Currency, o.FeeMinor); err != nil {
+				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
+			}
 		case TypeSell:
 			if o.AmountMinor <= 0 {
 				return nil, badOp(o, "sell amount must be positive")
@@ -985,10 +1116,13 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			p.realize(Realization{
 				OccurredOn:    o.OccurredOn,
 				ProceedsMinor: o.AmountMinor,
+				Currency:      o.Currency,
 				FeeMinor:      o.FeeMinor,
 				Released:      pieces,
 			})
-			p.FeesMinor += o.FeeMinor
+			if err := p.addFee(o.Currency, o.FeeMinor); err != nil {
+				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
+			}
 		case TypeDividend, TypeCoupon, TypeTax:
 			// In the currency the payment ARRIVED in, which need not be the one
 			// the paper is priced in — see Position.IncomeByCurrency. A tax
@@ -1004,7 +1138,10 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 			}
 		case TypeFee:
-			p.FeesMinor += -o.AmountMinor // amount negative → positive fee
+			// Amount negative → positive fee, in the currency it was charged in.
+			if err := p.addFee(o.Currency, -o.AmountMinor); err != nil {
+				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
+			}
 		case TypeAmortization:
 			// Return of principal: it retires cost basis, and in THIS currency
 			// only the excess over what is left of that basis is a result.
@@ -1073,6 +1210,7 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			p.realize(Realization{
 				OccurredOn:    o.OccurredOn,
 				ProceedsMinor: o.AmountMinor,
+				Currency:      o.Currency,
 				Released:      drainLotsCost(p, reduce),
 			})
 		case TypeTransferOut:
@@ -1144,6 +1282,14 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			p.applySplit(*o.SplitRatio)
 		default:
 			return nil, badOp(o, "type not applicable to instrument operations")
+		}
+	}
+	// The disposals are added up only now: Position.Currency is final at last,
+	// and until it is, no disposal can be judged to be in it (see
+	// finishRealized).
+	for _, p := range positions {
+		if err := p.finishRealized(); err != nil {
+			return nil, err
 		}
 	}
 	return positions, nil

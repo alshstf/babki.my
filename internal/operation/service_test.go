@@ -582,7 +582,7 @@ func TestTransferSameDayBoundary(t *testing.T) {
 //
 //	costReleased := totalProceeds - totalRealizedPnL - totalFees
 //
-// but the engine computes RealizedPnLMinor as exactly
+// but the engine computes RealizedPnL as exactly
 // `proceeds - released - fee` (internal/portfolio/engine.go, TypeSell), so
 // algebraically totalProceeds - totalRealizedPnL - totalFees ≡ released,
 // for ANY value the engine used internally as "released" — correct or

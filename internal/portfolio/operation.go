@@ -58,45 +58,66 @@ func (t Type) RequiresInstrument() bool {
 	return false
 }
 
-// mustMatchPositionCurrency reports whether an operation of this type has to be
-// denominated in the currency of the position it touches — and, by the same
-// token, settles that currency when nothing has settled it yet (see Compute's
-// get, which is the only caller).
+// mustMatchPositionCurrency reports whether this entry has to be denominated in
+// the currency of the position it touches — and, by the same token, settles that
+// currency when nothing has settled it yet (see Compute's get, which is the only
+// caller).
 //
-// TRUE FOR EVERYTHING THAT MOVES COST, QUANTITY OR FEES. A buy and a
-// transfer_in add a lot, a sell, a transfer_out and an amortization retire one,
-// a split rewrites quantities, and a fee lands in FeesMinor. Every one of those
-// figures is a single int64 of minor units, so two currencies inside it is
-// nonsense no rounding can rescue and no reader could detect.
+// THE QUESTION IT ANSWERS IS WHETHER THIS ENTRY PUTS MONEY INTO A FIGURE THAT
+// HOLDS ONE CURRENCY. Those figures are CostMinor, the cost of a lot, and the
+// basis a disposal retires: each is a single int64 of minor units, and two
+// currencies inside one is nonsense no rounding can rescue and no reader could
+// detect. Everything else about a position is kept per currency or per event,
+// and has nothing for a second currency to corrupt.
 //
-// FALSE FOR DIVIDEND, COUPON AND TAX, which produce nothing but income — and
-// income is kept per currency (see Position.IncomeByCurrency), so there is no
-// single int64 for a second currency to corrupt. This is what lets a yuan bond
-// pay its coupons in rubles and a dollar share pay its dividend, and have its
-// tax withheld, in rubles: the broker converts on the day of the payment, the
-// paper stays priced in its own currency, and both facts are recorded as they
-// happened instead of one of them being refused.
+// FALSE FOR DIVIDEND, COUPON AND TAX, which produce nothing but income, kept per
+// currency (Position.IncomeByCurrency). This is what lets a yuan bond pay its
+// coupons in rubles and a dollar share pay its dividend, and have its tax
+// withheld, in rubles: the broker converts on the day of the payment, the paper
+// stays priced in its own currency, and both facts are recorded as they happened
+// instead of one of them being refused.
 //
-// THE FEE IS ON THE STRICT SIDE DELIBERATELY, even though a commission is no
-// more part of an acquisition than a tax is. FeesMinor is one number in the
-// position's currency and is published as such, so admitting a second currency
-// there is a change to that figure and to everything showing it — not an
-// exemption from this rule. A commission charged in another currency therefore
-// stays a visible refusal, which is also what the T-Invest importer already
-// counts on when it keeps such a commission off the instrument
-// (tinvest.tradeCommission).
+// FALSE FOR A FEE, which is kept per currency too (Position.FeesByCurrency). It
+// used to be strict, on the argument that the fee total was one number in the
+// position's currency — which was true of the figure and is no longer, because
+// the figure is a list now. The commission charged in rubles on the sale of a
+// yuan bond is the case: refusing it lost the whole sale over a charge of four
+// rubles, and capitalizing it into a yuan basis would have been worse.
+//
+// FALSE FOR A SALE, and this is the one that needs the argument. Its proceeds
+// and its fee go to a Realization, which carries its own currency
+// (Realization.Currency), and what it retires is decided by the QUANTITY sold —
+// the queue gives up the same parcels of the same basis whatever currency the
+// money arrived in. So nothing of a sale reaches a single-currency figure, and
+// it need not settle the position's currency either: a sale can only ever follow
+// an acquisition that already did (with nothing acquired there is nothing to
+// release, and the engine refuses it for that instead).
+//
+// TRUE FOR AN AMORTIZATION, which looks like a sale and is not. It retires basis
+// BY AMOUNT, so a ruble payment against a yuan basis would need a rate to say how
+// much of it was retired — and that rate would live on in the REMAINING basis,
+// changing every later figure for that bond. A refusal naming that is honest; a
+// rate invented here would not be.
+//
+// TRUE FOR ANYTHING THAT MOVES NO MONEY AT ALL — false, rather. A transfer whose
+// basis is zero, a split, an entry with nothing in its amount, its fee or its
+// carried lots: there is no sum for its currency to be wrong about. This is what
+// admits the securities transfer that arrives with no cost attached, which the
+// broker denominates in the paper's own currency while the receiving account
+// holds it in another, and which was refused for years over a number that is
+// nought either way.
 //
 // The types the engine never folds into a position — deposit, withdrawal,
-// interest, conversion — answer true and it costs nothing: a conversion is
-// skipped before this is reached and the rest are refused by type moments
-// later. What the default buys is that a type added to the enum later is
+// interest, conversion — answer by the money rule and it costs nothing: a
+// conversion is skipped before this is reached and the rest are refused by type
+// moments later. What the default buys is that a type added to the enum later is
 // treated strictly until somebody decides otherwise.
-func (t Type) mustMatchPositionCurrency() bool {
-	switch t {
-	case TypeDividend, TypeCoupon, TypeTax:
+func (o Operation) mustMatchPositionCurrency() bool {
+	switch o.Type {
+	case TypeDividend, TypeCoupon, TypeTax, TypeFee, TypeSell:
 		return false
 	}
-	return true
+	return o.AmountMinor != 0 || o.FeeMinor != 0 || LotsCost(o.TransferLots) != 0
 }
 
 // Operation is one journal entry. AmountMinor is the signed cash effect on

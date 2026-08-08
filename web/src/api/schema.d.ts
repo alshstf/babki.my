@@ -895,8 +895,11 @@ export interface components {
             quantity: string;
             /** Format: int64 */
             cost_minor: number;
-            /** Format: int64 */
-            realized_pnl_minor: number;
+            /**
+             * Format: int64
+             * @description Realized profit or loss in the position's own `currency`. NULL EXACTLY WHEN A DISPOSAL SETTLED IN ANOTHER CURRENCY THAN THE BASIS IT RETIRED, and then there is no figure to publish in any currency at all: a yuan bond redeemed for rubles has proceeds in rubles and a basis in yuan, and the difference between them is a quantity of neither — striking it needs an fx rate, which the calculating core holds none of by design. That null is therefore NOT the news that something is unknown or that a rate is missing: every term is present and dated, and it is the single-currency ANSWER that does not exist. It has exactly one cause, so no companion field names it. This is the one thing the money kept per currency (`income_by_currency`, and the fee total) does not have an equivalent of: income in a second currency is still income in that currency and can be listed, while a result whose two ends are in different currencies belongs to neither list. THE RESULT IS NOT LOST WITH THE FIGURE: `in_base.realized_pnl_minor` converts each disposal's proceeds, fee and every retired parcel at that term's own date AND out of that term's own currency, so a row carrying that object publishes the whole result as one number — and a position whose own currency already IS the base currency but which sold into a third one carries that object for this reason alone. `RealizedTotal.by_currency` applies the same rule one level up: a currency whose bucket contains such a position publishes a null rather than the sum of the rest of it.
+             */
+            realized_pnl_minor: number | null;
             /**
              * Format: int64
              * @description Income denominated in the position's own `currency`, AND ONLY THAT: the dividends and coupons that arrived in `currency`, less the taxes withheld in `currency`. IT IS ONE TERM OF `income_by_currency` — that list's entry for `currency`, and 0 when the list holds no entry for it — never a summary of the list, and a reader who takes this field for «the position's income» is shown an incomplete answer on every position paid in more than one currency. It is published beside `currency` and rendered under that sign, which is the whole reason it can carry nothing else: adding another currency's minor units into it would denominate the result in nothing, and converting them needs a rate this object neither has nor publishes. A paper's payments need not arrive in the currency it was bought in — a yuan bond's coupons and a dollar share's dividend, tax included, routinely come in rubles from a Russian broker — so on such a position this field is a plain 0: true to the minor unit, and by itself indistinguishable on screen from a paper that has never paid anything. `income_by_currency` beside it is the complete answer with nothing converted; `in_base.income_minor` is the complete answer as ONE number, every payment converted at the rate of its own date, and it exists only where that object does.
@@ -904,7 +907,10 @@ export interface components {
             income_minor: number;
             /** @description The position's income KEPT PER CURRENCY, and the complete answer to what this paper has paid: one entry per currency the payments actually arrived in, ordered by currency code. NOTHING IS CONVERTED AND NO TWO ENTRIES ARE EVER ADDED — the calculating core holds no fx rates by design (see portfolio.Position.IncomeByCurrency), and one integer made of kopecks and fen is denominated in nothing; `in_base.income_minor` is where this becomes a single figure, each payment converted at the rate of its own date. The order is the server's own and is a property of the money rather than of the journal: two accounts holding the same payments recorded in a different order publish the same list. `income_minor` above is this list's entry for `currency` alone — one of these terms, not their sum. EMPTY EXACTLY WHEN THE POSITION HAS RECEIVED NO INCOME AT ALL, which is what tells that apart from an entry of 0: a coupon and its tax cancelling exactly is not the statement that nothing was ever paid. */
             income_by_currency: components["schemas"]["PositionCurrencyIncome"][];
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Commissions charged on this position IN THE POSITION'S OWN `currency`, and only those — the same rule `income_minor` states, applied to the fee total. A commission need not be denominated like the paper: selling a yuan bond settles in rubles and the broker charges its commission in rubles too, and such a charge is NOT in this figure. Unlike the income there is no `fees_by_currency` beside it, so that charge is not published anywhere in this payload; it is stated here rather than left for a reader to discover from a total that does not add up against the operations. Commissions on a PURCHASE never appear here at all in the first place — they are capitalized into the lot's cost and are part of `cost_minor` (and a purchase must be denominated in `currency`, so they raise no second-currency question).
+             */
             fees_minor: number;
             currency: string;
             /**
@@ -992,9 +998,9 @@ export interface components {
             currency: string;
             /**
              * Format: int64
-             * @description Sum of Position.realized_pnl_minor over every position denominated in `currency`. Exact: the terms are int64 minor units of one and the same currency, so nothing is converted and nothing is rounded here
+             * @description Sum of Position.realized_pnl_minor over every position denominated in `currency`. Exact: the terms are int64 minor units of one and the same currency, so nothing is converted and nothing is rounded here. NULL WHEN ANY POSITION IN THE BUCKET HAS NO SUCH FIGURE — one that sold into another currency, see Position.realized_pnl_minor — because a sum quietly missing one of its terms is an invented number, smaller or larger than the truth and indistinguishable from a real one on the same screen. The bucket is still listed: the currency has positions and the reader should see it, with a null where a total would be a lie. `in_base` is unaffected and normally still present, since a disposal in another currency converts perfectly well term by term.
              */
-            realized_pnl_minor: number;
+            realized_pnl_minor: number | null;
         };
         /** @description What an account's closed deals have locked in, added up over all its positions — the account-level twin of Position.realized_pnl_minor and Position.in_base.realized_pnl_minor. The server adds it rather than the client for the same reason it adds the balances on the accounts screen: a figure the interface shows is computed in one place, so the policy behind it (what rounds, what a gap suppresses, which positions count) can change in one place and every reader agrees on the answer. Both forms are always published, because the client cannot know which one a screen is about to show and the choice is a display preference, not a fact about the money. */
         RealizedTotal: {

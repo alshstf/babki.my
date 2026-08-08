@@ -1223,8 +1223,8 @@ func TestProjectedOperationsFoldThroughTheEngine(t *testing.T) {
 	if rubPos.Quantity.String() != "0" {
 		t.Errorf("quantity = %s, want 0 — a hundred bought and a hundred sold", rubPos.Quantity)
 	}
-	if rubPos.FeesMinor != 1761 {
-		t.Errorf("fees_minor = %d, want 1761 — 8.25 on the purchase and 9.36 on the sale", rubPos.FeesMinor)
+	if rubPos.FeesMinorIn(rubPos.Currency) != 1761 {
+		t.Errorf("fees_minor = %d, want 1761 — 8.25 on the purchase and 9.36 on the sale", rubPos.FeesMinorIn(rubPos.Currency))
 	}
 	if got := rubPos.IncomeMinorIn("RUB"); got != 135075 {
 		t.Errorf("income in RUB = %d, want 135075 — the gross dividend", got)
@@ -1248,8 +1248,8 @@ func TestProjectedOperationsFoldThroughTheEngine(t *testing.T) {
 	if usdPos.CostMinor != 120050 {
 		t.Errorf("cost_minor = %d, want 120050", usdPos.CostMinor)
 	}
-	if usdPos.FeesMinor != 0 {
-		t.Errorf("fees_minor = %d, want 0 — the commission is another currency's money", usdPos.FeesMinor)
+	if usdPos.FeesMinorIn(usdPos.Currency) != 0 {
+		t.Errorf("fees_minor = %d, want 0 — the commission is another currency's money", usdPos.FeesMinorIn(usdPos.Currency))
 	}
 }
 
