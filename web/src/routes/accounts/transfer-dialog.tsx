@@ -87,9 +87,22 @@ export function TransferDialog({
     );
   };
 
+  // The same defect #23 found in the trade dialog, on the endpoint next door,
+  // and fixed here because the contract now states the shared rule out loud
+  // (see /api/v1/operations/transfer in api/openapi.yaml): 409 says a replay
+  // refused and nothing finer. «Недостаточно бумаг для переноса» named one cause
+  // of several — a currency that does not match the position's, a stored FIFO
+  // breakdown that no longer matches the history it is replayed against, a
+  // journal that already did not compute — and it named the wrong ACCOUNT half
+  // the time as well: both journals are replayed, so the row refused can be one
+  // on the receiving side, which has nothing to do with what the source holds.
+  //
+  // A sentence of its own rather than operations.conflict's, because the fact IS
+  // different here: two accounts, and no telling which of them the refusal came
+  // from.
   const errorMessage = createTransfer.isError
     ? isConflict(createTransfer.error)
-      ? t("transfer.oversell")
+      ? t("transfer.conflict")
       : t("app.error")
     : null;
 

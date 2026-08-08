@@ -23,6 +23,11 @@ const fetchMock = vi.hoisted(() => {
 // once and only asynchronously, so it has to be taken as the call happens.
 let posted: Record<string, unknown> | null = null;
 
+// What POST /api/v1/operations answers with. 201 for every test that is about
+// the form itself; the refusal tests below set it to the status they are about,
+// which is the only thing the dialog is allowed to branch on (see isConflict).
+let operationStatus = 201;
+
 // Every request gets a FRESH Response built inside the implementation:
 // a single Response object handed to mockResolvedValue would work once and
 // then throw on the second read, because a body can only be consumed once.
@@ -46,6 +51,18 @@ function serve(instruments: Instrument[]) {
         const raw =
           input instanceof Request ? await input.clone().text() : String(init?.body ?? "{}");
         posted = JSON.parse(raw);
+        if (operationStatus !== 201) {
+          // The shape a refusal really has: the server's own English prose,
+          // written for a log. Spelled out rather than left empty so a test
+          // asserting the screen does not repeat it has something to fail on.
+          return new Response(
+            JSON.stringify({
+              error:
+                "journal would become inconsistent: buy 2026-07-10: currency RUB does not match the USD this position's cost is in",
+            }),
+            { status: operationStatus, headers: { "Content-Type": "application/json" } },
+          );
+        }
         return new Response(JSON.stringify({ ...posted, id: "op-1", source: "manual" }), {
           status: 201,
           headers: { "Content-Type": "application/json" },
@@ -146,6 +163,7 @@ const total = () => norm(screen.getByTestId("trade-total").textContent ?? "");
 beforeEach(() => {
   fetchMock.mockReset();
   posted = null;
+  operationStatus = 201;
 });
 
 afterEach(() => {
@@ -502,5 +520,48 @@ describe("TradeDialog: instruments that are not bonds", () => {
     await waitFor(() => expect(posted).not.toBeNull());
     expect(posted?.price).toBe("305.5");
     expect(posted?.amount_minor).toBe(-305_500);
+  });
+});
+
+// #23: every 409 was captioned «Недостаточно бумаг на счете на эту дату». The
+// server sends that status for several unrelated refusals and gives the client
+// nothing to tell them apart, and the row it refuses need not be the one just
+// posted — see the description of POST /api/v1/operations in api/openapi.yaml
+// and TestConflictIsNotOnlyAnOversell, which posts a BUY and is answered 409
+// over an entry stored on another date.
+describe("TradeDialog: a journal the server would not replay (#23)", () => {
+  // A buy: the side of the trade that releases nothing at all, so "not enough
+  // securities" cannot be what a refusal of it means.
+  async function refuseABuyWith(status: number) {
+    operationStatus = status;
+    await openWith(share());
+    typeInto(screen.getByLabelText(/Цена за единицу/), "100");
+    typeInto(quantityField(), "1");
+    fireEvent.click(screen.getByRole("button", { name: "Покупка" }));
+    return screen.findByRole("alert");
+  }
+
+  it("says the journal did not add up, and names no cause of its own", async () => {
+    const alert = await refuseABuyWith(409);
+
+    expect(norm(alert.textContent ?? "")).toContain(
+      "Журнал счёта с этой операцией не сошёлся",
+    );
+    // The sentence this replaces, in the words the dictionary held. Asserted
+    // against the whole document rather than the alert, so it fails wherever a
+    // future author puts it back.
+    expect(document.body.textContent).not.toContain("Недостаточно бумаг");
+    // And still not the server's own English, which is a log line (#95).
+    expect(document.body.textContent).not.toContain("journal would become inconsistent");
+  });
+
+  // The other half of the branch: a status that is NOT 409 must not borrow the
+  // conflict's sentence, or "the journal did not add up" would be printed over
+  // an outage that says nothing about any journal.
+  it("says only that something went wrong when the refusal is not a conflict", async () => {
+    const alert = await refuseABuyWith(500);
+
+    expect(alert.textContent).toContain("Что-то пошло не так");
+    expect(document.body.textContent).not.toContain("Журнал счёта");
   });
 });

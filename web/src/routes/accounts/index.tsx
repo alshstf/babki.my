@@ -154,7 +154,21 @@ export function AccountsPage() {
             </Alert>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setArchiveTarget(null)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                // Reset here too, not just in onOpenChange above: Radix calls
+                // onOpenChange only for its OWN dismiss triggers (Escape,
+                // overlay click, DialogClose), never when a plain button flips
+                // the controlled `open` prop by clearing archiveTarget. Without
+                // this, a refused archive left its alert armed on the mutation,
+                // and the next account's confirmation opened already accusing
+                // the server of refusing something nobody had asked for yet
+                // (#21). Same fix, same reason, as operations-table.tsx.
+                setArchiveTarget(null);
+                archiveAccount.reset();
+              }}
+            >
               {t("common.cancel")}
             </Button>
             <Button

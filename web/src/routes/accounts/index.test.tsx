@@ -219,4 +219,44 @@ describe("AccountsPage — an archive the server refused", () => {
     expect(await within(dialog).findByText("Не удалось архивировать счет")).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("account has operations");
   });
+
+  // #21: the alert lives on the mutation, and Cancel is a plain button that
+  // clears archiveTarget — Radix calls onOpenChange only for its OWN dismiss
+  // triggers (Escape, overlay, DialogClose), so the reset written there never
+  // ran on this path. The next confirmation opened already saying an archive
+  // had failed, about an account nobody had tried to archive yet.
+  it("opens clean afterwards instead of carrying the refusal to the next account", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = input instanceof Request ? input.method : (init?.method ?? "GET");
+      const json = (status: number, body: unknown) =>
+        Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      if (method === "DELETE") return json(409, { error: "account has operations" });
+      if (url.includes("/api/v1/summary")) return json(200, makeSummary());
+      if (url.includes("/api/v1/accounts")) return json(200, [makeAccount()]);
+      return json(404, null);
+    });
+    renderPage();
+
+    const openArchive = async () => {
+      fireEvent.keyDown(await screen.findByRole("button", { name: "Действия" }), { key: "Enter" });
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Архивировать" }));
+      return screen.findByRole("dialog");
+    };
+
+    const dialog = await openArchive();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Архивировать" }));
+    expect(await within(dialog).findByText("Не удалось архивировать счет")).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Отмена" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    const reopened = await openArchive();
+    expect(within(reopened).queryByText("Не удалось архивировать счет")).toBeNull();
+  });
 });

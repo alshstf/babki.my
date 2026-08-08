@@ -289,9 +289,37 @@ export function TradeDialog({
     );
   };
 
+  // A 409 from POST /api/v1/operations says the account's journal did not
+  // replay with this row in it — and NOTHING FINER, which is why the sentence
+  // below names no cause (#23).
+  //
+  // It used to say «Недостаточно бумаг на счете на эту дату», and that is false
+  // twice over. The engine refuses for several unrelated reasons that all arrive
+  // as this one status: a release exceeding the held quantity, an operation
+  // whose currency is not the one the position's cost is already kept in, a
+  // transfer whose stored FIFO breakdown no longer matches the history it is
+  // replayed against, and an income total that has left the int64 range (see
+  // internal/portfolio/engine.go). Worse, THE ROW REFUSED NEED NOT BE THE ROW
+  // POSTED: every write replays the account's WHOLE journal, so a purchase —
+  // which releases nothing and can only add to a position — comes back 409 over
+  // an entry stored months earlier, on a date the client never sent. «на эту
+  // дату» was a claim about the user's input in a message about someone else's
+  // row. TestConflictIsNotOnlyAnOversell holds both halves of that down.
+  //
+  // The alternative was to make the server tell its conflicts apart, as the
+  // importer does by lifting "this broker account cannot be imported" out of 409
+  // into 422. It does not fit here: the split would be oversell versus
+  // everything else, and "everything else" is itself a grab-bag needing a
+  // cause-free sentence of its own, so one honest caption would be bought and
+  // another owed. The overflow above is in neither group, and no status can
+  // promise the refusal is about what the client sent.
+  //
+  // Same key as the cash and income dialogs, not a copy of its wording: all
+  // three post to this endpoint and get the same undifferentiated status, so
+  // there is one answer to keep true rather than three.
   const errorMessage = createOperation.isError
     ? isConflict(createOperation.error)
-      ? t("trade.oversell")
+      ? t("operations.conflict")
       : t("app.error")
     : null;
 
