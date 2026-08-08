@@ -532,6 +532,25 @@ export function PositionsTable({
           const unrealizedPctTitle = t("positions.profitPercentIn", {
             currency: resolvedCost.currency,
           });
+          // Why the profit cell is empty, as ONE string used twice — the
+          // tooltip's and the screen reader's copy are the same value, so
+          // there is no arrangement in which they say different things. The
+          // line break survives in the tooltip and collapses to a space in the
+          // markup, which is the right rendering in each place and needs no
+          // second version to get it.
+          //
+          // Two ways to have no profit, and they are two different sentences.
+          // With a valuation present, the profit is missing because that
+          // valuation is in another currency and cannot be subtracted from the
+          // basis. With none, the profit is missing because one of its two
+          // operands is — so this cell says that in its own words and then
+          // hands over to the valuation's cause, whatever the server said it
+          // was. It used to print «Нет котировки» flat, which is the same false
+          // sentence #78 is about, one column over: a crypto row's profit is
+          // not waiting for a quote either.
+          const profitDashHint = hasMarketValue
+            ? t("positions.currencyMismatch")
+            : t("positions.profitNeedsValuation") + "\n" + valuationUnconvertedTitle;
           return (
             <TableRow
               key={position.instrument.id}
@@ -590,7 +609,16 @@ export function PositionsTable({
                     className="text-muted-foreground"
                     title={valuationUnconvertedTitle}
                   >
-                    —
+                    {/* The dash is a drawing of an empty cell and says nothing
+                        on its own, so it is hidden from assistive technology
+                        and the sentence beside it is what gets read (#31). The
+                        other order — announcing "dash" and then leaving the
+                        reason in a `title` no screen reader is obliged to
+                        surface on a non-focusable span — is how this cell told
+                        a sighted reader why the number is missing and told
+                        everyone else nothing. */}
+                    <span aria-hidden="true">—</span>
+                    <span className="sr-only">{valuationUnconvertedTitle}</span>
                   </span>
                 )}
               </TableCell>
@@ -618,23 +646,10 @@ export function PositionsTable({
                   <span
                     data-testid="position-profit-dash"
                     className="text-muted-foreground"
-                    // Two ways to have no profit, and they are two different
-                    // sentences. With a valuation present, the profit is
-                    // missing because that valuation is in another currency
-                    // and cannot be subtracted from the basis. With none, the
-                    // profit is missing because one of its two operands is —
-                    // so this cell says that in its own words and then hands
-                    // over to the valuation's cause, whatever the server said
-                    // it was. It used to print «Нет котировки» flat, which is
-                    // the same false sentence #78 is about, one column over: a
-                    // crypto row's profit is not waiting for a quote either.
-                    title={
-                      hasMarketValue
-                        ? t("positions.currencyMismatch")
-                        : t("positions.profitNeedsValuation") + "\n" + valuationUnconvertedTitle
-                    }
+                    title={profitDashHint}
                   >
-                    —
+                    <span aria-hidden="true">—</span>
+                    <span className="sr-only">{profitDashHint}</span>
                   </span>
                 )}
               </TableCell>

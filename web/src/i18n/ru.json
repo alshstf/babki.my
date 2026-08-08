@@ -49,6 +49,7 @@
     "shared": "общий",
     "archived": "архив",
     "columns": { "name": "Название", "type": "Тип", "owner": "Владелец", "balance": "Баланс" },
+    "noBalanceRecorded": "Баланс этого счёта ещё не записан",
     "add": "Добавить счет",
     "addOperation": "+ Добавить операцию",
     "notFound": "Счет не найден",

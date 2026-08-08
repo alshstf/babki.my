@@ -9,6 +9,28 @@ export function localToday(): string {
   return `${y}-${m}-${day}`;
 }
 
+// EARLIEST_OPERATION_DATE is the oldest date the server accepts on an
+// operation, copied here so a date field refuses at the keystroke instead of
+// after a round trip — the same arrangement money.ts holds for the amount cap.
+//
+// It exists as a typo guard and not as a rule from anywhere: a four-digit year
+// with a fumbled leading digit (1026 for 2026) is one keystroke, and the
+// journal's queue is ordered by acquisition date, so such a row lands at the
+// FRONT of it and the next sale releases it first. Nothing on any screen would
+// remark on the date — centuries old is an ordinary date to a comparison — so
+// the only place it can be noticed is where it is typed, and where it is
+// written. See minOccurredOn in internal/operation, which is the rule; this is
+// a copy of it, tied to it by
+// TestTheContractAndTheDateFieldsStateTheFloorTheServerEnforces.
+//
+// The four dialogs that write an operation carry it as the `min` of their date
+// input, beside the `max` of localToday() that was already there. The
+// balance dialog deliberately does not: a balance mark has no floor to copy,
+// because a mark dated centuries ago is one the latest mark still wins over —
+// a visible mistake in a row that can be retyped, not a wrong number nobody is
+// told about.
+export const EARLIEST_OPERATION_DATE = "1900-01-01";
+
 // formatDate renders an ISO "YYYY-MM-DD" date as short ru-RU ("20.07.2026").
 // Malformed or empty input returns "" rather than the useless
 // "Invalid Date" string, so callers can safely omit the whole context row.

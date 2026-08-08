@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -140,5 +141,92 @@ func TestTheContractStatesTheJournalAnswers400(t *testing.T) {
 	if _, ok := doc.Paths[journalPath].Get.Responses["400"]; !ok {
 		t.Errorf("GET %s declares no 400, but parsePage answers one for a limit or an offset "+
 			"outside the bounds beside it", journalPath)
+	}
+}
+
+// The oldest date an operation may carry is written down four times, in three
+// languages, and only one of them is the rule. minOccurredOn is what the
+// service refuses past; api/openapi.yaml states it twice, once per request
+// schema a client can validate against; and web/src/lib/dates.ts holds a copy
+// so the four dialogs that write an operation refuse it in the date field
+// instead of after a round trip.
+//
+// Nothing makes them agree — Go cannot import a YAML literal and TypeScript
+// cannot import a Go constant — so a change to the floor that touched only some
+// of them would leave a date field refusing what the server takes, or a
+// contract promising a range the server does not apply, with every other test
+// in this repository still green. That is the shape of gap
+// TestTheAmountFieldRefusesAtTheBoundTheServerEnforces closed for
+// money.MaxAmountMinor and TestTheCurrencyFormsRefuseAtTheShapeTheServerEnforces
+// for currency.Pattern; this is the same closure for this bound.
+//
+// The check is on the DATE AS WRITTEN, not on a parsed structure: all four
+// sites spell it YYYY-MM-DD and a reader compares them by eye that way. What it
+// cannot check is the prose around it — each site also explains in words what
+// the floor is for, and those sentences are read by people. Whoever moves this
+// number re-reads them by hand.
+// The two sites that write the date out as a literal. In the contract it is
+// prose a client reads; in dates.ts it is the frontend's single copy of the
+// number, which the dialogs then take by name.
+//
+// The contract states it on the two REQUEST schemas only. The Operation
+// RESPONSE schema's occurred_on deliberately says nothing about a range: it
+// describes a row already stored, and rows written before the floor existed are
+// untouched and still returned as they stand.
+var dateFloorLiteralSites = []string{
+	"api/openapi.yaml",
+	"web/src/lib/dates.ts",
+}
+
+// The four dialogs that write an operation. They are checked for the CONSTANT
+// and not for the date: each takes it from dates.ts, which is where the copy
+// lives and what the list above ties to the server. A dialog spelling the date
+// out itself would be a fifth copy, and this test would not want it.
+//
+// The balance dialog is deliberately absent — a balance mark has no floor. See
+// EARLIEST_OPERATION_DATE in dates.ts for why the two differ.
+var dateFloorFormSites = []string{
+	"web/src/routes/accounts/trade-dialog.tsx",
+	"web/src/routes/accounts/transfer-dialog.tsx",
+	"web/src/routes/accounts/income-dialog.tsx",
+	"web/src/routes/accounts/cash-dialog.tsx",
+}
+
+func TestTheContractAndTheDateFieldsStateTheFloorTheServerEnforces(t *testing.T) {
+	want := minOccurredOn.Format("2006-01-02")
+	for _, rel := range dateFloorLiteralSites {
+		body, err := os.ReadFile(filepath.Join("..", "..", rel))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		if !strings.Contains(string(body), want) {
+			t.Errorf("%s does not mention %s (minOccurredOn): a date field or a contract that "+
+				"disagrees with the floor either refuses what the server accepts or accepts "+
+				"what it refuses", rel, want)
+		}
+	}
+	// Each dialog must actually hand the constant to its date input, not merely
+	// import it: a file that names EARLIEST_OPERATION_DATE in an import line and
+	// passes nothing would satisfy a check for the name while its field still
+	// took any year.
+	for _, rel := range dateFloorFormSites {
+		body, err := os.ReadFile(filepath.Join("..", "..", rel))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		if !strings.Contains(string(body), "min={EARLIEST_OPERATION_DATE}") {
+			t.Errorf("%s does not pass min={EARLIEST_OPERATION_DATE} to its date input", rel)
+		}
+	}
+	// And the contract states it on BOTH request schemas, not on one of the
+	// two: a bound declared at one door and not the other is #100 and #102,
+	// where the money cap was declared on a single schema out of four.
+	body, err := os.ReadFile(filepath.Join("..", "..", "api", "openapi.yaml"))
+	if err != nil {
+		t.Fatalf("read api/openapi.yaml: %v", err)
+	}
+	if got := strings.Count(string(body), "NOT EARLIER THAN "+want); got != 2 {
+		t.Errorf("api/openapi.yaml states the %s floor %d times, want 2 "+
+			"(CreateOperationRequest.occurred_on and TransferRequest.occurred_on)", want, got)
 	}
 }

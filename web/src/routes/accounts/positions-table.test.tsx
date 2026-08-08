@@ -5,6 +5,7 @@ import "@/i18n";
 import { PositionsTable } from "./positions-table";
 import type { Position } from "@/api/positions";
 import { formatMinor } from "@/lib/money";
+import { announcedText, visibleText } from "@/test-utils";
 
 // PositionsTable is a pure presentational component (positions come in as a
 // prop), so a bare render is enough — no QueryClientProvider needed.
@@ -1040,8 +1041,10 @@ describe("PositionsTable", () => {
         />,
       );
 
-      // The amount itself is still shown, honestly, in its own currency.
-      expect(norm(screen.getByTestId("position-profit-amount").textContent ?? "")).toBe(
+      // The amount itself is still shown, honestly, in its own currency —
+      // and it is all that is shown, the not-converted sentence being a
+      // tooltip and a screen-reader-only copy of it (#31).
+      expect(norm(visibleText(screen.getByTestId("position-profit-amount")))).toBe(
         norm(formatMinor(25_000, "USD")),
       );
       expect(screen.getByTestId("position-profit-amount-not-converted")).toBeInTheDocument();
@@ -2075,7 +2078,7 @@ describe("PositionsTable", () => {
         />,
       );
 
-      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
+      expect(norm(visibleText(screen.getByTestId("position-income")))).toBe(
         norm(formatMinor(0, "CNY")),
       );
       expect(norm(screen.getByTestId("position-income-other-currency").textContent ?? "")).toBe(
@@ -2085,6 +2088,94 @@ describe("PositionsTable", () => {
         "title",
         CAPTION.noRateLotDate,
       );
+    });
+  });
+  // #31. Every hint on this screen about a figure that is missing or could not
+  // be converted was carried by a `title` attribute alone, on a <span> that
+  // holds no text of its own and that nothing can focus. That is not a hint
+  // that is merely awkward to reach without a mouse: a roleless, textless span
+  // is a generic container, a tooltip on one is not something assistive
+  // technology is obliged to announce, and there is no keyboard route to one
+  // outside the tab order either — so a reader using a screen reader met an
+  // empty cell and was told nothing at all about why it was empty. The row's numbers are the whole product; a reason a number is
+  // absent is part of the number.
+  //
+  // Each test below asserts BOTH halves — see announcedText in test-utils. The
+  // pair is the property: the eye still gets a dash and not a paragraph, the
+  // ear gets the sentence and not a dash. Either assertion alone passes on an
+  // arrangement that fails the other, which is exactly how this defect got
+  // written in the first place.
+  describe("a missing figure explains itself to a reader who is not looking", () => {
+    it("announces the valuation cell's reason instead of a bare dash", () => {
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              market_value_minor: null,
+              market_value_currency: null,
+              unrealized_pnl_minor: null,
+              market_value_gap: "no_quote",
+            }),
+          ]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const dash = screen.getByTestId("position-no-quote");
+      expect(visibleText(dash)).toBe("—");
+      expect(announcedText(dash)).toBe(NO_VALUATION.noQuote);
+    });
+
+    it("announces both of the profit cell's sentences, run together as speech and not as markup", () => {
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              market_value_minor: null,
+              market_value_currency: null,
+              unrealized_pnl_minor: null,
+              market_value_gap: "no_quote",
+            }),
+          ]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
+      );
+
+      const dash = screen.getByTestId("position-profit-dash");
+      expect(visibleText(dash)).toBe("—");
+      // One string, read out with its line break collapsed to a space the way
+      // any run of whitespace in markup is — which is the right rendering for
+      // speech and needs no second copy to get it. The tooltip keeps the break
+      // because a tooltip renders "\n" as a line; both come from the same
+      // value, so they cannot come to say different things.
+      expect(announcedText(dash)).toBe(`${PROFIT_NEEDS_VALUATION} ${NO_VALUATION.noQuote}`);
+      expect(dash).toHaveAttribute("title", `${PROFIT_NEEDS_VALUATION}\n${NO_VALUATION.noQuote}`);
+    });
+
+    it("announces why a figure is shown in its own currency rather than the base one", () => {
+      wrap(
+        <PositionsTable
+          positions={[
+            makePosition({
+              currency: "USD",
+              cost_minor: 100_00,
+              in_base: null,
+              in_base_gap: "no_rate_lot_date",
+            }),
+          ]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
+
+      // The indicator beside the number, which is an icon and therefore has no
+      // text of its own to be read out — it used to carry the whole
+      // explanation in a `title` and nothing else.
+      const indicator = screen.getByTestId("position-cost-not-converted");
+      expect(visibleText(indicator)).toBe("");
+      expect(announcedText(indicator)).toBe(CAPTION.noRateLotDate);
     });
   });
 });

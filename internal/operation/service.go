@@ -13,6 +13,7 @@ import (
 
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/platform/currency"
+	"babki.my/babki/internal/platform/dates"
 	"babki.my/babki/internal/platform/money"
 	"babki.my/babki/internal/portfolio"
 )
@@ -196,11 +197,46 @@ type TransferParams struct {
 // quantity and recorded as another (see normalizeForStorage).
 const quantityScale = portfolio.QuantityScale
 
-// maxOccurredOn mirrors the account package's as_of slack: a day of leeway
-// past the UTC "today" boundary so a user anywhere from UTC+3 to UTC+12 can
-// record "today" in their own local date.
-func maxOccurredOn() time.Time {
-	return time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)
+// minOccurredOn is the oldest date an operation may carry.
+//
+// IT IS A TYPO GUARD AND NOTHING MORE, and the comment says so rather than
+// dressing the number up as a rule from somewhere: no law, no broker and no
+// data source here names 1900. It is in particular NOT a claim about the
+// earliest date this program can value — an operation dated 1950 is accepted
+// here, and whether its figures can be shown in the base currency is a
+// separate question about which rates exist, one this bound does not answer
+// and must not be read as answering.
+//
+// What it does buy is the one wrong answer a mistyped year gives silently. A
+// year is four characters and the leading one is the easy one to fumble: 1026
+// for 2026 is one keystroke. The journal's queue is ordered by acquisition date
+// (see the package documentation and internal/family/taxresidency.go), so such
+// a row does not land somewhere visibly odd — it lands at the FRONT, ahead of
+// everything genuine, and the next sale releases it first. The cost basis that
+// comes out is wrong, and nothing on any screen says a date was strange,
+// because a date centuries old is a perfectly ordinary date to a comparison.
+// The refusal is the only place that can notice.
+//
+// Set where no personal-finance journal reaches and every fumbled year lands:
+// the mistake this catches produces a year in the first two digits' worth of
+// wrongness (0226, 1026, 1226), never 1899.
+var minOccurredOn = time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// checkOccurredOn holds a date to both ends of the range an operation may be
+// entered in. One function rather than two comparisons at each of the two write
+// paths (an ordinary operation and a transfer): they had drifted to the point
+// of checking different things already — the transfer path had the ceiling and
+// not the floor — and a rule about when something happened should not depend on
+// which endpoint recorded it.
+func checkOccurredOn(d time.Time) error {
+	if d.After(dates.LatestRecordable()) {
+		return fmt.Errorf("%w: occurred_on must not be in the future", family.ErrValidation)
+	}
+	if d.Before(minOccurredOn) {
+		return fmt.Errorf("%w: occurred_on must not be earlier than %s",
+			family.ErrValidation, minOccurredOn.Format("2006-01-02"))
+	}
+	return nil
 }
 
 // validate checks operation fields that are cheap and local — i.e. don't
@@ -239,8 +275,8 @@ func validateFields(o Operation) error {
 	if !currency.Valid(o.Currency) {
 		return fmt.Errorf("%w: currency must be ISO-4217 uppercase", family.ErrValidation)
 	}
-	if o.OccurredOn.After(maxOccurredOn()) {
-		return fmt.Errorf("%w: occurred_on must not be in the future", family.ErrValidation)
+	if err := checkOccurredOn(o.OccurredOn); err != nil {
+		return err
 	}
 	if o.FeeMinor < 0 {
 		return fmt.Errorf("%w: fee_minor must be >= 0", family.ErrValidation)
@@ -617,6 +653,17 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 	if p.FromAccountID == p.ToAccountID {
 		return Operation{}, Operation{}, fmt.Errorf("%w: from and to accounts must differ", family.ErrValidation)
 	}
+	// A missing instrument_id is a missing field, and it has to be refused as
+	// one HERE, before the source journal is searched. The search is what used
+	// to answer instead: a request without the field decodes to the nil UUID,
+	// no operation in any journal carries that instrument, and the refusal came
+	// back «no source history for instrument» (#19) — which names a plausible
+	// and entirely different mistake (you hold nothing of this paper on that
+	// account) and sends the reader looking through a journal that is fine.
+	// The status was already right; only the sentence was wrong.
+	if p.InstrumentID == uuid.Nil {
+		return Operation{}, Operation{}, fmt.Errorf("%w: instrument_id is required", family.ErrValidation)
+	}
 	if !p.Quantity.IsPositive() {
 		return Operation{}, Operation{}, fmt.Errorf("%w: quantity must be positive", family.ErrValidation)
 	}
@@ -641,8 +688,8 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 	if err := checkQuantityBound(quantity); err != nil {
 		return Operation{}, Operation{}, err
 	}
-	if p.OccurredOn.After(maxOccurredOn()) {
-		return Operation{}, Operation{}, fmt.Errorf("%w: occurred_on must not be in the future", family.ErrValidation)
+	if err := checkOccurredOn(p.OccurredOn); err != nil {
+		return Operation{}, Operation{}, err
 	}
 
 	sourceJournal, err := s.store.ListForEngine(ctx, spaceID, p.FromAccountID)

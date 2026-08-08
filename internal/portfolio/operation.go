@@ -42,8 +42,7 @@ var validTypes = map[Type]bool{
 	TypeInterest: true, TypeConversion: true,
 }
 
-func (t Type) Valid() bool   { return validTypes[t] }
-func (t Type) IsTrade() bool { return t == TypeBuy || t == TypeSell }
+func (t Type) Valid() bool { return validTypes[t] }
 
 // RequiresInstrument reports whether the type is meaningless without one.
 // Dividend and coupon are deliberately excluded: they may be recorded at

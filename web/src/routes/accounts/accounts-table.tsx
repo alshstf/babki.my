@@ -112,7 +112,26 @@ export function AccountsTable({
                     </div>
                   </>
                 ) : (
-                  <span className="text-muted-foreground">—</span>
+                  // No balance mark has ever been recorded for this account:
+                  // the server joins the latest row of account_balances and
+                  // publishes nothing when there is none. Until #31 this cell
+                  // was a bare dash with no hint of any kind — not even a
+                  // tooltip — so it was the one place on these two screens
+                  // where a missing figure said nothing to ANY reader about
+                  // why it was missing.
+                  //
+                  // The sentence says what is absent, not who failed to enter
+                  // it: an import writes balance marks as well as a person
+                  // does, so «не вносили» would be a guess about how this
+                  // account got here. What is certain is that there is no mark.
+                  <span
+                    data-testid={`account-balance-${account.id}-none`}
+                    className="text-muted-foreground"
+                    title={t("accounts.noBalanceRecorded")}
+                  >
+                    <span aria-hidden="true">—</span>
+                    <span className="sr-only">{t("accounts.noBalanceRecorded")}</span>
+                  </span>
                 )}
               </TableCell>
               {onRowAction && <TableCell>{onRowAction(account)}</TableCell>}

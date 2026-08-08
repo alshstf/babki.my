@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import "@/i18n";
 import { MoneyCell } from "./money-cell";
 import { formatMinor } from "@/lib/money";
+import { announcedText, visibleText } from "@/test-utils";
 
 describe("MoneyCell", () => {
   it("renders the amount with no indicator when noRate is false", () => {
@@ -220,5 +221,65 @@ describe("MoneyCell", () => {
     );
 
     expect(screen.getByTestId("amt").className).toContain("text-2xl");
+  });
+
+  // #31. Both indicators are icons: an <svg> with no text, inside a <span>
+  // nothing can focus. A tooltip on a roleless, textless span is not something
+  // assistive technology is obliged to announce, and there is no keyboard
+  // route to one outside the tab order either, so every
+  // one of these sentences — and they are the sentences that say a figure is
+  // not in the currency the reader asked for, or is not the kind of figure it
+  // looks like — reached a pointer and nobody else. The glyph is marked
+  // decorative and the sentence is spelled out for a screen reader beside it;
+  // `title` stays, because it is what works for a pointer.
+  //
+  // visibleText and announcedText are asserted as a pair on purpose (see
+  // test-utils): the first alone would pass on a cell that printed the whole
+  // paragraph next to the number, the second alone on the arrangement this
+  // replaced.
+  it("spells the not-converted sentence out for a screen reader, not only in a title", () => {
+    render(
+      <MoneyCell
+        resolved={{ amountMinor: 100_00, currency: "USD", noRate: true, converted: false, rateOn: null }}
+        testId="amt"
+      />,
+    );
+
+    const indicator = screen.getByTestId("amt-not-converted");
+    expect(visibleText(indicator)).toBe("");
+    expect(announcedText(indicator)).toBe("Нет курса — показано в валюте счёта");
+    expect(indicator).toHaveAttribute("title", "Нет курса — показано в валюте счёта");
+    // The caller's own wording is what gets said when there is one — this
+    // component never decides which cause a cell names.
+    expect(visibleText(screen.getByTestId("amt"))).toBe(formatMinor(100_00, "USD"));
+  });
+
+  it("spells the caller's own not-converted wording out, not the default one", () => {
+    render(
+      <MoneyCell
+        resolved={{ amountMinor: 100_00, currency: "USD", noRate: true, converted: false, rateOn: null }}
+        notConvertedTitle="Нет курса на день покупки"
+        testId="amt"
+      />,
+    );
+
+    expect(announcedText(screen.getByTestId("amt-not-converted"))).toBe(
+      "Нет курса на день покупки",
+    );
+  });
+
+  it("spells the caveat out for a screen reader too", () => {
+    render(
+      <MoneyCell
+        resolved={{ amountMinor: 100_00, currency: "USD", noRate: false, converted: false, rateOn: null }}
+        caveatTitle="Это стоимость бумаг, а не деньги этого дня"
+        testId="amt"
+      />,
+    );
+
+    const caveat = screen.getByTestId("amt-caveat");
+    expect(visibleText(caveat)).toBe("");
+    expect(announcedText(caveat)).toBe("Это стоимость бумаг, а не деньги этого дня");
+    expect(caveat).toHaveAttribute("title", "Это стоимость бумаг, а не деньги этого дня");
   });
 });

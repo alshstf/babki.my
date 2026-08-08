@@ -8,6 +8,7 @@ import {
   useHasMultipleScreenCurrencies,
 } from "@/lib/screen-currencies";
 import { formatMinor } from "@/lib/money";
+import { visibleText } from "@/test-utils";
 import type { Instrument } from "@/api/instruments";
 import { formatDate, localToday } from "@/lib/dates";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
@@ -963,8 +964,10 @@ describe("OperationsTable", () => {
       expect(title).toContain("стоимость бумаг");
       // Not a block of prose over the table any more.
       expect(screen.queryByTestId("cost-basis-notice")).not.toBeInTheDocument();
-      // And nothing leaked into the cell's text: the caveat is a tooltip.
-      expect(norm(screen.getByTestId("operation-amount").textContent ?? "")).toBe(
+      // And nothing leaked into the VISIBLE text: the caveat is a tooltip,
+      // plus a copy for a screen reader that the eye never meets (#31) — see
+      // visibleText, which is what keeps this assertion meaning what it meant.
+      expect(norm(visibleText(screen.getByTestId("operation-amount")))).toBe(
         norm(formatMinor(11_800_000, "RUB")),
       );
     });
