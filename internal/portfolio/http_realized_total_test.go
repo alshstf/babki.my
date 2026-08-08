@@ -108,10 +108,10 @@ func TestRealizedTotalAddsEachCurrencyOnItsOwn(t *testing.T) {
 		t.Fatalf("by_currency currencies = %q/%q, want EUR then USD (ordered by code)",
 			got.ByCurrency[0].Currency, got.ByCurrency[1].Currency)
 	}
-	if got.ByCurrency[0].RealizedPnlMinor != 2_000 {
-		t.Errorf("EUR total = %d, want 2000 (12000 - 10000)", got.ByCurrency[0].RealizedPnlMinor)
+	if realizedFigure(t, got.ByCurrency[0].RealizedPnlMinor) != 2_000 {
+		t.Errorf("EUR total = %d, want 2000 (12000 - 10000)", realizedFigure(t, got.ByCurrency[0].RealizedPnlMinor))
 	}
-	switch usd := got.ByCurrency[1].RealizedPnlMinor; usd {
+	switch usd := realizedFigure(t, got.ByCurrency[1].RealizedPnlMinor); usd {
 	case 20_000:
 		t.Errorf("USD total = 20000 — that is the winning position alone; the losing one (-5000) was dropped rather than added")
 	case 17_000:
@@ -287,9 +287,9 @@ func TestRealizedTotalInBaseCountsAPositionAlreadyInTheBaseCurrency(t *testing.T
 		if p.InBase != nil {
 			t.Fatalf("RUBL.in_base = %+v, want null: it is already in the base currency", *p.InBase)
 		}
-		if !p.HasUndatedRealizations || p.RealizedPnlMinor != 30_000 {
+		if !p.HasUndatedRealizations || realizedFigure(t, p.RealizedPnlMinor) != 30_000 {
 			t.Fatalf("RUBL = {has_undated_realizations %v, realized_pnl_minor %d}, want {true, 30000} — the fixture is not testing what it means to",
-				p.HasUndatedRealizations, p.RealizedPnlMinor)
+				p.HasUndatedRealizations, realizedFigure(t, p.RealizedPnlMinor))
 		}
 	}
 
@@ -414,7 +414,7 @@ func TestRealizedTotalNamesWhichGapStoppedTheBaseSum(t *testing.T) {
 			// Whatever the conversion is missing, the positions' own currency
 			// always has a complete answer: an unrecorded purchase date costs
 			// no money and no shares.
-			if len(got.ByCurrency) != 1 || got.ByCurrency[0].RealizedPnlMinor != tc.wantNative {
+			if len(got.ByCurrency) != 1 || realizedFigure(t, got.ByCurrency[0].RealizedPnlMinor) != tc.wantNative {
 				t.Errorf("by_currency = %+v, want one USD entry of %d — the by-currency form has no gaps and must not be withheld along with the converted one", got.ByCurrency, tc.wantNative)
 			}
 		})

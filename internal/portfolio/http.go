@@ -447,8 +447,20 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 		// one currency field and no way to say "this one is only a label", so
 		// widening it is a change to the contract rather than something this
 		// function may decide.
-		Currency:         p.Currency,
-		RealizedPnlMinor: p.RealizedPnLMinor,
+		Currency: p.Currency,
+		// THE POSITION'S REALIZED RESULT, OR NOTHING AT ALL. It goes null when a
+		// disposal settled in another currency than the basis it retired — a yuan
+		// bond redeemed for rubles — and then there is no figure to put here IN
+		// ANY CURRENCY: proceeds in one currency and basis in another have a
+		// difference that is a quantity of neither, and this object holds no rate
+		// to bridge them (see Position.RealizedPnL).
+		//
+		// The result is not lost with it. in_base.realized_pnl_minor converts each
+		// disposal's own terms at each term's own date and out of each term's own
+		// currency, so a row carrying that object publishes the very figure this
+		// field cannot — and the null here is about which currency to name it in,
+		// not about anything being unknown.
+		RealizedPnlMinor: realizedToAPI(p),
 		// INCOME IN THE POSITION'S OWN CURRENCY, AND NOTHING ELSE. This is one
 		// int64 published beside `currency`, and the screen renders it under
 		// that sign — so the only figure it can carry honestly is the one
@@ -473,9 +485,16 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 		// one, or because some other term of the object could not be valued —
 		// has the per-currency list and this field, and nothing is hidden by
 		// either absence.
-		IncomeMinor:            p.IncomeMinorIn(p.Currency),
-		IncomeByCurrency:       incomeByCurrencyToAPI(p.IncomeByCurrency),
-		FeesMinor:              p.FeesMinor,
+		IncomeMinor:      p.IncomeMinorIn(p.Currency),
+		IncomeByCurrency: incomeByCurrencyToAPI(p.IncomeByCurrency),
+		// FEES IN THE POSITION'S OWN CURRENCY, AND NOTHING ELSE — the same rule
+		// as the income above, applied to the same shape (Position.FeesByCurrency).
+		// A commission charged in another currency is not in this figure and is
+		// not published anywhere else either: unlike the income there is no
+		// fees_by_currency, because nothing renders one. That is an omission the
+		// contract states rather than a figure that lies — every kopeck here
+		// really is in `currency`.
+		FeesMinor:              p.FeesMinorIn(p.Currency),
 		HasUndatedLots:         hasUndatedLots(p),
 		HasUndatedRealizations: hasUndatedRealizations(p),
 		// The starting value, and the answer for a row where the valuation is
@@ -914,20 +933,41 @@ func realizedTerms(events []Realization, currency string) (terms []datedMinor, d
 	}
 	terms = make([]datedMinor, 0, len(events)*2)
 	for _, e := range events {
-		// The position's currency for every term, passed in: proceeds, fee and
-		// retired basis all come from operations that settle it (a sale, an
-		// amortization, the purchases behind the parcel — see
-		// Type.mustMatchPositionCurrency). Only income escapes that rule, and no
-		// income is realized.
+		// TWO CURRENCIES, AND EACH TERM IS TAGGED WITH ITS OWN. The proceeds and
+		// the fee are in the currency the disposal settled in
+		// (Realization.Currency) — usually the position's and not always, since
+		// a yuan bond may be redeemed for rubles. The retired basis is in the
+		// position's, always: what the purchases behind it were denominated in
+		// is exactly what the currency rule settles
+		// (Operation.mustMatchPositionCurrency).
+		//
+		// This is what makes the base-currency figure exist for a position whose
+		// own-currency figure does not: nothing here ever subtracts one currency
+		// from another — every term is converted first, at its own date, and only
+		// then summed.
 		terms = append(terms,
-			datedMinor{minor: e.ProceedsMinor, from: currency, on: e.OccurredOn},
-			datedMinor{minor: -e.FeeMinor, from: currency, on: e.OccurredOn},
+			datedMinor{minor: e.ProceedsMinor, from: e.Currency, on: e.OccurredOn},
+			datedMinor{minor: -e.FeeMinor, from: e.Currency, on: e.OccurredOn},
 		)
 		for _, r := range e.Released {
 			terms = append(terms, datedMinor{minor: -r.CostMinor, from: currency, on: *r.AcquiredOn})
 		}
 	}
 	return terms, true
+}
+
+// realizedToAPI publishes a position's realized result, or the null that says
+// there is none to publish.
+//
+// It is a function rather than an expression at the call site so that the two
+// halves of Position.RealizedPnL cannot be separated: the figure is reachable
+// only together with the answer to whether it is one.
+func realizedToAPI(p *Position) nullable.Nullable[int64] {
+	minor, inOneCurrency := p.RealizedPnL()
+	if !inOneCurrency {
+		return nullable.NewNullNullable[int64]()
+	}
+	return nullable.NewNullableWithValue(minor)
 }
 
 // baseGap names WHY a base-currency figure could not be struck. The two kinds
@@ -1063,12 +1103,20 @@ func apiInBaseGap(g inBaseGap) (apitypes.InBaseGap, bool) {
 // which would tell the owner their sale is unconvertible when the truth is that
 // this server is having a bad minute.
 func (h *Handler) realizedInBase(ctx context.Context, p *Position, to string, cache map[rateKey]*rateLookup) (nullable.Nullable[int64], baseGap, error) {
-	if p.Currency == to {
+	if minor, inOneCurrency := p.RealizedPnL(); p.Currency == to && inOneCurrency {
 		// Nothing to convert: the position's own realized result already IS
 		// the base-currency one. The published `in_base` object is null for
 		// such a position, but the figure is not unknown, and the account's
 		// total would silently lose a real term if this answered otherwise.
-		return nullable.NewNullableWithValue(p.RealizedPnLMinor), gapNone, nil
+		//
+		// THE SHORTCUT NEEDS BOTH HALVES. A position whose currency is already
+		// the base one can still have sold into another — a ruble account
+		// holding a yuan bond redeemed for rubles is that row seen from the
+		// other side — and there the position's own figure does not exist to be
+		// handed over, while the base-currency one is perfectly strikeable from
+		// the terms below. Testing only the currency published a null for a
+		// figure this handler could compute.
+		return nullable.NewNullableWithValue(minor), gapNone, nil
 	}
 	terms, dated := realizedTerms(p.Realizations, p.Currency)
 	if !dated {
@@ -1104,13 +1152,24 @@ func (h *Handler) realizedInBase(ctx context.Context, p *Position, to string, ca
 type realizedTotals struct {
 	baseCurrency string
 	byCurrency   map[string]int64
-	inBaseMinor  int64
-	undated      bool
-	noRate       bool
+	// notInOneCurrency names the currencies whose bucket is missing a term
+	// because some position in it realized into another currency and has no
+	// own-currency figure at all (see Position.RealizedPnL). The bucket is
+	// published as a null rather than as the sum of the rest: a total quietly
+	// short one of its terms is an invented number that looks exactly like a
+	// real one, which is the rule the base total below already stands on.
+	notInOneCurrency map[string]bool
+	inBaseMinor      int64
+	undated          bool
+	noRate           bool
 }
 
 func newRealizedTotals(baseCurrency string) *realizedTotals {
-	return &realizedTotals{baseCurrency: baseCurrency, byCurrency: make(map[string]int64)}
+	return &realizedTotals{
+		baseCurrency:     baseCurrency,
+		byCurrency:       make(map[string]int64),
+		notInOneCurrency: make(map[string]bool),
+	}
 }
 
 // add folds one position in: nativeMinor is its realized result in its own
@@ -1136,11 +1195,21 @@ func newRealizedTotals(baseCurrency string) *realizedTotals {
 // the request (see handleList). Nothing is half-added on the way out: both
 // totals are computed before either is stored, so a refused position leaves the
 // accumulator exactly as it found it.
-func (rt *realizedTotals) add(currency string, nativeMinor int64, baseMinor nullable.Nullable[int64], gap baseGap) error {
-	native, err := money.Add(rt.byCurrency[currency], nativeMinor)
-	if err != nil {
-		return fmt.Errorf("%w: the account's realized total in %s, adding %d to %d",
-			err, currency, nativeMinor, rt.byCurrency[currency])
+func (rt *realizedTotals) add(currency string, nativeMinor nullable.Nullable[int64], baseMinor nullable.Nullable[int64], gap baseGap) error {
+	native := rt.byCurrency[currency]
+	if nativeMinor.IsNull() {
+		// The position has no figure in its own currency, so this bucket has
+		// none either — and it is marked BEFORE the base total is touched
+		// below, because the two answers are independent: the base figure is
+		// struck from the disposals' own terms and survives perfectly well
+		// (see realizedInBase).
+		rt.notInOneCurrency[currency] = true
+	} else {
+		var err error
+		if native, err = money.Add(rt.byCurrency[currency], nativeMinor.MustGet()); err != nil {
+			return fmt.Errorf("%w: the account's realized total in %s, adding %d to %d",
+				err, currency, nativeMinor.MustGet(), rt.byCurrency[currency])
+		}
 	}
 	inBase := rt.inBaseMinor
 	switch gap {
@@ -1150,6 +1219,7 @@ func (rt *realizedTotals) add(currency string, nativeMinor int64, baseMinor null
 		rt.noRate = true
 	default:
 		// gapNone: the figure was struck, so there is one to add.
+		var err error
 		if inBase, err = money.Add(rt.inBaseMinor, baseMinor.MustGet()); err != nil {
 			return fmt.Errorf("%w: the account's realized total in %s, adding %d to %d",
 				err, rt.baseCurrency, baseMinor.MustGet(), rt.inBaseMinor)
@@ -1173,10 +1243,14 @@ func (rt *realizedTotals) result() apitypes.RealizedTotal {
 		ByCurrency:   make([]apitypes.RealizedCurrencyTotal, 0, len(rt.byCurrency)),
 	}
 	for currency, minor := range rt.byCurrency {
-		out.ByCurrency = append(out.ByCurrency, apitypes.RealizedCurrencyTotal{
+		total := apitypes.RealizedCurrencyTotal{
 			Currency:         currency,
-			RealizedPnlMinor: minor,
-		})
+			RealizedPnlMinor: nullable.NewNullableWithValue(minor),
+		}
+		if rt.notInOneCurrency[currency] {
+			total.RealizedPnlMinor = nullable.NewNullNullable[int64]()
+		}
+		out.ByCurrency = append(out.ByCurrency, total)
 	}
 	sort.Slice(out.ByCurrency, func(i, j int) bool {
 		return out.ByCurrency[i].Currency < out.ByCurrency[j].Currency
@@ -1414,7 +1488,22 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // p.Currency at today's rate a moment earlier, and the two must mean the same
 // day even for a request that crosses UTC midnight.
 func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, income []Operation, baseCurrency string, realizedMinor nullable.Nullable[int64], now time.Time, cache map[rateKey]*rateLookup) (*apitypes.PositionInBase, inBaseGap, error) {
-	if p.Currency == baseCurrency {
+	// NOTHING TO CONVERT — ALMOST ALWAYS. A position denominated in the base
+	// currency publishes every figure it has already in that currency, and a
+	// second object repeating them under the same sign would say nothing.
+	//
+	// THE EXCEPTION IS A DISPOSAL THAT SETTLED IN A THIRD CURRENCY. Then the
+	// position's own realized figure does not exist at all
+	// (Position.RealizedPnL), while a base-currency one is perfectly strikeable
+	// from the disposal's terms — and this object is the only place the payload
+	// has to put it. Returning early here published a position whose realized
+	// result appeared NOWHERE: a null in its own currency, and no object beside
+	// it to carry the answer.
+	//
+	// The rest of the object is then a set of identity conversions, and that is
+	// the point rather than a cost: every figure in it equals the position's
+	// own, so nothing about it can contradict the row it stands on.
+	if _, inOneCurrency := p.RealizedPnL(); p.Currency == baseCurrency && inOneCurrency {
 		return nil, inBaseSameCurrency, nil
 	}
 

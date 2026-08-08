@@ -1469,6 +1469,20 @@ func onlyPosition(t *testing.T, c *http.Client, url, accountID string) positionR
 	return got.Positions[0]
 }
 
+// realizedTotalOf is onlyPosition's twin for the account's realized header: the
+// same request, the part of the answer that speaks for the whole account.
+func realizedTotalOf(t *testing.T, c *http.Client, url, accountID string) realizedTotalResp {
+	t.Helper()
+	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET positions = %d, want 200: %s", resp.StatusCode, b)
+	}
+	var got positionsResp
+	decodeJSON(t, resp, &got)
+	return got.RealizedTotal
+}
+
 // TestPositionInBaseCostRoundsOnceForTheWholeBasis pins where the rounding
 // happens: the lots are multiplied by their rates as decimals and only the
 // TOTAL is rounded, once. Rounding each lot first and adding the results is

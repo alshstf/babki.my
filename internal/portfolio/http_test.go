@@ -212,7 +212,7 @@ type positionResp struct {
 	Quantity                  string           `json:"quantity"`
 	CostMinor                 int64            `json:"cost_minor"`
 	Currency                  string           `json:"currency"`
-	RealizedPnlMinor          int64            `json:"realized_pnl_minor"`
+	RealizedPnlMinor          *int64           `json:"realized_pnl_minor"`
 	IncomeMinor               int64            `json:"income_minor"`
 	IncomeByCurrency          []currencyIncome `json:"income_by_currency"`
 	FeesMinor                 int64            `json:"fees_minor"`
@@ -281,7 +281,7 @@ type realizedTotalResp struct {
 
 type realizedCurrencyTotalResp struct {
 	Currency         string `json:"currency"`
-	RealizedPnlMinor int64  `json:"realized_pnl_minor"`
+	RealizedPnlMinor *int64 `json:"realized_pnl_minor"`
 }
 
 // TestPositionsEndpoint covers three scenarios on the GET
@@ -356,8 +356,8 @@ func TestPositionsEndpoint(t *testing.T) {
 	if p.CostMinor != 160016 {
 		t.Errorf("acc1 position cost_minor = %d, want 160016", p.CostMinor)
 	}
-	if p.RealizedPnlMinor != 9990 {
-		t.Errorf("acc1 position realized_pnl_minor = %d, want 9990", p.RealizedPnlMinor)
+	if realizedFigure(t, p.RealizedPnlMinor) != 9990 {
+		t.Errorf("acc1 position realized_pnl_minor = %d, want 9990", realizedFigure(t, p.RealizedPnlMinor))
 	}
 	if p.IncomeMinor != 5000 {
 		t.Errorf("acc1 position income_minor = %d, want 5000", p.IncomeMinor)
@@ -426,8 +426,8 @@ func TestPositionsEndpoint(t *testing.T) {
 	if closed.CostMinor != 0 {
 		t.Errorf("acc3 closed position cost_minor = %d, want 0", closed.CostMinor)
 	}
-	if closed.RealizedPnlMinor != 3000 {
-		t.Errorf("acc3 closed position realized_pnl_minor = %d, want 3000", closed.RealizedPnlMinor)
+	if realizedFigure(t, closed.RealizedPnlMinor) != 3000 {
+		t.Errorf("acc3 closed position realized_pnl_minor = %d, want 3000", realizedFigure(t, closed.RealizedPnlMinor))
 	}
 }
 
@@ -1169,4 +1169,22 @@ func TestPositionsRealRateErrorFailsRequest(t *testing.T) {
 		t.Fatalf("GET positions with a failing rate lookup = %d, want 500 — a real outage must not be served as a 200 with in_base: null: %s",
 			resp.StatusCode, b)
 	}
+}
+
+// realizedFigure dereferences a realized figure the payload publishes, and
+// FAILS THE TEST when the payload published a null instead.
+//
+// The null means the position (or the currency bucket) sold into another
+// currency and has no result in one currency at all — see
+// Position.realized_pnl_minor in the contract. Every caller of this helper is
+// asserting a case where a figure exists, so meeting the null here is a real
+// failure rather than something to paper over with a zero: nought is also a
+// perfectly ordinary realized result, and a helper that returned it would let
+// the two cases pass for each other.
+func realizedFigure(t *testing.T, minor *int64) int64 {
+	t.Helper()
+	if minor == nil {
+		t.Fatalf("realized_pnl_minor is null: the payload says this has no result in one currency")
+	}
+	return *minor
 }

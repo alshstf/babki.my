@@ -169,7 +169,7 @@ func (f *rebuildFixture) realizedOf(t *testing.T, accountID uuid.UUID) int64 {
 	}
 	var total int64
 	for _, p := range positions {
-		total += p.RealizedPnLMinor
+		total += realizedOf(t, p)
 	}
 	return total
 }
@@ -1822,4 +1822,19 @@ func TestSameJournalRowIgnoresTheBasisTheJournalOwns(t *testing.T) {
 	if sameJournalRow(leg(operation.TypeTransferIn, nil, 0), leg(operation.TypeTransferIn, nil, 137_500)) {
 		t.Error("a lone arrival's basis is its own and a change in it must be seen")
 	}
+}
+
+// realizedOf is a position's realized result, and it FAILS THE TEST when the
+// position has none — a disposal that settled in another currency leaves no
+// figure in any single one (see portfolio.Position.RealizedPnL). Every call
+// below therefore asserts two things at once: the number, and that there is a
+// number, which is what keeps a test from quietly comparing a zero against a
+// zero the moment the currency rule starts refusing to answer.
+func realizedOf(t *testing.T, p *portfolio.Position) int64 {
+	t.Helper()
+	minor, inOneCurrency := p.RealizedPnL()
+	if !inOneCurrency {
+		t.Fatalf("position %s has no realized result in one currency: a disposal settled in another", p.InstrumentID)
+	}
+	return minor
 }

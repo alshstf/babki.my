@@ -97,15 +97,15 @@ func TestBuySellFIFO(t *testing.T) {
 	}
 	wantReleased := int64(100_010 + 55_005)
 	wantRealized := 180_000 - wantReleased - 18
-	if p.RealizedPnLMinor != wantRealized {
-		t.Errorf("realized = %d, want %d", p.RealizedPnLMinor, wantRealized)
+	if realizedOf(t, p) != wantRealized {
+		t.Errorf("realized = %d, want %d", realizedOf(t, p), wantRealized)
 	}
 	// remaining cost = full cost of both lots − released (not a cent of drift)
 	if p.CostMinor != (100_010+110_011)-wantReleased {
 		t.Errorf("cost = %d", p.CostMinor)
 	}
-	if p.FeesMinor != 10+11+18 {
-		t.Errorf("fees = %d", p.FeesMinor)
+	if p.FeesMinorIn(p.Currency) != 10+11+18 {
+		t.Errorf("fees = %d", p.FeesMinorIn(p.Currency))
 	}
 }
 
@@ -126,8 +126,8 @@ func TestLotDrainNoRoundingDrift(t *testing.T) {
 	if !p.Quantity.IsZero() || p.CostMinor != 0 {
 		t.Errorf("qty=%s cost=%d, want 0/0", p.Quantity, p.CostMinor)
 	}
-	if p.RealizedPnLMinor != 0 {
-		t.Errorf("realized = %d, want 0", p.RealizedPnLMinor)
+	if realizedOf(t, p) != 0 {
+		t.Errorf("realized = %d, want 0", realizedOf(t, p))
 	}
 }
 
@@ -150,8 +150,8 @@ func TestDriftRemainderGoesToLastPiece(t *testing.T) {
 	if p.CostMinor != 0 {
 		t.Errorf("cost = %d, want 0", p.CostMinor)
 	}
-	if p.RealizedPnLMinor != 12_000-10_001 {
-		t.Errorf("realized = %d, want %d", p.RealizedPnLMinor, 12_000-10_001)
+	if realizedOf(t, p) != 12_000-10_001 {
+		t.Errorf("realized = %d, want %d", realizedOf(t, p), 12_000-10_001)
 	}
 }
 
@@ -225,8 +225,8 @@ func TestAmortizationReducesCost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compute 2: %v", err)
 	}
-	if pos[ofz].CostMinor != 0 || pos[ofz].RealizedPnLMinor != 100_000 {
-		t.Errorf("cost=%d realized=%d, want 0/100000", pos[ofz].CostMinor, pos[ofz].RealizedPnLMinor)
+	if pos[ofz].CostMinor != 0 || realizedOf(t, pos[ofz]) != 100_000 {
+		t.Errorf("cost=%d realized=%d, want 0/100000", pos[ofz].CostMinor, realizedOf(t, pos[ofz]))
 	}
 }
 
@@ -240,38 +240,33 @@ func TestClosedPositionKeptInResult(t *testing.T) {
 		t.Fatalf("Compute: %v", err)
 	}
 	p := pos[lkoh]
-	if p == nil || !p.Quantity.IsZero() || p.RealizedPnLMinor != 250_000 {
+	if p == nil || !p.Quantity.IsZero() || realizedOf(t, p) != 250_000 {
 		t.Fatalf("closed position = %+v", p)
 	}
 }
 
-// TestCurrencyMismatchRejected pins the per-position currency invariant: the
-// first operation that touches cost, quantity or fees fixes the currency, and
-// mixing another one into any of those figures would sum unrelated minor units
-// into a single int64.
+// TestCurrencyMismatchRejected pins the per-position currency invariant: an
+// entry that puts money into a figure holding ONE currency has to repeat that
+// currency, because mixing another one in would sum unrelated minor units into
+// a single int64.
 //
-// INCOME IS THE ONE EXEMPTION and is deliberately absent from the table below:
-// a dividend, a coupon or a tax may arrive in any currency and is kept in it
-// (see Position.IncomeByCurrency and engine_income_currency_test.go, where both
-// halves of the rule are pinned together). Every other type the engine folds
-// into a position is here, so an exemption widened by one case fails.
+// THE EXEMPTIONS ARE ELSEWHERE ON PURPOSE and are as much a rule as these
+// refusals — income (engine_income_currency_test.go), a commission, a sale, and
+// any entry that moves no money at all (engine_position_currency_test.go, which
+// carries the whole enum). What belongs in THIS table is every entry that does
+// reach such a figure, so an exemption widened by one case fails here.
 func TestCurrencyMismatchRejected(t *testing.T) {
 	inCurrency := func(o portfolio.Operation, cur string) portfolio.Operation {
 		o.Currency = cur
 		return o
 	}
 	buyRUB := op(portfolio.TypeBuy, 1, &sber, "10", "100", -100_000, 0)
-	splitEUR := inCurrency(op(portfolio.TypeSplit, 6, &sber, "", "", 0, 0), "EUR")
-	splitEUR.SplitRatio = dp("2")
 
 	for name, bad := range map[string]portfolio.Operation{
-		"sell in another currency":         inCurrency(op(portfolio.TypeSell, 3, &sber, "10", "120", 120_000, 0), "EUR"),
 		"buy in another currency":          inCurrency(op(portfolio.TypeBuy, 4, &sber, "1", "100", -10_000, 0), "USD"),
 		"transfer_in another currency":     inCurrency(op(portfolio.TypeTransferIn, 5, &sber, "1", "", 10_000, 0), "USD"),
-		"transfer_out in another currency": inCurrency(op(portfolio.TypeTransferOut, 5, &sber, "1", "", 0, 0), "USD"),
+		"transfer_out in another currency": inCurrency(op(portfolio.TypeTransferOut, 5, &sber, "1", "", 5_000, 0), "USD"),
 		"amortization in another currency": inCurrency(op(portfolio.TypeAmortization, 5, &sber, "", "", 1_000, 0), "USD"),
-		"fee in another currency":          inCurrency(op(portfolio.TypeFee, 5, &sber, "", "", -100, 0), "USD"),
-		"split in another currency":        splitEUR,
 	} {
 		_, err := portfolio.Compute([]portfolio.Operation{buyRUB, bad})
 		if !errors.Is(err, portfolio.ErrBadOperation) {
@@ -461,7 +456,7 @@ func TestLotsStayExactOverLongSequence(t *testing.T) {
 		}
 	}
 	// realized = proceeds − released − fees, so released is observable from outside
-	releasedMinor := proceedsMinor - sellFeesMinor - p.RealizedPnLMinor
+	releasedMinor := proceedsMinor - sellFeesMinor - realizedOf(t, p)
 	if boughtMinor != p.CostMinor+releasedMinor {
 		t.Errorf("bought %d, but held %d + released %d = %d — %d minor units drifted",
 			boughtMinor, p.CostMinor, releasedMinor, p.CostMinor+releasedMinor,
@@ -597,9 +592,9 @@ func TestUndatedLotBehavesLikeAnyOtherLot(t *testing.T) {
 	if p.Lots[0].CostMinor != 6_668 {
 		t.Errorf("undated lot cost = %d, want 6668 (10001 − floor(10001/3))", p.Lots[0].CostMinor)
 	}
-	if p.RealizedPnLMinor != 4_000-3_333 {
+	if realizedOf(t, p) != 4_000-3_333 {
 		t.Errorf("realized = %d, want %d — the sale must consume the undated lot at ITS cost, not the buy's",
-			p.RealizedPnLMinor, 4_000-3_333)
+			realizedOf(t, p), 4_000-3_333)
 	}
 	// 2 units left of the undated lot and 2 bought, both doubled by the split.
 	if !sameAcquisition(p.Lots[1].AcquiredOn, dayp(6)) {
@@ -654,13 +649,13 @@ func TestTransferredLotBoughtEarlierIsSoldFirst(t *testing.T) {
 	}
 	p := pos[sber]
 
-	if p.RealizedPnLMinor == 400_000-300_000 {
+	if realizedOf(t, p) == 400_000-300_000 {
 		t.Fatalf("realized = %d — the day-%d purchase was released because the journal mentions it first; the parcel bought on day %d is the earlier ACQUISITION and the queue is built from that",
-			p.RealizedPnLMinor, 20, 2)
+			realizedOf(t, p), 20, 2)
 	}
-	if p.RealizedPnLMinor != 400_000-100_000 {
+	if realizedOf(t, p) != 400_000-100_000 {
 		t.Errorf("realized = %d, want %d (400000 − the day-2 parcel's cost 100000)",
-			p.RealizedPnLMinor, 400_000-100_000)
+			realizedOf(t, p), 400_000-100_000)
 	}
 	if !p.Quantity.Equal(d("10")) {
 		t.Fatalf("qty = %s, want 10", p.Quantity)
@@ -882,12 +877,12 @@ func TestUndatedLotLeavesTheQueueFirst(t *testing.T) {
 		t.Fatalf("Compute after the sale: %v", err)
 	}
 	q := after[sber]
-	if q.RealizedPnLMinor == 100_000-10_000 {
-		t.Fatalf("realized = %d — the day-1 purchase was released; a lot whose acquisition is unknown leaves first", q.RealizedPnLMinor)
+	if realizedOf(t, q) == 100_000-10_000 {
+		t.Fatalf("realized = %d — the day-1 purchase was released; a lot whose acquisition is unknown leaves first", realizedOf(t, q))
 	}
-	if q.RealizedPnLMinor != 100_000-90_000 {
+	if realizedOf(t, q) != 100_000-90_000 {
 		t.Errorf("realized = %d, want %d (100000 − the undated parcel's 90000)",
-			q.RealizedPnLMinor, 100_000-90_000)
+			realizedOf(t, q), 100_000-90_000)
 	}
 	// A welcome consequence: selling drains the unknown out of the account
 	// first, so what is left can be valued again (see Handler.positionInBase,
@@ -1368,9 +1363,9 @@ func checkRealizationsSumToTotal(t *testing.T, p *portfolio.Position) {
 	for _, r := range p.Realizations {
 		sum += r.PnLMinor()
 	}
-	if sum != p.RealizedPnLMinor {
+	if sum != realizedOf(t, p) {
 		t.Errorf("realizations sum to %d, but the position realized %d (off by %d) — every minor unit of the total must be accounted for by an event",
-			sum, p.RealizedPnLMinor, sum-p.RealizedPnLMinor)
+			sum, realizedOf(t, p), sum-realizedOf(t, p))
 		for i, r := range p.Realizations {
 			t.Logf("  event %d on %s: proceeds %d, fee %d, released %s → %d",
 				i, r.OccurredOn.Format("2006-01-02"), r.ProceedsMinor, r.FeeMinor, releasedText(r.Released), r.PnLMinor())
@@ -1464,7 +1459,7 @@ func TestEachDisposalGetsItsOwnRealization(t *testing.T) {
 // Moving shares between the family's own accounts is a disposal in none of the
 // seven jurisdictions this series was researched against, and the leg has no
 // proceeds to record — its AmountMinor is the basis that travelled, not money
-// received. It also adds nothing to RealizedPnLMinor and never has, so leaving
+// received. It also adds nothing to RealizedPnL and never has, so leaving
 // it out costs the events-sum-to-the-total invariant nothing.
 //
 // Both shapes are covered, because they take different branches: a transfer
@@ -1491,8 +1486,8 @@ func TestTransferOutRecordsNoRealization(t *testing.T) {
 				t.Errorf("realizations = %d %+v, want 0 — a transfer between one's own accounts realizes nothing",
 					len(p.Realizations), p.Realizations)
 			}
-			if p.RealizedPnLMinor != 0 {
-				t.Errorf("realized = %d, want 0", p.RealizedPnLMinor)
+			if realizedOf(t, p) != 0 {
+				t.Errorf("realized = %d, want 0", realizedOf(t, p))
 			}
 			checkRealizationsSumToTotal(t, p)
 		})
@@ -1547,8 +1542,8 @@ func TestAmortizationRecordsARealization(t *testing.T) {
 	if second.PnLMinor() != 100_000 {
 		t.Errorf("second event result = %d, want 100000", second.PnLMinor())
 	}
-	if p.RealizedPnLMinor != 100_000 {
-		t.Errorf("realized = %d, want 100000 — unchanged by recording what it was made of", p.RealizedPnLMinor)
+	if realizedOf(t, p) != 100_000 {
+		t.Errorf("realized = %d, want 100000 — unchanged by recording what it was made of", realizedOf(t, p))
 	}
 	checkRealizationsSumToTotal(t, p)
 }
@@ -1669,8 +1664,8 @@ func TestRealizationsSumToRealizedPnL(t *testing.T) {
 	p := pos[sber]
 	checkLotInvariants(t, p)
 	checkRealizationsSumToTotal(t, p)
-	if p.RealizedPnLMinor != 1_049_490 {
-		t.Errorf("realized = %d, want 1049490 (see the derivation above)", p.RealizedPnLMinor)
+	if realizedOf(t, p) != 1_049_490 {
+		t.Errorf("realized = %d, want 1049490 (see the derivation above)", realizedOf(t, p))
 	}
 	if len(p.Realizations) != 7 {
 		t.Fatalf("realizations = %d, want 7 — five sales and two amortizations, and nothing for either transfer", len(p.Realizations))
@@ -1765,8 +1760,8 @@ func TestAmortizationIsAllowedWherePrincipalCanCome(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Compute: %v", err)
 			}
-			if pos[ofz].RealizedPnLMinor != tc.wantRealized {
-				t.Errorf("realized = %d, want %d", pos[ofz].RealizedPnLMinor, tc.wantRealized)
+			if realizedOf(t, pos[ofz]) != tc.wantRealized {
+				t.Errorf("realized = %d, want %d", realizedOf(t, pos[ofz]), tc.wantRealized)
 			}
 		})
 	}
@@ -1792,7 +1787,22 @@ func TestPaymentsOnAPaperNeverAcquiredStayLegitimate(t *testing.T) {
 	if p.IncomeMinorIn("RUB") != 12_000+3_000-1_500 {
 		t.Errorf("income = %d, want 13500", p.IncomeMinorIn("RUB"))
 	}
-	if p.RealizedPnLMinor != 0 {
-		t.Errorf("realized = %d, want 0 — payments claim nothing about cost", p.RealizedPnLMinor)
+	if realizedOf(t, p) != 0 {
+		t.Errorf("realized = %d, want 0 — payments claim nothing about cost", realizedOf(t, p))
 	}
+}
+
+// realizedOf is a position's realized result, and it FAILS THE TEST when the
+// position has none — a disposal that settled in another currency leaves no
+// figure in any single one (see portfolio.Position.RealizedPnL). Every call
+// below therefore asserts two things at once: the number, and that there is a
+// number, which is what keeps a test from quietly comparing a zero against a
+// zero the moment the currency rule starts refusing to answer.
+func realizedOf(t *testing.T, p *portfolio.Position) int64 {
+	t.Helper()
+	minor, inOneCurrency := p.RealizedPnL()
+	if !inOneCurrency {
+		t.Fatalf("position %s has no realized result in one currency: a disposal settled in another", p.InstrumentID)
+	}
+	return minor
 }

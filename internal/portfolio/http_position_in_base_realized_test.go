@@ -76,8 +76,8 @@ func TestPositionInBaseRealizedUsesTheRatesOfItsOwnDays(t *testing.T) {
 	p := onlyPosition(t, c, url, acc.ID)
 
 	// Pin the position-currency figures the arithmetic rests on.
-	if p.RealizedPnlMinor != 19500 {
-		t.Fatalf("realized_pnl_minor = %d, want 19500 (120000 - 500 - 100000, in USD)", p.RealizedPnlMinor)
+	if realizedFigure(t, p.RealizedPnlMinor) != 19500 {
+		t.Fatalf("realized_pnl_minor = %d, want 19500 (120000 - 500 - 100000, in USD)", realizedFigure(t, p.RealizedPnlMinor))
 	}
 	if p.InBase == nil {
 		t.Fatalf("in_base = nil, want a converted object")
@@ -140,8 +140,8 @@ func TestPositionInBaseRealizedProfitInPositionCurrencyLossInBase(t *testing.T) 
 
 	p := onlyPosition(t, c, url, acc.ID)
 
-	if p.RealizedPnlMinor != 10000 {
-		t.Fatalf("realized_pnl_minor = %d, want +10000 (a profit in USD)", p.RealizedPnlMinor)
+	if realizedFigure(t, p.RealizedPnlMinor) != 10000 {
+		t.Fatalf("realized_pnl_minor = %d, want +10000 (a profit in USD)", realizedFigure(t, p.RealizedPnlMinor))
 	}
 	if p.InBase == nil {
 		t.Fatalf("in_base = nil, want a converted object")
@@ -154,9 +154,9 @@ func TestPositionInBaseRealizedProfitInPositionCurrencyLossInBase(t *testing.T) 
 	}
 	// The point of the test, stated as its own assertion so the failure message
 	// says what broke rather than merely which number moved.
-	if p.RealizedPnlMinor <= 0 || *p.InBase.RealizedPnlMinor >= 0 {
+	if realizedFigure(t, p.RealizedPnlMinor) <= 0 || *p.InBase.RealizedPnlMinor >= 0 {
 		t.Errorf("realized_pnl_minor = %d (USD) and in_base.realized_pnl_minor = %d (RUB): want opposite signs — a deal can be a profit in the position's currency and a loss in the base currency, and both answers must be published as they are",
-			p.RealizedPnlMinor, *p.InBase.RealizedPnlMinor)
+			realizedFigure(t, p.RealizedPnlMinor), *p.InBase.RealizedPnlMinor)
 	}
 }
 
@@ -196,8 +196,8 @@ func TestPositionInBaseRealizedIncludesAmortization(t *testing.T) {
 	p := onlyPosition(t, c, url, acc.ID)
 
 	// Pin the fixture: in USD this amortization really is a non-event.
-	if p.RealizedPnlMinor != 0 {
-		t.Fatalf("realized_pnl_minor = %d, want 0 — a covered amortization returns exactly what it retires, in the position's own currency", p.RealizedPnlMinor)
+	if realizedFigure(t, p.RealizedPnlMinor) != 0 {
+		t.Fatalf("realized_pnl_minor = %d, want 0 — a covered amortization returns exactly what it retires, in the position's own currency", realizedFigure(t, p.RealizedPnlMinor))
 	}
 	if p.CostMinor != 70000 {
 		t.Fatalf("cost_minor = %d, want 70000 (100000 retired by 30000, in USD)", p.CostMinor)
@@ -265,8 +265,8 @@ func TestPositionInBaseRealizedRoundsOnceForTheWholePosition(t *testing.T) {
 	}
 
 	p := onlyPosition(t, c, url, acc.ID)
-	if p.RealizedPnlMinor != 24690 {
-		t.Fatalf("realized_pnl_minor = %d, want 24690 (two disposals of 12345, in USD)", p.RealizedPnlMinor)
+	if realizedFigure(t, p.RealizedPnlMinor) != 24690 {
+		t.Fatalf("realized_pnl_minor = %d, want 24690 (two disposals of 12345, in USD)", realizedFigure(t, p.RealizedPnlMinor))
 	}
 	if p.InBase == nil {
 		t.Fatalf("in_base = nil, want a converted object")
@@ -367,8 +367,8 @@ func TestPositionInBaseRealizedNullWhenAReleasedParcelHasNoAcquisitionDate(t *te
 		t.Fatalf("destination position after the sale = {qty %q cost %d}, want {\"3\" 12000} — the queue must hand over the undated lot first",
 			p.Quantity, p.CostMinor)
 	}
-	if p.RealizedPnlMinor != 100000 {
-		t.Fatalf("realized_pnl_minor = %d, want 100000 (400000 - 300000, in USD)", p.RealizedPnlMinor)
+	if realizedFigure(t, p.RealizedPnlMinor) != 100000 {
+		t.Fatalf("realized_pnl_minor = %d, want 100000 (400000 - 300000, in USD)", realizedFigure(t, p.RealizedPnlMinor))
 	}
 	if p.HasUndatedLots {
 		t.Fatalf("has_undated_lots = true, want false: the undated lot has been sold and is not among the lots still held — which is exactly why it cannot be the thing that explains the null below")
@@ -485,8 +485,8 @@ func TestPositionInBaseRealizedNullWhenTheDisposalDateHasNoRate(t *testing.T) {
 
 	p := onlyPosition(t, c, url, accountID)
 
-	if p.RealizedPnlMinor != 20000 {
-		t.Fatalf("realized_pnl_minor = %d, want 20000 (120000 - 100000, in USD)", p.RealizedPnlMinor)
+	if realizedFigure(t, p.RealizedPnlMinor) != 20000 {
+		t.Fatalf("realized_pnl_minor = %d, want 20000 (120000 - 100000, in USD)", realizedFigure(t, p.RealizedPnlMinor))
 	}
 	// Every parcel here — the one retired and the one still held — has a
 	// recorded purchase date; only a fx rate is missing, and that is a gap
@@ -559,8 +559,8 @@ func TestPositionInBaseRealizedNullWhenThePurchaseDateHasNoRate(t *testing.T) {
 
 	p := onlyPosition(t, c, url, acc.ID)
 
-	if p.RealizedPnlMinor != 100000 {
-		t.Fatalf("realized_pnl_minor = %d, want 100000 (200000 - 100000, in USD)", p.RealizedPnlMinor)
+	if realizedFigure(t, p.RealizedPnlMinor) != 100000 {
+		t.Fatalf("realized_pnl_minor = %d, want 100000 (200000 - 100000, in USD)", realizedFigure(t, p.RealizedPnlMinor))
 	}
 	// The retired parcel's purchase date IS on record (2026-01-05); only its
 	// fx rate is missing. has_undated_realizations reports an unrecorded
@@ -605,5 +605,146 @@ func TestPositionInBaseRealizedRateErrorFailsRequest(t *testing.T) {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET positions with a failing rate lookup on the day of a sale = %d, want 500 — a real outage must not be served as a 200 with in_base.realized_pnl_minor: null: %s",
 			resp.StatusCode, b)
+	}
+}
+
+// TestRealizedInBaseSurvivesASaleSettledInAnotherCurrency is what the whole
+// currency change is FOR, seen from the screen.
+//
+// A dollar bond redeemed for rubles: the proceeds arrive in one currency and
+// the basis they retire is in another. In the position's own currency there is
+// no result to publish and the payload says so with a null — the difference
+// between 60 000 ₽ and $1 000 is a quantity of neither. In RUBLES there is, and
+// it is exact: the rubles are already rubles and need no rate at all, and the
+// basis is converted at the rate of the day the bonds were BOUGHT, which is the
+// rule НК РФ ст. 210 п. 5 states and the one this handler already applied to
+// every other disposal.
+//
+//	fx USD->RUB: 50 from 2026-02-01, 80 from 2026-05-01, 90 from 2026-07-01
+//	buy  10 @ $100.00 on 2026-03-10 -> basis 100_000 minor USD, rate 50
+//	sell 10 for 60 000,00 ₽ on 2026-05-10 -> proceeds 6_000_000 kopecks, NO rate
+//
+//	in_base.realized_pnl_minor = 6_000_000 - 100_000*50 = 1_000_000
+//
+// The numbers a wrong implementation reaches for, each different and each
+// asserted by name below:
+//
+//	6_000_000 - 100_000*80 = -2_000_000  the basis at the SALE day's rate — and
+//	                                     it even changes the SIGN of the result
+//	6_000_000 - 100_000*90 = -3_000_000  the basis at TODAY's rate
+//	5_900_000                            the proceeds converted as if they were
+//	                                     dollars would be absurd; what is real is
+//	                                     the shortcut this test exists against —
+//	                                     answering "nothing to convert, here is
+//	                                     the position's own figure" for a
+//	                                     position that HAS no own figure, which
+//	                                     published a null where 1 000 000 was
+//	                                     computable.
+func TestRealizedInBaseSurvivesASaleSettledInAnotherCurrency(t *testing.T) {
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := fxRateAPI(t, quotes,
+		datedRate{earlyRateOn, "50"}, datedRate{midRateOn, "80"}, datedRate{lateRateOn, "90"})
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	bond := createInstrument(t, c, url,
+		`{"type":"bond","name":"Облигация","ticker":"BOND1","currency":"USD","face_value_minor":100000,"face_currency":"USD"}`)
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, acc.ID, bond.ID, earlyBuyOn))
+	// The redemption: the issuer settles in rubles at its own rate, which is
+	// what the owner's own account holds seven of.
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
+		"occurred_on":%q,"quantity":"10","amount_minor":6000000,"currency":"RUB"}`,
+		acc.ID, bond.ID, sellOn))
+
+	p := onlyPosition(t, c, url, acc.ID)
+
+	if p.Currency != "USD" {
+		t.Fatalf("currency = %q, want USD — the purchase settles it and the ruble redemption does not", p.Currency)
+	}
+	if p.RealizedPnlMinor != nil {
+		t.Errorf("realized_pnl_minor = %d, want null: 6 000 000 kopecks against a basis of 100 000 cents is a result in neither",
+			*p.RealizedPnlMinor)
+	}
+	if p.InBase == nil || p.InBase.RealizedPnlMinor == nil {
+		t.Fatalf("in_base.realized_pnl_minor is absent, want 1000000: every term is present and dated, so the ruble answer exists (in_base = %+v, gap = %v)",
+			p.InBase, p.InBaseGap)
+	}
+	if got := *p.InBase.RealizedPnlMinor; got != 1_000_000 {
+		t.Errorf("in_base.realized_pnl_minor = %d, want 1000000 (6000000 - 100000*50)", got)
+	}
+
+	// And the account's total, which must not quietly report the USD bucket as
+	// a zero it never computed.
+	total := realizedTotalOf(t, c, url, acc.ID)
+	if len(total.ByCurrency) != 1 || total.ByCurrency[0].Currency != "USD" {
+		t.Fatalf("by_currency = %+v, want one USD bucket", total.ByCurrency)
+	}
+	if total.ByCurrency[0].RealizedPnlMinor != nil {
+		t.Errorf("by_currency[USD].realized_pnl_minor = %d, want null — its only position has no figure in one currency",
+			*total.ByCurrency[0].RealizedPnlMinor)
+	}
+	// The base total is unaffected: it is struck from the disposals' own terms
+	// and every one of them converted.
+	if total.InBase == nil || *total.InBase != 1_000_000 {
+		t.Errorf("in_base = %v, want 1000000 — the ruble answer survives what the dollar answer cannot", total.InBase)
+	}
+}
+
+// TestARubleBondSoldForDollarsStillPublishesItsResult is the same rule seen
+// from the side that has no second currency to fall back on: the position is
+// already denominated in the base currency, so nothing would normally be
+// converted — and this is the one case where something must be, because the
+// figure the position would otherwise publish does not exist.
+//
+// Without the exception, such a position published a realized result NOWHERE:
+// a null in its own currency, and no `in_base` object beside it to carry the
+// answer, on an account where the answer is exactly computable.
+//
+//	base currency RUB, position in RUB
+//	fx USD->RUB: 50 from 2026-02-01, 80 from 2026-05-01, 90 from 2026-07-01
+//	buy  10 for 100 000,00 ₽ on 2026-03-10 -> basis 10_000_000 kopecks, no rate
+//	sell 10 for $2 000.00   on 2026-05-10 -> proceeds 200_000 cents, rate 80
+//
+//	in_base.realized_pnl_minor = 200_000*80 - 10_000_000 = 6_000_000
+//
+// Not 200_000*90 - 10_000_000 = 8_000_000, which values the sale at today's
+// rate instead of the day it happened.
+func TestARubleBondSoldForDollarsStillPublishesItsResult(t *testing.T) {
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := fxRateAPI(t, quotes,
+		datedRate{earlyRateOn, "50"}, datedRate{midRateOn, "80"}, datedRate{lateRateOn, "90"})
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
+	share := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME2","currency":"RUB"}`)
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","amount_minor":-10000000,"currency":"RUB"}`,
+		acc.ID, share.ID, earlyBuyOn))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
+		"occurred_on":%q,"quantity":"10","amount_minor":200000,"currency":"USD"}`,
+		acc.ID, share.ID, sellOn))
+
+	p := onlyPosition(t, c, url, acc.ID)
+
+	if p.Currency != "RUB" {
+		t.Fatalf("currency = %q, want RUB", p.Currency)
+	}
+	if p.RealizedPnlMinor != nil {
+		t.Errorf("realized_pnl_minor = %d, want null — $2000 against a basis in kopecks is a result in neither",
+			*p.RealizedPnlMinor)
+	}
+	if p.InBase == nil || p.InBase.RealizedPnlMinor == nil {
+		t.Fatalf("in_base.realized_pnl_minor is absent, want 6000000: without it this position's realized result is published nowhere at all (in_base = %+v, gap = %v)",
+			p.InBase, p.InBaseGap)
+	}
+	if got := *p.InBase.RealizedPnlMinor; got != 6_000_000 {
+		t.Errorf("in_base.realized_pnl_minor = %d, want 6000000 (200000*80 - 10000000)", got)
+	}
+	// The rest of the object is the position's own figures under the same sign,
+	// which is what an identity conversion has to produce.
+	if p.InBase.CostMinor != 0 {
+		t.Errorf("in_base.cost_minor = %d, want 0 — everything was sold", p.InBase.CostMinor)
 	}
 }

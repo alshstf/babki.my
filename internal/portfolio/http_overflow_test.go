@@ -215,10 +215,10 @@ func TestSumInBaseOverflowIsNotAMissingRate(t *testing.T) {
 func TestRealizedTotalsRefusesANativeTotalThatWouldWrap(t *testing.T) {
 	rt := newRealizedTotals("RUB")
 	none := nullable.NewNullNullable[int64]()
-	if err := rt.add("USD", math.MaxInt64, none, gapNoRate); err != nil {
+	if err := rt.add("USD", nullable.NewNullableWithValue[int64](math.MaxInt64), none, gapNoRate); err != nil {
 		t.Fatalf("first position: %v — maxint64 is a figure, and one of them fits", err)
 	}
-	err := rt.add("USD", 1, none, gapNoRate)
+	err := rt.add("USD", nullable.NewNullableWithValue[int64](1), none, gapNoRate)
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("second position: err = %v, want ErrOverflow — maxint64 + 1 is not a total", err)
 	}
@@ -234,10 +234,10 @@ func TestRealizedTotalsRefusesANativeTotalThatWouldWrap(t *testing.T) {
 func TestRealizedTotalsRefusesABaseTotalThatWouldWrap(t *testing.T) {
 	rt := newRealizedTotals("RUB")
 	big := nullable.NewNullableWithValue(int64(math.MaxInt64))
-	if err := rt.add("USD", 0, big, gapNone); err != nil {
+	if err := rt.add("USD", nullable.NewNullableWithValue[int64](0), big, gapNone); err != nil {
 		t.Fatalf("first position: %v", err)
 	}
-	err := rt.add("EUR", 0, big, gapNone)
+	err := rt.add("EUR", nullable.NewNullableWithValue[int64](0), big, gapNone)
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("second position: err = %v, want ErrOverflow", err)
 	}
@@ -256,10 +256,10 @@ func TestRealizedTotalsRefusesABaseTotalThatWouldWrap(t *testing.T) {
 func TestRealizedTotalsOverflowIsNotAGap(t *testing.T) {
 	rt := newRealizedTotals("RUB")
 	big := nullable.NewNullableWithValue(int64(math.MaxInt64))
-	if err := rt.add("USD", 0, big, gapNone); err != nil {
+	if err := rt.add("USD", nullable.NewNullableWithValue[int64](0), big, gapNone); err != nil {
 		t.Fatalf("first position: %v", err)
 	}
-	if err := rt.add("EUR", 0, big, gapNone); err == nil {
+	if err := rt.add("EUR", nullable.NewNullableWithValue[int64](0), big, gapNone); err == nil {
 		t.Fatal("the overflowing total was accepted; there is nothing to publish and nothing was said")
 	}
 	if rt.undated || rt.noRate {
@@ -279,7 +279,7 @@ func TestRealizedTotalsOverflowIsNotAGap(t *testing.T) {
 // (internal/instrument/http.go) now refuses a face value that is not positive
 // (#93), so this exact construction can no longer occur through a POST or a
 // PATCH. The guard below stays regardless — a broken face value was never the
-// only door to a negative basis: Position.CostMinor and RealizedPnLMinor are
+// only door to a negative basis: Position.CostMinor and RealizedPnL are
 // both accumulated with a bare += in the engine (addLot at engine.go:702,
 // realize at engine.go:212), each term individually valid and none of them
 // carrying a broken field, so a long enough run of ordinary buys (about 4612

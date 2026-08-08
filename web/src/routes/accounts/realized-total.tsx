@@ -90,19 +90,31 @@ export function RealizedTotal({
   // keep.
   if (total.by_currency.length === 0) return null;
 
-  // In the positions' own currency every figure is published unconditionally,
-  // so that mode never has a gap. In the base currency the response carries
-  // either the figure or the reason there is none, never both.
+  // In the base currency the response carries either the figure or the reason
+  // there is none, never both.
+  //
+  // IN THE POSITIONS' OWN CURRENCY A BUCKET CAN BE NULL TOO, and it is not a
+  // gap of the same kind: nothing is missing and no rate would help — one of
+  // the positions in it sold into another currency, so the bucket has no total
+  // in ONE currency to state (see Position.realized_pnl_minor in the contract).
+  // Such a bucket is dropped from the line rather than drawn as a zero, which
+  // is the one rendering that would be a lie: nought is an ordinary realized
+  // result and the two would be indistinguishable. If that leaves nothing at
+  // all, the line disappears exactly as it does for an account with no
+  // positions, and the base-currency mode is where that money is still a
+  // figure.
   const gap = mode === "base" ? total.in_base_gap : null;
   const figures =
     mode === "base"
       ? total.in_base == null
         ? []
         : [{ currency: total.base_currency, amountMinor: total.in_base }]
-      : total.by_currency.map((entry) => ({
-          currency: entry.currency,
-          amountMinor: entry.realized_pnl_minor,
-        }));
+      : total.by_currency
+          .filter((entry) => entry.realized_pnl_minor != null)
+          .map((entry) => ({
+            currency: entry.currency,
+            amountMinor: entry.realized_pnl_minor as number,
+          }));
 
   const wording = gap ? gapWording(t, gap) : undefined;
   // Neither a figure nor a wording for the gap that stopped it: nothing this

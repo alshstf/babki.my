@@ -912,7 +912,7 @@ func TestApplyImportDeltaJudgesCandidatesInTheOrderTheyHappened(t *testing.T) {
 	if len(ops) != 2 || ops[0].Type != operation.TypeBuy {
 		t.Errorf("journal reads back as %+v, want the buy first", ops)
 	}
-	if pnl := positions[f.sberID].RealizedPnLMinor; pnl != 20_000 {
+	if pnl := realizedOf(t, positions[f.sberID]); pnl != 20_000 {
 		t.Errorf("realized = %d, want 20000", pnl)
 	}
 }
@@ -1006,7 +1006,7 @@ func TestApplyImportDeltaFoldsACandidateAfterWhatItsDateAlreadyHolds(t *testing.
 	if len(ops) != 2 || ops[0].Type != operation.TypeBuy {
 		t.Errorf("journal reads back as %+v, want the buy first", ops)
 	}
-	if pnl := positions[f.sberID].RealizedPnLMinor; pnl != 20_000 {
+	if pnl := realizedOf(t, positions[f.sberID]); pnl != 20_000 {
 		t.Errorf("realized = %d, want 20000", pnl)
 	}
 }
@@ -1154,4 +1154,19 @@ func TestApplyImportDeltaRefusesATimestampItCannotHaveInherited(t *testing.T) {
 	if ops, _ := journalOf(t, f, f.accountID); len(ops) != 0 {
 		t.Errorf("journal holds %d operations, want none written", len(ops))
 	}
+}
+
+// realizedOf is a position's realized result, and it FAILS THE TEST when the
+// position has none — a disposal that settled in another currency leaves no
+// figure in any single one (see portfolio.Position.RealizedPnL). Every call
+// below therefore asserts two things at once: the number, and that there is a
+// number, which is what keeps a test from quietly comparing a zero against a
+// zero the moment the currency rule starts refusing to answer.
+func realizedOf(t *testing.T, p *portfolio.Position) int64 {
+	t.Helper()
+	minor, inOneCurrency := p.RealizedPnL()
+	if !inOneCurrency {
+		t.Fatalf("position %s has no realized result in one currency: a disposal settled in another", p.InstrumentID)
+	}
+	return minor
 }

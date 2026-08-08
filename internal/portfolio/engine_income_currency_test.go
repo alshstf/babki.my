@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,17 +22,29 @@ import (
 // operations across 14 papers, every one of them refused by the engine with the
 // same sentence — and the model simply had no room for it.
 //
-// What did NOT change is the rule for everything that touches cost or quantity:
-// a purchase, a sale, either leg of a transfer, a split, an amortization and a
-// fee must still repeat the position's currency, because each of them lands in
-// a single int64 of minor units and two currencies in one such number is
-// corruption no rounding can rescue (see Position.Currency and
-// Type.mustMatchPositionCurrency). Both halves are pinned here: the refusals
-// below are as much the subject of these tests as the acceptances.
+// THE SAME ARGUMENT HAS SINCE BEEN FOLLOWED WHEREVER IT LEADS, and it does not
+// lead to every type. What still has to repeat the position's currency is
+// whatever puts money into a figure that holds one: a purchase, a transfer
+// carrying a basis, and an amortization, which retires basis BY AMOUNT and so
+// would need an fx rate to say how much a ruble payment took off a yuan cost.
+// A commission is now kept per currency exactly as the income is, and a SALE
+// need not match at all — its proceeds go to a disposal that carries its own
+// currency, and what it retires is decided by the quantity sold. An entry that
+// moves no money matches nothing because it claims nothing. Both halves are
+// pinned here: the refusals below are as much the subject of these tests as the
+// acceptances (see Operation.mustMatchPositionCurrency, and
+// engine_position_currency_test.go for the rule type by type).
 //
 // Every figure is written out as a literal rather than derived from the
 // fixtures, so a change in how the engine folds income cannot move the expected
 // answer with it.
+// opInFee is opIn with a commission on the entry.
+func opInFee(typ portfolio.Type, dayN int, inst *uuid.UUID, currency, qty string, amount, feeMinor int64) portfolio.Operation {
+	o := opIn(typ, dayN, inst, currency, qty, amount)
+	o.FeeMinor = feeMinor
+	return o
+}
+
 func opIn(typ portfolio.Type, dayN int, inst *uuid.UUID, currency, qty string, amount int64) portfolio.Operation {
 	o := portfolio.Operation{
 		Type: typ, OccurredOn: day(dayN), AmountMinor: amount,
@@ -140,20 +153,42 @@ func TestATaxInAThirdCurrencyReducesTheIncomeItWasWithheldFrom(t *testing.T) {
 	}
 }
 
-// TestAFeeInAnotherCurrencyIsStillRefused. FeesMinor is one int64 in the
-// position's currency and is published as such, so a commission charged in
-// another one has nowhere to go: it stays a loud refusal rather than being
-// folded in at par. The T-Invest importer already keeps such a commission off
-// the instrument for exactly this reason (see tinvest.tradeCommission).
-func TestAFeeInAnotherCurrencyIsStillRefused(t *testing.T) {
+// TestAFeeInAnotherCurrencyIsBookedInThatCurrency. A commission is charged in
+// the currency the money moved in, which need not be the one the paper is
+// priced in: the broker settles the sale of a yuan bond in rubles and charges
+// its commission in rubles too.
+//
+// This used to be a refusal, on the argument that the position's fee total was
+// one number in one currency. That was true of the FIGURE, and the figure is a
+// list now — so the argument no longer holds, and keeping the refusal would
+// have cost a whole sale over a charge of a few rubles.
+//
+// Both entries are pinned, and the yuan one is what makes the test mean
+// anything: a list that simply took whatever it was given would pass a check
+// that only looked at the ruble entry.
+func TestAFeeInAnotherCurrencyIsBookedInThatCurrency(t *testing.T) {
 	bond := uuid.New()
-	_, err := portfolio.Compute([]portfolio.Operation{
-		opIn(portfolio.TypeBuy, 1, &bond, "CNY", "10", -70_000),
+	pos, err := portfolio.Compute([]portfolio.Operation{
+		opInFee(portfolio.TypeBuy, 1, &bond, "CNY", "10", -70_000, 70),
 		opIn(portfolio.TypeCoupon, 5, &bond, "RUB", "", 123_456),
 		opIn(portfolio.TypeFee, 6, &bond, "RUB", "", -300),
 	})
-	if !errors.Is(err, portfolio.ErrBadOperation) {
-		t.Fatalf("err = %v, want ErrBadOperation — a fee in a second currency has nowhere to go", err)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[bond]
+	want := []portfolio.CurrencyMinor{
+		{Currency: "CNY", Minor: 70},
+		{Currency: "RUB", Minor: 300},
+	}
+	if !slices.Equal(p.FeesByCurrency, want) {
+		t.Errorf("fees = %v, want %v", p.FeesByCurrency, want)
+	}
+	// The purchase commission is capitalized into the basis as well, which is
+	// what it has always been: the fee list records the charge, it does not
+	// replace the cost it became part of.
+	if p.CostMinor != 70_070 {
+		t.Errorf("cost = %d, want 70070 — the purchase commission is part of the basis", p.CostMinor)
 	}
 }
 
@@ -186,20 +221,31 @@ func TestIncomeDoesNotSettleThePositionCurrency(t *testing.T) {
 	wantIncome(t, p, []portfolio.CurrencyMinor{{Currency: "RUB", Minor: 123_456}})
 }
 
-// TestAFeeSettlesThePositionCurrencyBeforeAnyPurchase is the boundary of the
-// rule above, stated as a value rather than left to be inferred: what a payment
-// leaves open, a fee closes. FeesMinor is in the position's currency, so the
-// moment a fee has been booked there is a figure a later purchase in another
-// currency would contradict — and the refusal is the honest answer, the same
-// one TestAFeeInAnotherCurrencyIsStillRefused gets from the other order.
-func TestAFeeSettlesThePositionCurrencyBeforeAnyPurchase(t *testing.T) {
+// TestAFeeDoesNotSettleThePositionCurrencyEither is the boundary of the rule
+// above, stated as a value rather than left to be inferred, and it is the
+// answer that CHANGED: a fee used to close what a payment left open, because
+// the fee total was one number in one currency. It is a list now, so a ruble
+// charge says no more about what the paper is priced in than a ruble coupon
+// does — and the yuan purchase that follows is accepted rather than refused for
+// having arrived second.
+func TestAFeeDoesNotSettleThePositionCurrencyEither(t *testing.T) {
 	bond := uuid.New()
-	_, err := portfolio.Compute([]portfolio.Operation{
+	pos, err := portfolio.Compute([]portfolio.Operation{
 		opIn(portfolio.TypeFee, 1, &bond, "RUB", "", -300),
 		opIn(portfolio.TypeBuy, 2, &bond, "CNY", "10", -70_000),
 	})
-	if !errors.Is(err, portfolio.ErrBadOperation) {
-		t.Fatalf("err = %v, want ErrBadOperation", err)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[bond]
+	if p.Currency != "CNY" {
+		t.Fatalf("currency = %q, want CNY — the purchase settles it, the charge does not", p.Currency)
+	}
+	if got := p.FeesMinorIn("RUB"); got != 300 {
+		t.Errorf("fees in RUB = %d, want 300", got)
+	}
+	if got := p.FeesMinorIn("CNY"); got != 0 {
+		t.Errorf("fees in CNY = %d, want 0 — nothing was charged in the position's own currency", got)
 	}
 }
 
@@ -260,9 +306,9 @@ func TestAPositionWithNoCostIsTheSameWhateverOrderItsPayoutsArrived(t *testing.T
 		// The currency above is a convention for drawing the row, and these
 		// four figures are why it can be one: nothing that would have to be
 		// denominated in it exists (see Position.Currency).
-		if p.CostMinor != 0 || len(p.Lots) != 0 || p.FeesMinor != 0 || len(p.Realizations) != 0 {
+		if p.CostMinor != 0 || len(p.Lots) != 0 || p.FeesMinorIn(p.Currency) != 0 || len(p.Realizations) != 0 {
 			t.Errorf("journal %d: cost %d, %d lots, fees %d, %d realizations — a position with no cost-touching operation must have none of these, or the currency it carries would be a claim about them",
-				i, p.CostMinor, len(p.Lots), p.FeesMinor, len(p.Realizations))
+				i, p.CostMinor, len(p.Lots), p.FeesMinorIn(p.Currency), len(p.Realizations))
 		}
 		got[i] = p
 	}
@@ -298,8 +344,8 @@ func TestAFeeSettlesTheCurrencyAPaymentOnlyLentIt(t *testing.T) {
 	if p.Currency != "CNY" {
 		t.Errorf("currency = %q, want CNY — the commission settled it, the coupon only lent one", p.Currency)
 	}
-	if p.FeesMinor != 300 {
-		t.Errorf("fees = %d, want 300 (fen)", p.FeesMinor)
+	if p.FeesMinorIn(p.Currency) != 300 {
+		t.Errorf("fees = %d, want 300 (fen)", p.FeesMinorIn(p.Currency))
 	}
 	if p.CostMinor != 70_000 {
 		t.Errorf("cost = %d, want 70000 (fen)", p.CostMinor)
@@ -351,4 +397,147 @@ func TestIncomeIsOrderedByCurrencyWhateverTheJournalOrder(t *testing.T) {
 		{Currency: "RUB", Minor: 100},
 		{Currency: "USD", Minor: 307},
 	})
+}
+
+// TestASaleSettledInAnotherCurrencyIsRecordedAndLeavesNoSingleFigure is the
+// yuan bond redeemed for rubles, which is what the owner's own account holds
+// seven of.
+//
+// The sale is ACCEPTED — nothing about it reaches a figure that holds one
+// currency: the proceeds and the fee go to the disposal, which carries its own,
+// and what leaves the position is decided by the quantity sold. What it costs
+// is the position's own realized figure, which stops existing: rubles received
+// less a yuan basis is a quantity of neither, and the engine holds no rate to
+// bridge them. Both halves are pinned, because accepting the sale while
+// publishing a nonsense difference would be worse than the old refusal.
+func TestASaleSettledInAnotherCurrencyIsRecordedAndLeavesNoSingleFigure(t *testing.T) {
+	bond := uuid.New()
+	pos, err := portfolio.Compute([]portfolio.Operation{
+		opIn(portfolio.TypeBuy, 1, &bond, "CNY", "10", -70_000),
+		opInFee(portfolio.TypeSell, 9, &bond, "RUB", "10", 1_137_541, 454),
+	})
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[bond]
+	if p.Currency != "CNY" {
+		t.Fatalf("currency = %q, want CNY — the purchase settles it and the sale does not", p.Currency)
+	}
+	if !p.Quantity.IsZero() {
+		t.Errorf("quantity = %s, want 0 — the bonds left whatever the money arrived in", p.Quantity)
+	}
+	if p.CostMinor != 0 {
+		t.Errorf("cost = %d, want 0 — the whole basis was released", p.CostMinor)
+	}
+	if minor, inOne := p.RealizedPnL(); inOne {
+		t.Errorf("realized = %d in one currency, want no such figure: %d ₽ against a basis in fen is neither", minor, 1_137_541)
+	}
+	// The disposal itself keeps everything a rate-holding layer needs.
+	if len(p.Realizations) != 1 {
+		t.Fatalf("realizations = %d, want 1", len(p.Realizations))
+	}
+	r := p.Realizations[0]
+	if r.Currency != "RUB" || r.ProceedsMinor != 1_137_541 || r.FeeMinor != 454 {
+		t.Errorf("realization = %+v, want 1137541 and a fee of 454, both in RUB", r)
+	}
+	if got := portfolio.LotsCost(r.Released); got != 70_000 {
+		t.Errorf("released basis = %d, want 70000 fen — the queue gives up the same parcels whatever the money was", got)
+	}
+	// And the commission is on the fee list under the currency it was charged
+	// in, not folded into a yuan total at par.
+	if got := p.FeesMinorIn("RUB"); got != 454 {
+		t.Errorf("fees in RUB = %d, want 454", got)
+	}
+}
+
+// TestOneSaleInAnotherCurrencyWithholdsTheWholeRealizedFigure. A position that
+// sold twice — once in its own currency, once in another — has no realized
+// figure at all, rather than the first sale's result standing in for both.
+//
+// A partial sum is the failure this rule exists against: it is a real number of
+// the right currency and the wrong size, and nothing on a screen distinguishes
+// it from the whole.
+func TestOneSaleInAnotherCurrencyWithholdsTheWholeRealizedFigure(t *testing.T) {
+	bond := uuid.New()
+	pos, err := portfolio.Compute([]portfolio.Operation{
+		opIn(portfolio.TypeBuy, 1, &bond, "CNY", "20", -140_000),
+		opIn(portfolio.TypeSell, 5, &bond, "CNY", "10", 80_000),
+		opIn(portfolio.TypeSell, 9, &bond, "RUB", "10", 1_137_541),
+	})
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[bond]
+	if minor, inOne := p.RealizedPnL(); inOne {
+		t.Errorf("realized = %d, want no figure: the yuan sale alone came to 10000 fen and is not the whole result", minor)
+	}
+}
+
+// TestAnAmortizationInAnotherCurrencyIsStillRefused is the line the change did
+// NOT cross, and the reason is in the arithmetic rather than in caution: an
+// amortization retires basis BY AMOUNT, so how much of a yuan basis a ruble
+// payment took off can only be answered with a rate — and that answer would
+// live on in the REMAINING basis, silently changing every later figure for the
+// bond. A sale has no such problem because what it retires is the quantity sold.
+func TestAnAmortizationInAnotherCurrencyIsStillRefused(t *testing.T) {
+	bond := uuid.New()
+	_, err := portfolio.Compute([]portfolio.Operation{
+		opIn(portfolio.TypeBuy, 1, &bond, "CNY", "10", -70_000),
+		opIn(portfolio.TypeAmortization, 9, &bond, "RUB", "", 10_000),
+	})
+	if !errors.Is(err, portfolio.ErrBadOperation) {
+		t.Fatalf("err = %v, want ErrBadOperation — a ruble payment cannot retire a yuan basis by amount", err)
+	}
+	for _, want := range []string{"RUB", "CNY", bond.String()} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+}
+
+// TestATransferCarryingNoBasisNeedNotMatchTheCurrency is the smallest of the
+// three changes and the one with nothing to weigh: the entry moves no money, so
+// its currency is a label over no sum at all.
+//
+// It is the owner's own incoming transfer of 2400 shares, which the broker
+// denominated in dollars while the receiving account holds the paper in rubles,
+// and which was refused for years over an amount of zero.
+func TestATransferCarryingNoBasisNeedNotMatchTheCurrency(t *testing.T) {
+	share := uuid.New()
+	pos, err := portfolio.Compute([]portfolio.Operation{
+		opIn(portfolio.TypeBuy, 1, &share, "RUB", "100", -100_000),
+		opIn(portfolio.TypeTransferIn, 5, &share, "USD", "2400", 0),
+	})
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[share]
+	if p.Currency != "RUB" {
+		t.Errorf("currency = %q, want RUB — a costless arrival settles nothing", p.Currency)
+	}
+	if got := p.Quantity.String(); got != "2500" {
+		t.Errorf("quantity = %s, want 2500", got)
+	}
+	if p.CostMinor != 100_000 {
+		t.Errorf("cost = %d, want 100000 — the arrival brought shares and no money", p.CostMinor)
+	}
+	// The arriving parcel has no acquisition date and no cost, which is the
+	// existing rule for a transfer whose basis nobody recorded; the currency
+	// exemption changes none of it.
+	if len(p.Lots) != 2 || p.Lots[0].AcquiredOn != nil || p.Lots[0].CostMinor != 0 {
+		t.Errorf("lots = %+v, want the dateless costless parcel at the head of the queue", p.Lots)
+	}
+}
+
+// TestATransferCarryingABasisMustStillMatch is the boundary of the rule above,
+// pinned so that "moves no money" cannot quietly become "is a transfer".
+func TestATransferCarryingABasisMustStillMatch(t *testing.T) {
+	share := uuid.New()
+	_, err := portfolio.Compute([]portfolio.Operation{
+		opIn(portfolio.TypeBuy, 1, &share, "RUB", "100", -100_000),
+		opIn(portfolio.TypeTransferIn, 5, &share, "USD", "2400", 1),
+	})
+	if !errors.Is(err, portfolio.ErrBadOperation) {
+		t.Fatalf("err = %v, want ErrBadOperation — one cent of dollar basis is still dollars", err)
+	}
 }

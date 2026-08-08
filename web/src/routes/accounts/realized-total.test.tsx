@@ -203,3 +203,36 @@ describe("RealizedTotal", () => {
     expect(screen.queryByTestId("realized-total-amounts")).not.toBeInTheDocument();
   });
 });
+
+// Одна из позиций продана в другой валюте: у корзины этой валюты нет итога
+// в одной валюте вообще, и строка не имеет права нарисовать вместо него ноль.
+// Ноль — это тоже настоящий результат, и два случая стали бы неразличимы.
+describe("корзина без итога в одной валюте", () => {
+  it("не рисуется, а остальные валюты остаются на месте", () => {
+    render(
+      <RealizedTotal
+        total={makeTotal({
+          by_currency: [
+            { currency: "CNY", realized_pnl_minor: null },
+            { currency: "USD", realized_pnl_minor: 12_500 },
+          ],
+        })}
+        mode="native"
+      />,
+    );
+    const amounts = screen.getByTestId("realized-total-amounts");
+    expect(amounts).toHaveTextContent("125,00");
+    expect(amounts).not.toHaveTextContent("CNY");
+    expect(amounts).not.toHaveTextContent("0,00");
+  });
+
+  it("не оставляет пустую строку, когда таких корзин все", () => {
+    const { container } = render(
+      <RealizedTotal
+        total={makeTotal({ by_currency: [{ currency: "CNY", realized_pnl_minor: null }] })}
+        mode="native"
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+});

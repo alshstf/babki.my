@@ -28,8 +28,8 @@ func TestSplitAdjustsQuantity(t *testing.T) {
 	if p.CostMinor != 1_500_000 {
 		t.Errorf("cost = %d, want 1500000", p.CostMinor)
 	}
-	if p.RealizedPnLMinor != 1_550_000-1_500_000 {
-		t.Errorf("realized = %d", p.RealizedPnLMinor)
+	if realizedOf(t, p) != 1_550_000-1_500_000 {
+		t.Errorf("realized = %d", realizedOf(t, p))
 	}
 }
 
@@ -44,7 +44,7 @@ func TestTransferOutInCarryover(t *testing.T) {
 		t.Fatalf("Compute out: %v", err)
 	}
 	p := pos[sber]
-	if !p.Quantity.Equal(d("6")) || p.CostMinor != 60_000 || p.RealizedPnLMinor != 0 {
+	if !p.Quantity.Equal(d("6")) || p.CostMinor != 60_000 || realizedOf(t, p) != 0 {
 		t.Fatalf("source pos = %+v", p)
 	}
 
@@ -57,8 +57,8 @@ func TestTransferOutInCarryover(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compute in: %v", err)
 	}
-	if pos[sber].RealizedPnLMinor != 8_000 {
-		t.Errorf("dest realized = %d, want 8000", pos[sber].RealizedPnLMinor)
+	if realizedOf(t, pos[sber]) != 8_000 {
+		t.Errorf("dest realized = %d, want 8000", realizedOf(t, pos[sber]))
 	}
 }
 
@@ -583,13 +583,13 @@ func TestTransferredLotsReleaseInFIFOOrder(t *testing.T) {
 	// The whole first piece is released, so realized P&L is measured against
 	// that piece's cost alone — not against a share of one merged lot, which
 	// for this fixture would be floor(155015*10/15) = 103_343 and give 16_657.
-	if p.RealizedPnLMinor == 120_000-103_343 {
+	if realizedOf(t, p) == 120_000-103_343 {
 		t.Fatalf("realized = %d — that is a proportional share of ONE merged lot; the sale must consume the first piece of the breakdown whole",
-			p.RealizedPnLMinor)
+			realizedOf(t, p))
 	}
-	if p.RealizedPnLMinor != 120_000-100_010 {
+	if realizedOf(t, p) != 120_000-100_010 {
 		t.Errorf("realized = %d, want %d (120000 − the first piece's cost 100010)",
-			p.RealizedPnLMinor, 120_000-100_010)
+			realizedOf(t, p), 120_000-100_010)
 	}
 	if len(p.Lots) != 1 {
 		t.Fatalf("lots = %+v, want 1 (the younger piece)", p.Lots)
