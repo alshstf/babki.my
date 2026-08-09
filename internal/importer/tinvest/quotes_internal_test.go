@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
@@ -430,5 +431,125 @@ func (f *quotesFixture) markUnparsed(t *testing.T, linkID uuid.UUID, key, reason
 			now(), 'RUB', 0, '{}'::jsonb, $3, now(), $4)`,
 		f.conn.ID, linkID, key, reason); err != nil {
 		t.Fatalf("seed mirror row %s: %v", key, err)
+	}
+}
+
+// -------------------------------------------------------------------------
+// pricing a holding nobody imported (#137)
+// -------------------------------------------------------------------------
+
+func listing(uid, isin, ticker, class, currency, kind string) Listing {
+	return Listing{UID: uid, ISIN: isin, Ticker: ticker, ClassCode: class, Currency: currency, Kind: kind}
+}
+
+// TestCandidateListingsRefuseEverythingButTheSamePaper. The broker answers a
+// search with whatever matches, and three of the four filters below are the
+// difference between a price and a stranger's price.
+func TestCandidateListingsRefuseEverythingButTheSamePaper(t *testing.T) {
+	want := UnmappedHeldInstrument{ISIN: "US0378331005", Ticker: "AAPL", Type: "share", Currency: "USD"}
+	found := []Listing{
+		listing("uid-spb", "US0378331005", "AAPL", "SPBXM", "USD", "INSTRUMENT_TYPE_SHARE"),
+		listing("uid-a25", "US0378331005", "AAPL", "A25", "usd", "INSTRUMENT_TYPE_SHARE"),
+		// Same paper, the old ruble line: a price in the wrong currency filed
+		// under this row would be wrong by a factor of eighty.
+		listing("uid-rm", "US0378331005", "AAPL-RM", "FQBR", "RUB", "INSTRUMENT_TYPE_SHARE"),
+		// SOMEBODY ELSE'S PAPER UNDER THE SAME TICKER, and identical to the
+		// wanted one in every other respect — same kind, same currency. Only
+		// the ISIN tells them apart, which is what makes this row the one that
+		// says the match is on the ISIN and not on the ticker. The broker
+		// really does answer "T" with two issuers.
+		listing("uid-other", "RU000A107UL4", "AAPL", "TQBR", "USD", "INSTRUMENT_TYPE_SHARE"),
+		// THE SAME PAPER UNDER ANOTHER TICKER, in the wanted currency: kept,
+		// which ticker matching would not do. The frozen foreign lines carry a
+		// "-RM" name of their own, and a rule that dropped them would leave
+		// exactly the holdings this pass exists for unpriced.
+		listing("uid-rm-usd", "US0378331005", "AAPL-RM", "MTQR", "USD", "INSTRUMENT_TYPE_SHARE"),
+		// The right ISIN and currency, the wrong kind of asset: a bond's quote
+		// is a percent of par and would be read here as money per share.
+		listing("uid-bond", "US0378331005", "AAPL", "TQCB", "USD", "INSTRUMENT_TYPE_BOND"),
+	}
+
+	got := candidateListings(want, found)
+	kept := map[string]bool{}
+	for _, l := range got {
+		kept[l.UID] = true
+	}
+	want3 := []string{"uid-spb", "uid-a25", "uid-rm-usd"}
+	for _, uid := range want3 {
+		if !kept[uid] {
+			t.Errorf("dropped %q, want it kept — it is this paper, in this currency, of this kind", uid)
+		}
+	}
+	if kept["uid-other"] {
+		t.Error("kept uid-other: another issuer's share under the same ticker, told apart only by its ISIN")
+	}
+	if len(got) != len(want3) {
+		t.Errorf("kept %d listings, want %d: %+v", len(got), len(want3), got)
+	}
+}
+
+// TestPickListingTakesTheOneStillBeingQuoted. Apple answers with lines quoted
+// this week and lines frozen since trading in them stopped in 2022. The freshest
+// price is the rule, and it needs no hand-maintained list of venue names.
+func TestPickListingTakesTheOneStillBeingQuoted(t *testing.T) {
+	live := listing("uid-live", "US0378331005", "AAPL", "SPBXM", "USD", "INSTRUMENT_TYPE_SHARE")
+	frozen := listing("uid-frozen", "US0378331005", "AAPL-RM", "FQBR", "USD", "INSTRUMENT_TYPE_SHARE")
+	prices := map[string]LastPrice{
+		"uid-live":   {InstrumentUID: "uid-live", Price: decimal.RequireFromString("313.25"), At: time.Date(2026, 8, 7, 23, 28, 0, 0, time.UTC)},
+		"uid-frozen": {InstrumentUID: "uid-frozen", Price: decimal.RequireFromString("58424"), At: time.Date(2022, 2, 25, 10, 10, 0, 0, time.UTC)},
+	}
+
+	// Offered in the order that would trip a "first one wins" implementation.
+	got, price, ok := pickListing([]Listing{frozen, live}, prices)
+	if !ok {
+		t.Fatal("refused to pick, want the listing still being quoted")
+	}
+	if got.UID != "uid-live" {
+		t.Errorf("picked %q, want uid-live", got.UID)
+	}
+	if price.Price.String() != "313.25" {
+		t.Errorf("price = %s, want 313.25", price.Price)
+	}
+}
+
+// TestPickListingRefusesTwoEqallyFreshPricesThatDisagree is the trap this
+// whole selection exists around: with nothing to choose between two venues,
+// picking one puts its price on the holding and nothing on any screen says
+// which venue it came from.
+func TestPickListingRefusesTwoEqallyFreshPricesThatDisagree(t *testing.T) {
+	at := time.Date(2026, 8, 7, 23, 59, 0, 0, time.UTC)
+	a := listing("uid-a", "US0378331005", "AAPL", "SPBXM", "USD", "INSTRUMENT_TYPE_SHARE")
+	b := listing("uid-b", "US0378331005", "AAPL", "A25", "USD", "INSTRUMENT_TYPE_SHARE")
+
+	disagree := map[string]LastPrice{
+		"uid-a": {InstrumentUID: "uid-a", Price: decimal.RequireFromString("313.25"), At: at},
+		"uid-b": {InstrumentUID: "uid-b", Price: decimal.RequireFromString("311.00"), At: at},
+	}
+	if _, _, ok := pickListing([]Listing{a, b}, disagree); ok {
+		t.Error("picked one of two same-day prices that disagree, want a refusal")
+	}
+
+	// The same tie with the same price is not a choice at all — it is one fact
+	// reported twice, and refusing it would leave a holding unpriced for no
+	// reason.
+	agree := map[string]LastPrice{
+		"uid-a": {InstrumentUID: "uid-a", Price: decimal.RequireFromString("313.25"), At: at},
+		"uid-b": {InstrumentUID: "uid-b", Price: decimal.RequireFromString("313.25"), At: at},
+	}
+	if _, price, ok := pickListing([]Listing{a, b}, agree); !ok || price.Price.String() != "313.25" {
+		t.Errorf("refused two identical prices, want 313.25 (ok=%v)", ok)
+	}
+}
+
+// TestPickListingRefusesWhenNothingIsQuoted. A candidate with no price is not
+// a candidate; with none of them priced there is nothing to pick.
+func TestPickListingRefusesWhenNothingIsQuoted(t *testing.T) {
+	a := listing("uid-a", "US0378331005", "AAPL", "SPBXM", "USD", "INSTRUMENT_TYPE_SHARE")
+	if _, _, ok := pickListing([]Listing{a}, map[string]LastPrice{}); ok {
+		t.Error("picked a listing the broker quoted no price for")
+	}
+	zero := map[string]LastPrice{"uid-a": {InstrumentUID: "uid-a", At: time.Now()}}
+	if _, _, ok := pickListing([]Listing{a}, zero); ok {
+		t.Error("picked a listing whose price is nought, which is no price")
 	}
 }

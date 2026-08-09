@@ -583,6 +583,56 @@ func (s *Store) UnparsedByConnection(ctx context.Context, connID uuid.UUID, limi
 	return rows, hasMore, nil
 }
 
+// UnmappedHeldInstrument is a catalog row this space's journal names and this
+// connection has no broker listing for.
+type UnmappedHeldInstrument struct {
+	InstrumentID uuid.UUID
+	ISIN         string
+	Ticker       string
+	Type         string
+	Currency     string
+}
+
+// UnmappedHeldInstruments lists the securities this space actually holds a
+// history of and that this connection's instrument map says nothing about.
+//
+// THEY ARE THE HOLDINGS ENTERED BY HAND. The map is built from IMPORTED
+// operations, so a paper the owner typed in — at a second broker, or before the
+// connection existed — is never in it, and the price worker walking the map
+// alone will never price it however plainly the broker lists that same paper.
+// On the owner's account this is exactly two rows, and they are the only two
+// holdings left with no price at all.
+//
+// Ordered by the catalog id so a run is reproducible, and bounded by the
+// caller: this is a search per row against the broker, not a lookup.
+func (s *Store) UnmappedHeldInstruments(ctx context.Context, spaceID, connID uuid.UUID) ([]UnmappedHeldInstrument, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT DISTINCT i.id, i.isin, i.ticker, i.type::text, i.currency
+		FROM operations o
+		JOIN instruments i ON i.id = o.instrument_id
+		WHERE o.space_id = $1
+		  AND NOT EXISTS (
+			SELECT 1 FROM tinvest_instrument_map m
+			WHERE m.connection_id = $2 AND m.instrument_id = i.id)
+		ORDER BY i.id`, spaceID, connID)
+	if err != nil {
+		return nil, fmt.Errorf("tinvest: list unmapped held instruments: %w", err)
+	}
+	defer rows.Close()
+	out := []UnmappedHeldInstrument{}
+	for rows.Next() {
+		var u UnmappedHeldInstrument
+		if err := rows.Scan(&u.InstrumentID, &u.ISIN, &u.Ticker, &u.Type, &u.Currency); err != nil {
+			return nil, fmt.Errorf("tinvest: list unmapped held instruments: %w", err)
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tinvest: list unmapped held instruments: %w", err)
+	}
+	return out, nil
+}
+
 // CurrencyTradesUnparsedByLink counts, per linked broker account, the currency
 // purchases and sales this program does not import (ReasonCurrencyTrade).
 //

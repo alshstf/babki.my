@@ -495,6 +495,43 @@ func (c *Client) InstrumentByUID(ctx context.Context, uid string) (InstrumentBri
 	}, nil
 }
 
+// Listing is one of the broker's tradable lines for a security, as
+// FindInstrument reports it. ONE PAPER HAS SEVERAL — Apple answers with four —
+// and they differ in the two things that matter to a price: which venue struck
+// it (ClassCode) and what it is denominated in.
+type Listing struct {
+	UID, ISIN, Ticker, Name, ClassCode, Currency, Kind string
+}
+
+// FindInstruments searches the broker's catalog by a free-text query, which for
+// this program's purposes is always an ISIN: a ticker is not unique across
+// venues or even across issuers (the broker answers "T" with a bond of one
+// issuer and a share of another), and matching on one is how a holding gets
+// priced with a stranger's price.
+//
+// The result is EVERY listing the broker returns, unfiltered. Choosing among
+// them is the caller's, and is deliberately not hidden in here: the rule for
+// picking is about what the catalog row says and what the prices show, neither
+// of which a search knows.
+func (c *Client) FindInstruments(ctx context.Context, query string) ([]Listing, error) {
+	req := struct {
+		Query string `json:"query"`
+	}{Query: query}
+	var resp wireFindInstrumentResponse
+	if err := c.do(ctx, "InstrumentsService/FindInstrument", req, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]Listing, 0, len(resp.Instruments))
+	for _, w := range resp.Instruments {
+		out = append(out, Listing{
+			UID: w.UID, ISIN: w.ISIN, Ticker: w.Ticker, Name: w.Name,
+			ClassCode: w.ClassCode, Currency: strings.ToUpper(w.Currency),
+			Kind: w.InstrumentKind,
+		})
+	}
+	return out, nil
+}
+
 // BondNominalByUID calls InstrumentsService/BondBy with
 // id_type=INSTRUMENT_ID_TYPE_UID and returns the bond's nominal — the one
 // value InstrumentByUID's GetInstrumentBy call cannot supply (see
