@@ -91,7 +91,7 @@ func stubTinvestDeps(t *testing.T, pool *pgxpool.Pool) jobs.TinvestDeps {
 			return tinvest.NewRebuilder(store, tinvest.NewResolver(store, instrument.NewStore(pool), slog.Default()),
 				operation.NewService(opStore), opStore, slog.Default())
 		},
-		Reconciler: tinvest.NewReconciler(store, opStore, account.NewStore(pool), slog.Default()),
+		Reconciler: tinvest.NewReconciler(store, opStore, account.NewStore(pool), instrument.NewStore(pool), slog.Default()),
 	}
 }
 

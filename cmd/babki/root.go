@@ -136,7 +136,7 @@ func newTinvestDeps(r *rt, instStore *instrument.Store, opStore *operation.Store
 			return tinvest.NewRebuilder(store, tinvest.NewResolver(store, instStore, r.log),
 				operation.NewService(opStore), opStore, r.log)
 		},
-		Reconciler: tinvest.NewReconciler(store, opStore, accStore, r.log),
+		Reconciler: tinvest.NewReconciler(store, opStore, accStore, instStore, r.log),
 	}, nil
 }
 

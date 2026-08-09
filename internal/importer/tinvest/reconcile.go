@@ -12,6 +12,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/portfolio"
 )
@@ -564,18 +565,29 @@ type Reconciler struct {
 	store    *Store
 	ops      engineReader
 	accounts balanceMarker
-	log      *slog.Logger
+	// catalog answers "which of our rows is this ISIN", which is how a broker
+	// position under a listing this connection never imported is recognized as
+	// a paper the owner does hold (see matchByISIN).
+	catalog isinCatalog
+	log     *slog.Logger
 	// now stands in for time.Now so a test can pin the day a mark is filed
 	// under instead of racing the wall clock (the pattern
 	// marketdata.backfillFxWorker uses).
 	now func() time.Time
 }
 
-func NewReconciler(store *Store, ops engineReader, accounts balanceMarker, log *slog.Logger) *Reconciler {
+func NewReconciler(store *Store, ops engineReader, accounts balanceMarker, catalog isinCatalog, log *slog.Logger) *Reconciler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Reconciler{store: store, ops: ops, accounts: accounts, log: log, now: time.Now}
+	return &Reconciler{store: store, ops: ops, accounts: accounts, catalog: catalog, log: log, now: time.Now}
+}
+
+// isinCatalog is the narrow view of instrument.Store the reconciliation needs:
+// one question, asked about a security the broker named and this program may
+// already hold under another of its listings.
+type isinCatalog interface {
+	ByISIN(ctx context.Context, isin string) (instrument.Instrument, error)
 }
 
 // ReconcileLink checks one linked account against the broker and, when the
@@ -615,6 +627,102 @@ func NewReconciler(store *Store, ops engineReader, accounts balanceMarker, log *
 //
 // A broker that did not answer yields ReconcileNotChecked and the error, which
 // is a different thing from "no differences" and must be shown as one.
+// passportLookupsPerReconcile bounds how many of the broker's own positions one
+// check asks a passport for. Each is a request; the set is the positions this
+// connection has no mapping for, which on a healthy account is empty and on the
+// owner's is fourteen. Whatever the cap leaves out stays reported as unmatched,
+// which is the honest answer for a position nothing was learned about — and the
+// count that was skipped is logged rather than passed over.
+const passportLookupsPerReconcile = 40
+
+// matchByISIN teaches the index the broker positions it does not already know,
+// by asking the broker what paper each one IS and looking that paper up in this
+// program's own catalog.
+//
+// ONE PAPER, TWO LISTINGS, TWO ROWS OF NONSENSE. When a foreign share was moved
+// to another venue after trading in it was suspended, the broker's portfolio
+// reports the new listing while the history that built the journal named the old
+// one. Nothing connects the two identifiers, so the check reported the holding
+// TWICE — once as "the broker has 20 and we have none", once as "we have 20 and
+// the broker has none" — for seven of the owner's papers at once, with the
+// quantities agreeing in every one of them. A list like that is not read.
+//
+// THE ISIN IS WHAT IDENTIFIES A SECURITY, which is why it and nothing else is
+// matched on. A ticker is not unique across venues or issuers, and matching on
+// one would file a stranger's position against the owner's paper.
+//
+// NOTHING IS WRITTEN DOWN. The learned pairs live for this one comparison. The
+// instrument map is what the IMPORT resolves operations through, and a pairing
+// put there — however sound — would decide where future trades are booked, on
+// the strength of a check whose whole job is to look and report.
+func (r *Reconciler) matchByISIN(ctx context.Context, c *Client, index InstrumentIndex,
+	labels map[uuid.UUID]string, positions []PortfolioPosition,
+) (InstrumentIndex, map[uuid.UUID]string) {
+	unknown := make([]PortfolioPosition, 0, len(positions))
+	for _, p := range positions {
+		if p.InstrumentType == brokerTypeCurrency {
+			continue
+		}
+		if _, ok := index.lookup(p); !ok && p.InstrumentUID != "" {
+			unknown = append(unknown, p)
+		}
+	}
+	if len(unknown) == 0 {
+		return index, labels
+	}
+	if len(unknown) > passportLookupsPerReconcile {
+		r.log.Info("tinvest: more unmatched broker positions than one check looks up, the rest stay unmatched",
+			"unmatched", len(unknown), "looked_up", passportLookupsPerReconcile)
+		unknown = unknown[:passportLookupsPerReconcile]
+	}
+
+	// Copies, so a failure halfway leaves the caller's own index untouched and
+	// so nothing learned here can outlive this comparison.
+	byUID := make(map[string]uuid.UUID, len(index.ByUID)+len(unknown))
+	for k, v := range index.ByUID {
+		byUID[k] = v
+	}
+	grown := InstrumentIndex{ByUID: byUID, ByFIGI: index.ByFIGI}
+	grownLabels := make(map[uuid.UUID]string, len(labels))
+	for k, v := range labels {
+		grownLabels[k] = v
+	}
+
+	for _, p := range unknown {
+		brief, err := c.InstrumentByUID(ctx, p.InstrumentUID)
+		if err != nil {
+			r.log.Debug("tinvest: the broker would not say what one of its own positions is",
+				"instrument_uid", p.InstrumentUID, "err", err)
+			continue
+		}
+		if brief.ISIN == "" {
+			// NOT A GUARD AGAINST A WRONG MATCH — instrument.Store.ByISIN
+			// refuses an empty ISIN itself, and one rule kept in two places is
+			// how the two eventually disagree. This is here so the LOG says
+			// which of two different things happened: the broker would not say
+			// what its own position is, or it said and nothing of ours carries
+			// that ISIN. Those send a reader to different places.
+			r.log.Debug("tinvest: the broker names no ISIN for one of its own positions",
+				"instrument_uid", p.InstrumentUID, "ticker", brief.Ticker)
+			continue
+		}
+		inst, err := r.catalog.ByISIN(ctx, brief.ISIN)
+		if err != nil {
+			// Including "no such row": the owner does not hold this paper in
+			// this program at all, which is a real difference and is reported
+			// as one.
+			r.log.Debug("tinvest: no catalog row carries the ISIN of a broker position",
+				"instrument_uid", p.InstrumentUID, "isin", brief.ISIN, "err", err)
+			continue
+		}
+		grown.ByUID[p.InstrumentUID] = inst.ID
+		if _, named := grownLabels[inst.ID]; !named {
+			grownLabels[inst.ID] = instrumentLabel(grownLabels, inst.ID)
+		}
+	}
+	return grown, grownLabels
+}
+
 func (r *Reconciler) ReconcileLink(ctx context.Context, c *Client, conn Connection, link AccountLink) (ReconcileResult, error) {
 	notChecked := ReconcileResult{Status: ReconcileNotChecked}
 
@@ -644,6 +752,7 @@ func (r *Reconciler) ReconcileLink(ctx context.Context, c *Client, conn Connecti
 	if err != nil {
 		return notChecked, err
 	}
+	index, labels = r.matchByISIN(ctx, c, index, labels, brokerPositions)
 
 	res, cmpErr := compareHoldings(brokerPositions, brokerBalances, journal, index, labels)
 

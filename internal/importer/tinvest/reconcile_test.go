@@ -30,11 +30,30 @@ var (
 const (
 	portfolioPath = "/tinkoff.public.invest.api.contract.v1.OperationsService/GetPortfolio"
 	positionsPath = "/tinkoff.public.invest.api.contract.v1.OperationsService/GetPositions"
+	// The check asks the broker what an unmatched position IS, so that one
+	// paper listed on two venues is not reported as two differences (see
+	// Reconciler.matchByISIN). A test whose stub does not answer it is a test
+	// whose broker position stays unmatched — which for most of these is the
+	// case under test anyway.
+	instrumentByPath = "/tinkoff.public.invest.api.contract.v1.InstrumentsService/GetInstrumentBy"
 )
 
 // -------------------------------------------------------------------------
 // test fixtures: the journal side
 // -------------------------------------------------------------------------
+
+// instrumentWithISIN creates a catalog row carrying an ISIN, which is what the
+// cross-venue pairing matches on.
+func (f fixture) instrumentWithISIN(t *testing.T, ticker, isin string) instrument.Instrument {
+	t.Helper()
+	inst, err := instrument.NewStore(f.pool).Create(f.ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: ticker, Ticker: ticker, ISIN: isin, Currency: "USD",
+	})
+	if err != nil {
+		t.Fatalf("create instrument %s: %v", ticker, err)
+	}
+	return inst
+}
 
 // aBuy is one purchase in the journal: qty units costing amountMinor (which
 // is negative, money leaving) plus feeMinor charged on top.
@@ -798,7 +817,7 @@ func TestReconcileLinkMarksTheBalanceWithTheBrokersOwnRubles(t *testing.T) {
 	r := NewReconciler(f.store, fakeJournal{ops: []operation.Operation{
 		aCashEntry(operation.TypeDeposit, 1_000_000, "RUB"),
 		aBuy(inst, "100", -100_000, 10, "RUB"),
-	}}, marker, nil)
+	}}, marker, instrument.NewStore(f.pool), nil)
 	r.now = func() time.Time { return time.Date(2026, 8, 4, 22, 30, 0, 0, time.UTC) }
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
@@ -851,7 +870,7 @@ func TestReconcileLinkAgreesWithAnAccountThatOnlyHoldsCash(t *testing.T) {
 	marker := newMarker()
 	r := NewReconciler(f.store, fakeJournal{ops: []operation.Operation{
 		aCashEntry(operation.TypeDeposit, 5_000_000, "RUB"),
-	}}, marker, nil)
+	}}, marker, instrument.NewStore(f.pool), nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if err != nil {
@@ -878,7 +897,7 @@ func TestReconcileLinkSaysNotCheckedWhenThePortfolioIsUnavailable(t *testing.T) 
 	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
 
 	marker := newMarker()
-	r := NewReconciler(f.store, fakeJournal{}, marker, nil)
+	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if err == nil {
@@ -906,7 +925,7 @@ func TestReconcileLinkSaysNotCheckedWhenTheCashIsUnavailable(t *testing.T) {
 	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
 
 	marker := newMarker()
-	r := NewReconciler(f.store, fakeJournal{}, marker, nil)
+	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if err == nil {
@@ -932,11 +951,15 @@ func TestReconcileLinkMarksTheBalanceEvenWhenTheSidesDisagree(t *testing.T) {
 				`"quantity":{"units":"3","nano":0},"blocked":false}]}`)},
 		positionsPath: {status: http.StatusOK, body: []byte(
 			`{"money":[{"currency":"rub","units":"1","nano":0}]}`)},
+		// The broker knows nothing about it either: the position stays
+		// unmatched, which is what this test's difference is made of.
+		instrumentByPath: {status: http.StatusNotFound, body: []byte(
+			`{"code":5,"message":"Instrument not found","description":"50002"}`)},
 	})
 	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
 
 	marker := newMarker()
-	r := NewReconciler(f.store, fakeJournal{}, marker, nil)
+	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if err != nil {
@@ -955,7 +978,7 @@ func TestReconcileLinkRefusesALinkOfAnotherConnection(t *testing.T) {
 	other := f.link
 	other.ConnectionID = uuid.New()
 
-	r := NewReconciler(f.store, fakeJournal{}, newMarker(), nil)
+	r := NewReconciler(f.store, fakeJournal{}, newMarker(), instrument.NewStore(f.pool), nil)
 	res, err := r.ReconcileLink(f.ctx, NewClient(nil, "", "token", nil), f.conn, other)
 	if !errors.Is(err, ErrLinkNotInConnection) {
 		t.Fatalf("error = %v, want %v", err, ErrLinkNotInConnection)
@@ -976,7 +999,7 @@ func TestReconcileLinkRefusesALinkOfAnotherSpace(t *testing.T) {
 	other.SpaceID = uuid.New()
 
 	marker := newMarker()
-	r := NewReconciler(f.store, fakeJournal{}, marker, nil)
+	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil)
 	res, err := r.ReconcileLink(f.ctx, NewClient(nil, "", "token", nil), f.conn, other)
 	if !errors.Is(err, ErrLinkOutsideSpace) {
 		t.Fatalf("error = %v, want %v", err, ErrLinkOutsideSpace)
@@ -1010,7 +1033,7 @@ func TestReconcileLinkMarksNothingWhenOurOwnJournalCannotBeRead(t *testing.T) {
 
 	dbDown := errors.New("connection refused")
 	marker := newMarker()
-	r := NewReconciler(f.store, fakeJournal{err: dbDown}, marker, nil)
+	r := NewReconciler(f.store, fakeJournal{err: dbDown}, marker, instrument.NewStore(f.pool), nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if !errors.Is(err, dbDown) {
@@ -1042,7 +1065,7 @@ func TestReconcileLinkRefusesToMarkANonRubleAccount(t *testing.T) {
 
 	marker := newMarker()
 	marker.currency = "USD"
-	r := NewReconciler(f.store, fakeJournal{}, marker, nil)
+	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil)
 
 	_, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if !errors.Is(err, ErrAccountNotInRubles) {
@@ -1071,7 +1094,7 @@ func TestABalanceMarkFinerThanAKopeckIsRefusedForWhatItIs(t *testing.T) {
 	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
 
 	marker := newMarker()
-	r := NewReconciler(f.store, fakeJournal{}, marker, nil)
+	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil)
 
 	_, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if !errors.Is(err, ErrBalanceMarkRefused) {
@@ -1115,7 +1138,7 @@ func TestBothRefusalsSurviveWhenBothHappened(t *testing.T) {
 	markFailed := errors.New("the balance table is locked")
 	marker := newMarker()
 	marker.err = markFailed
-	r := NewReconciler(f.store, fakeJournal{ops: journal}, marker, nil)
+	r := NewReconciler(f.store, fakeJournal{ops: journal}, marker, instrument.NewStore(f.pool), nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if res.Status != ReconcileNotChecked {
@@ -1408,5 +1431,114 @@ func TestFinishRunRefusesAVerdictItsOwnListContradicts(t *testing.T) {
 				t.Errorf("error = %v, want %v", err, ErrReconcileVerdictContradictsItself)
 			}
 		})
+	}
+}
+
+// TestReconcileMatchesOnePaperListedOnTwoVenues is the owner's own screen, and
+// what it looked like before this.
+//
+// A foreign share moved to another venue when trading in it was suspended: the
+// broker's portfolio reports AMZN-RM while the history that built the journal
+// named AMZN, and nothing connects the two identifiers. The check said the
+// holding twice — "the broker has 20 and we have none", "we have 20 and the
+// broker has none" — for seven of his papers at once, quantities agreeing in
+// every one. Here the quantities agree, so after the pairing there is no
+// difference at all.
+func TestReconcileMatchesOnePaperListedOnTwoVenues(t *testing.T) {
+	f := newFixture(t)
+
+	// Ours, mapped under the listing the history named.
+	inst := f.instrumentWithISIN(t, "AMZN", "US0231351067")
+	if err := f.store.saveMap(f.ctx, f.conn.ID, inst.ID,
+		InstrumentRef{InstrumentUID: "uid-amzn"}, inst.ISIN, inst.Ticker, "USD"); err != nil {
+		t.Fatalf("saveMap: %v", err)
+	}
+
+	srv, _ := serve(t, map[string]route{
+		// The broker reports the OTHER listing, which the map knows nothing of.
+		portfolioPath: {status: http.StatusOK, body: []byte(
+			`{"positions":[{"instrumentUid":"uid-amzn-rm","instrumentType":"share",` +
+				`"quantity":{"units":"20","nano":0},"blocked":false}]}`)},
+		positionsPath: {status: http.StatusOK, body: []byte(`{"money":[]}`)},
+		// Asked what that listing is, the broker names the same ISIN.
+		instrumentByPath: {status: http.StatusOK, body: []byte(
+			`{"instrument":{"uid":"uid-amzn-rm","ticker":"AMZN-RM","name":"Amazon",` +
+				`"isin":"US0231351067","currency":"usd","instrumentType":"share"}}`)},
+	})
+	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
+
+	r := NewReconciler(f.store, fakeJournal{ops: []operation.Operation{
+		aBuy(inst.ID, "20", -200_000, 20, "USD"),
+	}}, newMarker(), instrument.NewStore(f.pool), nil)
+
+	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
+	if err != nil {
+		t.Fatalf("ReconcileLink: %v", err)
+	}
+	// Asserted on the SECURITIES rows alone: this fixture's journal buys
+	// dollars it was never given, so the cash comparison has a difference of
+	// its own and it is not what is under test here.
+	if got := securitiesMismatches(res); len(got) != 0 {
+		t.Fatalf("got %+v, want none: one paper on two venues is one holding", got)
+	}
+}
+
+// securitiesMismatches is the part of a verdict that is about papers.
+func securitiesMismatches(res ReconcileResult) []ReconcileMismatch {
+	out := []ReconcileMismatch{}
+	for _, m := range res.Mismatches {
+		if m.Kind != MismatchCurrency {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// TestReconcileStillReportsARealDifferenceAcrossVenues is the other half, and
+// the reason the pairing is worth doing: once the phantom pairs are gone, what
+// is left is a difference somebody has to act on.
+//
+// The quantities here are the owner's Amazon: 1 in the journal against 20 at
+// the broker, which is the 20-for-1 split of June 2022 that no operation ever
+// reported. Pairing the listings is what makes that visible as ONE line about
+// one paper instead of two lines that cancel in the reader's head.
+func TestReconcileStillReportsARealDifferenceAcrossVenues(t *testing.T) {
+	f := newFixture(t)
+
+	inst := f.instrumentWithISIN(t, "AMZN2", "US0231351067")
+	if err := f.store.saveMap(f.ctx, f.conn.ID, inst.ID,
+		InstrumentRef{InstrumentUID: "uid-amzn"}, inst.ISIN, inst.Ticker, "USD"); err != nil {
+		t.Fatalf("saveMap: %v", err)
+	}
+
+	srv, _ := serve(t, map[string]route{
+		portfolioPath: {status: http.StatusOK, body: []byte(
+			`{"positions":[{"instrumentUid":"uid-amzn-rm","instrumentType":"share",` +
+				`"quantity":{"units":"20","nano":0},"blocked":false}]}`)},
+		positionsPath: {status: http.StatusOK, body: []byte(`{"money":[]}`)},
+		instrumentByPath: {status: http.StatusOK, body: []byte(
+			`{"instrument":{"uid":"uid-amzn-rm","ticker":"AMZN-RM","name":"Amazon",` +
+				`"isin":"US0231351067","currency":"usd","instrumentType":"share"}}`)},
+	})
+	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
+
+	r := NewReconciler(f.store, fakeJournal{ops: []operation.Operation{
+		aBuy(inst.ID, "1", -200_000, 1, "USD"),
+	}}, newMarker(), instrument.NewStore(f.pool), nil)
+
+	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
+	if err != nil {
+		t.Fatalf("ReconcileLink: %v", err)
+	}
+	got := securitiesMismatches(res)
+	if len(got) != 1 {
+		t.Fatalf("got %d differences about papers, want exactly 1: %+v", len(got), got)
+	}
+	m := got[0]
+	if m.Broker.String() != "20" || m.Journal.String() != "1" {
+		t.Errorf("difference = broker %s / journal %s, want 20 and 1 on one line", m.Broker, m.Journal)
+	}
+	if m.InstrumentID == nil || *m.InstrumentID != inst.ID {
+		t.Errorf("the line names %v, want our own catalog row %s", m.InstrumentID, inst.ID)
 	}
 }
