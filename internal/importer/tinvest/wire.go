@@ -373,7 +373,6 @@ type wireFindInstrumentResponse struct {
 		Ticker         string `json:"ticker"`
 		Name           string `json:"name"`
 		ClassCode      string `json:"classCode"`
-		Currency       string `json:"currency"`
 		InstrumentKind string `json:"instrumentKind"`
 	} `json:"instruments"`
 }
