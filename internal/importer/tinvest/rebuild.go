@@ -261,6 +261,13 @@ type projected struct {
 	// trade it names arrive in whatever order the mirror lists them.
 	seen      map[brokerRef]bool
 	feeBooked map[brokerRef]bool
+	// projected says the operation became journal entries at all. A trade that
+	// did NOT — refused as a currency trade, or for an instrument this program
+	// does not account for — has no commission in the journal to duplicate AND
+	// no gap to report: its own unparsed row is already the report, and a
+	// second row for its commission tells the owner nothing they are not
+	// already looking at.
+	projected map[brokerRef]bool
 }
 
 // brokerRef names one of the broker's operations the way the mirror does: by
@@ -303,6 +310,7 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 		rowOf:     map[string]uuid.UUID{},
 		seen:      map[brokerRef]bool{},
 		feeBooked: map[brokerRef]bool{},
+		projected: map[brokerRef]bool{},
 	}
 	// One run's answers about instruments. The Resolver caches the broker's
 	// passports; this caches the resolutions themselves, so a history that
@@ -347,6 +355,9 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 				r.log.Debug("tinvest: a broker operation did not become journal entries",
 					"mirror_row", row.ID, "op_type", row.OpType, "reason", refusal.Reason, "detail", refusal.Detail)
 				continue
+			}
+			if len(ops) > 0 {
+				p.projected[brokerRef{link.ID, row.BrokerOperationID}] = true
 			}
 			for i := range ops {
 				if ops[i].FeeMinor != 0 {
@@ -625,7 +636,7 @@ func (r *Rebuilder) closeRedemptions(p *projected) error {
 // that happens to equal a genuinely separate charge, and keep one the broker
 // rounded differently in its two reports, both silently.
 //
-// THREE ANSWERS, and the third is why this is not a one-line drop:
+// FOUR ANSWERS, and only the first was ever obvious:
 //
 //   - the trade booked a commission: this fee is that same money reported a
 //     second time. Dropped, and the mirror row keeps its clean verdict — it was
@@ -634,8 +645,13 @@ func (r *Rebuilder) closeRedemptions(p *projected) error {
 //     only record of that charge and it stays. On the owner's account this is
 //     one purchase out of 311, worth 11,34 ₽, and before this rule existed that
 //     money was in neither the journal nor the unparsed list.
-//   - the trade is not in this mirror: nothing here can tell the two apart, so
-//     the row becomes a visible unparsed entry rather than a guess in either
+//   - the trade is in the mirror and became no journal entries at all — it is
+//     itself unparsed, for a reason of its own. Its commission is not money
+//     that went missing; it is part of what that row already reports. Keeping
+//     it gave each of the owner's 79 unimported currency trades a second
+//     unparsed row saying nothing the first did not.
+//   - the trade is not in this mirror: nothing here can tell the cases apart,
+//     so the row becomes a visible unparsed entry rather than a guess in either
 //     direction. Dropping it could lose real money; keeping it could charge a
 //     commission twice.
 //
@@ -656,6 +672,15 @@ func (r *Rebuilder) settleBrokerFees(p *projected) {
 			kept = append(kept, d)
 		case p.feeBooked[ref]:
 			r.log.Debug("tinvest: a broker fee repeats the commission its trade already booked",
+				"mirror_row", d.rowID, "parent", d.parentBrokerID)
+			delete(p.rowOf, *d.op.ExternalID)
+		case p.seen[ref] && !p.projected[ref]:
+			// The trade itself is not in the journal — it is on the unparsed
+			// list, with its own reason. Its commission is not money that went
+			// missing: it is part of what that row already reports, and 79 of
+			// the owner's currency trades would otherwise each grow a second
+			// unparsed row saying nothing the first did not.
+			r.log.Debug("tinvest: a broker fee belongs to a trade that is itself unparsed, so it goes with it",
 				"mirror_row", d.rowID, "parent", d.parentBrokerID)
 			delete(p.rowOf, *d.op.ExternalID)
 		case p.seen[ref]:

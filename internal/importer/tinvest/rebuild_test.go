@@ -1944,3 +1944,37 @@ func TestRebuildRefusesABrokerFeeWhoseTradeIsNotHere(t *testing.T) {
 		t.Errorf("the journal took an entry for a fee nothing could judge")
 	}
 }
+
+// TestRebuildDropsABrokerFeeWhoseTradeIsItselfUnparsed is a regression the
+// live data caught and the fixtures did not.
+//
+// A currency purchase is not imported — the mirror names neither the traded
+// currency nor its nominal — so it sits on the unparsed list with its own
+// reason. Its commission then has no commission in the journal to duplicate,
+// and the rule as first written kept it: 79 of the owner's currency trades each
+// grew a SECOND unparsed row, saying nothing the first did not, and saying it
+// under a reason about the instrument rather than about the trade.
+//
+// A commission belongs where its trade went.
+func TestRebuildDropsABrokerFeeWhoseTradeIsItselfUnparsed(t *testing.T) {
+	f := newRebuildFixture(t)
+	trade := loadOperationItem(t, "currency_buy.json")
+	fee := loadOperationItem(t, "broker_fee.json")
+	fee.ParentOperationID = trade.ID
+	f.sync(t, f.link, trade, fee)
+
+	stats := f.rebuild(t)
+	if stats.Added != 0 {
+		t.Errorf("rebuild added %d entries, want 0", stats.Added)
+	}
+	// One row on the list, not two: the trade's.
+	if stats.Unparsed != 1 {
+		t.Errorf("rebuild left %d rows unparsed, want 1 — the trade, and not its commission as well", stats.Unparsed)
+	}
+	if got := f.mirrorRow(t, f.link, trade.ID).UnparsedReason; got != string(ReasonCurrencyTrade) {
+		t.Errorf("the trade's reason is %q, want %q", got, ReasonCurrencyTrade)
+	}
+	if got := f.mirrorRow(t, f.link, fee.ID).UnparsedReason; got != "" {
+		t.Errorf("the commission carries reason %q, want none: its trade is already reported", got)
+	}
+}
