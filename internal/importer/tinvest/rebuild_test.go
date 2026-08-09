@@ -1978,3 +1978,38 @@ func TestRebuildDropsABrokerFeeWhoseTradeIsItselfUnparsed(t *testing.T) {
 		t.Errorf("the commission carries reason %q, want none: its trade is already reported", got)
 	}
 }
+
+// TestRebuildChargesABrokerFeeToTheAccountNotToAPosition. The security named on
+// a commission row is the TRADE's; the commission itself is money off the
+// account. Reading it as the fee's own security refused every commission on a
+// paper this program does not account for — and attributed the rest to a
+// position, which is not what a broker's commission is.
+func TestRebuildChargesABrokerFeeToTheAccountNotToAPosition(t *testing.T) {
+	f := newRebuildFixture(t)
+	trade := loadOperationItem(t, "buy_without_commission.json")
+	fee := loadOperationItem(t, "broker_fee_without_parent_commission.json")
+	// The broker really does put the trade's security on the fee row.
+	fee.InstrumentUID = trade.InstrumentUID
+	fee.FIGI = trade.FIGI
+	fee.InstrumentType = trade.InstrumentType
+	f.sync(t, f.link, trade, fee)
+
+	f.rebuild(t)
+
+	ops := f.journalOf(t, f.link.AccountID)
+	var charge *operation.Operation
+	for i := range ops {
+		if ops[i].Type == operation.TypeFee {
+			charge = &ops[i]
+		}
+	}
+	if charge == nil {
+		t.Fatalf("no fee entry in the journal: %+v", ops)
+	}
+	if charge.InstrumentID != nil {
+		t.Errorf("the charge names instrument %s, want none: a commission is money off the account", charge.InstrumentID)
+	}
+	if charge.AmountMinor != -1134 {
+		t.Errorf("charge = %d, want -1134", charge.AmountMinor)
+	}
+}

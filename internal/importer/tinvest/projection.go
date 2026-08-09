@@ -620,9 +620,20 @@ func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]opera
 	case asBrokerFee:
 		// Built like any other cash entry, and then held: whether it survives
 		// depends on the trade it names, which is another row (see
-		// DeferredBrokerFeeVerdict). Building it here rather than at the point
-		// that decides keeps one place that knows how a fee is shaped.
-		ops, refusal = projectCash(row, accountID, resolved, r.journal)
+		// DeferredBrokerFeeVerdict).
+		//
+		// WITHOUT AN INSTRUMENT, DELIBERATELY, and this is the one place a cash
+		// entry drops one it was given. A commission charged as an operation of
+		// its own carries the TRADE's security, not one of its own, and reading
+		// it as the fee's had two costs. It refused every commission on a paper
+		// this program does not account for — 79 of the owner's currency trades
+		// each grew a second unparsed row, saying nothing their trade's own row
+		// did not and saying it under a reason about the instrument rather than
+		// about the trade. And where it did resolve, it attributed the charge to
+		// a position rather than to the account, which is not what a broker's
+		// commission is: it is money off the account, and the fee capitalized
+		// into a paper's cost is the one on the PURCHASE, already in the lot.
+		ops, refusal = projectBrokerFee(row, accountID)
 		if refusal == nil {
 			deferred = DeferredBrokerFeeVerdict
 		}
@@ -906,6 +917,27 @@ func projectCash(row MirrorRow, accountID uuid.UUID, resolved *Resolved, t opera
 	if refusal := attachInstrument(&op, row, resolved); refusal != nil {
 		return nil, refusal
 	}
+	return []operation.Operation{op}, nil
+}
+
+// projectBrokerFee turns a commission the broker charged as an operation of its
+// own into a journal fee against the ACCOUNT.
+//
+// It is projectCash minus the instrument, and the difference is the whole
+// function. See ProjectRow's asBrokerFee branch for why the security named on
+// such a row is the trade's rather than the fee's, and what reading it as the
+// fee's cost.
+//
+// No tax branch and no refund branch: a commission is not a tax, and a
+// commission that came back is refused earlier, on the trade, by
+// tradeCommission's own rule about signs.
+func projectBrokerFee(row MirrorRow, accountID uuid.UUID) ([]operation.Operation, *UnparsedError) {
+	amount, refusal := minorFromDecimal(row.Payment)
+	if refusal != nil {
+		return nil, refusal
+	}
+	op := base(row, accountID, operation.TypeFee)
+	op.AmountMinor = amount
 	return []operation.Operation{op}, nil
 }
 
