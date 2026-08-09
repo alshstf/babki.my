@@ -1,5 +1,5 @@
 {
-  "_note": "shape taken from the published API documentation; that DIV_EXT is a dividend paid to a card, bypassing the brokerage account, is the broker's own description — the numbers here are not from a live account (task 14)",
+  "_note": "shape taken from the published API documentation; that DIV_EXT is a dividend paid to a card, bypassing the brokerage account, is the broker's own description — the numbers here are not from a live account (a live account)",
   "id": "op-divext-1",
   "parentOperationId": "",
   "name": "Выплата дивидендов на карту",

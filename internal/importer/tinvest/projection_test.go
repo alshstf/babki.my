@@ -804,20 +804,29 @@ func TestProjectRowShapeWithNoBranchRefusesInsteadOfVanishing(t *testing.T) {
 	}
 }
 
-// TestProjectRowBrokerFeeIsNotProjected pins the flag: while a BROKER_FEE is
-// believed to be the same money as the commission field of its trade,
-// projecting it would charge the commission twice. It is not an unparsed row —
-// nothing failed to be understood.
-func TestProjectRowBrokerFeeIsNotProjected(t *testing.T) {
-	if projectBrokerFee {
-		t.Skip("projectBrokerFee is on: the live check of task 14 must have said the fee is separate money")
-	}
-	ops, _, refusal := ProjectRow(mirrorRowFor(t, "broker_fee.json"), fixtureAccountID, nil)
+// TestProjectRowBrokerFeeIsBuiltAndHeld. A commission the broker charged as an
+// operation of its own is now BUILT here and marked as owing a verdict, rather
+// than dropped on the spot as a duplicate.
+//
+// The reason is a single row out of the owner's 311: one purchase carries no
+// commission field at all, so there the separate operation is the only record
+// of that money and dropping it lost the charge outright. Which case a fee is
+// in is a question about another row, and this function sees one row — hence
+// the deferral rather than an answer (see DeferredBrokerFeeVerdict and
+// Rebuilder.settleBrokerFees).
+func TestProjectRowBrokerFeeIsBuiltAndHeld(t *testing.T) {
+	ops, deferred, refusal := ProjectRow(mirrorRowFor(t, "broker_fee.json"), fixtureAccountID, nil)
 	if refusal != nil {
-		t.Fatalf("refused: %v — a broker fee is understood, it is simply not recorded twice", refusal)
+		t.Fatalf("refused: %v — a broker fee is understood, it is simply not always kept", refusal)
 	}
-	if len(ops) != 0 {
-		t.Fatalf("got %d operations, want none", len(ops))
+	if len(ops) != 1 {
+		t.Fatalf("got %d operations, want 1", len(ops))
+	}
+	if ops[0].Type != operation.TypeFee {
+		t.Errorf("type = %s, want fee", ops[0].Type)
+	}
+	if deferred != DeferredBrokerFeeVerdict {
+		t.Errorf("deferred = %v, want DeferredBrokerFeeVerdict — the entry cannot be judged from its own row", deferred)
 	}
 }
 

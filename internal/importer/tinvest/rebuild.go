@@ -171,6 +171,7 @@ func (r *Rebuilder) Rebuild(ctx context.Context, conn Connection, links []Accoun
 	if err := r.closeRedemptions(p); err != nil {
 		return RebuildStats{}, err
 	}
+	r.settleBrokerFees(p)
 	pairTransfers(p.want)
 
 	delta, keptByRow, err := r.difference(ctx, conn.SpaceID, accountsOf(links), p.want)
@@ -222,6 +223,13 @@ type desired struct {
 	// entries are not one thing: a redemption's sale waits for a count, and the
 	// commission beside it does not.
 	deferred Deferred
+	// linkID and parentBrokerID are what a deferred broker fee is settled by:
+	// which broker account this row belongs to, and which of that account's
+	// operations it names as its own parent (see settleBrokerFees). Carried
+	// here rather than looked up again because the row is in hand at this point
+	// and is not afterwards.
+	linkID         uuid.UUID
+	parentBrokerID string
 }
 
 // projected is everything one pass over the mirror produced.
@@ -243,6 +251,23 @@ type projected struct {
 	// the name's shape is the projection's business, and a second reader of it
 	// here would be a second implementation of one rule.
 	rowOf map[string]uuid.UUID
+	// seen and feeBooked answer the two questions a deferred broker fee asks
+	// about the trade it names: is that trade in this mirror at all, and did it
+	// put a commission of its own into the journal. Keyed by the broker's own
+	// operation id WITHIN A LINK, because that is the only scope the broker's
+	// ids are meaningful in — nothing says two accounts cannot reuse one.
+	//
+	// They are filled during the pass and read after it, because a fee and the
+	// trade it names arrive in whatever order the mirror lists them.
+	seen      map[brokerRef]bool
+	feeBooked map[brokerRef]bool
+}
+
+// brokerRef names one of the broker's operations the way the mirror does: by
+// the broker's own id, within one linked account.
+type brokerRef struct {
+	linkID   uuid.UUID
+	brokerID string
 }
 
 // unparsed is how many of the connection's mirror rows carry a reason now.
@@ -273,9 +298,11 @@ func (p *projected) unparsed() int {
 // keeps them for. If it carries none, there is nothing to say.
 func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []AccountLink, src passportSource) (*projected, error) {
 	p := &projected{
-		verdicts: map[uuid.UUID]UnparsedVerdict{},
-		stored:   map[uuid.UUID]UnparsedVerdict{},
-		rowOf:    map[string]uuid.UUID{},
+		verdicts:  map[uuid.UUID]UnparsedVerdict{},
+		stored:    map[uuid.UUID]UnparsedVerdict{},
+		rowOf:     map[string]uuid.UUID{},
+		seen:      map[brokerRef]bool{},
+		feeBooked: map[brokerRef]bool{},
 	}
 	// One run's answers about instruments. The Resolver caches the broker's
 	// passports; this caches the resolutions themselves, so a history that
@@ -292,8 +319,13 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 		for _, row := range rows {
 			p.stored[row.ID] = UnparsedVerdict{Reason: row.UnparsedReason, Detail: row.UnparsedDetail}
 			if row.State != stateExecuted || row.DisappearedAt != nil {
+				// Deliberately not recorded as seen below: a cancelled order is
+				// not a trade whose commission anything could be duplicating,
+				// and counting it would let a fee be dropped against a trade
+				// whose commission never entered the journal at all.
 				continue
 			}
+			p.seen[brokerRef{link.ID, row.BrokerOperationID}] = true
 			resolved, refusal, err := r.resolve(ctx, conn.ID, src, row, resolutions)
 			if err != nil {
 				return nil, err
@@ -317,6 +349,16 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 				continue
 			}
 			for i := range ops {
+				if ops[i].FeeMinor != 0 {
+					// This row put a commission of its own into the journal,
+					// which is the whole question a BROKER_FEE naming it asks.
+					// Read off the ENTRY rather than off the mirror row's
+					// commission column: what matters is the money that reached
+					// the journal, and a commission charged in another currency
+					// leaves the trade and becomes an entry of its own (see
+					// tradeCommission).
+					p.feeBooked[brokerRef{link.ID, row.BrokerOperationID}] = true
+				}
 				if ops[i].ExternalID == nil || *ops[i].ExternalID == "" {
 					return nil, fmt.Errorf("tinvest: the projection produced an entry with no external id for mirror row %s", row.ID)
 				}
@@ -330,15 +372,15 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 				p.want = append(p.want, desired{
 					op: ops[i], rowID: row.ID, at: row.OccurredAt, leg: i,
 					pairable: pairableLeg(row), deferred: owed,
+					linkID: link.ID, parentBrokerID: row.ParentOperationID,
 				})
 			}
-			// Every row that reaches here is one the projection READ: one that
-			// became journal entries, or one it turns into nothing on purpose
-			// (a BROKER_FEE, which is the same money as a trade's commission
-			// field). Neither is a row this program failed to read, so whatever
-			// reason either carried goes — and the detail with it, in the same
+			// Every row that reaches here is one the projection READ, so whatever
+			// reason it carried goes — and the detail with it, in the same
 			// verdict, since a detail outliving its code would explain a refusal
-			// that is no longer being made.
+			// that is no longer being made. A broker fee later dropped as a
+			// duplicate was read too, which is why settleBrokerFees leaves this
+			// verdict alone.
 			p.verdicts[row.ID] = UnparsedVerdict{}
 		}
 	}
@@ -572,6 +614,63 @@ func (r *Rebuilder) closeRedemptions(p *projected) error {
 	return nil
 }
 
+// settleBrokerFees decides, for each commission the broker charged as an
+// operation of its own, whether it is money the journal already has.
+//
+// THE TEST IS WHETHER THE TRADE IT NAMES BOOKED A COMMISSION, and that is a
+// question about the journal rather than about the broker's fields: a trade
+// whose commission arrived in another currency puts it in an entry of its own
+// (see tradeCommission), and that money is in the journal just the same.
+// Comparing the two AMOUNTS was considered and rejected — it would drop a fee
+// that happens to equal a genuinely separate charge, and keep one the broker
+// rounded differently in its two reports, both silently.
+//
+// THREE ANSWERS, and the third is why this is not a one-line drop:
+//
+//   - the trade booked a commission: this fee is that same money reported a
+//     second time. Dropped, and the mirror row keeps its clean verdict — it was
+//     read, not refused.
+//   - the trade booked none, or the fee names no trade at all: the fee is the
+//     only record of that charge and it stays. On the owner's account this is
+//     one purchase out of 311, worth 11,34 ₽, and before this rule existed that
+//     money was in neither the journal nor the unparsed list.
+//   - the trade is not in this mirror: nothing here can tell the two apart, so
+//     the row becomes a visible unparsed entry rather than a guess in either
+//     direction. Dropping it could lose real money; keeping it could charge a
+//     commission twice.
+//
+// The entries are dropped in place rather than filtered into a new slice
+// because the sort above put them in the order everything downstream reads them
+// in, and rebuilding the slice would be a second place that has to know it.
+func (r *Rebuilder) settleBrokerFees(p *projected) {
+	kept := p.want[:0]
+	for _, d := range p.want {
+		if d.deferred != DeferredBrokerFeeVerdict {
+			kept = append(kept, d)
+			continue
+		}
+		ref := brokerRef{d.linkID, d.parentBrokerID}
+		switch {
+		case d.parentBrokerID == "":
+			// Names no trade, so there is nothing it could be a second copy of.
+			kept = append(kept, d)
+		case p.feeBooked[ref]:
+			r.log.Debug("tinvest: a broker fee repeats the commission its trade already booked",
+				"mirror_row", d.rowID, "parent", d.parentBrokerID)
+			delete(p.rowOf, *d.op.ExternalID)
+		case p.seen[ref]:
+			kept = append(kept, d)
+		default:
+			p.verdicts[d.rowID] = UnparsedVerdict{
+				Reason: string(ReasonBrokerFeeParentMissing),
+				Detail: fmt.Sprintf("the trade this commission names (%s) is not among the operations this connection imported, so whether the trade already carries it cannot be told", d.parentBrokerID),
+			}
+			delete(p.rowOf, *d.op.ExternalID)
+		}
+	}
+	p.want = kept
+}
+
 // unitsMoved is what one journal entry does to the number of units of a
 // security an account holds, and whether this file can say at all.
 //
@@ -683,8 +782,12 @@ func pairableLeg(row MirrorRow) bool {
 //
 // If the broker turns out to report a move between two of the owner's own
 // accounts under those outside-world types as well, such a move stays two lone
-// legs, each with the honest mark. That is the safe side of the error, and
-// task 14 asks the question against a live account.
+// legs, each with the honest mark. That is the safe side of the error, and it
+// is STILL UNASKED rather than answered: the owner's account holds not one
+// TRANS_* operation, so nothing there can say what the broker does with them.
+// The rule below, and the direction read off the sign of a quantity in
+// projectSecuritiesTransfer, rest on the documentation alone until an account
+// with such a move appears.
 //
 // TWO LEGS ARE ONE MOVE when one leaves and one arrives, both of a pairable
 // type, on the same paper, the same number of units, the same day and the same

@@ -1,5 +1,5 @@
 {
-  "_note": "shape taken from the published API documentation; not confirmed against a live account — task 14",
+  "_note": "shape taken from the published API documentation; This SHAPE has never been seen on a live account — the owner's history holds not one operation of this type — so it stays the documentation's shape and nothing here claims otherwise.",
   "id": "op-amort-1",
   "parentOperationId": "",
   "name": "Частичное погашение облигации",

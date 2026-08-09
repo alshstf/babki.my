@@ -633,7 +633,8 @@ func TestRebuildLeavesAnUnpairedLegAlone(t *testing.T) {
 // wiped off in the bargain.
 //
 // If a broker turns out to report a move between two of the owner's own
-// accounts under these types after all (task 14 asks), the answer is two lone
+// accounts under these types after all — still unasked, since the owner's
+// history holds no such move — the answer is two lone
 // legs with the honest mark on the arrival — the safe side of the mistake.
 func TestRebuildDoesNotPairSharesCrossingToAndFromTheOutsideWorld(t *testing.T) {
 	f := newRebuildFixture(t)
@@ -1837,4 +1838,109 @@ func realizedOf(t *testing.T, p *portfolio.Position) int64 {
 		t.Fatalf("position %s has no realized result in one currency: a disposal settled in another", p.InstrumentID)
 	}
 	return minor
+}
+
+// -------------------------------------------------------------------------
+// a commission charged as an operation of its own (#138)
+// -------------------------------------------------------------------------
+
+// TestRebuildDropsABrokerFeeTheTradeAlreadyCarries is the ordinary case, and
+// the one the old blanket rule got right 310 times out of 311: the trade
+// reports the commission in its own field, the broker reports it a second time
+// as an operation, and booking both would charge it twice.
+//
+// The mirror row is left CLEAN rather than marked unparsed — nothing failed to
+// be read.
+func TestRebuildDropsABrokerFeeTheTradeAlreadyCarries(t *testing.T) {
+	f := newRebuildFixture(t)
+	f.sync(t, f.link,
+		loadOperationItem(t, "buy.json"),
+		loadOperationItem(t, "broker_fee.json"))
+
+	stats := f.rebuild(t)
+	if stats.Added != 1 {
+		t.Errorf("rebuild added %d entries, want 1 — the purchase alone", stats.Added)
+	}
+	if stats.Unparsed != 0 {
+		t.Errorf("rebuild left %d unparsed, want 0 — a duplicate is understood, not unreadable", stats.Unparsed)
+	}
+	ops := f.journalOf(t, f.link.AccountID)
+	if len(ops) != 1 {
+		t.Fatalf("journal holds %d entries, want 1: %+v", len(ops), ops)
+	}
+	// 8,25 ₽ once, on the purchase — not twice, and not as an entry of its own.
+	if ops[0].Type != operation.TypeBuy || ops[0].FeeMinor != 825 {
+		t.Errorf("entry = %s with fee %d, want a buy carrying 825", ops[0].Type, ops[0].FeeMinor)
+	}
+	if got := f.mirrorRow(t, f.link, "op-brokerfee-1").UnparsedReason; got != "" {
+		t.Errorf("the dropped fee's reason is %q, want none", got)
+	}
+}
+
+// TestRebuildKeepsABrokerFeeItsTradeDoesNotCarry is the 311th, and the reason
+// the rule is no longer "drop them all".
+//
+// The purchase carries no commission field, so the separate operation is the
+// only record of that 11,34 ₽. Dropping it put the charge in neither the
+// journal nor the unparsed list — money gone with nothing on any screen saying
+// so, which is the one outcome this program forbids in capitals.
+func TestRebuildKeepsABrokerFeeItsTradeDoesNotCarry(t *testing.T) {
+	f := newRebuildFixture(t)
+	f.sync(t, f.link,
+		loadOperationItem(t, "buy_without_commission.json"),
+		loadOperationItem(t, "broker_fee_without_parent_commission.json"))
+
+	stats := f.rebuild(t)
+	if stats.Added != 2 {
+		t.Errorf("rebuild added %d entries, want 2 — the purchase and the charge beside it", stats.Added)
+	}
+	ops := f.journalOf(t, f.link.AccountID)
+	if len(ops) != 2 {
+		t.Fatalf("journal holds %d entries, want 2: %+v", len(ops), ops)
+	}
+	var fee *operation.Operation
+	for i := range ops {
+		if ops[i].Type == operation.TypeFee {
+			fee = &ops[i]
+		}
+	}
+	if fee == nil {
+		t.Fatalf("no fee entry in the journal: %+v", ops)
+	}
+	// Negative, because a fee entry's amount is what left the account; the
+	// engine turns it into a positive charge.
+	if fee.AmountMinor != -1134 {
+		t.Errorf("fee amount = %d, want -1134 (11,34 ₽ charged)", fee.AmountMinor)
+	}
+	if got := f.mirrorRow(t, f.link, "op-brokerfee-2").UnparsedReason; got != "" {
+		t.Errorf("the kept fee's reason is %q, want none", got)
+	}
+}
+
+// TestRebuildRefusesABrokerFeeWhoseTradeIsNotHere. With the trade absent, both
+// answers are guesses that cost money in opposite directions: dropping the fee
+// loses a real charge, keeping it books a commission twice. The row becomes a
+// visible unparsed entry saying exactly that, and the detail names the trade so
+// the owner can look it up in the broker's own app.
+func TestRebuildRefusesABrokerFeeWhoseTradeIsNotHere(t *testing.T) {
+	f := newRebuildFixture(t)
+	f.sync(t, f.link, loadOperationItem(t, "broker_fee_orphan.json"))
+
+	stats := f.rebuild(t)
+	if stats.Added != 0 {
+		t.Errorf("rebuild added %d entries, want 0", stats.Added)
+	}
+	if stats.Unparsed != 1 {
+		t.Errorf("rebuild left %d unparsed, want 1", stats.Unparsed)
+	}
+	row := f.mirrorRow(t, f.link, "op-brokerfee-3")
+	if row.UnparsedReason != string(ReasonBrokerFeeParentMissing) {
+		t.Errorf("reason = %q, want %q", row.UnparsedReason, ReasonBrokerFeeParentMissing)
+	}
+	if !strings.Contains(row.UnparsedDetail, "op-that-is-not-here") {
+		t.Errorf("detail = %q, want it to name the trade the fee points at", row.UnparsedDetail)
+	}
+	if len(f.journalOf(t, f.link.AccountID)) != 0 {
+		t.Errorf("the journal took an entry for a fee nothing could judge")
+	}
 }

@@ -1,5 +1,5 @@
 {
-  "_note": "shape taken from the published API documentation; whether a full redemption really carries a quantity is task 14's live question — this fixture is the case where it does",
+  "_note": "shape taken from the published API documentation; whether a full redemption really carries a quantity is a live account's live question — this fixture is the case where it does",
   "id": "op-repay-1",
   "parentOperationId": "",
   "name": "Погашение облигации",

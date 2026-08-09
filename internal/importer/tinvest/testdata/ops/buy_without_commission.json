@@ -1,0 +1,18 @@
+{
+  "_note": "an executed, fully filled purchase carrying NO commission field at all, shaped after broker operation 40385968044 on the owner's account (42 shares, 2023-11-02). Its commission exists only as the separate BROKER_FEE in broker_fee_without_parent_commission.json, which is why dropping such a fee as a duplicate lost the charge outright (#138).",
+  "id": "op-buy-nocomm-1",
+  "parentOperationId": "",
+  "name": "Покупка ценных бумаг",
+  "date": "2026-03-14T21:30:00Z",
+  "type": "OPERATION_TYPE_BUY",
+  "description": "Покупка 42 шт.",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
+  "figi": "BBG004730N88",
+  "instrumentType": "share",
+  "payment": {"currency": "rub", "units": "-27500", "nano": 0},
+  "price": {"currency": "rub", "units": "275", "nano": 0},
+  "quantity": "42",
+  "quantityRest": "0",
+  "quantityDone": "42"
+}

@@ -1,5 +1,5 @@
 {
-  "_note": "shape taken from the published API documentation; that this operation is the SAME money as the commission field of the trade it names in parentOperationId is the assumption behind projectBrokerFee and is what task 14 checks",
+  "_note": "a commission charged as an operation of its own, naming buy.json as its parent — and carrying the SAME 8,25 ₽ that trade already reports in its commission field. That duplication was an assumption when this fixture was written; it was checked on the owner's live account and holds 310 times out of 311 (see DeferredBrokerFeeVerdict). The 311th is broker_fee_without_parent_commission.json.",
   "id": "op-brokerfee-1",
   "parentOperationId": "op-buy-1",
   "name": "Удержание комиссии за операцию",

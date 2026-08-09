@@ -1,5 +1,5 @@
 {
-  "_note": "shape taken from the published API documentation; not confirmed against a live account — task 14. A Russian dividend arrives gross; its tax is a separate operation",
+  "_note": "shape taken from the published API documentation; the same operation type appears on the owner's live account and this shape agrees with it (checked 2026-08-09). A Russian dividend arrives gross; its tax is a separate operation",
   "id": "op-div-1",
   "parentOperationId": "",
   "name": "Выплата дивидендов",

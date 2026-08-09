@@ -1,0 +1,15 @@
+{
+  "_note": "a fee naming a trade that is not among the operations this connection imported — a purchase older than the window, or one that stayed unparsed. Neither dropping nor keeping this charge is an answer, so it becomes a visible unparsed row.",
+  "id": "op-brokerfee-3",
+  "parentOperationId": "op-that-is-not-here",
+  "name": "Удержание комиссии за операцию",
+  "date": "2026-03-14T21:30:00Z",
+  "type": "OPERATION_TYPE_BROKER_FEE",
+  "description": "Комиссия за сделку",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "",
+  "figi": "",
+  "instrumentType": "",
+  "payment": {"currency": "rub", "units": "-5", "nano": 0},
+  "quantity": "0"
+}
