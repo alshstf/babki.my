@@ -1492,7 +1492,7 @@ components:
         journal: { type: string, description: "Decimal as string — what this program's journal computes for the same thing, in the same units." }
     TinvestAccountReconcile:
       type: object
-      required: [link_id, account_id, broker_account_name, at, status, mismatches]
+      required: [link_id, account_id, broker_account_name, at, status, mismatches, currency_trades_unparsed]
       description: "The most recent check against the broker FOR ONE LINKED BROKER ACCOUNT. A sync run is made for the pair (connection, link) and the reconciliation is made inside it, so a verdict is a statement about ONE broker account and about no other. A connection importing two of them therefore has two verdicts which can differ and can be reached at different moments; publishing whichever of them is newest as the connection's own would draw one account's tick over the other account's difference, and the older account's verdict would never be seen at all. Nothing here is a connection-wide claim: a client that wants one derives it from all of these."
       properties:
         link_id: { type: string, format: uuid, description: "Which link this verdict belongs to — the same id as the matching TinvestLinkedAccount.link_id, and the same one a run carries." }
@@ -1511,6 +1511,9 @@ components:
           type: array
           items: { $ref: "#/components/schemas/TinvestReconcileMismatch" }
           description: "What differed for THIS account. Empty when `status` is `matched` — the verdict is derived from this list and never kept beside it — and empty again when `status` is `not_checked`, where it means nobody looked. `status` is what tells those two apart."
+        currency_trades_unparsed:
+          type: integer
+          description: "How many of this broker account's currency purchases and sales this program does not import (unparsed reason `currency_trade`). IT IS PUBLISHED TO EXPLAIN A CASH DIFFERENCE THAT CANNOT CLOSE: each such operation is money that left one currency and arrived in another with the journal recording neither half, so the account's money comparison against the broker is off by their whole sum — rubles too high, the bought currencies negative — and stays off however many times the sync is re-run. Without this figure that difference stands beside the securities ones as if it were the same kind of news, and a difference that never resolves teaches a reader to stop reading the whole verdict. IT SPEAKS FOR THE MONEY ROWS ONLY, and a client must not caption a securities row with it: a currency trade moves no shares, so a difference in units of a paper has nothing to do with this number. Present on every verdict including `not_checked` and `matched` — it is a fact about the account rather than about the comparison, and 0 is the answer that says a cash difference has to be looked for elsewhere. Counted from the mirror as it stands rather than frozen into the run, so a rebuild that reads more of them is reflected at once."
     TinvestConnection:
       type: object
       required: [id, status, token_last4, accounts, reconciles]

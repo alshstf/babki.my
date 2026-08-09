@@ -82,6 +82,7 @@ function makeReconcile(overrides: Partial<TinvestAccountReconcile> = {}): Tinves
     at: "2026-08-04T09:15:00Z",
     status: "matched",
     mismatches: [],
+    currency_trades_unparsed: 0,
     ...overrides,
   };
 }
@@ -421,5 +422,65 @@ describe("ReconcilePanel — the unparsed counter says only what was counted", (
       await screen.findByText("Сколько операций осталось неразобранными, узнать не удалось"),
     ).toBeInTheDocument();
     expect(screen.queryByText("Неразобранных операций нет")).not.toBeInTheDocument();
+  });
+});
+
+// Расхождение по деньгам, которое не сойдётся никогда, обязано назвать причину:
+// иначе оно стоит рядом с расхождениями по бумагам как та же новость, а
+// сигнал, который всегда красный, перестают читать.
+describe("причина денежного расхождения", () => {
+  const cashMismatch = {
+    kind: "currency" as const,
+    label: "RUB",
+    broker: "4862.07",
+    journal: "2580881.45",
+    instrument_id: null,
+  };
+  const paperMismatch = {
+    kind: "instrument" as const,
+    label: "SBER",
+    broker: "10",
+    journal: "12",
+    instrument_id: "instr-1",
+  };
+
+  it("названа, когда есть и неразобранные валютные сделки, и расхождение по деньгам", async () => {
+    renderPanel([
+      makeReconcile({
+        status: "mismatched",
+        mismatches: [cashMismatch],
+        currency_trades_unparsed: 79,
+      }),
+    ]);
+    const note = await screen.findByTestId("reconcile-currency-trades-note");
+    expect(note).toHaveTextContent("79");
+  });
+
+  // Обе половины проверяются по отдельности: подпись без своего числа и число
+  // без своей подписи — два разных способа соврать.
+  it("молчит, когда валютных сделок нет, а деньги всё равно разошлись", async () => {
+    renderPanel([
+      makeReconcile({
+        status: "mismatched",
+        mismatches: [cashMismatch],
+        currency_trades_unparsed: 0,
+      }),
+    ]);
+    // Ждём саму строку расхождения, иначе «ничего не нарисовано» прошло бы за
+    // «подписи нет» — тест, зеленеющий по неверной причине.
+    expect(await screen.findByText("RUB")).toBeInTheDocument();
+    expect(screen.queryByTestId("reconcile-currency-trades-note")).toBeNull();
+  });
+
+  it("молчит, когда разошлись только бумаги", async () => {
+    renderPanel([
+      makeReconcile({
+        status: "mismatched",
+        mismatches: [paperMismatch],
+        currency_trades_unparsed: 79,
+      }),
+    ]);
+    expect(await screen.findByText("SBER")).toBeInTheDocument();
+    expect(screen.queryByTestId("reconcile-currency-trades-note")).toBeNull();
   });
 });

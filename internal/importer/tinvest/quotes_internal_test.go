@@ -384,3 +384,51 @@ func TestSavingAMappingWithoutACurrencyKeepsTheOneItHas(t *testing.T) {
 		t.Errorf("figi = %q, want the identifier the second call carried", figi)
 	}
 }
+
+// TestCurrencyTradesAreCountedPerLinkAndByReason. The count that explains a
+// cash difference has to be about ONE broker account and about ONE reason:
+// captioning an account's money gap with another account's unimported trades,
+// or with rows unparsed for some unrelated cause, would name a reason that is
+// not the true one.
+func TestCurrencyTradesAreCountedPerLinkAndByReason(t *testing.T) {
+	f := newQuotesFixture(t)
+	other := f.secondLink(t)
+
+	f.markUnparsed(t, f.link.ID, "cur-1", string(ReasonCurrencyTrade))
+	f.markUnparsed(t, f.link.ID, "cur-2", string(ReasonCurrencyTrade))
+	f.markUnparsed(t, f.link.ID, "other-reason", string(ReasonUnsupportedType))
+	f.markUnparsed(t, f.link.ID, "read-fine", "")
+	f.markUnparsed(t, other.ID, "cur-3", string(ReasonCurrencyTrade))
+
+	got, err := f.store.CurrencyTradesUnparsedByLink(f.ctx, f.conn.ID)
+	if err != nil {
+		t.Fatalf("CurrencyTradesUnparsedByLink: %v", err)
+	}
+	if got[f.link.ID] != 2 {
+		t.Errorf("first account = %d, want 2 — its own currency trades and nothing else", got[f.link.ID])
+	}
+	if got[other.ID] != 1 {
+		t.Errorf("second account = %d, want 1", got[other.ID])
+	}
+	if len(got) != 2 {
+		t.Errorf("map holds %d links, want 2: %+v", len(got), got)
+	}
+}
+
+// markUnparsed writes one mirror row carrying a given reason. Straight to the
+// table: what is under test is the COUNT's grouping, and driving a real
+// projection to produce each reason would make the fixture about something
+// else.
+func (f *quotesFixture) markUnparsed(t *testing.T, linkID uuid.UUID, key, reason string) {
+	t.Helper()
+	if _, err := f.pool.Exec(f.ctx, `
+		INSERT INTO tinvest_operations_mirror (
+			connection_id, link_id, broker_operation_id, op_type, state,
+			occurred_at, currency, payment, raw, content_key,
+			last_confirmed_at, unparsed_reason)
+		VALUES ($1, $2, $3, 'OPERATION_TYPE_BUY', 'OPERATION_STATE_EXECUTED',
+			now(), 'RUB', 0, '{}'::jsonb, $3, now(), $4)`,
+		f.conn.ID, linkID, key, reason); err != nil {
+		t.Fatalf("seed mirror row %s: %v", key, err)
+	}
+}

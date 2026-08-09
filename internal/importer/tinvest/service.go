@@ -146,6 +146,11 @@ type ConnectionView struct {
 	Links                []AccountLink
 	LastSuccessfulSyncAt *time.Time
 	LastReconcileByLink  map[uuid.UUID]SyncRun
+	// CurrencyTradesUnparsedByLink is how many currency trades of each linked
+	// account this program does not import. It is what tells a cash difference
+	// that cannot close from one that can — see
+	// Store.CurrencyTradesUnparsedByLink. A link absent from the map has none.
+	CurrencyTradesUnparsedByLink map[uuid.UUID]int
 }
 
 // Service is the request path of the T-Invest importer: everything a person
@@ -588,11 +593,16 @@ func (s *Service) view(ctx context.Context, conn Connection) (ConnectionView, er
 	if err != nil {
 		return ConnectionView{}, err
 	}
+	currencyTrades, err := s.store.CurrencyTradesUnparsedByLink(ctx, conn.ID)
+	if err != nil {
+		return ConnectionView{}, err
+	}
 	return ConnectionView{
-		Connection:           conn,
-		Links:                links,
-		LastSuccessfulSyncAt: lastSync,
-		LastReconcileByLink:  reconciles,
+		Connection:                   conn,
+		Links:                        links,
+		LastSuccessfulSyncAt:         lastSync,
+		LastReconcileByLink:          reconciles,
+		CurrencyTradesUnparsedByLink: currencyTrades,
 	}, nil
 }
 

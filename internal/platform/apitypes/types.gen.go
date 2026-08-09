@@ -1033,6 +1033,9 @@ type TinvestAccountReconcile struct {
 	// BrokerAccountName What the broker called the account WHEN THE LINK WAS MADE, the same frozen label TinvestLinkedAccount carries and read from the same link row in the same query — the two cannot disagree, and a reader of a verdict needs to be told whose it is without looking it up.
 	BrokerAccountName string `json:"broker_account_name"`
 
+	// CurrencyTradesUnparsed How many of this broker account's currency purchases and sales this program does not import (unparsed reason `currency_trade`). IT IS PUBLISHED TO EXPLAIN A CASH DIFFERENCE THAT CANNOT CLOSE: each such operation is money that left one currency and arrived in another with the journal recording neither half, so the account's money comparison against the broker is off by their whole sum — rubles too high, the bought currencies negative — and stays off however many times the sync is re-run. Without this figure that difference stands beside the securities ones as if it were the same kind of news, and a difference that never resolves teaches a reader to stop reading the whole verdict. IT SPEAKS FOR THE MONEY ROWS ONLY, and a client must not caption a securities row with it: a currency trade moves no shares, so a difference in units of a paper has nothing to do with this number. Present on every verdict including `not_checked` and `matched` — it is a fact about the account rather than about the comparison, and 0 is the answer that says a cash difference has to be looked for elsewhere. Counted from the mirror as it stands rather than frozen into the run, so a rebuild that reads more of them is reflected at once.
+	CurrencyTradesUnparsed int `json:"currency_trades_unparsed"`
+
 	// LinkId Which link this verdict belongs to — the same id as the matching TinvestLinkedAccount.link_id, and the same one a run carries.
 	LinkId openapi_types.UUID `json:"link_id"`
 

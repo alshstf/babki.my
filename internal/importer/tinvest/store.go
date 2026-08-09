@@ -583,6 +583,47 @@ func (s *Store) UnparsedByConnection(ctx context.Context, connID uuid.UUID, limi
 	return rows, hasMore, nil
 }
 
+// CurrencyTradesUnparsedByLink counts, per linked broker account, the currency
+// purchases and sales this program does not import (ReasonCurrencyTrade).
+//
+// IT EXISTS TO EXPLAIN A DIFFERENCE THAT CANNOT CLOSE. Every such operation is
+// money that left one currency and arrived in another, and the journal records
+// neither half — so the account's cash comparison against the broker is off by
+// their whole sum, in both currencies, and stays off however many times it is
+// re-run. A reconciliation that reports that difference beside the securities
+// ones, with nothing to tell them apart, teaches a reader to ignore the lot.
+//
+// It speaks for the MONEY side only. A currency trade moves no securities, so a
+// difference in units of a share has nothing to do with this figure and must not
+// be captioned by it.
+//
+// Counted at read time rather than stored on the run: it is a property of the
+// mirror as it stands, and a number frozen into a run row would go on claiming
+// an old count after a rebuild changed it.
+func (s *Store) CurrencyTradesUnparsedByLink(ctx context.Context, connID uuid.UUID) (map[uuid.UUID]int, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT link_id, count(*) FROM tinvest_operations_mirror
+		WHERE connection_id = $1 AND unparsed_reason = $2
+		GROUP BY link_id`, connID, string(ReasonCurrencyTrade))
+	if err != nil {
+		return nil, fmt.Errorf("tinvest: count unparsed currency trades: %w", err)
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]int{}
+	for rows.Next() {
+		var linkID uuid.UUID
+		var n int
+		if err := rows.Scan(&linkID, &n); err != nil {
+			return nil, fmt.Errorf("tinvest: count unparsed currency trades: %w", err)
+		}
+		out[linkID] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tinvest: count unparsed currency trades: %w", err)
+	}
+	return out, nil
+}
+
 // unparsedCountByLink counts the mirror rows of ONE broker account that the
 // projection could not read. The sync worker writes it onto that link's run.
 //

@@ -276,6 +276,11 @@ func connectionAPI(v ConnectionView) (apitypes.TinvestConnection, error) {
 			Status:            apitypes.TinvestReconcileStatus(ReconcileNotChecked),
 			At:                nullable.NewNullNullable[time.Time](),
 			Mismatches:        []apitypes.TinvestReconcileMismatch{},
+			// Published on EVERY verdict, including not_checked and matched,
+			// because it is a fact about the account rather than about the
+			// comparison: a reader deciding what a cash difference means needs
+			// it, and a reader seeing none needs to know there is none.
+			CurrencyTradesUnparsed: v.CurrencyTradesUnparsedByLink[l.ID],
 		}
 		if run, ok := v.LastReconcileByLink[l.ID]; ok {
 			mismatches, err := mismatchesAPI(run.ReconcileMismatches)
