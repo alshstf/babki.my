@@ -44,16 +44,19 @@ import (
 //
 // NOTHING IS EVER DROPPED IN SILENCE. Every row either becomes journal
 // entries, or becomes an *UnparsedError whose Reason the owner is shown next
-// to the broker's own document, or — for the two cases below, and only them —
+// to the broker's own document, or — for the one case below, and only it —
 // becomes nothing at all, on purpose and with the mirror still holding the
-// row:
+// row: an operation that did not happen, i.e. whose state is not "executed" or
+// which the broker has stopped reporting (DisappearedAt). Those are not
+// failures of understanding, and marking them "unparsed" would put cancelled
+// orders in the list of things this program could not read.
 //
-//   - an operation that did not happen: state is not "executed", or the
-//     broker has stopped reporting it (DisappearedAt). Those are not failures
-//     of understanding, and marking them "unparsed" would put cancelled
-//     orders in the list of things this program could not read.
-//   - a BROKER_FEE, while projectBrokerFee says it is the same money as the
-//     commission field of the trade it belongs to.
+// A commission the broker charged as an operation of its own used to be a
+// second such case, dropped wholesale as a duplicate of the trade's commission
+// field. It is not dropped here any more: it is built and handed on with a
+// deferral, because ONE of the owner's 311 of them was not a duplicate and the
+// money in it reached neither the journal nor the unparsed list. See
+// DeferredBrokerFeeVerdict.
 
 // Source is what the journal calls operations this importer produced. It is
 // one of the three values the operations.source column accepts (migration
@@ -61,24 +64,6 @@ import (
 // external_id) — which is what keeps one broker record from becoming two
 // journal rows however often the projection is rebuilt.
 const Source = "tinvest"
-
-// projectBrokerFee decides whether a BROKER_FEE operation becomes a journal
-// fee of its own.
-//
-// It is false because a trade's commission is believed to be reported TWICE:
-// once in the commission field of the trade itself (which becomes FeeMinor,
-// see projectTrade) and once as a separate BROKER_FEE operation carrying the
-// trade's id in parent_operation_id. Projecting both would charge the owner
-// the same commission twice.
-//
-// THIS IS NOT VERIFIED. It is a statement about the broker's data that this
-// session never checked against a live account, and it is written down as an
-// assumption rather than as a fact on purpose. Task 14 settles it: on a real
-// account, over a period, sum the commission fields of the trades and sum the
-// BROKER_FEE operations, and see whether they are the same money. If they are
-// not, this constant flips to true and the rule table already has the row for
-// it.
-const projectBrokerFee = false
 
 // stateExecuted is the only operation state that describes something that
 // actually happened. The mirror stores the broker's enum name verbatim (see
@@ -221,6 +206,16 @@ const (
 	// change is a visible unparsed row rather than a row that projects to
 	// nothing and says nothing. See ProjectRow's switch.
 	ReasonProjectionIncomplete UnparsedReason = "projection_incomplete"
+	// ReasonBrokerFeeParentMissing: a commission the broker charged as an
+	// operation of its own, naming a trade that is not among the operations
+	// this connection imported.
+	//
+	// Whether such a fee is money the journal already has depends entirely on
+	// that trade (see DeferredBrokerFeeVerdict), and with the trade absent
+	// neither answer is available: dropping the fee could lose a real charge,
+	// keeping it could book the same commission twice. Both are wrong numbers
+	// with nothing on screen to say so, and this code is what is left.
+	ReasonBrokerFeeParentMissing UnparsedReason = "broker_fee_parent_missing"
 )
 
 // UnparsedError is one refusal: the code that is stored and shown, and a
@@ -289,6 +284,24 @@ const (
 	// first (operation.validateByType, "sell requires positive quantity") and
 	// the engine's replay behind it.
 	DeferredRedeemedQuantity
+	// DeferredBrokerFeeVerdict: the entry is a commission the broker charged as
+	// an operation of its own, and whether it belongs in the journal depends on
+	// a row this function cannot see — the TRADE it names in
+	// parent_operation_id.
+	//
+	// The broker reports a trade's commission twice: in the trade's own
+	// commission field, which becomes that entry's fee, and again as a separate
+	// BROKER_FEE naming it. On the owner's account 310 of 311 such fees match
+	// their trade's commission field to the kopeck, so booking both would have
+	// charged 32 764 ₽ of commission twice over.
+	//
+	// The 311th is why this is a deferral rather than a rule to drop them all.
+	// One purchase (42 shares, 2023-11-02) carries NO commission field at all
+	// while a BROKER_FEE of 11,34 ₽ names it — there the separate operation is
+	// the only record of that money, and dropping it put the charge in neither
+	// the journal nor the unparsed list. Which case a fee is in is decided by
+	// Rebuilder.settleBrokerFees, where the trade is in hand.
+	DeferredBrokerFeeVerdict
 )
 
 // minorUnitScale is how many decimal places a major currency unit is split
@@ -566,10 +579,6 @@ func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]opera
 		}
 	}
 
-	if r.how == asBrokerFee && !projectBrokerFee {
-		return nil, DeferredNothing, nil
-	}
-
 	// A currency trade is refused before anything else looks at it, and it is
 	// refused even if the caller passed a resolved instrument (which it never
 	// should — the resolver deliberately does not resolve currencies, see
@@ -609,9 +618,14 @@ func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]opera
 	case asSecuritiesTransfer:
 		ops, refusal = projectSecuritiesTransfer(row, accountID, resolved, r.transfer)
 	case asBrokerFee:
-		// Reached only with projectBrokerFee on, when the broker's separate
-		// fee operation is NOT the same money as a trade's commission field.
+		// Built like any other cash entry, and then held: whether it survives
+		// depends on the trade it names, which is another row (see
+		// DeferredBrokerFeeVerdict). Building it here rather than at the point
+		// that decides keeps one place that knows how a fee is shaped.
 		ops, refusal = projectCash(row, accountID, resolved, r.journal)
+		if refusal == nil {
+			deferred = DeferredBrokerFeeVerdict
+		}
 	default:
 		// Unreachable from any broker data: every shape in brokerOpTypes has
 		// a branch above. It is reachable from a change to this file — a
@@ -659,24 +673,32 @@ func base(row MirrorRow, accountID uuid.UUID, t operation.Type) operation.Operat
 // only as a record of what was asked for (see OperationItem.QuantityDone,
 // which says how far apart the two can be).
 //
-// THE ACCRUED INTEREST OF A BOND TRADE IS NOT READ, and that is an assumption
-// rather than a decision. The mirror carries the broker's accrued_int into a
-// column and reads it back out (MirrorRow.AccruedInt), and that is the whole
-// of its life in this program: no rule anywhere, here or downstream, computes
-// anything from it. What makes that right is the payment being the WHOLE
-// money that moved,
-// coupon interest included — in which case adding accrued_int to it would
-// count the same money twice. If the payment instead excludes it, every bond
-// purchase understates the position's cost by exactly that interest, and the
-// money reaches neither the journal nor the unparsed list: the silent loss
-// this file exists to prevent. It is task 14's first question, settled against
-// the owner's own broker report.
+// THE ACCRUED INTEREST OF A BOND TRADE IS NOT READ, and it used to be an
+// assumption rather than a decision. The mirror carries the broker's
+// accrued_int into a column and reads it back out (MirrorRow.AccruedInt), and
+// that is the whole of its life in this program: no rule anywhere, here or
+// downstream, computes anything from it. What makes that right is the payment
+// being the WHOLE money that moved, coupon interest included — in which case
+// adding accrued_int to it would count the same money twice. If the payment
+// instead excluded it, every bond purchase would understate the position's cost
+// by exactly that interest, and the money would reach neither the journal nor
+// the unparsed list: the silent loss this file exists to prevent.
 //
-// Whether a bond's price arrives as money per bond or as a percent of par is
-// NOT verified here or anywhere in this session; it is another question for
-// task 14's live run. Nothing computed from this row depends on the answer:
-// the amount is the broker's payment, and the price is an annotation the
-// engine never reads.
+// CHECKED, AND UNANIMOUS. On the owner's account all 173 bond trades carrying a
+// non-zero accrued interest satisfy payment = executed quantity × price +
+// accrued interest to the kopeck, and not one satisfies that sum without it. So
+// the interest is inside the payment and must not be added a second time. The
+// sale of 115 ОФЗ 29008 on 2026-02-05 is the whole argument in one line:
+// 115 × 1036,98 + 7868,30 = 127 121,00, which is the payment exactly.
+//
+// A BOND'S PRICE HERE IS MONEY PER BOND, and that is worth saying because the
+// same bond's QUOTE is a percentage of par — one word with two meanings inside
+// one package. Checked on the same account: 78 ОФЗ 26226 bought at 989,60 paid
+// 79 074,84, which is 78 × 989,60 plus accrued interest and nothing like a
+// percentage of a 1000 par. Nothing computed from this row depends on it either
+// way — the amount is the broker's payment and the price is an annotation the
+// engine never reads — but a reader comparing this field against a quote would
+// otherwise have no warning.
 func projectTrade(row MirrorRow, accountID uuid.UUID, resolved *Resolved, t operation.Type) ([]operation.Operation, *UnparsedError) {
 	amount, refusal := minorFromDecimal(row.Payment)
 	if refusal != nil {
@@ -771,9 +793,10 @@ func tradePrice(row MirrorRow) *decimal.Decimal {
 // journal would take the flipped number without a word and nothing downstream
 // could tell it from a real charge. So it becomes a visible unparsed row
 // (ReasonCommissionRefund) and the whole operation waits for the owner. That
-// the broker reports a commission as money leaving, i.e. negative, is believed
-// and not verified live (task 14); this is what happens when the belief turns
-// out to be wrong.
+// the broker reports a commission as money leaving, i.e. negative, is now
+// CHECKED rather than believed: on the owner's account every trade carrying a
+// commission at all carries it negative. This branch is what happens on the day
+// one does not.
 //
 // A ZERO IS AN ORDINARY CASE, not a refusal: it is a trade the broker charged
 // nothing for, and it is the one commission value that means the same thing
@@ -842,8 +865,13 @@ func tradeCommission(row MirrorRow, accountID uuid.UUID) (int64, *operation.Oper
 // A NEGATIVE correction is an ordinary tax, booked by this same code. A ZERO
 // is handed to the journal as a tax too, and the journal refuses it in its own
 // words: a zero is not money given back, and calling it a refund would be a
-// reason that is not the true one. Whether the broker's corrections really
-// arrive positive is task 14's live check.
+// reason that is not the true one.
+//
+// That the broker's corrections really do arrive positive is CHECKED: of the
+// nine TAX_CORRECTION operations on the owner's account seven are positive,
+// while all 67 of the ordinary tax types (TAX, DIVIDEND_TAX, BOND_TAX,
+// BENEFIT_TAX) are negative without exception. So the refusal below answers a
+// real case rather than a defensive one.
 //
 // NO SIGN IS RESCUED ANYWHERE, and the tax was the last place that tried. A
 // withdrawal that arrived positive, a dividend that arrived negative and a fee
@@ -854,11 +882,12 @@ func tradeCommission(row MirrorRow, accountID uuid.UUID) (int64, *operation.Oper
 // journal would take a flipped commission in silence where it refuses every
 // one of these outright.
 //
-// A commission field on a cash operation is NOT projected. The broker's own
-// fee operations are types of their own (SERVICE_FEE and the rest), and a
-// commission attached to a top-up or a dividend is not something this session
-// has seen; task 14's reconciliation of commission fields against fee
-// operations is what would show it happening.
+// A commission field on a cash operation is NOT projected. The broker's own fee
+// operations are types of their own (SERVICE_FEE and the rest), and a
+// commission attached to a top-up or a dividend is not something the owner's
+// account holds: every operation there carrying one is a trade. If one ever
+// does, that money reaches neither the journal nor the unparsed list, so this
+// is the paragraph to come back to.
 func projectCash(row MirrorRow, accountID uuid.UUID, resolved *Resolved, t operation.Type) ([]operation.Operation, *UnparsedError) {
 	amount, refusal := minorFromDecimal(row.Payment)
 	if refusal != nil {
@@ -938,7 +967,9 @@ func projectAmortization(row MirrorRow, accountID uuid.UUID, resolved *Resolved)
 // distinction between this sale and any other, so neither does this; and a
 // commission dropped here would be money vanishing from the journal AND from
 // the unparsed list at once. Whether the broker ever charges one on a
-// redemption is not known — the sale is booked the same way either way.
+// redemption is not known from the documentation, and on the owner's account
+// none of the 23 full redemptions carries one — the sale is booked the same way
+// either way, so the rule costs nothing and is ready if one ever appears.
 func projectRedemption(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, Deferred, *UnparsedError) {
 	amount, refusal := minorFromDecimal(row.Payment)
 	if refusal != nil {
@@ -1038,10 +1069,12 @@ func projectDividendToCard(row MirrorRow, accountID uuid.UUID, resolved *Resolve
 //
 // THAT LEAVES ONE ASSUMPTION where there were two, and it is the smaller one:
 // that a paper's passport currency is the currency its trades are paid in,
-// which is what makes this leg agree with the purchases around it. Unverified
-// against a live account like the rest of this file (task 14) — but a passport
-// says something about the paper, while the currency beside a zero payment says
-// nothing about anything.
+// which is what makes this leg agree with the purchases around it. STILL
+// UNVERIFIED, and unverifiable on the account this program has seen — it holds
+// no securities transfer whose paper trades in anything but rubles, so nothing
+// there could disagree with a passport. What makes it the safe assumption
+// anyway is that a passport says something about the paper, while the currency
+// beside a zero payment says nothing about anything.
 //
 // A leg whose instrument was not resolved keeps the row's currency and is
 // refused a few lines below rather than written: both transfer types require an
@@ -1061,8 +1094,10 @@ func projectDividendToCard(row MirrorRow, accountID uuid.UUID, resolved *Resolve
 // exactly and any note claiming otherwise would be false.
 //
 // THE DIRECTION of a move between the owner's own accounts is read from the
-// SIGN OF THE QUANTITY, and that is the one assumption here that has not been
-// checked against live data (task 14). The type cannot say it: TRANS_IIS_BS
+// SIGN OF THE QUANTITY, and that assumption is STILL UNCHECKED — not put off to
+// a later run, but unanswerable so far: the owner's account holds not one
+// TRANS_* operation, so nothing on it could confirm or refute this. It rests on
+// the broker's documentation alone. The type cannot say it: TRANS_IIS_BS
 // and TRANS_BS_BS describe a move between two accounts and appear on both
 // sides of it, so the same type is an arrival on one account and a departure
 // on the other. A zero leaves the direction unknowable and is refused rather

@@ -1,5 +1,5 @@
 {
-  "_note": "constructed for this test — a full redemption the broker charged a commission on; the shape is the documented one (BOND_REPAYMENT_FULL with a commission field), the combination has not been seen live (task 14)",
+  "_note": "constructed for this test — a full redemption the broker charged a commission on; the shape is the documented one (BOND_REPAYMENT_FULL with a commission field), the combination has not been seen live (a live account)",
   "id": "op-repay-2",
   "parentOperationId": "",
   "name": "Погашение облигации",

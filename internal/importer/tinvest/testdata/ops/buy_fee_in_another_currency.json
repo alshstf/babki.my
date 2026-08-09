@@ -1,5 +1,5 @@
 {
-  "_note": "constructed for this test — a trade paid in one currency whose commission the broker charged in another; the shape is the documented one, the combination has not been seen live (task 14)",
+  "_note": "constructed for this test — a trade paid in one currency whose commission the broker charged in another; the shape is the documented one, the combination has not been seen live (a live account)",
   "id": "op-buy-2",
   "parentOperationId": "",
   "name": "Покупка ценных бумаг",

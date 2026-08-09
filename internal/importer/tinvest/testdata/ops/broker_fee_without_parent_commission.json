@@ -1,0 +1,15 @@
+{
+  "_note": "the 311th fee: it names a trade that carries no commission of its own, so this operation is the only record of the money. 11,34 ₽ is the real amount from the owner's account (broker operation 126217596416).",
+  "id": "op-brokerfee-2",
+  "parentOperationId": "op-buy-nocomm-1",
+  "name": "Удержание комиссии за операцию",
+  "date": "2026-03-14T21:30:00Z",
+  "type": "OPERATION_TYPE_BROKER_FEE",
+  "description": "Комиссия за сделку",
+  "state": "OPERATION_STATE_EXECUTED",
+  "instrumentUid": "",
+  "figi": "",
+  "instrumentType": "",
+  "payment": {"currency": "rub", "units": "-11", "nano": -340000000},
+  "quantity": "0"
+}

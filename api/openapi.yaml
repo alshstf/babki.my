@@ -1391,7 +1391,11 @@ components:
         `tax_refund`: a tax operation whose amount is positive.
         `projection_incomplete`: this program has a rule for the broker's
         operation type and the rule produced nothing — a gap in this program,
-        stated as one.
+        stated as one. `broker_fee_parent_missing`: a commission charged as an
+        operation of its own, naming a trade that is not among the operations
+        this connection imported — so whether the trade already carries that
+        same commission cannot be told, and neither dropping nor keeping the
+        charge would be an answer.
       enum:
         - unsupported_type
         - unrepresentable_amount
@@ -1407,6 +1411,7 @@ components:
         - commission_refund
         - tax_refund
         - projection_incomplete
+        - broker_fee_parent_missing
     TinvestTokenCheckRequest:
       type: object
       required: [token]
