@@ -362,6 +362,22 @@ type wireBondResponse struct {
 	} `json:"instrument"`
 }
 
+// wireFindInstrumentResponse mirrors InstrumentsService/FindInstrument. Its
+// element is a shape of its own (InstrumentShort) rather than the full
+// instrument GetInstrumentBy returns, and it carries exactly the four fields
+// the search is for.
+type wireFindInstrumentResponse struct {
+	Instruments []struct {
+		UID            string `json:"uid"`
+		ISIN           string `json:"isin"`
+		Ticker         string `json:"ticker"`
+		Name           string `json:"name"`
+		ClassCode      string `json:"classCode"`
+		Currency       string `json:"currency"`
+		InstrumentKind string `json:"instrumentKind"`
+	} `json:"instruments"`
+}
+
 // wireGetLastPricesResponse mirrors MarketDataService/GetLastPrices. The
 // response carries NO CURRENCY — see LastPrice and migration 0017 for where the
 // currency of a price comes from instead, and why it cannot be the catalog

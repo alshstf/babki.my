@@ -192,6 +192,28 @@ function AccountVerdict({
       {reconcile.mismatches.length > 0 && (
         <MismatchTable mismatches={reconcile.mismatches} />
       )}
+
+      {/* A CASH DIFFERENCE THAT CANNOT CLOSE SAYS SO. Both conditions are
+          required and neither is enough on its own: unimported currency trades
+          with no money difference beside them explain nothing that is on the
+          screen, and a money difference on an account with none of them has
+          another cause entirely and must not be handed this one. That pairing
+          is the whole point — a caption naming the wrong reason beside a right
+          number is the failure this project has been caught at repeatedly.
+
+          It is deliberately NOT shown for the securities rows: a currency trade
+          moves no shares, and the contract says as much about this field. */}
+      {reconcile.currency_trades_unparsed > 0 &&
+        reconcile.mismatches.some((m) => m.kind === "currency") && (
+          <p
+            data-testid="reconcile-currency-trades-note"
+            className="text-xs text-muted-foreground"
+          >
+            {t("connections.detail.reconcile.currencyTradesExplainCash", {
+              count: reconcile.currency_trades_unparsed,
+            })}
+          </p>
+        )}
     </li>
   );
 }

@@ -135,6 +135,7 @@ function makeConnection(overrides: Partial<TinvestConnection> = {}): TinvestConn
         at: null,
         status: "not_checked",
         mismatches: [],
+        currency_trades_unparsed: 0,
       },
     ],
     ...overrides,
@@ -614,6 +615,7 @@ describe("ConnectionDetailPage — the panels below", () => {
             mismatches: [
               { kind: "instrument", instrument_id: "i-1", label: "SBER", broker: "150", journal: "100" },
             ],
+            currency_trades_unparsed: 0,
           },
         ],
       }),
@@ -645,6 +647,7 @@ describe("ConnectionDetailPage — the panels below", () => {
                     journal: "100",
                   },
                 ],
+                currency_trades_unparsed: 0,
               },
             ],
             has_more: false,
@@ -711,6 +714,7 @@ describe("ConnectionDetailPage — the panels below", () => {
             mismatches: [
               { kind: "currency", instrument_id: null, label: "RUB", broker: "1000.5", journal: "0" },
             ],
+            currency_trades_unparsed: 0,
           },
           {
             link_id: "link-2",
@@ -719,6 +723,7 @@ describe("ConnectionDetailPage — the panels below", () => {
             at: "2026-08-04T09:16:00Z",
             status: "matched",
             mismatches: [],
+            currency_trades_unparsed: 0,
           },
         ],
       }),
