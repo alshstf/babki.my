@@ -438,8 +438,12 @@ func (f *quotesFixture) markUnparsed(t *testing.T, linkID uuid.UUID, key, reason
 // pricing a holding nobody imported (#137)
 // -------------------------------------------------------------------------
 
-func listing(uid, isin, ticker, class, currency, kind string) Listing {
-	return Listing{UID: uid, ISIN: isin, Ticker: ticker, ClassCode: class, Currency: currency, Kind: kind}
+// listing mirrors what FindInstrument really returns — WITHOUT a currency,
+// which the search does not report (see Listing). Taking one here is what made
+// the first version of these tests pass against a filter that matched nothing
+// in production.
+func listing(uid, isin, ticker, class, kind string) Listing {
+	return Listing{UID: uid, ISIN: isin, Ticker: ticker, ClassCode: class, Kind: kind}
 }
 
 // TestCandidateListingsRefuseEverythingButTheSamePaper. The broker answers a
@@ -448,25 +452,28 @@ func listing(uid, isin, ticker, class, currency, kind string) Listing {
 func TestCandidateListingsRefuseEverythingButTheSamePaper(t *testing.T) {
 	want := UnmappedHeldInstrument{ISIN: "US0378331005", Ticker: "AAPL", Type: "share", Currency: "USD"}
 	found := []Listing{
-		listing("uid-spb", "US0378331005", "AAPL", "SPBXM", "USD", "INSTRUMENT_TYPE_SHARE"),
-		listing("uid-a25", "US0378331005", "AAPL", "A25", "usd", "INSTRUMENT_TYPE_SHARE"),
-		// Same paper, the old ruble line: a price in the wrong currency filed
-		// under this row would be wrong by a factor of eighty.
-		listing("uid-rm", "US0378331005", "AAPL-RM", "FQBR", "RUB", "INSTRUMENT_TYPE_SHARE"),
+		listing("uid-spb", "US0378331005", "AAPL", "SPBXM", "INSTRUMENT_TYPE_SHARE"),
+		listing("uid-a25", "US0378331005", "AAPL", "A25", "INSTRUMENT_TYPE_SHARE"),
+		// Same paper, the old ruble line. It IS a candidate here — the search
+		// says nothing about currency — and is stopped later, on the listing
+		// that wins, by its passport (see priceUnmapped). Which is also why it
+		// carries a frozen price in the test below: freshness is what removes
+		// it in practice.
+		listing("uid-rm", "US0378331005", "AAPL-RM", "FQBR", "INSTRUMENT_TYPE_SHARE"),
 		// SOMEBODY ELSE'S PAPER UNDER THE SAME TICKER, and identical to the
 		// wanted one in every other respect — same kind, same currency. Only
 		// the ISIN tells them apart, which is what makes this row the one that
 		// says the match is on the ISIN and not on the ticker. The broker
 		// really does answer "T" with two issuers.
-		listing("uid-other", "RU000A107UL4", "AAPL", "TQBR", "USD", "INSTRUMENT_TYPE_SHARE"),
+		listing("uid-other", "RU000A107UL4", "AAPL", "TQBR", "INSTRUMENT_TYPE_SHARE"),
 		// THE SAME PAPER UNDER ANOTHER TICKER, in the wanted currency: kept,
 		// which ticker matching would not do. The frozen foreign lines carry a
 		// "-RM" name of their own, and a rule that dropped them would leave
 		// exactly the holdings this pass exists for unpriced.
-		listing("uid-rm-usd", "US0378331005", "AAPL-RM", "MTQR", "USD", "INSTRUMENT_TYPE_SHARE"),
-		// The right ISIN and currency, the wrong kind of asset: a bond's quote
-		// is a percent of par and would be read here as money per share.
-		listing("uid-bond", "US0378331005", "AAPL", "TQCB", "USD", "INSTRUMENT_TYPE_BOND"),
+		listing("uid-rm-usd", "US0378331005", "AAPL-RM", "MTQR", "INSTRUMENT_TYPE_SHARE"),
+		// The right ISIN, the wrong kind of asset: a bond's quote is a percent
+		// of par and would be read here as money per share.
+		listing("uid-bond", "US0378331005", "AAPL", "TQCB", "INSTRUMENT_TYPE_BOND"),
 	}
 
 	got := candidateListings(want, found)
@@ -474,7 +481,7 @@ func TestCandidateListingsRefuseEverythingButTheSamePaper(t *testing.T) {
 	for _, l := range got {
 		kept[l.UID] = true
 	}
-	want3 := []string{"uid-spb", "uid-a25", "uid-rm-usd"}
+	want3 := []string{"uid-spb", "uid-a25", "uid-rm-usd", "uid-rm"}
 	for _, uid := range want3 {
 		if !kept[uid] {
 			t.Errorf("dropped %q, want it kept — it is this paper, in this currency, of this kind", uid)
@@ -492,8 +499,8 @@ func TestCandidateListingsRefuseEverythingButTheSamePaper(t *testing.T) {
 // this week and lines frozen since trading in them stopped in 2022. The freshest
 // price is the rule, and it needs no hand-maintained list of venue names.
 func TestPickListingTakesTheOneStillBeingQuoted(t *testing.T) {
-	live := listing("uid-live", "US0378331005", "AAPL", "SPBXM", "USD", "INSTRUMENT_TYPE_SHARE")
-	frozen := listing("uid-frozen", "US0378331005", "AAPL-RM", "FQBR", "USD", "INSTRUMENT_TYPE_SHARE")
+	live := listing("uid-live", "US0378331005", "AAPL", "SPBXM", "INSTRUMENT_TYPE_SHARE")
+	frozen := listing("uid-frozen", "US0378331005", "AAPL-RM", "FQBR", "INSTRUMENT_TYPE_SHARE")
 	prices := map[string]LastPrice{
 		"uid-live":   {InstrumentUID: "uid-live", Price: decimal.RequireFromString("313.25"), At: time.Date(2026, 8, 7, 23, 28, 0, 0, time.UTC)},
 		"uid-frozen": {InstrumentUID: "uid-frozen", Price: decimal.RequireFromString("58424"), At: time.Date(2022, 2, 25, 10, 10, 0, 0, time.UTC)},
@@ -518,8 +525,8 @@ func TestPickListingTakesTheOneStillBeingQuoted(t *testing.T) {
 // which venue it came from.
 func TestPickListingRefusesTwoEqallyFreshPricesThatDisagree(t *testing.T) {
 	at := time.Date(2026, 8, 7, 23, 59, 0, 0, time.UTC)
-	a := listing("uid-a", "US0378331005", "AAPL", "SPBXM", "USD", "INSTRUMENT_TYPE_SHARE")
-	b := listing("uid-b", "US0378331005", "AAPL", "A25", "USD", "INSTRUMENT_TYPE_SHARE")
+	a := listing("uid-a", "US0378331005", "AAPL", "SPBXM", "INSTRUMENT_TYPE_SHARE")
+	b := listing("uid-b", "US0378331005", "AAPL", "A25", "INSTRUMENT_TYPE_SHARE")
 
 	disagree := map[string]LastPrice{
 		"uid-a": {InstrumentUID: "uid-a", Price: decimal.RequireFromString("313.25"), At: at},
@@ -544,7 +551,7 @@ func TestPickListingRefusesTwoEqallyFreshPricesThatDisagree(t *testing.T) {
 // TestPickListingRefusesWhenNothingIsQuoted. A candidate with no price is not
 // a candidate; with none of them priced there is nothing to pick.
 func TestPickListingRefusesWhenNothingIsQuoted(t *testing.T) {
-	a := listing("uid-a", "US0378331005", "AAPL", "SPBXM", "USD", "INSTRUMENT_TYPE_SHARE")
+	a := listing("uid-a", "US0378331005", "AAPL", "SPBXM", "INSTRUMENT_TYPE_SHARE")
 	if _, _, ok := pickListing([]Listing{a}, map[string]LastPrice{}); ok {
 		t.Error("picked a listing the broker quoted no price for")
 	}

@@ -367,15 +367,35 @@ func (w *quotesWorker) priceUnmapped(ctx context.Context, conn Connection, clien
 				"instrument_uid", listing.UID, "on", on.Format(time.DateOnly))
 			continue
 		}
+		// THE WINNER'S CURRENCY, ASKED OF ITS PASSPORT, because the search does
+		// not report one and the catalog row's is not this listing's (migration
+		// 0017 says why). One request, for the one listing that won, rather than
+		// one per candidate.
+		brief, err := client.InstrumentByUID(ctx, listing.UID)
+		if err != nil {
+			if errors.Is(err, ErrTokenInvalid) {
+				return out, err
+			}
+			w.log.Debug("tinvest: could not learn what the chosen listing is denominated in",
+				"instrument_uid", listing.UID, "err", err)
+			continue
+		}
+		currency := upperCurrency(brief.Currency)
+		if currency == "" || !strings.EqualFold(currency, u.Currency) {
+			// A price in another currency than the row is kept in is not this
+			// row's price: filing it here would be wrong by whatever the two
+			// currencies differ by, and there is nothing on a position screen
+			// that would show it.
+			w.log.Debug("tinvest: the chosen listing is denominated in another currency than the holding",
+				"instrument_id", u.InstrumentID, "listing", currency, "holding", u.Currency)
+			continue
+		}
 		out = append(out, marketdata.Quote{
 			InstrumentID: u.InstrumentID,
 			On:           on,
 			Price:        price.Price,
-			// The LISTING's currency, which candidateListings has already
-			// required to equal the catalog row's — so this is one currency
-			// stated twice rather than a choice between two.
-			Currency: listing.Currency,
-			Source:   quoteSource(price.Dealer),
+			Currency:     currency,
+			Source:       quoteSource(price.Dealer),
 		})
 	}
 	return out, nil
@@ -451,12 +471,16 @@ var brokerInstrumentKinds = map[string]instrument.Type{
 // honestly stand for a catalog row: the same ISIN, the same kind of asset, and
 // the same currency.
 //
-// ALL THREE ARE REQUIRED AND NONE OF THEM IS THE TICKER. The broker answers a
-// search for "T" with a bond of one issuer and a share of another; matching on
-// a ticker is how a holding gets priced with a stranger's price. The ISIN is
-// what identifies the paper, the kind keeps a bond's percent-of-par quote off a
-// share's row, and the currency keeps a dollar price from being filed as
-// rubles — the same rule migration 0017 states for a listing's own currency.
+// NEITHER OF THEM IS THE TICKER. The broker answers a search for "T" with a
+// bond of one issuer and a share of another; matching on a ticker is how a
+// holding gets priced with a stranger's price. The ISIN is what identifies the
+// paper, and the kind keeps a bond's percent-of-par quote off a share's row.
+//
+// THE CURRENCY IS NOT CHECKED HERE, because the search does not report one (see
+// Listing). It is checked on the listing that wins, out of its passport, which
+// is the only place that has it — see priceUnmapped. Filtering on it here, in
+// the first version of this, compared every listing's empty string against the
+// catalog's currency and quietly matched nothing at all.
 func candidateListings(want UnmappedHeldInstrument, found []Listing) []Listing {
 	out := []Listing{}
 	for _, l := range found {
@@ -464,9 +488,6 @@ func candidateListings(want UnmappedHeldInstrument, found []Listing) []Listing {
 			continue
 		}
 		if kind, ok := brokerInstrumentKinds[l.Kind]; !ok || string(kind) != want.Type {
-			continue
-		}
-		if !strings.EqualFold(l.Currency, want.Currency) {
 			continue
 		}
 		out = append(out, l)

@@ -496,11 +496,21 @@ func (c *Client) InstrumentByUID(ctx context.Context, uid string) (InstrumentBri
 }
 
 // Listing is one of the broker's tradable lines for a security, as
-// FindInstrument reports it. ONE PAPER HAS SEVERAL — Apple answers with four —
-// and they differ in the two things that matter to a price: which venue struck
-// it (ClassCode) and what it is denominated in.
+// FindInstrument reports it. ONE PAPER HAS SEVERAL — a search for Apple's ISIN
+// answers with nine, across venues and under three different tickers.
+//
+// THERE IS NO CURRENCY HERE, AND THAT IS THE SEARCH'S OWN SHAPE rather than an
+// omission of this type: FindInstrument returns InstrumentShort, which carries
+// no currency field at all (checked live, 2026-08-10 — every one of the nine
+// Apple listings came back without one). What a listing is denominated in has
+// to be asked of the passport, InstrumentByUID.
+//
+// Declaring it here anyway was a defect worth remembering: a filter compared it
+// against the catalog's currency, every listing carried the empty string, and
+// the whole search quietly matched nothing. The unit tests passed because their
+// fixtures supplied a currency the real API never sends.
 type Listing struct {
-	UID, ISIN, Ticker, Name, ClassCode, Currency, Kind string
+	UID, ISIN, Ticker, Name, ClassCode, Kind string
 }
 
 // FindInstruments searches the broker's catalog by a free-text query, which for
@@ -525,8 +535,7 @@ func (c *Client) FindInstruments(ctx context.Context, query string) ([]Listing, 
 	for _, w := range resp.Instruments {
 		out = append(out, Listing{
 			UID: w.UID, ISIN: w.ISIN, Ticker: w.Ticker, Name: w.Name,
-			ClassCode: w.ClassCode, Currency: strings.ToUpper(w.Currency),
-			Kind: w.InstrumentKind,
+			ClassCode: w.ClassCode, Kind: w.InstrumentKind,
 		})
 	}
 	return out, nil
