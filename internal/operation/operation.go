@@ -23,6 +23,7 @@ type (
 const (
 	TypeBuy          = portfolio.TypeBuy
 	TypeSell         = portfolio.TypeSell
+	TypeRedemption   = portfolio.TypeRedemption
 	TypeDeposit      = portfolio.TypeDeposit
 	TypeWithdrawal   = portfolio.TypeWithdrawal
 	TypeDividend     = portfolio.TypeDividend

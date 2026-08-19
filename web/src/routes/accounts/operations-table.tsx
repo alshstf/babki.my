@@ -562,7 +562,30 @@ export function OperationsTable({
                     <SourceBadge operation={operation} />
                   </div>
                 </TableCell>
-                <TableCell>{instrumentName(operation.instrument_id)}</TableCell>
+                <TableCell>
+                  {instrumentName(operation.instrument_id)}
+                  {/* THE BROKER'S OWN WORDS, WHICH THE JOURNAL HAS ALWAYS
+                      STORED AND THIS SCREEN NEVER SHOWED. A type is a category
+                      and a note is the event: «Погашение Инарктика 001Р-01»
+                      says which bond ran out, where the badge above can only
+                      say that something was redeemed. It sits under the
+                      instrument rather than in a column of its own — most rows
+                      have none, and an empty seventh column would cost every
+                      row width to serve a few.
+
+                      Rendered as the broker (or the person) wrote it, with no
+                      interpretation: this is the one field on the row that is
+                      not a figure and not a code, and inventing wording for it
+                      is exactly what the type badge already does. */}
+                  {operation.note && (
+                    <div
+                      data-testid="operation-note"
+                      className="text-xs text-muted-foreground"
+                    >
+                      {operation.note}
+                    </div>
+                  )}
+                </TableCell>
                 <TableCell
                   className="text-right tabular-nums"
                   // The tooltip sits on the whole cell, not just the price

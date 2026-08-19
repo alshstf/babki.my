@@ -19,8 +19,21 @@ import (
 type Type string
 
 const (
-	TypeBuy          Type = "buy"
-	TypeSell         Type = "sell"
+	TypeBuy  Type = "buy"
+	TypeSell Type = "sell"
+	// TypeRedemption is a bond reaching maturity: the issuer takes the paper
+	// back and pays the principal. THE ARITHMETIC IS A SALE'S, exactly — the
+	// bonds leave, the money arrives, and the queue gives up the basis they
+	// carried — and the engine therefore treats the two as one throughout.
+	//
+	// It is a type of its own all the same, for two reasons that are not about
+	// arithmetic. The journal already names the PARTIAL repayment separately
+	// (TypeAmortization), so the full one masquerading as a sale was the odd
+	// one out; and the word on the screen was a lie about what happened —
+	// nobody sold anything, the bond ran out. НК РФ ст. 214.1 names the two
+	// together ("реализации (погашения)"), which is why one computation serves
+	// both and why nothing here needs a second rule.
+	TypeRedemption   Type = "redemption"
 	TypeDeposit      Type = "deposit"
 	TypeWithdrawal   Type = "withdrawal"
 	TypeDividend     Type = "dividend"
@@ -36,7 +49,7 @@ const (
 )
 
 var validTypes = map[Type]bool{
-	TypeBuy: true, TypeSell: true, TypeDeposit: true, TypeWithdrawal: true,
+	TypeBuy: true, TypeSell: true, TypeRedemption: true, TypeDeposit: true, TypeWithdrawal: true,
 	TypeDividend: true, TypeCoupon: true, TypeAmortization: true, TypeFee: true,
 	TypeTax: true, TypeTransferIn: true, TypeTransferOut: true, TypeSplit: true,
 	TypeInterest: true, TypeConversion: true,
@@ -51,7 +64,7 @@ func (t Type) Valid() bool { return validTypes[t] }
 // position, so it keeps the requirement.
 func (t Type) RequiresInstrument() bool {
 	switch t {
-	case TypeBuy, TypeSell, TypeAmortization,
+	case TypeBuy, TypeSell, TypeRedemption, TypeAmortization,
 		TypeTransferIn, TypeTransferOut, TypeSplit:
 		return true
 	}
@@ -84,7 +97,8 @@ func (t Type) RequiresInstrument() bool {
 // yuan bond is the case: refusing it lost the whole sale over a charge of four
 // rubles, and capitalizing it into a yuan basis would have been worse.
 //
-// FALSE FOR A SALE, and this is the one that needs the argument. Its proceeds
+// FALSE FOR A SALE AND FOR A REDEMPTION, which the engine treats as one thing
+// (see TypeRedemption), and this is the exemption that needs the argument. Its proceeds
 // and its fee go to a Realization, which carries its own currency
 // (Realization.Currency), and what it retires is decided by the QUANTITY sold —
 // the queue gives up the same parcels of the same basis whatever currency the
@@ -114,7 +128,7 @@ func (t Type) RequiresInstrument() bool {
 // treated strictly until somebody decides otherwise.
 func (o Operation) mustMatchPositionCurrency() bool {
 	switch o.Type {
-	case TypeDividend, TypeCoupon, TypeTax, TypeFee, TypeSell:
+	case TypeDividend, TypeCoupon, TypeTax, TypeFee, TypeSell, TypeRedemption:
 		return false
 	}
 	return o.AmountMinor != 0 || o.FeeMinor != 0 || LotsCost(o.TransferLots) != 0

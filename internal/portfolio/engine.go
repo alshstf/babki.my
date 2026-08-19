@@ -1072,7 +1072,7 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			continue // cash-level operation: not the engine's business
 		}
 		switch o.Type {
-		case TypeBuy, TypeSell,
+		case TypeBuy, TypeSell, TypeRedemption,
 			TypeTransferIn, TypeTransferOut:
 			if o.Quantity == nil || !o.Quantity.IsPositive() {
 				return nil, badOp(o, "positive quantity required")
@@ -1105,9 +1105,13 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			if err := p.addFee(o.Currency, o.FeeMinor); err != nil {
 				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 			}
-		case TypeSell:
+		case TypeSell, TypeRedemption:
+			// ONE BRANCH FOR BOTH, and it must stay one: a redemption differs
+			// from a sale in what happened, not in what it comes to (see
+			// TypeRedemption). Splitting this would be two implementations of
+			// one computation, which this package has been bitten by before.
 			if o.AmountMinor <= 0 {
-				return nil, badOp(o, "sell amount must be positive")
+				return nil, badOp(o, fmt.Sprintf("%s amount must be positive", o.Type))
 			}
 			pieces, err := p.releaseFIFO(*o.Quantity)
 			if err != nil {

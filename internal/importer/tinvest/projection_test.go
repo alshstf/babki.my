@@ -466,12 +466,12 @@ func TestProjectRowAmortizationCarriesNoQuantity(t *testing.T) {
 	}
 }
 
-func TestProjectRowFullRedemptionIsASale(t *testing.T) {
+func TestProjectRowFullRedemptionIsItsOwnKindOfDisposal(t *testing.T) {
 	row := mirrorRowFor(t, "bond_repayment_full.json")
 	op := projectOne(t, row, &Resolved{InstrumentID: fixtureInstrID, Type: instrument.TypeBond})
 
-	if op.Type != operation.TypeSell {
-		t.Errorf("type = %s, want sell", op.Type)
+	if op.Type != operation.TypeRedemption {
+		t.Errorf("type = %s, want redemption — the bond matured, nobody sold it", op.Type)
 	}
 	if op.AmountMinor != 1000000 {
 		t.Errorf("amount_minor = %d, want 1000000", op.AmountMinor)
@@ -494,8 +494,8 @@ func TestProjectRowFullRedemptionKeepsItsCommission(t *testing.T) {
 
 	t.Run("the row's own currency goes into fee_minor", func(t *testing.T) {
 		op := projectOne(t, mirrorRowFor(t, "bond_repayment_full_with_fee.json"), bond)
-		if op.Type != operation.TypeSell {
-			t.Errorf("type = %s, want sell", op.Type)
+		if op.Type != operation.TypeRedemption {
+			t.Errorf("type = %s, want redemption", op.Type)
 		}
 		if op.AmountMinor != 1000000 {
 			t.Errorf("amount_minor = %d, want 1000000", op.AmountMinor)
@@ -571,8 +571,8 @@ func TestProjectRowFullRedemptionWithoutQuantityAsksTheJournalForTheCount(t *tes
 		t.Errorf("deferred = %d, want DeferredRedeemedQuantity (%d)", deferred, DeferredRedeemedQuantity)
 	}
 	sale := ops[0]
-	if sale.Type != operation.TypeSell {
-		t.Errorf("type = %s, want sell", sale.Type)
+	if sale.Type != operation.TypeRedemption {
+		t.Errorf("type = %s, want redemption", sale.Type)
 	}
 	if sale.Quantity != nil {
 		t.Errorf("quantity = %v, want none: a count invented here would be this program saying how many bonds the broker redeemed", sale.Quantity)

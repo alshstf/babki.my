@@ -67,6 +67,12 @@ func TestIncomeByInstrumentMatchesEngineIncomeTypes(t *testing.T) {
 				{Type: TypeSell, InstrumentID: &id, OccurredOn: on(2), Currency: "USD", Quantity: qty("10"), AmountMinor: 150_000},
 			}
 		}},
+		{TypeRedemption, func(id uuid.UUID) []Operation {
+			return []Operation{
+				{Type: TypeBuy, InstrumentID: &id, OccurredOn: on(1), Currency: "USD", Quantity: qty("10"), AmountMinor: -100_000},
+				{Type: TypeRedemption, InstrumentID: &id, OccurredOn: on(2), Currency: "USD", Quantity: qty("10"), AmountMinor: 100_000},
+			}
+		}},
 		{TypeDeposit, func(id uuid.UUID) []Operation {
 			return []Operation{
 				{Type: TypeDeposit, OccurredOn: on(1), Currency: "USD", AmountMinor: 100_000},
