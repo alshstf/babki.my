@@ -3,6 +3,7 @@ package portfolio_test
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1805,4 +1806,76 @@ func realizedOf(t *testing.T, p *portfolio.Position) int64 {
 		t.Fatalf("position %s has no realized result in one currency: a disposal settled in another", p.InstrumentID)
 	}
 	return minor
+}
+
+// TestRedemptionComputesExactlyAsASale is the load-bearing test of the new
+// type, and it is a DIFFERENTIAL one on purpose: a redemption differs from a
+// sale in what happened, not in what it comes to, so the only way the change
+// can go wrong is by the two drifting apart.
+//
+// Every figure is compared against the same journal with the disposal recorded
+// as a sale — cost, quantity, realized result, the released parcels and their
+// dates — rather than against literals of its own. Literals would pin today's
+// arithmetic; this pins the identity, which is the actual claim.
+func TestRedemptionComputesExactlyAsASale(t *testing.T) {
+	journal := func(disposal portfolio.Type) []portfolio.Operation {
+		return []portfolio.Operation{
+			op(portfolio.TypeBuy, 1, &sber, "10", "100", -100_000, 50),
+			op(portfolio.TypeBuy, 2, &sber, "10", "110", -110_000, 55),
+			op(disposal, 9, &sber, "15", "120", 180_000, 90),
+		}
+	}
+
+	asSale, err := portfolio.Compute(journal(portfolio.TypeSell))
+	if err != nil {
+		t.Fatalf("Compute as a sale: %v", err)
+	}
+	asRedemption, err := portfolio.Compute(journal(portfolio.TypeRedemption))
+	if err != nil {
+		t.Fatalf("Compute as a redemption: %v", err)
+	}
+
+	sale, redeemed := asSale[sber], asRedemption[sber]
+	if !sale.Quantity.Equal(redeemed.Quantity) {
+		t.Errorf("quantity: sale %s, redemption %s", sale.Quantity, redeemed.Quantity)
+	}
+	if sale.CostMinor != redeemed.CostMinor {
+		t.Errorf("cost: sale %d, redemption %d", sale.CostMinor, redeemed.CostMinor)
+	}
+	saleRealized, saleOK := sale.RealizedPnL()
+	redeemedRealized, redeemedOK := redeemed.RealizedPnL()
+	if saleOK != redeemedOK || saleRealized != redeemedRealized {
+		t.Errorf("realized: sale %d/%v, redemption %d/%v", saleRealized, saleOK, redeemedRealized, redeemedOK)
+	}
+	if len(sale.Realizations) != 1 || len(redeemed.Realizations) != 1 {
+		t.Fatalf("realizations: sale %d, redemption %d", len(sale.Realizations), len(redeemed.Realizations))
+	}
+	// The parcels the queue gave up, piece by piece with their purchase days:
+	// this is what a ruble result is struck from, so a difference here would
+	// move money even where the totals above happened to agree.
+	if !reflect.DeepEqual(sale.Realizations[0], redeemed.Realizations[0]) {
+		t.Errorf("the disposal itself differs:\n sale       %+v\n redemption %+v",
+			sale.Realizations[0], redeemed.Realizations[0])
+	}
+	// And a positive result really was produced, so the comparison above is not
+	// two empty answers agreeing.
+	if !saleOK || saleRealized == 0 {
+		t.Fatalf("the fixture realized nothing (%d, %v): the equality above would be vacuous", saleRealized, saleOK)
+	}
+}
+
+// TestRedemptionRefusesWhatASaleRefuses. The refusals are part of the identity
+// too, and the message has to name the type the owner wrote rather than the one
+// the branch is shared with.
+func TestRedemptionRefusesWhatASaleRefuses(t *testing.T) {
+	_, err := portfolio.Compute([]portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "10", "100", -100_000, 0),
+		op(portfolio.TypeRedemption, 9, &sber, "10", "120", -1, 0),
+	})
+	if !errors.Is(err, portfolio.ErrBadOperation) {
+		t.Fatalf("err = %v, want ErrBadOperation: money must come IN on a redemption", err)
+	}
+	if !strings.Contains(err.Error(), "redemption") {
+		t.Errorf("error %q does not name the type the journal actually holds", err)
+	}
 }

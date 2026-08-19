@@ -26,8 +26,10 @@ func TestMustMatchPositionCurrencyClassifiesEveryType(t *testing.T) {
 		TypeTransferIn:   true,
 		TypeTransferOut:  true,
 		// A sale's proceeds and fee go to a Realization, which carries its own
-		// currency, and what it retires is decided by the quantity sold.
-		TypeSell: false,
+		// currency, and what it retires is decided by the quantity sold. A
+		// redemption is the same event by another name and answers the same.
+		TypeSell:       false,
+		TypeRedemption: false,
 		// Income and commissions, both kept per currency and free to arrive in
 		// any of them.
 		TypeDividend: false,

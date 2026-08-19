@@ -497,7 +497,7 @@ var brokerOpTypes = map[string]rule{
 
 	// Bonds paying down.
 	"OPERATION_TYPE_BOND_REPAYMENT":      {how: asAmortization, journal: operation.TypeAmortization},
-	"OPERATION_TYPE_BOND_REPAYMENT_FULL": {how: asRedemption, journal: operation.TypeSell},
+	"OPERATION_TYPE_BOND_REPAYMENT_FULL": {how: asRedemption, journal: operation.TypeRedemption},
 
 	// Fees the broker charges outside a trade.
 	"OPERATION_TYPE_SERVICE_FEE":    {how: asCash, journal: operation.TypeFee},
@@ -612,7 +612,7 @@ func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]opera
 	case asAmortization:
 		ops, refusal = projectAmortization(row, accountID, resolved)
 	case asRedemption:
-		ops, deferred, refusal = projectRedemption(row, accountID, resolved)
+		ops, deferred, refusal = projectRedemption(row, accountID, resolved, r.journal)
 	case asDividendToCard:
 		ops, refusal = projectDividendToCard(row, accountID, resolved)
 	case asSecuritiesTransfer:
@@ -963,9 +963,14 @@ func projectAmortization(row MirrorRow, accountID uuid.UUID, resolved *Resolved)
 	return []operation.Operation{op}, nil
 }
 
-// projectRedemption turns a bond's full repayment into a sale at par: the
-// bonds leave the position and the money arrives, which is what redemption is
-// and what the journal has a shape for.
+// projectRedemption turns a bond's full repayment into the journal's redemption:
+// the bonds leave the position and the money arrives.
+//
+// It used to build a SALE, because the journal had no other type for it, and the
+// screen then told the owner he had sold a bond that had simply matured. The
+// arithmetic was right and stayed right — a redemption and a sale are one
+// computation (see portfolio.TypeRedemption) — so this change is a word, not a
+// number, and the figures it produces are the ones it always produced.
 //
 // A REDEMPTION THAT NAMES NO QUANTITY IS BUILT WITHOUT ONE and asks the
 // journal for it (DeferredRedeemedQuantity). That is what the broker sends: on
@@ -1002,12 +1007,15 @@ func projectAmortization(row MirrorRow, accountID uuid.UUID, resolved *Resolved)
 // redemption is not known from the documentation, and on the owner's account
 // none of the 23 full redemptions carries one — the sale is booked the same way
 // either way, so the rule costs nothing and is ready if one ever appears.
-func projectRedemption(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, Deferred, *UnparsedError) {
+func projectRedemption(row MirrorRow, accountID uuid.UUID, resolved *Resolved, t operation.Type) ([]operation.Operation, Deferred, *UnparsedError) {
 	amount, refusal := minorFromDecimal(row.Payment)
 	if refusal != nil {
 		return nil, DeferredNothing, refusal
 	}
-	op := base(row, accountID, operation.TypeSell)
+	// The type comes from the rule table like every other shape's, rather
+	// than being spelled a second time here: two places naming one journal
+	// type is two places to change, and only one of them would be noticed.
+	op := base(row, accountID, t)
 	op.AmountMinor = amount
 	op.Price = tradePrice(row)
 
@@ -1228,7 +1236,7 @@ func attachInstrument(op *operation.Operation, row MirrorRow, resolved *Resolved
 // and compares (see TestAcceptsInstrumentAgreesWithTheEngine).
 func acceptsInstrument(t operation.Type) bool {
 	switch t {
-	case operation.TypeBuy, operation.TypeSell,
+	case operation.TypeBuy, operation.TypeSell, operation.TypeRedemption,
 		operation.TypeDividend, operation.TypeCoupon,
 		operation.TypeTax, operation.TypeFee,
 		operation.TypeAmortization,

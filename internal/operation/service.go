@@ -344,7 +344,7 @@ func validateFields(o Operation) error {
 // a caller must never hand it a type it has not already ruled on.
 func validateByType(o Operation) error {
 	switch o.Type {
-	case TypeBuy, TypeSell:
+	case TypeBuy, TypeSell, TypeRedemption:
 		if o.InstrumentID == nil {
 			return fmt.Errorf("%w: %s requires an instrument", family.ErrValidation, o.Type)
 		}
@@ -357,8 +357,8 @@ func validateByType(o Operation) error {
 		if o.Type == TypeBuy && o.AmountMinor >= 0 {
 			return fmt.Errorf("%w: buy amount_minor must be negative", family.ErrValidation)
 		}
-		if o.Type == TypeSell && o.AmountMinor <= 0 {
-			return fmt.Errorf("%w: sell amount_minor must be positive", family.ErrValidation)
+		if (o.Type == TypeSell || o.Type == TypeRedemption) && o.AmountMinor <= 0 {
+			return fmt.Errorf("%w: %s amount_minor must be positive", family.ErrValidation, o.Type)
 		}
 	case TypeDeposit, TypeInterest, TypeDividend, TypeCoupon, TypeAmortization:
 		if o.AmountMinor <= 0 {

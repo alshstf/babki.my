@@ -725,7 +725,7 @@ func unitsMoved(op operation.Operation) (decimal.Decimal, bool) {
 			return decimal.Zero, false
 		}
 		return *op.Quantity, true
-	case operation.TypeSell, operation.TypeTransferOut:
+	case operation.TypeSell, operation.TypeRedemption, operation.TypeTransferOut:
 		if op.Quantity == nil {
 			return decimal.Zero, false
 		}

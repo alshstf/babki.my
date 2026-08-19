@@ -751,8 +751,11 @@ export interface components {
             /** @description The currency face_value_minor is denominated in: an ISO-4217 code in uppercase, enforced as on creation — an empty string comes back 400, not stored. Sent together with face_value_minor or not at all, and set only on an instrument that is stored as a bond — see it. */
             face_currency?: string | null;
         };
-        /** @enum {string} */
-        OperationType: "buy" | "sell" | "deposit" | "withdrawal" | "dividend" | "coupon" | "amortization" | "fee" | "tax" | "transfer_in" | "transfer_out" | "split" | "interest" | "conversion";
+        /**
+         * @description What the entry is. `redemption` deserves a note of its own: it is a bond reaching maturity, and it is ARITHMETICALLY A SALE — the paper leaves, the money arrives, the earliest-purchases-first queue gives up the basis those bonds carried — so every figure derived from it (realized profit, remaining cost, quantity) is computed by the same rule a `sell` is, and НК РФ ст. 214.1 names the two together, «реализации (погашения)». It is a separate value because it is a different EVENT: nobody sold anything, the bond ran out, and the journal already named the partial repayment separately as `amortization`, which left the full one the only disposal wearing another name. A client may group the two wherever it groups disposals; what it must not do is call one the other on screen.
+         * @enum {string}
+         */
+        OperationType: "buy" | "sell" | "redemption" | "deposit" | "withdrawal" | "dividend" | "coupon" | "amortization" | "fee" | "tax" | "transfer_in" | "transfer_out" | "split" | "interest" | "conversion";
         Operation: {
             /** Format: uuid */
             id: string;

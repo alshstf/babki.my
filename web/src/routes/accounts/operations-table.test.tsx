@@ -1733,3 +1733,29 @@ describe("OperationsTable — an instrument the first page of the catalog does n
     expect(asked).toEqual(["0", "1"]);
   });
 });
+
+// Примечание — единственное поле строки, которое не число и не код: у
+// импортированной операции это слова самого брокера. Тип говорит «погашение»,
+// а какая именно облигация погашена — только здесь.
+describe("примечание операции", () => {
+  it("выводится под инструментом", async () => {
+    renderTable({
+      operations: [
+        makeOperation({ type: "redemption", note: "Погашение Инарктика 001Р-01" }),
+      ],
+    });
+    expect(await screen.findByTestId("operation-note")).toHaveTextContent(
+      "Погашение Инарктика 001Р-01",
+    );
+    // И тип назван своим словом, а не «продажей».
+    expect(screen.getByText("погашение")).toBeInTheDocument();
+  });
+
+  it("не оставляет пустой строки, когда его нет", async () => {
+    renderTable({ operations: [makeOperation({ note: "" })] });
+    // Ждём саму строку операции: иначе «ничего не отрисовано» прошло бы за
+    // «примечания нет» — тест, зеленеющий по неверной причине.
+    expect(await screen.findByText("пополнение")).toBeInTheDocument();
+    expect(screen.queryByTestId("operation-note")).toBeNull();
+  });
+});

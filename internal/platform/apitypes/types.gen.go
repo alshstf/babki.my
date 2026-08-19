@@ -272,6 +272,7 @@ const (
 	OperationTypeDividend     OperationType = "dividend"
 	OperationTypeFee          OperationType = "fee"
 	OperationTypeInterest     OperationType = "interest"
+	OperationTypeRedemption   OperationType = "redemption"
 	OperationTypeSell         OperationType = "sell"
 	OperationTypeSplit        OperationType = "split"
 	OperationTypeTax          OperationType = "tax"
@@ -298,6 +299,8 @@ func (e OperationType) Valid() bool {
 	case OperationTypeFee:
 		return true
 	case OperationTypeInterest:
+		return true
+	case OperationTypeRedemption:
 		return true
 	case OperationTypeSell:
 		return true
@@ -648,7 +651,9 @@ type CreateOperationRequest struct {
 
 	// SplitRatio Decimal as string: how many units one unit becomes. Must be positive and strictly less than 10^10 (10000000000) — the first value the column cannot hold — or 400. A split multiplies the whole position's quantity, so a ratio that is a mis-scaled field rather than a corporate action carries an ordinary holding past what any screen can value; the bound refuses it by name instead of letting the database answer with an overflow.
 	SplitRatio nullable.Nullable[string] `json:"split_ratio,omitempty"`
-	Type       OperationType             `json:"type"`
+
+	// Type What the entry is. `redemption` deserves a note of its own: it is a bond reaching maturity, and it is ARITHMETICALLY A SALE — the paper leaves, the money arrives, the earliest-purchases-first queue gives up the basis those bonds carried — so every figure derived from it (realized profit, remaining cost, quantity) is computed by the same rule a `sell` is, and НК РФ ст. 214.1 names the two together, «реализации (погашения)». It is a separate value because it is a different EVENT: nobody sold anything, the bond ran out, and the journal already named the partial repayment separately as `amortization`, which left the full one the only disposal wearing another name. A client may group the two wherever it groups disposals; what it must not do is call one the other on screen.
+	Type OperationType `json:"type"`
 }
 
 // CreateTinvestConnectionRequest defines model for CreateTinvestConnectionRequest.
@@ -781,7 +786,9 @@ type Operation struct {
 	// SplitRatio Decimal as string
 	SplitRatio      nullable.Nullable[string]             `json:"split_ratio,omitempty"`
 	TransferGroupId nullable.Nullable[openapi_types.UUID] `json:"transfer_group_id,omitempty"`
-	Type            OperationType                         `json:"type"`
+
+	// Type What the entry is. `redemption` deserves a note of its own: it is a bond reaching maturity, and it is ARITHMETICALLY A SALE — the paper leaves, the money arrives, the earliest-purchases-first queue gives up the basis those bonds carried — so every figure derived from it (realized profit, remaining cost, quantity) is computed by the same rule a `sell` is, and НК РФ ст. 214.1 names the two together, «реализации (погашения)». It is a separate value because it is a different EVENT: nobody sold anything, the bond ran out, and the journal already named the partial repayment separately as `amortization`, which left the full one the only disposal wearing another name. A client may group the two wherever it groups disposals; what it must not do is call one the other on screen.
+	Type OperationType `json:"type"`
 }
 
 // OperationSource Who wrote this row. `manual` is a person, through this API; anything else is an importer, and the set is closed by a CHECK constraint on the column rather than only by the code that writes it, which is why it is enumerated on a response at all. It is not decoration: an operation whose source is not `manual` cannot be deleted (see deleteOperation) because the importer that owns it would write it back on its next rebuild, so a client must not offer a delete control on such a row.
@@ -808,7 +815,7 @@ type OperationInBase struct {
 // OperationInBaseGap Which TERM the server could not value, and so why Operation.in_base — the whole object — is absent. It is the journal's twin of InBaseGap and names terms for the same reason that one does: there is exactly one operation here, and the terms are the very figures standing side by side in its row. `undated_lot`: amount_minor is the cost basis of a transferred parcel and at least one piece of that parcel does not know when it was bought — a breakdown that was never recorded (a basis given by hand, or a transfer predating breakdowns) or one carrying a dateless piece inherited from an earlier undated transfer. There is no date to ask the fx table about and none will ever be recovered, because nobody wrote it down. This is the same condition Operation.has_undated_lots reports. `no_rate_operation_date`: amount_minor is money that moved on `occurred_on`, and the fx table holds no rate for that day nor for any earlier one. `no_rate_lot_date`: amount_minor is a cost basis assembled from a stored breakdown whose every piece IS dated, and the fx table holds no rate for one of those PURCHASE days nor for any earlier one. The transfer's own date is not the date at issue and usually has a perfectly good rate — it is simply not a rate that may value shares bought on other days — so a caption naming it would blame a day that had nothing to do with the gap, which is the whole of #79. EXACTLY ONE VALUE IS PUBLISHED, AND THERE IS NO COMBINED VALUE. `undated_lot` is settled before any rate is looked up, so a row that has both an undated piece and a missing rate reports the undated piece: it is the one cause no backfill will ever close, and reporting it never promises a figure that is not coming. The two `no_rate_*` values need no order between them because they cannot both arise on one row: an amount is either money that moved on the operation's own date or a basis assembled from a stored breakdown, never both, so all of its terms are dated the one way or all the other — and `assembled_from_lots` is the field that says which, published on the operation whether or not this gap is.
 type OperationInBaseGap string
 
-// OperationType defines model for OperationType.
+// OperationType What the entry is. `redemption` deserves a note of its own: it is a bond reaching maturity, and it is ARITHMETICALLY A SALE — the paper leaves, the money arrives, the earliest-purchases-first queue gives up the basis those bonds carried — so every figure derived from it (realized profit, remaining cost, quantity) is computed by the same rule a `sell` is, and НК РФ ст. 214.1 names the two together, «реализации (погашения)». It is a separate value because it is a different EVENT: nobody sold anything, the bond ran out, and the journal already named the partial repayment separately as `amortization`, which left the full one the only disposal wearing another name. A client may group the two wherever it groups disposals; what it must not do is call one the other on screen.
 type OperationType string
 
 // OperationsResponse One page of an account's journal. It used to be the bare array `operations` still is, which left a reader no way to tell a complete journal from a truncated one: the server clamped `limit` to its ceiling without saying so, and a client that asked for 250 and counted 200 back concluded there was nothing more. At exactly the ceiling the journal therefore presented itself as whole while hiding everything older, and the interface offered no other route to those rows (#86). The clamp itself is gone as of #118 — an over-large `limit` is now refused with 400 — so that particular short page can no longer be produced at all; this envelope stays, because it answers a question a page of the RIGHT length still cannot.

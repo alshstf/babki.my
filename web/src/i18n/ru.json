@@ -181,6 +181,7 @@
   "operationTypes": {
     "buy": "покупка",
     "sell": "продажа",
+    "redemption": "погашение",
     "deposit": "пополнение",
     "withdrawal": "вывод",
     "dividend": "дивиденд",

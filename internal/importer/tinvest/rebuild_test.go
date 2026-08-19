@@ -1388,8 +1388,8 @@ func TestRebuildClosesAFullRedemptionWithThePositionTheJournalHolds(t *testing.T
 
 	journal := f.journalOf(t, f.accountID)
 	redemption := byExternalID(t, journal, externalIDFor(f.mirrorRow(t, f.link, "op-repay-2"), 1))
-	if redemption.Type != operation.TypeSell {
-		t.Errorf("the redemption is a %s, want sell", redemption.Type)
+	if redemption.Type != operation.TypeRedemption {
+		t.Errorf("the redemption is a %s, want redemption", redemption.Type)
 	}
 	if redemption.Quantity == nil || redemption.Quantity.String() != "6" {
 		t.Fatalf("the redemption closes %v bonds, want 6 — eight bought less two sold", redemption.Quantity)
