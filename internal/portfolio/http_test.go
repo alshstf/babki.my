@@ -213,6 +213,8 @@ type positionResp struct {
 	CostMinor                 int64            `json:"cost_minor"`
 	Currency                  string           `json:"currency"`
 	RealizedPnlMinor          *int64           `json:"realized_pnl_minor"`
+	SettledMinor              *int64           `json:"settled_minor"`
+	TotalMinor                *int64           `json:"total_minor"`
 	IncomeMinor               int64            `json:"income_minor"`
 	IncomeByCurrency          []currencyIncome `json:"income_by_currency"`
 	FeesMinor                 int64            `json:"fees_minor"`
@@ -273,10 +275,17 @@ type positionsResp struct {
 // test can tell an explicit null — the account has no publishable total, and
 // the gap says why — apart from a figure, which a zero value could not.
 type realizedTotalResp struct {
-	ByCurrency   []realizedCurrencyTotalResp `json:"by_currency"`
-	BaseCurrency string                      `json:"base_currency"`
-	InBase       *int64                      `json:"in_base"`
-	InBaseGap    *string                     `json:"in_base_gap"`
+	ByCurrency            []realizedCurrencyTotalResp `json:"by_currency"`
+	TaxWithheldByCurrency []currencyAmountResp        `json:"tax_withheld_by_currency"`
+	BaseCurrency          string                      `json:"base_currency"`
+	InBase                *int64                      `json:"in_base"`
+	InBaseGap             *string                     `json:"in_base_gap"`
+}
+
+// currencyAmountResp mirrors apitypes.CurrencyAmount.
+type currencyAmountResp struct {
+	Currency    string `json:"currency"`
+	AmountMinor int64  `json:"amount_minor"`
 }
 
 type realizedCurrencyTotalResp struct {

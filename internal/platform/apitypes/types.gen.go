@@ -665,6 +665,15 @@ type CreateTinvestConnectionRequest struct {
 	Token string `json:"token"`
 }
 
+// CurrencyAmount One amount in one currency. Used where a figure cannot be added across currencies and is published per currency instead.
+type CurrencyAmount struct {
+	// AmountMinor Minor units, sign preserved
+	AmountMinor int64 `json:"amount_minor"`
+
+	// Currency ISO-4217
+	Currency string `json:"currency"`
+}
+
 // CurrencyTotal defines model for CurrencyTotal.
 type CurrencyTotal struct {
 	AssetsMinor int64  `json:"assets_minor"`
@@ -881,6 +890,12 @@ type Position struct {
 	// RealizedPnlMinor Realized profit or loss in the position's own `currency`. NULL EXACTLY WHEN A DISPOSAL SETTLED IN ANOTHER CURRENCY THAN THE BASIS IT RETIRED, and then there is no figure to publish in any currency at all: a yuan bond redeemed for rubles has proceeds in rubles and a basis in yuan, and the difference between them is a quantity of neither — striking it needs an fx rate, which the calculating core holds none of by design. That null is therefore NOT the news that something is unknown or that a rate is missing: every term is present and dated, and it is the single-currency ANSWER that does not exist. It has exactly one cause, so no companion field names it. This is the one thing the money kept per currency (`income_by_currency`, and the fee total) does not have an equivalent of: income in a second currency is still income in that currency and can be listed, while a result whose two ends are in different currencies belongs to neither list. THE RESULT IS NOT LOST WITH THE FIGURE: `in_base.realized_pnl_minor` converts each disposal's proceeds, fee and every retired parcel at that term's own date AND out of that term's own currency, so a row carrying that object publishes the whole result as one number — and a position whose own currency already IS the base currency but which sold into a third one carries that object for this reason alone. `RealizedTotal.by_currency` applies the same rule one level up: a currency whose bucket contains such a position publishes a null rather than the sum of the rest of it.
 	RealizedPnlMinor nullable.Nullable[int64] `json:"realized_pnl_minor"`
 
+	// SettledMinor WHAT THE POSITION HAS LOCKED IN, in its own `currency`: `realized_pnl_minor` plus `income_minor`. Both halves are past events with dates of their own, so this figure never moves again — which is why it is published apart from `total_minor`, whose other half changes every day. It is also the figure a tax base is built from, though it is NOT that base: no tax is subtracted here (see AccountPositions.tax_withheld_minor for the tax that was actually taken, and why it cannot be attributed to a position). NULL WHENEVER A TERM IS MISSING RATHER THAN SUMMED WITHOUT IT, and there are two ways that happens: `realized_pnl_minor` may not exist at all (a disposal that settled in another currency), and `income_minor` is only the part of the income denominated in `currency` — a yuan bond paid in rubles has income this sum cannot see, and publishing the visible part under a name that says «everything» is the failure this null exists against. `in_base.settled_minor` is the same figure with every term converted at its own date, and it exists on rows where this one does not.
+	SettledMinor nullable.Nullable[int64] `json:"settled_minor"`
+
+	// TotalMinor WHAT THE POSITION HAS COME TO, in its own `currency`: `settled_minor` plus `unrealized_pnl_minor`. It deliberately mixes two kinds of certainty — the settled half is final, the unrealized half is a valuation that moves with the market — and that is why `settled_minor` stays published beside it instead of being folded away: a reader who needs the number that will not change has to be able to see it. Null whenever either half is null, for those halves' own reasons (no valuation, a valuation in another currency, or no settled figure).
+	TotalMinor nullable.Nullable[int64] `json:"total_minor"`
+
 	// UnrealizedPnlMinor market_value_minor minus cost_minor, i.e. the position's unrealized profit or loss; both are already in the same currency (market_value_minor is converted into the position's currency when needed, see above), so this is a plain integer subtraction. Null when there is no market_value_minor, or when market_value_currency still differs from currency (a conversion was needed but no fx rate was available).
 	UnrealizedPnlMinor nullable.Nullable[int64] `json:"unrealized_pnl_minor,omitempty"`
 }
@@ -913,6 +928,12 @@ type PositionInBase struct {
 
 	// RealizedPnlMinor Realized profit or loss in currency, and the only figure in this object that is FINAL: both of its ends are past events with dates of their own, so unlike unrealized_pnl_minor it will never move again. Every disposal the position has made contributes its proceeds and its fee at the fx rate of the day THAT disposal happened, and every parcel of basis it retired at the rate of the day THAT parcel was bought (НК РФ ст. 210 п. 5); all of those terms are summed as decimals and the position's figure is rounded once, at the end. It is therefore NOT Position.realized_pnl_minor times any single rate — neither today's nor the sale day's — and it carries the currency's own move between purchase and sale, so a deal can be a profit in the position's currency and a loss here, or the reverse; that is the intended answer, not a rounding artefact. An amortization is one of these disposals: a covered return of principal is exactly neutral in the position's own currency, yet the principal comes back at the rate of its own day while the basis it retires was struck at the rates of the purchase days, and that difference is as real a result as any sale's. A transfer between the family's own accounts is NOT one — it is a disposal in none of the jurisdictions this was researched against, and the leaving leg has no proceeds. Null when any single date this sum needs has no fx rate, or when a retired parcel does not know when it was bought (a transfer's basis given by hand, or one recorded before per-lot breakdowns were kept) — a realized total missing one of its terms is an invented number, smaller or larger than the truth and indistinguishable from a real one on screen. Null here nulls nothing else: cost_minor, income_minor and the valuation answer their own questions from their own dates and are published exactly as usual. `has_undated_lots` does NOT explain this null — it speaks about the lots still HELD, while the parcel that stopped this sum has already been sold and is no longer among them; `Position.has_undated_realizations` is the flag that does, for the identical reason `has_undated_lots` exists for cost_minor and the object above
 	RealizedPnlMinor nullable.Nullable[int64] `json:"realized_pnl_minor,omitempty"`
+
+	// SettledMinor `realized_pnl_minor` plus `income_minor`, both already converted here — each term at the rate of its own date and out of the currency it actually arrived in. It is Position.settled_minor's answer for a row that has none: a position whose disposal settled in a third currency, or whose income arrived in one, cannot state this figure in its own currency and can state it here. Null exactly when `realized_pnl_minor` is null, which is the only term of the two that can be missing.
+	SettledMinor nullable.Nullable[int64] `json:"settled_minor"`
+
+	// TotalMinor `settled_minor` plus `unrealized_pnl_minor`, in currency. Null when either is. Note what this mixes and Position.total_minor mixes too: a settled half struck at the rates of the days it happened on, and an unrealized half struck at today's — which is correct for both questions and is why the two halves stay separately published.
+	TotalMinor nullable.Nullable[int64] `json:"total_minor"`
 
 	// UnrealizedPnlMinor market_value_minor minus cost_minor. Both are already in currency, so this is exact integer subtraction and nothing is rounded a second time. Since the basis is historical and the valuation is current, this INCLUDES the fx revaluation of the position: it is NOT Position.unrealized_pnl_minor times a rate, and a holding can be in profit in its own currency while at a loss in the base currency (or the reverse). Null exactly when market_value_minor above is null — the P&L is derived from the valuation and cannot outlive it
 	UnrealizedPnlMinor nullable.Nullable[int64] `json:"unrealized_pnl_minor,omitempty"`
@@ -953,6 +974,9 @@ type RealizedTotal struct {
 
 	// InBaseGap Which kind of gap stopped `in_base`, or null when there is a figure. Both of them can be true of one account at once, hence `both`.
 	InBaseGap nullable.Nullable[RealizedGap] `json:"in_base_gap"`
+
+	// TaxWithheldByCurrency Tax the broker took FROM THE ACCOUNT rather than from a payment, per currency, sign preserved (negative — money left). THIS IS THE TAX NO POSITION CAN SEE, and that is the whole reason it is published here. A withholding attributed to a security is already inside that position's income_minor, subtracted where it belongs; what is left is the tax charged against the account itself — in Russia, withheld when money is taken out, against the year's accumulated base rather than against any one disposal. On the owner's own account 20 of 21 such withholdings fall on the same day as a withdrawal, and three of them have no disposal in the preceding month at all. IT IS NOT SPLIT ACROSS POSITIONS AND MUST NOT BE: no tax authority computes a per-position share, and any division of it would be an invented number wearing a real one's name. A reader may subtract it from the account's realized total; a reader may not attribute it to a row. Empty when the account has no such withholding. Not converted to the base currency: it is money charged in the currency it was charged in, and no term of it is dated per payment the way in_base's are.
+	TaxWithheldByCurrency []CurrencyAmount `json:"tax_withheld_by_currency"`
 }
 
 // Role defines model for Role.

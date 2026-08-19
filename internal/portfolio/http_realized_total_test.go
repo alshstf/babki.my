@@ -610,3 +610,101 @@ func TestRealizedTotalRefusesToPublishASumThatWouldWrap(t *testing.T) {
 			resp.StatusCode, int64(onePosition), b)
 	}
 }
+
+// TestSettledIsRealizedPlusIncome is the column «Зафиксировано»: what the
+// position has locked in and will not change again.
+func TestSettledIsRealizedPlusIncome(t *testing.T) {
+	url, c := newAPI(t)
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
+	bond := createInstrument(t, c, url,
+		`{"type":"bond","name":"Селектел","ticker":"SEL1","currency":"RUB","face_value_minor":100000,"face_currency":"RUB"}`)
+
+	// The owner's own bond, to the kopeck: bought 200 for 197 980,70 ₽ with
+	// 78,88 ₽ of commission, one coupon of 13 264,00 ₽, redeemed at par.
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-02-20","quantity":"200","amount_minor":-19798070,"fee_minor":7888,"currency":"RUB"}`, acc.ID, bond.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"coupon",
+		"occurred_on":"2026-08-14","amount_minor":1326400,"currency":"RUB"}`, acc.ID, bond.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"redemption",
+		"occurred_on":"2026-08-14","quantity":"200","amount_minor":20000000,"currency":"RUB"}`, acc.ID, bond.ID))
+
+	p := onlyPosition(t, c, url, acc.ID)
+
+	// 200 000,00 − 197 980,70 − 78,88 = 1 940,42 ₽
+	if got := realizedFigure(t, p.RealizedPnlMinor); got != 194042 {
+		t.Fatalf("realized_pnl_minor = %d, want 194042", got)
+	}
+	if p.IncomeMinor != 1326400 {
+		t.Fatalf("income_minor = %d, want 1326400", p.IncomeMinor)
+	}
+	// 1 940,42 + 13 264,00 = 15 204,42 ₽. A literal, not the sum of the two
+	// fields above: an expectation computed from what the server sent would
+	// agree with any arithmetic the server chose.
+	if p.SettledMinor == nil || *p.SettledMinor != 1520442 {
+		t.Errorf("settled_minor = %v, want 1520442 (1940,42 ₽ realized plus 13 264,00 ₽ of coupon)", p.SettledMinor)
+	}
+}
+
+// TestSettledIsWithheldWhenIncomeArrivedInAnotherCurrency. income_minor carries
+// only the payments denominated in the position's own currency, so a position
+// paid in another has income this sum cannot see — and a figure named «all of
+// it» that is missing a term is the failure this null exists against.
+func TestSettledIsWithheldWhenIncomeArrivedInAnotherCurrency(t *testing.T) {
+	url, c := newAPI(t)
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	bond := createInstrument(t, c, url,
+		`{"type":"bond","name":"Юаневая","ticker":"CNY1","currency":"USD","face_value_minor":100000,"face_currency":"USD"}`)
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-02-20","quantity":"10","amount_minor":-100000,"currency":"USD"}`, acc.ID, bond.ID))
+	// The coupon arrives in rubles, as a yuan bond's does on a Russian broker.
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"coupon",
+		"occurred_on":"2026-08-14","amount_minor":500000,"currency":"RUB"}`, acc.ID, bond.ID))
+
+	p := onlyPosition(t, c, url, acc.ID)
+
+	if p.IncomeMinor != 0 {
+		t.Fatalf("income_minor = %d, want 0 — nothing was paid in the position's own currency", p.IncomeMinor)
+	}
+	if p.SettledMinor != nil {
+		t.Errorf("settled_minor = %d, want null: the ruble coupon is income this sum cannot see", *p.SettledMinor)
+	}
+}
+
+// TestAccountTaxIsTheWithholdingNoPositionSees. A tax the broker tied to a
+// paper is already inside that position's income; what this figure carries is
+// the tax charged against the ACCOUNT, which nothing on the positions screen
+// could otherwise account for. Counting the attributed one here as well would
+// take the same money twice.
+func TestAccountTaxIsTheWithholdingNoPositionSees(t *testing.T) {
+	url, c := newAPI(t)
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
+	share := createInstrument(t, c, url, `{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`)
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-02-20","quantity":"10","amount_minor":-100000,"currency":"RUB"}`, acc.ID, share.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"dividend",
+		"occurred_on":"2026-03-01","amount_minor":10000,"currency":"RUB"}`, acc.ID, share.ID))
+	// Withheld from that dividend: already inside the position's income.
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"tax",
+		"occurred_on":"2026-03-01","amount_minor":-1300,"currency":"RUB"}`, acc.ID, share.ID))
+	// Withheld from the account when money was taken out: nothing sees this.
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"tax",
+		"occurred_on":"2026-08-14","amount_minor":-1058800,"currency":"RUB"}`, acc.ID))
+
+	total := realizedTotalOf(t, c, url, acc.ID)
+	if len(total.TaxWithheldByCurrency) != 1 {
+		t.Fatalf("tax_withheld_by_currency = %+v, want one entry", total.TaxWithheldByCurrency)
+	}
+	got := total.TaxWithheldByCurrency[0]
+	if got.Currency != "RUB" || got.AmountMinor != -1058800 {
+		t.Errorf("tax = %s %d, want RUB -1058800 — the account's own withholding, and not the 1300 already inside the position's income",
+			got.Currency, got.AmountMinor)
+	}
+
+	p := onlyPosition(t, c, url, acc.ID)
+	// 100,00 ₽ of dividend less 13,00 ₽ of tax.
+	if p.IncomeMinor != 8700 {
+		t.Errorf("income_minor = %d, want 8700 — net of the tax attributed to this paper", p.IncomeMinor)
+	}
+}

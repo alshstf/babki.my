@@ -17,6 +17,7 @@ function makeTotal(overrides: Partial<RealizedTotalPayload> = {}): RealizedTotal
   return {
     by_currency: [{ currency: "USD", realized_pnl_minor: 12_500 }],
     base_currency: "RUB",
+    tax_withheld_by_currency: [],
     in_base: 1_000_000,
     in_base_gap: null,
     ...overrides,

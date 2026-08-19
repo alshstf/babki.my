@@ -504,6 +504,16 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 		// unspecified nullable does not marshal as one).
 		MarketValueGap: nullable.NewNullNullable[apitypes.MarketValueGap](),
 	}
+	// Settled needs no valuation — both its halves are past events — so it is
+	// set here, once, and survives every early return below. Total is the one
+	// that waits: it has an unrealized half, and that half exists only where a
+	// valuation was struck in this position's own currency.
+	settled, err := settledToAPI(p)
+	if err != nil {
+		return apitypes.Position{}, err
+	}
+	out.SettledMinor = settled
+	out.TotalMinor = nullable.NewNullNullable[int64]()
 	// The quote is looked up first and JUDGED LAST: marketValue takes `quoted`
 	// and decides the type and the face value before it, so the two causes an
 	// arriving quote would not close are reported ahead of the one it would
@@ -647,6 +657,11 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 			return apitypes.Position{}, fmt.Errorf("%w: a valuation of %d less a basis of %d", err, minor, p.CostMinor)
 		}
 		out.UnrealizedPnlMinor = nullable.NewNullableWithValue(unrealized)
+		total, err := totalToAPI(out.SettledMinor, out.UnrealizedPnlMinor, p.InstrumentID)
+		if err != nil {
+			return apitypes.Position{}, err
+		}
+		out.TotalMinor = total
 	}
 	return out, nil
 }
@@ -970,6 +985,75 @@ func realizedToAPI(p *Position) nullable.Nullable[int64] {
 	return nullable.NewNullableWithValue(minor)
 }
 
+// settledToAPI is what the position HAS LOCKED IN: the result of the disposals
+// it has already made, plus what the paper has paid it. Both halves are past
+// events with dates of their own, so this figure never moves again — which is
+// the whole reason it is published apart from the one that includes the
+// valuation.
+//
+// IT NEEDS EVERY TERM IN THE POSITION'S OWN CURRENCY, and goes null otherwise
+// rather than summing what it happens to have:
+//
+//   - the realized result may not exist at all (a disposal settled in another
+//     currency — see Position.RealizedPnL), and there is then nothing to add;
+//   - the income figure beside it is only the part denominated in this
+//     currency (see Position.IncomeByCurrency). A yuan bond paid in rubles has
+//     income this figure cannot see, and adding the visible part would publish
+//     a number smaller than the truth under a name that says "everything".
+//
+// The base-currency object carries the same two figures with every term
+// converted, so a row that has one publishes there what it cannot publish here.
+func settledToAPI(p *Position) (nullable.Nullable[int64], error) {
+	realized, inOneCurrency := p.RealizedPnL()
+	if !inOneCurrency || !incomeIsAllIn(p, p.Currency) {
+		return nullable.NewNullNullable[int64](), nil
+	}
+	sum, err := money.Add(realized, p.IncomeMinorIn(p.Currency))
+	if err != nil {
+		return nullable.Nullable[int64]{}, fmt.Errorf(
+			"%w: settled result of instrument %s, a realized %d and income of %d",
+			err, p.InstrumentID, realized, p.IncomeMinorIn(p.Currency))
+	}
+	return nullable.NewNullableWithValue(sum), nil
+}
+
+// incomeIsAllIn reports whether every payment this position received is
+// denominated in one currency — the one asked about.
+//
+// Read off the LIST rather than by comparing IncomeMinorIn against some other
+// total: the list is what holds the currencies, and a position that received
+// nothing has an empty one and passes, which is right — nothing is missing from
+// a sum of no payments.
+func incomeIsAllIn(p *Position, currency string) bool {
+	for _, e := range p.IncomeByCurrency {
+		if e.Currency != currency {
+			return false
+		}
+	}
+	return true
+}
+
+// totalToAPI is the settled result plus what the holding is worth beyond its
+// basis today. It is the answer to "what has this paper come to", and it mixes
+// two kinds of certainty on purpose — the settled half is final, the unrealized
+// half moves every day — which is why the settled figure stays published beside
+// it rather than being folded away.
+//
+// Null whenever either half is, and for the halves' own reasons: no valuation,
+// a valuation in another currency, or a settled figure that does not exist.
+func totalToAPI(settled, unrealized nullable.Nullable[int64], instrument uuid.UUID) (nullable.Nullable[int64], error) {
+	if settled.IsNull() || !settled.IsSpecified() || unrealized.IsNull() || !unrealized.IsSpecified() {
+		return nullable.NewNullNullable[int64](), nil
+	}
+	sum, err := money.Add(settled.MustGet(), unrealized.MustGet())
+	if err != nil {
+		return nullable.Nullable[int64]{}, fmt.Errorf(
+			"%w: total result of instrument %s, a settled %d and an unrealized %d",
+			err, instrument, settled.MustGet(), unrealized.MustGet())
+	}
+	return nullable.NewNullableWithValue(sum), nil
+}
+
 // baseGap names WHY a base-currency figure could not be struck. The two kinds
 // are not the same news to the person reading the screen — one closes on its
 // own and the other never will — and this type exists so the answer travels
@@ -1130,6 +1214,49 @@ func (h *Handler) realizedInBase(ctx context.Context, p *Position, to string, ca
 		return nullable.NewNullNullable[int64](), gapNoRate, nil
 	}
 	return nullable.NewNullableWithValue(minor), gapNone, nil
+}
+
+// withAccountTax puts the account's own tax withholdings on the realized total.
+//
+// Attached here rather than inside realizedTotals because it is not a total OF
+// the positions: the accumulator walks positions and this walks the journal's
+// cash-level entries, which belong to no position at all. Keeping them apart is
+// what stops the two ever being added into one figure by accident.
+func withAccountTax(total apitypes.RealizedTotal, ops []Operation) apitypes.RealizedTotal {
+	total.TaxWithheldByCurrency = taxWithheldFromAccount(ops)
+	return total
+}
+
+// taxWithheldFromAccount sums the tax charged against the ACCOUNT — the
+// entries that name no security — per currency.
+//
+// THE ATTRIBUTED TAX IS DELIBERATELY NOT HERE. A withholding the broker tied to
+// a paper is already inside that position's income (the engine books a tax as
+// negative income, see Compute), so counting it again in a figure a reader is
+// invited to subtract would take the same money twice.
+//
+// What is left is the tax nothing on the positions screen can otherwise
+// account for. In Russia the broker withholds it when money is taken OUT,
+// against the year's accumulated base rather than against any one disposal: on
+// the owner's own account 20 of these 21 entries fall on the same day as a
+// withdrawal, and three have no disposal in the preceding month at all. That is
+// exactly why it is summed per account and never divided per position.
+func taxWithheldFromAccount(ops []Operation) []apitypes.CurrencyAmount {
+	byCurrency := map[string]int64{}
+	for _, o := range ops {
+		if o.Type != TypeTax || o.InstrumentID != nil {
+			continue
+		}
+		byCurrency[o.Currency] += o.AmountMinor
+	}
+	out := make([]apitypes.CurrencyAmount, 0, len(byCurrency))
+	for currency, minor := range byCurrency {
+		out = append(out, apitypes.CurrencyAmount{Currency: currency, AmountMinor: minor})
+	}
+	// By currency code, for the reason every other per-currency list in this
+	// package is: a map's order is random and these figures go on a screen.
+	sort.Slice(out, func(i, j int) bool { return out[i].Currency < out[j].Currency })
+	return out
 }
 
 // realizedTotals adds up what an account's closed deals have locked in, folding
@@ -1551,6 +1678,21 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		RealizedPnlMinor: realizedMinor,
 		Currency:         baseCurrency,
 	}
+	// Both terms are already converted here — each at the rate of its own date —
+	// and the income one covers every payment whatever currency it arrived in.
+	// So this figure exists on rows where the position-currency one cannot,
+	// which is the whole reason it is worth publishing twice.
+	if !realizedMinor.IsNull() && realizedMinor.IsSpecified() {
+		settled, err := money.Add(realizedMinor.MustGet(), incomeMinor)
+		if err != nil {
+			return nil, inBaseStruck, fmt.Errorf("%w: settled result of instrument %s in %s, a realized %d and income of %d",
+				err, p.InstrumentID, baseCurrency, realizedMinor.MustGet(), incomeMinor)
+		}
+		out.SettledMinor = nullable.NewNullableWithValue(settled)
+	} else {
+		out.SettledMinor = nullable.NewNullNullable[int64]()
+	}
+	out.TotalMinor = nullable.NewNullNullable[int64]()
 
 	// Which figure this object converts, and out of which currency. The GUARD
 	// comes first and the rule it enforces is unchanged: a valuation that never
@@ -1698,6 +1840,11 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 			err, valuation, costMinor, baseCurrency)
 	}
 	out.UnrealizedPnlMinor = nullable.NewNullableWithValue(unrealized)
+	total, err := totalToAPI(out.SettledMinor, out.UnrealizedPnlMinor, p.InstrumentID)
+	if err != nil {
+		return nil, inBaseStruck, err
+	}
+	out.TotalMinor = total
 	// rate_on names the rate that was actually applied, and there is not always
 	// one to name: a valuation already denominated in the base currency (an OFZ
 	// with a ruble face value in a dollar account of a ruble space) is the
@@ -2094,6 +2241,6 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		CostBasisRules: family.CostBasisRulesAPI(sp.CostBasisRules()),
 		// Added here rather than by whoever renders the list: see
 		// realizedTotals, and RealizedTotal in the API contract.
-		RealizedTotal: totals.result(),
+		RealizedTotal: withAccountTax(totals.result(), ops),
 	})
 }

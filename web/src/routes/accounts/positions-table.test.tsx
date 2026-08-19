@@ -165,6 +165,8 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     quantity: "10",
     cost_minor: 250_000,
     realized_pnl_minor: 0,
+    settled_minor: 0,
+    total_minor: 0,
     income_minor: 0,
     // The ordinary row: nothing was ever paid, so the per-currency list is
     // empty and income_minor's 0 is the whole story. A row whose income
@@ -252,6 +254,8 @@ describe("PositionsTable", () => {
             in_base: {
               cost_minor: 2_275_000,
               market_value_minor: 2_780_050,
+              settled_minor: null,
+              total_minor: null,
               unrealized_pnl_minor: 227_500,
               income_minor: 9_100,
               currency: "RUB",
@@ -285,6 +289,8 @@ describe("PositionsTable", () => {
             in_base: {
               cost_minor: 2_275_000,
               market_value_minor: 2_780_050,
+              settled_minor: null,
+              total_minor: null,
               unrealized_pnl_minor: 227_500,
               income_minor: 0,
               currency: "RUB",
@@ -704,6 +710,8 @@ describe("PositionsTable", () => {
       quantity: "100",
       cost_minor: 9_000_000,
       market_value_minor: 9_520_000,
+      settled_minor: null,
+      total_minor: null,
       market_value_currency: "RUB",
       unrealized_pnl_minor: 520_000,
       price: "95.20",
@@ -782,6 +790,8 @@ describe("PositionsTable", () => {
             in_base: {
               cost_minor: 22_500_000,
               market_value_minor: 27_495_000,
+              settled_minor: null,
+              total_minor: null,
               unrealized_pnl_minor: 4_995_000,
               income_minor: 0,
               currency: "RUB",
@@ -939,6 +949,8 @@ describe("PositionsTable", () => {
               in_base: {
                 cost_minor: 2_275_000,
                 market_value_minor: 2_780_050,
+                settled_minor: null,
+                total_minor: null,
                 unrealized_pnl_minor: 227_500,
                 income_minor: 9_100,
                 currency: "RUB",
@@ -996,6 +1008,8 @@ describe("PositionsTable", () => {
               in_base: {
                 cost_minor: 2_000_000,
                 market_value_minor: 2_200_000,
+                settled_minor: null,
+                total_minor: null,
                 unrealized_pnl_minor: 200_000,
                 income_minor: 0,
                 currency: "RUB",
@@ -1029,6 +1043,8 @@ describe("PositionsTable", () => {
               in_base: {
                 cost_minor: 22_500_000,
                 market_value_minor: null,
+                settled_minor: null,
+                total_minor: null,
                 unrealized_pnl_minor: null,
                 income_minor: 0,
                 currency: "RUB",
@@ -1381,6 +1397,8 @@ describe("PositionsTable", () => {
               in_base: {
                 cost_minor: 2_275_000,
                 market_value_minor: 2_780_050,
+                settled_minor: null,
+                total_minor: null,
                 unrealized_pnl_minor: 227_500,
                 income_minor: 9_100,
                 currency: "RUB",
@@ -1488,6 +1506,8 @@ describe("PositionsTable", () => {
               in_base: {
                 cost_minor: 9_000_000,
                 market_value_minor: null,
+                settled_minor: null,
+                total_minor: null,
                 unrealized_pnl_minor: null,
                 income_minor: 0,
                 currency: "RUB",
@@ -1705,6 +1725,8 @@ describe("PositionsTable", () => {
               currency: "USD",
               cost_minor: 100_000,
               market_value_minor: 9_000_000,
+              settled_minor: null,
+              total_minor: null,
               // A bond priced off a face value denominated in the base
               // currency, held on a dollar position.
               market_value_currency: "RUB",
@@ -1764,6 +1786,8 @@ describe("PositionsTable", () => {
         in_base: {
           cost_minor: 2_000_000,
           market_value_minor: 2_200_000,
+          settled_minor: null,
+          total_minor: null,
           unrealized_pnl_minor: 200_000,
           income_minor: 0,
           currency: "RUB",
@@ -1842,6 +1866,8 @@ describe("PositionsTable", () => {
         in_base: {
           cost_minor: 10_000_000,
           market_value_minor: 5_500_000,
+          settled_minor: null,
+          total_minor: null,
           unrealized_pnl_minor: -4_500_000,
           income_minor: 0,
           currency: "RUB",
@@ -2003,6 +2029,8 @@ describe("PositionsTable", () => {
         in_base: {
           cost_minor: 2_000_000,
           market_value_minor: 2_200_000,
+          settled_minor: null,
+          total_minor: null,
           unrealized_pnl_minor: 200_000,
           income_minor: 141_075,
           currency: "RUB",
