@@ -1056,10 +1056,40 @@ export interface components {
             /** @description Which kind of gap stopped `in_base`, or null when there is a figure. Both of them can be true of one account at once, hence `both`. */
             in_base_gap: components["schemas"]["RealizedGap"] | null;
         };
+        AccountCurrencyTotal: {
+            currency: string;
+            /**
+             * Format: int64
+             * @description The account's result in this currency, or null when one of its terms has no figure in this currency at all — a position that realized into another currency, or one paid in another, has no own-currency total to add (see Position.total_minor). A bucket short one term is published as null rather than as the sum of the rest: a total quietly missing a term reads as a smaller result, not as a gap, and is indistinguishable from a real figure on screen.
+             */
+            amount_minor: number | null;
+        };
+        /** @description WHAT THE ACCOUNT HAS MADE, ALL IN — the account-level twin of Position.total_minor, plus the money no position can see. It is the sum of every position's total (realized result + income + unrealized revaluation) and, beside it, the account's own charges: interest credited on the cash, every commission booked as an operation of its own, and the tax the broker took from the account rather than from a payment. Deposits and withdrawals are NOT in it — putting money in is not earning it — and neither is the revaluation of idle cash, which no position covers and which this figure therefore does not claim. Both forms are always published, because the client cannot know which one a screen is about to show and the choice is a display preference, not a fact about the money. */
+        AccountTotal: {
+            /** @description One entry per currency the account has a result in, ordered by currency code, each an exact sum within that currency. Amounts in different currencies are never added together: a single integer made of rubles and yuan is denominated in nothing. Empty exactly when the account has no positions and no charges of its own. */
+            by_currency: components["schemas"]["AccountCurrencyTotal"][];
+            /** @description The space's base currency (ISO-4217), carried here so a client formatting the total need not go back to the session for it */
+            base_currency: string;
+            /**
+             * Format: int64
+             * @description The same result as ONE figure in the space's base currency, and the only form in which an account holding several currencies has a single answer. Each position contributes the total its own in_base object carries — every term struck at the rate of its own date, the valuation at today's — and each of the account's own charges is converted at the rate of the day it was charged. THE ROUNDED PER-POSITION FIGURES ARE WHAT IS ADDED, for the reason RealizedTotal.in_base states at length: this total is defined as the sum of figures published in the same response, and a header disagreeing by a minor unit with the rows one field away would be a number nobody could check. Null when at least one term could not be valued; `in_base_gap` then says which kind of gap stopped it, and nothing partial is published in its place.
+             */
+            in_base: number | null;
+            /** @description Which kind of gap stopped `in_base`, or null when there is a figure. Both can be true of one account at once, hence `both`. */
+            in_base_gap: components["schemas"]["RealizedGap"] | null;
+            /** @description HOW MANY HOLDINGS WENT INTO THIS TOTAL AT A VALUE OF NOUGHT because nothing prices them — no quote stored, a bond with no face value recorded, a type this program has no valuation model for (Position.market_value_gap names which, row by row). Their money is counted as spent and nothing is counted as held, so the total is lower than the truth by whatever those papers are actually worth. This is a deliberate answer to a real question — a frozen fund nobody can sell is worth nothing to its holder today — and it is NOT a claim that those papers are worthless: it is the most conservative reading, and it is published as a count precisely so a reader can see the figure rests on it. 0 when every holding was priced, which is when the total needs no such caveat. Their basis is in zero_valued_cost_by_currency, so the size of the assumption is a number rather than an adjective. */
+            zero_valued_positions: number;
+            /** @description What the holdings counted at nought actually cost, per currency — the exact amount by which this total understates, since each of them contributes minus its own basis. Empty exactly when zero_valued_positions is 0. */
+            zero_valued_cost_by_currency: components["schemas"]["CurrencyAmount"][];
+            /** @description HOW MANY HOLDINGS THE ACCOUNT CANNOT SAY THE PRICE OF: still held, and carrying a basis of nought — shares that arrived by a transfer the broker sent without a cost attached. Their whole market value counts as profit here, so the total is HIGHER than the truth by whatever was really paid for them, on an account that never recorded it. The opposite direction to zero_valued_positions, and published for the same reason: a reader is told what the figure rests on rather than left to discover it. 0 when every holding knows what it cost. */
+            unknown_cost_positions: number;
+        };
         PositionsResponse: {
             positions: components["schemas"]["Position"][];
             /** @description Whether the cost basis behind every figure above is the one the owner's country requires (see CostBasisRules). It travels with the numbers rather than only in the session because this is the payload a reader takes the numbers from: a client that renders positions without ever reading the session must still be unable to show cost_minor, unrealized_pnl_minor and realized_pnl_minor as if they were a tax basis when they are not. It describes the whole computation, not one row, so it sits on the response rather than being repeated identically inside every Position. This is the ONLY repetition of it, and the line is drawn here on purpose: the journal publishes a cost basis too (a transfer's Operation.amount_minor) and carries no copy — not for want of an envelope, which OperationsResponse has had since #86, but because one statement living in three payloads is two extra places to forget. The statement belongs to the space, not to a payload — SessionInfo.cost_basis_rules is where a reader of any other figure takes it from. */
             cost_basis_rules: components["schemas"]["CostBasisRules"];
+            /** @description What this account has made all in, across the positions above and its own charges beside them. It sits on the response for the same reasons realized_total does: it is an aggregate of exactly these rows, it arrives in the round trip the screen already makes, and the addition happens once on the server so every reader agrees on the answer. Present even for an account with no positions, where by_currency is empty and in_base is a plain zero. */
+            account_total: components["schemas"]["AccountTotal"];
             /** @description What this account's closed deals have locked in, across all of the positions above. It sits on the response rather than being computed by the reader from `positions`, and rather than living on its own endpoint: it is an aggregate of exactly these rows, arrives with them in the one round trip the screen already makes, and — like cost_basis_rules — describes the whole list rather than any one row. Present even for an account with no positions, where by_currency is empty and in_base is a plain zero. */
             realized_total: components["schemas"]["RealizedTotal"];
         };

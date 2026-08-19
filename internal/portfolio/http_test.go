@@ -269,6 +269,27 @@ type positionInBase struct {
 type positionsResp struct {
 	Positions     []positionResp    `json:"positions"`
 	RealizedTotal realizedTotalResp `json:"realized_total"`
+	AccountTotal  accountTotalResp  `json:"account_total"`
+}
+
+// accountTotalResp mirrors apitypes.AccountTotal for decoding in tests (see
+// http_account_total_test.go). InBase, InBaseGap and each bucket's amount are
+// pointers for the same reason realizedTotalResp's are: a zero value cannot be
+// told apart from an explicit null, and the difference between "the account
+// made nothing" and "the account has no figure at all" is the whole subject.
+type accountTotalResp struct {
+	ByCurrency               []accountCurrencyTotalResp `json:"by_currency"`
+	BaseCurrency             string                     `json:"base_currency"`
+	InBase                   *int64                     `json:"in_base"`
+	InBaseGap                *string                    `json:"in_base_gap"`
+	ZeroValuedPositions      int                        `json:"zero_valued_positions"`
+	ZeroValuedCostByCurrency []currencyAmountResp       `json:"zero_valued_cost_by_currency"`
+	UnknownCostPositions     int                        `json:"unknown_cost_positions"`
+}
+
+type accountCurrencyTotalResp struct {
+	Currency    string `json:"currency"`
+	AmountMinor *int64 `json:"amount_minor"`
 }
 
 // realizedTotalResp mirrors apitypes.RealizedTotal for decoding in tests (see

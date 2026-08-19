@@ -21,6 +21,7 @@ import { MoneyCell } from "@/components/money-cell";
 import { CostBasisNotice } from "@/components/cost-basis-notice";
 import { PositionsTable } from "./positions-table";
 import { RealizedTotal } from "./realized-total";
+import { AccountTotal } from "./account-total";
 import { OperationsTable } from "./operations-table";
 import { TradeDialog } from "./trade-dialog";
 import { CashDialog } from "./cash-dialog";
@@ -85,7 +86,10 @@ export function AccountDetailPage() {
         <Alert variant="destructive">
           <AlertDescription>{t("accounts.notFound")}</AlertDescription>
         </Alert>
-        <Link to="/accounts" className="text-sm text-muted-foreground hover:underline">
+        <Link
+          to="/accounts"
+          className="text-sm text-muted-foreground hover:underline"
+        >
           {t("accounts.back")}
         </Link>
       </div>
@@ -94,7 +98,10 @@ export function AccountDetailPage() {
 
   return (
     <div className="grid gap-6">
-      <Link to="/accounts" className="text-sm text-muted-foreground hover:underline">
+      <Link
+        to="/accounts"
+        className="text-sm text-muted-foreground hover:underline"
+      >
         {t("accounts.back")}
       </Link>
 
@@ -107,38 +114,18 @@ export function AccountDetailPage() {
           {account.institution && `${account.institution} · `}
           {account.currency}
         </div>
-        {account.balance && (
-          <div className="mt-2 grid gap-0.5">
-            <MoneyCell
-              resolved={resolveDisplayAmount(
-                mode,
-                account.currency,
-                account.balance.amount_minor,
-                baseCurrency,
-                // The converted balance is printed in the currency it itself
-                // carries (MoneyInBase.currency, required by the contract),
-                // never in the session's answer to the same question — which
-                // this cached account may already have outlived (#106).
-                account.balance_in_base && {
-                  amountMinor: account.balance_in_base.amount_minor,
-                  currency: account.balance_in_base.currency,
-                  rateOn: account.balance_in_base.rate_on,
-                },
-              )}
-              className="text-2xl font-bold tabular-nums"
-              testId="account-detail-balance"
-            />
-            <div className="text-xs text-muted-foreground">{formatDate(account.balance.as_of)}</div>
-          </div>
+        {/* THE BIGGEST NUMBER ON THE SCREEN ANSWERS THE BIGGEST QUESTION —
+            «сколько я тут заработал». It used to be the free cash, which is a
+            fact about the account rather than an answer, and which now sits
+            with the holdings below. */}
+        {positions.data && (
+          <AccountTotal total={positions.data.account_total} mode={mode} />
         )}
-        {/* What the account's closed deals have actually locked in. It sits in
-            the header rather than in the positions table because the owner
-            removed the per-row "Реализовано" as visual noise and that decision
-            stands: one figure here answers the question without putting it
-            back into every row. The figure arrives added up from the server,
-            with the positions it stands over (see RealizedTotal in the API
-            contract); it renders nothing at all for an account that has no
-            positions. */}
+        {/* One half of the figure above, on its own: what the closed deals
+            locked in, which is final and will never move again. It arrives
+            added up from the server with the positions it stands over (see
+            RealizedTotal in the API contract), and renders nothing at all for
+            an account that has neither deals nor a withholding. */}
         {positions.data && (
           <RealizedTotal total={positions.data.realized_total} mode={mode} />
         )}
@@ -146,7 +133,47 @@ export function AccountDetailPage() {
 
       <div className="grid gap-2">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">{t("positions.title")}</h2>
+          <div className="flex flex-wrap items-baseline gap-x-3">
+            <h2 className="text-lg font-semibold">{t("positions.title")}</h2>
+            {/* The money not in any paper, beside the papers — it is a holding
+                like the rest, and the reader comparing it with them is doing
+                the arithmetic this screen exists for. It is the broker's own
+                figure from the last reconciliation, not a sum over the journal,
+                so it keeps the date it was true on. */}
+            {account.balance && (
+              <span className="flex items-baseline gap-1.5 text-sm">
+                <span
+                  className="text-muted-foreground"
+                  title={t("positions.freeCashHint")}
+                >
+                  {t("positions.freeCash")}
+                </span>
+                <MoneyCell
+                  resolved={resolveDisplayAmount(
+                    mode,
+                    account.currency,
+                    account.balance.amount_minor,
+                    baseCurrency,
+                    // The converted balance is printed in the currency it
+                    // itself carries (MoneyInBase.currency, required by the
+                    // contract), never in the session's answer to the same
+                    // question — which this cached account may already have
+                    // outlived (#106).
+                    account.balance_in_base && {
+                      amountMinor: account.balance_in_base.amount_minor,
+                      currency: account.balance_in_base.currency,
+                      rateOn: account.balance_in_base.rate_on,
+                    },
+                  )}
+                  className="font-medium tabular-nums"
+                  testId="account-detail-balance"
+                />
+                <span className="text-xs text-muted-foreground">
+                  {formatDate(account.balance.as_of)}
+                </span>
+              </span>
+            )}
+          </div>
           {!isViewer && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -191,7 +218,10 @@ export function AccountDetailPage() {
                 a caveat about nothing. The response carries the statement
                 even for an empty account (see the API contract) so that a
                 client which needs it earlier still has it. */}
-            <CostBasisNotice rules={positions.data.cost_basis_rules} namesCountry />
+            <CostBasisNotice
+              rules={positions.data.cost_basis_rules}
+              namesCountry
+            />
             <PositionsTable
               positions={positions.data.positions}
               mode={mode}
@@ -240,13 +270,25 @@ export function AccountDetailPage() {
         />
       )}
       {action === "cash" && (
-        <CashDialog open onOpenChange={(open) => !open && closeAction()} account={account} />
+        <CashDialog
+          open
+          onOpenChange={(open) => !open && closeAction()}
+          account={account}
+        />
       )}
       {action === "income" && (
-        <IncomeDialog open onOpenChange={(open) => !open && closeAction()} account={account} />
+        <IncomeDialog
+          open
+          onOpenChange={(open) => !open && closeAction()}
+          account={account}
+        />
       )}
       {action === "transfer" && (
-        <TransferDialog open onOpenChange={(open) => !open && closeAction()} account={account} />
+        <TransferDialog
+          open
+          onOpenChange={(open) => !open && closeAction()}
+          account={account}
+        />
       )}
     </div>
   );
