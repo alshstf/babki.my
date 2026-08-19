@@ -208,8 +208,31 @@ function makePositionsBody(
   rules: SessionInfo["cost_basis_rules"],
   positions: unknown[] = [makePosition()],
   realizedTotal: unknown = makeRealizedTotal(),
+  accountTotal: unknown = makeAccountTotal(),
 ) {
-  return { positions, cost_basis_rules: rules, realized_total: realizedTotal };
+  return {
+    positions,
+    cost_basis_rules: rules,
+    realized_total: realizedTotal,
+    account_total: accountTotal,
+  };
+}
+
+// The account's headline figure as the server publishes it. Required by the
+// contract on every positions response — a body without it is not a shape the
+// server can produce, and a fixture that omitted it would be a screen crash
+// nobody saw until production.
+function makeAccountTotal(overrides: Record<string, unknown> = {}) {
+  return {
+    by_currency: [{ currency: "USD", amount_minor: 0 }],
+    base_currency: "RUB",
+    in_base: 0,
+    in_base_gap: null,
+    zero_valued_positions: 0,
+    zero_valued_cost_by_currency: [],
+    unknown_cost_positions: 0,
+    ...overrides,
+  };
 }
 
 // Stand-in for the header's display-currency toggle, mounted beside the page

@@ -11,6 +11,12 @@ export type PositionsResponse = components["schemas"]["PositionsResponse"];
 // RealizedTotal in the API contract).
 export type RealizedTotal = components["schemas"]["RealizedTotal"];
 export type RealizedGap = components["schemas"]["RealizedGap"];
+// What the whole account has made, all in: every position's total plus the
+// account's own charges — interest, commissions booked on their own, and the
+// tax taken from the account rather than from a payment. Added up by the
+// server, with two counts beside it naming the assumptions it rests on (see
+// AccountTotal in the API contract).
+export type AccountTotal = components["schemas"]["AccountTotal"];
 // Which TERM the server could not value, and so why a position carries no
 // base-currency figures at all — and, separately, why its market valuation
 // carries none of its own. The screen never re-derives either from the
