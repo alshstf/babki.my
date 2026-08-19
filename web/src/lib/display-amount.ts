@@ -146,3 +146,42 @@ export function resolveDisplayAmount(
     rateOn: null,
   };
 }
+
+/**
+ * resolveDisplayAmount for a figure that MAY NOT EXIST IN EITHER CURRENCY, and
+ * whose two absences are independent.
+ *
+ * The realized result, the settled result and the total are all like this: a
+ * position whose disposal settled in a third currency has no figure in its own
+ * currency and a perfectly good one in the base currency, and a position whose
+ * fx rates are missing has the reverse. The plain resolver takes a native amount
+ * as a required argument and cannot express either case.
+ *
+ * Returns null only when the figure the CHOSEN MODE would show is missing —
+ * which is what the cell renders a dash for. In base mode a missing converted
+ * figure still falls back to the native one, exactly as the plain resolver
+ * does, so a row keeps saying what it can.
+ */
+export function resolveOptionalDisplayAmount(
+  mode: DisplayCurrencyMode,
+  nativeCurrency: string,
+  nativeAmountMinor: number | null | undefined,
+  baseCurrency: string,
+  converted?: ConvertedFigure | null,
+): ResolvedAmount | null {
+  if (mode === "native" || nativeCurrency === baseCurrency) {
+    if (nativeAmountMinor == null) return null;
+    return resolveDisplayAmount(mode, nativeCurrency, nativeAmountMinor, baseCurrency, converted);
+  }
+  if (converted != null && converted.amountMinor != null) {
+    return {
+      amountMinor: converted.amountMinor,
+      currency: converted.currency,
+      noRate: false,
+      converted: true,
+      rateOn: converted.rateOn ?? null,
+    };
+  }
+  if (nativeAmountMinor == null) return null;
+  return resolveDisplayAmount(mode, nativeCurrency, nativeAmountMinor, baseCurrency, converted);
+}

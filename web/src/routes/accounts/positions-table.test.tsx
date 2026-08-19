@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import "@/i18n";
 import { PositionsTable } from "./positions-table";
 import type { Position } from "@/api/positions";
@@ -82,7 +82,8 @@ const CAPTION = {
 // puts the cause a quote would not close first (see MarketValueGap in the API
 // contract).
 const NO_VALUATION = {
-  noQuote: "Котировки пока нет. Если она появится, рыночная оценка посчитается сама",
+  noQuote:
+    "Котировки пока нет. Если она появится, рыночная оценка посчитается сама",
   typeNotPriced:
     "Рыночную оценку для этого вида активов программа не считает — такого расчёта в ней нет. Котировка тут ничего не меняет: даже когда она есть, оценки не будет, и ждать её не нужно",
   noFaceValue:
@@ -94,7 +95,8 @@ const NO_VALUATION = {
 // column's own dash needs its own first line: the sentences above explain why
 // there is no valuation, and this is why that leaves the profit cell empty
 // too.
-const PROFIT_NEEDS_VALUATION = "Прибыль — это рыночная оценка минус стоимость, а оценки нет";
+const PROFIT_NEEDS_VALUATION =
+  "Прибыль — это рыночная оценка минус стоимость, а оценки нет";
 
 // The two sentences the price line's tooltip carries under the date, spelled
 // out here in full for the same reason the captions above are: what this is
@@ -147,11 +149,20 @@ const ROW_MARKERS = [
   "position-cost-not-converted",
   "position-market-value-not-converted",
   "position-profit-amount-not-converted",
-  "position-income-not-converted",
+  "position-settled-not-converted",
 ] as const;
 
+// makePosition builds a row the way the SERVER would, which for the two summed
+// figures means deriving them rather than restating them: settled is the
+// realized result plus the income, and total adds the unrealized half (see
+// Position.settled_minor in the API contract). A fixture that made a caller
+// spell all four out would let a test assert an income of 5,00 beside a settled
+// of nought and never notice.
+//
+// Overriding either one explicitly still wins — that is how the null cases are
+// written, and they are the cases the derivation cannot produce.
 function makePosition(overrides: Partial<Position> = {}): Position {
-  return {
+  const base: Position = {
     instrument: {
       id: "instr-1",
       type: "share",
@@ -204,15 +215,34 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     market_value_gap: null,
     ...overrides,
   };
+  const settled =
+    "settled_minor" in overrides
+      ? base.settled_minor
+      : base.realized_pnl_minor == null
+        ? null
+        : base.realized_pnl_minor + base.income_minor;
+  const total =
+    "total_minor" in overrides
+      ? base.total_minor
+      : settled == null || base.unrealized_pnl_minor == null
+        ? null
+        : settled + base.unrealized_pnl_minor;
+  return { ...base, settled_minor: settled, total_minor: total };
 }
 
 describe("PositionsTable", () => {
   it("shows the market value amount and price, with the quote date only in a tooltip", () => {
-    wrap(<PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />);
-
-    expect(norm(screen.getByTestId("position-market-value").textContent ?? "")).toBe(
-      norm(formatMinor(305_50, "USD")),
+    wrap(
+      <PositionsTable
+        positions={[makePosition()]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
     );
+
+    expect(
+      norm(screen.getByTestId("position-market-value").textContent ?? ""),
+    ).toBe(norm(formatMinor(305_50, "USD")));
     // Price is shown as text...
     const priceLine = screen.getByTestId("position-price");
     expect(norm(priceLine.textContent ?? "")).toBe("305,50 $");
@@ -222,7 +252,13 @@ describe("PositionsTable", () => {
   });
 
   it("captions the price with the session it belongs to, not with the day it was fetched", () => {
-    wrap(<PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />);
+    wrap(
+      <PositionsTable
+        positions={[makePosition()]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
 
     // Pinned as ONE exact string, in order: swapping any of the three lines
     // for another sentence, dropping one, or reordering them fails here. That
@@ -254,8 +290,8 @@ describe("PositionsTable", () => {
             in_base: {
               cost_minor: 2_275_000,
               market_value_minor: 2_780_050,
-              settled_minor: null,
-              total_minor: null,
+              settled_minor: 9_100,
+              total_minor: 236_600,
               unrealized_pnl_minor: 227_500,
               income_minor: 9_100,
               currency: "RUB",
@@ -272,10 +308,12 @@ describe("PositionsTable", () => {
       ["position-cost", 2_275_000],
       ["position-market-value", 2_780_050],
       ["position-profit-amount", 227_500],
-      ["position-income", 9_100],
+      ["position-settled", 9_100],
     ] as const) {
       const cell = screen.getByTestId(testId);
-      expect(norm(cell.textContent ?? "")).toBe(norm(formatMinor(minor, "RUB")));
+      expect(norm(cell.textContent ?? "")).toBe(
+        norm(formatMinor(minor, "RUB")),
+      );
       expect(cell.textContent).not.toContain("€");
     }
   });
@@ -307,14 +345,15 @@ describe("PositionsTable", () => {
       />,
     );
 
-    const priceTitle = screen.getByTestId("position-price").getAttribute("title") ?? "";
+    const priceTitle =
+      screen.getByTestId("position-price").getAttribute("title") ?? "";
     expect(priceTitle).toContain("Цена на 20.07.2026");
     expect(priceTitle).not.toContain("22.07.2026");
     // The neighbour's date, rendered by the same formatDate: same dd.MM.yyyy
     // shape, so the two dates on one row cannot be read as two conventions.
-    expect(screen.getByTestId("position-market-value").getAttribute("title")).toBe(
-      "Пересчитано по текущему курсу (на 22.07.2026)",
-    );
+    expect(
+      screen.getByTestId("position-market-value").getAttribute("title"),
+    ).toBe("Пересчитано по текущему курсу (на 22.07.2026)");
   });
 
   it("shows an honest dash with a tooltip instead of a fake zero when there is no quote", () => {
@@ -349,7 +388,9 @@ describe("PositionsTable", () => {
     // happen to end in "0,00" (e.g. "500,00"), while still catching a real
     // fake-zero amount ("0,00").
     expect(screen.queryByText(/(?<!\d)0,00/)).not.toBeInTheDocument();
-    expect(screen.queryByTestId("position-market-value")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("position-market-value"),
+    ).not.toBeInTheDocument();
   });
 
   it("formats the market value by market_value_currency, not the position's own currency", () => {
@@ -368,12 +409,20 @@ describe("PositionsTable", () => {
     );
 
     const amount = screen.getByTestId("position-market-value");
-    expect(norm(amount.textContent ?? "")).toBe(norm(formatMinor(100_000, "EUR")));
+    expect(norm(amount.textContent ?? "")).toBe(
+      norm(formatMinor(100_000, "EUR")),
+    );
     expect(amount.textContent).not.toMatch(/₽/);
   });
 
   it("does not render the removed realized/fees columns", () => {
-    wrap(<PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />);
+    wrap(
+      <PositionsTable
+        positions={[makePosition()]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
 
     expect(screen.queryByText("Реализовано")).not.toBeInTheDocument();
     expect(screen.queryByText("Комиссии")).not.toBeInTheDocument();
@@ -384,36 +433,44 @@ describe("PositionsTable", () => {
     // cost 2500,00, unrealized +250,00 -> +10,0 %
     wrap(
       <PositionsTable
-        positions={[makePosition({ cost_minor: 250_000, unrealized_pnl_minor: 25_000 })]}
+        positions={[
+          makePosition({ cost_minor: 250_000, unrealized_pnl_minor: 25_000 }),
+        ]}
         mode="native"
         baseCurrency="RUB"
       />,
     );
 
     const amount = screen.getByTestId("position-profit-amount");
-    expect(norm(amount.textContent ?? "")).toBe(norm(formatMinor(25_000, "USD")));
-    expect(amount.className).toContain("text-emerald-500");
-    expect(norm(screen.getByTestId("position-profit-percent").textContent ?? "")).toBe(
-      norm("+10,0 %"),
+    expect(norm(amount.textContent ?? "")).toBe(
+      norm(formatMinor(25_000, "USD")),
     );
+    expect(amount.className).toContain("text-emerald-500");
+    expect(
+      norm(screen.getByTestId("position-profit-percent").textContent ?? ""),
+    ).toBe(norm("+10,0 %"));
   });
 
   it("shows unrealized loss in red with a negative percentage", () => {
     // cost 2500,00, unrealized -300,00 -> -12,0 %
     wrap(
       <PositionsTable
-        positions={[makePosition({ cost_minor: 250_000, unrealized_pnl_minor: -30_000 })]}
+        positions={[
+          makePosition({ cost_minor: 250_000, unrealized_pnl_minor: -30_000 }),
+        ]}
         mode="native"
         baseCurrency="RUB"
       />,
     );
 
     const amount = screen.getByTestId("position-profit-amount");
-    expect(norm(amount.textContent ?? "")).toBe(norm(formatMinor(-30_000, "USD")));
-    expect(amount.className).toContain("text-red-500");
-    expect(norm(screen.getByTestId("position-profit-percent").textContent ?? "")).toBe(
-      norm("-12,0 %"),
+    expect(norm(amount.textContent ?? "")).toBe(
+      norm(formatMinor(-30_000, "USD")),
     );
+    expect(amount.className).toContain("text-red-500");
+    expect(
+      norm(screen.getByTestId("position-profit-percent").textContent ?? ""),
+    ).toBe(norm("-12,0 %"));
   });
 
   it("shows a dash with a tooltip for the profit column when unrealized_pnl_minor is null", () => {
@@ -442,8 +499,12 @@ describe("PositionsTable", () => {
       "title",
       `${PROFIT_NEEDS_VALUATION}\n${NO_VALUATION.noQuote}`,
     );
-    expect(screen.queryByTestId("position-profit-amount")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("position-profit-percent")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("position-profit-amount"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("position-profit-percent"),
+    ).not.toBeInTheDocument();
   });
 
   it("shows a dash with currency mismatch tooltip when unrealized_pnl_minor is null but market value exists in different currency", () => {
@@ -463,13 +524,22 @@ describe("PositionsTable", () => {
     );
 
     const marketValue = screen.getByTestId("position-market-value");
-    expect(norm(marketValue.textContent ?? "")).toBe(norm(formatMinor(952_00, "USD")));
+    expect(norm(marketValue.textContent ?? "")).toBe(
+      norm(formatMinor(952_00, "USD")),
+    );
 
     const dash = screen.getByTestId("position-profit-dash");
     expect(dash).toHaveTextContent("—");
-    expect(dash).toHaveAttribute("title", "Оценка в другой валюте — прибыль не рассчитывается");
-    expect(screen.queryByTestId("position-profit-amount")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("position-profit-percent")).not.toBeInTheDocument();
+    expect(dash).toHaveAttribute(
+      "title",
+      "Оценка в другой валюте — прибыль не рассчитывается",
+    );
+    expect(
+      screen.queryByTestId("position-profit-amount"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("position-profit-percent"),
+    ).not.toBeInTheDocument();
   });
 
   describe("the empty valuation cell says WHICH absence it is", () => {
@@ -526,7 +596,9 @@ describe("PositionsTable", () => {
       // and it may not promise the figure is coming, because no decision to
       // write such a valuation has been taken.
       expect(dash.getAttribute("title")).not.toBe(NO_VALUATION.noQuote);
-      expect(dash.getAttribute("title")).not.toMatch(/появится|посчитается сама|пока нет/);
+      expect(dash.getAttribute("title")).not.toMatch(
+        /появится|посчитается сама|пока нет/,
+      );
     });
 
     it("does not blame a missing quote for a bond with no face value", () => {
@@ -554,7 +626,10 @@ describe("PositionsTable", () => {
         <PositionsTable
           positions={[
             makePosition({
-              instrument: { ...makePosition().instrument, id: "instr-unnameable" },
+              instrument: {
+                ...makePosition().instrument,
+                id: "instr-unnameable",
+              },
               market_value_minor: null,
               market_value_currency: null,
               unrealized_pnl_minor: null,
@@ -562,7 +637,10 @@ describe("PositionsTable", () => {
                 "no_lunar_settlement_price" as Position["market_value_gap"],
             }),
             makePosition({
-              instrument: { ...makePosition().instrument, id: "instr-no-cause" },
+              instrument: {
+                ...makePosition().instrument,
+                id: "instr-no-cause",
+              },
               market_value_minor: null,
               market_value_currency: null,
               unrealized_pnl_minor: null,
@@ -622,7 +700,10 @@ describe("PositionsTable", () => {
       );
 
       const dash = screen.getByTestId("position-profit-dash");
-      expect(dash).toHaveAttribute("title", "Оценка в другой валюте — прибыль не рассчитывается");
+      expect(dash).toHaveAttribute(
+        "title",
+        "Оценка в другой валюте — прибыль не рассчитывается",
+      );
       expect(dash.getAttribute("title")).not.toContain(PROFIT_NEEDS_VALUATION);
     });
   });
@@ -647,10 +728,14 @@ describe("PositionsTable", () => {
 
     // The converted (position-currency) amount is still what's shown in the DOM...
     const amount = screen.getByTestId("position-market-value");
-    expect(norm(amount.textContent ?? "")).toBe(norm(formatMinor(305_50, "USD")));
+    expect(norm(amount.textContent ?? "")).toBe(
+      norm(formatMinor(305_50, "USD")),
+    );
     // ...profit is computed normally (not the currency-mismatch dash)...
     const profitAmount = screen.getByTestId("position-profit-amount");
-    expect(norm(profitAmount.textContent ?? "")).toBe(norm(formatMinor(25_000, "USD")));
+    expect(norm(profitAmount.textContent ?? "")).toBe(
+      norm(formatMinor(25_000, "USD")),
+    );
     // ...and the source amount appears only in the tooltip, never as text.
     const sourceAmount = formatMinor(2_800_00, "RUB");
     expect(screen.queryByText(sourceAmount)).not.toBeInTheDocument();
@@ -663,7 +748,13 @@ describe("PositionsTable", () => {
   });
 
   it("omits the converted-from tooltip line when the market value has no source currency/amount", () => {
-    wrap(<PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />);
+    wrap(
+      <PositionsTable
+        positions={[makePosition()]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
 
     const priceLine = screen.getByTestId("position-price");
     expect(priceLine.getAttribute("title")).toBe(
@@ -689,6 +780,8 @@ describe("PositionsTable", () => {
   // be false in exactly the mode the owner uses.
   const BOND_PRICE_NOTE =
     "Облигация котируется в процентах от номинала, а не в деньгах за штуку: одна бумага стоит номинал, умноженный на этот процент";
+  const BOND_MONEY_NOTE =
+    "Деньги за одну бумагу — это номинал, умноженный на этот процент. Номинал записан в каталоге и не обновляется: у амортизируемой облигации он со временем уменьшается, и тогда цена в деньгах будет завышена";
 
   function makeBond(overrides: Partial<Position> = {}): Position {
     return makePosition({
@@ -716,33 +809,337 @@ describe("PositionsTable", () => {
       unrealized_pnl_minor: 520_000,
       price: "95.20",
       price_on: "2026-07-20",
+      // 1 000,00 ₽ of face at 95.20 % = 952,00 ₽ for one bond. The SERVER
+      // strikes this (Position.price_money_minor) — the screen never multiplies
+      // the face value itself — so a fixture that omitted it would be testing
+      // the percent-only row, which is the case below.
+      price_money_minor: 95_200,
       ...overrides,
     });
   }
 
+  // THE THREE FIGURES THE OWNER ASKED FOR, AND WHAT SEPARATES THEM. «Прибыль»
+  // is the unrealized half alone — what the paper is worth today against what
+  // it cost. «Зафиксировано» is the settled half: the result of closed deals
+  // plus what the paper has paid out, money that is already his. «Всего» is
+  // both, which is what he was reaching for a calculator to work out.
+  //
+  // Three DIFFERENT numbers in one fixture on purpose: a cell wired to the
+  // wrong one of the three still prints a plausible amount, and only figures
+  // that disagree can catch it.
+  it("keeps the profit, the settled result and their total apart", () => {
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            currency: "USD",
+            cost_minor: 250_000,
+            unrealized_pnl_minor: 25_000,
+            realized_pnl_minor: 10_000,
+            income_minor: 1_000,
+            income_by_currency: [{ currency: "USD", income_minor: 1_000 }],
+          }),
+        ]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    // Unrealized alone.
+    expect(
+      norm(screen.getByTestId("position-profit-amount").textContent ?? ""),
+    ).toBe(norm(formatMinor(25_000, "USD")));
+    // Realized 100,00 $ + income 10,00 $ = 110,00 $, and NOT the 250,00 $ of
+    // profit that shares the row.
+    expect(norm(screen.getByTestId("position-settled").textContent ?? "")).toBe(
+      norm(formatMinor(11_000, "USD")),
+    );
+    // Everything: 110,00 $ settled + 250,00 $ still on paper.
+    expect(norm(screen.getByTestId("position-total").textContent ?? "")).toBe(
+      norm(formatMinor(36_000, "USD")),
+    );
+  });
+
+  it("says under the profit what this paper has already locked in", () => {
+    // A closed position's unrealized profit is honestly nothing, and the column
+    // that says «Прибыль» must keep saying nothing — while the money the sale
+    // actually made gets its own line under it rather than being folded into
+    // that cell under the wrong word.
+    wrap(
+      <PositionsTable
+        positions={[
+          makeClosed({ realized_pnl_minor: 1_326_400, currency: "RUB" }),
+        ]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+    // Closed rows are behind the control, so the row has to be asked for first.
+    fireEvent.click(screen.getByTestId("toggle-closed-positions"));
+
+    const realized = screen.getByTestId("position-realized");
+    expect(norm(realized.textContent ?? "")).toContain(
+      norm(formatMinor(1_326_400, "RUB")),
+    );
+  });
+
+  it("draws no realized line on a paper that has never been sold out of", () => {
+    // «реализовано 0,00» on every open row is noise, and noise is what makes a
+    // real line invisible.
+    wrap(
+      <PositionsTable
+        positions={[makePosition({ realized_pnl_minor: 0 })]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(screen.getByTestId("position-profit-amount")).toBeInTheDocument();
+    expect(screen.queryByTestId("position-realized")).not.toBeInTheDocument();
+  });
+
+  it("spells out both terms of the settled figure, and what the tax does and does not include", () => {
+    // The cell shows one number and the tooltip shows what it is made of —
+    // which is where the «Доход» column went. Pinned as one exact string
+    // because two of its claims are claims about the SERVER: that the tax on a
+    // dividend is already inside the income (Position.income_minor subtracts
+    // it), and that the tax withheld from the ACCOUNT is not
+    // (RealizedTotal.tax_withheld_by_currency carries that one, under the
+    // table). An earlier wording said flatly «налог тут не вычтен», which was
+    // false of every dividend this program has ever recorded.
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            currency: "USD",
+            realized_pnl_minor: 10_000,
+            income_minor: 1_000,
+            income_by_currency: [{ currency: "USD", income_minor: 1_000 }],
+          }),
+        ]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const cell = screen.getByTestId("position-settled").closest("td");
+    expect(norm(cell?.getAttribute("title") ?? "")).toBe(
+      norm(
+        "Свершившееся, которое больше не изменится: реализованная прибыль 100,00 $ плюс доход 10,00 $. Налог с дивиденда или купона уже вычтен из дохода. А тот, что брокер списывает со счёта при выводе средств, тут не вычтен — он берётся с накопленной за год базы, а не с бумаги, и показан общей суммой под таблицей",
+      ),
+    );
+  });
+
+  // THE DASH UNDER «ЗАФИКСИРОВАНО» HAS TWO CAUSES AND MUST NAME THE RIGHT ONE.
+  // The server withholds the figure when a disposal settled in a currency the
+  // position is not denominated in, and also when the payments arrived in more
+  // than one currency — unrelated events that a single sentence would describe
+  // wrongly half the time.
+  it("blames the sale when it is the sale that has no common currency", () => {
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            currency: "USD",
+            realized_pnl_minor: null,
+            settled_minor: null,
+          }),
+        ]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const dash = screen.getByTestId("position-settled-dash");
+    expect(announcedText(dash)).toContain(
+      "расчёт по одной из продаж пришёл в другой валюте",
+    );
+    expect(announcedText(dash)).not.toContain("выплаты");
+  });
+
+  it("blames the payments when the sale is not what stopped it", () => {
+    // A yuan bond paying its coupons in rubles: nothing was sold, the realized
+    // figure is a perfectly good nought, and the old single caption would have
+    // announced a disposal that never happened.
+    wrap(
+      <PositionsTable
+        positions={[
+          makePosition({
+            currency: "CNY",
+            realized_pnl_minor: 0,
+            settled_minor: null,
+            income_minor: 0,
+            income_by_currency: [{ currency: "RUB", income_minor: 141_075 }],
+          }),
+        ]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const dash = screen.getByTestId("position-settled-dash");
+    expect(announcedText(dash)).toContain(
+      "выплаты по этой бумаге пришли не только в её валюте",
+    );
+    expect(announcedText(dash)).not.toContain("продаж");
+    // And the payments it blames are on the screen beside it, which is what
+    // the sentence promises.
+    expect(
+      norm(
+        screen.getByTestId("position-income-other-currency").textContent ?? "",
+      ),
+    ).toContain(norm(formatMinor(141_075, "RUB")));
+  });
+
+  // A POSITION SOLD OUT OF IS STILL HISTORY, AND STILL OFF THE SCREEN BY
+  // DEFAULT. Both halves are the point: the row keeps a realized result and the
+  // income the paper paid, so deleting it would lose real answers — and a
+  // portfolio of a few holdings should not open with a list of things that are
+  // over. What makes hiding honest is the count beside the control, so these
+  // tests check the sentence as closely as the filtering.
+  function makeClosed(overrides: Partial<Position> = {}): Position {
+    return makePosition({
+      instrument: {
+        ...makePosition().instrument,
+        id: "instr-closed",
+        name: "Проданное",
+      },
+      quantity: "0",
+      cost_minor: 0,
+      market_value_minor: null,
+      market_value_currency: null,
+      market_value_gap: "no_quote",
+      unrealized_pnl_minor: null,
+      realized_pnl_minor: 1_326_400,
+      ...overrides,
+    });
+  }
+
+  it("keeps a sold-out position off the list until asked, and says how many are missing", () => {
+    wrap(
+      <PositionsTable
+        positions={[makePosition(), makeClosed()]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(screen.getByText("Test Corp")).toBeInTheDocument();
+    expect(screen.queryByText("Проданное")).not.toBeInTheDocument();
+    // The number of hidden rows, and the fact that the figures under the table
+    // are NOT filtered with them — a header standing over rows that show none
+    // of it reads as an error rather than as the deliberate answer it is.
+    expect(screen.getByTestId("closed-positions-note").textContent).toBe(
+      "скрыто закрытых: 1. Итоги под таблицей считаются по всем позициям, включая скрытые",
+    );
+  });
+
+  it("shows the closed rows once the control is pressed, and changes its word", () => {
+    wrap(
+      <PositionsTable
+        positions={[makePosition(), makeClosed()]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const toggle = screen.getByTestId("toggle-closed-positions");
+    expect(toggle.textContent).toBe("Показать закрытые");
+    fireEvent.click(toggle);
+
+    expect(screen.getByText("Проданное")).toBeInTheDocument();
+    expect(screen.getByText("Test Corp")).toBeInTheDocument();
+    expect(toggle.textContent).toBe("Скрыть закрытые");
+    expect(screen.getByTestId("closed-positions-note").textContent).toBe(
+      "закрытых среди них: 1",
+    );
+
+    // And back: the control is a switch, not a one-way door.
+    fireEvent.click(toggle);
+    expect(screen.queryByText("Проданное")).not.toBeInTheDocument();
+  });
+
+  it("offers no control at all when nothing is closed", () => {
+    // A button that hides nothing, over a sentence that would have to say
+    // «скрыто закрытых: 0», is a question nobody asked.
+    wrap(
+      <PositionsTable
+        positions={[makePosition()]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(screen.getByText("Test Corp")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("toggle-closed-positions"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("closed-positions-note"),
+    ).not.toBeInTheDocument();
+  });
+
   it("marks a bond's price as a percentage of face value and says so in the tooltip", () => {
-    wrap(<PositionsTable positions={[makeBond()]} mode="native" baseCurrency="RUB" />);
+    wrap(
+      <PositionsTable
+        positions={[makeBond()]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
 
     const priceLine = screen.getByTestId("position-price");
-    expect(norm(priceLine.textContent ?? "")).toBe("95,20 %");
+    // MONEY FIRST, THE PERCENT BESIDE IT: 952,00 ₽ is what one bond costs, and
+    // 95,20 % is how the market quotes it. The money is the server's figure
+    // (price_money_minor) printed as given — the multiplication behind it is
+    // not repeated here — and its sign belongs to the FACE VALUE's currency,
+    // never to the percent, which is denominated in nothing.
+    expect(norm(priceLine.textContent ?? "")).toBe("952,00 ₽ · 95,20 %");
     // norm() above strips NBSP, so it can't tell a real non-breaking space
-    // from a plain one that would let "%" wrap onto its own line — pin the
-    // raw character too, unnormalized, against ru.json's pricePercent key.
-    expect(priceLine.textContent).toBe("95,20 %");
-    // And NOT a currency sign, which is the other half of #76: a bond's quote
-    // is a percentage of face value, not money, so it is denominated in
-    // nothing — even though this row's valuation right above it IS in rubles
-    // and market_value_currency says so, which is the field a share's price
-    // reads its own currency from.
-    expect(priceLine.textContent).not.toContain("₽");
+    // from a plain one that would let "%" or "₽" wrap onto its own line — pin
+    // the raw characters too, unnormalized, against ru.json's
+    // priceMoneyAndPercent key. The space around "·" is an ordinary one on
+    // purpose: that is where the line MAY break.
+    expect(priceLine.textContent).toBe("952,00\u00a0₽ · 95,20\u00a0%");
     // The session note sits under the date it explains and ABOVE the
     // percentage note, and the valuation note under both: a reader learns what
     // the date means, then what the number is, then what was computed from it.
+    // The face-value caveat comes with the money, and only with it.
+    expect(norm(priceLine.getAttribute("title") ?? "")).toBe(
+      norm(
+        `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${BOND_PRICE_NOTE}\n${BOND_MONEY_NOTE}\n${PRICE_VALUATION_NOTE}`,
+      ),
+    );
+  });
+
+  it("prints the percentage alone, and no face-value caveat, when the server sent no money price", () => {
+    // The server publishes price_money_minor only where it can strike it, and
+    // the screen must not fill that gap in: multiplying the face value here
+    // would be money arithmetic on the client. The percent alone is what such
+    // a row actually knows — and it is still NOT a currency sign, which is the
+    // other half of #76: the valuation right above IS in rubles and
+    // market_value_currency says so, which is the field a share's price reads
+    // its own currency from.
+    //
+    // The caveat about the face value drifting goes with the money and only
+    // with it: here it would explain a number that is not on screen.
+    wrap(
+      <PositionsTable
+        positions={[makeBond({ price_money_minor: null })]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const priceLine = screen.getByTestId("position-price");
+    expect(priceLine.textContent).toBe("95,20\u00a0%");
+    expect(priceLine.textContent).not.toContain("₽");
     expect(norm(priceLine.getAttribute("title") ?? "")).toBe(
       norm(
         `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${BOND_PRICE_NOTE}\n${PRICE_VALUATION_NOTE}`,
       ),
     );
+    expect(priceLine.getAttribute("title")).not.toContain(BOND_MONEY_NOTE);
   });
 
   it.each([["share"], ["etf"]] as const)(
@@ -804,9 +1201,9 @@ describe("PositionsTable", () => {
       />,
     );
 
-    expect(norm(screen.getByTestId("position-market-value").textContent ?? "")).toBe(
-      norm(formatMinor(27_495_000, "RUB")),
-    );
+    expect(
+      norm(screen.getByTestId("position-market-value").textContent ?? ""),
+    ).toBe(norm(formatMinor(27_495_000, "RUB")));
     const priceLine = screen.getByTestId("position-price");
     expect(norm(priceLine.textContent ?? "")).toBe("305,50 $");
     // The one wrong sign that would look plausible: the valuation's own, taken
@@ -910,15 +1307,16 @@ describe("PositionsTable", () => {
     );
 
     const priceLine = screen.getByTestId("position-price");
-    expect(norm(priceLine.textContent ?? "")).toBe("95,20 %");
     // The row where a bond has BOTH candidate currencies filled in — the
     // position's own on the valuation, the face value's on the source — and
-    // the price belongs to neither of them (#76). It is still a percentage.
+    // the percentage belongs to neither of them (#76). The money beside it
+    // belongs to the FACE VALUE's currency, which is where the server struck
+    // it, and which is why the dollar of this position is nowhere on the line.
+    expect(norm(priceLine.textContent ?? "")).toBe("952,00 ₽ · 95,20 %");
     expect(priceLine.textContent).not.toContain("$");
-    expect(priceLine.textContent).not.toContain("₽");
     expect(norm(priceLine.getAttribute("title") ?? "")).toBe(
       norm(
-        `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${BOND_PRICE_NOTE}\n${PRICE_VALUATION_NOTE}\nПересчитано из ${sourceAmount}`,
+        `Цена на 20.07.2026\n${PRICE_SESSION_NOTE}\n${BOND_PRICE_NOTE}\n${BOND_MONEY_NOTE}\n${PRICE_VALUATION_NOTE}\nПересчитано из ${sourceAmount}`,
       ),
     );
   });
@@ -926,15 +1324,21 @@ describe("PositionsTable", () => {
   it("omits the percentage (but still shows the amount) when cost is 0", () => {
     wrap(
       <PositionsTable
-        positions={[makePosition({ cost_minor: 0, unrealized_pnl_minor: 1_000 })]}
+        positions={[
+          makePosition({ cost_minor: 0, unrealized_pnl_minor: 1_000 }),
+        ]}
         mode="native"
         baseCurrency="RUB"
       />,
     );
 
     const amount = screen.getByTestId("position-profit-amount");
-    expect(norm(amount.textContent ?? "")).toBe(norm(formatMinor(1_000, "USD")));
-    expect(screen.queryByTestId("position-profit-percent")).not.toBeInTheDocument();
+    expect(norm(amount.textContent ?? "")).toBe(
+      norm(formatMinor(1_000, "USD")),
+    );
+    expect(
+      screen.queryByTestId("position-profit-percent"),
+    ).not.toBeInTheDocument();
   });
 
   describe("base mode", () => {
@@ -949,8 +1353,8 @@ describe("PositionsTable", () => {
               in_base: {
                 cost_minor: 2_275_000,
                 market_value_minor: 2_780_050,
-                settled_minor: null,
-                total_minor: null,
+                settled_minor: 9_100,
+                total_minor: 236_600,
                 unrealized_pnl_minor: 227_500,
                 income_minor: 9_100,
                 currency: "RUB",
@@ -966,15 +1370,15 @@ describe("PositionsTable", () => {
       expect(norm(screen.getByTestId("position-cost").textContent ?? "")).toBe(
         norm(formatMinor(2_275_000, "RUB")),
       );
-      expect(norm(screen.getByTestId("position-market-value").textContent ?? "")).toBe(
-        norm(formatMinor(2_780_050, "RUB")),
-      );
-      expect(norm(screen.getByTestId("position-profit-amount").textContent ?? "")).toBe(
-        norm(formatMinor(227_500, "RUB")),
-      );
-      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
-        norm(formatMinor(9_100, "RUB")),
-      );
+      expect(
+        norm(screen.getByTestId("position-market-value").textContent ?? ""),
+      ).toBe(norm(formatMinor(2_780_050, "RUB")));
+      expect(
+        norm(screen.getByTestId("position-profit-amount").textContent ?? ""),
+      ).toBe(norm(formatMinor(227_500, "RUB")));
+      expect(
+        norm(screen.getByTestId("position-settled").textContent ?? ""),
+      ).toBe(norm(formatMinor(9_100, "RUB")));
       // No "not converted" indicators anywhere — every figure had a rate.
       // (Checked by test id, not by text: the marker is an icon whose
       // wording lives in a title attribute, so a text query can never see it
@@ -983,9 +1387,11 @@ describe("PositionsTable", () => {
         "position-cost",
         "position-market-value",
         "position-profit-amount",
-        "position-income",
+        "position-settled",
       ]) {
-        expect(screen.queryByTestId(`${testId}-not-converted`)).not.toBeInTheDocument();
+        expect(
+          screen.queryByTestId(`${testId}-not-converted`),
+        ).not.toBeInTheDocument();
       }
     });
 
@@ -1022,9 +1428,9 @@ describe("PositionsTable", () => {
         />,
       );
 
-      expect(norm(screen.getByTestId("position-profit-percent").textContent ?? "")).toBe(
-        norm("+10,0 %"),
-      );
+      expect(
+        norm(screen.getByTestId("position-profit-percent").textContent ?? ""),
+      ).toBe(norm("+10,0 %"));
     });
 
     it("omits the percentage when profit stays native while cost converts", () => {
@@ -1060,11 +1466,15 @@ describe("PositionsTable", () => {
       // The amount itself is still shown, honestly, in its own currency —
       // and it is all that is shown, the not-converted sentence being a
       // tooltip and a screen-reader-only copy of it (#31).
-      expect(norm(visibleText(screen.getByTestId("position-profit-amount")))).toBe(
-        norm(formatMinor(25_000, "USD")),
-      );
-      expect(screen.getByTestId("position-profit-amount-not-converted")).toBeInTheDocument();
-      expect(screen.queryByTestId("position-profit-percent")).not.toBeInTheDocument();
+      expect(
+        norm(visibleText(screen.getByTestId("position-profit-amount"))),
+      ).toBe(norm(formatMinor(25_000, "USD")));
+      expect(
+        screen.getByTestId("position-profit-amount-not-converted"),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByTestId("position-profit-percent"),
+      ).not.toBeInTheDocument();
     });
 
     it("shows the native amounts plus a not-converted indicator on every money cell when in_base is null and the currency differs from base", () => {
@@ -1086,26 +1496,32 @@ describe("PositionsTable", () => {
       );
 
       // Honest native fallback everywhere — no dash, no fabricated zero.
-      expect(norm(screen.getByTestId("position-cost").textContent ?? "")).toContain(
-        norm(formatMinor(250_000, "USD")),
-      );
-      expect(norm(screen.getByTestId("position-market-value").textContent ?? "")).toContain(
-        norm(formatMinor(305_50, "USD")),
-      );
-      expect(norm(screen.getByTestId("position-profit-amount").textContent ?? "")).toContain(
-        norm(formatMinor(25_000, "USD")),
-      );
-      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toContain(
-        norm(formatMinor(1_000, "USD")),
-      );
+      expect(
+        norm(screen.getByTestId("position-cost").textContent ?? ""),
+      ).toContain(norm(formatMinor(250_000, "USD")));
+      expect(
+        norm(screen.getByTestId("position-market-value").textContent ?? ""),
+      ).toContain(norm(formatMinor(305_50, "USD")));
+      expect(
+        norm(screen.getByTestId("position-profit-amount").textContent ?? ""),
+      ).toContain(norm(formatMinor(25_000, "USD")));
+      expect(
+        norm(screen.getByTestId("position-settled").textContent ?? ""),
+      ).toContain(norm(formatMinor(1_000, "USD")));
 
       expect(screen.getByTestId("position-cost-not-converted")).toHaveAttribute(
         "title",
         CAPTION.noRateLotDate,
       );
-      expect(screen.getByTestId("position-market-value-not-converted")).toBeInTheDocument();
-      expect(screen.getByTestId("position-profit-amount-not-converted")).toBeInTheDocument();
-      expect(screen.getByTestId("position-income-not-converted")).toBeInTheDocument();
+      expect(
+        screen.getByTestId("position-market-value-not-converted"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId("position-profit-amount-not-converted"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId("position-settled-not-converted"),
+      ).toBeInTheDocument();
     });
 
     // #66. Four different things stop in_base, the server names the one it
@@ -1120,7 +1536,9 @@ describe("PositionsTable", () => {
       // Unmounts whatever a previous call rendered first: a case that asks for
       // several gaps in a row would otherwise leave two tables in one document
       // and every getByTestId below would find two elements.
-      function captionsFor(gap: NonNullable<Position["in_base_gap"]>): string[] {
+      function captionsFor(
+        gap: NonNullable<Position["in_base_gap"]>,
+      ): string[] {
         cleanup();
         wrap(
           <PositionsTable
@@ -1136,7 +1554,9 @@ describe("PositionsTable", () => {
             baseCurrency="RUB"
           />,
         );
-        return ROW_MARKERS.map((id) => screen.getByTestId(id).getAttribute("title") ?? "");
+        return ROW_MARKERS.map(
+          (id) => screen.getByTestId(id).getAttribute("title") ?? "",
+        );
       }
 
       it("says an unrecorded purchase date, and does not promise it will resolve on its own", () => {
@@ -1201,7 +1621,11 @@ describe("PositionsTable", () => {
         // rate turns up, the figure follows. That much this program does
         // guarantee, since every request recomputes from whatever rates exist
         // at the time.
-        for (const gap of ["no_rate_lot_date", "no_rate_income_date", "no_rate_today"] as const) {
+        for (const gap of [
+          "no_rate_lot_date",
+          "no_rate_income_date",
+          "no_rate_today",
+        ] as const) {
           const [cost] = captionsFor(gap);
           expect(cost).toContain("Если курс появится при обновлении курсов");
           // The bare promise, in the exact shape it had.
@@ -1246,7 +1670,10 @@ describe("PositionsTable", () => {
               in_base_gap: "no_rate_lot_date",
             }),
             makePosition({
-              instrument: { ...makePosition().instrument, id: "instr-flag-off" },
+              instrument: {
+                ...makePosition().instrument,
+                id: "instr-flag-off",
+              },
               currency: "USD",
               has_undated_lots: false,
               in_base: null,
@@ -1258,7 +1685,9 @@ describe("PositionsTable", () => {
         />,
       );
 
-      const [flagOn, flagOff] = screen.getAllByTestId("position-cost-not-converted");
+      const [flagOn, flagOff] = screen.getAllByTestId(
+        "position-cost-not-converted",
+      );
       expect(flagOn).toHaveAttribute("title", CAPTION.noRateLotDate);
       expect(flagOff).toHaveAttribute("title", CAPTION.undatedLot);
     });
@@ -1274,7 +1703,10 @@ describe("PositionsTable", () => {
         <PositionsTable
           positions={[
             makePosition({
-              instrument: { ...makePosition().instrument, id: "instr-unknown-gap" },
+              instrument: {
+                ...makePosition().instrument,
+                id: "instr-unknown-gap",
+              },
               currency: "USD",
               in_base: null,
               // Deliberately outside the generated union — this is JSON off the
@@ -1293,7 +1725,9 @@ describe("PositionsTable", () => {
         />,
       );
 
-      for (const marker of screen.getAllByTestId("position-cost-not-converted")) {
+      for (const marker of screen.getAllByTestId(
+        "position-cost-not-converted",
+      )) {
         expect(marker).toHaveAttribute("title", CAPTION.general);
       }
       // #105, asserted as the property and not only as the string. The
@@ -1308,7 +1742,9 @@ describe("PositionsTable", () => {
       expect(CAPTION.general).toContain("не посчиталась");
       // Still marked, still showing the native figure: degrading the wording
       // must not degrade the disclosure.
-      expect(screen.getAllByTestId("position-income-not-converted")).toHaveLength(2);
+      expect(
+        screen.getAllByTestId("position-settled-not-converted"),
+      ).toHaveLength(2);
     });
 
     it("shows the plain native amounts with no indicator when the position's currency already is the base currency", () => {
@@ -1332,10 +1768,18 @@ describe("PositionsTable", () => {
       expect(norm(screen.getByTestId("position-cost").textContent ?? "")).toBe(
         norm(formatMinor(250_000, "RUB")),
       );
-      expect(screen.queryByTestId("position-cost-not-converted")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("position-market-value-not-converted")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("position-profit-amount-not-converted")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("position-income-not-converted")).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("position-cost-not-converted"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("position-market-value-not-converted"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("position-profit-amount-not-converted"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("position-settled-not-converted"),
+      ).not.toBeInTheDocument();
     });
 
     it("gives the valuation its own cause even when the position's currency already is the base currency", () => {
@@ -1369,14 +1813,25 @@ describe("PositionsTable", () => {
 
       // Cost/income/profit need no conversion at all — no marker on any of
       // them.
-      expect(screen.queryByTestId("position-cost-not-converted")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("position-profit-amount-not-converted")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("position-income-not-converted")).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("position-cost-not-converted"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("position-profit-amount-not-converted"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("position-settled-not-converted"),
+      ).not.toBeInTheDocument();
 
       // The valuation alone carries a marker, and it names its OWN cause —
       // not the general phrase the row would otherwise fall back to.
-      const valuationMarker = screen.getByTestId("position-market-value-not-converted");
-      expect(valuationMarker).toHaveAttribute("title", CAPTION.valuationCurrency);
+      const valuationMarker = screen.getByTestId(
+        "position-market-value-not-converted",
+      );
+      expect(valuationMarker).toHaveAttribute(
+        "title",
+        CAPTION.valuationCurrency,
+      );
       expect(valuationMarker.getAttribute("title")).not.toBe(CAPTION.general);
     });
 
@@ -1397,8 +1852,8 @@ describe("PositionsTable", () => {
               in_base: {
                 cost_minor: 2_275_000,
                 market_value_minor: 2_780_050,
-                settled_minor: null,
-                total_minor: null,
+                settled_minor: 9_100,
+                total_minor: 236_600,
                 unrealized_pnl_minor: 227_500,
                 income_minor: 9_100,
                 currency: "RUB",
@@ -1419,9 +1874,19 @@ describe("PositionsTable", () => {
         "title",
         "Пересчитано по курсам на даты покупок, а не по текущему",
       );
-      expect(screen.getByTestId("position-income")).toHaveAttribute(
+      // The settled figure is realized result plus income, and every term of it
+      // is a past event with a date of its own — so the sentence names all
+      // three kinds of date rather than the payments alone, which was the whole
+      // of this cell back when it showed nothing but income.
+      expect(screen.getByTestId("position-settled")).toHaveAttribute(
         "title",
-        "Пересчитано по курсам на даты выплат, а не по текущему",
+        "Пересчитано по курсам на даты событий — покупок, продаж и выплат, — а не по текущему",
+      );
+      // The total adds the unrealized half, which is today's valuation at
+      // today's rate: one sentence over both halves would be false about one.
+      expect(screen.getByTestId("position-total")).toHaveAttribute(
+        "title",
+        "Половины пересчитаны по разным курсам: свершившееся — по курсам на даты событий, рыночная оценка внутри — по сегодняшнему",
       );
       expect(screen.getByTestId("position-profit-amount")).toHaveAttribute(
         "title",
@@ -1429,8 +1894,15 @@ describe("PositionsTable", () => {
       );
       // The valuation's rate date must not leak into the three tooltips that
       // it says nothing about.
-      for (const testId of ["position-cost", "position-income", "position-profit-amount"]) {
-        expect(screen.getByTestId(testId).getAttribute("title")).not.toMatch(/19\.07\.2026/);
+      for (const testId of [
+        "position-cost",
+        "position-settled",
+        "position-total",
+        "position-profit-amount",
+      ]) {
+        expect(screen.getByTestId(testId).getAttribute("title")).not.toMatch(
+          /19\.07\.2026/,
+        );
       }
       // Tooltips only — no date ever becomes cell text.
       expect(screen.queryByText(/19\.07\.2026/)).not.toBeInTheDocument();
@@ -1455,13 +1927,22 @@ describe("PositionsTable", () => {
         cleanup();
         wrap(
           <PositionsTable
-            positions={[makePosition({ currency: "USD", in_base: null, in_base_gap: gap })]}
+            positions={[
+              makePosition({
+                currency: "USD",
+                in_base: null,
+                in_base_gap: gap,
+              }),
+            ]}
             mode="base"
             baseCurrency="RUB"
           />,
         );
 
-        const title = screen.getByTestId("position-cost-not-converted").getAttribute("title") ?? "";
+        const title =
+          screen
+            .getByTestId("position-cost-not-converted")
+            .getAttribute("title") ?? "";
         expect(title).not.toContain("счёт");
         expect(title).not.toContain("счет");
       }
@@ -1469,13 +1950,17 @@ describe("PositionsTable", () => {
       cleanup();
       wrap(
         <PositionsTable
-          positions={[makePosition({ currency: "USD", in_base: null, in_base_gap: null })]}
+          positions={[
+            makePosition({ currency: "USD", in_base: null, in_base_gap: null }),
+          ]}
           mode="base"
           baseCurrency="RUB"
         />,
       );
       const generalTitle =
-        screen.getByTestId("position-cost-not-converted").getAttribute("title") ?? "";
+        screen
+          .getByTestId("position-cost-not-converted")
+          .getAttribute("title") ?? "";
       expect(generalTitle).toContain("в исходной валюте");
       expect(generalTitle).not.toContain("счёт");
       expect(generalTitle).not.toContain("счет");
@@ -1537,7 +2022,9 @@ describe("PositionsTable", () => {
       // 90 000,00 ₽ (that same figure times the USD rate) passed off as base
       // currency, and never a dash or a zero.
       const marketValue = screen.getByTestId("position-market-value");
-      expect(norm(marketValue.textContent ?? "")).toContain(norm(formatMinor(100_000, "EUR")));
+      expect(norm(marketValue.textContent ?? "")).toContain(
+        norm(formatMinor(100_000, "EUR")),
+      );
       expect(marketValue.textContent).not.toMatch(/₽/);
       // Issue #42: the marker must name the cause that IS the cause. The rate
       // that is missing is the link from EUR to the position's USD, without
@@ -1546,12 +2033,19 @@ describe("PositionsTable", () => {
       // this ONE figure: the cost in the very same row converted into rubles
       // above. "Нет курса" is the row's marker and would say the row could not
       // be converted at all, which the cell beside it disproves.
-      const valuationMarker = screen.getByTestId("position-market-value-not-converted");
-      expect(valuationMarker).toHaveAttribute("title", CAPTION.valuationCurrency);
+      const valuationMarker = screen.getByTestId(
+        "position-market-value-not-converted",
+      );
+      expect(valuationMarker).toHaveAttribute(
+        "title",
+        CAPTION.valuationCurrency,
+      );
       expect(valuationMarker.getAttribute("title")).not.toBe(CAPTION.general);
       // Profit is derived from that valuation, so it stays an honest dash.
       expect(screen.getByTestId("position-profit-dash")).toHaveTextContent("—");
-      expect(screen.queryByTestId("position-profit-amount")).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("position-profit-amount"),
+      ).not.toBeInTheDocument();
     });
 
     it("keeps the row's own reason on the cells the valuation's reason is not true of", () => {
@@ -1581,19 +2075,17 @@ describe("PositionsTable", () => {
       );
 
       // The nearer, cell-specific cause wins on the cell it belongs to.
-      expect(screen.getByTestId("position-market-value-not-converted")).toHaveAttribute(
-        "title",
-        CAPTION.valuationCurrency,
-      );
+      expect(
+        screen.getByTestId("position-market-value-not-converted"),
+      ).toHaveAttribute("title", CAPTION.valuationCurrency);
       // ...and does not leak onto the cells it says nothing about.
       expect(screen.getByTestId("position-cost-not-converted")).toHaveAttribute(
         "title",
         CAPTION.undatedLot,
       );
-      expect(screen.getByTestId("position-income-not-converted")).toHaveAttribute(
-        "title",
-        CAPTION.undatedLot,
-      );
+      expect(
+        screen.getByTestId("position-settled-not-converted"),
+      ).toHaveAttribute("title", CAPTION.undatedLot);
     });
 
     it("gives the valuation the row's own cause when the valuation itself converted fine", () => {
@@ -1622,11 +2114,17 @@ describe("PositionsTable", () => {
         />,
       );
 
-      const valuationMarker = screen.getByTestId("position-market-value-not-converted");
+      const valuationMarker = screen.getByTestId(
+        "position-market-value-not-converted",
+      );
       expect(valuationMarker).toHaveAttribute("title", CAPTION.noRateLotDate);
-      expect(valuationMarker.getAttribute("title")).not.toBe(CAPTION.valuationCurrency);
+      expect(valuationMarker.getAttribute("title")).not.toBe(
+        CAPTION.valuationCurrency,
+      );
       expect(valuationMarker.getAttribute("title")).not.toBe(CAPTION.general);
-      expect(valuationMarker.getAttribute("title")).not.toBe(CAPTION.noRateToday);
+      expect(valuationMarker.getAttribute("title")).not.toBe(
+        CAPTION.noRateToday,
+      );
     });
 
     it("captions the valuation from market_value_gap, never from the two currency codes", () => {
@@ -1658,9 +2156,16 @@ describe("PositionsTable", () => {
         />,
       );
 
-      const valuationMarker = screen.getByTestId("position-market-value-not-converted");
-      expect(valuationMarker).toHaveAttribute("title", CAPTION.noRateIncomeDate);
-      expect(valuationMarker.getAttribute("title")).not.toBe(CAPTION.valuationCurrency);
+      const valuationMarker = screen.getByTestId(
+        "position-market-value-not-converted",
+      );
+      expect(valuationMarker).toHaveAttribute(
+        "title",
+        CAPTION.noRateIncomeDate,
+      );
+      expect(valuationMarker.getAttribute("title")).not.toBe(
+        CAPTION.valuationCurrency,
+      );
     });
 
     it("falls back to the row's cause for a valuation gap this build cannot name", () => {
@@ -1673,7 +2178,10 @@ describe("PositionsTable", () => {
         <PositionsTable
           positions={[
             makePosition({
-              instrument: { ...makePosition().instrument, id: "instr-row-named" },
+              instrument: {
+                ...makePosition().instrument,
+                id: "instr-row-named",
+              },
               currency: "USD",
               market_value_minor: 100_000,
               market_value_currency: "EUR",
@@ -1684,7 +2192,10 @@ describe("PositionsTable", () => {
                 "no_rate_lunar_settlement" as Position["market_value_gap"],
             }),
             makePosition({
-              instrument: { ...makePosition().instrument, id: "instr-row-unnamed" },
+              instrument: {
+                ...makePosition().instrument,
+                id: "instr-row-unnamed",
+              },
               currency: "USD",
               market_value_minor: 100_000,
               market_value_currency: "EUR",
@@ -1742,9 +2253,15 @@ describe("PositionsTable", () => {
       );
 
       const marketValue = screen.getByTestId("position-market-value");
-      expect(norm(marketValue.textContent ?? "")).toContain(norm(formatMinor(9_000_000, "RUB")));
-      expect(screen.queryByTestId("position-market-value-not-converted")).not.toBeInTheDocument();
-      expect(screen.queryByTitle(/в другой валюте, чем позиция/)).not.toBeInTheDocument();
+      expect(norm(marketValue.textContent ?? "")).toContain(
+        norm(formatMinor(9_000_000, "RUB")),
+      );
+      expect(
+        screen.queryByTestId("position-market-value-not-converted"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTitle(/в другой валюте, чем позиция/),
+      ).not.toBeInTheDocument();
       // The cells that ARE in the position's currency keep the row's own
       // reason, which here is a purchase day's missing rate and nothing to do
       // with chains.
@@ -1796,14 +2313,24 @@ describe("PositionsTable", () => {
       });
 
       const { rerender } = wrap(
-        <PositionsTable positions={[position]} mode="native" baseCurrency="RUB" />,
+        <PositionsTable
+          positions={[position]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
       );
       expect(screen.getByTestId("position-profit-percent")).toHaveAttribute(
         "title",
         "Доходность в USD. В другой валюте ответ другой — вплоть до противоположного знака: это два разных вопроса, а не расхождение",
       );
 
-      rerender(<PositionsTable positions={[position]} mode="base" baseCurrency="RUB" />);
+      rerender(
+        <PositionsTable
+          positions={[position]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
       expect(screen.getByTestId("position-profit-percent")).toHaveAttribute(
         "title",
         "Доходность в RUB. В другой валюте ответ другой — вплоть до противоположного знака: это два разных вопроса, а не расхождение",
@@ -1876,25 +2403,39 @@ describe("PositionsTable", () => {
       });
 
       const { rerender } = wrap(
-        <PositionsTable positions={[position]} mode="native" baseCurrency="RUB" />,
+        <PositionsTable
+          positions={[position]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
       );
 
       const nativeAmount = screen.getByTestId("position-profit-amount");
-      expect(norm(nativeAmount.textContent ?? "")).toBe(norm(formatMinor(10_000, "USD")));
-      expect(nativeAmount.className).toContain("text-emerald-500");
-      expect(norm(screen.getByTestId("position-profit-percent").textContent ?? "")).toBe(
-        norm("+10,0 %"),
+      expect(norm(nativeAmount.textContent ?? "")).toBe(
+        norm(formatMinor(10_000, "USD")),
       );
+      expect(nativeAmount.className).toContain("text-emerald-500");
+      expect(
+        norm(screen.getByTestId("position-profit-percent").textContent ?? ""),
+      ).toBe(norm("+10,0 %"));
 
-      rerender(<PositionsTable positions={[position]} mode="base" baseCurrency="RUB" />);
+      rerender(
+        <PositionsTable
+          positions={[position]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
+      );
 
       const baseAmount = screen.getByTestId("position-profit-amount");
-      expect(norm(baseAmount.textContent ?? "")).toBe(norm(formatMinor(-4_500_000, "RUB")));
+      expect(norm(baseAmount.textContent ?? "")).toBe(
+        norm(formatMinor(-4_500_000, "RUB")),
+      );
       expect(baseAmount.className).toContain("text-red-500");
       expect(baseAmount.className).not.toContain("text-emerald-500");
-      expect(norm(screen.getByTestId("position-profit-percent").textContent ?? "")).toBe(
-        norm("-45,0 %"),
-      );
+      expect(
+        norm(screen.getByTestId("position-profit-percent").textContent ?? ""),
+      ).toBe(norm("-45,0 %"));
     });
   });
 
@@ -1912,8 +2453,12 @@ describe("PositionsTable", () => {
     // sits beside the number is the whole point, and a test that fetched it
     // through the component's own lookup would agree with the component
     // whatever it picked (same rule as CAPTION above).
+    // "В сумму выше входит доход" and not "сумма выше — это доход": the cell
+    // above this line is «Зафиксировано» now, which is the realized result PLUS
+    // the income. The old wording named the whole cell as income and was made
+    // false by the column that replaced it.
     const OTHER_CURRENCY_HINT =
-      "Доход, пришедший не в валюте позиции: каждая сумма — в своей валюте. С суммой выше она не складывается и её пересчётом не является — это разные деньги. Сумма выше — это доход только в валюте позиции, и ноль в ней не значит, что дохода не было. По юаневой облигации купон может прийти рублями, по долларовой акции — дивиденд рублями: у российских брокеров это обычное дело. Отрицательная сумма — тоже ответ: удержанный налог вычитается в своей валюте, и если выплат в ней не было, остаётся минус";
+      "Доход, пришедший не в валюте позиции: каждая сумма — в своей валюте. С суммой выше она не складывается и её пересчётом не является — это разные деньги. В сумму выше входит доход только в валюте позиции, и ноль в ней не значит, что дохода не было. По юаневой облигации купон может прийти рублями, по долларовой акции — дивиденд рублями: у российских брокеров это обычное дело. Отрицательная сумма — тоже ответ: удержанный налог вычитается в своей валюте, и если выплат в ней не было, остаётся минус";
 
     it("draws the ruble coupons of a yuan bond instead of leaving a bare 0 ¥", () => {
       // The live case from the owner's own account: bought for yuan, paid in
@@ -1932,18 +2477,22 @@ describe("PositionsTable", () => {
         />,
       );
 
-      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
-        norm(formatMinor(0, "CNY")),
-      );
+      expect(
+        norm(screen.getByTestId("position-settled").textContent ?? ""),
+      ).toBe(norm(formatMinor(0, "CNY")));
       const other = screen.getByTestId("position-income-other-currency");
-      expect(norm(other.textContent ?? "")).toBe(norm(`ещё ${formatMinor(135_075, "RUB")}`));
+      expect(norm(other.textContent ?? "")).toBe(
+        norm(`ещё ${formatMinor(135_075, "RUB")}`),
+      );
       expect(other).toHaveAttribute("title", OTHER_CURRENCY_HINT);
       // The two figures are never welded into one: the cell above stays 0,00 ¥
       // and the kopecks below keep the ruble sign. Printing them under the
       // position's own sign instead — the one-character mistake this line
       // guards — would put 135 075 kopecks behind a yuan sign and make the row
       // a hundred-and-a-bit times richer than it is.
-      expect(norm(other.textContent ?? "")).not.toContain(norm(formatMinor(135_075, "CNY")));
+      expect(norm(other.textContent ?? "")).not.toContain(
+        norm(formatMinor(135_075, "CNY")),
+      );
     });
 
     it("lists two foreign currencies side by side, in the order the server sent them", () => {
@@ -1965,13 +2514,20 @@ describe("PositionsTable", () => {
         />,
       );
 
-      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
-        norm(formatMinor(500, "CNY")),
-      );
+      expect(
+        norm(screen.getByTestId("position-settled").textContent ?? ""),
+      ).toBe(norm(formatMinor(500, "CNY")));
       // The position's own currency is not repeated below the figure that
       // already carries it, and the other two keep the server's order.
-      expect(norm(screen.getByTestId("position-income-other-currency").textContent ?? "")).toBe(
-        norm(`ещё ${formatMinor(135_075, "RUB")} · ${formatMinor(4_200, "USD")}`),
+      expect(
+        norm(
+          screen.getByTestId("position-income-other-currency").textContent ??
+            "",
+        ),
+      ).toBe(
+        norm(
+          `ещё ${formatMinor(135_075, "RUB")} · ${formatMinor(4_200, "USD")}`,
+        ),
       );
     });
 
@@ -1990,9 +2546,9 @@ describe("PositionsTable", () => {
         />,
       );
 
-      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
-        norm(formatMinor(5_000, "USD")),
-      );
+      expect(
+        norm(screen.getByTestId("position-settled").textContent ?? ""),
+      ).toBe(norm(formatMinor(5_000, "USD")));
       expect(screen.queryByTestId("position-income-other-currency")).toBeNull();
     });
 
@@ -2000,16 +2556,20 @@ describe("PositionsTable", () => {
       wrap(
         <PositionsTable
           positions={[
-            makePosition({ currency: "USD", income_minor: 0, income_by_currency: [] }),
+            makePosition({
+              currency: "USD",
+              income_minor: 0,
+              income_by_currency: [],
+            }),
           ]}
           mode="native"
           baseCurrency="RUB"
         />,
       );
 
-      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
-        norm(formatMinor(0, "USD")),
-      );
+      expect(
+        norm(screen.getByTestId("position-settled").textContent ?? ""),
+      ).toBe(norm(formatMinor(0, "USD")));
       expect(screen.queryByTestId("position-income-other-currency")).toBeNull();
     });
 
@@ -2029,8 +2589,8 @@ describe("PositionsTable", () => {
         in_base: {
           cost_minor: 2_000_000,
           market_value_minor: 2_200_000,
-          settled_minor: null,
-          total_minor: null,
+          settled_minor: 141_075,
+          total_minor: 341_075,
           unrealized_pnl_minor: 200_000,
           income_minor: 141_075,
           currency: "RUB",
@@ -2039,14 +2599,24 @@ describe("PositionsTable", () => {
       });
 
       const { rerender } = wrap(
-        <PositionsTable positions={[position]} mode="native" baseCurrency="RUB" />,
+        <PositionsTable
+          positions={[position]}
+          mode="native"
+          baseCurrency="RUB"
+        />,
       );
       expect(screen.getByTestId("position-income-other-currency")).toBeTruthy();
 
-      rerender(<PositionsTable positions={[position]} mode="base" baseCurrency="RUB" />);
-      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
-        norm(formatMinor(141_075, "RUB")),
+      rerender(
+        <PositionsTable
+          positions={[position]}
+          mode="base"
+          baseCurrency="RUB"
+        />,
       );
+      expect(
+        norm(screen.getByTestId("position-settled").textContent ?? ""),
+      ).toBe(norm(formatMinor(141_075, "RUB")));
       expect(screen.queryByTestId("position-income-other-currency")).toBeNull();
     });
 
@@ -2073,16 +2643,19 @@ describe("PositionsTable", () => {
         />,
       );
 
-      expect(norm(screen.getByTestId("position-income").textContent ?? "")).toBe(
-        norm(formatMinor(0, "RUB")),
-      );
-      expect(norm(screen.getByTestId("position-income-other-currency").textContent ?? "")).toBe(
-        norm(`ещё ${formatMinor(5_000, "USD")}`),
-      );
+      expect(
+        norm(screen.getByTestId("position-settled").textContent ?? ""),
+      ).toBe(norm(formatMinor(0, "RUB")));
+      expect(
+        norm(
+          screen.getByTestId("position-income-other-currency").textContent ??
+            "",
+        ),
+      ).toBe(norm(`ещё ${formatMinor(5_000, "USD")}`));
       // Nothing was withheld here — there was nothing to convert — so the cell
       // carries no "could not convert" marker to explain the second line
       // away.
-      expect(screen.queryByTestId("position-income-not-converted")).toBeNull();
+      expect(screen.queryByTestId("position-settled-not-converted")).toBeNull();
     });
 
     it("keeps the second line in base mode when the conversion could not be struck", () => {
@@ -2106,16 +2679,18 @@ describe("PositionsTable", () => {
         />,
       );
 
-      expect(norm(visibleText(screen.getByTestId("position-income")))).toBe(
+      expect(norm(visibleText(screen.getByTestId("position-settled")))).toBe(
         norm(formatMinor(0, "CNY")),
       );
-      expect(norm(screen.getByTestId("position-income-other-currency").textContent ?? "")).toBe(
-        norm(`ещё ${formatMinor(135_075, "RUB")}`),
-      );
-      expect(screen.getByTestId("position-income-not-converted")).toHaveAttribute(
-        "title",
-        CAPTION.noRateLotDate,
-      );
+      expect(
+        norm(
+          screen.getByTestId("position-income-other-currency").textContent ??
+            "",
+        ),
+      ).toBe(norm(`ещё ${formatMinor(135_075, "RUB")}`));
+      expect(
+        screen.getByTestId("position-settled-not-converted"),
+      ).toHaveAttribute("title", CAPTION.noRateLotDate);
     });
   });
   // #31. Every hint on this screen about a figure that is missing or could not
@@ -2178,8 +2753,13 @@ describe("PositionsTable", () => {
       // speech and needs no second copy to get it. The tooltip keeps the break
       // because a tooltip renders "\n" as a line; both come from the same
       // value, so they cannot come to say different things.
-      expect(announcedText(dash)).toBe(`${PROFIT_NEEDS_VALUATION} ${NO_VALUATION.noQuote}`);
-      expect(dash).toHaveAttribute("title", `${PROFIT_NEEDS_VALUATION}\n${NO_VALUATION.noQuote}`);
+      expect(announcedText(dash)).toBe(
+        `${PROFIT_NEEDS_VALUATION} ${NO_VALUATION.noQuote}`,
+      );
+      expect(dash).toHaveAttribute(
+        "title",
+        `${PROFIT_NEEDS_VALUATION}\n${NO_VALUATION.noQuote}`,
+      );
     });
 
     it("announces why a figure is shown in its own currency rather than the base one", () => {

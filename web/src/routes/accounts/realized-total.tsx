@@ -2,7 +2,10 @@ import { useTranslation } from "react-i18next";
 import { formatMinor, signClass } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
-import type { RealizedGap, RealizedTotal as RealizedTotalPayload } from "@/api/positions";
+import type {
+  RealizedGap,
+  RealizedTotal as RealizedTotalPayload,
+} from "@/api/positions";
 
 // assertUnreachable is gapWording's runtime backstop for a RealizedGap value
 // this build cannot name. TypeScript proves the switch below exhaustive over
@@ -56,7 +59,7 @@ function gapWording(
   }
 }
 
-// The account header's "Зафиксировано" line: what the closed deals have
+// The account header's "Реализованная прибыль" line: what the closed deals have
 // actually locked in, across every position of the account.
 //
 // It adds nothing. The server publishes both forms of the total — one figure
@@ -66,9 +69,13 @@ function gapWording(
 // figure has a single definition and the rounding and gap policies behind it
 // can change in one place (see RealizedTotal in the API contract).
 //
-// Deliberately NOT a column in the positions table — the owner removed the
-// per-row "Реализовано" as visual noise, and that decision stands; one figure
-// in the header answers the question without putting it back into every row.
+// It is the ACCOUNT's figure, and the reason it is not the same word as the
+// table's "Зафиксировано" column is that it is not the same quantity: this is
+// closed deals alone, while that column adds the payments the paper made. The
+// row below does show its own realized result, as a second line under the
+// profit rather than a column of its own — the owner removed a "Реализовано"
+// column once as visual noise, and that decision is what keeps it off the
+// header row here.
 //
 // What separates it from the profit in the table is that both of its ends are
 // past events with dates of their own: it will never move again, and in the
@@ -83,12 +90,6 @@ export function RealizedTotal({
   mode: DisplayCurrencyMode;
 }) {
   const { t } = useTranslation();
-  // An account with no positions has nothing to say here — a "0,00" over an
-  // empty account is an answer to a question nobody asked, and by_currency is
-  // empty exactly then. A real zero across real positions IS shown: it is a
-  // fact, and hiding it would be the silence this screen is not allowed to
-  // keep.
-  if (total.by_currency.length === 0) return null;
 
   // In the base currency the response carries either the figure or the reason
   // there is none, never both.
@@ -103,9 +104,18 @@ export function RealizedTotal({
   // all, the line disappears exactly as it does for an account with no
   // positions, and the base-currency mode is where that money is still a
   // figure.
-  const gap = mode === "base" ? total.in_base_gap : null;
-  const figures =
-    mode === "base"
+  // AN ACCOUNT WITH NO CLOSED DEALS AT ALL SAYS NOTHING ABOUT THEM — not even
+  // the base currency's nought, which the server does publish (the sum of no
+  // deals is 0, honestly) and which would otherwise print as a realized result
+  // over an account that has never sold anything. by_currency is empty exactly
+  // in that case, and it is the one field that distinguishes it: a real zero
+  // across real positions has a bucket and IS shown, because nought is a fact
+  // and hiding it would be the silence this screen is not allowed to keep.
+  const anyRealized = total.by_currency.length > 0;
+  const gap = anyRealized && mode === "base" ? total.in_base_gap : null;
+  const figures = !anyRealized
+    ? []
+    : mode === "base"
       ? total.in_base == null
         ? []
         : [{ currency: total.base_currency, amountMinor: total.in_base }]
@@ -117,15 +127,44 @@ export function RealizedTotal({
           }));
 
   const wording = gap ? gapWording(t, gap) : undefined;
-  // Neither a figure nor a wording for the gap that stopped it: nothing this
-  // screen could say would be true. Checked against wording rather than gap
-  // itself — a gap can be non-null yet unnameable (see assertUnreachable),
-  // and a reason invented here is exactly what the named gap exists to
-  // prevent, so that case must fall through to the same blank as no gap at
-  // all rather than render the label over an empty amount.
-  if (!wording && figures.length === 0) return null;
+  // THE TAX THE ACCOUNT ITSELF WAS CHARGED, beside the result it was charged
+  // against. It is not part of any position's figures and never can be — the
+  // broker takes it against the year's accumulated base, not against a paper —
+  // so it stands as its own line rather than being folded into the total above.
+  //
+  // Shown in EVERY mode, unconverted, because that is what it is: money taken
+  // in the currency it was taken in. The realized total beside it converts;
+  // this one has no per-payment dates to convert by and the contract says so.
+  const tax = total.tax_withheld_by_currency.filter(
+    (entry) => entry.amount_minor !== 0,
+  );
+
+  // NOTHING TO SAY, SAID BY SAYING NOTHING. Three ways this line can be empty
+  // and all three are checked together: no figure, no wording for the gap that
+  // stopped one, and no tax withheld. An account with no positions at all
+  // arrives here with all three empty — a "0,00" over an empty account is an
+  // answer to a question nobody asked — while a real zero across real positions
+  // IS a figure and IS shown, because nought is a fact and hiding it would be
+  // the silence this screen is not allowed to keep.
+  //
+  // The tax is checked BESIDE the figures rather than after them, which is the
+  // whole reason this is one guard: the two are independent. A broker that
+  // records the tax on a dividend as its own operation with no paper attached
+  // gives an account a withholding with no realized result anywhere — and an
+  // earlier version of this component returned before it ever looked, so that
+  // money was on the screen nowhere at all.
+  //
+  // Checked against wording rather than gap itself — a gap can be non-null yet
+  // unnameable (see assertUnreachable), and a reason invented here is exactly
+  // what the named gap exists to prevent, so that case must fall through to the
+  // same blank as no gap at all rather than render the label over an empty
+  // amount.
+  if (!wording && figures.length === 0 && tax.length === 0) return null;
   return (
-    <div className="mt-2 flex flex-wrap items-baseline gap-x-2 text-sm" data-testid="realized-total">
+    <div
+      className="mt-2 flex flex-wrap items-baseline gap-x-2 text-sm"
+      data-testid="realized-total"
+    >
       <span
         data-testid="realized-total-label"
         className="text-muted-foreground"
@@ -133,6 +172,19 @@ export function RealizedTotal({
       >
         {t("positions.realizedTitle")}
       </span>
+      {tax.length > 0 && (
+        <span
+          data-testid="realized-total-tax"
+          className="text-muted-foreground"
+          title={t("positions.taxWithheldHint")}
+        >
+          {t("positions.taxWithheld", {
+            amounts: tax
+              .map((entry) => formatMinor(entry.amount_minor, entry.currency))
+              .join(" · "),
+          })}
+        </span>
+      )}
       {wording ? (
         <span
           data-testid="realized-total-gap"
@@ -142,7 +194,10 @@ export function RealizedTotal({
           {wording.text}
         </span>
       ) : (
-        <span data-testid="realized-total-amounts" className="font-medium tabular-nums">
+        <span
+          data-testid="realized-total-amounts"
+          className="font-medium tabular-nums"
+        >
           {figures.map((figure, index) => (
             <span key={figure.currency}>
               {index > 0 && <span className="text-muted-foreground"> · </span>}

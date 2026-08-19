@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Table,
@@ -8,10 +9,19 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { formatMinor, formatPrice, formatPriceIn, signClass } from "@/lib/money";
+import {
+  formatMinor,
+  formatPrice,
+  formatPriceIn,
+  signClass,
+} from "@/lib/money";
 import { formatDate } from "@/lib/dates";
-import { resolveDisplayAmount } from "@/lib/display-amount";
+import {
+  resolveDisplayAmount,
+  resolveOptionalDisplayAmount,
+} from "@/lib/display-amount";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
 import { MoneyCell } from "@/components/money-cell";
 import { unnameableGap } from "@/lib/unnameable-gap";
@@ -46,7 +56,10 @@ import type { InBaseGap, MarketValueGap, Position } from "@/api/positions";
 // Written as a switch over literal keys rather than a lookup table, so every
 // key stays a literal at the t() call site — the only shape
 // scripts/check-i18n.mjs can verify.
-function rowGapTitle(t: (key: string) => string, gap: InBaseGap | null): string {
+function rowGapTitle(
+  t: (key: string) => string,
+  gap: InBaseGap | null,
+): string {
   switch (gap) {
     case "undated_lot":
       return t("positions.notConvertedUndatedLot");
@@ -255,16 +268,48 @@ function priceHint(
   const date = formatDate(position.price_on);
   if (formatted === null || !date) return null;
   let price = formatted;
-  let title = t("positions.priceOn", { date }) + "\n" + t("positions.priceSession");
+  let title =
+    t("positions.priceOn", { date }) + "\n" + t("positions.priceSession");
   // A switch over the instrument's type rather than "bond or else", so the
   // claim each branch makes is made only where it has been checked. Written
   // with literal keys at every t() call site — the only shape
   // scripts/check-i18n.mjs can verify.
   switch (position.instrument.type) {
-    case "bond":
-      price = t("positions.pricePercent", { price: formatted });
+    case "bond": {
+      // MONEY FIRST, THE PERCENT BESIDE IT. A bond is quoted as a percentage
+      // of par, which is what the market trades and what the broker's own app
+      // shows — so the percent stays. But every other figure in the row is
+      // money, and a percent cannot be compared with a basis; the reader was
+      // left multiplying by the face value in their head.
+      //
+      // The face value is a SNAPSHOT taken when the paper was catalogued and
+      // is not refreshed, so on an amortizing bond it drifts. That is not a
+      // new risk introduced here: the market valuation in this very row is
+      // already the same face value times the same percent (see
+      // portfolio.marketValue). This makes an input that was always in use
+      // visible, rather than adding one.
+      //
+      // THE MONEY COMES FROM THE SERVER (price_money_minor), which is where
+      // face x price/100 is multiplied and rounded — once, on the figure that
+      // is published. Multiplying it here would be money arithmetic on the
+      // client, and there is exactly one exemption from that rule in this
+      // program (the profit percentage, which is not money).
+      const perUnitMinor = position.price_money_minor;
+      const faceCurrency = position.instrument.face_currency;
+      const perUnit =
+        perUnitMinor != null && faceCurrency
+          ? formatMinor(perUnitMinor, faceCurrency)
+          : null;
+      price = perUnit
+        ? t("positions.priceMoneyAndPercent", {
+            money: perUnit,
+            price: formatted,
+          })
+        : t("positions.pricePercent", { price: formatted });
       title += "\n" + t("positions.priceIsPercentOfFace");
+      if (perUnit) title += "\n" + t("positions.priceMoneyFromFace");
       break;
+    }
     case "share":
     case "etf": {
       const quoteCurrency =
@@ -275,7 +320,8 @@ function priceHint(
       // string. It falls back to the bare number all the same, because the
       // number is the position's own datum and dropping the line would hide
       // it to protect a sign.
-      if (quoteCurrency) price = formatPriceIn(position.price, quoteCurrency) ?? formatted;
+      if (quoteCurrency)
+        price = formatPriceIn(position.price, quoteCurrency) ?? formatted;
       break;
     }
   }
@@ -283,7 +329,11 @@ function priceHint(
   const sourceCurrency = position.market_value_source_currency;
   const sourceMinor = position.market_value_source_minor;
   if (sourceCurrency != null && sourceMinor != null) {
-    title += "\n" + t("positions.convertedFrom", { amount: formatMinor(sourceMinor, sourceCurrency) });
+    title +=
+      "\n" +
+      t("positions.convertedFrom", {
+        amount: formatMinor(sourceMinor, sourceCurrency),
+      });
   }
   return { price, title };
 }
@@ -330,7 +380,10 @@ function otherCurrencyIncome(position: Position): string | null {
 // Returns null when cost is 0 — there is no honest percentage to show for a
 // division by zero, so the caller omits the line entirely rather than
 // display "Infinity %" or similarly nonsensical output.
-function unrealizedPercent(unrealizedMinor: number, costMinor: number): string | null {
+function unrealizedPercent(
+  unrealizedMinor: number,
+  costMinor: number,
+): string | null {
   if (costMinor === 0) return null;
   const ratio = unrealizedMinor / costMinor;
   return new Intl.NumberFormat("ru-RU", {
@@ -386,230 +439,363 @@ export function PositionsTable({
   // printing it under them would name a date that had no part in the number
   // above it.
   const costConvertedTitle = () => t("positions.convertedAtPurchaseRates");
-  const incomeConvertedTitle = () => t("positions.convertedAtIncomeRates");
+  // EACH CELL NAMES THE RATES BEHIND ITS OWN NUMBER, and the three answers
+  // differ because the figures are made of different things. The settled figure
+  // is realized result plus income: every term is a past event with a date of
+  // its own, so every rate is that date's. The total adds the unrealized half,
+  // which is today's valuation at today's rate — one sentence over both would
+  // be false about one of them. The income line under the settled cell keeps
+  // the payment-rate wording, which is all it is.
+  const settledConvertedTitle = () => t("positions.convertedSettled");
+  const totalConvertedTitle = () => t("positions.convertedTotal");
   const profitConvertedTitle = () => t("positions.convertedProfitMixed");
+
+  // CLOSED ROWS ARE HIDDEN BY DEFAULT AND NEVER IN SILENCE. A position sold out
+  // of keeps a realized result and income that are real history, so it is not
+  // noise — but it is over, and a portfolio of a few holdings should not open
+  // with a screen of them. The count beside the control is what makes hiding
+  // honest: the reader is told a number is missing from the list rather than
+  // discovering it.
+  //
+  // THE TOTALS ARE NOT FILTERED WITH THE ROWS, and the control says so. They
+  // are the account's, computed on the server over every position, and a header
+  // reading «Реализовано 50 000 ₽» over rows that show none of it would look
+  // like an error rather than like the deliberate answer it is.
+  const [showClosed, setShowClosed] = useState(false);
+  const closedCount = positions.filter((p) => p.quantity === "0").length;
+  const shown = showClosed
+    ? positions
+    : positions.filter((p) => p.quantity !== "0");
+
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>{t("positions.columns.instrument")}</TableHead>
-          <TableHead className="text-right">{t("positions.columns.quantity")}</TableHead>
-          <TableHead className="text-right">{t("positions.columns.cost")}</TableHead>
-          <TableHead className="text-right">{t("positions.columns.market")}</TableHead>
-          <TableHead className="text-right">{t("positions.columns.profit")}</TableHead>
-          <TableHead className="text-right">{t("positions.columns.income")}</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {positions.map((position) => {
-          const closed = position.quantity === "0";
-          const unconvertedTitle = rowGapTitle(t, position.in_base_gap);
-          // Market value's currency can differ from the position's own
-          // currency (a bond's face-value currency, for instance), so it is
-          // always formatted with market_value_currency, never `currency`.
-          const marketValueMinor = position.market_value_minor;
-          const marketValueCurrency = position.market_value_currency;
-          const hasMarketValue = marketValueMinor != null && marketValueCurrency != null;
-          // The valuation's own reason, which outranks the row's on its own
-          // cell and nowhere else. The two can be set at once and both be
-          // true — a row stopped by a dateless lot whose valuation is also
-          // stuck in a third currency — and this cell takes the nearer of
-          // them, while the rest of the row keeps the one that is true of it.
-          //
-          // WHICH FALLBACK depends on whether there is a figure in the cell,
-          // and the two cases are answered by the same lookup so that one
-          // vocabulary of causes reaches both. With a figure, an unnamed cause
-          // means the row's own sentence is the true one. With none, the row's
-          // sentence would be false — it is about the base currency, and a
-          // valuation that was never struck is missing in every currency — so
-          // the general "no valuation, cause not named" phrase stands instead.
-          const valuationUnconvertedTitle = valuationGapTitle(
-            t,
-            position.market_value_gap,
-            hasMarketValue ? unconvertedTitle : t("positions.noValuation"),
-          );
-          const hint = hasMarketValue ? priceHint(t, position) : null;
-          const unrealizedMinor = position.unrealized_pnl_minor;
-          const hasUnrealized = unrealizedMinor != null;
-          // Cost is resolved unconditionally: it's always present (unlike
-          // market value / unrealized P&L), and the profit percentage below
-          // needs it alongside the resolved profit figure. Both numbers in
-          // that ratio must live in the same currency, which the percentage
-          // asserts for itself rather than assuming: in_base carries a null
-          // unrealized_pnl_minor whenever the valuation could not be
-          // expressed in the position's currency, so cost and profit do not
-          // always resolve the same way.
-          // One term of the row's converted block, welded to the currency that
-          // block says its figures are in (PositionInBase.currency, required
-          // by the contract) — never to the session's base currency, which is
-          // a second answer to the same question and comes apart from this one
-          // whenever a cached row outlives a change of base currency (#106).
-          // The term is picked by a function of the block rather than passed
-          // in, so a caller cannot hand over the position's OWN figure by
-          // mistake and have it printed under the base currency's sign.
-          const inBase = position.in_base;
-          const convertedTerm = (
-            term: (block: NonNullable<typeof inBase>) => number | null | undefined,
-          ) =>
-            inBase && {
-              amountMinor: term(inBase),
-              currency: inBase.currency,
-              rateOn: inBase.rate_on,
-            };
-          const resolvedCost = resolveDisplayAmount(
-            mode,
-            position.currency,
-            position.cost_minor,
-            baseCurrency,
-            convertedTerm((block) => block.cost_minor),
-          );
-          const resolvedMarketValue = hasMarketValue
-            ? resolveDisplayAmount(
-                mode,
-                marketValueCurrency,
-                marketValueMinor,
-                baseCurrency,
-                convertedTerm((block) => block.market_value_minor),
-              )
-            : null;
-          const resolvedUnrealized = hasUnrealized
-            ? resolveDisplayAmount(
-                mode,
-                position.currency,
-                unrealizedMinor,
-                baseCurrency,
-                convertedTerm((block) => block.unrealized_pnl_minor),
-              )
-            : null;
-          const resolvedIncome = resolveDisplayAmount(
-            mode,
-            position.currency,
-            position.income_minor,
-            baseCurrency,
-            convertedTerm((block) => block.income_minor),
-          );
-          // The second line under the income, and WHETHER it is drawn is
-          // decided by what the cell above ended up showing rather than by
-          // which mode the toggle is in — the two are not the same question,
-          // and using the mode would be wrong in both directions.
-          //
-          // The converted figure (in_base.income_minor) is the whole income
-          // already, every payment brought out of the currency it arrived in,
-          // so listing those payments a second time beneath it would show the
-          // same money twice and invite the reader to add it to a sum that
-          // already contains it.
-          //
-          // Everything else shows the position's OWN figure, which carries one
-          // currency and cannot carry the rest — and that is three situations,
-          // not one: the toggle asks for the position's currency; the toggle
-          // asks for the base currency and the row's block could not be struck
-          // (`noRate`, captioned by the row's own sentence); or the position's
-          // currency IS the base currency, so the server publishes no block at
-          // all and never had to. That last one is the case this line exists
-          // for above all: a ruble paper paid a dollar dividend has no
-          // conversion object in EITHER mode, so before this its row showed a
-          // ruble zero in both, with nothing on it saying a dividend had been
-          // paid at all. (The journal below still listed the payment itself —
-          // this is about the position's own row, which is where a reader asks
-          // what the paper has earned.)
-          const otherIncome = resolvedIncome.converted ? null : otherCurrencyIncome(position);
-          const unrealizedPct =
-            resolvedUnrealized && resolvedUnrealized.currency === resolvedCost.currency
-              ? unrealizedPercent(resolvedUnrealized.amountMinor, resolvedCost.amountMinor)
+    <>
+      {closedCount > 0 && (
+        <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="toggle-closed-positions"
+            onClick={() => setShowClosed((v) => !v)}
+          >
+            {showClosed ? t("positions.hideClosed") : t("positions.showClosed")}
+          </Button>
+          <span
+            className="text-muted-foreground"
+            data-testid="closed-positions-note"
+          >
+            {showClosed
+              ? t("positions.closedShown", { count: closedCount })
+              : t("positions.closedHidden", { count: closedCount })}
+          </span>
+        </div>
+      )}
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>{t("positions.columns.instrument")}</TableHead>
+            <TableHead className="text-right">
+              {t("positions.columns.quantity")}
+            </TableHead>
+            <TableHead className="text-right">
+              {t("positions.columns.cost")}
+            </TableHead>
+            <TableHead className="text-right">
+              {t("positions.columns.market")}
+            </TableHead>
+            <TableHead className="text-right">
+              {t("positions.columns.profit")}
+            </TableHead>
+            <TableHead className="text-right">
+              {t("positions.columns.settled")}
+            </TableHead>
+            <TableHead className="text-right">
+              {t("positions.columns.total")}
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {shown.map((position) => {
+            const closed = position.quantity === "0";
+            const unconvertedTitle = rowGapTitle(t, position.in_base_gap);
+            // Market value's currency can differ from the position's own
+            // currency (a bond's face-value currency, for instance), so it is
+            // always formatted with market_value_currency, never `currency`.
+            const marketValueMinor = position.market_value_minor;
+            const marketValueCurrency = position.market_value_currency;
+            const hasMarketValue =
+              marketValueMinor != null && marketValueCurrency != null;
+            // The valuation's own reason, which outranks the row's on its own
+            // cell and nowhere else. The two can be set at once and both be
+            // true — a row stopped by a dateless lot whose valuation is also
+            // stuck in a third currency — and this cell takes the nearer of
+            // them, while the rest of the row keeps the one that is true of it.
+            //
+            // WHICH FALLBACK depends on whether there is a figure in the cell,
+            // and the two cases are answered by the same lookup so that one
+            // vocabulary of causes reaches both. With a figure, an unnamed cause
+            // means the row's own sentence is the true one. With none, the row's
+            // sentence would be false — it is about the base currency, and a
+            // valuation that was never struck is missing in every currency — so
+            // the general "no valuation, cause not named" phrase stands instead.
+            const valuationUnconvertedTitle = valuationGapTitle(
+              t,
+              position.market_value_gap,
+              hasMarketValue ? unconvertedTitle : t("positions.noValuation"),
+            );
+            const hint = hasMarketValue ? priceHint(t, position) : null;
+            const unrealizedMinor = position.unrealized_pnl_minor;
+            const hasUnrealized = unrealizedMinor != null;
+            // Cost is resolved unconditionally: it's always present (unlike
+            // market value / unrealized P&L), and the profit percentage below
+            // needs it alongside the resolved profit figure. Both numbers in
+            // that ratio must live in the same currency, which the percentage
+            // asserts for itself rather than assuming: in_base carries a null
+            // unrealized_pnl_minor whenever the valuation could not be
+            // expressed in the position's currency, so cost and profit do not
+            // always resolve the same way.
+            // One term of the row's converted block, welded to the currency that
+            // block says its figures are in (PositionInBase.currency, required
+            // by the contract) — never to the session's base currency, which is
+            // a second answer to the same question and comes apart from this one
+            // whenever a cached row outlives a change of base currency (#106).
+            // The term is picked by a function of the block rather than passed
+            // in, so a caller cannot hand over the position's OWN figure by
+            // mistake and have it printed under the base currency's sign.
+            const inBase = position.in_base;
+            const convertedTerm = (
+              term: (
+                block: NonNullable<typeof inBase>,
+              ) => number | null | undefined,
+            ) =>
+              inBase && {
+                amountMinor: term(inBase),
+                currency: inBase.currency,
+                rateOn: inBase.rate_on,
+              };
+            const resolvedCost = resolveDisplayAmount(
+              mode,
+              position.currency,
+              position.cost_minor,
+              baseCurrency,
+              convertedTerm((block) => block.cost_minor),
+            );
+            const resolvedMarketValue = hasMarketValue
+              ? resolveDisplayAmount(
+                  mode,
+                  marketValueCurrency,
+                  marketValueMinor,
+                  baseCurrency,
+                  convertedTerm((block) => block.market_value_minor),
+                )
               : null;
-          // A bare "+10,0 %" means a different thing per mode: in the
-          // position's own currency it is the instrument's move alone, in the
-          // base currency it carries the fx move too, so one position can
-          // honestly read +10 % in one mode and -45 % in the other. Naming
-          // the currency is what makes those two answers legible as answers
-          // to different questions rather than as a discrepancy.
-          //
-          // The currency named is the one the ratio was actually computed in
-          // (resolvedCost's — the guard above already proved the profit's
-          // equal to it), not the one the mode asked for: in base mode with
-          // no converted figure available both figures stay native, and the
-          // label has to follow the numbers.
-          const unrealizedPctTitle = t("positions.profitPercentIn", {
-            currency: resolvedCost.currency,
-          });
-          // Why the profit cell is empty, as ONE string used twice — the
-          // tooltip's and the screen reader's copy are the same value, so
-          // there is no arrangement in which they say different things. The
-          // line break survives in the tooltip and collapses to a space in the
-          // markup, which is the right rendering in each place and needs no
-          // second version to get it.
-          //
-          // Two ways to have no profit, and they are two different sentences.
-          // With a valuation present, the profit is missing because that
-          // valuation is in another currency and cannot be subtracted from the
-          // basis. With none, the profit is missing because one of its two
-          // operands is — so this cell says that in its own words and then
-          // hands over to the valuation's cause, whatever the server said it
-          // was. It used to print «Нет котировки» flat, which is the same false
-          // sentence #78 is about, one column over: a crypto row's profit is
-          // not waiting for a quote either.
-          const profitDashHint = hasMarketValue
-            ? t("positions.currencyMismatch")
-            : t("positions.profitNeedsValuation") + "\n" + valuationUnconvertedTitle;
-          return (
-            <TableRow
-              key={position.instrument.id}
-              className={cn(closed && "opacity-50")}
-            >
-              <TableCell>
-                <div className="font-medium">
-                  {position.instrument.name}
-                  {position.instrument.frozen && (
-                    <Badge variant="outline" className="ml-2">
-                      {t("positions.frozen")}
-                    </Badge>
-                  )}
-                  {closed && (
-                    <Badge variant="outline" className="ml-2">
-                      {t("positions.closed")}
-                    </Badge>
-                  )}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {position.instrument.ticker}
-                </div>
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {position.quantity}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                <MoneyCell
-                  resolved={resolvedCost}
-                  notConvertedTitle={unconvertedTitle}
-                  convertedTitle={costConvertedTitle}
-                  testId="position-cost"
-                />
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {hasMarketValue && resolvedMarketValue ? (
-                  <>
-                    <MoneyCell
-                      resolved={resolvedMarketValue}
-                      notConvertedTitle={valuationUnconvertedTitle}
-                      testId="position-market-value"
-                    />
-                    {hint && (
-                      <div
-                        data-testid="position-price"
-                        className="text-xs font-normal text-muted-foreground"
-                        title={hint.title}
-                      >
-                        {hint.price}
-                      </div>
+            const resolvedUnrealized = hasUnrealized
+              ? resolveDisplayAmount(
+                  mode,
+                  position.currency,
+                  unrealizedMinor,
+                  baseCurrency,
+                  convertedTerm((block) => block.unrealized_pnl_minor),
+                )
+              : null;
+            const resolvedIncome = resolveDisplayAmount(
+              mode,
+              position.currency,
+              position.income_minor,
+              baseCurrency,
+              convertedTerm((block) => block.income_minor),
+            );
+            // The second line under the income, and WHETHER it is drawn is
+            // decided by what the cell above ended up showing rather than by
+            // which mode the toggle is in — the two are not the same question,
+            // and using the mode would be wrong in both directions.
+            //
+            // The converted figure (in_base.income_minor) is the whole income
+            // already, every payment brought out of the currency it arrived in,
+            // so listing those payments a second time beneath it would show the
+            // same money twice and invite the reader to add it to a sum that
+            // already contains it.
+            //
+            // Everything else shows the position's OWN figure, which carries one
+            // currency and cannot carry the rest — and that is three situations,
+            // not one: the toggle asks for the position's currency; the toggle
+            // asks for the base currency and the row's block could not be struck
+            // (`noRate`, captioned by the row's own sentence); or the position's
+            // currency IS the base currency, so the server publishes no block at
+            // all and never had to. That last one is the case this line exists
+            // for above all: a ruble paper paid a dollar dividend has no
+            // conversion object in EITHER mode, so before this its row showed a
+            // ruble zero in both, with nothing on it saying a dividend had been
+            // paid at all. (The journal below still listed the payment itself —
+            // this is about the position's own row, which is where a reader asks
+            // what the paper has earned.)
+            const otherIncome = resolvedIncome.converted
+              ? null
+              : otherCurrencyIncome(position);
+            // The three figures that can be missing in ONE currency and present
+            // in the other, which is why they go through the optional resolver:
+            // a disposal settled in a third currency leaves no realized figure
+            // (and so no settled, and so no total) in the position's own
+            // currency, while the converted block has all three.
+            const resolvedRealized = resolveOptionalDisplayAmount(
+              mode,
+              position.currency,
+              position.realized_pnl_minor,
+              baseCurrency,
+              convertedTerm((block) => block.realized_pnl_minor),
+            );
+            const resolvedSettled = resolveOptionalDisplayAmount(
+              mode,
+              position.currency,
+              position.settled_minor,
+              baseCurrency,
+              convertedTerm((block) => block.settled_minor),
+            );
+            const resolvedTotal = resolveOptionalDisplayAmount(
+              mode,
+              position.currency,
+              position.total_minor,
+              baseCurrency,
+              convertedTerm((block) => block.total_minor),
+            );
+            // What the settled figure is made of, spelled out where the column
+            // that used to show one of its halves used to be. The income column
+            // is gone and its number lives on here: a reader who wants to know
+            // why «Зафиксировано» is what it is gets the two terms rather than
+            // being told to trust the sum.
+            const settledHint = resolvedSettled
+              ? t("positions.settledHint", {
+                  realized: resolvedRealized
+                    ? formatMinor(
+                        resolvedRealized.amountMinor,
+                        resolvedRealized.currency,
+                      )
+                    : "—",
+                  income: formatMinor(
+                    resolvedIncome.amountMinor,
+                    resolvedIncome.currency,
+                  ),
+                })
+              : // WHICH OF THE TWO REASONS IT IS, ASKED OF THE DATA RATHER THAN
+                // GUESSED. The server withholds this figure on two unrelated
+                // grounds — a disposal settled in a currency the position is not
+                // denominated in, or payments that arrived in more than one
+                // currency — and a caption naming the first over a paper nobody
+                // ever sold would be a false reason beside a true dash, which is
+                // the failure this codebase has been caught at four times.
+                //
+                // realized_pnl_minor is null on exactly the first ground (see
+                // Position.realized_pnl_minor in the contract), so the two are
+                // told apart from published fields with nothing inferred. The
+                // dash itself is reached only when the POSITION-currency figure
+                // is missing — a figure present in the base currency is shown
+                // rather than dashed — so the reason is about the position's own
+                // currency in either mode.
+                position.realized_pnl_minor == null
+                ? t("positions.settledMissingSale")
+                : t("positions.settledMissingIncome");
+            const unrealizedPct =
+              resolvedUnrealized &&
+              resolvedUnrealized.currency === resolvedCost.currency
+                ? unrealizedPercent(
+                    resolvedUnrealized.amountMinor,
+                    resolvedCost.amountMinor,
+                  )
+                : null;
+            // A bare "+10,0 %" means a different thing per mode: in the
+            // position's own currency it is the instrument's move alone, in the
+            // base currency it carries the fx move too, so one position can
+            // honestly read +10 % in one mode and -45 % in the other. Naming
+            // the currency is what makes those two answers legible as answers
+            // to different questions rather than as a discrepancy.
+            //
+            // The currency named is the one the ratio was actually computed in
+            // (resolvedCost's — the guard above already proved the profit's
+            // equal to it), not the one the mode asked for: in base mode with
+            // no converted figure available both figures stay native, and the
+            // label has to follow the numbers.
+            const unrealizedPctTitle = t("positions.profitPercentIn", {
+              currency: resolvedCost.currency,
+            });
+            // Why the profit cell is empty, as ONE string used twice — the
+            // tooltip's and the screen reader's copy are the same value, so
+            // there is no arrangement in which they say different things. The
+            // line break survives in the tooltip and collapses to a space in the
+            // markup, which is the right rendering in each place and needs no
+            // second version to get it.
+            //
+            // Two ways to have no profit, and they are two different sentences.
+            // With a valuation present, the profit is missing because that
+            // valuation is in another currency and cannot be subtracted from the
+            // basis. With none, the profit is missing because one of its two
+            // operands is — so this cell says that in its own words and then
+            // hands over to the valuation's cause, whatever the server said it
+            // was. It used to print «Нет котировки» flat, which is the same false
+            // sentence #78 is about, one column over: a crypto row's profit is
+            // not waiting for a quote either.
+            const profitDashHint = hasMarketValue
+              ? t("positions.currencyMismatch")
+              : t("positions.profitNeedsValuation") +
+                "\n" +
+                valuationUnconvertedTitle;
+            return (
+              <TableRow
+                key={position.instrument.id}
+                className={cn(closed && "opacity-50")}
+              >
+                <TableCell>
+                  <div className="font-medium">
+                    {position.instrument.name}
+                    {position.instrument.frozen && (
+                      <Badge variant="outline" className="ml-2">
+                        {t("positions.frozen")}
+                      </Badge>
                     )}
-                  </>
-                ) : (
-                  <span
-                    data-testid="position-no-quote"
-                    className="text-muted-foreground"
-                    title={valuationUnconvertedTitle}
-                  >
-                    {/* The dash is a drawing of an empty cell and says nothing
+                    {closed && (
+                      <Badge variant="outline" className="ml-2">
+                        {t("positions.closed")}
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {position.instrument.ticker}
+                  </div>
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {position.quantity}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  <MoneyCell
+                    resolved={resolvedCost}
+                    notConvertedTitle={unconvertedTitle}
+                    convertedTitle={costConvertedTitle}
+                    testId="position-cost"
+                  />
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {hasMarketValue && resolvedMarketValue ? (
+                    <>
+                      <MoneyCell
+                        resolved={resolvedMarketValue}
+                        notConvertedTitle={valuationUnconvertedTitle}
+                        testId="position-market-value"
+                      />
+                      {hint && (
+                        <div
+                          data-testid="position-price"
+                          className="text-xs font-normal text-muted-foreground"
+                          title={hint.title}
+                        >
+                          {hint.price}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <span
+                      data-testid="position-no-quote"
+                      className="text-muted-foreground"
+                      title={valuationUnconvertedTitle}
+                    >
+                      {/* The dash is a drawing of an empty cell and says nothing
                         on its own, so it is hidden from assistive technology
                         and the sentence beside it is what gets read (#31). The
                         other order — announcing "dash" and then leaving the
@@ -617,63 +803,131 @@ export function PositionsTable({
                         surface on a non-focusable span — is how this cell told
                         a sighted reader why the number is missing and told
                         everyone else nothing. */}
-                    <span aria-hidden="true">—</span>
-                    <span className="sr-only">{valuationUnconvertedTitle}</span>
-                  </span>
-                )}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {resolvedUnrealized ? (
-                  <>
+                      <span aria-hidden="true">—</span>
+                      <span className="sr-only">
+                        {valuationUnconvertedTitle}
+                      </span>
+                    </span>
+                  )}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {resolvedUnrealized ? (
+                    <>
+                      <MoneyCell
+                        resolved={resolvedUnrealized}
+                        className={signClass(resolvedUnrealized.amountMinor)}
+                        notConvertedTitle={unconvertedTitle}
+                        convertedTitle={profitConvertedTitle}
+                        testId="position-profit-amount"
+                      />
+                      {unrealizedPct && (
+                        <div
+                          data-testid="position-profit-percent"
+                          className="text-xs font-normal text-muted-foreground"
+                          title={unrealizedPctTitle}
+                        >
+                          {unrealizedPct}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <span
+                      data-testid="position-profit-dash"
+                      className="text-muted-foreground"
+                      title={profitDashHint}
+                    >
+                      <span aria-hidden="true">—</span>
+                      <span className="sr-only">{profitDashHint}</span>
+                    </span>
+                  )}
+                  {/* THE REALIZED RESULT, UNDER THE UNREALIZED ONE AND NOT
+                    INSTEAD OF IT. The column says «Прибыль» and means the
+                    valuation less the basis; a closed position's is honestly
+                    nothing, and before this line such a row showed 0,00 ₽
+                    under that heading for a paper that had made 1 940,42 ₽.
+                    Folding the two into one cell would put two different
+                    figures under one word, which is how a true number ends up
+                    under a false caption — the failure this codebase has been
+                    caught at repeatedly.
+
+                    Drawn only when there IS a realized result, so a position
+                    nobody has ever sold out of does not carry a row of
+                    «реализовано 0,00» it has no use for. */}
+                  {resolvedRealized && resolvedRealized.amountMinor !== 0 && (
+                    <div
+                      data-testid="position-realized"
+                      className="text-xs font-normal text-muted-foreground"
+                      title={t("positions.realizedHintRow")}
+                    >
+                      {t("positions.realizedOnRow", {
+                        amount: formatMinor(
+                          resolvedRealized.amountMinor,
+                          resolvedRealized.currency,
+                        ),
+                      })}
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell
+                  className="text-right tabular-nums"
+                  title={settledHint}
+                >
+                  {resolvedSettled ? (
                     <MoneyCell
-                      resolved={resolvedUnrealized}
-                      className={signClass(resolvedUnrealized.amountMinor)}
+                      resolved={resolvedSettled}
                       notConvertedTitle={unconvertedTitle}
-                      convertedTitle={profitConvertedTitle}
-                      testId="position-profit-amount"
+                      convertedTitle={settledConvertedTitle}
+                      testId="position-settled"
                     />
-                    {unrealizedPct && (
-                      <div
-                        data-testid="position-profit-percent"
-                        className="text-xs font-normal text-muted-foreground"
-                        title={unrealizedPctTitle}
-                      >
-                        {unrealizedPct}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <span
-                    data-testid="position-profit-dash"
-                    className="text-muted-foreground"
-                    title={profitDashHint}
-                  >
-                    <span aria-hidden="true">—</span>
-                    <span className="sr-only">{profitDashHint}</span>
-                  </span>
-                )}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                <MoneyCell
-                  resolved={resolvedIncome}
-                  notConvertedTitle={unconvertedTitle}
-                  convertedTitle={incomeConvertedTitle}
-                  testId="position-income"
-                />
-                {otherIncome && (
-                  <div
-                    data-testid="position-income-other-currency"
-                    className="text-xs font-normal text-muted-foreground"
-                    title={t("positions.incomeOtherCurrencyHint")}
-                  >
-                    {t("positions.incomeOtherCurrency", { amounts: otherIncome })}
-                  </div>
-                )}
-              </TableCell>
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
+                  ) : (
+                    <span
+                      data-testid="position-settled-dash"
+                      className="text-muted-foreground"
+                    >
+                      <span aria-hidden="true">—</span>
+                      <span className="sr-only">{settledHint}</span>
+                    </span>
+                  )}
+                  {otherIncome && (
+                    <div
+                      data-testid="position-income-other-currency"
+                      className="text-xs font-normal text-muted-foreground"
+                      title={t("positions.incomeOtherCurrencyHint")}
+                    >
+                      {t("positions.incomeOtherCurrency", {
+                        amounts: otherIncome,
+                      })}
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell
+                  className="text-right tabular-nums"
+                  title={t("positions.totalHint")}
+                >
+                  {resolvedTotal ? (
+                    <MoneyCell
+                      resolved={resolvedTotal}
+                      notConvertedTitle={unconvertedTitle}
+                      convertedTitle={totalConvertedTitle}
+                      testId="position-total"
+                    />
+                  ) : (
+                    <span
+                      data-testid="position-total-dash"
+                      className="text-muted-foreground"
+                    >
+                      <span aria-hidden="true">—</span>
+                      <span className="sr-only">
+                        {t("positions.totalMissing")}
+                      </span>
+                    </span>
+                  )}
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </>
   );
 }
