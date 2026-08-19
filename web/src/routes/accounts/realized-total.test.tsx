@@ -13,7 +13,9 @@ const norm = (s: string) => s.replace(/[\u00A0\u202F]/g, " ");
 // RealizedTotal in the API contract). This component adds nothing to it — every
 // test here is about which of the server's figures reaches the screen and what
 // is said when there is none.
-function makeTotal(overrides: Partial<RealizedTotalPayload> = {}): RealizedTotalPayload {
+function makeTotal(
+  overrides: Partial<RealizedTotalPayload> = {},
+): RealizedTotalPayload {
   return {
     by_currency: [{ currency: "USD", realized_pnl_minor: 12_500 }],
     base_currency: "RUB",
@@ -37,16 +39,16 @@ function makeTotal(overrides: Partial<RealizedTotalPayload> = {}): RealizedTotal
 // покупок», which is false of a commission the broker charged on the day of
 // the sale.
 const REALIZED_HINT =
-  "Результат уже закрытых сделок — он больше не изменится. Стоимость проданного взята по курсам на дни покупок, а выручка и комиссия продажи — по курсу на день продажи, поэтому в базовой валюте сюда входит и изменение курса. Прибыль в таблице — про другое: это переоценка того, что ещё не продано";
+  "Результат уже закрытых сделок по этому счёту — он больше не изменится. Стоимость проданного взята по курсам на дни покупок, а выручка и комиссия продажи — по курсу на день продажи, поэтому в базовой валюте сюда входит и изменение курса. Это только сделки: выплаты по бумагам сюда не входят, они складываются с этой суммой в колонке «Зафиксировано»";
 
 describe("RealizedTotal", () => {
   it("shows the figure under its own label", () => {
     render(<RealizedTotal total={makeTotal()} mode="native" />);
 
-    expect(screen.getByText("Зафиксировано")).toBeInTheDocument();
-    expect(norm(screen.getByTestId("realized-total-amounts").textContent ?? "")).toContain(
-      "125,00 $",
-    );
+    expect(screen.getByText("Реализованная прибыль")).toBeInTheDocument();
+    expect(
+      norm(screen.getByTestId("realized-total-amounts").textContent ?? ""),
+    ).toContain("125,00 $");
   });
 
   it("explains in a tooltip how this differs from the profit on paper", () => {
@@ -55,24 +57,36 @@ describe("RealizedTotal", () => {
     // full of numbers (the owner's standing rule).
     render(<RealizedTotal total={makeTotal()} mode="native" />);
 
-    const hint = screen.getByTestId("realized-total-label").getAttribute("title") ?? "";
+    const hint =
+      screen.getByTestId("realized-total-label").getAttribute("title") ?? "";
     expect(hint).toContain("на дни покупок");
     expect(hint).toContain("на день продажи");
     expect(hint).toContain("изменение курса");
     // The label itself stays a label; the mechanics are not printed as text.
-    expect(screen.getByTestId("realized-total-label").textContent).toBe("Зафиксировано");
+    // And it is NOT the table's word: «Зафиксировано» there adds the payments
+    // the paper made to this figure, so one word over both would name two
+    // different numbers on the same screen.
+    expect(screen.getByTestId("realized-total-label").textContent).toBe(
+      "Реализованная прибыль",
+    );
   });
 
   it("dates a sale's fee on the sale day, as the server does, not on the purchase days", () => {
     render(<RealizedTotal total={makeTotal()} mode="native" />);
 
-    expect(screen.getByTestId("realized-total-label").getAttribute("title")).toBe(REALIZED_HINT);
+    expect(
+      screen.getByTestId("realized-total-label").getAttribute("title"),
+    ).toBe(REALIZED_HINT);
     // The specific thing that was false: an expense clause that swept the fee
     // in with the basis. Both halves are asserted, so neither "the fee moved
     // to the sale day" nor "the basis stayed on the purchase days" can be
     // dropped without this failing.
-    expect(REALIZED_HINT).toContain("комиссия продажи — по курсу на день продажи");
-    expect(REALIZED_HINT).toContain("Стоимость проданного взята по курсам на дни покупок");
+    expect(REALIZED_HINT).toContain(
+      "комиссия продажи — по курсу на день продажи",
+    );
+    expect(REALIZED_HINT).toContain(
+      "Стоимость проданного взята по курсам на дни покупок",
+    );
   });
 
   it("shows each currency's figure separately rather than one meaningless number", () => {
@@ -88,7 +102,9 @@ describe("RealizedTotal", () => {
       />,
     );
 
-    const shown = norm(screen.getByTestId("realized-total-amounts").textContent ?? "");
+    const shown = norm(
+      screen.getByTestId("realized-total-amounts").textContent ?? "",
+    );
     expect(shown).toContain("25,00 €");
     expect(shown).toContain("100,00 $");
   });
@@ -107,17 +123,24 @@ describe("RealizedTotal", () => {
       />,
     );
 
-    const shown = norm(screen.getByTestId("realized-total-amounts").textContent ?? "");
+    const shown = norm(
+      screen.getByTestId("realized-total-amounts").textContent ?? "",
+    );
     expect(shown).toContain("9 000,00 ₽");
     expect(shown).not.toContain("125,00 $");
   });
 
   it("shows no base-currency sum, and says what about the deals stopped it", () => {
     render(
-      <RealizedTotal total={makeTotal({ in_base: null, in_base_gap: "undated" })} mode="base" />,
+      <RealizedTotal
+        total={makeTotal({ in_base: null, in_base_gap: "undated" })}
+        mode="base"
+      />,
     );
 
-    expect(screen.queryByTestId("realized-total-amounts")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("realized-total-amounts"),
+    ).not.toBeInTheDocument();
     const gap = screen.getByTestId("realized-total-gap");
     // A fact about the reader's own deals, and one that says of itself that it
     // will not fix itself — not the name of a field that was left blank.
@@ -132,7 +155,10 @@ describe("RealizedTotal", () => {
 
   it("says the rate is what stopped it when nothing about the deals is unknown", () => {
     render(
-      <RealizedTotal total={makeTotal({ in_base: null, in_base_gap: "no_rate" })} mode="base" />,
+      <RealizedTotal
+        total={makeTotal({ in_base: null, in_base_gap: "no_rate" })}
+        mode="base"
+      />,
     );
 
     const gap = screen.getByTestId("realized-total-gap");
@@ -143,7 +169,12 @@ describe("RealizedTotal", () => {
   });
 
   it("names both causes when different positions were stopped by different gaps", () => {
-    render(<RealizedTotal total={makeTotal({ in_base: null, in_base_gap: "both" })} mode="base" />);
+    render(
+      <RealizedTotal
+        total={makeTotal({ in_base: null, in_base_gap: "both" })}
+        mode="base"
+      />,
+    );
 
     const gap = screen.getByTestId("realized-total-gap");
     expect(gap.textContent).toContain("когда была куплена");
@@ -163,9 +194,104 @@ describe("RealizedTotal", () => {
     );
 
     expect(screen.queryByTestId("realized-total-gap")).not.toBeInTheDocument();
-    expect(norm(screen.getByTestId("realized-total-amounts").textContent ?? "")).toContain(
-      "125,00 $",
+    expect(
+      norm(screen.getByTestId("realized-total-amounts").textContent ?? ""),
+    ).toContain("125,00 $");
+  });
+
+  // THE TAX THE ACCOUNT ITSELF WAS CHARGED. In Russia the broker withholds at
+  // the moment money leaves the account, against the year's accumulated base —
+  // so the charge belongs to no paper and cannot be spread over the rows. The
+  // owner met it as 36 000 ₽ he could not attribute to anything; these tests
+  // are about that figure having a place on the screen and an honest sentence.
+  it("shows what the broker withheld from the account, beside the result it was charged against", () => {
+    render(
+      <RealizedTotal
+        total={makeTotal({
+          tax_withheld_by_currency: [
+            { currency: "RUB", amount_minor: 3_600_000 },
+          ],
+        })}
+        mode="native"
+      />,
     );
+
+    const tax = screen.getByTestId("realized-total-tax");
+    expect(norm(tax.textContent ?? "")).toBe("удержано налога 36 000,00 ₽");
+    expect(tax.getAttribute("title")).toBe(
+      "Налог, который брокер списал со счёта, а не с выплаты по бумаге: в России — при выводе средств, с накопленной за год базы. Поэтому он не относится ни к одной позиции и по строкам не разносится. Налог, удержанный с дивиденда или купона, в эту сумму не входит — он уже вычтен из дохода той бумаги",
+    );
+  });
+
+  it("keeps the withheld tax in its own currency even in base mode", () => {
+    // Everything else on this line converts; this does not, and the difference
+    // is not an oversight. A withholding is money taken on a day, and the
+    // response carries no per-charge dates to convert it by — so it is shown as
+    // what it is rather than as a figure struck at a rate nobody chose.
+    render(
+      <RealizedTotal
+        total={makeTotal({
+          tax_withheld_by_currency: [{ currency: "USD", amount_minor: 1_000 }],
+        })}
+        mode="base"
+      />,
+    );
+
+    expect(
+      norm(screen.getByTestId("realized-total-tax").textContent ?? ""),
+    ).toBe("удержано налога 10,00 $");
+    // ...while the realized figure beside it IS the base-currency one.
+    expect(
+      norm(screen.getByTestId("realized-total-amounts").textContent ?? ""),
+    ).toContain("10 000,00 ₽");
+  });
+
+  it("lists two currencies side by side and drops a bucket that is nought", () => {
+    // Nought withheld is not news, and a "0,00 $" beside a real charge reads as
+    // a second charge. The server publishes the bucket all the same — it is the
+    // sum of the operations it found — so the dropping happens here.
+    render(
+      <RealizedTotal
+        total={makeTotal({
+          tax_withheld_by_currency: [
+            { currency: "RUB", amount_minor: 3_600_000 },
+            { currency: "USD", amount_minor: 0 },
+          ],
+        })}
+        mode="native"
+      />,
+    );
+
+    const tax = norm(
+      screen.getByTestId("realized-total-tax").textContent ?? "",
+    );
+    expect(tax).toBe("удержано налога 36 000,00 ₽");
+    expect(tax).not.toContain("$");
+  });
+
+  it("shows a withholding on an account that has closed no deals at all", () => {
+    // The case that has nothing to do with sales: a broker that records the tax
+    // on a dividend as its own operation with no paper attached charges the
+    // ACCOUNT, and an account whose every position is still open then has a
+    // withholding and no realized result anywhere. The line must appear for the
+    // tax alone — and say nothing about a realized total it does not have.
+    render(
+      <RealizedTotal
+        total={makeTotal({
+          by_currency: [],
+          in_base: 0,
+          tax_withheld_by_currency: [
+            { currency: "RUB", amount_minor: 130_000 },
+          ],
+        })}
+        mode="base"
+      />,
+    );
+
+    expect(
+      norm(screen.getByTestId("realized-total-tax").textContent ?? ""),
+    ).toBe("удержано налога 1 300,00 ₽");
+    expect(screen.getByTestId("realized-total-amounts").textContent).toBe("");
   });
 
   it("renders nothing when the account has no positions at all", () => {
@@ -173,7 +299,10 @@ describe("RealizedTotal", () => {
     // answers a question nobody asked. The base figure is a real zero here —
     // the sum of no deals — and it must not be what decides.
     render(
-      <RealizedTotal total={makeTotal({ by_currency: [], in_base: 0 })} mode="base" />,
+      <RealizedTotal
+        total={makeTotal({ by_currency: [], in_base: 0 })}
+        mode="base"
+      />,
     );
 
     expect(screen.queryByTestId("realized-total")).not.toBeInTheDocument();
@@ -183,7 +312,10 @@ describe("RealizedTotal", () => {
     // The contract publishes a figure or a gap, never neither. If that ever
     // breaks, an unexplained blank is honest and a cause guessed here is not.
     render(
-      <RealizedTotal total={makeTotal({ in_base: null, in_base_gap: null })} mode="base" />,
+      <RealizedTotal
+        total={makeTotal({ in_base: null, in_base_gap: null })}
+        mode="base"
+      />,
     );
 
     expect(screen.queryByTestId("realized-total")).not.toBeInTheDocument();
@@ -196,12 +328,20 @@ describe("RealizedTotal", () => {
     // API boundary unchanged — TypeScript's exhaustiveness check on
     // gapWording's switch cannot see it, because it never saw the string at
     // compile time. The cast below stands in for exactly that value.
-    const unknownGap = "future_gap_kind" as unknown as RealizedTotalPayload["in_base_gap"];
-    render(<RealizedTotal total={makeTotal({ in_base: null, in_base_gap: unknownGap })} mode="base" />);
+    const unknownGap =
+      "future_gap_kind" as unknown as RealizedTotalPayload["in_base_gap"];
+    render(
+      <RealizedTotal
+        total={makeTotal({ in_base: null, in_base_gap: unknownGap })}
+        mode="base"
+      />,
+    );
 
     expect(screen.queryByTestId("realized-total")).not.toBeInTheDocument();
     expect(screen.queryByTestId("realized-total-gap")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("realized-total-amounts")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("realized-total-amounts"),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -230,7 +370,9 @@ describe("корзина без итога в одной валюте", () => {
   it("не оставляет пустую строку, когда таких корзин все", () => {
     const { container } = render(
       <RealizedTotal
-        total={makeTotal({ by_currency: [{ currency: "CNY", realized_pnl_minor: null }] })}
+        total={makeTotal({
+          by_currency: [{ currency: "CNY", realized_pnl_minor: null }],
+        })}
         mode="native"
       />,
     );

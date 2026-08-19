@@ -69,7 +69,9 @@ function makeSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
   };
 }
 
-function makeAccount(overrides: Partial<AccountWithBalance> = {}): AccountWithBalance {
+function makeAccount(
+  overrides: Partial<AccountWithBalance> = {},
+): AccountWithBalance {
   return {
     id: "acc-1",
     name: "Брокерский",
@@ -79,7 +81,11 @@ function makeAccount(overrides: Partial<AccountWithBalance> = {}): AccountWithBa
     status: "active",
     created_at: "2026-01-01T00:00:00Z",
     balance: { as_of: "2026-07-20", amount_minor: 10_000 },
-    balance_in_base: { amount_minor: 900_000, currency: "RUB", rate_on: "2026-07-19" },
+    balance_in_base: {
+      amount_minor: 900_000,
+      currency: "RUB",
+      rate_on: "2026-07-19",
+    },
     ...overrides,
   };
 }
@@ -131,6 +137,11 @@ function makeRealizedTotal(overrides: Record<string, unknown> = {}) {
     base_currency: "RUB",
     in_base: 0,
     in_base_gap: null,
+    // Required by the contract and always sent, empty here: nothing was
+    // withheld from this account. An absent list is not a shape the server can
+    // produce, and a fixture that omitted it would be a screen crash nobody saw
+    // until production.
+    tax_withheld_by_currency: [],
     ...overrides,
   };
 }
@@ -238,7 +249,9 @@ function renderPage(session: SessionInfo = makeSession()) {
     component: () => null,
   });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([layoutRoute.addChildren([detailRoute, listRoute])]),
+    routeTree: rootRoute.addChildren([
+      layoutRoute.addChildren([detailRoute, listRoute]),
+    ]),
     history: createMemoryHistory({ initialEntries: ["/accounts/acc-1"] }),
   });
   return render(
@@ -262,9 +275,13 @@ describe("AccountDetailPage", () => {
         // An account with no positions: the server's total is empty too —
         // by_currency has no entries and in_base is the plain zero of no
         // deals at all.
-        body: makePositionsBody(makeSession().cost_basis_rules, [], makeRealizedTotal({
-          by_currency: [],
-        })),
+        body: makePositionsBody(
+          makeSession().cost_basis_rules,
+          [],
+          makeRealizedTotal({
+            by_currency: [],
+          }),
+        ),
       },
       "/operations": { body: { operations: [], has_more: false } },
       "/api/v1/instruments": { body: { instruments: [], has_more: false } },
@@ -288,7 +305,9 @@ describe("AccountDetailPage", () => {
 
     expect(await screen.findByText("Брокерский")).toBeInTheDocument();
     expect(screen.queryByText("Что-то пошло не так")).not.toBeInTheDocument();
-    expect(await screen.findByTestId("account-detail-balance")).toBeInTheDocument();
+    expect(
+      await screen.findByTestId("account-detail-balance"),
+    ).toBeInTheDocument();
   });
 
   it("shows the converted balance without the summary, taking the base currency it needs from the session", async () => {
@@ -301,7 +320,10 @@ describe("AccountDetailPage", () => {
 
     const balance = await screen.findByTestId("account-detail-balance");
     expect(balance.textContent).toMatch(/₽/);
-    expect(balance).toHaveAttribute("title", "Пересчитано по текущему курсу (на 19.07.2026)");
+    expect(balance).toHaveAttribute(
+      "title",
+      "Пересчитано по текущему курсу (на 19.07.2026)",
+    );
   });
 
   it("prints the converted balance in the currency the balance itself carries, not the session's", async () => {
@@ -349,7 +371,9 @@ describe("AccountDetailPage", () => {
     expect(
       await screen.findByText(/не самая ранняя покупка/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/сразу по всем счетам владельца/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/сразу по всем счетам владельца/),
+    ).toBeInTheDocument();
     // The country is named, so "в этой стране" has a referent on a screen
     // that never mentions the residency otherwise.
     const notice = screen.getByTestId("cost-basis-notice");
@@ -360,7 +384,9 @@ describe("AccountDetailPage", () => {
     // there too: "average"/"owner" would be the wire format talking to a
     // person.
     expect(notice.getAttribute("title")).toContain("стоимость усредняется");
-    expect(notice.getAttribute("title")).toContain("сразу по всем счетам владельца");
+    expect(notice.getAttribute("title")).toContain(
+      "сразу по всем счетам владельца",
+    );
     expect(notice.textContent).not.toContain("average");
     expect(notice.textContent).not.toContain("стоимость усредняется");
   });
@@ -377,9 +403,14 @@ describe("AccountDetailPage", () => {
           makeSession().cost_basis_rules,
           [
             makePosition({ realized_pnl_minor: 10_000 }),
-            makePosition({ instrument_id: "instr-2", realized_pnl_minor: 2_500 }),
+            makePosition({
+              instrument_id: "instr-2",
+              realized_pnl_minor: 2_500,
+            }),
           ],
-          makeRealizedTotal({ by_currency: [{ currency: "USD", realized_pnl_minor: 12_600 }] }),
+          makeRealizedTotal({
+            by_currency: [{ currency: "USD", realized_pnl_minor: 12_600 }],
+          }),
         ),
       },
       "/operations": { body: { operations: [], has_more: false } },
@@ -388,7 +419,9 @@ describe("AccountDetailPage", () => {
 
     renderPage();
 
-    expect(await screen.findByText("Зафиксировано")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Реализованная прибыль"),
+    ).toBeInTheDocument();
     const amounts = await screen.findByTestId("realized-total-amounts");
     expect(norm(amounts.textContent ?? "")).toContain("126,00 $");
   });
@@ -424,7 +457,9 @@ describe("AccountDetailPage", () => {
     // "0,00" over an empty account answers a question nobody asked.
     renderPage();
 
-    expect(await screen.findByText("На этом счете пока нет позиций")).toBeInTheDocument();
+    expect(
+      await screen.findByText("На этом счете пока нет позиций"),
+    ).toBeInTheDocument();
     expect(screen.queryByTestId("realized-total")).not.toBeInTheDocument();
   });
 
@@ -445,7 +480,13 @@ describe("AccountDetailPage", () => {
     // also has no positions at all, so nothing above can leak down the page.
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
-      "/positions": { body: makePositionsBody(russia, [], makeRealizedTotal({ by_currency: [] })) },
+      "/positions": {
+        body: makePositionsBody(
+          russia,
+          [],
+          makeRealizedTotal({ by_currency: [] }),
+        ),
+      },
       "/operations": {
         body: {
           operations: [
@@ -495,15 +536,25 @@ describe("AccountDetailPage", () => {
     // an empty table.
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
-      "/positions": { body: makePositionsBody(russia, [], makeRealizedTotal({ by_currency: [] })) },
-      "/operations": { body: { operations: [makeOperation()], has_more: false } },
+      "/positions": {
+        body: makePositionsBody(
+          russia,
+          [],
+          makeRealizedTotal({ by_currency: [] }),
+        ),
+      },
+      "/operations": {
+        body: { operations: [makeOperation()], has_more: false },
+      },
       "/api/v1/instruments": { body: { instruments: [], has_more: false } },
     });
 
     renderPage(makeSession({ tax_residency: "GB", cost_basis_rules: britain }));
 
     expect(await screen.findByText("пополнение")).toBeInTheDocument();
-    expect(screen.queryByTestId("operation-amount-caveat")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("operation-amount-caveat"),
+    ).not.toBeInTheDocument();
     expect(screen.queryByTestId("cost-basis-notice")).not.toBeInTheDocument();
   });
 
@@ -603,7 +654,11 @@ describe("AccountDetailPage", () => {
           ],
         },
         "/positions": {
-          body: makePositionsBody(russia, [], makeRealizedTotal({ by_currency: [] })),
+          body: makePositionsBody(
+            russia,
+            [],
+            makeRealizedTotal({ by_currency: [] }),
+          ),
         },
         "/operations": {
           body: {
@@ -634,7 +689,9 @@ describe("AccountDetailPage", () => {
       // Not just the toggle: the mode the page settles on is handed down to
       // the journal, so the row the journal reported for is the row that gets
       // converted. A count the page overwrote would leave this in dollars.
-      expect(norm(screen.getByTestId("operation-amount").textContent ?? "")).toContain("7 850,00 ₽");
+      expect(
+        norm(screen.getByTestId("operation-amount").textContent ?? ""),
+      ).toContain("7 850,00 ₽");
     });
 
     it("keeps the page's currencies when the journal reports only the base one", async () => {
@@ -644,11 +701,17 @@ describe("AccountDetailPage", () => {
       serve({
         "/api/v1/accounts": { body: [makeAccount()] },
         "/positions": {
-          body: makePositionsBody(russia, [], makeRealizedTotal({ by_currency: [] })),
+          body: makePositionsBody(
+            russia,
+            [],
+            makeRealizedTotal({ by_currency: [] }),
+          ),
         },
         "/operations": {
           body: {
-            operations: [makeOperation({ currency: "RUB", amount_minor: 100_000 })],
+            operations: [
+              makeOperation({ currency: "RUB", amount_minor: 100_000 }),
+            ],
             has_more: false,
           },
         },

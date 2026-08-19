@@ -320,6 +320,30 @@ func marketValue(instType instrument.Type, faceValueMinor *int64, faceCurrency *
 	}
 }
 
+// pricePerUnitMinor is what ONE bond costs in money at the quoted price, and is
+// published beside the quote itself (Position.price_money_minor).
+//
+// IT IS FOR BONDS ALONE, because a bond is the only paper here whose quote is
+// not money: it is a percentage of face value, and a reader comparing it with
+// the cost and the valuation on the same row — both money — had to multiply by
+// the face value in their head. For a share the quote already IS money per unit
+// and this would restate it, so the caller does not ask.
+//
+// STRUCK ON ITS OWN, NOT DIVIDED OUT OF THE VALUATION. The two are the same
+// product in a different order (face x price/100, times the quantity or not),
+// and dividing would round a second time on a figure that had already been
+// rounded once — the published value is the one that gets rounded, and this is
+// a published value. It is deliberately NOT computed on the client either: the
+// client does no money arithmetic, which is the rule that keeps every rounding
+// decision in one place.
+//
+// The overflow refusal is marketValue's argument narrowed: this product has no
+// quantity in it, so it fits wherever the valuation does — but the guard costs
+// nothing and the alternative to it is a wrapped number that looks like a price.
+func pricePerUnitMinor(faceValueMinor int64, price decimal.Decimal) (int64, error) {
+	return money.Minor(decimal.NewFromInt(faceValueMinor).Mul(price).Shift(-centsPerUnit))
+}
+
 // anyUndatedLot is the ONE statement of "this basis contains a piece with no
 // purchase date" — published as Position.has_undated_lots (via hasUndatedLots
 // below) rather than left to be inferred from in_base being null, because null
@@ -537,6 +561,26 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 	}
 	out.Price = nullable.NewNullableWithValue(q.Price.String())
 	out.PriceOn = nullable.NewNullableWithValue(q.On.Format("2006-01-02"))
+	// Only a bond gets the money price, and only here — past every gap, so a row
+	// without a valuation carries the same null for this as it does for the
+	// quote. The face value is non-nil by construction on this path: marketValue
+	// answers valuationNoFaceValue for a bond without one, and that gap returned
+	// above.
+	//
+	// NO TEST SEPARATES THE TWO CONDITIONS, and nothing can: the catalog refuses
+	// a face value on anything but a bond (instrument.checkFaceType), and the
+	// importer sets a nominal only on bonds, so a non-bond carrying one is not a
+	// row this program can produce. The type check states the rule all the same
+	// — for a share the price already IS money and this field would restate it,
+	// and for any type marketValue does not multiply by the face value, the
+	// number would be unrelated to the valuation beside it.
+	if inst.Type == instrument.TypeBond && inst.FaceValueMinor != nil {
+		perUnit, err := pricePerUnitMinor(*inst.FaceValueMinor, q.Price)
+		if err != nil {
+			return apitypes.Position{}, fmt.Errorf("%w: %s%% of a face value of %d", err, q.Price, *inst.FaceValueMinor)
+		}
+		out.PriceMoneyMinor = nullable.NewNullableWithValue(perUnit)
+	}
 
 	// A raw market valuation can be denominated in a currency other than the
 	// position's own (for a bond, market_value_currency is the face value's

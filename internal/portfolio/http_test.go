@@ -224,6 +224,7 @@ type positionResp struct {
 	MarketValueSourceMinor    *int64           `json:"market_value_source_minor"`
 	Price                     *string          `json:"price"`
 	PriceOn                   *string          `json:"price_on"`
+	PriceMoneyMinor           *int64           `json:"price_money_minor"`
 	UnrealizedPnlMinor        *int64           `json:"unrealized_pnl_minor"`
 	HasUndatedLots            bool             `json:"has_undated_lots"`
 	HasUndatedRealizations    bool             `json:"has_undated_realizations"`
@@ -618,6 +619,21 @@ func TestPositionsMarketValuation(t *testing.T) {
 	}
 	if bondPos.PriceOn == nil || *bondPos.PriceOn != "2026-07-21" {
 		t.Errorf("bond price_on = %v, want 2026-07-21", bondPos.PriceOn)
+	}
+	// What ONE bond costs in money: 1 000,00 of face at 95.2 % = 952,00, in the
+	// FACE VALUE's currency (USD here — deliberately not the quote's RUB and
+	// not the position's RUB, the same distinction market_value_currency makes
+	// two checks above). Written as a literal rather than derived from the
+	// 9520000 valuation: this figure is struck on its own and rounded on its
+	// own, and dividing that one by the quantity is exactly the second rounding
+	// it exists to avoid.
+	if bondPos.PriceMoneyMinor == nil || *bondPos.PriceMoneyMinor != 95200 {
+		t.Errorf("bond price_money_minor = %v, want 95200", bondPos.PriceMoneyMinor)
+	}
+	// The share beside it gets none: its quote is already money per unit, and a
+	// second field restating it would be one more number to keep in agreement.
+	if sharePos.PriceMoneyMinor != nil {
+		t.Errorf("share price_money_minor = %v, want null (a share's price is already money)", sharePos.PriceMoneyMinor)
 	}
 	// The bond's buy operation (and therefore position.Currency) is RUB, but
 	// market_value_currency is USD (face_currency) — different currencies,
