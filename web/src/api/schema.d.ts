@@ -905,6 +905,16 @@ export interface components {
             realized_pnl_minor: number | null;
             /**
              * Format: int64
+             * @description WHAT THE POSITION HAS LOCKED IN, in its own `currency`: `realized_pnl_minor` plus `income_minor`. Both halves are past events with dates of their own, so this figure never moves again — which is why it is published apart from `total_minor`, whose other half changes every day. It is also the figure a tax base is built from, though it is NOT that base: no tax is subtracted here (see AccountPositions.tax_withheld_minor for the tax that was actually taken, and why it cannot be attributed to a position). NULL WHENEVER A TERM IS MISSING RATHER THAN SUMMED WITHOUT IT, and there are two ways that happens: `realized_pnl_minor` may not exist at all (a disposal that settled in another currency), and `income_minor` is only the part of the income denominated in `currency` — a yuan bond paid in rubles has income this sum cannot see, and publishing the visible part under a name that says «everything» is the failure this null exists against. `in_base.settled_minor` is the same figure with every term converted at its own date, and it exists on rows where this one does not.
+             */
+            settled_minor: number | null;
+            /**
+             * Format: int64
+             * @description WHAT THE POSITION HAS COME TO, in its own `currency`: `settled_minor` plus `unrealized_pnl_minor`. It deliberately mixes two kinds of certainty — the settled half is final, the unrealized half is a valuation that moves with the market — and that is why `settled_minor` stays published beside it instead of being folded away: a reader who needs the number that will not change has to be able to see it. Null whenever either half is null, for those halves' own reasons (no valuation, a valuation in another currency, or no settled figure).
+             */
+            total_minor: number | null;
+            /**
+             * Format: int64
              * @description Income denominated in the position's own `currency`, AND ONLY THAT: the dividends and coupons that arrived in `currency`, less the taxes withheld in `currency`. IT IS ONE TERM OF `income_by_currency` — that list's entry for `currency`, and 0 when the list holds no entry for it — never a summary of the list, and a reader who takes this field for «the position's income» is shown an incomplete answer on every position paid in more than one currency. It is published beside `currency` and rendered under that sign, which is the whole reason it can carry nothing else: adding another currency's minor units into it would denominate the result in nothing, and converting them needs a rate this object neither has nor publishes. A paper's payments need not arrive in the currency it was bought in — a yuan bond's coupons and a dollar share's dividend, tax included, routinely come in rubles from a Russian broker — so on such a position this field is a plain 0: true to the minor unit, and by itself indistinguishable on screen from a paper that has never paid anything. `income_by_currency` beside it is the complete answer with nothing converted; `in_base.income_minor` is the complete answer as ONE number, every payment converted at the rate of its own date, and it exists only where that object does.
              */
             income_minor: number;
@@ -951,6 +961,16 @@ export interface components {
             in_base?: components["schemas"]["PositionInBase"] | null;
         };
         PositionInBase: {
+            /**
+             * Format: int64
+             * @description `realized_pnl_minor` plus `income_minor`, both already converted here — each term at the rate of its own date and out of the currency it actually arrived in. It is Position.settled_minor's answer for a row that has none: a position whose disposal settled in a third currency, or whose income arrived in one, cannot state this figure in its own currency and can state it here. Null exactly when `realized_pnl_minor` is null, which is the only term of the two that can be missing.
+             */
+            settled_minor: number | null;
+            /**
+             * Format: int64
+             * @description `settled_minor` plus `unrealized_pnl_minor`, in currency. Null when either is. Note what this mixes and Position.total_minor mixes too: a settled half struck at the rates of the days it happened on, and an unrealized half struck at today's — which is correct for both questions and is why the two halves stay separately published.
+             */
+            total_minor: number | null;
             /**
              * Format: int64
              * @description Remaining cost basis in currency: every FIFO lot still held, converted at the fx rate of ITS OWN acquisition date, summed as decimals and rounded once at the end. Deliberately NOT Position.cost_minor times today's rate — that would price the basis as if everything had been bought today and would strip the currency's move out of unrealized_pnl_minor below
@@ -1005,8 +1025,20 @@ export interface components {
              */
             realized_pnl_minor: number | null;
         };
+        /** @description One amount in one currency. Used where a figure cannot be added across currencies and is published per currency instead. */
+        CurrencyAmount: {
+            /** @description ISO-4217 */
+            currency: string;
+            /**
+             * Format: int64
+             * @description Minor units, sign preserved
+             */
+            amount_minor: number;
+        };
         /** @description What an account's closed deals have locked in, added up over all its positions — the account-level twin of Position.realized_pnl_minor and Position.in_base.realized_pnl_minor. The server adds it rather than the client for the same reason it adds the balances on the accounts screen: a figure the interface shows is computed in one place, so the policy behind it (what rounds, what a gap suppresses, which positions count) can change in one place and every reader agrees on the answer. Both forms are always published, because the client cannot know which one a screen is about to show and the choice is a display preference, not a fact about the money. */
         RealizedTotal: {
+            /** @description Tax the broker took FROM THE ACCOUNT rather than from a payment, per currency, sign preserved (negative — money left). THIS IS THE TAX NO POSITION CAN SEE, and that is the whole reason it is published here. A withholding attributed to a security is already inside that position's income_minor, subtracted where it belongs; what is left is the tax charged against the account itself — in Russia, withheld when money is taken out, against the year's accumulated base rather than against any one disposal. On the owner's own account 20 of 21 such withholdings fall on the same day as a withdrawal, and three of them have no disposal in the preceding month at all. IT IS NOT SPLIT ACROSS POSITIONS AND MUST NOT BE: no tax authority computes a per-position share, and any division of it would be an invented number wearing a real one's name. A reader may subtract it from the account's realized total; a reader may not attribute it to a row. Empty when the account has no such withholding. Not converted to the base currency: it is money charged in the currency it was charged in, and no term of it is dated per payment the way in_base's are. */
+            tax_withheld_by_currency: components["schemas"]["CurrencyAmount"][];
             /** @description One entry per currency the account's positions are denominated in, ordered by currency code, each one an exact sum within that currency. Amounts in different currencies are never added together: a single integer made of dollars and euros is denominated in nothing. Never has a gap — Position.realized_pnl_minor is published unconditionally, since an unrecorded purchase date costs no money and no shares — so a reader in this mode always has a complete answer. Empty exactly when the account has no positions at all, which is also how a client tells 'nothing to say here' apart from a genuine zero. */
             by_currency: components["schemas"]["RealizedCurrencyTotal"][];
             /** @description The space's base currency (ISO-4217), same as Summary.base_currency: the currency of in_base, carried here so a client formatting the total need not go back to the session for it */
