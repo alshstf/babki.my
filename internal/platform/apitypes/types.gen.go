@@ -61,6 +61,24 @@ func (e AccountType) Valid() bool {
 	}
 }
 
+// Defines values for CashGap.
+const (
+	CashGapNoRateLotDate CashGap = "no_rate_lot_date"
+	CashGapNoRateToday   CashGap = "no_rate_today"
+)
+
+// Valid indicates whether the value is a known member of the CashGap enum.
+func (e CashGap) Valid() bool {
+	switch e {
+	case CashGapNoRateLotDate:
+		return true
+	case CashGapNoRateToday:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CostBasisMethod.
 const (
 	CostBasisMethodAverage       CostBasisMethod = "average"
@@ -584,6 +602,39 @@ type BalancePoint struct {
 	AsOf string `json:"as_of"`
 }
 
+// CashGap defines model for CashGap.
+type CashGap string
+
+// CashInBase The same money in the space's base currency, which is the only form in which it has a profit at all: in its OWN currency a thousand yuan cost a thousand yuan and always will. Null figures with a named `gap` when a rate was missing — never a partial answer.
+type CashInBase struct {
+	// CostMinor What this money was worth when it ARRIVED: each parcel still held, struck at the rate of the day it came, and summed. The parcels are consumed oldest-first, so what remains is the newest money — the same queue every other holding here uses. Null when any parcel's day has no rate. On a NEGATIVE balance this is 0: nothing is held, so nothing was paid for it.
+	CostMinor nullable.Nullable[int64] `json:"cost_minor"`
+
+	// Currency The base currency these figures are in, carried here so a client need not go back to the session for it
+	Currency string `json:"currency"`
+
+	// Gap Which rate was missing, or null when the figures are struck. `no_rate_today` stops the valuation; `no_rate_lot_date` stops the cost, and therefore the profit.
+	Gap nullable.Nullable[CashGap] `json:"gap"`
+
+	// UnrealizedPnlMinor value_minor less cost_minor — the currency's own move while this money sat on the account. Null when either half is.
+	UnrealizedPnlMinor nullable.Nullable[int64] `json:"unrealized_pnl_minor"`
+
+	// ValueMinor What the balance is worth TODAY, at today's rate. Null when there is no rate for today, which `gap` then names.
+	ValueMinor nullable.Nullable[int64] `json:"value_minor"`
+}
+
+// CashPosition THE MONEY THE ACCOUNT HOLDS IN ONE CURRENCY, published as a holding rather than as a balance — because that is what it is. Yuan sitting on a Russian broker's account was bought at some rate and is worth another today, and the difference is real money made or lost. It is NOT the balance mark the reconciliation stores (Account.balance): that is one figure the broker named on one day, in rubles alone; this is computed from the journal, in every currency the account has touched.
+type CashPosition struct {
+	// AmountMinor The balance in minor units of `currency`: every cash effect the journal records, added up — amount less commission on each entry, which is the same formula the reconciliation compares against the broker. CAN BE NEGATIVE, and is published so rather than clamped: an account whose journal is missing an operation genuinely shows money spent that never arrived (the owner's own yuan, spent on bonds while some of the purchases behind it are trades the broker will not explain), and a floor at nought would hide exactly the discrepancy a reader needs.
+	AmountMinor int64 `json:"amount_minor"`
+
+	// Currency ISO-4217 code of the money this row is
+	Currency string `json:"currency"`
+
+	// InBase The same money in the space's base currency, which is the only form in which it has a profit at all: in its OWN currency a thousand yuan cost a thousand yuan and always will. Null figures with a named `gap` when a rate was missing — never a partial answer.
+	InBase CashInBase `json:"in_base"`
+}
+
 // CostBasisMethod How a jurisdiction decides WHICH of the parcels held are the ones a sale disposed of. `fifo`: the earliest acquisitions, in order. `average`: no parcels at all — one pooled average cost per instrument. `specific_lot`: the taxpayer nominates the parcel. `not_applicable`: the country does not tax an individual's capital gains, so nothing has to be matched. `unknown`: the stored country has no rules row in this application (see CostBasisNotice.unknown_country).
 type CostBasisMethod string
 
@@ -977,6 +1028,9 @@ type PositionInBase struct {
 type PositionsResponse struct {
 	// AccountTotal What this account has made all in, across the positions above and its own charges beside them. It sits on the response for the same reasons realized_total does: it is an aggregate of exactly these rows, it arrives in the round trip the screen already makes, and the addition happens once on the server so every reader agrees on the answer. Present even for an account with no positions, where by_currency is empty and in_base is a plain zero.
 	AccountTotal AccountTotal `json:"account_total"`
+
+	// Cash The money the account holds, one entry per currency it has ever touched, ordered by currency code. It sits beside `positions` rather than among them because it is not a security and has no instrument — but it belongs on the same screen and in the same round trip: cash is a holding, and a reader comparing it with the papers beside it is doing the arithmetic this screen is for. A currency whose balance came to nought is still listed: an account that bought dollars and sold them all again HAS held dollars, and saying nothing about them is a different claim from saying the balance is zero.
+	Cash []CashPosition `json:"cash"`
 
 	// CostBasisRules Whether the cost basis behind every figure above is the one the owner's country requires (see CostBasisRules). It travels with the numbers rather than only in the session because this is the payload a reader takes the numbers from: a client that renders positions without ever reading the session must still be unable to show cost_minor, unrealized_pnl_minor and realized_pnl_minor as if they were a tax basis when they are not. It describes the whole computation, not one row, so it sits on the response rather than being repeated identically inside every Position. This is the ONLY repetition of it, and the line is drawn here on purpose: the journal publishes a cost basis too (a transfer's Operation.amount_minor) and carries no copy — not for want of an envelope, which OperationsResponse has had since #86, but because one statement living in three payloads is two extra places to forget. The statement belongs to the space, not to a payload — SessionInfo.cost_basis_rules is where a reader of any other figure takes it from.
 	CostBasisRules CostBasisRules `json:"cost_basis_rules"`

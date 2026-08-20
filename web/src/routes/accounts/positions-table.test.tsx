@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import "@/i18n";
 import { PositionsTable } from "./positions-table";
-import type { Position } from "@/api/positions";
+import type { CashPosition, Position } from "@/api/positions";
 import { formatMinor } from "@/lib/money";
 import { announcedText, visibleText } from "@/test-utils";
 
@@ -989,6 +989,166 @@ describe("PositionsTable", () => {
         screen.getByTestId("position-income-other-currency").textContent ?? "",
       ),
     ).toContain(norm(formatMinor(141_075, "RUB")));
+  });
+
+  // MONEY IS A HOLDING, AND THESE ROWS ARE WHERE IT BECAME ONE. Yuan on a
+  // Russian broker's account was bought at one rate and is worth another today;
+  // before this the only cash figure on the screen was a snapshot the broker
+  // named, in rubles, with no cost behind it.
+  function makeCash(overrides: Partial<CashPosition> = {}): CashPosition {
+    return {
+      currency: "USD",
+      amount_minor: 150_000,
+      in_base: {
+        currency: "RUB",
+        value_minor: 13_500_000,
+        cost_minor: 9_000_000,
+        unrealized_pnl_minor: 4_500_000,
+        gap: null,
+      },
+      ...overrides,
+    };
+  }
+
+  it("shows the money among the papers, with its own name and kind", () => {
+    wrap(
+      <PositionsTable
+        positions={[makePosition()]}
+        cash={[makeCash()]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(screen.getByTestId("cash-currency").textContent).toBe(
+      "Деньги · USD",
+    );
+    expect(norm(screen.getByTestId("cash-amount").textContent ?? "")).toBe(
+      norm(formatMinor(150_000, "USD")),
+    );
+    // The paper is still there: money joins the list, it does not replace it.
+    expect(screen.getByText("Test Corp")).toBeInTheDocument();
+  });
+
+  it("leaves the money columns empty in the account's own currencies", () => {
+    // A thousand dollars cost a thousand dollars and is worth a thousand
+    // dollars. Printing that figure three times across the row would look like
+    // three answers where there is one.
+    wrap(
+      <PositionsTable
+        positions={[]}
+        cash={[makeCash()]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(screen.getByTestId("cash-cost").textContent).toBe("");
+    expect(screen.getByTestId("cash-value").textContent).toBe("");
+    expect(screen.queryByTestId("cash-profit")).not.toBeInTheDocument();
+  });
+
+  it("shows what the money cost, what it is worth and the difference, in the base currency", () => {
+    wrap(
+      <PositionsTable
+        positions={[]}
+        cash={[makeCash()]}
+        mode="base"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(norm(screen.getByTestId("cash-cost").textContent ?? "")).toBe(
+      norm(formatMinor(9_000_000, "RUB")),
+    );
+    expect(norm(screen.getByTestId("cash-value").textContent ?? "")).toBe(
+      norm(formatMinor(13_500_000, "RUB")),
+    );
+    // The whole point of the row: the currency's own move while the money sat
+    // there. 45 000 ₽ made on dollars nobody traded.
+    expect(norm(screen.getByTestId("cash-profit").textContent ?? "")).toBe(
+      norm(formatMinor(4_500_000, "RUB")),
+    );
+    // Still the balance in its own currency, never converted: the quantity
+    // column of a holding is the holding, not its price.
+    expect(norm(screen.getByTestId("cash-amount").textContent ?? "")).toBe(
+      norm(formatMinor(150_000, "USD")),
+    );
+  });
+
+  it("says nothing about a profit on the base currency itself", () => {
+    // Rubles in a ruble space cost rubles and are worth rubles. The server does
+    // publish an honest nought here; the row shows the balance and no more,
+    // because a column of noughts across every account is noise.
+    wrap(
+      <PositionsTable
+        positions={[]}
+        cash={[
+          makeCash({
+            currency: "RUB",
+            amount_minor: 500_000,
+            in_base: {
+              currency: "RUB",
+              value_minor: 500_000,
+              cost_minor: 500_000,
+              unrealized_pnl_minor: 0,
+              gap: null,
+            },
+          }),
+        ]}
+        mode="base"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(norm(screen.getByTestId("cash-amount").textContent ?? "")).toBe(
+      norm(formatMinor(500_000, "RUB")),
+    );
+    expect(screen.queryByTestId("cash-profit")).not.toBeInTheDocument();
+  });
+
+  it("shows a negative balance rather than hiding it", () => {
+    // The owner's own case: the journal spends yuan whose purchase the broker
+    // would not explain, so the balance goes below nought. That IS the
+    // discrepancy, and a row that hid it would agree with a broker it does not
+    // agree with.
+    wrap(
+      <PositionsTable
+        positions={[]}
+        cash={[makeCash({ currency: "CNY", amount_minor: -40_000 })]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(norm(screen.getByTestId("cash-amount").textContent ?? "")).toBe(
+      norm(formatMinor(-40_000, "CNY")),
+    );
+  });
+
+  it("hides a currency the account holds nothing of, behind the same control", () => {
+    // An account that bought dollars and sold them all again has held dollars.
+    // The row is not noise — it is where that history lives — but it is not
+    // today's portfolio either, so it sits behind the control that shows what
+    // is no longer held.
+    wrap(
+      <PositionsTable
+        positions={[makePosition(), makeClosed()]}
+        cash={[makeCash({ amount_minor: 0 })]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(screen.queryByTestId("cash-row")).not.toBeInTheDocument();
+    // ...and the control's count is about PAPERS: an empty balance is not a
+    // closed position, and counting it would make the sentence wrong.
+    expect(screen.getByTestId("closed-positions-note").textContent).toContain(
+      "1",
+    );
+
+    fireEvent.click(screen.getByTestId("toggle-closed-positions"));
+    expect(screen.getByTestId("cash-row")).toBeInTheDocument();
   });
 
   // A POSITION SOLD OUT OF IS STILL HISTORY, AND STILL OFF THE SCREEN BY

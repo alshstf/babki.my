@@ -1056,6 +1056,41 @@ export interface components {
             /** @description Which kind of gap stopped `in_base`, or null when there is a figure. Both of them can be true of one account at once, hence `both`. */
             in_base_gap: components["schemas"]["RealizedGap"] | null;
         };
+        /** @description THE MONEY THE ACCOUNT HOLDS IN ONE CURRENCY, published as a holding rather than as a balance — because that is what it is. Yuan sitting on a Russian broker's account was bought at some rate and is worth another today, and the difference is real money made or lost. It is NOT the balance mark the reconciliation stores (Account.balance): that is one figure the broker named on one day, in rubles alone; this is computed from the journal, in every currency the account has touched. */
+        CashPosition: {
+            /** @description ISO-4217 code of the money this row is */
+            currency: string;
+            /**
+             * Format: int64
+             * @description The balance in minor units of `currency`: every cash effect the journal records, added up — amount less commission on each entry, which is the same formula the reconciliation compares against the broker. CAN BE NEGATIVE, and is published so rather than clamped: an account whose journal is missing an operation genuinely shows money spent that never arrived (the owner's own yuan, spent on bonds while some of the purchases behind it are trades the broker will not explain), and a floor at nought would hide exactly the discrepancy a reader needs.
+             */
+            amount_minor: number;
+            in_base: components["schemas"]["CashInBase"];
+        };
+        /** @description The same money in the space's base currency, which is the only form in which it has a profit at all: in its OWN currency a thousand yuan cost a thousand yuan and always will. Null figures with a named `gap` when a rate was missing — never a partial answer. */
+        CashInBase: {
+            /** @description The base currency these figures are in, carried here so a client need not go back to the session for it */
+            currency: string;
+            /**
+             * Format: int64
+             * @description What the balance is worth TODAY, at today's rate. Null when there is no rate for today, which `gap` then names.
+             */
+            value_minor: number | null;
+            /**
+             * Format: int64
+             * @description What this money was worth when it ARRIVED: each parcel still held, struck at the rate of the day it came, and summed. The parcels are consumed oldest-first, so what remains is the newest money — the same queue every other holding here uses. Null when any parcel's day has no rate. On a NEGATIVE balance this is 0: nothing is held, so nothing was paid for it.
+             */
+            cost_minor: number | null;
+            /**
+             * Format: int64
+             * @description value_minor less cost_minor — the currency's own move while this money sat on the account. Null when either half is.
+             */
+            unrealized_pnl_minor: number | null;
+            /** @description Which rate was missing, or null when the figures are struck. `no_rate_today` stops the valuation; `no_rate_lot_date` stops the cost, and therefore the profit. */
+            gap: components["schemas"]["CashGap"] | null;
+        };
+        /** @enum {string} */
+        CashGap: "no_rate_today" | "no_rate_lot_date";
         AccountCurrencyTotal: {
             currency: string;
             /**
@@ -1088,6 +1123,8 @@ export interface components {
             positions: components["schemas"]["Position"][];
             /** @description Whether the cost basis behind every figure above is the one the owner's country requires (see CostBasisRules). It travels with the numbers rather than only in the session because this is the payload a reader takes the numbers from: a client that renders positions without ever reading the session must still be unable to show cost_minor, unrealized_pnl_minor and realized_pnl_minor as if they were a tax basis when they are not. It describes the whole computation, not one row, so it sits on the response rather than being repeated identically inside every Position. This is the ONLY repetition of it, and the line is drawn here on purpose: the journal publishes a cost basis too (a transfer's Operation.amount_minor) and carries no copy — not for want of an envelope, which OperationsResponse has had since #86, but because one statement living in three payloads is two extra places to forget. The statement belongs to the space, not to a payload — SessionInfo.cost_basis_rules is where a reader of any other figure takes it from. */
             cost_basis_rules: components["schemas"]["CostBasisRules"];
+            /** @description The money the account holds, one entry per currency it has ever touched, ordered by currency code. It sits beside `positions` rather than among them because it is not a security and has no instrument — but it belongs on the same screen and in the same round trip: cash is a holding, and a reader comparing it with the papers beside it is doing the arithmetic this screen is for. A currency whose balance came to nought is still listed: an account that bought dollars and sold them all again HAS held dollars, and saying nothing about them is a different claim from saying the balance is zero. */
+            cash: components["schemas"]["CashPosition"][];
             /** @description What this account has made all in, across the positions above and its own charges beside them. It sits on the response for the same reasons realized_total does: it is an aggregate of exactly these rows, it arrives in the round trip the screen already makes, and the addition happens once on the server so every reader agrees on the answer. Present even for an account with no positions, where by_currency is empty and in_base is a plain zero. */
             account_total: components["schemas"]["AccountTotal"];
             /** @description What this account's closed deals have locked in, across all of the positions above. It sits on the response rather than being computed by the reader from `positions`, and rather than living on its own endpoint: it is an aggregate of exactly these rows, arrives with them in the one round trip the screen already makes, and — like cost_basis_rules — describes the whole list rather than any one row. Present even for an account with no positions, where by_currency is empty and in_base is a plain zero. */

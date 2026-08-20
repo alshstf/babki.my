@@ -25,7 +25,12 @@ import {
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
 import { MoneyCell } from "@/components/money-cell";
 import { unnameableGap } from "@/lib/unnameable-gap";
-import type { InBaseGap, MarketValueGap, Position } from "@/api/positions";
+import type {
+  CashPosition,
+  InBaseGap,
+  MarketValueGap,
+  Position,
+} from "@/api/positions";
 
 // The one sentence that captions EVERY money cell of a row, chosen from the
 // term the server says it stopped on (Position.in_base_gap). It is the row's
@@ -396,10 +401,19 @@ function unrealizedPercent(
 
 export function PositionsTable({
   positions,
+  cash,
   mode,
   baseCurrency,
 }: {
   positions: Position[];
+  // THE MONEY, AMONG THE PAPERS. Cash is a holding: yuan on the account was
+  // bought at one rate and is worth another today, and that difference is money
+  // made or lost exactly as a share's is. It arrives from the server already
+  // valued, one row per currency the account has ever touched.
+  //
+  // Optional because the rows are new and not every caller has them yet; absent
+  // and empty render the same — no money rows at all.
+  cash?: CashPosition[];
   mode: DisplayCurrencyMode;
   // The space's base currency (Summary.base_currency) — needed to tell
   // "already in base, nothing to convert" apart from "conversion failed, no
@@ -466,6 +480,14 @@ export function PositionsTable({
   const shown = showClosed
     ? positions
     : positions.filter((p) => p.quantity !== "0");
+  // A currency the account has touched and holds nothing of is hidden by the
+  // same control, for the same reason a paper it has sold out of is — with one
+  // difference: an empty balance is not «closed», so it is not counted in the
+  // control's number. It reappears with the closed rows, since that is the
+  // control a reader reaches for when looking for what is no longer held.
+  const shownCash = (cash ?? []).filter(
+    (c) => showClosed || c.amount_minor !== 0,
+  );
 
   return (
     <>
@@ -923,6 +945,76 @@ export function PositionsTable({
                     </span>
                   )}
                 </TableCell>
+              </TableRow>
+            );
+          })}
+          {shownCash.map((money) => {
+            // WHAT THE ROW SHOWS DEPENDS ON THE MODE, and the two are not the
+            // same question. In the account's own currencies the money is
+            // simply itself — a thousand yuan, costing a thousand yuan — so the
+            // row prints the balance and leaves the money columns empty rather
+            // than filling three of them with one figure. In the base currency
+            // it has a cost, a value and a profit like any other holding, and
+            // that is the whole reason it is on this screen.
+            const inBase = money.in_base;
+            const showInBase =
+              mode === "base" && money.currency !== baseCurrency;
+            return (
+              <TableRow key={`cash-${money.currency}`} data-testid="cash-row">
+                <TableCell>
+                  <div className="font-medium" data-testid="cash-currency">
+                    {t("positions.cashName", { currency: money.currency })}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {t("positions.cashKind")}
+                  </div>
+                </TableCell>
+                <TableCell
+                  className="text-right tabular-nums"
+                  data-testid="cash-amount"
+                >
+                  {formatMinor(money.amount_minor, money.currency)}
+                </TableCell>
+                <TableCell
+                  className="text-right tabular-nums"
+                  data-testid="cash-cost"
+                >
+                  {showInBase && inBase.cost_minor != null
+                    ? formatMinor(inBase.cost_minor, inBase.currency)
+                    : ""}
+                </TableCell>
+                <TableCell
+                  className="text-right tabular-nums"
+                  data-testid="cash-value"
+                >
+                  {showInBase && inBase.value_minor != null
+                    ? formatMinor(inBase.value_minor, inBase.currency)
+                    : ""}
+                </TableCell>
+                <TableCell
+                  className="text-right tabular-nums"
+                  title={showInBase ? t("positions.cashProfitHint") : undefined}
+                >
+                  {showInBase && inBase.unrealized_pnl_minor != null ? (
+                    <span
+                      data-testid="cash-profit"
+                      className={signClass(inBase.unrealized_pnl_minor)}
+                    >
+                      {formatMinor(
+                        inBase.unrealized_pnl_minor,
+                        inBase.currency,
+                      )}
+                    </span>
+                  ) : (
+                    ""
+                  )}
+                </TableCell>
+                {/* Settled and total belong to papers: money that was never
+                    sold has locked in nothing and paid nothing. Left empty
+                    rather than written as noughts, which would read as figures
+                    a reader could add up. */}
+                <TableCell />
+                <TableCell />
               </TableRow>
             );
           })}
