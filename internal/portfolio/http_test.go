@@ -285,6 +285,7 @@ type cashPositionResp struct {
 		ValueMinor         *int64  `json:"value_minor"`
 		CostMinor          *int64  `json:"cost_minor"`
 		UnrealizedPnlMinor *int64  `json:"unrealized_pnl_minor"`
+		RealizedPnlMinor   *int64  `json:"realized_pnl_minor"`
 		Gap                *string `json:"gap"`
 	} `json:"in_base"`
 }

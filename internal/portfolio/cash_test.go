@@ -221,3 +221,130 @@ func TestCashByCurrencyIsOrdered(t *testing.T) {
 		t.Errorf("order = %v, want CNY RUB USD", got)
 	}
 }
+
+// TestCashRecordsWhatLeftAndWhen is what makes a banked currency result
+// visible at all. The parcels a departure took, and the day it went, are the two
+// halves of "sold at a better rate than it was bought" — and a screen holding
+// only balances reports a gain of exactly nought on money that has already been
+// turned back.
+func TestCashRecordsWhatLeftAndWhen(t *testing.T) {
+	ops := []Operation{
+		cashOp(t, TypeConversion, "2026-01-10", "USD", 100_000, 0), // $1 000 in
+		cashOp(t, TypeConversion, "2026-03-10", "USD", -60_000, 0), // $600 out
+	}
+
+	cash, err := Cash(ops)
+	if err != nil {
+		t.Fatalf("Cash: %v", err)
+	}
+	usd := cash["USD"]
+	if len(usd.Realizations) != 1 {
+		t.Fatalf("realizations = %+v, want one", usd.Realizations)
+	}
+	r := usd.Realizations[0]
+	if r.Minor() != 60_000 {
+		t.Errorf("the departure accounts for %d, want 60000", r.Minor())
+	}
+	if !r.OccurredOn.Equal(day(t, "2026-03-10")) {
+		t.Errorf("the departure is dated %s, want 2026-03-10 — that is the day whose rate its proceeds are struck at", r.OccurredOn.Format("2006-01-02"))
+	}
+	if len(r.Released) != 1 || !r.Released[0].On.Equal(day(t, "2026-01-10")) {
+		t.Errorf("released %+v, want one parcel dated 2026-01-10 — the day the money ARRIVED, which is what its cost is struck at", r.Released)
+	}
+	if usd.Minor != 40_000 || len(usd.Lots) != 1 || usd.Lots[0].Minor != 40_000 {
+		t.Errorf("what is left is %d in %+v, want 40000 in one parcel", usd.Minor, usd.Lots)
+	}
+}
+
+// TestCashSplitsADepartureAcrossTheParcelsItTakes: one payment can reach back
+// through several arrivals, and each carries its own day. Valuing the whole
+// departure at the oldest parcel's rate — or at the newest — is a different
+// number, and the split is what makes it the right one.
+func TestCashSplitsADepartureAcrossTheParcelsItTakes(t *testing.T) {
+	ops := []Operation{
+		cashOp(t, TypeConversion, "2026-01-10", "USD", 100_000, 0),
+		cashOp(t, TypeConversion, "2026-02-10", "USD", 100_000, 0),
+		cashOp(t, TypeBuy, "2026-03-10", "USD", -150_000, 0),
+	}
+
+	cash, err := Cash(ops)
+	if err != nil {
+		t.Fatalf("Cash: %v", err)
+	}
+	released := cash["USD"].Realizations[0].Released
+	if len(released) != 2 {
+		t.Fatalf("released %+v, want two parcels: the January one entirely and half of February's", released)
+	}
+	if released[0].Minor != 100_000 || !released[0].On.Equal(day(t, "2026-01-10")) {
+		t.Errorf("the first parcel is %+v, want 100000 dated 2026-01-10", released[0])
+	}
+	if released[1].Minor != 50_000 || !released[1].On.Equal(day(t, "2026-02-10")) {
+		t.Errorf("the second parcel is %+v, want 50000 dated 2026-02-10 — the REMAINDER of the newer arrival, keeping its own day", released[1])
+	}
+}
+
+// TestCashRecordsNoDepartureForMoneyItNeverSaw. Spending yuan whose purchase the
+// broker would not explain releases nothing: there is no parcel to take, and a
+// departure recorded with an empty hand would be a profit struck against a cost
+// of nought — the whole payment counted as gain. The negative balance is where
+// that gap is reported instead.
+func TestCashRecordsNoDepartureForMoneyItNeverSaw(t *testing.T) {
+	ops := []Operation{cashOp(t, TypeBuy, "2026-02-10", "CNY", -50_000, 0)}
+
+	cash, err := Cash(ops)
+	if err != nil {
+		t.Fatalf("Cash: %v", err)
+	}
+	if got := cash["CNY"].Realizations; len(got) != 0 {
+		t.Errorf("realizations = %+v, want none: nothing was held, so nothing was given up", got)
+	}
+	if cash["CNY"].Minor != -50_000 {
+		t.Errorf("balance = %d, want -50000 — the gap is reported here", cash["CNY"].Minor)
+	}
+}
+
+// TestCashCoversAnOverdraftBeforeHoldingAnything is the invariant this position
+// lives or dies by: WHAT THE PARCELS SAY MUST BE WHAT THE BALANCE SAYS.
+//
+// The case is the owner's own, and it is not exotic. A share is bought with
+// dollars whose purchase the journal never saw (a currency trade the broker
+// would not explain), so the balance goes below nought; a later sale brings
+// dollars in. Without an overdraft to pay off first, the whole arrival becomes a
+// parcel and the position claims to hold eight times what it has — and every
+// figure struck from those parcels is wrong in the same proportion.
+//
+// Found by an account total that came out at minus three and a half million on
+// a fixture whose answer was plus four.
+func TestCashCoversAnOverdraftBeforeHoldingAnything(t *testing.T) {
+	ops := []Operation{
+		cashOp(t, TypeBuy, "2026-03-10", "USD", -100_000, 0), // spent, never seen arriving
+		cashOp(t, TypeSell, "2026-05-10", "USD", 120_000, 0), // and now money comes in
+		cashOp(t, TypeFee, "2026-05-10", "USD", -5_000, 0),
+	}
+
+	cash, err := Cash(ops)
+	if err != nil {
+		t.Fatalf("Cash: %v", err)
+	}
+	usd := cash["USD"]
+	if usd.Minor != 15_000 {
+		t.Fatalf("balance = %d, want 15000", usd.Minor)
+	}
+	var held int64
+	for _, l := range usd.Lots {
+		held += l.Minor
+	}
+	switch held {
+	case 115_000:
+		t.Errorf("the parcels hold 115000 against a balance of 15000 — the overdraft was forgotten, so the arrival was counted as held in full. Everything struck from these parcels is then wrong by the same 100000")
+	case 15_000:
+	default:
+		t.Errorf("the parcels hold %d, want 15000 — as much as the balance", held)
+	}
+	// The departure recorded is the fee alone. Covering an overdraft is not a
+	// disposal: the spending it pays off had no known cost, and pairing it with
+	// the arriving money's own day would invent one.
+	if len(usd.Realizations) != 1 || usd.Realizations[0].Minor() != 5_000 {
+		t.Errorf("realizations = %+v, want the 5000 fee alone", usd.Realizations)
+	}
+}

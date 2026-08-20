@@ -216,7 +216,13 @@ func TestAccountTotalCountsAnUnpricedHoldingAtNoughtAndSaysSo(t *testing.T) {
 //	a commission of $50.00 booked on 2026-05-10 (rate 80)  -> -5_000 USD, -400_000 ₽
 //
 //	account in USD  =    20_000 -   5_000 =    15_000
-//	account in base = 4_600_000 - 400_000 = 4_200_000
+//
+// And the DOLLARS THEMSELVES are a holding: the 15 000 left on the account
+// arrived with the sale on 2026-05-10 (rate 80) and are worth today's 90, so the
+// currency has made 15_000 * (90 - 80) = 150_000 while they sat there. That term
+// is the whole reason this total is not just the papers.
+//
+//	account in base = 4_600_000 - 400_000 + 150_000 = 4_350_000
 func TestAccountTotalInBaseConvertsEachChargeOnItsOwnDay(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes,
@@ -244,12 +250,91 @@ func TestAccountTotalInBaseConvertsEachChargeOnItsOwnDay(t *testing.T) {
 	}
 	switch *got.InBase {
 	case 4_600_000:
-		t.Errorf("in_base = 4600000 — the commission never reached the base figure, though it did reach the USD one")
-	case 4_150_000:
-		t.Errorf("in_base = 4150000 — the commission was converted at TODAY's rate (90) rather than at the rate of the day it was charged (80). Every other past event on this screen is valued on its own day")
+		t.Errorf("in_base = 4600000 — neither the commission nor the money's own move reached the base figure")
+	case 4_200_000:
+		t.Errorf("in_base = 4200000 — the papers and the charge, with the dollars left on the account contributing nothing. Money is a holding: 15 000 $ that arrived at 80 and are worth 90 have made 150 000 ₽, and a total that omits it says the account did nothing with its cash")
+	case 4_300_000:
+		t.Errorf("in_base = 4300000 — the commission was converted at TODAY's rate (90) rather than at the rate of the day it was charged (80). Every other past event on this screen is valued on its own day")
 	default:
-		if *got.InBase != 4_200_000 {
-			t.Errorf("in_base = %d, want 4200000 (4600000 - 5000*80)", *got.InBase)
+		if *got.InBase != 4_350_000 {
+			t.Errorf("in_base = %d, want 4350000 (4600000 - 400000 + 150000)", *got.InBase)
 		}
+	}
+}
+
+// TestAccountTotalCountsTheCurrencyResultAlreadyBanked is the case that decided
+// the shape of this whole figure. Money exchanged and exchanged BACK leaves
+// nothing behind to revalue — the balances afterwards are rubles bought today
+// and no dollars at all — so a total built from balances alone reports a gain
+// of exactly nought on an account that plainly made money.
+//
+//	fx USD->RUB: 50 from 2026-02-01, 80 from 2026-05-01, 90 from 2026-07-01
+//	deposit 1 000,00 $ on 2026-03-10 (rate 50) -> the dollars arrive worth 50 000
+//	convert them away on 2026-05-10 (rate 80)  -> they leave worth 80 000
+//
+//	the account made                              30_000
+//
+// Nothing is held at the end and the unrealized half is nought; the whole result
+// is in the departure. The 80 000 ₽ that arrived in exchange are NOT income —
+// they are the same money in another currency, and the ruble side of a
+// conversion is why they are not counted twice.
+func TestAccountTotalCountsTheCurrencyResultAlreadyBanked(t *testing.T) {
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := fxRateAPI(t, quotes,
+		datedRate{earlyRateOn, "50"}, datedRate{midRateOn, "80"}, datedRate{lateRateOn, "90"})
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"deposit",
+		"occurred_on":"2026-03-10","amount_minor":100000,"currency":"USD"}`, acc.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"conversion",
+		"occurred_on":%q,"amount_minor":-100000,"currency":"USD"}`, acc.ID, sellOn))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"conversion",
+		"occurred_on":%q,"amount_minor":8000000,"currency":"RUB"}`, acc.ID, sellOn))
+
+	body := accountPositions(t, c, url, acc.ID)
+
+	usd := cashOf(t, body, "USD")
+	if usd.AmountMinor != 0 {
+		t.Fatalf("the dollar balance is %d, want 0 — they were all exchanged back", usd.AmountMinor)
+	}
+	if usd.InBase.RealizedPnlMinor == nil || *usd.InBase.RealizedPnlMinor != 3_000_000 {
+		t.Errorf("the dollars' banked result is %v, want 3000000 (they left at 80 having arrived at 50)", usd.InBase.RealizedPnlMinor)
+	}
+	if usd.InBase.UnrealizedPnlMinor == nil || *usd.InBase.UnrealizedPnlMinor != 0 {
+		t.Errorf("the dollars' unrealized result is %v, want 0 — nothing is held", usd.InBase.UnrealizedPnlMinor)
+	}
+
+	got := body.AccountTotal
+	if got.InBase == nil {
+		t.Fatalf("in_base is null (%v) — every rate this needs is seeded", got.InBaseGap)
+	}
+	switch *got.InBase {
+	case 0:
+		t.Errorf("in_base = 0 — the account's whole result was the currency's, and a total built from what is still held reports nought on money that has already been turned back. That is the case this term exists for")
+	case 3_000_000:
+	default:
+		t.Errorf("in_base = %d, want 3000000", *got.InBase)
+	}
+}
+
+// TestAccountTotalAddsNoCurrencyResultOnItsOwnBaseCurrency: rubles in a ruble
+// space cost rubles and are worth rubles, whatever they do. The total must not
+// pick up a term for them — not because the term would be wrong, but because
+// asking a rate of one to say something is how a rounding becomes a result.
+func TestAccountTotalAddsNoCurrencyResultOnItsOwnBaseCurrency(t *testing.T) {
+	url, c := newAPI(t)
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"deposit",
+		"occurred_on":"2026-03-10","amount_minor":500000,"currency":"RUB"}`, acc.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"withdrawal",
+		"occurred_on":"2026-04-10","amount_minor":-200000,"currency":"RUB"}`, acc.ID))
+
+	got := accountPositions(t, c, url, acc.ID).AccountTotal
+	if got.InBase == nil || *got.InBase != 0 {
+		t.Errorf("in_base = %v, want 0: putting money in and taking it out is not earning it", got.InBase)
+	}
+	if got.InBaseGap != nil {
+		t.Errorf("in_base_gap = %q, want null — nothing here needed a rate at all", *got.InBaseGap)
 	}
 }

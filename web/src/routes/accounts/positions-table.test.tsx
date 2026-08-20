@@ -1004,6 +1004,7 @@ describe("PositionsTable", () => {
         value_minor: 13_500_000,
         cost_minor: 9_000_000,
         unrealized_pnl_minor: 4_500_000,
+        realized_pnl_minor: 0,
         gap: null,
       },
       ...overrides,
@@ -1092,6 +1093,7 @@ describe("PositionsTable", () => {
               value_minor: 500_000,
               cost_minor: 500_000,
               unrealized_pnl_minor: 0,
+              realized_pnl_minor: 0,
               gap: null,
             },
           }),
@@ -1105,6 +1107,52 @@ describe("PositionsTable", () => {
       norm(formatMinor(500_000, "RUB")),
     );
     expect(screen.queryByTestId("cash-profit")).not.toBeInTheDocument();
+  });
+
+  it("says under the profit what this money has already earned", () => {
+    // The case that decided the whole shape: dollars bought and exchanged back
+    // leave nothing to revalue, so the figure above is a truthful nought and
+    // the entire result is in what already left. A row showing only the first
+    // would report nothing happened.
+    wrap(
+      <PositionsTable
+        positions={[]}
+        cash={[
+          makeCash({
+            amount_minor: 0,
+            in_base: {
+              currency: "RUB",
+              value_minor: 0,
+              cost_minor: 0,
+              unrealized_pnl_minor: 0,
+              realized_pnl_minor: 3_000_000,
+              gap: null,
+            },
+          }),
+        ]}
+        mode="base"
+        baseCurrency="RUB"
+      />,
+    );
+    fireEvent.click(screen.getByTestId("toggle-closed-positions"));
+
+    expect(
+      norm(screen.getByTestId("cash-realized").textContent ?? ""),
+    ).toContain(norm(formatMinor(3_000_000, "RUB")));
+  });
+
+  it("draws no realized line on money that has never moved", () => {
+    wrap(
+      <PositionsTable
+        positions={[]}
+        cash={[makeCash()]}
+        mode="base"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(screen.getByTestId("cash-profit")).toBeInTheDocument();
+    expect(screen.queryByTestId("cash-realized")).not.toBeInTheDocument();
   });
 
   it("shows a negative balance rather than hiding it", () => {
@@ -1141,10 +1189,12 @@ describe("PositionsTable", () => {
     );
 
     expect(screen.queryByTestId("cash-row")).not.toBeInTheDocument();
-    // ...and the control's count is about PAPERS: an empty balance is not a
-    // closed position, and counting it would make the sentence wrong.
+    // ...and the count names BOTH — the paper sold out of and the currency
+    // emptied. Counting only the papers would undercount what is missing, and
+    // on an account with no closed papers at all the control would not appear
+    // at all, leaving the emptied currency reachable from nowhere.
     expect(screen.getByTestId("closed-positions-note").textContent).toContain(
-      "1",
+      "2",
     );
 
     fireEvent.click(screen.getByTestId("toggle-closed-positions"));
@@ -1190,7 +1240,7 @@ describe("PositionsTable", () => {
     // are NOT filtered with them — a header standing over rows that show none
     // of it reads as an error rather than as the deliberate answer it is.
     expect(screen.getByTestId("closed-positions-note").textContent).toBe(
-      "скрыто закрытых: 1. Итоги под таблицей считаются по всем позициям, включая скрытые",
+      "скрыто: 1 — закрытые бумаги и валюты с нулевым остатком. Итоги под таблицей считаются по всем позициям, включая скрытые",
     );
   });
 
@@ -1211,7 +1261,7 @@ describe("PositionsTable", () => {
     expect(screen.getByText("Test Corp")).toBeInTheDocument();
     expect(toggle.textContent).toBe("Скрыть закрытые");
     expect(screen.getByTestId("closed-positions-note").textContent).toBe(
-      "закрытых среди них: 1",
+      "закрытых и пустых среди них: 1",
     );
 
     // And back: the control is a switch, not a one-way door.

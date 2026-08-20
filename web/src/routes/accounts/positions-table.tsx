@@ -476,7 +476,14 @@ export function PositionsTable({
   // reading «Реализовано 50 000 ₽» over rows that show none of it would look
   // like an error rather than like the deliberate answer it is.
   const [showClosed, setShowClosed] = useState(false);
-  const closedCount = positions.filter((p) => p.quantity === "0").length;
+  // WHAT IS HIDDEN IS WHAT THE COUNT MUST NAME. Papers sold out of and
+  // currencies emptied are hidden by the same control, so counting only the
+  // papers would undercount what is missing from the list — and on an account
+  // with no closed papers at all the control would not appear, leaving an
+  // emptied currency's history reachable from nowhere.
+  const emptiedCash = (cash ?? []).filter((c) => c.amount_minor === 0).length;
+  const closedCount =
+    positions.filter((p) => p.quantity === "0").length + emptiedCash;
   const shown = showClosed
     ? positions
     : positions.filter((p) => p.quantity !== "0");
@@ -1008,6 +1015,29 @@ export function PositionsTable({
                   ) : (
                     ""
                   )}
+                  {/* WHAT THIS MONEY ALREADY EARNED, under what it is earning
+                      now — the same two lines a paper's profit cell carries,
+                      for the same reason. Money exchanged and exchanged back
+                      leaves nothing to revalue, so the figure above it is a
+                      truthful nought and the whole result is here. Drawn only
+                      when there IS one, so an account whose money never moved
+                      does not carry a row of «реализовано 0,00». */}
+                  {showInBase &&
+                    inBase.realized_pnl_minor != null &&
+                    inBase.realized_pnl_minor !== 0 && (
+                      <div
+                        data-testid="cash-realized"
+                        className="text-xs font-normal text-muted-foreground"
+                        title={t("positions.cashRealizedHint")}
+                      >
+                        {t("positions.cashRealizedOnRow", {
+                          amount: formatMinor(
+                            inBase.realized_pnl_minor,
+                            inBase.currency,
+                          ),
+                        })}
+                      </div>
+                    )}
                 </TableCell>
                 {/* Settled and total belong to papers: money that was never
                     sold has locked in nothing and paid nothing. Left empty

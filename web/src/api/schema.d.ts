@@ -1086,11 +1086,16 @@ export interface components {
              * @description value_minor less cost_minor — the currency's own move while this money sat on the account. Null when either half is.
              */
             unrealized_pnl_minor: number | null;
-            /** @description Which rate was missing, or null when the figures are struck. `no_rate_today` stops the valuation; `no_rate_lot_date` stops the cost, and therefore the profit. */
+            /**
+             * Format: int64
+             * @description WHAT THE CURRENCY ALREADY EARNED OR COST, banked: for every departure of this money, its proceeds at the rate of the day it left, less what its parcels were worth on the days they arrived. Without this figure a currency result vanishes the moment it is taken: a hundred thousand rubles turned into dollars at 100 and back at 120 is twenty thousand rubles made, and the balances afterwards — rubles bought today, no dollars — value to a gain of exactly nought. IT IS FINAL, like a disposal's: both of its ends are past days with rates that will not change. Only departures the queue could actually cover are in it; money spent that was never seen arriving accounts for nothing here and is reported as the negative balance instead. Null when a rate behind one of those days is missing, which `gap` then names.
+             */
+            realized_pnl_minor: number | null;
+            /** @description Which rate was missing, or null when the figures are struck. `no_rate_today` stops the valuation; `no_rate_lot_date` stops the cost and therefore the unrealized profit; `no_rate_disposal_date` stops the realized result alone, whose days are its own. */
             gap: components["schemas"]["CashGap"] | null;
         };
         /** @enum {string} */
-        CashGap: "no_rate_today" | "no_rate_lot_date";
+        CashGap: "no_rate_today" | "no_rate_lot_date" | "no_rate_disposal_date";
         AccountCurrencyTotal: {
             currency: string;
             /**
