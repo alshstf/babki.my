@@ -1303,6 +1303,77 @@ func taxWithheldFromAccount(ops []Operation) []apitypes.CurrencyAmount {
 	return out
 }
 
+// cashToAPI values one currency's balance in the base currency and publishes it
+// as the contract's CashPosition.
+//
+// TWO RATES FOR TWO QUESTIONS, the same pair every other holding on this screen
+// uses. What the money is worth is today's question and takes today's rate. What
+// it COST is a past one and takes the rate of the day each parcel arrived — the
+// parcels being what the queue left behind, oldest spent first (see
+// portfolio.Cash). A balance valued entirely at today's rate would report a
+// profit of exactly nought on every account, for ever.
+//
+// THE OWN-CURRENCY FIGURES ARE NOT PUBLISHED because there is nothing to
+// publish: a thousand yuan cost a thousand yuan and is worth a thousand yuan,
+// and a profit column of nought in every row is an answer to a question nobody
+// asked. The base currency is where this money has a result at all — and where
+// the base currency IS this currency, the rate is one and the result is an
+// honest nought.
+//
+// A NEGATIVE BALANCE HAS NO COST. Nothing is held, so nothing was paid for it:
+// the parcels are empty by construction and the sum over them is zero. The
+// valuation is still struck — money owed in yuan is worth something in rubles —
+// so the profit on such a row is the whole of that negative valuation, which is
+// true and is what a reader should see while the journal is missing the
+// purchases behind it.
+func (h *Handler) cashToAPI(ctx context.Context, p *CashPosition, base string, now time.Time, cache map[rateKey]*rateLookup) (apitypes.CashPosition, error) {
+	out := apitypes.CashPosition{
+		Currency:    p.Currency,
+		AmountMinor: p.Minor,
+		InBase: apitypes.CashInBase{
+			Currency: base,
+			Gap:      nullable.NewNullNullable[apitypes.CashGap](),
+		},
+	}
+	value, ok, err := h.sumInBase(ctx, []datedMinor{{minor: p.Minor, from: p.Currency, on: now}}, base, cache)
+	if err != nil {
+		return apitypes.CashPosition{}, err
+	}
+	if !ok {
+		out.InBase.ValueMinor = nullable.NewNullNullable[int64]()
+		out.InBase.CostMinor = nullable.NewNullNullable[int64]()
+		out.InBase.UnrealizedPnlMinor = nullable.NewNullNullable[int64]()
+		out.InBase.Gap = nullable.NewNullableWithValue(apitypes.CashGapNoRateToday)
+		return out, nil
+	}
+	out.InBase.ValueMinor = nullable.NewNullableWithValue(value)
+
+	terms := make([]datedMinor, 0, len(p.Lots))
+	for _, l := range p.Lots {
+		terms = append(terms, datedMinor{minor: l.Minor, from: p.Currency, on: l.On})
+	}
+	cost, ok, err := h.sumInBase(ctx, terms, base, cache)
+	if err != nil {
+		return apitypes.CashPosition{}, err
+	}
+	if !ok {
+		// The valuation stands and the cost does not, so the profit cannot be
+		// struck either — and the two nulls are published with the reason
+		// rather than with the valuation subtracted from nothing.
+		out.InBase.CostMinor = nullable.NewNullNullable[int64]()
+		out.InBase.UnrealizedPnlMinor = nullable.NewNullNullable[int64]()
+		out.InBase.Gap = nullable.NewNullableWithValue(apitypes.CashGapNoRateLotDate)
+		return out, nil
+	}
+	out.InBase.CostMinor = nullable.NewNullableWithValue(cost)
+	pnl, err := money.Sub(value, cost)
+	if err != nil {
+		return apitypes.CashPosition{}, fmt.Errorf("%w: the %s balance worth %d against a cost of %d", err, p.Currency, value, cost)
+	}
+	out.InBase.UnrealizedPnlMinor = nullable.NewNullableWithValue(pnl)
+	return out, nil
+}
+
 // accountTotals adds up what the account HAS MADE — every position's total
 // (realized result + income + unrealized revaluation) plus the account's own
 // charges, which no position can see.
@@ -2251,10 +2322,25 @@ func rateQueries(
 	instruments map[uuid.UUID]instrument.Instrument,
 	quotes map[uuid.UUID]marketdata.Quote,
 	income map[uuid.UUID][]Operation,
+	cash map[string]*CashPosition,
 	baseCurrency string,
 	now time.Time,
 ) []marketdata.RateQuery {
 	var out []marketdata.RateQuery
+	// The money's own two questions, asked for every currency: what it is worth
+	// today, and what each parcel still held was worth on the day it arrived
+	// (see cashToAPI). Left out of this warm-up, each of them becomes a lookup
+	// of its own inside the loop below — which is the N+1 the round-trip test
+	// guards, and which caught exactly this omission.
+	for currency, p := range cash {
+		if currency == baseCurrency {
+			continue
+		}
+		out = append(out, marketdata.RateQuery{From: currency, To: baseCurrency, On: now})
+		for _, l := range p.Lots {
+			out = append(out, marketdata.RateQuery{From: currency, To: baseCurrency, On: l.On})
+		}
+	}
 	for _, p := range positions {
 		inst, known := instruments[p.InstrumentID]
 		q, quoted := quotes[p.InstrumentID]
@@ -2483,7 +2569,15 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	// cache warm-up and nothing more: what it misses, and everything it
 	// resolves if it fails outright, the loop resolves for itself (see
 	// rateQueries, prewarmRates and rateFor).
-	h.prewarmRates(r.Context(), rateQueries(positions, instruments, quotes, income, sp.BaseCurrency, now), rates)
+	// The money the account holds, folded from the same journal by the same pure
+	// function the positions come from. Built BEFORE the warm-up so its rates
+	// are asked for in the same batch as everything else's.
+	cashPositions, err := Cash(ops)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	h.prewarmRates(r.Context(), rateQueries(positions, instruments, quotes, income, cashPositions, sp.BaseCurrency, now), rates)
 
 	totals := newRealizedTotals(sp.BaseCurrency)
 	account := newAccountTotals(sp.BaseCurrency)
@@ -2565,6 +2659,19 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Instrument.Name < out[j].Instrument.Name })
 
+	// THE MONEY, beside the papers. Valued here rather than in the fold for the
+	// reason every rate on this page is applied here: the calculating core holds
+	// none.
+	cash := make([]apitypes.CashPosition, 0, len(cashPositions))
+	for _, p := range CashByCurrency(cashPositions) {
+		one, err := h.cashToAPI(r.Context(), p, sp.BaseCurrency, now, rates)
+		if err != nil {
+			family.WriteError(w, err)
+			return
+		}
+		cash = append(cash, one)
+	}
+
 	// The account's own charges, each converted at the rate of the day it was
 	// charged — the same rule every other past event on this screen follows
 	// (НК РФ ст. 210 п. 5 for the money that is tax, and plain consistency for
@@ -2610,5 +2717,6 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		// realizedTotals, and RealizedTotal in the API contract.
 		RealizedTotal: withAccountTax(totals.result(), ops),
 		AccountTotal:  account.result(),
+		Cash:          cash,
 	})
 }

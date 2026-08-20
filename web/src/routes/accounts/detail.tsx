@@ -208,7 +208,12 @@ export function AccountDetailPage() {
           <Alert variant="destructive">
             <AlertDescription>{t("app.error")}</AlertDescription>
           </Alert>
-        ) : positions.data && positions.data.positions.length > 0 ? (
+        ) : positions.data &&
+          // Money counts as something to show. An account holding nothing but
+          // cash used to say «пусто» over a real balance — which was true of
+          // its papers and false of the account.
+          (positions.data.positions.length > 0 ||
+            positions.data.cash.some((c) => c.amount_minor !== 0)) ? (
           <>
             {/* Whether the cost and profit in the table below are the ones
                 the owner's country's rules produce. It sits ABOVE the table
@@ -224,6 +229,7 @@ export function AccountDetailPage() {
             />
             <PositionsTable
               positions={positions.data.positions}
+              cash={positions.data.cash}
               mode={mode}
               baseCurrency={baseCurrency}
             />

@@ -212,6 +212,10 @@ function makePositionsBody(
 ) {
   return {
     positions,
+    // Required by the contract on every positions response, empty by default:
+    // most tests here are about the papers, and a body without the field is not
+    // a shape the server can produce.
+    cash: [],
     cost_basis_rules: rules,
     realized_total: realizedTotal,
     account_total: accountTotal,

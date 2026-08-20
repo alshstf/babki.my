@@ -267,9 +267,26 @@ type positionInBase struct {
 }
 
 type positionsResp struct {
-	Positions     []positionResp    `json:"positions"`
-	RealizedTotal realizedTotalResp `json:"realized_total"`
-	AccountTotal  accountTotalResp  `json:"account_total"`
+	Positions     []positionResp     `json:"positions"`
+	RealizedTotal realizedTotalResp  `json:"realized_total"`
+	AccountTotal  accountTotalResp   `json:"account_total"`
+	Cash          []cashPositionResp `json:"cash"`
+}
+
+// cashPositionResp mirrors apitypes.CashPosition for decoding in tests (see
+// http_cash_test.go). The three base-currency figures are pointers because each
+// can be an explicit null with a named gap beside it, and a zero value could not
+// be told from one.
+type cashPositionResp struct {
+	Currency    string `json:"currency"`
+	AmountMinor int64  `json:"amount_minor"`
+	InBase      struct {
+		Currency           string  `json:"currency"`
+		ValueMinor         *int64  `json:"value_minor"`
+		CostMinor          *int64  `json:"cost_minor"`
+		UnrealizedPnlMinor *int64  `json:"unrealized_pnl_minor"`
+		Gap                *string `json:"gap"`
+	} `json:"in_base"`
 }
 
 // accountTotalResp mirrors apitypes.AccountTotal for decoding in tests (see
