@@ -14,10 +14,7 @@ import {
 import { useSession } from "@/api/session";
 import { useAccounts } from "@/api/accounts";
 import { usePositions } from "@/api/positions";
-import { formatDate } from "@/lib/dates";
-import { resolveDisplayAmount } from "@/lib/display-amount";
 import { useScreenCurrencies } from "@/lib/screen-currencies";
-import { MoneyCell } from "@/components/money-cell";
 import { CostBasisNotice } from "@/components/cost-basis-notice";
 import { PositionsTable } from "./positions-table";
 import { RealizedTotal } from "./realized-total";
@@ -135,44 +132,6 @@ export function AccountDetailPage() {
         <div className="flex items-center justify-between">
           <div className="flex flex-wrap items-baseline gap-x-3">
             <h2 className="text-lg font-semibold">{t("positions.title")}</h2>
-            {/* The money not in any paper, beside the papers — it is a holding
-                like the rest, and the reader comparing it with them is doing
-                the arithmetic this screen exists for. It is the broker's own
-                figure from the last reconciliation, not a sum over the journal,
-                so it keeps the date it was true on. */}
-            {account.balance && (
-              <span className="flex items-baseline gap-1.5 text-sm">
-                <span
-                  className="text-muted-foreground"
-                  title={t("positions.freeCashHint")}
-                >
-                  {t("positions.freeCash")}
-                </span>
-                <MoneyCell
-                  resolved={resolveDisplayAmount(
-                    mode,
-                    account.currency,
-                    account.balance.amount_minor,
-                    baseCurrency,
-                    // The converted balance is printed in the currency it
-                    // itself carries (MoneyInBase.currency, required by the
-                    // contract), never in the session's answer to the same
-                    // question — which this cached account may already have
-                    // outlived (#106).
-                    account.balance_in_base && {
-                      amountMinor: account.balance_in_base.amount_minor,
-                      currency: account.balance_in_base.currency,
-                      rateOn: account.balance_in_base.rate_on,
-                    },
-                  )}
-                  className="font-medium tabular-nums"
-                  testId="account-detail-balance"
-                />
-                <span className="text-xs text-muted-foreground">
-                  {formatDate(account.balance.as_of)}
-                </span>
-              </span>
-            )}
           </div>
           {!isViewer && (
             <DropdownMenu>
