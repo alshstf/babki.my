@@ -63,13 +63,16 @@ func (e AccountType) Valid() bool {
 
 // Defines values for CashGap.
 const (
-	CashGapNoRateLotDate CashGap = "no_rate_lot_date"
-	CashGapNoRateToday   CashGap = "no_rate_today"
+	CashGapNoRateDisposalDate CashGap = "no_rate_disposal_date"
+	CashGapNoRateLotDate      CashGap = "no_rate_lot_date"
+	CashGapNoRateToday        CashGap = "no_rate_today"
 )
 
 // Valid indicates whether the value is a known member of the CashGap enum.
 func (e CashGap) Valid() bool {
 	switch e {
+	case CashGapNoRateDisposalDate:
+		return true
 	case CashGapNoRateLotDate:
 		return true
 	case CashGapNoRateToday:
@@ -613,8 +616,11 @@ type CashInBase struct {
 	// Currency The base currency these figures are in, carried here so a client need not go back to the session for it
 	Currency string `json:"currency"`
 
-	// Gap Which rate was missing, or null when the figures are struck. `no_rate_today` stops the valuation; `no_rate_lot_date` stops the cost, and therefore the profit.
+	// Gap Which rate was missing, or null when the figures are struck. `no_rate_today` stops the valuation; `no_rate_lot_date` stops the cost and therefore the unrealized profit; `no_rate_disposal_date` stops the realized result alone, whose days are its own.
 	Gap nullable.Nullable[CashGap] `json:"gap"`
+
+	// RealizedPnlMinor WHAT THE CURRENCY ALREADY EARNED OR COST, banked: for every departure of this money, its proceeds at the rate of the day it left, less what its parcels were worth on the days they arrived. Without this figure a currency result vanishes the moment it is taken: a hundred thousand rubles turned into dollars at 100 and back at 120 is twenty thousand rubles made, and the balances afterwards — rubles bought today, no dollars — value to a gain of exactly nought. IT IS FINAL, like a disposal's: both of its ends are past days with rates that will not change. Only departures the queue could actually cover are in it; money spent that was never seen arriving accounts for nothing here and is reported as the negative balance instead. Null when a rate behind one of those days is missing, which `gap` then names.
+	RealizedPnlMinor nullable.Nullable[int64] `json:"realized_pnl_minor"`
 
 	// UnrealizedPnlMinor value_minor less cost_minor — the currency's own move while this money sat on the account. Null when either half is.
 	UnrealizedPnlMinor nullable.Nullable[int64] `json:"unrealized_pnl_minor"`

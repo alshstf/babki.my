@@ -1343,6 +1343,7 @@ func (h *Handler) cashToAPI(ctx context.Context, p *CashPosition, base string, n
 		out.InBase.ValueMinor = nullable.NewNullNullable[int64]()
 		out.InBase.CostMinor = nullable.NewNullNullable[int64]()
 		out.InBase.UnrealizedPnlMinor = nullable.NewNullNullable[int64]()
+		out.InBase.RealizedPnlMinor = nullable.NewNullNullable[int64]()
 		out.InBase.Gap = nullable.NewNullableWithValue(apitypes.CashGapNoRateToday)
 		return out, nil
 	}
@@ -1362,6 +1363,14 @@ func (h *Handler) cashToAPI(ctx context.Context, p *CashPosition, base string, n
 		// rather than with the valuation subtracted from nothing.
 		out.InBase.CostMinor = nullable.NewNullNullable[int64]()
 		out.InBase.UnrealizedPnlMinor = nullable.NewNullNullable[int64]()
+		// ONE CAUSE IS PUBLISHED, and this one is chosen over the realized
+		// result's: a parcel still held without a rate is the gap a reader can
+		// act on, and the realized figure below would be reported with the same
+		// two words on an account where it is perfectly strikeable. The realized
+		// result is withheld with it rather than published beside a null cost —
+		// half an answer under one caption is what the single cause exists to
+		// prevent.
+		out.InBase.RealizedPnlMinor = nullable.NewNullNullable[int64]()
 		out.InBase.Gap = nullable.NewNullableWithValue(apitypes.CashGapNoRateLotDate)
 		return out, nil
 	}
@@ -1371,7 +1380,65 @@ func (h *Handler) cashToAPI(ctx context.Context, p *CashPosition, base string, n
 		return apitypes.CashPosition{}, fmt.Errorf("%w: the %s balance worth %d against a cost of %d", err, p.Currency, value, cost)
 	}
 	out.InBase.UnrealizedPnlMinor = nullable.NewNullableWithValue(pnl)
+
+	// WHAT THIS MONEY HAS ALREADY EARNED, struck from the days it actually
+	// happened on: each departure's proceeds at the rate of the day it left,
+	// against its parcels at the rates of the days they came. Nothing here is
+	// today's — both ends are past, which is why this figure is final.
+	//
+	// It gaps ON ITS OWN. A missing rate behind a disposal says nothing about
+	// the balance still held, so the valuation and the unrealized figure above
+	// stand, and only this one is withheld — the same argument the positions'
+	// realized result already stands on (see realizedInBase).
+	realized, ok, err := h.cashRealizedInBase(ctx, p, base, cache)
+	if err != nil {
+		return apitypes.CashPosition{}, err
+	}
+	if !ok {
+		out.InBase.RealizedPnlMinor = nullable.NewNullNullable[int64]()
+		out.InBase.Gap = nullable.NewNullableWithValue(apitypes.CashGapNoRateDisposalDate)
+		return out, nil
+	}
+	out.InBase.RealizedPnlMinor = nullable.NewNullableWithValue(realized)
 	return out, nil
+}
+
+// cashRealizedInBase is the currency result this money has already banked: for
+// every departure, what it came to on the day it went, less what its parcels
+// were worth on the days they arrived.
+//
+// ONE SUM, NOT A SUM OF ROUNDED PIECES. Both sides go through sumInBase, which
+// multiplies every term as a decimal and rounds once — the same treatment a
+// position's realized result gets, and for the same reason: the published figure
+// is the total, so the total is what may be rounded.
+func (h *Handler) cashRealizedInBase(ctx context.Context, p *CashPosition, to string, cache map[rateKey]*rateLookup) (int64, bool, error) {
+	if len(p.Realizations) == 0 {
+		// Nothing has left, so the result is nought rather than unknown — and
+		// no rate is asked for, which matters on an account whose money has
+		// never moved out of a currency the fx table cannot reach.
+		return 0, true, nil
+	}
+	proceeds := make([]datedMinor, 0, len(p.Realizations))
+	var costs []datedMinor
+	for _, r := range p.Realizations {
+		proceeds = append(proceeds, datedMinor{minor: r.Minor(), from: p.Currency, on: r.OccurredOn})
+		for _, l := range r.Released {
+			costs = append(costs, datedMinor{minor: l.Minor, from: p.Currency, on: l.On})
+		}
+	}
+	gotProceeds, ok, err := h.sumInBase(ctx, proceeds, to, cache)
+	if err != nil || !ok {
+		return 0, false, err
+	}
+	gotCost, ok, err := h.sumInBase(ctx, costs, to, cache)
+	if err != nil || !ok {
+		return 0, false, err
+	}
+	minor, err := money.Sub(gotProceeds, gotCost)
+	if err != nil {
+		return 0, false, fmt.Errorf("%w: %s departures worth %d against a cost of %d", err, p.Currency, gotProceeds, gotCost)
+	}
+	return minor, true, nil
 }
 
 // accountTotals adds up what the account HAS MADE — every position's total
@@ -1565,6 +1632,51 @@ func (at *accountTotals) addCharge(currency string, minor int64, baseMinor nulla
 			err, at.baseCurrency, baseMinor.MustGet(), at.inBaseMinor)
 	}
 	at.inBaseMinor = base
+	return nil
+}
+
+// addCash folds one currency's money in — the currency's own result, and the
+// only term of this total that has nothing to do with any paper.
+//
+// BASE CURRENCY ONLY, and that is not an omission. In its own currency a
+// thousand yuan cost a thousand yuan and is worth a thousand yuan: there is no
+// result to add, today or ever, and adding a nought to each bucket would be
+// noise. In the base currency the same money has both halves of one — what it
+// earned on the way out (realized) and what it is worth against what it cost
+// (unrealized) — and those are exactly the two figures a reader means by "what
+// did my currency do".
+//
+// WHY BOTH HALVES AND NOT ONE. Take a hundred thousand rubles to dollars at 100
+// and back at 120: the money made twenty thousand rubles and the balances
+// afterwards value to nought, because everything it earned is in the departure.
+// Take dollars and hold them: nothing has left, and everything is in the
+// unrealized half. An account does both.
+//
+// NOTHING HERE IS DOUBLE-COUNTED WITH THE PAPERS. A share bought with dollars
+// spends dollar parcels — banking the currency's move up to that day — and the
+// share's own basis is struck at the rate of the day it was bought, so the two
+// figures meet at that day and neither covers the other's ground.
+func (at *accountTotals) addCash(c apitypes.CashPosition) error {
+	if c.Currency == at.baseCurrency {
+		// Rubles in a ruble space: both halves are structurally nought, and
+		// asking for them would be asking a rate of one to say something.
+		return nil
+	}
+	for _, half := range []nullable.Nullable[int64]{c.InBase.RealizedPnlMinor, c.InBase.UnrealizedPnlMinor} {
+		if half.IsNull() {
+			// A rate behind this money is missing, so the account has no single
+			// figure. Reported as no_rate, which is what it is: every one of
+			// these gaps closes when the fx table catches up.
+			at.noRate = true
+			continue
+		}
+		sum, err := money.Add(at.inBaseMinor, half.MustGet())
+		if err != nil {
+			return fmt.Errorf("%w: the account's total in %s, adding %d of currency result to %d",
+				err, at.baseCurrency, half.MustGet(), at.inBaseMinor)
+		}
+		at.inBaseMinor = sum
+	}
 	return nil
 }
 
@@ -2340,6 +2452,14 @@ func rateQueries(
 		for _, l := range p.Lots {
 			out = append(out, marketdata.RateQuery{From: currency, To: baseCurrency, On: l.On})
 		}
+		// And the days its departures happened on, plus the days the parcels
+		// they took had arrived — the two ends of the result already banked.
+		for _, r := range p.Realizations {
+			out = append(out, marketdata.RateQuery{From: currency, To: baseCurrency, On: r.OccurredOn})
+			for _, l := range r.Released {
+				out = append(out, marketdata.RateQuery{From: currency, To: baseCurrency, On: l.On})
+			}
+		}
 	}
 	for _, p := range positions {
 		inst, known := instruments[p.InstrumentID]
@@ -2670,6 +2790,10 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		cash = append(cash, one)
+		if err := account.addCash(one); err != nil {
+			family.WriteError(w, err)
+			return
+		}
 	}
 
 	// The account's own charges, each converted at the rate of the day it was

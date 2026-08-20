@@ -37,6 +37,57 @@ type CashPosition struct {
 	// whenever Minor is positive; on a negative balance there are none, since
 	// nothing is held.
 	Lots []CashLot
+	// Realizations are the money that has already LEFT, each recorded as the
+	// parcels it took and the day it went.
+	//
+	// WITHOUT THEM A CURRENCY RESULT DISAPPEARS THE MOMENT IT IS BANKED. A
+	// hundred thousand rubles turned into dollars at 100 and back into
+	// rubles at 120 is twenty thousand rubles earned — and the balances
+	// afterwards are a ruble parcel bought today and no dollars at all, which
+	// values to a gain of exactly nought. What was made is in the DEPARTURE:
+	// the dollars left at a rate higher than the one they arrived at, and
+	// this is where that pairing is kept.
+	//
+	// A disposal covers only what the queue could actually give it. Money spent
+	// that was never seen arriving (the owner's yuan, whose purchases the broker
+	// would not explain) releases nothing and is recorded nowhere here — it
+	// shows up as the negative balance instead, rather than as a profit struck
+	// against a cost of nought.
+	Realizations []CashRealization
+	// shortfall is money already spent that no parcel covered — the overdraft.
+	//
+	// IT MUST BE REMEMBERED OR THE PARCELS STOP MEANING THE BALANCE. Spend a
+	// thousand dollars the journal never saw arrive and the balance goes to
+	// -1 000; let a sale bring 1 200 in, and the balance is 200 — but without
+	// this counter the whole 1 200 becomes a parcel, and the position claims to
+	// hold six times what it has. Every figure struck from those parcels is then
+	// wrong in the same proportion.
+	//
+	// What arrives while an overdraft stands COVERS IT FIRST and is not held:
+	// the money is gone, it just went earlier. No departure is recorded for that
+	// covering either — the spending it pays off had no known cost, and a
+	// disposal whose cost is the arriving money's own day would be a number
+	// nobody chose.
+	shortfall int64
+}
+
+// CashRealization is one departure of money: the parcels it consumed, and the
+// day it happened. What it came to in another currency is the layer above's
+// question — proceeds at THIS day's rate against parcels at each of THEIRS.
+type CashRealization struct {
+	OccurredOn time.Time
+	Released   []CashLot
+}
+
+// Minor is how much money this departure actually accounted for: the parcels it
+// took, and not a unit more. It is the sum of Released rather than the amount
+// the operation moved, so proceeds and cost are always about the same money.
+func (r CashRealization) Minor() int64 {
+	var total int64
+	for _, l := range r.Released {
+		total += l.Minor
+	}
+	return total
 }
 
 // CashLot is one arrival of money: how much, and the day it came.
@@ -113,9 +164,14 @@ func Cash(ops []Operation) (map[string]*CashPosition, error) {
 		p.Minor = balance
 		switch {
 		case effect > 0:
-			p.Lots = append(p.Lots, CashLot{Minor: effect, On: o.OccurredOn})
+			p.receive(effect, o.OccurredOn)
 		case effect < 0:
-			p.spend(-effect)
+			released := p.spend(-effect)
+			if len(released) > 0 {
+				p.Realizations = append(p.Realizations, CashRealization{
+					OccurredOn: o.OccurredOn, Released: released,
+				})
+			}
 		}
 	}
 	return out, nil
@@ -131,16 +187,39 @@ func Cash(ops []Operation) (map[string]*CashPosition, error) {
 // is one of the trades the broker would not explain. Refusing there would take
 // down the whole screen over a gap that is already reported as an unparsed row;
 // what the balance does instead is go negative and say so.
-func (p *CashPosition) spend(minor int64) {
+// receive books an arrival: it pays off any overdraft first, and only what is
+// left over is money the account now holds.
+func (p *CashPosition) receive(minor int64, on time.Time) {
+	if p.shortfall > 0 {
+		covered := minor
+		if covered > p.shortfall {
+			covered = p.shortfall
+		}
+		p.shortfall -= covered
+		minor -= covered
+	}
+	if minor > 0 {
+		p.Lots = append(p.Lots, CashLot{Minor: minor, On: on})
+	}
+}
+
+func (p *CashPosition) spend(minor int64) []CashLot {
+	var released []CashLot
 	for minor > 0 && len(p.Lots) > 0 {
 		l := &p.Lots[0]
 		if l.Minor > minor {
+			released = append(released, CashLot{Minor: minor, On: l.On})
 			l.Minor -= minor
-			return
+			return released
 		}
+		released = append(released, *l)
 		minor -= l.Minor
 		p.Lots = p.Lots[1:]
 	}
+	// Whatever no parcel could cover is an overdraft, and it is remembered so
+	// that the next arrival pays it off instead of being counted as held.
+	p.shortfall += minor
+	return released
 }
 
 // CashByCurrency returns the positions ordered by currency code, which is what
