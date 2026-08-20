@@ -116,6 +116,9 @@ type fakePassportSource struct {
 	instrumentErrs   map[string]error
 	instrumentCalls  map[string]int
 	bondNominalCalls map[string]int
+
+	currencyNominals     map[string]MoneyValue
+	currencyNominalCalls map[string]int
 }
 
 func newFakePassportSource() *fakePassportSource {
@@ -125,7 +128,23 @@ func newFakePassportSource() *fakePassportSource {
 		instrumentErrs:   map[string]error{},
 		instrumentCalls:  map[string]int{},
 		bondNominalCalls: map[string]int{},
+
+		currencyNominals:     map[string]MoneyValue{},
+		currencyNominalCalls: map[string]int{},
 	}
+}
+
+// CurrencyNominalByUID answers what a currency instrument trades. Nothing is
+// registered by default, so a test that does not set one gets the broker's
+// "no such instrument" and the refusal that follows — never a silent zero
+// nominal, which is the shape that would put an unnamed currency in the journal.
+func (s *fakePassportSource) CurrencyNominalByUID(_ context.Context, uid string) (MoneyValue, error) {
+	s.currencyNominalCalls[uid]++
+	nominal, ok := s.currencyNominals[uid]
+	if !ok {
+		return MoneyValue{}, fmt.Errorf("%w: %s", ErrInstrumentNotFound, uid)
+	}
+	return nominal, nil
 }
 
 func (s *fakePassportSource) InstrumentByUID(_ context.Context, uid string) (InstrumentBrief, error) {

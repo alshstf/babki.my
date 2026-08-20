@@ -557,7 +557,7 @@ const (
 // accountID is the babki account the broker account is linked to. SpaceID is
 // left unset: the write path takes it from the account itself (see
 // operation.insertSQL), so stating it here would be a second copy of one fact.
-func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, Deferred, *UnparsedError) {
+func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved, traded *TradedCurrency) ([]operation.Operation, Deferred, *UnparsedError) {
 	// Projecting a cancelled order, or one the broker has taken back, would put
 	// money in the journal that never moved. The check stands here, in the
 	// rule itself, so that it holds however the function is called.
@@ -579,24 +579,23 @@ func ProjectRow(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]opera
 		}
 	}
 
-	// A currency trade is refused before anything else looks at it, and it is
-	// refused even if the caller passed a resolved instrument (which it never
-	// should — the resolver deliberately does not resolve currencies, see
-	// brokerInstrumentTypes).
+	// A currency trade is a pair of conversion entries — the money paid in one
+	// currency, the money received in the other — and it is handled before
+	// anything else looks at the row, because the resolver deliberately does not
+	// resolve currencies into catalog rows (see brokerInstrumentTypes) and there
+	// is no instrument here to attach.
 	//
-	// The plan's mapping table calls for two "conversion" rows here: the money
-	// paid in one currency and the money received in the other. THE SECOND ROW
-	// CANNOT BE BUILT from what the mirror holds, and projecting only the paid
-	// leg would say money left the account and nothing came back. The two
-	// things missing, and why guessing either would be expensive, are written
-	// out at ReasonCurrencyTrade — which is a reason of its own precisely
-	// because "not yet, and here is what it would take" is a different
-	// statement from "this program does not account for that kind of asset".
+	// The second leg needs what the mirror does not hold: WHICH currency was
+	// bought (the row's own currency field is the payment side) and how much of
+	// it one unit is. Both come from the broker's CurrencyBy call, resolved by
+	// the caller and handed in as `traded` — and a caller that did not resolve
+	// one leaves this a visible unparsed row rather than a guess.
 	if r.how == asTrade && row.InstrumentType == brokerCurrencyInstrumentType {
-		return nil, DeferredNothing, &UnparsedError{
-			Reason: ReasonCurrencyTrade,
-			Detail: "a currency trade: the mirror names neither the traded currency nor its nominal per unit, so the second leg cannot be built",
+		ops, refusal := projectCurrencyTrade(row, accountID, traded)
+		if refusal != nil {
+			return nil, DeferredNothing, refusal
 		}
+		return withExternalIDs(row.ID, ops), DeferredNothing, nil
 	}
 
 	var (
@@ -743,6 +742,117 @@ func projectTrade(row MirrorRow, accountID uuid.UUID, resolved *Resolved, t oper
 		return []operation.Operation{op}, nil
 	}
 	return []operation.Operation{op, *feeLeg}, nil
+}
+
+// projectCurrencyTrade turns a purchase or sale of currency into the two
+// conversion entries it actually is: money left the account in one currency and
+// arrived in another, on the same day. Both legs together are the whole event,
+// and neither alone is true of anything — a single leg would say money vanished.
+//
+// WHAT EACH LEG CARRIES. The paid leg is the broker's own payment, in the row's
+// own currency, with its sign as sent (negative on a purchase, positive on a
+// sale). The received leg is the mirror image in the traded currency: units
+// executed times the nominal of one unit, signed the other way. Neither leg
+// names an instrument — a conversion is cash, and the engine skips it whole
+// rather than folding it into any position.
+//
+// THE QUANTITY IS CHECKED BY DIVISION, and this is not ceremony. `quantity` on
+// a broker row has already been found to mean something other than what it
+// looks like once — it is the size of the ORDER, and the executed part lives in
+// another field, which put fifteen trades in the journal at up to two and a half
+// times their real size. So the money must divide by the units at the stated
+// price: if quantity times price is not the payment, this row does not mean what
+// this function assumes and it becomes visible rather than projected. On the
+// owner's own 82 currency trades the identity holds exactly (23 000 x 12.3565 =
+// 284 199.50).
+//
+// The commission rides on the PAID leg, which is the currency the broker charges
+// in on this account, and is refused into its own entry when it is not (the same
+// rule every other trade follows, see tradeCommission).
+func projectCurrencyTrade(row MirrorRow, accountID uuid.UUID, traded *TradedCurrency) ([]operation.Operation, *UnparsedError) {
+	// THE ROW'S OWN FAULTS ARE NAMED BEFORE THE BROKER'S. An order with no
+	// executed part is not a currency problem at all and gets the reason every
+	// other unfilled trade gets — put after the lookup, it would be reported as
+	// "the broker would not say what this pair trades", which is a true sentence
+	// about a row that has nothing to trade.
+	if row.QuantityDone <= 0 {
+		return nil, &UnparsedError{
+			Reason: ReasonTradeWithoutFill,
+			Detail: fmt.Sprintf("the broker reports an order of %d units and no executed part of it", row.Quantity),
+		}
+	}
+	if traded == nil {
+		return nil, &UnparsedError{
+			Reason: ReasonCurrencyTrade,
+			Detail: "a currency trade whose traded currency and nominal the broker would not say",
+		}
+	}
+	paidMinor, refusal := minorFromDecimal(row.Payment)
+	if refusal != nil {
+		return nil, refusal
+	}
+	units := decimal.NewFromInt(row.QuantityDone)
+	if refusal := checkMoneyDividesByUnits(row, units); refusal != nil {
+		return nil, refusal
+	}
+	receivedMinor, refusal := minorFromDecimal(units.Mul(traded.NominalPerUnit))
+	if refusal != nil {
+		return nil, refusal
+	}
+	if paidMinor > 0 {
+		// A sale: rubles came in, so the traded currency went out.
+		receivedMinor = -receivedMinor
+	}
+
+	paid := base(row, accountID, operation.TypeConversion)
+	paid.AmountMinor = paidMinor
+
+	received := base(row, accountID, operation.TypeConversion)
+	received.AmountMinor = receivedMinor
+	received.Currency = traded.Code
+
+	feeMinor, feeLeg, refusal := tradeCommission(row, accountID)
+	if refusal != nil {
+		return nil, refusal
+	}
+	paid.FeeMinor = feeMinor
+	if feeLeg == nil {
+		return []operation.Operation{paid, received}, nil
+	}
+	return []operation.Operation{paid, received, *feeLeg}, nil
+}
+
+// checkMoneyDividesByUnits is the guard between this rule and a quantity that
+// means something other than it looks like. That has happened here once
+// already: `quantity` turned out to be the size of the ORDER, with the executed
+// part in another field, and fifteen trades went into the journal at up to two
+// and a half times their real size — every one of them a plausible number.
+//
+// IT TOLERATES A MINOR UNIT AND NOTHING MORE, and the tolerance is the whole
+// design. The broker sends a price with six decimals and a payment rounded to
+// the kopeck: 942 yuan at 12.341497 ₽ is 11 625.690174 ₽, paid as 11 625.69 —
+// so an exact comparison refuses 44 of the owner's 52 remaining currency trades
+// over a rounding, which is what a first version of this did, on live data.
+// Nothing this check exists to catch is a kopeck wide: a misread quantity is out
+// by a factor, not by a fraction of one unit of money.
+//
+// A row with no price at all passes rather than failing: the price is an
+// annotation the broker need not send, and refusing over its absence would lose
+// a trade whose two amounts are both perfectly good.
+func checkMoneyDividesByUnits(row MirrorRow, units decimal.Decimal) *UnparsedError {
+	if row.Price == nil || !row.Price.IsPositive() {
+		return nil
+	}
+	expected := units.Mul(*row.Price).Shift(minorUnitScale).Round(0)
+	paid := row.Payment.Abs().Shift(minorUnitScale).Round(0)
+	if expected.Sub(paid).Abs().LessThanOrEqual(decimal.NewFromInt(1)) {
+		return nil
+	}
+	return &UnparsedError{
+		Reason: ReasonCurrencyTrade,
+		Detail: fmt.Sprintf("the money does not divide by the units: %s units at %s is not a payment of %s",
+			units, row.Price, row.Payment.Abs()),
+	}
 }
 
 // tradePrice is the per-unit price to record, or nothing.

@@ -1011,16 +1011,73 @@ func TestRebuildRefusesTheProjectionsOwnUnreadableRow(t *testing.T) {
 	}
 }
 
-// TestRebuildGivesACurrencyTradeItsOwnReason is the sharp case of the rule
-// above. Everything about a currency purchase can be resolved — the broker has
-// a passport for it and would gladly say it is a currency — and if the rebuild
-// asked, the answer would be "this program does not account for that kind of
-// asset". That answer is FALSE here: the journal has a type for a conversion,
-// and what is missing is the data to build the second leg from
-// (ReasonCurrencyTrade). So the projection, which knows that, is the one that
-// names the fault.
-func TestRebuildGivesACurrencyTradeItsOwnReason(t *testing.T) {
+// TestRebuildTurnsACurrencyTradeIntoBothItsLegs is what a currency purchase
+// actually is: money left the account in one currency and arrived in another,
+// on the same day. Neither leg alone is true of anything — a single one would
+// say the rubles vanished.
+//
+// The traded currency comes from the broker (CurrencyBy) and from nowhere else:
+// the operation row names its own PAYMENT currency, which is the rubles handed
+// over, and says nothing about what was bought. The fixture buys 1 000 units at
+// 90 ₽, so 90 000 ₽ leave and 1 000 $ arrive.
+func TestRebuildTurnsACurrencyTradeIntoBothItsLegs(t *testing.T) {
 	f := newRebuildFixture(t)
+	f.src.currencyNominals[uidUSDRUB] = MoneyValue{Currency: "usd", Units: 1}
+	f.sync(t, f.link, loadOperationItem(t, "currency_buy.json"))
+
+	stats := f.rebuild(t)
+	if stats.Added != 2 || stats.Unparsed != 0 {
+		t.Fatalf("rebuild added %d and left %d unparsed, want 2 and 0", stats.Added, stats.Unparsed)
+	}
+	journal := f.journalOf(t, f.accountID)
+	if len(journal) != 2 {
+		t.Fatalf("journal holds %d operations, want 2", len(journal))
+	}
+	byCurrency := map[string]operation.Operation{}
+	for _, o := range journal {
+		if o.Type != operation.TypeConversion {
+			t.Fatalf("a currency trade produced a %s — the journal's word for exchanging money is conversion, and the engine skips it whole rather than folding it into a position", o.Type)
+		}
+		byCurrency[o.Currency] = o
+	}
+	paid, ok := byCurrency["RUB"]
+	if !ok {
+		t.Fatalf("no ruble leg among %+v", byCurrency)
+	}
+	if paid.AmountMinor != -9_000_000 {
+		t.Errorf("the ruble leg is %d, want -9000000 (90 000 ₽ left the account)", paid.AmountMinor)
+	}
+	if paid.FeeMinor != 2_700 {
+		t.Errorf("the commission is %d, want 2700 — it was charged in rubles, which is the leg it belongs on", paid.FeeMinor)
+	}
+	received, ok := byCurrency["USD"]
+	if !ok {
+		t.Fatalf("no dollar leg among %+v — the traded currency comes from the broker's nominal, and without it the trade says money vanished", byCurrency)
+	}
+	if received.AmountMinor != 100_000 {
+		t.Errorf("the dollar leg is %d, want 100000 (1 000 $ arrived)", received.AmountMinor)
+	}
+	if received.OccurredOn != paid.OccurredOn {
+		t.Errorf("the two legs fall on %s and %s — one exchange happens on one day", received.OccurredOn, paid.OccurredOn)
+	}
+	// Asked once, and about the currency rather than about a catalog row: a
+	// currency trade names no instrument in the journal at all.
+	if calls := f.src.currencyNominalCalls[uidUSDRUB]; calls != 1 {
+		t.Errorf("the broker was asked %d times for the nominal, want 1", calls)
+	}
+	if calls := f.src.instrumentCalls[uidUSDRUB]; calls != 0 {
+		t.Errorf("the general passport was asked %d times, want 0 — a currency needs no catalog row", calls)
+	}
+}
+
+// TestRebuildRefusesACurrencyTradeTheBrokerWillNotNameIsTheOtherHalf: the
+// broker cannot say what the instrument trades, so the row stays visible with
+// its own reason. NOT «this program does not account for that kind of asset» —
+// the journal has a type for a conversion and the rule is written — but «the one
+// fact needed is missing», which is a different sentence to whoever reads it.
+func TestRebuildRefusesACurrencyTradeTheBrokerWillNotName(t *testing.T) {
+	f := newRebuildFixture(t)
+	// No nominal registered: the broker answers "no such instrument".
 	f.sync(t, f.link, loadOperationItem(t, "currency_buy.json"))
 
 	stats := f.rebuild(t)
@@ -1030,8 +1087,9 @@ func TestRebuildGivesACurrencyTradeItsOwnReason(t *testing.T) {
 	if got := f.mirrorRow(t, f.link, "op-cur-1").UnparsedReason; got != string(ReasonCurrencyTrade) {
 		t.Errorf("the currency purchase's reason is %q, want %q", got, ReasonCurrencyTrade)
 	}
-	if calls := f.src.instrumentCalls[uidUSDRUB]; calls != 0 {
-		t.Errorf("the broker was asked %d times about the currency, want 0", calls)
+	// And nothing half-written: a single leg would say the rubles vanished.
+	if journal := f.journalOf(t, f.accountID); len(journal) != 0 {
+		t.Errorf("journal holds %d operations, want 0 — one leg alone is not true of anything", len(journal))
 	}
 }
 
@@ -1150,8 +1208,8 @@ func TestRebuildWithdrawsTheHalfOfAnEventItHadLeftInPlace(t *testing.T) {
 	// The income entry becomes a move of shares the account never held, which
 	// the engine refuses; the withdrawal beside it is not offered at all.
 	inner := f.reb.project
-	f.reb.project = func(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, Deferred, *UnparsedError) {
-		ops, deferred, refusal := inner(row, accountID, resolved)
+	f.reb.project = func(row MirrorRow, accountID uuid.UUID, resolved *Resolved, traded *TradedCurrency) ([]operation.Operation, Deferred, *UnparsedError) {
+		ops, deferred, refusal := inner(row, accountID, resolved, traded)
 		for i := range ops {
 			if ops[i].Type != operation.TypeDividend {
 				continue
@@ -1492,8 +1550,8 @@ func TestRebuildStopsRatherThanCountAPositionItCannotRead(t *testing.T) {
 	// A rule that turns the sale of two bonds into a split of the same bond —
 	// the shape a later change to this package could add.
 	inner := f.reb.project
-	f.reb.project = func(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, Deferred, *UnparsedError) {
-		ops, deferred, refusal := inner(row, accountID, resolved)
+	f.reb.project = func(row MirrorRow, accountID uuid.UUID, resolved *Resolved, traded *TradedCurrency) ([]operation.Operation, Deferred, *UnparsedError) {
+		ops, deferred, refusal := inner(row, accountID, resolved, traded)
 		for i := range ops {
 			if ops[i].Type != operation.TypeSell || ops[i].Quantity == nil {
 				continue
@@ -1595,8 +1653,8 @@ func TestRebuildChangesTheJournalWhenTheRuleChanges(t *testing.T) {
 	// A new rule: every top-up is recorded with a note of its own. Nothing else
 	// about the run changes — no mirror row, no broker call.
 	inner := f.reb.project
-	f.reb.project = func(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, Deferred, *UnparsedError) {
-		ops, deferred, refusal := inner(row, accountID, resolved)
+	f.reb.project = func(row MirrorRow, accountID uuid.UUID, resolved *Resolved, traded *TradedCurrency) ([]operation.Operation, Deferred, *UnparsedError) {
+		ops, deferred, refusal := inner(row, accountID, resolved, traded)
 		for i := range ops {
 			if ops[i].Type == operation.TypeDeposit {
 				ops[i].Note = "переведено по новому правилу"

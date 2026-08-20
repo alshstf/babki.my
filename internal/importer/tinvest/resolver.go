@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -114,9 +115,21 @@ type instrumentCatalog interface {
 // creating a bond impossible to implement at all, so it is added here as a
 // deliberate, necessary correction rather than an oversight. *Client
 // satisfies both methods already.
+//
+// CurrencyNominalByUID is here for the same reason and by the same argument: a
+// currency instrument's nominal is not in GetInstrumentBy either, and without it
+// a currency trade cannot name the money it acquired. It is kept as its own
+// one-method interface below so ResolveCurrency commits to nothing else.
 type passportSource interface {
 	InstrumentByUID(ctx context.Context, uid string) (InstrumentBrief, error)
 	BondNominalByUID(ctx context.Context, uid string) (MoneyValue, error)
+	currencySource
+}
+
+// currencySource is the one call ResolveCurrency needs, kept as narrow as every
+// other dependency in this package.
+type currencySource interface {
+	CurrencyNominalByUID(ctx context.Context, uid string) (MoneyValue, error)
 }
 
 // brokerInstrumentTypes maps the broker's own instrument_type strings (see
@@ -126,15 +139,13 @@ type passportSource interface {
 // second list of excluded types to keep in step with this one.
 //
 // CURRENCY IS NOT HERE, AND THAT IS THE POINT rather than an omission. A
-// currency trade needs no instrument from this resolver either way. It does
-// not reach the journal at all today — ProjectRow refuses it with
-// ReasonCurrencyTrade, because the mirror names neither the traded currency
-// nor its nominal per unit — and the journal type it would reach if that
-// changed is "conversion", which the engine skips whole, moving on to the next
-// operation before it ever asks which instrument the row names (engine.go,
-// `if o.Type == TypeConversion { continue }`). So this resolver must never be
-// called for a currency, under the rule that stands now and under the one that
-// would replace it.
+// currency trade needs no instrument from this resolver: it becomes a pair of
+// "conversion" entries, which are cash and name no instrument at all, and the
+// engine skips a conversion whole — moving on to the next operation before it
+// ever asks which instrument the row names (engine.go, `if o.Type ==
+// TypeConversion { continue }`). What such a trade DOES need from the broker is
+// the traded currency and its nominal, and that is ResolveCurrency, which
+// touches the catalog nowhere.
 //
 // Listing currency here would have made a wrong call silent and expensive
 // instead. Neither lookup below can find a currency row: ByTickerTradable
@@ -177,6 +188,10 @@ type Resolver struct {
 	catalog   instrumentCatalog
 	log       *slog.Logger
 	passports map[string]InstrumentBrief
+	// currencies memoizes ResolveCurrency's answers for the run, the way
+	// passports does for Resolve's. A yuan account trades the same pair a
+	// hundred times.
+	currencies map[string]TradedCurrency
 }
 
 // NewResolver builds a Resolver. store owns the per-connection instrument
@@ -186,7 +201,7 @@ func NewResolver(store *Store, catalog instrumentCatalog, log *slog.Logger) *Res
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Resolver{store: store, catalog: catalog, log: log, passports: map[string]InstrumentBrief{}}
+	return &Resolver{store: store, catalog: catalog, log: log, passports: map[string]InstrumentBrief{}, currencies: map[string]TradedCurrency{}}
 }
 
 // Resolve turns one broker instrument reference into this instance's
@@ -319,6 +334,58 @@ func (r *Resolver) lookupMap(ctx context.Context, connectionID uuid.UUID, ref In
 // brief: a run's history can carry the same instrument hundreds of times,
 // and a hundred identical requests would spend the broker's per-minute
 // limit on nothing new).
+// TradedCurrency is what a currency instrument actually trades: the ISO code of
+// the money that changes hands, and how many of its units one instrument unit
+// buys.
+//
+// BOTH HALVES COME FROM THE PASSPORT'S NOMINAL, and both are needed. An
+// operation row for a currency trade names its own PAYMENT currency (the rubles
+// handed over) and nothing at all about the money acquired — that lives only in
+// the broker's opaque identifiers for the pair. And one unit is not always one:
+// a unit of the Kyrgyz som instrument is a hundred som, a unit of the Uzbek sum
+// instrument ten thousand (checked against the broker's live instrument service
+// on 2026-08-05). Multiplying by the wrong nominal is wrong by exactly that
+// factor, which is the shape of the most expensive defect this program has had.
+type TradedCurrency struct {
+	Code           string
+	NominalPerUnit decimal.Decimal
+}
+
+// ResolveCurrency answers what a currency instrument trades, from the broker's
+// CurrencyBy call and nothing else. It is memoized for the run, so a hundred
+// yuan trades ask the broker once.
+//
+// NOT from the general passport: GetInstrumentBy supplies no nominal at all
+// (see InstrumentBrief), which is the same reason a bond's face value has a
+// call of its own.
+//
+// It does NOT touch the catalog. A currency trade becomes a pair of conversion
+// entries, which are cash and name no instrument — there is nothing for a
+// catalog row to be, and creating one would put a paper in the owner's
+// instrument list that no screen can value (see brokerInstrumentTypes).
+//
+// ErrIncompletePassport when the nominal carries no currency or no positive
+// value: the whole point of asking was those two fields, and a trade projected
+// without them would move an invented amount of an unnamed currency.
+func (r *Resolver) ResolveCurrency(ctx context.Context, src currencySource, uid string) (TradedCurrency, error) {
+	if known, ok := r.currencies[uid]; ok {
+		return known, nil
+	}
+	nominal, err := src.CurrencyNominalByUID(ctx, uid)
+	if err != nil {
+		return TradedCurrency{}, err
+	}
+	code := strings.ToUpper(nominal.Currency)
+	per := nominal.Decimal()
+	if code == "" || !per.IsPositive() {
+		return TradedCurrency{}, fmt.Errorf("%w: currency instrument %s has a nominal of %s %q",
+			ErrIncompletePassport, uid, per, nominal.Currency)
+	}
+	traded := TradedCurrency{Code: code, NominalPerUnit: per}
+	r.currencies[uid] = traded
+	return traded, nil
+}
+
 func (r *Resolver) passport(ctx context.Context, src passportSource, uid string) (InstrumentBrief, error) {
 	if brief, ok := r.passports[uid]; ok {
 		return brief, nil
