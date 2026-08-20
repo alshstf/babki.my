@@ -102,7 +102,7 @@ type RebuildStats struct{ Added, Removed, Withdrawn, Unparsed int }
 // so that a test can put another rule in its place and watch the journal follow
 // — which is the property this whole file exists for, and one that cannot be
 // demonstrated by calling the only rule there is.
-type projection func(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, Deferred, *UnparsedError)
+type projection func(row MirrorRow, accountID uuid.UUID, resolved *Resolved, traded *TradedCurrency) ([]operation.Operation, Deferred, *UnparsedError)
 
 // Rebuilder turns one connection's mirror into journal operations. Build one
 // per sync run: the Resolver it carries caches the broker's instrument
@@ -338,12 +338,29 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 			if err != nil {
 				return nil, err
 			}
+			// What a currency row TRADES, which the row itself does not say —
+			// asked of the broker once per pair and handed to the projection so
+			// the rule stays a pure function of its inputs. A broker that cannot
+			// answer leaves the trade a visible unparsed row naming exactly that,
+			// rather than a conversion of an unnamed currency.
+			var traded *TradedCurrency
+			if refusal == nil && row.InstrumentType == brokerCurrencyInstrumentType && row.InstrumentUID != "" {
+				resolvedCurrency, currencyErr := r.resolver.ResolveCurrency(ctx, src, row.InstrumentUID)
+				switch {
+				case currencyErr == nil:
+					traded = &resolvedCurrency
+				case errors.Is(currencyErr, ErrIncompletePassport), errors.Is(currencyErr, ErrInstrumentNotFound):
+					refusal = &UnparsedError{Reason: ReasonCurrencyTrade, Detail: currencyErr.Error()}
+				default:
+					return nil, currencyErr
+				}
+			}
 			var (
 				ops      []operation.Operation
 				deferred Deferred
 			)
 			if refusal == nil {
-				ops, deferred, refusal = r.project(row, link.AccountID, resolved)
+				ops, deferred, refusal = r.project(row, link.AccountID, resolved, traded)
 			}
 			if refusal != nil {
 				// The detail goes to the mirror as well as to the log. It is the

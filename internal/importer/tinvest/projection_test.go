@@ -98,7 +98,7 @@ func mirrorRowFor(t *testing.T, name string) MirrorRow {
 
 func projectOne(t *testing.T, row MirrorRow, resolved *Resolved) operation.Operation {
 	t.Helper()
-	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolved)
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolved, nil)
 	if refusal != nil {
 		t.Fatalf("ProjectRow(%s): refused: %v", row.OpType, refusal)
 	}
@@ -238,7 +238,7 @@ func TestProjectRowTradeWithoutAFilledQuantityIsRefused(t *testing.T) {
 			row.Quantity, row.QuantityDone)
 	}
 
-	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare())
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare(), nil)
 	if refusal == nil {
 		t.Fatalf("a sale of an unknown number of shares was projected into %d operations", len(ops))
 	}
@@ -262,7 +262,7 @@ func TestProjectRowTradeWithoutAFilledQuantityIsRefused(t *testing.T) {
 // see TestProjectedOperationsFoldThroughTheEngine).
 func TestProjectRowSplitsOffACommissionChargedInAnotherCurrency(t *testing.T) {
 	row := mirrorRowFor(t, "buy_fee_in_another_currency.json")
-	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare())
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare(), nil)
 	if refusal != nil {
 		t.Fatalf("refused: %v", refusal)
 	}
@@ -318,7 +318,7 @@ func TestProjectRowSplitsOffACommissionChargedInAnotherCurrency(t *testing.T) {
 func TestProjectRowCurrencyTradeStaysUnparsed(t *testing.T) {
 	row := mirrorRowFor(t, "currency_buy.json")
 	for _, resolved := range []*Resolved{nil, resolvedShare()} {
-		ops, _, refusal := ProjectRow(row, fixtureAccountID, resolved)
+		ops, _, refusal := ProjectRow(row, fixtureAccountID, resolved, nil)
 		if len(ops) != 0 {
 			t.Fatalf("got %d operations, want none", len(ops))
 		}
@@ -392,7 +392,7 @@ func TestProjectRowCashOperations(t *testing.T) {
 func TestProjectRowTaxRefundStaysUnparsed(t *testing.T) {
 	row := mirrorRowFor(t, "tax_correction_refund.json")
 	for _, resolved := range []*Resolved{nil, resolvedShare()} {
-		ops, _, refusal := ProjectRow(row, fixtureAccountID, resolved)
+		ops, _, refusal := ProjectRow(row, fixtureAccountID, resolved, nil)
 		if len(ops) != 0 {
 			t.Fatalf("got %d operations, want none — a refund has no journal shape", len(ops))
 		}
@@ -508,7 +508,7 @@ func TestProjectRowFullRedemptionKeepsItsCommission(t *testing.T) {
 	t.Run("another currency becomes an entry of its own", func(t *testing.T) {
 		row := mirrorRowFor(t, "bond_repayment_full_with_fee.json")
 		row.CommissionCurrency = "USD"
-		ops, _, refusal := ProjectRow(row, fixtureAccountID, bond)
+		ops, _, refusal := ProjectRow(row, fixtureAccountID, bond, nil)
 		if refusal != nil {
 			t.Fatalf("refused: %v", refusal)
 		}
@@ -537,7 +537,7 @@ func TestProjectRowFullRedemptionKeepsItsCommission(t *testing.T) {
 		row := mirrorRowFor(t, "bond_repayment_full_with_fee.json")
 		back := decimal.RequireFromString("3")
 		row.Commission = &back
-		ops, _, refusal := ProjectRow(row, fixtureAccountID, bond)
+		ops, _, refusal := ProjectRow(row, fixtureAccountID, bond, nil)
 		if len(ops) != 0 {
 			t.Fatalf("got %d operations, want none", len(ops))
 		}
@@ -559,7 +559,7 @@ func TestProjectRowFullRedemptionKeepsItsCommission(t *testing.T) {
 // its count must not lose its fee on the way.
 func TestProjectRowFullRedemptionWithoutQuantityAsksTheJournalForTheCount(t *testing.T) {
 	row := mirrorRowFor(t, "bond_repayment_full_no_quantity.json")
-	ops, deferred, refusal := ProjectRow(row, fixtureAccountID, &Resolved{InstrumentID: fixtureInstrID, Type: instrument.TypeBond})
+	ops, deferred, refusal := ProjectRow(row, fixtureAccountID, &Resolved{InstrumentID: fixtureInstrID, Type: instrument.TypeBond}, nil)
 
 	if refusal != nil {
 		t.Fatalf("refused: %v — a redemption the broker priced in money alone is readable, it is only incomplete", refusal)
@@ -594,7 +594,7 @@ func TestProjectRowFullRedemptionWithoutQuantityAsksTheJournalForTheCount(t *tes
 // the test above.
 func TestProjectRowFullRedemptionWithAQuantityIsComplete(t *testing.T) {
 	row := mirrorRowFor(t, "bond_repayment_full.json")
-	ops, deferred, refusal := ProjectRow(row, fixtureAccountID, &Resolved{InstrumentID: fixtureInstrID, Type: instrument.TypeBond})
+	ops, deferred, refusal := ProjectRow(row, fixtureAccountID, &Resolved{InstrumentID: fixtureInstrID, Type: instrument.TypeBond}, nil)
 
 	if refusal != nil {
 		t.Fatalf("refused: %v", refusal)
@@ -615,7 +615,7 @@ func TestProjectRowFullRedemptionWithAQuantityIsComplete(t *testing.T) {
 // grew.
 func TestProjectRowDividendToCardIsPaidAndWithdrawnTheSameDay(t *testing.T) {
 	row := mirrorRowFor(t, "div_ext.json")
-	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare())
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare(), nil)
 	if refusal != nil {
 		t.Fatalf("refused: %v", refusal)
 	}
@@ -732,7 +732,7 @@ func TestProjectRowTransferBetweenOwnAccountsReadsItsDirectionFromTheQuantity(t 
 func TestProjectRowTransferOfNothingIsRefused(t *testing.T) {
 	row := mirrorRowFor(t, "trans_bs_bs_in.json")
 	row.Quantity = 0
-	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare())
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare(), nil)
 
 	if len(ops) != 0 {
 		t.Fatalf("got %d operations, want none", len(ops))
@@ -791,7 +791,7 @@ func TestProjectRowShapeWithNoBranchRefusesInsteadOfVanishing(t *testing.T) {
 
 	row := mirrorRowFor(t, "input.json")
 	row.OpType = opType
-	ops, _, refusal := ProjectRow(row, fixtureAccountID, nil)
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, nil, nil)
 
 	if len(ops) != 0 {
 		t.Fatalf("got %d operations, want none", len(ops))
@@ -815,7 +815,7 @@ func TestProjectRowShapeWithNoBranchRefusesInsteadOfVanishing(t *testing.T) {
 // the deferral rather than an answer (see DeferredBrokerFeeVerdict and
 // Rebuilder.settleBrokerFees).
 func TestProjectRowBrokerFeeIsBuiltAndHeld(t *testing.T) {
-	ops, deferred, refusal := ProjectRow(mirrorRowFor(t, "broker_fee.json"), fixtureAccountID, nil)
+	ops, deferred, refusal := ProjectRow(mirrorRowFor(t, "broker_fee.json"), fixtureAccountID, nil, nil)
 	if refusal != nil {
 		t.Fatalf("refused: %v — a broker fee is understood, it is simply not always kept", refusal)
 	}
@@ -835,7 +835,7 @@ func TestProjectRowUnknownTypesStayVisible(t *testing.T) {
 	// out here: the whole repo-tax family, the expirations, the enum's own
 	// "unspecified", and a value the broker has not invented yet.
 	row := mirrorRowFor(t, "delivery_buy.json")
-	ops, _, refusal := ProjectRow(row, fixtureAccountID, nil)
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, nil, nil)
 	if len(ops) != 0 || refusal == nil || refusal.Reason != ReasonUnsupportedType {
 		t.Fatalf("DELIVERY_BUY: got %d operations, refusal %v; want none and unsupported_type", len(ops), refusal)
 	}
@@ -852,7 +852,7 @@ func TestProjectRowUnknownTypesStayVisible(t *testing.T) {
 	} {
 		row := mirrorRowFor(t, "input.json")
 		row.OpType = opType
-		ops, _, refusal := ProjectRow(row, fixtureAccountID, nil)
+		ops, _, refusal := ProjectRow(row, fixtureAccountID, nil, nil)
 		if len(ops) != 0 {
 			t.Errorf("%s: got %d operations, want none", opType, len(ops))
 		}
@@ -869,14 +869,14 @@ func TestProjectRowUnknownTypesStayVisible(t *testing.T) {
 // with orders that simply did not happen.
 func TestProjectRowSkipsWhatDidNotHappen(t *testing.T) {
 	cancelled := mirrorRowFor(t, "cancelled_buy.json")
-	ops, _, refusal := ProjectRow(cancelled, fixtureAccountID, resolvedShare())
+	ops, _, refusal := ProjectRow(cancelled, fixtureAccountID, resolvedShare(), nil)
 	if len(ops) != 0 || refusal != nil {
 		t.Errorf("cancelled: got %d operations and refusal %v, want none and none", len(ops), refusal)
 	}
 
 	inProgress := mirrorRowFor(t, "buy.json")
 	inProgress.State = "OPERATION_STATE_PROGRESS"
-	ops, _, refusal = ProjectRow(inProgress, fixtureAccountID, resolvedShare())
+	ops, _, refusal = ProjectRow(inProgress, fixtureAccountID, resolvedShare(), nil)
 	if len(ops) != 0 || refusal != nil {
 		t.Errorf("in progress: got %d operations and refusal %v, want none and none", len(ops), refusal)
 	}
@@ -884,7 +884,7 @@ func TestProjectRowSkipsWhatDidNotHappen(t *testing.T) {
 	gone := mirrorRowFor(t, "buy.json")
 	at := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
 	gone.DisappearedAt = &at
-	ops, _, refusal = ProjectRow(gone, fixtureAccountID, resolvedShare())
+	ops, _, refusal = ProjectRow(gone, fixtureAccountID, resolvedShare(), nil)
 	if len(ops) != 0 || refusal != nil {
 		t.Errorf("disappeared: got %d operations and refusal %v, want none and none", len(ops), refusal)
 	}
@@ -892,7 +892,7 @@ func TestProjectRowSkipsWhatDidNotHappen(t *testing.T) {
 
 func TestProjectRowRefusesAnAmountFinerThanAMinorUnit(t *testing.T) {
 	row := mirrorRowFor(t, "fractional_payment.json")
-	ops, _, refusal := ProjectRow(row, fixtureAccountID, nil)
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, nil, nil)
 
 	if len(ops) != 0 {
 		t.Fatalf("got %d operations, want none — 10.123456789 is not a sum this journal holds", len(ops))
@@ -905,7 +905,7 @@ func TestProjectRowRefusesAnAmountFinerThanAMinorUnit(t *testing.T) {
 func TestProjectRowRefusesAnAmountBeyondTheBound(t *testing.T) {
 	row := mirrorRowFor(t, "input.json")
 	row.Payment = decimal.RequireFromString("10000000000000.01")
-	ops, _, refusal := ProjectRow(row, fixtureAccountID, nil)
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, nil, nil)
 
 	if len(ops) != 0 {
 		t.Fatalf("got %d operations, want none", len(ops))
@@ -922,7 +922,7 @@ func TestProjectRowRefusesACommissionItCannotExpress(t *testing.T) {
 	row := mirrorRowFor(t, "buy.json")
 	fraction := decimal.RequireFromString("-8.255")
 	row.Commission = &fraction
-	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare())
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare(), nil)
 
 	if len(ops) != 0 {
 		t.Fatalf("got %d operations, want none", len(ops))
@@ -952,7 +952,7 @@ func TestProjectRowCommissionSign(t *testing.T) {
 		row := mirrorRowFor(t, "buy.json")
 		back := decimal.RequireFromString("8.25")
 		row.Commission = &back
-		ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare())
+		ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare(), nil)
 		if len(ops) != 0 {
 			t.Fatalf("got %d operations, want none — a returned commission is not a charge", len(ops))
 		}
@@ -965,7 +965,7 @@ func TestProjectRowCommissionSign(t *testing.T) {
 		row := mirrorRowFor(t, "buy_fee_in_another_currency.json")
 		back := decimal.RequireFromString("95.40")
 		row.Commission = &back
-		ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare())
+		ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare(), nil)
 		if len(ops) != 0 {
 			t.Fatalf("got %d operations, want none", len(ops))
 		}
@@ -990,7 +990,7 @@ func TestProjectRowCommissionSign(t *testing.T) {
 
 func TestProjectRowInstrumentRules(t *testing.T) {
 	t.Run("a trade whose security was not resolved is refused", func(t *testing.T) {
-		ops, _, refusal := ProjectRow(mirrorRowFor(t, "buy.json"), fixtureAccountID, nil)
+		ops, _, refusal := ProjectRow(mirrorRowFor(t, "buy.json"), fixtureAccountID, nil, nil)
 		if len(ops) != 0 {
 			t.Fatalf("got %d operations, want none", len(ops))
 		}
@@ -1002,7 +1002,7 @@ func TestProjectRowInstrumentRules(t *testing.T) {
 	t.Run("a trade in a kind of asset this program does not account for says so", func(t *testing.T) {
 		row := mirrorRowFor(t, "buy.json")
 		row.InstrumentType = "futures"
-		ops, _, refusal := ProjectRow(row, fixtureAccountID, nil)
+		ops, _, refusal := ProjectRow(row, fixtureAccountID, nil, nil)
 		if len(ops) != 0 {
 			t.Fatalf("got %d operations, want none", len(ops))
 		}
@@ -1012,7 +1012,7 @@ func TestProjectRowInstrumentRules(t *testing.T) {
 	})
 
 	t.Run("income on an unmatched security is refused rather than left unattributed", func(t *testing.T) {
-		ops, _, refusal := ProjectRow(mirrorRowFor(t, "dividend.json"), fixtureAccountID, nil)
+		ops, _, refusal := ProjectRow(mirrorRowFor(t, "dividend.json"), fixtureAccountID, nil, nil)
 		if len(ops) != 0 {
 			t.Fatalf("got %d operations, want none", len(ops))
 		}
@@ -1210,7 +1210,7 @@ func TestProjectedOperationsFoldThroughTheEngine(t *testing.T) {
 		{"sell.json", rub},
 		{"buy_fee_in_another_currency.json", usd},
 	} {
-		ops, _, refusal := ProjectRow(mirrorRowFor(t, c.fixture), fixtureAccountID, c.resolved)
+		ops, _, refusal := ProjectRow(mirrorRowFor(t, c.fixture), fixtureAccountID, c.resolved, nil)
 		if refusal != nil {
 			t.Fatalf("%s: refused: %v", c.fixture, refusal)
 		}
@@ -1304,4 +1304,122 @@ func TestJournalQuantity(t *testing.T) {
 func decimalPtr(s string) *decimal.Decimal {
 	d := decimal.RequireFromString(s)
 	return &d
+}
+
+// TestProjectCurrencyTradeSignsBothLegsBySide is the case the buy fixture
+// cannot reach: a SALE of currency. The money goes the other way on both legs —
+// rubles in, dollars out — and a rule that signed only the payment would say the
+// owner received rubles AND received dollars, which is money from nowhere.
+func TestProjectCurrencyTradeSignsBothLegsBySide(t *testing.T) {
+	row := mirrorRowFor(t, "currency_buy.json")
+	// The same trade seen from the other side: the broker pays 90 000 ₽ for the
+	// 1 000 $ it takes back.
+	row.Payment = decimal.RequireFromString("90000")
+	row.OpType = "OPERATION_TYPE_SELL"
+
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, nil, &TradedCurrency{
+		Code: "USD", NominalPerUnit: decimal.RequireFromString("1"),
+	})
+	if refusal != nil {
+		t.Fatalf("a currency sale was refused: %v", refusal)
+	}
+	byCurrency := map[string]int64{}
+	for _, o := range ops {
+		if o.Type == operation.TypeConversion {
+			byCurrency[o.Currency] = o.AmountMinor
+		}
+	}
+	if byCurrency["RUB"] != 9_000_000 {
+		t.Errorf("the ruble leg is %d, want 9000000 — a sale brings rubles IN", byCurrency["RUB"])
+	}
+	if byCurrency["USD"] != -100_000 {
+		t.Errorf("the dollar leg is %d, want -100000 — the dollars LEFT. A positive figure here is money from nowhere: rubles received and dollars received for one exchange", byCurrency["USD"])
+	}
+}
+
+// TestProjectCurrencyTradeMultipliesByTheNominal is the hundredfold case, and
+// the reason the nominal is fetched at all. One unit of the Kyrgyz som
+// instrument is a HUNDRED som, so ten units bought is a thousand som — not ten.
+// Every currency the owner actually trades has a nominal of one, which is
+// exactly why no fixture of his would ever catch this.
+func TestProjectCurrencyTradeMultipliesByTheNominal(t *testing.T) {
+	row := mirrorRowFor(t, "currency_buy.json")
+	row.QuantityDone = 10
+	row.Quantity = 10
+	// Ten units at 900 ₽ each: the money still divides by the units, which is
+	// the check that stands between this rule and a misread quantity.
+	row.Payment = decimal.RequireFromString("-9000")
+	price := decimal.RequireFromString("900")
+	row.Price = &price
+
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, nil, &TradedCurrency{
+		Code: "KGS", NominalPerUnit: decimal.RequireFromString("100"),
+	})
+	if refusal != nil {
+		t.Fatalf("the trade was refused: %v", refusal)
+	}
+	var received int64
+	for _, o := range ops {
+		if o.Currency == "KGS" {
+			received = o.AmountMinor
+		}
+	}
+	switch received {
+	case 1_000:
+		t.Errorf("the som leg is 1000 — ten units were taken as ten som. One unit is a hundred, so this is wrong by exactly a hundredfold, which is the shape of the most expensive defect this program has had")
+	case 100_000:
+	default:
+		t.Errorf("the som leg is %d, want 100000 (10 units x 100 som, in minor units)", received)
+	}
+}
+
+// TestProjectCurrencyTradeAllowsTheBrokersOwnRounding is the live case the
+// first version of the check got wrong. The broker sends six decimals of price
+// and a payment rounded to the kopeck, so the product almost never lands
+// exactly: 942 yuan at 12.341497 ₽ is 11 625.690174 ₽ and is paid as
+// 11 625.69. An exact comparison refused 44 of the owner's own trades over
+// that fraction. The numbers here are one of those rows.
+func TestProjectCurrencyTradeAllowsTheBrokersOwnRounding(t *testing.T) {
+	row := mirrorRowFor(t, "currency_buy.json")
+	row.Quantity, row.QuantityDone = 942, 942
+	row.Payment = decimal.RequireFromString("-11625.69")
+	price := decimal.RequireFromString("12.341497")
+	row.Price = &price
+
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, nil, &TradedCurrency{
+		Code: "CNY", NominalPerUnit: decimal.RequireFromString("1"),
+	})
+	if refusal != nil {
+		t.Fatalf("a trade rounded to the kopeck was refused: %v", refusal)
+	}
+	var received int64
+	for _, o := range ops {
+		if o.Currency == "CNY" {
+			received = o.AmountMinor
+		}
+	}
+	if received != 94_200 {
+		t.Errorf("the yuan leg is %d, want 94200 (942 CNY in minor units)", received)
+	}
+}
+
+// TestProjectCurrencyTradeRefusesMoneyThatDoesNotDivide is the guard against the
+// mistake this codebase has already made once with a broker's quantity field:
+// `quantity` turned out to be the size of the ORDER, and fifteen trades went
+// into the journal at up to two and a half times their real size. If the money
+// does not divide by the units at the stated price, this row does not mean what
+// the rule assumes, and it becomes visible instead of projected.
+func TestProjectCurrencyTradeRefusesMoneyThatDoesNotDivide(t *testing.T) {
+	row := mirrorRowFor(t, "currency_buy.json")
+	row.QuantityDone = 400 // the payment says 1 000 units at 90 ₽
+
+	_, _, refusal := ProjectRow(row, fixtureAccountID, nil, &TradedCurrency{
+		Code: "USD", NominalPerUnit: decimal.RequireFromString("1"),
+	})
+	if refusal == nil {
+		t.Fatalf("a trade whose money does not divide by its units was projected")
+	}
+	if refusal.Reason != ReasonCurrencyTrade {
+		t.Errorf("reason is %q, want %q", refusal.Reason, ReasonCurrencyTrade)
+	}
 }

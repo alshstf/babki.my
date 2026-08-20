@@ -362,6 +362,17 @@ type wireBondResponse struct {
 	} `json:"instrument"`
 }
 
+// wireCurrencyResponse mirrors CurrencyResponse (InstrumentsService/CurrencyBy),
+// trimmed to the one field CurrencyNominalByUID (client.go) needs. Same nesting
+// under "instrument" as the bond and instrument responses above: the published
+// OpenAPI spec gives v1CurrencyResponse -> v1Currency, and every By-method in
+// that service is shaped this way.
+type wireCurrencyResponse struct {
+	Instrument struct {
+		Nominal wireMoneyValue `json:"nominal"`
+	} `json:"instrument"`
+}
+
 // wireFindInstrumentResponse mirrors InstrumentsService/FindInstrument. Its
 // element is a shape of its own (InstrumentShort) rather than the full
 // instrument GetInstrumentBy returns, and it carries exactly the four fields

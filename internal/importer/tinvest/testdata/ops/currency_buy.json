@@ -1,5 +1,5 @@
 {
-  "_note": "shape taken from the published API documentation; the same operation type appears on the owner's live account and this shape agrees with it (checked 2026-08-09). instrumentType \"currency\" is the broker's own value for a currency instrument",
+  "_note": "shape taken from the published API documentation; the same operation type appears on the owner's live account and this shape agrees with it (checked 2026-08-09). instrumentType \"currency\" is the broker's own value for a currency instrument. quantity and quantityDone are equal here and the money divides by them exactly (1000 x 90 = 90 000), which is what the owner's own 82 currency trades do too",
   "id": "op-cur-1",
   "parentOperationId": "",
   "name": "Покупка валюты",
@@ -12,8 +12,21 @@
   "positionUid": "6e97aa9b-50b6-4738-bce7-17313f2b2cc2",
   "assetUid": "c27b41a3-1a1a-4e93-a2b6-a4b3ee0bcbb0",
   "instrumentType": "currency",
-  "payment": {"currency": "rub", "units": "-90000", "nano": 0},
-  "price": {"currency": "rub", "units": "90", "nano": 0},
-  "commission": {"currency": "rub", "units": "-27", "nano": 0},
-  "quantity": "1000"
+  "payment": {
+    "currency": "rub",
+    "units": "-90000",
+    "nano": 0
+  },
+  "price": {
+    "currency": "rub",
+    "units": "90",
+    "nano": 0
+  },
+  "commission": {
+    "currency": "rub",
+    "units": "-27",
+    "nano": 0
+  },
+  "quantity": "1000",
+  "quantityDone": "1000"
 }

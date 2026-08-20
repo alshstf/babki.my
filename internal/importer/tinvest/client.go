@@ -541,6 +541,40 @@ func (c *Client) FindInstruments(ctx context.Context, query string) ([]Listing, 
 	return out, nil
 }
 
+// CurrencyNominalByUID calls InstrumentsService/CurrencyBy and returns the
+// currency instrument's nominal — WHICH MONEY ONE UNIT OF IT IS, and how much
+// of it. Both halves are needed and neither is anywhere else: an operation row
+// for a currency trade names its own payment currency (the rubles handed over)
+// and nothing about the money acquired, and a unit is not always one — a unit
+// of the Kyrgyz som instrument is a hundred som, of the Uzbek sum instrument
+// ten thousand. Those two values were checked against the broker's live
+// instrument service on 2026-08-05, which is what this method exists to carry
+// into the journal.
+//
+// WHAT IS AND IS NOT CHECKED HERE. The nominal values above are live facts. The
+// CALL is by analogy with BondNominalByUID, whose response shape was checked
+// live against the gateway: every By-method in this service nests its answer
+// under "instrument", and the published spec gives v1CurrencyResponse ->
+// v1Currency with a nominal on it. If that analogy is wrong, this returns an
+// error or a zero nominal and the trade becomes a visible unparsed row naming
+// exactly that — nothing is invented in either case.
+//
+// A zero or currency-less nominal is returned as-is rather than refused here:
+// the caller is what decides, and the refusal it writes says which of the two
+// halves was missing (see Resolver.ResolveCurrency).
+func (c *Client) CurrencyNominalByUID(ctx context.Context, uid string) (MoneyValue, error) {
+	req := instrumentByRequest{IDType: instrumentIDTypeUID, ID: uid}
+	var resp wireCurrencyResponse
+	if err := c.do(ctx, "InstrumentsService/CurrencyBy", req, &resp); err != nil {
+		return MoneyValue{}, err
+	}
+	nominal, err := resp.Instrument.Nominal.parse()
+	if err != nil {
+		return MoneyValue{}, fmt.Errorf("tinvest: InstrumentsService/CurrencyBy: nominal: %w", err)
+	}
+	return nominal, nil
+}
+
 // BondNominalByUID calls InstrumentsService/BondBy with
 // id_type=INSTRUMENT_ID_TYPE_UID and returns the bond's nominal — the one
 // value InstrumentByUID's GetInstrumentBy call cannot supply (see
