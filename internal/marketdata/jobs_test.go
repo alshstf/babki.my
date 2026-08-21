@@ -1903,3 +1903,107 @@ func TestBackfillFx_JobTimeoutOutlastsRiversDefault(t *testing.T) {
 		t.Fatalf("Timeout = %s, want more than River's one-minute default", got)
 	}
 }
+
+// fakeGoldProvider answers the exchange's gold history without a network call,
+// and records the range it was asked for.
+type fakeGoldProvider struct {
+	rates []marketdata.FxRate
+	err   error
+	from  time.Time
+	to    time.Time
+	calls int
+}
+
+func (p *fakeGoldProvider) GoldRates(_ context.Context, from, to time.Time) ([]marketdata.FxRate, error) {
+	p.calls++
+	p.from, p.to = from, to
+	return p.rates, p.err
+}
+
+// TestBackfillGold_StoresTheExchangesGoldHistory is the whole of the gold path:
+// the central bank publishes no rate for it, the exchange does, and the rates
+// land in the same table every other currency's do — so a cash balance in gold
+// is valued by the same lookup a balance in dollars is, and nothing downstream
+// has to know gold is special.
+func TestBackfillGold_StoresTheExchangesGoldHistory(t *testing.T) {
+	store, pool, ctx := newBackfillFixture(t)
+
+	provider := &fakeGoldProvider{rates: []marketdata.FxRate{
+		{Base: "XAU", Quote: "RUB", On: date("2024-10-21"), Rate: dec("8422.2"), Source: "moex"},
+		{Base: "XAU", Quote: "RUB", On: date("2024-10-22"), Rate: dec("8479"), Source: "moex"},
+	}}
+	worker := marketdata.NewBackfillGoldWorker(store,
+		fakeOpStore{earliest: date("2024-10-25"), currencies: []string{"XAU"}}, provider, slog.Default())
+
+	if err := worker.Work(ctx, &river.Job[marketdata.BackfillGoldArgs]{Args: marketdata.BackfillGoldArgs{}}); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	// A MONTH BEFORE THE EARLIEST OPERATION, for the reason rangeStart states:
+	// a rate is looked up by nearest EARLIER date, and gold trades on business
+	// days like everything else, so asking from the operation's own day leaves
+	// a purchase on a Saturday with nothing behind it.
+	if want := date("2024-10-25").AddDate(0, 0, -31); !provider.from.Equal(want) {
+		t.Errorf("asked from %s, want %s", provider.from.Format(time.DateOnly), want.Format(time.DateOnly))
+	}
+
+	got, err := store.FxRateOn(ctx, "XAU", "RUB", date("2024-10-23"))
+	if err != nil {
+		t.Fatalf("FxRateOn: %v — a day after the last published one must fall back to it", err)
+	}
+	if got.Rate.String() != "8479" {
+		t.Errorf("rate = %s, want 8479", got.Rate)
+	}
+	if n := countFxRates(t, ctx, pool); n != 2 {
+		t.Errorf("stored %d rates, want 2", n)
+	}
+}
+
+// TestBackfillGold_AnEmptyAnswerIsWarnedAboutRatherThanStoredSilently: the
+// exchange answered and published nothing across the whole range. Amounts in
+// gold then stay unconverted, which is the same outcome the currency backfill
+// warns about for a currency its source does not quote — and it must look like
+// a problem rather than a normal run.
+func TestBackfillGold_AnEmptyAnswerIsWarnedAboutRatherThanStoredSilently(t *testing.T) {
+	store, _, ctx := newBackfillFixture(t)
+
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	worker := marketdata.NewBackfillGoldWorker(store,
+		fakeOpStore{earliest: date("2024-10-25"), currencies: []string{"XAU"}},
+		&fakeGoldProvider{}, log)
+
+	if err := worker.Work(ctx, &river.Job[marketdata.BackfillGoldArgs]{Args: marketdata.BackfillGoldArgs{}}); err != nil {
+		t.Fatalf("Work: %v — an empty answer is not a failure to retry for ever", err)
+	}
+	wantWarned(t, &logs, "no gold prices")
+}
+
+// TestBackfillFx_GoldIsNotAskedOfTheCentralBank. It does not quote gold, and the
+// warning that would fire for it promises the amounts "stay unconverted" — which
+// is false now that the exchange covers them. A true sentence about the wrong
+// source is still the wrong sentence.
+func TestBackfillFx_GoldIsNotAskedOfTheCentralBank(t *testing.T) {
+	store, _, ctx := newBackfillFixture(t)
+
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	provider := &recordingHistoryProvider{ids: cbrIDs}
+	worker := newBackfillWorker(store,
+		fakeOpStore{earliest: date("2024-10-25"), currencies: []string{"XAU", "USD"}},
+		fakeAccountStore{currencies: []string{"RUB"}},
+		fakeSpaceStore{base: []string{"RUB"}},
+		provider, log)
+
+	if err := worker.Work(ctx, backfillJob()); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	for _, r := range provider.requests {
+		if r.code == "XAU" {
+			t.Errorf("the central bank was asked about gold: %+v", r)
+		}
+	}
+	if strings.Contains(logs.String(), "XAU") {
+		t.Errorf("gold was reported as a currency this source does not quote — true of the source, and misleading about the money:\n%s", logs.String())
+	}
+}

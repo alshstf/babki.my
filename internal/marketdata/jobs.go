@@ -411,6 +411,98 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 // built in refreshQuotesWorker.Work for why the ticker alone will not do.
 type tickerCurrency struct{ ticker, currency string }
 
+// BackfillGoldArgs asks for the exchange's gold history, which the central bank
+// does not publish at all.
+type BackfillGoldArgs struct{}
+
+func (BackfillGoldArgs) Kind() string { return "marketdata.backfill_gold" }
+
+// GoldRateProvider is the subset of the exchange client this worker needs. See
+// moex.GoldRates for why the rate it returns is per GRAM and why that matters.
+type GoldRateProvider interface {
+	GoldRates(ctx context.Context, from, to time.Time) ([]FxRate, error)
+}
+
+// backfillGoldWorker keeps XAU->RUB in the same fx table every other currency
+// lives in, so that nothing downstream needs to know gold is special: a cash
+// balance in XAU is valued by the same lookup a balance in dollars is.
+//
+// IT IS A SEPARATE JOB FROM THE CENTRAL BANK'S because it is a separate SOURCE.
+// The Bank of Russia publishes no gold rate — the backfill there reports XAU as
+// a currency it does not quote — and the exchange, which does, speaks a
+// different protocol entirely. Folding a second source into that worker would
+// have made "the provider" mean two things at once.
+type backfillGoldWorker struct {
+	river.WorkerDefaults[BackfillGoldArgs]
+	store    *Store
+	ops      operationCurrencies
+	provider GoldRateProvider
+	log      *slog.Logger
+	now      func() time.Time
+}
+
+func NewBackfillGoldWorker(store *Store, ops operationCurrencies, provider GoldRateProvider, log *slog.Logger) river.Worker[BackfillGoldArgs] {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &backfillGoldWorker{store: store, ops: ops, provider: provider, log: log, now: time.Now}
+}
+
+func (w *backfillGoldWorker) Timeout(*river.Job[BackfillGoldArgs]) time.Duration {
+	return backfillTimeout
+}
+
+// Work asks for the whole range at once, exactly as the currency backfill does:
+// one request heals any hole an outage left, and re-running overwrites the same
+// rows.
+//
+// The range starts a month before the earliest operation for the reason
+// rangeStart states at length — a rate is looked up by nearest EARLIER date, and
+// gold trades on business days like everything else.
+func (w *backfillGoldWorker) Work(ctx context.Context, _ *river.Job[BackfillGoldArgs]) error {
+	earliest, err := w.ops.EarliestOccurredOn(ctx)
+	if errors.Is(err, pgx.ErrNoRows) {
+		w.log.Debug("marketdata: no operations yet, skipping the gold backfill")
+		return nil
+	}
+	if err != nil {
+		w.log.Error("marketdata: read earliest operation date failed", "err", err)
+		return err
+	}
+	from := utcDay(earliest).AddDate(0, 0, -backfillLeadDays)
+	if from.Before(backfillFloor) {
+		from = backfillFloor
+	}
+	to := utcDay(w.now())
+	if from.After(to) {
+		from = to
+	}
+
+	rates, err := w.provider.GoldRates(ctx, from, to)
+	if err != nil {
+		w.log.Error("marketdata: fetch gold history failed",
+			"from", from.Format(time.DateOnly), "to", to.Format(time.DateOnly), "err", err)
+		return err
+	}
+	if len(rates) == 0 {
+		// The exchange answered and published nothing across the whole range.
+		// Warn rather than Debug, for the reason the currency backfill warns
+		// about a currency its source does not quote: amounts in gold stay
+		// unconverted, and that has to be visible rather than look like a
+		// normal run.
+		w.log.Warn("marketdata: the exchange published no gold prices over the whole range (amounts in gold stay unconverted)",
+			"from", from.Format(time.DateOnly), "to", to.Format(time.DateOnly))
+		return nil
+	}
+	if err := w.store.UpsertFxRates(ctx, rates); err != nil {
+		w.log.Error("marketdata: store gold history failed", "err", err)
+		return err
+	}
+	w.log.Info("marketdata: downloaded gold history",
+		"from", from.Format(time.DateOnly), "to", to.Format(time.DateOnly), "rates", len(rates))
+	return nil
+}
+
 // backfillFxWorker downloads the FX rate history the journal needs: the
 // whole range at once, one request per currency in use.
 type backfillFxWorker struct {
@@ -501,6 +593,14 @@ func (w *backfillFxWorker) Work(ctx context.Context, _ *river.Job[BackfillFxArgs
 	}
 
 	for _, code := range codes {
+		// Gold is asked of the exchange instead, which is the only source that
+		// quotes it — the central bank publishes no rate for XAU at all. Skipped
+		// here rather than left to the warning below, because that warning
+		// promises the amounts "stay unconverted", and for this one code they
+		// do not (see backfillGoldWorker).
+		if code == GoldCode {
+			continue
+		}
 		id, ok := ids[code]
 		if !ok {
 			// The source doesn't quote this currency, so there is no series to

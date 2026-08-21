@@ -13,6 +13,16 @@ import (
 )
 
 // FxRate is the number of Quote units per 1 Base unit on date On.
+// GoldCode is the code this program files gold rates under, and it is the
+// broker's code rather than ISO 4217's meaning of it.
+//
+// ISO says XAU is a troy OUNCE. The broker uses it for the exchange's spot gold,
+// whose unit is a GRAM, and the owner's journal counts grams because his
+// purchases are of that instrument. So the code travels through this program
+// meaning what his operations mean by it, and the one source that could
+// contradict it publishes no gold rate at all (see moex.GoldRates).
+const GoldCode = "XAU"
+
 type FxRate struct {
 	Base   string
 	Quote  string
