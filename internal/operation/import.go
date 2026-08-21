@@ -768,10 +768,26 @@ func replayCandidate(legs []Operation, pending map[uuid.UUID][]Operation) (int, 
 //     history unimportable. A person entering a transfer by hand still cannot
 //     write one leg — both of their accounts are in here, so both legs are
 //     knowable, and the pair endpoint is how they say so.
+//
 //   - A SPLIT IS NEVER IMPORTED. Corporate actions do not arrive as operations
 //     at all, so an importer cannot know a split happened; a split row with a
 //     broker's name on it would be this program's invention wearing the
 //     broker's authority.
+//
+//   - A TAX MAY BE MONEY GIVEN BACK. A broker's tax CORRECTION arrives with a
+//     positive amount, and it is an ordinary event: of the nine on the owner's
+//     own account seven are positive. The hand-entry path keeps refusing one,
+//     and should: there a positive tax is a sign somebody typed wrong, and the
+//     refusal catches it at the moment it can still be fixed. Here the sign is
+//     the broker's own statement about money that actually moved, and refusing
+//     it left seven real credits out of the journal for as long as the account
+//     existed. Nothing downstream needs teaching: a tax is folded into income
+//     by its signed amount, so a refund restores exactly what the withholding
+//     took (see portfolio.Compute), and the account's withheld total nets it
+//     off (see taxWithheldFromAccount).
+//
+//     A ZERO stays refused on both paths and by the same rule below: money that
+//     did not move is not a correction of anything.
 //
 // What it does NOT check is the delta's own contract — that an operation names
 // a source and the record it came from, and does not arrive with a parcel it
@@ -787,6 +803,11 @@ func validateImported(o Operation) error {
 	case TypeSplit:
 		return fmt.Errorf("%w: an import does not record splits — corporate actions do not arrive as operations",
 			family.ErrValidation)
+	case TypeTax:
+		if o.AmountMinor == 0 {
+			return fmt.Errorf("%w: tax amount_minor must not be 0", family.ErrValidation)
+		}
+		return nil
 	case TypeTransferIn, TypeTransferOut:
 		if o.InstrumentID == nil {
 			return fmt.Errorf("%w: %s requires an instrument", family.ErrValidation, o.Type)

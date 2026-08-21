@@ -380,27 +380,40 @@ func TestProjectRowCashOperations(t *testing.T) {
 	}
 }
 
-// TestProjectRowTaxRefundStaysUnparsed pins the controller's decision: a tax
-// the broker gave back becomes a VISIBLE unparsed row of its own, and not a
-// journal entry of some other type.
+// TestProjectRowTaxRefundIsATaxThatGaveMoneyBACK. A broker's tax correction
+// arrives with a positive amount and is an ordinary event — of the nine on the
+// owner's own account seven are positive — so it is recorded as the tax it is,
+// with the sign the broker sent.
 //
-// The alternative it replaces — booking it as a deposit with a note — moved two
-// published figures at once: the position's income stays understated by the
-// refund for good (the engine subtracts a tax from the position's income in the
-// currency the tax was charged in, and never sees an account-level deposit),
-// and the journal grows a top-up the owner never made.
-func TestProjectRowTaxRefundStaysUnparsed(t *testing.T) {
+// IT USED TO BE REFUSED, and the refusal cost seven real credits their place in
+// the journal for as long as the account existed. What made the refusal look
+// right was the alternatives: booked as a DEPOSIT it would leave the position's
+// income understated by the refund for good and grow a top-up the owner never
+// made; booked as INCOME it would inflate dividends that were never paid. The
+// answer was neither — it was that a tax is folded into income by its SIGNED
+// amount, so a refund restores exactly what the withholding took, and nothing
+// downstream needed teaching at all.
+//
+// The hand-entry path still refuses a positive tax, and should: there the sign
+// is somebody's typing rather than the broker's statement (see
+// operation.validateImported).
+func TestProjectRowTaxRefundIsATaxThatGaveMoneyBACK(t *testing.T) {
 	row := mirrorRowFor(t, "tax_correction_refund.json")
-	for _, resolved := range []*Resolved{nil, resolvedShare()} {
+	// Resolved, because the fixture's correction names a paper: an unresolved
+	// instrument is refused for that, later and for its own reason.
+	for _, resolved := range []*Resolved{resolvedShare()} {
 		ops, _, refusal := ProjectRow(row, fixtureAccountID, resolved, nil)
-		if len(ops) != 0 {
-			t.Fatalf("got %d operations, want none — a refund has no journal shape", len(ops))
+		if refusal != nil {
+			t.Fatalf("refused with %q — a correction that gives money back is money that moved", refusal.Reason)
 		}
-		if refusal == nil {
-			t.Fatal("a tax refund was projected instead of being refused")
+		if len(ops) != 1 {
+			t.Fatalf("got %d operations, want exactly one", len(ops))
 		}
-		if refusal.Reason != ReasonTaxRefund {
-			t.Errorf("reason = %q, want tax_refund", refusal.Reason)
+		if ops[0].Type != operation.TypeTax {
+			t.Errorf("type = %s, want tax: it is a tax, and it is the sign that differs", ops[0].Type)
+		}
+		if ops[0].AmountMinor <= 0 {
+			t.Errorf("amount = %d, want it positive and unchanged — the sign is the broker's own statement about which way the money went", ops[0].AmountMinor)
 		}
 	}
 }

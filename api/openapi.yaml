@@ -1511,7 +1511,6 @@ components:
         the real number survives only in the prose of the description — which
         this program does not read figures out of. `commission_refund`: a
         negative commission on the operation, i.e. money coming back.
-        `tax_refund`: a tax operation whose amount is positive.
         `projection_incomplete`: this program has a rule for the broker's
         operation type and the rule produced nothing — a gap in this program,
         stated as one. `broker_fee_parent_missing`: a commission charged as an
@@ -1533,7 +1532,6 @@ components:
         - currency_trade
         - transfer_without_quantity
         - commission_refund
-        - tax_refund
         - projection_incomplete
         - broker_fee_parent_missing
     TinvestTokenCheckRequest:
