@@ -571,6 +571,9 @@ type AccountTotal struct {
 	// InBaseGap Which kind of gap stopped `in_base`, or null when there is a figure. Both can be true of one account at once, hence `both`.
 	InBaseGap nullable.Nullable[RealizedGap] `json:"in_base_gap"`
 
+	// NoRateCurrencies WHICH MONEY THE SERVER COULD NOT VALUE, by currency code, ordered and without repeats. `in_base_gap` says a rate was missing; this says what it was a rate FOR, which is the difference between a gap that closes on its own and one that never will — a rate source may not quote a currency AT ALL (the Bank of Russia publishes none for XAU, the code the broker uses for gold), and a reader told only «нет курса» waits for a backfill that has nothing to fetch. Empty when nothing was stopped by a rate, and empty too when the only gaps were of the other kind. It names the CASH the account holds and nothing else: there the missing rate is exactly this currency against the base one, while a position's gap can be about the currency its VALUATION is struck in rather than its own, and naming that one would be a guess.
+	NoRateCurrencies []string `json:"no_rate_currencies"`
+
 	// UnknownCostPositions HOW MANY HOLDINGS THE ACCOUNT CANNOT SAY THE PRICE OF: still held, and carrying a basis of nought — shares that arrived by a transfer the broker sent without a cost attached. Their whole market value counts as profit here, so the total is HIGHER than the truth by whatever was really paid for them, on an account that never recorded it. The opposite direction to zero_valued_positions, and published for the same reason: a reader is told what the figure rests on rather than left to discover it. 0 when every holding knows what it cost.
 	UnknownCostPositions int `json:"unknown_cost_positions"`
 

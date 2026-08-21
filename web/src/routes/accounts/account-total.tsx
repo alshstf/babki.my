@@ -63,7 +63,12 @@ export function AccountTotal({
     .map((entry) => formatMinor(entry.amount_minor, entry.currency))
     .join(" · ");
 
-  if (figures.length === 0 && unknowable.length === 0 && total.in_base_gap == null) return null;
+  if (
+    figures.length === 0 &&
+    unknowable.length === 0 &&
+    total.in_base_gap == null
+  )
+    return null;
 
   return (
     <div className="mt-2 grid gap-0.5" data-testid="account-total">
@@ -72,14 +77,33 @@ export function AccountTotal({
           <span
             key={figure.currency}
             data-testid="account-total-amount"
-            className={cn("text-2xl font-bold tabular-nums", signClass(figure.amountMinor))}
+            className={cn(
+              "text-2xl font-bold tabular-nums",
+              signClass(figure.amountMinor),
+            )}
           >
             {formatMinor(figure.amountMinor, figure.currency)}
           </span>
         ))}
         {mode === "base" && total.in_base_gap != null && (
-          <span data-testid="account-total-gap" className="text-sm text-muted-foreground">
-            {t("positions.accountTotalGap")}
+          <span
+            data-testid="account-total-gap"
+            className="text-sm text-muted-foreground"
+            title={
+              total.no_rate_currencies.length > 0
+                ? t("positions.accountTotalGapCurrenciesHint")
+                : undefined
+            }
+          >
+            {/* WHICH MONEY, when the server could name it. «Нет курса» alone
+                sends a reader to wait for a backfill, and a source that does not
+                quote a currency at all has nothing to fetch — the Bank of Russia
+                publishes none for XAU, the code the broker uses for gold. */}
+            {total.no_rate_currencies.length > 0
+              ? t("positions.accountTotalGapCurrencies", {
+                  currencies: total.no_rate_currencies.join(", "),
+                })
+              : t("positions.accountTotalGap")}
           </span>
         )}
       </div>
@@ -91,7 +115,10 @@ export function AccountTotal({
         {t("positions.accountTotalTitle")}
       </div>
       {unknowable.length > 0 && (
-        <div data-testid="account-total-unknowable" className="text-xs text-muted-foreground">
+        <div
+          data-testid="account-total-unknowable"
+          className="text-xs text-muted-foreground"
+        >
           {t("positions.accountTotalUnknowable", {
             currencies: unknowable.map((entry) => entry.currency).join(", "),
           })}
@@ -103,7 +130,10 @@ export function AccountTotal({
           className="text-xs text-muted-foreground"
           title={t("positions.accountTotalZeroValuedHint")}
         >
-          {t("positions.accountTotalZeroValued", { count: zeroValued, cost: zeroValuedCost })}
+          {t("positions.accountTotalZeroValued", {
+            count: zeroValued,
+            cost: zeroValuedCost,
+          })}
         </div>
       )}
       {unknownCost > 0 && (

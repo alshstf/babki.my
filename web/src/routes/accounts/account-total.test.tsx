@@ -17,6 +17,7 @@ function makeTotal(
     base_currency: "RUB",
     in_base: 1_000_000,
     in_base_gap: null,
+    no_rate_currencies: [],
     zero_valued_positions: 0,
     zero_valued_cost_by_currency: [],
     unknown_cost_positions: 0,
@@ -93,6 +94,28 @@ describe("AccountTotal", () => {
       screen.queryByTestId("account-total-amount"),
     ).not.toBeInTheDocument();
     expect(screen.getByTestId("account-total-gap")).toBeInTheDocument();
+  });
+
+  it("names the money it could not value, rather than a bare «нет курса»", () => {
+    // «Нет курса» alone sends a reader to wait for a backfill. A source that
+    // does not quote a currency at all has nothing to fetch — the Bank of
+    // Russia publishes none for XAU, the code the broker uses for gold — and on
+    // the owner's account that one holding took the total off three screens
+    // with nothing saying which money was responsible.
+    render(
+      <AccountTotal
+        total={makeTotal({
+          in_base: null,
+          in_base_gap: "no_rate",
+          no_rate_currencies: ["XAU"],
+        })}
+        mode="base"
+      />,
+    );
+
+    expect(screen.getByTestId("account-total-gap").textContent).toContain(
+      "XAU",
+    );
   });
 
   it("names the papers written off, and how much basis went in that way", () => {

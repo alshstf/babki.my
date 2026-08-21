@@ -1396,7 +1396,7 @@ components:
           description: "The account's result in this currency, or null when one of its terms has no figure in this currency at all — a position that realized into another currency, or one paid in another, has no own-currency total to add (see Position.total_minor). A bucket short one term is published as null rather than as the sum of the rest: a total quietly missing a term reads as a smaller result, not as a gap, and is indistinguishable from a real figure on screen."
     AccountTotal:
       type: object
-      required: [by_currency, base_currency, in_base, in_base_gap, zero_valued_positions, zero_valued_cost_by_currency, unknown_cost_positions]
+      required: [by_currency, base_currency, in_base, in_base_gap, no_rate_currencies, zero_valued_positions, zero_valued_cost_by_currency, unknown_cost_positions]
       description: "WHAT THE ACCOUNT HAS MADE, ALL IN — the account-level twin of Position.total_minor, plus the money no position can see. It is the sum of every position's total (realized result + income + unrealized revaluation) and, beside it, the account's own charges: interest credited on the cash, every commission booked as an operation of its own, and the tax the broker took from the account rather than from a payment. Deposits and withdrawals are NOT in it — putting money in is not earning it — and neither is the revaluation of idle cash, which no position covers and which this figure therefore does not claim. Both forms are always published, because the client cannot know which one a screen is about to show and the choice is a display preference, not a fact about the money."
       properties:
         by_currency:
@@ -1414,6 +1414,10 @@ components:
           description: "Which kind of gap stopped `in_base`, or null when there is a figure. Both can be true of one account at once, hence `both`."
           allOf:
             - $ref: "#/components/schemas/RealizedGap"
+        no_rate_currencies:
+          type: array
+          items: { type: string }
+          description: "WHICH MONEY THE SERVER COULD NOT VALUE, by currency code, ordered and without repeats. `in_base_gap` says a rate was missing; this says what it was a rate FOR, which is the difference between a gap that closes on its own and one that never will — a rate source may not quote a currency AT ALL (the Bank of Russia publishes none for XAU, the code the broker uses for gold), and a reader told only «нет курса» waits for a backfill that has nothing to fetch. Empty when nothing was stopped by a rate, and empty too when the only gaps were of the other kind. It names the CASH the account holds and nothing else: there the missing rate is exactly this currency against the base one, while a position's gap can be about the currency its VALUATION is struck in rather than its own, and naming that one would be a guess."
         zero_valued_positions:
           type: integer
           description: "HOW MANY HOLDINGS WENT INTO THIS TOTAL AT A VALUE OF NOUGHT because nothing prices them — no quote stored, a bond with no face value recorded, a type this program has no valuation model for (Position.market_value_gap names which, row by row). Their money is counted as spent and nothing is counted as held, so the total is lower than the truth by whatever those papers are actually worth. This is a deliberate answer to a real question — a frozen fund nobody can sell is worth nothing to its holder today — and it is NOT a claim that those papers are worthless: it is the most conservative reading, and it is published as a count precisely so a reader can see the figure rests on it. 0 when every holding was priced, which is when the total needs no such caveat. Their basis is in zero_valued_cost_by_currency, so the size of the assumption is a number rather than an adjective."

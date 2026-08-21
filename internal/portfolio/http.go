@@ -1489,14 +1489,21 @@ type accountTotals struct {
 	zeroValued     int
 	zeroValuedCost map[string]int64
 	unknownCost    int
+	// noRateCurrencies names the money this account holds that could not be
+	// valued. It is filled from the CASH alone, where the missing rate is
+	// exactly that currency against the base one — a position's gap can be
+	// about the currency its valuation is struck in rather than its own, and
+	// naming that one would be a guess (see AccountTotal.no_rate_currencies).
+	noRateCurrencies map[string]bool
 }
 
 func newAccountTotals(baseCurrency string) *accountTotals {
 	return &accountTotals{
-		baseCurrency:   baseCurrency,
-		byCurrency:     make(map[string]int64),
-		unknowable:     make(map[string]bool),
-		zeroValuedCost: make(map[string]int64),
+		baseCurrency:     baseCurrency,
+		byCurrency:       make(map[string]int64),
+		unknowable:       make(map[string]bool),
+		zeroValuedCost:   make(map[string]int64),
+		noRateCurrencies: make(map[string]bool),
 	}
 }
 
@@ -1665,9 +1672,13 @@ func (at *accountTotals) addCash(c apitypes.CashPosition) error {
 	for _, half := range []nullable.Nullable[int64]{c.InBase.RealizedPnlMinor, c.InBase.UnrealizedPnlMinor} {
 		if half.IsNull() {
 			// A rate behind this money is missing, so the account has no single
-			// figure. Reported as no_rate, which is what it is: every one of
-			// these gaps closes when the fx table catches up.
+			// figure — and the currency is named, because «нет курса» alone
+			// cannot tell a gap that closes when the backfill catches up from
+			// one that never closes at all. The Bank of Russia publishes no rate
+			// for XAU, the code the broker uses for gold, and no amount of
+			// waiting will produce one.
 			at.noRate = true
+			at.noRateCurrencies[c.Currency] = true
 			continue
 		}
 		sum, err := money.Add(at.inBaseMinor, half.MustGet())
@@ -1687,6 +1698,7 @@ func (at *accountTotals) result() apitypes.AccountTotal {
 		ByCurrency:               make([]apitypes.AccountCurrencyTotal, 0, len(at.byCurrency)),
 		ZeroValuedPositions:      at.zeroValued,
 		ZeroValuedCostByCurrency: make([]apitypes.CurrencyAmount, 0, len(at.zeroValuedCost)),
+		NoRateCurrencies:         make([]string, 0, len(at.noRateCurrencies)),
 		UnknownCostPositions:     at.unknownCost,
 	}
 	// Every currency that has a bucket OR a hole in one: a currency whose only
@@ -1719,6 +1731,11 @@ func (at *accountTotals) result() apitypes.AccountTotal {
 	sort.Slice(out.ZeroValuedCostByCurrency, func(i, j int) bool {
 		return out.ZeroValuedCostByCurrency[i].Currency < out.ZeroValuedCostByCurrency[j].Currency
 	})
+
+	for currency := range at.noRateCurrencies {
+		out.NoRateCurrencies = append(out.NoRateCurrencies, currency)
+	}
+	sort.Strings(out.NoRateCurrencies)
 
 	switch {
 	case at.undated && at.noRate:
