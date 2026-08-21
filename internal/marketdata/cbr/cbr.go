@@ -26,6 +26,10 @@ const DefaultBaseURL = "https://www.cbr.ru/scripts/XML_daily.asp"
 // one request returns a whole date range of one currency's rates.
 const DefaultDynamicURL = "https://www.cbr.ru/scripts/XML_dynamic.asp"
 
+// userAgent identifies this program to the Bank of Russia. See fetchXML for
+// what happens without it.
+const userAgent = "babki.my/1.0 (+https://github.com/alshstf/babki.my)"
+
 // sourceName is used both as the provider's Name() and as FxRate.Source for
 // every rate this provider returns.
 const sourceName = "cbr"
@@ -129,6 +133,22 @@ func (c *Client) fetchXML(ctx context.Context, reqURL string, dst any) error {
 	if err != nil {
 		return fmt.Errorf("cbr: build request: %w", err)
 	}
+	// THE BANK REFUSES GO'S DEFAULT AGENT WITH 403, and refusing it is its
+	// right: a public feed is entitled to know who is asking. Left unset, Go
+	// sends "Go-http-client/2.0", and every request this program has ever made
+	// for a rate came back 403 — checked against cbr.ru on 2026-08-21, where
+	// that agent is refused on both endpoints and an ordinary one is served.
+	//
+	// WHAT IT COST WAS EVERY BASE-CURRENCY FIGURE IN THE PROGRAM. The fx table
+	// held eleven days against a journal starting in 2020, so a rate for any
+	// day a purchase actually happened on was simply absent — and each figure
+	// struck from one honestly published nothing with `no_rate` beside it. Five
+	// of the owner's six accounts showed no total at all, and the cause was one
+	// missing header rather than anything the reader could act on.
+	//
+	// The URL is here so a person reading a log at the other end can find out
+	// what this is, which is the whole point of the header.
+	req.Header.Set("User-Agent", userAgent)
 
 	resp, err := c.http.Do(req)
 	if err != nil {

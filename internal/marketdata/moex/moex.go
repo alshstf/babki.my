@@ -181,6 +181,9 @@ func New(client *http.Client, baseURL string, log *slog.Logger) *Client {
 }
 
 // Name implements marketdata.QuoteProvider.
+// userAgent identifies this program to the exchange.
+const userAgent = "babki.my/1.0 (+https://github.com/alshstf/babki.my)"
+
 func (c *Client) Name() string { return sourceName }
 
 // QuotesFor implements marketdata.QuoteProvider. It queries every board in
@@ -454,6 +457,12 @@ func (c *Client) fetchBoard(ctx context.Context, b board) ([]secRow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("moex: %s: build request: %w", b.label, err)
 	}
+
+	// Named for the same reason the rate client is (see cbr.userAgent): a public
+	// feed is entitled to know who is asking, and the Bank of Russia's answer to
+	// Go's default agent is a 403. The exchange serves it today; being served on
+	// sufferance by an anonymous client is not a thing to rely on.
+	req.Header.Set("User-Agent", userAgent)
 
 	resp, err := c.http.Do(req)
 	if err != nil {

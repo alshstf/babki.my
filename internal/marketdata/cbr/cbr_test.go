@@ -587,3 +587,58 @@ func TestRatesRange_MissingNominalIsRefused(t *testing.T) {
 		t.Errorf("error = %q, want it to name KZT", err)
 	}
 }
+
+// TestEveryRequestNamesThisProgram is the fix for the outage that made every
+// base-currency figure in this program unavailable at once.
+//
+// The Bank of Russia answers Go's default agent — "Go-http-client/2.0", which
+// is what net/http sends when nothing sets the header — with 403, on both of
+// its endpoints (checked live on 2026-08-21). Nothing in this client set one,
+// so no rate for any historical day had ever been fetched: the table held the
+// last eleven days against a journal starting in 2020, and every figure that
+// needed a rate for the day a purchase actually happened published nothing with
+// `no_rate` beside it. Five of the owner's six accounts showed no total at all.
+//
+// The assertion is on the header being SENT AND NOT GO'S OWN, rather than on
+// its exact wording: what the feed refuses is the default, and a test pinned to
+// one spelling would fail over a version bump that changes nothing.
+func TestEveryRequestNamesThisProgram(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		call func(*cbr.Client) error
+	}{
+		{"the daily table", func(cl *cbr.Client) error {
+			_, err := cl.RatesOn(context.Background(), time.Date(2026, 2, 15, 0, 0, 0, 0, time.UTC))
+			return err
+		}},
+		{"one currency's history", func(cl *cbr.Client) error {
+			_, err := cl.RatesRange(context.Background(), "USD", "R01235",
+				time.Date(2026, 2, 15, 0, 0, 0, 0, time.UTC),
+				time.Date(2026, 2, 20, 0, 0, 0, 0, time.UTC))
+			return err
+		}},
+		{"the currency index", func(cl *cbr.Client) error {
+			_, err := cl.CurrencyIDs(context.Background())
+			return err
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var got string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = r.Header.Get("User-Agent")
+				w.Header().Set("Content-Type", "application/xml")
+				_, _ = io.WriteString(w, `<?xml version="1.0" encoding="windows-1251"?><ValCurs/>`)
+			}))
+			defer srv.Close()
+
+			_ = c.call(cbr.New(srv.Client(), srv.URL))
+
+			if got == "" {
+				t.Fatalf("no User-Agent sent — Go fills in its own, and the Bank of Russia answers that one 403")
+			}
+			if strings.HasPrefix(got, "Go-http-client") {
+				t.Errorf("User-Agent = %q, which is Go's default and the one the feed refuses", got)
+			}
+		})
+	}
+}
