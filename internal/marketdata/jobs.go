@@ -254,8 +254,25 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 		return nil
 	}
 
-	byTicker := make(map[string]uuid.UUID, len(insts))
+	// KEYED BY TICKER AND CURRENCY, because a ticker alone does not name a
+	// security. The owner's catalog holds AT&T under "T" in dollars and
+	// Т-Технологии under "T" in rubles — two companies on two exchanges — and
+	// this map used to hold one of them and silently drop the other (#26, and
+	// the reason migration 0011 forbade the pair outright). The provider says
+	// which currency each price is in, and that is exactly what separates them:
+	// MOEX answers "T" in rubles and never in dollars.
+	//
+	// The REQUEST is still by ticker alone, because that is all the provider's
+	// interface speaks; the currency only enters when the answers are matched
+	// back, which is the first moment it exists.
+	byTickerCurrency := make(map[tickerCurrency]uuid.UUID, len(insts))
+	// ambiguous names the pairs no answer can be attached to: two catalog rows
+	// with the same ticker AND the same currency. Neither is priced — picking
+	// one would be a coin toss over which paper a real price belongs to — and
+	// the pair is reported once rather than per answer.
+	ambiguous := make(map[tickerCurrency][]uuid.UUID)
 	tickers := make([]string, 0, len(insts))
+	asked := make(map[string]bool, len(insts))
 	for _, inst := range insts {
 		if inst.Ticker == "" {
 			// The empty string is how "this instrument has no exchange ticker"
@@ -274,7 +291,8 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 				"instrument_id", inst.ID)
 			continue
 		}
-		if priced, taken := byTicker[inst.Ticker]; taken {
+		key := tickerCurrency{ticker: inst.Ticker, currency: inst.Currency}
+		if priced, taken := byTickerCurrency[key]; taken {
 			// instruments.ticker carries a partial unique index (migration
 			// 0011) over exactly what ListTradable returns, so a read of the
 			// catalog cannot produce this any more. The check is here all the
@@ -290,14 +308,24 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 			// un-duplicate a ticker, so River would retry forever and every
 			// other instrument would stop being priced too — one wrong number
 			// traded for all of them.
-			w.log.Warn("marketdata: two instruments share a ticker, only one of them can be priced",
+			w.log.Warn("marketdata: two instruments share a ticker AND a currency, so neither can be priced",
 				"ticker", inst.Ticker,
-				"priced_instrument_id", priced,
-				"skipped_instrument_id", inst.ID)
+				"currency", inst.Currency,
+				"instrument_id", priced,
+				"other_instrument_id", inst.ID)
+			ambiguous[key] = append(ambiguous[key], inst.ID)
 			continue
 		}
-		byTicker[inst.Ticker] = inst.ID
-		tickers = append(tickers, inst.Ticker)
+		byTickerCurrency[key] = inst.ID
+		if !asked[inst.Ticker] {
+			asked[inst.Ticker] = true
+			tickers = append(tickers, inst.Ticker)
+		}
+	}
+	// Removed only now, so that the FIRST row of an ambiguous pair does not keep
+	// the price by having been seen first. Both go unpriced or neither does.
+	for key := range ambiguous {
+		delete(byTickerCurrency, key)
 	}
 
 	tickerQuotes, err := w.provider.QuotesFor(ctx, tickers)
@@ -310,7 +338,7 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 	seen := make(map[string]bool, len(tickerQuotes))
 	quotes := make([]Quote, 0, len(tickerQuotes))
 	for _, tq := range tickerQuotes {
-		id, ok := byTicker[tq.Ticker]
+		id, ok := byTickerCurrency[tickerCurrency{ticker: tq.Ticker, currency: tq.Currency}]
 		if !ok {
 			// A ticker we didn't ask about; ignored rather than failed over,
 			// but no longer dropped without a word — the sibling case ("we
@@ -378,6 +406,10 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 		"provider", w.provider.Name(), "requested", len(tickers), "matched", len(quotes))
 	return nil
 }
+
+// tickerCurrency is what a price is matched to a catalog row by. See the map
+// built in refreshQuotesWorker.Work for why the ticker alone will not do.
+type tickerCurrency struct{ ticker, currency string }
 
 // backfillFxWorker downloads the FX rate history the journal needs: the
 // whole range at once, one request per currency in use.

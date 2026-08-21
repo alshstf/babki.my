@@ -75,13 +75,18 @@ func (f fixture) secondConnection(t *testing.T) Connection {
 	return conn
 }
 
-// raceCatalog simulates createInstrument losing a race on the ticker's
-// unique index (decision 4 of the task brief). The FIRST Create for
-// raceOnTicker inserts racedWinner through the same real store first — as
-// if a concurrent writer's INSERT had already committed — so the resolver's
-// own attempt right after it hits the database's own unique_violation and
-// gets back a genuine instrument.ErrTickerTaken, exactly as it would from a
-// second process. Every other ticker passes straight through.
+// raceCatalog simulates createInstrument losing a race to a concurrent writer
+// (decision 4 of the task brief). The FIRST Create for raceOnTicker inserts
+// racedWinner through the same real store first — as if another process's
+// INSERT had already committed — so the resolver's own attempt right after it
+// hits the database's own unique_violation and gets back a genuine sentinel,
+// exactly as it would in production. Every other ticker passes straight through.
+//
+// WHICH sentinel is up to the winner, and the tests below use both: a winner
+// carrying an ISIN collides on the isin index (ErrISINTaken, and the winner is
+// the same paper), while one with no ISIN collides on the ticker index
+// (ErrTickerTaken, and the winner may be anybody). The field is still named for
+// the ticker because that is what the fake matches on, not what it produces.
 type raceCatalog struct {
 	*countingCatalog
 	raceOnTicker string
@@ -747,20 +752,165 @@ func TestResolve_CreatesBond_CarriesNominalAndCurrency(t *testing.T) {
 	}
 }
 
-// TestResolve_ErrTickerTaken_RetriesAndFindsTheWinner pins decision 4: a
-// Create that loses a race on the ticker's unique index does not fail the
-// resolution — it looks the ticker up again and uses whichever row won,
-// exactly as if that row had been the catalog hit all along.
+// -------------------------------------------------------------------------
+// a ticker is not an identity
+// -------------------------------------------------------------------------
+
+// TestResolve_TickerHitWithAContradictingISINGetsARowOfItsOwn runs the owner's
+// own case, and it is the case this rule has now been rewritten twice for.
 //
-// THE WINNER CARRIES THE PASSPORT'S OWN ISIN, and the ISIN step still misses:
-// it ran before the race seeded that row, so there was nothing yet to find.
-// The earlier version of this test gave the winner a DIFFERENT ISIN to make
-// that step miss, which pinned the very defect this branch fixes — under the
-// rule refuseContradiction now states, a row whose ISIN contradicts the
-// passport is a different security and taking it is the thing that must not
-// happen (see TestResolve_TickerRaceWinnerWithAContradictingISINIsRefused,
-// which is now that case's own test).
-func TestResolve_ErrTickerTaken_RetriesAndFindsTheWinner(t *testing.T) {
+// His catalog has AT&T under ticker "T"; Т-Технологии trade on MOEX under "T"
+// as well, with ISIN RU000A107UL4. The first version resolved Т-Технологии to
+// AT&T's row and stamped Т-Технологии's identifiers onto it — permanently, for
+// every space in the instance. The second refused, which stopped the damage and
+// left every one of his Т-Технологии operations unimportable, because the
+// catalog could not hold two rows under one ticker.
+//
+// Now it can (migration 0020): a ticker is not a name for a security, an ISIN
+// is. So the answer is a row of Т-Технологии's own, and the assertion is in two
+// parts — the new row is right, AND AT&T's is exactly as it was.
+func TestResolve_TickerHitWithAContradictingISINGetsARowOfItsOwn(t *testing.T) {
+	f := newFixture(t)
+	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
+	att, err := catalog.Create(f.ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "AT&T", Ticker: "T",
+		ISIN: "US00206R1023", Currency: "USD",
+	})
+	if err != nil {
+		t.Fatalf("seed catalog: %v", err)
+	}
+
+	src := newFakePassportSource()
+	src.instruments["uid-t-tech"] = InstrumentBrief{
+		UID: "uid-t-tech", FIGI: "TCS10A107UL4", ISIN: "RU000A107UL4",
+		Ticker: "T", Name: "Т-Технологии", Currency: "RUB", InstrumentType: "share",
+	}
+
+	r := NewResolver(f.store, catalog, nil)
+	got, err := r.Resolve(f.ctx, f.conn.ID, src, InstrumentRef{InstrumentUID: "uid-t-tech", FIGI: "TCS10A107UL4"})
+	if err != nil {
+		t.Fatalf("Resolve err = %v — the two are different companies and the catalog holds both", err)
+	}
+	if got.InstrumentID == att.ID {
+		t.Fatal("Т-Технологии resolved to AT&T's row: the same ticker is not the same security")
+	}
+	created, err := catalog.ByID(f.ctx, got.InstrumentID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if created.ISIN != "RU000A107UL4" || created.Ticker != "T" || created.Name != "Т-Технологии" {
+		t.Errorf("the new row = %+v, want Т-Технологии under ticker T with its own ISIN", created)
+	}
+
+	after, err := catalog.ByID(f.ctx, att.ID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if after.ISIN != "US00206R1023" || after.FIGI != "" || after.Name != "AT&T" {
+		t.Errorf("AT&T's row afterwards = %+v, want it untouched (isin US00206R1023, no figi)", after)
+	}
+	if catalog.updateCalls != 0 {
+		t.Errorf("catalog.Update called %d times, want 0 — a stranger's row is not written to, whatever is done instead", catalog.updateCalls)
+	}
+}
+
+// TestResolve_TickerHitOfAnotherTypeIsRefused pins the second half of the same
+// rule, on a row where the ISIN half cannot fire at all: the catalog row
+// carries no ISIN, so only the types can settle whether this is the same
+// paper.
+//
+// A type is not a label here. Every valuation in this program branches on it —
+// a bond is priced as a percentage of its face value and a fund at the quote
+// itself — so trades filed against a row of the wrong type are mispriced even
+// when the ticker really is the same string.
+func TestResolve_TickerHitOfAnotherTypeGetsARowOfItsOwn(t *testing.T) {
+	f := newFixture(t)
+	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
+	fund, err := catalog.Create(f.ctx, instrument.Instrument{
+		Type: instrument.TypeETF, Name: "Фонд с тем же тикером", Ticker: "SAME1", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("seed catalog: %v", err)
+	}
+
+	src := newFakePassportSource()
+	src.instruments["uid-bond-same-ticker"] = InstrumentBrief{
+		UID: "uid-bond-same-ticker", FIGI: "BBG00SAME001", ISIN: "RU000A10SAME",
+		Ticker: "SAME1", Name: "Облигация с тем же тикером", Currency: "RUB", InstrumentType: "bond",
+	}
+	src.nominals["uid-bond-same-ticker"] = MoneyValue{Currency: "RUB", Units: 1000}
+
+	r := NewResolver(f.store, catalog, nil)
+	got, err := r.Resolve(f.ctx, f.conn.ID, src,
+		InstrumentRef{InstrumentUID: "uid-bond-same-ticker", FIGI: "BBG00SAME001"})
+	if err != nil {
+		t.Fatalf("Resolve err = %v — a bond and a fund under one ticker are two papers, and the catalog holds both", err)
+	}
+	if got.InstrumentID == fund.ID {
+		t.Fatal("the bond resolved to the FUND's row: every valuation branches on the type, so its trades would be priced as a fund's")
+	}
+	if got.Type != instrument.TypeBond {
+		t.Errorf("resolved type = %s, want bond", got.Type)
+	}
+	after, err := catalog.ByID(f.ctx, fund.ID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if after.ISIN != "" || after.FIGI != "" {
+		t.Errorf("the fund's row afterwards = %+v, want no identifiers written onto it — they belong to the bond", after)
+	}
+	if catalog.updateCalls != 0 {
+		t.Errorf("catalog.Update called %d times, want 0", catalog.updateCalls)
+	}
+}
+
+// TestResolve_TickerRaceWinnerOfAnotherTypeIsRefused pins the one door that
+// still has nothing else to do about a stranger: the re-lookup after losing a
+// race on the TICKER.
+//
+// Since identity moved to the ISIN (migration 0020), a race is normally lost on
+// the ISIN instead, and there the winner is by definition the same paper — see
+// TestResolve_ISINRaceTakesTheWinnersRow. The ticker index is left holding only
+// the rows with NO ISIN, so this race needs both sides to have none: the broker
+// answers about a bond it will not give an ISIN for, and somebody has just
+// entered a FUND under the same ticker.
+//
+// A second row is not available there — the ticker it would need is the one it
+// just lost — so the refusal stands, and it becomes a visible unparsed entry
+// naming both sides.
+func TestResolve_TickerRaceWinnerOfAnotherTypeIsRefused(t *testing.T) {
+	f := newFixture(t)
+	catalog := &raceCatalog{
+		countingCatalog: &countingCatalog{Store: instrument.NewStore(f.pool)},
+		raceOnTicker:    "SAME1",
+		racedWinner: instrument.Instrument{
+			Type: instrument.TypeETF, Name: "Фонд, созданный конкурентно",
+			Ticker: "SAME1", Currency: "RUB",
+		},
+	}
+
+	src := newFakePassportSource()
+	src.instruments["uid-bond-no-isin"] = InstrumentBrief{
+		UID: "uid-bond-no-isin", FIGI: "BBG00SAME002",
+		Ticker: "SAME1", Name: "Облигация без ISIN", Currency: "RUB", InstrumentType: "bond",
+	}
+	src.nominals["uid-bond-no-isin"] = MoneyValue{Currency: "RUB", Units: 1000}
+
+	r := NewResolver(f.store, catalog, nil)
+	_, err := r.Resolve(f.ctx, f.conn.ID, src, InstrumentRef{InstrumentUID: "uid-bond-no-isin", FIGI: "BBG00SAME002"})
+	if !errors.Is(err, ErrDifferentSecurity) {
+		t.Fatalf("Resolve err = %v, want ErrDifferentSecurity", err)
+	}
+	if catalog.updateCalls != 0 {
+		t.Errorf("catalog.Update called %d times, want 0 — the row that won the race is a different security and must not be written to", catalog.updateCalls)
+	}
+}
+
+// TestResolve_ISINRaceTakesTheWinnersRow is the race as it happens now. Two
+// writers resolve one paper at the same moment and collide on the ISIN, which
+// is the identity of a security — so the winner IS this paper and there is
+// nothing to check beyond finding it.
+func TestResolve_ISINRaceTakesTheWinnersRow(t *testing.T) {
 	f := newFixture(t)
 	catalog := &raceCatalog{
 		countingCatalog: &countingCatalog{Store: instrument.NewStore(f.pool)},
@@ -791,157 +941,6 @@ func TestResolve_ErrTickerTaken_RetriesAndFindsTheWinner(t *testing.T) {
 	}
 	if catalog.createCalls != 1 {
 		t.Errorf("catalog.Create called %d times, want exactly 1 (the losing attempt) — a retry must not call Create again", catalog.createCalls)
-	}
-}
-
-// -------------------------------------------------------------------------
-// a ticker is not an identity
-// -------------------------------------------------------------------------
-
-// TestResolve_TickerHitWithAContradictingISINIsRefused runs the owner's own
-// case, the one this rule was written for.
-//
-// The owner's catalog has AT&T entered by hand under ticker "T" — a foreign
-// share whose ISIN was never recorded, which is precisely the row backfilling
-// exists to complete. Т-Технологии trade on MOEX under ticker "T" as well, with ISIN
-// RU000A107UL4. Connecting the broker used to resolve Т-Технологии to AT&T's
-// row and then stamp Т-Технологии's ISIN and figi onto it: permanently, for
-// every space in the instance, with every Т-Технологии trade booked against
-// AT&T from then on.
-//
-// So the assertion is in two parts, and the second is the one that matters:
-// the refusal names its own reason, AND AT&T's row is exactly as it was.
-func TestResolve_TickerHitWithAContradictingISINIsRefused(t *testing.T) {
-	f := newFixture(t)
-	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
-	att, err := catalog.Create(f.ctx, instrument.Instrument{
-		Type: instrument.TypeShare, Name: "AT&T", Ticker: "T",
-		ISIN: "US00206R1023", Currency: "USD",
-	})
-	if err != nil {
-		t.Fatalf("seed catalog: %v", err)
-	}
-
-	src := newFakePassportSource()
-	src.instruments["uid-t-tech"] = InstrumentBrief{
-		UID: "uid-t-tech", FIGI: "TCS10A107UL4", ISIN: "RU000A107UL4",
-		Ticker: "T", Name: "Т-Технологии", Currency: "RUB", InstrumentType: "share",
-	}
-
-	r := NewResolver(f.store, catalog, nil)
-	_, err = r.Resolve(f.ctx, f.conn.ID, src, InstrumentRef{InstrumentUID: "uid-t-tech", FIGI: "TCS10A107UL4"})
-	if !errors.Is(err, ErrDifferentSecurity) {
-		t.Fatalf("Resolve err = %v, want ErrDifferentSecurity", err)
-	}
-
-	after, err := catalog.ByID(f.ctx, att.ID)
-	if err != nil {
-		t.Fatalf("ByID: %v", err)
-	}
-	if after.ISIN != "US00206R1023" || after.FIGI != "" || after.Name != "AT&T" {
-		t.Errorf("AT&T's row after the refused Resolve = %+v, want it untouched (isin US00206R1023, no figi)", after)
-	}
-	if catalog.updateCalls != 0 {
-		t.Errorf("catalog.Update called %d times, want 0 — nothing may be written onto a row that turned out to be a different security", catalog.updateCalls)
-	}
-
-	// And the map must not remember the wrong answer either: a resolution that
-	// refused resolved nothing, so there is no id to file under this uid.
-	var count int
-	if err := f.pool.QueryRow(f.ctx,
-		`SELECT count(*) FROM tinvest_instrument_map WHERE connection_id = $1 AND instrument_uid = $2`,
-		f.conn.ID, "uid-t-tech").Scan(&count); err != nil {
-		t.Fatalf("count map rows: %v", err)
-	}
-	if count != 0 {
-		t.Errorf("tinvest_instrument_map holds %d row(s) for the refused uid, want 0", count)
-	}
-}
-
-// TestResolve_TickerHitOfAnotherTypeIsRefused pins the second half of the same
-// rule, on a row where the ISIN half cannot fire at all: the catalog row
-// carries no ISIN, so only the types can settle whether this is the same
-// paper.
-//
-// A type is not a label here. Every valuation in this program branches on it —
-// a bond is priced as a percentage of its face value and a fund at the quote
-// itself — so trades filed against a row of the wrong type are mispriced even
-// when the ticker really is the same string.
-func TestResolve_TickerHitOfAnotherTypeIsRefused(t *testing.T) {
-	f := newFixture(t)
-	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
-	fund, err := catalog.Create(f.ctx, instrument.Instrument{
-		Type: instrument.TypeETF, Name: "Фонд с тем же тикером", Ticker: "SAME1", Currency: "RUB",
-	})
-	if err != nil {
-		t.Fatalf("seed catalog: %v", err)
-	}
-
-	src := newFakePassportSource()
-	src.instruments["uid-bond-same-ticker"] = InstrumentBrief{
-		UID: "uid-bond-same-ticker", FIGI: "BBG00SAME001", ISIN: "RU000A10SAME",
-		Ticker: "SAME1", Name: "Облигация с тем же тикером", Currency: "RUB", InstrumentType: "bond",
-	}
-	src.nominals["uid-bond-same-ticker"] = MoneyValue{Currency: "RUB", Units: 1000}
-
-	r := NewResolver(f.store, catalog, nil)
-	_, err = r.Resolve(f.ctx, f.conn.ID, src,
-		InstrumentRef{InstrumentUID: "uid-bond-same-ticker", FIGI: "BBG00SAME001"})
-	if !errors.Is(err, ErrDifferentSecurity) {
-		t.Fatalf("Resolve err = %v, want ErrDifferentSecurity", err)
-	}
-	after, err := catalog.ByID(f.ctx, fund.ID)
-	if err != nil {
-		t.Fatalf("ByID: %v", err)
-	}
-	if after.ISIN != "" || after.FIGI != "" {
-		t.Errorf("the fund's row after the refused Resolve = %+v, want no identifiers written onto it", after)
-	}
-	if catalog.updateCalls != 0 {
-		t.Errorf("catalog.Update called %d times, want 0", catalog.updateCalls)
-	}
-}
-
-// TestResolve_TickerRaceWinnerWithAContradictingISINIsRefused pins the SAME
-// rule on the second door to the same backfill: the re-lookup after losing the
-// race on a ticker.
-//
-// That door is if anything the likelier one to meet a stranger behind it. The
-// row that won the race was written in the moment between this resolution's
-// own lookup and its insert, so it is by construction something this
-// resolution has never seen — most plausibly a person entering an unrelated
-// paper under this ticker by hand a second earlier.
-func TestResolve_TickerRaceWinnerWithAContradictingISINIsRefused(t *testing.T) {
-	f := newFixture(t)
-	catalog := &raceCatalog{
-		countingCatalog: &countingCatalog{Store: instrument.NewStore(f.pool)},
-		raceOnTicker:    "T",
-		racedWinner: instrument.Instrument{
-			Type: instrument.TypeShare, Name: "AT&T", Ticker: "T",
-			ISIN: "US00206R1023", Currency: "USD",
-		},
-	}
-
-	src := newFakePassportSource()
-	src.instruments["uid-t-tech"] = InstrumentBrief{
-		UID: "uid-t-tech", FIGI: "TCS10A107UL4", ISIN: "RU000A107UL4",
-		Ticker: "T", Name: "Т-Технологии", Currency: "RUB", InstrumentType: "share",
-	}
-
-	r := NewResolver(f.store, catalog, nil)
-	_, err := r.Resolve(f.ctx, f.conn.ID, src, InstrumentRef{InstrumentUID: "uid-t-tech", FIGI: "TCS10A107UL4"})
-	if !errors.Is(err, ErrDifferentSecurity) {
-		t.Fatalf("Resolve err = %v, want ErrDifferentSecurity", err)
-	}
-	if catalog.updateCalls != 0 {
-		t.Errorf("catalog.Update called %d times, want 0 — the row that won the race is a different security and must not be written to", catalog.updateCalls)
-	}
-	winner, err := catalog.ByTickerTradable(f.ctx, "T")
-	if err != nil {
-		t.Fatalf("ByTickerTradable: %v", err)
-	}
-	if winner.ISIN != "US00206R1023" || winner.FIGI != "" {
-		t.Errorf("the winning row after the refused Resolve = %+v, want it untouched", winner)
 	}
 }
 

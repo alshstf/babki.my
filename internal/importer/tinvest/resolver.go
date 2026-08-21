@@ -71,11 +71,14 @@ var ErrUnsupportedInstrumentType = errors.New("tinvest: unsupported instrument t
 // broker's passport disagree about which paper this is, and one of them has
 // to be corrected".
 //
-// THERE IS NOTHING ELSE THIS CASE COULD DO. The catalog holds at most one
-// tradable row per ticker (migration 0011's partial unique index, the one
-// behind instrument.ErrTickerTaken), so creating a second row for the same
-// ticker is not available either — see refuseContradiction for the case that
-// found this.
+// THERE IS NOTHING ELSE THIS CASE COULD DO — and since migration 0020 that is
+// no longer because of the ticker. Two papers may now share one across
+// exchanges (AT&T and Т-Технологии both trade as "T"), so a second row is
+// creatable; what stops it here is that this row was reached BY TICKER and the
+// passport's ISIN says it is somebody else's. Taking it would attach the
+// broker's operations to another company, and inventing a row instead would
+// need identifiers the passport just contradicted. See refuseContradiction for
+// the case that found this.
 var ErrDifferentSecurity = errors.New("tinvest: the catalog row with this ticker is a different security")
 
 // ErrIncompletePassport means the broker's own answer about an instrument
@@ -468,8 +471,22 @@ func (r *Resolver) findOrCreate(ctx context.Context, src passportSource, typ ins
 		inst, err := r.catalog.ByTickerTradable(ctx, brief.Ticker)
 		switch {
 		case err == nil:
-			if err := r.refuseContradiction(inst, typ, brief); err != nil {
-				return instrument.Instrument{}, err
+			// A CONTRADICTION IS NO LONGER A DEAD END. The row this ticker
+			// found is somebody else — a different ISIN, or a type this paper
+			// is not — and since identity moved to the ISIN (migration 0020) a
+			// second row under one ticker is a thing the catalog holds. So the
+			// answer is to make one, which is what AT&T and Т-Технологии, both
+			// trading as "T", need in order to exist at the same time.
+			//
+			// It used to be a refusal, and had to be: with tickers unique, the
+			// only two moves were to take a stranger's row or to fail, and
+			// taking it stamped Т-Технологии's identifiers onto AT&T for every
+			// space in the instance.
+			if r.contradicts(inst, typ, brief) {
+				r.log.Info("tinvest: the catalog row under this ticker is a different security, creating a row of our own",
+					"ticker", brief.Ticker, "catalog_isin", inst.ISIN, "broker_isin", brief.ISIN,
+					"catalog_type", inst.Type, "instrument_uid", brief.UID)
+				break
 			}
 			return r.backfillIdentifiers(ctx, inst, brief)
 		case !errors.Is(err, pgx.ErrNoRows):
@@ -510,10 +527,20 @@ func (r *Resolver) findOrCreate(ctx context.Context, src passportSource, typ ins
 //     so a bond's trades filed against an ETF row are mispriced even when the
 //     ticker genuinely is the same string.
 //
-// It refuses rather than creating a row of its own because it cannot create
-// one: at most one tradable row per ticker may exist (migration 0011). The
-// refusal becomes a visible unparsed entry naming both sides, which is a
-// question only the owner can answer.
+// WHAT THE ANSWER TO A CONTRADICTION IS depends on which door asked. Step 5 can
+// make a row of its own and does — two papers may share a ticker now (migration
+// 0020), and refusing there would keep AT&T and Т-Технологии from existing at
+// the same time, which is the whole reason that migration exists. The re-lookup
+// after a lost TICKER race cannot: the ticker it would need is the one it just
+// lost, and it is only ever lost to a row with no ISIN, so a second row is not
+// available. There it refuses, and the refusal becomes a visible unparsed entry
+// naming both sides — a question only the owner can answer.
+func (r *Resolver) contradicts(inst instrument.Instrument, typ instrument.Type, brief InstrumentBrief) bool {
+	return inst.ISIN != "" && brief.ISIN != "" && inst.ISIN != brief.ISIN || inst.Type != typ
+}
+
+// refuseContradiction is contradicts with the refusal attached, for the one
+// caller that has nothing else to do about it.
 func (r *Resolver) refuseContradiction(inst instrument.Instrument, typ instrument.Type, brief InstrumentBrief) error {
 	if inst.ISIN != "" && brief.ISIN != "" && inst.ISIN != brief.ISIN {
 		r.log.Error("tinvest: refusing to resolve an instrument to a catalog row with a different isin",
@@ -643,6 +670,26 @@ func (r *Resolver) createInstrument(ctx context.Context, src passportSource, typ
 	}
 
 	created, err := r.catalog.Create(ctx, inst)
+	if errors.Is(err, instrument.ErrISINTaken) {
+		// THE RACE THIS ONE ACTUALLY LOSES NOW. Another writer created the
+		// paper between findOrCreate's lookup and this insert — another
+		// connection's sync, or a person entering it by hand — and the ISIN is
+		// what the two collide on since identity moved there (migration 0020).
+		//
+		// Nothing is checked against the winner beyond finding it: they agree
+		// on the ISIN, which IS the identity of a security, so there is no
+		// stranger to refuse. That is the whole difference from the ticker race
+		// below, where the winner may be an unrelated company that happens to
+		// trade under the same letters.
+		r.log.Warn("tinvest: another writer created this security first, taking their catalog row",
+			"isin", brief.ISIN, "instrument_uid", brief.UID)
+		found, ferr := r.catalog.ByISIN(ctx, brief.ISIN)
+		if ferr != nil {
+			return instrument.Instrument{}, fmt.Errorf(
+				"tinvest: instrument create lost the isin race and the re-lookup failed: %w", ferr)
+		}
+		return r.backfillIdentifiers(ctx, found, brief)
+	}
 	if errors.Is(err, instrument.ErrTickerTaken) {
 		// Someone else created this ticker between findOrCreate's lookup and
 		// this insert — another connection's sync running concurrently, or a

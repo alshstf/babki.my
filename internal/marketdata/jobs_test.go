@@ -663,18 +663,81 @@ func quotesJob() *river.Job[marketdata.RefreshQuotesArgs] {
 	return &river.Job[marketdata.RefreshQuotesArgs]{Args: marketdata.RefreshQuotesArgs{}}
 }
 
-// TestQuotesWorker_TwoInstrumentsUnderOneTickerAreWarned is issue #26. The
-// worker maps ticker -> instrument id; two instruments carrying one ticker
-// means one of them is not in the map and is never priced, for as long as both
-// rows exist. Before this, the loser was overwritten without a word: the
-// position simply showed no quote, and nothing anywhere said why.
+// TestQuotesWorker_OneTickerTwoCurrenciesArePricedApart is the pair the catalog
+// now allows, and the reason it can: AT&T trades as "T" in dollars and
+// Т-Технологии as "T" in rubles. The exchange answering in rubles is answering
+// about the Russian company, and matching on the currency is what says so.
 //
-// WARN, and the run continues. Warn rather than Debug because Debug is off on
-// a production instance, which is precisely where the silence hurt; Warn
-// rather than a failed job because retrying cannot resolve a duplicate — River
-// would retry forever and every other instrument would stop being priced too,
-// trading one wrong number for all of them.
-func TestQuotesWorker_TwoInstrumentsUnderOneTickerAreWarned(t *testing.T) {
+// Before this, one of the two was priced with the other's number or not priced
+// at all, depending on the order a list came back in — which is why migration
+// 0011 forbade the pair outright and left the owner unable to catalogue the
+// paper his broker reports.
+func TestQuotesWorker_OneTickerTwoCurrenciesArePricedApart(t *testing.T) {
+	store, instStore, ctx := newJobsFixture(t)
+
+	russian, err := instStore.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Т-Технологии", Ticker: "T",
+		ISIN: "RU000A107UL4", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("create the Russian paper: %v", err)
+	}
+	american, err := instStore.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "AT&T", Ticker: "T",
+		ISIN: "US00206R1023", Currency: "USD",
+	})
+	if err != nil {
+		t.Fatalf("create AT&T — the catalog must take two papers under one ticker: %v", err)
+	}
+
+	var calls [][]string
+	provider := fakeQuoteProvider{
+		calls: &calls,
+		quotes: []marketdata.TickerQuote{
+			{Ticker: "T", Price: dec("3500"), Currency: "RUB", On: date("2026-07-25")},
+		},
+	}
+	worker := marketdata.NewQuotesWorker(store,
+		fakeInstrumentLister{insts: []instrument.Instrument{russian, american}}, provider, slog.Default())
+
+	if err := worker.Work(ctx, quotesJob()); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	// Asked ONCE: the provider's interface speaks in bare tickers, and two rows
+	// sharing one have nothing extra to ask about.
+	if len(calls) != 1 || !slices.Equal(calls[0], []string{"T"}) {
+		t.Errorf("provider was asked for %v, want one T", calls)
+	}
+
+	latest, err := store.LatestQuotes(ctx, []uuid.UUID{russian.ID, american.ID})
+	if err != nil {
+		t.Fatalf("LatestQuotes: %v", err)
+	}
+	if q, ok := latest[russian.ID]; !ok || !q.Price.Equal(dec("3500")) {
+		t.Errorf("the Russian paper's quote = %+v, ok = %v, want 3500 ₽", q, ok)
+	}
+	if q, ok := latest[american.ID]; ok {
+		t.Errorf("AT&T was priced %+v from a RUBLE quote — that is another company's number, and off by the whole exchange rate", q)
+	}
+}
+
+// TestQuotesWorker_TwoInstrumentsUnderOneTickerAndCurrencyArePricedNeitherWay is
+// issue #26 as it stands now. The worker matches a price to a catalog row by
+// ticker AND currency, so two papers under one ticker on two exchanges are told
+// apart by the currency the provider itself reports — that is what lets AT&T and
+// Т-Технологии both live under "T" (migration 0020).
+//
+// What remains ambiguous is a pair that agrees on BOTH. There nothing separates
+// them, and the price goes to neither: handing it to whichever row was seen
+// first is a coin toss over which company a real number belongs to. Before #26
+// that coin toss happened in silence.
+//
+// WARN, and the run continues. Warn rather than Debug because Debug is off on a
+// production instance, which is precisely where the silence hurt; Warn rather
+// than a failed job because retrying cannot resolve a duplicate — River would
+// retry forever and every other instrument would stop being priced too.
+func TestQuotesWorker_TwoInstrumentsUnderOneTickerAndCurrencyArePricedNeitherWay(t *testing.T) {
 	store, instStore, ctx := newJobsFixture(t)
 
 	// Two real catalog rows, so the quote written for the winner has an
@@ -710,7 +773,7 @@ func TestQuotesWorker_TwoInstrumentsUnderOneTickerAreWarned(t *testing.T) {
 		t.Fatalf("Work: %v — one duplicated ticker must not cost the whole refresh", err)
 	}
 
-	line := onlyLine(t, *records, "marketdata: two instruments share a ticker, only one of them can be priced")
+	line := onlyLine(t, *records, "marketdata: two instruments share a ticker AND a currency, so neither can be priced")
 	if line.level != slog.LevelWarn {
 		t.Errorf("the collision was logged at %s, want WARN: Debug is off on a production instance, "+
 			"which is exactly where this went unnoticed", line.level)
@@ -720,11 +783,14 @@ func TestQuotesWorker_TwoInstrumentsUnderOneTickerAreWarned(t *testing.T) {
 	if got := line.attrs["ticker"]; got != "SBER" {
 		t.Errorf("ticker attribute = %q, want SBER", got)
 	}
-	if got := line.attrs["priced_instrument_id"]; got != sber.ID.String() {
-		t.Errorf("priced_instrument_id = %q, want %s", got, sber.ID)
+	if got := line.attrs["currency"]; got != "RUB" {
+		t.Errorf("currency attribute = %q, want RUB — it is half of what a price is matched by", got)
 	}
-	if got := line.attrs["skipped_instrument_id"]; got != twin.ID.String() {
-		t.Errorf("skipped_instrument_id = %q, want %s", got, twin.ID)
+	if got := line.attrs["instrument_id"]; got != sber.ID.String() {
+		t.Errorf("instrument_id = %q, want %s", got, sber.ID)
+	}
+	if got := line.attrs["other_instrument_id"]; got != twin.ID.String() {
+		t.Errorf("other_instrument_id = %q, want %s", got, twin.ID)
 	}
 
 	// The duplicate is dropped from the request too, not asked for twice.
@@ -732,17 +798,18 @@ func TestQuotesWorker_TwoInstrumentsUnderOneTickerAreWarned(t *testing.T) {
 		t.Errorf("provider was asked for %v, want one SBER: the second row adds nothing to ask for", calls)
 	}
 
-	// The winner is priced and the loser is not — which is the outcome the
-	// warning exists to explain, so it has to be the outcome that happens.
+	// NEITHER is priced, which is the outcome the warning exists to explain, so
+	// it has to be the outcome that happens. Being seen first must buy nothing:
+	// the price belongs to one of these two papers and nothing here knows which.
 	latest, err := store.LatestQuotes(ctx, []uuid.UUID{sber.ID, twin.ID})
 	if err != nil {
 		t.Fatalf("LatestQuotes: %v", err)
 	}
-	if q, ok := latest[sber.ID]; !ok || !q.Price.Equal(dec("305.5")) {
-		t.Errorf("sber quote = %+v, ok = %v, want 305.5", q, ok)
+	if q, ok := latest[sber.ID]; ok {
+		t.Errorf("the first row got the quote %+v — being listed first is not evidence that the price is its", q)
 	}
 	if q, ok := latest[twin.ID]; ok {
-		t.Errorf("the duplicate got a quote %+v; only one instrument per ticker can", q)
+		t.Errorf("the second row got a quote %+v; neither of an ambiguous pair may be priced", q)
 	}
 }
 
