@@ -97,6 +97,24 @@ const (
 	// this comparison exists to replace — but calling it the other thing
 	// would send him looking for operations that are not missing.
 	MismatchUnsupported = "unsupported"
+	// MismatchUnknownSecurity: the broker holds a security of a kind this
+	// program DOES account for, and nothing of ours corresponds to it — no
+	// operation on that paper has ever reached the journal, so there is no row
+	// in the instrument map to pair it with.
+	//
+	// A THIRD STATEMENT BECAUSE IT IS A THIRD SITUATION, and the label alone
+	// does not tell it from the others. On the owner's own account the broker
+	// reports TECH2, TSPX2 and TUSD2 — funds his TECH and TSPX were converted
+	// into, under new ISINs — and the row read "the broker has it and we do
+	// not", exactly as a paper we both know but count differently does. The
+	// only clue was that the ticker was not one of his, which is a thing to
+	// NOTICE rather than a thing to be told.
+	//
+	// What it invites is a different question, too. MismatchInstrument asks
+	// "which operations are missing"; this one asks "what happened to this
+	// paper" — a corporate action nobody recorded, and an answer that is the
+	// owner's to give rather than a rule's to find.
+	MismatchUnknownSecurity = "unknown_security"
 )
 
 // The verdicts beyond ReconcileNotChecked, which lives in store.go because a
@@ -463,9 +481,9 @@ func currencyUnion(broker, ours map[string]decimal.Decimal) []string {
 }
 
 // unmatchedKind decides what a broker position that resolves to no instrument
-// of ours is: a security whose operations did not reach the journal
-// (MismatchInstrument), or an asset of a kind this program does not account
-// for at all (MismatchUnsupported).
+// of ours is: a security this program could hold but has never seen an
+// operation on (MismatchUnknownSecurity), or an asset of a kind it does not
+// account for at all (MismatchUnsupported).
 //
 // THE ANSWER IS READ OFF brokerInstrumentTypes AND NOTHING ELSE — the same
 // table the resolver refuses by, so the screen cannot come to call an asset
@@ -478,7 +496,7 @@ func currencyUnion(broker, ours map[string]decimal.Decimal) []string {
 // the broker's instrument_type, which is why one table can answer for both.
 func unmatchedKind(p PortfolioPosition) string {
 	if _, supported := brokerInstrumentTypes[p.InstrumentType]; supported {
-		return MismatchInstrument
+		return MismatchUnknownSecurity
 	}
 	return MismatchUnsupported
 }

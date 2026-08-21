@@ -202,9 +202,15 @@ func TestAQuantityMismatchCarriesBothFigures(t *testing.T) {
 // TestAnUnmappedBrokerPositionIsAMismatch pins decision 2 of the brief: the
 // broker's instruments are matched against ours ONLY through the index the
 // resolver has already built, and a SECURITY THIS PROGRAM ACCOUNTS FOR that is
-// not in it is a difference with an honest label — never a silent skip. It is
-// also the best evidence there is that operations went unparsed, which is
-// exactly what MismatchInstrument means and why the kind is checked here.
+// not in it is a difference with an honest label — never a silent skip.
+//
+// THE KIND IS ITS OWN, and that is the point of checking it here. Such a row
+// used to be reported as MismatchInstrument, word for word what a paper both
+// sides know but count differently gets — and the only thing separating them on
+// screen was that the label was not a ticker from this catalog, which is a thing
+// to NOTICE rather than a thing to be told. On the owner's own account these are
+// the funds his TECH and TSPX were converted into, and the question they raise
+// is what happened to that paper rather than which operations are missing.
 func TestAnUnmappedBrokerPositionIsAMismatch(t *testing.T) {
 	res := CompareHoldings(
 		[]PortfolioPosition{{
@@ -224,9 +230,16 @@ func TestAnUnmappedBrokerPositionIsAMismatch(t *testing.T) {
 		t.Fatalf("mismatches = %+v, want exactly one", res.Mismatches)
 	}
 	m := res.Mismatches[0]
-	if m.Kind != MismatchInstrument {
-		t.Errorf("kind = %q, want %q — a share IS a thing this program accounts for, so what this says is "+
-			"that some of its operations did not reach the journal", m.Kind, MismatchInstrument)
+	switch m.Kind {
+	case MismatchInstrument:
+		t.Errorf("kind = %q — that is what a paper BOTH sides know but count differently gets, and it sends a "+
+			"reader looking for operations that may not be missing at all", m.Kind)
+	case MismatchUnsupported:
+		t.Errorf("kind = %q — a share is not outside what this program accounts for; that value is for futures "+
+			"and options, which no re-import will ever bring in", m.Kind)
+	case MismatchUnknownSecurity:
+	default:
+		t.Errorf("kind = %q, want %q", m.Kind, MismatchUnknownSecurity)
 	}
 	if m.InstrumentID != nil {
 		t.Errorf("instrument = %v, want none — nothing here is ours to name", m.InstrumentID)

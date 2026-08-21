@@ -405,9 +405,10 @@ func (e TinvestConnectionStatus) Valid() bool {
 
 // Defines values for TinvestReconcileMismatchKind.
 const (
-	TinvestReconcileMismatchKindCurrency    TinvestReconcileMismatchKind = "currency"
-	TinvestReconcileMismatchKindInstrument  TinvestReconcileMismatchKind = "instrument"
-	TinvestReconcileMismatchKindUnsupported TinvestReconcileMismatchKind = "unsupported"
+	TinvestReconcileMismatchKindCurrency        TinvestReconcileMismatchKind = "currency"
+	TinvestReconcileMismatchKindInstrument      TinvestReconcileMismatchKind = "instrument"
+	TinvestReconcileMismatchKindUnknownSecurity TinvestReconcileMismatchKind = "unknown_security"
+	TinvestReconcileMismatchKindUnsupported     TinvestReconcileMismatchKind = "unsupported"
 )
 
 // Valid indicates whether the value is a known member of the TinvestReconcileMismatchKind enum.
@@ -416,6 +417,8 @@ func (e TinvestReconcileMismatchKind) Valid() bool {
 	case TinvestReconcileMismatchKindCurrency:
 		return true
 	case TinvestReconcileMismatchKindInstrument:
+		return true
+	case TinvestReconcileMismatchKindUnknownSecurity:
 		return true
 	case TinvestReconcileMismatchKindUnsupported:
 		return true
@@ -1244,14 +1247,14 @@ type TinvestReconcileMismatch struct {
 	// Journal Decimal as string — what this program's journal computes for the same thing, in the same units.
 	Journal string `json:"journal"`
 
-	// Kind What kind of difference the check found. `instrument`: a security's quantity differs, or one side names a security the other does not — which usually means some of the broker's operations did not become journal entries, so the unparsed list is where to look. `currency`: a cash balance in one currency differs. `unsupported`: the broker holds an asset of a kind this program does not account for at all (a future, an option), which no amount of re-importing will change — a separate value precisely so it is not read as the first one and does not send a reader hunting for missing operations.
+	// Kind What kind of difference the check found, and each value asks a different question of the reader. `instrument`: a security's quantity differs, or the JOURNAL names one the broker does not — which usually means some of the broker's operations did not become journal entries, so the unparsed list is where to look. `currency`: a cash balance in one currency differs. `unknown_security`: the broker holds a security this program could perfectly well hold, and no operation on it has ever reached the journal — so there is nothing of ours to pair it with, and the label shown is the BROKER's own naming rather than a ticker from this catalog. It asks what happened to that paper (a fund converted into another under a new ISIN, say — a corporate action that arrives as no operation at all) rather than which operations are missing. `unsupported`: the broker holds an asset of a kind this program does not account for at all (a future, an option), which no amount of re-importing will change. The last two are separate values precisely so neither is read as the first one and sends a reader hunting for operations that are not missing.
 	Kind TinvestReconcileMismatchKind `json:"kind"`
 
 	// Label What a person reads: our instrument's ticker or name when the row is about one of ours, the broker's own naming when it is about a position that is not, and a currency code on a currency row.
 	Label string `json:"label"`
 }
 
-// TinvestReconcileMismatchKind What kind of difference the check found. `instrument`: a security's quantity differs, or one side names a security the other does not — which usually means some of the broker's operations did not become journal entries, so the unparsed list is where to look. `currency`: a cash balance in one currency differs. `unsupported`: the broker holds an asset of a kind this program does not account for at all (a future, an option), which no amount of re-importing will change — a separate value precisely so it is not read as the first one and does not send a reader hunting for missing operations.
+// TinvestReconcileMismatchKind What kind of difference the check found, and each value asks a different question of the reader. `instrument`: a security's quantity differs, or the JOURNAL names one the broker does not — which usually means some of the broker's operations did not become journal entries, so the unparsed list is where to look. `currency`: a cash balance in one currency differs. `unknown_security`: the broker holds a security this program could perfectly well hold, and no operation on it has ever reached the journal — so there is nothing of ours to pair it with, and the label shown is the BROKER's own naming rather than a ticker from this catalog. It asks what happened to that paper (a fund converted into another under a new ISIN, say — a corporate action that arrives as no operation at all) rather than which operations are missing. `unsupported`: the broker holds an asset of a kind this program does not account for at all (a future, an option), which no amount of re-importing will change. The last two are separate values precisely so neither is read as the first one and sends a reader hunting for operations that are not missing.
 type TinvestReconcileMismatchKind string
 
 // TinvestReconcileStatus What the check against the broker said about a run. `not_checked` is NOT `matched`, and the difference is the reason this enum has three values rather than a boolean: a run that was never reconciled — because it failed, or because our own side could not be computed — makes no claim at all, and a screen that could not tell the two apart would draw a tick over a check that never happened. `matched`: every security's quantity and every currency's balance agreed, and the broker named no asset this program cannot hold. `mismatched`: at least one did not, and the mismatch list says which.

@@ -48,7 +48,10 @@ const ACCOUNTS = [
   { id: "acc-2", name: "Т-Инвестиции: ИИС" },
 ];
 
-function serveUnparsed(operations: TinvestUnparsedOperation[], hasMore = false) {
+function serveUnparsed(
+  operations: TinvestUnparsedOperation[],
+  hasMore = false,
+) {
   serve([
     { path: "/api/v1/accounts", body: ACCOUNTS },
     {
@@ -74,7 +77,9 @@ function makeUnparsed(id: string): TinvestUnparsedOperation {
 
 // The verdict of one account, with the fields a caller does not care about
 // filled in. `link_id`/`account_id` are what tell two of them apart.
-function makeReconcile(overrides: Partial<TinvestAccountReconcile> = {}): TinvestAccountReconcile {
+function makeReconcile(
+  overrides: Partial<TinvestAccountReconcile> = {},
+): TinvestAccountReconcile {
   return {
     link_id: "link-1",
     account_id: "acc-1",
@@ -100,7 +105,9 @@ function renderPanel(reconciles: TinvestAccountReconcile[]) {
   const panelRoute = createRoute({
     getParentRoute: () => layoutRoute,
     path: "/",
-    component: () => <ReconcilePanel connectionId="conn-1" reconciles={reconciles} />,
+    component: () => (
+      <ReconcilePanel connectionId="conn-1" reconciles={reconciles} />
+    ),
   });
   const accountRoute = createRoute({
     getParentRoute: () => layoutRoute,
@@ -108,7 +115,9 @@ function renderPanel(reconciles: TinvestAccountReconcile[]) {
     component: () => <div>ACCOUNT</div>,
   });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([layoutRoute.addChildren([panelRoute, accountRoute])]),
+    routeTree: rootRoute.addChildren([
+      layoutRoute.addChildren([panelRoute, accountRoute]),
+    ]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   return render(
@@ -156,7 +165,9 @@ describe("ReconcilePanel — a verdict belongs to one account", () => {
     ]);
 
     // Both verdicts, each beside the account it was made for.
-    expect(await screen.findByText("Расходится с брокером")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Расходится с брокером"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Сходится с брокером")).toBeInTheDocument();
     expect(screen.getByText("У брокера: Брокерский счёт")).toBeInTheDocument();
     expect(screen.getByText("У брокера: ИИС")).toBeInTheDocument();
@@ -186,15 +197,18 @@ describe("ReconcilePanel — a verdict belongs to one account", () => {
     expect(
       await screen.findByRole("link", { name: "Т-Инвестиции: брокерский" }),
     ).toHaveAttribute("href", "/accounts/acc-1");
-    expect(screen.getByRole("link", { name: "Т-Инвестиции: ИИС" })).toHaveAttribute(
-      "href",
-      "/accounts/acc-2",
-    );
+    expect(
+      screen.getByRole("link", { name: "Т-Инвестиции: ИИС" }),
+    ).toHaveAttribute("href", "/accounts/acc-2");
   });
 
   it("times each check separately and gives an unchecked account no time at all", async () => {
     renderPanel([
-      makeReconcile({ link_id: "link-1", account_id: "acc-1", at: "2026-08-04T09:15:00Z" }),
+      makeReconcile({
+        link_id: "link-1",
+        account_id: "acc-1",
+        at: "2026-08-04T09:15:00Z",
+      }),
       makeReconcile({
         link_id: "link-2",
         account_id: "acc-2",
@@ -203,7 +217,9 @@ describe("ReconcilePanel — a verdict belongs to one account", () => {
       }),
     ]);
 
-    expect(await screen.findByText("Проверено 04.08.2026, 12:15")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Проверено 04.08.2026, 12:15"),
+    ).toBeInTheDocument();
     expect(screen.getAllByText(/^Проверено /)).toHaveLength(1);
     expect(screen.getByText("Не проверено")).toBeInTheDocument();
   });
@@ -212,10 +228,14 @@ describe("ReconcilePanel — a verdict belongs to one account", () => {
   // together. If they ever did, the verdict is what this panel believes: a
   // rendered timestamp under «Не проверено» would be the screen saying both.
   it("believes an account's own «not_checked» over a time printed beside it", async () => {
-    renderPanel([makeReconcile({ status: "not_checked", at: "2026-08-04T09:15:00Z" })]);
+    renderPanel([
+      makeReconcile({ status: "not_checked", at: "2026-08-04T09:15:00Z" }),
+    ]);
 
     expect(await screen.findByText("Не проверено")).toBeInTheDocument();
-    expect(screen.queryByText("Проверено 04.08.2026, 12:15")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Проверено 04.08.2026, 12:15"),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText("Сходится с брокером")).not.toBeInTheDocument();
   });
 });
@@ -224,7 +244,11 @@ describe("ReconcilePanel — the connection's own line is derived", () => {
   it("says the whole connection agrees only when every account was checked and agreed", async () => {
     renderPanel([
       makeReconcile({ link_id: "link-1", account_id: "acc-1" }),
-      makeReconcile({ link_id: "link-2", account_id: "acc-2", broker_account_name: "ИИС" }),
+      makeReconcile({
+        link_id: "link-2",
+        account_id: "acc-2",
+        broker_account_name: "ИИС",
+      }),
     ]);
 
     expect(
@@ -253,10 +277,17 @@ describe("ReconcilePanel — the connection's own line is derived", () => {
 
   it("says nobody has checked anywhere, and does not say it agrees", async () => {
     renderPanel([
-      makeReconcile({ link_id: "link-1", account_id: "acc-1", status: "not_checked", at: null }),
+      makeReconcile({
+        link_id: "link-1",
+        account_id: "acc-1",
+        status: "not_checked",
+        at: null,
+      }),
     ]);
 
-    expect(await screen.findByText("Сверки с брокером ещё не было")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Сверки с брокером ещё не было"),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(
         "Ни один прогон ещё не сверял посчитанное здесь с тем, что говорит о себе брокер. Это не то же самое, что «расхождений нет»",
@@ -265,7 +296,9 @@ describe("ReconcilePanel — the connection's own line is derived", () => {
     expect(
       screen.queryByText("Все счета сверены и сходятся с брокером"),
     ).not.toBeInTheDocument();
-    expect(screen.queryByText("Есть расхождения с брокером")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Есть расхождения с брокером"),
+    ).not.toBeInTheDocument();
   });
 
   // A difference found on one account is not a report on the others.
@@ -286,9 +319,13 @@ describe("ReconcilePanel — the connection's own line is derived", () => {
       }),
     ]);
 
-    expect(await screen.findByText("Есть расхождения с брокером")).toBeInTheDocument();
     expect(
-      screen.getByText("Часть счетов при этом не сверялась вовсе — что с ними, отсюда не видно"),
+      await screen.findByText("Есть расхождения с брокером"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Часть счетов при этом не сверялась вовсе — что с ними, отсюда не видно",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -307,6 +344,47 @@ describe("ReconcilePanel — the connection's own line is derived", () => {
 });
 
 describe("ReconcilePanel — the kinds of difference read differently", () => {
+  it("gives a paper the journal never saw its own sentence, not the one about unparsed operations", async () => {
+    // The owner's own case: the broker reports TECH2, the fund his TECH was
+    // converted into under a new ISIN. Nothing of ours pairs with it, and the
+    // row used to read exactly like a paper both sides know but count
+    // differently — the only clue being that the label was not one of his
+    // tickers. That is a thing to notice rather than a thing to be told.
+    serveUnparsed([makeUnparsed("u-1")]);
+    renderPanel([
+      makeReconcile({
+        status: "mismatched",
+        mismatches: [
+          {
+            kind: "unknown_security",
+            instrument_id: null,
+            label: "TECH2",
+            broker: "60795",
+            journal: "0",
+          },
+        ],
+      }),
+    ]);
+
+    expect(
+      await screen.findByText("Бумага, которой нет в журнале"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("reconcile-unknown-security-note").textContent,
+    ).toBe(
+      "У брокера есть бумаги, о которых в журнале нет ни одной операции, — поэтому сопоставить их не с чем, и в таблице показано название брокера, а не тикер из вашего каталога. Обычно так выглядит корпоративное действие: фонд превратили в другой под новым ISIN, и операцией это не приходит. Что именно произошло с бумагой, знаете только вы — это вносится вручную",
+    );
+    // And NOT the sentence about unparsed operations: there is an unparsed row
+    // in this fixture, so that sentence would have printed if the kind were
+    // read as a plain security difference — sending the reader to a list that
+    // has nothing to do with a fund conversion.
+    expect(
+      screen.queryByText(
+        "Расхождение по бумаге чаще всего значит, что часть операций брокера не удалось разобрать: они перечислены ниже",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
   it("sends a security difference to the unparsed list when there is one to send it to", async () => {
     serveUnparsed([makeUnparsed("u-1")]);
     renderPanel([
@@ -314,15 +392,31 @@ describe("ReconcilePanel — the kinds of difference read differently", () => {
         status: "mismatched",
         mismatches: [
           MISMATCH,
-          { kind: "currency", instrument_id: null, label: "USD", broker: "10", journal: "12" },
-          { kind: "unsupported", instrument_id: null, label: "Si-9.26", broker: "3", journal: "0" },
+          {
+            kind: "currency",
+            instrument_id: null,
+            label: "USD",
+            broker: "10",
+            journal: "12",
+          },
+          {
+            kind: "unsupported",
+            instrument_id: null,
+            label: "Si-9.26",
+            broker: "3",
+            journal: "0",
+          },
         ],
       }),
     ]);
 
-    expect(await screen.findByText("Расхождение по бумаге")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Расхождение по бумаге"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Расхождение по деньгам")).toBeInTheDocument();
-    expect(screen.getByText("Актив, который программа не учитывает")).toBeInTheDocument();
+    expect(
+      screen.getByText("Актив, который программа не учитывает"),
+    ).toBeInTheDocument();
     expect(
       await screen.findByText(
         "Расхождение по бумаге чаще всего значит, что часть операций брокера не удалось разобрать: они перечислены ниже",
@@ -341,9 +435,13 @@ describe("ReconcilePanel — the kinds of difference read differently", () => {
   // «Неразобранных операций нет».
   it("does not promise a list of unreadable operations when there are none", async () => {
     serveUnparsed([]);
-    renderPanel([makeReconcile({ status: "mismatched", mismatches: [MISMATCH] })]);
+    renderPanel([
+      makeReconcile({ status: "mismatched", mismatches: [MISMATCH] }),
+    ]);
 
-    expect(await screen.findByText("Неразобранных операций нет")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Неразобранных операций нет"),
+    ).toBeInTheDocument();
     expect(
       screen.queryByText(
         "Расхождение по бумаге чаще всего значит, что часть операций брокера не удалось разобрать: они перечислены ниже",
@@ -354,12 +452,20 @@ describe("ReconcilePanel — the kinds of difference read differently", () => {
   it("does not promise one either when the unparsed list could not be read", async () => {
     serve([
       { path: "/api/v1/accounts", body: ACCOUNTS },
-      { path: "/api/v1/tinvest/connections/conn-1/unparsed", status: 500, body: {} },
+      {
+        path: "/api/v1/tinvest/connections/conn-1/unparsed",
+        status: 500,
+        body: {},
+      },
     ]);
-    renderPanel([makeReconcile({ status: "mismatched", mismatches: [MISMATCH] })]);
+    renderPanel([
+      makeReconcile({ status: "mismatched", mismatches: [MISMATCH] }),
+    ]);
 
     expect(
-      await screen.findByText("Сколько операций осталось неразобранными, узнать не удалось"),
+      await screen.findByText(
+        "Сколько операций осталось неразобранными, узнать не удалось",
+      ),
     ).toBeInTheDocument();
     expect(
       screen.queryByText(
@@ -374,12 +480,20 @@ describe("ReconcilePanel — the kinds of difference read differently", () => {
       makeReconcile({
         status: "mismatched",
         mismatches: [
-          { kind: "currency", instrument_id: null, label: "USD", broker: "10", journal: "12" },
+          {
+            kind: "currency",
+            instrument_id: null,
+            label: "USD",
+            broker: "10",
+            journal: "12",
+          },
         ],
       }),
     ]);
 
-    expect(await screen.findByText("Расхождение по деньгам")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Расхождение по деньгам"),
+    ).toBeInTheDocument();
     expect(
       screen.queryByText(
         "Расхождение по бумаге чаще всего значит, что часть операций брокера не удалось разобрать: они перечислены ниже",
@@ -393,35 +507,51 @@ describe("ReconcilePanel — the unparsed counter says only what was counted", (
     serveUnparsed([makeUnparsed("u-1"), makeUnparsed("u-2")]);
     renderPanel([makeReconcile({ status: "not_checked", at: null })]);
 
-    expect(await screen.findByText("Неразобранных операций: 2")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Неразобранных операций: 2"),
+    ).toBeInTheDocument();
   });
 
   it("publishes a floor, not a total, while the server says there is more", async () => {
     serveUnparsed([makeUnparsed("u-1"), makeUnparsed("u-2")], true);
     renderPanel([makeReconcile({ status: "not_checked", at: null })]);
 
-    expect(await screen.findByText("Неразобранных операций: не меньше 2")).toBeInTheDocument();
-    expect(screen.queryByText("Неразобранных операций: 2")).not.toBeInTheDocument();
+    expect(
+      await screen.findByText("Неразобранных операций: не меньше 2"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Неразобранных операций: 2"),
+    ).not.toBeInTheDocument();
   });
 
   it("says there are none when the list is empty", async () => {
     serveUnparsed([]);
     renderPanel([makeReconcile({ status: "not_checked", at: null })]);
 
-    expect(await screen.findByText("Неразобранных операций нет")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Неразобранных операций нет"),
+    ).toBeInTheDocument();
   });
 
   it("says it does not know rather than drawing a zero, when the list could not be read", async () => {
     serve([
       { path: "/api/v1/accounts", body: ACCOUNTS },
-      { path: "/api/v1/tinvest/connections/conn-1/unparsed", status: 500, body: {} },
+      {
+        path: "/api/v1/tinvest/connections/conn-1/unparsed",
+        status: 500,
+        body: {},
+      },
     ]);
     renderPanel([makeReconcile({ status: "not_checked", at: null })]);
 
     expect(
-      await screen.findByText("Сколько операций осталось неразобранными, узнать не удалось"),
+      await screen.findByText(
+        "Сколько операций осталось неразобранными, узнать не удалось",
+      ),
     ).toBeInTheDocument();
-    expect(screen.queryByText("Неразобранных операций нет")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Неразобранных операций нет"),
+    ).not.toBeInTheDocument();
   });
 });
 
