@@ -1057,6 +1057,23 @@ export function PositionsTable({
                   className="text-right tabular-nums"
                   title={showInBase ? t("positions.cashProfitHint") : undefined}
                 >
+                  {/* AN EMPTY CELL SAYS NOTHING, and there are two different
+                      reasons this one can be empty. An overdraft has its own
+                      line under the name; a missing RATE has nowhere else to
+                      appear at all — the owner's gold sits under a currency the
+                      Bank of Russia does not quote, and its row showed three
+                      blanks and no explanation. */}
+                  {showInBase &&
+                    inBase.unrealized_pnl_minor == null &&
+                    money.amount_minor >= 0 && (
+                      <span
+                        data-testid="cash-no-rate"
+                        className="text-muted-foreground"
+                        title={t("positions.cashNoRateHint")}
+                      >
+                        {t("positions.cashNoRate")}
+                      </span>
+                    )}
                   {showInBase && inBase.unrealized_pnl_minor != null ? (
                     <span
                       data-testid="cash-profit"
