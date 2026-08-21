@@ -397,7 +397,7 @@ var seedTinvestVerdicts = map[string]tinvest.UnparsedVerdict{
 	},
 	"seed-fxbuy-1": {
 		Reason: string(tinvest.ReasonCurrencyTrade),
-		Detail: "a currency trade: the mirror names neither the traded currency nor its nominal per unit, so the second leg cannot be built",
+		Detail: "a currency trade whose traded currency and nominal the broker would not say",
 	},
 	"seed-overnight-1": {
 		Reason: string(tinvest.ReasonUnsupportedType),

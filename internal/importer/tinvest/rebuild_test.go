@@ -2049,9 +2049,9 @@ func TestRebuildRefusesABrokerFeeWhoseTradeIsNotHere(t *testing.T) {
 // TestRebuildDropsABrokerFeeWhoseTradeIsItselfUnparsed is a regression the
 // live data caught and the fixtures did not.
 //
-// A currency purchase is not imported — the mirror names neither the traded
-// currency nor its nominal — so it sits on the unparsed list with its own
-// reason. Its commission then has no commission in the journal to duplicate,
+// A currency purchase the broker will not explain is not imported — it answers
+// nothing about what the pair trades or what one unit of it is — so the trade
+// sits on the unparsed list with its own reason. Its commission then has no commission in the journal to duplicate,
 // and the rule as first written kept it: 79 of the owner's currency trades each
 // grew a SECOND unparsed row, saying nothing the first did not, and saying it
 // under a reason about the instrument rather than about the trade.
