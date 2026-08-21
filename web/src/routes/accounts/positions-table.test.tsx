@@ -5,6 +5,7 @@ import "@/i18n";
 import { PositionsTable } from "./positions-table";
 import type { CashPosition, Position } from "@/api/positions";
 import { formatMinor } from "@/lib/money";
+import { formatDate } from "@/lib/dates";
 import { announcedText, visibleText } from "@/test-utils";
 
 // PositionsTable is a pure presentational component (positions come in as a
@@ -161,6 +162,14 @@ const ROW_MARKERS = [
 //
 // Overriding either one explicitly still wins — that is how the null cases are
 // written, and they are the cases the derivation cannot produce.
+// daysAgo spells a date relative to the clock, for the one rule on this screen
+// that is about AGE: a price is called out once it is a month behind. A date
+// pinned as a literal would drift past that threshold on its own and start
+// passing for the wrong reason.
+function daysAgo(n: number): string {
+  return new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+}
+
 function makePosition(overrides: Partial<Position> = {}): Position {
   const base: Position = {
     instrument: {
@@ -191,6 +200,9 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     market_value_minor: 305_50,
     market_value_currency: "USD",
     price: "305.5",
+    // Deliberately more than a month old: the rows this fixture builds carry
+    // the «цена не обновлялась» line, which is what a price this age should
+    // say. A test about a FRESH price passes its own date (see daysAgo).
     price_on: "2026-07-20",
     // 250 000 (2500,00) cost, +250,00 unrealized -> +10,0 %; a plain
     // non-zero default so tests that don't care about the profit column
@@ -232,9 +244,13 @@ function makePosition(overrides: Partial<Position> = {}): Position {
 
 describe("PositionsTable", () => {
   it("shows the market value amount and price, with the quote date only in a tooltip", () => {
+    // A FRESH price, spelled relative to the clock: the fixture's own date is
+    // deliberately an old one (see makePosition), and an old price says its
+    // date out loud on purpose — which is the opposite of what this test is
+    // about.
     wrap(
       <PositionsTable
-        positions={[makePosition()]}
+        positions={[makePosition({ price_on: daysAgo(2) })]}
         mode="native"
         baseCurrency="RUB"
       />,
@@ -246,9 +262,14 @@ describe("PositionsTable", () => {
     // Price is shown as text...
     const priceLine = screen.getByTestId("position-price");
     expect(norm(priceLine.textContent ?? "")).toBe("305,50 $");
-    // ...but the date is not — it moved into the title tooltip.
-    expect(screen.queryByText(/20\.07\.2026/)).not.toBeInTheDocument();
-    expect(priceLine.getAttribute("title")).toContain("Цена на 20.07.2026");
+    // ...but the date is not — it moved into the title tooltip. Written from
+    // the same day the fixture was given, so the assertion says "the date this
+    // row carries" rather than a literal that has to be kept in step with it.
+    const shown = formatDate(daysAgo(2));
+    expect(
+      screen.queryByText(new RegExp(shown.replace(/\./g, "\\."))),
+    ).not.toBeInTheDocument();
+    expect(priceLine.getAttribute("title")).toContain(`Цена на ${shown}`);
   });
 
   it("captions the price with the session it belongs to, not with the day it was fetched", () => {
@@ -989,6 +1010,48 @@ describe("PositionsTable", () => {
         screen.getByTestId("position-income-other-currency").textContent ?? "",
       ),
     ).toContain(norm(formatMinor(141_075, "RUB")));
+  });
+
+  // A PRICE MONTHS OUT OF DATE IS STILL WHAT EVERY TOTAL COUNTS. The owner's
+  // frozen funds are valued from a quote dated 25.02.2022 — the day trading
+  // stopped — and that valuation enters the account's own figure as though it
+  // were today's. Nothing here recomputes it: the price is the last real one
+  // there is. What changes is that its age stops living in a tooltip.
+  //
+  // The dates are computed from the real clock rather than pinned, because the
+  // rule is about AGE and a fixed date would age past the threshold on its own
+  // and start passing for the wrong reason.
+  it("says out loud how old a price is once it is months out of date", () => {
+    wrap(
+      <PositionsTable
+        positions={[makePosition({ price_on: daysAgo(400) })]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const stale = screen.getByTestId("position-price-stale");
+    expect(stale.textContent).toContain("цена не обновлялась");
+    // The price itself is still shown: this is a caveat, not a replacement.
+    expect(screen.getByTestId("position-price")).toBeInTheDocument();
+  });
+
+  it("says nothing about the age of an ordinary price", () => {
+    // A weekend, a holiday run, a bond that trades a few times a month — none
+    // of those is news, and a warning on every row is how a real one becomes
+    // invisible.
+    wrap(
+      <PositionsTable
+        positions={[makePosition({ price_on: daysAgo(3) })]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(screen.getByTestId("position-price")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("position-price-stale"),
+    ).not.toBeInTheDocument();
   });
 
   // MONEY IS A HOLDING, AND THESE ROWS ARE WHERE IT BECAME ONE. Yuan on a
