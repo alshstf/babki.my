@@ -17,12 +17,14 @@ import {
 import { useSession } from "@/api/session";
 import { useUpdateSpace, type UpdateSpaceBody } from "@/api/space";
 import { useTaxResidencies } from "@/api/tax-residencies";
-import { useConnections, type TinvestConnectionStatus } from "@/api/connections";
+import {
+  useConnections,
+  type TinvestConnectionStatus,
+} from "@/api/connections";
 import { ApiError } from "@/api/operations";
 import { CostBasisNotice } from "@/components/cost-basis-notice";
 import { countryName } from "@/lib/country";
 import { COMMON_CURRENCIES } from "@/lib/currencies";
-
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -36,10 +38,14 @@ export function SettingsPage() {
   // The layout route only renders once a session is loaded, so `session` is
   // already available here — safe to seed local state from it once.
   const [currency, setCurrency] = useState(() =>
-    session && COMMON_CURRENCIES.includes(session.base_currency) ? session.base_currency : "custom",
+    session && COMMON_CURRENCIES.includes(session.base_currency)
+      ? session.base_currency
+      : "custom",
   );
   const [customCurrency, setCustomCurrency] = useState(() =>
-    session && !COMMON_CURRENCIES.includes(session.base_currency) ? session.base_currency : "",
+    session && !COMMON_CURRENCIES.includes(session.base_currency)
+      ? session.base_currency
+      : "",
   );
   const [country, setCountry] = useState(() => session?.tax_residency ?? "");
 
@@ -51,7 +57,8 @@ export function SettingsPage() {
     );
   }
 
-  const effectiveCurrency = currency === "custom" ? customCurrency.toUpperCase() : currency;
+  const effectiveCurrency =
+    currency === "custom" ? customCurrency.toUpperCase() : currency;
   const validCurrency = /^[A-Z]{3}$/.test(effectiveCurrency);
   const currencyChanged = effectiveCurrency !== session?.base_currency;
   const countryChanged = country !== session?.tax_residency;
@@ -77,7 +84,9 @@ export function SettingsPage() {
   // if a country somehow stored outside this form is not in it at all).
   const selectedRules =
     residencies.data?.find((r) => r.country === country) ??
-    (country === session?.tax_residency ? session?.cost_basis_rules : undefined);
+    (country === session?.tax_residency
+      ? session?.cost_basis_rules
+      : undefined);
 
   // Sorted by the name actually shown, not by the ISO code the server sorts
   // by: a person picking their country reads down the Russian names, and
@@ -97,7 +106,9 @@ export function SettingsPage() {
   // is the same answer the server already gives (MethodUnknown /
   // PerimeterUnknown / unknown_country) — the selector must not be the one
   // place that stays quiet about it.
-  const selectedIsOffered = countries.some((rules) => rules.country === country);
+  const selectedIsOffered = countries.some(
+    (rules) => rules.country === country,
+  );
 
   return (
     <div className="grid gap-6">
@@ -122,7 +133,9 @@ export function SettingsPage() {
                     {code}
                   </SelectItem>
                 ))}
-                <SelectItem value="custom">{t("accounts.dialog.otherCurrency")}</SelectItem>
+                <SelectItem value="custom">
+                  {t("accounts.dialog.otherCurrency")}
+                </SelectItem>
               </SelectContent>
             </Select>
             {currency === "custom" && (
@@ -136,7 +149,9 @@ export function SettingsPage() {
                 }}
               />
             )}
-            <p className="text-xs text-muted-foreground">{t("settings.baseCurrencyHint")}</p>
+            <p className="text-xs text-muted-foreground">
+              {t("settings.baseCurrencyHint")}
+            </p>
           </div>
 
           <div className="grid gap-2">
@@ -160,7 +175,9 @@ export function SettingsPage() {
                       leaves the ordinary selected-item text in place. */}
                   <SelectValue placeholder={t("app.loading")}>
                     {countries.length > 0 && !selectedIsOffered
-                      ? t("settings.unknownCountry", { country: countryName(country) })
+                      ? t("settings.unknownCountry", {
+                          country: countryName(country),
+                        })
                       : undefined}
                   </SelectValue>
                 </SelectTrigger>
@@ -173,14 +190,19 @@ export function SettingsPage() {
                 </SelectContent>
               </Select>
             )}
-            <p className="text-xs text-muted-foreground">{t("settings.taxResidencyHint")}</p>
-            {selectedRules && <CostBasisNotice rules={selectedRules} confirmWhenSupported />}
+            <p className="text-xs text-muted-foreground">
+              {t("settings.taxResidencyHint")}
+            </p>
+            {selectedRules && (
+              <CostBasisNotice rules={selectedRules} confirmWhenSupported />
+            )}
           </div>
 
           {updateSpace.isError && (
             <Alert variant="destructive">
               <AlertDescription>
-                {updateSpace.error instanceof ApiError && updateSpace.error.status === 403
+                {updateSpace.error instanceof ApiError &&
+                updateSpace.error.status === 403
                   ? t("settings.forbidden")
                   : t("app.error")}
               </AlertDescription>
@@ -219,6 +241,23 @@ export function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+      {/* The catalog is one section down from the connections because it is
+          where their result lands: the importer creates the rows, and this is
+          the only place a wrong one can be put right. */}
+      <Card className="max-w-md">
+        <CardHeader>
+          <CardTitle>{t("instruments.title")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Link
+            to="/settings/instruments"
+            className="text-sm underline"
+            data-testid="settings-instruments-link"
+          >
+            {t("instruments.searchTitle")}
+          </Link>
+        </CardContent>
+      </Card>
       <ConnectionsSection />
     </div>
   );
@@ -228,7 +267,9 @@ export function SettingsPage() {
 // contract's own three values rather than a two-way test, so a fourth state
 // added there arrives here as a type error instead of quietly rendering as
 // «everything is fine» or as «nothing to do».
-function statusVariant(status: TinvestConnectionStatus): "default" | "secondary" | "destructive" {
+function statusVariant(
+  status: TinvestConnectionStatus,
+): "default" | "secondary" | "destructive" {
   switch (status) {
     case "active":
       return "default";
@@ -263,9 +304,13 @@ function ConnectionsSection() {
             <AlertDescription>{t("app.error")}</AlertDescription>
           </Alert>
         )}
-        {!connections.isLoading && !connections.isError && list.length === 0 && (
-          <p className="text-sm text-muted-foreground">{t("connections.empty")}</p>
-        )}
+        {!connections.isLoading &&
+          !connections.isError &&
+          list.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              {t("connections.empty")}
+            </p>
+          )}
         {list.length > 0 && (
           <ul className="grid gap-2">
             {list.map((connection) => (
@@ -276,9 +321,13 @@ function ConnectionsSection() {
                   className="flex items-center justify-between rounded-lg border p-3 text-sm hover:bg-muted"
                 >
                   <div className="grid gap-0.5">
-                    <span className="font-medium">{t("connections.tinvest")}</span>
+                    <span className="font-medium">
+                      {t("connections.tinvest")}
+                    </span>
                     <span className="text-xs text-muted-foreground">
-                      {t("connections.tokenLast4", { last4: connection.token_last4 })}
+                      {t("connections.tokenLast4", {
+                        last4: connection.token_last4,
+                      })}
                     </span>
                   </div>
                   {/* Three states, three looks, because two of them are not
@@ -299,7 +348,9 @@ function ConnectionsSection() {
         )}
         <div>
           <Button asChild>
-            <Link to="/settings/connections/new">{t("connections.connect")}</Link>
+            <Link to="/settings/connections/new">
+              {t("connections.connect")}
+            </Link>
           </Button>
         </div>
       </CardContent>

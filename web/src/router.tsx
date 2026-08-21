@@ -33,15 +33,34 @@ import { AppLayout } from "@/routes/app-layout";
 //
 // The second argument names the export, since none of these screens is a
 // default export.
-const LoginPage = lazyRouteComponent(() => import("@/routes/login"), "LoginPage");
-const SetupPage = lazyRouteComponent(() => import("@/routes/setup"), "SetupPage");
-const AccountsPage = lazyRouteComponent(() => import("@/routes/accounts"), "AccountsPage");
+const LoginPage = lazyRouteComponent(
+  () => import("@/routes/login"),
+  "LoginPage",
+);
+const SetupPage = lazyRouteComponent(
+  () => import("@/routes/setup"),
+  "SetupPage",
+);
+const AccountsPage = lazyRouteComponent(
+  () => import("@/routes/accounts"),
+  "AccountsPage",
+);
 const AccountDetailPage = lazyRouteComponent(
   () => import("@/routes/accounts/detail"),
   "AccountDetailPage",
 );
-const FamilyPage = lazyRouteComponent(() => import("@/routes/family"), "FamilyPage");
-const SettingsPage = lazyRouteComponent(() => import("@/routes/settings"), "SettingsPage");
+const FamilyPage = lazyRouteComponent(
+  () => import("@/routes/family"),
+  "FamilyPage",
+);
+const SettingsPage = lazyRouteComponent(
+  () => import("@/routes/settings"),
+  "SettingsPage",
+);
+const InstrumentsPage = lazyRouteComponent(
+  () => import("@/routes/settings/instruments"),
+  "InstrumentsPage",
+);
 const ConnectWizardPage = lazyRouteComponent(
   () => import("@/routes/settings/connections/connect"),
   "ConnectWizardPage",
@@ -63,7 +82,13 @@ function FullScreenLoader() {
 // What the gate shows instead of a screen, when it has no screen it may
 // honestly show. A message, and — where asking again can help — a button that
 // asks again.
-function StartupNotice({ message, onRetry }: { message: string; onRetry?: () => void }) {
+function StartupNotice({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry?: () => void;
+}) {
   const { t } = useTranslation();
   return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-background p-6 text-center">
@@ -257,6 +282,15 @@ const settingsRoute = createRoute({
 // Static segments ("new") take precedence over the sibling dynamic one
 // ($connectionId) regardless of declaration order — TanStack Router ranks a
 // literal path segment above a param segment when matching.
+// The instrument catalog, and the only place a row of it can be corrected. It
+// lives under the settings rather than under an account because the catalog is
+// instance-wide: the same row backs every account that holds the paper.
+const instrumentsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: "/settings/instruments",
+  component: InstrumentsPage,
+});
+
 const connectWizardRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/settings/connections/new",
@@ -286,6 +320,7 @@ export const routeTree = rootRoute.addChildren([
     accountDetailRoute,
     familyRoute,
     settingsRoute,
+    instrumentsRoute,
     connectWizardRoute,
     connectionDetailRoute,
   ]),
