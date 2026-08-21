@@ -1520,7 +1520,7 @@ func newAccountTotals(baseCurrency string) *accountTotals {
 // the bucket unknowable, because the term genuinely does not exist rather than
 // being nought. And the base figure answers all three again from its own object,
 // which carries its own arithmetic (see PositionInBase).
-func (at *accountTotals) addPosition(p apitypes.Position, inBase *apitypes.PositionInBase, gap inBaseGap) error {
+func (at *accountTotals) addPosition(p apitypes.Position, inBase *apitypes.PositionInBase, gap inBaseGap, realizedGap baseGap) error {
 	// The paper is held and cost nothing to hold: a transfer the broker sent
 	// with no price attached. Counted before anything else, because it is true
 	// of the row whatever else is or is not known about it.
@@ -1581,12 +1581,17 @@ func (at *accountTotals) addPosition(p apitypes.Position, inBase *apitypes.Posit
 			p.MarketValueGap.IsSpecified() && !p.MarketValueGap.IsNull())
 	}
 	if !baseOK {
-		// The base figure is missing a term that is not a rate and not a date —
-		// a disposal or a payment in a third currency — so no rate arriving
-		// later would produce it. It is reported as `undated` all the same,
-		// which is the honest half of the two words this enum has: the account
-		// has no single figure and the reason is not a missing rate.
-		at.undated = true
+		// The base figure has no settled result to build on, and WHY decides
+		// what to do about it. A disposal whose parcels have no acquisition day
+		// can never be valued — the same permanent gap the branch above answers,
+		// so the paper is left out and counted. A missing RATE is the opposite:
+		// the figure appears when the backfill catches up, and publishing a
+		// total without this paper meanwhile would quietly change it later.
+		if realizedGap == gapUndated {
+			at.undatedPositions++
+			return nil
+		}
+		at.noRate = true
 		return nil
 	}
 	sum, err := money.Add(at.inBaseMinor, base.minor)
@@ -2800,7 +2805,7 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		// total reads that object: it is the one place the row's converted
 		// figures exist, and re-striking them here would be the second
 		// computation of one value this package keeps warning about.
-		if err := account.addPosition(apiPos, inBase, gap); err != nil {
+		if err := account.addPosition(apiPos, inBase, gap, realizedGap); err != nil {
 			family.WriteError(w, err)
 			return
 		}
