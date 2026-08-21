@@ -26,6 +26,7 @@ services:
     environment:
       BABKI_DATABASE_URL: postgres://babki:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/compose/.env — copy .env.example}@postgres:5432/babki?sslmode=disable
       BABKI_ENCRYPTION_KEY: ${BABKI_ENCRYPTION_KEY}
+      BABKI_LOG_LEVEL: ${BABKI_LOG_LEVEL:-info}
     depends_on:
       postgres:
         condition: service_healthy
