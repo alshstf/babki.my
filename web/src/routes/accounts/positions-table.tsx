@@ -259,6 +259,32 @@ function valuationGapTitle(
 // server prices a new type, what its Position.price means will be decided
 // there and not here, and a client one release behind must not answer that
 // question with the valuation's currency. Same rule as the gap captions
+// STALE_PRICE_DAYS is how old a quote has to be before the row says its date out
+// loud instead of keeping it in the tooltip.
+//
+// A month, because that is comfortably past every ordinary reason a price is not
+// today's — a weekend, a holiday run, a bond that trades a few times a month —
+// and nowhere near the four YEARS the owner's frozen funds have stood at. Their
+// valuation is struck from a price dated 25.02.2022 and enters every total as
+// though it were today's: FXIT alone carries 420 280 ₽ of February-2022 money
+// into what the account has supposedly earned.
+//
+// Nothing is recomputed. The price is the last real one there is and no better
+// number exists; what changes is that the reader is not required to hover to
+// find out how old it is.
+const STALE_PRICE_DAYS = 30;
+
+// staleSince returns the price's date when the quote is old enough to say so,
+// and null otherwise. Comparing the ISO strings would work as well — both are
+// YYYY-MM-DD, where lexical order IS calendar order — but the age is what the
+// threshold is about, so the dates are dates.
+function staleSince(priceOn: string): string | null {
+  const on = new Date(priceOn);
+  if (Number.isNaN(on.getTime())) return null;
+  const days = (Date.now() - on.getTime()) / 86_400_000;
+  return days > STALE_PRICE_DAYS ? formatDate(priceOn) : null;
+}
+
 // (#105): what is known stays said, what is not stays unsaid.
 function priceHint(
   t: (key: string, opts?: Record<string, string>) => string,
@@ -815,6 +841,21 @@ export function PositionsTable({
                           title={hint.title}
                         >
                           {hint.price}
+                        </div>
+                      )}
+                      {/* HOW OLD THE PRICE IS, WHERE THE PRICE IS. A quote
+                          months out of date is still what the valuation above
+                          is struck from and still what every total counts, and
+                          until now the only place that said so was a tooltip. */}
+                      {position.price_on && staleSince(position.price_on) && (
+                        <div
+                          data-testid="position-price-stale"
+                          className="text-xs text-amber-600"
+                          title={t("positions.priceStaleHint")}
+                        >
+                          {t("positions.priceStale", {
+                            date: staleSince(position.price_on) as string,
+                          })}
                         </div>
                       )}
                     </>
