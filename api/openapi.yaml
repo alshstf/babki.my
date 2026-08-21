@@ -1465,8 +1465,8 @@ components:
       enum: [not_checked, matched, mismatched]
     TinvestReconcileMismatchKind:
       type: string
-      description: "What kind of difference the check found. `instrument`: a security's quantity differs, or one side names a security the other does not — which usually means some of the broker's operations did not become journal entries, so the unparsed list is where to look. `currency`: a cash balance in one currency differs. `unsupported`: the broker holds an asset of a kind this program does not account for at all (a future, an option), which no amount of re-importing will change — a separate value precisely so it is not read as the first one and does not send a reader hunting for missing operations."
-      enum: [instrument, currency, unsupported]
+      description: "What kind of difference the check found, and each value asks a different question of the reader. `instrument`: a security's quantity differs, or the JOURNAL names one the broker does not — which usually means some of the broker's operations did not become journal entries, so the unparsed list is where to look. `currency`: a cash balance in one currency differs. `unknown_security`: the broker holds a security this program could perfectly well hold, and no operation on it has ever reached the journal — so there is nothing of ours to pair it with, and the label shown is the BROKER's own naming rather than a ticker from this catalog. It asks what happened to that paper (a fund converted into another under a new ISIN, say — a corporate action that arrives as no operation at all) rather than which operations are missing. `unsupported`: the broker holds an asset of a kind this program does not account for at all (a future, an option), which no amount of re-importing will change. The last two are separate values precisely so neither is read as the first one and sends a reader hunting for operations that are not missing."
+      enum: [instrument, currency, unsupported, unknown_security]
     TinvestUnparsedReason:
       type: string
       description: >-

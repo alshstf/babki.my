@@ -329,8 +329,8 @@ func TestTheContractStatesTheVocabulariesTheServerUses(t *testing.T) {
 	for _, m := range kindRe.FindAllStringSubmatch(string(body), -1) {
 		kinds = append(kinds, m[1])
 	}
-	if len(kinds) != 3 {
-		t.Fatalf("found %d Mismatch* constants in reconcile.go (%v), want 3", len(kinds), kinds)
+	if len(kinds) != 4 {
+		t.Fatalf("found %d Mismatch* constants in reconcile.go (%v), want 4", len(kinds), kinds)
 	}
 	sort.Strings(kinds)
 	declared := append([]string(nil), doc.Components.Schemas["TinvestReconcileMismatchKind"].Enum...)

@@ -57,14 +57,22 @@ function overallOf(list: TinvestAccountReconcile[]): Overall {
 
 // One account's differences, printed as they arrived. Both figures, never their
 // difference: a reader who sees only the gap cannot tell which side to look at.
-function MismatchTable({ mismatches }: { mismatches: TinvestReconcileMismatch[] }) {
+function MismatchTable({
+  mismatches,
+}: {
+  mismatches: TinvestReconcileMismatch[];
+}) {
   const { t } = useTranslation();
   return (
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>{t("connections.detail.reconcile.columns.label")}</TableHead>
-          <TableHead>{t("connections.detail.reconcile.columns.kind")}</TableHead>
+          <TableHead>
+            {t("connections.detail.reconcile.columns.label")}
+          </TableHead>
+          <TableHead>
+            {t("connections.detail.reconcile.columns.kind")}
+          </TableHead>
           <TableHead className="text-right">
             {t("connections.detail.reconcile.columns.broker")}
           </TableHead>
@@ -90,8 +98,12 @@ function MismatchTable({ mismatches }: { mismatches: TinvestReconcileMismatch[] 
                 {t(`connections.mismatchKinds.${mismatch.kind}`)}
               </Badge>
             </TableCell>
-            <TableCell className="text-right tabular-nums">{mismatch.broker}</TableCell>
-            <TableCell className="text-right tabular-nums">{mismatch.journal}</TableCell>
+            <TableCell className="text-right tabular-nums">
+              {mismatch.broker}
+            </TableCell>
+            <TableCell className="text-right tabular-nums">
+              {mismatch.journal}
+            </TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -105,7 +117,11 @@ function MismatchTable({ mismatches }: { mismatches: TinvestReconcileMismatch[] 
 // arrives here as a type error instead of drawing nothing at all, silently, on
 // the card whose whole job is to say what the check found. The tick is
 // `matched`'s alone.
-function VerdictLine({ status }: { status: TinvestReconcileStatus }): React.JSX.Element {
+function VerdictLine({
+  status,
+}: {
+  status: TinvestReconcileStatus;
+}): React.JSX.Element {
   const { t } = useTranslation();
   switch (status) {
     case "not_checked":
@@ -178,12 +194,16 @@ function AccountVerdict({
           className="text-xs text-muted-foreground"
           title={t("connections.detail.brokerAccountNameFrozen")}
         >
-          {t("connections.detail.brokerAccount", { name: reconcile.broker_account_name })}
+          {t("connections.detail.brokerAccount", {
+            name: reconcile.broker_account_name,
+          })}
         </span>
       </div>
 
       <VerdictLine status={reconcile.status} />
-      {checkedAt && <p className="text-xs text-muted-foreground">{checkedAt}</p>}
+      {checkedAt && (
+        <p className="text-xs text-muted-foreground">{checkedAt}</p>
+      )}
 
       {/* Rendered off the LIST rather than off the status, so the table and the
           word above it cannot come apart: the contract derives one from the
@@ -321,7 +341,10 @@ export function ReconcilePanel({
   // project's own rule says will eventually disagree with the first.
   const unparsed = useUnparsed(connectionId);
   const loadedUnparsed =
-    unparsed.data?.pages.reduce((rows, page) => rows + page.operations.length, 0) ?? 0;
+    unparsed.data?.pages.reduce(
+      (rows, page) => rows + page.operations.length,
+      0,
+    ) ?? 0;
 
   // Only ever as much as was actually fetched. `hasNextPage` is the server's
   // own `has_more` (see useUnparsed), so when there is more behind the page the
@@ -329,11 +352,17 @@ export function ReconcilePanel({
   // as though they were all of them would be a figure nobody measured.
   const unparsedCaption = (() => {
     if (unparsed.isPending) return null;
-    if (unparsed.isError) return t("connections.detail.reconcile.unparsedUnknown");
+    if (unparsed.isError)
+      return t("connections.detail.reconcile.unparsedUnknown");
     if (unparsed.hasNextPage)
-      return t("connections.detail.reconcile.unparsedAtLeast", { n: loadedUnparsed });
-    if (loadedUnparsed === 0) return t("connections.detail.reconcile.unparsedNone");
-    return t("connections.detail.reconcile.unparsedCount", { n: loadedUnparsed });
+      return t("connections.detail.reconcile.unparsedAtLeast", {
+        n: loadedUnparsed,
+      });
+    if (loadedUnparsed === 0)
+      return t("connections.detail.reconcile.unparsedNone");
+    return t("connections.detail.reconcile.unparsedCount", {
+      n: loadedUnparsed,
+    });
   })();
 
   const hasInstrumentRow = reconciles.some((r) =>
@@ -341,6 +370,13 @@ export function ReconcilePanel({
   );
   const hasUnsupportedRow = reconciles.some((r) =>
     r.mismatches.some((m) => m.kind === "unsupported"),
+  );
+  // A paper the journal has never seen an operation on asks a different
+  // question from a quantity that disagrees, so it gets its own sentence rather
+  // than sharing the one about unparsed operations — which would send a reader
+  // looking for operations that are not missing.
+  const hasUnknownSecurityRow = reconciles.some((r) =>
+    r.mismatches.some((m) => m.kind === "unknown_security"),
   );
 
   // «Они перечислены ниже» IS A CLAIM ABOUT THE LIST, so it is made only where
@@ -376,6 +412,14 @@ export function ReconcilePanel({
         {hasInstrumentRow && unparsedIsKnownNonEmpty && (
           <p className="text-sm text-muted-foreground">
             {t("connections.detail.reconcile.instrumentNote")}
+          </p>
+        )}
+        {hasUnknownSecurityRow && (
+          <p
+            className="text-sm text-muted-foreground"
+            data-testid="reconcile-unknown-security-note"
+          >
+            {t("connections.detail.reconcile.unknownSecurityNote")}
           </p>
         )}
         {hasUnsupportedRow && (
