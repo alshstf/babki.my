@@ -1489,6 +1489,9 @@ type accountTotals struct {
 	zeroValued     int
 	zeroValuedCost map[string]int64
 	unknownCost    int
+	// undatedPositions counts the holdings left out of the base figure because
+	// their purchase dates were never recorded (see addPosition).
+	undatedPositions int
 	// noRateCurrencies names the money this account holds that could not be
 	// valued. It is filled from the CASH alone, where the missing rate is
 	// exactly that currency against the base one — a position's gap can be
@@ -1553,7 +1556,16 @@ func (at *accountTotals) addPosition(p apitypes.Position, inBase *apitypes.Posit
 	// convert because the row is already in the base currency.
 	switch gap {
 	case inBaseUndatedLot:
-		at.undated = true
+		// LEFT OUT, NOT SUPPRESSING. Nobody knows when this paper was bought, so
+		// its basis has no day whose rate could value it — and unlike a missing
+		// rate, that never resolves: a date cannot arrive later. Taking the
+		// whole account's figure down for ever over it answered nothing, and on
+		// the owner's own journal it left five accounts of six blank.
+		//
+		// The count is what keeps this honest, and it is the same bargain the
+		// owner struck for a paper nothing prices: publish the figure, and say
+		// what it rests on.
+		at.undatedPositions++
 		return nil
 	case inBaseNoRateLotDate, inBaseNoRateIncomeDate, inBaseNoRateToday:
 		at.noRate = true
@@ -1699,6 +1711,7 @@ func (at *accountTotals) result() apitypes.AccountTotal {
 		ZeroValuedPositions:      at.zeroValued,
 		ZeroValuedCostByCurrency: make([]apitypes.CurrencyAmount, 0, len(at.zeroValuedCost)),
 		NoRateCurrencies:         make([]string, 0, len(at.noRateCurrencies)),
+		UndatedPositions:         at.undatedPositions,
 		UnknownCostPositions:     at.unknownCost,
 	}
 	// Every currency that has a bucket OR a hole in one: a currency whose only

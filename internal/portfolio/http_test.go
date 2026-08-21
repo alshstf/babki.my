@@ -303,6 +303,7 @@ type accountTotalResp struct {
 	ZeroValuedPositions      int                        `json:"zero_valued_positions"`
 	ZeroValuedCostByCurrency []currencyAmountResp       `json:"zero_valued_cost_by_currency"`
 	NoRateCurrencies         []string                   `json:"no_rate_currencies"`
+	UndatedPositions         int                        `json:"undated_positions"`
 	UnknownCostPositions     int                        `json:"unknown_cost_positions"`
 }
 

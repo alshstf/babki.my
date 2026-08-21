@@ -8,6 +8,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/testdb"
 )
 
 // The account's TOTAL — what the whole account has made, all in — is added up
@@ -383,5 +384,73 @@ func TestAccountTotalNamesNoCurrencyWhenNothingWasStoppedByARate(t *testing.T) {
 
 	if len(got.NoRateCurrencies) != 0 {
 		t.Errorf("no_rate_currencies = %v, want empty: every rate this account needed exists", got.NoRateCurrencies)
+	}
+}
+
+// TestAccountTotalLeavesOutAPaperNobodyKnowsTheDatesOf is the difference between
+// a gap that can close and one that cannot.
+//
+// A missing RATE resolves itself: the backfill catches up and the figure
+// appears. A missing purchase DATE never does — the shares arrived by a transfer
+// the broker sent without one, and no job will ever supply it. Suppressing the
+// account's whole figure over such a paper answered nothing and answered it for
+// ever: on the owner's own journal it left five accounts of six blank.
+//
+// So the paper is left out and COUNTED, which is the same bargain he struck for
+// a holding nothing prices — publish the figure, and say what it rests on.
+//
+//	fx USD->RUB: 60 from 2026-02-01, 90 from 2026-07-01
+//	ACME transferred in with no dates behind its basis -> left out
+//	BETA bought for $2 000.00 on 2026-07-10 (rate 90), no quote
+//	     -> counted at nought: settled 0 less a basis of 200_000 * 90
+//
+//	in_base = -18_000_000, over one paper, with the other named as left out
+func TestAccountTotalLeavesOutAPaperNobodyKnowsTheDatesOf(t *testing.T) {
+	pool := testdb.New(t)
+	mdStore := marketdata.NewStore(pool)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(mdStore))
+	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: mustDate(t, earlyRateOn), Rate: decimal.RequireFromString("60"), Source: "test"},
+		{Base: "USD", Quote: "RUB", On: mustDate(t, lateRateOn), Rate: decimal.RequireFromString("90"), Source: "test"},
+	}); err != nil {
+		t.Fatalf("seed fx rates: %v", err)
+	}
+
+	from := createAccount(t, c, url, `{"name":"Старый брокер","type":"brokerage","currency":"USD"}`)
+	to := createAccount(t, c, url, `{"name":"Новый брокер","type":"brokerage","currency":"USD"}`)
+	acme := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
+	beta := createInstrument(t, c, url, `{"type":"share","name":"Бета","ticker":"BETA","currency":"USD"}`)
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, from.ID, acme.ID, earlyBuyOn))
+	createTransfer(t, c, url, fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,
+		"quantity":"10","occurred_on":%q}`, from.ID, to.ID, acme.ID, transferOn))
+	// A transfer recorded before breakdowns were kept: the basis survives on the
+	// operation, the dates behind it do not.
+	if _, err := pool.Exec(t.Context(), `DELETE FROM operation_transfer_lots`); err != nil {
+		t.Fatalf("drop the stored breakdown: %v", err)
+	}
+	// Funded before it spends, so the MONEY contributes nothing of its own: the
+	// deposit and the purchase land on the same day at the same rate, and the
+	// balance ends at nought. Without it the account is overdrawn by two
+	// thousand dollars — a real answer, and a second term this test is not about.
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"deposit",
+		"occurred_on":%q,"amount_minor":200000,"currency":"USD"}`, to.ID, lateBuyOn))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","price":"200",
+		"amount_minor":-200000,"currency":"USD"}`, to.ID, beta.ID, lateBuyOn))
+
+	got := accountPositions(t, c, url, to.ID).AccountTotal
+
+	if got.InBase == nil {
+		t.Fatalf("in_base is null (%v) — one paper's dates are unknown, and withholding the account's whole figure over it withholds it for ever", got.InBaseGap)
+	}
+	if *got.InBase != -18_000_000 {
+		t.Errorf("in_base = %d, want -18000000 (BETA's basis of 200000 at 90, written off for want of a quote)", *got.InBase)
+	}
+	if got.UndatedPositions != 1 {
+		t.Errorf("undated_positions = %d, want 1: the figure covers one paper of two, and a reader is told so", got.UndatedPositions)
 	}
 }

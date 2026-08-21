@@ -18,6 +18,7 @@ function makeTotal(
     in_base: 1_000_000,
     in_base_gap: null,
     no_rate_currencies: [],
+    undated_positions: 0,
     zero_valued_positions: 0,
     zero_valued_cost_by_currency: [],
     unknown_cost_positions: 0,
@@ -140,6 +141,21 @@ describe("AccountTotal", () => {
     expect(mark).toContain("2");
     expect(mark).toContain("50 000,00 ₽");
     // And the figure itself is still shown: this is a caveat, not a gap.
+    expect(screen.getByTestId("account-total-amount")).toBeInTheDocument();
+  });
+
+  it("names the papers left out for want of a purchase date", () => {
+    // A missing RATE resolves itself when the backfill catches up. A missing
+    // DATE never does, so the figure is published without those papers rather
+    // than withheld for ever — and the count is what keeps that honest.
+    render(
+      <AccountTotal total={makeTotal({ undated_positions: 2 })} mode="base" />,
+    );
+
+    expect(screen.getByTestId("account-total-undated").textContent).toContain(
+      "2",
+    );
+    // The figure itself is still shown: this is a caveat, not a gap.
     expect(screen.getByTestId("account-total-amount")).toBeInTheDocument();
   });
 
