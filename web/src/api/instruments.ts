@@ -8,6 +8,7 @@ export type Instrument = components["schemas"]["Instrument"];
 export type InstrumentType = components["schemas"]["InstrumentType"];
 export type InstrumentsPage = components["schemas"]["InstrumentsResponse"];
 export type CreateInstrumentBody = components["schemas"]["CreateInstrumentRequest"];
+export type UpdateInstrumentBody = components["schemas"]["UpdateInstrumentRequest"];
 
 // CATALOG_PAGE_SIZE is how many instruments one page of the picker's list
 // holds. Comfortably under the endpoint's own ceiling (200), which matters more
@@ -132,6 +133,52 @@ function useInvalidateInstruments() {
   return () => {
     void queryClient.invalidateQueries({ queryKey: ["instruments"] });
   };
+}
+
+// useUpdateInstrument corrects a row of the catalog.
+//
+// IT EXISTS BECAUSE A PAPER ENTERED BY HAND COULD NOT BE CORRECTED AT ALL. The
+// endpoint has always been there; nothing in the interface reached it, so an
+// instrument created through a trade dialog — with whatever was typed into it —
+// stayed that way for ever. The owner's Apple and Tesla have no ISIN, which is
+// the field the quote worker searches by, so neither has ever been priced, and
+// their positions go into the account's total counted at nought.
+//
+// `networkMode: "always"` for the reason every mutation the user pressed a
+// button for carries it (#111): offline, react-query would otherwise hold the
+// call in a pending state that looks exactly like a slow server, and the form
+// would hang instead of saying what happened.
+export function useUpdateInstrument() {
+  const invalidate = useInvalidateInstruments();
+  const queryClient = useQueryClient();
+  return useMutation({
+    networkMode: "always",
+    mutationFn: async ({
+      id,
+      body,
+    }: {
+      id: string;
+      body: UpdateInstrumentBody;
+    }): Promise<Instrument> => {
+      const { data, error, response } = await api.PATCH("/api/v1/instruments/{instrumentId}", {
+        params: { path: { instrumentId: id } },
+        body,
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    // The catalog AND the positions computed from it. A position row carries
+    // the instrument's own fields — its name, its ticker, whether it is frozen
+    // — so a correction that did not reach that query would leave the old
+    // spelling on screen beside the new one until something else refetched.
+    // (The VALUATION does not appear on the next render either way: the quote
+    // worker has to run and find the paper first, which is a job and not a
+    // request.)
+    onSuccess: () => {
+      invalidate();
+      void queryClient.invalidateQueries({ queryKey: ["positions"] });
+    },
+  });
 }
 
 export function useCreateInstrument() {
