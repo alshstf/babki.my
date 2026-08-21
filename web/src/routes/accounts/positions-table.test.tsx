@@ -1140,6 +1140,67 @@ describe("PositionsTable", () => {
     );
   });
 
+  it("says «нет курса» where the money's profit would have been", () => {
+    // The owner's gold sits under XAU, which the Bank of Russia does not quote
+    // at all, so the row's three base-currency cells came out empty and said
+    // nothing about why — while the account's own total, missing for the same
+    // reason, named the currency in the header. One of the two was talking.
+    wrap(
+      <PositionsTable
+        positions={[]}
+        cash={[
+          makeCash({
+            currency: "XAU",
+            amount_minor: 2_600,
+            in_base: {
+              currency: "RUB",
+              value_minor: null,
+              cost_minor: null,
+              unrealized_pnl_minor: null,
+              realized_pnl_minor: null,
+              gap: "no_rate_today",
+            },
+          }),
+        ]}
+        mode="base"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(screen.getByTestId("cash-no-rate")).toBeInTheDocument();
+    // And not the overdraft's sentence, which is about a different absence.
+    expect(screen.queryByTestId("cash-overdraft")).not.toBeInTheDocument();
+  });
+
+  it("says «в минусе» rather than «нет курса» on an overdraft", () => {
+    // Both leave the profit empty and they are not the same news: one is money
+    // the account owes, the other money nobody can price. The overdraft has its
+    // own line under the name, so the rate sentence must stay off it.
+    wrap(
+      <PositionsTable
+        positions={[]}
+        cash={[
+          makeCash({
+            amount_minor: -40_000,
+            in_base: {
+              currency: "RUB",
+              value_minor: -3_600_000,
+              cost_minor: 0,
+              unrealized_pnl_minor: null,
+              realized_pnl_minor: 0,
+              gap: "negative_balance",
+            },
+          }),
+        ]}
+        mode="base"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(screen.getByTestId("cash-overdraft")).toBeInTheDocument();
+    expect(screen.queryByTestId("cash-no-rate")).not.toBeInTheDocument();
+  });
+
   it("says nothing about a profit on the base currency itself", () => {
     // Rubles in a ruble space cost rubles and are worth rubles. The server does
     // publish an honest nought here; the row shows the balance and no more,
