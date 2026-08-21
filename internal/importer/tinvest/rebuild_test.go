@@ -342,6 +342,49 @@ func TestRebuildOverAnUnchangedMirrorAsksForNothing(t *testing.T) {
 // value. A mirror row carries the broker's latest word, so a commission the
 // broker corrected has to reach the journal — and a rebuild that stopped at
 // "this id is already there" would leave the old number in place for good.
+// TestRebuildResolvesAPaperTheBrokerForgotByTheIsinTheOperationCarries is the
+// wiring that makes the resolver's last resort reachable at all: the ticker the
+// OPERATION carries has to travel from the mirror row into the ref.
+//
+// A fund wound up and its passport answers 404 for ever, while the owner's
+// history stays full of operations on it. For such an instrument the broker
+// writes the ISIN into the ticker field, and the catalog already knows the
+// paper by that ISIN — so the operation lands in the journal instead of joining
+// the unparsed list.
+func TestRebuildResolvesAPaperTheBrokerForgotByTheIsinTheOperationCarries(t *testing.T) {
+	f := newRebuildFixture(t)
+	const uidGone = "11111111-2222-3333-4444-555555555555"
+	f.src.instrumentErrs[uidGone] = fmt.Errorf("%w: %s", ErrInstrumentNotFound, uidGone)
+	if _, err := f.catalog.Create(f.ctx, instrument.Instrument{
+		Type: instrument.TypeETF, Name: "Технологии Америки",
+		Ticker: "TECH", ISIN: "RU000A101X68", FIGI: "TCS20A101X68", Currency: "RUB",
+	}); err != nil {
+		t.Fatalf("seed the catalog: %v", err)
+	}
+
+	item := loadOperationItem(t, "buy.json")
+	item.ID = "op-forgotten-1"
+	item.InstrumentUID = uidGone
+	// The figi the OPERATION carries differs from the catalog's for the same
+	// paper — the broker re-issues it per listing — so nothing but the ISIN
+	// can join the two.
+	item.FIGI = "TCS33A101X68"
+	item.Ticker = "RU000A101X68"
+	f.sync(t, f.link, item)
+
+	stats := f.rebuild(t)
+	if stats.Unparsed != 0 {
+		t.Fatalf("left %d rows unparsed, want none: the catalog knows this paper by the ISIN the operation carries", stats.Unparsed)
+	}
+	if stats.Added != 1 {
+		t.Fatalf("added %d operations, want 1", stats.Added)
+	}
+	journal := f.journalOf(t, f.accountID)
+	if len(journal) != 1 || journal[0].InstrumentID == nil {
+		t.Fatalf("journal = %+v, want one operation carrying the catalog row", journal)
+	}
+}
+
 func TestRebuildRewritesAnOperationWhoseMirrorRowChanged(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link, loadOperationItem(t, "buy.json"))

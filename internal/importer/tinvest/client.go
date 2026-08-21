@@ -270,8 +270,15 @@ type OperationItem struct {
 	// size of zero and must not be read as one; a trade without it is refused
 	// rather than measured by its order (see projectTrade).
 	Quantity, QuantityDone int64
-	Description            string
-	Raw                    json.RawMessage
+	// Ticker is what the operation calls the paper. For an instrument the
+	// broker still knows it is an ordinary ticker and nothing here needs it —
+	// the passport is a better source for every field. It is kept for the
+	// instrument the broker has FORGOTTEN, where the passport answers 404 and
+	// this is the last identifier left: for exactly those the broker puts the
+	// ISIN here (see Resolver.resolveOne).
+	Ticker      string
+	Description string
+	Raw         json.RawMessage
 }
 
 // operationsPageLimit is the page size OperationsAll requests. 1000 is the

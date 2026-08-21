@@ -833,6 +833,64 @@ func TestMigrate_TinvestInstrumentMapUniqueConstraint(t *testing.T) {
 	}
 }
 
+const tinvestMirrorTickerMigration = 19
+
+// TestMigrate_TinvestTickerIsRecoveredFromTheStoredPayload is the upgrade half
+// of the delisted-paper fix. The mirror kept the broker's payload verbatim from
+// the first day, so an installation that already imported its history recovers
+// every ticker from what it stored — and it matters for exactly the papers the
+// broker will never answer about again.
+//
+// The rows are the two shapes the live mirror holds: an ordinary ticker, and an
+// ISIN in the ticker field, which is what the broker sends for an instrument it
+// has since forgotten (the FinEx funds on the owner's own account).
+func TestMigrate_TinvestTickerIsRecoveredFromTheStoredPayload(t *testing.T) {
+	pool := testdb.NewEmpty(t)
+	ctx := context.Background()
+
+	upTo(t, ctx, pool, tinvestMirrorTickerMigration-1)
+	spaceID := insertTinvestSpace(t, ctx, pool)
+	accountID := insertTinvestAccount(t, ctx, pool, spaceID, "Т-Инвестиции")
+	connectionID := insertTinvestConnection(t, ctx, pool, spaceID)
+	linkID := insertTinvestLink(t, ctx, pool, connectionID, spaceID, accountID, "2000000001")
+
+	rows := []struct {
+		opID string
+		raw  string
+		want string
+	}{
+		{"ordinary", `{"ticker": "SBER"}`, "SBER"},
+		// The owner's own: a fund the broker has wound up, named by its ISIN.
+		{"forgotten-paper", `{"ticker": "RU000A101X68"}`, "RU000A101X68"},
+		{"no-such-field", `{"quantity": "1000"}`, ""},
+	}
+	for _, r := range rows {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO tinvest_operations_mirror
+			    (connection_id, link_id, broker_operation_id, op_type, state, occurred_at, currency, payment, quantity, raw, content_key, last_confirmed_at)
+			 VALUES ($1, $2, $3, 'OPERATION_TYPE_SELL', 'OPERATION_STATE_EXECUTED', now(), 'RUB', 127121, 190, $4::jsonb, $3, now())`,
+			connectionID, linkID, r.opID, r.raw); err != nil {
+			t.Fatalf("insert mirror row %s: %v", r.opID, err)
+		}
+	}
+
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	for _, r := range rows {
+		var got string
+		if err := pool.QueryRow(ctx,
+			`SELECT ticker FROM tinvest_operations_mirror WHERE broker_operation_id = $1`, r.opID).
+			Scan(&got); err != nil {
+			t.Fatalf("read ticker of %s: %v", r.opID, err)
+		}
+		if got != r.want {
+			t.Errorf("%s: ticker = %q, want %q", r.opID, got, r.want)
+		}
+	}
+}
+
 const tinvestQuantityDoneMigration = 16
 
 // TestMigrate_TinvestExecutedQuantityIsRecoveredFromTheStoredPayload is the
