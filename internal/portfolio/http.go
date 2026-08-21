@@ -1375,11 +1375,26 @@ func (h *Handler) cashToAPI(ctx context.Context, p *CashPosition, base string, n
 		return out, nil
 	}
 	out.InBase.CostMinor = nullable.NewNullableWithValue(cost)
-	pnl, err := money.Sub(value, cost)
-	if err != nil {
-		return apitypes.CashPosition{}, fmt.Errorf("%w: the %s balance worth %d against a cost of %d", err, p.Currency, value, cost)
+	if p.Minor < 0 {
+		// AN OVERDRAFT HAS NO GAIN TO REPORT. Nothing is held, so the cost is a
+		// structural nought, and value less nought is the WHOLE OF THE DEBT
+		// wearing the name of a profit — on the owner's own account that put
+		// -157 751,84 ₽ in a column headed «Прибыль» and folded the same figure
+		// into what the account had supposedly earned. What it really says is
+		// that the journal is missing the purchases behind those dollars.
+		//
+		// The two figures that ARE true stay: what the debt is worth (money owed
+		// in dollars is worth something in rubles) and what the money that has
+		// already left earned on the way out.
+		out.InBase.UnrealizedPnlMinor = nullable.NewNullNullable[int64]()
+		out.InBase.Gap = nullable.NewNullableWithValue(apitypes.CashGapNegativeBalance)
+	} else {
+		pnl, err := money.Sub(value, cost)
+		if err != nil {
+			return apitypes.CashPosition{}, fmt.Errorf("%w: the %s balance worth %d against a cost of %d", err, p.Currency, value, cost)
+		}
+		out.InBase.UnrealizedPnlMinor = nullable.NewNullableWithValue(pnl)
 	}
-	out.InBase.UnrealizedPnlMinor = nullable.NewNullableWithValue(pnl)
 
 	// WHAT THIS MONEY HAS ALREADY EARNED, struck from the days it actually
 	// happened on: each departure's proceeds at the rate of the day it left,
@@ -1686,7 +1701,15 @@ func (at *accountTotals) addCash(c apitypes.CashPosition) error {
 		// asking for them would be asking a rate of one to say something.
 		return nil
 	}
-	for _, half := range []nullable.Nullable[int64]{c.InBase.RealizedPnlMinor, c.InBase.UnrealizedPnlMinor} {
+	// An overdraft contributes what it EARNED and nothing else. Its unrealized
+	// half does not exist (see cashToAPI), and that absence is not a gap in the
+	// data: there is no gain on money the account does not have, so nothing is
+	// withheld over it and no currency is named.
+	halves := []nullable.Nullable[int64]{c.InBase.RealizedPnlMinor, c.InBase.UnrealizedPnlMinor}
+	if !c.InBase.Gap.IsNull() && c.InBase.Gap.MustGet() == apitypes.CashGapNegativeBalance {
+		halves = []nullable.Nullable[int64]{c.InBase.RealizedPnlMinor}
+	}
+	for _, half := range halves {
 		if half.IsNull() {
 			// A rate behind this money is missing, so the account has no single
 			// figure — and the currency is named, because «нет курса» alone

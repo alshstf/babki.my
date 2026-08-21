@@ -63,6 +63,7 @@ func (e AccountType) Valid() bool {
 
 // Defines values for CashGap.
 const (
+	CashGapNegativeBalance    CashGap = "negative_balance"
 	CashGapNoRateDisposalDate CashGap = "no_rate_disposal_date"
 	CashGapNoRateLotDate      CashGap = "no_rate_lot_date"
 	CashGapNoRateToday        CashGap = "no_rate_today"
@@ -71,6 +72,8 @@ const (
 // Valid indicates whether the value is a known member of the CashGap enum.
 func (e CashGap) Valid() bool {
 	switch e {
+	case CashGapNegativeBalance:
+		return true
 	case CashGapNoRateDisposalDate:
 		return true
 	case CashGapNoRateLotDate:
@@ -625,13 +628,13 @@ type CashInBase struct {
 	// Currency The base currency these figures are in, carried here so a client need not go back to the session for it
 	Currency string `json:"currency"`
 
-	// Gap Which rate was missing, or null when the figures are struck. `no_rate_today` stops the valuation; `no_rate_lot_date` stops the cost and therefore the unrealized profit; `no_rate_disposal_date` stops the realized result alone, whose days are its own.
+	// Gap Which rate was missing, or null when the figures are struck. `no_rate_today` stops the valuation; `no_rate_lot_date` stops the cost and therefore the unrealized profit; `no_rate_disposal_date` stops the realized result alone, whose days are its own. `negative_balance` is not a missing rate at all: the account owes this money rather than holding it, so there is no basis to measure a gain against and none is published — the balance and what already left are still there.
 	Gap nullable.Nullable[CashGap] `json:"gap"`
 
 	// RealizedPnlMinor WHAT THE CURRENCY ALREADY EARNED OR COST, banked: for every departure of this money, its proceeds at the rate of the day it left, less what its parcels were worth on the days they arrived. Without this figure a currency result vanishes the moment it is taken: a hundred thousand rubles turned into dollars at 100 and back at 120 is twenty thousand rubles made, and the balances afterwards — rubles bought today, no dollars — value to a gain of exactly nought. IT IS FINAL, like a disposal's: both of its ends are past days with rates that will not change. Only departures the queue could actually cover are in it; money spent that was never seen arriving accounts for nothing here and is reported as the negative balance instead. Null when a rate behind one of those days is missing, which `gap` then names.
 	RealizedPnlMinor nullable.Nullable[int64] `json:"realized_pnl_minor"`
 
-	// UnrealizedPnlMinor value_minor less cost_minor — the currency's own move while this money sat on the account. Null when either half is.
+	// UnrealizedPnlMinor value_minor less cost_minor — the currency's own move while this money sat on the account. Null when either half is, AND null on a NEGATIVE balance whatever the rates: nothing is held there, so cost_minor is 0 and this subtraction would come to the whole of the debt wearing the name of a profit. What such a balance is worth is still published above (money owed in dollars is worth something in rubles), and what the money that HAS left earned is still in realized_pnl_minor; what does not exist is a gain on money the account does not have.
 	UnrealizedPnlMinor nullable.Nullable[int64] `json:"unrealized_pnl_minor"`
 
 	// ValueMinor What the balance is worth TODAY, at today's rate. Null when there is no rate for today, which `gap` then names.
