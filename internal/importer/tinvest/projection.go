@@ -201,10 +201,6 @@ const (
 	// journal's own rule, so recording this one would turn a refund into a
 	// charge. See tradeCommission.
 	ReasonCommissionRefund UnparsedReason = "commission_refund"
-	// ReasonTaxRefund: a tax operation whose amount is positive, i.e. a tax
-	// the broker gave back. The journal has no shape for it — see projectCash,
-	// which also says why the substitutes are worse than the refusal.
-	ReasonTaxRefund UnparsedReason = "tax_refund"
 	// ReasonProjectionIncomplete: this program has a rule for the broker's
 	// operation type and no code that carries the rule out — a shape added to
 	// brokerOpTypes with no branch built for it. It cannot be produced by any
@@ -1019,13 +1015,6 @@ func projectCash(row MirrorRow, accountID uuid.UUID, resolved *Resolved, t opera
 	amount, refusal := minorFromDecimal(row.Payment)
 	if refusal != nil {
 		return nil, refusal
-	}
-
-	if t == operation.TypeTax && amount > 0 {
-		return nil, &UnparsedError{
-			Reason: ReasonTaxRefund,
-			Detail: fmt.Sprintf("a tax of %s came back rather than being taken, and the journal's tax is money leaving", row.Payment),
-		}
 	}
 
 	op := base(row, accountID, t)

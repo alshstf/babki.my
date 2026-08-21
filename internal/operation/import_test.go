@@ -149,6 +149,68 @@ func TestApplyImportDeltaRefusesASplitFromTheImporter(t *testing.T) {
 	}
 }
 
+// TestApplyImportDeltaTakesATaxThatGaveMoneyBack is the second point on which
+// the import path differs from the hand-entry one, and it is worth its own test
+// because the difference is a single sign.
+//
+// A broker's tax CORRECTION arrives positive: of the nine on the owner's own
+// account seven are. Refused, they were seven real credits missing from the
+// journal for as long as the account existed. Nothing downstream needed
+// teaching — a tax is folded into income by its signed amount, so a refund
+// restores exactly what the withholding took.
+//
+// A ZERO is still refused, because money that did not move corrects nothing.
+func TestApplyImportDeltaTakesATaxThatGaveMoneyBack(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	refund := imported(operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeTax,
+		OccurredOn: date("2026-07-01"), AmountMinor: 32_000, Currency: "RUB",
+	}, "op-tax-refund")
+	nothing := imported(operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeTax,
+		OccurredOn: date("2026-07-02"), AmountMinor: 0, Currency: "RUB",
+	}, "op-tax-zero")
+
+	applied, refused, err := svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{
+		Add: []operation.Operation{refund, nothing},
+	})
+	if err != nil {
+		t.Fatalf("ApplyImportDelta: %v", err)
+	}
+	if len(applied) != 1 || applied[0].AmountMinor != 32_000 {
+		t.Fatalf("applied = %+v, want the refund alone, with its sign untouched", applied)
+	}
+	if len(refused) != 1 || !errors.Is(refused[0].Err, family.ErrValidation) {
+		t.Fatalf("refused = %+v, want the zero refused with ErrValidation", refused)
+	}
+	if refused[0].ExternalID != "op-tax-zero" {
+		t.Errorf("refused %q, want the zero — the refund is the one that must go in", refused[0].ExternalID)
+	}
+}
+
+// TestCreateStillRefusesATaxThatIsNotACharge is the other half: the hand-entry
+// path keeps the guard the import path drops. There a positive tax is a sign
+// somebody typed wrong, and refusing it catches the mistake while it can still
+// be fixed; here the sign is the broker's own statement about money that moved.
+//
+// The two paths differ on exactly two rules and this is one of them, so a change
+// that "simplified" them into one would take this guard away from the door where
+// it earns its keep.
+func TestCreateStillRefusesATaxThatIsNotACharge(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	_, err := svc.Create(f.ctx, f.spaceID, operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeTax,
+		OccurredOn: date("2026-07-01"), AmountMinor: 32_000, Currency: "RUB",
+	})
+	if !errors.Is(err, family.ErrValidation) {
+		t.Fatalf("Create of a positive tax = %v, want ErrValidation: by hand, that sign is a typo", err)
+	}
+}
+
 // pairOfLegs builds the two legs of one transfer, already carrying the shared
 // group id its caller computed — which is how a delta presents a pair.
 func pairOfLegs(f fixture, group uuid.UUID, quantity string, on string) (out, in operation.Operation) {
