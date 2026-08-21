@@ -58,6 +58,11 @@ export function AccountTotal({
   // a paper written off makes the total too low, a paper whose price nobody
   // recorded makes it too high.
   const zeroValued = total.zero_valued_positions;
+  // Papers left out of the base figure because nobody knows when they were
+  // bought. Unlike a missing rate this never closes, which is why the figure is
+  // published without them rather than withheld for ever (see
+  // AccountTotal.undated_positions).
+  const undated = total.undated_positions;
   const unknownCost = total.unknown_cost_positions;
   const zeroValuedCost = total.zero_valued_cost_by_currency
     .map((entry) => formatMinor(entry.amount_minor, entry.currency))
@@ -134,6 +139,15 @@ export function AccountTotal({
             count: zeroValued,
             cost: zeroValuedCost,
           })}
+        </div>
+      )}
+      {undated > 0 && (
+        <div
+          data-testid="account-total-undated"
+          className="text-xs text-muted-foreground"
+          title={t("positions.accountTotalUndatedHint")}
+        >
+          {t("positions.accountTotalUndated", { count: undated })}
         </div>
       )}
       {unknownCost > 0 && (
