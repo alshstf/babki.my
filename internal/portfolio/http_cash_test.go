@@ -168,6 +168,56 @@ func TestCashGoesNegativeAndSaysSo(t *testing.T) {
 	if usd.InBase.ValueMinor == nil || *usd.InBase.ValueMinor != -1_800_000 {
 		t.Errorf("value = %v, want -1800000: money owed in dollars is worth something in rubles too", usd.InBase.ValueMinor)
 	}
+	// AND NO GAIN, which is the half that used to be published and was the whole
+	// of the debt under another name. Cost is a structural nought here — nothing
+	// is held — so value less cost is the debt itself, and calling it a profit
+	// put -18 000,00 ₽ in a column headed «Прибыль» on the owner's own account.
+	if usd.InBase.UnrealizedPnlMinor != nil {
+		t.Errorf("unrealized = %d, want null: there is no gain on money the account does not have, and this figure is the debt wearing a profit's name", *usd.InBase.UnrealizedPnlMinor)
+	}
+	if usd.InBase.Gap == nil || *usd.InBase.Gap != "negative_balance" {
+		t.Errorf("gap = %v, want negative_balance — and NOT one of the rate gaps: no rate is missing here, and a reader sent looking for one would find nothing wrong", usd.InBase.Gap)
+	}
+}
+
+// TestAccountTotalDoesNotCountAnOverdraftAsALoss is the same rule where it
+// mattered most. The debt used to reach the account's own figure through the
+// cash's unrealized half — on the owner's account two currencies together put
+// 185 000 ₽ of «loss» into what the account had supposedly earned, and every
+// kopeck of it was the journal missing the purchases behind those balances.
+//
+// What the overdrawn currency still contributes is what it EARNED on the way
+// out, which is real money and dated on both ends.
+func TestAccountTotalDoesNotCountAnOverdraftAsALoss(t *testing.T) {
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := fxRateAPI(t, quotes,
+		datedRate{earlyRateOn, "50"}, datedRate{midRateOn, "80"}, datedRate{lateRateOn, "90"})
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
+	// $1 000 arrive at 50 and leave at 80: +30 000 ₽ banked, and nothing held.
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"deposit",
+		"occurred_on":"2026-03-10","amount_minor":100000,"currency":"USD"}`, acc.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"withdrawal",
+		"occurred_on":%q,"amount_minor":-100000,"currency":"USD"}`, acc.ID, sellOn))
+	// And then $500 more are spent that the journal never saw arrive.
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"withdrawal",
+		"occurred_on":%q,"amount_minor":-50000,"currency":"USD"}`, acc.ID, sellOn))
+
+	got := accountPositions(t, c, url, acc.ID).AccountTotal
+
+	if got.InBase == nil {
+		t.Fatalf("in_base is null (%v) — nothing here is unvalued", got.InBaseGap)
+	}
+	switch *got.InBase {
+	case -1_500_000:
+		t.Errorf("in_base = -1500000 — the debt was counted as a loss and the banked gain with it. Every kopeck of that debt is the journal missing an operation, not money the account lost")
+	case 3_000_000:
+	default:
+		t.Errorf("in_base = %d, want 3000000: the dollars that were held earned 30 000 ₽, and the ones the account never had earned nothing either way", *got.InBase)
+	}
+	if len(got.NoRateCurrencies) != 0 {
+		t.Errorf("no_rate_currencies = %v, want empty — an overdraft is not a missing rate, and naming it would send a reader looking for a backfill that has nothing to fetch", got.NoRateCurrencies)
+	}
 }
 
 // TestCashNamesTheRateThatIsMissing. Two gaps, and they stop different figures:

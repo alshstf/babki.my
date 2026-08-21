@@ -1155,7 +1155,7 @@ describe("PositionsTable", () => {
     expect(screen.queryByTestId("cash-realized")).not.toBeInTheDocument();
   });
 
-  it("shows a negative balance rather than hiding it", () => {
+  it("shows a negative balance rather than hiding it, and says what it is", () => {
     // The owner's own case: the journal spends yuan whose purchase the broker
     // would not explain, so the balance goes below nought. That IS the
     // discrepancy, and a row that hid it would agree with a broker it does not
@@ -1172,6 +1172,25 @@ describe("PositionsTable", () => {
     expect(norm(screen.getByTestId("cash-amount").textContent ?? "")).toBe(
       norm(formatMinor(-40_000, "CNY")),
     );
+    // And it says WHY there is no profit beside it. The server publishes none
+    // for a balance below nought — nothing is held to measure one against —
+    // and an empty cell would read as «не посчиталось» rather than as the
+    // journal missing operations.
+    expect(screen.getByTestId("cash-overdraft")).toBeInTheDocument();
+  });
+
+  it("draws no overdraft note on money the account actually holds", () => {
+    wrap(
+      <PositionsTable
+        positions={[]}
+        cash={[makeCash()]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    expect(screen.getByTestId("cash-amount")).toBeInTheDocument();
+    expect(screen.queryByTestId("cash-overdraft")).not.toBeInTheDocument();
   });
 
   it("hides a currency the account holds nothing of, behind the same control", () => {

@@ -975,6 +975,20 @@ export function PositionsTable({
                   <div className="text-xs text-muted-foreground">
                     {t("positions.cashKind")}
                   </div>
+                  {/* AN OVERDRAFT SAYS SO WHERE ITS PROFIT WOULD HAVE BEEN.
+                      The server publishes no gain for a balance below nought
+                      (there is nothing held to measure one against), and an
+                      empty cell would read as «не посчиталось» rather than as
+                      the plain fact that the journal is missing operations. */}
+                  {money.amount_minor < 0 && (
+                    <div
+                      data-testid="cash-overdraft"
+                      className="text-xs text-amber-600"
+                      title={t("positions.cashOverdraftHint")}
+                    >
+                      {t("positions.cashOverdraft")}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell
                   className="text-right tabular-nums"

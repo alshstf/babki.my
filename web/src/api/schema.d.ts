@@ -1083,7 +1083,7 @@ export interface components {
             cost_minor: number | null;
             /**
              * Format: int64
-             * @description value_minor less cost_minor — the currency's own move while this money sat on the account. Null when either half is.
+             * @description value_minor less cost_minor — the currency's own move while this money sat on the account. Null when either half is, AND null on a NEGATIVE balance whatever the rates: nothing is held there, so cost_minor is 0 and this subtraction would come to the whole of the debt wearing the name of a profit. What such a balance is worth is still published above (money owed in dollars is worth something in rubles), and what the money that HAS left earned is still in realized_pnl_minor; what does not exist is a gain on money the account does not have.
              */
             unrealized_pnl_minor: number | null;
             /**
@@ -1091,11 +1091,11 @@ export interface components {
              * @description WHAT THE CURRENCY ALREADY EARNED OR COST, banked: for every departure of this money, its proceeds at the rate of the day it left, less what its parcels were worth on the days they arrived. Without this figure a currency result vanishes the moment it is taken: a hundred thousand rubles turned into dollars at 100 and back at 120 is twenty thousand rubles made, and the balances afterwards — rubles bought today, no dollars — value to a gain of exactly nought. IT IS FINAL, like a disposal's: both of its ends are past days with rates that will not change. Only departures the queue could actually cover are in it; money spent that was never seen arriving accounts for nothing here and is reported as the negative balance instead. Null when a rate behind one of those days is missing, which `gap` then names.
              */
             realized_pnl_minor: number | null;
-            /** @description Which rate was missing, or null when the figures are struck. `no_rate_today` stops the valuation; `no_rate_lot_date` stops the cost and therefore the unrealized profit; `no_rate_disposal_date` stops the realized result alone, whose days are its own. */
+            /** @description Which rate was missing, or null when the figures are struck. `no_rate_today` stops the valuation; `no_rate_lot_date` stops the cost and therefore the unrealized profit; `no_rate_disposal_date` stops the realized result alone, whose days are its own. `negative_balance` is not a missing rate at all: the account owes this money rather than holding it, so there is no basis to measure a gain against and none is published — the balance and what already left are still there. */
             gap: components["schemas"]["CashGap"] | null;
         };
         /** @enum {string} */
-        CashGap: "no_rate_today" | "no_rate_lot_date" | "no_rate_disposal_date";
+        CashGap: "no_rate_today" | "no_rate_lot_date" | "no_rate_disposal_date" | "negative_balance";
         AccountCurrencyTotal: {
             currency: string;
             /**
