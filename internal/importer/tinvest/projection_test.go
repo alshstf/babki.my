@@ -745,6 +745,49 @@ func TestProjectRowTransferOfNothingIsRefused(t *testing.T) {
 	}
 }
 
+// TestProjectRowOneSidedTransferOfNothingNamesTheMissingNumber is the owner's
+// own row, and the reason it needs a name of its own.
+//
+// The broker moved 0.24 of a share of Warner Bros. Discovery in from another
+// depository. EVERY quantity field it sends is an integer — quantity,
+// quantityDone and quantityRest — so all three came back "0", and the real
+// number survives in the Russian prose of the description and nowhere else.
+//
+// Built anyway, such a row was refused by the JOURNAL with "transfer_in
+// requires positive quantity": true of our rule, and silent about what
+// happened. The reader could not tell a program bug from a number the broker
+// never sent — which is the difference between something to report and a line
+// to enter by hand.
+//
+// A one-sided transfer, deliberately: the two-sided kind reads its DIRECTION
+// from the same sign and refuses a zero earlier, for a reason of its own (see
+// the test above), and that refusal must keep its own wording.
+func TestProjectRowOneSidedTransferOfNothingNamesTheMissingNumber(t *testing.T) {
+	row := mirrorRowFor(t, "input_securities.json")
+	row.Quantity = 0
+	row.Description = "Завод 0.24 акций Warner Bros. Discovery из другого депозитария"
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare(), nil)
+
+	if len(ops) != 0 {
+		t.Fatalf("got %d operations, want none — the journal refuses this one anyway, and the refusal it gives names our rule instead of the broker's silence", len(ops))
+	}
+	if refusal == nil {
+		t.Fatal("a transfer of no units was projected instead of being refused")
+	}
+	switch refusal.Reason {
+	case ReasonTransferDirectionUnknown:
+		t.Errorf("reason = %q — the direction of a one-sided transfer is in its TYPE, not in a sign, and nothing about it is unknown here", refusal.Reason)
+	case ReasonTransferWithoutQuantity:
+	default:
+		t.Errorf("reason = %q, want transfer_without_quantity", refusal.Reason)
+	}
+	// The description is carried into the detail, because it is the only place
+	// the real number exists — a reader retyping the line by hand needs it.
+	if !strings.Contains(refusal.Detail, "0.24") {
+		t.Errorf("detail = %q, want the broker's own description in it: the figure is in that prose and nowhere else", refusal.Detail)
+	}
+}
+
 // TestProjectRowShapeWithNoBranchRefusesInsteadOfVanishing pins the switch's
 // default arm — the one case in this file that cannot be reached through any
 // input, because it is reached through a change to the code instead: a shape
