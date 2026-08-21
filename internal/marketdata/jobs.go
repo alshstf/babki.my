@@ -54,6 +54,11 @@ const backfillTimeout = 15 * time.Minute
 // will ever be converted at.
 var backfillFloor = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
+// backfillLeadDays is how far before the earliest operation the history is
+// fetched from, so that a nearest-earlier lookup always has something to land
+// on. See rangeStart for why it is not zero and why a month.
+const backfillLeadDays = 31
+
 // operationCurrencies is the subset of operation.Store the backfill worker
 // needs — the same locally declared interface pattern as instrumentLister
 // below, which additionally keeps marketdata free of an import of the
@@ -421,7 +426,7 @@ func (w *backfillFxWorker) Timeout(*river.Job[BackfillFxArgs]) time.Duration {
 // A provider or store error fails the job so River retries it; whatever was
 // stored for the currencies handled before the failure stays in the database.
 func (w *backfillFxWorker) Work(ctx context.Context, _ *river.Job[BackfillFxArgs]) error {
-	from, wanted, err := w.rangeStart(ctx)
+	from, earliest, wanted, err := w.rangeStart(ctx)
 	if err != nil || !wanted {
 		return err
 	}
@@ -431,7 +436,11 @@ func (w *backfillFxWorker) Work(ctx context.Context, _ *river.Job[BackfillFxArgs
 	// be logged even on an instance where every account and operation is in
 	// RUB and there ends up being nothing left to fetch.
 	to := utcDay(w.now())
-	if from.After(to) {
+	// AGAINST THE EARLIEST OPERATION, not against the padded start. The lead
+	// above would otherwise swallow this: an operation ten days in the future
+	// leaves a start three weeks in the past, the range no longer inverts, and
+	// a date nobody can have meant goes unreported.
+	if earliest.After(to) {
 		// The earliest operation is dated after today. Usually a typo, but not
 		// always: operation validation allows a day of leeway, so an owner
 		// well ahead of UTC entering their local "today" lands here
@@ -525,17 +534,40 @@ func (w *backfillFxWorker) Work(ctx context.Context, _ *river.Job[BackfillFxArgs
 // operation, clamped to backfillFloor. wanted is false when there are no
 // operations at all — then no amount needs converting at any past date, and
 // the source is not contacted even once.
-func (w *backfillFxWorker) rangeStart(ctx context.Context) (time.Time, bool, error) {
+// rangeStart returns the day the history is fetched FROM and the day of the
+// EARLIEST OPERATION, which are no longer the same day (see the lead below) and
+// answer two different questions: what to ask the source for, and whether the
+// journal's own dates make sense at all.
+func (w *backfillFxWorker) rangeStart(ctx context.Context) (time.Time, time.Time, bool, error) {
 	earliest, err := w.ops.EarliestOccurredOn(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
 		w.log.Debug("marketdata: no operations yet, skipping fx backfill")
-		return time.Time{}, false, nil
+		return time.Time{}, time.Time{}, false, nil
 	}
 	if err != nil {
 		w.log.Error("marketdata: read earliest operation date failed", "err", err)
-		return time.Time{}, false, err
+		return time.Time{}, time.Time{}, false, err
 	}
-	from := utcDay(earliest)
+	// A RUN OF DAYS BEFORE THE EARLIEST OPERATION, and it is not slack.
+	//
+	// A rate is looked up by nearest EARLIER date (Store.FxRateOn), so an
+	// operation dated before the first row in the table has nothing to fall
+	// back to and stays unconvertible for ever. Asking the source for exactly
+	// the operation's own day is not enough: rates are published on business
+	// days, so a purchase on a Saturday — or on the second of January — is
+	// answered by a range that begins after it.
+	//
+	// The owner's own journal is the case. Its first operation is dated
+	// 2020-10-26 and the Bank of Russia's first published row in that range is
+	// the 27th, so one dollar operation had no rate at all — and a total is not
+	// published while one of its terms cannot be valued, which took the figure
+	// off the whole account over a single day.
+	//
+	// A month covers a New Year's run, which is the longest stretch the source
+	// publishes nothing across, and it costs nothing: the range is one request
+	// per currency whatever its length.
+	day := utcDay(earliest)
+	from := day.AddDate(0, 0, -backfillLeadDays)
 	if from.Before(backfillFloor) {
 		w.log.Warn("marketdata: earliest operation predates the fx backfill floor, clamping (most likely a mistyped date)",
 			"provider", w.provider.Name(),
@@ -544,7 +576,7 @@ func (w *backfillFxWorker) rangeStart(ctx context.Context) (time.Time, bool, err
 			"days_dropped", daysBetween(from, backfillFloor))
 		from = backfillFloor
 	}
-	return from, true, nil
+	return from, day, true, nil
 }
 
 // wantedCurrencies is the sorted set of currencies rates are needed for:

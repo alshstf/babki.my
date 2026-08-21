@@ -1333,25 +1333,43 @@ func TestBackfillFx_AsksForEachSeriesOnceOverTheWholeRange(t *testing.T) {
 		t.Fatalf("provider got %d requests [%s], want exactly one per currency (2)",
 			len(provider.requests), showRequests(provider.requests))
 	}
+	// A MONTH BEFORE THE OLDEST OPERATION, not the day of it. A rate is looked
+	// up by nearest earlier date, so an operation dated before the first row in
+	// the table can never be converted — and rates are published on business
+	// days, so asking from the operation's own day leaves a purchase on a
+	// Saturday, or on the second of January, with nothing behind it. See
+	// backfillLeadDays.
+	wantFrom := earliest.AddDate(0, 0, -31)
 	for _, r := range provider.requests {
-		if !r.from.Equal(earliest) || !r.to.Equal(pinnedToday) {
+		if !r.from.Equal(wantFrom) || !r.to.Equal(pinnedToday) {
 			t.Fatalf("%s was asked for %s..%s, want the whole range %s..%s in one request",
 				r.code, r.from.Format(time.DateOnly), r.to.Format(time.DateOnly),
-				earliest.Format(time.DateOnly), pinnedToday.Format(time.DateOnly))
+				wantFrom.Format(time.DateOnly), pinnedToday.Format(time.DateOnly))
 		}
 	}
 
-	// Both ends of both series must have landed in the database.
+	// Both ends of both series must have landed in the database — and the older
+	// end is what the lead buys: the oldest operation itself resolves to a rate
+	// dated at or before it, which is the whole reason the range starts before
+	// it. (The fixture's provider answers with the ends of the range it was
+	// asked for, so the older row IS wantFrom.)
 	for _, code := range []string{"EUR", "USD"} {
-		for _, on := range []time.Time{earliest, pinnedToday} {
-			got, err := store.FxRateOn(ctx, code, "RUB", on)
-			if err != nil {
-				t.Fatalf("FxRateOn(%s, %s): %v", code, on.Format(time.DateOnly), err)
-			}
-			if !got.On.Equal(on) {
-				t.Fatalf("%s rate nearest %s is dated %s, want the series to cover both ends",
-					code, on.Format(time.DateOnly), got.On.Format(time.DateOnly))
-			}
+		got, err := store.FxRateOn(ctx, code, "RUB", earliest)
+		if err != nil {
+			t.Fatalf("FxRateOn(%s, %s): %v — the oldest operation has no rate to fall back to, which is what the lead exists to prevent",
+				code, earliest.Format(time.DateOnly), err)
+		}
+		if got.On.After(earliest) {
+			t.Fatalf("%s rate nearest %s is dated %s, which is AFTER it — a lookup takes the nearest EARLIER row and this one cannot be used",
+				code, earliest.Format(time.DateOnly), got.On.Format(time.DateOnly))
+		}
+		today, err := store.FxRateOn(ctx, code, "RUB", pinnedToday)
+		if err != nil {
+			t.Fatalf("FxRateOn(%s, today): %v", code, err)
+		}
+		if !today.On.Equal(pinnedToday) {
+			t.Fatalf("%s rate nearest today is dated %s, want the series to reach today",
+				code, today.On.Format(time.DateOnly))
 		}
 	}
 	if got := countFxRates(t, ctx, pool); got != 4 {
@@ -1555,8 +1573,10 @@ func TestBackfillFx_ClampsAbsurdlyEarlyOperationToTheFloor(t *testing.T) {
 		t.Fatalf("requests [%s], want a single USD series starting at the floor %s",
 			showRequests(provider.requests), floor.Format(time.DateOnly))
 	}
-	// The dropped tail must be visible, not silently swallowed.
-	wantDropped := int(floor.Sub(date("1970-01-01")).Hours() / 24)
+	// The dropped tail must be visible, not silently swallowed. Measured from
+	// the day the request WOULD have started at — a month before the operation
+	// (see backfillLeadDays) — because that is what the clamp actually cut.
+	wantDropped := int(floor.Sub(date("1970-01-01").AddDate(0, 0, -31)).Hours() / 24)
 	wantWarned(t, &logs, "days_dropped="+strconv.Itoa(wantDropped))
 }
 
@@ -1704,6 +1724,37 @@ func TestBackfillFx_FutureDatedOperationDoesNotInvertTheRange(t *testing.T) {
 	}
 	if len(provider.requests) != 1 {
 		t.Fatalf("requests [%s], want exactly one", showRequests(provider.requests))
+	}
+	if r := provider.requests[0]; r.from.After(r.to) {
+		t.Fatalf("asked for %s..%s: the range runs backwards",
+			r.from.Format(time.DateOnly), r.to.Format(time.DateOnly))
+	}
+	wantWarned(t, &logs, "future")
+}
+
+// TestBackfillFx_ANearFutureOperationIsStillReported is the case the lead
+// created and nearly hid. The range now starts a month before the earliest
+// operation (backfillLeadDays), so an operation dated a few days ahead no longer
+// makes the range run backwards — and a check written against the padded start
+// would fall silent about a date nobody can have meant. It is asked of the
+// OPERATION's own day for exactly that reason.
+//
+// Five days ahead: well inside the lead, so nothing about the range itself
+// complains.
+func TestBackfillFx_ANearFutureOperationIsStillReported(t *testing.T) {
+	store, _, ctx := newBackfillFixture(t)
+
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	provider := &recordingHistoryProvider{ids: cbrIDs}
+	worker := newBackfillWorker(store,
+		fakeOpStore{earliest: pinnedToday.AddDate(0, 0, 5), currencies: []string{"USD"}},
+		fakeAccountStore{currencies: []string{"RUB"}},
+		fakeSpaceStore{base: []string{"RUB"}},
+		provider, log)
+
+	if err := worker.Work(ctx, backfillJob()); err != nil {
+		t.Fatalf("Work: %v", err)
 	}
 	if r := provider.requests[0]; r.from.After(r.to) {
 		t.Fatalf("asked for %s..%s: the range runs backwards",
