@@ -167,6 +167,7 @@ type wireOperationItem struct {
 	PositionUID       string         `json:"positionUid"`
 	AssetUID          string         `json:"assetUid"`
 	InstrumentType    string         `json:"instrumentType"`
+	Ticker            string         `json:"ticker"`
 	Payment           wireMoneyValue `json:"payment"`
 	Commission        wireMoneyValue `json:"commission"`
 	AccruedInt        wireMoneyValue `json:"accruedInt"`
@@ -217,6 +218,7 @@ func (w wireOperationItem) parse(raw json.RawMessage) (OperationItem, error) {
 		PositionUID:       w.PositionUID,
 		AssetUID:          w.AssetUID,
 		InstrumentType:    w.InstrumentType,
+		Ticker:            w.Ticker,
 		Payment:           payment,
 		Commission:        commission,
 		AccruedInt:        accruedInt,

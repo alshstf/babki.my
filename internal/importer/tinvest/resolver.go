@@ -26,6 +26,9 @@ import (
 // at the call site is easy to get wrong.
 type InstrumentRef struct {
 	InstrumentUID, FIGI, PositionUID, AssetUID string
+	// Ticker is what the OPERATION called the paper, and it is here for one
+	// case: a broker that has forgotten the instrument. See resolveOne.
+	Ticker string
 }
 
 // Resolved is what Resolve found: this instance's catalog id for the
@@ -278,6 +281,32 @@ func (r *Resolver) resolveOne(ctx context.Context, connectionID uuid.UUID, src p
 
 	brief, err := r.passport(ctx, src, ref.InstrumentUID)
 	if err != nil {
+		// THE BROKER FORGETS PAPERS IT ONCE TRADED. A fund wound up, a company
+		// redomiciled, and the passport answers 404 for ever after — while the
+		// owner's history is full of operations on it. The operation itself is
+		// then the only description of the paper left, and one of its fields
+		// identifies it exactly: for such an instrument the broker puts the
+		// ISIN in the TICKER field ("IE00BD3QJN10", "RU000A101X68" — the
+		// FinEx funds on the owner's own account), and an ISIN is a globally
+		// unique security identifier, so an exact match against the catalog is
+		// proof rather than a guess.
+		//
+		// NOT BY FIGI, which is the identifier one would reach for first and is
+		// the wrong one: the broker re-issues it per listing, so the catalog
+		// holds TCS20A101X68 for the very paper whose operations carry
+		// TCS33A101X68. Only the ISIN survives the move.
+		//
+		// Nothing is CREATED here. A paper the catalog does not already know
+		// stays unresolved with the broker's own reason, because everything
+		// else about it — its currency above all — would have to be invented.
+		if errors.Is(err, ErrInstrumentNotFound) && ref.Ticker != "" {
+			if inst, found, ferr := r.catalogByISIN(ctx, ref.Ticker); ferr != nil {
+				return Resolved{}, "", "", "", ferr
+			} else if found {
+				return Resolved{InstrumentID: inst.ID, Type: inst.Type, Currency: inst.Currency},
+					inst.ISIN, inst.Ticker, "", nil
+			}
+		}
 		return Resolved{}, "", "", "", err
 	}
 
@@ -396,6 +425,21 @@ func (r *Resolver) passport(ctx context.Context, src passportSource, uid string)
 	}
 	r.passports[uid] = brief
 	return brief, nil
+}
+
+// catalogByISIN looks one row up by ISIN, telling "no such row" apart from a
+// failure: the first is an answer this resolver acts on, the second must not be
+// mistaken for one.
+func (r *Resolver) catalogByISIN(ctx context.Context, isin string) (instrument.Instrument, bool, error) {
+	inst, err := r.catalog.ByISIN(ctx, isin)
+	switch {
+	case err == nil:
+		return inst, true, nil
+	case errors.Is(err, pgx.ErrNoRows):
+		return instrument.Instrument{}, false, nil
+	default:
+		return instrument.Instrument{}, false, err
+	}
 }
 
 // findOrCreate is steps 4-6 of Resolve's doc comment: the catalog by ISIN,

@@ -341,6 +341,99 @@ func TestResolve_MapHitRefreshesDriftedAttributes(t *testing.T) {
 // broker/catalog paths
 // -------------------------------------------------------------------------
 
+// TestResolve_ForgottenPaperIsFoundByTheIsinTheOperationCarries is the one
+// answer left when the broker no longer knows an instrument it once traded.
+//
+// A fund wound up or a company redomiciled, and the passport answers 404 for
+// ever after — while the owner's history stays full of operations on it. For
+// exactly such an instrument the broker puts the ISIN in the operation's TICKER
+// field ("RU000A101X68", one of the FinEx funds on the owner's own account),
+// and an ISIN is a globally unique security identifier: matching it against the
+// catalog is proof, not a guess.
+func TestResolve_ForgottenPaperIsFoundByTheIsinTheOperationCarries(t *testing.T) {
+	f := newFixture(t)
+	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
+	src := newFakePassportSource()
+	src.instrumentErrs["uid-gone"] = fmt.Errorf("%w: uid-gone", ErrInstrumentNotFound)
+
+	existing, err := catalog.Create(f.ctx, instrument.Instrument{
+		Type: instrument.TypeETF, Name: "Технологии Америки",
+		Ticker: "TECH", ISIN: "RU000A101X68", FIGI: "TCS20A101X68", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("seed the catalog: %v", err)
+	}
+
+	r := NewResolver(f.store, catalog, nil)
+	got, err := r.Resolve(f.ctx, f.conn.ID, src, InstrumentRef{
+		InstrumentUID: "uid-gone",
+		// The broker re-issues the figi per listing, so the one the OPERATION
+		// carries differs from the catalog's for the very same paper. Set to a
+		// different value on purpose: a resolution by figi would find nothing,
+		// and a test that left them equal could not tell the two apart.
+		FIGI:   "TCS33A101X68",
+		Ticker: "RU000A101X68",
+	})
+	if err != nil {
+		t.Fatalf("Resolve(a paper the broker forgot) = %v, want the catalog row it plainly is", err)
+	}
+	if got.InstrumentID != existing.ID {
+		t.Errorf("resolved to %s, want the existing row %s", got.InstrumentID, existing.ID)
+	}
+	if catalog.createCalls != 1 {
+		t.Errorf("catalog.Create called %d times, want only the seeding one — nothing about such a paper may be invented, its currency least of all", catalog.createCalls)
+	}
+}
+
+// TestResolve_ForgottenPaperTheCatalogDoesNotKnowStaysUnresolved is the other
+// half. The fallback above matches an ISIN and does nothing else: a paper no
+// row of the catalog carries cannot be created from an operation, because
+// everything else about it — its currency above all — would have to be
+// invented. The broker's own reason stands.
+func TestResolve_ForgottenPaperTheCatalogDoesNotKnowStaysUnresolved(t *testing.T) {
+	f := newFixture(t)
+	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
+	src := newFakePassportSource()
+	src.instrumentErrs["uid-gone"] = fmt.Errorf("%w: uid-gone", ErrInstrumentNotFound)
+
+	r := NewResolver(f.store, catalog, nil)
+	_, err := r.Resolve(f.ctx, f.conn.ID, src, InstrumentRef{
+		InstrumentUID: "uid-gone", Ticker: "US87238U2033",
+	})
+	if !errors.Is(err, ErrInstrumentNotFound) {
+		t.Fatalf("Resolve = %v, want the broker's own ErrInstrumentNotFound", err)
+	}
+	if catalog.createCalls != 0 {
+		t.Errorf("catalog.Create called %d times, want 0", catalog.createCalls)
+	}
+}
+
+// TestResolve_AnOrdinaryTickerIsNotTreatedAsAnIsin: the fallback matches by
+// ISIN and by nothing else. A paper the broker forgot whose operations carry a
+// plain ticker finds nothing — and must not fall through to a ticker search,
+// where "T" is AT&T in one catalog and Т-Технологии in another.
+func TestResolve_AnOrdinaryTickerIsNotTreatedAsAnIsin(t *testing.T) {
+	f := newFixture(t)
+	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
+	src := newFakePassportSource()
+	src.instrumentErrs["uid-gone"] = fmt.Errorf("%w: uid-gone", ErrInstrumentNotFound)
+
+	if _, err := catalog.Create(f.ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "AT&T", Ticker: "T",
+		ISIN: "US00206R1023", Currency: "USD",
+	}); err != nil {
+		t.Fatalf("seed the catalog: %v", err)
+	}
+
+	r := NewResolver(f.store, catalog, nil)
+	_, err := r.Resolve(f.ctx, f.conn.ID, src, InstrumentRef{
+		InstrumentUID: "uid-gone", Ticker: "T",
+	})
+	if !errors.Is(err, ErrInstrumentNotFound) {
+		t.Fatalf("Resolve = %v, want ErrInstrumentNotFound — «T» is a ticker, and the paper behind it here is a different company entirely", err)
+	}
+}
+
 // TestResolve_UnsupportedInstrumentType pins decision 3 of the task brief: a
 // futures/options/etc. instrument refuses with ErrUnsupportedInstrumentType
 // before any catalog call, rather than being filed as some generic "other"

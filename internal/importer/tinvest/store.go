@@ -165,6 +165,11 @@ type MirrorRow struct {
 	// sent.
 	Quantity     int64
 	QuantityDone int64
+	// Ticker is what the OPERATION called the paper — and for an instrument the
+	// broker has since forgotten, the ISIN, which it puts in this field for
+	// exactly those. It is the last identifier such a paper has (see
+	// Resolver.resolveOne and migration 0019).
+	Ticker string
 
 	FIGI           string
 	InstrumentUID  string
@@ -506,7 +511,7 @@ func (s *Store) LinksByConnection(ctx context.Context, connID uuid.UUID) ([]Acco
 const mirrorCols = `id, connection_id, link_id, broker_operation_id,
 	parent_operation_id, op_type, state, occurred_at, currency, payment, price,
 	commission, commission_currency, accrued_int, quantity, quantity_done, figi,
-	instrument_uid, position_uid, asset_uid, instrument_type, description, raw,
+	ticker, instrument_uid, position_uid, asset_uid, instrument_type, description, raw,
 	content_key, first_seen_at, last_confirmed_at, disappeared_at, unparsed_reason,
 	unparsed_detail`
 
@@ -515,7 +520,7 @@ func scanMirrorRow(row pgx.Row) (MirrorRow, error) {
 	err := row.Scan(&m.ID, &m.ConnectionID, &m.LinkID, &m.BrokerOperationID,
 		&m.ParentOperationID, &m.OpType, &m.State, &m.OccurredAt, &m.Currency,
 		&m.Payment, &m.Price, &m.Commission, &m.CommissionCurrency, &m.AccruedInt,
-		&m.Quantity, &m.QuantityDone, &m.FIGI, &m.InstrumentUID, &m.PositionUID, &m.AssetUID,
+		&m.Quantity, &m.QuantityDone, &m.FIGI, &m.Ticker, &m.InstrumentUID, &m.PositionUID, &m.AssetUID,
 		&m.InstrumentType, &m.Description, &m.Raw, &m.ContentKey, &m.FirstSeenAt,
 		&m.LastConfirmedAt, &m.DisappearedAt, &m.UnparsedReason, &m.UnparsedDetail)
 	return m, err
