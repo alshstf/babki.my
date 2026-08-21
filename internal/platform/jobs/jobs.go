@@ -163,6 +163,14 @@ func NewWorkers(
 	river.AddWorker(workers, marketdata.NewQuotesWorker(mdStore, instruments, quoteProvider, log))
 	river.AddWorker(workers, marketdata.NewBackfillFxWorker(
 		mdStore, operations, accounts, spaces, fxProvider, log))
+	// Gold has a source of its own because the central bank publishes none for
+	// it (see marketdata.backfillGoldWorker). Registered only when the quote
+	// provider can answer for it — the interface is the exchange client's, and
+	// a deployment wired to something else simply has no gold rates rather than
+	// a job that fails for ever.
+	if gold, ok := quoteProvider.(marketdata.GoldRateProvider); ok {
+		river.AddWorker(workers, marketdata.NewBackfillGoldWorker(mdStore, operations, gold, log))
+	}
 	river.AddWorker(workers, tinvest.NewDispatchWorker(tinvestDeps.Store, enqueuer, log))
 	river.AddWorker(workers, tinvest.NewSyncWorker(tinvestDeps.Store, tinvestDeps.Box,
 		tinvestDeps.NewClient, tinvestDeps.NewRebuilder, tinvestDeps.Reconciler, log))
@@ -245,6 +253,13 @@ func newClient(pool *pgxpool.Pool, workers *river.Workers, log *slog.Logger) (*r
 				river.PeriodicInterval(backfillFxInterval),
 				func() (river.JobArgs, *river.InsertOpts) {
 					return marketdata.BackfillFxArgs{}, nil
+				},
+				&river.PeriodicJobOpts{RunOnStart: true},
+			),
+			river.NewPeriodicJob(
+				river.PeriodicInterval(backfillFxInterval),
+				func() (river.JobArgs, *river.InsertOpts) {
+					return marketdata.BackfillGoldArgs{}, nil
 				},
 				&river.PeriodicJobOpts{RunOnStart: true},
 			),

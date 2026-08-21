@@ -567,3 +567,109 @@ func parseSecurities(boardLabel string, columns []string, data [][]any) ([]secRo
 
 	return rows, nil
 }
+
+// goldSecurity is the exchange's spot gold instrument, and goldBoard the board
+// its real trading happens on.
+//
+// ONE GRAM OF GOLD, WHICH IS THE WHOLE REASON THIS EXISTS. The broker denotes
+// gold with the code "XAU", and ISO 4217 says that code is a troy OUNCE — 31.1
+// grams. It does not mean that here: the owner's own purchases are of
+// GLDRUB_TOM, whose unit is a gram, and every figure in his journal is counted
+// in those. Taking an ounce-denominated rate to them would be wrong by a factor
+// of thirty-one, which is the shape of the most expensive kind of defect this
+// program can have — so the rate for "XAU" comes from THIS instrument and no
+// other, and the only source that could contradict it (the Bank of Russia)
+// publishes no gold rate at all.
+//
+// Checked against the exchange on 2026-08-21: GLDRUB_TOM closed at 8422.2 on
+// 2024-10-21, against the 8654.19 average the owner's own broker reports for
+// purchases made around then. A price per ounce would have been near 260 000.
+const (
+	goldSecurity = "GLDRUB_TOM"
+	goldBoard    = "CETS"
+)
+
+// GoldRates returns one rate per trading day between from and to inclusive:
+// how many rubles one unit of the exchange's spot gold cost that day.
+//
+// THE CLOSING PRICE, and the board's own. ISS answers this security on four
+// boards and three of them are formalities — LICU and SPEC report zeros, CNGD
+// reports a handful of trades a day — so a run over every row would take
+// whichever came last and land on a zero often enough. CETS is where the
+// thousands of trades are.
+//
+// A day whose close is zero or absent is LEFT OUT rather than stored: a rate of
+// nought would value every gram at nothing, and a lookup takes the nearest
+// earlier date, so one such row would silently answer for every day after it.
+func (c *Client) GoldRates(ctx context.Context, from, to time.Time) ([]marketdata.FxRate, error) {
+	url := fmt.Sprintf("%s/iss/history/engines/currency/markets/selt/securities/%s.json"+
+		"?iss.meta=off&iss.only=history&history.columns=BOARDID,TRADEDATE,CLOSE&from=%s&till=%s",
+		c.baseURL, goldSecurity, from.Format(time.DateOnly), to.Format(time.DateOnly))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("moex: gold history: build request: %w", err)
+	}
+	req.Header.Set("User-Agent", userAgent)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("moex: gold history: request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("moex: gold history: unexpected status %d", resp.StatusCode)
+	}
+
+	var body struct {
+		History struct {
+			Columns []string `json:"columns"`
+			Data    [][]any  `json:"data"`
+		} `json:"history"`
+	}
+	dec := json.NewDecoder(resp.Body)
+	// The same reason fetchBoard uses it: a price is money, and float64 loses
+	// digits ISS actually sent.
+	dec.UseNumber()
+	if err := dec.Decode(&body); err != nil {
+		return nil, fmt.Errorf("moex: gold history: decode: %w", err)
+	}
+
+	idx := make(map[string]int, len(body.History.Columns))
+	for i, name := range body.History.Columns {
+		idx[name] = i
+	}
+	boardAt, dateAt, closeAt := idx["BOARDID"], idx["TRADEDATE"], idx["CLOSE"]
+	if boardAt < 0 || dateAt < 0 || closeAt < 0 {
+		return nil, fmt.Errorf("moex: gold history: the answer names no %s/%s/%s column", "BOARDID", "TRADEDATE", "CLOSE")
+	}
+
+	out := make([]marketdata.FxRate, 0, len(body.History.Data))
+	for _, row := range body.History.Data {
+		if len(row) <= boardAt || len(row) <= dateAt || len(row) <= closeAt {
+			continue
+		}
+		if board, _ := row[boardAt].(string); board != goldBoard {
+			continue
+		}
+		day, ok := row[dateAt].(string)
+		if !ok {
+			continue
+		}
+		on, err := time.Parse(time.DateOnly, day)
+		if err != nil {
+			continue
+		}
+		num, ok := row[closeAt].(json.Number)
+		if !ok {
+			continue
+		}
+		price, err := decimal.NewFromString(num.String())
+		if err != nil || !price.IsPositive() {
+			continue
+		}
+		out = append(out, marketdata.FxRate{
+			Base: marketdata.GoldCode, Quote: "RUB", On: on, Rate: price, Source: sourceName,
+		})
+	}
+	return out, nil
+}
