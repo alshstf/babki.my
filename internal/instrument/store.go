@@ -19,6 +19,7 @@ import (
 const (
 	pgUniqueViolation       = "23505"
 	instrumentsTickerUnique = "instruments_ticker_uniq"
+	instrumentsISINUnique   = "instruments_isin_uniq"
 )
 
 // ErrTickerTaken means another instrument already carries this ticker. The
@@ -46,6 +47,19 @@ const (
 // either write, and it renders one generic message whatever comes back.
 var ErrTickerTaken = fmt.Errorf("%w: ticker already belongs to another instrument", family.ErrValidation)
 
+// ErrISINTaken means another instrument already carries this ISIN.
+//
+// AN ISIN IDENTIFIES A SECURITY WORLDWIDE, so two rows under one are the same
+// paper entered twice — and unlike a shared ticker, that is true of every
+// instrument type there is. It became a rule of its own when the ticker stopped
+// being one (migration 0020): the ticker's uniqueness had been standing in for
+// this, catching two writers who resolved one paper at the same moment, and
+// moving identity to the ISIN without moving that protection would have left the
+// race to produce duplicates in silence.
+//
+// The same 400 as ErrTickerTaken, for the same contract reason recorded there.
+var ErrISINTaken = fmt.Errorf("%w: isin already belongs to another instrument", family.ErrValidation)
+
 // wrapTickerConflict maps a unique_violation on the ticker index to
 // ErrTickerTaken. Every other error passes through untouched — the same shape
 // as family.wrapUsernameConflict and operation.mapWriteError, which translate
@@ -54,9 +68,14 @@ var ErrTickerTaken = fmt.Errorf("%w: ticker already belongs to another instrumen
 // the reason recorded on ErrTickerTaken above.
 func wrapTickerConflict(err error) error {
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) &&
-		pgErr.Code == pgUniqueViolation && pgErr.ConstraintName == instrumentsTickerUnique {
+	if !errors.As(err, &pgErr) || pgErr.Code != pgUniqueViolation {
+		return err
+	}
+	switch pgErr.ConstraintName {
+	case instrumentsTickerUnique:
 		return ErrTickerTaken
+	case instrumentsISINUnique:
+		return ErrISINTaken
 	}
 	return err
 }
@@ -100,12 +119,14 @@ func (s *Store) ByID(ctx context.Context, id uuid.UUID) (Instrument, error) {
 // resolver) that has one authoritative ISIN from a broker and needs the one
 // catalog row it names, not every row that happens to contain it.
 //
-// The catalog carries NO uniqueness constraint on isin (migration 0011 only
-// covers ticker); duplicates exist today, entered by hand before this method
-// existed to notice them. Rather than surface that ambiguity to every
-// caller, this returns the OLDEST matching row (lowest created_at, ties
-// broken by id): the one most likely to be the original entry rather than a
-// later accidental copy, and a deterministic answer either way.
+// The catalog now carries uniqueness on isin (migration 0020), so at most one
+// row can match and the ordering below decides nothing. It is kept because it
+// once did: duplicates were enterable by hand until that migration, which
+// refuses to upgrade a database still holding any. Should one ever arrive by
+// another door, the OLDEST row (lowest created_at, ties broken by id) is what
+// this hands back — the original entry rather than a later copy, and a
+// deterministic answer either way instead of whichever row Postgres returned
+// first.
 //
 // isin == "" returns pgx.ErrNoRows without querying at all, rather than
 // running the same comparison against an empty string. isin has no NOT

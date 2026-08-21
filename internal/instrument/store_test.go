@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -711,21 +710,26 @@ func TestByISIN_ExactMatch(t *testing.T) {
 	}
 
 	// The empty string is not "no filter" here (unlike Search's query
-	// parameter): the catalog carries no uniqueness on ISIN, so a bare
-	// `isin = ''` could match every instrument nobody has entered one for
-	// and hand back whichever is oldest — a plausible-looking wrong answer
-	// instead of the honest "no exact match" this refuses with instead.
+	// parameter). Uniqueness on isin skips the empty string — any number of
+	// rows may carry none — so a bare `isin = ''` would match every instrument
+	// nobody has entered one for and hand back whichever is oldest: a
+	// plausible-looking wrong answer instead of the honest "no exact match"
+	// this refuses with instead.
 	if _, err := st.ByISIN(ctx, ""); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("ByISIN(\"\") = %v, want pgx.ErrNoRows", err)
 	}
 }
 
-// TestByISIN_DuplicateReturnsOldest pins the tie-break the doc comment
-// promises for the one case migration 0011 never covered: ISIN carries no
-// unique constraint (duplicates were entered by hand before this method
-// existed), so an importer resolving one still needs a single, deterministic
-// answer rather than whichever row Postgres happens to return first.
-func TestByISIN_DuplicateReturnsOldest(t *testing.T) {
+// TestISINIsUnique pins what replaced the tie-break this test used to check.
+//
+// An ISIN identifies a security worldwide, so two rows under one are the same
+// paper entered twice — and until migration 0020 nothing said so: the catalog
+// took them and every importer silently resolved to whichever was created
+// first. The ticker's own uniqueness had been standing in for this, and when
+// identity moved to the ISIN (two companies may share a ticker across
+// exchanges) the protection had to move with it or the race that used to
+// collide on the ticker would quietly produce duplicates instead.
+func TestISINIsUnique(t *testing.T) {
 	st, ctx, _ := newStore(t)
 
 	first, err := st.Create(ctx, instrument.Instrument{
@@ -735,17 +739,34 @@ func TestByISIN_DuplicateReturnsOldest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create first: %v", err)
 	}
-	// created_at is assigned by now() inside each INSERT's own implicit
-	// transaction; a short sleep keeps the two rows apart at whatever
-	// precision the column actually holds, rather than relying on two
-	// statements issued back to back always landing in different
-	// microseconds.
-	time.Sleep(5 * time.Millisecond)
-	if _, err := st.Create(ctx, instrument.Instrument{
+	_, err = st.Create(ctx, instrument.Instrument{
 		Type: instrument.TypeShare, Name: "Дубль, второй", Ticker: "DUP2",
 		ISIN: "RU0000000001", Currency: "RUB",
+	})
+	if !errors.Is(err, instrument.ErrISINTaken) {
+		t.Fatalf("Create of a second row under one ISIN = %v, want ErrISINTaken", err)
+	}
+	// A DIFFERENT type under the same ISIN is refused too, unlike the ticker
+	// rule it replaced: a ticker means something only on an exchange, while an
+	// ISIN names the paper itself whatever this catalog calls its type.
+	_, err = st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeETF, Name: "Дубль, фондом", Ticker: "DUP3",
+		ISIN: "RU0000000001", Currency: "RUB",
+	})
+	if !errors.Is(err, instrument.ErrISINTaken) {
+		t.Fatalf("Create of a fund under the same ISIN = %v, want ErrISINTaken", err)
+	}
+	// And rows with NO ISIN go on being as many as anyone likes: the empty
+	// string is how "this paper has none" is written down.
+	if _, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Без ISIN, один", Ticker: "NOI1", Currency: "RUB",
 	}); err != nil {
-		t.Fatalf("Create second: %v", err)
+		t.Fatalf("Create without an ISIN: %v", err)
+	}
+	if _, err := st.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Без ISIN, два", Ticker: "NOI2", Currency: "RUB",
+	}); err != nil {
+		t.Fatalf("Create of a second row without an ISIN: %v", err)
 	}
 
 	got, err := st.ByISIN(ctx, "RU0000000001")
@@ -753,7 +774,7 @@ func TestByISIN_DuplicateReturnsOldest(t *testing.T) {
 		t.Fatalf("ByISIN: %v", err)
 	}
 	if got.ID != first.ID {
-		t.Fatalf("ByISIN(duplicate) = %q (%v), want the oldest, %q (%v)",
+		t.Fatalf("ByISIN = %q (%v), want the only row there is, %q (%v)",
 			got.Name, got.ID, first.Name, first.ID)
 	}
 }
