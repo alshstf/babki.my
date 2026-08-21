@@ -602,22 +602,61 @@ const (
 // nought would value every gram at nothing, and a lookup takes the nearest
 // earlier date, so one such row would silently answer for every day after it.
 func (c *Client) GoldRates(ctx context.Context, from, to time.Time) ([]marketdata.FxRate, error) {
+	// ONE PAGE IS NOT THE ANSWER. ISS caps a history response at a hundred rows
+	// and says so only in a cursor block; ask for six years and it hands back the
+	// first five weeks without a word about the rest. Taken at face value that
+	// filled the table with 2020 and left the nearest-earlier lookup answering
+	// every day since with an October-2020 price — measured on the owner's own
+	// data, where the first run stored 25 rates ending 2020-10-29.
+	//
+	// THE CURSOR IS WHAT ENDS THE LOOP, not an empty page. A server that ignores
+	// `start` — a proxy, a stub, a version that changes its mind — answers the
+	// same page for ever, and a loop that stops only on emptiness never stops at
+	// all. The first version of this did exactly that and hung its own test.
+	// TOTAL says how many rows exist; PAGESIZE how many came back.
+	var out []marketdata.FxRate
+	for start := 0; ; {
+		page, err := c.goldPage(ctx, from, to, start)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page.rates...)
+		start += page.rows
+		if page.rows == 0 || start >= page.total {
+			return out, nil
+		}
+	}
+}
+
+// goldPageResult is one page: the rates read from it, how many RAW rows it
+// held, and how many rows the whole answer has. The rows are counted raw
+// because the page size is about rows — four boards answer for this security
+// and only one is read, so a full page of a hundred easily yields twenty-five
+// rates.
+type goldPageResult struct {
+	rates []marketdata.FxRate
+	rows  int
+	total int
+}
+
+// goldPage fetches one page, reading the cursor block ISS attaches alongside it.
+func (c *Client) goldPage(ctx context.Context, from, to time.Time, start int) (goldPageResult, error) {
 	url := fmt.Sprintf("%s/iss/history/engines/currency/markets/selt/securities/%s.json"+
-		"?iss.meta=off&iss.only=history&history.columns=BOARDID,TRADEDATE,CLOSE&from=%s&till=%s",
-		c.baseURL, goldSecurity, from.Format(time.DateOnly), to.Format(time.DateOnly))
+		"?iss.meta=off&iss.only=history,history.cursor&history.columns=BOARDID,TRADEDATE,CLOSE&from=%s&till=%s&start=%d",
+		c.baseURL, goldSecurity, from.Format(time.DateOnly), to.Format(time.DateOnly), start)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("moex: gold history: build request: %w", err)
+		return goldPageResult{}, fmt.Errorf("moex: gold history: build request: %w", err)
 	}
 	req.Header.Set("User-Agent", userAgent)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("moex: gold history: request: %w", err)
+		return goldPageResult{}, fmt.Errorf("moex: gold history: request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("moex: gold history: unexpected status %d", resp.StatusCode)
+		return goldPageResult{}, fmt.Errorf("moex: gold history: unexpected status %d", resp.StatusCode)
 	}
 
 	var body struct {
@@ -625,13 +664,35 @@ func (c *Client) GoldRates(ctx context.Context, from, to time.Time) ([]marketdat
 			Columns []string `json:"columns"`
 			Data    [][]any  `json:"data"`
 		} `json:"history"`
+		Cursor struct {
+			Columns []string `json:"columns"`
+			Data    [][]any  `json:"data"`
+		} `json:"history.cursor"`
 	}
 	dec := json.NewDecoder(resp.Body)
 	// The same reason fetchBoard uses it: a price is money, and float64 loses
 	// digits ISS actually sent.
 	dec.UseNumber()
 	if err := dec.Decode(&body); err != nil {
-		return nil, fmt.Errorf("moex: gold history: decode: %w", err)
+		return goldPageResult{}, fmt.Errorf("moex: gold history: decode: %w", err)
+	}
+
+	// TOTAL out of the cursor, which is the only place the answer says how much
+	// there is. Absent — an older ISS, a stub — it stays 0 and the loop falls
+	// back to stopping on an empty page, which is right for a server that pages
+	// honestly and is why this is not an error.
+	total := 0
+	if len(body.Cursor.Data) > 0 {
+		for i, name := range body.Cursor.Columns {
+			if name != "TOTAL" || i >= len(body.Cursor.Data[0]) {
+				continue
+			}
+			if num, ok := body.Cursor.Data[0][i].(json.Number); ok {
+				if n, err := num.Int64(); err == nil {
+					total = int(n)
+				}
+			}
+		}
 	}
 
 	idx := make(map[string]int, len(body.History.Columns))
@@ -640,7 +701,7 @@ func (c *Client) GoldRates(ctx context.Context, from, to time.Time) ([]marketdat
 	}
 	boardAt, dateAt, closeAt := idx["BOARDID"], idx["TRADEDATE"], idx["CLOSE"]
 	if boardAt < 0 || dateAt < 0 || closeAt < 0 {
-		return nil, fmt.Errorf("moex: gold history: the answer names no %s/%s/%s column", "BOARDID", "TRADEDATE", "CLOSE")
+		return goldPageResult{}, fmt.Errorf("moex: gold history: the answer names no %s/%s/%s column", "BOARDID", "TRADEDATE", "CLOSE")
 	}
 
 	out := make([]marketdata.FxRate, 0, len(body.History.Data))
@@ -671,5 +732,5 @@ func (c *Client) GoldRates(ctx context.Context, from, to time.Time) ([]marketdat
 			Base: marketdata.GoldCode, Quote: "RUB", On: on, Rate: price, Source: sourceName,
 		})
 	}
-	return out, nil
+	return goldPageResult{rates: out, rows: len(body.History.Data), total: total}, nil
 }
