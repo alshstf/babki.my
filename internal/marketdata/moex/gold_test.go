@@ -27,7 +27,8 @@ const goldAnswer = `{"history":{
     ["CETS","2024-10-22",8479],
     ["CETS","2024-10-23",null],
     ["CETS","2024-10-24",0]
-  ]}}`
+  ]},
+  "history.cursor":{"columns":["INDEX","TOTAL","PAGESIZE"],"data":[[0,7,100]]}}`
 
 func goldServer(t *testing.T, body string) *httptest.Server {
 	t.Helper()
@@ -125,5 +126,84 @@ func TestGoldRatesNamesItselfToTheExchange(t *testing.T) {
 	}
 	if agent == "" || len(agent) > 6 && agent[:6] == "Go-htt" {
 		t.Errorf("User-Agent = %q, want this program's own", agent)
+	}
+}
+
+// TestGoldRatesReadsEveryPage is the defect the owner's own data found within
+// minutes of the first run: ISS caps a history answer at a hundred rows and
+// mentions it only in a cursor block, so six years of gold came back as five
+// weeks of 2020 — and the nearest-earlier lookup then answered every day since
+// with an October-2020 price.
+//
+// The pages here are deliberately of different sizes, and the last one is not
+// empty: a reader that stopped at the first short page, or one that needed an
+// empty page to stop, would each miss something.
+func TestGoldRatesReadsEveryPage(t *testing.T) {
+	pages := map[string]string{
+		"0": `{"history":{"columns":["BOARDID","TRADEDATE","CLOSE"],
+			"data":[["CETS","2024-10-21",8422.2],["CNGD","2024-10-21",8440]]},
+			"history.cursor":{"columns":["INDEX","TOTAL","PAGESIZE"],"data":[[0,3,2]]}}`,
+		"2": `{"history":{"columns":["BOARDID","TRADEDATE","CLOSE"],
+			"data":[["CETS","2024-10-22",8479]]},
+			"history.cursor":{"columns":["INDEX","TOTAL","PAGESIZE"],"data":[[2,3,2]]}}`,
+	}
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := r.URL.Query().Get("start")
+		asked = append(asked, start)
+		body, ok := pages[start]
+		if !ok {
+			t.Errorf("asked for start=%q, which this fixture does not have", start)
+			body = `{"history":{"columns":[],"data":[]}}`
+		}
+		_, _ = io.WriteString(w, body)
+	}))
+	defer srv.Close()
+
+	c := moex.New(srv.Client(), srv.URL, nil)
+	got, err := c.GoldRates(context.Background(),
+		time.Date(2024, 10, 20, 0, 0, 0, 0, time.UTC),
+		time.Date(2024, 10, 30, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("GoldRates: %v", err)
+	}
+	if len(asked) != 2 {
+		t.Fatalf("asked for %v, want two pages: the first says three rows exist and hands back two", asked)
+	}
+	if len(got) != 2 || got[1].Rate.String() != "8479" {
+		t.Fatalf("got %+v, want both CETS days — the second one lives on the second page", got)
+	}
+}
+
+// TestGoldRatesStopsWhenTheAnswerRepeatsItself is the loop's own safety. A
+// server that ignores `start` — a proxy, a stub, a version that changes its
+// mind — answers the same page for ever, and the first version of this reader
+// stopped only on an empty page and hung its own test. The cursor's TOTAL is
+// what ends it instead.
+func TestGoldRatesStopsWhenTheAnswerRepeatsItself(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = io.WriteString(w, `{"history":{"columns":["BOARDID","TRADEDATE","CLOSE"],
+			"data":[["CETS","2024-10-21",8422.2]]},
+			"history.cursor":{"columns":["INDEX","TOTAL","PAGESIZE"],"data":[[0,1,100]]}}`)
+	}))
+	defer srv.Close()
+
+	done := make(chan struct{})
+	go func() {
+		c := moex.New(srv.Client(), srv.URL, nil)
+		_, _ = c.GoldRates(context.Background(),
+			time.Date(2024, 10, 20, 0, 0, 0, 0, time.UTC),
+			time.Date(2024, 10, 30, 0, 0, 0, 0, time.UTC))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("GoldRates did not finish: it asked %d times and is still going", calls)
+	}
+	if calls != 1 {
+		t.Errorf("asked %d times, want 1 — the answer said there is one row and handed it over", calls)
 	}
 }
