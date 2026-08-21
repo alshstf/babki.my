@@ -1554,6 +1554,22 @@ func (at *accountTotals) addPosition(p apitypes.Position, inBase *apitypes.Posit
 		}
 		at.byCurrency[p.Currency] = sum
 		if native.atZero {
+			// COUNTED FROM THE ROW'S OWN CURRENCY, deliberately, even though the
+			// mark stands beside the base figure. The base branch below writes
+			// off the same paper for the same reason — nothing prices it — so
+			// counting there instead would say the same thing, and counting in
+			// both would say it twice.
+			//
+			// The one row the two branches disagree about is a paper with no
+			// quote whose payments arrived in a third currency: it has no
+			// own-currency total to write off (the bucket is unknowable) while
+			// its base figure is struck perfectly well. Such a row goes into the
+			// base total at nought and is NOT counted here — the figure it
+			// qualifies is right and the count beside it is one short. Left as
+			// it is rather than papered over, because the alternative shapes
+			// each say something false: counting on the base branch would count
+			// nothing at all on an account with no conversion objects, and
+			// counting on both would double every ordinary row.
 			at.zeroValued++
 			cost, err := money.Add(at.zeroValuedCost[p.Currency], p.CostMinor)
 			if err != nil {
