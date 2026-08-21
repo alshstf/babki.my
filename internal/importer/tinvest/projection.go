@@ -190,6 +190,12 @@ const (
 	// carried into this function — which changes its inputs and is the owner's
 	// decision, not a detail to slip in here.
 	ReasonCurrencyTrade UnparsedReason = "currency_trade"
+	// ReasonTransferWithoutQuantity: a securities transfer the broker reports
+	// with no units at all. Every quantity field it sends is an integer, so a
+	// transfer of PART of a share arrives as a nought in all of them, and the
+	// real number is in the description's prose and nowhere else. See
+	// projectSecuritiesTransfer for why that prose is not read.
+	ReasonTransferWithoutQuantity UnparsedReason = "transfer_without_quantity"
 	// ReasonCommissionRefund: the broker's commission on this operation is
 	// POSITIVE, i.e. money that came back. FeeMinor is a magnitude by the
 	// journal's own rule, so recording this one would turn a refund into a
@@ -1280,6 +1286,30 @@ func projectSecuritiesTransfer(row MirrorRow, accountID uuid.UUID, resolved *Res
 	units := row.Quantity
 	if units < 0 {
 		units = -units
+	}
+	if units == 0 {
+		// EVERY QUANTITY FIELD THE BROKER SENDS IS AN INTEGER, and a transfer
+		// of part of a share therefore arrives as a nought in all of them —
+		// quantity, quantityDone and quantityRest alike. The real number
+		// survives only in the Russian prose of the description ("Завод 0.24
+		// акций Warner Bros. Discovery из другого депозитария", from the
+		// owner's own account), and reading a figure out of prose is precisely
+		// the guess this importer refuses to make.
+		//
+		// It used to be built anyway and refused by the journal, which said
+		// "transfer_in requires positive quantity" — true of our rule and
+		// silent about what actually happened. The row is the same either way;
+		// what changes is whether the reader is told that the broker never sent
+		// the number, which is the difference between a bug to report and a
+		// line to enter by hand.
+		//
+		// Reached only for the two one-sided kinds: a move between the owner's
+		// own accounts reads its DIRECTION from this sign and refuses a zero
+		// earlier, for a reason of its own.
+		return nil, &UnparsedError{
+			Reason: ReasonTransferWithoutQuantity,
+			Detail: fmt.Sprintf("the broker reports no units for this transfer; its description says %q", row.Description),
+		}
 	}
 	qty, refusal := journalQuantity(units)
 	if refusal != nil {

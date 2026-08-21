@@ -1504,7 +1504,12 @@ components:
         nothing to close — a different fault from the previous one, and a
         different thing to go looking for: there the broker said nothing, here
         the purchase is missing from this program's own journal.
-        `currency_trade`: a purchase or sale of currency. `commission_refund`: a
+        `currency_trade`: a purchase or sale of currency.
+        `transfer_without_quantity`: a securities transfer the broker reports
+        with no units at all. Every quantity field it sends is an integer, so a
+        transfer of PART of a share arrives as a nought in all three of them and
+        the real number survives only in the prose of the description — which
+        this program does not read figures out of. `commission_refund`: a
         negative commission on the operation, i.e. money coming back.
         `tax_refund`: a tax operation whose amount is positive.
         `projection_incomplete`: this program has a rule for the broker's
@@ -1526,6 +1531,7 @@ components:
         - redemption_without_quantity
         - redemption_nothing_held
         - currency_trade
+        - transfer_without_quantity
         - commission_refund
         - tax_refund
         - projection_incomplete
