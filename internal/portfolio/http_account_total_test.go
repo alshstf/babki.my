@@ -338,3 +338,50 @@ func TestAccountTotalAddsNoCurrencyResultOnItsOwnBaseCurrency(t *testing.T) {
 		t.Errorf("in_base_gap = %q, want null — nothing here needed a rate at all", *got.InBaseGap)
 	}
 }
+
+// TestAccountTotalNamesTheMoneyItCouldNotValue is the difference between a gap
+// that closes on its own and one that never closes at all.
+//
+// «Нет курса» alone sends a reader to wait for a backfill. But a rate SOURCE may
+// not quote a currency at all — the Bank of Russia publishes none for XAU, the
+// code the broker uses for gold — and on the owner's account that one holding
+// took the total off three screens with nothing saying which money was
+// responsible. The currency named turns "wait" into "this one is not coming".
+func TestAccountTotalNamesTheMoneyItCouldNotValue(t *testing.T) {
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	// USD has rates; nothing anywhere quotes XAU.
+	url, c := fxRateAPI(t, quotes, datedRate{earlyRateOn, "50"}, datedRate{lateRateOn, "90"})
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"deposit",
+		"occurred_on":"2026-03-10","amount_minor":100000,"currency":"USD"}`, acc.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"deposit",
+		"occurred_on":"2026-03-10","amount_minor":2600,"currency":"XAU"}`, acc.ID))
+
+	got := accountPositions(t, c, url, acc.ID).AccountTotal
+
+	if got.InBase != nil {
+		t.Fatalf("in_base = %d, want null: a term of it could not be valued", *got.InBase)
+	}
+	if len(got.NoRateCurrencies) != 1 || got.NoRateCurrencies[0] != "XAU" {
+		t.Errorf("no_rate_currencies = %v, want [XAU] — the dollars have rates, and naming them too would send a reader looking at money that is fine", got.NoRateCurrencies)
+	}
+}
+
+// TestAccountTotalNamesNoCurrencyWhenNothingWasStoppedByARate: the list is about
+// rates and nothing else, so an account whose total is missing for another
+// reason entirely must not put a currency's name under a sentence about rates.
+func TestAccountTotalNamesNoCurrencyWhenNothingWasStoppedByARate(t *testing.T) {
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := fxRateAPI(t, quotes, datedRate{earlyRateOn, "50"}, datedRate{lateRateOn, "90"})
+
+	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"deposit",
+		"occurred_on":"2026-03-10","amount_minor":100000,"currency":"USD"}`, acc.ID))
+
+	got := accountPositions(t, c, url, acc.ID).AccountTotal
+
+	if len(got.NoRateCurrencies) != 0 {
+		t.Errorf("no_rate_currencies = %v, want empty: every rate this account needed exists", got.NoRateCurrencies)
+	}
+}
