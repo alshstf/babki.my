@@ -254,23 +254,35 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 		return nil
 	}
 
-	// KEYED BY TICKER AND CURRENCY, because a ticker alone does not name a
-	// security. The owner's catalog holds AT&T under "T" in dollars and
-	// Т-Технологии under "T" in rubles — two companies on two exchanges — and
-	// this map used to hold one of them and silently drop the other (#26, and
-	// the reason migration 0011 forbade the pair outright). The provider says
-	// which currency each price is in, and that is exactly what separates them:
-	// MOEX answers "T" in rubles and never in dollars.
+	// MATCHED BY ISIN, WHICH NAMES THE SECURITY. A ticker names a LISTING of
+	// one: two exchanges give unrelated companies the same ticker — the owner's
+	// catalog holds AT&T under "T" and Т-Технологии under "T" — and this map
+	// used to hold one of them and silently drop the other (#26).
 	//
-	// The REQUEST is still by ticker alone, because that is all the provider's
-	// interface speaks; the currency only enters when the answers are matched
-	// back, which is the first moment it exists.
+	// Ticker AND CURRENCY was the first answer to that and is not enough
+	// either: two exchanges inside one currency zone hand the same ticker to
+	// two companies in the same euros, and nothing about that pair would
+	// separate them. The exchange sends the ISIN alongside every price and
+	// always did; this program simply did not ask for the column.
+	//
+	// The ticker map stays as the SECOND key, for catalog rows carrying no ISIN
+	// — hand-entered papers, and the kinds no exchange assigns one to. There the
+	// ticker really is all there is, and the currency beside it is the most that
+	// can be asked of it.
+	//
+	// The REQUEST is still by ticker, because that is all the provider's
+	// interface speaks; the identifiers only enter when the answers come back.
+	byISIN := make(map[string]uuid.UUID, len(insts))
 	byTickerCurrency := make(map[tickerCurrency]uuid.UUID, len(insts))
 	// ambiguous names the pairs no answer can be attached to: two catalog rows
 	// with the same ticker AND the same currency. Neither is priced — picking
 	// one would be a coin toss over which paper a real price belongs to — and
 	// the pair is reported once rather than per answer.
 	ambiguous := make(map[tickerCurrency][]uuid.UUID)
+	// What each row's ISIN is, so the ticker fallback can refuse to answer for a
+	// row that HAS one: there the exchange has named a different security, and
+	// a match on the letters would be the very confusion the ISIN settles.
+	instISIN := make(map[uuid.UUID]string, len(insts))
 	tickers := make([]string, 0, len(insts))
 	asked := make(map[string]bool, len(insts))
 	for _, inst := range insts {
@@ -291,6 +303,20 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 				"instrument_id", inst.ID)
 			continue
 		}
+		// THE ISIN IS REGISTERED FIRST AND UNCONDITIONALLY, before any of the
+		// ticker bookkeeping below can `continue` past it. Two rows sharing a
+		// ticker are not ambiguous when each carries its own ISIN — that is the
+		// whole point of matching by one — and an early exit here left the
+		// second of such a pair out of the ISIN map entirely, so the exchange's
+		// answer about it found nothing.
+		instISIN[inst.ID] = inst.ISIN
+		if inst.ISIN != "" {
+			// One row per ISIN is a rule the database keeps (migration 0020),
+			// so this cannot overwrite anything — and if it ever could, the
+			// answer would belong to whichever row it named, not to a map.
+			byISIN[inst.ISIN] = inst.ID
+		}
+
 		key := tickerCurrency{ticker: inst.Ticker, currency: inst.Currency}
 		if priced, taken := byTickerCurrency[key]; taken {
 			// instruments.ticker carries a partial unique index (migration
@@ -308,7 +334,10 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 			// un-duplicate a ticker, so River would retry forever and every
 			// other instrument would stop being priced too — one wrong number
 			// traded for all of them.
-			w.log.Warn("marketdata: two instruments share a ticker AND a currency, so neither can be priced",
+			// Only the ticker fallback is affected: each of these rows is
+			// still reachable by its own ISIN, and this says what is lost for
+			// the ones that carry none.
+			w.log.Warn("marketdata: two instruments share a ticker AND a currency, so neither can be priced by that alone",
 				"ticker", inst.Ticker,
 				"currency", inst.Currency,
 				"instrument_id", priced,
@@ -338,7 +367,17 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 	seen := make(map[string]bool, len(tickerQuotes))
 	quotes := make([]Quote, 0, len(tickerQuotes))
 	for _, tq := range tickerQuotes {
-		id, ok := byTickerCurrency[tickerCurrency{ticker: tq.Ticker, currency: tq.Currency}]
+		id, ok := byISIN[tq.ISIN]
+		if !ok {
+			// No ISIN on one side or the other: fall back to the listing's own
+			// name. A row that HAS an ISIN and did not match by it is not this
+			// paper — the exchange named a different security — so the fallback
+			// is reached only when one of the two carries none.
+			id, ok = byTickerCurrency[tickerCurrency{ticker: tq.Ticker, currency: tq.Currency}]
+			if ok && instISIN[id] != "" && tq.ISIN != "" {
+				ok = false
+			}
+		}
 		if !ok {
 			// A ticker we didn't ask about; ignored rather than failed over,
 			// but no longer dropped without a word — the sibling case ("we

@@ -56,7 +56,13 @@ type FxHistoryProvider interface {
 // nothing about our instrument catalog, so mapping ticker to InstrumentID is
 // the caller's job.
 type TickerQuote struct {
-	Ticker   string
+	Ticker string
+	// ISIN identifies the SECURITY, where the ticker identifies a listing of
+	// one. Two exchanges give unrelated companies the same ticker — and two
+	// exchanges in one currency zone give it to them in one currency, so a
+	// ticker and a currency together do not settle it either. Empty when the
+	// source sends none, and then the ticker is all there is.
+	ISIN     string
 	Price    decimal.Decimal
 	Currency string
 	// On is the trading day this price belongs to, as stated by the source —

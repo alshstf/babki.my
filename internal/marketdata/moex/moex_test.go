@@ -129,7 +129,7 @@ func TestQuotesFor_ParsesFixture(t *testing.T) {
 	// without it every quote would have to be dated by our own clock, which
 	// is the whole of #90. Asking for a column ISS does not send costs
 	// nothing, but NOT asking for this one costs the quote its day.
-	wantQuery := "iss.meta=off&iss.only=securities&securities.columns=SECID,PREVPRICE,PREVDATE,CURRENCYID"
+	wantQuery := "iss.meta=off&iss.only=securities&securities.columns=SECID,ISIN,PREVPRICE,PREVDATE,CURRENCYID"
 	for _, p := range wantBoardPaths {
 		if gotQueries[p] != wantQuery {
 			t.Errorf("request query for %s = %q, want %q", p, gotQueries[p], wantQuery)
@@ -168,6 +168,15 @@ func TestQuotesFor_ParsesFixture(t *testing.T) {
 	if sber.Currency != "RUB" {
 		t.Errorf("SBER.Currency = %q, want RUB (SUR must map to RUB)", sber.Currency)
 	}
+	// THE ISIN COMES THROUGH, because it is what the price is matched to a
+	// catalog row by (see marketdata.refreshQuotesWorker). A ticker names a
+	// LISTING: two exchanges hand the same one to unrelated companies, and two
+	// inside one currency zone hand it to them in the same currency, so ticker
+	// and currency together settle nothing. The exchange has been sending this
+	// field all along; this program simply did not ask for the column.
+	if sber.ISIN != "RU0009029540" {
+		t.Errorf("SBER.ISIN = %q, want RU0009029540", sber.ISIN)
+	}
 
 	// LKOH's fixture price, 1234.567890123456789, has more significant
 	// digits than a float64 can represent exactly. If the response were
@@ -196,6 +205,14 @@ func TestQuotesFor_ParsesFixture(t *testing.T) {
 	}
 	if bond.Currency != "RUB" {
 		t.Errorf("SU26238RMFS4.Currency = %q, want RUB (SUR must map to RUB)", bond.Currency)
+	}
+	// ITS SECID IS NOT ITS ISIN, and this bond is in the fixture partly to say
+	// so: the exchange calls it SU26238RMFS4 and its ISIN is RU000A1038V6
+	// (checked against iss.moex.com). A reader that took the security id for
+	// the identifier would be right about every corporate bond on this exchange
+	// — their SECIDs really are ISINs — and wrong about every federal one.
+	if bond.ISIN != "RU000A1038V6" {
+		t.Errorf("SU26238RMFS4.ISIN = %q, want RU000A1038V6 — the SECID is not the ISIN here", bond.ISIN)
 	}
 
 	usdBond, ok := byTicker["RU000A105EX7"]

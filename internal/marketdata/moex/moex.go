@@ -149,7 +149,7 @@ var boards = []board{
 // That is the price of the quote knowing which day it belongs to, and it is
 // paid on every refresh rather than once, because ISS has no endpoint that
 // answers "what dates do the prices you just gave me have".
-const requestedColumns = "SECID,PREVPRICE,PREVDATE,CURRENCYID"
+const requestedColumns = "SECID,ISIN,PREVPRICE,PREVDATE,CURRENCYID"
 
 // Client fetches instrument prices from the Moscow Exchange ISS API.
 type Client struct {
@@ -360,6 +360,7 @@ func (c *Client) QuotesFor(ctx context.Context, tickers []string) ([]marketdata.
 			quoted[row.ticker] = true
 			quotes = append(quotes, marketdata.TickerQuote{
 				Ticker:   row.ticker,
+				ISIN:     row.isin,
 				Price:    *row.price,
 				Currency: normalizeCurrency(row.currency),
 				On:       *row.priceOn,
@@ -397,6 +398,11 @@ type secRow struct {
 	// previous session) would be indistinguishable from a changed format.
 	priceOnRaw string
 	currency   string
+	// isin is what the exchange itself calls this paper, and the only field in
+	// the answer that identifies a security rather than a listing of one. Empty
+	// when ISS sends none — it is nullable, and a few instrument kinds carry no
+	// ISIN at all — which is why the ticker is still read beside it.
+	isin string
 }
 
 // parsePrevDate reads one PREVDATE cell. It returns the day it names at
@@ -520,6 +526,10 @@ func parseSecurities(boardLabel string, columns []string, data [][]any) ([]secRo
 	if !ok {
 		return nil, fmt.Errorf("moex: %s: response missing CURRENCYID column", boardLabel)
 	}
+	// ISIN is asked for and NOT required: it is how a price finds the right
+	// catalog row (see refreshQuotesWorker), and a board that stopped sending it
+	// should cost the weaker match rather than the whole board's prices.
+	isinIdx, hasISIN := index["ISIN"]
 
 	rows := make([]secRow, 0, len(data))
 	for i, fields := range data {
@@ -539,6 +549,11 @@ func parseSecurities(boardLabel string, columns []string, data [][]any) ([]secRo
 		}
 
 		row := secRow{ticker: ticker, currency: currency}
+		if hasISIN {
+			// Not an error when it is not a string: ISS sends null for a
+			// security with no ISIN, and the ticker still answers for it.
+			row.isin, _ = fields[isinIdx].(string)
+		}
 		row.priceOn, row.priceOnRaw = parsePrevDate(fields[dateIdx])
 
 		// PREVPRICE is nullable: ISS reports null when the exchange has no

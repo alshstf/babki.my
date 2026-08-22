@@ -773,7 +773,7 @@ func TestQuotesWorker_TwoInstrumentsUnderOneTickerAndCurrencyArePricedNeitherWay
 		t.Fatalf("Work: %v — one duplicated ticker must not cost the whole refresh", err)
 	}
 
-	line := onlyLine(t, *records, "marketdata: two instruments share a ticker AND a currency, so neither can be priced")
+	line := onlyLine(t, *records, "marketdata: two instruments share a ticker AND a currency, so neither can be priced by that alone")
 	if line.level != slog.LevelWarn {
 		t.Errorf("the collision was logged at %s, want WARN: Debug is off on a production instance, "+
 			"which is exactly where this went unnoticed", line.level)
@@ -2005,5 +2005,125 @@ func TestBackfillFx_GoldIsNotAskedOfTheCentralBank(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "XAU") {
 		t.Errorf("gold was reported as a currency this source does not quote — true of the source, and misleading about the money:\n%s", logs.String())
+	}
+}
+
+// TestQuotesWorker_PricesAreMatchedByISINNotByTicker is the owner's own
+// objection, and the reason the ticker+currency answer was not good enough:
+// "придут тебе 2 одинаковых тикера с немецкой и французской бирж, оба в евро —
+// как их будешь отличать?"
+//
+// Nothing about that pair would separate them. The exchange sends the ISIN
+// beside every price and always did — this program simply did not ask for the
+// column — and an ISIN names the SECURITY where a ticker names a listing of one.
+func TestQuotesWorker_PricesAreMatchedByISINNotByTicker(t *testing.T) {
+	store, instStore, ctx := newJobsFixture(t)
+
+	french, err := instStore.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Парижская", Ticker: "ABC",
+		ISIN: "FR0000000001", Currency: "EUR",
+	})
+	if err != nil {
+		t.Fatalf("create the French paper: %v", err)
+	}
+	german, err := instStore.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Франкфуртская", Ticker: "ABC",
+		ISIN: "DE0000000002", Currency: "EUR",
+	})
+	if err != nil {
+		t.Fatalf("create the German paper: %v", err)
+	}
+
+	provider := fakeQuoteProvider{
+		quotes: []marketdata.TickerQuote{
+			{Ticker: "ABC", ISIN: "DE0000000002", Price: dec("42"), Currency: "EUR", On: date("2026-07-25")},
+		},
+	}
+	worker := marketdata.NewQuotesWorker(store,
+		fakeInstrumentLister{insts: []instrument.Instrument{french, german}}, provider, slog.Default())
+
+	if err := worker.Work(ctx, quotesJob()); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	latest, err := store.LatestQuotes(ctx, []uuid.UUID{french.ID, german.ID})
+	if err != nil {
+		t.Fatalf("LatestQuotes: %v", err)
+	}
+	if q, ok := latest[german.ID]; !ok || !q.Price.Equal(dec("42")) {
+		t.Errorf("the German paper's quote = %+v, ok = %v, want 42 — the answer carried its ISIN", q, ok)
+	}
+	if q, ok := latest[french.ID]; ok {
+		t.Errorf("the French paper was priced %+v from another company's number: same ticker, same currency, different security", q)
+	}
+}
+
+// TestQuotesWorker_ARowWithNoISINIsStillPricedByItsTicker keeps the fallback
+// honest. Hand-entered papers carry no ISIN — and neither do some kinds no
+// exchange assigns one to — so the ticker is all such a row has, and dropping
+// the weaker match would simply stop pricing them.
+func TestQuotesWorker_ARowWithNoISINIsStillPricedByItsTicker(t *testing.T) {
+	store, instStore, ctx := newJobsFixture(t)
+
+	byHand, err := instStore.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Заведена руками", Ticker: "SBER", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	provider := fakeQuoteProvider{
+		quotes: []marketdata.TickerQuote{
+			{Ticker: "SBER", ISIN: "RU0009029540", Price: dec("305.5"), Currency: "RUB", On: date("2026-07-25")},
+		},
+	}
+	worker := marketdata.NewQuotesWorker(store,
+		fakeInstrumentLister{insts: []instrument.Instrument{byHand}}, provider, slog.Default())
+
+	if err := worker.Work(ctx, quotesJob()); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	latest, err := store.LatestQuotes(ctx, []uuid.UUID{byHand.ID})
+	if err != nil {
+		t.Fatalf("LatestQuotes: %v", err)
+	}
+	if q, ok := latest[byHand.ID]; !ok || !q.Price.Equal(dec("305.5")) {
+		t.Errorf("quote = %+v, ok = %v, want 305.5 — a row with no ISIN has only its ticker", q, ok)
+	}
+}
+
+// TestQuotesWorker_ARowWithAnISINIsNotPricedByItsTickerAlone is the other side
+// of that fallback, and the case that makes it safe. A row carrying an ISIN
+// that did NOT match is not the paper the exchange answered about — it said so
+// by naming a different security — so matching the letters afterwards would be
+// the very confusion the ISIN settles.
+func TestQuotesWorker_ARowWithAnISINIsNotPricedByItsTickerAlone(t *testing.T) {
+	store, instStore, ctx := newJobsFixture(t)
+
+	att, err := instStore.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "AT&T", Ticker: "T",
+		ISIN: "US00206R1023", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	provider := fakeQuoteProvider{
+		quotes: []marketdata.TickerQuote{
+			{Ticker: "T", ISIN: "RU000A107UL4", Price: dec("3500"), Currency: "RUB", On: date("2026-07-25")},
+		},
+	}
+	worker := marketdata.NewQuotesWorker(store,
+		fakeInstrumentLister{insts: []instrument.Instrument{att}}, provider, slog.Default())
+
+	if err := worker.Work(ctx, quotesJob()); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	latest, err := store.LatestQuotes(ctx, []uuid.UUID{att.ID})
+	if err != nil {
+		t.Fatalf("LatestQuotes: %v", err)
+	}
+	if q, ok := latest[att.ID]; ok {
+		t.Errorf("AT&T was priced %+v from Т-Технологии's number: the answer named a different security outright", q)
 	}
 }
