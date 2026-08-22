@@ -63,6 +63,7 @@ type rebuildFixture struct {
 	applier *recordingDelta
 	src     *fakePassportSource
 	catalog *countingCatalog
+	rates   *fakeRates
 	reb     *Rebuilder
 }
 
@@ -70,6 +71,10 @@ func newRebuildFixture(t *testing.T) *rebuildFixture {
 	t.Helper()
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
+	// An empty rate table by default: the fallback that reads a forgotten
+	// currency pair from its name needs an official rate to check against, and
+	// a test that wants it says so by putting one in (see fakeRates).
+	rates := ratesOf(map[string]string{})
 	src := newFakePassportSource()
 	src.instruments[uidSber] = InstrumentBrief{
 		UID: uidSber, FIGI: "BBG004730N88", ISIN: "RU0009029540",
@@ -105,7 +110,8 @@ func newRebuildFixture(t *testing.T) *rebuildFixture {
 	applier := &recordingDelta{inner: operation.NewService(ops)}
 	return &rebuildFixture{
 		fixture: f, ops: ops, applier: applier, src: src, catalog: catalog,
-		reb: NewRebuilder(f.store, NewResolver(f.store, catalog, nil), applier, ops, nil),
+		rates: rates,
+		reb:   NewRebuilder(f.store, NewResolver(f.store, catalog, nil).WithRates(rates), applier, ops, nil),
 	}
 }
 
@@ -2112,5 +2118,68 @@ func TestRebuildChargesABrokerFeeToTheAccountNotToAPosition(t *testing.T) {
 	}
 	if charge.AmountMinor != -1134 {
 		t.Errorf("charge = %d, want -1134", charge.AmountMinor)
+	}
+}
+
+// TestRebuildWorksOutAForgottenCurrencyPairFromItsName is the owner's two dozen
+// unparsed rows, end to end: dollar and euro pairs the broker delisted and now
+// answers 404 for, so nothing could say what a trade in them bought.
+//
+// The wiring is what this test is for — the pair's name and the trade's own
+// price have to travel from the mirror row into the resolver, where the official
+// rate turns a guess into a fact.
+func TestRebuildWorksOutAForgottenCurrencyPairFromItsName(t *testing.T) {
+	f := newRebuildFixture(t)
+	// The rate the central bank published that day. The fixture's trade bought
+	// at 90, which is the same money.
+	f.rates.byCode["USD"] = decimal.RequireFromString("89.50")
+
+	item := loadOperationItem(t, "currency_buy.json")
+	item.InstrumentUID = "uid-usd-delisted"
+	item.Ticker = "USD000UTSTOM"
+	f.sync(t, f.link, item)
+	// The broker knows nothing about this pair any more, which is the whole
+	// premise: newFakePassportSource registers no nominal for that uid.
+
+	stats := f.rebuild(t)
+	if stats.Unparsed != 0 {
+		t.Fatalf("left %d rows unparsed, want none: the pair's own name says USD and the official rate agrees with the price it traded at", stats.Unparsed)
+	}
+	journal := f.journalOf(t, f.accountID)
+	var currencies []string
+	for _, op := range journal {
+		if op.Type == operation.TypeConversion {
+			currencies = append(currencies, op.Currency)
+		}
+	}
+	if len(currencies) != 2 {
+		t.Fatalf("journal holds %+v, want a conversion's two legs", journal)
+	}
+	// One leg is the rubles that left, the other the dollars that arrived.
+	var hasRUB, hasUSD bool
+	for _, c := range currencies {
+		hasRUB = hasRUB || c == "RUB"
+		hasUSD = hasUSD || c == "USD"
+	}
+	if !hasRUB || !hasUSD {
+		t.Errorf("the conversion's legs are %v, want RUB and USD", currencies)
+	}
+}
+
+// TestRebuildLeavesAForgottenPairUnparsedWithoutARate is the same row with the
+// proof missing. A name alone settles nothing — that is the whole design — so
+// until the rate table reaches that day the trade stays exactly as unparsed as
+// it was.
+func TestRebuildLeavesAForgottenPairUnparsedWithoutARate(t *testing.T) {
+	f := newRebuildFixture(t)
+
+	item := loadOperationItem(t, "currency_buy.json")
+	item.InstrumentUID = "uid-usd-delisted"
+	item.Ticker = "USD000UTSTOM"
+	f.sync(t, f.link, item)
+
+	stats := f.rebuild(t)
+	if stats.Unparsed != 1 {
+		t.Fatalf("left %d rows unparsed, want 1: with no official rate to check against, the name is a guess", stats.Unparsed)
 	}
 }

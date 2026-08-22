@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/platform/money"
@@ -1419,5 +1420,155 @@ func TestInstrumentMapLookups_EmptyIdentifierIsNeverAMatch(t *testing.T) {
 	}
 	if _, err := f.store.mapByFIGI(f.ctx, f.conn.ID, ""); !errors.Is(err, pgx.ErrNoRows) {
 		t.Errorf("mapByFIGI(\"\") = %v, want pgx.ErrNoRows (must not match the row seeded with an empty figi)", err)
+	}
+}
+
+// fakeRates answers what a currency was officially worth on a day, without a
+// database. A pair it has nothing for answers like the fx table does when the
+// backfill has not reached that day: an error, which is not the same as a
+// disagreement and must not be read as one.
+type fakeRates struct {
+	// byCode is what the table holds. A code absent from it answers the way the
+	// real table does for a currency nobody publishes: an error, which is not a
+	// disagreement and must not be read as one.
+	byCode map[string]decimal.Decimal
+	err    error
+	asks   int
+}
+
+func (f *fakeRates) Rate(_ context.Context, from, _ string, _ time.Time) (decimal.Decimal, time.Time, error) {
+	f.asks++
+	if f.err != nil {
+		return decimal.Zero, time.Time{}, f.err
+	}
+	rate, ok := f.byCode[from]
+	if !ok {
+		return decimal.Zero, time.Time{}, fmt.Errorf("fakeRates: no rate for %s", from)
+	}
+	return rate, time.Time{}, nil
+}
+
+func ratesOf(pairs map[string]string) *fakeRates {
+	byCode := make(map[string]decimal.Decimal, len(pairs))
+	for code, rate := range pairs {
+		byCode[code] = decimal.RequireFromString(rate)
+	}
+	return &fakeRates{byCode: byCode}
+}
+
+func currencyHint(ticker, price string) CurrencyHint {
+	return CurrencyHint{
+		Ticker:       ticker,
+		Settlement:   "RUB",
+		PricePerUnit: decimal.RequireFromString(price),
+		On:           time.Date(2021, 2, 22, 0, 0, 0, 0, time.UTC),
+	}
+}
+
+// TestResolveCurrency_ForgottenPairIsWorkedOutFromItsNameAndProvedByTheRate is
+// the owner's own two dozen unparsed rows: dollar and euro pairs the broker
+// delisted and now answers 404 for, so nothing could say what they traded.
+//
+// The pair's NAME carries the code in its first three letters, which is a
+// guess — and the price the trade was actually struck at, against what the
+// central bank published that day, is what turns it into a fact. 74.465 ₽ for
+// one unit beside an official 74.30 is a dollar and can be nothing else.
+func TestResolveCurrency_ForgottenPairIsWorkedOutFromItsNameAndProvedByTheRate(t *testing.T) {
+	f := newFixture(t)
+	src := newFakePassportSource() // registers no currency nominal: the broker 404s
+	rates := ratesOf(map[string]string{"USD": "74.30"})
+
+	r := NewResolver(f.store, &countingCatalog{Store: instrument.NewStore(f.pool)}, nil).WithRates(rates)
+	got, err := r.ResolveCurrency(f.ctx, src, "uid-usd-gone", currencyHint("USD000UTSTOM", "74.465"))
+	if err != nil {
+		t.Fatalf("ResolveCurrency: %v", err)
+	}
+	if got.Code != "USD" {
+		t.Errorf("code = %q, want USD", got.Code)
+	}
+	if !got.NominalPerUnit.Equal(decimal.NewFromInt(1)) {
+		t.Errorf("nominal = %s, want 1 — that is what the agreement with the official rate PROVED", got.NominalPerUnit)
+	}
+}
+
+// TestResolveCurrency_APairQuotedPerHundredUnitsIsRefused is the case the whole
+// refusal was written for, and the reason a name alone was never enough: the
+// broker quotes some pairs per hundred units and some per ten thousand (a
+// Kyrgyz som, an Uzbek sum). Reading one for the other is wrong by exactly that
+// factor, and it is the shape of the most expensive defect this program can
+// have.
+//
+// Here the trade was struck at 110 ₽ for one quoted unit while the som stood at
+// 1.10 — a hundredfold apart, which is not a market moving and is not a
+// misprint either.
+func TestResolveCurrency_APairQuotedPerHundredUnitsIsRefused(t *testing.T) {
+	f := newFixture(t)
+	src := newFakePassportSource()
+	rates := ratesOf(map[string]string{"KGS": "1.10"})
+
+	r := NewResolver(f.store, &countingCatalog{Store: instrument.NewStore(f.pool)}, nil).WithRates(rates)
+	_, err := r.ResolveCurrency(f.ctx, src, "uid-kgs-gone", currencyHint("KGSRUB_TOM", "110"))
+	if !errors.Is(err, ErrInstrumentNotFound) {
+		t.Fatalf("ResolveCurrency = %v, want the broker's own refusal to stand", err)
+	}
+}
+
+// TestResolveCurrency_ANameThatIsNotACurrencyIsRefused: gold trades on the same
+// market under GLDRUB_TOM, and "GLD" is not a currency code. The check is made
+// before any rate is asked for, so a name that cannot be a currency never
+// becomes one by accident.
+func TestResolveCurrency_ANameThatIsNotACurrencyIsRefused(t *testing.T) {
+	f := newFixture(t)
+	src := newFakePassportSource()
+	// The table holds no GLD, because no source publishes one — that is what
+	// actually stops a name like this, and the test says so rather than
+	// pretending the shape check does.
+	rates := ratesOf(map[string]string{"USD": "74.30"})
+
+	r := NewResolver(f.store, &countingCatalog{Store: instrument.NewStore(f.pool)}, nil).WithRates(rates)
+	_, err := r.ResolveCurrency(f.ctx, src, "uid-gold", currencyHint("GLDRUB_TOM", "8422.2"))
+	if !errors.Is(err, ErrInstrumentNotFound) {
+		t.Fatalf("ResolveCurrency = %v, want the broker's own refusal to stand", err)
+	}
+	if rates.asks != 1 {
+		t.Errorf("the rate table was asked %d times, want once: three uppercase letters is all the shape check can say, and the table is what knows GLD is not money", rates.asks)
+	}
+}
+
+// TestResolveCurrency_NoOfficialRateLeavesThePairUnparsed. A rate the fx table
+// does not hold yet is not a disagreement: the backfill may bring it. Until
+// then the pair stays exactly as unparsed as it was, rather than being taken on
+// the strength of its name alone.
+func TestResolveCurrency_NoOfficialRateLeavesThePairUnparsed(t *testing.T) {
+	f := newFixture(t)
+	src := newFakePassportSource()
+	rates := &fakeRates{err: errors.New("no rate for that day")}
+
+	r := NewResolver(f.store, &countingCatalog{Store: instrument.NewStore(f.pool)}, nil).WithRates(rates)
+	_, err := r.ResolveCurrency(f.ctx, src, "uid-usd-gone", currencyHint("USD000UTSTOM", "74.465"))
+	if !errors.Is(err, ErrInstrumentNotFound) {
+		t.Fatalf("ResolveCurrency = %v, want the broker's own refusal to stand", err)
+	}
+}
+
+// TestResolveCurrency_TheBrokersOwnAnswerIsPreferred. The fallback is for a
+// broker that cannot answer, and only for that: where it can, its nominal is
+// the authority and no rate is consulted at all.
+func TestResolveCurrency_TheBrokersOwnAnswerIsPreferred(t *testing.T) {
+	f := newFixture(t)
+	src := newFakePassportSource()
+	src.currencyNominals["uid-kgs"] = MoneyValue{Currency: "kgs", Units: 100}
+	rates := ratesOf(map[string]string{"KGS": "1.10"})
+
+	r := NewResolver(f.store, &countingCatalog{Store: instrument.NewStore(f.pool)}, nil).WithRates(rates)
+	got, err := r.ResolveCurrency(f.ctx, src, "uid-kgs", currencyHint("KGSRUB_TOM", "110"))
+	if err != nil {
+		t.Fatalf("ResolveCurrency: %v", err)
+	}
+	if got.Code != "KGS" || !got.NominalPerUnit.Equal(decimal.NewFromInt(100)) {
+		t.Errorf("got %s per %s, want 100 per KGS — the broker said so itself", got.NominalPerUnit, got.Code)
+	}
+	if rates.asks != 0 {
+		t.Errorf("the rate table was asked %d times though the broker answered", rates.asks)
 	}
 }
