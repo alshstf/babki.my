@@ -1,9 +1,27 @@
 {
-  "securities": {
-    "columns": ["PREVPRICE", "SECID", "PREVDATE", "CURRENCYID"],
-    "data": [
-      [99.85, "SU26238RMFS4", "2026-07-24", "SUR"],
-      [101.2, "RU000A105EX7", "2026-07-24", "USD"]
-    ]
-  }
+ "securities": {
+  "columns": [
+   "PREVPRICE",
+   "SECID",
+   "ISIN",
+   "PREVDATE",
+   "CURRENCYID"
+  ],
+  "data": [
+   [
+    99.85,
+    "SU26238RMFS4",
+    "RU000A1038V6",
+    "2026-07-24",
+    "SUR"
+   ],
+   [
+    101.2,
+    "RU000A105EX7",
+    "RU000A105EX7",
+    "2026-07-24",
+    "USD"
+   ]
+  ]
+ }
 }
