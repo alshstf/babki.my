@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -198,6 +199,17 @@ type Resolver struct {
 	// passports does for Resolve's. A yuan account trades the same pair a
 	// hundred times.
 	currencies map[string]TradedCurrency
+	// rates answers what a currency was officially worth on a day, and is used
+	// for one thing only: proving what a pair the broker has FORGOTTEN trades
+	// (see ResolveCurrency). nil disables that fallback entirely — such a pair
+	// then stays unparsed, which is where it was before this existed.
+	rates rateOracle
+}
+
+// rateOracle is the narrow slice of marketdata.Converter this package needs:
+// the official rate of one currency against another on a given day.
+type rateOracle interface {
+	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
 }
 
 // NewResolver builds a Resolver. store owns the per-connection instrument
@@ -208,6 +220,14 @@ func NewResolver(store *Store, catalog instrumentCatalog, log *slog.Logger) *Res
 		log = slog.Default()
 	}
 	return &Resolver{store: store, catalog: catalog, log: log, passports: map[string]InstrumentBrief{}, currencies: map[string]TradedCurrency{}}
+}
+
+// WithRates hands the resolver an oracle of official rates, which is what lets
+// it work out a currency pair the broker has forgotten (see ResolveCurrency).
+// Without one that fallback does not happen at all.
+func (r *Resolver) WithRates(rates rateOracle) *Resolver {
+	r.rates = rates
+	return r
 }
 
 // Resolve turns one broker instrument reference into this instance's
@@ -399,11 +419,21 @@ type TradedCurrency struct {
 // ErrIncompletePassport when the nominal carries no currency or no positive
 // value: the whole point of asking was those two fields, and a trade projected
 // without them would move an invented amount of an unnamed currency.
-func (r *Resolver) ResolveCurrency(ctx context.Context, src currencySource, uid string) (TradedCurrency, error) {
+func (r *Resolver) ResolveCurrency(ctx context.Context, src currencySource, uid string, hint CurrencyHint) (TradedCurrency, error) {
 	if known, ok := r.currencies[uid]; ok {
 		return known, nil
 	}
 	nominal, err := src.CurrencyNominalByUID(ctx, uid)
+	if errors.Is(err, ErrInstrumentNotFound) {
+		traded, ok, ferr := r.currencyFromHint(ctx, hint)
+		if ferr != nil {
+			return TradedCurrency{}, ferr
+		}
+		if ok {
+			r.currencies[uid] = traded
+			return traded, nil
+		}
+	}
 	if err != nil {
 		return TradedCurrency{}, err
 	}
@@ -416,6 +446,90 @@ func (r *Resolver) ResolveCurrency(ctx context.Context, src currencySource, uid 
 	traded := TradedCurrency{Code: code, NominalPerUnit: per}
 	r.currencies[uid] = traded
 	return traded, nil
+}
+
+// CurrencyHint is everything the OPERATION itself says about the pair it
+// traded: what the broker calls the instrument, how many rubles one unit cost
+// on that trade, and the day it happened.
+type CurrencyHint struct {
+	Ticker       string
+	Settlement   string
+	PricePerUnit decimal.Decimal
+	On           time.Time
+}
+
+// tradedFromTickerBand is how far the price a trade was struck at may sit from
+// the central bank's official rate for the same day and still be taken as the
+// same currency, in either direction.
+//
+// A FACTOR OF TWO, which sounds enormous and is not. What this has to settle is
+// the NOMINAL: the broker quotes some pairs per unit and some per hundred or
+// per ten thousand units (a Kyrgyz som, an Uzbek sum), and reading one for the
+// other is wrong by exactly that factor — 100 or 10000, never 1.5. Meanwhile the
+// market rate legitimately runs far from the official one: in March 2022 the
+// two stood tens of percent apart for days, and those are precisely the trades
+// this fallback exists to recover.
+//
+// So the band is drawn where nothing legitimate falls outside it and no
+// misreading of the nominal falls inside.
+const tradedFromTickerBand = 2
+
+// currencyFromHint works out what a pair trades when the broker no longer
+// knows the instrument at all — a delisted dollar or euro pair, of which the
+// owner's history holds two dozen.
+//
+// THE TICKER IS THE HYPOTHESIS AND THE OFFICIAL RATE IS THE PROOF. The pair's
+// own name carries the code in its first three letters (USD000UTSTOM,
+// EUR_RUB__TOM, CNYRUB_TOM), which is a guess; what settles it is that the
+// price the trade was actually struck at agrees with what the central bank
+// published for that currency that day. A pair quoted per hundred units — the
+// case this whole refusal was written for — misses by a hundredfold and is
+// refused.
+//
+// A NAME THAT IS NOT A CURRENCY IS STOPPED BY THE RATE, not by the shape of it.
+// currency.Valid checks three uppercase letters and nothing else, so GLDRUB_TOM
+// passes it — and then no rate table has a GLD, and the pair stays unparsed.
+// The shape check is worth keeping for what it is: a cheap refusal of a name too
+// short or too odd to be a code, made before anything is asked of the database.
+//
+// The nominal that follows is therefore 1: it is what the agreement PROVED,
+// not an assumption laid on top of it.
+//
+// ok=false means "not settled here", and the caller falls back to the broker's
+// own refusal — the honest outcome this had before, and the one for a rate the
+// fx table does not hold.
+func (r *Resolver) currencyFromHint(ctx context.Context, hint CurrencyHint) (TradedCurrency, bool, error) {
+	if r.rates == nil || len(hint.Ticker) < 3 || !hint.PricePerUnit.IsPositive() || hint.On.IsZero() {
+		return TradedCurrency{}, false, nil
+	}
+	code := strings.ToUpper(hint.Ticker[:3])
+	if !currency.Valid(code) || code == hint.Settlement {
+		return TradedCurrency{}, false, nil
+	}
+	official, _, err := r.rates.Rate(ctx, code, hint.Settlement, hint.On)
+	if err != nil {
+		// A rate the table does not hold yet is not a refusal of its own: the
+		// backfill may bring it, and until then this pair stays exactly as
+		// unparsed as it was.
+		r.log.Debug("tinvest: no official rate to check a forgotten currency pair against",
+			"ticker", hint.Ticker, "code", code, "on", hint.On.Format(time.DateOnly), "err", err)
+		return TradedCurrency{}, false, nil
+	}
+	if !official.IsPositive() {
+		return TradedCurrency{}, false, nil
+	}
+	ratio := hint.PricePerUnit.Div(official)
+	band := decimal.NewFromInt(tradedFromTickerBand)
+	if ratio.GreaterThan(band) || ratio.LessThan(decimal.NewFromInt(1).Div(band)) {
+		r.log.Warn("tinvest: a forgotten currency pair trades too far from the official rate to be read from its name",
+			"ticker", hint.Ticker, "code", code, "on", hint.On.Format(time.DateOnly),
+			"price_per_unit", hint.PricePerUnit.String(), "official", official.String())
+		return TradedCurrency{}, false, nil
+	}
+	r.log.Info("tinvest: worked out a forgotten currency pair from its name, checked against the official rate",
+		"ticker", hint.Ticker, "code", code, "on", hint.On.Format(time.DateOnly),
+		"price_per_unit", hint.PricePerUnit.String(), "official", official.String())
+	return TradedCurrency{Code: code, NominalPerUnit: decimal.NewFromInt(1)}, true, nil
 }
 
 func (r *Resolver) passport(ctx context.Context, src passportSource, uid string) (InstrumentBrief, error) {

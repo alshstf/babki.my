@@ -345,7 +345,24 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 			// rather than a conversion of an unnamed currency.
 			var traded *TradedCurrency
 			if refusal == nil && row.InstrumentType == brokerCurrencyInstrumentType && row.InstrumentUID != "" {
-				resolvedCurrency, currencyErr := r.resolver.ResolveCurrency(ctx, src, row.InstrumentUID)
+				// What the OPERATION says about the pair, for the one case the
+				// broker cannot answer: a delisted dollar or euro pair, of
+				// which the owner's history holds two dozen. The price per unit
+				// is the trade's own, and it is the thing the official rate is
+				// checked against (see Resolver.currencyFromHint).
+				hint := CurrencyHint{
+					Ticker:     row.Ticker,
+					Settlement: row.Currency,
+					On:         row.OccurredAt,
+				}
+				// The price is nullable in the mirror — the broker leaves it out
+				// of a row that is not a trade — and an absent one simply leaves
+				// the hint unprovable, which currencyFromHint answers with "not
+				// settled here".
+				if row.Price != nil {
+					hint.PricePerUnit = *row.Price
+				}
+				resolvedCurrency, currencyErr := r.resolver.ResolveCurrency(ctx, src, row.InstrumentUID, hint)
 				switch {
 				case currencyErr == nil:
 					traded = &resolvedCurrency

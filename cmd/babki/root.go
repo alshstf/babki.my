@@ -109,7 +109,7 @@ const tinvestHTTPTimeout = 30 * time.Second
 // building one per run would rebuild that pool on every sync, per connection,
 // forever.
 func newTinvestDeps(r *rt, instStore *instrument.Store, opStore *operation.Store,
-	accStore *account.Store,
+	accStore *account.Store, converter *marketdata.Converter,
 ) (jobs.TinvestDeps, error) {
 	store := tinvest.NewStore(r.pool)
 	newClient, err := newTinvestClientFactory(r)
@@ -133,8 +133,11 @@ func newTinvestDeps(r *rt, instStore *instrument.Store, opStore *operation.Store
 		Box:       r.box,
 		NewClient: newClient,
 		NewRebuilder: func() *tinvest.Rebuilder {
-			return tinvest.NewRebuilder(store, tinvest.NewResolver(store, instStore, r.log),
-				operation.NewService(opStore), opStore, r.log)
+			// The resolver is given the rate table for one purpose: proving
+			// what a currency pair the broker has FORGOTTEN trades, from the
+			// price the trade was struck at (see Resolver.currencyFromHint).
+			resolver := tinvest.NewResolver(store, instStore, r.log).WithRates(converter)
+			return tinvest.NewRebuilder(store, resolver, operation.NewService(opStore), opStore, r.log)
 		},
 		Reconciler: tinvest.NewReconciler(store, opStore, accStore, instStore, r.log),
 	}, nil
@@ -182,7 +185,7 @@ func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	famStore := family.NewStore(r.pool)
 	fxProvider := cbr.New(newCbrHTTPClient(), "")
 	quoteProvider := moex.New(nil, "", r.log)
-	tinvestDeps, err := newTinvestDeps(r, instStore, opStore, accStore)
+	tinvestDeps, err := newTinvestDeps(r, instStore, opStore, accStore, marketdata.NewConverter(mdStore))
 	if err != nil {
 		return nil, err
 	}
