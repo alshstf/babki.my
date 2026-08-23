@@ -2183,3 +2183,81 @@ func TestRebuildLeavesAForgottenPairUnparsedWithoutARate(t *testing.T) {
 		t.Fatalf("left %d rows unparsed, want 1: with no official rate to check against, the name is a guess", stats.Unparsed)
 	}
 }
+
+// TestRebuildLeavesAFundPayoutUnparsedAndThePositionIntact is the owner's own
+// October 2025 (checked live 2026-08-22): Т-Капитал redeemed part of a fund's
+// units, and the broker reported it as an OUTPUT_SECURITIES of "44380.35"
+// units (the fraction only in the prose, the field truncated) followed two
+// weeks later by a BOND_REPAYMENT_FULL of the money. Before this branch's two
+// rules, the transfer lost its fraction AND the payout closed the rest of the
+// position as if a bond had matured — a fabricated loss on units the broker
+// still shows as held.
+//
+// End to end through the real rebuild: the fraction is read with the field as
+// proof, the payout stays a visible unparsed row, and the position afterwards
+// is exactly what the broker holds.
+func TestRebuildLeavesAFundPayoutUnparsedAndThePositionIntact(t *testing.T) {
+	const uidTech = "7c3f9a2e-1111-4222-8333-abcdefabcdef"
+	f := newRebuildFixture(t)
+	f.src.instruments[uidTech] = InstrumentBrief{
+		UID: uidTech, FIGI: "TCS20A101X68", ISIN: "RU000A101X68",
+		Ticker: "TECH", Name: "Технологии Америки", Currency: "RUB", InstrumentType: "etf",
+	}
+
+	buy := loadOperationItem(t, "buy.json")
+	buy.ID = "op-tech-buy"
+	buy.InstrumentUID, buy.FIGI, buy.InstrumentType = uidTech, "TCS20A101X68", "etf"
+
+	out := loadOperationItem(t, "output_securities.json")
+	out.ID = "op-tech-out"
+	out.InstrumentUID, out.FIGI, out.InstrumentType = uidTech, "TCS20A101X68", "etf"
+	out.Quantity = 30
+	out.Description = "Вывод 30.5 лотов фонда Технологии Америки в другой депозитарий"
+	// A day of its own rather than the fixture's, which is dated after this
+	// test was written: the journal refuses an operation in the future, and
+	// this test would then fail for a reason that has nothing to do with what
+	// it checks. It sits between the purchase and the payout, which is the
+	// order the owner's own three rows came in.
+	out.Date = time.Date(2026, 5, 20, 8, 0, 0, 0, time.UTC)
+
+	payout := loadOperationItem(t, "bond_repayment_full_no_quantity.json")
+	payout.ID = "op-tech-payout"
+	// The figi differs from the catalog's for the same paper — the broker
+	// re-issues it per listing, and that is exactly how the live payout came.
+	payout.InstrumentUID, payout.FIGI, payout.InstrumentType = uidTech, "TCS97A101X68", "etf"
+
+	f.sync(t, f.link, buy, out, payout)
+	stats := f.rebuild(t)
+
+	if stats.Added != 2 {
+		t.Fatalf("rebuild added %d operations, want 2 — the purchase and the fractional transfer out", stats.Added)
+	}
+	if stats.Unparsed != 1 {
+		t.Errorf("rebuild left %d rows unparsed, want 1 — the payout, whose units the broker does not name", stats.Unparsed)
+	}
+	row := f.mirrorRow(t, f.link, "op-tech-payout")
+	if row.UnparsedReason != "fund_payout_units_unknown" {
+		t.Errorf("the payout's reason is %q, want fund_payout_units_unknown", row.UnparsedReason)
+	}
+
+	journal := f.journalOf(t, f.accountID)
+	moved := byExternalID(t, journal, externalIDFor(f.mirrorRow(t, f.link, "op-tech-out"), 1))
+	if moved.Type != operation.TypeTransferOut {
+		t.Errorf("the withdrawal is a %s, want transfer_out", moved.Type)
+	}
+	if moved.Quantity == nil || moved.Quantity.String() != "30.5" {
+		t.Errorf("the withdrawal moved %v units, want 30.5 — the description's figure, proved by the field's 30", moved.Quantity)
+	}
+
+	positions, err := portfolio.Compute(mustListForEngine(t, f, f.accountID))
+	if err != nil {
+		t.Fatalf("the journal that was written does not replay when read back: %v", err)
+	}
+	fund := positions[*moved.InstrumentID]
+	if fund == nil {
+		t.Fatal("the account holds no position in the fund at all")
+	}
+	if fund.Quantity.String() != "69.5" {
+		t.Errorf("the fund's position is %s, want 69.5 — 100 bought, 30.5 withdrawn, and the payout closing nothing", fund.Quantity)
+	}
+}

@@ -758,47 +758,213 @@ func TestProjectRowTransferOfNothingIsRefused(t *testing.T) {
 	}
 }
 
-// TestProjectRowOneSidedTransferOfNothingNamesTheMissingNumber is the owner's
-// own row, and the reason it needs a name of its own.
+// TestProjectRowTransferReadsAFractionFromTheDescriptionWithProof is the
+// owner's own two rows. Every quantity field the broker sends is an integer,
+// so 0.24 of a share of Warner Bros. Discovery arrived as a nought in all of
+// them, and 44 380,35 units of a fund as 44 380 — and the real number survives
+// in the Russian prose of the description and nowhere else.
 //
-// The broker moved 0.24 of a share of Warner Bros. Discovery in from another
-// depository. EVERY quantity field it sends is an integer — quantity,
-// quantityDone and quantityRest — so all three came back "0", and the real
-// number survives in the Russian prose of the description and nowhere else.
-//
-// Built anyway, such a row was refused by the JOURNAL with "transfer_in
-// requires positive quantity": true of our rule, and silent about what
-// happened. The reader could not tell a program bug from a number the broker
-// never sent — which is the difference between something to report and a line
-// to enter by hand.
+// The prose is read WITH THE FIELD AS PROOF: the fraction is taken because its
+// whole part is the field's own number. A rule that read the prose without
+// the proof would pass the first case here and is caught by the contradiction
+// test below; a rule that ignored the prose is caught here.
+func TestProjectRowTransferReadsAFractionFromTheDescriptionWithProof(t *testing.T) {
+	t.Run("a part of a share the field reports as nought", func(t *testing.T) {
+		row := mirrorRowFor(t, "input_securities.json")
+		row.Quantity = 0
+		row.Description = "Завод 0.24 акций Warner Bros. Discovery из другого депозитария"
+		op := projectOne(t, row, resolvedShare())
+		if op.Type != operation.TypeTransferIn {
+			t.Errorf("type = %s, want transfer_in", op.Type)
+		}
+		if op.Quantity == nil || op.Quantity.String() != "0.24" {
+			t.Errorf("quantity = %v, want 0.24 — the description's figure, whose whole part (0) is the field's", op.Quantity)
+		}
+	})
+
+	// A FRACTION PAST THE HALF, whose whole part is still the field's nought.
+	// The proof is the WHOLE PART and not the nearest whole number, and the two
+	// part company exactly here: rounding 0.75 gives 1, which the field's 0
+	// does not equal, and this transfer would be refused as a contradiction
+	// though the broker's two statements agree perfectly. Every other fixture
+	// in this file has a fraction below a half, where truncation and rounding
+	// answer alike and the rule under test is invisible.
+	t.Run("a part of a share past the half the field still reports as nought", func(t *testing.T) {
+		row := mirrorRowFor(t, "input_securities.json")
+		row.Quantity = 0
+		row.Description = "Завод 0.75 акций Warner Bros. Discovery из другого депозитария"
+		op := projectOne(t, row, resolvedShare())
+		if op.Quantity == nil || op.Quantity.String() != "0.75" {
+			t.Errorf("quantity = %v, want 0.75 — the whole part of 0.75 is 0, which is what the field says", op.Quantity)
+		}
+	})
+
+	t.Run("fund units the field reports by their whole part", func(t *testing.T) {
+		row := mirrorRowFor(t, "output_securities.json")
+		row.Quantity = 44380
+		row.Description = "Вывод 44380.35 лотов фонда Технологии Америки в другой депозитарий"
+		op := projectOne(t, row, resolvedShare())
+		if op.Type != operation.TypeTransferOut {
+			t.Errorf("type = %s, want transfer_out", op.Type)
+		}
+		if op.Quantity == nil || op.Quantity.String() != "44380.35" {
+			t.Errorf("quantity = %v, want 44380.35 — the description's figure, whose whole part (44380) is the field's", op.Quantity)
+		}
+	})
+}
+
+// TestProjectRowTransferWhoseDescriptionContradictsTheFieldIsRefused is the
+// proof failing: the description names a fraction whose whole part is not the
+// field's number. Neither is taken, and the reason names the disagreement
+// rather than a missing number — the broker sent two, and they differ.
+func TestProjectRowTransferWhoseDescriptionContradictsTheFieldIsRefused(t *testing.T) {
+	row := mirrorRowFor(t, "output_securities.json")
+	row.Quantity = 44381
+	row.Description = "Вывод 44380.35 лотов фонда Технологии Америки в другой депозитарий"
+	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare(), nil)
+
+	if len(ops) != 0 {
+		t.Fatalf("got %d operations, want none — the field says 44381 and the description 44380.35, and a row built from either is this program picking which half of the broker's message to believe", len(ops))
+	}
+	if refusal == nil {
+		t.Fatal("a transfer whose field and description disagree was projected instead of being refused")
+	}
+	if refusal.Reason != ReasonTransferQuantityContradicted {
+		t.Errorf("reason = %q, want transfer_quantity_contradicted", refusal.Reason)
+	}
+	// Both numbers travel into the detail: a reader deciding which is right
+	// needs to see the pair.
+	if !strings.Contains(refusal.Detail, "44381") || !strings.Contains(refusal.Detail, "44380.35") {
+		t.Errorf("detail = %q, want both the field's 44381 and the description's 44380.35 in it", refusal.Detail)
+	}
+}
+
+// TestProjectRowOneSidedTransferOfNothingNamesTheMissingNumber is what is
+// left when the field is nought and the description has no fraction to read:
+// a transfer of no units as far as the broker's message goes. The reason says
+// the broker never sent the number, which is the difference between a bug to
+// report and a line to enter by hand.
 //
 // A one-sided transfer, deliberately: the two-sided kind reads its DIRECTION
 // from the same sign and refuses a zero earlier, for a reason of its own (see
 // the test above), and that refusal must keep its own wording.
+//
+// The comma case pins a documented limit rather than a wish: the broker has
+// never been seen to write a fraction with a comma, so one is not read, and
+// the row is refused for want of a number instead of on a guess at what the
+// comma means.
 func TestProjectRowOneSidedTransferOfNothingNamesTheMissingNumber(t *testing.T) {
-	row := mirrorRowFor(t, "input_securities.json")
-	row.Quantity = 0
-	row.Description = "Завод 0.24 акций Warner Bros. Discovery из другого депозитария"
-	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare(), nil)
+	for _, description := range []string{
+		"Завод акций Warner Bros. Discovery из другого депозитария",
+		"Завод 0,24 акций Warner Bros. Discovery из другого депозитария",
+	} {
+		t.Run(description, func(t *testing.T) {
+			row := mirrorRowFor(t, "input_securities.json")
+			row.Quantity = 0
+			row.Description = description
+			ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare(), nil)
 
-	if len(ops) != 0 {
-		t.Fatalf("got %d operations, want none — the journal refuses this one anyway, and the refusal it gives names our rule instead of the broker's silence", len(ops))
+			if len(ops) != 0 {
+				t.Fatalf("got %d operations, want none — the journal refuses this one anyway, and the refusal it gives names our rule instead of the broker's silence", len(ops))
+			}
+			if refusal == nil {
+				t.Fatal("a transfer of no units was projected instead of being refused")
+			}
+			switch refusal.Reason {
+			case ReasonTransferDirectionUnknown:
+				t.Errorf("reason = %q — the direction of a one-sided transfer is in its TYPE, not in a sign, and nothing about it is unknown here", refusal.Reason)
+			case ReasonTransferWithoutQuantity:
+			default:
+				t.Errorf("reason = %q, want transfer_without_quantity", refusal.Reason)
+			}
+			// The description is carried into the detail: whatever number it
+			// holds that this program could not read, a reader retyping the
+			// line by hand needs to see.
+			if !strings.Contains(refusal.Detail, description) {
+				t.Errorf("detail = %q, want the broker's own description in it", refusal.Detail)
+			}
+		})
 	}
-	if refusal == nil {
-		t.Fatal("a transfer of no units was projected instead of being refused")
+}
+
+// TestProjectRowTransferWithAWholeFigureKeepsTheField pins the edge of the
+// rule: a whole number in the prose is not compared with the field, and the
+// field is taken as it stands. Without this a later reader could "tighten"
+// the proof to whole numbers too and turn the broker's own restatement of a
+// count into a contradiction.
+func TestProjectRowTransferWithAWholeFigureKeepsTheField(t *testing.T) {
+	for _, tc := range []struct {
+		field int64
+		want  string
+	}{
+		{2400, "2400"},
+		{2401, "2401"},
+	} {
+		row := mirrorRowFor(t, "input_securities.json")
+		row.Quantity = tc.field
+		row.Description = "Завод 2400 лотов фонда FinEx Акции американских компаний из другого депозитария"
+		op := projectOne(t, row, resolvedShare())
+		if op.Quantity == nil || op.Quantity.String() != tc.want {
+			t.Errorf("field %d: quantity = %v, want %s — the field, whatever whole number the prose restates", tc.field, op.Quantity, tc.want)
+		}
 	}
-	switch refusal.Reason {
-	case ReasonTransferDirectionUnknown:
-		t.Errorf("reason = %q — the direction of a one-sided transfer is in its TYPE, not in a sign, and nothing about it is unknown here", refusal.Reason)
-	case ReasonTransferWithoutQuantity:
-	default:
-		t.Errorf("reason = %q, want transfer_without_quantity", refusal.Reason)
+}
+
+// TestProjectRowPayoutOnAFundIsRefusedNotBookedAsARedemption is the owner's
+// own case (2026-08-22): Т-Капитал redeemed 73 % of a fund's units and the
+// broker sent the money as BOND_REPAYMENT_FULL. Booked by the bond rule, the
+// payout closed the 27 % the broker still shows as held. The catalog's type is
+// what decides, and the bond fixtures are reused on purpose: the ROW is the
+// same shape either way, the security it resolved to is what differs.
+func TestProjectRowPayoutOnAFundIsRefusedNotBookedAsARedemption(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		fixture string
+		typ     instrument.Type
+		// The fixture's own payment, written out rather than read back off
+		// the row: the detail has to carry the money, and a value taken from
+		// the same field the code copies would agree with itself however
+		// wrong both were.
+		payment string
+	}{
+		{"a full redemption of an etf without a count", "bond_repayment_full_no_quantity.json", instrument.TypeETF, "10000"},
+		{"a full redemption of an etf with a count", "bond_repayment_full.json", instrument.TypeETF, "10000"},
+		{"a full redemption of a share", "bond_repayment_full_no_quantity.json", instrument.TypeShare, "10000"},
+		{"a partial repayment of an etf", "bond_repayment.json", instrument.TypeETF, "200"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := mirrorRowFor(t, tc.fixture)
+			ops, deferred, refusal := ProjectRow(row, fixtureAccountID, &Resolved{InstrumentID: fixtureInstrID, Type: tc.typ}, nil)
+			if len(ops) != 0 {
+				t.Fatalf("got %d operations, want none — a fund's payout booked as a bond's redemption closes units nobody redeemed", len(ops))
+			}
+			if deferred != DeferredNothing {
+				t.Errorf("deferred = %d, want DeferredNothing (%d): a refused row must not leave the rebuild a count to fill in", deferred, DeferredNothing)
+			}
+			if refusal == nil {
+				t.Fatal("a payout on a fund was projected instead of being refused")
+			}
+			if refusal.Reason != ReasonFundPayoutUnitsUnknown {
+				t.Errorf("reason = %q, want fund_payout_units_unknown", refusal.Reason)
+			}
+			// The money is in the detail: the row is refused for the units,
+			// not for the sum, and the sum is what the owner retypes by hand.
+			if !strings.Contains(refusal.Detail, tc.payment) {
+				t.Errorf("detail = %q, want the payment %s in it", refusal.Detail, tc.payment)
+			}
+		})
 	}
-	// The description is carried into the detail, because it is the only place
-	// the real number exists — a reader retyping the line by hand needs it.
-	if !strings.Contains(refusal.Detail, "0.24") {
-		t.Errorf("detail = %q, want the broker's own description in it: the figure is in that prose and nowhere else", refusal.Detail)
-	}
+
+	t.Run("a bond is unchanged", func(t *testing.T) {
+		row := mirrorRowFor(t, "bond_repayment_full_no_quantity.json")
+		_, deferred, refusal := ProjectRow(row, fixtureAccountID, &Resolved{InstrumentID: fixtureInstrID, Type: instrument.TypeBond}, nil)
+		if refusal != nil {
+			t.Fatalf("refused: %v — the bond rule is the bond rule", refusal)
+		}
+		if deferred != DeferredRedeemedQuantity {
+			t.Errorf("deferred = %d, want DeferredRedeemedQuantity (%d)", deferred, DeferredRedeemedQuantity)
+		}
+	})
 }
 
 // TestProjectRowShapeWithNoBranchRefusesInsteadOfVanishing pins the switch's

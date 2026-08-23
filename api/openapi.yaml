@@ -1509,7 +1509,19 @@ components:
         with no units at all. Every quantity field it sends is an integer, so a
         transfer of PART of a share arrives as a nought in all three of them and
         the real number survives only in the prose of the description — which
-        this program does not read figures out of. `commission_refund`: a
+        this program reads ONLY when it carries a fraction whose whole part is
+        the field's own number (the field is the proof); this code is what is
+        left when the prose has no such figure either.
+        `transfer_quantity_contradicted`: the broker's quantity field and its
+        description disagree — the description names a fraction whose whole
+        part is not the field's number — and neither is taken over the other.
+        `fund_payout_units_unknown`: a bond-repayment operation on a security
+        whose catalog row is not a bond, i.e. a fund's payout sent under the
+        bond types. A bond's full redemption may take its count from the
+        position because a matured bond retires the whole holding; a fund's
+        payout retires units the broker does not name while the holder keeps
+        the rest, so the money is shown here and the units are the owner's to
+        name. `commission_refund`: a
         negative commission on the operation, i.e. money coming back.
         `projection_incomplete`: this program has a rule for the broker's
         operation type and the rule produced nothing — a gap in this program,
@@ -1531,6 +1543,8 @@ components:
         - redemption_nothing_held
         - currency_trade
         - transfer_without_quantity
+        - transfer_quantity_contradicted
+        - fund_payout_units_unknown
         - commission_refund
         - projection_incomplete
         - broker_fee_parent_missing
