@@ -128,15 +128,19 @@ func TestIncomeByInstrumentMatchesEngineIncomeTypes(t *testing.T) {
 			acquired := on(1)
 			return []Operation{
 				{Type: TypeBuy, InstrumentID: &id, OccurredOn: on(1), Currency: "USD", Quantity: qty("10"), AmountMinor: -100_000},
-				{Type: TypeExchangeOut, InstrumentID: &id, OccurredOn: on(2), Currency: "USD", Quantity: qty("10"), AmountMinor: 100_000,
-					TransferLots: []ReleasedLot{{Quantity: *qty("10"), CostMinor: 100_000, AcquiredOn: &acquired}}},
+				{
+					Type: TypeExchangeOut, InstrumentID: &id, OccurredOn: on(2), Currency: "USD", Quantity: qty("10"), AmountMinor: 100_000,
+					TransferLots: []ReleasedLot{{Quantity: *qty("10"), CostMinor: 100_000, AcquiredOn: &acquired}},
+				},
 			}
 		}},
 		{TypeExchangeIn, func(id uuid.UUID) []Operation {
 			acquired := on(1)
 			return []Operation{
-				{Type: TypeExchangeIn, InstrumentID: &id, OccurredOn: on(2), Currency: "USD", Quantity: qty("20"), AmountMinor: 100_000,
-					TransferLots: []ReleasedLot{{Quantity: *qty("20"), CostMinor: 100_000, AcquiredOn: &acquired}}},
+				{
+					Type: TypeExchangeIn, InstrumentID: &id, OccurredOn: on(2), Currency: "USD", Quantity: qty("20"), AmountMinor: 100_000,
+					TransferLots: []ReleasedLot{{Quantity: *qty("20"), CostMinor: 100_000, AcquiredOn: &acquired}},
+				},
 			}
 		}},
 		{TypeSplit, func(id uuid.UUID) []Operation {
