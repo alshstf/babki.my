@@ -25,6 +25,14 @@ func TestMustMatchPositionCurrencyClassifiesEveryType(t *testing.T) {
 		TypeAmortization: true,
 		TypeTransferIn:   true,
 		TypeTransferOut:  true,
+		// A conversion's legs carry the very same kind of figure a transfer's
+		// do — the parcel's cost basis — into the very same single-currency
+		// int64. The arriving leg is the one that makes the rule bite: it is
+		// what SETTLES the new paper's cost currency, and it must settle it to
+		// the currency the money was actually paid in rather than to whatever
+		// the new paper is quoted in.
+		TypeExchangeOut: true,
+		TypeExchangeIn:  true,
 		// A sale's proceeds and fee go to a Realization, which carries its own
 		// currency, and what it retires is decided by the quantity sold. A
 		// redemption is the same event by another name and answers the same.

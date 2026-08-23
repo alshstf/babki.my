@@ -43,9 +43,36 @@ const (
 	TypeTax          Type = "tax"
 	TypeTransferIn   Type = "transfer_in"
 	TypeTransferOut  Type = "transfer_out"
-	TypeSplit        Type = "split"
-	TypeInterest     Type = "interest"
-	TypeConversion   Type = "conversion"
+	// TypeExchangeOut and TypeExchangeIn are the two legs of a SECURITIES
+	// CONVERSION: one paper becomes another — a depositary receipt converted
+	// into the share it represented, a fund's units reissued under a new ISIN —
+	// with N units of the old giving M units of the new, on ONE account, on one
+	// day.
+	//
+	// IT IS NOT A DISPOSAL AND MUST NEVER BE FOLDED AS ONE. Nothing was sold and
+	// nothing was bought: the holder paid nothing and received nothing, so no
+	// result is realized and no new basis is created. НК РФ ст. 214.1 п. 13
+	// abz. 17 says as much for the case this was built for — the expense behind
+	// shares received when a depositary receipt is redeemed is the price the
+	// RECEIPT was acquired at — and ст. 219.1 (as amended by 389-ФЗ of
+	// 2023-07-31) counts the holding period from the receipt's own acquisition.
+	// So the parcel travels whole: its cost basis and the days behind that basis
+	// arrive on the new paper unchanged, and only the number of units is
+	// restated.
+	//
+	// THE TWO LEGS DESCRIBE DIFFERENT PARCELS, which is what separates this pair
+	// from a transfer's. A transfer moves the same shares to another account, so
+	// one breakdown serves both legs and is stored once; a conversion changes
+	// the instrument AND the count, so the departing leg's pieces sum to N units
+	// of the old paper and the arriving leg's to M of the new. Each leg
+	// therefore carries and stores its OWN breakdown (see
+	// operation.carriesOwnLots), and the piece-for-piece correspondence between
+	// them is what carries a date and a cost from one paper to the other.
+	TypeExchangeOut Type = "exchange_out"
+	TypeExchangeIn  Type = "exchange_in"
+	TypeSplit       Type = "split"
+	TypeInterest    Type = "interest"
+	TypeConversion  Type = "conversion"
 )
 
 var validTypes = map[Type]bool{
@@ -53,6 +80,7 @@ var validTypes = map[Type]bool{
 	TypeDividend: true, TypeCoupon: true, TypeAmortization: true, TypeFee: true,
 	TypeTax: true, TypeTransferIn: true, TypeTransferOut: true, TypeSplit: true,
 	TypeInterest: true, TypeConversion: true,
+	TypeExchangeOut: true, TypeExchangeIn: true,
 }
 
 func (t Type) Valid() bool { return validTypes[t] }
@@ -65,7 +93,8 @@ func (t Type) Valid() bool { return validTypes[t] }
 func (t Type) RequiresInstrument() bool {
 	switch t {
 	case TypeBuy, TypeSell, TypeRedemption, TypeAmortization,
-		TypeTransferIn, TypeTransferOut, TypeSplit:
+		TypeTransferIn, TypeTransferOut, TypeSplit,
+		TypeExchangeOut, TypeExchangeIn:
 		return true
 	}
 	return false

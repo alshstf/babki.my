@@ -263,6 +263,17 @@ func validate(o Operation) error {
 		// reports shares arriving without reporting where they came from.
 		return fmt.Errorf("%w: use the transfer endpoint for %s", family.ErrValidation, o.Type)
 	}
+	if o.Type == TypeExchangeOut || o.Type == TypeExchangeIn {
+		// A conversion has no hand-entry door AT ALL, and this is not the
+		// transfer's "use the other endpoint" — there is no other endpoint. What
+		// happened to a paper is a fact about the PAPER, true for everyone who
+		// held it, so it is recorded once in the corporate-actions registry and
+		// applied to every account from there (see Service.CreateExchange, whose
+		// only caller that is). A leg typed in against one account would be a
+		// second place the same fact lives, and the two would disagree the first
+		// time one of them was edited.
+		return fmt.Errorf("%w: a conversion is recorded in the corporate-actions registry, not entered against an account", family.ErrValidation)
+	}
 	return validateByType(o)
 }
 
@@ -380,6 +391,26 @@ func validateByType(o Operation) error {
 		}
 		if o.Source != "" && o.Source != "manual" {
 			return fmt.Errorf("%w: split is only supported for source=manual", family.ErrValidation)
+		}
+	case TypeExchangeOut, TypeExchangeIn:
+		// Reachable only through the import path's validateImported: the hand
+		// path refuses both types before it delegates here (see validate), and
+		// CreateExchange builds its legs itself. It is written all the same, so
+		// that a future importer teaching itself to project a broker's
+		// conversion is refused by a rule rather than by nobody: a conversion
+		// is the registry's to write, and a leg arriving from anywhere else
+		// would be a second, unsynchronised record of one corporate action.
+		if o.InstrumentID == nil {
+			return fmt.Errorf("%w: %s requires an instrument", family.ErrValidation, o.Type)
+		}
+		if o.Quantity == nil || !o.Quantity.IsPositive() {
+			return fmt.Errorf("%w: %s requires positive quantity", family.ErrValidation, o.Type)
+		}
+		if o.AmountMinor < 0 {
+			return fmt.Errorf("%w: %s amount_minor (cost basis) must be >= 0", family.ErrValidation, o.Type)
+		}
+		if o.Source != SourceRegistry {
+			return fmt.Errorf("%w: %s is only supported for source=%s", family.ErrValidation, o.Type, SourceRegistry)
 		}
 	case TypeConversion:
 		// cash-level: any sign is legitimate (buying vs. selling currency).
@@ -539,6 +570,46 @@ func quantizeLots(pieces []portfolio.ReleasedLot, total decimal.Decimal) []portf
 		carry = 0
 	}
 	return out
+}
+
+// rescaleLots restates a FIFO breakdown in another paper's units: the pieces
+// that gave up `from` units of the old instrument come back describing `to`
+// units of the new one, each keeping its cost basis and its acquisition date
+// untouched.
+//
+// ONLY THE QUANTITIES MOVE, and that is the whole of what a conversion does to a
+// parcel (see portfolio.TypeExchangeOut). Scaling the cost as well would be the
+// mistake this function is easiest to write: the money did not change, only the
+// number of certificates it is spread over, and a basis that shrank with a
+// 1-for-10 conversion would hand the owner a nine-tenths loss the law says did
+// not happen.
+//
+// THE ALLOCATION IS quantizeLots' AND IS NOT REIMPLEMENTED HERE. Each piece is
+// multiplied out at full precision and the running total is what gets truncated
+// to the journal's scale, so the pieces sum to `to` EXACTLY rather than to
+// whatever a piece-by-piece rounding happens to leave — the same rule
+// Position.applySplit follows for the lots of a position, and for the same
+// reason: a breakdown that misses the quantity of the row carrying it is
+// refused by portfolio.CheckTransferLots on every later read, which is the
+// "accepted on write, refused on every read" shape this package has been bitten
+// by twice. Reusing the function rather than copying its five lines is what
+// keeps the two from drifting.
+//
+// The multiplication is per piece — quantity × to ÷ from — rather than by a
+// ratio computed once, so no piece is scaled by a pre-rounded factor. Division
+// is inexact by nature and each piece may land a hair off; the last piece is
+// pinned to `to` by quantizeLots regardless, and the truncation of every running
+// total before it is downward, so no piece can come out negative.
+func rescaleLots(pieces []ReleasedLot, from, to decimal.Decimal) []ReleasedLot {
+	scaled := make([]ReleasedLot, 0, len(pieces))
+	for _, pc := range pieces {
+		scaled = append(scaled, ReleasedLot{
+			Quantity:   pc.Quantity.Mul(to).Div(from),
+			CostMinor:  pc.CostMinor,
+			AcquiredOn: pc.AcquiredOn,
+		})
+	}
+	return quantizeLots(scaled, to)
 }
 
 // mapWriteError translates pgconn constraint violations from Store.Create
@@ -839,6 +910,173 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 		cOut, cIn, err = st.CreatePair(ctx, spaceID, outOp, inOp, func(storedOut, _ Operation) error {
 			if _, err := portfolio.Compute(journalWith(sourceJournal, []Operation{storedOut}, nil)); err != nil {
 				return fmt.Errorf("the transfer as stored no longer replays on the source account: %v", err)
+			}
+			return nil
+		})
+		return err
+	})
+	if err != nil {
+		return Operation{}, Operation{}, mapWriteError(err)
+	}
+	return cOut, cIn, nil
+}
+
+// ExchangeParams describes a securities conversion on ONE account: `Quantity`
+// units of `FromInstrumentID` become `ToQuantity` units of `ToInstrumentID` on
+// `OccurredOn`.
+//
+// Both counts are given rather than a ratio. A corporate action is announced as
+// "N old for M new", the registry records exactly that (two whole numbers, so
+// nothing is pre-rounded), and this is the one place where those two numbers
+// meet the account's actual holding — which is neither of them.
+type ExchangeParams struct {
+	AccountID        uuid.UUID
+	FromInstrumentID uuid.UUID
+	ToInstrumentID   uuid.UUID
+	Quantity         decimal.Decimal
+	ToQuantity       decimal.Decimal
+	OccurredOn       time.Time
+	Source           string
+	Note             string
+}
+
+// CreateExchange records a securities conversion as an atomic
+// exchange_out/exchange_in pair on one account: the old paper gives up the very
+// lots named in the breakdown, and the new paper is built from those same lots
+// with their costs and acquisition dates intact and only their quantities
+// restated (see portfolio.TypeExchangeOut for why the law says nothing else may
+// change).
+//
+// IT IS THE REGISTRY'S ENTRY POINT AND NOBODY ELSE'S. What happened to a paper
+// is true for every account that held it, so it is recorded once in the
+// corporate-actions registry and applied from there; a Source other than
+// SourceRegistry is refused here as well as in validateByType, because this
+// function does not route through validate at all (CreateTransfer does not
+// either — a pair builds its own legs) and a rule only the other path enforces
+// is a rule this path does not have.
+//
+// THE SHAPE IS CreateTransfer'S, with one difference that matters at every
+// step: both legs land on the SAME account. So one lock is taken rather than
+// two, one journal is read rather than two, and — the part that would be easy to
+// get wrong — the two candidates are checked TOGETHER against that one journal.
+// Checking them one at a time would fold a journal in which the old paper had
+// left and the new one had not yet arrived, which is not a state the account is
+// ever in.
+func (s *Service) CreateExchange(ctx context.Context, spaceID uuid.UUID, p ExchangeParams) (out, in Operation, err error) {
+	if p.Source != SourceRegistry {
+		return Operation{}, Operation{}, fmt.Errorf("%w: a conversion is only written by source=%s", family.ErrValidation, SourceRegistry)
+	}
+	if p.FromInstrumentID == uuid.Nil || p.ToInstrumentID == uuid.Nil {
+		return Operation{}, Operation{}, fmt.Errorf("%w: from and to instruments are required", family.ErrValidation)
+	}
+	// THE SAME PAPER ON BOTH SIDES IS NOT A CONVERSION, it is a split written
+	// with extra steps — and it would fold as one position releasing lots and
+	// immediately re-adding them, whose result depends on the order of two rows
+	// sharing a date. A split is the type for "the same paper, a different
+	// count" and it already exists.
+	if p.FromInstrumentID == p.ToInstrumentID {
+		return Operation{}, Operation{}, fmt.Errorf("%w: from and to instruments must differ; the same paper in a new count is a split", family.ErrValidation)
+	}
+	if !p.Quantity.IsPositive() || !p.ToQuantity.IsPositive() {
+		return Operation{}, Operation{}, fmt.Errorf("%w: both quantities must be positive", family.ErrValidation)
+	}
+	// Truncated for the same reason a transfer's quantity is (see
+	// CreateTransfer): what the columns can hold is what the check must be run
+	// against, and rounding DOWN so that "convert everything I hold" can never
+	// round up past the position it is emptying.
+	quantity := p.Quantity.Truncate(quantityScale)
+	toQuantity := p.ToQuantity.Truncate(quantityScale)
+	if !quantity.IsPositive() || !toQuantity.IsPositive() {
+		return Operation{}, Operation{}, fmt.Errorf("%w: a quantity is finer than the %d decimal places the journal records",
+			family.ErrValidation, quantityScale)
+	}
+	if err := checkQuantityBound(quantity); err != nil {
+		return Operation{}, Operation{}, err
+	}
+	if err := checkQuantityBound(toQuantity); err != nil {
+		return Operation{}, Operation{}, err
+	}
+	if err := checkOccurredOn(p.OccurredOn); err != nil {
+		return Operation{}, Operation{}, err
+	}
+
+	var cOut, cIn Operation
+	err = s.store.WithAccountsLocked(ctx, spaceID, []uuid.UUID{p.AccountID}, func(st *Store) error {
+		journal, err := st.ListForEngine(ctx, spaceID, p.AccountID)
+		if err != nil {
+			return err
+		}
+
+		// The currency the old paper's cost is denominated in, read off the
+		// account's own history exactly as a transfer reads it. The new paper
+		// inherits it, and must: what arrives is the money that was paid, and
+		// that money has a currency of its own regardless of what the new paper
+		// is quoted in. If the account already holds the new paper in a
+		// different currency the engine refuses the pair, loudly, rather than
+		// mixing two currencies inside one basis.
+		currency := ""
+		for i := len(journal) - 1; i >= 0; i-- {
+			o := journal[i]
+			if o.InstrumentID != nil && *o.InstrumentID == p.FromInstrumentID {
+				currency = o.Currency
+				break
+			}
+		}
+		if currency == "" {
+			return fmt.Errorf("%w: no history for the instrument being converted", family.ErrValidation)
+		}
+
+		// Resolved against the journal as it stood on the conversion's own date,
+		// not against the end state: a backdated conversion is replayed at its
+		// chronological place, where the FIFO front is a different one.
+		lots, err := portfolio.ReleasedLots(journalUpTo(journal, p.OccurredOn), p.FromInstrumentID, quantity)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrInconsistent, err)
+		}
+		lots = quantizeLots(lots, quantity)
+		cost := portfolio.LotsCost(lots)
+		arriving := rescaleLots(lots, quantity, toQuantity)
+		// NOT AN ARGUMENT ABOUT rescaleLots BUT A CHECK ON IT. The two legs
+		// carry one and the same amount_minor, and portfolio.CheckTransferLots
+		// holds each leg's pieces to the amount of the row carrying them — so a
+		// basis lost or invented in the restating would surface as a refusal on
+		// every later read of this account rather than here. Saying it outright,
+		// on the write that caused it, is the difference between a bug reported
+		// against the request that made it and one reported against whoever next
+		// opens the screen.
+		if got := portfolio.LotsCost(arriving); got != cost {
+			return fmt.Errorf("restating the breakdown in the new paper's units changed the basis from %d to %d minor units", cost, got)
+		}
+
+		outOp := Operation{
+			AccountID: p.AccountID, InstrumentID: &p.FromInstrumentID, Type: TypeExchangeOut,
+			OccurredOn: p.OccurredOn, Quantity: &quantity, AmountMinor: cost,
+			Currency: currency, Note: p.Note, Source: p.Source,
+			TransferLots: lots,
+		}
+		inOp := Operation{
+			AccountID: p.AccountID, InstrumentID: &p.ToInstrumentID, Type: TypeExchangeIn,
+			OccurredOn: p.OccurredOn, Quantity: &toQuantity, AmountMinor: cost,
+			Currency: currency, Note: p.Note, Source: p.Source,
+			TransferLots: arriving,
+		}
+
+		// BOTH LEGS AT ONCE, against the one journal they both land in — see
+		// this function's doc. The order inside the slice is the order the
+		// engine will fold them in, the departing leg first, which is the order
+		// CreatePair then writes them in (clock_timestamp() per row, see
+		// insertSQL).
+		if err := checkJournalOps(journal, []Operation{outOp, inOp}, nil); err != nil {
+			return err
+		}
+
+		cOut, cIn, err = st.CreatePair(ctx, spaceID, outOp, inOp, func(storedOut, storedIn Operation) error {
+			// The pair as the database actually kept it, folded once more before
+			// the commit — the guard every write path here has, and the one that
+			// matters most for a pair whose legs replay the pieces the columns
+			// rounded rather than the ones checked in memory.
+			if _, err := portfolio.Compute(journalWith(journal, []Operation{storedOut, storedIn}, nil)); err != nil {
+				return fmt.Errorf("the conversion as stored no longer replays: %v", err)
 			}
 			return nil
 		})

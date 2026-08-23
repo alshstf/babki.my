@@ -247,7 +247,9 @@
     "transfer_out": "перевод из",
     "split": "сплит",
     "interest": "проценты",
-    "conversion": "конвертация"
+    "conversion": "конвертация",
+    "exchange_out": "конвертация бумаги: выбыло",
+    "exchange_in": "конвертация бумаги: получено"
   },
   "trade": {
     "buyTitle": "Покупка",

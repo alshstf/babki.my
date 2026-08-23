@@ -104,19 +104,47 @@ type CashLot struct {
 // commission is charged on top, a disposal's amount is the proceeds and its
 // commission comes out of them. Both directions are therefore amount − fee.
 //
-// ok is false for the entries that move no money at all, and each is a
-// deliberate exclusion rather than an omission:
+// ok is MovesCash, which is where the list of exclusions and the reasons for
+// each of them live — one list, because a second reader of the journal asks the
+// same question (see MovesCash).
+// MovesCash reports whether a journal entry's AmountMinor is money that changed
+// the account's balance, as opposed to a figure that merely rides in the same
+// column.
+//
+// FALSE FOR FOUR TYPES, each a deliberate exclusion rather than an omission:
 //
 //   - transfer_in / transfer_out carry a COST BASIS in their amount, not cash.
 //     Shares moving between accounts change no balance (see Operation.Amount).
+//   - exchange_out / exchange_in carry the same kind of figure for the same
+//     reason: a conversion restates a holding under a new paper, and the basis
+//     that travels with it is not a payment (see TypeExchangeOut). Counting it
+//     would credit and debit an account that never saw the money — twice over,
+//     since both legs sit on the SAME account, which is the shape a transfer
+//     never had.
 //   - split moves nothing and always carries a zero amount.
 //
 // Everything else moves money, including the types the position engine refuses
 // by type: a deposit, a withdrawal, interest credited on the balance, and both
-// legs of a conversion are exactly the entries a cash balance is made of.
-func cashEffect(o Operation) (int64, bool, error) {
+// legs of a currency conversion are exactly the entries a cash balance is made
+// of.
+//
+// IT IS EXPORTED BECAUSE TWO PLACES SUM THIS JOURNAL AS MONEY — this package's
+// own Cash, and the import's reconciliation, which compares the journal's cash
+// against what the broker says it holds. Those were two lists of excluded types
+// maintained by hand, and this codebase has watched that shape drift before: the
+// day one of them learned about a new type and the other did not, the account
+// would carry a difference against the broker that no screen could explain. One
+// predicate, two callers.
+func MovesCash(o Operation) bool {
 	switch o.Type {
-	case TypeTransferIn, TypeTransferOut, TypeSplit:
+	case TypeTransferIn, TypeTransferOut, TypeExchangeOut, TypeExchangeIn, TypeSplit:
+		return false
+	}
+	return true
+}
+
+func cashEffect(o Operation) (int64, bool, error) {
+	if !MovesCash(o) {
 		return 0, false, nil
 	}
 	minor, err := money.Sub(o.AmountMinor, o.FeeMinor)
