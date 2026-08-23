@@ -192,3 +192,54 @@ export function useCreateInstrument() {
     onSuccess: invalidate,
   });
 }
+
+// What useAddInstrumentByISIN did: it either created the row or found the ISIN
+// was already catalogued. The caller says which happened; nothing here decides
+// how to word it.
+export type AddInstrumentResult = {
+  created: boolean;
+  instrument: Instrument;
+};
+
+// useAddInstrumentByISIN files a paper the reconciliation found at the broker
+// and this catalog has no row for, out of the broker's own passport of it.
+//
+// IT LOOKS BEFORE IT WRITES, and that is not a nicety. A duplicate ISIN is
+// refused by the server with 400 (instrument.ErrISINTaken) — the same status a
+// malformed currency or an empty name gets, and the only thing that tells them
+// apart is the English sentence in the body, which a screen may not read (the
+// i18n check forbids it, and rightly: a caption picked from a server's log
+// sentence is a caption that changes when the log does). So the ISIN is looked
+// up first, and «уже в каталоге» is then something this client KNOWS rather
+// than something it inferred from a refusal it could not classify.
+//
+// The search endpoint matches a substring of name, ticker OR isin, so the
+// answer is filtered down to an exact ISIN here: a query that happens to appear
+// inside another paper's name must not be taken for the same paper. One page is
+// asked for and no more — an exact ISIN cannot be catalogued twice (the server's
+// own unique index), so a second page cannot hold a match the first missed.
+export function useAddInstrumentByISIN() {
+  const invalidate = useInvalidateInstruments();
+  return useMutation({
+    // The owner pressed a button and is waiting for an answer now; offline,
+    // react-query would otherwise park the call in a pending state that looks
+    // exactly like a slow server (#111).
+    networkMode: "always",
+    mutationFn: async (body: CreateInstrumentBody & { isin: string }): Promise<AddInstrumentResult> => {
+      const { isin } = body;
+      const found = await api.GET("/api/v1/instruments", {
+        params: { query: { query: isin, limit: CATALOG_PAGE_SIZE, offset: 0 } },
+      });
+      if (!found.data) throw apiError(found.response, found.error);
+      const existing = found.data.instruments.find(
+        (candidate) => candidate.isin.toUpperCase() === isin.toUpperCase(),
+      );
+      if (existing) return { created: false, instrument: existing };
+
+      const { data, error, response } = await api.POST("/api/v1/instruments", { body });
+      if (!data) throw apiError(response, error);
+      return { created: true, instrument: data };
+    },
+    onSuccess: invalidate,
+  });
+}

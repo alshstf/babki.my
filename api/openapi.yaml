@@ -1626,6 +1626,23 @@ components:
         label: { type: string, description: "What a person reads: our instrument's ticker or name when the row is about one of ours, the broker's own naming when it is about a position that is not, and a currency code on a currency row." }
         broker: { type: string, description: "Decimal as string — what the broker says is there. Units of the security, or an amount of the currency." }
         journal: { type: string, description: "Decimal as string — what this program's journal computes for the same thing, in the same units." }
+        broker_isin:
+          type: string
+          nullable: true
+          description: "The ISIN the BROKER'S OWN PASSPORT gives a position nothing of ours matched — set on `unknown_security` rows alone, and there only when the check obtained the passport (it asks the broker what each unmatched position is, to pair one paper listed on two venues; see the server's matchByISIN) and the passport carried an ISIN. Null on every row of another kind; null on an unknown-security row when the broker would not say what its own position is (404), when the position lay past the number of passports one check looks up, or when the passport named no ISIN; and null on every row of a run recorded before this field existed, whose stored differences carry no such key. A value here is the one thing a catalog row can be made from that the check will then pair the position with: the pairing is by ISIN and nothing else."
+        broker_name:
+          type: string
+          nullable: true
+          description: "The name the broker's passport gives that same position — the words the reader will recognize where the label (the broker's ticker) says only «TECH2». Null exactly when the passport was not obtained, or when it named nothing; independent of `broker_isin`, since a passport can carry a name and no ISIN."
+        broker_currency:
+          type: string
+          nullable: true
+          description: "The currency the broker's passport says the position is denominated in, ISO-4217 uppercase (the server uppercases the broker's lowercase code) — the shape CreateInstrumentRequest.currency requires. Null exactly when the passport was not obtained, or when it named no currency."
+        broker_type:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/InstrumentType"
+          description: "What kind of instrument the position is, ALREADY TRANSLATED INTO THIS CATALOG'S OWN InstrumentType by the importer's one table of broker types (share, bond, etf) — the same table that books every imported operation and that decides a row is `unknown_security` rather than `unsupported` in the first place. Set on `unknown_security` rows, from the position's own type rather than the passport's, so it is present even when the passport was not obtained; null on every other kind. Published translated so that a client creating the catalog row does not keep a second copy of that table, which is exactly the pair of independent computations of one thing this codebase has watched drift."
     TinvestAccountReconcile:
       type: object
       required: [link_id, account_id, broker_account_name, at, status, mismatches, currency_trades_unparsed]

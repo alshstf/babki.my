@@ -1555,3 +1555,144 @@ func TestReconcileStillReportsARealDifferenceAcrossVenues(t *testing.T) {
 		t.Errorf("the line names %v, want our own catalog row %s", m.InstrumentID, inst.ID)
 	}
 }
+
+// TestReconcileUnknownSecurityCarriesTheBrokersPassport: a position nothing of
+// ours matched used to reach the screen as a bare broker ticker — «TECH2»,
+// which is not a name of ours and says nothing about what the broker holds —
+// although the check had already asked the broker exactly that and thrown the
+// answer away. The row now carries the passport: ISIN, name, currency (in the
+// uppercase shape a catalog row requires), and the instrument type translated
+// by the importer's own table. This is the owner's live case: the fund his
+// TECH was converted into, under an ISIN this catalog has no row for.
+func TestReconcileUnknownSecurityCarriesTheBrokersPassport(t *testing.T) {
+	f := newFixture(t)
+
+	srv, _ := serve(t, map[string]route{
+		portfolioPath: {status: http.StatusOK, body: []byte(
+			`{"positions":[{"instrumentUid":"uid-tech2","instrumentType":"etf",` +
+				`"quantity":{"units":"60795","nano":0},"blocked":true}]}`)},
+		positionsPath: {status: http.StatusOK, body: []byte(`{"money":[]}`)},
+		// Asked what the position is, the broker answers — lowercase currency,
+		// the way the wire really spells it.
+		instrumentByPath: {status: http.StatusOK, body: []byte(
+			`{"instrument":{"uid":"uid-tech2","ticker":"TECH2",` +
+				`"name":"Заблокированные активы Тинькофф Технологии",` +
+				`"isin":"RU000A1071G8","currency":"rub","instrumentType":"etf"}}`)},
+	})
+	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
+
+	r := NewReconciler(f.store, fakeJournal{}, newMarker(), instrument.NewStore(f.pool), nil)
+	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
+	if err != nil {
+		t.Fatalf("ReconcileLink: %v", err)
+	}
+
+	got := securitiesMismatches(res)
+	if len(got) != 1 {
+		t.Fatalf("got %d differences about papers, want exactly 1: %+v", len(got), got)
+	}
+	m := got[0]
+	if m.Kind != MismatchUnknownSecurity {
+		t.Fatalf("kind = %q, want %q", m.Kind, MismatchUnknownSecurity)
+	}
+	if m.BrokerISIN == nil || *m.BrokerISIN != "RU000A1071G8" {
+		t.Errorf("broker_isin = %v, want RU000A1071G8", m.BrokerISIN)
+	}
+	if m.BrokerName == nil || *m.BrokerName != "Заблокированные активы Тинькофф Технологии" {
+		t.Errorf("broker_name = %v, want the passport's name", m.BrokerName)
+	}
+	// Uppercased on the way in (InstrumentBrief), because that is the shape
+	// CreateInstrumentRequest.currency requires — the whole point of carrying
+	// the field is that a catalog row can be made from it as it stands.
+	if m.BrokerCurrency == nil || *m.BrokerCurrency != "RUB" {
+		t.Errorf("broker_currency = %v, want RUB", m.BrokerCurrency)
+	}
+	if m.BrokerType == nil || *m.BrokerType != string(instrument.TypeETF) {
+		t.Errorf("broker_type = %v, want %q — our own type word, translated by the importer's table",
+			m.BrokerType, instrument.TypeETF)
+	}
+}
+
+// TestReconcileUnsupportedAssetCarriesNoPassport: the passport is attached to
+// an unknown-security row and to nothing else, and this is the case that says
+// so. A future is an asset this program does not account for at all, and the
+// check asks the broker about it exactly as it asks about any position nothing
+// of ours matched — so a passport for it EXISTS by the time the row is built,
+// and only the kind stops it reaching the screen. Publishing it would offer a
+// reader the makings of a catalog row for a paper no rule of this program can
+// book, under a line that says the opposite.
+func TestReconcileUnsupportedAssetCarriesNoPassport(t *testing.T) {
+	f := newFixture(t)
+
+	srv, _ := serve(t, map[string]route{
+		portfolioPath: {status: http.StatusOK, body: []byte(
+			`{"positions":[{"instrumentUid":"uid-fut","instrumentType":"futures",` +
+				`"quantity":{"units":"3","nano":0}}]}`)},
+		positionsPath: {status: http.StatusOK, body: []byte(`{"money":[]}`)},
+		instrumentByPath: {status: http.StatusOK, body: []byte(
+			`{"instrument":{"uid":"uid-fut","ticker":"SiH6","name":"Фьючерс на доллар",` +
+				`"isin":"RU000FUT00001","currency":"rub","instrumentType":"futures"}}`)},
+	})
+	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
+
+	r := NewReconciler(f.store, fakeJournal{}, newMarker(), instrument.NewStore(f.pool), nil)
+	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
+	if err != nil {
+		t.Fatalf("ReconcileLink: %v", err)
+	}
+
+	got := securitiesMismatches(res)
+	if len(got) != 1 {
+		t.Fatalf("got %d differences about papers, want exactly 1: %+v", len(got), got)
+	}
+	m := got[0]
+	if m.Kind != MismatchUnsupported {
+		t.Fatalf("kind = %q, want %q", m.Kind, MismatchUnsupported)
+	}
+	if m.BrokerISIN != nil || m.BrokerName != nil || m.BrokerCurrency != nil || m.BrokerType != nil {
+		t.Errorf("an unsupported asset carries a passport: isin=%v name=%v currency=%v type=%v — the fields belong to an unknown-security row alone",
+			m.BrokerISIN, m.BrokerName, m.BrokerCurrency, m.BrokerType)
+	}
+}
+
+// TestReconcileUnknownSecurityWithoutPassportSaysSo: when the broker will not
+// say what its own position is (404 — the live case is a paper the broker
+// forgot, like the owner's TCS Group receipts), the row carries no ISIN, no
+// name and no currency — an explicit «the passport was not obtained», not a
+// passport of empty strings. The TYPE is still published: it comes off the
+// position itself, and it is the very fact that classified the row as an
+// unknown security rather than an unsupported asset.
+func TestReconcileUnknownSecurityWithoutPassportSaysSo(t *testing.T) {
+	f := newFixture(t)
+
+	srv, _ := serve(t, map[string]route{
+		portfolioPath: {status: http.StatusOK, body: []byte(
+			`{"positions":[{"instrumentUid":"uid-forgotten","instrumentType":"share",` +
+				`"quantity":{"units":"3","nano":0},"blocked":false}]}`)},
+		positionsPath: {status: http.StatusOK, body: []byte(`{"money":[]}`)},
+		instrumentByPath: {status: http.StatusNotFound, body: []byte(
+			`{"code":5,"message":"Instrument not found","description":"50002"}`)},
+	})
+	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
+
+	r := NewReconciler(f.store, fakeJournal{}, newMarker(), instrument.NewStore(f.pool), nil)
+	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
+	if err != nil {
+		t.Fatalf("ReconcileLink: %v", err)
+	}
+
+	got := securitiesMismatches(res)
+	if len(got) != 1 {
+		t.Fatalf("got %d differences about papers, want exactly 1: %+v", len(got), got)
+	}
+	m := got[0]
+	if m.BrokerISIN != nil || m.BrokerName != nil || m.BrokerCurrency != nil {
+		t.Errorf("passport fields = %v/%v/%v, want all nil: the broker answered 404 and inventing "+
+			"an empty passport would let a reader take blank for known",
+			m.BrokerISIN, m.BrokerName, m.BrokerCurrency)
+	}
+	if m.BrokerType == nil || *m.BrokerType != string(instrument.TypeShare) {
+		t.Errorf("broker_type = %v, want %q even without a passport — the position's own type is what "+
+			"made this row an unknown security", m.BrokerType, instrument.TypeShare)
+	}
+}

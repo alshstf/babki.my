@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { CheckCircle2, CircleDashed, TriangleAlert } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -14,7 +15,9 @@ import {
 } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/dates";
 import { useAccounts } from "@/api/accounts";
+import { useAddInstrumentByISIN } from "@/api/instruments";
 import {
+  useTriggerSync,
   useUnparsed,
   type TinvestAccountReconcile,
   type TinvestReconcileMismatch,
@@ -55,11 +58,129 @@ function overallOf(list: TinvestAccountReconcile[]): Overall {
   return "partial";
 }
 
+// PASSPORT OF A PAPER THAT IS NOT OURS, printed under the broker's ticker.
+// The label alone is «TECH2», which is not a ticker of this catalog and says
+// nothing about what the broker is holding; the check already asks the broker
+// what each unmatched position is, and these are its words.
+//
+// EVERY LINE IS DRAWN ONLY WHERE ITS FIELD IS SET. A run recorded before the
+// server published a passport carries none of them and this draws nothing at
+// all — no empty parentheses, no «—», nothing that could be read as «the
+// broker says it has no name».
+function PassportLine({
+  mismatch,
+}: {
+  mismatch: TinvestReconcileMismatch;
+}): React.JSX.Element | null {
+  const { t } = useTranslation();
+  const parts: string[] = [];
+  if (mismatch.broker_name) parts.push(mismatch.broker_name);
+  if (mismatch.broker_isin) parts.push(mismatch.broker_isin);
+  if (mismatch.broker_type) parts.push(t(`instrumentTypes.${mismatch.broker_type}`));
+  if (mismatch.broker_currency) parts.push(mismatch.broker_currency);
+  if (parts.length === 0) return null;
+  return (
+    <div className="text-muted-foreground text-xs">
+      {t("connections.detail.reconcile.passport", { fields: parts.join(" · ") })}
+    </div>
+  );
+}
+
+// «Завести в каталог по паспорту брокера»: the row's own button, and it does
+// exactly what it says — creates a catalog row out of the four fields the
+// broker's passport gave, with nothing typed in and nothing guessed.
+//
+// IT IS OFFERED ONLY WITH AN ISIN AND A TYPE IN HAND, because those are what
+// make the row worth creating: the reconciliation pairs a broker position with
+// a catalog row BY ISIN and by nothing else, so a row created without one
+// would sit in the catalog and pair with nothing, and the difference on this
+// screen would stay exactly as it is. A passport the broker refused (404) is
+// therefore left with its figures and no button — see TinvestReconcileMismatch
+// in the contract for when each field is null.
+//
+// WHAT IT PROMISES AFTERWARDS IS WHAT IT DID. Creating the row does not close
+// the difference: the check has to run again to pair the position with it, so
+// the sentence names the sync, and it names it differently depending on what
+// the sync request actually answered — queued now, or already in the queue —
+// and says so plainly when the sync could not be asked for at all.
+function AddToCatalogButton({
+  connectionId,
+  mismatch,
+}: {
+  connectionId: string;
+  mismatch: TinvestReconcileMismatch;
+}): React.JSX.Element | null {
+  const { t } = useTranslation();
+  const add = useAddInstrumentByISIN();
+  const triggerSync = useTriggerSync();
+
+  const isin = mismatch.broker_isin;
+  const type = mismatch.broker_type;
+  const currency = mismatch.broker_currency;
+  if (!isin || !type || !currency) return null;
+
+  const message = (() => {
+    if (add.isError) return t("connections.detail.reconcile.catalog.failed");
+    if (!add.data) return null;
+    if (!add.data.created)
+      return t("connections.detail.reconcile.catalog.alreadyThere", {
+        name: add.data.instrument.name,
+      });
+    if (triggerSync.isPending) return t("connections.detail.reconcile.catalog.created");
+    if (triggerSync.isError) return t("connections.detail.reconcile.catalog.createdSyncRefused");
+    if (triggerSync.data)
+      return triggerSync.data.queued
+        ? t("connections.detail.reconcile.catalog.createdSyncQueued")
+        : t("connections.detail.reconcile.catalog.createdSyncAlreadyQueued");
+    return t("connections.detail.reconcile.catalog.created");
+  })();
+
+  return (
+    <div className="grid gap-1">
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={add.isPending || add.isSuccess}
+        onClick={() =>
+          add.mutate(
+            {
+              isin,
+              type,
+              // The broker's own naming of the position is this catalog's
+              // ticker for it, and the passport's name is its name. Neither is
+              // typed in and neither is invented. The label is the fallback for
+              // a passport that carried an ISIN and no name: the catalog
+              // refuses an empty name, and the broker's ticker is the only
+              // other word anybody here has for this paper.
+              ticker: mismatch.label,
+              name: mismatch.broker_name ?? mismatch.label,
+              currency,
+            },
+            {
+              // Only a row that was actually created is worth re-checking for:
+              // one that was already catalogued has been there all along, and
+              // this check has already run against it.
+              onSuccess: (result) => {
+                if (result.created) triggerSync.mutate(connectionId);
+              },
+            },
+          )
+        }
+      >
+        {t("connections.detail.reconcile.catalog.button")}
+      </Button>
+      {message && <div className="text-muted-foreground text-xs">{message}</div>}
+    </div>
+  );
+}
+
 // One account's differences, printed as they arrived. Both figures, never their
 // difference: a reader who sees only the gap cannot tell which side to look at.
 function MismatchTable({
+  connectionId,
   mismatches,
 }: {
+  connectionId: string;
   mismatches: TinvestReconcileMismatch[];
 }) {
   const { t } = useTranslation();
@@ -88,7 +209,18 @@ function MismatchTable({
           // snapshot that is never reordered or edited in place, so the position
           // in it is the only key there is.
           <TableRow key={`${mismatch.kind}-${mismatch.label}-${index}`}>
-            <TableCell>{mismatch.label}</TableCell>
+            <TableCell>
+              <div className="grid gap-1">
+                <div>{mismatch.label}</div>
+                <PassportLine mismatch={mismatch} />
+                {mismatch.kind === "unknown_security" && (
+                  <AddToCatalogButton
+                    connectionId={connectionId}
+                    mismatch={mismatch}
+                  />
+                )}
+              </div>
+            </TableCell>
             <TableCell>
               {/* Three different pieces of news, and the contract keeps them
                   apart precisely so a reader is not sent hunting for missing
@@ -151,9 +283,11 @@ function VerdictLine({
 // One account's verdict: whose it is, what the check said, when it was made and
 // — when something differed — what did.
 function AccountVerdict({
+  connectionId,
   reconcile,
   accountName,
 }: {
+  connectionId: string;
   reconcile: TinvestAccountReconcile;
   accountName: string | undefined;
 }) {
@@ -210,7 +344,10 @@ function AccountVerdict({
           other on the server (empty exactly when `matched`), and reading the
           list here keeps that single fact single. */}
       {reconcile.mismatches.length > 0 && (
-        <MismatchTable mismatches={reconcile.mismatches} />
+        <MismatchTable
+          connectionId={connectionId}
+          mismatches={reconcile.mismatches}
+        />
       )}
 
       {/* A CASH DIFFERENCE THAT CANNOT CLOSE SAYS SO. Both conditions are
@@ -402,6 +539,7 @@ export function ReconcilePanel({
             {reconciles.map((reconcile) => (
               <AccountVerdict
                 key={reconcile.link_id}
+                connectionId={connectionId}
                 reconcile={reconcile}
                 accountName={accountName(reconcile.account_id)}
               />

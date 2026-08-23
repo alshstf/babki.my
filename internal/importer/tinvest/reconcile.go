@@ -140,12 +140,38 @@ const (
 // Label is what a person reads: our instrument's ticker or name when it is
 // ours (its id, when the catalog gave neither), the broker's own naming of a
 // position that is not ours (see brokerLabel), or a currency code.
+//
+// THE FOUR Broker* FIELDS ARE THE BROKER'S PASSPORT OF A POSITION THAT IS NOT
+// OURS, and they are set on a MismatchUnknownSecurity row alone. Such a row
+// used to carry nothing but the broker's ticker — «TECH2», which is not a
+// ticker of ours and says nothing about WHAT the broker holds — while the
+// check had already asked the broker exactly that (see matchByISIN) and
+// thrown the answer away the moment no catalog row carried its ISIN. They are
+// pointers so that a row can say «the passport was not obtained» (all nil:
+// the broker answered 404, or the position was past the lookup cap) apart
+// from a passport whose field happened to be empty; and so that runs recorded
+// before these fields existed — whose jsonb has no such keys — read back as
+// exactly that, rather than as a passport of empty strings.
+//
+// BrokerType is NOT the broker's own word but this catalog's InstrumentType,
+// translated by brokerInstrumentTypes — the one table the resolver books by
+// and unmatchedKind classifies by. It is set from the position's type, not
+// from the passport's, because the position's type is what made the row an
+// unknown security in the first place (unmatchedKind), so it is in the table
+// by construction; the other three come from the passport and are nil when
+// none was obtained. A client that wants to create the catalog row therefore
+// has every field CreateInstrumentRequest needs, in the shape it needs them,
+// without a second copy of the type table on its side.
 type ReconcileMismatch struct {
-	Kind         string          `json:"kind"`
-	InstrumentID *uuid.UUID      `json:"instrument_id,omitempty"`
-	Label        string          `json:"label"`
-	Broker       decimal.Decimal `json:"broker"`
-	Journal      decimal.Decimal `json:"journal"`
+	Kind           string          `json:"kind"`
+	InstrumentID   *uuid.UUID      `json:"instrument_id,omitempty"`
+	Label          string          `json:"label"`
+	Broker         decimal.Decimal `json:"broker"`
+	Journal        decimal.Decimal `json:"journal"`
+	BrokerISIN     *string         `json:"broker_isin,omitempty"`
+	BrokerName     *string         `json:"broker_name,omitempty"`
+	BrokerCurrency *string         `json:"broker_currency,omitempty"`
+	BrokerType     *string         `json:"broker_type,omitempty"`
 }
 
 // ReconcileResult is one reconciliation's whole verdict.
@@ -244,15 +270,17 @@ func CompareHoldings(brokerPositions []PortfolioPosition, brokerBalances []Money
 	journal []operation.Operation, index InstrumentIndex,
 	labels map[uuid.UUID]string,
 ) ReconcileResult {
-	res, _ := compareHoldings(brokerPositions, brokerBalances, journal, index, labels)
+	res, _ := compareHoldings(brokerPositions, brokerBalances, journal, index, labels, nil)
 	return res
 }
 
 // compareHoldings is CompareHoldings with the engine's refusal kept, for the
-// caller inside this package that logs and returns it.
+// caller inside this package that logs and returns it — and with the
+// passports the check obtained for positions nothing of ours matched, keyed by
+// instrument_uid (see matchByISIN), which CompareHoldings has none of.
 func compareHoldings(brokerPositions []PortfolioPosition, brokerBalances []MoneyBalance,
 	journal []operation.Operation, index InstrumentIndex,
-	labels map[uuid.UUID]string,
+	labels map[uuid.UUID]string, passports map[string]InstrumentBrief,
 ) (ReconcileResult, error) {
 	positions, err := portfolio.Compute(journal)
 	if err != nil {
@@ -260,7 +288,7 @@ func compareHoldings(brokerPositions []PortfolioPosition, brokerBalances []Money
 			"tinvest: reconcile: the journal itself does not compute, so there was nothing to compare: %w", err)
 	}
 
-	mismatches := compareInstruments(brokerPositions, positions, index, labels)
+	mismatches := compareInstruments(brokerPositions, positions, index, labels, passports)
 	mismatches = append(mismatches, compareCash(brokerBalances, journal)...)
 	sortMismatches(mismatches)
 
@@ -280,8 +308,13 @@ const brokerTypeCurrency = "currency"
 
 // compareInstruments compares the number of UNITS of every security either
 // side names.
+//
+// passports is what the broker said the unmatched positions ARE, keyed by
+// instrument_uid; nil when nothing was asked (CompareHoldings). It fills the
+// Broker* fields of an unknown-security row and decides nothing: a position
+// is matched or not by the index alone, as before.
 func compareInstruments(brokerPositions []PortfolioPosition, positions map[uuid.UUID]*portfolio.Position,
-	index InstrumentIndex, labels map[uuid.UUID]string,
+	index InstrumentIndex, labels map[uuid.UUID]string, passports map[string]InstrumentBrief,
 ) []ReconcileMismatch {
 	out := []ReconcileMismatch{}
 	compared := make(map[uuid.UUID]bool, len(brokerPositions))
@@ -314,12 +347,16 @@ func compareInstruments(brokerPositions []PortfolioPosition, positions map[uuid.
 
 		id, ok := index.lookup(p)
 		if !ok {
-			out = append(out, ReconcileMismatch{
+			m := ReconcileMismatch{
 				Kind:    unmatchedKind(p),
 				Label:   brokerLabel(p),
 				Broker:  brokerQty,
 				Journal: decimal.Zero,
-			})
+			}
+			if m.Kind == MismatchUnknownSecurity {
+				attachPassport(&m, p, passports)
+			}
+			out = append(out, m)
 			continue
 		}
 		compared[id] = true
@@ -501,6 +538,37 @@ func unmatchedKind(p PortfolioPosition) string {
 	return MismatchUnsupported
 }
 
+// attachPassport fills the Broker* fields of an unknown-security row: the
+// type from the position itself, translated by the one table unmatchedKind
+// has just classified it by (so the lookup cannot miss — a type outside the
+// table is MismatchUnsupported and never reaches here; the guard is for the
+// day that invariant is broken, and it then publishes no type rather than an
+// empty one), and ISIN, name and currency from the passport when one was
+// obtained. An empty field of an obtained passport stays nil too: a blank
+// ISIN is nothing a catalog row can be made from, and publishing "" would let
+// a client build one.
+func attachPassport(m *ReconcileMismatch, p PortfolioPosition, passports map[string]InstrumentBrief) {
+	if t, ok := brokerInstrumentTypes[p.InstrumentType]; ok {
+		s := string(t)
+		m.BrokerType = &s
+	}
+	brief, ok := passports[p.InstrumentUID]
+	if !ok {
+		return
+	}
+	m.BrokerISIN = nonEmpty(brief.ISIN)
+	m.BrokerName = nonEmpty(brief.Name)
+	m.BrokerCurrency = nonEmpty(brief.Currency)
+}
+
+// nonEmpty is a pointer to s, or nil when s is blank.
+func nonEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
 // brokerLabel names a broker position that resolves to nothing of ours, in
 // the words a person is likeliest to recognize: the ticker, then the figi,
 // then the identifiers that exist for machines. Ordered this way because such
@@ -673,9 +741,19 @@ const passportLookupsPerReconcile = 40
 // instrument map is what the IMPORT resolves operations through, and a pairing
 // put there — however sound — would decide where future trades are booked, on
 // the strength of a check whose whole job is to look and report.
+//
+// THE THIRD VALUE IS THE PASSPORTS THAT PAIRED NOTHING, keyed by
+// instrument_uid: what the broker said a position is when no catalog row of
+// ours carries that ISIN. Before it existed the check asked the question,
+// received the answer, and dropped it — and the row then went to the screen
+// under the broker's bare ticker, leaving the reader to notice that «TECH2»
+// is not a name of ours and to go and look it up by hand. A passport the
+// broker would not give (404) is simply absent from the map, and the row says
+// so by carrying nothing. Positions past the lookup cap are absent for the
+// same reason.
 func (r *Reconciler) matchByISIN(ctx context.Context, c *Client, index InstrumentIndex,
 	labels map[uuid.UUID]string, positions []PortfolioPosition,
-) (InstrumentIndex, map[uuid.UUID]string) {
+) (InstrumentIndex, map[uuid.UUID]string, map[string]InstrumentBrief) {
 	unknown := make([]PortfolioPosition, 0, len(positions))
 	for _, p := range positions {
 		if p.InstrumentType == brokerTypeCurrency {
@@ -685,8 +763,9 @@ func (r *Reconciler) matchByISIN(ctx context.Context, c *Client, index Instrumen
 			unknown = append(unknown, p)
 		}
 	}
+	unpaired := map[string]InstrumentBrief{}
 	if len(unknown) == 0 {
-		return index, labels
+		return index, labels, unpaired
 	}
 	if len(unknown) > passportLookupsPerReconcile {
 		r.log.Info("tinvest: more unmatched broker positions than one check looks up, the rest stay unmatched",
@@ -720,17 +799,25 @@ func (r *Reconciler) matchByISIN(ctx context.Context, c *Client, index Instrumen
 			// which of two different things happened: the broker would not say
 			// what its own position is, or it said and nothing of ours carries
 			// that ISIN. Those send a reader to different places.
+			//
+			// The passport is kept all the same: a name and a currency are
+			// still what the broker said, and the row is allowed to show them
+			// — it just cannot be turned into a catalog row from them, which
+			// the missing ISIN says on its own.
 			r.log.Debug("tinvest: the broker names no ISIN for one of its own positions",
 				"instrument_uid", p.InstrumentUID, "ticker", brief.Ticker)
+			unpaired[p.InstrumentUID] = brief
 			continue
 		}
 		inst, err := r.catalog.ByISIN(ctx, brief.ISIN)
 		if err != nil {
 			// Including "no such row": the owner does not hold this paper in
 			// this program at all, which is a real difference and is reported
-			// as one.
+			// as one — with the passport on it, so that the report says what
+			// the paper is and not only that it is not ours.
 			r.log.Debug("tinvest: no catalog row carries the ISIN of a broker position",
 				"instrument_uid", p.InstrumentUID, "isin", brief.ISIN, "err", err)
+			unpaired[p.InstrumentUID] = brief
 			continue
 		}
 		grown.ByUID[p.InstrumentUID] = inst.ID
@@ -738,7 +825,7 @@ func (r *Reconciler) matchByISIN(ctx context.Context, c *Client, index Instrumen
 			grownLabels[inst.ID] = instrumentLabel(grownLabels, inst.ID)
 		}
 	}
-	return grown, grownLabels
+	return grown, grownLabels, unpaired
 }
 
 func (r *Reconciler) ReconcileLink(ctx context.Context, c *Client, conn Connection, link AccountLink) (ReconcileResult, error) {
@@ -770,9 +857,9 @@ func (r *Reconciler) ReconcileLink(ctx context.Context, c *Client, conn Connecti
 	if err != nil {
 		return notChecked, err
 	}
-	index, labels = r.matchByISIN(ctx, c, index, labels, brokerPositions)
+	index, labels, passports := r.matchByISIN(ctx, c, index, labels, brokerPositions)
 
-	res, cmpErr := compareHoldings(brokerPositions, brokerBalances, journal, index, labels)
+	res, cmpErr := compareHoldings(brokerPositions, brokerBalances, journal, index, labels, passports)
 
 	// The mark goes on whatever the verdict was, cmpErr included: it is the
 	// broker's own statement about the account, and a journal of ours that
