@@ -86,6 +86,15 @@ func engineOrderSQL() string {
 		sources = append(sources, source)
 	}
 	sort.Strings(sources)
+	// No ranked source: every row folds in the ordinary place and the CASE
+	// would have no arms at all, which is not valid SQL. Written out rather
+	// than left to fail, so that emptying the table produces a journal ordered
+	// the old way — a wrong ANSWER a test can catch — instead of a syntax error
+	// every query dies on, which is a test going red for a reason that has
+	// nothing to do with what it checks.
+	if len(sources) == 0 {
+		return "ORDER BY occurred_on ASC, created_at ASC"
+	}
 	var b strings.Builder
 	b.WriteString("ORDER BY occurred_on ASC, CASE source")
 	for _, source := range sources {
