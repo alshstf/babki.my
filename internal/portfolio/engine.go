@@ -1073,7 +1073,8 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 		}
 		switch o.Type {
 		case TypeBuy, TypeSell, TypeRedemption,
-			TypeTransferIn, TypeTransferOut:
+			TypeTransferIn, TypeTransferOut,
+			TypeExchangeOut, TypeExchangeIn:
 			if o.Quantity == nil || !o.Quantity.IsPositive() {
 				return nil, badOp(o, "positive quantity required")
 			}
@@ -1217,8 +1218,18 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 				Currency:      o.Currency,
 				Released:      drainLotsCost(p, reduce),
 			})
-		case TypeTransferOut:
+		case TypeTransferOut, TypeExchangeOut:
 			if len(o.TransferLots) == 0 {
+				// A CONVERSION HAS NO SUCH CASE. Its breakdown is what carries
+				// the parcel onto the other paper — the arriving leg is built
+				// from the departing one's pieces, piece for piece (see
+				// TypeExchangeOut) — so a conversion without one is not a leg
+				// with a hand-given basis but a leg with nothing on the other
+				// side of it. There is no endpoint that can produce it: the
+				// registry writes both legs together or neither.
+				if o.Type == TypeExchangeOut {
+					return nil, badOp(o, "a conversion must carry the breakdown of the lots it converted")
+				}
 				// Nothing was recorded about which lots left, so there is
 				// nothing to give up but a fresh slice of the queue, and the
 				// released cost is discarded: the pair's transfer_in carries a
@@ -1244,11 +1255,17 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			if err := p.releaseRecorded(o); err != nil {
 				return nil, err
 			}
-		case TypeTransferIn:
+		case TypeTransferIn, TypeExchangeIn:
 			if o.AmountMinor < 0 {
-				return nil, badOp(o, "transfer_in amount (cost basis) must be >= 0")
+				return nil, badOp(o, fmt.Sprintf("%s amount (cost basis) must be >= 0", o.Type))
 			}
 			if len(o.TransferLots) == 0 {
+				// See the departing leg above: a conversion's arriving leg is
+				// built from the pieces the departing one gave up, so one
+				// without them describes a parcel that came from nowhere.
+				if o.Type == TypeExchangeIn {
+					return nil, badOp(o, "a conversion must carry the breakdown of the lots it converted")
+				}
 				// No breakdown: the basis was given by hand (nothing was
 				// released, so there are no source lots behind that number) or
 				// the transfer was recorded before breakdowns were kept. Either
@@ -1270,12 +1287,21 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			if err := CheckTransferLots(o); err != nil {
 				return nil, err
 			}
-			// Rebuild what the source account released, piece by piece, in the
-			// FIFO order it was released in: each moved lot keeps its own
-			// quantity, its own cost and the day it was actually bought. A
-			// transfer between the family's own accounts is not a purchase, so
-			// it must not reprice anything — and a lot's date is what later
-			// values it at the fx rate of its own purchase day.
+			// Rebuild what was released, piece by piece, in the FIFO order it
+			// was released in: each lot keeps its own quantity, its own cost and
+			// the day it was actually bought. A transfer between the family's
+			// own accounts is not a purchase, so it must not reprice anything —
+			// and a lot's date is what later values it at the fx rate of its own
+			// purchase day.
+			//
+			// A CONVERSION'S PIECES ARE THE DEPARTING LEG'S RESTATED IN THE NEW
+			// PAPER'S UNITS, and only their quantities differ from the pieces
+			// the other leg gave up: the cost and the date of each one are the
+			// same numbers, because the parcel is the same parcel under a new
+			// name (see TypeExchangeOut). Nothing here has to know which of the
+			// two it is folding — a piece is a piece, and both legs' breakdowns
+			// were checked to sum to the quantity and basis their own row
+			// carries.
 			for _, pc := range o.TransferLots {
 				p.addLot(pc.Quantity, pc.CostMinor, pc.AcquiredOn)
 			}

@@ -483,6 +483,15 @@ func compareCash(brokerBalances []MoneyBalance, journal []operation.Operation) [
 // invent a balance nobody has and hang a false difference on the account for
 // good.
 //
+// WHICH TYPES THOSE ARE IS NOT DECIDED HERE. portfolio.MovesCash answers it, and
+// this function asks rather than keeping a list of its own: the engine's own
+// cash fold asks the same question, and two hand-maintained lists of "types that
+// are not money" would agree only until one of them learned about a new type.
+// A conversion of one paper into another is the type that arrived after this was
+// written, its two legs both on THIS account, and a list kept here would have
+// counted its basis as cash twice and hung a difference against the broker that
+// nothing on the screen could explain.
+//
 // The running total is a decimal rather than an int64 because a sum of
 // arbitrarily many entries has no bound of its own, and a wrapped int64 is a
 // plausible-looking figure of the wrong sign. Nothing is rounded: every term
@@ -490,7 +499,7 @@ func compareCash(brokerBalances []MoneyBalance, journal []operation.Operation) [
 func journalCashMinor(journal []operation.Operation) map[string]decimal.Decimal {
 	cash := make(map[string]decimal.Decimal)
 	for _, o := range journal {
-		if o.Type == operation.TypeTransferIn || o.Type == operation.TypeTransferOut {
+		if !portfolio.MovesCash(o) {
 			continue
 		}
 		cash[o.Currency] = cash[o.Currency].
