@@ -57,7 +57,8 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	instStore := instrument.NewStore(r.pool)
 	instrument.NewHandler(instStore, famAuth, famSM).Mount(srv)
 	opStore := operation.NewStore(r.pool)
-	operation.NewHandler(operation.NewService(opStore), opStore, famStore, converter, famAuth, famSM).Mount(srv)
+	opSvc := operation.NewService(opStore)
+	operation.NewHandler(opSvc, opStore, famStore, converter, famAuth, famSM).Mount(srv)
 	portfolio.NewHandler(opStore, instStore, mdStore, converter, famStore, famAuth, famSM).Mount(srv)
 
 	newClient, err := newTinvestClientFactory(r)
@@ -68,7 +69,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	// must only ever be reached from a role that required the encryption key —
 	// which is exactly the two roles that mount modules ("all" and "api"; see
 	// setup's requireEncryptionKey).
-	tinvestSvc := tinvest.NewService(tinvest.NewStore(r.pool), accStore, r.box, newClient, inserter, r.log)
+	tinvestSvc := tinvest.NewService(tinvest.NewStore(r.pool), accStore, opSvc, r.box, newClient, inserter, r.log)
 	tinvest.NewHandler(tinvestSvc, famAuth, famSM).Mount(srv)
 	return nil
 }
