@@ -782,6 +782,23 @@ func TestProjectRowTransferReadsAFractionFromTheDescriptionWithProof(t *testing.
 		}
 	})
 
+	// A FRACTION PAST THE HALF, whose whole part is still the field's nought.
+	// The proof is the WHOLE PART and not the nearest whole number, and the two
+	// part company exactly here: rounding 0.75 gives 1, which the field's 0
+	// does not equal, and this transfer would be refused as a contradiction
+	// though the broker's two statements agree perfectly. Every other fixture
+	// in this file has a fraction below a half, where truncation and rounding
+	// answer alike and the rule under test is invisible.
+	t.Run("a part of a share past the half the field still reports as nought", func(t *testing.T) {
+		row := mirrorRowFor(t, "input_securities.json")
+		row.Quantity = 0
+		row.Description = "Завод 0.75 акций Warner Bros. Discovery из другого депозитария"
+		op := projectOne(t, row, resolvedShare())
+		if op.Quantity == nil || op.Quantity.String() != "0.75" {
+			t.Errorf("quantity = %v, want 0.75 — the whole part of 0.75 is 0, which is what the field says", op.Quantity)
+		}
+	})
+
 	t.Run("fund units the field reports by their whole part", func(t *testing.T) {
 		row := mirrorRowFor(t, "output_securities.json")
 		row.Quantity = 44380

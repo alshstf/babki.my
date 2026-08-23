@@ -1558,9 +1558,9 @@ func transferQuantity(row MirrorRow, units int64) (decimal.Decimal, *UnparsedErr
 // resolved to nothing is left for attachInstrument to refuse for its own
 // reason, which is the truer one there.
 //
-// what names the shape in the detail — "a full redemption", "a partial
-// repayment" — so a reader can tell which of the two broker types the row is
-// without opening it.
+// The `what` argument names the shape in the detail — "a full redemption", "a
+// partial repayment" — so a reader can tell which of the two broker types the
+// row is without opening it.
 func refuseFundPayout(row MirrorRow, resolved *Resolved, what string) *UnparsedError {
 	if resolved == nil || resolved.Type == instrument.TypeBond {
 		return nil
