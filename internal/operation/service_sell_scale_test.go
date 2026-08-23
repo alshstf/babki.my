@@ -86,11 +86,10 @@ func TestSellingEverythingAfterASplitStaysReadable(t *testing.T) {
 		OccurredOn: date("2026-07-02"), SplitRatio: dec("0.3333333333"),
 		AmountMinor: 0, Currency: "RUB",
 	}
-	for _, op := range []operation.Operation{buy, split} {
-		if _, err := svc.Create(f.ctx, f.spaceID, op); err != nil {
-			t.Fatalf("seed %s: %v", op.Type, err)
-		}
+	if _, err := svc.Create(f.ctx, f.spaceID, buy); err != nil {
+		t.Fatalf("seed the purchase: %v", err)
 	}
+	seedSplit(t, f, svc, split)
 
 	held := positionsOf(t, f, f.accountID)[f.sberID].Quantity
 	if want := decimal.RequireFromString("0.1166666666"); !held.Equal(want) {
@@ -149,11 +148,10 @@ func TestSellingWhatATransferLeftBehindStaysReadable(t *testing.T) {
 		OccurredOn: date("2026-07-02"), SplitRatio: dec("0.3333333333"),
 		AmountMinor: 0, Currency: "RUB",
 	}
-	for _, op := range []operation.Operation{buy, split} {
-		if _, err := svc.Create(f.ctx, f.spaceID, op); err != nil {
-			t.Fatalf("seed %s: %v", op.Type, err)
-		}
+	if _, err := svc.Create(f.ctx, f.spaceID, buy); err != nil {
+		t.Fatalf("seed the purchase: %v", err)
 	}
+	seedSplit(t, f, svc, split)
 
 	if _, _, err := svc.CreateTransfer(f.ctx, f.spaceID, operation.TransferParams{
 		FromAccountID: f.accountID, ToAccountID: f.account2ID,
@@ -228,7 +226,7 @@ func TestSplitRatioIsRecordedAtTheScaleItIsCheckedAt(t *testing.T) {
 		OccurredOn: date("2026-07-02"), SplitRatio: dec("0.500000000049"),
 		AmountMinor: 0, Currency: "RUB",
 	}
-	if _, err := svc.Create(f.ctx, f.spaceID, split); !errors.Is(err, operation.ErrInconsistent) {
+	if err := trySplit(t, f, svc, split); !errors.Is(err, operation.ErrInconsistent) {
 		t.Fatalf("backdated split with a ratio finer than the journal: err = %v, want ErrInconsistent — accepting it records a ratio that makes the existing sell an oversell", err)
 	}
 

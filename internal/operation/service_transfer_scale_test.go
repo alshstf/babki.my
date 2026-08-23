@@ -98,11 +98,12 @@ func TestTransferAfterReverseSplitStaysReadable(t *testing.T) {
 		OccurredOn: date("2026-07-03"), SplitRatio: dec("0.3333333333"),
 		AmountMinor: 0, Currency: "RUB",
 	}
-	for _, op := range []operation.Operation{buy1, buy2, split} {
+	for _, op := range []operation.Operation{buy1, buy2} {
 		if _, err := svc.Create(f.ctx, f.spaceID, op); err != nil {
 			t.Fatalf("seed %s %s: %v", op.Type, op.OccurredOn.Format("2006-01-02"), err)
 		}
 	}
+	seedSplit(t, f, svc, split)
 
 	// What the source holds after the split, and therefore what the transfer
 	// below moves in full: two lots of 3.5 × 0.3333333333.
@@ -297,11 +298,12 @@ func TestTransferDropsAPieceTooSmallToStoreButKeepsItsCost(t *testing.T) {
 		OccurredOn: date("2026-07-03"), Quantity: dec("5"), Price: dec("100"),
 		AmountMinor: -50_000, Currency: "RUB",
 	}
-	for _, op := range []operation.Operation{dust, split, buy} {
+	for _, op := range []operation.Operation{dust, buy} {
 		if _, err := svc.Create(f.ctx, f.spaceID, op); err != nil {
 			t.Fatalf("seed %s %s: %v", op.Type, op.OccurredOn.Format("2006-01-02"), err)
 		}
 	}
+	seedSplit(t, f, svc, split)
 
 	_, in, err := svc.CreateTransfer(f.ctx, f.spaceID, operation.TransferParams{
 		FromAccountID: f.accountID, ToAccountID: f.account2ID,
