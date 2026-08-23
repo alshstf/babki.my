@@ -363,16 +363,27 @@ func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Opera
 			return Operation{}, Operation{}, err
 		}
 		cIn.TransferLots = stored
-		// The departing leg gets them too. The rows are stored next to the
-		// arriving leg only, but they describe THE PARCEL, and the pair is one
-		// parcel with the opposite sign — which is exactly what
-		// attachTransferLots decided for every later read (see its doc). Handing
-		// back an out leg with an empty breakdown made the pair contradict itself
-		// within a single response: whether a transfer knows when its shares were
-		// bought is published per operation (Operation.has_undated_lots, see the
-		// API contract), and the departing leg would have answered "no" about a
-		// parcel whose dates are sitting in the same transaction.
-		cOut.TransferLots = stored
+		// The departing leg gets them too, WHEN THE PAIR IS ONE PARCEL. The rows
+		// are stored next to the arriving leg only, but they describe THE
+		// PARCEL, and a transfer's pair is one parcel with the opposite sign —
+		// which is exactly what attachTransferLots decided for every later read
+		// (see its doc). Handing back an out leg with an empty breakdown made
+		// the pair contradict itself within a single response: whether a
+		// transfer knows when its shares were bought is published per operation
+		// (Operation.has_undated_lots, see the API contract), and the departing
+		// leg would have answered "no" about a parcel whose dates are sitting in
+		// the same transaction.
+		//
+		// A CONVERSION IS NOT ONE PARCEL and so is not copied here: its legs
+		// name different papers and different counts, and the departing one
+		// carries and stores a breakdown of its own just below (see
+		// carriesOwnLots). Copying the arriving leg's pieces onto it would put M
+		// units of the NEW paper on the row that gave up N of the old — a
+		// breakdown that does not sum to the quantity of the row carrying it,
+		// which is precisely what the check below refuses.
+		if !carriesOwnLots(out) {
+			cOut.TransferLots = stored
+		}
 		if err := portfolio.CheckTransferLots(cIn); err != nil {
 			// The rows are already in this transaction, so refusing here rolls
 			// them back. Reaching this means the write path built a breakdown
@@ -380,6 +391,20 @@ func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Opera
 			// something the caller did — so it is not one of the domain errors
 			// and surfaces as a server error, loudly, on the request that
 			// caused it rather than on every future read by someone else.
+			return Operation{}, Operation{}, fmt.Errorf("transfer lots as stored: %w", err)
+		}
+	}
+	// The departing leg's own breakdown, for the pair whose two legs are two
+	// different parcels. Written and checked exactly like the arriving one, and
+	// against ITS row: a conversion's out leg claims N units of the old paper and
+	// its pieces must sum to N, while the in leg's sum to M of the new.
+	if carriesOwnLots(out) {
+		stored, err := writeTransferLots(ctx, tx, cOut.ID, out.TransferLots)
+		if err != nil {
+			return Operation{}, Operation{}, err
+		}
+		cOut.TransferLots = stored
+		if err := portfolio.CheckTransferLots(cOut); err != nil {
 			return Operation{}, Operation{}, fmt.Errorf("transfer lots as stored: %w", err)
 		}
 	}
@@ -402,11 +427,23 @@ func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Opera
 // fact eventually disagree — while a transfer_out with no sibling anywhere
 // (shares that left for another broker, which only an import can record) stores
 // its own, because it is then the only row that can hold them.
+//
+// BOTH LEGS OF A CONVERSION STORE THEIR OWN, and that is not an exception to the
+// rule above but the same rule applied to a pair whose legs describe DIFFERENT
+// parcels: a conversion changes the paper and the number of units, so the
+// departing leg's pieces sum to N of the old and the arriving leg's to M of the
+// new (see portfolio.TypeExchangeOut). Neither list can be read off the other,
+// and the query above never tries — its sibling join fires for transfer_out
+// alone, so an exchange_out resolves to itself and finds the rows written here.
 func carriesOwnLots(op Operation) bool {
 	if len(op.TransferLots) == 0 {
 		return false
 	}
-	return op.Type == TypeTransferIn || op.TransferGroupID == nil
+	switch op.Type {
+	case TypeTransferIn, TypeExchangeOut, TypeExchangeIn:
+		return true
+	}
+	return op.TransferGroupID == nil
 }
 
 // ApplyDelta applies one importer's difference to the journal: removals first,
@@ -662,8 +699,16 @@ func (s *Store) ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID)
 // attachTransferLots fills TransferLots on the given operations. It is a
 // separate query rather than a join onto the journal so that an operation
 // with several pieces stays a single journal entry. Anything without stored
-// pieces keeps an empty list: every non-transfer, a transfer whose basis was
-// given by hand, and a transfer recorded before the breakdown was kept.
+// pieces keeps an empty list: every row that is neither a transfer nor a
+// conversion leg, a transfer whose basis was given by hand, and a transfer
+// recorded before the breakdown was kept.
+//
+// A CONVERSION'S TWO LEGS EACH READ THEIR OWN, and the query below already does
+// that without a word about them: its sibling join is conditioned on
+// `o.type = 'transfer_out'`, so an exchange_out resolves to itself and picks up
+// the rows written next to it (see carriesOwnLots for why it has its own at
+// all — the legs of a conversion are two different parcels, N units of the old
+// paper and M of the new).
 //
 // BOTH legs of a transfer pair get the breakdown, though only one of them
 // stores it. The rows are written next to the receiving leg, whose account

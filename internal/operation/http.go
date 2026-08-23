@@ -136,10 +136,27 @@ func writeError(w http.ResponseWriter, err error) {
 // response that returns an operation, including the two that convert nothing and
 // publish no gap at all.
 //
-// Only a transfer can be in this state. Every other operation's amount is money
-// that moved on the day the row is dated, which is a date it always has.
+// Only a transfer or a conversion can be in this state. Every other operation's
+// amount is money that moved on the day the row is dated, which is a date it
+// always has. A conversion's legs carry a cost basis for the same reason a
+// transfer's do — the parcel travels, the money does not (see
+// portfolio.TypeExchangeOut) — and a parcel that reached the account undated
+// stays undated across the conversion, so the question is exactly as live here.
+// carriesCostBasis reports whether this row's amount_minor is a cost basis that
+// travelled with shares rather than money that moved on its own date — the four
+// types portfolio.MovesCash excludes for that reason, minus split, whose amount
+// is always zero and which carries no parcel at all.
+//
+// It is DERIVED from MovesCash rather than listed again, so that a type added to
+// one list cannot go missing from the other: everything MovesCash calls "not
+// money" is either a parcel of basis or a split, and a split is named here
+// explicitly because it is the one exclusion that is not about a parcel.
+func carriesCostBasis(o Operation) bool {
+	return !portfolio.MovesCash(o) && o.Type != TypeSplit
+}
+
 func hasUndatedLots(o Operation) bool {
-	if o.Type != TypeTransferIn && o.Type != TypeTransferOut {
+	if !carriesCostBasis(o) {
 		return false
 	}
 	// No breakdown at all is the smallest instance of the case below, not a
@@ -174,8 +191,9 @@ func hasUndatedLots(o Operation) bool {
 // and undated pieces answers both questions "yes". False for a transfer with
 // no breakdown (a hand-typed basis, or one recorded before breakdowns were
 // kept): there is nothing to have been assembled from, and hasUndatedLots is
-// what answers for that parcel instead. Always false for a non-transfer,
-// which never carries TransferLots.
+// what answers for that parcel instead. Always false for a row that carries no
+// parcel at all — every type but a transfer's two legs and a conversion's,
+// which are the only ones TransferLots is ever stored for.
 func assembledFromLots(o Operation) bool {
 	return len(o.TransferLots) > 0
 }
@@ -481,7 +499,7 @@ type datedMinor struct {
 // of the journal, on both accounts, forever.
 func amountTerms(o Operation) (terms []datedMinor, headline rateDate, ok bool, err error) {
 	if len(o.TransferLots) == 0 {
-		if o.Type == TypeTransferIn || o.Type == TypeTransferOut {
+		if carriesCostBasis(o) {
 			// No breakdown at all: the basis was given by hand, or the
 			// transfer predates breakdowns being kept. Either way there is no
 			// purchase date behind this figure — o.OccurredOn is the day the
@@ -491,6 +509,14 @@ func amountTerms(o Operation) (terms []datedMinor, headline rateDate, ok bool, e
 			// to o.OccurredOn here would value that same undated basis at a
 			// rate the position built from it refuses to use. ok is false, on
 			// both legs, for the same reason a dateless piece below is false.
+			//
+			// A CONVERSION LEG NEVER REACHES THIS. Both of its breakdowns are
+			// built from a release of the account's own lots and neither can be
+			// given by hand, so an empty one would mean a parcel that came from
+			// nowhere — which portfolio.Compute refuses outright rather than
+			// folding (see its TypeExchangeIn branch). It is answered here all
+			// the same, and answered the same way: a figure with no purchase
+			// date behind it is not one this can date.
 			return nil, rateDate{}, false, nil
 		}
 		// The one term of an ordinary row, dated on the day its money moved:
