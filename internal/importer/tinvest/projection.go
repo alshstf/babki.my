@@ -2,11 +2,13 @@ package tinvest
 
 import (
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/money"
 	"babki.my/babki/internal/portfolio"
@@ -191,11 +193,36 @@ const (
 	// decision, not a detail to slip in here.
 	ReasonCurrencyTrade UnparsedReason = "currency_trade"
 	// ReasonTransferWithoutQuantity: a securities transfer the broker reports
-	// with no units at all. Every quantity field it sends is an integer, so a
-	// transfer of PART of a share arrives as a nought in all of them, and the
-	// real number is in the description's prose and nowhere else. See
-	// projectSecuritiesTransfer for why that prose is not read.
+	// with no units at all — a nought in every quantity field AND no fraction
+	// in the description for transferQuantity to read and prove. Every
+	// quantity field the broker sends is an integer, so a transfer of PART of
+	// a share arrives as a nought in all of them; when its description carries
+	// the fraction ("Завод 0.24 акций …") that fraction IS read, with the
+	// integer field as its proof (see transferQuantity), and this reason is
+	// what is left when there is nothing to read.
 	ReasonTransferWithoutQuantity UnparsedReason = "transfer_without_quantity"
+	// ReasonTransferQuantityContradicted: the broker's quantity field and its
+	// own description disagree about how many units moved — the description
+	// names a fraction whose whole part is not the field's number. Neither is
+	// taken: the field is the broker's structured statement and the
+	// description its prose, and a figure picked from one over the other would
+	// be this program deciding which half of the broker's message to believe.
+	// See transferQuantity. Distinct from ReasonTransferWithoutQuantity, where
+	// the broker sent no number at all.
+	ReasonTransferQuantityContradicted UnparsedReason = "transfer_quantity_contradicted"
+	// ReasonFundPayoutUnitsUnknown: a BOND_REPAYMENT_FULL or BOND_REPAYMENT
+	// on a security whose catalog row is not a bond — a fund, on the owner's
+	// own account. A bond's full redemption may take its count from the
+	// position, because a matured bond retires the whole holding (see
+	// projectRedemption); a fund's payout may not, because it retires units the
+	// broker does not name and the holder keeps the rest. Live data
+	// (2026-08-22): Т-Капитал redeemed 73 % of the units of «Технологии
+	// Америки» and sent the money as BOND_REPAYMENT_FULL two weeks after an
+	// OUTPUT_SECURITIES of the redeemed units; booked as a full redemption, the
+	// payout closed the 27 % the broker still shows as held and recorded a loss
+	// on units nobody redeemed. So the row is refused: the money is visible
+	// here, the units are the owner's to name.
+	ReasonFundPayoutUnitsUnknown UnparsedReason = "fund_payout_units_unknown"
 	// ReasonCommissionRefund: the broker's commission on this operation is
 	// POSITIVE, i.e. money that came back. FeeMinor is a magnitude by the
 	// journal's own rule, so recording this one would turn a refund into a
@@ -1056,6 +1083,9 @@ func projectBrokerFee(row MirrorRow, accountID uuid.UUID) ([]operation.Operation
 // quantity). Writing the broker's count into that column would say a number
 // of bonds changed hands.
 func projectAmortization(row MirrorRow, accountID uuid.UUID, resolved *Resolved) ([]operation.Operation, *UnparsedError) {
+	if refusal := refuseFundPayout(row, resolved, "a partial repayment"); refusal != nil {
+		return nil, refusal
+	}
 	amount, refusal := minorFromDecimal(row.Payment)
 	if refusal != nil {
 		return nil, refusal
@@ -1102,6 +1132,19 @@ func projectAmortization(row MirrorRow, accountID uuid.UUID, resolved *Resolved)
 // A REDEMPTION THAT DOES NAME A QUANTITY IS UNCHANGED: it is a complete sale
 // and no one is asked for anything.
 //
+// A PAYOUT ON ANYTHING BUT A BOND IS REFUSED, with a quantity or without
+// (refuseFundPayout). The count-from-the-position rule above is true of a
+// bond because a matured bond retires the whole holding; it is false of a
+// fund, and the broker sends a fund's payouts under the same two types. On
+// the owner's account (2026-08-22) Т-Капитал redeemed 73 % of the units of
+// «Технологии Америки» — an OUTPUT_SECURITIES of 44 380,35 units on
+// 15.10.2025 and a BOND_REPAYMENT_FULL of 2 559,80 ₽ on 29.10.2025 — and
+// this rule closed the remaining 16 414,65 units the broker still shows as
+// held, booking a loss on units nobody redeemed, with nothing on screen to
+// say so. A visible unparsed row with the money in it is the honest answer:
+// which units a fund's payout retires is not in the row, and not in the
+// position either.
+//
 // A COMMISSION ON IT IS KEPT, by the same rule a trade's is (tradeCommission):
 // into this entry's FeeMinor when the broker charged it in this row's
 // currency, into an entry of its own when it did not, and refused outright
@@ -1113,6 +1156,9 @@ func projectAmortization(row MirrorRow, accountID uuid.UUID, resolved *Resolved)
 // none of the 23 full redemptions carries one — the sale is booked the same way
 // either way, so the rule costs nothing and is ready if one ever appears.
 func projectRedemption(row MirrorRow, accountID uuid.UUID, resolved *Resolved, t operation.Type) ([]operation.Operation, Deferred, *UnparsedError) {
+	if refusal := refuseFundPayout(row, resolved, "a full redemption"); refusal != nil {
+		return nil, DeferredNothing, refusal
+	}
 	amount, refusal := minorFromDecimal(row.Payment)
 	if refusal != nil {
 		return nil, DeferredNothing, refusal
@@ -1276,31 +1322,7 @@ func projectSecuritiesTransfer(row MirrorRow, accountID uuid.UUID, resolved *Res
 	if units < 0 {
 		units = -units
 	}
-	if units == 0 {
-		// EVERY QUANTITY FIELD THE BROKER SENDS IS AN INTEGER, and a transfer
-		// of part of a share therefore arrives as a nought in all of them —
-		// quantity, quantityDone and quantityRest alike. The real number
-		// survives only in the Russian prose of the description ("Завод 0.24
-		// акций Warner Bros. Discovery из другого депозитария", from the
-		// owner's own account), and reading a figure out of prose is precisely
-		// the guess this importer refuses to make.
-		//
-		// It used to be built anyway and refused by the journal, which said
-		// "transfer_in requires positive quantity" — true of our rule and
-		// silent about what actually happened. The row is the same either way;
-		// what changes is whether the reader is told that the broker never sent
-		// the number, which is the difference between a bug to report and a
-		// line to enter by hand.
-		//
-		// Reached only for the two one-sided kinds: a move between the owner's
-		// own accounts reads its DIRECTION from this sign and refuses a zero
-		// earlier, for a reason of its own.
-		return nil, &UnparsedError{
-			Reason: ReasonTransferWithoutQuantity,
-			Detail: fmt.Sprintf("the broker reports no units for this transfer; its description says %q", row.Description),
-		}
-	}
-	qty, refusal := journalQuantity(units)
+	qty, refusal := transferQuantity(row, units)
 	if refusal != nil {
 		return nil, refusal
 	}
@@ -1436,6 +1458,118 @@ func journalQuantity(units int64) (decimal.Decimal, *UnparsedError) {
 		}
 	}
 	return q, nil
+}
+
+// describedFraction is the one figure this projection reads out of the
+// broker's prose: a number WITH A FRACTIONAL PART, written with a dot, standing
+// directly before the word for the unit — "Завод 0.24 акций …", "Вывод
+// 44380.35 лотов …", both from the owner's own account. A whole number in the
+// description is not matched, because the broker's integer field already
+// carries it; a comma is not matched, because the broker has never been seen
+// to write one, and a guess at its meaning would be exactly the prose-reading
+// this program otherwise refuses. Anything this does not match falls back to
+// the field.
+var describedFraction = regexp.MustCompile(`(?:^|\s)(\d+\.\d+)\s+(?:акци[яий]|лот(?:ов|а)?|па[её]в|па[йя]|штук[аи]?)(?:\s|$|[.,])`)
+
+// transferQuantity is the number of units a securities transfer moved, from
+// the two places the broker puts it: the integer quantity field, and the
+// description's prose when the number has a fraction the field cannot hold.
+//
+// EVERY QUANTITY FIELD THE BROKER SENDS IS AN INTEGER — quantity, quantityDone
+// and quantityRest alike — so a transfer of part of a share arrives as a nought
+// in all of them ("Завод 0.24 акций Warner Bros. Discovery из другого
+// депозитария", field 0) and a transfer of a fractional number of fund units
+// as its whole part ("Вывод 44380.35 лотов фонда Технологии Америки в другой
+// депозитарий", field 44380). Both are from the owner's own account, and in
+// both the real number survives in the prose and nowhere else.
+//
+// THE PROSE IS READ WITH A PROOF, NOT TRUSTED. A fraction in the description
+// is taken only when its whole part is the integer field's number: the field
+// is the broker's structured statement, the description restates it with the
+// digits the field dropped, and the two agreeing is what says they describe
+// the same number. A fraction whose whole part is NOT the field's is refused
+// as a contradiction rather than resolved either way — the field alone would
+// be wrong by the fraction and the prose alone would be an unchecked guess.
+//
+// A WHOLE NUMBER IN THE PROSE IS NOT COMPARED with the field. The field is
+// taken as it stands: it is the broker's statement of the count, and where the
+// prose has nothing the field lacks there is nothing for it to prove or
+// contradict. A description with no readable fraction and a field of nought
+// is a transfer of no units as far as the broker's message goes, and is
+// refused as such (ReasonTransferWithoutQuantity).
+//
+// This used to refuse every nought outright, on the ground that reading a
+// figure out of prose is a guess. It is — without the proof. With it, the
+// alternative was a line the owner retypes by hand from the very description
+// this program had already read.
+func transferQuantity(row MirrorRow, units int64) (decimal.Decimal, *UnparsedError) {
+	if m := describedFraction.FindStringSubmatch(row.Description); m != nil {
+		// MustCompile's own pattern admits only digits and one dot here, so a
+		// parse failure would be a bug in that pattern rather than a row to
+		// refuse; it is still refused rather than panicked on, because a sync
+		// is the wrong place to stop the program.
+		described, err := decimal.NewFromString(m[1])
+		if err != nil {
+			return decimal.Zero, &UnparsedError{
+				Reason: ReasonTransferWithoutQuantity,
+				Detail: fmt.Sprintf("the description's figure %q could not be read as a number: %v", m[1], err),
+			}
+		}
+		if !described.Truncate(0).Equal(decimal.NewFromInt(units)) {
+			return decimal.Zero, &UnparsedError{
+				Reason: ReasonTransferQuantityContradicted,
+				Detail: fmt.Sprintf("the broker's quantity field says %d units and its description says %s: %q", units, described.String(), row.Description),
+			}
+		}
+		q := described.Truncate(portfolio.QuantityScale)
+		if !q.IsPositive() {
+			return decimal.Zero, &UnparsedError{
+				Reason: ReasonUnrepresentableQty,
+				Detail: fmt.Sprintf("%s units is finer than the %d decimal places the journal records", described.String(), portfolio.QuantityScale),
+			}
+		}
+		return q, nil
+	}
+	if units == 0 {
+		// Reached only for the two one-sided kinds: a move between the owner's
+		// own accounts reads its DIRECTION from this sign and refuses a zero
+		// earlier, for a reason of its own (projectSecuritiesTransfer).
+		//
+		// It used to be built anyway and refused by the journal, which said
+		// "transfer_in requires positive quantity" — true of our rule and
+		// silent about what actually happened. What the reader is told now is
+		// that the broker never sent the number, which is the difference
+		// between a bug to report and a line to enter by hand.
+		return decimal.Zero, &UnparsedError{
+			Reason: ReasonTransferWithoutQuantity,
+			Detail: fmt.Sprintf("the broker reports no units for this transfer and its description names no fraction to read: %q", row.Description),
+		}
+	}
+	return journalQuantity(units)
+}
+
+// refuseFundPayout is the guard in front of both bond-repayment shapes: the
+// broker sends a fund's payouts under the bond types, and the rules written for
+// a bond — a full redemption retires the whole position, a partial repayment
+// retires basis and no units — are false of a fund, which pays out against
+// units it does not name while the holder keeps the rest (see
+// ReasonFundPayoutUnitsUnknown for the owner's own case). The catalog's type
+// decides, because it is what the resolver matched the row to; a row that
+// resolved to nothing is left for attachInstrument to refuse for its own
+// reason, which is the truer one there.
+//
+// what names the shape in the detail — "a full redemption", "a partial
+// repayment" — so a reader can tell which of the two broker types the row is
+// without opening it.
+func refuseFundPayout(row MirrorRow, resolved *Resolved, what string) *UnparsedError {
+	if resolved == nil || resolved.Type == instrument.TypeBond {
+		return nil
+	}
+	return &UnparsedError{
+		Reason: ReasonFundPayoutUnitsUnknown,
+		Detail: fmt.Sprintf("%s of %s %s on %q, whose catalog row is %s and not a bond: a fund pays out against units it does not name, and the count a bond's redemption takes from the position is not this payout's to take",
+			what, row.Payment.String(), row.Currency, row.Description, resolved.Type),
+	}
 }
 
 // withExternalIDs names every entry one mirror row produced, so the journal's
