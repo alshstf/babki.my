@@ -1613,6 +1613,48 @@ func TestReconcileUnknownSecurityCarriesTheBrokersPassport(t *testing.T) {
 	}
 }
 
+// TestReconcileUnsupportedAssetCarriesNoPassport: the passport is attached to
+// an unknown-security row and to nothing else, and this is the case that says
+// so. A future is an asset this program does not account for at all, and the
+// check asks the broker about it exactly as it asks about any position nothing
+// of ours matched — so a passport for it EXISTS by the time the row is built,
+// and only the kind stops it reaching the screen. Publishing it would offer a
+// reader the makings of a catalog row for a paper no rule of this program can
+// book, under a line that says the opposite.
+func TestReconcileUnsupportedAssetCarriesNoPassport(t *testing.T) {
+	f := newFixture(t)
+
+	srv, _ := serve(t, map[string]route{
+		portfolioPath: {status: http.StatusOK, body: []byte(
+			`{"positions":[{"instrumentUid":"uid-fut","instrumentType":"futures",` +
+				`"quantity":{"units":"3","nano":0}}]}`)},
+		positionsPath: {status: http.StatusOK, body: []byte(`{"money":[]}`)},
+		instrumentByPath: {status: http.StatusOK, body: []byte(
+			`{"instrument":{"uid":"uid-fut","ticker":"SiH6","name":"Фьючерс на доллар",` +
+				`"isin":"RU000FUT00001","currency":"rub","instrumentType":"futures"}}`)},
+	})
+	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
+
+	r := NewReconciler(f.store, fakeJournal{}, newMarker(), instrument.NewStore(f.pool), nil)
+	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
+	if err != nil {
+		t.Fatalf("ReconcileLink: %v", err)
+	}
+
+	got := securitiesMismatches(res)
+	if len(got) != 1 {
+		t.Fatalf("got %d differences about papers, want exactly 1: %+v", len(got), got)
+	}
+	m := got[0]
+	if m.Kind != MismatchUnsupported {
+		t.Fatalf("kind = %q, want %q", m.Kind, MismatchUnsupported)
+	}
+	if m.BrokerISIN != nil || m.BrokerName != nil || m.BrokerCurrency != nil || m.BrokerType != nil {
+		t.Errorf("an unsupported asset carries a passport: isin=%v name=%v currency=%v type=%v — the fields belong to an unknown-security row alone",
+			m.BrokerISIN, m.BrokerName, m.BrokerCurrency, m.BrokerType)
+	}
+}
+
 // TestReconcileUnknownSecurityWithoutPassportSaysSo: when the broker will not
 // say what its own position is (404 — the live case is a paper the broker
 // forgot, like the owner's TCS Group receipts), the row carries no ISIN, no
