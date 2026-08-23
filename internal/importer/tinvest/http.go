@@ -164,6 +164,17 @@ func dateOrNull(t *time.Time) nullable.Nullable[string] {
 	return nullable.NewNullableWithValue(t.Format("2006-01-02"))
 }
 
+// nullableString is dateOrNull for a text the check may not have: an absent
+// one is an explicit null, for the same reason — «the broker's passport was
+// not obtained» is a statement, and an omitted key would read as the server
+// having forgotten to answer.
+func nullableString(s *string) nullable.Nullable[string] {
+	if s == nil {
+		return nullable.NewNullNullable[string]()
+	}
+	return nullable.NewNullableWithValue(*s)
+}
+
 // timeOrNull is dateOrNull for the instants: an absent one is an explicit null,
 // for the same reason.
 func timeOrNull(t *time.Time) nullable.Nullable[time.Time] {
@@ -220,6 +231,17 @@ func mismatchesAPI(raw json.RawMessage) ([]apitypes.TinvestReconcileMismatch, er
 			item.InstrumentId = nullable.NewNullableWithValue(*m.InstrumentID)
 		} else {
 			item.InstrumentId = nullable.NewNullNullable[uuid.UUID]()
+		}
+		// The passport, field by field: each is null exactly when the check
+		// recorded none — including every row of a run recorded before these
+		// fields existed, whose jsonb carries no such keys and decodes to nil.
+		item.BrokerIsin = nullableString(m.BrokerISIN)
+		item.BrokerName = nullableString(m.BrokerName)
+		item.BrokerCurrency = nullableString(m.BrokerCurrency)
+		if m.BrokerType != nil {
+			item.BrokerType = nullable.NewNullableWithValue(apitypes.InstrumentType(*m.BrokerType))
+		} else {
+			item.BrokerType = nullable.NewNullNullable[apitypes.InstrumentType]()
 		}
 		out = append(out, item)
 	}

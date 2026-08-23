@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Outlet,
@@ -612,5 +612,291 @@ describe("причина денежного расхождения", () => {
     ]);
     expect(await screen.findByText("SBER")).toBeInTheDocument();
     expect(screen.queryByTestId("reconcile-currency-trades-note")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Паспорт бумаги, которой нет в каталоге, и кнопка «завести по нему»
+// ---------------------------------------------------------------------------
+
+// Фонд, в который превратился TECH: у брокера он есть, в каталоге строки нет,
+// и брокер сам говорит, что это за бумага.
+const TECH2: TinvestReconcileMismatch = {
+  kind: "unknown_security",
+  instrument_id: null,
+  label: "TECH2",
+  broker: "60795",
+  journal: "0",
+  broker_isin: "RU000A1071G8",
+  broker_name: "Заблокированные активы Тинькофф Технологии",
+  broker_currency: "RUB",
+  broker_type: "etf",
+};
+
+// Метод РАЗЛИЧАЕТСЯ: по одному и тому же пути /api/v1/instruments идут и поиск
+// (GET), и заведение (POST), и тест, который их путает, доказал бы не то.
+// Свежий Response на каждый вызов — общий с serve() резон: тело читается один
+// раз, и один mockResolvedValue сломался бы на втором обращении.
+function serveCatalog(options: {
+  found?: unknown[];
+  createStatus?: number;
+  syncQueued?: boolean;
+  syncStatus?: number;
+}) {
+  const {
+    found = [],
+    createStatus = 201,
+    syncQueued = true,
+    syncStatus = 200,
+  } = options;
+  fetchMock.mockImplementation(
+    (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const path = new URL(url, "http://localhost").pathname;
+      const method = (
+        input instanceof Request ? input.method : (init?.method ?? "GET")
+      ).toUpperCase();
+      const answer = (body: unknown, status = 200) =>
+        Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+
+      if (path === "/api/v1/accounts") return answer(ACCOUNTS);
+      if (path.endsWith("/unparsed"))
+        return answer({ operations: [], has_more: false });
+      if (path === "/api/v1/instruments" && method === "GET")
+        return answer({ instruments: found, has_more: false });
+      if (path === "/api/v1/instruments" && method === "POST")
+        return answer(
+          createStatus === 201
+            ? {
+                id: "instr-new",
+                type: "etf",
+                name: "Заблокированные активы Тинькофф Технологии",
+                ticker: "TECH2",
+                isin: "RU000A1071G8",
+                figi: "",
+                currency: "RUB",
+                frozen: false,
+              }
+            : { error: "isin already belongs to another instrument" },
+          createStatus,
+        );
+      if (path.endsWith("/sync") && method === "POST")
+        return answer(
+          syncStatus === 200 ? { queued: syncQueued } : { error: "not active" },
+          syncStatus,
+        );
+      return answer(null, 404);
+    },
+  );
+}
+
+// Обращения, ушедшие методом `method` на путь `path`. Отдельно от их тел:
+// у запроса синхронизации тела нет вовсе, и разбор пустой строки как JSON
+// уронил бы тест по причине, к предмету проверки отношения не имеющей.
+function callsTo(method: string, path: string) {
+  return fetchMock.mock.calls.filter(([input, init]) => {
+    const url = input instanceof Request ? input.url : String(input);
+    const sent = (
+      input instanceof Request
+        ? input.method
+        : ((init as RequestInit | undefined)?.method ?? "GET")
+    ).toUpperCase();
+    return (
+      sent === method.toUpperCase() &&
+      new URL(url, "http://localhost").pathname === path
+    );
+  });
+}
+
+// Тела, ушедшие методом `method` на путь `path`, по порядку — то, что экран
+// ПОПРОСИЛ у сервера, а не то, что нарисовал после.
+async function bodiesSentTo(
+  method: string,
+  path: string,
+): Promise<Record<string, unknown>[]> {
+  const calls = callsTo(method, path);
+  return Promise.all(
+    calls.map(async ([input, init]) => {
+      const raw =
+        input instanceof Request
+          ? await input.clone().text()
+          : String((init as RequestInit).body);
+      return JSON.parse(raw) as Record<string, unknown>;
+    }),
+  );
+}
+
+describe("ReconcilePanel — бумага, которой нет в каталоге, названа паспортом брокера", () => {
+  it("печатает имя, ISIN, тип и валюту, которые назвал сам брокер", async () => {
+    serveCatalog({});
+    renderPanel([makeReconcile({ status: "mismatched", mismatches: [TECH2] })]);
+
+    // Тикер брокера сам по себе — «TECH2», и он не говорит НИЧЕГО о том, что
+    // это за бумага: ровно поэтому паспорт и печатается рядом.
+    expect(await screen.findByText("TECH2")).toBeInTheDocument();
+    const passport = await screen.findByText(/RU000A1071G8/);
+    expect(passport).toHaveTextContent(
+      "Заблокированные активы Тинькофф Технологии",
+    );
+    expect(passport).toHaveTextContent("фонд");
+    expect(passport).toHaveTextContent("RUB");
+  });
+
+  // Прогон, записанный до того, как сервер стал публиковать паспорт: ключей в
+  // его jsonb нет вовсе. Экран обязан не нарисовать НИЧЕГО, а не пустые скобки
+  // и не «—», которые читались бы как «брокер говорит, что имени нет».
+  it("ничего не выдумывает по строке старого прогона, где паспорта не было", async () => {
+    serveCatalog({});
+    const old: TinvestReconcileMismatch = {
+      kind: "unknown_security",
+      instrument_id: null,
+      label: "TSPX2",
+      broker: "27200",
+      journal: "0",
+    };
+    renderPanel([makeReconcile({ status: "mismatched", mismatches: [old] })]);
+
+    expect(await screen.findByText("TSPX2")).toBeInTheDocument();
+    expect(screen.queryByText(/Брокер о ней/)).toBeNull();
+    // И кнопки нет: заводить не из чего, а сопоставляется бумага только по
+    // ISIN — строка без него не закрыла бы расхождение.
+    expect(
+      screen.queryByRole("button", { name: /Завести в каталог/ }),
+    ).toBeNull();
+  });
+
+  // Паспорт брокер не отдал (404 — так у него отвечают «забытые» бумаги), но
+  // ТИП всё равно известен: он взят из самой позиции. Кнопки быть не должно —
+  // без ISIN заведённая строка ни с чем не спарится.
+  it("не предлагает завести бумагу, когда брокер не назвал её ISIN", async () => {
+    serveCatalog({});
+    const noPassport: TinvestReconcileMismatch = {
+      kind: "unknown_security",
+      instrument_id: null,
+      label: "uid-forgotten",
+      broker: "3",
+      journal: "0",
+      broker_type: "share",
+    };
+    renderPanel([
+      makeReconcile({ status: "mismatched", mismatches: [noPassport] }),
+    ]);
+
+    expect(await screen.findByText("uid-forgotten")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Завести в каталог/ }),
+    ).toBeNull();
+  });
+
+  it("заводит строку каталога ровно из полей паспорта и просит новую синхронизацию", async () => {
+    serveCatalog({ syncQueued: true });
+    renderPanel([makeReconcile({ status: "mismatched", mismatches: [TECH2] })]);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Завести в каталог/ }),
+    );
+
+    await waitFor(async () => {
+      expect(await bodiesSentTo("POST", "/api/v1/instruments")).toHaveLength(1);
+    });
+    const [body] = await bodiesSentTo("POST", "/api/v1/instruments");
+    expect(body).toMatchObject({
+      type: "etf",
+      name: "Заблокированные активы Тинькофф Технологии",
+      ticker: "TECH2",
+      isin: "RU000A1071G8",
+      currency: "RUB",
+    });
+
+    // Заведение само по себе расхождение не закрывает: спарить позицию с новой
+    // строкой может только следующая сверка, и подпись обещает ровно это.
+    expect(
+      await screen.findByText(/Синхронизация поставлена в очередь/),
+    ).toBeInTheDocument();
+    expect(
+      callsTo("POST", "/api/v1/tinvest/connections/conn-1/sync"),
+    ).toHaveLength(1);
+  });
+
+  it("говорит, что бумага уже в каталоге, и ничего не заводит", async () => {
+    serveCatalog({
+      found: [
+        {
+          id: "instr-1",
+          type: "etf",
+          name: "Технологии Америки (заблокированные)",
+          ticker: "TECH2",
+          isin: "RU000A1071G8",
+          figi: "",
+          currency: "RUB",
+          frozen: false,
+        },
+      ],
+    });
+    renderPanel([makeReconcile({ status: "mismatched", mismatches: [TECH2] })]);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Завести в каталог/ }),
+    );
+
+    expect(
+      await screen.findByText(
+        /уже есть в каталоге: Технологии Америки \(заблокированные\)/,
+      ),
+    ).toBeInTheDocument();
+    expect(await bodiesSentTo("POST", "/api/v1/instruments")).toHaveLength(0);
+    // И синхронизацию не просим: строка была там и до нажатия, сверка уже
+    // ходила по ней.
+    expect(
+      callsTo("POST", "/api/v1/tinvest/connections/conn-1/sync"),
+    ).toHaveLength(0);
+  });
+
+  // Поиск по ISIN совпадает по ПОДСТРОКЕ имени, тикера или ISIN, поэтому чужая
+  // бумага в ответе не должна сойти за эту: иначе кнопка молча сказала бы «уже
+  // в каталоге» и не завела ничего.
+  it("не принимает чужую бумагу из ответа поиска за эту", async () => {
+    serveCatalog({
+      found: [
+        {
+          id: "instr-2",
+          type: "etf",
+          name: "Другой фонд, у которого в имени RU000A1071G8",
+          ticker: "OTHER",
+          isin: "RU000A0000A0",
+          figi: "",
+          currency: "RUB",
+          frozen: false,
+        },
+      ],
+    });
+    renderPanel([makeReconcile({ status: "mismatched", mismatches: [TECH2] })]);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Завести в каталог/ }),
+    );
+
+    await waitFor(async () => {
+      expect(await bodiesSentTo("POST", "/api/v1/instruments")).toHaveLength(1);
+    });
+    expect(screen.queryByText(/уже есть в каталоге/)).toBeNull();
+  });
+
+  it("не обещает синхронизацию, которую сервер отказался ставить", async () => {
+    serveCatalog({ syncStatus: 409 });
+    renderPanel([makeReconcile({ status: "mismatched", mismatches: [TECH2] })]);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Завести в каталог/ }),
+    );
+
+    expect(
+      await screen.findByText(/запустить синхронизацию сейчас не удалось/),
+    ).toBeInTheDocument();
   });
 });
