@@ -120,6 +120,25 @@ func TestIncomeByInstrumentMatchesEngineIncomeTypes(t *testing.T) {
 				{Type: TypeTransferOut, InstrumentID: &id, OccurredOn: on(2), Currency: "USD", Quantity: qty("5"), AmountMinor: 0},
 			}
 		}},
+		// A conversion's two legs, built the way the service builds them: the
+		// departing one gives up the recorded lots and the arriving one rebuilds
+		// them under the new paper. Neither is income, and the point of having
+		// them here is that incomeByInstrument must agree.
+		{TypeExchangeOut, func(id uuid.UUID) []Operation {
+			acquired := on(1)
+			return []Operation{
+				{Type: TypeBuy, InstrumentID: &id, OccurredOn: on(1), Currency: "USD", Quantity: qty("10"), AmountMinor: -100_000},
+				{Type: TypeExchangeOut, InstrumentID: &id, OccurredOn: on(2), Currency: "USD", Quantity: qty("10"), AmountMinor: 100_000,
+					TransferLots: []ReleasedLot{{Quantity: *qty("10"), CostMinor: 100_000, AcquiredOn: &acquired}}},
+			}
+		}},
+		{TypeExchangeIn, func(id uuid.UUID) []Operation {
+			acquired := on(1)
+			return []Operation{
+				{Type: TypeExchangeIn, InstrumentID: &id, OccurredOn: on(2), Currency: "USD", Quantity: qty("20"), AmountMinor: 100_000,
+					TransferLots: []ReleasedLot{{Quantity: *qty("20"), CostMinor: 100_000, AcquiredOn: &acquired}}},
+			}
+		}},
 		{TypeSplit, func(id uuid.UUID) []Operation {
 			ratio := decimal.RequireFromString("2")
 			return []Operation{
