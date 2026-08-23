@@ -801,8 +801,20 @@ func validateImported(o Operation) error {
 	}
 	switch o.Type {
 	case TypeSplit:
-		return fmt.Errorf("%w: an import does not record splits — corporate actions do not arrive as operations",
-			family.ErrValidation)
+		// A BROKER IMPORT STILL DOES NOT RECORD SPLITS — corporate actions do
+		// not arrive as operations, and a split row wearing a broker's name
+		// would be this program's invention wearing the broker's authority.
+		// What changed is that the registry now writes through this same path:
+		// its rows are not a person's own entry, so they cannot go through
+		// validate, and they carry the id of the registry event they came from
+		// exactly as an imported row carries the broker record's. Their source
+		// is what tells the two apart, and validateByType holds the rest of the
+		// rule (an instrument, a positive ratio, a zero amount).
+		if o.Source != SourceRegistry {
+			return fmt.Errorf("%w: an import does not record splits — corporate actions do not arrive as operations",
+				family.ErrValidation)
+		}
+		return validateByType(o)
 	case TypeTax:
 		if o.AmountMinor == 0 {
 			return fmt.Errorf("%w: tax amount_minor must not be 0", family.ErrValidation)

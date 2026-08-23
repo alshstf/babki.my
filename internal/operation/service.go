@@ -389,8 +389,24 @@ func validateByType(o Operation) error {
 		if o.AmountMinor != 0 {
 			return fmt.Errorf("%w: split amount_minor must be 0", family.ErrValidation)
 		}
-		if o.Source != "" && o.Source != "manual" {
-			return fmt.Errorf("%w: split is only supported for source=manual", family.ErrValidation)
+		// A SPLIT IS WRITTEN FROM THE REGISTRY AND FROM NOWHERE ELSE, and this
+		// rule used to say the opposite — source=manual only, importers
+		// refused. Both halves were right about their own half and wrong
+		// together. An importer must not invent a split, because no broker
+		// reports one; a person must not enter one per account either, because
+		// a split happened to the PAPER and typing it into one account leaves
+		// every other holder of the same paper wrong, with nothing to say so.
+		// So the fact is recorded once, against the ISIN, and carried into
+		// every account that held it (see internal/corporateaction).
+		//
+		// The two paths reach this same line: the hand-entry one refuses
+		// "manual" here, and the import path refuses every source but this one
+		// before it delegates (see validateImported). Nothing else in the
+		// program writes a split.
+		if o.Source != SourceRegistry {
+			return fmt.Errorf(
+				"%w: a split is recorded once for the security in the corporate-actions registry, not entered on an account",
+				family.ErrValidation)
 		}
 	case TypeExchangeOut, TypeExchangeIn:
 		// Reachable only through the import path's validateImported: the hand
@@ -460,16 +476,26 @@ func journalWith(ops []Operation, add []Operation, removeIDs map[uuid.UUID]bool)
 }
 
 // sortJournal puts operations in the order the engine folds them, which is the
-// order ListForEngine reads them back in: by the day they happened, and within
-// a day by when they were recorded. One function because two paths assemble a
-// journal to fold — this one and the import's (see ApplyImportDelta and
-// prepareCandidate, which sort journals whose rows already carry a created_at)
-// — and an order that differs between the check and the read is the fault this
-// package spends most of its care on.
+// order ListForEngine reads them back in: by the day they happened, then by the
+// rank their source gives them within that day, then by when they were
+// recorded. One function because two paths assemble a journal to fold — this
+// one and the import's (see ApplyImportDelta and prepareCandidate, which sort
+// journals whose rows already carry a created_at) — and an order that differs
+// between the check and the read is the fault this package spends most of its
+// care on.
+//
+// The rank comes from foldRank, which is the same rule the SQL reads (see
+// foldorder.go): a row the corporate-actions registry materialized folds at the
+// START of its day, ahead of trades dated the same day, because it is stamped
+// years after them and would otherwise multiply a quantity that already counts
+// the split.
 func sortJournal(journal []Operation) {
 	sort.SliceStable(journal, func(i, j int) bool {
 		if !journal[i].OccurredOn.Equal(journal[j].OccurredOn) {
 			return journal[i].OccurredOn.Before(journal[j].OccurredOn)
+		}
+		if ri, rj := foldRank(journal[i].Source), foldRank(journal[j].Source); ri != rj {
+			return ri < rj
 		}
 		return journal[i].CreatedAt.Before(journal[j].CreatedAt)
 	})
