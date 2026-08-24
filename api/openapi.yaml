@@ -1529,7 +1529,13 @@ components:
         operation of its own, naming a trade that is not among the operations
         this connection imported — so whether the trade already carries that
         same commission cannot be told, and neither dropping nor keeping the
-        charge would be an answer.
+        charge would be an answer. `broker_fee_parent_explained`: the same
+        commission, naming a trade the owner has accounted for BY HAND (see
+        TinvestExplainRequest). That trade produced no journal entries on
+        purpose and — unlike an unparsed one — says nothing about this money,
+        since an explained row carries no reason at all; so the charge is
+        neither booked (the manual entry may already include it) nor dropped
+        (it may not), and the owner is asked.
       enum:
         - unsupported_type
         - unrepresentable_amount
@@ -1743,10 +1749,33 @@ components:
         has_more: { type: boolean, description: "Whether the log holds at least one more run beyond this page. The server's to answer: the page's own length cannot, and here it especially cannot be inferred from a short page, since an over-large `limit` is refused rather than clamped. Fetched — one row beyond the page is asked for and its arrival IS this answer — never derived by comparing lengths afterwards." }
     TinvestUnparsedOperation:
       type: object
-      required: [id, occurred_at, op_type, payment, currency, description, reason, detail, raw]
-      description: "One broker operation the projection could not turn into journal entries. Rows the broker has since stopped returning stay on this list: they are still operations this program could not read, and dropping them would be the silence the list exists to replace."
+      required: [id, content_key, occurred_at, op_type, payment, currency, description, reason, detail, raw]
+      description: >-
+        One broker operation the projection could not turn into journal entries
+        — OR one the owner has accounted for by hand, which it could have and
+        deliberately did not. Rows the broker has since stopped returning stay
+        on this list: they are still operations this program could not read, and
+        dropping them would be the silence the list exists to replace.
+
+
+        THE TWO KINDS ARE TOLD APART BY `explained_by` AND NEVER BY `reason`.
+        An explained row carries no reason — it is not unparsed, and no count
+        of unparsed operations includes it — so a client reading an empty
+        reason as "nothing wrong here" would caption the owner's own answer as
+        a blank. It is listed at all because this is the only screen it appears
+        on and the only place the explanation can be taken back.
       properties:
         id: { type: string, format: uuid, description: "The mirror row's id — this program's own, not the broker's, whose operation ids are documented to change over time and are an attribute here rather than a key." }
+        content_key:
+          type: string
+          description: >-
+            What this mirror row is identified BY, across syncs: a digest of
+            the operation's own content. It is what an explanation names (see
+            TinvestExplainRequest), rather than `id` or the broker's operation
+            id, because the broker rewrites its history in place — an operation
+            may come back with a new id and the same content, and an
+            explanation has to survive that. A client that explains rows sends
+            these back verbatim; nothing else may be computed from them.
         occurred_at: { type: string, format: date-time, description: "When the broker says the operation happened." }
         op_type: { type: string, description: "The broker's own operation-type word, verbatim (e.g. OPERATION_TYPE_BUY)." }
         payment: { type: string, description: "Decimal as string — the broker's own amount, exactly as it arrived, unconverted and unrounded. Not minor units: an amount too fine or too large for this program's money is one of the reasons a row lands on this list, and rendering it in minor units would be impossible for exactly those rows." }
@@ -1789,6 +1818,89 @@ components:
             never carry a credential: the broker token travels as a request
             header and appears in no message this program builds.
         raw: { description: "The broker's own JSON element for this operation, as it arrived — every field, including the ones this program does not model. Untyped on purpose: it is evidence for a person asking what the broker actually sent, and nothing here computes from it." }
+        explained_by:
+          nullable: true
+          allOf: [{ $ref: "#/components/schemas/TinvestRowExplanation" }]
+          description: >-
+            The manual operation the owner entered to account for this row, or
+            null for a row nobody has explained. Non-null exactly when this row
+            was skipped by the projection on purpose — and such a row's
+            `reason` is empty, since "could not be read" is not what is true of
+            it.
+    TinvestRowExplanation:
+      type: object
+      required: [id, operation_id, operation_on, operation_type]
+      description: >-
+        The manual journal operation that stands for a broker row this program
+        cannot read as itself — a corporate action, which the broker sends no
+        operation type for at all.
+
+
+        It names the operation rather than restating it: date and type, so a
+        reader knows which journal entry to look at, and no amounts, because
+        the journal is where those are read and a second copy of them here
+        would part company with the first the moment the operation is edited.
+      properties:
+        id: { type: string, format: uuid, description: "The explanation's own id — what DELETE /api/v1/tinvest/explanations/{explanationId} takes." }
+        operation_id: { type: string, format: uuid, description: "The manual journal operation. Deleting it from the journal screen removes this explanation too, and the rows it covered go back to being projected on the next sync." }
+        operation_on: { type: string, format: date, description: "The operation's journal date, which need not be either broker row's date: one operation may stand for rows a fortnight apart." }
+        operation_type: { $ref: "#/components/schemas/OperationType" }
+    TinvestExplainRequest:
+      type: object
+      required: [content_keys, operation]
+      description: >-
+        Account for one or more of a linked account's broker rows with one
+        manual journal operation.
+
+
+        WHAT IT IS FOR: the broker's operation enum has no split, no
+        conversion, no spin-off — no corporate action of any kind — so a real
+        event reaches this program as whatever rows happened to carry its
+        money. On the owner's own account a fund's partial redemption arrived
+        as a withdrawal of 44 380,35 units "to another depositary" and, a
+        fortnight later, a payment of 2 559,80 ₽ typed as a bond redemption. No
+        rule over those two rows can find the one operation they are; the owner
+        can, and this is where that answer goes.
+
+
+        The rows named stop being projected — no journal entries, and not
+        unparsed either — and the operation below is what the journal holds
+        instead. Both halves happen together or neither does.
+      properties:
+        content_keys:
+          type: array
+          minItems: 1
+          items: { type: string }
+          description: "The `content_key` of each mirror row this operation accounts for, from TinvestUnparsedOperation. A key that is not one of this link's rows is a 404 naming it; a row already explained is a 409."
+        operation:
+          allOf: [{ $ref: "#/components/schemas/CreateOperationRequest" }]
+          description: >-
+            The manual operation, in the journal's own create shape and
+            validated by the journal's own rules — the engine replays the
+            account with it exactly as it would for an operation entered on the
+            journal screen, and refuses it in exactly the same cases with
+            exactly the same messages.
+
+
+            `account_id` IS IGNORED AND OVERWRITTEN with the linked account's:
+            the explanation is about this link's rows, so its operation belongs
+            on this link's account, and letting the field decide would put the
+            money on an account the broker never had it on while leaving the
+            linked one still missing the event.
+    TinvestExplanationResponse:
+      type: object
+      required: [operation_id, sync_queued]
+      properties:
+        operation_id: { type: string, format: uuid, description: "The manual operation that was created." }
+        sync_queued:
+          type: boolean
+          description: >-
+            Whether a sync was queued to rebuild the journal with this
+            explanation applied. FALSE IS NOT A FAILURE and the explanation is
+            written either way: a connection that is switched off or waiting
+            for a new token cannot sync at all, and the explanation takes
+            effect the next time it runs. It is also false when a sync for this
+            connection was already queued — that run will apply it.
     TinvestUnparsedResponse:
       type: object
       required: [operations, has_more]
