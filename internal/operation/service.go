@@ -263,6 +263,13 @@ func validate(o Operation) error {
 		// reports shares arriving without reporting where they came from.
 		return fmt.Errorf("%w: use the transfer endpoint for %s", family.ErrValidation, o.Type)
 	}
+	if o.Type == TypeSpinoffOut || o.Type == TypeSpinoffIn {
+		// A spin-off answers exactly as a conversion does below, and for the
+		// same reason: what a paper did is one fact about the paper, so it is
+		// recorded in the registry once and applied to every account from there
+		// (see Service.CreateSpinoff).
+		return fmt.Errorf("%w: a spin-off is recorded in the corporate-actions registry, not entered against an account", family.ErrValidation)
+	}
 	if o.Type == TypeExchangeOut || o.Type == TypeExchangeIn {
 		// A conversion has no hand-entry door AT ALL, and this is not the
 		// transfer's "use the other endpoint" — there is no other endpoint. What
@@ -416,6 +423,37 @@ func validateByType(o Operation) error {
 		// conversion is refused by a rule rather than by nobody: a conversion
 		// is the registry's to write, and a leg arriving from anywhere else
 		// would be a second, unsynchronised record of one corporate action.
+		if o.InstrumentID == nil {
+			return fmt.Errorf("%w: %s requires an instrument", family.ErrValidation, o.Type)
+		}
+		if o.Quantity == nil || !o.Quantity.IsPositive() {
+			return fmt.Errorf("%w: %s requires positive quantity", family.ErrValidation, o.Type)
+		}
+		if o.AmountMinor < 0 {
+			return fmt.Errorf("%w: %s amount_minor (cost basis) must be >= 0", family.ErrValidation, o.Type)
+		}
+		if o.Source != SourceRegistry {
+			return fmt.Errorf("%w: %s is only supported for source=%s", family.ErrValidation, o.Type, SourceRegistry)
+		}
+	case TypeSpinoffOut:
+		// The departing leg is the one type in this journal that touches a
+		// position and carries NO quantity: it moves money out of the parcels
+		// and leaves every unit where it was (see portfolio.TypeSpinoffOut). A
+		// count here would be rendered as units leaving on every screen that
+		// draws a row, which is why it is refused rather than ignored.
+		if o.InstrumentID == nil {
+			return fmt.Errorf("%w: %s requires an instrument", family.ErrValidation, o.Type)
+		}
+		if o.Quantity != nil {
+			return fmt.Errorf("%w: a spin-off moves no units, so %s carries no quantity", family.ErrValidation, o.Type)
+		}
+		if o.AmountMinor < 0 {
+			return fmt.Errorf("%w: %s amount_minor (cost basis) must be >= 0", family.ErrValidation, o.Type)
+		}
+		if o.Source != SourceRegistry {
+			return fmt.Errorf("%w: %s is only supported for source=%s", family.ErrValidation, o.Type, SourceRegistry)
+		}
+	case TypeSpinoffIn:
 		if o.InstrumentID == nil {
 			return fmt.Errorf("%w: %s requires an instrument", family.ErrValidation, o.Type)
 		}
@@ -594,6 +632,24 @@ func quantizeLots(pieces []portfolio.ReleasedLot, total decimal.Decimal) []portf
 			Quantity: qty, CostMinor: pc.CostMinor + carry, AcquiredOn: pc.AcquiredOn,
 		})
 		carry = 0
+	}
+	// A CARRY LEFT AT THE END GOES BACKWARD RATHER THAN NOWHERE. It is money,
+	// and the sum of the pieces must equal the basis the row carries or the
+	// engine refuses the row for ever (portfolio.CheckTransferLots).
+	//
+	// It cannot arise from a FIFO release, whose last piece always has a
+	// quantity — which is why this went unwritten until a spin-off's breakdown
+	// came through here: that one names EVERY parcel, and the last of them can
+	// be a shareless one a reverse split rounded away (see
+	// portfolio.SpinoffPieces). Adding it to the last piece that does have a
+	// quantity keeps the money in the parcel nearest it in the queue, which is
+	// the same neighbour the loop above would have given it to.
+	//
+	// With no such piece there is nothing to hold the money and nothing to hold
+	// it FOR: `total` was zero, so the caller asked to restate a parcel into no
+	// units at all, and both write paths refuse that before they get here.
+	if carry != 0 && len(out) > 0 {
+		out[len(out)-1].CostMinor += carry
 	}
 	return out
 }
@@ -936,6 +992,161 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 		cOut, cIn, err = st.CreatePair(ctx, spaceID, outOp, inOp, func(storedOut, _ Operation) error {
 			if _, err := portfolio.Compute(journalWith(sourceJournal, []Operation{storedOut}, nil)); err != nil {
 				return fmt.Errorf("the transfer as stored no longer replays on the source account: %v", err)
+			}
+			return nil
+		})
+		return err
+	})
+	if err != nil {
+		return Operation{}, Operation{}, mapWriteError(err)
+	}
+	return cOut, cIn, nil
+}
+
+// SpinoffParams describes a spin-off on ONE account: a share of what was paid
+// for `FromInstrumentID` moves onto `ToInstrumentID`, which appears beside it
+// with `RatioTo` units for every `RatioFrom` of the original.
+//
+// THE RATIO IS GIVEN AND THE COUNT IS NOT, which is the one place this differs
+// from ExchangeParams and the difference is deliberate. A conversion names how
+// many units left and how many arrived, because the holding is consumed and the
+// caller can state both halves. A spin-off leaves the holding alone, so how many
+// units of the new paper arrive depends on how many of the old are held — and
+// that is decided by folding this account's journal, which happens INSIDE the
+// lock below. A caller passing an absolute count would be a second computation
+// of the same figure, made against a journal that may have moved since; this
+// codebase has watched two such computations drift more than once.
+//
+// BasisShare is the fraction of the cost that moves (НК РФ ст. 277 п. 7): the
+// value of the carved-out assets over the fund's net assets before the
+// carve-out. It comes from the registry, which got it from whoever published
+// it; nothing here can derive it.
+type SpinoffParams struct {
+	AccountID        uuid.UUID
+	FromInstrumentID uuid.UUID
+	ToInstrumentID   uuid.UUID
+	RatioFrom        decimal.Decimal
+	RatioTo          decimal.Decimal
+	BasisShare       decimal.Decimal
+	OccurredOn       time.Time
+	Source           string
+	Note             string
+}
+
+// CreateSpinoff records a spin-off as an atomic spinoff_out/spinoff_in pair on
+// one account: the original paper keeps every unit and gives up a share of its
+// money, and the carved-out paper is built from the very parcels that gave it
+// up, each keeping its cost and the day it was acquired (see
+// portfolio.TypeSpinoffOut for the law that fixes all three).
+//
+// IT IS THE REGISTRY'S ENTRY POINT AND NOBODY ELSE'S, exactly as CreateExchange
+// is: what happened to a paper is true for every account that held it, so it is
+// recorded once and applied from there.
+//
+// THE SHAPE IS CreateExchange'S — one account, one lock, one journal, both
+// candidates checked TOGETHER against it — and the two differences are the ones
+// the event itself has: the departing leg carries no quantity because nothing
+// leaves, and the arriving leg's count is worked out here from the holding
+// rather than taken from the caller.
+func (s *Service) CreateSpinoff(ctx context.Context, spaceID uuid.UUID, p SpinoffParams) (out, in Operation, err error) {
+	if p.Source != SourceRegistry {
+		return Operation{}, Operation{}, fmt.Errorf("%w: a spin-off is only written by source=%s", family.ErrValidation, SourceRegistry)
+	}
+	if p.FromInstrumentID == uuid.Nil || p.ToInstrumentID == uuid.Nil {
+		return Operation{}, Operation{}, fmt.Errorf("%w: from and to instruments are required", family.ErrValidation)
+	}
+	// THE SAME PAPER ON BOTH SIDES IS NOT A SPIN-OFF. It would take money out of
+	// the position's parcels and add it back to the same position as new
+	// parcels — the basis unchanged, the parcel list doubled, and the FIFO queue
+	// silently rearranged.
+	if p.FromInstrumentID == p.ToInstrumentID {
+		return Operation{}, Operation{}, fmt.Errorf("%w: a spin-off must name a different paper than the one it comes out of", family.ErrValidation)
+	}
+	if !p.RatioFrom.IsPositive() || !p.RatioTo.IsPositive() {
+		return Operation{}, Operation{}, fmt.Errorf("%w: both sides of the ratio must be positive", family.ErrValidation)
+	}
+	// STRICTLY BETWEEN NOTHING AND EVERYTHING. A share of 0 moves no money and
+	// would write a pair that says nothing; a share of 1 moves ALL of it, which
+	// is a conversion — the original paper would be left holding units with no
+	// basis behind them, so every later sale of it would show the whole proceeds
+	// as profit. The registry refuses both as well (corporateaction.Event's
+	// Validate); it is stated here too because this function does not route
+	// through that one, and a rule only the other door enforces is a rule this
+	// door does not have.
+	if !p.BasisShare.IsPositive() || !p.BasisShare.LessThan(decimal.NewFromInt(1)) {
+		return Operation{}, Operation{}, fmt.Errorf("%w: the share of the basis that moves must be greater than 0 and less than 1", family.ErrValidation)
+	}
+	if err := checkOccurredOn(p.OccurredOn); err != nil {
+		return Operation{}, Operation{}, err
+	}
+
+	var cOut, cIn Operation
+	err = s.store.WithAccountsLocked(ctx, spaceID, []uuid.UUID{p.AccountID}, func(st *Store) error {
+		journal, err := st.ListForEngine(ctx, spaceID, p.AccountID)
+		if err != nil {
+			return err
+		}
+
+		// The holding as it stood at the START of the day the spin-off took
+		// effect — the same moment the registry decides against, and the same
+		// reason a backdated conversion resolves its lots against its own date:
+		// the event is replayed at its chronological place, where the parcels
+		// are the parcels of that day.
+		positions, err := portfolio.Compute(journalUpTo(journal, p.OccurredOn))
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrInconsistent, err)
+		}
+		held, ok := positions[p.FromInstrumentID]
+		if !ok || !held.Quantity.IsPositive() {
+			return fmt.Errorf("%w: this account held nothing of the paper the spin-off comes out of on %s",
+				family.ErrValidation, p.OccurredOn.Format(time.DateOnly))
+		}
+
+		toQuantity := held.Quantity.Mul(p.RatioTo).Div(p.RatioFrom).Truncate(quantityScale)
+		if !toQuantity.IsPositive() {
+			return fmt.Errorf("%w: %s units at %s for %s comes to less than the %d decimal places the journal records",
+				family.ErrValidation, held.Quantity, p.RatioTo, p.RatioFrom, quantityScale)
+		}
+		if err := checkQuantityBound(toQuantity); err != nil {
+			return err
+		}
+
+		pieces := portfolio.SpinoffPieces(held.Lots, p.BasisShare)
+		cost := portfolio.LotsCost(pieces)
+		if cost <= 0 {
+			return fmt.Errorf("%w: %s of the %d minor this account paid for the paper rounds to nothing, so the spin-off would move no money at all",
+				family.ErrValidation, p.BasisShare, held.CostMinor)
+		}
+		// The arriving parcel: the same money and the same days, restated in the
+		// new paper's units by the one allocation this package has (see
+		// rescaleLots). The departing leg's pieces are NOT restated — they name
+		// the original's own parcels, which is what a later replay matches them
+		// against.
+		arriving := rescaleLots(pieces, held.Quantity, toQuantity)
+		if got := portfolio.LotsCost(arriving); got != cost {
+			return fmt.Errorf("restating the breakdown in the carved-out paper's units changed the basis from %d to %d minor units", cost, got)
+		}
+
+		outOp := Operation{
+			AccountID: p.AccountID, InstrumentID: &p.FromInstrumentID, Type: TypeSpinoffOut,
+			OccurredOn: p.OccurredOn, AmountMinor: cost,
+			Currency: held.Currency, Note: p.Note, Source: p.Source,
+			TransferLots: pieces,
+		}
+		inOp := Operation{
+			AccountID: p.AccountID, InstrumentID: &p.ToInstrumentID, Type: TypeSpinoffIn,
+			OccurredOn: p.OccurredOn, Quantity: &toQuantity, AmountMinor: cost,
+			Currency: held.Currency, Note: p.Note, Source: p.Source,
+			TransferLots: arriving,
+		}
+
+		if err := checkJournalOps(journal, []Operation{outOp, inOp}, nil); err != nil {
+			return err
+		}
+
+		cOut, cIn, err = st.CreatePair(ctx, spaceID, outOp, inOp, func(storedOut, storedIn Operation) error {
+			if _, err := portfolio.Compute(journalWith(journal, []Operation{storedOut, storedIn}, nil)); err != nil {
+				return fmt.Errorf("the spin-off as stored no longer replays: %v", err)
 			}
 			return nil
 		})

@@ -35,13 +35,16 @@ const (
 	TypeTransferOut  = portfolio.TypeTransferOut
 	TypeExchangeOut  = portfolio.TypeExchangeOut
 	TypeExchangeIn   = portfolio.TypeExchangeIn
+	TypeSpinoffOut   = portfolio.TypeSpinoffOut
+	TypeSpinoffIn    = portfolio.TypeSpinoffIn
 	TypeSplit        = portfolio.TypeSplit
 	TypeInterest     = portfolio.TypeInterest
 	TypeConversion   = portfolio.TypeConversion
 )
 
 // SourceRegistry is the writer of the rows the corporate-actions registry
-// materializes into journals: splits, and the two legs of a conversion.
+// materializes into journals: splits, and the two legs of a conversion or of a
+// spin-off.
 //
 // IT IS A SOURCE OF ITS OWN rather than "manual", and the distinction is what
 // the delete rule already reads (see Service.Delete): a registry row is a

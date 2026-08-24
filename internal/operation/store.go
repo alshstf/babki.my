@@ -440,7 +440,7 @@ func carriesOwnLots(op Operation) bool {
 		return false
 	}
 	switch op.Type {
-	case TypeTransferIn, TypeExchangeOut, TypeExchangeIn:
+	case TypeTransferIn, TypeExchangeOut, TypeExchangeIn, TypeSpinoffOut, TypeSpinoffIn:
 		return true
 	}
 	return op.TransferGroupID == nil
