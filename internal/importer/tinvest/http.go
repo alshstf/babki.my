@@ -12,8 +12,10 @@ import (
 	"github.com/alexedwards/scs/v2"
 	"github.com/google/uuid"
 	"github.com/oapi-codegen/nullable"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
@@ -74,6 +76,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("POST /api/v1/tinvest/connections/{connectionId}/sync", authed(h.handleSync))
 	srv.Mount("GET /api/v1/tinvest/connections/{connectionId}/runs", authed(h.handleRuns))
 	srv.Mount("GET /api/v1/tinvest/connections/{connectionId}/unparsed", authed(h.handleUnparsed))
+	srv.Mount("POST /api/v1/tinvest/links/{linkId}/explanations", authed(h.handleExplain))
+	srv.Mount("DELETE /api/v1/tinvest/explanations/{explanationId}", authed(h.handleRemoveExplanation))
 }
 
 // writeError maps this package's own sentinels onto status codes and hands
@@ -103,8 +107,15 @@ func writeError(w http.ResponseWriter, err error) {
 		httpjson.Error(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrBrokerAccountNotImportable):
 		httpjson.Error(w, http.StatusUnprocessableEntity, err.Error())
-	case errors.Is(err, ErrConnectionNotActive), errors.Is(err, ErrBrokerAccountAlreadyLinked):
+	case errors.Is(err, ErrConnectionNotActive), errors.Is(err, ErrBrokerAccountAlreadyLinked),
+		errors.Is(err, ErrRowAlreadyExplained):
 		httpjson.Error(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrRowNotInLink), errors.Is(err, ErrExplanationNotFound), errors.Is(err, ErrLinkNotFound):
+		// 404 rather than 400: each names something well formed that this
+		// space does not have — a content key none of the link's rows carries,
+		// an explanation or a link that is not here. A 400 would tell the
+		// owner to fix the request they sent, which is not what is wrong.
+		httpjson.Error(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrBrokerUnreachable):
 		// Logged as well as answered, through the same default logger
 		// family.WriteError uses for the errors behind its 500s: this branch
@@ -494,8 +505,13 @@ func (h *Handler) handleUnparsed(w http.ResponseWriter, r *http.Request) {
 		HasMore:    hasMore,
 	}
 	for _, m := range rows {
-		out.Operations = append(out.Operations, apitypes.TinvestUnparsedOperation{
-			Id:          m.ID,
+		row := apitypes.TinvestUnparsedOperation{
+			Id: m.ID,
+			// What an explanation names this row by, and the reason it is
+			// published at all: the broker's own operation id is documented to
+			// change, so a client sending one back would be naming a row that
+			// may no longer be there (see MirrorRow.ContentKey).
+			ContentKey:  m.ContentKey,
 			OccurredAt:  m.OccurredAt,
 			OpType:      m.OpType,
 			Payment:     m.Payment.String(),
@@ -510,9 +526,74 @@ func (h *Handler) handleUnparsed(w http.ResponseWriter, r *http.Request) {
 			// here computes from them, and re-modelling them would be a second
 			// reading of a document this program deliberately keeps unread.
 			Raw: m.Raw,
-		})
+		}
+		if e := m.ExplainedBy; e != nil {
+			row.ExplainedBy.Set(apitypes.TinvestRowExplanation{
+				Id:            e.ID,
+				OperationId:   e.OperationID,
+				OperationOn:   openapi_types.Date{Time: e.OperationOn},
+				OperationType: apitypes.OperationType(e.OperationType),
+			})
+		}
+		out.Operations = append(out.Operations, row)
 	}
 	httpjson.Write(w, http.StatusOK, out)
+}
+
+// handleExplain records that one manual operation accounts for the named
+// broker rows of a linked account.
+func (h *Handler) handleExplain(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	linkID, err := uuid.Parse(r.PathValue("linkId"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "invalid linkId")
+		return
+	}
+	var req apitypes.TinvestExplainRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	// THE JOURNAL'S OWN READING OF ITS OWN REQUEST SHAPE. A second parser here
+	// would be a second set of rules about what a date or a decimal is, and the
+	// two would part company the first time either moved.
+	op, err := operation.OperationFromCreateRequest(req.Operation)
+	if err != nil {
+		var bad operation.BadFieldError
+		if errors.As(err, &bad) {
+			httpjson.Error(w, http.StatusBadRequest, bad.Message)
+			return
+		}
+		writeError(w, err)
+		return
+	}
+
+	explanation, queued, err := h.svc.ExplainRows(r.Context(), p, linkID, req.ContentKeys, op)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusCreated, apitypes.TinvestExplanationResponse{
+		OperationId: explanation.OperationID,
+		SyncQueued:  queued,
+	})
+}
+
+// handleRemoveExplanation deletes an explanation together with the manual
+// operation it names — see Service.RemoveExplanation for why that is one
+// action and not two.
+func (h *Handler) handleRemoveExplanation(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, err := uuid.Parse(r.PathValue("explanationId"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "invalid explanationId")
+		return
+	}
+	queued, err := h.svc.RemoveExplanation(r.Context(), p, id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, apitypes.TinvestExplanationRemoved{SyncQueued: queued})
 }
 
 func (h *Handler) writeConnection(w http.ResponseWriter, status int, view ConnectionView) {
