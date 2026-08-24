@@ -143,6 +143,28 @@ func TestIncomeByInstrumentMatchesEngineIncomeTypes(t *testing.T) {
 				},
 			}
 		}},
+		// A spin-off's two legs. The departing one carries no quantity — it moves
+		// no units — and the arriving one is an ordinary parcel of the new paper.
+		// Neither is income, which is the whole of what this table asserts.
+		{TypeSpinoffOut, func(id uuid.UUID) []Operation {
+			acquired := on(1)
+			return []Operation{
+				{Type: TypeBuy, InstrumentID: &id, OccurredOn: on(1), Currency: "USD", Quantity: qty("10"), AmountMinor: -100_000},
+				{
+					Type: TypeSpinoffOut, InstrumentID: &id, OccurredOn: on(2), Currency: "USD", AmountMinor: 40_000,
+					TransferLots: []ReleasedLot{{Quantity: *qty("10"), CostMinor: 40_000, AcquiredOn: &acquired}},
+				},
+			}
+		}},
+		{TypeSpinoffIn, func(id uuid.UUID) []Operation {
+			acquired := on(1)
+			return []Operation{
+				{
+					Type: TypeSpinoffIn, InstrumentID: &id, OccurredOn: on(2), Currency: "USD", Quantity: qty("10"), AmountMinor: 40_000,
+					TransferLots: []ReleasedLot{{Quantity: *qty("10"), CostMinor: 40_000, AcquiredOn: &acquired}},
+				},
+			}
+		}},
 		{TypeSplit, func(id uuid.UUID) []Operation {
 			ratio := decimal.RequireFromString("2")
 			return []Operation{

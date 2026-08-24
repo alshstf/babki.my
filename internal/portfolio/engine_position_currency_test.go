@@ -33,6 +33,13 @@ func TestMustMatchPositionCurrencyClassifiesEveryType(t *testing.T) {
 		// the new paper is quoted in.
 		TypeExchangeOut: true,
 		TypeExchangeIn:  true,
+		// A spin-off's legs answer the same way and for the same reason: the
+		// departing one takes money out of the single-currency basis and the
+		// arriving one settles the carved-out paper's cost currency to the
+		// currency that money was paid in. The departing leg moves no units at
+		// all, which changes nothing here — the question is about the money.
+		TypeSpinoffOut: true,
+		TypeSpinoffIn:  true,
 		// A sale's proceeds and fee go to a Realization, which carries its own
 		// currency, and what it retires is decided by the quantity sold. A
 		// redemption is the same event by another name and answers the same.
