@@ -862,24 +862,6 @@ func parseDate(s string) (time.Time, error) {
 	return d, nil
 }
 
-// parseNullableDecimal converts an optional decimal-as-string field. An
-// absent or explicit-null field yields (nil, true). A present-but-garbage
-// string writes a 400 response and returns ok=false so the caller can bail
-// out before ever reaching the service.
-func parseNullableDecimal(w http.ResponseWriter, n nullable.Nullable[string], field string) (*decimal.Decimal, bool) {
-	d, err := nullableDecimal(n, field)
-	if err != nil {
-		var bad BadFieldError
-		if errors.As(err, &bad) {
-			httpjson.Error(w, http.StatusBadRequest, bad.Message)
-			return nil, false
-		}
-		httpjson.Error(w, http.StatusBadRequest, err.Error())
-		return nil, false
-	}
-	return d, true
-}
-
 // nullableDecimal is the same conversion without a response writer, for the
 // callers that build an operation away from an HTTP handler (see
 // OperationFromCreateRequest). One reading of the field, two doors.
