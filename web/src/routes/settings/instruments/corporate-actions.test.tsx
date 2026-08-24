@@ -221,6 +221,69 @@ describe("CorporateActions", () => {
     expect(screen.getByText("US0231351067 → RU000A107UL4")).toBeInTheDocument();
   });
 
+  it("says which paper a recorded conversion is waiting for", async () => {
+    // A conversion IS carried into journals now; what can still hold one back is
+    // a catalog with no row for the paper it produces, and the two answers are
+    // different fields because they are different questions. The row must show
+    // the waiting one — a person who has just recorded a fact and sees nothing
+    // change is owed the reason, and "not counted yet" would now be false.
+    serve([
+      {
+        path: "/api/v1/instrument-events",
+        body: {
+          events: [
+            makeEvent({
+              id: "conv-2",
+              kind: "conversion",
+              result_isin: "RU000A107UL4",
+              materialized: true,
+              not_counted_reason: "result_not_in_catalog",
+            }),
+          ],
+        },
+      },
+    ]);
+
+    renderSection();
+
+    expect(
+      await screen.findByText(
+        "Бумаги, которая из неё получилась, нет в каталоге — заведите её, и запись применится",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Пока не учитывается в журнале")).toBeNull();
+  });
+
+  // No `not_counted_reason` at all, which is how the server says "nothing is in
+  // the way": the field is omitted rather than sent as null.
+  it("says nothing extra about an event that is fully counted", async () => {
+    serve([
+      {
+        path: "/api/v1/instrument-events",
+        body: {
+          events: [
+            makeEvent({
+              id: "conv-3",
+              kind: "conversion",
+              result_isin: "RU000A107UL4",
+              materialized: true,
+            }),
+          ],
+        },
+      },
+    ]);
+
+    renderSection();
+
+    expect(await screen.findByTestId("corporate-action-row")).toBeInTheDocument();
+    expect(screen.queryByText("Пока не учитывается в журнале")).toBeNull();
+    expect(
+      screen.queryByText(
+        "Бумаги, которая из неё получилась, нет в каталоге — заведите её, и запись применится",
+      ),
+    ).toBeNull();
+  });
+
   it("offers nothing to write to a member who may not", async () => {
     serve([
       { path: "/api/v1/instrument-events", body: { events: [makeEvent()] } },

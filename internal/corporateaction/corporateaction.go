@@ -33,13 +33,21 @@
 //
 // # What is here and what is not
 //
-// Splits are materialized. Conversions and spin-offs are STORABLE but not yet
-// materialized: the journal has no type for one paper becoming another, and
-// inventing the rows before the engine can fold them would put arithmetic in the
-// journal that nothing checks. Recording the facts first is deliberate — the
-// owner's own funds converted in 2023 and nobody can go back and ask the
-// registrar again — and the screen says which kinds are carried into the journal
-// today.
+// All three kinds are materialized. A split writes one row; a conversion and a
+// spin-off write a PAIR — one leg giving up and one receiving, on the same
+// account and the same day, built by the journal's own arithmetic (see
+// operation.BuildExchange and operation.BuildSpinoff) and applied through the
+// same difference the split goes through.
+//
+// The one thing that still stops a recorded event from reaching a journal is a
+// catalog with no row for the paper the event PRODUCES: a journal row points at
+// a catalog row, and inventing one would be this program deciding what somebody
+// holds. That is a waiting state rather than a failure — the fact was recorded
+// the moment it was known, which is the whole reason the registry stores things
+// it cannot yet apply (the owner's own funds converted in 2023 and nobody can go
+// back and ask the registrar again) — and the event says so on its own row (see
+// Event.NotCountedReason). Cataloguing the paper is what completes it: the next
+// materialization writes the pair, against the same event, unchanged.
 package corporateaction
 
 import (
@@ -85,14 +93,50 @@ func (k Kind) Valid() bool {
 	return false
 }
 
-// MaterializedKinds are the kinds this program carries into journals today.
-// Everything else is recorded and shown, and says of itself that it is not
-// counted yet — see the package doc.
+// Materialized reports whether this program carries this KIND into journals.
 //
-// The screen reads this rather than restating the list: a kind that starts
-// being materialized must not need a second edit somewhere else to stop
-// claiming it is not.
-func (k Kind) Materialized() bool { return k == KindSplit }
+// ALL THREE ARE, SINCE THE PAIRS LANDED — a split writes one row, a conversion
+// and a spin-off write two (see Materializer.rowsFor). So this answers true for
+// every kind Valid does today, and it is kept as a question of its own rather
+// than deleted for the same reason it was written: a fourth kind will be
+// recordable before it is applicable, and on that day it must be able to say so
+// here instead of somewhere a screen would have to be taught about.
+//
+// IT SAYS NOTHING ABOUT ONE EVENT. Whether a particular event produced anything
+// depends on the accounts (nobody held the paper) and on the catalog (the paper
+// it produces has no row here) — see NotCountedReason, which is the per-event
+// answer and the one a screen should show beside a row.
+func (k Kind) Materialized() bool {
+	switch k {
+	case KindSplit, KindConversion, KindSpinOff:
+		return true
+	}
+	return false
+}
+
+// NotCounted is why one recorded event still puts nothing in any journal.
+type NotCounted string
+
+// NotCountedResultMissing: the event produces a paper the catalog has no row
+// for, so no journal row could point at it. It is not a failure and not a
+// refusal — the registry deliberately records facts about papers nobody here
+// holds — but it IS the difference between "recorded and applied" and "recorded
+// and waiting", and a reader who has just entered a conversion is owed it.
+// Cured by cataloguing the paper: the next materialization writes the pair.
+const NotCountedResultMissing NotCounted = "result_not_in_catalog"
+
+// NotCountedReason answers, for one event, why it is not carried into journals —
+// or "" when nothing stands in the way.
+//
+// resultCataloged says whether the catalog holds the paper this event produces;
+// the caller looks that up in one query for a whole list rather than one per row
+// (see Store.CatalogedISINs).
+func (e Event) NotCountedReason(resultCataloged bool) NotCounted {
+	if e.ResultISIN != "" && !resultCataloged {
+		return NotCountedResultMissing
+	}
+	return ""
+}
 
 // Source is where a fact came from.
 const (

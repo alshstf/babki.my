@@ -2,13 +2,17 @@ package corporateaction
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/portfolio"
 )
@@ -48,6 +52,17 @@ type rechecker interface {
 	QueueRecheckForAccounts(ctx context.Context, accountIDs []uuid.UUID) (int, error)
 }
 
+// catalog is how a conversion or a spin-off finds the paper it PRODUCES. The
+// registry names it by ISIN, because the fact outlives any catalog row; the
+// journal names it by instrument id, because a journal row points at a row of
+// the catalog. This is the one lookup between the two.
+//
+// *instrument.Store satisfies it. Narrow, and declared here, for the same reason
+// the two above are: what this package wants of the catalog is one question.
+type catalog interface {
+	ByISIN(ctx context.Context, isin string) (instrument.Instrument, error)
+}
+
 // Materializer carries the registry's facts into the journals of the accounts
 // that held the paper.
 //
@@ -62,19 +77,21 @@ type Materializer struct {
 	store   *Store
 	journal journalReader
 	ops     journalWriter
+	papers  catalog
 	recheck rechecker
 	log     *slog.Logger
 }
 
 // NewMaterializer wires the registry to the journal. recheck may be nil (see
-// the rechecker interface).
+// the rechecker interface); papers may not — every conversion and spin-off needs
+// it to find the paper it produces.
 func NewMaterializer(store *Store, journal journalReader, ops journalWriter,
-	recheck rechecker, log *slog.Logger,
+	papers catalog, recheck rechecker, log *slog.Logger,
 ) *Materializer {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Materializer{store: store, journal: journal, ops: ops, recheck: recheck, log: log}
+	return &Materializer{store: store, journal: journal, ops: ops, papers: papers, recheck: recheck, log: log}
 }
 
 // Stats is what one run did, for the log line and for the tests to read.
@@ -209,27 +226,33 @@ func (m *Materializer) forAccount(ctx context.Context, spaceID, accountID uuid.U
 		ours[id] = true
 	}
 
-	// The rows this materialization owns on this account: registry rows on the
-	// catalog rows of this paper. They are recomputed from scratch below, so
-	// they are held out of the journal the recomputation folds — otherwise the
-	// quantity a split is decided on would already have that split in it.
+	// The rows this materialization owns on this account. They are recomputed
+	// from scratch below, so they are held out of the journal the recomputation
+	// folds — otherwise the quantity a split is decided on would already have
+	// that split in it.
 	//
-	// WHEN CONVERSIONS AND SPIN-OFFS ARE MATERIALIZED this ownership rule needs
-	// revisiting: those write a row onto the paper they PRODUCE as well, and a
-	// row on that instrument would belong to this ISIN's event while sitting
-	// under another ISIN's name. Today only splits are carried into journals
-	// and a split touches nothing but its own paper, so the two readings agree.
+	// OWNERSHIP IS READ OFF THE ROW'S NAME, NOT OFF ITS INSTRUMENT COLUMN, and
+	// that is what makes a pair expressible at all. A conversion writes its
+	// arriving leg onto the paper it PRODUCES — the T shares, not the receipts —
+	// so a rule keyed on "is this instrument one of ours" would leave that leg
+	// unowned by the run that wrote it (never removed when the event changes) and
+	// owned by the run for the produced paper (removed as unwanted the moment it
+	// looked). Both readings are wrong and they are wrong in opposite directions.
+	// The external id names the SOURCE instrument on both legs (see
+	// externalIDFor), so a row says for itself which paper's event it belongs to,
+	// and a deleted event's rows are still collected — the name outlives the
+	// event.
 	owned := map[uuid.UUID]operation.Operation{}
 	base := make([]operation.Operation, 0, len(journal))
 	for _, o := range journal {
-		if o.Source == operation.SourceRegistry && o.InstrumentID != nil && ours[*o.InstrumentID] {
+		if o.Source == operation.SourceRegistry && ownedByThisPaper(o, ours) {
 			owned[o.ID] = o
 			continue
 		}
 		base = append(base, o)
 	}
 
-	want, err := m.desired(base, accountID, instrumentIDs, events)
+	want, err := m.desired(ctx, base, accountID, instrumentIDs, events)
 	if err != nil {
 		return Stats{}, err
 	}
@@ -297,7 +320,7 @@ func (m *Materializer) RequestRecheck(ctx context.Context, stats Stats) int {
 // because each one acts on the holding the ones before it left: a paper that
 // split ten for one in 2021 and two for one in 2024 is held in the 2021 answer
 // when the 2024 event asks whether anything is held at all.
-func (m *Materializer) desired(base []operation.Operation, accountID uuid.UUID,
+func (m *Materializer) desired(ctx context.Context, base []operation.Operation, accountID uuid.UUID,
 	instrumentIDs []uuid.UUID, events []Event,
 ) ([]operation.Operation, error) {
 	var want []operation.Operation
@@ -305,6 +328,24 @@ func (m *Materializer) desired(base []operation.Operation, accountID uuid.UUID,
 	for _, e := range events {
 		if !e.Kind.Materialized() {
 			continue
+		}
+		// The paper a conversion or a spin-off produces, resolved once per event
+		// rather than once per holding. An event whose result the catalog has no
+		// row for produces NOTHING and says so where a person can read it (see
+		// Store.NotCountedReason); here it is simply skipped, because a journal
+		// row cannot point at a paper that is not in the catalog.
+		var result *uuid.UUID
+		if e.ResultISIN != "" {
+			id, err := m.resultInstrument(ctx, e)
+			if err != nil {
+				return nil, err
+			}
+			if id == nil {
+				m.log.Info("corporateaction: the paper this event produces is not in the catalog, so nothing is written for it",
+					"event", e.ID, "isin", e.ISIN, "result_isin", e.ResultISIN)
+				continue
+			}
+			result = id
 		}
 		for _, instrumentID := range instrumentIDs {
 			held, err := heldAtStartOf(working, instrumentID, e.EffectiveOn)
@@ -320,7 +361,7 @@ func (m *Materializer) desired(base []operation.Operation, accountID uuid.UUID,
 			if !held.IsPositive() {
 				continue
 			}
-			if hasForeignSplit(working, instrumentID, e.EffectiveOn) {
+			if e.Kind == KindSplit && hasForeignSplit(working, instrumentID, e.EffectiveOn) {
 				// Somebody else's split of this paper on this very day is
 				// already in the journal. Adding ours would multiply the
 				// holding twice for one corporate action. It cannot happen
@@ -332,12 +373,121 @@ func (m *Materializer) desired(base []operation.Operation, accountID uuid.UUID,
 					"account", accountID, "instrument", instrumentID, "on", e.EffectiveOn.Format(time.DateOnly))
 				continue
 			}
-			row := splitRow(e, accountID, instrumentID, held)
-			want = append(want, row)
-			working = append(working, row)
+			rows, err := m.rowsFor(e, accountID, instrumentID, result, held, working)
+			if err != nil {
+				// The event cannot be expressed against THIS account's journal —
+				// a holding too small to leave a unit behind after the ratio, a
+				// share of the basis that rounds to nothing. It is news about
+				// this account and this event, not about the registry, so the
+				// other accounts go on being brought into line.
+				m.log.Warn("corporateaction: this account's holding cannot take the event, leaving it alone",
+					"account", accountID, "instrument", instrumentID, "event", e.ID, "err", err)
+				continue
+			}
+			want = append(want, rows...)
+			working = append(working, rows...)
 		}
 	}
 	return want, nil
+}
+
+// resultInstrument is the catalog row of the paper an event produces, or nil
+// when the catalog has none.
+//
+// A MISSING ROW IS NOT AN ERROR. The registry records what happened to a paper
+// whether or not anybody here holds the result — the exchange job writes splits
+// of papers nobody in this instance has ever traded — and a conversion recorded
+// before its new paper is catalogued is exactly the order things happen in when
+// somebody enters a fact they have just learned. What it is instead is a visible
+// answer on the screen, so nobody is left wondering why a recorded event moved
+// nothing.
+func (m *Materializer) resultInstrument(ctx context.Context, e Event) (*uuid.UUID, error) {
+	inst, err := m.papers.ByISIN(ctx, e.ResultISIN)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("corporateaction: look up the paper %s produces: %w", e.ID, err)
+	}
+	return &inst.ID, nil
+}
+
+// rowsFor is the journal rows one event asks one account for on one catalog row
+// of the paper: a single split, or the two legs of a conversion or a spin-off.
+//
+// THE PAIRS ARE BUILT BY THE OPERATION PACKAGE'S OWN BUILDERS and not restated
+// here (see operation.BuildExchange and operation.BuildSpinoff). What is added
+// on this side is only what makes them the REGISTRY's rows: the names that let
+// the next run recognise them, and the group that keeps the two legs one event.
+func (m *Materializer) rowsFor(e Event, accountID, instrumentID uuid.UUID, result *uuid.UUID,
+	held heldPosition, working []operation.Operation,
+) ([]operation.Operation, error) {
+	if e.Kind == KindSplit {
+		return []operation.Operation{splitRow(e, accountID, instrumentID, held)}, nil
+	}
+	if result == nil {
+		return nil, fmt.Errorf("corporateaction: %s names no paper to produce", e.Kind)
+	}
+
+	var out, in operation.Operation
+	var err error
+	switch e.Kind {
+	case KindConversion:
+		// THE WHOLE HOLDING CONVERTS. A conversion is not a trade somebody sizes
+		// — the registrar exchanged every unit anybody held, and an account that
+		// kept some of the old paper back is a state that never existed. So the
+		// count is the holding at the start of the day and the arriving count is
+		// that holding through the registry's ratio.
+		out, in, err = operation.BuildExchange(working, operation.ExchangeParams{
+			AccountID:        accountID,
+			FromInstrumentID: instrumentID,
+			ToInstrumentID:   *result,
+			Quantity:         held.quantity,
+			ToQuantity:       held.quantity.Mul(e.Ratio()),
+			OccurredOn:       e.EffectiveOn,
+			Source:           operation.SourceRegistry,
+			Note:             eventNote(e),
+		})
+	case KindSpinOff:
+		out, in, err = operation.BuildSpinoff(working, operation.SpinoffParams{
+			AccountID:        accountID,
+			FromInstrumentID: instrumentID,
+			ToInstrumentID:   *result,
+			RatioFrom:        decimal.NewFromInt(e.RatioFrom),
+			RatioTo:          decimal.NewFromInt(e.RatioTo),
+			BasisShare:       *e.BasisShare,
+			OccurredOn:       e.EffectiveOn,
+			Source:           operation.SourceRegistry,
+			Note:             eventNote(e),
+		})
+	default:
+		return nil, fmt.Errorf("corporateaction: no rule for materializing %s", e.Kind)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// One group for the two legs, from ONE value: that is what makes the pair one
+	// event to everything downstream, and the journal's own removal rule refuses
+	// to take one leg of a group without the other.
+	//
+	// IT IS DERIVED RATHER THAN DRAWN FRESH, AND NOTHING TODAY DEPENDS ON THAT.
+	// A stored row's group is not among the fields a recomputation compares (see
+	// sameRow), deliberately: a group is a name for "these two are one event",
+	// not a statement about the event, so comparing it would turn a fresh name
+	// into a rewrite of two perfectly good rows. Deriving it therefore buys no
+	// idempotence — it was checked by hand, and drawing the group at random
+	// leaves every test in this package green. What it buys is that the same
+	// event rewritten (a corrected ratio, a purchase backdated underneath) is
+	// recognisable across runs in a log and in the database, which a fresh
+	// random name each time would not be. Said plainly here because the first
+	// version of this comment claimed it prevented churn, and it does not.
+	group := groupFor(e, accountID, instrumentID)
+	outID := externalIDFor(e, accountID, instrumentID)
+	inID := outID + inLegSuffix
+	out.TransferGroupID, out.ExternalID = &group, &outID
+	in.TransferGroupID, in.ExternalID = &group, &inID
+	return []operation.Operation{out, in}, nil
 }
 
 // splitRow is the journal row one event asks one account for.
@@ -373,6 +523,24 @@ func splitRow(e Event, accountID, instrumentID uuid.UUID, held heldPosition) ope
 // It names the ratio the way the exchange publishes it and the source the fact
 // came from, so a reader looking at a quantity that changed on its own can see
 // in one line what changed it and who said so.
+// eventNote is what a conversion's or a spin-off's rows say about themselves,
+// in the same shape and for the same reasons as splitNote below.
+func eventNote(e Event) string {
+	var what string
+	switch e.Kind {
+	case KindConversion:
+		what = fmt.Sprintf("Конвертация %d:%d", e.RatioFrom, e.RatioTo)
+	case KindSpinOff:
+		what = fmt.Sprintf("Выделение %d:%d", e.RatioFrom, e.RatioTo)
+	default:
+		what = fmt.Sprintf("%s %d:%d", e.Kind, e.RatioFrom, e.RatioTo)
+	}
+	if e.Source == SourceMOEX {
+		return what + " — из реестра корпоративных действий (Московская биржа)"
+	}
+	return what + " — из реестра корпоративных действий (внесено вручную)"
+}
+
 func splitNote(e Event) string {
 	switch e.Source {
 	case SourceMOEX:
@@ -397,6 +565,52 @@ func splitNote(e Event) string {
 // row already in the journal is recognised as the row this run is asking for.
 func externalIDFor(e Event, accountID, instrumentID uuid.UUID) string {
 	return fmt.Sprintf("%s:%s:%s", e.ID, accountID, instrumentID)
+}
+
+// inLegSuffix distinguishes the arriving leg of a pair from the departing one.
+//
+// BOTH LEGS ARE NAMED AFTER THE SOURCE INSTRUMENT, and the suffix is what keeps
+// them apart under the journal's unique index over (account, source, external
+// id). Naming the arriving leg after the paper it lands on would have read more
+// naturally and would have broken ownership: a row's name is how the next run
+// decides whose event it belongs to (see ownedByThisPaper), and the arriving leg
+// belongs to the event of the paper it CAME FROM.
+const inLegSuffix = ":in"
+
+// ownedByThisPaper reports whether a registry row was written for an event of
+// one of the catalog rows named in ours.
+//
+// It reads the row's external id rather than its instrument column, for the
+// reason forAccount states: the arriving leg of a pair sits on a paper that is
+// not this event's own. The id is "event:account:instrument" with an optional
+// ":in", so the instrument is the third field either way.
+func ownedByThisPaper(o operation.Operation, ours map[uuid.UUID]bool) bool {
+	if o.ExternalID == nil {
+		return false
+	}
+	parts := strings.Split(*o.ExternalID, ":")
+	if len(parts) < 3 {
+		return false
+	}
+	id, err := uuid.Parse(parts[2])
+	if err != nil {
+		return false
+	}
+	return ours[id]
+}
+
+// nsCorporateAction is the UUID namespace the transfer groups of materialized
+// pairs are derived under (RFC 4122's name-based version 5). It is a constant
+// and must stay one: changing it renames every group this package has ever
+// written, and the next run would then remove every pair and write it again
+// under new names.
+var nsCorporateAction = uuid.MustParse("2b6a3d55-3a7f-5e64-9b0f-4f4b0c3a1d7e")
+
+// groupFor is the transfer group the two legs of one materialized pair share.
+// Derived from the same three things the external id is, so that recomputing the
+// pair arrives at the same group rather than at a fresh one.
+func groupFor(e Event, accountID, instrumentID uuid.UUID) uuid.UUID {
+	return uuid.NewSHA1(nsCorporateAction, []byte(externalIDFor(e, accountID, instrumentID)))
 }
 
 // heldPosition is what the fold says about a holding at a moment: how much, and
@@ -488,17 +702,44 @@ func diff(want []operation.Operation, owned map[uuid.UUID]operation.Operation) (
 
 	var delta operation.ImportDelta
 	kept := map[uuid.UUID]bool{}
-	for _, w := range want {
-		stored, ok := byName[*w.ExternalID]
-		if ok && sameSplitRow(w, stored) {
-			kept[stored.ID] = true
+	// AN EVENT IS COMPARED WHOLE, not leg by leg. A pair's two rows are one fact,
+	// and the journal refuses a delta that removes one leg of a group and leaves
+	// the other (see operation.importRemovals) — so a conversion whose arriving
+	// count changed while its departing leg happened to stay identical would
+	// otherwise produce exactly that refusal, and the run would fail rather than
+	// correct itself. Grouping by the departing leg's name is what makes "the
+	// same event as before" a single question with a single answer.
+	for _, unit := range unitsOf(want) {
+		storedRows := make([]operation.Operation, 0, len(unit))
+		matched := true
+		for _, w := range unit {
+			stored, ok := byName[*w.ExternalID]
+			if !ok || !sameRow(w, stored) {
+				matched = false
+			}
+			if ok {
+				storedRows = append(storedRows, stored)
+			}
+		}
+		if matched && len(storedRows) == len(unit) {
+			for _, stored := range storedRows {
+				kept[stored.ID] = true
+			}
 			continue
 		}
-		if ok {
+		// Any difference at all rewrites the whole event. The rows that come back
+		// inherit the stamps of the rows they replace, one for one in the order
+		// both were built in, so a corrected ratio does not also move where the
+		// event folds within its day (see operation.ImportDelta).
+		for _, stored := range storedRows {
 			delta.Remove = append(delta.Remove, stored.ID)
-			w.CreatedAt = stored.CreatedAt
 		}
-		delta.Add = append(delta.Add, w)
+		for i, w := range unit {
+			if i < len(storedRows) {
+				w.CreatedAt = storedRows[i].CreatedAt
+			}
+			delta.Add = append(delta.Add, w)
+		}
 	}
 	for id, o := range owned {
 		if kept[id] {
@@ -512,16 +753,36 @@ func diff(want []operation.Operation, owned map[uuid.UUID]operation.Operation) (
 	return delta, nil
 }
 
-// sameSplitRow reports whether the stored row already says what this run says.
+// unitsOf groups the desired rows into the events they describe: a split on its
+// own, a pair's two legs together, in the order they were built.
 //
-// EVERY FIELD THIS PACKAGE SETS IS COMPARED. A field left out would be a field
-// the registry could no longer correct: the note would go on describing a ratio
-// the row no longer carries, or a row would keep an instrument the paper no
-// longer maps to, and every run would report nothing to do.
-func sameSplitRow(want, stored operation.Operation) bool {
+// The grouping is by transfer group where there is one and by external id
+// otherwise, so it does not depend on the order rows happen to arrive in.
+func unitsOf(want []operation.Operation) [][]operation.Operation {
+	var units [][]operation.Operation
+	at := map[string]int{}
+	for _, w := range want {
+		key := *w.ExternalID
+		if w.TransferGroupID != nil {
+			key = w.TransferGroupID.String()
+		}
+		i, seen := at[key]
+		if !seen {
+			at[key] = len(units)
+			units = append(units, []operation.Operation{w})
+			continue
+		}
+		units[i] = append(units[i], w)
+	}
+	return units
+}
+
+// sameRow reports whether the stored row already says what this run says, for
+// any of the kinds this package writes.
+func sameRow(want, stored operation.Operation) bool {
 	if want.AccountID != stored.AccountID || want.Type != stored.Type ||
 		want.Currency != stored.Currency || want.Note != stored.Note ||
-		want.Source != stored.Source {
+		want.Source != stored.Source || want.AmountMinor != stored.AmountMinor {
 		return false
 	}
 	if !want.OccurredOn.Equal(stored.OccurredOn) {
@@ -530,8 +791,50 @@ func sameSplitRow(want, stored operation.Operation) bool {
 	if want.InstrumentID == nil || stored.InstrumentID == nil || *want.InstrumentID != *stored.InstrumentID {
 		return false
 	}
-	if want.SplitRatio == nil || stored.SplitRatio == nil || !want.SplitRatio.Equal(*stored.SplitRatio) {
+	if !sameQuantity(want.Quantity, stored.Quantity) {
 		return false
+	}
+	if !sameRatio(want.SplitRatio, stored.SplitRatio) {
+		return false
+	}
+	// THE BREAKDOWN IS COMPARED PIECE BY PIECE, and it is the field that actually
+	// changes when the journal underneath moves: a purchase backdated under an
+	// existing conversion leaves the counts and the money identical while the
+	// parcels behind them are different ones. Without this the run would report
+	// nothing to do and the pair would go on naming lots that no longer describe
+	// the position.
+	return sameLots(want.TransferLots, stored.TransferLots)
+}
+
+func sameQuantity(want, stored *decimal.Decimal) bool {
+	if want == nil || stored == nil {
+		return want == nil && stored == nil
+	}
+	return want.Equal(*stored)
+}
+
+func sameRatio(want, stored *decimal.Decimal) bool {
+	if want == nil || stored == nil {
+		return want == nil && stored == nil
+	}
+	return want.Equal(*stored)
+}
+
+func sameLots(want, stored []operation.ReleasedLot) bool {
+	if len(want) != len(stored) {
+		return false
+	}
+	for i := range want {
+		if !want[i].Quantity.Equal(stored[i].Quantity) || want[i].CostMinor != stored[i].CostMinor {
+			return false
+		}
+		switch {
+		case want[i].AcquiredOn == nil && stored[i].AcquiredOn == nil:
+		case want[i].AcquiredOn == nil || stored[i].AcquiredOn == nil:
+			return false
+		case !want[i].AcquiredOn.Equal(*stored[i].AcquiredOn):
+			return false
+		}
 	}
 	return true
 }

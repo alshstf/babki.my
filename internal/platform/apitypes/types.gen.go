@@ -208,6 +208,21 @@ func (e InstrumentEventKind) Valid() bool {
 	}
 }
 
+// Defines values for InstrumentEventNotCountedReason.
+const (
+	ResultNotInCatalog InstrumentEventNotCountedReason = "result_not_in_catalog"
+)
+
+// Valid indicates whether the value is a known member of the InstrumentEventNotCountedReason enum.
+func (e InstrumentEventNotCountedReason) Valid() bool {
+	switch e {
+	case ResultNotInCatalog:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for InstrumentEventSource.
 const (
 	InstrumentEventSourceManual  InstrumentEventSource = "manual"
@@ -922,11 +937,14 @@ type InstrumentEvent struct {
 	// ONLY `split` IS CARRIED INTO JOURNALS TODAY — see InstrumentEvent.materialized, which says so per row rather than leaving a reader to hold this list in their head. The other two are recorded because the facts are perishable: a fund converted in 2023 and nobody can go back and ask the registrar again.
 	Kind InstrumentEventKind `json:"kind"`
 
-	// Materialized Whether this program carries this KIND into journals today — true for a split, false for a conversion and a spin-off. Published per row rather than left to the client to derive from `kind`, so the day a kind starts being materialized no screen goes on claiming it is not. It says nothing about whether THIS event actually produced a row: an account that held nothing on the day gets none, and that is a fact about the account rather than about the event.
+	// Materialized Whether this program carries this KIND into journals — true for all three today. It was the field that told a split apart from a conversion and a spin-off, which were recorded but not applied; both are applied now, as a pair of journal rows each. It is still published per row rather than left to the client to derive from `kind`, because a kind will one day be recordable before it is applicable and must be able to say so here rather than in a list every screen has to be taught. It says nothing about whether THIS event produced a row — an account that held nothing on the day gets none, and `not_counted_reason` names the one condition that stops an event of a supported kind from producing anything at all.
 	Materialized bool `json:"materialized"`
 
 	// MoexSecid The exchange's security code the splits job resolved this ISIN from, cached so a later run costs no second lookup. Empty on a hand-recorded event. NEVER an identity: MOEX's `T` is Т-Технологии while this catalog also holds AT&T under `T`, which is why the job resolves through the exchange's own ISIN and not through a ticker.
 	MoexSecid *string `json:"moex_secid,omitempty"`
+
+	// NotCountedReason Why an event of a kind this program applies still puts nothing in a journal. `result_not_in_catalog`: the conversion or spin-off produces a paper the catalog has no row for, and a journal row cannot point at a paper that is not there. Nothing is wrong and nothing was refused — the fact is recorded and waits; adding the paper to the catalog is what completes it. A split can never carry this: it produces no second paper.
+	NotCountedReason *InstrumentEventNotCountedReason `json:"not_counted_reason,omitempty"`
 
 	// Note Whatever the recorder wanted to say about it. Empty on an exchange row.
 	Note string `json:"note"`
@@ -951,6 +969,9 @@ type InstrumentEvent struct {
 //
 // ONLY `split` IS CARRIED INTO JOURNALS TODAY — see InstrumentEvent.materialized, which says so per row rather than leaving a reader to hold this list in their head. The other two are recorded because the facts are perishable: a fund converted in 2023 and nobody can go back and ask the registrar again.
 type InstrumentEventKind string
+
+// InstrumentEventNotCountedReason Why an event of a kind this program applies still puts nothing in a journal. `result_not_in_catalog`: the conversion or spin-off produces a paper the catalog has no row for, and a journal row cannot point at a paper that is not there. Nothing is wrong and nothing was refused — the fact is recorded and waits; adding the paper to the catalog is what completes it. A split can never carry this: it produces no second paper.
+type InstrumentEventNotCountedReason string
 
 // InstrumentEventSource Where the fact came from. `moex_iss`: the exchange's own splits table, read by a daily job. Not a person's to remove — the job rewrites it from the exchange on every run, so a deletion would last until the next one. `manual`: somebody recorded it, with a link to the evidence in `source_ref`.
 type InstrumentEventSource string

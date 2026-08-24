@@ -190,6 +190,41 @@ func (s *Store) DistinctISINs(ctx context.Context) ([]string, error) {
 	return out, rows.Err()
 }
 
+// CatalogedISINs reports which of the given ISINs the catalog has a row for.
+//
+// ONE QUERY FOR A WHOLE LIST, and that is the point of it: the screen shows
+// every event, and asking the catalog once per row about the paper it produces
+// would be an N+1 over a table the registry already walks. Empty strings are
+// dropped rather than looked up — an event with no result names no paper.
+func (s *Store) CatalogedISINs(ctx context.Context, isins []string) (map[string]bool, error) {
+	wanted := make([]string, 0, len(isins))
+	seen := map[string]bool{}
+	for _, isin := range isins {
+		if isin == "" || seen[isin] {
+			continue
+		}
+		seen[isin] = true
+		wanted = append(wanted, isin)
+	}
+	out := map[string]bool{}
+	if len(wanted) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT isin FROM instruments WHERE isin = ANY($1)`, wanted)
+	if err != nil {
+		return nil, fmt.Errorf("corporateaction: look up which produced papers the catalog holds: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var isin string
+		if err := rows.Scan(&isin); err != nil {
+			return nil, err
+		}
+		out[isin] = true
+	}
+	return out, rows.Err()
+}
+
 // Delete removes a hand-recorded event. An exchange row is refused by name
 // (ErrNotEditable) and an unknown id by errNoSuchEvent, so the handler can tell
 // a 400 from a 404 without a second read.
