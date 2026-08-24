@@ -170,7 +170,8 @@ func newTestAPI(t *testing.T) *testAPI {
 	store := NewStore(pool)
 	accStore := account.NewStore(pool)
 	inserter := &fakeInserter{}
-	svc := NewService(store, accStore, operation.NewService(operation.NewStore(pool)), box,
+	opStore := operation.NewStore(pool)
+	svc := NewService(store, accStore, operation.NewService(opStore), opStore, box,
 		func(token string) (*Client, error) {
 			return NewClient(brokerSrv.Client(), brokerSrv.URL, token, slog.Default()), nil
 		}, inserter, slog.Default())
@@ -721,7 +722,8 @@ func TestAHalfBuiltConnectionThatCouldNotBeRemovedIsNotScheduled(t *testing.T) {
 		}
 	}
 
-	svc := NewService(api.store, strayAccountCreator{}, operation.NewService(operation.NewStore(api.pool)), api.box,
+	strayOps := operation.NewStore(api.pool)
+	svc := NewService(api.store, strayAccountCreator{}, operation.NewService(strayOps), strayOps, api.box,
 		func(token string) (*Client, error) {
 			return NewClient(http.DefaultClient, api.brokerURL, token, slog.Default()), nil
 		}, api.inserter, slog.New(&logCapture{}))

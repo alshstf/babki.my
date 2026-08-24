@@ -173,6 +173,15 @@ func TestTheContractStatesThePageBoundsTheServerEnforces(t *testing.T) {
 // meets. Or a later path could copy the declaration without being able to
 // produce it — a promise nothing keeps, which is #120's whole lesson in reverse.
 //
+// THE EXPLAIN PATH DECLARED ONE AND COULD NOT ANSWER IT. The reasoning written
+// down at the time was that the manual operation it takes goes through the
+// journal's own service, whose refusals reach the client unchanged — true, and
+// it does not produce a 422: that service answers ErrValidation with 400 and
+// ErrInconsistent with 409 (operation.writeError), and nothing on that path
+// makes a 422 at all. The declaration was checked against what the sentence
+// SAID rather than against what the code answers, and this test then held the
+// mistake in place. It is gone from the document and from here.
+//
 // The count is asserted for the reason goConstantValues asserts its own: a
 // renamed prefix or a moved path would otherwise leave this test iterating over
 // nothing and passing.
@@ -180,7 +189,6 @@ func TestTheContractStatesWhichPathCanAnswer422(t *testing.T) {
 	doc := readContract(t)
 	const createPath = "/api/v1/tinvest/connections"
 	const wantOperations = 11 // what Handler.Mount registers
-	const explainPath = "/api/v1/tinvest/links/{linkId}/explanations"
 
 	seen := 0
 	for path, item := range doc.Paths {
@@ -201,20 +209,10 @@ func TestTheContractStatesWhichPathCanAnswer422(t *testing.T) {
 					"ErrBrokerAccountNotImportable: a client meeting it has nothing to read it by",
 					verb, path)
 			}
-			// The explain path answers a 422 of its own, and a different one:
-			// the manual operation it is given goes through the journal's own
-			// service, whose refusals reach the client unchanged. Both paths
-			// have to declare it, and no third one may — a 422 nothing can
-			// answer is a promise a client would wait for forever.
-			isExplain := verb == "POST" && path == explainPath
-			if isExplain && !declares422 {
-				t.Errorf("%s %s declares no 422, but the journal's own refusals travel through it "+
-					"unchanged: a client meeting one has nothing to read it by", verb, path)
-			}
-			if !isCreate && !isExplain && declares422 {
+			if !isCreate && declares422 {
 				t.Errorf("%s %s declares a 422 it cannot answer: only the create path takes "+
-					"broker account picks and only the explain path forwards the journal's "+
-					"refusals, so no other one can produce one", verb, path)
+					"broker account picks, and the journal's own refusals — which the explain "+
+					"path forwards — are a 400 or a 409, never this", verb, path)
 			}
 			if isCreate {
 				// The other leg of the same split, declared beside it: a refused

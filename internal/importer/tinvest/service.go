@@ -163,33 +163,48 @@ type ConnectionView struct {
 // the first statement of the method cannot be reached around at all, and a
 // second caller (a future CLI, a job) gets it for free.
 // journalWriter is the journal's own door, as narrow as this package's use of
-// it: one manual operation written, one deleted. Both go through the operation
-// service rather than its store, so a row this importer's owner enters by hand
-// is validated and replayed through the engine exactly like one entered on the
-// journal screen — there is no second way into the journal, and this is not it.
+// it: one manual operation written — in place of the imported rows it accounts
+// for, when it accounts for rows this importer had already booked — and one
+// deleted. Both go through the operation service rather than its store, so a
+// row this importer's owner enters by hand is validated and replayed through
+// the engine exactly like one entered on the journal screen — there is no
+// second way into the journal, and this is not it.
+//
+// CreateReplacing AND NOT Create, because the rows an explanation accounts for
+// may be rows this importer READ AND BOOKED: a fund's partial redemption comes
+// as a withdrawal "to another depositary" that the projection believes, and the
+// owner's own redemption of those units cannot be written while that withdrawal
+// still holds them. Removing them first would be a second transaction and a
+// window with neither reading of the event in the journal.
 type journalWriter interface {
-	Create(ctx context.Context, spaceID uuid.UUID, op operation.Operation) (operation.Operation, error)
+	CreateReplacing(ctx context.Context, spaceID uuid.UUID, op operation.Operation, replace []uuid.UUID) (
+		operation.Operation, error)
 	Delete(ctx context.Context, spaceID, id uuid.UUID) error
 }
 
 type Service struct {
-	store     *Store
-	accounts  accountCreator
-	journal   journalWriter
+	store    *Store
+	accounts accountCreator
+	journal  journalWriter
+	// entries reads back what this importer wrote, which an explanation needs
+	// in order to name the rows it replaces. It is the SAME interface the
+	// rebuild reads the journal through, satisfied by the same store, so there
+	// is one reader of imported rows rather than two.
+	entries   journalReader
 	box       *secretbox.Box
 	newClient clientFactory
 	inserter  jobInserter
 	log       *slog.Logger
 }
 
-func NewService(store *Store, accounts accountCreator, journal journalWriter, box *secretbox.Box,
-	newClient clientFactory, inserter jobInserter, log *slog.Logger,
+func NewService(store *Store, accounts accountCreator, journal journalWriter, entries journalReader,
+	box *secretbox.Box, newClient clientFactory, inserter jobInserter, log *slog.Logger,
 ) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Service{
-		store: store, accounts: accounts, journal: journal, box: box,
+		store: store, accounts: accounts, journal: journal, entries: entries, box: box,
 		newClient: newClient, inserter: inserter, log: log,
 	}
 }

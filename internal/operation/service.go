@@ -786,22 +786,91 @@ func normalizeForStorage(op *Operation) error {
 // silently breaking every later read by someone else. It is the same guard
 // CreatePair applies to a transfer's breakdown.
 func (s *Service) Create(ctx context.Context, spaceID uuid.UUID, op Operation) (Operation, error) {
+	return s.CreateReplacing(ctx, spaceID, op, nil)
+}
+
+// CreateReplacing writes op IN PLACE OF the imported rows named by replace: in
+// one transaction the named rows go, op arrives, and the engine is asked about
+// the journal that RESULTS. With an empty replace it is exactly Create, which
+// is why Create is one line — the ordinary case is the empty replacement, and
+// one implementation of "check this journal and write it" is what keeps the two
+// from parting company.
+//
+// WHY IT EXISTS. The broker sends no corporate actions at all, so a real event
+// reaches this program as whatever rows carried its money — and some of those
+// rows the importer reads WRONGLY but successfully. On the owner's own account
+// a fund's partial redemption arrived as a withdrawal of 44 380,35 units "to
+// another depositary" (a transfer_out, booked and believed) and, a fortnight
+// later, a payment of 2 559,80 ₽ typed as a bond redemption. The owner accounts
+// for both with one redemption of those units — and until this existed that
+// answer was refused, because the operation was checked while the transfer_out
+// still held the very units it names: «not enough quantity: have 16414.65, need
+// 44380.35». Removing first and writing after would have been two transactions
+// with a window between them where the journal held neither reading of the
+// event, and a failure in the second would have left it there.
+//
+// WHAT IT REFUSES. A row entered by hand is not an importer's to replace — the
+// owner deletes their own rows on the journal screen, where the refusals are
+// about their own history. A transfer group is replaced whole or not at all,
+// for the reason importRemovals gives: nothing downstream can tell that shares
+// in one account came from a transfer whose other half is gone. And every id
+// must be a row of this space, which is the same read the removal itself does.
+func (s *Service) CreateReplacing(ctx context.Context, spaceID uuid.UUID, op Operation, replace []uuid.UUID) (
+	Operation, error,
+) {
 	if err := normalizeForStorage(&op); err != nil {
 		return Operation{}, err
 	}
 	if err := validate(op); err != nil {
 		return Operation{}, err
 	}
+	// Which accounts to lock cannot itself be learned under the lock, so the
+	// replaced rows are read once on the pool for their accounts alone and read
+	// again inside — the same two steps Delete takes, for the same reason. This
+	// first read decides nothing: a row that vanishes meanwhile is refused by
+	// the second one.
+	accountIDs := []uuid.UUID{op.AccountID}
+	if len(replace) > 0 {
+		rows, err := s.store.ByIDs(ctx, spaceID, replace)
+		if err != nil {
+			return Operation{}, err
+		}
+		for _, o := range rows {
+			accountIDs = append(accountIDs, o.AccountID)
+		}
+	}
+
 	var created Operation
-	err := s.store.WithAccountsLocked(ctx, spaceID, []uuid.UUID{op.AccountID}, func(st *Store) error {
-		journal, err := st.ListForEngine(ctx, spaceID, op.AccountID)
+	err := s.store.WithAccountsLocked(ctx, spaceID, accountIDs, func(st *Store) error {
+		removeIDs, accounts, err := replacedRows(ctx, st, spaceID, replace)
 		if err != nil {
 			return err
 		}
-		if err := checkJournalOps(journal, []Operation{op}, nil); err != nil {
-			return err
+		accounts[op.AccountID] = true
+
+		// Every touched account is asked separately, because the engine answers
+		// about one journal at a time: the account op lands on is asked whether
+		// it replays WITH op and WITHOUT the removed rows, and an account that
+		// only loses rows is asked whether it still replays at all. Without that
+		// second question a replacement could quietly break an account it never
+		// wrote to.
+		journals := make(map[uuid.UUID][]Operation, len(accounts))
+		for accountID := range accounts {
+			journal, err := st.ListForEngine(ctx, spaceID, accountID)
+			if err != nil {
+				return err
+			}
+			journals[accountID] = journal
+			var add []Operation
+			if accountID == op.AccountID {
+				add = []Operation{op}
+			}
+			if err := checkJournalOps(journal, add, removeIDs); err != nil {
+				return err
+			}
 		}
-		created, err = st.Create(ctx, spaceID, op, func(stored Operation) error {
+
+		stored, err := st.ApplyDelta(ctx, spaceID, []Operation{op}, replace, func(stored []Operation) error {
 			// Not wrapped in ErrInconsistent: the caller's journal was fine a
 			// moment ago and their request was accepted, so reaching this is a
 			// bug in this program, not something they did. It must read as a
@@ -810,17 +879,76 @@ func (s *Service) Create(ctx context.Context, spaceID uuid.UUID, op Operation) (
 			// under the lock — it is refused by the check above instead. What is
 			// left for this to catch is the fault it was written for: a row the
 			// columns stored differently from the one that was checked.
-			if _, err := portfolio.Compute(journalWith(journal, []Operation{stored}, nil)); err != nil {
-				return fmt.Errorf("the operation as stored no longer replays: %v", err)
+			for accountID := range accounts {
+				var add []Operation
+				if accountID == op.AccountID {
+					add = stored
+				}
+				if _, err := portfolio.Compute(journalWith(journals[accountID], add, removeIDs)); err != nil {
+					return fmt.Errorf("the operation as stored no longer replays on account %s: %v", accountID, err)
+				}
 			}
 			return nil
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		created = stored[0]
+		return nil
 	})
 	if err != nil {
 		return Operation{}, mapWriteError(err)
 	}
 	return created, nil
+}
+
+// replacedRows reads the rows a replacement takes out and says which accounts
+// they belong to, refusing what must not be replaced. It runs INSIDE the lock,
+// where its answers are the ones acted on.
+func replacedRows(ctx context.Context, st *Store, spaceID uuid.UUID, replace []uuid.UUID) (
+	removeIDs map[uuid.UUID]bool, accounts map[uuid.UUID]bool, err error,
+) {
+	removeIDs = make(map[uuid.UUID]bool, len(replace))
+	accounts = map[uuid.UUID]bool{}
+	if len(replace) == 0 {
+		return removeIDs, accounts, nil
+	}
+	rows, err := st.ByIDs(ctx, spaceID, replace)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(rows) != len(replace) {
+		// An id of another space, an id named twice, or a row already gone. All
+		// three mean the caller computed its replacement against a journal this
+		// is not, so none of it is written.
+		return nil, nil, fmt.Errorf("%w: asked to replace %d operations, found %d in this space",
+			family.ErrValidation, len(replace), len(rows))
+	}
+	groups := map[uuid.UUID]bool{}
+	for _, o := range rows {
+		if o.Source == "manual" {
+			return nil, nil, fmt.Errorf("%w: operation %s was entered by hand and is not an importer's to replace",
+				family.ErrValidation, o.ID)
+		}
+		removeIDs[o.ID] = true
+		accounts[o.AccountID] = true
+		if o.TransferGroupID != nil {
+			groups[*o.TransferGroupID] = true
+		}
+	}
+	for group := range groups {
+		siblings, err := st.ByTransferGroup(ctx, spaceID, group)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, o := range siblings {
+			if !removeIDs[o.ID] {
+				return nil, nil, fmt.Errorf("%w: replacing transfer group %s would leave its %s leg behind",
+					family.ErrValidation, group, o.Type)
+			}
+		}
+	}
+	return removeIDs, accounts, nil
 }
 
 // CreateTransfer moves an in-kind position between two accounts as an
