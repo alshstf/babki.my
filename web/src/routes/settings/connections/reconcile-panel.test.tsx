@@ -64,6 +64,8 @@ function serveUnparsed(
 function makeUnparsed(id: string): TinvestUnparsedOperation {
   return {
     id,
+    link_id: "link-1",
+    content_key: `key-${id}`,
     occurred_at: "2026-08-04T09:15:00Z",
     op_type: "OPERATION_TYPE_FUTURES",
     payment: "-1234.5",

@@ -1819,7 +1819,7 @@ components:
         has_more: { type: boolean, description: "Whether the log holds at least one more run beyond this page. The server's to answer: the page's own length cannot, and here it especially cannot be inferred from a short page, since an over-large `limit` is refused rather than clamped. Fetched — one row beyond the page is asked for and its arrival IS this answer — never derived by comparing lengths afterwards." }
     TinvestUnparsedOperation:
       type: object
-      required: [id, content_key, occurred_at, op_type, payment, currency, description, reason, detail, raw]
+      required: [id, link_id, content_key, occurred_at, op_type, payment, currency, description, reason, detail, raw]
       description: >-
         One broker operation the projection could not turn into journal entries
         — OR one the owner has accounted for by hand, which it could have and
@@ -1836,6 +1836,16 @@ components:
         on and the only place the explanation can be taken back.
       properties:
         id: { type: string, format: uuid, description: "The mirror row's id — this program's own, not the broker's, whose operation ids are documented to change over time and are an attribute here rather than a key." }
+        link_id:
+          type: string
+          format: uuid
+          description: >-
+            The linked broker account this row belongs to. One connection may
+            feed several of them — the owner's own feeds four — and this list
+            covers the whole connection, so a client explaining a row needs to
+            know which link's endpoint to send it to, and must not offer to
+            explain rows of two different links with one operation: an
+            operation belongs to one account.
         content_key:
           type: string
           description: >-

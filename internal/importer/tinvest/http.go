@@ -507,6 +507,10 @@ func (h *Handler) handleUnparsed(w http.ResponseWriter, r *http.Request) {
 	for _, m := range rows {
 		row := apitypes.TinvestUnparsedOperation{
 			Id: m.ID,
+			// Which linked account the row is on: this list is per connection
+			// and a connection may feed several, so without it a client could
+			// not tell which link's endpoint to explain the row through.
+			LinkId: m.LinkID,
 			// What an explanation names this row by, and the reason it is
 			// published at all: the broker's own operation id is documented to
 			// change, so a client sending one back would be naming a row that

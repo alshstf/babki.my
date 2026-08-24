@@ -1448,6 +1448,9 @@ type TinvestUnparsedOperation struct {
 	// Id The mirror row's id — this program's own, not the broker's, whose operation ids are documented to change over time and are an attribute here rather than a key.
 	Id openapi_types.UUID `json:"id"`
 
+	// LinkId The linked broker account this row belongs to. One connection may feed several of them — the owner's own feeds four — and this list covers the whole connection, so a client explaining a row needs to know which link's endpoint to send it to, and must not offer to explain rows of two different links with one operation: an operation belongs to one account.
+	LinkId openapi_types.UUID `json:"link_id"`
+
 	// OccurredAt When the broker says the operation happened.
 	OccurredAt time.Time `json:"occurred_at"`
 

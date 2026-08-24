@@ -36,6 +36,8 @@ function serve(operations: TinvestUnparsedOperation[], hasMore = false) {
 function makeOperation(overrides: Partial<TinvestUnparsedOperation> = {}): TinvestUnparsedOperation {
   return {
     id: "u-1",
+    link_id: "link-1",
+    content_key: "key-u-1",
     occurred_at: "2026-08-04T09:15:00Z",
     op_type: "OPERATION_TYPE_FUTURES_VARIATION_MARGIN",
     payment: "-1234.5",
