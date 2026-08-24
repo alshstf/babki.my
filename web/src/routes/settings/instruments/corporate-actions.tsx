@@ -128,13 +128,22 @@ export function CorporateActions({ canEdit }: { canEdit: boolean }) {
                   <span className="tabular-nums text-muted-foreground">
                     {event.effective_on}
                   </span>
-                  {/* A kind this program records but does not yet carry into
-                      journals says so on its own row. The server publishes the
-                      answer per event rather than leaving the client to hold a
-                      list of kinds in its head. */}
+                  {/* Two different answers, and the row shows whichever
+                      applies. `materialized` is about the KIND — false only for
+                      a kind this program records but cannot yet apply, of which
+                      there are none today. `not_counted_reason` is about THIS
+                      event: the one thing that still holds a recorded fact back
+                      is a catalog with no row for the paper it produces. Both
+                      come from the server rather than being derived here, so no
+                      list of kinds lives in the client. */}
                   {!event.materialized && (
                     <Badge variant="outline">
                       {t("corporateActions.notCounted")}
+                    </Badge>
+                  )}
+                  {event.materialized && event.not_counted_reason != null && (
+                    <Badge variant="outline">
+                      {t(`corporateActions.notCountedReasons.${event.not_counted_reason}`)}
                     </Badge>
                   )}
                 </div>

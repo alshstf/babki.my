@@ -165,6 +165,80 @@ func TestASpinoffLeavesTheUnitsAndCarvesOutTheirMoney(t *testing.T) {
 	}
 }
 
+// TestAConversionTakesTheParcelsOfItsOwnDayAndNotTheOnesLeftAtTheEnd. An event
+// is replayed at its chronological place, so the parcels it converts are the
+// parcels the account held THEN — and every other test here has a journal in
+// which those are also the parcels left at the end, which makes the rule
+// invisible. Here they are not: a later purchase and a later sale between them
+// consume the very parcel the conversion took, so resolving against the end
+// state would carry a different day and a different sum onto the new paper.
+//
+// Written because a mutation that resolved the breakdown against the end state
+// passed every test in this file. That is a case nobody wrote, not a weak test.
+func TestAConversionTakesTheParcelsOfItsOwnDayAndNotTheOnesLeftAtTheEnd(t *testing.T) {
+	f := newFixture(t)
+	produced := f.catalogue(t, producedISIN, "T")
+	f.buy(t, f.accountID, "2021-07-02", "2", -600_000)
+	f.buy(t, f.accountID, "2021-07-05", "2", -900_000)
+	// The sale empties the FIFO front, so at the END of this journal the oldest
+	// parcel is the one bought on the 5th — while on the 3rd it was the 2nd's.
+	f.sell(t, f.accountID, "2021-07-06", "2", 700_000)
+
+	f.conversionEvent(t, "2021-07-03", 1, 1)
+	if _, err := f.materializer.ForISIN(f.ctx, amazonISIN); err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+
+	got := f.position(t, f.accountID, produced)
+	if got == nil || got.Quantity.String() != "2" {
+		t.Fatalf("the new paper holds %v, want the 2 held on the day of the conversion", got)
+	}
+	if got.CostMinor != 600_000 {
+		t.Errorf("the new paper cost %d, want 600000 — what was paid on 2021-07-02, the parcel held on the day",
+			got.CostMinor)
+	}
+	if len(got.Lots) != 1 || got.Lots[0].AcquiredOn == nil ||
+		got.Lots[0].AcquiredOn.Format("2006-01-02") != "2021-07-02" {
+		t.Errorf("the new paper's parcel is %v, want one acquired 2021-07-02", got.Lots)
+	}
+}
+
+// TestASpinoffCarvesFromTheMoneyHeldOnTheDayOnly is the same rule on the other
+// kind, where it is easier to get wrong and costs more: the share applies to
+// what had been paid BY the carve-out, and a purchase made afterwards is money
+// that was never in the fund when its assets were split off. Resolving against
+// the end state would carve a quarter of every rouble the account ever spent on
+// the paper.
+func TestASpinoffCarvesFromTheMoneyHeldOnTheDayOnly(t *testing.T) {
+	f := newFixture(t)
+	produced := f.catalogue(t, producedISIN, "TECH2")
+	f.buy(t, f.accountID, "2020-12-30", "100", -100_000)
+	f.spinoffEvent(t, "2023-12-22", 1, 1, "0.25")
+	// Bought AFTER the carve-out: this money never belonged to the assets that
+	// were split off.
+	f.buy(t, f.accountID, "2024-03-01", "100", -900_000)
+
+	if _, err := f.materializer.ForISIN(f.ctx, amazonISIN); err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+
+	got := f.position(t, f.accountID, produced)
+	if got == nil {
+		t.Fatal("the carved-out paper is not held at all")
+	}
+	if got.CostMinor != 25_000 {
+		t.Errorf("the carved-out paper cost %d, want 25000 — a quarter of the 100000 paid BEFORE the carve-out",
+			got.CostMinor)
+	}
+	if got.Quantity.String() != "100" {
+		t.Errorf("the carved-out paper holds %s, want 100 — the units held on the day, one for one", got.Quantity)
+	}
+	old := f.position(t, f.accountID, f.amazonID)
+	if old == nil || old.CostMinor != 975_000 {
+		t.Errorf("the original cost %v, want 975000 — everything paid less the 25000 carved out", old)
+	}
+}
+
 // TestMaterializingAPairTwiceWritesItOnce. Every run recomputes the rows the
 // registry asks for and diffs them, so a second run over an unchanged world must
 // find nothing to do — not "write it again and let the unique index refuse".

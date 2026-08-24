@@ -467,10 +467,21 @@ func (m *Materializer) rowsFor(e Event, accountID, instrumentID uuid.UUID, resul
 		return nil, err
 	}
 
-	// One group for the two legs, DERIVED from the event and the holding rather
-	// than drawn fresh: the next run recomputes these rows and must arrive at the
-	// same group, or every run would remove a pair and write an identical one
-	// under a new group for ever.
+	// One group for the two legs, from ONE value: that is what makes the pair one
+	// event to everything downstream, and the journal's own removal rule refuses
+	// to take one leg of a group without the other.
+	//
+	// IT IS DERIVED RATHER THAN DRAWN FRESH, AND NOTHING TODAY DEPENDS ON THAT.
+	// A stored row's group is not among the fields a recomputation compares (see
+	// sameRow), deliberately: a group is a name for "these two are one event",
+	// not a statement about the event, so comparing it would turn a fresh name
+	// into a rewrite of two perfectly good rows. Deriving it therefore buys no
+	// idempotence — it was checked by hand, and drawing the group at random
+	// leaves every test in this package green. What it buys is that the same
+	// event rewritten (a corrected ratio, a purchase backdated underneath) is
+	// recognisable across runs in a log and in the database, which a fresh
+	// random name each time would not be. Said plainly here because the first
+	// version of this comment claimed it prevented churn, and it does not.
 	group := groupFor(e, accountID, instrumentID)
 	outID := externalIDFor(e, accountID, instrumentID)
 	inID := outID + inLegSuffix
