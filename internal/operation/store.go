@@ -595,7 +595,13 @@ func storeBreakdowns(ctx context.Context, tx pgx.Tx, add, stored []Operation) er
 			return err
 		}
 		stored[i].TransferLots = back
-		if err := portfolio.CheckTransferLots(stored[i]); err != nil {
+		// checkStoredLots and not CheckTransferLots, for the reason that function
+		// gives: a spin-off's departing leg carries no quantity, and the transfer
+		// check dereferences one. CreatePair learned this when the spin-off was
+		// written; this path learned it when the registry began writing pairs
+		// through the import door, and until then it was a panic waiting for the
+		// first materialized spin-off rather than a refusal.
+		if err := checkStoredLots(stored[i]); err != nil {
 			// The rows are already in this transaction, so refusing here rolls
 			// them back. Same reasoning as CreatePair: a breakdown the storage
 			// cannot hold faithfully is a bug in this program, surfaced loudly

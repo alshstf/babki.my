@@ -546,18 +546,41 @@ func checkImportContract(op Operation) error {
 		return fmt.Errorf("%w: an imported operation must carry the id of the record it was projected from",
 			ErrImportContract)
 	}
-	if len(op.TransferLots) > 0 {
+	if len(op.TransferLots) > 0 && !carriesRegistryBreakdown(op) {
 		return fmt.Errorf("%w: a transfer's FIFO breakdown is worked out from the journal here, not supplied",
 			ErrImportContract)
 	}
-	if op.TransferGroupID != nil && op.Type != TypeTransferIn && op.Type != TypeTransferOut {
-		return fmt.Errorf("%w: only a transfer's legs may share a transfer group, and %s is not one",
+	if op.TransferGroupID != nil && !isTransferLeg(op.Type) && !isCorporatePairLeg(op.Type) {
+		return fmt.Errorf("%w: only the legs of a transfer or of a corporate action may share a group, and %s is neither",
 			ErrImportContract, op.Type)
+	}
+	if isCorporatePairLeg(op.Type) {
+		if op.Source != SourceRegistry {
+			return fmt.Errorf("%w: %s is the corporate-actions registry's to write, and %q is not it",
+				ErrImportContract, op.Type, op.Source)
+		}
+		if op.TransferGroupID == nil {
+			return fmt.Errorf("%w: %s is one leg of a pair and must name the group it shares with the other",
+				ErrImportContract, op.Type)
+		}
+		if len(op.TransferLots) == 0 {
+			return fmt.Errorf("%w: %s must arrive with the breakdown of the parcels behind it",
+				ErrImportContract, op.Type)
+		}
 	}
 	// The basis of a parcel taken from this journal is this journal's to state.
 	// A number supplied for it would be a guess, and one that is overwritten
 	// here would be a guess nobody was told about; only a leg with no sibling —
 	// shares arriving from a broker outside this program — declares its own.
+	//
+	// A CORPORATE ACTION'S LEGS ARE NOT IN THIS RULE and must carry their basis:
+	// this path does not compute it for them (see releaseBasis), because it
+	// cannot — a conversion's is a release the registry's ratio decides the size
+	// of, and a spin-off's is a share of the basis that exists nowhere but in the
+	// registry's own record. What keeps a supplied number honest there is the
+	// engine, which holds every piece against the row carrying it on every fold
+	// and matches a spin-off's pieces to the very parcels they name (see
+	// checkStoredLots).
 	if op.AmountMinor != 0 && (op.Type == TypeTransferOut || (op.Type == TypeTransferIn && op.TransferGroupID != nil)) {
 		return fmt.Errorf("%w: the cost basis of %s is released from the source account's journal, not supplied",
 			ErrImportContract, op.Type)
@@ -565,13 +588,53 @@ func checkImportContract(op Operation) error {
 	return nil
 }
 
-// pairedLegs checks that a transfer group really is one transfer and returns
-// its legs with the departing one first.
+// isTransferLeg and isCorporatePairLeg name the two kinds of pair this path
+// knows, kept as predicates rather than as `switch` arms repeated at each of the
+// five places that ask: a list restated at every call site is a list that
+// eventually differs between them.
+func isTransferLeg(t Type) bool {
+	return t == TypeTransferIn || t == TypeTransferOut
+}
+
+// isCorporatePairLeg reports whether this is one leg of a corporate action the
+// registry materializes — a conversion or a spin-off. Both are written as a pair
+// on ONE account (unlike a transfer, which is one parcel across two), and both
+// arrive with the breakdown their own leg carries.
+func isCorporatePairLeg(t Type) bool {
+	switch t {
+	case TypeExchangeOut, TypeExchangeIn, TypeSpinoffOut, TypeSpinoffIn:
+		return true
+	}
+	return false
+}
+
+// carriesRegistryBreakdown reports whether this operation is allowed to arrive
+// with its FIFO breakdown already worked out.
+//
+// IT IS THE ONE HOLE IN "the parcel is computed here, not supplied", AND IT IS
+// NARROW ON PURPOSE: only the corporate-actions registry, and only on the four
+// leg types it writes. Everything else keeps the old refusal, because everything
+// else CAN have its parcel computed here from the journal — a broker's transfer
+// names a quantity and the FIFO queue answers the rest. A conversion cannot: how
+// much leaves is the registry's ratio applied to a holding, and a spin-off's
+// share of the basis is a number published by a fund manager that appears in no
+// journal at all. Letting any caller supply a parcel would let it name a cost
+// basis, which is a tax figure; letting this one supply it puts the registry's
+// own record where it belongs and leaves the engine to check it on every fold.
+func carriesRegistryBreakdown(op Operation) bool {
+	return op.Source == SourceRegistry && isCorporatePairLeg(op.Type)
+}
+
+// pairedLegs checks that a group really is one event and returns its legs with
+// the departing one first.
 func pairedLegs(legs []Operation) ([]Operation, error) {
 	group := *legs[0].TransferGroupID
 	if len(legs) != 2 {
 		return nil, fmt.Errorf("%w: transfer group %s has %d legs in this delta, and a pair is written whole or not at all",
 			ErrImportContract, group, len(legs))
+	}
+	if isCorporatePairLeg(legs[0].Type) || isCorporatePairLeg(legs[1].Type) {
+		return corporatePairLegs(group, legs)
 	}
 	out, in := legs[0], legs[1]
 	if out.Type == TypeTransferIn {
@@ -601,6 +664,52 @@ func pairedLegs(legs []Operation) ([]Operation, error) {
 	if out.Currency != in.Currency {
 		return nil, fmt.Errorf("%w: transfer group %s leaves in %s and arrives in %s",
 			ErrImportContract, group, out.Currency, in.Currency)
+	}
+	return []Operation{out, in}, nil
+}
+
+// corporatePairLegs is pairedLegs for a conversion or a spin-off, whose pair is
+// the opposite shape from a transfer's in every respect that matters: ONE
+// account and TWO papers, where a transfer is two accounts and one paper. So the
+// checks are the mirror image — the accounts must match and the instruments must
+// differ — and the quantities are deliberately not compared, because a
+// conversion restates the count (N old for M new) and a spin-off's departing leg
+// carries no count at all.
+//
+// What IS held to be equal is the basis: the two legs describe one parcel of
+// money under two names, and a pair whose halves disagree about how much moved
+// would put a number into a journal that no single fact stands behind.
+func corporatePairLegs(group uuid.UUID, legs []Operation) ([]Operation, error) {
+	out, in := legs[0], legs[1]
+	if in.Type == TypeExchangeOut || in.Type == TypeSpinoffOut {
+		out, in = in, out
+	}
+	switch {
+	case out.Type == TypeExchangeOut && in.Type == TypeExchangeIn:
+	case out.Type == TypeSpinoffOut && in.Type == TypeSpinoffIn:
+	default:
+		return nil, fmt.Errorf("%w: group %s is %s and %s, want the two legs of one conversion or one spin-off",
+			ErrImportContract, group, legs[0].Type, legs[1].Type)
+	}
+	if out.AccountID != in.AccountID {
+		return nil, fmt.Errorf("%w: group %s spans two accounts, and a corporate action happens on one",
+			ErrImportContract, group)
+	}
+	if out.InstrumentID == nil || in.InstrumentID == nil || *out.InstrumentID == *in.InstrumentID {
+		return nil, fmt.Errorf("%w: group %s names one paper on both legs, and a corporate action turns one into another",
+			ErrImportContract, group)
+	}
+	if !out.OccurredOn.Equal(in.OccurredOn) {
+		return nil, fmt.Errorf("%w: group %s leaves on %s and arrives on %s",
+			ErrImportContract, group, out.OccurredOn.Format("2006-01-02"), in.OccurredOn.Format("2006-01-02"))
+	}
+	if out.Currency != in.Currency {
+		return nil, fmt.Errorf("%w: group %s leaves in %s and arrives in %s",
+			ErrImportContract, group, out.Currency, in.Currency)
+	}
+	if out.AmountMinor != in.AmountMinor {
+		return nil, fmt.Errorf("%w: group %s gives up %d minor units and receives %d: one parcel of money, two figures",
+			ErrImportContract, group, out.AmountMinor, in.AmountMinor)
 	}
 	return []Operation{out, in}, nil
 }
@@ -696,6 +805,11 @@ func normalizeCandidate(legs []Operation) (int, error) {
 // parcel on the arriving leg.
 func releaseBasis(legs []Operation, pending map[uuid.UUID][]Operation) (int, error) {
 	for i := range legs {
+		// A CORPORATE ACTION'S LEGS PASS THROUGH UNTOUCHED. Their parcels arrived
+		// with them and could not have been worked out here: the registry decides
+		// how much of the holding a conversion consumes, and what share of the
+		// basis a spin-off carves out is a figure no journal holds. See
+		// carriesRegistryBreakdown for what keeps that narrow.
 		if legs[i].Type != TypeTransferOut {
 			continue
 		}
