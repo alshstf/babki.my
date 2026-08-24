@@ -269,8 +269,23 @@ func (e Event) Validate() error {
 		return fmt.Errorf("%w: ratio_from and ratio_to must be whole numbers from 1 to %d",
 			family.ErrValidation, maxRatio)
 	}
-	if e.RatioFrom == e.RatioTo {
-		return fmt.Errorf("%w: a ratio of %d to %d changes nothing", family.ErrValidation, e.RatioFrom, e.RatioTo)
+	// EQUAL SIDES ARE EMPTY ONLY FOR A SPLIT, whose whole content is the ratio:
+	// a split of 1 to 1 multiplies every holding by one and would be a row
+	// saying nothing happened, materialized into every holder's journal.
+	//
+	// FOR THE OTHER TWO IT IS THE COMMONEST SHAPE THERE IS, and refusing it
+	// refused the very events this registry was built for. A conversion of 1
+	// to 1 is a paper becoming ANOTHER paper unit for unit — a depositary
+	// receipt redeemed for the share it represented, a fund reissued under a
+	// new ISIN — where the count is unchanged and the identity is not: the
+	// owner's TCS Group receipts became shares of МКПАО «ТКС Холдинг» one for
+	// one on 2024-02-27 (moex.com/n67851), and until this rule was narrowed
+	// that fact could not be recorded at all. A spin-off of 1 to 1 is the same
+	// story with the money: each unit of the fund yielded one unit of the
+	// carved-out fund while a share of the basis moved across, which is what
+	// Т-Капитал did to TECH, TSPX and TUSD.
+	if e.Kind == KindSplit && e.RatioFrom == e.RatioTo {
+		return fmt.Errorf("%w: a split of %d to %d changes nothing", family.ErrValidation, e.RatioFrom, e.RatioTo)
 	}
 	// A factor that rounds away at the scale the journal keeps would multiply
 	// every holding by zero — the position would vanish and the money spent on

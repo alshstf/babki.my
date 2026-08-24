@@ -952,7 +952,7 @@ type InstrumentEvent struct {
 	// RatioFrom The `from` half of the ratio: one unit becomes ratio_to/ratio_from units. Whole numbers, the shape the exchange publishes, so that 1:3 is 1 and 3 rather than 0.3333333333. From 1 to 1000000000.
 	RatioFrom int64 `json:"ratio_from"`
 
-	// RatioTo The `to` half. See ratio_from. A ratio of 1 to 1 is refused: it changes nothing and would put a row in every holder's journal saying so.
+	// RatioTo The `to` half. See ratio_from. A SPLIT of 1 to 1 is refused: a split has nothing but its ratio to say, so equal sides multiply every holding by one and would put a row in every holder's journal saying nothing happened. A CONVERSION or a SPIN-OFF of 1 to 1 is accepted, and is the commonest shape of both: a redomiciliation or an ISIN change moves the identity of the paper and leaves the count alone (TCS Group receipts became МКПАО «ТКС Холдинг» shares one for one on 2024-02-27), and a carve-out yields one unit of the new fund per unit of the old while a share of the basis moves across.
 	RatioTo int64 `json:"ratio_to"`
 
 	// ResultIsin The paper a conversion or a spin-off produces. Required on those two and refused on a split, which produces no new paper. Never equal to `isin`.

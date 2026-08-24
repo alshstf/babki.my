@@ -301,6 +301,28 @@ func TestAMaterializationThatChangesNothingAsksForNoRecheck(t *testing.T) {
 	}
 }
 
+// TestASplitOfOneToOneIsRefused keeps the emptiness rule where it is true.
+//
+// A split has nothing to say but its ratio, so one for one multiplies every
+// holding by one: a row claiming an event, carried into the journal of every
+// account holding the paper, saying nothing happened. The other two kinds are
+// not like that at all — see TestAConversionWaitsForThePaperItProducesToBeCatalogued,
+// where one for one is the owner's own case — and this test exists so that the
+// narrowing cannot be widened back by accident.
+func TestASplitOfOneToOneIsRefused(t *testing.T) {
+	f := newAPIFixture(t)
+
+	resp, body := f.do(t, http.MethodPost, "/api/v1/instrument-events", `{
+		"kind": "split", "isin": "`+amazonISIN+`",
+		"effective_on": "2024-02-27", "ratio_from": 1, "ratio_to": 1,
+		"source_ref": "https://www.moex.com/n67851"
+	}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400 — a split of one to one multiplies every holding by one: %s",
+			resp.StatusCode, body)
+	}
+}
+
 // TestAConversionWaitsForThePaperItProducesToBeCatalogued. The facts are
 // perishable — a fund converted in 2023 and nobody can go back and ask the
 // registrar again — so a conversion is recorded whether or not anything here can
@@ -319,21 +341,17 @@ func TestAConversionWaitsForThePaperItProducesToBeCatalogued(t *testing.T) {
 		"effective_on": "2024-02-27", "ratio_from": 1, "ratio_to": 1,
 		"source_ref": "https://www.moex.com/n67851"
 	}`)
-	// A ratio of 1 to 1 changes no quantity, and the registry refuses it for
-	// that reason alone — a row saying nothing happened would still be
-	// materialized into every holder's journal one day.
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status %d, want 400 (a ratio of 1 to 1 changes nothing): %s", resp.StatusCode, body)
+	// ONE FOR ONE IS ACCEPTED HERE, and the exact request above is the reason:
+	// it is the owner's own case — TCS Group receipts became shares of МКПАО
+	// «ТКС Холдинг» unit for unit on 2024-02-27 — and it is what a conversion
+	// most often looks like, since a redomiciliation or an ISIN change moves
+	// the identity and leaves the count alone. Equal sides are empty only for a
+	// SPLIT, which has nothing but the ratio to say; that refusal has a test of
+	// its own (see TestASplitOfOneToOneIsRefused).
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status %d, want 201 — one for one is what a conversion usually is: %s", resp.StatusCode, body)
 	}
 
-	resp, body = f.do(t, http.MethodPost, "/api/v1/instrument-events", `{
-		"kind": "conversion", "isin": "`+amazonISIN+`", "result_isin": "`+producedISIN+`",
-		"effective_on": "2024-02-27", "ratio_from": 2, "ratio_to": 1,
-		"source_ref": "https://www.moex.com/n67851"
-	}`)
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("status %d, want 201: %s", resp.StatusCode, body)
-	}
 	var written struct {
 		Event struct {
 			ID               string  `json:"id"`
