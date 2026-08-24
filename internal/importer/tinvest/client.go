@@ -276,7 +276,18 @@ type OperationItem struct {
 	// instrument the broker has FORGOTTEN, where the passport answers 404 and
 	// this is the last identifier left: for exactly those the broker puts the
 	// ISIN here (see Resolver.resolveOne).
-	Ticker      string
+	Ticker string
+	// ClassCode is the broker's trading mode (режим торгов): the board an
+	// order was matched on ("TQBR", "TQCB" — Moscow Exchange's own codes), or
+	// the venue a deal was struck away from an order book ("FINEX_OTC", the
+	// over-the-counter dealing the broker opened in the FinEx funds after
+	// exchange trading in them stopped).
+	//
+	// EMPTY IS ORDINARY AND MEANS THE BROKER SENT NONE: money moving in and
+	// out of the account describes no instrument and carries no mode. It is
+	// stored as it arrives and never guessed at (see tradingMode, which says
+	// what this program can and cannot name).
+	ClassCode   string
 	Description string
 	Raw         json.RawMessage
 }

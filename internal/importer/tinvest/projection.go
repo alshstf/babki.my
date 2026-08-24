@@ -703,8 +703,24 @@ func base(row MirrorRow, accountID uuid.UUID, t operation.Type) operation.Operat
 		OccurredOn: mskDay(row.OccurredAt),
 		Currency:   row.Currency,
 		Note:       row.Description,
-		Source:     Source,
+		// The trading mode travels with every entry the row produces, and it
+		// is the broker's word for it, unchanged. Nothing is put here when the
+		// broker said nothing: a nil is "nobody said", which is what the
+		// column means, while an empty string would be a mode named "".
+		TradingMode: tradingModeOrNothing(row.ClassCode),
+		Source:      Source,
 	}
+}
+
+// tradingModeOrNothing is the broker's classCode as the journal stores it:
+// nothing at all when the broker sent none. Money moving in and out of an
+// account describes no instrument and carries no mode — 83 deposits and 52
+// withdrawals on the owner's own account — and those rows must not claim one.
+func tradingModeOrNothing(classCode string) *string {
+	if classCode == "" {
+		return nil
+	}
+	return &classCode
 }
 
 // projectTrade turns a purchase or a sale into the journal entry for it, plus

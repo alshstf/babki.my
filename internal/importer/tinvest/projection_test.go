@@ -84,6 +84,7 @@ func mirrorRowFor(t *testing.T, name string) MirrorRow {
 		Quantity:           it.Quantity,
 		QuantityDone:       it.QuantityDone,
 		FIGI:               it.FIGI,
+		ClassCode:          it.ClassCode,
 		InstrumentUID:      it.InstrumentUID,
 		PositionUID:        it.PositionUID,
 		AssetUID:           it.AssetUID,

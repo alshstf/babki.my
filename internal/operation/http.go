@@ -20,6 +20,7 @@ import (
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/money"
+	"babki.my/babki/internal/platform/tradingmode"
 	"babki.my/babki/internal/portfolio"
 )
 
@@ -218,6 +219,16 @@ func toAPI(o Operation) apitypes.Operation {
 		CreatedAt:         o.CreatedAt,
 		HasUndatedLots:    hasUndatedLots(o),
 		AssembledFromLots: assembledFromLots(o),
+	}
+	// The mode and what this program can call it travel together, and both are
+	// absent when nobody said where the operation happened. They are set from
+	// the SAME nil check on purpose: a kind published beside no code would ask
+	// a reader to take «unknown» for the row's answer when the row has no
+	// answer at all.
+	if o.TradingMode != nil {
+		out.TradingMode = nullable.NewNullableWithValue(*o.TradingMode)
+		out.TradingModeKind = nullable.NewNullableWithValue(
+			apitypes.TradingModeKind(tradingmode.Of(*o.TradingMode)))
 	}
 	if o.InstrumentID != nil {
 		out.InstrumentId = nullable.NewNullableWithValue(*o.InstrumentID)

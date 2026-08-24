@@ -759,6 +759,14 @@ export interface components {
              */
             amount_minor: number;
         };
+        /**
+         * @description WHAT THIS PROGRAM IS WILLING TO SAY about the trading mode an operation was executed in, and the set is small on purpose. `order_book`: an exchange's anonymous («безадресная») mode, where the exchange matched the order against whoever was on the other side. `negotiated`: an addressed («адресная») mode OF AN EXCHANGE — a deal with a named counterparty, registered by the exchange; it is NOT off-exchange, and the distinction is load-bearing, since the owner's 52 currency deals in such a mode were organised by the Moscow Exchange. `off_exchange`: dealing away from an exchange altogether. `unknown`: the broker named a mode and this program has no source for what it is — the code itself is still published in `trading_mode`, and a client must show it and say it is unnamed rather than hide the row's mode or invent a label for it.
+         *     THE KINDS ARE READ FROM AUTHORITIES, NOT JUDGED. Every Moscow Exchange board is classified by the exchange's own title for it in its published board index, whose last word is «безадрес.» or «адрес.»; the one off-exchange code is classified by its own name («FINEX_OTC»), which is the broker's word rather than this program's reading. Codes with neither — the Saint Petersburg boards among them — are `unknown`, and that is a statement about this program's sources rather than about the venue (see internal/importer/tinvest/tradingmode.go, which lists each one and why).
+         *     THIS IS EVIDENCE, NOT A TAX VERDICT. Whether a security is «обращающаяся» is a property of the SECURITY — admitted to trading and quoted (НК РФ ст. 214.1 п. 9) — and not of the venue of one deal, so a client must never render `off_exchange` as «необращающаяся бумага». It is a flag saying which lots will need looking at when a tax report is built, and no more than that.
+         *     Null exactly when `trading_mode` is null: nobody said where the operation happened, so there is no kind to name.
+         * @enum {string|null}
+         */
+        TradingModeKind: "order_book" | "negotiated" | "off_exchange" | "unknown" | null;
         CurrencyTotal: {
             currency: string;
             /** Format: int64 */
@@ -972,6 +980,13 @@ export interface components {
             /** Format: int64 */
             fee_minor: number;
             note: string;
+            /**
+             * @description WHERE THIS OPERATION HAPPENED, in the words of whoever reported it: an exchange board's code as the broker sent it ("TQBR", "TQCB"), or the code of dealing away from an order book ("FINEX_OTC" — the over-the-counter dealing the broker opened in the FinEx funds after exchange trading in them stopped). Null for every row nobody said it about: everything entered by hand, and every imported row whose source reported no mode — money moving in and out of an account describes no instrument and carries none.
+             *     IT IS THE RAW CODE AND IS NEVER TRANSLATED AWAY, because this program can name only some of them: `trading_mode_kind` says which kind it is, and for a code with no source behind it that field says `unknown` while this one still carries what the broker said. A client shows the code whenever it shows the kind, so an unnamed mode is visible as itself rather than as a blank.
+             * @example FINEX_OTC
+             */
+            trading_mode?: string | null;
+            trading_mode_kind?: components["schemas"]["TradingModeKind"];
             /** Format: uuid */
             transfer_group_id?: string | null;
             /** @description Decimal as string */
@@ -1565,6 +1580,9 @@ export interface components {
             occurred_at: string;
             /** @description The broker's own operation-type word, verbatim (e.g. OPERATION_TYPE_BUY). */
             op_type: string;
+            /** @description The broker's own trading-mode code for this operation, verbatim and possibly empty — the mirror keeps what the broker said, and it says nothing here for an operation that describes no instrument (money in and out of the account). `trading_mode_kind` is what this program is willing to call it; see Operation.trading_mode, which is the same fact carried onto the journal row this row produced. */
+            class_code: string;
+            trading_mode_kind: components["schemas"]["TradingModeKind"];
             /** @description Decimal as string — the broker's own amount, exactly as it arrived, unconverted and unrounded. Not minor units: an amount too fine or too large for this program's money is one of the reasons a row lands on this list, and rendering it in minor units would be impossible for exactly those rows. */
             payment: string;
             /** @description ISO-4217, upper case. */

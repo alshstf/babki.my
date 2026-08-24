@@ -1793,6 +1793,8 @@ func comparedFields(t *testing.T) []comparedField {
 		{"Source", "source", func(o *operation.Operation) { o.Source = "csv" }},
 		{"TransferGroupID", "transfer group", func(o *operation.Operation) { o.TransferGroupID = &groupA }},
 		{"SplitRatio", "split ratio", func(o *operation.Operation) { r := decimal.RequireFromString("2"); o.SplitRatio = &r }},
+		{"TradingMode", "trading mode", func(o *operation.Operation) { m := "FINEX_OTC"; o.TradingMode = &m }},
+		{"TradingMode", "trading mode dropped", func(o *operation.Operation) { o.TradingMode = nil }},
 	}
 }
 
@@ -1829,9 +1831,16 @@ func sameJournalRowBase(t *testing.T) operation.Operation {
 		Currency:     "RUB",
 		FeeMinor:     825,
 		Note:         "Покупка 100 шт.",
-		Source:       Source,
+		// A mode the base row HAS, so that both directions are a real
+		// difference: one code replaced by another, and one dropped
+		// altogether. A base carrying nothing would make "dropped" identical
+		// to the base and the case would prove nothing.
+		TradingMode: strPtr("TQBR"),
+		Source:      Source,
 	}
 }
+
+func strPtr(s string) *string { return &s }
 
 // TestSameJournalRowNoticesEveryFieldItCompares walks the fields one at a time.
 // A comparison that quietly stopped looking at one of them would leave the
