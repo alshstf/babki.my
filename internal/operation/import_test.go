@@ -149,6 +149,56 @@ func TestApplyImportDeltaRefusesASplitFromTheImporter(t *testing.T) {
 	}
 }
 
+// TestApplyImportDeltaRefusesABreakdownFromAnyoneButTheRegistry pins the ONE
+// hole in "the parcel is computed here, not supplied".
+//
+// The hole was opened for the corporate-actions registry, whose pairs cannot
+// have their breakdown computed from the journal: how many units of the new
+// paper N of the old become, and what share of the basis a spin-off carves
+// out, live in the registry and nowhere else. Everything else must keep the
+// old refusal — a broker's transfer names a quantity and the FIFO queue
+// answers the rest, so a breakdown arriving with it is a cost basis somebody
+// invented, and this path exists to make that impossible.
+//
+// WITHOUT THIS CASE THE GUARD IS UNTESTED: opening it to every caller (the
+// function simply returning true) leaves the whole suite green, because no
+// fixture ever supplies a breakdown it is not entitled to. The mutation is the
+// point of the test.
+func TestApplyImportDeltaRefusesABreakdownFromAnyoneButTheRegistry(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	on := date("2021-01-08")
+	// An ordinary imported transfer, arriving with a parcel of its own: the
+	// shape the importer is never allowed to send.
+	transfer := imported(operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeTransferIn,
+		OccurredOn: date("2026-07-01"), Quantity: dec("10"), AmountMinor: 100_000,
+		Currency: "RUB",
+		TransferLots: []operation.ReleasedLot{
+			{Quantity: *dec("10"), CostMinor: 100_000, AcquiredOn: &on},
+		},
+	}, "op-transfer-with-its-own-parcel")
+
+	applied, _, err := svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{
+		Add: []operation.Operation{transfer},
+	})
+	// THE WHOLE DELTA FAILS, and this row is not merely refused among others:
+	// a candidate carrying a parcel it did not earn is a caller breaking the
+	// contract, not a row the journal cannot take — the difference between a
+	// bug in the program and news about the broker's data.
+	if !errors.Is(err, operation.ErrImportContract) {
+		t.Fatalf("err = %v, want ErrImportContract — a supplied parcel is a cost basis this path did not work out", err)
+	}
+	const reason = "not supplied"
+	if !strings.Contains(err.Error(), reason) {
+		t.Errorf("refusal reason = %v, want it to name %q", err, reason)
+	}
+	if len(applied) != 0 {
+		t.Fatalf("applied %d operations, want none", len(applied))
+	}
+}
+
 // TestApplyImportDeltaTakesATaxThatGaveMoneyBack is the second point on which
 // the import path differs from the hand-entry one, and it is worth its own test
 // because the difference is a single sign.
