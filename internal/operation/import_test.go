@@ -106,6 +106,55 @@ func TestApplyImportDeltaIsolatesTheCandidateThatCannotApply(t *testing.T) {
 	}
 }
 
+// TestCreateReplacingWillNotReplaceARowEnteredByHand is the guard that keeps a
+// replacement pointed at the importer's own rows.
+//
+// CreateReplacing exists so that an explanation can take out the reading this
+// program made of a broker's row and put the owner's reading in its place. What
+// it must never take out is a row the owner ENTERED — those are theirs, deleted
+// on the journal screen where the refusals are about their own history, and a
+// caller that named one here would delete it with nothing on any screen saying
+// so. It is the mirror of the rule Service.Delete applies in the other
+// direction, where an imported row is not a person's to remove.
+//
+// Without this case the guard is untested: no fixture anywhere hands a
+// replacement the id of a manual row, so deleting the check outright leaves the
+// whole suite green.
+func TestCreateReplacingWillNotReplaceARowEnteredByHand(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	byHand, err := svc.Create(f.ctx, f.spaceID, operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit,
+		OccurredOn: date("2026-07-01"), AmountMinor: 100_000, Currency: "RUB",
+		Note: "пополнение, введённое владельцем",
+	})
+	if err != nil {
+		t.Fatalf("the hand-entered operation: %v", err)
+	}
+
+	_, err = svc.CreateReplacing(f.ctx, f.spaceID, operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit,
+		OccurredOn: date("2026-07-02"), AmountMinor: 200_000, Currency: "RUB",
+	}, []uuid.UUID{byHand.ID})
+	if err == nil {
+		t.Fatal("a replacement took out a row the owner had entered by hand")
+	}
+	if !errors.Is(err, family.ErrValidation) {
+		t.Errorf("err = %v, want ErrValidation — the caller named a row it may not replace", err)
+	}
+	const reason = "entered by hand"
+	if !strings.Contains(err.Error(), reason) {
+		t.Errorf("refusal = %v, want it to name %q rather than whatever the journal would have said next", err, reason)
+	}
+
+	// AND THE ROW IS STILL THERE. A refusal that had already deleted it would
+	// be the very loss this guard exists to prevent, reported politely.
+	if _, err := f.store.ByID(f.ctx, f.spaceID, byHand.ID); err != nil {
+		t.Errorf("the hand-entered operation is gone after a refused replacement: %v", err)
+	}
+}
+
 // TestApplyImportDeltaRefusesASplitFromTheImporter pins that a split is
 // refused UNCONDITIONALLY by the import path itself (validateImported's own
 // TypeSplit case) — not merely because validateByType happens to refuse the
