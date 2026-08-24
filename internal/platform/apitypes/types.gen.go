@@ -530,6 +530,7 @@ func (e TinvestSyncRunStatus) Valid() bool {
 const (
 	TinvestSyncTriggerInitial  TinvestSyncTrigger = "initial"
 	TinvestSyncTriggerManual   TinvestSyncTrigger = "manual"
+	TinvestSyncTriggerRegistry TinvestSyncTrigger = "registry"
 	TinvestSyncTriggerSchedule TinvestSyncTrigger = "schedule"
 )
 
@@ -539,6 +540,8 @@ func (e TinvestSyncTrigger) Valid() bool {
 	case TinvestSyncTriggerInitial:
 		return true
 	case TinvestSyncTriggerManual:
+		return true
+	case TinvestSyncTriggerRegistry:
 		return true
 	case TinvestSyncTriggerSchedule:
 		return true
@@ -1469,6 +1472,13 @@ type TinvestReconcileMismatch struct {
 
 	// Label What a person reads: our instrument's ticker or name when the row is about one of ours, the broker's own naming when it is about a position that is not, and a currency code on a currency row.
 	Label string `json:"label"`
+
+	// SplitHintFactor SET WHEN THE TWO QUANTITIES DIFFER BY A WHOLE FACTOR OF TWO OR MORE AND THE CORPORATE-ACTIONS REGISTRY HOLDS NO SPLIT THAT WOULD ACCOUNT FOR IT, and carries that factor — the larger quantity over the smaller, whichever side is larger, since a reverse split leaves the journal holding the multiple.
+	//
+	// IT IS A QUESTION, NOT A FINDING, and a client must render it as one. The owner's own AMZN stands at 1 against the broker's 20 and NVDA at 3 against 30, and both are real splits nobody recorded — but a whole factor is equally what a purchase this import never saw would leave behind, and nothing on the server can tell those apart. Nothing acts on it: no event is written and no journal is touched.
+	//
+	// Null on every row of another kind, on any difference that is not a whole multiple, on a paper the registry already knows a split of (the journal then already has it, so the difference has another cause), on a paper with no ISIN (the registry is keyed by it, so nothing could be recorded against that paper at all), and on every row of a run recorded before this field existed. Null too when the registry could not be reached — a hint not offered rather than a check not finished.
+	SplitHintFactor nullable.Nullable[int64] `json:"split_hint_factor,omitempty"`
 }
 
 // TinvestReconcileMismatchKind What kind of difference the check found, and each value asks a different question of the reader. `instrument`: a security's quantity differs, or the JOURNAL names one the broker does not — which usually means some of the broker's operations did not become journal entries, so the unparsed list is where to look. `currency`: a cash balance in one currency differs. `unknown_security`: the broker holds a security this program could perfectly well hold, and no operation on it has ever reached the journal — so there is nothing of ours to pair it with, and the label shown is the BROKER's own naming rather than a ticker from this catalog. It asks what happened to that paper (a fund converted into another under a new ISIN, say — a corporate action that arrives as no operation at all) rather than which operations are missing. `unsupported`: the broker holds an asset of a kind this program does not account for at all (a future, an option), which no amount of re-importing will change. The last two are separate values precisely so neither is read as the first one and sends a reader hunting for operations that are not missing.
@@ -1534,7 +1544,7 @@ type TinvestSyncRun struct {
 	// Status Where one sync run stands. `running`: it started and has not reported back — a run left in this state for good is a process that died mid-sync, which is visible as such rather than as nothing having happened. `ok`: it finished. `failed`: it stopped on an error, which TinvestSyncRun.error names.
 	Status TinvestSyncRunStatus `json:"status"`
 
-	// Trigger What caused a sync run. `initial`: the first import, queued by the request that created the connection. `schedule`: the hourly job. `manual`: the owner asked for one (POST .../sync).
+	// Trigger What caused a sync run. `initial`: the first import, queued by the request that created the connection. `schedule`: the hourly job. `manual`: the owner asked for one (POST .../sync). `registry`: the corporate-actions registry changed a journal this connection is reconciled against, and asked for a fresh comparison — a verdict is a sentence about the journal at the moment it was struck, and a split materialized after that moment leaves it describing a journal that no longer exists (see migration 0024 for the live case).
 	Trigger TinvestSyncTrigger `json:"trigger"`
 
 	// UnparsedCount How many of THIS account's mirror rows the projection could not read, counted after this run — the account's own figure, not the connection's.
@@ -1553,7 +1563,7 @@ type TinvestSyncRunsResponse struct {
 	Runs []TinvestSyncRun `json:"runs"`
 }
 
-// TinvestSyncTrigger What caused a sync run. `initial`: the first import, queued by the request that created the connection. `schedule`: the hourly job. `manual`: the owner asked for one (POST .../sync).
+// TinvestSyncTrigger What caused a sync run. `initial`: the first import, queued by the request that created the connection. `schedule`: the hourly job. `manual`: the owner asked for one (POST .../sync). `registry`: the corporate-actions registry changed a journal this connection is reconciled against, and asked for a fresh comparison — a verdict is a sentence about the journal at the moment it was struck, and a split materialized after that moment leaves it describing a journal that no longer exists (see migration 0024 for the live case).
 type TinvestSyncTrigger string
 
 // TinvestTokenCheckRequest defines model for TinvestTokenCheckRequest.
