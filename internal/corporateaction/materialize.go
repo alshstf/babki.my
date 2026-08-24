@@ -32,6 +32,22 @@ type journalWriter interface {
 		[]operation.Operation, []operation.ImportRefusal, error)
 }
 
+// rechecker is asked for a fresh comparison against the broker for the accounts
+// a materialization changed. Declared here and narrow, and satisfied by
+// *tinvest.Rechecker structurally, so this package does not import the importer
+// — the dependency runs the other way, if at all: a registry knows nothing about
+// brokers, and a broker's account is one of the places a registry's facts land.
+//
+// WHY IT IS NEEDED AT ALL: a verdict is a sentence about the journal at the
+// moment it was struck, and this package changes journals underneath it. See
+// tinvest.Rechecker for the live case that produced a wrong sentence.
+//
+// Nil is a legitimate value and means nothing is asked — an instance with no
+// importer wired, and every test that is not about this.
+type rechecker interface {
+	QueueRecheckForAccounts(ctx context.Context, accountIDs []uuid.UUID) (int, error)
+}
+
 // Materializer carries the registry's facts into the journals of the accounts
 // that held the paper.
 //
@@ -46,25 +62,38 @@ type Materializer struct {
 	store   *Store
 	journal journalReader
 	ops     journalWriter
+	recheck rechecker
 	log     *slog.Logger
 }
 
-func NewMaterializer(store *Store, journal journalReader, ops journalWriter, log *slog.Logger) *Materializer {
+// NewMaterializer wires the registry to the journal. recheck may be nil (see
+// the rechecker interface).
+func NewMaterializer(store *Store, journal journalReader, ops journalWriter,
+	recheck rechecker, log *slog.Logger,
+) *Materializer {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Materializer{store: store, journal: journal, ops: ops, log: log}
+	return &Materializer{store: store, journal: journal, ops: ops, recheck: recheck, log: log}
 }
 
 // Stats is what one run did, for the log line and for the tests to read.
+//
+// Accounts are the accounts whose journals actually CHANGED — not the accounts
+// looked at. That distinction is the whole value of the field: a sweep walks
+// every holder of every paper in the registry and almost always writes nothing,
+// and asking for a fresh broker comparison of all of them would turn a no-op
+// sweep into a broker read per connection, every day, for ever.
 type Stats struct {
 	Added, Removed, Refused int
+	Accounts                []uuid.UUID
 }
 
 func (s *Stats) add(o Stats) {
 	s.Added += o.Added
 	s.Removed += o.Removed
 	s.Refused += o.Refused
+	s.Accounts = append(s.Accounts, o.Accounts...)
 }
 
 // ForISIN brings every account that has ever traded this paper into line with
@@ -226,7 +255,40 @@ func (m *Materializer) forAccount(ctx context.Context, spaceID, accountID uuid.U
 		m.log.Error("corporateaction: the journal would not take a split the registry asks for",
 			"account", accountID, "event", r.ExternalID, "err", r.Err)
 	}
-	return Stats{Added: len(delta.Add) - len(refused), Removed: len(delta.Remove), Refused: len(refused)}, nil
+	return Stats{
+		Added:    len(delta.Add) - len(refused),
+		Removed:  len(delta.Remove),
+		Refused:  len(refused),
+		Accounts: []uuid.UUID{accountID},
+	}, nil
+}
+
+// RequestRecheck asks for a fresh comparison against the broker for the
+// accounts a run changed, and reports how many were queued.
+//
+// IT IS THE CALLER'S CALL AND NOT AN AUTOMATIC TAIL OF EVERY RUN, because the
+// three callers want different things from it. The API handler wants it before
+// it answers, so the owner who has just recorded a split does not read a stale
+// verdict on the very next screen. The daily sweep wants it too, for the rows a
+// trigger missed. The exchange job wants it for the splits it learns. Nothing
+// wants it twice, and a materialization that wrote nothing wants it not at all
+// — which is what Stats.Accounts being empty then means.
+//
+// A FAILURE IS LOGGED AND SWALLOWED. Everything this reports on has already
+// been written; the worst a failure costs is a verdict that stays stale until
+// the hourly run, which is where the program stood before any of this existed.
+// Turning it into the caller's error would make a successful write look like a
+// failed one.
+func (m *Materializer) RequestRecheck(ctx context.Context, stats Stats) int {
+	if m.recheck == nil || len(stats.Accounts) == 0 {
+		return 0
+	}
+	queued, err := m.recheck.QueueRecheckForAccounts(ctx, stats.Accounts)
+	if err != nil {
+		m.log.Error("corporateaction: the journals were written but no fresh check could be queued",
+			"accounts", len(stats.Accounts), "err", err)
+	}
+	return queued
 }
 
 // desired is the set of journal rows the registry asks this account to hold.

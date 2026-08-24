@@ -154,7 +154,7 @@ var ErrUnknownTrigger = errors.New("tinvest: unknown sync trigger")
 // syncTrigger turns a job argument back into the run log's own vocabulary.
 func syncTrigger(s string) (SyncTrigger, error) {
 	switch t := SyncTrigger(s); t {
-	case TriggerSchedule, TriggerManual, TriggerInitial:
+	case TriggerSchedule, TriggerManual, TriggerInitial, TriggerRegistry:
 		return t, nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnknownTrigger, s)

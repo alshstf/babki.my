@@ -70,6 +70,12 @@ const (
 	TriggerSchedule SyncTrigger = "schedule"
 	TriggerManual   SyncTrigger = "manual"
 	TriggerInitial  SyncTrigger = "initial"
+	// TriggerRegistry is a run the corporate-actions registry asked for,
+	// because it changed a journal this connection is reconciled against. It is
+	// a word of its own rather than one of the three above for the reason
+	// migration 0024 states: none of them is true of it, and the run log's
+	// trigger is a sentence a reader is shown.
+	TriggerRegistry SyncTrigger = "registry"
 )
 
 // RunStatus is where one sync run stands. Named for the reason SyncTrigger
@@ -496,6 +502,38 @@ func (s *Store) CreateLink(ctx context.Context, link AccountLink) (AccountLink, 
 		return AccountLink{}, fmt.Errorf("tinvest: create account link: %w", err)
 	}
 	return l, nil
+}
+
+// ConnectionsOfAccounts names the connections that reconcile any of these
+// accounts, each one once, in a stable order.
+//
+// IT IS DELIBERATELY NOT SCOPED TO A SPACE. The caller is the corporate-actions
+// registry, whose facts are instance-wide (a split happens to the paper, not to
+// a household), and it hands over the accounts its own write touched — which it
+// found through the journals, already knowing each one's space. Asking for a
+// space here would mean either taking the caller's word for it or refusing
+// accounts it has every right to name, and the ids themselves are unguessable
+// primary keys rather than anything a request supplies.
+//
+// An account no connection feeds contributes nothing, which is the ordinary
+// case for a household that keeps its own records.
+func (s *Store) ConnectionsOfAccounts(ctx context.Context, accountIDs []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT DISTINCT connection_id FROM tinvest_account_links
+		WHERE account_id = ANY($1) ORDER BY connection_id`, accountIDs)
+	if err != nil {
+		return nil, fmt.Errorf("tinvest: find the connections of %d accounts: %w", len(accountIDs), err)
+	}
+	defer rows.Close()
+	var out []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("tinvest: find the connections of %d accounts: %w", len(accountIDs), err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) LinksByConnection(ctx context.Context, connID uuid.UUID) ([]AccountLink, error) {

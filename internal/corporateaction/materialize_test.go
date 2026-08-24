@@ -70,7 +70,7 @@ func newFixture(t *testing.T) fixture {
 	svc := operation.NewService(ops)
 	return fixture{
 		ctx: ctx, pool: pool, store: store, ops: ops, svc: svc,
-		materializer: corporateaction.NewMaterializer(store, ops, svc, nil),
+		materializer: corporateaction.NewMaterializer(store, ops, svc, nil, nil),
 		spaceID:      sp.ID, accountID: a1.ID, otherID: a2.ID, amazonID: amazon.ID,
 	}
 }

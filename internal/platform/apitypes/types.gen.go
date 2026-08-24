@@ -187,6 +187,45 @@ func (e InBaseGap) Valid() bool {
 	}
 }
 
+// Defines values for InstrumentEventKind.
+const (
+	InstrumentEventKindConversion InstrumentEventKind = "conversion"
+	InstrumentEventKindSpinOff    InstrumentEventKind = "spin_off"
+	InstrumentEventKindSplit      InstrumentEventKind = "split"
+)
+
+// Valid indicates whether the value is a known member of the InstrumentEventKind enum.
+func (e InstrumentEventKind) Valid() bool {
+	switch e {
+	case InstrumentEventKindConversion:
+		return true
+	case InstrumentEventKindSpinOff:
+		return true
+	case InstrumentEventKindSplit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InstrumentEventSource.
+const (
+	InstrumentEventSourceManual  InstrumentEventSource = "manual"
+	InstrumentEventSourceMoexIss InstrumentEventSource = "moex_iss"
+)
+
+// Valid indicates whether the value is a known member of the InstrumentEventSource enum.
+func (e InstrumentEventSource) Valid() bool {
+	switch e {
+	case InstrumentEventSourceManual:
+		return true
+	case InstrumentEventSourceMoexIss:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for InstrumentType.
 const (
 	InstrumentTypeBond     InstrumentType = "bond"
@@ -716,6 +755,30 @@ type CreateAccountRequest struct {
 	Type        AccountType                           `json:"type"`
 }
 
+// CreateInstrumentEventRequest A corporate action recorded by hand. Its `source` is always `manual`: the exchange's own rows are written by the job that reads the exchange, and a request claiming to be one would be a row nobody could check and the job would overwrite.
+type CreateInstrumentEventRequest struct {
+	// BasisShare Decimal as string, greater than 0 and less than 1. Required for a spin-off, refused on the other two. See InstrumentEvent.basis_share.
+	BasisShare nullable.Nullable[string] `json:"basis_share,omitempty"`
+
+	// EffectiveOn See InstrumentEvent.effective_on — the first day the paper trades in the new quantity at the venue where it is held, NOT the record date. Refused if later than today.
+	EffectiveOn openapi_types.Date `json:"effective_on"`
+	Isin        string             `json:"isin"`
+
+	// Kind What happened to the paper. `split`: the quantity is rewritten and nothing else — the money spent stands and so do the acquisition dates, which is why it is tax-neutral everywhere this program models. `conversion`: one paper becomes another (a depositary receipt into the share it represented, a fund into its successor); the basis and the dates travel with it and nothing is realized (НК РФ ст. 214.1 п. 13). `spin_off`: the original stands and a second paper is handed out beside it, taking part of the basis with it (НК РФ ст. 277 п. 7).
+	//
+	// ONLY `split` IS CARRIED INTO JOURNALS TODAY — see InstrumentEvent.materialized, which says so per row rather than leaving a reader to hold this list in their head. The other two are recorded because the facts are perishable: a fund converted in 2023 and nobody can go back and ask the registrar again.
+	Kind      InstrumentEventKind `json:"kind"`
+	Note      *string             `json:"note,omitempty"`
+	RatioFrom int64               `json:"ratio_from"`
+	RatioTo   int64               `json:"ratio_to"`
+
+	// ResultIsin Required for a conversion and a spin-off, refused on a split. See InstrumentEvent.result_isin.
+	ResultIsin nullable.Nullable[string] `json:"result_isin,omitempty"`
+
+	// SourceRef Required: a link to the exchange's or the issuer's own announcement. See InstrumentEvent.source_ref for why this one field is not optional.
+	SourceRef string `json:"source_ref"`
+}
+
 // CreateInstrumentRequest defines model for CreateInstrumentRequest.
 type CreateInstrumentRequest struct {
 	// Currency ISO-4217 uppercase, e.g. RUB: the currency the instrument's own figures are denominated in, which is not necessarily face_currency below. Three uppercase letters is the SHAPE of a code and it is the whole of what the server checks: it holds no register, so a well-formed code it has never met is accepted, and a lowercase spelling or a currency's name is a 400. It cannot be changed afterwards — UpdateInstrumentRequest carries no currency.
@@ -832,6 +895,85 @@ type Instrument struct {
 	Name           string                   `json:"name"`
 	Ticker         string                   `json:"ticker"`
 	Type           InstrumentType           `json:"type"`
+}
+
+// InstrumentEvent One recorded corporate action. Keyed by the ISIN of the paper it happened to rather than by a catalog row: the fact outlives any row, and the exchange job records splits of papers nobody here holds.
+type InstrumentEvent struct {
+	// BasisShare Decimal as string: the fraction of the original's cost basis a spin-off moves across (НК РФ ст. 277 п. 7 — the share of the fund's assets that was carved out). Greater than 0 and less than 1. Required on a spin-off and refused on the other two, where the whole basis either stays or travels.
+	BasisShare nullable.Nullable[string] `json:"basis_share,omitempty"`
+	CreatedAt  time.Time                 `json:"created_at"`
+
+	// EffectiveOn THE FIRST DAY THE PAPER TRADES IN THE NEW QUANTITY at the venue where it is held. Not the record date, not the day the decision was announced, and not the day the registrar did the work.
+	//
+	// The event applies at the START of it: what was held at the close of the day before is multiplied, and a trade dated this day is already in the new quantity. That is also why a purchase made on the effective day gets no split row of its own.
+	//
+	// Checked against three live events before it was written this way — FXUS (exchange table 2021-10-06, last trade before 10-04, first trade after 10-07), NVDA-RM (table 2021-07-21, trades 07-15 and 07-22) and T (table 2026-04-17, last trade 04-10, registrar 04-15, trading resumed 04-17). The exchange's own date is sometimes the last day of the halt and sometimes the first day after it, but it always falls inside the window where nothing trades, so this rule is right in all three.
+	EffectiveOn openapi_types.Date `json:"effective_on"`
+	Id          openapi_types.UUID `json:"id"`
+
+	// Isin ISIN of the paper this happened to. The catalog's own identity since migration 0020, which is what lets one recorded fact reach every account holding the paper, however each of them came to hold it.
+	Isin string `json:"isin"`
+
+	// Kind What happened to the paper. `split`: the quantity is rewritten and nothing else — the money spent stands and so do the acquisition dates, which is why it is tax-neutral everywhere this program models. `conversion`: one paper becomes another (a depositary receipt into the share it represented, a fund into its successor); the basis and the dates travel with it and nothing is realized (НК РФ ст. 214.1 п. 13). `spin_off`: the original stands and a second paper is handed out beside it, taking part of the basis with it (НК РФ ст. 277 п. 7).
+	//
+	// ONLY `split` IS CARRIED INTO JOURNALS TODAY — see InstrumentEvent.materialized, which says so per row rather than leaving a reader to hold this list in their head. The other two are recorded because the facts are perishable: a fund converted in 2023 and nobody can go back and ask the registrar again.
+	Kind InstrumentEventKind `json:"kind"`
+
+	// Materialized Whether this program carries this KIND into journals today — true for a split, false for a conversion and a spin-off. Published per row rather than left to the client to derive from `kind`, so the day a kind starts being materialized no screen goes on claiming it is not. It says nothing about whether THIS event actually produced a row: an account that held nothing on the day gets none, and that is a fact about the account rather than about the event.
+	Materialized bool `json:"materialized"`
+
+	// MoexSecid The exchange's security code the splits job resolved this ISIN from, cached so a later run costs no second lookup. Empty on a hand-recorded event. NEVER an identity: MOEX's `T` is Т-Технологии while this catalog also holds AT&T under `T`, which is why the job resolves through the exchange's own ISIN and not through a ticker.
+	MoexSecid *string `json:"moex_secid,omitempty"`
+
+	// Note Whatever the recorder wanted to say about it. Empty on an exchange row.
+	Note string `json:"note"`
+
+	// RatioFrom The `from` half of the ratio: one unit becomes ratio_to/ratio_from units. Whole numbers, the shape the exchange publishes, so that 1:3 is 1 and 3 rather than 0.3333333333. From 1 to 1000000000.
+	RatioFrom int64 `json:"ratio_from"`
+
+	// RatioTo The `to` half. See ratio_from. A ratio of 1 to 1 is refused: it changes nothing and would put a row in every holder's journal saying so.
+	RatioTo int64 `json:"ratio_to"`
+
+	// ResultIsin The paper a conversion or a spin-off produces. Required on those two and refused on a split, which produces no new paper. Never equal to `isin`.
+	ResultIsin nullable.Nullable[string] `json:"result_isin,omitempty"`
+
+	// Source Where the fact came from. `moex_iss`: the exchange's own splits table, read by a daily job. Not a person's to remove — the job rewrites it from the exchange on every run, so a deletion would last until the next one. `manual`: somebody recorded it, with a link to the evidence in `source_ref`.
+	Source InstrumentEventSource `json:"source"`
+
+	// SourceRef Where the fact can be checked: the exchange's own URL for a `moex_iss` row, and for a `manual` one whatever its recorder linked to. Required on a manual event — a ratio nobody can check is a number this program would carry into every holder's journal on one person's word.
+	SourceRef string `json:"source_ref"`
+}
+
+// InstrumentEventKind What happened to the paper. `split`: the quantity is rewritten and nothing else — the money spent stands and so do the acquisition dates, which is why it is tax-neutral everywhere this program models. `conversion`: one paper becomes another (a depositary receipt into the share it represented, a fund into its successor); the basis and the dates travel with it and nothing is realized (НК РФ ст. 214.1 п. 13). `spin_off`: the original stands and a second paper is handed out beside it, taking part of the basis with it (НК РФ ст. 277 п. 7).
+//
+// ONLY `split` IS CARRIED INTO JOURNALS TODAY — see InstrumentEvent.materialized, which says so per row rather than leaving a reader to hold this list in their head. The other two are recorded because the facts are perishable: a fund converted in 2023 and nobody can go back and ask the registrar again.
+type InstrumentEventKind string
+
+// InstrumentEventSource Where the fact came from. `moex_iss`: the exchange's own splits table, read by a daily job. Not a person's to remove — the job rewrites it from the exchange on every run, so a deletion would last until the next one. `manual`: somebody recorded it, with a link to the evidence in `source_ref`.
+type InstrumentEventSource string
+
+// InstrumentEventWritten What recording or removing an event did. The event itself, and the journals it changed on the way — materialization runs inside the request rather than waiting for the daily sweep, so these figures describe a state the next screen will already show.
+type InstrumentEventWritten struct {
+	// AccountsTouched How many accounts' journals actually changed — not how many were looked at.
+	AccountsTouched int `json:"accounts_touched"`
+
+	// Event One recorded corporate action. Keyed by the ISIN of the paper it happened to rather than by a catalog row: the fact outlives any row, and the exchange job records splits of papers nobody here holds.
+	Event InstrumentEvent `json:"event"`
+
+	// RecheckQueued How many broker connections were asked for a fresh comparison because their accounts changed. Zero when no changed account belongs to a connection, and zero when a check of that connection was already queued and will read the journal as it now stands. Not an error either way: the hourly run reconciles regardless, and this only shortens the window in which a verdict on screen describes a journal that has already moved.
+	RecheckQueued int `json:"recheck_queued"`
+
+	// RowsAdded Journal rows written. Zero for a kind this program does not carry into journals, and zero for a paper no account held on the day — neither is a failure, and `materialized` on the event tells the first case from the second.
+	RowsAdded int `json:"rows_added"`
+
+	// RowsRemoved Journal rows taken out. On a delete this is what the removed event had put there; on a create it is normally 0, and non-zero only when the new event changes what an older one asked for.
+	RowsRemoved int `json:"rows_removed"`
+}
+
+// InstrumentEventsResponse defines model for InstrumentEventsResponse.
+type InstrumentEventsResponse struct {
+	// Events The whole registry, newest effective date first. Not paged — see the endpoint.
+	Events []InstrumentEvent `json:"events"`
 }
 
 // InstrumentType defines model for InstrumentType.
@@ -1602,6 +1744,9 @@ type SetAccountBalanceJSONRequestBody = SetBalanceRequest
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
+
+// CreateInstrumentEventJSONRequestBody defines body for CreateInstrumentEvent for application/json ContentType.
+type CreateInstrumentEventJSONRequestBody = CreateInstrumentEventRequest
 
 // CreateInstrumentJSONRequestBody defines body for CreateInstrument for application/json ContentType.
 type CreateInstrumentJSONRequestBody = CreateInstrumentRequest
