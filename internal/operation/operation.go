@@ -52,5 +52,5 @@ const (
 // the journals follow.
 //
 // The set of sources is closed by a CHECK constraint on the column, so adding
-// one is a migration (0021) as well as a constant.
+// one is a migration (0022) as well as a constant.
 const SourceRegistry = "registry"

@@ -686,7 +686,7 @@ func (s *Store) ListByAccount(ctx context.Context, spaceID, accountID uuid.UUID,
 func (s *Store) ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]Operation, error) {
 	ops, err := s.list(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND account_id = $2
-		ORDER BY occurred_on ASC, created_at ASC`, spaceID, accountID)
+		`+engineOrder, spaceID, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -789,7 +789,7 @@ func (s *Store) attachTransferLots(ctx context.Context, spaceID uuid.UUID, ops [
 func (s *Store) ListBySource(ctx context.Context, spaceID, accountID uuid.UUID, source string) ([]Operation, error) {
 	ops, err := s.list(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND account_id = $2 AND source = $3
-		ORDER BY occurred_on ASC, created_at ASC`, spaceID, accountID, source)
+		`+engineOrder, spaceID, accountID, source)
 	if err != nil {
 		return nil, err
 	}
@@ -809,7 +809,7 @@ func (s *Store) ByIDs(ctx context.Context, spaceID uuid.UUID, ids []uuid.UUID) (
 	}
 	ops, err := s.list(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND id = ANY($2)
-		ORDER BY occurred_on ASC, created_at ASC`, spaceID, ids)
+		`+engineOrder, spaceID, ids)
 	if err != nil {
 		return nil, err
 	}

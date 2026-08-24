@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
@@ -61,6 +62,13 @@ const (
 	backfillFxInterval    = 24 * time.Hour
 	tinvestSyncInterval   = time.Hour
 	tinvestQuotesInterval = 30 * time.Minute
+
+	// corporateActionsInterval paces both registry jobs, and a day is not a
+	// compromise here: a split is announced days ahead and takes effect on a
+	// date, so nothing about it moves within a day. The exchange's own table is
+	// small (56 rows on 2026-08-22) and the sweep that follows writes nothing
+	// unless a journal changed under an event already stored.
+	corporateActionsInterval = 24 * time.Hour
 )
 
 // SoftStopTimeout is how long a job that is already running gets to finish
@@ -155,6 +163,8 @@ func NewWorkers(
 	fxProvider marketdata.FxHistoryProvider,
 	quoteProvider marketdata.QuoteProvider,
 	tinvestDeps TinvestDeps,
+	caStore *corporateaction.Store,
+	caMaterializer *corporateaction.Materializer,
 	enqueuer *Enqueuer,
 ) *river.Workers {
 	workers := river.NewWorkers()
@@ -176,6 +186,18 @@ func NewWorkers(
 		tinvestDeps.NewClient, tinvestDeps.NewRebuilder, tinvestDeps.Reconciler, log))
 	river.AddWorker(workers, tinvest.NewQuotesWorker(tinvestDeps.Store, mdStore,
 		tinvestDeps.Box, tinvestDeps.NewClient, log, nil))
+	// The corporate-actions registry. The refresh worker is registered only
+	// when the quote provider can also answer about splits — the same rule the
+	// gold worker follows above and for the same reason: the interface is the
+	// exchange client's, and a deployment wired to something else has no
+	// automatic splits rather than a job that fails for ever. The sweep is
+	// registered unconditionally, because it reads only what is already stored
+	// and is what carries a HAND-ENTERED event into the journals.
+	if splits, ok := quoteProvider.(corporateaction.SplitsProvider); ok {
+		river.AddWorker(workers, corporateaction.NewRefreshMoexSplitsWorker(
+			caStore, caMaterializer, splits, log))
+	}
+	river.AddWorker(workers, corporateaction.NewMaterializeAllWorker(caMaterializer, log))
 	return workers
 }
 
@@ -274,6 +296,20 @@ func newClient(pool *pgxpool.Pool, workers *river.Workers, log *slog.Logger) (*r
 				river.PeriodicInterval(tinvestQuotesInterval),
 				func() (river.JobArgs, *river.InsertOpts) {
 					return tinvest.RefreshQuotesArgs{}, nil
+				},
+				&river.PeriodicJobOpts{RunOnStart: true},
+			),
+			river.NewPeriodicJob(
+				river.PeriodicInterval(corporateActionsInterval),
+				func() (river.JobArgs, *river.InsertOpts) {
+					return corporateaction.RefreshMoexSplitsArgs{}, nil
+				},
+				&river.PeriodicJobOpts{RunOnStart: true},
+			),
+			river.NewPeriodicJob(
+				river.PeriodicInterval(corporateActionsInterval),
+				func() (river.JobArgs, *river.InsertOpts) {
+					return corporateaction.MaterializeAllArgs{}, nil
 				},
 				&river.PeriodicJobOpts{RunOnStart: true},
 			),

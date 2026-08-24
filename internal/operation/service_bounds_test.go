@@ -281,10 +281,7 @@ func TestSplitRatioJustInsideTheBoundIsAccepted(t *testing.T) {
 		OccurredOn: date("2026-07-02"), SplitRatio: dec(largest),
 		AmountMinor: 0, Currency: "RUB",
 	}
-	created, err := svc.Create(f.ctx, f.spaceID, split)
-	if err != nil {
-		t.Fatalf("split at a ratio of %s: %v — the largest ratio the column holds is inside the bound", largest, err)
-	}
+	created := seedSplit(t, f, svc, split)
 	if created.SplitRatio == nil || created.SplitRatio.String() != largest {
 		t.Errorf("stored split_ratio = %v, want %s", created.SplitRatio, largest)
 	}

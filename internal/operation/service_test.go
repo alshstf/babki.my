@@ -413,29 +413,63 @@ func TestServiceDeleteTransferRemovesLots(t *testing.T) {
 	}
 }
 
+// TestServiceSplitValidation is about WHO may write a split as much as about
+// what one has to look like.
+//
+// THE HAND-ENTRY DOOR NO LONGER TAKES ONE AT ALL, and that is the change this
+// test's first half is here to hold. A split happens to the PAPER: entering it
+// on one account leaves every other holder of the same security carrying the
+// pre-split quantity, with nothing on any screen saying why the two disagree.
+// So it is recorded once in the corporate-actions registry, against the ISIN,
+// and materialized into every account that held it (see
+// internal/corporateaction) — which reaches the journal through the importer's
+// door, carrying source "registry".
 func TestServiceSplitValidation(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
 
-	// Valid split: instrument + positive ratio + amount 0 + source manual or empty
+	// The shape a valid split has. Only its SOURCE decides which door will take
+	// it, which is what the two halves below check.
 	validSplit := operation.Operation{
 		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeSplit,
 		OccurredOn: date("2026-07-01"), SplitRatio: dec("10"), AmountMinor: 0,
-		Currency: "RUB", Source: "manual",
+		Currency: "RUB", Source: operation.SourceRegistry,
 	}
-	if _, err := svc.Create(f.ctx, f.spaceID, validSplit); err != nil {
-		t.Fatalf("valid split with source=manual: %v", err)
+	seedSplit(t, f, svc, validSplit)
+
+	// Every source but the registry's is refused at the hand-entry door,
+	// including the two that used to be the ONLY ones accepted.
+	for _, source := range []string{"manual", "", "csv", "tinvest"} {
+		refused := validSplit
+		refused.Source = source
+		refused.OccurredOn = date("2026-07-02")
+		if _, err := svc.Create(f.ctx, f.spaceID, refused); !errors.Is(err, family.ErrValidation) {
+			t.Errorf("split entered by hand with source %q: err = %v, want ErrValidation — a split is the registry's to write", source, err)
+		}
 	}
 
-	validSplitNoSource := operation.Operation{
-		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeSplit,
-		OccurredOn: date("2026-07-02"), SplitRatio: dec("2"), AmountMinor: 0,
-		Currency: "RUB", Source: "",
-	}
-	if _, err := svc.Create(f.ctx, f.spaceID, validSplitNoSource); err != nil {
-		t.Fatalf("valid split with empty source: %v", err)
+	// The import door refuses every source but the registry's too, so a broker
+	// cannot invent a corporate action it never reported (see
+	// operation.validateImported).
+	for _, source := range []string{"tinvest", "csv"} {
+		refused := validSplit
+		refused.Source = source
+		refused.OccurredOn = date("2026-07-03")
+		id := source + "-split"
+		refused.ExternalID = &id
+		_, imported, err := svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{
+			Add: []operation.Operation{refused},
+		})
+		if err != nil {
+			t.Fatalf("import a %s split: %v", source, err)
+		}
+		if len(imported) != 1 || !errors.Is(imported[0].Err, family.ErrValidation) {
+			t.Errorf("split imported as %q: refusals = %v, want one ErrValidation", source, imported)
+		}
 	}
 
+	// What a split has to look like, whoever writes it. Checked at the registry
+	// door, because that is the only one that would otherwise take these.
 	cases := map[string]func(o operation.Operation) operation.Operation{
 		"split without instrument": func(o operation.Operation) operation.Operation {
 			o.InstrumentID = nil
@@ -457,13 +491,11 @@ func TestServiceSplitValidation(t *testing.T) {
 			o.AmountMinor = 100
 			return o
 		},
-		"split with csv source": func(o operation.Operation) operation.Operation {
-			o.Source = "csv"
-			return o
-		},
 	}
 	for name, mutate := range cases {
-		if _, err := svc.Create(f.ctx, f.spaceID, mutate(validSplit)); !errors.Is(err, family.ErrValidation) {
+		broken := mutate(validSplit)
+		broken.OccurredOn = date("2026-07-04")
+		if err := trySplit(t, f, svc, broken); !errors.Is(err, family.ErrValidation) {
 			t.Errorf("%s: err = %v, want ErrValidation", name, err)
 		}
 	}
