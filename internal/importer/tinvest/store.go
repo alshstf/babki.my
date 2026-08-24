@@ -73,7 +73,7 @@ const (
 	// TriggerRegistry is a run the corporate-actions registry asked for,
 	// because it changed a journal this connection is reconciled against. It is
 	// a word of its own rather than one of the three above for the reason
-	// migration 0024 states: none of them is true of it, and the run log's
+	// migration 0025 states: none of them is true of it, and the run log's
 	// trigger is a sentence a reader is shown.
 	TriggerRegistry SyncTrigger = "registry"
 )
