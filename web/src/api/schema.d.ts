@@ -272,7 +272,7 @@ export interface paths {
         /**
          * @description Record a corporate action by hand. The event is stored, and — for the kinds this program carries into journals — materialized into every account that held the paper BEFORE this responds, so the answer already says what changed.
          *
-         *     WHAT IT ANSWERS 400 FOR is every rule in internal/corporateaction.Event.Validate, which both doors run: the exchange job's facts are held to the same rules a person's are. The ones worth knowing before sending: a ratio of 1 to 1 changes nothing; a ratio so deep it rounds to zero at ten decimal places would multiply a holding by nought; `result_isin` naming the same paper as `isin` is not a conversion; and the same paper, kind and date twice is a duplicate.
+         *     WHAT IT ANSWERS 400 FOR is every rule in internal/corporateaction.Event.Validate, which both doors run: the exchange job's facts are held to the same rules a person's are. The ones worth knowing before sending: a SPLIT of 1 to 1 changes nothing (the other two kinds are commonly 1 to 1 — see ratio_to); a ratio so deep it rounds to zero at ten decimal places would multiply a holding by nought; `result_isin` naming the same paper as `isin` is not a conversion; and the same paper, kind and date twice is a duplicate.
          */
         post: operations["createInstrumentEvent"];
         delete?: never;
@@ -847,7 +847,7 @@ export interface components {
             ratio_from: number;
             /**
              * Format: int64
-             * @description The `to` half. See ratio_from. A ratio of 1 to 1 is refused: it changes nothing and would put a row in every holder's journal saying so.
+             * @description The `to` half. See ratio_from. A SPLIT of 1 to 1 is refused: a split has nothing but its ratio to say, so equal sides multiply every holding by one and would put a row in every holder's journal saying nothing happened. A CONVERSION or a SPIN-OFF of 1 to 1 is accepted, and is the commonest shape of both: a redomiciliation or an ISIN change moves the identity of the paper and leaves the count alone (TCS Group receipts became МКПАО «ТКС Холдинг» shares one for one on 2024-02-27), and a carve-out yields one unit of the new fund per unit of the old while a share of the basis moves across.
              */
             ratio_to: number;
             /** @description The paper a conversion or a spin-off produces. Required on those two and refused on a split, which produces no new paper. Never equal to `isin`. */
