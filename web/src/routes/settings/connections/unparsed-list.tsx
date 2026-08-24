@@ -75,8 +75,17 @@ export function UnparsedList({ connectionId }: { connectionId: string }) {
             the rows, printed only where there are rows for it to be about. Over
             an empty list it introduced nothing, and «Неразобранных операций
             нет» directly underneath answered it. */}
-        {list.length > 0 && (
+        {/* Each sentence is printed only over rows it is TRUE of. The first
+            one — «ни позиции, ни прибыль их не учитывают» — is false about an
+            explained row, whose manual operation is counted in both; the second
+            says so, and appears only when such a row is on the page. */}
+        {list.some((operation) => operation.explained_by == null) && (
           <p className="text-sm text-muted-foreground">{t("connections.detail.unparsed.intro")}</p>
+        )}
+        {list.some((operation) => operation.explained_by != null) && (
+          <p className="text-sm text-muted-foreground">
+            {t("connections.detail.unparsed.introExplained")}
+          </p>
         )}
         {unparsed.isPending && (
           <p className="text-sm text-muted-foreground">{t("app.loading")}</p>
