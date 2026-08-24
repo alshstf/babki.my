@@ -172,6 +172,23 @@ type ReconcileMismatch struct {
 	BrokerName     *string         `json:"broker_name,omitempty"`
 	BrokerCurrency *string         `json:"broker_currency,omitempty"`
 	BrokerType     *string         `json:"broker_type,omitempty"`
+
+	// SplitHintFactor is set when the two quantities differ by a whole factor
+	// of two or more AND the corporate-actions registry holds no split of this
+	// paper that could account for it. It carries the factor itself, because
+	// "twenty times" is what makes the guess worth making.
+	//
+	// IT IS A QUESTION AND NOT A FINDING. The owner's own AMZN stands at 1
+	// against the broker's 20 and NVDA at 3 against 30, and both are real
+	// splits nobody recorded — but a whole factor is also what a purchase this
+	// import never saw would leave behind, and nothing here can tell the two
+	// apart. So it is published as the observation it is and nothing acts on
+	// it: no event is written, no journal is touched, and the screen asks
+	// rather than tells.
+	//
+	// ONE FIELD AND NOT TWO. A boolean beside a factor would be two statements
+	// of one thing that could disagree; the factor's presence IS the statement.
+	SplitHintFactor *int64 `json:"split_hint_factor,omitempty"`
 }
 
 // ReconcileResult is one reconciliation's whole verdict.
@@ -664,18 +681,30 @@ type Reconciler struct {
 	// position under a listing this connection never imported is recognized as
 	// a paper the owner does hold (see matchByISIN).
 	catalog isinCatalog
-	log     *slog.Logger
+	// registry answers whether a difference that looks like a split is one
+	// nobody has recorded yet. Nil in an instance wired without it, and then no
+	// hint is offered — see attachSplitHints.
+	registry splitRegistry
+	log      *slog.Logger
 	// now stands in for time.Now so a test can pin the day a mark is filed
 	// under instead of racing the wall clock (the pattern
 	// marketdata.backfillFxWorker uses).
 	now func() time.Time
 }
 
-func NewReconciler(store *Store, ops engineReader, accounts balanceMarker, catalog isinCatalog, log *slog.Logger) *Reconciler {
+// NewReconciler builds the check. registry may be nil, and then a difference
+// that looks like an unrecorded split is reported without the hint that says so
+// (see attachSplitHints).
+func NewReconciler(store *Store, ops engineReader, accounts balanceMarker, catalog isinCatalog,
+	registry splitRegistry, log *slog.Logger,
+) *Reconciler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Reconciler{store: store, ops: ops, accounts: accounts, catalog: catalog, log: log, now: time.Now}
+	return &Reconciler{
+		store: store, ops: ops, accounts: accounts, catalog: catalog,
+		registry: registry, log: log, now: time.Now,
+	}
 }
 
 // isinCatalog is the narrow view of instrument.Store the reconciliation needs:
@@ -683,6 +712,23 @@ func NewReconciler(store *Store, ops engineReader, accounts balanceMarker, catal
 // already hold under another of its listings.
 type isinCatalog interface {
 	ByISIN(ctx context.Context, isin string) (instrument.Instrument, error)
+	// ByIDs answers the other way round, for the split hint: a difference names
+	// one of our catalog rows, and the registry is keyed by ISIN. Batched
+	// because a check can carry several differences and one query per row is
+	// the N+1 this package has a test against (see round_trips).
+	ByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]instrument.Instrument, error)
+}
+
+// splitRegistry answers whether the corporate-actions registry already knows of
+// a split of this paper on or before a day.
+//
+// NARROW, AND DECLARED HERE rather than imported as a package: what this check
+// wants of the registry is one question, and *corporateaction.Store answers it
+// structurally. The dependency has to run this way round — the registry knows
+// nothing about brokers, and its own materialization already reaches into
+// journals through the operation service.
+type splitRegistry interface {
+	HasSplitOnOrBefore(ctx context.Context, isin string, day time.Time) (bool, error)
 }
 
 // ReconcileLink checks one linked account against the broker and, when the
@@ -869,6 +915,7 @@ func (r *Reconciler) ReconcileLink(ctx context.Context, c *Client, conn Connecti
 	index, labels, passports := r.matchByISIN(ctx, c, index, labels, brokerPositions)
 
 	res, cmpErr := compareHoldings(brokerPositions, brokerBalances, journal, index, labels, passports)
+	r.attachSplitHints(ctx, res.Mismatches)
 
 	// The mark goes on whatever the verdict was, cmpErr included: it is the
 	// broker's own statement about the account, and a journal of ours that
@@ -896,6 +943,110 @@ func (r *Reconciler) ReconcileLink(ctx context.Context, c *Client, conn Connecti
 	}
 	r.log.Info("tinvest: an account's check against the broker finished", attrs...)
 	return res, cmpErr
+}
+
+// attachSplitHints marks the differences that look like an unrecorded split.
+//
+// WHAT IT LOOKS FOR is a difference by a whole factor of two or more, in either
+// direction — twenty of ours against one of theirs is a reverse split read the
+// other way — on a paper the registry holds no split for. On the owner's own
+// account that is AMZN (1 against 20, Amazon's 20:1 of June 2022) and NVDA (3
+// against 30, NVIDIA's 10:1 of June 2024), neither of which the broker reports
+// as an operation because no broker does: the T-Invest operation enum has 71
+// values and not one corporate action in it.
+//
+// WHY THE REGISTRY IS CONSULTED AT ALL. Once the event is recorded, the split
+// is in the journal and the difference is gone — so a hint over a paper the
+// registry already knows about could only mean something else is wrong, and
+// pointing at the registry would send the reader to a row that is already
+// there and already right.
+//
+// IT CHANGES NOTHING AND ASKS. No event is written, no journal is touched, and
+// a failure to look is a hint not shown rather than a check not finished: the
+// difference itself is the finding, and this is a suggestion about where to
+// look for its cause.
+func (r *Reconciler) attachSplitHints(ctx context.Context, mismatches []ReconcileMismatch) {
+	if r.registry == nil || r.catalog == nil {
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(mismatches))
+	for i := range mismatches {
+		if mismatches[i].Kind == MismatchInstrument && mismatches[i].InstrumentID != nil {
+			ids = append(ids, *mismatches[i].InstrumentID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	rows, err := r.catalog.ByIDs(ctx, ids)
+	if err != nil {
+		r.log.Debug("tinvest: could not read the papers of the differences, so no split hint is offered", "err", err)
+		return
+	}
+	// The day the hint is about: an event effective after this check could not
+	// have moved today's holding. r.now is the same clock the balance mark is
+	// filed under.
+	today := r.now()
+	for i := range mismatches {
+		m := &mismatches[i]
+		if m.Kind != MismatchInstrument || m.InstrumentID == nil {
+			continue
+		}
+		factor, ok := wholeFactor(m.Broker, m.Journal)
+		if !ok {
+			continue
+		}
+		inst, found := rows[*m.InstrumentID]
+		if !found || inst.ISIN == "" {
+			// No ISIN is no question to ask: the registry is keyed by it, so
+			// nothing could be recorded against this paper anyway, and a hint
+			// pointing at a registry that cannot hold the answer would be
+			// advice nobody can act on.
+			continue
+		}
+		known, err := r.registry.HasSplitOnOrBefore(ctx, inst.ISIN, today)
+		if err != nil {
+			r.log.Debug("tinvest: could not ask the registry about a paper, so no split hint is offered",
+				"isin", inst.ISIN, "err", err)
+			continue
+		}
+		if known {
+			continue
+		}
+		f := factor
+		m.SplitHintFactor = &f
+	}
+}
+
+// wholeFactor reports the whole number one of these quantities is times the
+// other, when there is one and it is at least two.
+//
+// EITHER DIRECTION COUNTS. A forward split leaves the broker holding the
+// multiple of what the journal does; a reverse split leaves the journal holding
+// the multiple. The factor returned is the larger over the smaller in both
+// cases, which is what the screen says ("differs by a factor of N") and is true
+// of both.
+//
+// A ZERO ON EITHER SIDE IS NOT A FACTOR, however tempting: nothing multiplied
+// by anything is still nothing, so a paper held on one side and not the other
+// says nothing about splits.
+func wholeFactor(a, b decimal.Decimal) (int64, bool) {
+	if !a.IsPositive() || !b.IsPositive() {
+		return 0, false
+	}
+	hi, lo := a, b
+	if hi.LessThan(lo) {
+		hi, lo = lo, hi
+	}
+	q := hi.Div(lo)
+	if !q.Equal(q.Truncate(0)) {
+		return 0, false
+	}
+	f := q.IntPart()
+	if f < 2 {
+		return 0, false
+	}
+	return f, true
 }
 
 // markBalance files the broker's own ruble figure as the account's balance

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -130,6 +131,36 @@ func (s *Store) ByISIN(ctx context.Context, isin string) ([]Event, error) {
 	}
 	return s.query(ctx, `SELECT `+cols+` FROM instrument_events
 		WHERE isin = $1 ORDER BY effective_on, created_at, id`, isin)
+}
+
+// HasSplitOnOrBefore reports whether the registry holds a split of this paper
+// effective on or before the given day.
+//
+// IT IS A QUESTION ABOUT THE REGISTRY, NOT ABOUT ANY JOURNAL. The caller is the
+// broker reconciliation, which has found a difference that looks exactly like an
+// unrecorded split — the broker holding twenty of what the journal holds one of
+// — and wants to say so only when the registry cannot already account for it.
+// A false answer therefore means "nobody here has recorded such an event", which
+// is a question for a person; it does not mean the difference IS a split.
+//
+// ON OR BEFORE, because an event dated after the check could not have affected
+// today's holding, and pointing at it would send the reader to a row that
+// explains nothing. An empty ISIN is false rather than a match on every paper
+// with no ISIN, the same refusal ByISIN makes.
+func (s *Store) HasSplitOnOrBefore(ctx context.Context, isin string, day time.Time) (bool, error) {
+	if isin == "" {
+		return false, nil
+	}
+	var exists bool
+	err := s.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM instrument_events
+			WHERE isin = $1 AND kind = $2 AND effective_on <= $3
+		)`, isin, KindSplit, day).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("corporateaction: look for a split of %s: %w", isin, err)
+	}
+	return exists, nil
 }
 
 // List returns the whole registry, newest event first — what the settings
