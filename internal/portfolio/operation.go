@@ -70,9 +70,42 @@ const (
 	// them is what carries a date and a cost from one paper to the other.
 	TypeExchangeOut Type = "exchange_out"
 	TypeExchangeIn  Type = "exchange_in"
-	TypeSplit       Type = "split"
-	TypeInterest    Type = "interest"
-	TypeConversion  Type = "conversion"
+	// TypeSpinoffOut and TypeSpinoffIn are the two legs of a SPIN-OFF: paper A
+	// STAYS with the holder and paper B appears beside it, N units of A giving
+	// M units of B, on one account, on one day. The owner's own case is
+	// Т-Капитал carving the blocked assets out of TECH, TSPX and TUSD into the
+	// closed funds TECH2, TSPX2 and TUSD2 on 2023-12-22, units one for one —
+	// and the broker sent no operation for any of it.
+	//
+	// WHAT SEPARATES IT FROM A CONVERSION IS THAT NOTHING LEAVES. A conversion
+	// retires the old paper and its whole basis travels; a spin-off keeps the
+	// old paper, its units untouched, and moves only a SHARE of the money that
+	// was paid for it. НК РФ ст. 214.1 п. 13 abz. 8 sends the question to
+	// ст. 277 п. 7, which fixes the share exactly: the units of the additional
+	// fund are worth the part of the original units' cost that the carved-out
+	// assets were of the fund's net assets before the carve-out, and the
+	// original units' cost is reduced by that same figure. Neither income nor
+	// expense arises on the day.
+	//
+	// SO THE DEPARTING LEG MOVES NO UNITS AT ALL, and it carries no quantity —
+	// the field is nil, exactly as a split's is, because there is no count to
+	// put in it and any count put there would be read as shares leaving. What
+	// it carries instead is the money: AmountMinor is the basis moved, and
+	// TransferLots names, lot by lot and in queue order, which parcel gave up
+	// how much of it. Those pieces carry each lot's OWN quantity — not as
+	// something that moved, but as the lot's identity, so that a journal which
+	// has grown a parcel underneath the record is caught rather than silently
+	// re-allocated (see Position.applySpinoffOut).
+	//
+	// THE ARRIVING LEG IS THE ORDINARY ONE: M units of B, built from the very
+	// pieces the departing leg named, each keeping its cost and the day the
+	// original parcel was acquired — a spin-off is not a purchase, and the day
+	// the new paper appeared is not the day its money was spent.
+	TypeSpinoffOut Type = "spinoff_out"
+	TypeSpinoffIn  Type = "spinoff_in"
+	TypeSplit      Type = "split"
+	TypeInterest   Type = "interest"
+	TypeConversion Type = "conversion"
 )
 
 var validTypes = map[Type]bool{
@@ -81,6 +114,7 @@ var validTypes = map[Type]bool{
 	TypeTax: true, TypeTransferIn: true, TypeTransferOut: true, TypeSplit: true,
 	TypeInterest: true, TypeConversion: true,
 	TypeExchangeOut: true, TypeExchangeIn: true,
+	TypeSpinoffOut: true, TypeSpinoffIn: true,
 }
 
 func (t Type) Valid() bool { return validTypes[t] }
@@ -94,7 +128,8 @@ func (t Type) RequiresInstrument() bool {
 	switch t {
 	case TypeBuy, TypeSell, TypeRedemption, TypeAmortization,
 		TypeTransferIn, TypeTransferOut, TypeSplit,
-		TypeExchangeOut, TypeExchangeIn:
+		TypeExchangeOut, TypeExchangeIn,
+		TypeSpinoffOut, TypeSpinoffIn:
 		return true
 	}
 	return false
