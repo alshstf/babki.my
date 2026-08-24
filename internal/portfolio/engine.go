@@ -91,6 +91,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -823,6 +824,179 @@ func acquisitionText(t *time.Time) string {
 	return "on " + t.Format("2006-01-02")
 }
 
+// SpinoffPieces is the whole arithmetic of a spin-off's departing leg: which
+// lot gives up how much of the basis, when a share of the position's money
+// moves to a paper carved out of it (see TypeSpinoffOut).
+//
+// ONE PIECE PER LOT, IN QUEUE ORDER, INCLUDING THE LOTS THAT GIVE UP NOTHING.
+// The pieces are not only a record of money — they are the record of the LOT
+// LIST as it stood when the spin-off was worked out, which is what lets a later
+// fold notice that the journal has grown a parcel underneath it
+// (applySpinoffOut). Leaving out a lot with no cost, or one whose share rounds
+// to nothing, would make the record describe a shorter position than the one it
+// was struck against.
+//
+// THE TOTAL IS ROUNDED ONCE AND THE PIECES ARE AN EXACT ALLOCATION OF IT. The
+// money that moves is floor(total basis x share) — one rounding, on the one
+// figure that is published — and it is then divided among the lots in
+// proportion to what each holds, by largest remainders, so the pieces sum to
+// that figure exactly rather than to whatever a per-lot rounding happens to
+// leave. Rounding each lot on its own would be the ordinary way to lose or
+// invent a minor unit here: eleven lots each 0.5 short is five rubles of basis
+// that either never arrives on the new paper or arrives from nowhere.
+//
+// FLOOR, AND NOT NEAREST, for the total. What stays with the original paper is
+// what the holder can still be taxed on later, so a half-unit ambiguity is
+// resolved in favour of the paper that keeps it — the same direction lotShare
+// takes for the same reason (a ledger may leave a minor unit behind; it must
+// never hand out one that was not there). The invariant this package actually
+// guards does not depend on the choice: the position loses exactly what these
+// pieces name and the new paper gains exactly that, whichever way the total
+// was struck.
+//
+// THE REMAINDERS ARE COMPARED EXACTLY, as the remainder of an integer division
+// rather than as a rounded quotient. decimal.QuoRem answers both halves at once
+// and neither is approximate, so two lots whose ideal shares differ in the
+// sixteenth digit are still ordered by which of them is really larger — and,
+// where they are genuinely equal, the earlier lot wins, so the allocation is a
+// function of the lots alone and folding the same journal twice cannot produce
+// two answers.
+func SpinoffPieces(lots []Lot, share decimal.Decimal) []ReleasedLot {
+	pieces := make([]ReleasedLot, len(lots))
+	var total int64
+	for i, l := range lots {
+		pieces[i] = ReleasedLot{Quantity: l.Quantity, CostMinor: 0, AcquiredOn: l.AcquiredOn}
+		total += l.CostMinor
+	}
+	if total <= 0 {
+		// Nothing to divide. A position can hold real shares bought for nothing
+		// — a transfer that arrived with no basis behind it — and a spin-off out
+		// of it moves no money, which is the truthful answer rather than a
+		// degenerate one.
+		return pieces
+	}
+	moved := decimal.NewFromInt(total).Mul(share).Floor().IntPart()
+	if moved <= 0 {
+		return pieces
+	}
+	totalDec := decimal.NewFromInt(total)
+	movedDec := decimal.NewFromInt(moved)
+
+	type remainder struct {
+		at  int
+		rem decimal.Decimal
+	}
+	rems := make([]remainder, 0, len(lots))
+	var placed int64
+	for i, l := range lots {
+		if l.CostMinor <= 0 {
+			continue
+		}
+		q, r := movedDec.Mul(decimal.NewFromInt(l.CostMinor)).QuoRem(totalDec, 0)
+		pieces[i].CostMinor = q.IntPart()
+		placed += pieces[i].CostMinor
+		rems = append(rems, remainder{at: i, rem: r})
+	}
+	// The leftover is what the flooring above did not place: at most one minor
+	// unit per lot, by construction. It goes to the largest remainders first,
+	// earliest lot first among equals.
+	sort.SliceStable(rems, func(i, j int) bool { return rems[i].rem.GreaterThan(rems[j].rem) })
+	for i := 0; placed < moved && i < len(rems); i++ {
+		pieces[rems[i].at].CostMinor++
+		placed++
+	}
+	return pieces
+}
+
+// CheckSpinoffLots verifies that a spin-off leg and its breakdown describe one
+// event: every piece is real (a quantity that is not negative, a cost that is
+// not negative) and the costs sum to the basis the row carries.
+//
+// IT DOES NOT CHECK THE QUANTITIES AGAINST THE ROW, which is the whole
+// difference from CheckTransferLots and follows from what the two rows are. A
+// transfer's pieces are the shares that moved, so their sum IS the operation's
+// quantity; a spin-off's departing leg moves no shares at all and carries no
+// quantity to sum to — its pieces carry each lot's own count as the lot's
+// identity (see TypeSpinoffOut). What matches those counts against something is
+// applySpinoffOut, which holds them to the lots themselves, where they mean
+// something.
+//
+// The arriving leg is an ordinary parcel and is checked by CheckTransferLots
+// like any other.
+func CheckSpinoffLots(o Operation) error {
+	if len(o.TransferLots) == 0 {
+		return badOp(o, "a spin-off must carry the breakdown of the lots whose basis it moved")
+	}
+	var cost int64
+	for i, pc := range o.TransferLots {
+		if pc.Quantity.IsNegative() {
+			return badOp(o, fmt.Sprintf("spin-off lot %d names a quantity of %s: a lot holds no negative number of units", i, pc.Quantity))
+		}
+		if pc.CostMinor < 0 {
+			return badOp(o, fmt.Sprintf("spin-off lot %d gives up %d: a piece's cost basis cannot be negative", i, pc.CostMinor))
+		}
+		if pc.AcquiredOn != nil && pc.AcquiredOn.After(o.OccurredOn) {
+			return badOp(o, fmt.Sprintf("spin-off lot %d was acquired on %s, after the spin-off on %s: a lot cannot give up basis before it exists",
+				i, pc.AcquiredOn.Format("2006-01-02"), o.OccurredOn.Format("2006-01-02")))
+		}
+		cost += pc.CostMinor
+	}
+	if cost != o.AmountMinor {
+		return badOp(o, fmt.Sprintf("spin-off lots sum to cost %d, but the operation moves %d", cost, o.AmountMinor))
+	}
+	return nil
+}
+
+// applySpinoffOut takes the recorded basis out of the very lots the record
+// names, leaving every quantity where it was.
+//
+// THE PIECES ARE MATCHED TO THE LOTS POSITION BY POSITION, and all of them must
+// match — which is stricter than releaseRecorded's matching by acquisition day,
+// deliberately and for a reason of this event's own. A release names a PARCEL,
+// so it need only find lots of the right days to take it from; a spin-off names
+// the WHOLE POSITION, because a share of every lot's money moves at once, and
+// the list of pieces therefore is a photograph of the lot list. A journal that
+// has since grown a lot, lost one, or had one's quantity changed underneath the
+// record is a journal in which this allocation is no longer the allocation that
+// was struck — and re-allocating quietly would take money out of parcels the
+// record never touched, which is exactly the silent re-dating this package
+// refuses everywhere else.
+//
+// So the refusal is loud and says which half moved. The way out is the one
+// every other record-versus-replay disagreement has: delete the operation and
+// record it again, at which point the allocation is struck against the journal
+// as it now stands (see recordAndReplayDisagree).
+//
+// A SHARELESS LOT IS MATCHED AND DRAINED LIKE ANY OTHER. A lot whose entire
+// holding a reverse split rounded away keeps real money and a real acquisition
+// day (see applySplit), and a share of that money belongs to the carved-out
+// paper as much as any other lot's does. Its piece carries a quantity of zero,
+// which is the lot's true count and not a piece of nothing.
+func (p *Position) applySpinoffOut(o Operation) error {
+	if len(o.TransferLots) != len(p.Lots) {
+		return badOp(o, fmt.Sprintf(
+			"the spin-off was struck against %d parcels and replaying this account leaves %d: %s",
+			len(o.TransferLots), len(p.Lots), recordAndReplayDisagree))
+	}
+	for i, pc := range o.TransferLots {
+		l := &p.Lots[i]
+		if !sameAcquisition(l.AcquiredOn, pc.AcquiredOn) || !l.Quantity.Equal(pc.Quantity) {
+			return badOp(o, fmt.Sprintf(
+				"spin-off lot %d names %s units acquired %s and replaying this account leaves %s units acquired %s in its place: %s",
+				i, pc.Quantity, acquisitionText(pc.AcquiredOn), l.Quantity, acquisitionText(l.AcquiredOn),
+				recordAndReplayDisagree))
+		}
+		if pc.CostMinor > l.CostMinor {
+			return badOp(o, fmt.Sprintf(
+				"spin-off lot %d moves %d minor of basis out of a parcel that replaying this account leaves holding %d: %s",
+				i, pc.CostMinor, l.CostMinor, recordAndReplayDisagree))
+		}
+		l.CostMinor -= pc.CostMinor
+		p.CostMinor -= pc.CostMinor
+	}
+	return nil
+}
+
 // LotsCost sums the pieces' costs — the one number most callers of a FIFO
 // release actually need. It is exported so a caller that already holds the
 // breakdown (see ReleasedLots) derives the total from those very pieces
@@ -1078,6 +1252,19 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			if o.Quantity == nil || !o.Quantity.IsPositive() {
 				return nil, badOp(o, "positive quantity required")
 			}
+		case TypeSpinoffIn:
+			if o.Quantity == nil || !o.Quantity.IsPositive() {
+				return nil, badOp(o, "positive quantity required")
+			}
+		case TypeSpinoffOut:
+			// THE ABSENCE IS THE STATEMENT. A spin-off's departing leg moves no
+			// units, and a count in this field would be read as units leaving by
+			// everything that renders a journal row (see TypeSpinoffOut). Its
+			// pieces carry the lots' own counts, where they are an identity
+			// rather than a movement.
+			if o.Quantity != nil {
+				return nil, badOp(o, "a spin-off moves no units, so it must carry no quantity")
+			}
 		case TypeSplit:
 			if o.SplitRatio == nil || !o.SplitRatio.IsPositive() {
 				return nil, badOp(o, "positive split_ratio required")
@@ -1255,7 +1442,7 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			if err := p.releaseRecorded(o); err != nil {
 				return nil, err
 			}
-		case TypeTransferIn, TypeExchangeIn:
+		case TypeTransferIn, TypeExchangeIn, TypeSpinoffIn:
 			if o.AmountMinor < 0 {
 				return nil, badOp(o, fmt.Sprintf("%s amount (cost basis) must be >= 0", o.Type))
 			}
@@ -1265,6 +1452,12 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 				// without them describes a parcel that came from nowhere.
 				if o.Type == TypeExchangeIn {
 					return nil, badOp(o, "a conversion must carry the breakdown of the lots it converted")
+				}
+				// The same for a spin-off's arriving leg, and for the same
+				// reason: it is built from the pieces the departing leg named,
+				// so one without them describes money that came from nowhere.
+				if o.Type == TypeSpinoffIn {
+					return nil, badOp(o, "a spin-off must carry the breakdown of the lots whose basis it moved")
 				}
 				// No breakdown: the basis was given by hand (nothing was
 				// released, so there are no source lots behind that number) or
@@ -1304,6 +1497,16 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			// carries.
 			for _, pc := range o.TransferLots {
 				p.addLot(pc.Quantity, pc.CostMinor, pc.AcquiredOn)
+			}
+		case TypeSpinoffOut:
+			if o.AmountMinor < 0 {
+				return nil, badOp(o, "the basis a spin-off moves must be >= 0")
+			}
+			if err := CheckSpinoffLots(o); err != nil {
+				return nil, err
+			}
+			if err := p.applySpinoffOut(o); err != nil {
+				return nil, err
 			}
 		case TypeSplit:
 			// A split rewrites quantities only — see applySplit, which also

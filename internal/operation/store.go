@@ -384,7 +384,7 @@ func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Opera
 		if !carriesOwnLots(out) {
 			cOut.TransferLots = stored
 		}
-		if err := portfolio.CheckTransferLots(cIn); err != nil {
+		if err := checkStoredLots(cIn); err != nil {
 			// The rows are already in this transaction, so refusing here rolls
 			// them back. Reaching this means the write path built a breakdown
 			// the storage cannot hold faithfully — a bug in this program, not
@@ -404,7 +404,7 @@ func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Opera
 			return Operation{}, Operation{}, err
 		}
 		cOut.TransferLots = stored
-		if err := portfolio.CheckTransferLots(cOut); err != nil {
+		if err := checkStoredLots(cOut); err != nil {
 			return Operation{}, Operation{}, fmt.Errorf("transfer lots as stored: %w", err)
 		}
 	}
@@ -414,6 +414,27 @@ func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Opera
 		}
 	}
 	return cOut, cIn, tx.Commit(ctx)
+}
+
+// checkStoredLots holds a leg's breakdown, AS THE DATABASE GAVE IT BACK, to
+// whatever "adding up" means for that leg's type.
+//
+// For everything that moves units it means the pieces sum to the quantity of
+// the row and to its basis (portfolio.CheckTransferLots). A spin-off's
+// departing leg moves no units and carries no quantity to sum to, so it is held
+// to its basis alone and its pieces are matched against the account's parcels
+// where they mean something, on every fold (portfolio.CheckSpinoffLots and
+// Position.applySpinoffOut). Calling the transfer check on one would not merely
+// be too strict — it dereferences a quantity that is deliberately absent.
+//
+// One function because both call sites ask the same question of two legs whose
+// types they do not otherwise care about, and a `switch` repeated at each of
+// them is a switch that eventually differs between them.
+func checkStoredLots(op Operation) error {
+	if op.Type == TypeSpinoffOut {
+		return portfolio.CheckSpinoffLots(op)
+	}
+	return portfolio.CheckTransferLots(op)
 }
 
 // carriesOwnLots reports whether this operation's FIFO breakdown is stored next
@@ -440,7 +461,7 @@ func carriesOwnLots(op Operation) bool {
 		return false
 	}
 	switch op.Type {
-	case TypeTransferIn, TypeExchangeOut, TypeExchangeIn:
+	case TypeTransferIn, TypeExchangeOut, TypeExchangeIn, TypeSpinoffOut, TypeSpinoffIn:
 		return true
 	}
 	return op.TransferGroupID == nil
