@@ -112,6 +112,99 @@ func TestCreateSpinoffKeepsTheUnitsAndCarvesOutAShareOfTheMoney(t *testing.T) {
 	}
 }
 
+// TestCreateSpinoffOutOfAPositionWhoseLastParcelIsShareless is the case the
+// allocation's tail depends on, and it is reachable only through a reverse
+// split: one deep enough leaves a parcel with no units and real money in it
+// (see portfolio.applySplit), and when that parcel is the LAST in the queue,
+// restating the breakdown in the new paper's units has nowhere further forward
+// to put its money.
+//
+// The money must not evaporate there. If it does, the arriving leg's pieces sum
+// to less than the basis its own row carries, and the pair is refused — by this
+// service on the way in, and by the engine on every later read if it ever got
+// past. quantizeLots therefore folds a trailing remainder BACKWARD, into the
+// last parcel that does have units, which is the neighbour it would have gone
+// to had one more parcel followed.
+func TestCreateSpinoffOutOfAPositionWhoseLastParcelIsShareless(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+	carvedID := newPaper(t, f, "TIPO2", "Тинькофф индекс IPO заблокированные активы")
+
+	// 1.5 units of a fund and then 0.4, reversed by the deepest ratio the
+	// journal can record (1e-10, ten decimal places — finer is refused on the
+	// way in). The first parcel's running total truncates to 1e-10 and the total
+	// of both truncates to 1e-10 as well, so the second is left holding no units
+	// and all of its money. Whole numbers cannot produce this: the truncated
+	// running totals of two integer parcels always differ.
+	for _, op := range []operation.Operation{{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2021-01-04"), Quantity: dec("1.5"), Price: dec("100"),
+		AmountMinor: -15_000, Currency: "RUB",
+	}, {
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2021-02-04"), Quantity: dec("0.4"), Price: dec("100"),
+		AmountMinor: -4_000, Currency: "RUB",
+	}} {
+		if _, err := svc.Create(f.ctx, f.spaceID, op); err != nil {
+			t.Fatalf("seed buy: %v", err)
+		}
+	}
+	if _, err := svc.Create(f.ctx, f.spaceID, operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeSplit,
+		OccurredOn: date("2021-03-04"), SplitRatio: dec("0.0000000001"),
+		Currency: "RUB", Source: operation.SourceRegistry,
+	}); err != nil {
+		t.Fatalf("seed reverse split: %v", err)
+	}
+
+	journal, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
+	if err != nil {
+		t.Fatalf("ListForEngine: %v", err)
+	}
+	before, err := portfolio.Compute(journal)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	lots := before[f.sberID].Lots
+	if len(lots) != 2 || !lots[1].Quantity.IsZero() || lots[1].CostMinor == 0 {
+		t.Fatalf("the fixture did not leave a shareless LAST parcel with money in it: %+v", lots)
+	}
+
+	out, in, err := svc.CreateSpinoff(f.ctx, f.spaceID, operation.SpinoffParams{
+		AccountID:        f.accountID,
+		FromInstrumentID: f.sberID,
+		ToInstrumentID:   carvedID,
+		RatioFrom:        decimal.RequireFromString("1"),
+		RatioTo:          decimal.RequireFromString("1"),
+		BasisShare:       decimal.RequireFromString("0.5"),
+		OccurredOn:       date("2023-12-22"),
+		Source:           operation.SourceRegistry,
+	})
+	if err != nil {
+		t.Fatalf("CreateSpinoff: %v — the shareless parcel's money had nowhere to go", err)
+	}
+
+	// Half of the 19 000 paid, and every kopeck of it arrives.
+	if out.AmountMinor != 9_500 || in.AmountMinor != 9_500 {
+		t.Errorf("legs carry %d/%d, want 9500 on both", out.AmountMinor, in.AmountMinor)
+	}
+
+	after, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
+	if err != nil {
+		t.Fatalf("ListForEngine: %v", err)
+	}
+	positions, err := portfolio.Compute(after)
+	if err != nil {
+		t.Fatalf("Compute after the spin-off: %v", err)
+	}
+	if got := positions[carvedID].CostMinor; got != 9_500 {
+		t.Errorf("the carved-out paper carries %d, want 9500 — including the shareless parcel's half", got)
+	}
+	if total := positions[f.sberID].CostMinor + positions[carvedID].CostMinor; total != 19_000 {
+		t.Errorf("the two papers hold %d between them, want the 19000 that was paid", total)
+	}
+}
+
 // TestCreateSpinoffRefusesWhatItCannotAccountFor: every refusal states a rule of
 // its own, and each is here because getting it wrong would put a number in the
 // journal that no later reader could question.
