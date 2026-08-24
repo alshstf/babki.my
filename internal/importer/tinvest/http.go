@@ -84,7 +84,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 // writeError maps this package's own sentinels onto status codes and hands
 // everything else to family.WriteError.
 //
-// THE FOUR SEPARATIONS BELOW ARE THE WHOLE POINT OF HAVING SENTINELS AT ALL. A
+// THE SEPARATIONS BELOW ARE THE WHOLE POINT OF HAVING SENTINELS AT ALL. A
 // refused token (400) and an unreachable broker (502) are opposite advice —
 // paste a new token, or wait — and a client can only tell them apart by the
 // code, since the text is prose. A connection that is switched off (409) is not
@@ -109,7 +109,18 @@ func writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrBrokerAccountNotImportable):
 		httpjson.Error(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, ErrConnectionNotActive), errors.Is(err, ErrBrokerAccountAlreadyLinked),
-		errors.Is(err, ErrRowAlreadyExplained):
+		errors.Is(err, ErrRowAlreadyExplained), errors.Is(err, operation.ErrInconsistent):
+		// THE JOURNAL'S OWN REFUSAL IS ANSWERED THE WAY THE JOURNAL ANSWERS IT.
+		// An explanation hands the operation service a manual operation, and
+		// when the engine will not replay the journal it would leave, that
+		// service says so with ErrInconsistent — which the journal screen
+		// answers with 409 and the engine's own sentence (see
+		// operation.writeError). Without this branch it fell through to
+		// family.WriteError's default and reached the owner as «internal
+		// error», 500: the program telling them it had broken, when what
+		// happened is that their history cannot hold that operation. Live, on
+		// the very case this feature exists for — a redemption of 44 380,35
+		// units offered while a transfer_out still held them.
 		httpjson.Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrRowNotInLink), errors.Is(err, ErrExplanationNotFound), errors.Is(err, ErrLinkNotFound):
 		// 404 rather than 400: each names something well formed that this

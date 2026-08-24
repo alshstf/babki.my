@@ -557,7 +557,9 @@ export interface paths {
          *
          *     The broker sends no corporate actions at all, so an event this program cannot read as itself — a fund's partial redemption, a conversion, a spin-off — arrives as whatever rows carried its money. This is where the owner says what those rows were. The named rows stop being projected and stop counting as unparsed; the operation is what the journal holds instead.
          *
-         *     THE OPERATION IS THE JOURNAL'S OWN: it is validated and replayed through the engine exactly as one entered on the journal screen, and a 400 or 422 from those rules travels back word for word. A content key that is not one of this link's rows is a 404 naming it; a row already explained is a 409.
+         *     THE OPERATION IS THE JOURNAL'S OWN: it is validated and replayed through the engine exactly as one entered on the journal screen, and its refusals travel back word for word — a malformed or impossible operation is a 400, and a journal that cannot hold the one offered is a 409 carrying the engine's own sentence, the same code and the same words the journal screen answers with. A content key that is not one of this link's rows is a 404 naming it; a row already explained is a 409 too.
+         *
+         *     ROWS ALREADY BOOKED ARE REPLACED, NOT DUPLICATED. Some of what an owner explains this program had read and believed — a fund's partial redemption arrives as a withdrawal "to another depositary" and is booked as a transfer. The journal entries those rows produced are removed in the same transaction the operation is written in, so the operation is judged against the journal it LEAVES rather than against one still holding the old reading of the same event.
          */
         post: operations["explainTinvestRows"];
         delete?: never;
@@ -2664,7 +2666,6 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
-            422: components["responses"]["Error"];
         };
     };
     deleteTinvestExplanation: {

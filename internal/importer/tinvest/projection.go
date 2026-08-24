@@ -3,6 +3,7 @@ package tinvest
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -1620,10 +1621,53 @@ func refuseFundPayout(row MirrorRow, resolved *Resolved, what string) *UnparsedE
 // shape costs one suffix nobody reads.
 func withExternalIDs(rowID uuid.UUID, ops []operation.Operation) []operation.Operation {
 	for i := range ops {
-		id := fmt.Sprintf("%s/%d", rowID, i+1)
+		id := fmt.Sprintf("%s%d", externalIDPrefix(rowID), i+1)
 		ops[i].ExternalID = &id
 	}
 	return ops
+}
+
+// externalIDPrefix is the part of an entry's name that says which mirror row it
+// came from — everything before the suffix withExternalIDs appends.
+//
+// IT IS HERE SO THAT THERE IS STILL ONE RULE. The projection is where the shape
+// of a name is decided (see rebuild's rowOf, which remembers the mapping rather
+// than parsing it back), and an explanation has to go the other way: it must
+// name the journal entries a given mirror row produced, without knowing how
+// many there are. Both directions now read the shape from this one function —
+// built here, matched here — instead of one of them spelling out "%s/%d" a
+// second time and drifting the day the shape changes.
+func externalIDPrefix(rowID uuid.UUID) string {
+	return rowID.String() + "/"
+}
+
+// EntriesOfRows picks out, from an account's imported journal rows, the ones
+// produced by the given mirror rows. It is what an explanation replaces: the
+// owner says these broker rows are really one operation of their own, and these
+// are the entries the old reading of them put in the journal.
+//
+// Matching is by the NAME the projection gave each entry, which is the only
+// link a journal row keeps back to the mirror (see withExternalIDs). A row of
+// this source with no name is not one this projection wrote and is left alone —
+// the same rule the rebuild's difference applies.
+func EntriesOfRows(journal []operation.Operation, rows []MirrorRow) []uuid.UUID {
+	prefixes := make([]string, 0, len(rows))
+	for _, m := range rows {
+		prefixes = append(prefixes, externalIDPrefix(m.ID))
+	}
+	var ids []uuid.UUID
+	for _, o := range journal {
+		if o.ExternalID == nil {
+			continue
+		}
+		for _, p := range prefixes {
+			if strings.HasPrefix(*o.ExternalID, p) {
+				ids = append(ids, o.ID)
+				break
+			}
+		}
+	}
+	return ids
 }
 
 // withNote adds this program's own mark to whatever the broker called the

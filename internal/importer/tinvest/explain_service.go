@@ -26,16 +26,28 @@ import (
 // (see journalWriter). It is refused for exactly what the journal screen would
 // refuse it for, and the refusal travels back unchanged.
 //
-// IT IS NOT ONE TRANSACTION, and cannot honestly be made one from here: the
-// operation service owns its own, together with the account locks that make
-// the engine replay mean anything, and reaching past it would be a second
-// write path into the journal. What stands in for atomicity is the order and
-// the undo — every key is checked against this link BEFORE the operation is
-// written, and an explanation that still cannot be written (the race: another
-// request explained one of these rows meanwhile) takes the operation back out
-// again. A failure to undo is reported rather than swallowed: at that point
-// the journal holds an operation explaining nothing, and only saying so is
-// honest.
+// IT REPLACES WHAT THOSE ROWS ALREADY PRODUCED, in the journal's own single
+// transaction. Some of the rows an owner explains are not unparsed at all: the
+// importer read them, believed them and booked them — a fund's partial
+// redemption arrives as a withdrawal of 44 380,35 units "to another
+// depositary", which the projection records as a transfer_out. The owner's own
+// redemption of those same units cannot be written while that transfer holds
+// them, and until this call named them for replacement the answer was «not
+// enough quantity: have 16414.65, need 44380.35» — the feature refusing its own
+// headline case. So the entries those rows produced are named here (see
+// EntriesOfRows) and go in the same transaction the operation arrives in.
+//
+// THE EXPLANATION ROWS ARE STILL A SECOND WRITE, and cannot honestly be made
+// part of that transaction: the operation service owns it, together with the
+// account locks that make the engine replay mean anything, and reaching past it
+// would be a second write path into the journal. What stands in is the order,
+// the undo and the rebuild — every key is checked against this link BEFORE the
+// operation is written; an explanation that still cannot be written (the race:
+// another request explained one of these rows meanwhile) takes the operation
+// back out; and the sync that follows re-projects the mirror, which puts the
+// replaced entries back, since nothing now explains those rows. A failure to
+// undo is reported rather than swallowed: at that point the journal holds an
+// operation explaining nothing, and only saying so is honest.
 func (s *Service) ExplainRows(ctx context.Context, p family.Principal, linkID uuid.UUID,
 	contentKeys []string, op operation.Operation,
 ) (Explanation, bool, error) {
@@ -78,15 +90,32 @@ func (s *Service) ExplainRows(ctx context.Context, p family.Principal, linkID uu
 		}
 	}
 
-	created, err := s.journal.Create(ctx, p.SpaceID, op)
+	// What the old reading of these rows put in the journal, so that it goes in
+	// the same transaction the new one arrives in. A row that produced nothing —
+	// every unparsed row, and that is most of them — contributes nothing here,
+	// and the call is then an ordinary Create.
+	replaced, err := s.entriesOfRows(ctx, p.SpaceID, link.AccountID, rows)
+	if err != nil {
+		return Explanation{}, false, err
+	}
+
+	created, err := s.journal.CreateReplacing(ctx, p.SpaceID, op, replaced)
 	if err != nil {
 		return Explanation{}, false, err
 	}
 	if err := s.store.CreateExplanations(ctx, linkID, created.ID, contentKeys); err != nil {
+		// Deleting the operation restores the journal to what it was: the
+		// entries removed with it come back on the sync below, because nothing
+		// explains their rows any more and the projection is a pure function of
+		// the mirror. That is why the sync is queued on this path too.
 		if undo := s.journal.Delete(ctx, p.SpaceID, created.ID); undo != nil {
 			s.log.Error("tinvest: an explanation could not be written and its operation could not be taken back",
 				"operation", created.ID, "link", linkID, "err", err, "undo_err", undo)
 			return Explanation{}, false, fmt.Errorf("tinvest: explanation not written and operation %s left in the journal: %w", created.ID, err)
+		}
+		if _, requeue := s.rebuildAfterExplanations(ctx, link.ConnectionID); requeue != nil {
+			s.log.Error("tinvest: an explanation was undone but the rebuild that restores its rows could not be queued",
+				"link", linkID, "err", err, "requeue_err", requeue)
 		}
 		return Explanation{}, false, err
 	}
@@ -129,6 +158,24 @@ func (s *Service) RemoveExplanation(ctx context.Context, p family.Principal, id 
 		return false, err
 	}
 	return s.rebuildAfterExplanations(ctx, e.ConnectionID)
+}
+
+// entriesOfRows is the journal entries these mirror rows produced, which an
+// explanation replaces.
+//
+// It reads the whole imported journal of the account and picks by name, rather
+// than asking the database for the names it wants: the account's imported rows
+// are what the rebuild reads on every sync anyway, and a query shaped around
+// the name's own syntax would put the projection's naming rule into SQL as
+// well — see externalIDPrefix for why there is exactly one statement of it.
+func (s *Service) entriesOfRows(ctx context.Context, spaceID, accountID uuid.UUID, rows []MirrorRow) (
+	[]uuid.UUID, error,
+) {
+	journal, err := s.entries.ListBySource(ctx, spaceID, accountID, Source)
+	if err != nil {
+		return nil, fmt.Errorf("tinvest: read the imported journal of account %s: %w", accountID, err)
+	}
+	return EntriesOfRows(journal, rows), nil
 }
 
 // rebuildAfterExplanations asks the connection to sync, which is what runs the

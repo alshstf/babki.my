@@ -70,7 +70,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	// which is exactly the two roles that mount modules ("all" and "api"; see
 	// setup's requireEncryptionKey).
 	tinvestStore := tinvest.NewStore(r.pool)
-	tinvestSvc := tinvest.NewService(tinvestStore, accStore, opSvc, r.box, newClient, inserter, r.log)
+	tinvestSvc := tinvest.NewService(tinvestStore, accStore, opSvc, opStore, r.box, newClient, inserter, r.log)
 	tinvest.NewHandler(tinvestSvc, famAuth, famSM).Mount(srv)
 
 	// The registry's own door, and the same two dependencies the worker role

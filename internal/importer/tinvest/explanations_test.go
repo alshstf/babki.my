@@ -311,7 +311,7 @@ func TestExplainRowsRefusesWhatItCannotAccountFor(t *testing.T) {
 	instrumentID := *byExternalID(t, f.journalOf(t, f.accountID),
 		externalIDFor(f.mirrorRow(t, f.link, "op-tech-buy"), 1)).InstrumentID
 
-	svc := NewService(f.store, nil, operation.NewService(f.ops), nil, nil, &fakeInserter{}, slog.Default())
+	svc := NewService(f.store, nil, operation.NewService(f.ops), f.ops, nil, nil, &fakeInserter{}, slog.Default())
 	owner := family.Principal{SpaceID: f.spaceID, Role: family.RoleOwner}
 	qty := decimal.RequireFromString("30.5")
 	newOp := func() operation.Operation {
@@ -372,7 +372,7 @@ func TestRemoveExplanationTakesTheOperationWithIt(t *testing.T) {
 		externalIDFor(f.mirrorRow(t, f.link, "op-tech-buy"), 1)).InstrumentID
 
 	inserter := &fakeInserter{}
-	svc := NewService(f.store, nil, operation.NewService(f.ops), nil, nil, inserter, slog.Default())
+	svc := NewService(f.store, nil, operation.NewService(f.ops), f.ops, nil, nil, inserter, slog.Default())
 	owner := family.Principal{SpaceID: f.spaceID, Role: family.RoleOwner}
 	qty := decimal.RequireFromString("30.5")
 	created, queued, err := svc.ExplainRows(f.ctx, owner, f.link.ID,
