@@ -314,6 +314,18 @@ func guardedRequests(id uuid.UUID) map[string]struct{ path, body string } {
 		"POST /api/v1/tinvest/connections/{connectionId}/sync":    {conn + "/sync", ""},
 		"GET /api/v1/tinvest/connections/{connectionId}/runs":     {conn + "/runs", ""},
 		"GET /api/v1/tinvest/connections/{connectionId}/unparsed": {conn + "/unparsed", ""},
+		// The two explanation routes take ids of their own — a link and an
+		// explanation. Any well-formed uuid does: what is under test is that the
+		// role is refused BEFORE anything is looked up, so a row that does not
+		// exist must not be what answers.
+		"POST /api/v1/tinvest/links/{linkId}/explanations": {
+			"/api/v1/tinvest/links/" + id.String() + "/explanations",
+			`{"content_keys":["k"],"operation":{"account_id":"` + id.String() +
+				`","type":"deposit","occurred_on":"2026-05-21","amount_minor":1000,"currency":"RUB"}}`,
+		},
+		"DELETE /api/v1/tinvest/explanations/{explanationId}": {
+			"/api/v1/tinvest/explanations/" + id.String(), "",
+		},
 	}
 }
 
