@@ -254,6 +254,8 @@ describe("CorporateActions", () => {
     expect(screen.queryByText("Пока не учитывается в журнале")).toBeNull();
   });
 
+  // No `not_counted_reason` at all, which is how the server says "nothing is in
+  // the way": the field is omitted rather than sent as null.
   it("says nothing extra about an event that is fully counted", async () => {
     serve([
       {
@@ -265,7 +267,6 @@ describe("CorporateActions", () => {
               kind: "conversion",
               result_isin: "RU000A107UL4",
               materialized: true,
-              not_counted_reason: null,
             }),
           ],
         },
