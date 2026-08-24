@@ -1211,6 +1211,15 @@ func sameJournalRow(want, stored operation.Operation) bool {
 	if !sameDay(want.SettledOn, stored.SettledOn) {
 		return false
 	}
+	// The trading mode is compared like every other column the projection
+	// sets: a broker that corrects the board an operation was executed in has
+	// corrected this journal row, and a column left out of this comparison is
+	// a column the mirror can no longer fix. It is also what carries the mode
+	// onto the rows imported before this column existed — they hold nothing,
+	// the projection now asks for something, and the difference rewrites them.
+	if !sameString(want.TradingMode, stored.TradingMode) {
+		return false
+	}
 	if !sameID(want.InstrumentID, stored.InstrumentID) || !sameID(want.TransferGroupID, stored.TransferGroupID) {
 		return false
 	}
@@ -1234,6 +1243,16 @@ func journalOwnsBasis(op operation.Operation) bool {
 }
 
 func sameID(a, b *uuid.UUID) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+// sameString compares two optional strings, where "nobody said" and "said an
+// empty string" are different answers — the distinction trading_mode's own
+// column keeps (see migration 0026).
+func sameString(a, b *string) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}

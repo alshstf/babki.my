@@ -169,6 +169,33 @@ export function UnparsedList({ connectionId }: { connectionId: string }) {
                         claiming an understanding that is missing. */}
                     <div className="grid gap-0.5">
                       <code className="text-xs">{operation.op_type}</code>
+                      {/* WHERE THE BROKER SAYS IT HAPPENED, beside what it
+                          says happened. The code is shown as it arrived and a
+                          word is added only where this program has a source
+                          for one — an unnamed code stands on its own rather
+                          than being dressed in a guess, which is the same rule
+                          the type above follows. Empty for an operation that
+                          describes no instrument (money in and out), and then
+                          there is nothing to show. */}
+                      {operation.class_code !== "" && (
+                        <span
+                          data-testid="mirror-trading-mode"
+                          className="text-xs text-muted-foreground"
+                          title={t(
+                            `tradingModeTitles.${
+                              operation.trading_mode_kind &&
+                              operation.trading_mode_kind !== "unknown"
+                                ? operation.trading_mode_kind
+                                : "unknown"
+                            }`,
+                          )}
+                        >
+                          {operation.trading_mode_kind &&
+                          operation.trading_mode_kind !== "unknown"
+                            ? `${t(`tradingModes.${operation.trading_mode_kind}`)} · ${operation.class_code}`
+                            : operation.class_code}
+                        </span>
+                      )}
                       {operation.description !== "" && (
                         <span className="text-xs text-muted-foreground">
                           {operation.description}

@@ -19,6 +19,7 @@ import (
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
+	"babki.my/babki/internal/platform/tradingmode"
 )
 
 // defaultPageLimit and maxPageLimit bound the two paged endpoints below, and
@@ -515,13 +516,21 @@ func (h *Handler) handleUnparsed(w http.ResponseWriter, r *http.Request) {
 			// published at all: the broker's own operation id is documented to
 			// change, so a client sending one back would be naming a row that
 			// may no longer be there (see MirrorRow.ContentKey).
-			ContentKey:  m.ContentKey,
-			OccurredAt:  m.OccurredAt,
-			OpType:      m.OpType,
-			Payment:     m.Payment.String(),
-			Currency:    m.Currency,
-			Description: m.Description,
-			Reason:      apitypes.TinvestUnparsedReason(m.UnparsedReason),
+			ContentKey: m.ContentKey,
+			OccurredAt: m.OccurredAt,
+			OpType:     m.OpType,
+			// Where the broker says it happened, and what this program can
+			// call that: the code verbatim (empty when the broker sent none),
+			// and the kind beside it. The kind is published even for an empty
+			// code, where it says `unknown` — on THIS list that is the honest
+			// answer, since the list exists to show what the broker sent and
+			// an absent field would look like a field this screen forgot.
+			ClassCode:       m.ClassCode,
+			TradingModeKind: nullable.NewNullableWithValue(apitypes.TradingModeKind(tradingmode.Of(m.ClassCode))),
+			Payment:         m.Payment.String(),
+			Currency:        m.Currency,
+			Description:     m.Description,
+			Reason:          apitypes.TinvestUnparsedReason(m.UnparsedReason),
 			// The refuser's own words, handed on as they were written. The
 			// interface still chooses what to SAY from Reason alone; this is
 			// shown, never read.

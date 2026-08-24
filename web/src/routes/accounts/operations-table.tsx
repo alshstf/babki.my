@@ -223,6 +223,36 @@ function SourceBadge({ operation }: { operation: Operation }) {
   );
 }
 
+// TradingModeBadge says WHERE an operation happened, when anything said it.
+//
+// IT SHOWS THE BROKER'S CODE AND NEVER REPLACES IT. This program can name only
+// some of the codes — the exchange boards it has a published index for, and
+// the one whose own name says it is over-the-counter — so the badge carries
+// the code itself and adds a word only where a word is sourced. An unnamed
+// code says so in its hint instead of being dressed in a guess.
+//
+// IT IS NOT A TAX STATEMENT. «Обращающаяся» is a property of the SECURITY —
+// admitted to trading and quoted — not of where one deal was struck, so the
+// hint says this is worth looking at when a tax report is built and stops
+// there. Naming an off-exchange purchase «необращающаяся» would be a caption
+// this program cannot stand behind.
+function TradingModeBadge({ operation }: { operation: Operation }) {
+  const { t } = useTranslation();
+  const code = operation.trading_mode;
+  const kind = operation.trading_mode_kind;
+  if (!code) return null;
+  const known = kind && kind !== "unknown";
+  return (
+    <Badge
+      variant="outline"
+      data-testid="operation-trading-mode"
+      title={t(`tradingModeTitles.${known ? kind : "unknown"}`)}
+    >
+      {known ? `${t(`tradingModes.${kind}`)} · ${code}` : code}
+    </Badge>
+  );
+}
+
 export function OperationsTable({
   accountId,
   canDelete,
@@ -560,6 +590,7 @@ export function OperationsTable({
                   <div className="flex flex-wrap items-center gap-1">
                     <Badge variant="secondary">{t(`operationTypes.${operation.type}`)}</Badge>
                     <SourceBadge operation={operation} />
+                    <TradingModeBadge operation={operation} />
                   </div>
                 </TableCell>
                 <TableCell>

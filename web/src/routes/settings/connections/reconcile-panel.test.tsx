@@ -68,6 +68,8 @@ function makeUnparsed(id: string): TinvestUnparsedOperation {
     content_key: `key-${id}`,
     occurred_at: "2026-08-04T09:15:00Z",
     op_type: "OPERATION_TYPE_FUTURES",
+    class_code: "",
+    trading_mode_kind: null,
     payment: "-1234.5",
     currency: "RUB",
     description: "",

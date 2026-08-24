@@ -202,19 +202,30 @@ func (o Operation) mustMatchPositionCurrency() bool {
 // the account (buy < 0, sell > 0, ...); for transfers it carries the moved
 // cost basis and has zero cash meaning; for splits it is 0.
 type Operation struct {
-	ID              uuid.UUID
-	SpaceID         uuid.UUID
-	AccountID       uuid.UUID
-	InstrumentID    *uuid.UUID
-	Type            Type
-	OccurredOn      time.Time
-	SettledOn       *time.Time
-	Quantity        *decimal.Decimal
-	Price           *decimal.Decimal
-	AmountMinor     int64
-	Currency        string
-	FeeMinor        int64
-	Note            string
+	ID           uuid.UUID
+	SpaceID      uuid.UUID
+	AccountID    uuid.UUID
+	InstrumentID *uuid.UUID
+	Type         Type
+	OccurredOn   time.Time
+	SettledOn    *time.Time
+	Quantity     *decimal.Decimal
+	Price        *decimal.Decimal
+	AmountMinor  int64
+	Currency     string
+	FeeMinor     int64
+	Note         string
+	// TradingMode is where this operation happened, in the words of whoever
+	// reported it: an exchange board's code ("TQBR"), or the code of dealing
+	// away from an order book ("FINEX_OTC"). Nil for every row nobody said it
+	// about — everything entered by hand, and every imported row whose source
+	// reported no mode.
+	//
+	// THE ENGINE NEVER READS IT, and it is here for the same reason Note is:
+	// the journal carries what it was told, and one struct describes a row.
+	// Nothing about a position, a basis or a result depends on where a trade
+	// was struck.
+	TradingMode     *string
 	TransferGroupID *uuid.UUID
 	// TransferLots is the FIFO breakdown of what a transfer moved: the
 	// source lots it consumed, in FIFO order, each with the day it was

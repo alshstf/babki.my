@@ -40,6 +40,8 @@ function makeOperation(overrides: Partial<TinvestUnparsedOperation> = {}): Tinve
     content_key: "key-u-1",
     occurred_at: "2026-08-04T09:15:00Z",
     op_type: "OPERATION_TYPE_FUTURES_VARIATION_MARGIN",
+    class_code: "",
+    trading_mode_kind: null,
     payment: "-1234.5",
     currency: "RUB",
     description: "Вариационная маржа",

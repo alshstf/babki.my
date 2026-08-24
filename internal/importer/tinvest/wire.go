@@ -152,7 +152,7 @@ type wireGetAccountsResponse struct {
 // wireOperationItem mirrors the REST gateway's OperationItem
 // (OperationsService/GetOperationsByCursor). Only the fields OperationItem
 // (client.go) surfaces are declared; the rest of the wire shape (name,
-// class_code, trades_info, child_operations, cancel_date_time/reason,
+// trades_info, child_operations, cancel_date_time/reason,
 // yield/yield_relative, quantity_rest, ...) is preserved verbatim in
 // OperationItem.Raw instead of being modeled here, since no caller of this
 // package needs it decoded yet.
@@ -168,6 +168,7 @@ type wireOperationItem struct {
 	AssetUID          string         `json:"assetUid"`
 	InstrumentType    string         `json:"instrumentType"`
 	Ticker            string         `json:"ticker"`
+	ClassCode         string         `json:"classCode"`
 	Payment           wireMoneyValue `json:"payment"`
 	Commission        wireMoneyValue `json:"commission"`
 	AccruedInt        wireMoneyValue `json:"accruedInt"`
@@ -219,6 +220,7 @@ func (w wireOperationItem) parse(raw json.RawMessage) (OperationItem, error) {
 		AssetUID:          w.AssetUID,
 		InstrumentType:    w.InstrumentType,
 		Ticker:            w.Ticker,
+		ClassCode:         w.ClassCode,
 		Payment:           payment,
 		Commission:        commission,
 		AccruedInt:        accruedInt,
