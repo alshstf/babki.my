@@ -496,6 +496,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tinvest/links/{linkId}/explanations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Account for one or more of this linked account's broker rows with one manual journal operation. Owner-only.
+         *
+         *     The broker sends no corporate actions at all, so an event this program cannot read as itself — a fund's partial redemption, a conversion, a spin-off — arrives as whatever rows carried its money. This is where the owner says what those rows were. The named rows stop being projected and stop counting as unparsed; the operation is what the journal holds instead.
+         *
+         *     THE OPERATION IS THE JOURNAL'S OWN: it is validated and replayed through the engine exactly as one entered on the journal screen, and a 400 or 422 from those rules travels back word for word. A content key that is not one of this link's rows is a 404 naming it; a row already explained is a 409.
+         */
+        post: operations["explainTinvestRows"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tinvest/explanations/{explanationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * @description Take back an explanation. Owner-only.
+         *
+         *     THE MANUAL OPERATION GOES WITH IT — that is the action, not a side effect: the operation is deleted from the journal and the explanation rows naming it follow through the table's own foreign key, so nothing can be left pointing at an operation that is gone. Every row the operation was accounting for is projected again on the next sync, and lands back on the unparsed list if that is what it was.
+         *
+         *     Deleting the operation from the journal screen instead does exactly the same thing, by the same key. 404 when this space has no such explanation.
+         */
+        delete: operations["deleteTinvestExplanation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1165,10 +1211,10 @@ export interface components {
          */
         TinvestReconcileMismatchKind: "instrument" | "currency" | "unsupported" | "unknown_security";
         /**
-         * @description Why one broker operation did not become journal entries — a code, never prose: the wording the owner reads is the interface's to translate, and naming the wrong cause beside a right figure is the failure this whole list exists to prevent. `unsupported_type`: the broker's operation type is not one this program accounts for. `unrepresentable_amount`: the sum carries a fraction finer than a minor unit. `amount_out_of_bounds`: the sum is beyond what the journal can hold — a different accident from the previous one, and not to be captioned as it. `unrepresentable_quantity`: the number of units is finer than the journal's quantity scale. `trade_without_filled_quantity`: a purchase or sale that does not say how much of its order was executed — the broker reports the order's size and the executed part separately, and only the second one is the trade. `transfer_direction_unknown`: a move between the owner's own accounts whose direction this program could not tell. `instrument_unresolved`: the operation names a security and no catalog row was matched to it — distinct from `unsupported_type`, which is about the OPERATION rather than about the security. `engine_refused`: the journal itself would not take the operation. `redemption_without_quantity`: a full bond redemption that said nothing about how many bonds were redeemed — NO LONGER PRODUCED, since such a redemption now takes its count from the journal (the position it closes); it is declared because rows ruled before that change carry it until their connection is next rebuilt. `redemption_nothing_held`: a full bond redemption on an account whose journal holds none of that bond by the day it happened, so there is nothing to close — a different fault from the previous one, and a different thing to go looking for: there the broker said nothing, here the purchase is missing from this program's own journal. `currency_trade`: a purchase or sale of currency. `transfer_without_quantity`: a securities transfer the broker reports with no units at all. Every quantity field it sends is an integer, so a transfer of PART of a share arrives as a nought in all three of them and the real number survives only in the prose of the description — which this program reads ONLY when it carries a fraction whose whole part is the field's own number (the field is the proof); this code is what is left when the prose has no such figure either. `transfer_quantity_contradicted`: the broker's quantity field and its description disagree — the description names a fraction whose whole part is not the field's number — and neither is taken over the other. `fund_payout_units_unknown`: a bond-repayment operation on a security whose catalog row is not a bond, i.e. a fund's payout sent under the bond types. A bond's full redemption may take its count from the position because a matured bond retires the whole holding; a fund's payout retires units the broker does not name while the holder keeps the rest, so the money is shown here and the units are the owner's to name. `commission_refund`: a negative commission on the operation, i.e. money coming back. `projection_incomplete`: this program has a rule for the broker's operation type and the rule produced nothing — a gap in this program, stated as one. `broker_fee_parent_missing`: a commission charged as an operation of its own, naming a trade that is not among the operations this connection imported — so whether the trade already carries that same commission cannot be told, and neither dropping nor keeping the charge would be an answer.
+         * @description Why one broker operation did not become journal entries — a code, never prose: the wording the owner reads is the interface's to translate, and naming the wrong cause beside a right figure is the failure this whole list exists to prevent. `unsupported_type`: the broker's operation type is not one this program accounts for. `unrepresentable_amount`: the sum carries a fraction finer than a minor unit. `amount_out_of_bounds`: the sum is beyond what the journal can hold — a different accident from the previous one, and not to be captioned as it. `unrepresentable_quantity`: the number of units is finer than the journal's quantity scale. `trade_without_filled_quantity`: a purchase or sale that does not say how much of its order was executed — the broker reports the order's size and the executed part separately, and only the second one is the trade. `transfer_direction_unknown`: a move between the owner's own accounts whose direction this program could not tell. `instrument_unresolved`: the operation names a security and no catalog row was matched to it — distinct from `unsupported_type`, which is about the OPERATION rather than about the security. `engine_refused`: the journal itself would not take the operation. `redemption_without_quantity`: a full bond redemption that said nothing about how many bonds were redeemed — NO LONGER PRODUCED, since such a redemption now takes its count from the journal (the position it closes); it is declared because rows ruled before that change carry it until their connection is next rebuilt. `redemption_nothing_held`: a full bond redemption on an account whose journal holds none of that bond by the day it happened, so there is nothing to close — a different fault from the previous one, and a different thing to go looking for: there the broker said nothing, here the purchase is missing from this program's own journal. `currency_trade`: a purchase or sale of currency. `transfer_without_quantity`: a securities transfer the broker reports with no units at all. Every quantity field it sends is an integer, so a transfer of PART of a share arrives as a nought in all three of them and the real number survives only in the prose of the description — which this program reads ONLY when it carries a fraction whose whole part is the field's own number (the field is the proof); this code is what is left when the prose has no such figure either. `transfer_quantity_contradicted`: the broker's quantity field and its description disagree — the description names a fraction whose whole part is not the field's number — and neither is taken over the other. `fund_payout_units_unknown`: a bond-repayment operation on a security whose catalog row is not a bond, i.e. a fund's payout sent under the bond types. A bond's full redemption may take its count from the position because a matured bond retires the whole holding; a fund's payout retires units the broker does not name while the holder keeps the rest, so the money is shown here and the units are the owner's to name. `commission_refund`: a negative commission on the operation, i.e. money coming back. `projection_incomplete`: this program has a rule for the broker's operation type and the rule produced nothing — a gap in this program, stated as one. `broker_fee_parent_missing`: a commission charged as an operation of its own, naming a trade that is not among the operations this connection imported — so whether the trade already carries that same commission cannot be told, and neither dropping nor keeping the charge would be an answer. `broker_fee_parent_explained`: the same commission, naming a trade the owner has accounted for BY HAND (see TinvestExplainRequest). That trade produced no journal entries on purpose and — unlike an unparsed one — says nothing about this money, since an explained row carries no reason at all; so the charge is neither booked (the manual entry may already include it) nor dropped (it may not), and the owner is asked.
          * @enum {string}
          */
-        TinvestUnparsedReason: "unsupported_type" | "unrepresentable_amount" | "amount_out_of_bounds" | "unrepresentable_quantity" | "trade_without_filled_quantity" | "transfer_direction_unknown" | "instrument_unresolved" | "engine_refused" | "redemption_without_quantity" | "redemption_nothing_held" | "currency_trade" | "transfer_without_quantity" | "transfer_quantity_contradicted" | "fund_payout_units_unknown" | "commission_refund" | "projection_incomplete" | "broker_fee_parent_missing";
+        TinvestUnparsedReason: "unsupported_type" | "unrepresentable_amount" | "amount_out_of_bounds" | "unrepresentable_quantity" | "trade_without_filled_quantity" | "transfer_direction_unknown" | "instrument_unresolved" | "engine_refused" | "redemption_without_quantity" | "redemption_nothing_held" | "currency_trade" | "transfer_without_quantity" | "transfer_quantity_contradicted" | "fund_payout_units_unknown" | "commission_refund" | "projection_incomplete" | "broker_fee_parent_missing" | "broker_fee_parent_explained";
         TinvestTokenCheckRequest: {
             /** @description A read-only T-Invest API token. Sent to the broker and dropped; nothing about it is stored by this endpoint. Only its emptiness is checked here — its length, shape and alphabet are the broker's to judge, and this server holds no pattern it could honestly check them against. It appears in this request schema and in the two write requests below, and in NO RESPONSE SCHEMA ANYWHERE — the same way `password` does. */
             token: string;
@@ -1340,13 +1386,19 @@ export interface components {
             /** @description Whether the log holds at least one more run beyond this page. The server's to answer: the page's own length cannot, and here it especially cannot be inferred from a short page, since an over-large `limit` is refused rather than clamped. Fetched — one row beyond the page is asked for and its arrival IS this answer — never derived by comparing lengths afterwards. */
             has_more: boolean;
         };
-        /** @description One broker operation the projection could not turn into journal entries. Rows the broker has since stopped returning stay on this list: they are still operations this program could not read, and dropping them would be the silence the list exists to replace. */
+        /**
+         * @description One broker operation the projection could not turn into journal entries — OR one the owner has accounted for by hand, which it could have and deliberately did not. Rows the broker has since stopped returning stay on this list: they are still operations this program could not read, and dropping them would be the silence the list exists to replace.
+         *
+         *     THE TWO KINDS ARE TOLD APART BY `explained_by` AND NEVER BY `reason`. An explained row carries no reason — it is not unparsed, and no count of unparsed operations includes it — so a client reading an empty reason as "nothing wrong here" would caption the owner's own answer as a blank. It is listed at all because this is the only screen it appears on and the only place the explanation can be taken back.
+         */
         TinvestUnparsedOperation: {
             /**
              * Format: uuid
              * @description The mirror row's id — this program's own, not the broker's, whose operation ids are documented to change over time and are an attribute here rather than a key.
              */
             id: string;
+            /** @description What this mirror row is identified BY, across syncs: a digest of the operation's own content. It is what an explanation names (see TinvestExplainRequest), rather than `id` or the broker's operation id, because the broker rewrites its history in place — an operation may come back with a new id and the same content, and an explanation has to survive that. A client that explains rows sends these back verbatim; nothing else may be computed from them. */
+            content_key: string;
             /**
              * Format: date-time
              * @description When the broker says the operation happened.
@@ -1373,6 +1425,61 @@ export interface components {
             detail: string;
             /** @description The broker's own JSON element for this operation, as it arrived — every field, including the ones this program does not model. Untyped on purpose: it is evidence for a person asking what the broker actually sent, and nothing here computes from it. */
             raw: unknown;
+            /** @description The manual operation the owner entered to account for this row, or null for a row nobody has explained. Non-null exactly when this row was skipped by the projection on purpose — and such a row's `reason` is empty, since "could not be read" is not what is true of it. */
+            explained_by?: components["schemas"]["TinvestRowExplanation"] | null;
+        };
+        /**
+         * @description The manual journal operation that stands for a broker row this program cannot read as itself — a corporate action, which the broker sends no operation type for at all.
+         *
+         *     It names the operation rather than restating it: date and type, so a reader knows which journal entry to look at, and no amounts, because the journal is where those are read and a second copy of them here would part company with the first the moment the operation is edited.
+         */
+        TinvestRowExplanation: {
+            /**
+             * Format: uuid
+             * @description The explanation's own id — what DELETE /api/v1/tinvest/explanations/{explanationId} takes.
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @description The manual journal operation. Deleting it from the journal screen removes this explanation too, and the rows it covered go back to being projected on the next sync.
+             */
+            operation_id: string;
+            /**
+             * Format: date
+             * @description The operation's journal date, which need not be either broker row's date: one operation may stand for rows a fortnight apart.
+             */
+            operation_on: string;
+            operation_type: components["schemas"]["OperationType"];
+        };
+        /**
+         * @description Account for one or more of a linked account's broker rows with one manual journal operation.
+         *
+         *     WHAT IT IS FOR: the broker's operation enum has no split, no conversion, no spin-off — no corporate action of any kind — so a real event reaches this program as whatever rows happened to carry its money. On the owner's own account a fund's partial redemption arrived as a withdrawal of 44 380,35 units "to another depositary" and, a fortnight later, a payment of 2 559,80 ₽ typed as a bond redemption. No rule over those two rows can find the one operation they are; the owner can, and this is where that answer goes.
+         *
+         *     The rows named stop being projected — no journal entries, and not unparsed either — and the operation below is what the journal holds instead. Both halves happen together or neither does.
+         */
+        TinvestExplainRequest: {
+            /** @description The `content_key` of each mirror row this operation accounts for, from TinvestUnparsedOperation. A key that is not one of this link's rows is a 404 naming it; a row already explained is a 409. */
+            content_keys: string[];
+            /**
+             * @description The manual operation, in the journal's own create shape and validated by the journal's own rules — the engine replays the account with it exactly as it would for an operation entered on the journal screen, and refuses it in exactly the same cases with exactly the same messages.
+             *
+             *     `account_id` IS IGNORED AND OVERWRITTEN with the linked account's: the explanation is about this link's rows, so its operation belongs on this link's account, and letting the field decide would put the money on an account the broker never had it on while leaving the linked one still missing the event.
+             */
+            operation: components["schemas"]["CreateOperationRequest"];
+        };
+        TinvestExplanationResponse: {
+            /**
+             * Format: uuid
+             * @description The manual operation that was created.
+             */
+            operation_id: string;
+            /** @description Whether a sync was queued to rebuild the journal with this explanation applied. FALSE IS NOT A FAILURE and the explanation is written either way: a connection that is switched off or waiting for a new token cannot sync at all, and the explanation takes effect the next time it runs. It is also false when a sync for this connection was already queued — that run will apply it. */
+            sync_queued: boolean;
+        };
+        TinvestExplanationRemoved: {
+            /** @description Whether a sync was queued to project the freed rows again. False is not a failure — see TinvestExplanationResponse.sync_queued. */
+            sync_queued: boolean;
         };
         TinvestUnparsedResponse: {
             /** @description The page itself, newest first, at most `limit` long. */
@@ -2272,6 +2379,63 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    explainTinvestRows: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TinvestExplainRequest"];
+            };
+        };
+        responses: {
+            /** @description The manual operation was created and the rows are accounted for by it */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TinvestExplanationResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    deleteTinvestExplanation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                explanationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The explanation and its operation are gone */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TinvestExplanationRemoved"];
+                };
+            };
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];

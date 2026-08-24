@@ -716,6 +716,75 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/tinvest/links/{linkId}/explanations:
+    post:
+      operationId: explainTinvestRows
+      description: >-
+        Account for one or more of this linked account's broker rows with one
+        manual journal operation. Owner-only.
+
+
+        The broker sends no corporate actions at all, so an event this program
+        cannot read as itself — a fund's partial redemption, a conversion, a
+        spin-off — arrives as whatever rows carried its money. This is where
+        the owner says what those rows were. The named rows stop being
+        projected and stop counting as unparsed; the operation is what the
+        journal holds instead.
+
+
+        THE OPERATION IS THE JOURNAL'S OWN: it is validated and replayed
+        through the engine exactly as one entered on the journal screen, and a
+        400 or 422 from those rules travels back word for word. A content key
+        that is not one of this link's rows is a 404 naming it; a row already
+        explained is a 409.
+      parameters:
+        - { name: linkId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TinvestExplainRequest" }
+      responses:
+        "201":
+          description: The manual operation was created and the rows are accounted for by it
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TinvestExplanationResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/tinvest/explanations/{explanationId}:
+    delete:
+      operationId: deleteTinvestExplanation
+      description: >-
+        Take back an explanation. Owner-only.
+
+
+        THE MANUAL OPERATION GOES WITH IT — that is the action, not a side
+        effect: the operation is deleted from the journal and the explanation
+        rows naming it follow through the table's own foreign key, so nothing
+        can be left pointing at an operation that is gone. Every row the
+        operation was accounting for is projected again on the next sync, and
+        lands back on the unparsed list if that is what it was.
+
+
+        Deleting the operation from the journal screen instead does exactly the
+        same thing, by the same key. 404 when this space has no such
+        explanation.
+      parameters:
+        - { name: explanationId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The explanation and its operation are gone
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TinvestExplanationRemoved" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 components:
   responses:
     Error:
@@ -1554,6 +1623,7 @@ components:
         - commission_refund
         - projection_incomplete
         - broker_fee_parent_missing
+        - broker_fee_parent_explained
     TinvestTokenCheckRequest:
       type: object
       required: [token]
@@ -1901,6 +1971,11 @@ components:
             for a new token cannot sync at all, and the explanation takes
             effect the next time it runs. It is also false when a sync for this
             connection was already queued — that run will apply it.
+    TinvestExplanationRemoved:
+      type: object
+      required: [sync_queued]
+      properties:
+        sync_queued: { type: boolean, description: "Whether a sync was queued to project the freed rows again. False is not a failure — see TinvestExplanationResponse.sync_queued." }
     TinvestUnparsedResponse:
       type: object
       required: [operations, has_more]
