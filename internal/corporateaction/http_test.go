@@ -78,7 +78,7 @@ func newAPIFixture(t *testing.T) apiFixture {
 	if err != nil || resp.StatusCode != http.StatusCreated {
 		t.Fatalf("setup: %v %v", err, resp)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	var spaceID uuid.UUID
 	if err := pool.QueryRow(ctx, `SELECT id FROM spaces LIMIT 1`).Scan(&spaceID); err != nil {
@@ -122,7 +122,7 @@ func (a *apiFixture) do(t *testing.T, method, path, body string) (*http.Response
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	out, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)
