@@ -64,6 +64,8 @@ function serveUnparsed(
 function makeUnparsed(id: string): TinvestUnparsedOperation {
   return {
     id,
+    link_id: "link-1",
+    content_key: `key-${id}`,
     occurred_at: "2026-08-04T09:15:00Z",
     op_type: "OPERATION_TYPE_FUTURES",
     payment: "-1234.5",
@@ -509,6 +511,33 @@ describe("ReconcilePanel — the unparsed counter says only what was counted", (
 
     expect(
       await screen.findByText("Неразобранных операций: 2"),
+    ).toBeInTheDocument();
+  });
+
+  it("не считает объяснённые строки, хотя список ниже их показывает", async () => {
+    // Одна строка не разобрана, вторая учтена ручной операцией владельца.
+    // Счётчик обязан назвать ОДНУ: объяснённая строка — не операция, которую
+    // программа не смогла прочитать, и «Неразобранных операций: 2» было бы про
+    // неё ложью. Признак берётся из explained_by, а не из пустой причины:
+    // пустая причина бывает и у строки, которую ещё пересобирают.
+    serveUnparsed([
+      makeUnparsed("u-1"),
+      {
+        ...makeUnparsed("u-2"),
+        reason: "" as TinvestUnparsedOperation["reason"],
+        detail: "",
+        explained_by: {
+          id: "exp-1",
+          operation_id: "op-1",
+          operation_on: "2026-05-21",
+          operation_type: "redemption",
+        },
+      },
+    ]);
+    renderPanel([makeReconcile({ status: "not_checked", at: null })]);
+
+    expect(
+      await screen.findByText("Неразобранных операций: 1"),
     ).toBeInTheDocument();
   });
 

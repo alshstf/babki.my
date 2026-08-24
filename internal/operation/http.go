@@ -862,20 +862,18 @@ func parseDate(s string) (time.Time, error) {
 	return d, nil
 }
 
-// parseNullableDecimal converts an optional decimal-as-string field. An
-// absent or explicit-null field yields (nil, true). A present-but-garbage
-// string writes a 400 response and returns ok=false so the caller can bail
-// out before ever reaching the service.
-func parseNullableDecimal(w http.ResponseWriter, n nullable.Nullable[string], field string) (*decimal.Decimal, bool) {
+// nullableDecimal is the same conversion without a response writer, for the
+// callers that build an operation away from an HTTP handler (see
+// OperationFromCreateRequest). One reading of the field, two doors.
+func nullableDecimal(n nullable.Nullable[string], field string) (*decimal.Decimal, error) {
 	if !n.IsSpecified() || n.IsNull() {
-		return nil, true
+		return nil, nil
 	}
 	d, err := decimal.NewFromString(n.MustGet())
 	if err != nil {
-		httpjson.Error(w, http.StatusBadRequest, field+" must be a decimal string")
-		return nil, false
+		return nil, BadFieldError{Message: field + " must be a decimal string"}
 	}
-	return &d, true
+	return &d, nil
 }
 
 func pathAccountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
@@ -936,63 +934,15 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	occurredOn, err := parseDate(req.OccurredOn)
+	op, err := OperationFromCreateRequest(req)
 	if err != nil {
-		httpjson.Error(w, http.StatusBadRequest, "occurred_on "+err.Error())
-		return
-	}
-
-	var settledOn *time.Time
-	if req.SettledOn.IsSpecified() && !req.SettledOn.IsNull() {
-		t, err := parseDate(req.SettledOn.MustGet())
-		if err != nil {
-			httpjson.Error(w, http.StatusBadRequest, "settled_on "+err.Error())
+		var bad BadFieldError
+		if errors.As(err, &bad) {
+			httpjson.Error(w, http.StatusBadRequest, bad.Message)
 			return
 		}
-		settledOn = &t
-	}
-
-	quantity, ok := parseNullableDecimal(w, req.Quantity, "quantity")
-	if !ok {
+		writeError(w, err)
 		return
-	}
-	price, ok := parseNullableDecimal(w, req.Price, "price")
-	if !ok {
-		return
-	}
-	splitRatio, ok := parseNullableDecimal(w, req.SplitRatio, "split_ratio")
-	if !ok {
-		return
-	}
-
-	var instrumentID *uuid.UUID
-	if req.InstrumentId.IsSpecified() && !req.InstrumentId.IsNull() {
-		v := req.InstrumentId.MustGet()
-		instrumentID = &v
-	}
-
-	feeMinor := int64(0)
-	if req.FeeMinor != nil {
-		feeMinor = *req.FeeMinor
-	}
-	note := ""
-	if req.Note != nil {
-		note = *req.Note
-	}
-
-	op := Operation{
-		AccountID:    req.AccountId,
-		InstrumentID: instrumentID,
-		Type:         Type(req.Type),
-		OccurredOn:   occurredOn,
-		SettledOn:    settledOn,
-		Quantity:     quantity,
-		Price:        price,
-		AmountMinor:  req.AmountMinor,
-		Currency:     req.Currency,
-		FeeMinor:     feeMinor,
-		Note:         note,
-		SplitRatio:   splitRatio,
 	}
 
 	created, err := h.svc.Create(r.Context(), p.SpaceID, op)

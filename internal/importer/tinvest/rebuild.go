@@ -261,6 +261,13 @@ type projected struct {
 	// trade it names arrive in whatever order the mirror lists them.
 	seen      map[brokerRef]bool
 	feeBooked map[brokerRef]bool
+	// explained says the owner accounted for the operation by hand, so it
+	// produced no journal entries ON PURPOSE. It is a third answer to the
+	// question a deferred broker fee asks, and it has to be one: the other two
+	// are "the trade is on the unparsed list with its own reason" — which an
+	// explained row is not, it carries no reason — and "the trade is in the
+	// journal", which it is not either. See settleBrokerFees.
+	explained map[brokerRef]bool
 	// projected says the operation became journal entries at all. A trade that
 	// did NOT — refused as a currency trade, or for an instrument this program
 	// does not account for — has no commission in the journal to duplicate AND
@@ -310,6 +317,7 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 		rowOf:     map[string]uuid.UUID{},
 		seen:      map[brokerRef]bool{},
 		feeBooked: map[brokerRef]bool{},
+		explained: map[brokerRef]bool{},
 		projected: map[brokerRef]bool{},
 	}
 	// One run's answers about instruments. The Resolver caches the broker's
@@ -324,8 +332,44 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 		if err != nil {
 			return nil, err
 		}
+		explained, err := r.store.ExplainedKeysByLink(ctx, link.ID)
+		if err != nil {
+			return nil, err
+		}
 		for _, row := range rows {
 			p.stored[row.ID] = UnparsedVerdict{Reason: row.UnparsedReason, Detail: row.UnparsedDetail}
+			if explained[row.ContentKey] {
+				// THE OWNER HAS ANSWERED FOR THIS ROW. A manual operation on
+				// the linked account stands for what happened, so this row
+				// produces no journal entries — writing them too would record
+				// the event twice — and carries NO REASON, because "could not
+				// be read" is not what is true of it. That cleared verdict is
+				// the whole mechanism by which every count of unparsed rows
+				// stops including it: the count is over reasons, and this row
+				// no longer has one. The screen still shows it, from the
+				// explanations table rather than from a reason (see
+				// UnparsedByConnection).
+				//
+				// BEFORE THE STATE CHECK BELOW, and deliberately: an
+				// explanation is a statement about the row whatever the broker
+				// has since done with it. A row explained while it was live and
+				// then withdrawn would otherwise fall through to that check,
+				// which leaves a row's verdict alone — and the reason it
+				// carried before it was explained would come back, counted
+				// again, with the owner's operation still standing beside it.
+				p.verdicts[row.ID] = UnparsedVerdict{}
+				if row.State == stateExecuted && row.DisappearedAt == nil {
+					// Recorded exactly as a projected row is, so that a
+					// BROKER_FEE naming this operation as its parent finds it
+					// (see settleBrokerFees): the trade IS in the mirror, and
+					// it produced no journal entries — but for a reason of its
+					// own, which that function has to tell from the others.
+					ref := brokerRef{link.ID, row.BrokerOperationID}
+					p.seen[ref] = true
+					p.explained[ref] = true
+				}
+				continue
+			}
 			if row.State != stateExecuted || row.DisappearedAt != nil {
 				// Deliberately not recorded as seen below: a cancelled order is
 				// not a trade whose commission anything could be duplicating,
@@ -711,6 +755,20 @@ func (r *Rebuilder) settleBrokerFees(p *projected) {
 		case p.feeBooked[ref]:
 			r.log.Debug("tinvest: a broker fee repeats the commission its trade already booked",
 				"mirror_row", d.rowID, "parent", d.parentBrokerID)
+			delete(p.rowOf, *d.op.ExternalID)
+		case p.explained[ref]:
+			// The trade is accounted for by hand, and this commission is not:
+			// the owner explained one row and this is another. Dropping it here
+			// on the strength of the branch below would lose the money in
+			// silence — that branch's justification is that the trade's OWN
+			// unparsed row already reports it, and an explained row reports
+			// nothing, it carries no reason at all. So this one says what
+			// happened and lets the owner decide: explain it too, into the
+			// same operation or another, or leave it.
+			p.verdicts[d.rowID] = UnparsedVerdict{
+				Reason: string(ReasonBrokerFeeParentExplained),
+				Detail: fmt.Sprintf("the operation this commission names (%s) is accounted for by a manual entry, and this commission is not part of it unless it was entered there too", d.parentBrokerID),
+			}
 			delete(p.rowOf, *d.op.ExternalID)
 		case p.seen[ref] && !p.projected[ref]:
 			// The trade itself is not in the journal — it is on the unparsed

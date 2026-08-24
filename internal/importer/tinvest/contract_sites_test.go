@@ -179,7 +179,8 @@ func TestTheContractStatesThePageBoundsTheServerEnforces(t *testing.T) {
 func TestTheContractStatesWhichPathCanAnswer422(t *testing.T) {
 	doc := readContract(t)
 	const createPath = "/api/v1/tinvest/connections"
-	const wantOperations = 9 // what Handler.Mount registers
+	const wantOperations = 11 // what Handler.Mount registers
+	const explainPath = "/api/v1/tinvest/links/{linkId}/explanations"
 
 	seen := 0
 	for path, item := range doc.Paths {
@@ -200,9 +201,20 @@ func TestTheContractStatesWhichPathCanAnswer422(t *testing.T) {
 					"ErrBrokerAccountNotImportable: a client meeting it has nothing to read it by",
 					verb, path)
 			}
-			if !isCreate && declares422 {
+			// The explain path answers a 422 of its own, and a different one:
+			// the manual operation it is given goes through the journal's own
+			// service, whose refusals reach the client unchanged. Both paths
+			// have to declare it, and no third one may — a 422 nothing can
+			// answer is a promise a client would wait for forever.
+			isExplain := verb == "POST" && path == explainPath
+			if isExplain && !declares422 {
+				t.Errorf("%s %s declares no 422, but the journal's own refusals travel through it "+
+					"unchanged: a client meeting one has nothing to read it by", verb, path)
+			}
+			if !isCreate && !isExplain && declares422 {
 				t.Errorf("%s %s declares a 422 it cannot answer: only the create path takes "+
-					"broker account picks, so no other one can refuse them", verb, path)
+					"broker account picks and only the explain path forwards the journal's "+
+					"refusals, so no other one can produce one", verb, path)
 			}
 			if isCreate {
 				// The other leg of the same split, declared beside it: a refused
@@ -306,7 +318,7 @@ func TestTheContractStatesTheVocabulariesTheServerUses(t *testing.T) {
 		{"TinvestSyncTrigger", goConstantValues(t, "SyncTrigger", 3, "store.go")},
 		{"TinvestSyncRunStatus", goConstantValues(t, "RunStatus", 3, "store.go")},
 		{"TinvestReconcileStatus", goConstantValues(t, "ReconcileStatus", 3, "store.go", "reconcile.go")},
-		{"TinvestUnparsedReason", goConstantValues(t, "UnparsedReason", 17, "projection.go")},
+		{"TinvestUnparsedReason", goConstantValues(t, "UnparsedReason", 18, "projection.go")},
 	} {
 		declared := append([]string(nil), doc.Components.Schemas[site.schema].Enum...)
 		sort.Strings(declared)

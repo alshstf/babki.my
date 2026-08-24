@@ -11,6 +11,7 @@ import (
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/secretbox"
 )
 
@@ -161,23 +162,34 @@ type ConnectionView struct {
 // role check in a route can be forgotten when a route is added; a role check as
 // the first statement of the method cannot be reached around at all, and a
 // second caller (a future CLI, a job) gets it for free.
+// journalWriter is the journal's own door, as narrow as this package's use of
+// it: one manual operation written, one deleted. Both go through the operation
+// service rather than its store, so a row this importer's owner enters by hand
+// is validated and replayed through the engine exactly like one entered on the
+// journal screen — there is no second way into the journal, and this is not it.
+type journalWriter interface {
+	Create(ctx context.Context, spaceID uuid.UUID, op operation.Operation) (operation.Operation, error)
+	Delete(ctx context.Context, spaceID, id uuid.UUID) error
+}
+
 type Service struct {
 	store     *Store
 	accounts  accountCreator
+	journal   journalWriter
 	box       *secretbox.Box
 	newClient clientFactory
 	inserter  jobInserter
 	log       *slog.Logger
 }
 
-func NewService(store *Store, accounts accountCreator, box *secretbox.Box,
+func NewService(store *Store, accounts accountCreator, journal journalWriter, box *secretbox.Box,
 	newClient clientFactory, inserter jobInserter, log *slog.Logger,
 ) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Service{
-		store: store, accounts: accounts, box: box,
+		store: store, accounts: accounts, journal: journal, box: box,
 		newClient: newClient, inserter: inserter, log: log,
 	}
 }

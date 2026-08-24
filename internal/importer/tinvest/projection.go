@@ -245,6 +245,16 @@ const (
 	// keeping it could book the same commission twice. Both are wrong numbers
 	// with nothing on screen to say so, and this code is what is left.
 	ReasonBrokerFeeParentMissing UnparsedReason = "broker_fee_parent_missing"
+	// ReasonBrokerFeeParentExplained: a commission the broker charged as an
+	// operation of its own, naming a trade the owner has accounted for by hand
+	// (see the explanations table). The trade produced no journal entries on
+	// purpose, so there is no commission of its own for this one to duplicate —
+	// and unlike a trade left unparsed, it says nothing about this money, since
+	// an explained row carries no reason at all. Booking the fee anyway could
+	// charge a commission the manual entry already includes; dropping it could
+	// lose one it does not. The owner is the only one who knows which, and this
+	// code is what asks them. See settleBrokerFees.
+	ReasonBrokerFeeParentExplained UnparsedReason = "broker_fee_parent_explained"
 )
 
 // UnparsedError is one refusal: the code that is stored and shown, and a

@@ -477,9 +477,19 @@ export function ReconcilePanel({
   // there" endpoint would be a second computation of one figure, which this
   // project's own rule says will eventually disagree with the first.
   const unparsed = useUnparsed(connectionId);
+  // ROWS THE OWNER HAS EXPLAINED ARE NOT COUNTED HERE, though the list below
+  // does show them. They are on that list because it is the only screen they
+  // appear on and the only place the answer can be taken back — but they are
+  // not operations this program could not read, so counting them would state a
+  // number the server's own `unparsed_reason` disagrees with, and the sentence
+  // over them («Неразобранных операций: N») would be false about every one.
+  // The server publishes `explained_by` for exactly this distinction; the
+  // absence of a `reason` must not be used for it, since an explained row and a
+  // row still being rebuilt both lack one.
   const loadedUnparsed =
     unparsed.data?.pages.reduce(
-      (rows, page) => rows + page.operations.length,
+      (rows, page) =>
+        rows + page.operations.filter((o) => !o.explained_by).length,
       0,
     ) ?? 0;
 

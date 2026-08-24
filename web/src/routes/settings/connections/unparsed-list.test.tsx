@@ -36,6 +36,8 @@ function serve(operations: TinvestUnparsedOperation[], hasMore = false) {
 function makeOperation(overrides: Partial<TinvestUnparsedOperation> = {}): TinvestUnparsedOperation {
   return {
     id: "u-1",
+    link_id: "link-1",
+    content_key: "key-u-1",
     occurred_at: "2026-08-04T09:15:00Z",
     op_type: "OPERATION_TYPE_FUTURES_VARIATION_MARGIN",
     payment: "-1234.5",
@@ -190,5 +192,61 @@ describe("UnparsedList", () => {
 
     expect(await screen.findByText("-2 RUB")).toBeInTheDocument();
     expect(screen.getByText("-1 RUB")).toBeInTheDocument();
+  });
+});
+
+describe("UnparsedList: объяснение строк вручную", () => {
+  it("объяснённая строка называет операцию владельца вместо причины и не предлагается к выбору", async () => {
+    serve([
+      makeOperation({
+        id: "u-explained",
+        content_key: "key-explained",
+        // Объяснённая строка приходит БЕЗ причины: она не «не прочитана».
+        reason: "" as TinvestUnparsedOperation["reason"],
+        detail: "",
+        explained_by: {
+          id: "exp-1",
+          operation_id: "op-1",
+          operation_on: "2026-05-21",
+          operation_type: "redemption",
+        },
+      }),
+    ]);
+    renderList();
+
+    expect(await screen.findByText("Учтено вручную: погашение от 21.05.2026")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Снять" })).toBeInTheDocument();
+    // Рядом сказано, чем «Снять» обойдётся: операция уйдёт из журнала.
+    expect(
+      screen.getByText("Операция из журнала будет удалена, а строки снова станут неразобранными."),
+    ).toBeInTheDocument();
+    // Выбрать её нельзя: у неё уже есть ответ.
+    expect(screen.queryByRole("checkbox", { name: "Выбрать строку" })).not.toBeInTheDocument();
+  });
+
+  it("выбор двух строк одного счёта складывается в одну операцию", async () => {
+    serve([
+      makeOperation({ id: "u-1", content_key: "key-1", link_id: "link-1" }),
+      makeOperation({ id: "u-2", content_key: "key-2", link_id: "link-1" }),
+    ]);
+    renderList();
+
+    const boxes = await screen.findAllByRole("checkbox", { name: "Выбрать строку" });
+    fireEvent.click(boxes[0]);
+    fireEvent.click(boxes[1]);
+    expect(screen.getByRole("button", { name: "Объяснить вручную (2)" })).toBeInTheDocument();
+  });
+
+  it("строка другого счёта начинает выбор заново: одна операция принадлежит одному счёту", async () => {
+    serve([
+      makeOperation({ id: "u-1", content_key: "key-1", link_id: "link-1" }),
+      makeOperation({ id: "u-2", content_key: "key-2", link_id: "link-2" }),
+    ]);
+    renderList();
+
+    const boxes = await screen.findAllByRole("checkbox", { name: "Выбрать строку" });
+    fireEvent.click(boxes[0]);
+    fireEvent.click(boxes[1]);
+    expect(screen.getByRole("button", { name: "Объяснить вручную (1)" })).toBeInTheDocument();
   });
 });

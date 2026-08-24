@@ -195,6 +195,17 @@ type MirrorRow struct {
 	// code. UnparsedReason is what tells those apart, and it is the only field
 	// of the pair anything may compute from — see UnparsedVerdict.
 	UnparsedDetail string
+	// ExplainedBy is the manual operation the owner entered to account for
+	// this row, or nil for a row nobody has explained. It is NOT a column of
+	// this table — it is attached by the queries that list rows for a person
+	// to read (see attachExplanations), and left nil by the ones the
+	// projection reads, which ask the explanations table its own question.
+	//
+	// A row with one is not unparsed: UnparsedReason is cleared when the
+	// explanation is applied, which is what keeps every count of unparsed rows
+	// agreeing with the list without a single one of them naming this field
+	// (see projectAll).
+	ExplainedBy *RowExplanation
 }
 
 // SyncRun is one attempt to bring the mirror up to date with the broker, and
@@ -558,7 +569,18 @@ func (s *Store) MirrorRowsByLink(ctx context.Context, linkID uuid.UUID) ([]Mirro
 }
 
 // UnparsedByConnection lists the connection's operations that the projection
-// could not turn into journal entries, newest first, one page at a time.
+// could not turn into journal entries, newest first, one page at a time —
+// AND the rows the owner has accounted for by hand, which it could turn into
+// journal entries and deliberately did not.
+//
+// THE SECOND KIND IS NOT UNPARSED AND IS STILL LISTED HERE, because this is
+// the only screen those rows appear on: an explained row carries no reason,
+// so no count of unparsed rows includes it (see projectAll, which clears the
+// verdict), and leaving it off the list as well would hide the owner's own
+// answer from them and leave nowhere to take it back. Each such row arrives
+// with ExplainedBy filled in, which is what tells the two kinds apart —
+// never the presence of a reason, which an explained row also lacks while it
+// is being rebuilt.
 //
 // Rows the broker has since stopped returning stay on the list. They are
 // still operations this program could not read, and dropping them from the
@@ -575,15 +597,21 @@ func (s *Store) UnparsedByConnection(ctx context.Context, connID uuid.UUID, limi
 		return nil, false, fmt.Errorf("tinvest: list unparsed: limit must be positive, got %d", limit)
 	}
 	rows, err := s.listMirrorRows(ctx, "list unparsed",
-		`SELECT `+mirrorCols+` FROM tinvest_operations_mirror
-		 WHERE connection_id = $1 AND unparsed_reason <> ''
-		 ORDER BY occurred_at DESC, id LIMIT $2 OFFSET $3`, connID, limit+1, offset)
+		`SELECT `+mirrorCols+` FROM tinvest_operations_mirror m
+		 WHERE m.connection_id = $1
+		   AND (m.unparsed_reason <> ''
+		        OR EXISTS (SELECT 1 FROM tinvest_mirror_explanations e
+		                    WHERE e.link_id = m.link_id AND e.content_key = m.content_key))
+		 ORDER BY m.occurred_at DESC, m.id LIMIT $2 OFFSET $3`, connID, limit+1, offset)
 	if err != nil {
 		return nil, false, err
 	}
 	hasMore := len(rows) > limit
 	if hasMore {
 		rows = rows[:limit]
+	}
+	if err := s.attachExplanations(ctx, rows); err != nil {
+		return nil, false, err
 	}
 	return rows, hasMore, nil
 }

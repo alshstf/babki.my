@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -10,8 +11,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatDateTime } from "@/lib/dates";
+import { Checkbox } from "@/components/ui/checkbox";
+import { formatDate, formatDateTime } from "@/lib/dates";
 import { useUnparsed } from "@/api/connections";
+import { useRemoveExplanation } from "@/api/explanations";
+import { ExplainDialog } from "./explain-dialog";
 
 // UnparsedList shows the broker's operations that this program could not turn
 // into journal entries: what the broker said happened, why the projection
@@ -24,10 +28,42 @@ import { useUnparsed } from "@/api/connections";
 // what the owner holds.
 export function UnparsedList({ connectionId }: { connectionId: string }) {
   const { t } = useTranslation();
+  // The rows picked, as (link, content key) pairs. A connection may feed
+  // SEVERAL broker accounts and this list covers all of them, while one
+  // journal operation belongs to one account — so a selection may never span
+  // two links, and the link of the first pick is what the rest are measured
+  // against (see toggle).
+  const [pickedLink, setPickedLink] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [explaining, setExplaining] = useState(false);
+  const removeExplanation = useRemoveExplanation(connectionId);
   // The same query the reconcile panel's counter reads, by the same key — one
   // request, and one answer that both places state the same way.
   const unparsed = useUnparsed(connectionId);
   const list = unparsed.data?.pages.flatMap((page) => page.operations) ?? [];
+  const clearPicks = () => {
+    setPicked([]);
+    setPickedLink(null);
+  };
+  const toggle = (linkId: string, contentKey: string) => {
+    if (picked.includes(contentKey)) {
+      const left = picked.filter((k) => k !== contentKey);
+      setPicked(left);
+      if (left.length === 0) setPickedLink(null);
+      return;
+    }
+    // Picking a row of another broker account starts a new selection rather
+    // than joining the two: one operation cannot stand for events on two
+    // accounts, and silently dropping the earlier picks would be worse than
+    // replacing them visibly.
+    if (pickedLink !== null && pickedLink !== linkId) {
+      setPicked([contentKey]);
+      setPickedLink(linkId);
+      return;
+    }
+    setPicked([...picked, contentKey]);
+    setPickedLink(linkId);
+  };
 
   return (
     <Card>
@@ -39,8 +75,17 @@ export function UnparsedList({ connectionId }: { connectionId: string }) {
             the rows, printed only where there are rows for it to be about. Over
             an empty list it introduced nothing, and «Неразобранных операций
             нет» directly underneath answered it. */}
-        {list.length > 0 && (
+        {/* Each sentence is printed only over rows it is TRUE of. The first
+            one — «ни позиции, ни прибыль их не учитывают» — is false about an
+            explained row, whose manual operation is counted in both; the second
+            says so, and appears only when such a row is on the page. */}
+        {list.some((operation) => operation.explained_by == null) && (
           <p className="text-sm text-muted-foreground">{t("connections.detail.unparsed.intro")}</p>
+        )}
+        {list.some((operation) => operation.explained_by != null) && (
+          <p className="text-sm text-muted-foreground">
+            {t("connections.detail.unparsed.introExplained")}
+          </p>
         )}
         {unparsed.isPending && (
           <p className="text-sm text-muted-foreground">{t("app.loading")}</p>
@@ -59,10 +104,36 @@ export function UnparsedList({ connectionId }: { connectionId: string }) {
             {t("connections.detail.unparsed.empty")}
           </p>
         )}
+        {/* The explaining controls, offered only when there is something to
+            explain and an account to write to. The count is on the button
+            because the operation entered next will stand for exactly these
+            rows, and a person about to enter one number for two events should
+            see how many they picked. */}
+        {picked.length > 0 && (
+          <div className="flex items-center gap-3">
+            <Button size="sm" onClick={() => setExplaining(true)}>
+              {t("connections.detail.explain.action", { n: picked.length })}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={clearPicks}>
+              {t("connections.detail.explain.clearSelection")}
+            </Button>
+          </div>
+        )}
+        {pickedLink !== null && (
+          <ExplainDialog
+            open={explaining}
+            onOpenChange={setExplaining}
+            connectionId={connectionId}
+            linkId={pickedLink}
+            contentKeys={picked}
+            onExplained={clearPicks}
+          />
+        )}
         {list.length > 0 && (
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-8" />
                 <TableHead>{t("connections.detail.unparsed.columns.occurredAt")}</TableHead>
                 <TableHead>{t("connections.detail.unparsed.columns.type")}</TableHead>
                 <TableHead className="text-right">
@@ -74,6 +145,19 @@ export function UnparsedList({ connectionId }: { connectionId: string }) {
             <TableBody>
               {list.map((operation) => (
                 <TableRow key={operation.id}>
+                  <TableCell>
+                    {/* An explained row cannot be picked: it already has an
+                        answer, and the way to change that answer is to take the
+                        old one back first — which is what the «Снять» button
+                        beside its caption does. */}
+                    {operation.explained_by == null && (
+                      <Checkbox
+                        aria-label={t("connections.detail.explain.pick")}
+                        checked={picked.includes(operation.content_key)}
+                        onCheckedChange={() => toggle(operation.link_id, operation.content_key)}
+                      />
+                    )}
+                  </TableCell>
                   <TableCell className="whitespace-nowrap">
                     {formatDateTime(operation.occurred_at)}
                   </TableCell>
@@ -102,7 +186,46 @@ export function UnparsedList({ connectionId }: { connectionId: string }) {
                   </TableCell>
                   <TableCell>
                     <div className="grid gap-1">
-                      <span>{t(`connections.unparsedReasons.${operation.reason}`)}</span>
+                      {/* AN EXPLAINED ROW HAS NO REASON, and printing the empty
+                          one would render the Russian name of a code that is
+                          not there. What is true of it is the owner's own
+                          answer, so that is what stands here — with the
+                          operation it points at, and the way to take it back.
+                          The distinction is read from `explained_by` and never
+                          from an empty `reason`, which a row still being
+                          rebuilt also has. */}
+                      {operation.explained_by != null ? (
+                        <>
+                          <span>
+                            {t("connections.detail.explain.explainedBy", {
+                              type: t(`operationTypes.${operation.explained_by.operation_type}`),
+                              date: formatDate(operation.explained_by.operation_on),
+                            })}
+                          </span>
+                          <div>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={removeExplanation.isPending}
+                              onClick={() => {
+                                const id = operation.explained_by?.id;
+                                if (id !== undefined) removeExplanation.mutate(id);
+                              }}
+                            >
+                              {t("connections.detail.explain.remove")}
+                            </Button>
+                            {/* Said next to the button rather than in a
+                                confirmation nobody reads: the journal entry
+                                goes too, and that is money leaving the
+                                account's figures. */}
+                            <p className="text-xs text-muted-foreground">
+                              {t("connections.detail.explain.removeHint")}
+                            </p>
+                          </div>
+                        </>
+                      ) : (
+                        <span>{t(`connections.unparsedReasons.${operation.reason}`)}</span>
+                      )}
                       {/* What refused this row said about THIS row, printed
                           under the Russian name of the code. The code is what
                           chooses the sentence above — this is only shown, never
