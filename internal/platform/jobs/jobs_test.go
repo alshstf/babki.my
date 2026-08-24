@@ -16,6 +16,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
@@ -97,6 +98,18 @@ func stubTinvestDeps(t *testing.T, pool *pgxpool.Pool) jobs.TinvestDeps {
 
 // TestHeartbeat verifies that the River client starts, the periodic
 // heartbeat job (RunOnStart) executes, and leaves a mark in meta.
+
+// stubCorporateActions is the registry pair NewWorkers needs. REAL stores over
+// the test pool rather than fakes: the periodic jobs registered from them fire
+// on start (RunOnStart), so a nil pair would be a panic in a worker rather than
+// a compile error here, and the tables they read exist in every test database.
+// It returns both values NewWorkers takes, in that order.
+func stubCorporateActions(pool *pgxpool.Pool) (*corporateaction.Store, *corporateaction.Materializer) {
+	store := corporateaction.NewStore(pool)
+	opStore := operation.NewStore(pool)
+	return store, corporateaction.NewMaterializer(store, opStore, operation.NewService(opStore), slog.Default())
+}
+
 func TestHeartbeat(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -107,8 +120,10 @@ func TestHeartbeat(t *testing.T) {
 	accStore := account.NewStore(pool)
 	famStore := family.NewStore(pool)
 	enqueuer := jobs.NewEnqueuer()
+	caStore, caMaterializer := stubCorporateActions(pool)
 	workers := jobs.NewWorkers(slog.Default(), pool, mdStore, instStore, opStore, accStore, famStore,
-		stubFxProvider{}, stubQuoteProvider{}, stubTinvestDeps(t, pool), enqueuer)
+		stubFxProvider{}, stubQuoteProvider{}, stubTinvestDeps(t, pool),
+		caStore, caMaterializer, enqueuer)
 	client, err := jobs.NewClient(pool, workers, enqueuer, slog.Default())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -156,6 +171,64 @@ func TestHeartbeat(t *testing.T) {
 // client factory, which refuses to build anything. What is waited for is
 // therefore the sync job's ROW — the queue's own record that the dispatcher
 // inserted it — and not its success, which no test may have without a broker.
+// TestStartingTheQueueQueuesTheCorporateActionJobs is the registry's half of
+// the same guard the sync test above is: the workers can be registered, the
+// stores wired and every unit test green, and the feature still be dead —
+// because nothing ever ENQUEUES the two jobs. A split nobody fetches is a
+// split that never happens, and the process looks perfectly healthy while it
+// does not happen. Deleting either periodic job below turns this red; nothing
+// else in the suite notices.
+//
+// BOTH kinds are asserted, because they answer different halves: the refresh
+// is what learns a split from the exchange, and the sweep is what carries an
+// event a person entered by hand into the journals of the accounts that held
+// the paper. A registry with only the first is deaf to the owner; with only
+// the second it never hears the exchange.
+func TestStartingTheQueueQueuesTheCorporateActionJobs(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+
+	enqueuer := jobs.NewEnqueuer()
+	caStore, caMaterializer := stubCorporateActions(pool)
+	workers := jobs.NewWorkers(slog.Default(), pool, marketdata.NewStore(pool), instrument.NewStore(pool),
+		operation.NewStore(pool), account.NewStore(pool), family.NewStore(pool),
+		stubFxProvider{}, stubQuoteProvider{}, stubTinvestDeps(t, pool),
+		caStore, caMaterializer, enqueuer)
+	client, err := jobs.NewClient(pool, workers, enqueuer, slog.Default())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if err := client.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = client.Stop(stopCtx)
+	}()
+
+	for _, kind := range []string{
+		"corporateaction.refresh_moex_splits",
+		"corporateaction.materialize_all",
+	} {
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			var n int
+			if err := pool.QueryRow(ctx,
+				`SELECT count(*) FROM river_job WHERE kind = $1`, kind).Scan(&n); err != nil {
+				t.Fatalf("count %s: %v", kind, err)
+			}
+			if n > 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s was never queued: the registry is wired but nothing asks it to run", kind)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}
+
 func TestStartingTheQueueQueuesASyncForAnActiveConnection(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -177,9 +250,10 @@ func TestStartingTheQueueQueuesASyncForAnActiveConnection(t *testing.T) {
 	}
 
 	enqueuer := jobs.NewEnqueuer()
+	caStore, caMaterializer := stubCorporateActions(pool)
 	workers := jobs.NewWorkers(slog.Default(), pool, marketdata.NewStore(pool), instrument.NewStore(pool),
 		operation.NewStore(pool), account.NewStore(pool), fam,
-		stubFxProvider{}, stubQuoteProvider{}, deps, enqueuer)
+		stubFxProvider{}, stubQuoteProvider{}, deps, caStore, caMaterializer, enqueuer)
 	client, err := jobs.NewClient(pool, workers, enqueuer, slog.Default())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -328,9 +402,11 @@ func TestSigtermLeavesARunningJobItsGracefulWindow(t *testing.T) {
 		release:   make(chan struct{}),
 	}
 	enqueuer := jobs.NewEnqueuer()
+	caStore, caMaterializer := stubCorporateActions(pool)
 	workers := jobs.NewWorkers(slog.Default(), pool, marketdata.NewStore(pool), instrument.NewStore(pool),
 		operation.NewStore(pool), account.NewStore(pool), family.NewStore(pool),
-		stubFxProvider{}, stubQuoteProvider{}, stubTinvestDeps(t, pool), enqueuer)
+		stubFxProvider{}, stubQuoteProvider{}, stubTinvestDeps(t, pool),
+		caStore, caMaterializer, enqueuer)
 	river.AddWorker(workers, probe)
 
 	client, err := jobs.NewClient(pool, workers, enqueuer, slog.Default())

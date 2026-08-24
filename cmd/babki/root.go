@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
@@ -189,9 +190,16 @@ func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	if err != nil {
 		return nil, err
 	}
+	// The corporate-actions registry writes journal rows through the same door
+	// the importer uses (operation.Service.ApplyImportDelta), so it gets a
+	// service of its own rather than the store: the engine has to be asked about
+	// the journal the difference LEAVES, not only about the rows added.
+	caStore := corporateaction.NewStore(r.pool)
+	caMaterializer := corporateaction.NewMaterializer(
+		caStore, opStore, operation.NewService(opStore), r.log)
 	enqueuer := jobs.NewEnqueuer()
 	workers := jobs.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, accStore, famStore,
-		fxProvider, quoteProvider, tinvestDeps, enqueuer)
+		fxProvider, quoteProvider, tinvestDeps, caStore, caMaterializer, enqueuer)
 	client, err := jobs.NewClient(r.pool, workers, enqueuer, r.log)
 	if err != nil {
 		return nil, err

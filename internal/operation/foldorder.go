@@ -6,19 +6,11 @@ import (
 	"strings"
 )
 
-// The sources a journal row can carry. Only the two this package has rules
-// about are named here; "csv" is in the column's CHECK constraint and nothing
-// in Go mentions it yet.
-const (
-	// SourceManual is a row a person entered.
-	SourceManual = "manual"
-
-	// SourceRegistry is a row materialized from the corporate-actions registry
-	// — a split that happened to the PAPER, carried into every account that
-	// held it (see internal/corporateaction). Nobody types one and nobody
-	// deletes one directly; the registry entry is edited and the rows follow.
-	SourceRegistry = "registry"
-)
+// SourceManual is a row a person entered. SourceRegistry, its counterpart for
+// rows the corporate-actions registry materializes, is declared beside the
+// journal's own types (see operation.go): the conversion pair landed it there
+// first, and one constant in two files is how the two eventually disagree.
+const SourceManual = "manual"
 
 // foldRank orders operations WITHIN one day, ahead of their created_at.
 //
