@@ -55,7 +55,11 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("DELETE /api/v1/instrument-events/{eventId}", edit(h.handleDelete))
 }
 
-func toAPI(e Event) apitypes.InstrumentEvent {
+// toAPI renders one event. resultCataloged says whether the catalog holds the
+// paper this event produces — the caller answers it for a whole list in one
+// query (see Store.CatalogedISINs), because it is what decides the one field
+// here that is about this event rather than about its kind.
+func toAPI(e Event, resultCataloged bool) apitypes.InstrumentEvent {
 	out := apitypes.InstrumentEvent{
 		Id:           e.ID,
 		Kind:         apitypes.InstrumentEventKind(e.Kind),
@@ -68,6 +72,10 @@ func toAPI(e Event) apitypes.InstrumentEvent {
 		Note:         e.Note,
 		Materialized: e.Kind.Materialized(),
 		CreatedAt:    e.CreatedAt,
+	}
+	if reason := e.NotCountedReason(resultCataloged); reason != "" {
+		published := apitypes.InstrumentEventNotCountedReason(reason)
+		out.NotCountedReason = &published
 	}
 	if e.ResultISIN != "" {
 		out.ResultIsin = nullable.NewNullableWithValue(e.ResultISIN)
@@ -87,9 +95,18 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		family.WriteError(w, err)
 		return
 	}
+	results := make([]string, 0, len(events))
+	for _, e := range events {
+		results = append(results, e.ResultISIN)
+	}
+	cataloged, err := h.store.CatalogedISINs(r.Context(), results)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
 	out := make([]apitypes.InstrumentEvent, 0, len(events))
 	for _, e := range events {
-		out = append(out, toAPI(e))
+		out = append(out, toAPI(e, cataloged[e.ResultISIN]))
 	}
 	httpjson.Write(w, http.StatusOK, apitypes.InstrumentEventsResponse{Events: out})
 }
@@ -196,8 +213,18 @@ func (h *Handler) writeWithMaterialization(w http.ResponseWriter, r *http.Reques
 			"event", e.ID, "isin", e.ISIN, "err", err)
 	}
 	queued := h.materializer.RequestRecheck(ctx, stats)
+	// Asked AFTER the materialization rather than before: cataloguing the paper
+	// and recording the event are two requests in either order, and the answer a
+	// person reads on the row they just wrote must describe the world as it is
+	// now. A failure to look it up is not worth failing the response over — the
+	// event is written either way — so the row simply carries no reason.
+	cataloged, err := h.store.CatalogedISINs(ctx, []string{e.ResultISIN})
+	if err != nil {
+		h.log.Error("corporateaction: could not tell whether the paper this event produces is in the catalog",
+			"event", e.ID, "result_isin", e.ResultISIN, "err", err)
+	}
 	httpjson.Write(w, status, apitypes.InstrumentEventWritten{
-		Event:           toAPI(e),
+		Event:           toAPI(e, cataloged[e.ResultISIN]),
 		RowsAdded:       stats.Added,
 		RowsRemoved:     stats.Removed,
 		AccountsTouched: len(stats.Accounts),

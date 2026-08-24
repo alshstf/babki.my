@@ -80,7 +80,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	// instead of leaving a verdict on screen that describes the journal as it
 	// was a moment ago.
 	caStore := corporateaction.NewStore(r.pool)
-	caMaterializer := corporateaction.NewMaterializer(caStore, opStore, opSvc,
+	caMaterializer := corporateaction.NewMaterializer(caStore, opStore, opSvc, instStore,
 		tinvest.NewRechecker(tinvestStore, inserter, r.log), r.log)
 	corporateaction.NewHandler(caStore, caMaterializer, famAuth, famSM, r.log).Mount(srv)
 	return nil
@@ -213,7 +213,7 @@ func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	// NewClient fills in below — so a materialization that runs before the queue
 	// is up gets a refusal it logs, rather than a silently dropped check.
 	caMaterializer := corporateaction.NewMaterializer(
-		caStore, opStore, operation.NewService(opStore),
+		caStore, opStore, operation.NewService(opStore), instStore,
 		tinvest.NewRechecker(tinvest.NewStore(r.pool), enqueuer, r.log), r.log)
 	workers := jobs.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, accStore, famStore,
 		fxProvider, quoteProvider, tinvestDeps, caStore, caMaterializer, enqueuer)

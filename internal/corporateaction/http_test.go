@@ -63,7 +63,7 @@ func newAPIFixture(t *testing.T) apiFixture {
 	ops := operation.NewStore(pool)
 	svc := operation.NewService(ops)
 	recheck := &queuedRecheck{}
-	materializer := corporateaction.NewMaterializer(store, ops, svc, recheck, nil)
+	materializer := corporateaction.NewMaterializer(store, ops, svc, instrument.NewStore(pool), recheck, nil)
 
 	srv := httpserver.New(slog.Default(), pool)
 	family.NewHandler(family.NewService(famStore), famStore, auth, sm).Mount(srv)
@@ -301,16 +301,21 @@ func TestAMaterializationThatChangesNothingAsksForNoRecheck(t *testing.T) {
 	}
 }
 
-// TestAConversionIsRecordedAndSaysItIsNotCounted. The facts are perishable — a
-// fund converted in 2023 and nobody can go back and ask the registrar again —
-// so they are stored before the engine can fold them, and every row says of
-// itself whether it is counted.
-func TestAConversionIsRecordedAndSaysItIsNotCounted(t *testing.T) {
+// TestAConversionWaitsForThePaperItProducesToBeCatalogued. The facts are
+// perishable — a fund converted in 2023 and nobody can go back and ask the
+// registrar again — so a conversion is recorded whether or not anything here can
+// yet act on it. What it cannot do is point a journal row at a paper the catalog
+// has no row for, and THAT is the only thing standing between the record and the
+// journal now that both legs of a conversion exist. So the row says which of the
+// two it is, in a field of its own, and the moment the paper is catalogued the
+// very same event writes the pair.
+func TestAConversionWaitsForThePaperItProducesToBeCatalogued(t *testing.T) {
 	f := newAPIFixture(t)
-	f.buy(t, f.accountID, "2021-05-04", "1", -320_000)
+	f.buy(t, f.accountID, "2021-05-04", "4", -320_000)
 
+	const producedISIN = "RU000A107UL4"
 	resp, body := f.do(t, http.MethodPost, "/api/v1/instrument-events", `{
-		"kind": "conversion", "isin": "`+amazonISIN+`", "result_isin": "RU000A107UL4",
+		"kind": "conversion", "isin": "`+amazonISIN+`", "result_isin": "`+producedISIN+`",
 		"effective_on": "2024-02-27", "ratio_from": 1, "ratio_to": 1,
 		"source_ref": "https://www.moex.com/n67851"
 	}`)
@@ -322,7 +327,7 @@ func TestAConversionIsRecordedAndSaysItIsNotCounted(t *testing.T) {
 	}
 
 	resp, body = f.do(t, http.MethodPost, "/api/v1/instrument-events", `{
-		"kind": "conversion", "isin": "`+amazonISIN+`", "result_isin": "RU000A107UL4",
+		"kind": "conversion", "isin": "`+amazonISIN+`", "result_isin": "`+producedISIN+`",
 		"effective_on": "2024-02-27", "ratio_from": 2, "ratio_to": 1,
 		"source_ref": "https://www.moex.com/n67851"
 	}`)
@@ -331,24 +336,70 @@ func TestAConversionIsRecordedAndSaysItIsNotCounted(t *testing.T) {
 	}
 	var written struct {
 		Event struct {
-			Materialized bool `json:"materialized"`
+			ID               string  `json:"id"`
+			Materialized     bool    `json:"materialized"`
+			NotCountedReason *string `json:"not_counted_reason"`
 		} `json:"event"`
 		RowsAdded int `json:"rows_added"`
 	}
 	if err := json.Unmarshal(body, &written); err != nil {
 		t.Fatalf("decode %s: %v", body, err)
 	}
-	if written.Event.Materialized {
-		t.Errorf("materialized = true on a conversion, which no journal type can hold yet")
+	// The KIND is carried into journals; THIS event is not, and the two answers
+	// are separate fields because they are separate questions.
+	if !written.Event.Materialized {
+		t.Errorf("materialized = false on a conversion, though conversions are carried into journals now")
+	}
+	if written.Event.NotCountedReason == nil || *written.Event.NotCountedReason != "result_not_in_catalog" {
+		t.Errorf("not_counted_reason = %v, want result_not_in_catalog — the paper it produces has no catalog row",
+			written.Event.NotCountedReason)
 	}
 	if written.RowsAdded != 0 {
-		t.Errorf("rows_added = %d on a conversion, want 0", written.RowsAdded)
+		t.Errorf("rows_added = %d, want 0 — there is no paper to point the arriving leg at", written.RowsAdded)
 	}
-	if held := f.held(t, f.accountID); held.String() != "1" {
-		t.Errorf("the account holds %s, want 1 — a conversion changes no journal today", held)
+	if held := f.held(t, f.accountID); held.String() != "4" {
+		t.Errorf("the account holds %s, want 4 — nothing was written", held)
 	}
 	if f.recheck.calls != 0 {
 		t.Errorf("the rechecker was asked %d times though no journal changed, want 0", f.recheck.calls)
+	}
+
+	// Now catalogue the paper the conversion produces and let the registry run
+	// again. NOTHING ABOUT THE EVENT CHANGES — it is the same row, recorded
+	// before the paper existed here — and that is the point: the fact was always
+	// true and only this program's ability to express it was missing.
+	if _, err := instrument.NewStore(f.pool).Create(f.ctx, instrument.Instrument{
+		Type: instrument.TypeShare, Name: "Т-Технологии", Ticker: "T", ISIN: producedISIN, Currency: "USD",
+	}); err != nil {
+		t.Fatalf("catalogue the produced paper: %v", err)
+	}
+	if _, err := f.materializer.ForISIN(f.ctx, amazonISIN); err != nil {
+		t.Fatalf("materialize after cataloguing: %v", err)
+	}
+
+	resp, body = f.do(t, http.MethodGet, "/api/v1/instrument-events", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", resp.StatusCode, body)
+	}
+	var listed struct {
+		Events []struct {
+			ID               string  `json:"id"`
+			NotCountedReason *string `json:"not_counted_reason"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(body, &listed); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	if len(listed.Events) != 1 {
+		t.Fatalf("the registry lists %d events, want 1", len(listed.Events))
+	}
+	if listed.Events[0].NotCountedReason != nil {
+		t.Errorf("not_counted_reason = %v after the paper was catalogued, want null",
+			*listed.Events[0].NotCountedReason)
+	}
+	// Two units left and one arrived: the ratio is two for one.
+	if held := f.held(t, f.accountID); held.String() != "0" {
+		t.Errorf("the account holds %s of the old paper, want 0 — a conversion takes the whole holding", held)
 	}
 }
 
