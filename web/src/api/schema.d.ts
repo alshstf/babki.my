@@ -255,6 +255,53 @@ export interface paths {
         patch: operations["updateInstrument"];
         trace?: never;
     };
+    "/api/v1/instrument-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description The corporate-actions registry: what happened to the PAPERS, newest effective date first. Splits, conversions and spin-offs, each keyed by the ISIN it happened to rather than by any account — a split happens to the security, and every holder of it at every broker wakes up to the same multiplied quantity on the same day.
+         *
+         *     THE WHOLE REGISTRY COMES BACK IN ONE ANSWER, with no paging. It is one row per corporate action of every paper anyone in this instance holds, plus whatever the exchange published: the live instance carries 37 of them. If that ever stops being small this endpoint gains an envelope like the catalog's, and until then a `has_more` that is always false would be a promise nothing keeps.
+         */
+        get: operations["listInstrumentEvents"];
+        put?: never;
+        /**
+         * @description Record a corporate action by hand. The event is stored, and — for the kinds this program carries into journals — materialized into every account that held the paper BEFORE this responds, so the answer already says what changed.
+         *
+         *     WHAT IT ANSWERS 400 FOR is every rule in internal/corporateaction.Event.Validate, which both doors run: the exchange job's facts are held to the same rules a person's are. The ones worth knowing before sending: a ratio of 1 to 1 changes nothing; a ratio so deep it rounds to zero at ten decimal places would multiply a holding by nought; `result_isin` naming the same paper as `isin` is not a conversion; and the same paper, kind and date twice is a duplicate.
+         */
+        post: operations["createInstrumentEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instrument-events/{eventId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * @description Remove a hand-recorded event, and with it the journal rows it put into every account — the same materialization runs, finds the registry no longer asks for those rows, and takes them out before this responds.
+         *
+         *     AN EXCHANGE ROW IS REFUSED WITH 400, not silently kept: the job that wrote it reads the exchange's table on every run and would write it back, so a deletion would last until the next run and no longer. The message names the source, so a reader is not left to guess why a row on their own screen would not go.
+         */
+        delete: operations["deleteInstrumentEvent"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{accountId}/operations": {
         parameters: {
             query?: never;
@@ -765,6 +812,97 @@ export interface components {
             /** @description Whether the catalog holds at least one more instrument beyond this page — i.e. at `offset + len(instruments)` and later. The server's to answer, and fetched rather than inferred: one row beyond the page is asked for and its arrival IS this answer, after which a statement of its own trims that row away so nothing downstream can mistake it for part of the page. A flag rather than a total, for the reason OperationsResponse.has_more gives. False on an empty page, which is the end of the catalog (or past it). */
             has_more: boolean;
         };
+        /**
+         * @description What happened to the paper. `split`: the quantity is rewritten and nothing else — the money spent stands and so do the acquisition dates, which is why it is tax-neutral everywhere this program models. `conversion`: one paper becomes another (a depositary receipt into the share it represented, a fund into its successor); the basis and the dates travel with it and nothing is realized (НК РФ ст. 214.1 п. 13). `spin_off`: the original stands and a second paper is handed out beside it, taking part of the basis with it (НК РФ ст. 277 п. 7).
+         *
+         *     ONLY `split` IS CARRIED INTO JOURNALS TODAY — see InstrumentEvent.materialized, which says so per row rather than leaving a reader to hold this list in their head. The other two are recorded because the facts are perishable: a fund converted in 2023 and nobody can go back and ask the registrar again.
+         * @enum {string}
+         */
+        InstrumentEventKind: "split" | "conversion" | "spin_off";
+        /**
+         * @description Where the fact came from. `moex_iss`: the exchange's own splits table, read by a daily job. Not a person's to remove — the job rewrites it from the exchange on every run, so a deletion would last until the next one. `manual`: somebody recorded it, with a link to the evidence in `source_ref`.
+         * @enum {string}
+         */
+        InstrumentEventSource: "moex_iss" | "manual";
+        /** @description One recorded corporate action. Keyed by the ISIN of the paper it happened to rather than by a catalog row: the fact outlives any row, and the exchange job records splits of papers nobody here holds. */
+        InstrumentEvent: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["InstrumentEventKind"];
+            /** @description ISIN of the paper this happened to. The catalog's own identity since migration 0020, which is what lets one recorded fact reach every account holding the paper, however each of them came to hold it. */
+            isin: string;
+            /**
+             * Format: date
+             * @description THE FIRST DAY THE PAPER TRADES IN THE NEW QUANTITY at the venue where it is held. Not the record date, not the day the decision was announced, and not the day the registrar did the work.
+             *
+             *     The event applies at the START of it: what was held at the close of the day before is multiplied, and a trade dated this day is already in the new quantity. That is also why a purchase made on the effective day gets no split row of its own.
+             *
+             *     Checked against three live events before it was written this way — FXUS (exchange table 2021-10-06, last trade before 10-04, first trade after 10-07), NVDA-RM (table 2021-07-21, trades 07-15 and 07-22) and T (table 2026-04-17, last trade 04-10, registrar 04-15, trading resumed 04-17). The exchange's own date is sometimes the last day of the halt and sometimes the first day after it, but it always falls inside the window where nothing trades, so this rule is right in all three.
+             */
+            effective_on: string;
+            /**
+             * Format: int64
+             * @description The `from` half of the ratio: one unit becomes ratio_to/ratio_from units. Whole numbers, the shape the exchange publishes, so that 1:3 is 1 and 3 rather than 0.3333333333. From 1 to 1000000000.
+             */
+            ratio_from: number;
+            /**
+             * Format: int64
+             * @description The `to` half. See ratio_from. A ratio of 1 to 1 is refused: it changes nothing and would put a row in every holder's journal saying so.
+             */
+            ratio_to: number;
+            /** @description The paper a conversion or a spin-off produces. Required on those two and refused on a split, which produces no new paper. Never equal to `isin`. */
+            result_isin?: string | null;
+            /** @description Decimal as string: the fraction of the original's cost basis a spin-off moves across (НК РФ ст. 277 п. 7 — the share of the fund's assets that was carved out). Greater than 0 and less than 1. Required on a spin-off and refused on the other two, where the whole basis either stays or travels. */
+            basis_share?: string | null;
+            source: components["schemas"]["InstrumentEventSource"];
+            /** @description Where the fact can be checked: the exchange's own URL for a `moex_iss` row, and for a `manual` one whatever its recorder linked to. Required on a manual event — a ratio nobody can check is a number this program would carry into every holder's journal on one person's word. */
+            source_ref: string;
+            /** @description The exchange's security code the splits job resolved this ISIN from, cached so a later run costs no second lookup. Empty on a hand-recorded event. NEVER an identity: MOEX's `T` is Т-Технологии while this catalog also holds AT&T under `T`, which is why the job resolves through the exchange's own ISIN and not through a ticker. */
+            moex_secid?: string;
+            /** @description Whatever the recorder wanted to say about it. Empty on an exchange row. */
+            note: string;
+            /** @description Whether this program carries this KIND into journals today — true for a split, false for a conversion and a spin-off. Published per row rather than left to the client to derive from `kind`, so the day a kind starts being materialized no screen goes on claiming it is not. It says nothing about whether THIS event actually produced a row: an account that held nothing on the day gets none, and that is a fact about the account rather than about the event. */
+            materialized: boolean;
+            /** Format: date-time */
+            created_at: string;
+        };
+        InstrumentEventsResponse: {
+            /** @description The whole registry, newest effective date first. Not paged — see the endpoint. */
+            events: components["schemas"]["InstrumentEvent"][];
+        };
+        /** @description A corporate action recorded by hand. Its `source` is always `manual`: the exchange's own rows are written by the job that reads the exchange, and a request claiming to be one would be a row nobody could check and the job would overwrite. */
+        CreateInstrumentEventRequest: {
+            kind: components["schemas"]["InstrumentEventKind"];
+            isin: string;
+            /**
+             * Format: date
+             * @description See InstrumentEvent.effective_on — the first day the paper trades in the new quantity at the venue where it is held, NOT the record date. Refused if later than today.
+             */
+            effective_on: string;
+            /** Format: int64 */
+            ratio_from: number;
+            /** Format: int64 */
+            ratio_to: number;
+            /** @description Required for a conversion and a spin-off, refused on a split. See InstrumentEvent.result_isin. */
+            result_isin?: string | null;
+            /** @description Decimal as string, greater than 0 and less than 1. Required for a spin-off, refused on the other two. See InstrumentEvent.basis_share. */
+            basis_share?: string | null;
+            /** @description Required: a link to the exchange's or the issuer's own announcement. See InstrumentEvent.source_ref for why this one field is not optional. */
+            source_ref: string;
+            note?: string;
+        };
+        /** @description What recording or removing an event did. The event itself, and the journals it changed on the way — materialization runs inside the request rather than waiting for the daily sweep, so these figures describe a state the next screen will already show. */
+        InstrumentEventWritten: {
+            event: components["schemas"]["InstrumentEvent"];
+            /** @description Journal rows written. Zero for a kind this program does not carry into journals, and zero for a paper no account held on the day — neither is a failure, and `materialized` on the event tells the first case from the second. */
+            rows_added: number;
+            /** @description Journal rows taken out. On a delete this is what the removed event had put there; on a create it is normally 0, and non-zero only when the new event changes what an older one asked for. */
+            rows_removed: number;
+            /** @description How many accounts' journals actually changed — not how many were looked at. */
+            accounts_touched: number;
+            /** @description How many broker connections were asked for a fresh comparison because their accounts changed. Zero when no changed account belongs to a connection, and zero when a check of that connection was already queued and will read the journal as it now stands. Not an error either way: the hourly run reconciles regardless, and this only shortens the window in which a verdict on screen describes a journal that has already moved. */
+            recheck_queued: number;
+        };
         CreateInstrumentRequest: {
             type: components["schemas"]["InstrumentType"];
             /** @description What to call the instrument. Refused EMPTY and nothing more (internal/instrument/http.go, handleCreate): the server compares against "" and does not trim. Same floor and same reasoning as CreateAccountRequest.name — see it. */
@@ -1191,10 +1329,10 @@ export interface components {
          */
         TinvestConnectionStatus: "active" | "token_revoked" | "disabled";
         /**
-         * @description What caused a sync run. `initial`: the first import, queued by the request that created the connection. `schedule`: the hourly job. `manual`: the owner asked for one (POST .../sync).
+         * @description What caused a sync run. `initial`: the first import, queued by the request that created the connection. `schedule`: the hourly job. `manual`: the owner asked for one (POST .../sync). `registry`: the corporate-actions registry changed a journal this connection is reconciled against, and asked for a fresh comparison — a verdict is a sentence about the journal at the moment it was struck, and a split materialized after that moment leaves it describing a journal that no longer exists (see migration 0024 for the live case).
          * @enum {string}
          */
-        TinvestSyncTrigger: "schedule" | "manual" | "initial";
+        TinvestSyncTrigger: "schedule" | "manual" | "initial" | "registry";
         /**
          * @description Where one sync run stands. `running`: it started and has not reported back — a run left in this state for good is a process that died mid-sync, which is visible as such rather than as nothing having happened. `ok`: it finished. `failed`: it stopped on an error, which TinvestSyncRun.error names.
          * @enum {string}
@@ -1292,6 +1430,15 @@ export interface components {
             broker_currency?: string | null;
             /** @description What kind of instrument the position is, ALREADY TRANSLATED INTO THIS CATALOG'S OWN InstrumentType by the importer's one table of broker types (share, bond, etf) — the same table that books every imported operation and that decides a row is `unknown_security` rather than `unsupported` in the first place. Set on `unknown_security` rows, from the position's own type rather than the passport's, so it is present even when the passport was not obtained; null on every other kind. Published translated so that a client creating the catalog row does not keep a second copy of that table, which is exactly the pair of independent computations of one thing this codebase has watched drift. */
             broker_type?: components["schemas"]["InstrumentType"] | null;
+            /**
+             * Format: int64
+             * @description SET WHEN THE TWO QUANTITIES DIFFER BY A WHOLE FACTOR OF TWO OR MORE AND THE CORPORATE-ACTIONS REGISTRY HOLDS NO SPLIT THAT WOULD ACCOUNT FOR IT, and carries that factor — the larger quantity over the smaller, whichever side is larger, since a reverse split leaves the journal holding the multiple.
+             *
+             *     IT IS A QUESTION, NOT A FINDING, and a client must render it as one. The owner's own AMZN stands at 1 against the broker's 20 and NVDA at 3 against 30, and both are real splits nobody recorded — but a whole factor is equally what a purchase this import never saw would leave behind, and nothing on the server can tell those apart. Nothing acts on it: no event is written and no journal is touched.
+             *
+             *     Null on every row of another kind, on any difference that is not a whole multiple, on a paper the registry already knows a split of (the journal then already has it, so the difference has another cause), on a paper with no ISIN (the registry is keyed by it, so nothing could be recorded against that paper at all), and on every row of a run recorded before this field existed. Null too when the registry could not be reached — a hint not offered rather than a check not finished.
+             */
+            split_hint_factor?: number | null;
         };
         /** @description The most recent check against the broker FOR ONE LINKED BROKER ACCOUNT. A sync run is made for the pair (connection, link) and the reconciliation is made inside it, so a verdict is a statement about ONE broker account and about no other. A connection importing two of them therefore has two verdicts which can differ and can be reached at different moments; publishing whichever of them is newest as the connection's own would draw one account's tick over the other account's difference, and the older account's verdict would never be seen at all. Nothing here is a connection-wide claim: a client that wants one derives it from all of these. */
         TinvestAccountReconcile: {
@@ -2001,6 +2148,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Instrument"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    listInstrumentEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every recorded corporate action */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstrumentEventsResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    createInstrumentEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInstrumentEventRequest"];
+            };
+        };
+        responses: {
+            /** @description The recorded event, and what materializing it changed */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstrumentEventWritten"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    deleteInstrumentEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                eventId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The removed event, and what un-materializing it changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstrumentEventWritten"];
                 };
             };
             400: components["responses"]["Error"];

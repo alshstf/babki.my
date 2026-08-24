@@ -373,7 +373,7 @@ func newWorkerFixture(t *testing.T) *workerFixture {
 		return NewRebuilder(f.store, NewResolver(f.store, instStore, log),
 			operation.NewService(wf.ops), wf.ops, log)
 	}
-	reconciler := NewReconciler(f.store, wf.ops, account.NewStore(f.pool), instStore, log)
+	reconciler := NewReconciler(f.store, wf.ops, account.NewStore(f.pool), instStore, nil, log)
 	wf.worker = NewSyncWorker(f.store, box, newClient, newRebuilder, reconciler, log)
 	return wf
 }

@@ -830,7 +830,7 @@ func TestReconcileLinkMarksTheBalanceWithTheBrokersOwnRubles(t *testing.T) {
 	r := NewReconciler(f.store, fakeJournal{ops: []operation.Operation{
 		aCashEntry(operation.TypeDeposit, 1_000_000, "RUB"),
 		aBuy(inst, "100", -100_000, 10, "RUB"),
-	}}, marker, instrument.NewStore(f.pool), nil)
+	}}, marker, instrument.NewStore(f.pool), nil, nil)
 	r.now = func() time.Time { return time.Date(2026, 8, 4, 22, 30, 0, 0, time.UTC) }
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
@@ -883,7 +883,7 @@ func TestReconcileLinkAgreesWithAnAccountThatOnlyHoldsCash(t *testing.T) {
 	marker := newMarker()
 	r := NewReconciler(f.store, fakeJournal{ops: []operation.Operation{
 		aCashEntry(operation.TypeDeposit, 5_000_000, "RUB"),
-	}}, marker, instrument.NewStore(f.pool), nil)
+	}}, marker, instrument.NewStore(f.pool), nil, nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if err != nil {
@@ -910,7 +910,7 @@ func TestReconcileLinkSaysNotCheckedWhenThePortfolioIsUnavailable(t *testing.T) 
 	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
 
 	marker := newMarker()
-	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil)
+	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil, nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if err == nil {
@@ -938,7 +938,7 @@ func TestReconcileLinkSaysNotCheckedWhenTheCashIsUnavailable(t *testing.T) {
 	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
 
 	marker := newMarker()
-	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil)
+	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil, nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if err == nil {
@@ -972,7 +972,7 @@ func TestReconcileLinkMarksTheBalanceEvenWhenTheSidesDisagree(t *testing.T) {
 	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
 
 	marker := newMarker()
-	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil)
+	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil, nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if err != nil {
@@ -991,7 +991,7 @@ func TestReconcileLinkRefusesALinkOfAnotherConnection(t *testing.T) {
 	other := f.link
 	other.ConnectionID = uuid.New()
 
-	r := NewReconciler(f.store, fakeJournal{}, newMarker(), instrument.NewStore(f.pool), nil)
+	r := NewReconciler(f.store, fakeJournal{}, newMarker(), instrument.NewStore(f.pool), nil, nil)
 	res, err := r.ReconcileLink(f.ctx, NewClient(nil, "", "token", nil), f.conn, other)
 	if !errors.Is(err, ErrLinkNotInConnection) {
 		t.Fatalf("error = %v, want %v", err, ErrLinkNotInConnection)
@@ -1012,7 +1012,7 @@ func TestReconcileLinkRefusesALinkOfAnotherSpace(t *testing.T) {
 	other.SpaceID = uuid.New()
 
 	marker := newMarker()
-	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil)
+	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil, nil)
 	res, err := r.ReconcileLink(f.ctx, NewClient(nil, "", "token", nil), f.conn, other)
 	if !errors.Is(err, ErrLinkOutsideSpace) {
 		t.Fatalf("error = %v, want %v", err, ErrLinkOutsideSpace)
@@ -1046,7 +1046,7 @@ func TestReconcileLinkMarksNothingWhenOurOwnJournalCannotBeRead(t *testing.T) {
 
 	dbDown := errors.New("connection refused")
 	marker := newMarker()
-	r := NewReconciler(f.store, fakeJournal{err: dbDown}, marker, instrument.NewStore(f.pool), nil)
+	r := NewReconciler(f.store, fakeJournal{err: dbDown}, marker, instrument.NewStore(f.pool), nil, nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if !errors.Is(err, dbDown) {
@@ -1078,7 +1078,7 @@ func TestReconcileLinkRefusesToMarkANonRubleAccount(t *testing.T) {
 
 	marker := newMarker()
 	marker.currency = "USD"
-	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil)
+	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil, nil)
 
 	_, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if !errors.Is(err, ErrAccountNotInRubles) {
@@ -1107,7 +1107,7 @@ func TestABalanceMarkFinerThanAKopeckIsRefusedForWhatItIs(t *testing.T) {
 	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
 
 	marker := newMarker()
-	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil)
+	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil, nil)
 
 	_, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if !errors.Is(err, ErrBalanceMarkRefused) {
@@ -1151,7 +1151,7 @@ func TestBothRefusalsSurviveWhenBothHappened(t *testing.T) {
 	markFailed := errors.New("the balance table is locked")
 	marker := newMarker()
 	marker.err = markFailed
-	r := NewReconciler(f.store, fakeJournal{ops: journal}, marker, instrument.NewStore(f.pool), nil)
+	r := NewReconciler(f.store, fakeJournal{ops: journal}, marker, instrument.NewStore(f.pool), nil, nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if res.Status != ReconcileNotChecked {
@@ -1482,7 +1482,7 @@ func TestReconcileMatchesOnePaperListedOnTwoVenues(t *testing.T) {
 
 	r := NewReconciler(f.store, fakeJournal{ops: []operation.Operation{
 		aBuy(inst.ID, "20", -200_000, 20, "USD"),
-	}}, newMarker(), instrument.NewStore(f.pool), nil)
+	}}, newMarker(), instrument.NewStore(f.pool), nil, nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if err != nil {
@@ -1537,7 +1537,7 @@ func TestReconcileStillReportsARealDifferenceAcrossVenues(t *testing.T) {
 
 	r := NewReconciler(f.store, fakeJournal{ops: []operation.Operation{
 		aBuy(inst.ID, "1", -200_000, 1, "USD"),
-	}}, newMarker(), instrument.NewStore(f.pool), nil)
+	}}, newMarker(), instrument.NewStore(f.pool), nil, nil)
 
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if err != nil {
@@ -1581,7 +1581,7 @@ func TestReconcileUnknownSecurityCarriesTheBrokersPassport(t *testing.T) {
 	})
 	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
 
-	r := NewReconciler(f.store, fakeJournal{}, newMarker(), instrument.NewStore(f.pool), nil)
+	r := NewReconciler(f.store, fakeJournal{}, newMarker(), instrument.NewStore(f.pool), nil, nil)
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if err != nil {
 		t.Fatalf("ReconcileLink: %v", err)
@@ -1635,7 +1635,7 @@ func TestReconcileUnsupportedAssetCarriesNoPassport(t *testing.T) {
 	})
 	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
 
-	r := NewReconciler(f.store, fakeJournal{}, newMarker(), instrument.NewStore(f.pool), nil)
+	r := NewReconciler(f.store, fakeJournal{}, newMarker(), instrument.NewStore(f.pool), nil, nil)
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if err != nil {
 		t.Fatalf("ReconcileLink: %v", err)
@@ -1675,7 +1675,7 @@ func TestReconcileUnknownSecurityWithoutPassportSaysSo(t *testing.T) {
 	})
 	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
 
-	r := NewReconciler(f.store, fakeJournal{}, newMarker(), instrument.NewStore(f.pool), nil)
+	r := NewReconciler(f.store, fakeJournal{}, newMarker(), instrument.NewStore(f.pool), nil, nil)
 	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
 	if err != nil {
 		t.Fatalf("ReconcileLink: %v", err)

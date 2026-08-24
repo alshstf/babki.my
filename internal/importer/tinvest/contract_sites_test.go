@@ -315,7 +315,7 @@ func TestTheContractStatesTheVocabulariesTheServerUses(t *testing.T) {
 		values []string
 	}{
 		{"TinvestConnectionStatus", goConstantValues(t, "ConnectionStatus", 3, "store.go")},
-		{"TinvestSyncTrigger", goConstantValues(t, "SyncTrigger", 3, "store.go")},
+		{"TinvestSyncTrigger", goConstantValues(t, "SyncTrigger", 4, "store.go")},
 		{"TinvestSyncRunStatus", goConstantValues(t, "RunStatus", 3, "store.go")},
 		{"TinvestReconcileStatus", goConstantValues(t, "ReconcileStatus", 3, "store.go", "reconcile.go")},
 		{"TinvestUnparsedReason", goConstantValues(t, "UnparsedReason", 18, "projection.go")},

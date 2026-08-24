@@ -213,6 +213,24 @@ function MismatchTable({
               <div className="grid gap-1">
                 <div>{mismatch.label}</div>
                 <PassportLine mismatch={mismatch} />
+                {/* A QUESTION AND NOT A FINDING. The server sets this only when
+                    the two quantities differ by a whole factor and the
+                    corporate-actions registry holds no split that would account
+                    for it — the owner's AMZN at 1 against 20 and NVDA at 3
+                    against 30. But a whole factor is equally what a purchase
+                    this import never saw would leave behind, so the sentence
+                    says what was noticed and offers nowhere to press: recording
+                    the event is a decision, made on the catalog screen. */}
+                {mismatch.split_hint_factor != null && (
+                  <div
+                    className="text-xs text-muted-foreground"
+                    data-testid="mismatch-split-hint"
+                  >
+                    {t("connections.detail.reconcile.splitHint", {
+                      factor: mismatch.split_hint_factor,
+                    })}
+                  </div>
+                )}
                 {mismatch.kind === "unknown_security" && (
                   <AddToCatalogButton
                     connectionId={connectionId}

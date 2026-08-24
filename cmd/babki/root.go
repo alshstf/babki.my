@@ -69,8 +69,20 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	// must only ever be reached from a role that required the encryption key —
 	// which is exactly the two roles that mount modules ("all" and "api"; see
 	// setup's requireEncryptionKey).
-	tinvestSvc := tinvest.NewService(tinvest.NewStore(r.pool), accStore, opSvc, r.box, newClient, inserter, r.log)
+	tinvestStore := tinvest.NewStore(r.pool)
+	tinvestSvc := tinvest.NewService(tinvestStore, accStore, opSvc, r.box, newClient, inserter, r.log)
 	tinvest.NewHandler(tinvestSvc, famAuth, famSM).Mount(srv)
+
+	// The registry's own door, and the same two dependencies the worker role
+	// gives it (see startJobClient): a materializer, so recording a split
+	// reaches the journals before the request answers, and a rechecker, so the
+	// connection whose account just changed is asked for a fresh comparison
+	// instead of leaving a verdict on screen that describes the journal as it
+	// was a moment ago.
+	caStore := corporateaction.NewStore(r.pool)
+	caMaterializer := corporateaction.NewMaterializer(caStore, opStore, opSvc,
+		tinvest.NewRechecker(tinvestStore, inserter, r.log), r.log)
+	corporateaction.NewHandler(caStore, caMaterializer, famAuth, famSM, r.log).Mount(srv)
 	return nil
 }
 
@@ -141,7 +153,7 @@ func newTinvestDeps(r *rt, instStore *instrument.Store, opStore *operation.Store
 			resolver := tinvest.NewResolver(store, instStore, r.log).WithRates(converter)
 			return tinvest.NewRebuilder(store, resolver, operation.NewService(opStore), opStore, r.log)
 		},
-		Reconciler: tinvest.NewReconciler(store, opStore, accStore, instStore, r.log),
+		Reconciler: tinvest.NewReconciler(store, opStore, accStore, instStore, corporateaction.NewStore(r.pool), r.log),
 	}, nil
 }
 
@@ -196,9 +208,13 @@ func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	// service of its own rather than the store: the engine has to be asked about
 	// the journal the difference LEAVES, not only about the rows added.
 	caStore := corporateaction.NewStore(r.pool)
-	caMaterializer := corporateaction.NewMaterializer(
-		caStore, opStore, operation.NewService(opStore), r.log)
 	enqueuer := jobs.NewEnqueuer()
+	// The rechecker enqueues through the same Enqueuer the workers use, which
+	// NewClient fills in below — so a materialization that runs before the queue
+	// is up gets a refusal it logs, rather than a silently dropped check.
+	caMaterializer := corporateaction.NewMaterializer(
+		caStore, opStore, operation.NewService(opStore),
+		tinvest.NewRechecker(tinvest.NewStore(r.pool), enqueuer, r.log), r.log)
 	workers := jobs.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, accStore, famStore,
 		fxProvider, quoteProvider, tinvestDeps, caStore, caMaterializer, enqueuer)
 	client, err := jobs.NewClient(r.pool, workers, enqueuer, r.log)

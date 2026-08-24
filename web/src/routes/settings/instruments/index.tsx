@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useInstruments, type Instrument } from "@/api/instruments";
 import { useSession } from "@/api/session";
 import { InstrumentEditDialog } from "./edit-dialog";
+import { CorporateActions } from "./corporate-actions";
 
 // THE CATALOG, AND THE FIRST PLACE IT CAN BE CORRECTED. Instruments are created
 // by the trade dialogs and by the importer, and until this screen existed
@@ -32,8 +33,17 @@ export function InstrumentsPage() {
   const rows =
     instruments.data?.pages.flatMap((page) => page.instruments) ?? [];
   // The catalog is shared by the whole instance, and correcting a row changes
-  // it for every member. Only the owner may, which is the server's rule (403
-  // otherwise) — stated here rather than discovered by a save that fails.
+  // it for every member — as does recording a corporate action, which is why
+  // both cards on this screen answer this one question the same way.
+  //
+  // THIS SCREEN IS STRICTER THAN THE SERVER, deliberately and not by accident:
+  // the write endpoints require an EDITOR (family.RequireRole is a floor, so an
+  // owner passes it too), and this offers the controls to the owner alone. A
+  // household's editor can enter their own trades without also rewriting facts
+  // that every other member's figures rest on. The sentence that used to stand
+  // here called this the server's rule and gave 403 as the proof, which was
+  // simply false about an editor: they would have been refused by a screen that
+  // said the server had refused them.
   const isOwner = session?.role === "owner";
 
   return (
@@ -144,6 +154,7 @@ export function InstrumentsPage() {
           )}
         </CardContent>
       </Card>
+      <CorporateActions canEdit={isOwner} />
       <InstrumentEditDialog
         instrument={editing}
         onOpenChange={(open) => {

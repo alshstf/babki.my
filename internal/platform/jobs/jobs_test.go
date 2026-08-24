@@ -92,7 +92,7 @@ func stubTinvestDeps(t *testing.T, pool *pgxpool.Pool) jobs.TinvestDeps {
 			return tinvest.NewRebuilder(store, tinvest.NewResolver(store, instrument.NewStore(pool), slog.Default()),
 				operation.NewService(opStore), opStore, slog.Default())
 		},
-		Reconciler: tinvest.NewReconciler(store, opStore, account.NewStore(pool), instrument.NewStore(pool), slog.Default()),
+		Reconciler: tinvest.NewReconciler(store, opStore, account.NewStore(pool), instrument.NewStore(pool), nil, slog.Default()),
 	}
 }
 
@@ -107,7 +107,7 @@ func stubTinvestDeps(t *testing.T, pool *pgxpool.Pool) jobs.TinvestDeps {
 func stubCorporateActions(pool *pgxpool.Pool) (*corporateaction.Store, *corporateaction.Materializer) {
 	store := corporateaction.NewStore(pool)
 	opStore := operation.NewStore(pool)
-	return store, corporateaction.NewMaterializer(store, opStore, operation.NewService(opStore), slog.Default())
+	return store, corporateaction.NewMaterializer(store, opStore, operation.NewService(opStore), nil, slog.Default())
 }
 
 func TestHeartbeat(t *testing.T) {

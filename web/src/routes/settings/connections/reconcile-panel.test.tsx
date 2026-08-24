@@ -928,4 +928,51 @@ describe("ReconcilePanel — бумага, которой нет в катало
       await screen.findByText(/запустить синхронизацию сейчас не удалось/),
     ).toBeInTheDocument();
   });
+  it("спрашивает про дробление, когда количество отличается ровно в целое число раз", async () => {
+    // Живой случай владельца: AMZN — 1 против 20 у брокера, дробление Amazon
+    // 20:1 июня 2022 года, которого никто не записал. Брокер о корпоративных
+    // действиях не сообщает вовсе, поэтому единственный способ, которым это
+    // становится вопросом, — заметить форму расхождения.
+    renderPanel([
+      makeReconcile({
+        status: "mismatched",
+        mismatches: [
+          {
+            kind: "instrument",
+            label: "AMZN",
+            broker: "20",
+            journal: "1",
+            instrument_id: "instr-amzn",
+            split_hint_factor: 20,
+          },
+        ],
+      }),
+    ]);
+
+    const hint = await screen.findByTestId("mismatch-split-hint");
+    expect(hint).toHaveTextContent("в 20 раз(а)");
+    // ПОДСКАЗКА, А НЕ ДЕЙСТВИЕ: записать событие — решение, и принимается оно
+    // в каталоге, а не кнопкой рядом с расхождением.
+    expect(hint.querySelector("button")).toBeNull();
+  });
+
+  it("молчит о дроблении там, где сервер его не предположил", async () => {
+    renderPanel([
+      makeReconcile({
+        status: "mismatched",
+        mismatches: [
+          {
+            kind: "instrument",
+            label: "FXUS",
+            broker: "8830",
+            journal: "8820",
+            instrument_id: "instr-fxus",
+          },
+        ],
+      }),
+    ]);
+
+    expect(await screen.findByText("FXUS")).toBeInTheDocument();
+    expect(screen.queryByTestId("mismatch-split-hint")).toBeNull();
+  });
 });
