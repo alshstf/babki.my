@@ -839,30 +839,6 @@ func sameLots(want, stored []operation.ReleasedLot) bool {
 	return true
 }
 
-// sameSplitRow reports whether the stored row already says what this run says.
-//
-// EVERY FIELD THIS PACKAGE SETS IS COMPARED. A field left out would be a field
-// the registry could no longer correct: the note would go on describing a ratio
-// the row no longer carries, or a row would keep an instrument the paper no
-// longer maps to, and every run would report nothing to do.
-func sameSplitRow(want, stored operation.Operation) bool {
-	if want.AccountID != stored.AccountID || want.Type != stored.Type ||
-		want.Currency != stored.Currency || want.Note != stored.Note ||
-		want.Source != stored.Source {
-		return false
-	}
-	if !want.OccurredOn.Equal(stored.OccurredOn) {
-		return false
-	}
-	if want.InstrumentID == nil || stored.InstrumentID == nil || *want.InstrumentID != *stored.InstrumentID {
-		return false
-	}
-	if want.SplitRatio == nil || stored.SplitRatio == nil || !want.SplitRatio.Equal(*stored.SplitRatio) {
-		return false
-	}
-	return true
-}
-
 func slicesContains(ids []uuid.UUID, id uuid.UUID) bool {
 	for _, x := range ids {
 		if x == id {
