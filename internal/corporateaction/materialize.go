@@ -18,23 +18,15 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// journalReader is the slice of operation.Store the materialization reads
-// through; *operation.Store satisfies it structurally. Declared here, narrow,
-// for the same reason marketdata declares its own: what this package needs of
-// the journal is two reads, and a package-wide dependency would let it grow
-// quietly into more.
-type journalReader interface {
-	ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]operation.Operation, error)
-}
-
 // journalWriter is the one write. It is operation.Service's importer door
 // rather than the store's, because everything that door does is needed here:
 // removals and insertions in one transaction, the engine asked about the
 // journal the difference LEAVES, and the stored rows replayed once more before
 // the commit.
 type journalWriter interface {
-	ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d operation.ImportDelta) (
-		[]operation.Operation, []operation.ImportRefusal, error)
+	BuildAndApplyImportDelta(ctx context.Context, spaceID, accountID uuid.UUID,
+		build func(journal []operation.Operation) (operation.ImportDelta, error),
+	) (operation.ImportDelta, []operation.Operation, []operation.ImportRefusal, error)
 }
 
 // rechecker is asked for a fresh comparison against the broker for the accounts
@@ -76,7 +68,6 @@ type catalog interface {
 // arriving today can be dated 2021 and lands underneath four years of trades.
 type Materializer struct {
 	store   *Store
-	journal journalReader
 	ops     journalWriter
 	papers  catalog
 	recheck rechecker
@@ -86,13 +77,13 @@ type Materializer struct {
 // NewMaterializer wires the registry to the journal. recheck may be nil (see
 // the rechecker interface); papers may not — every conversion and spin-off needs
 // it to find the paper it produces.
-func NewMaterializer(store *Store, journal journalReader, ops journalWriter,
+func NewMaterializer(store *Store, ops journalWriter,
 	papers catalog, recheck rechecker, log *slog.Logger,
 ) *Materializer {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Materializer{store: store, journal: journal, ops: ops, papers: papers, recheck: recheck, log: log}
+	return &Materializer{store: store, ops: ops, papers: papers, recheck: recheck, log: log}
 }
 
 // Stats is what one run did, for the log line and for the tests to read.
@@ -157,43 +148,58 @@ func (m *Materializer) ForISIN(ctx context.Context, isin string) (Stats, error) 
 }
 
 // ForAccount brings one account into line with the registry, for every paper
-// its journal touches. It is what runs after somebody writes an operation by
-// hand: a purchase dated before a split needs that split's row, and the
-// registry has known about the split all along.
+// of its journal the registry has an event about. It is what runs after a hand
+// entry (see AfterManualWrite): a purchase dated before a split needs that
+// split's row, and the registry has known about the split all along.
 func (m *Materializer) ForAccount(ctx context.Context, spaceID, accountID uuid.UUID) (Stats, error) {
-	isins, err := m.store.isinsOfAccount(ctx, spaceID, accountID)
+	papers, err := m.store.eventPapersOfAccount(ctx, spaceID, accountID)
 	if err != nil {
 		return Stats{}, err
 	}
 	var total Stats
-	for _, isin := range isins {
-		events, err := m.store.ByISIN(ctx, isin)
+	var failed []error
+	for _, paper := range papers {
+		events, err := m.store.ByISIN(ctx, paper.isin)
 		if err != nil {
-			return total, fmt.Errorf("corporateaction: read the events of %s: %w", isin, err)
-		}
-		if len(events) == 0 {
+			failed = append(failed, fmt.Errorf("corporateaction: read the events of %s: %w", paper.isin, err))
 			continue
 		}
-		holders, err := m.store.holders(ctx, isin)
+		stats, err := m.forAccount(ctx, spaceID, accountID, paper.instrumentIDs, events)
 		if err != nil {
-			return total, err
-		}
-		var ours []uuid.UUID
-		for _, h := range holders {
-			if h.spaceID == spaceID && h.accountID == accountID {
-				ours = append(ours, h.instrumentID)
-			}
-		}
-		if len(ours) == 0 {
+			failed = append(failed, err)
 			continue
-		}
-		stats, err := m.forAccount(ctx, spaceID, accountID, ours, events)
-		if err != nil {
-			return total, err
 		}
 		total.add(stats)
 	}
-	return total, nil
+	return total, errors.Join(failed...)
+}
+
+// AfterManualWrite is the hook a hand entry calls once it is committed (see
+// operation.Service.OnManualWrite): the accounts it touched are brought into
+// line at once, and the broker connections that reconcile against them are asked
+// for a fresh check.
+//
+// It reports nothing back. The entry is already written and must not be failed
+// by what follows it; a failure here is logged and left to the daily sweep.
+func (m *Materializer) AfterManualWrite(ctx context.Context, spaceID uuid.UUID, accountIDs []uuid.UUID) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), materializeTimeout)
+	defer cancel()
+
+	var total Stats
+	seen := make(map[uuid.UUID]bool, len(accountIDs))
+	for _, accountID := range accountIDs {
+		if seen[accountID] {
+			continue
+		}
+		seen[accountID] = true
+		stats, err := m.ForAccount(ctx, spaceID, accountID)
+		total.add(stats)
+		if err != nil {
+			m.log.Error("corporateaction: a hand entry was recorded but the registry's rows were not brought into line",
+				"account", accountID, "err", err)
+		}
+	}
+	m.RequestRecheck(ctx, total)
 }
 
 // All sweeps the whole registry. It is the safety net behind the synchronous
@@ -224,11 +230,6 @@ func (m *Materializer) All(ctx context.Context) (Stats, error) {
 func (m *Materializer) forAccount(ctx context.Context, spaceID, accountID uuid.UUID,
 	instrumentIDs []uuid.UUID, events []Event,
 ) (Stats, error) {
-	journal, err := m.journal.ListForEngine(ctx, spaceID, accountID)
-	if err != nil {
-		return Stats{}, fmt.Errorf("corporateaction: read the journal of account %s: %w", accountID, err)
-	}
-
 	ours := make(map[uuid.UUID]bool, len(instrumentIDs))
 	for _, id := range instrumentIDs {
 		ours[id] = true
@@ -250,32 +251,34 @@ func (m *Materializer) forAccount(ctx context.Context, spaceID, accountID uuid.U
 	// externalIDFor), so a row says for itself which paper's event it belongs to,
 	// and a deleted event's rows are still collected — the name outlives the
 	// event.
-	owned := map[uuid.UUID]operation.Operation{}
-	base := make([]operation.Operation, 0, len(journal))
-	for _, o := range journal {
-		if o.Source == operation.SourceRegistry && ownedByThisPaper(o, ours) {
-			owned[o.ID] = o
-			continue
+	//
+	// THE JOURNAL IS READ, THE ROWS WORKED OUT AND THE DIFFERENCE WRITTEN UNDER
+	// ONE LOCK on the account. A holding read before the lock describes a
+	// journal that a hand entry, an import or another run of this very function
+	// may have changed by the time the rows are written.
+	build := func(journal []operation.Operation) (operation.ImportDelta, error) {
+		owned := map[uuid.UUID]operation.Operation{}
+		base := make([]operation.Operation, 0, len(journal))
+		for _, o := range journal {
+			if o.Source == operation.SourceRegistry && ownedByThisPaper(o, ours) {
+				owned[o.ID] = o
+				continue
+			}
+			base = append(base, o)
 		}
-		base = append(base, o)
+		want, err := m.desired(ctx, base, accountID, instrumentIDs, events)
+		if err != nil {
+			return operation.ImportDelta{}, err
+		}
+		return diff(want, owned)
 	}
 
-	want, err := m.desired(ctx, base, accountID, instrumentIDs, events)
+	delta, _, refused, err := m.ops.BuildAndApplyImportDelta(ctx, spaceID, accountID, build)
 	if err != nil {
-		return Stats{}, err
-	}
-
-	delta, err := diff(want, owned)
-	if err != nil {
-		return Stats{}, err
+		return Stats{}, fmt.Errorf("corporateaction: bring account %s into line with the registry: %w", accountID, err)
 	}
 	if len(delta.Add) == 0 && len(delta.Remove) == 0 {
 		return Stats{}, nil
-	}
-
-	_, refused, err := m.ops.ApplyImportDelta(ctx, spaceID, delta)
-	if err != nil {
-		return Stats{}, fmt.Errorf("corporateaction: write the registry's rows into account %s: %w", accountID, err)
 	}
 	for _, r := range refused {
 		// A refusal here is not a broker's odd data, which is what the import

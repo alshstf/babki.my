@@ -318,28 +318,40 @@ func (s *Store) holders(ctx context.Context, isin string) ([]holder, error) {
 	return out, rows.Err()
 }
 
-// isinsOfAccount lists the ISINs an account's journal touches. It answers the
-// question the other way round from holders, for the trigger that fires after
-// somebody writes an operation by hand: what papers might this account now need
-// events materialized for.
-func (s *Store) isinsOfAccount(ctx context.Context, spaceID, accountID uuid.UUID) ([]string, error) {
+// accountPaper is one paper of an account's journal the registry has something
+// to say about: its ISIN and the catalog rows the journal names it by.
+type accountPaper struct {
+	isin          string
+	instrumentIDs []uuid.UUID
+}
+
+// eventPapersOfAccount lists the papers of one account's journal that have at
+// least one event in the registry. It runs after every hand entry, so it asks
+// only about this account and only about papers with events — most have none.
+func (s *Store) eventPapersOfAccount(ctx context.Context, spaceID, accountID uuid.UUID) ([]accountPaper, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT DISTINCT i.isin
+		SELECT DISTINCT i.isin, o.instrument_id
 		FROM operations o
 		JOIN instruments i ON i.id = o.instrument_id
 		WHERE o.space_id = $1 AND o.account_id = $2 AND i.isin <> ''
-		ORDER BY i.isin`, spaceID, accountID)
+		  AND EXISTS (SELECT 1 FROM instrument_events e WHERE e.isin = i.isin)
+		ORDER BY i.isin, o.instrument_id`, spaceID, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("corporateaction: find the papers of account %s: %w", accountID, err)
 	}
 	defer rows.Close()
-	var out []string
+	var out []accountPaper
 	for rows.Next() {
 		var isin string
-		if err := rows.Scan(&isin); err != nil {
+		var instrumentID uuid.UUID
+		if err := rows.Scan(&isin, &instrumentID); err != nil {
 			return nil, err
 		}
-		out = append(out, isin)
+		if n := len(out); n > 0 && out[n-1].isin == isin {
+			out[n-1].instrumentIDs = append(out[n-1].instrumentIDs, instrumentID)
+			continue
+		}
+		out = append(out, accountPaper{isin: isin, instrumentIDs: []uuid.UUID{instrumentID}})
 	}
 	return out, rows.Err()
 }

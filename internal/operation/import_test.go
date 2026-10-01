@@ -1331,3 +1331,30 @@ func realizedOf(t *testing.T, p *portfolio.Position) int64 {
 	}
 	return minor
 }
+
+// TestBuildAndApplyImportDeltaIsConfinedToTheAccountItLocked: the lock covers
+// one account, so a delta built under it may write to that account only.
+// Anything else would be judged against a journal nobody locked.
+func TestBuildAndApplyImportDeltaIsConfinedToTheAccountItLocked(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	_, _, _, err := svc.BuildAndApplyImportDelta(f.ctx, f.spaceID, f.accountID,
+		func([]operation.Operation) (operation.ImportDelta, error) {
+			return operation.ImportDelta{Add: []operation.Operation{imported(operation.Operation{
+				AccountID: f.account2ID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+				OccurredOn: date("2026-03-02"), Quantity: dec("1"), Price: dec("100"),
+				AmountMinor: -10_000, Currency: "RUB",
+			}, "other-account")}}, nil
+		})
+	if !errors.Is(err, operation.ErrImportContract) {
+		t.Fatalf("err = %v, want ErrImportContract", err)
+	}
+	journal, err := f.store.ListForEngine(f.ctx, f.spaceID, f.account2ID)
+	if err != nil {
+		t.Fatalf("ListForEngine: %v", err)
+	}
+	if len(journal) != 0 {
+		t.Errorf("the other account's journal holds %d rows, want none", len(journal))
+	}
+}
