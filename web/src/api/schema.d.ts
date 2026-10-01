@@ -609,12 +609,12 @@ export interface components {
             username: string;
             /** @description What to call the person. Same rule and same reasoning as space_name above: refused empty, not trimmed, no ceiling and no shape. */
             display_name: string;
-            /** @description At least eight CHARACTERS, counted as Unicode code points — which is what `minLength` counts here and what the server counts now. It used to count BYTES while its own refusal said «characters», so a seven-letter Cyrillic password was fourteen bytes and went through, and this document could not state the rule without stating one stricter than the code (#117). The count moved to code points rather than the sentence to bytes, because the sentence is what the person reads. No ceiling is declared because none is checked; the request body as a whole stops at 1 MB, answered 413. NOT DECLARED ON LoginRequest, which checks no length at all — see it. */
+            /** @description At least eight CHARACTERS and at most 1024, counted as Unicode code points — which is what `minLength` and `maxLength` count here and what the server counts. It used to count BYTES while its own refusal said «characters», so a seven-letter Cyrillic password was fourteen bytes and went through, and this document could not state the rule without stating one stricter than the code (#117). The count moved to code points rather than the sentence to bytes, because the sentence is what the person reads. The ceiling is there so that what gets hashed has a size the server chose. NOT DECLARED ON LoginRequest — see it. */
             password: string;
         };
         /**
          * @description NEITHER FIELD CARRIES THE RULE ITS TWIN ON SetupRequest CARRIES, and that is the point of this schema rather than an omission. Login reads the username straight out of the table and compares the password against the hash it finds (internal/family/auth.go, Login); no shape and no length is judged, and every failure — a malformed name, a name nobody has, a wrong password — comes back as the same 401, on purpose, so that a caller cannot enumerate users by the answers it gets.
-         *     A `pattern` or a `minLength` here would therefore describe a refusal that does not exist, and it would do real harm rather than merely be untrue. The password's own count changed with #117 — from bytes to code points — so a password accepted at setup as fourteen bytes of seven Cyrillic letters is a password `minLength: 8` now describes as too short. Declared here, it would lock that user out through his own client while the server stood ready to let him in. This document states what the server checks, and on this path it checks nothing.
+         *     A `pattern` or a `minLength` here would therefore describe a refusal that does not exist, and it would do real harm rather than merely be untrue. The password's own count changed with #117 — from bytes to code points — so a password accepted at setup as fourteen bytes of seven Cyrillic letters is a password `minLength: 8` now describes as too short. Declared here, it would lock that user out through his own client while the server stood ready to let him in. This document states what the server checks, and on this path it checks no shape. A password longer than the 1024 characters one can be set to is nobody's, and is answered with the same 401 as any other wrong one.
          */
         LoginRequest: {
             username: string;
@@ -1758,6 +1758,17 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            /** @description Too many wrong passwords for this username from this address. Five in a row lock the pair for a minute, each further one doubles the lock up to fifteen minutes. Nothing is looked up while the lock stands, so the right password is refused too. `Retry-After` says how many seconds remain. */
+            429: {
+                headers: {
+                    /** @description Whole seconds until the next attempt will be looked at. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     logout: {

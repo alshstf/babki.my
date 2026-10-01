@@ -186,7 +186,7 @@ func TestLoginOrphanedUser(t *testing.T) {
 	store := family.NewStore(pool)
 	svc := family.NewService(store)
 
-	hash, err := svc.HashPassword("secret123")
+	hash, err := svc.HashPassword(context.Background(), "secret123")
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}

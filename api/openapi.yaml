@@ -43,6 +43,20 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SessionInfo" }
         "401": { $ref: "#/components/responses/Error" }
+        "429":
+          description: >-
+            Too many wrong passwords for this username from this address. Five
+            in a row lock the pair for a minute, each further one doubles the
+            lock up to fifteen minutes. Nothing is looked up while the lock
+            stands, so the right password is refused too. `Retry-After` says how
+            many seconds remain.
+          headers:
+            Retry-After:
+              description: Whole seconds until the next attempt will be looked at.
+              schema: { type: integer, minimum: 1 }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
   /api/v1/auth/logout:
     post:
       operationId: logout
@@ -914,7 +928,8 @@ components:
         password:
           type: string
           minLength: 8
-          description: "At least eight CHARACTERS, counted as Unicode code points — which is what `minLength` counts here and what the server counts now. It used to count BYTES while its own refusal said «characters», so a seven-letter Cyrillic password was fourteen bytes and went through, and this document could not state the rule without stating one stricter than the code (#117). The count moved to code points rather than the sentence to bytes, because the sentence is what the person reads. No ceiling is declared because none is checked; the request body as a whole stops at 1 MB, answered 413. NOT DECLARED ON LoginRequest, which checks no length at all — see it."
+          maxLength: 1024
+          description: "At least eight CHARACTERS and at most 1024, counted as Unicode code points — which is what `minLength` and `maxLength` count here and what the server counts. It used to count BYTES while its own refusal said «characters», so a seven-letter Cyrillic password was fourteen bytes and went through, and this document could not state the rule without stating one stricter than the code (#117). The count moved to code points rather than the sentence to bytes, because the sentence is what the person reads. The ceiling is there so that what gets hashed has a size the server chose. NOT DECLARED ON LoginRequest — see it."
     LoginRequest:
       type: object
       description: >-
@@ -933,7 +948,9 @@ components:
         seven Cyrillic letters is a password `minLength: 8` now describes as
         too short. Declared here, it would lock that user out through his own
         client while the server stood ready to let him in. This document states
-        what the server checks, and on this path it checks nothing.
+        what the server checks, and on this path it checks no shape. A password
+        longer than the 1024 characters one can be set to is nobody's, and is
+        answered with the same 401 as any other wrong one.
       required: [username, password]
       properties:
         username: { type: string }
@@ -1049,6 +1066,7 @@ components:
         password:
           type: string
           minLength: 8
+          maxLength: 1024
           description: "Same rule as SetupRequest.password — see it, including why the count is in code points and why LoginRequest carries none."
         role: { $ref: "#/components/schemas/Role" }
     UpdateMemberRequest:

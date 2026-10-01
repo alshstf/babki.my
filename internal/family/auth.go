@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/alexedwards/argon2id"
@@ -61,14 +62,63 @@ const UsernamePattern = `^[a-z0-9_]{3,32}$`
 // spelled, which is what the refusal has claimed all along.
 const MinPasswordRunes = 8
 
+// MaxPasswordRunes is the longest password either door accepts, counted the way
+// MinPasswordRunes is. Nobody's password is a thousand characters; the ceiling is
+// there so that what gets hashed has a size this server chose.
+const MaxPasswordRunes = 1024
+
 var usernameRe = regexp.MustCompile(UsernamePattern)
 
-// dummyHash is a precomputed argon2id hash (params: argon2id.DefaultParams,
-// passphrase "dummy-password-for-timing-safety") used to run a real
-// ComparePasswordAndHash on the unknown-user path in Login. This keeps the
-// unknown-user and wrong-password branches taking comparable time, so
-// response latency can't be used to enumerate valid usernames.
-const dummyHash = "$argon2id$v=19$m=65536,t=1,p=10$uCI9AQQt4/1WJmPclbYXzg$zPMTCrkLSnqn0LFwxFOsmtZzj2IpULcX4CzdpoIRs8k"
+// hashParams are what a password is hashed with.
+//
+// argon2id.DefaultParams as this machine evaluates it: 64 MiB, one pass, and as
+// many lanes as there are CPUs. One name for it, because the hash a new user
+// gets and the hash an unknown username is compared against (see dummyHash)
+// have to cost the same.
+var hashParams = argon2id.DefaultParams
+
+// hashSlots bounds how many passwords are being hashed at once in this process.
+//
+// Every hash takes 64 MiB for as long as it runs. Unbounded, fifty sign-in
+// attempts arriving together take three gigabytes, and a home server falls over
+// before a single password has been refused. Two at a time is 128 MiB at the
+// worst and still more sign-ins a second than a household makes in a day.
+//
+// Package-level, because the memory is the process's however many Services it
+// holds.
+var hashSlots = make(chan struct{}, 2)
+
+// withHashSlot runs fn while holding one of the hash slots, or gives up when
+// the request does.
+func withHashSlot(ctx context.Context, fn func()) error {
+	select {
+	case hashSlots <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-hashSlots }()
+	fn()
+	return nil
+}
+
+// dummyHash is a hash of a password nobody has, made once per process with the
+// very parameters a real one is made with. Login compares against it for a
+// username it does not know, so that branch takes as long as a wrong password
+// does and the response time does not say which usernames exist.
+//
+// It used to be a constant hashed with ten lanes, while real hashes are made
+// with as many lanes as the machine has CPUs — on a two-core server the two
+// branches took measurably different time.
+var dummyHash = sync.OnceValue(func() string {
+	hash, err := argon2id.CreateHash("a password nobody has", hashParams)
+	if err != nil {
+		// Creating a hash fails only when the system's random source does, and
+		// then no real password can be set either. The comparison against an
+		// empty hash fails at once; the timing is the least of it.
+		return ""
+	}
+	return hash
+})
 
 // Service implements authentication and member management on top of Store.
 type Service struct{ store *Store }
@@ -88,14 +138,36 @@ func validateCredentials(username, password string) error {
 	}
 	// utf8.RuneCountInString, not len: see MinPasswordRunes for why the sentence
 	// below is the rule and the byte count was the bug.
-	if utf8.RuneCountInString(password) < MinPasswordRunes {
+	runes := utf8.RuneCountInString(password)
+	if runes < MinPasswordRunes {
 		return fmt.Errorf("%w: password must be at least %d characters", ErrValidation, MinPasswordRunes)
+	}
+	if runes > MaxPasswordRunes {
+		return fmt.Errorf("%w: password must be at most %d characters", ErrValidation, MaxPasswordRunes)
 	}
 	return nil
 }
 
-func (s *Service) HashPassword(password string) (string, error) {
-	return argon2id.CreateHash(password, argon2id.DefaultParams)
+// HashPassword hashes a password for storage, one of at most len(hashSlots) at
+// a time.
+func (s *Service) HashPassword(ctx context.Context, password string) (string, error) {
+	var hash string
+	var err error
+	if slotErr := withHashSlot(ctx, func() { hash, err = argon2id.CreateHash(password, hashParams) }); slotErr != nil {
+		return "", slotErr
+	}
+	return hash, err
+}
+
+// passwordMatches compares a password with a stored hash under the same bound
+// HashPassword works under.
+func passwordMatches(ctx context.Context, password, hash string) (bool, error) {
+	var ok bool
+	var err error
+	if slotErr := withHashSlot(ctx, func() { ok, err = argon2id.ComparePasswordAndHash(password, hash) }); slotErr != nil {
+		return false, slotErr
+	}
+	return ok, err
 }
 
 // SetupNeeded reports whether the instance has no users yet.
@@ -119,7 +191,7 @@ func (s *Service) Setup(ctx context.Context, p SetupParams) (User, Principal, er
 	if err := validateCredentials(p.Username, p.Password); err != nil {
 		return User{}, Principal{}, err
 	}
-	hash, err := s.HashPassword(p.Password)
+	hash, err := s.HashPassword(ctx, p.Password)
 	if err != nil {
 		return User{}, Principal{}, err
 	}
@@ -133,18 +205,24 @@ func (s *Service) Setup(ctx context.Context, p SetupParams) (User, Principal, er
 // Login verifies credentials. Unknown user and wrong password return the
 // same ErrInvalidCredentials to avoid user enumeration.
 func (s *Service) Login(ctx context.Context, username, password string) (User, Principal, error) {
+	if utf8.RuneCountInString(password) > MaxPasswordRunes {
+		// Longer than any password that could have been set, so it is nobody's.
+		return User{}, Principal{}, ErrInvalidCredentials
+	}
 	u, err := s.store.UserByUsername(ctx, username)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Run a real argon2id comparison against a fixed dummy hash so this
-		// branch takes comparable time to the wrong-password branch below,
-		// closing the username-enumeration timing side-channel.
-		_, _ = argon2id.ComparePasswordAndHash(password, dummyHash)
+		// A real comparison against a hash of nothing, so this branch takes as
+		// long as the wrong-password branch below (see dummyHash). What it
+		// answers is not looked at — only a request that gave up is reported.
+		if _, err := passwordMatches(ctx, password, dummyHash()); err != nil && ctx.Err() != nil {
+			return User{}, Principal{}, err
+		}
 		return User{}, Principal{}, ErrInvalidCredentials
 	}
 	if err != nil {
 		return User{}, Principal{}, err
 	}
-	ok, err := argon2id.ComparePasswordAndHash(password, u.PasswordHash)
+	ok, err := passwordMatches(ctx, password, u.PasswordHash)
 	if err != nil {
 		return User{}, Principal{}, err
 	}
@@ -177,7 +255,7 @@ func (s *Service) CreateMember(ctx context.Context, p Principal, username, displ
 	if err := validateCredentials(username, password); err != nil {
 		return Member{}, err
 	}
-	hash, err := s.HashPassword(password)
+	hash, err := s.HashPassword(ctx, password)
 	if err != nil {
 		return Member{}, err
 	}
