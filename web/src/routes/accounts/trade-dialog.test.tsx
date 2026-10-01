@@ -285,8 +285,8 @@ describe("TradeDialog: a bond is quoted in percent of face value (#77)", () => {
   // one that gets sent: `price` is money per unit everywhere else in this
   // application (the journal line renders it as «quantity × price», and that
   // multiplication has to come out to the amount beside it), so a bond's row
-  // carries 980, not 98. amount_minor is negative because a buy is an
-  // outflow.
+  // carries 980, not 98. No amount is sent: the server works it out from the
+  // quantity and the price, so a browser's rounding never becomes a lot's cost.
   it("records the money price per bond, never the percentage", async () => {
     await openWith(ofz());
 
@@ -296,7 +296,7 @@ describe("TradeDialog: a bond is quoted in percent of face value (#77)", () => {
 
     await waitFor(() => expect(posted).not.toBeNull());
     expect(posted?.price).toBe("980.00");
-    expect(posted?.amount_minor).toBe(-980_000);
+    expect(posted).not.toHaveProperty("amount_minor");
     expect(posted?.quantity).toBe("10");
   });
 
@@ -519,7 +519,7 @@ describe("TradeDialog: instruments that are not bonds", () => {
 
     await waitFor(() => expect(posted).not.toBeNull());
     expect(posted?.price).toBe("305.5");
-    expect(posted?.amount_minor).toBe(-305_500);
+    expect(posted).not.toHaveProperty("amount_minor");
   });
 });
 

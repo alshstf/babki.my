@@ -1,0 +1,19 @@
+{
+  "_comment": "What quantity x price comes to in minor units: the product, rounded half away from zero, at two decimal places. One table read by the Go test of operation.TradeAmountMinor and the vitest test of multiplyToMinor, so the figure the trade dialog previews is the figure the server records.",
+  "cases": [
+    { "quantity": "10", "price": "100", "minor": 100000 },
+    { "quantity": "1", "price": "305.55", "minor": 30555 },
+    { "quantity": "3", "price": "0.335", "minor": 101 },
+    { "quantity": "1", "price": "0.005", "minor": 1 },
+    { "quantity": "1", "price": "0.0049", "minor": 0 },
+    { "quantity": "1", "price": "0.015", "minor": 2 },
+    { "quantity": "1", "price": "0.025", "minor": 3 },
+    { "quantity": "0.5", "price": "0.01", "minor": 1 },
+    { "quantity": "0.0000000005", "price": "1000000000", "minor": 50 },
+    { "quantity": "7", "price": "980.005", "minor": 686004 },
+    { "quantity": "1", "price": "0.129999999999", "minor": 13 },
+    { "quantity": "44380.35", "price": "0.0577", "minor": 256075 },
+    { "quantity": "6644", "price": "13.275", "minor": 8819910 },
+    { "quantity": "1000000", "price": "1234567.89", "minor": 123456789000000 }
+  ]
+}

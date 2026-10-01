@@ -1,3 +1,4 @@
+import shared from "./testdata/trade-amounts.json";
 import { describe, expect, it } from "vitest";
 import {
   bondPercentFromPrice,
@@ -323,6 +324,12 @@ describe("isPositiveDecimal", () => {
 });
 
 describe("multiplyToMinor", () => {
+  // The preview and the server's own figure, held to one table: the Go test of
+  // operation.TradeAmountMinor reads the same file.
+  it.each(shared.cases)("agrees with the server on $quantity × $price", ({ quantity, price, minor }) => {
+    expect(multiplyToMinor(quantity, price)).toBe(minor);
+  });
+
   it.each([
     ["10", "305.5", 305_500],
     ["0.5", "100", 5_000],

@@ -251,8 +251,11 @@ export function TradeDialog({
   // AmountRefusal).
   const feeRefusal = fee.trim() === "" ? null : amountRefusal(fee);
 
-  // Total is computed with exact BigInt arithmetic (see multiplyToMinor) —
-  // never as a float — so what's previewed here is exactly what gets sent.
+  // A PREVIEW, and nothing that is recorded: the request carries quantity and
+  // price, and the server works the amount out in its own rounding (see
+  // CreateOperationRequest.amount_minor). The two are held to one table of
+  // examples (src/lib/testdata/trade-amounts.json), so what is previewed here is
+  // what the server records — but the server's figure is the lot's cost.
   const totalMinor = qtyValid && priceValid ? multiplyToMinor(quantity, price) : null;
   const overflow = qtyValid && priceValid && totalMinor === null;
 
@@ -266,7 +269,6 @@ export function TradeDialog({
 
   const submit = () => {
     if (!instrument || totalMinor === null || feeParsed === null) return;
-    const signedAmount = side === "buy" ? -totalMinor : totalMinor;
     createOperation.mutate(
       {
         account_id: account.id,
@@ -275,7 +277,6 @@ export function TradeDialog({
         occurred_on: occurredOn,
         quantity,
         price,
-        amount_minor: signedAmount,
         // The operation's currency follows the instrument being traded (a
         // position's currency is fixed by its first operation and must stay
         // consistent thereafter — see internal/portfolio/engine.go), not the

@@ -1,8 +1,11 @@
 package operation_test
 
 import (
+	"encoding/json"
 	"errors"
 	"math"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -585,5 +588,37 @@ func TestTheSchemaNamesExactlyTheOperationTypesTheCodeKnows(t *testing.T) {
 	}
 	if inSchema := testdb.CheckLiterals(t, f.pool, "operations_type_check"); !slices.Equal(inSchema, inCode) {
 		t.Errorf("the schema allows %v, the code knows %v", inSchema, inCode)
+	}
+}
+
+// TestTradeAmountMinorFollowsTheSharedTable: the server's rounding of quantity ×
+// price against the one table the trade dialog's preview is held to as well
+// (web/src/lib/money.test.ts reads the same file).
+func TestTradeAmountMinorFollowsTheSharedTable(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "lib", "testdata", "trade-amounts.json"))
+	if err != nil {
+		t.Fatalf("read the table: %v", err)
+	}
+	var table struct {
+		Cases []struct {
+			Quantity string `json:"quantity"`
+			Price    string `json:"price"`
+			Minor    int64  `json:"minor"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &table); err != nil {
+		t.Fatalf("decode the table: %v", err)
+	}
+	if len(table.Cases) == 0 {
+		t.Fatal("the table is empty")
+	}
+	for _, c := range table.Cases {
+		qty, price := decimal.RequireFromString(c.Quantity), decimal.RequireFromString(c.Price)
+		if got, err := operation.TradeAmountMinor(operation.TypeSell, qty, price); err != nil || got != c.Minor {
+			t.Errorf("sell %s × %s = %d (%v), want %d", c.Quantity, c.Price, got, err, c.Minor)
+		}
+		if got, err := operation.TradeAmountMinor(operation.TypeBuy, qty, price); err != nil || got != -c.Minor {
+			t.Errorf("buy %s × %s = %d (%v), want %d", c.Quantity, c.Price, got, err, -c.Minor)
+		}
 	}
 }

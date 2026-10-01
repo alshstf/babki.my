@@ -246,6 +246,25 @@ const quantityScale = portfolio.QuantityScale
 // wrongness (0226, 1026, 1226), never 1899.
 var minOccurredOn = dates.EarliestRecordable()
 
+// TradeAmountMinor is what a trade of quantity at price comes to in minor units:
+// the product rounded once, half away from zero (money.Minor), negative for a
+// buy — money leaves — and positive for a sell.
+//
+// It is THE implementation of that rounding. The trade dialog previews the same
+// figure with arithmetic of its own, and web/src/lib/testdata/trade-amounts.json holds
+// the two to one table; but what is recorded as a lot's cost is this, not what
+// a browser computed (#194).
+func TradeAmountMinor(typ Type, quantity, price decimal.Decimal) (int64, error) {
+	minor, err := money.Minor(quantity.Mul(price).Shift(minorUnitScale))
+	if err != nil {
+		return 0, err
+	}
+	if typ == TypeBuy {
+		return -minor, nil
+	}
+	return minor, nil
+}
+
 // maxSettlementLag is how long after its trade an operation may settle. Markets
 // settle in days; a year is far past any of them and still catches a mistyped
 // year, which is all this bound is for.
