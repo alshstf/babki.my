@@ -69,7 +69,7 @@ func BuildExchange(journal []Operation, p ExchangeParams) (out, in Operation, er
 	// Resolved against the journal as it stood on the conversion's own date, not
 	// against the end state: a backdated conversion is replayed at its
 	// chronological place, where the FIFO front is a different one.
-	lots, err := portfolio.ReleasedLots(journalUpTo(journal, p.OccurredOn), p.FromInstrumentID, quantity)
+	lots, err := portfolio.ReleasedLots(FoldedBefore(journal, p.OccurredOn, p.Source), p.FromInstrumentID, quantity)
 	if err != nil {
 		return Operation{}, Operation{}, fmt.Errorf("%w: %v", ErrInconsistent, err)
 	}
@@ -116,12 +116,9 @@ func BuildSpinoff(journal []Operation, p SpinoffParams) (out, in Operation, err 
 		return Operation{}, Operation{}, err
 	}
 
-	// The holding as it stood at the START of the day the spin-off took effect —
-	// the same moment the registry decides against, and the same reason a
-	// backdated conversion resolves its lots against its own date: the event is
-	// replayed at its chronological place, where the parcels are the parcels of
-	// that day.
-	positions, err := portfolio.Compute(journalUpTo(journal, p.OccurredOn))
+	// The holding the row will find when it is replayed: a registry row folds at
+	// the start of its day, ahead of that day's trades (see FoldedBefore).
+	positions, err := portfolio.Compute(FoldedBefore(journal, p.OccurredOn, p.Source))
 	if err != nil {
 		return Operation{}, Operation{}, fmt.Errorf("%w: %v", ErrInconsistent, err)
 	}
