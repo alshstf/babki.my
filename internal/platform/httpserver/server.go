@@ -66,7 +66,7 @@ func (s *Server) Routes() []string {
 // Order matters: withRequestLog wraps withRecover so that panics recovered
 // deeper in the chain still produce an access log entry (status, duration).
 func (s *Server) Handler() http.Handler {
-	return withRequestLog(s.log, withRecover(s.log, s.mux))
+	return withRequestLog(s.log, withRecover(s.log, withSecurityHeaders(withSameOrigin(s.mux))))
 }
 
 // Run blocks until ctx is cancelled, then performs graceful shutdown (10s).
@@ -75,6 +75,14 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 		Addr:              addr,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
+		// A request body is at most a megabyte of JSON and an answer at most a
+		// journal page: these are far past either and exist so that a client
+		// sending or reading one byte at a time cannot hold a connection open
+		// for ever. WriteTimeout covers the slowest handler there is — a
+		// recorded corporate action materializing into every journal.
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 2 * time.Minute,
+		IdleTimeout:  2 * time.Minute,
 	}
 	errCh := make(chan error, 1)
 	go func() {
