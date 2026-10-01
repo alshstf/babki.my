@@ -577,6 +577,9 @@ func TestSyncMirrorRefreshesEveryAttributeTheBrokerCorrected(t *testing.T) {
 		Commission:        MoneyValue{Currency: "RUB", Units: -7, Nano: -600000000},
 		AccruedInt:        MoneyValue{Currency: "RUB", Units: 3, Nano: 250000000},
 		Quantity:          10,
+		QuantityDone:      0,
+		Ticker:            "AAPL",
+		ClassCode:         "SPBXM",
 		Description:       "Покупка ЦБ",
 		Raw:               json.RawMessage(`{"id":"op-before"}`),
 	}
@@ -609,6 +612,12 @@ func TestSyncMirrorRefreshesEveryAttributeTheBrokerCorrected(t *testing.T) {
 	after.AccruedInt = MoneyValue{Currency: "RUB", Units: 4, Nano: 750000000}
 	after.Description = "Покупка ценных бумаг"
 	after.Raw = json.RawMessage(`{"id":"op-after"}`)
+	// The three the confirming statement used to leave at their first sighting
+	// (#192): the filled size the broker completes later, the ticker it replaces
+	// with an ISIN once it forgets the paper, and the trading mode.
+	after.QuantityDone = 10
+	after.Ticker = "US0378331005"
+	after.ClassCode = "TQBR"
 
 	stats, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link, []OperationItem{after}, second)
 	if err != nil {
@@ -655,6 +664,15 @@ func TestSyncMirrorRefreshesEveryAttributeTheBrokerCorrected(t *testing.T) {
 	if row.AccruedInt == nil || row.AccruedInt.String() != "4.75" {
 		t.Errorf("accrued interest = %v, want 4.75", row.AccruedInt)
 	}
+	if row.QuantityDone != 10 {
+		t.Errorf("quantity done = %d, want 10 — a fill the broker reports later must reach the projection", row.QuantityDone)
+	}
+	if row.Ticker != "US0378331005" {
+		t.Errorf("ticker = %q, want US0378331005", row.Ticker)
+	}
+	if row.ClassCode != "TQBR" {
+		t.Errorf("class code = %q, want TQBR", row.ClassCode)
+	}
 	if row.Description != "Покупка ценных бумаг" {
 		t.Errorf("description = %q, want Покупка ценных бумаг", row.Description)
 	}
@@ -691,6 +709,48 @@ func TestSyncMirrorRefreshesEveryAttributeTheBrokerCorrected(t *testing.T) {
 	}
 	if row.Currency != "RUB" || row.Payment.String() != "-15230.5" || row.Quantity != 10 {
 		t.Errorf("a field of the key moved: %q / %s / %d", row.Currency, row.Payment, row.Quantity)
+	}
+}
+
+// TestEveryMirrorColumnIsEitherRefreshedOrDeliberatelyLeftAlone makes a column
+// added to the mirror answer one question: does a confirmation rewrite it? Three
+// columns added by later migrations were never added to the confirming
+// statement, and nothing noticed (#192).
+func TestEveryMirrorColumnIsEitherRefreshedOrDeliberatelyLeftAlone(t *testing.T) {
+	refreshed := map[string]bool{
+		// What the broker says about the operation now.
+		"broker_operation_id": true, "parent_operation_id": true, "state": true,
+		"price": true, "commission": true, "commission_currency": true,
+		"accrued_int": true, "quantity_done": true, "figi": true, "ticker": true,
+		"class_code": true, "position_uid": true, "asset_uid": true,
+		"instrument_type": true, "description": true, "raw": true,
+		"last_confirmed_at": true, "disappeared_at": true,
+		// The row's identity and where it is filed.
+		"id": false, "connection_id": false, "link_id": false, "first_seen_at": false,
+		// The content key and the fields it is built from.
+		"content_key": false, "op_type": false, "occurred_at": false,
+		"currency": false, "payment": false, "quantity": false, "instrument_uid": false,
+		// The projection's verdict, not a sync's.
+		"unparsed_reason": false, "unparsed_detail": false,
+	}
+	cols := strings.Split(strings.Join(strings.Fields(mirrorCols), ""), ",")
+	if len(cols) != len(refreshed) {
+		t.Fatalf("the mirror has %d columns and this table answers for %d — classify the new one", len(cols), len(refreshed))
+	}
+	set := mirrorConfirmSQL[strings.Index(mirrorConfirmSQL, "SET"):strings.Index(mirrorConfirmSQL, "WHERE")]
+	assigned := map[string]bool{}
+	for _, assignment := range strings.Split(set[len("SET"):], ",") {
+		assigned[strings.TrimSpace(strings.SplitN(assignment, "=", 2)[0])] = true
+	}
+	for _, col := range cols {
+		want, known := refreshed[col]
+		if !known {
+			t.Errorf("column %s is not classified", col)
+			continue
+		}
+		if assigned[col] != want {
+			t.Errorf("column %s: rewritten by a confirmation = %v, want %v", col, assigned[col], want)
+		}
 	}
 }
 

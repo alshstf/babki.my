@@ -179,8 +179,9 @@ type mirrorMatch struct {
 // first sighting. Every field the broker sends that the key is not built from
 // — the state, the price, the commission and its currency, the accrued
 // interest, the figi, the position and asset uids, the instrument type, the
-// description, the parent operation id, the raw document and the broker's own
-// operation id — is set to the value in this fetch. What a refresh leaves
+// description, the parent operation id, the filled quantity, the ticker, the
+// class code, the raw document and the broker's own operation id — is set to
+// the value in this fetch. What a refresh leaves
 // alone is the row's own id and where it is filed (the journal points at the
 // id), first_seen_at, the unparsed reason (the projection's verdict, not a
 // sync's), and the key together with the fields it was built from, which
@@ -375,7 +376,8 @@ const mirrorConfirmSQL = `
 		price = $5, commission = $6, commission_currency = $7, accrued_int = $8,
 		figi = $9, position_uid = $10, asset_uid = $11, instrument_type = $12,
 		description = $13, raw = $14,
-		last_confirmed_at = $15, disappeared_at = NULL
+		quantity_done = $15, ticker = $16, class_code = $17,
+		last_confirmed_at = $18, disappeared_at = NULL
 	WHERE id = $1`
 
 // confirmMirrorRows rewrites every matched row, as ONE batch for the reason
@@ -384,7 +386,7 @@ const mirrorConfirmSQL = `
 // EVERY CONFIRMED ROW IS REWRITTEN ON EVERY SYNC, whether anything about it
 // changed or not: the statement carries no "where something differs" clause,
 // because telling apart "the broker sent the same values" from "the broker
-// sent different ones" would mean comparing thirteen columns per row to save
+// sent different ones" would mean comparing every refreshed column per row to save
 // a write. For a personal instance with tens of thousands of operations that
 // trade is the right way round and was weighed deliberately — the whole
 // history is a few tens of thousands of rows, rewritten hourly in one batch
@@ -401,7 +403,8 @@ func confirmMirrorRows(ctx context.Context, tx pgx.Tx, confirmed []confirmation,
 			moneyOrNothing(it.Price), moneyOrNothing(it.Commission),
 			upperCurrency(it.Commission.Currency), moneyOrNothing(it.AccruedInt),
 			it.FIGI, it.PositionUID, it.AssetUID, it.InstrumentType,
-			it.Description, rawDocument(it.Raw), now)
+			it.Description, rawDocument(it.Raw),
+			it.QuantityDone, it.Ticker, it.ClassCode, now)
 	}
 	br := tx.SendBatch(ctx, batch)
 	for i, c := range confirmed {
