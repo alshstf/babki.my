@@ -223,6 +223,7 @@ export function AccountDetailPage() {
           mode={mode}
           baseCurrency={baseCurrency}
           costBasisRules={session?.cost_basis_rules}
+          onPurchasePrice={isViewer ? undefined : setPricing}
         />
       </div>
 

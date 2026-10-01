@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@/i18n";
 import { OperationsTable } from "./operations-table";
@@ -130,6 +130,7 @@ function renderTable({
   baseCurrency = "RUB",
   costBasisRules,
   canDelete = false,
+  onPurchasePrice,
 }: {
   operations: Operation[];
   // The catalog the table looks names and types up in, served as one whole
@@ -147,6 +148,9 @@ function renderTable({
   // The role gate on the delete action (editor+). False by default, which is
   // what a viewer sees; only the tests about who may delete a row turn it on.
   canDelete?: boolean;
+  // What «цена покупки» on an arrival from another broker opens; absent for a
+  // reader who cannot write, as on the screen.
+  onPurchasePrice?: (paper: { id: string; name: string; ticker: string }) => void;
 }) {
   serve({
     "/operations": { body: { operations, has_more: hasMore } },
@@ -163,11 +167,42 @@ function renderTable({
           mode={mode}
           baseCurrency={baseCurrency}
           costBasisRules={costBasisRules}
+          onPurchasePrice={onPurchasePrice}
         />
       </ScreenCurrencyCountProvider>
     </QueryClientProvider>,
   );
 }
+
+// The way back to an arrival's purchases once the paper no longer says its
+// price is unknown: on the journal row of shares from another broker, and only
+// there — a move between own accounts carries the source's purchases.
+describe("OperationsTable: the purchases of an arrival from another broker", () => {
+  const ko = { id: "inst-ko", type: "share", name: "Coca-Cola", ticker: "KO", isin: "", figi: "", currency: "USD", frozen: false } as Instrument;
+  const arrival = (overrides: Partial<Operation> = {}) =>
+    makeOperation({ id: "op-arrival", type: "transfer_in", instrument_id: "inst-ko", quantity: "10", amount_minor: 0, fee_minor: 0, ...overrides });
+
+  it("offers «цена покупки» on shares from another broker and hands over the paper", async () => {
+    const opened: unknown[] = [];
+    renderTable({ operations: [arrival()], instruments: [ko], onPurchasePrice: (paper) => opened.push(paper) });
+    const action = await screen.findByTestId("operation-purchase-price");
+    await screen.findByText("Coca-Cola");
+    fireEvent.click(action);
+    expect(opened).toEqual([{ id: "inst-ko", name: "Coca-Cola", ticker: "KO" }]);
+  });
+
+  it("does not offer it on a move between own accounts", async () => {
+    renderTable({ operations: [arrival({ transfer_group_id: "grp-1" })], instruments: [ko], onPurchasePrice: () => {} });
+    await screen.findByText("Coca-Cola");
+    expect(screen.queryByTestId("operation-purchase-price")).not.toBeInTheDocument();
+  });
+
+  it("does not offer it to a reader who cannot write", async () => {
+    renderTable({ operations: [arrival()], instruments: [ko] });
+    await screen.findByText("Coca-Cola");
+    expect(screen.queryByTestId("operation-purchase-price")).not.toBeInTheDocument();
+  });
+});
 
 describe("OperationsTable", () => {
   it("shows the operation's own amount and fee, with no conversion markers, in native mode", async () => {

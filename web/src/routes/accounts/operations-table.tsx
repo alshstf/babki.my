@@ -39,6 +39,7 @@ import { useInstrumentIndex, type Instrument } from "@/api/instruments";
 import type { CostBasisRules } from "@/api/tax-residencies";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
 import { queryState, refreshFailed } from "@/lib/query-state";
+import type { PricedPaper } from "./purchase-price-dialog";
 
 // Whether this row's amount is not money that moved on the day it is dated but
 // a cost basis some rule picked out of earlier purchases — the only kind of
@@ -261,6 +262,7 @@ export function OperationsTable({
   mode,
   baseCurrency,
   costBasisRules,
+  onPurchasePrice,
 }: {
   accountId: string;
   // Delete action is editor+ (owner/editor); viewers never see it.
@@ -279,6 +281,10 @@ export function OperationsTable({
   // contract). Undefined while the session is still loading — the caveat
   // simply waits rather than guessing.
   costBasisRules?: CostBasisRules;
+  // What «цена покупки» on an arrival from another broker opens — the way back
+  // to its purchases once the paper no longer says its price is unknown.
+  // Absent for a reader who cannot write.
+  onPurchasePrice?: (paper: PricedPaper) => void;
 }) {
   const { t } = useTranslation();
   // "Show more" fetches the next page and appends it (see useOperations). The
@@ -590,6 +596,26 @@ export function OperationsTable({
                 </TableCell>
                 <TableCell>
                   {instrumentName(operation.instrument_id)}
+                  {onPurchasePrice &&
+                    operation.type === "transfer_in" &&
+                    operation.transfer_group_id == null &&
+                    operation.instrument_id && (
+                      <button
+                        type="button"
+                        data-testid="operation-purchase-price"
+                        className="ml-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                        onClick={() => {
+                          const found = instrumentOf(operation.instrument_id);
+                          onPurchasePrice({
+                            id: operation.instrument_id as string,
+                            name: found?.name ?? instrumentName(operation.instrument_id),
+                            ticker: found?.ticker ?? "",
+                          });
+                        }}
+                      >
+                        {t("operations.purchasePrice")}
+                      </button>
+                    )}
                   {/* THE BROKER'S OWN WORDS, WHICH THE JOURNAL HAS ALWAYS
                       STORED AND THIS SCREEN NEVER SHOWED. A type is a category
                       and a note is the event: «Погашение Инарктика 001Р-01»
