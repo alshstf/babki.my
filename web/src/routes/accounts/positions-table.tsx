@@ -825,6 +825,20 @@ export function PositionsTable({
                     convertedTitle={costConvertedTitle}
                     testId="position-cost"
                   />
+                  {/* Under the cost it is about: shares that arrived with no
+                      purchase price are counted as bought for nothing, so every
+                      profit on this row is higher than the truth by what was
+                      really paid. Said on the paper itself, held or sold, so
+                      the owner knows which price to go and find. */}
+                  {position.has_unknown_cost && (
+                    <div
+                      data-testid="position-unknown-cost"
+                      className="text-xs text-amber-600"
+                      title={t("positions.unknownCostHint")}
+                    >
+                      {t("positions.unknownCost")}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {hasMarketValue && resolvedMarketValue ? (

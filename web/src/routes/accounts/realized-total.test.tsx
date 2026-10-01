@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import "@/i18n";
 import { RealizedTotal } from "./realized-total";
 import type { RealizedTotal as RealizedTotalPayload } from "@/api/positions";
@@ -23,6 +23,7 @@ function makeTotal(
     in_base: 1_000_000,
     in_base_gap: null,
     undated_positions: 0,
+    unknown_cost_positions: 0,
     ...overrides,
   };
 }
@@ -155,6 +156,22 @@ describe("RealizedTotal", () => {
     expect(note.textContent).toContain("когда куплено");
     expect(note.textContent).not.toContain("курс");
     expect(note.getAttribute("title")).toContain("не появится");
+  });
+
+  // A sale of shares that arrived with no purchase price: counted as bought
+  // for nothing, the whole proceeds in the figure. True in every currency, so
+  // said in both modes, and never in place of the figure.
+  it("says in both modes that some sales were counted as bought for nothing", () => {
+    for (const mode of ["base", "native"] as const) {
+      cleanup();
+      render(
+        <RealizedTotal total={makeTotal({ unknown_cost_positions: 1 })} mode={mode} />,
+      );
+      expect(screen.getByTestId("realized-total-amounts")).toBeInTheDocument();
+      const note = screen.getByTestId("realized-total-unknown-cost");
+      expect(note.textContent).toContain("купленными за 0");
+      expect(note.getAttribute("title")).toContain("завышена");
+    }
   });
 
   it("says nothing about left-out positions when there are none", () => {

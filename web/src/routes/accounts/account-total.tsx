@@ -153,7 +153,7 @@ export function AccountTotal({
       {unknownCost > 0 && (
         <div
           data-testid="account-total-unknown-cost"
-          className="text-xs text-muted-foreground"
+          className="text-xs text-amber-600"
           title={t("positions.accountTotalUnknownCostHint")}
         >
           {t("positions.accountTotalUnknownCost", { count: unknownCost })}

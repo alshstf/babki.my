@@ -437,6 +437,11 @@ func TestRealizedTotalLeavesOutWhatCanNeverBeValuedAndWaitsForWhatCan(t *testing
 			if got.UndatedPositions != tc.wantUndated {
 				t.Errorf("undated_positions = %d, want %d: %s", got.UndatedPositions, tc.wantUndated, tc.why)
 			}
+			// Every parcel here was bought for real money: none counts as
+			// bought for nothing, so none is counted as such.
+			if got.UnknownCostPositions != 0 {
+				t.Errorf("unknown_cost_positions = %d, want 0: every sale here knew its cost", got.UnknownCostPositions)
+			}
 			// Whatever the conversion is missing, the positions' own currency
 			// always has a complete answer: an unrecorded purchase date costs
 			// no money and no shares.
@@ -732,5 +737,96 @@ func TestAccountTaxIsTheWithholdingNoPositionSees(t *testing.T) {
 	// 100,00 ₽ of dividend less 13,00 ₽ of tax.
 	if p.IncomeMinor != 8700 {
 		t.Errorf("income_minor = %d, want 8700 — net of the tax attributed to this paper", p.IncomeMinor)
+	}
+}
+
+// TestAPaperThatArrivedWithNoPriceCountsAsBoughtForNothingInEveryCurrency is
+// the owner's ruling for shares a broker passed on without their cost (#195):
+// count them as bought for nothing, the way the broker does, in rubles as well
+// as in the paper's own currency, and say so on the paper and on both totals.
+//
+// The parcel arrives with no price AND no date. Nought needs no date to be
+// converted, so it is not left out of the ruble figures as undated — that is
+// kept for a parcel whose cost is known and whose day is not (see the test
+// above).
+func TestAPaperThatArrivedWithNoPriceCountsAsBoughtForNothingInEveryCurrency(t *testing.T) {
+	pool := testdb.New(t)
+	mdStore := marketdata.NewStore(pool)
+	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
+	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(mdStore))
+	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: mustDate(t, earlyRateOn), Rate: decimal.RequireFromString("60"), Source: "test"},
+		{Base: "USD", Quote: "RUB", On: mustDate(t, lateRateOn), Rate: decimal.RequireFromString("90"), Source: "test"},
+	}); err != nil {
+		t.Fatalf("seed fx rates: %v", err)
+	}
+
+	src := createAccount(t, c, url, `{"name":"Старый брокер","type":"brokerage","currency":"USD"}`)
+	dst := createAccount(t, c, url, `{"name":"Новый брокер","type":"brokerage","currency":"USD"}`)
+	acme := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
+	acmeID, err := uuid.Parse(acme.ID)
+	if err != nil {
+		t.Fatalf("parse instrument id: %v", err)
+	}
+	quotes.byInstrument[acmeID] = marketdata.Quote{
+		InstrumentID: acmeID, On: mustDate(t, "2026-07-28"),
+		Price: decimal.RequireFromString("250"), Currency: "USD",
+	}
+
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":%q,"quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, src.ID, acme.ID, earlyBuyOn))
+	// The new broker was told nothing about the price: a basis of nought.
+	createTransfer(t, c, url, fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,
+		"quantity":"10","occurred_on":%q,"cost_minor":0}`, src.ID, dst.ID, acme.ID, transferOn))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
+		"occurred_on":"2026-07-28","quantity":"4","price":"200",
+		"amount_minor":80000,"currency":"USD"}`, dst.ID, acme.ID))
+
+	got := accountPositions(t, c, url, dst.ID)
+
+	// The realized result: all 800 $ of the sale, at 90 ₽ on the day of it.
+	rt := got.RealizedTotal
+	if len(rt.ByCurrency) != 1 || realizedFigure(t, rt.ByCurrency[0].RealizedPnlMinor) != 80_000 {
+		t.Errorf("by_currency = %+v, want one USD entry of 80000 — the whole proceeds, the cost being nought", rt.ByCurrency)
+	}
+	if rt.InBase == nil || *rt.InBase != 7_200_000 {
+		t.Errorf("in_base = %s, want 7200000 (80000 × 90): nought needs no date, so the sale is not left out", gapOf(rt))
+	}
+	if rt.UndatedPositions != 0 {
+		t.Errorf("undated_positions = %d, want 0: a parcel with no price is not one that needs a date", rt.UndatedPositions)
+	}
+	if rt.UnknownCostPositions != 1 {
+		t.Errorf("unknown_cost_positions = %d, want 1: the result is higher than the truth by what was really paid, and only this says so", rt.UnknownCostPositions)
+	}
+
+	// The account's whole result: the sale, plus six shares at 250 $ that cost
+	// nothing, valued at today's 90 ₽.
+	at := got.AccountTotal
+	if at.InBase == nil || *at.InBase != 7_200_000+13_500_000 {
+		t.Errorf("account in_base = %v, want 20700000 (7200000 realized + 150000 × 90 held): the holding with no price is in the figure, not left out", at.InBase)
+	}
+	if at.UndatedPositions != 0 || at.UnknownCostPositions != 1 {
+		t.Errorf("account undated/unknown_cost = %d/%d, want 0/1", at.UndatedPositions, at.UnknownCostPositions)
+	}
+
+	// And the paper itself says it.
+	if len(got.Positions) != 1 {
+		t.Fatalf("positions = %d, want 1", len(got.Positions))
+	}
+	p := got.Positions[0]
+	if !p.HasUnknownCost {
+		t.Error("has_unknown_cost = false on the paper that arrived with no price")
+	}
+	if p.HasUndatedLots || p.HasUndatedRealizations {
+		t.Errorf("has_undated_lots/realizations = %v/%v, want false/false: nothing here needs a date", p.HasUndatedLots, p.HasUndatedRealizations)
+	}
+	if p.InBaseGap != nil {
+		t.Errorf("in_base_gap = %q, want null: the position converts in full", *p.InBaseGap)
+	}
+
+	// The account it came from paid real money and sold nothing.
+	if from := accountPositions(t, c, url, src.ID); from.AccountTotal.UnknownCostPositions != 0 {
+		t.Errorf("the source account counts %d positions with no price, want 0", from.AccountTotal.UnknownCostPositions)
 	}
 }

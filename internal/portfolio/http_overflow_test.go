@@ -215,10 +215,10 @@ func TestSumInBaseOverflowIsNotAMissingRate(t *testing.T) {
 func TestRealizedTotalsRefusesANativeTotalThatWouldWrap(t *testing.T) {
 	rt := newRealizedTotals("RUB")
 	none := nullable.NewNullNullable[int64]()
-	if err := rt.add("USD", nullable.NewNullableWithValue[int64](math.MaxInt64), none, gapNoRate); err != nil {
+	if err := rt.add("USD", nullable.NewNullableWithValue[int64](math.MaxInt64), none, gapNoRate, false); err != nil {
 		t.Fatalf("first position: %v — maxint64 is a figure, and one of them fits", err)
 	}
-	err := rt.add("USD", nullable.NewNullableWithValue[int64](1), none, gapNoRate)
+	err := rt.add("USD", nullable.NewNullableWithValue[int64](1), none, gapNoRate, false)
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("second position: err = %v, want ErrOverflow — maxint64 + 1 is not a total", err)
 	}
@@ -234,10 +234,10 @@ func TestRealizedTotalsRefusesANativeTotalThatWouldWrap(t *testing.T) {
 func TestRealizedTotalsRefusesABaseTotalThatWouldWrap(t *testing.T) {
 	rt := newRealizedTotals("RUB")
 	big := nullable.NewNullableWithValue(int64(math.MaxInt64))
-	if err := rt.add("USD", nullable.NewNullableWithValue[int64](0), big, gapNone); err != nil {
+	if err := rt.add("USD", nullable.NewNullableWithValue[int64](0), big, gapNone, false); err != nil {
 		t.Fatalf("first position: %v", err)
 	}
-	err := rt.add("EUR", nullable.NewNullableWithValue[int64](0), big, gapNone)
+	err := rt.add("EUR", nullable.NewNullableWithValue[int64](0), big, gapNone, false)
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("second position: err = %v, want ErrOverflow", err)
 	}
@@ -256,10 +256,10 @@ func TestRealizedTotalsRefusesABaseTotalThatWouldWrap(t *testing.T) {
 func TestRealizedTotalsOverflowIsNotAGap(t *testing.T) {
 	rt := newRealizedTotals("RUB")
 	big := nullable.NewNullableWithValue(int64(math.MaxInt64))
-	if err := rt.add("USD", nullable.NewNullableWithValue[int64](0), big, gapNone); err != nil {
+	if err := rt.add("USD", nullable.NewNullableWithValue[int64](0), big, gapNone, false); err != nil {
 		t.Fatalf("first position: %v", err)
 	}
-	if err := rt.add("EUR", nullable.NewNullableWithValue[int64](0), big, gapNone); err == nil {
+	if err := rt.add("EUR", nullable.NewNullableWithValue[int64](0), big, gapNone, false); err == nil {
 		t.Fatal("the overflowing total was accepted; there is nothing to publish and nothing was said")
 	}
 	if rt.undatedPositions != 0 || rt.noRate {

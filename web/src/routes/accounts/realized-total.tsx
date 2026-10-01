@@ -122,6 +122,10 @@ export function RealizedTotal({
   // server and counted. A statement about the base-currency figure alone: in
   // the positions' own currency they are counted in full.
   const undated = anyRealized && mode === "base" ? total.undated_positions : 0;
+  // Sales of shares that arrived with no purchase price, counted as bought for
+  // nothing: the whole proceeds are in the figure as profit. True of every
+  // currency, so said in every mode.
+  const unknownCost = anyRealized ? total.unknown_cost_positions : 0;
   // THE TAX THE ACCOUNT ITSELF WAS CHARGED, beside the result it was charged
   // against. It is not part of any position's figures and never can be — the
   // broker takes it against the year's accumulated base, not against a paper —
@@ -154,7 +158,8 @@ export function RealizedTotal({
   // what the named gap exists to prevent, so that case must fall through to the
   // same blank as no gap at all rather than render the label over an empty
   // amount.
-  if (!wording && figures.length === 0 && tax.length === 0 && undated === 0) return null;
+  if (!wording && figures.length === 0 && tax.length === 0 && undated === 0 && unknownCost === 0)
+    return null;
   return (
     <div
       className="mt-2 flex flex-wrap items-baseline gap-x-2 text-sm"
@@ -210,6 +215,15 @@ export function RealizedTotal({
           title={t("positions.realizedUndatedHint")}
         >
           {t("positions.realizedUndated", { count: undated })}
+        </span>
+      )}
+      {unknownCost > 0 && (
+        <span
+          data-testid="realized-total-unknown-cost"
+          className="text-amber-600"
+          title={t("positions.realizedUnknownCostHint")}
+        >
+          {t("positions.realizedUnknownCost", { count: unknownCost })}
         </span>
       )}
     </div>
