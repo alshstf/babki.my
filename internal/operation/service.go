@@ -166,9 +166,32 @@ func checkQuantityBound(q decimal.Decimal) error {
 
 // Service validates journal entries and guards journal consistency by
 // replaying the account's operations through the portfolio engine.
-type Service struct{ store *Store }
+type Service struct {
+	store *Store
+	// afterManualWrite, when set, is told which accounts a hand entry has just
+	// changed — after the write is committed. See OnManualWrite.
+	afterManualWrite func(ctx context.Context, spaceID uuid.UUID, accountIDs []uuid.UUID)
+}
 
 func NewService(store *Store) *Service { return &Service{store: store} }
+
+// OnManualWrite registers what runs after every committed hand entry: a create,
+// a transfer, a replacement, a delete. The corporate-actions registry hangs
+// here, so a purchase dated before a split it already knows gets the split at
+// once instead of at the next daily sweep.
+//
+// The import door does not call it — the registry itself writes through that
+// door. It is set once, while the process is being wired, before anything is
+// served. fn must not fail the request: the entry is already committed.
+func (s *Service) OnManualWrite(fn func(ctx context.Context, spaceID uuid.UUID, accountIDs []uuid.UUID)) {
+	s.afterManualWrite = fn
+}
+
+func (s *Service) manualWriteDone(ctx context.Context, spaceID uuid.UUID, accountIDs ...uuid.UUID) {
+	if s.afterManualWrite != nil {
+		s.afterManualWrite(ctx, spaceID, accountIDs)
+	}
+}
 
 // TransferParams describes an in-kind transfer of an instrument position
 // between two accounts. The moved cost basis is either supplied explicitly
@@ -925,6 +948,7 @@ func (s *Service) CreateReplacing(ctx context.Context, spaceID uuid.UUID, op Ope
 	if err != nil {
 		return Operation{}, mapWriteError(err)
 	}
+	s.manualWriteDone(ctx, spaceID, accountIDs...)
 	return created, nil
 }
 
@@ -1154,6 +1178,7 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 	if err != nil {
 		return Operation{}, Operation{}, mapWriteError(err)
 	}
+	s.manualWriteDone(ctx, spaceID, p.FromAccountID, p.ToAccountID)
 	return cOut, cIn, nil
 }
 
@@ -1350,7 +1375,7 @@ func (s *Service) Delete(ctx context.Context, spaceID, id uuid.UUID) error {
 	if err != nil {
 		return err
 	}
-	return s.store.WithAccountsLocked(ctx, spaceID, accountIDs, func(st *Store) error {
+	err = s.store.WithAccountsLocked(ctx, spaceID, accountIDs, func(st *Store) error {
 		op, err := st.ByID(ctx, spaceID, id)
 		if err != nil {
 			return err
@@ -1384,6 +1409,11 @@ func (s *Service) Delete(ctx context.Context, spaceID, id uuid.UUID) error {
 		_, err = st.Delete(ctx, spaceID, id)
 		return err
 	})
+	if err != nil {
+		return err
+	}
+	s.manualWriteDone(ctx, spaceID, accountIDs...)
+	return nil
 }
 
 // deletionAccounts names every account Delete has to lock: the row's own, and —

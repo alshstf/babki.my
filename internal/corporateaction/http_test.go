@@ -63,7 +63,7 @@ func newAPIFixture(t *testing.T) apiFixture {
 	ops := operation.NewStore(pool)
 	svc := operation.NewService(ops)
 	recheck := &queuedRecheck{}
-	materializer := corporateaction.NewMaterializer(store, ops, svc, instrument.NewStore(pool), recheck, nil)
+	materializer := corporateaction.NewMaterializer(store, svc, instrument.NewStore(pool), recheck, nil)
 
 	srv := httpserver.New(slog.Default(), pool)
 	family.NewHandler(family.NewService(famStore), famStore, auth, sm).Mount(srv)

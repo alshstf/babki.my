@@ -170,6 +170,53 @@ func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d Imp
 	return applied, refused, nil
 }
 
+// BuildAndApplyImportDelta is ApplyImportDelta for a writer that has to SEE the
+// journal to know what to write: it locks one account, hands build that
+// account's journal as read under the lock, and applies the delta build returns
+// — one lock around the read, the decision and the write. The registry needs
+// it: its rows are worked out from the holding, and a holding read before the
+// lock describes a journal that may have moved.
+//
+// The delta may touch that one account only; anything else is the caller's
+// mistake and refuses the whole call. delta comes back as build returned it.
+func (s *Service) BuildAndApplyImportDelta(ctx context.Context, spaceID, accountID uuid.UUID,
+	build func(journal []Operation) (ImportDelta, error),
+) (delta ImportDelta, applied []Operation, refused []ImportRefusal, err error) {
+	err = s.store.WithAccountsLocked(ctx, spaceID, []uuid.UUID{accountID}, func(st *Store) error {
+		journal, err := st.ListForEngine(ctx, spaceID, accountID)
+		if err != nil {
+			return err
+		}
+		if delta, err = build(journal); err != nil {
+			return err
+		}
+		if len(delta.Add) == 0 && len(delta.Remove) == 0 {
+			return nil
+		}
+		candidates, err := importCandidates(delta.Add)
+		if err != nil {
+			return err
+		}
+		locked := &Service{store: st}
+		touched, err := locked.deltaAccounts(ctx, spaceID, candidates, delta.Remove)
+		if err != nil {
+			return err
+		}
+		for _, id := range touched {
+			if id != accountID {
+				return fmt.Errorf("%w: a delta built under the lock of account %s names account %s",
+					ErrImportContract, accountID, id)
+			}
+		}
+		applied, refused, err = locked.applyImportDeltaLocked(ctx, spaceID, delta, candidates)
+		return err
+	})
+	if err != nil {
+		return ImportDelta{}, nil, nil, err
+	}
+	return delta, applied, refused, nil
+}
+
 // deltaAccounts names the accounts a delta touches, which is what has to be
 // locked before anything about it is judged. It is read outside the lock and
 // that is safe: a candidate names its own account and a stored row never
