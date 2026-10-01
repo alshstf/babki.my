@@ -24,12 +24,14 @@ import { TradeDialog } from "./trade-dialog";
 import { CashDialog } from "./cash-dialog";
 import { IncomeDialog } from "./income-dialog";
 import { TransferDialog } from "./transfer-dialog";
+import { ArrivalDialog } from "./arrival-dialog";
+import { PurchasePriceDialog, type PricedPaper } from "./purchase-price-dialog";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
 import { queryState, refreshFailed } from "@/lib/query-state";
 
 // undefined = no dialog open; otherwise the action picked from the
 // "+ Add operation" menu, each mapping to one dialog below.
-type AddAction = "buy" | "sell" | "cash" | "income" | "transfer";
+type AddAction = "buy" | "sell" | "cash" | "income" | "transfer" | "arrival";
 
 export function AccountDetailPage() {
   const { t } = useTranslation();
@@ -47,6 +49,8 @@ export function AccountDetailPage() {
   const isViewer = session?.role === "viewer";
   const [action, setAction] = useState<AddAction | undefined>(undefined);
   const closeAction = () => setAction(undefined);
+  // The paper whose purchase price is being given, from its «указать цену».
+  const [pricing, setPricing] = useState<PricedPaper | null>(null);
 
   // Reports the currencies in play on this screen so the header's toggle
   // can hide itself when there's nothing to convert (see
@@ -152,6 +156,9 @@ export function AccountDetailPage() {
                 <DropdownMenuItem onSelect={() => setAction("transfer")}>
                   {t("transfer.title")}
                 </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setAction("arrival")}>
+                  {t("arrival.menuItem")}
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           )}
@@ -183,6 +190,7 @@ export function AccountDetailPage() {
               cash={positions.data.cash}
               mode={mode}
               baseCurrency={baseCurrency}
+              onPriceUnknown={isViewer ? undefined : setPricing}
             />
           </>
         ) : (
@@ -215,6 +223,7 @@ export function AccountDetailPage() {
           mode={mode}
           baseCurrency={baseCurrency}
           costBasisRules={session?.cost_basis_rules}
+          onPurchasePrice={isViewer ? undefined : setPricing}
         />
       </div>
 
@@ -245,6 +254,21 @@ export function AccountDetailPage() {
           open
           onOpenChange={(open) => !open && closeAction()}
           account={account}
+        />
+      )}
+      {action === "arrival" && (
+        <ArrivalDialog
+          open
+          onOpenChange={(open) => !open && closeAction()}
+          account={account}
+        />
+      )}
+      {pricing && (
+        <PurchasePriceDialog
+          open
+          onOpenChange={(open) => !open && setPricing(null)}
+          accountId={accountId}
+          paper={pricing}
         />
       )}
     </div>

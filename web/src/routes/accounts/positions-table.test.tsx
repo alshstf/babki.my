@@ -1056,6 +1056,33 @@ describe("PositionsTable", () => {
     expect(note.getAttribute("title")).toContain("отчёте брокера");
   });
 
+  it("offers to give the price where the reader can write, and hands over the paper", () => {
+    const opened: unknown[] = [];
+    wrap(
+      <PositionsTable
+        positions={[makePosition({ cost_minor: 0, has_unknown_cost: true })]}
+        mode="native"
+        baseCurrency="RUB"
+        onPriceUnknown={(paper) => opened.push(paper)}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("position-unknown-cost-action"));
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatchObject({ name: makePosition().instrument.name });
+  });
+
+  it("offers nothing to a reader who cannot write", () => {
+    wrap(
+      <PositionsTable
+        positions={[makePosition({ cost_minor: 0, has_unknown_cost: true })]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+    expect(screen.getByTestId("position-unknown-cost")).toBeInTheDocument();
+    expect(screen.queryByTestId("position-unknown-cost-action")).not.toBeInTheDocument();
+  });
+
   it("says nothing about the purchase price when it is known", () => {
     wrap(
       <PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />,
