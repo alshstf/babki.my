@@ -363,8 +363,12 @@ func pricePerUnitMinor(faceValueMinor int64, price decimal.Decimal) (int64, erro
 //
 // It scans the same slice positionInBase walks and stops at the first hit —
 // the question is whether any exists, not how many.
+//
+// A lot with no date and no cost is not undated in this sense: it is counted as
+// bought for nothing, and nought needs no date (see DatelessBasis). It is
+// reported by has_unknown_cost instead.
 func anyUndatedLot(lots []Lot) bool {
-	return slices.ContainsFunc(lots, func(l Lot) bool { return l.AcquiredOn == nil })
+	return slices.ContainsFunc(lots, func(l Lot) bool { return DatelessBasis(l.AcquiredOn, l.CostMinor) })
 }
 
 // hasUndatedLots is anyUndatedLot published as Position.has_undated_lots (see
@@ -400,9 +404,33 @@ func hasUndatedLots(p *Position) bool {
 // It scans every Realization rather than stopping at the first one with any
 // Released piece, but the question is still only whether any undated piece
 // exists anywhere, not how many or in which disposal.
+//
+// As with anyUndatedLot, a parcel with no date and no cost does not count: it
+// was sold as bought for nothing, which needs no date (see DatelessBasis).
 func anyUndatedRealization(events []Realization) bool {
 	for _, e := range events {
-		if slices.ContainsFunc(e.Released, func(r ReleasedLot) bool { return r.AcquiredOn == nil }) {
+		if slices.ContainsFunc(e.Released, func(r ReleasedLot) bool { return DatelessBasis(r.AcquiredOn, r.CostMinor) }) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasUnknownCost reports whether any of the position's basis — still held or
+// already sold — arrived with no purchase price and counts as bought for
+// nothing (see UnknownCost). Published as Position.has_unknown_cost, so the
+// paper itself can say that its profit is overstated by what was really paid.
+func hasUnknownCost(p *Position) bool {
+	return slices.ContainsFunc(p.Lots, func(l Lot) bool { return UnknownCost(l.Quantity, l.CostMinor) }) ||
+		soldUnknownCost(p)
+}
+
+// soldUnknownCost reports whether a disposal released a parcel counted as bought
+// for nothing, so that the whole of what it sold for went into the realized
+// result.
+func soldUnknownCost(p *Position) bool {
+	for _, e := range p.Realizations {
+		if slices.ContainsFunc(e.Released, func(r ReleasedLot) bool { return UnknownCost(r.Quantity, r.CostMinor) }) {
 			return true
 		}
 	}
@@ -521,6 +549,7 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 		FeesMinor:              p.FeesMinorIn(p.Currency),
 		HasUndatedLots:         hasUndatedLots(p),
 		HasUndatedRealizations: hasUndatedRealizations(p),
+		HasUnknownCost:         hasUnknownCost(p),
 		// The starting value, and the answer for a row where the valuation is
 		// struck and needs no explaining. Every other path below overwrites it
 		// with a named cause. It is an explicit null, never an unspecified key
@@ -922,6 +951,11 @@ func lotTerms(lots []Lot, currency string) (terms []datedMinor, dated bool) {
 	}
 	terms = make([]datedMinor, 0, len(lots))
 	for _, l := range lots {
+		if l.AcquiredOn == nil {
+			// Bought for nothing as far as anyone knows (see DatelessBasis):
+			// nought on any day, so no term and no rate.
+			continue
+		}
 		// The position's currency, passed in: a lot's cost is what was paid for
 		// the paper, and Position.Currency is exactly the currency that was paid
 		// (every operation that adds a lot settles it — see
@@ -1009,6 +1043,11 @@ func realizedTerms(events []Realization, currency string) (terms []datedMinor, d
 			datedMinor{minor: -e.FeeMinor, from: e.Currency, on: e.OccurredOn},
 		)
 		for _, r := range e.Released {
+			if r.AcquiredOn == nil {
+				// Sold as bought for nothing (see DatelessBasis): no expense
+				// to convert, and the whole proceeds above are the result.
+				continue
+			}
 			terms = append(terms, datedMinor{minor: -r.CostMinor, from: currency, on: *r.AcquiredOn})
 		}
 	}
@@ -1499,7 +1538,6 @@ type accountTotals struct {
 	// result rather than as a gap.
 	unknowable     map[string]bool
 	inBaseMinor    int64
-	undated        bool
 	noRate         bool
 	zeroValued     int
 	zeroValuedCost map[string]int64
@@ -1536,10 +1574,11 @@ func newAccountTotals(baseCurrency string) *accountTotals {
 // being nought. And the base figure answers all three again from its own object,
 // which carries its own arithmetic (see PositionInBase).
 func (at *accountTotals) addPosition(p apitypes.Position, inBase *apitypes.PositionInBase, gap inBaseGap, realizedGap baseGap) error {
-	// The paper is held and cost nothing to hold: a transfer the broker sent
-	// with no price attached. Counted before anything else, because it is true
-	// of the row whatever else is or is not known about it.
-	if p.Quantity != "0" && p.CostMinor == 0 {
+	// Some of the paper — held or already sold — arrived with no price and
+	// counts as bought for nothing, so its whole value is in this total as
+	// profit. Counted before anything else, because it is true of the row
+	// whatever else is or is not known about it.
+	if p.HasUnknownCost {
 		at.unknownCost++
 	}
 
@@ -1794,17 +1833,10 @@ func (at *accountTotals) result() apitypes.AccountTotal {
 	}
 	sort.Strings(out.NoRateCurrencies)
 
-	switch {
-	case at.undated && at.noRate:
-		out.InBase = nullable.NewNullNullable[int64]()
-		out.InBaseGap = nullable.NewNullableWithValue(apitypes.Both)
-	case at.undated:
-		out.InBase = nullable.NewNullNullable[int64]()
-		out.InBaseGap = nullable.NewNullableWithValue(apitypes.Undated)
-	case at.noRate:
+	if at.noRate {
 		out.InBase = nullable.NewNullNullable[int64]()
 		out.InBaseGap = nullable.NewNullableWithValue(apitypes.NoRate)
-	default:
+	} else {
 		out.InBase = nullable.NewNullableWithValue(at.inBaseMinor)
 		out.InBaseGap = nullable.NewNullNullable[apitypes.RealizedGap]()
 	}
@@ -1872,8 +1904,18 @@ type realizedTotals struct {
 	// real one, which is the rule the base total below already stands on.
 	notInOneCurrency map[string]bool
 	inBaseMinor      int64
-	undated          bool
-	noRate           bool
+	// undatedPositions counts the positions LEFT OUT of the base sum because a
+	// disposal released a parcel nobody knows the purchase day of. That gap is
+	// permanent — no rate answers for a day that was never recorded — so the
+	// position is excluded and counted rather than taking the account's whole
+	// figure down for good. The same bargain accountTotals strikes, and the
+	// owner's ruling for both (#158, #195).
+	undatedPositions int
+	// unknownCostPositions counts the positions whose disposals sold shares
+	// that arrived with no purchase price: their whole proceeds are in both
+	// totals as profit (see UnknownCost).
+	unknownCostPositions int
+	noRate               bool
 }
 
 func newRealizedTotals(baseCurrency string) *realizedTotals {
@@ -1907,7 +1949,7 @@ func newRealizedTotals(baseCurrency string) *realizedTotals {
 // the request (see handleList). Nothing is half-added on the way out: both
 // totals are computed before either is stored, so a refused position leaves the
 // accumulator exactly as it found it.
-func (rt *realizedTotals) add(currency string, nativeMinor nullable.Nullable[int64], baseMinor nullable.Nullable[int64], gap baseGap) error {
+func (rt *realizedTotals) add(currency string, nativeMinor nullable.Nullable[int64], baseMinor nullable.Nullable[int64], gap baseGap, soldUnknown bool) error {
 	native := rt.byCurrency[currency]
 	if nativeMinor.IsNull() {
 		// The position has no figure in its own currency, so this bucket has
@@ -1923,10 +1965,10 @@ func (rt *realizedTotals) add(currency string, nativeMinor nullable.Nullable[int
 				err, currency, nativeMinor.MustGet(), rt.byCurrency[currency])
 		}
 	}
-	inBase := rt.inBaseMinor
+	inBase, undated := rt.inBaseMinor, 0
 	switch gap {
 	case gapUndated:
-		rt.undated = true
+		undated++
 	case gapNoRate:
 		rt.noRate = true
 	default:
@@ -1938,6 +1980,10 @@ func (rt *realizedTotals) add(currency string, nativeMinor nullable.Nullable[int
 		}
 	}
 	rt.byCurrency[currency], rt.inBaseMinor = native, inBase
+	rt.undatedPositions += undated
+	if soldUnknown {
+		rt.unknownCostPositions++
+	}
 	return nil
 }
 
@@ -1968,21 +2014,16 @@ func (rt *realizedTotals) result() apitypes.RealizedTotal {
 		return out.ByCurrency[i].Currency < out.ByCurrency[j].Currency
 	})
 
-	// A total missing one of its terms is an invented number — smaller or
-	// larger than the truth and indistinguishable from a real one on screen —
-	// so nothing at all is published in its place, and the reason is named
-	// instead of left for the reader to guess from the rows.
-	switch {
-	case rt.undated && rt.noRate:
-		out.InBase = nullable.NewNullNullable[int64]()
-		out.InBaseGap = nullable.NewNullableWithValue(apitypes.Both)
-	case rt.undated:
-		out.InBase = nullable.NewNullNullable[int64]()
-		out.InBaseGap = nullable.NewNullableWithValue(apitypes.Undated)
-	case rt.noRate:
+	// A missing RATE withholds the figure: the rate arrives, and a total
+	// published without that position meanwhile would quietly change later. A
+	// missing purchase DAY never arrives, so those positions are left out and
+	// counted beside the figure instead (see undatedPositions).
+	out.UndatedPositions = rt.undatedPositions
+	out.UnknownCostPositions = rt.unknownCostPositions
+	if rt.noRate {
 		out.InBase = nullable.NewNullNullable[int64]()
 		out.InBaseGap = nullable.NewNullableWithValue(apitypes.NoRate)
-	default:
+	} else {
 		out.InBase = nullable.NewNullableWithValue(rt.inBaseMinor)
 		out.InBaseGap = nullable.NewNullNullable[apitypes.RealizedGap]()
 	}
@@ -2805,7 +2846,7 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 			family.WriteError(w, err)
 			return
 		}
-		if err := totals.add(apiPos.Currency, apiPos.RealizedPnlMinor, realizedMinor, realizedGap); err != nil {
+		if err := totals.add(apiPos.Currency, apiPos.RealizedPnlMinor, realizedMinor, realizedGap, soldUnknownCost(pos)); err != nil {
 			family.WriteError(w, err)
 			return
 		}

@@ -228,6 +228,7 @@ type positionResp struct {
 	UnrealizedPnlMinor        *int64           `json:"unrealized_pnl_minor"`
 	HasUndatedLots            bool             `json:"has_undated_lots"`
 	HasUndatedRealizations    bool             `json:"has_undated_realizations"`
+	HasUnknownCost            bool             `json:"has_unknown_cost"`
 	InBase                    *positionInBase  `json:"in_base"`
 	// InBaseGap and MarketValueGap are pointers so a test can tell an explicit
 	// null — nothing stopped the object, or nothing was withheld from the
@@ -322,6 +323,8 @@ type realizedTotalResp struct {
 	BaseCurrency          string                      `json:"base_currency"`
 	InBase                *int64                      `json:"in_base"`
 	InBaseGap             *string                     `json:"in_base_gap"`
+	UndatedPositions      int                         `json:"undated_positions"`
+	UnknownCostPositions  int                         `json:"unknown_cost_positions"`
 }
 
 // currencyAmountResp mirrors apitypes.CurrencyAmount.

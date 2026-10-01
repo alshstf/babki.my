@@ -86,7 +86,7 @@ describe("AccountTotal", () => {
   it("says nothing was struck, and shows no number, when the base figure has a gap", () => {
     render(
       <AccountTotal
-        total={makeTotal({ in_base: null, in_base_gap: "undated" })}
+        total={makeTotal({ in_base: null, in_base_gap: "no_rate" })}
         mode="base"
       />,
     );

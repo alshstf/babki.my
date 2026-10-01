@@ -216,6 +216,7 @@ function makePosition(overrides: Partial<Position> = {}): Position {
     // component surfaces a per-position realized-undated indicator, so the
     // field stays at its honest default rather than an untested guess.
     has_undated_realizations: false,
+    has_unknown_cost: false,
     // The two server-named causes (#66), and the only source the row's and the
     // valuation's captions read. Null is the honest default for this fixture:
     // it converts cleanly, so nothing stopped the object and nothing was
@@ -1034,6 +1035,32 @@ describe("PositionsTable", () => {
     expect(stale.textContent).toContain("цена не обновлялась");
     // The price itself is still shown: this is a caveat, not a replacement.
     expect(screen.getByTestId("position-price")).toBeInTheDocument();
+  });
+
+  // Shares that arrived with no purchase price are counted as bought for
+  // nothing, so the row's profit is overstated by what was really paid. The
+  // paper itself says so, under its cost, and the hint says where the real
+  // price is to be found.
+  it("says on the paper that its purchase price is unknown and counted as nought", () => {
+    wrap(
+      <PositionsTable
+        positions={[makePosition({ cost_minor: 0, has_unknown_cost: true })]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+
+    const note = screen.getByTestId("position-unknown-cost");
+    expect(note.textContent).toContain("цена покупки неизвестна");
+    expect(note.textContent).toContain("0");
+    expect(note.getAttribute("title")).toContain("отчёте брокера");
+  });
+
+  it("says nothing about the purchase price when it is known", () => {
+    wrap(
+      <PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />,
+    );
+    expect(screen.queryByTestId("position-unknown-cost")).not.toBeInTheDocument();
   });
 
   it("says nothing about the age of an ordinary price", () => {

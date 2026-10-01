@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import "@/i18n";
 import { RealizedTotal } from "./realized-total";
 import type { RealizedTotal as RealizedTotalPayload } from "@/api/positions";
@@ -22,6 +22,8 @@ function makeTotal(
     tax_withheld_by_currency: [],
     in_base: 1_000_000,
     in_base_gap: null,
+    undated_positions: 0,
+    unknown_cost_positions: 0,
     ...overrides,
   };
 }
@@ -130,27 +132,53 @@ describe("RealizedTotal", () => {
     expect(shown).not.toContain("125,00 $");
   });
 
-  it("shows no base-currency sum, and says what about the deals stopped it", () => {
+  // #195: a parcel sold without a recorded purchase day can never be valued in
+  // the base currency. It used to blank the whole figure for good; the server
+  // now leaves such positions out and counts them, and the screen shows the
+  // figure with the count beside it.
+  it("shows the sum of what can be valued and counts what was left out", () => {
     render(
       <RealizedTotal
-        total={makeTotal({ in_base: null, in_base_gap: "undated" })}
+        total={makeTotal({ in_base: 450_000, undated_positions: 2 })}
         mode="base"
       />,
     );
 
     expect(
-      screen.queryByTestId("realized-total-amounts"),
-    ).not.toBeInTheDocument();
-    const gap = screen.getByTestId("realized-total-gap");
+      norm(screen.getByTestId("realized-total-amounts").textContent ?? ""),
+    ).toContain("4 500,00 ₽");
+    expect(screen.queryByTestId("realized-total-gap")).not.toBeInTheDocument();
+    const note = screen.getByTestId("realized-total-undated");
+    expect(note.textContent).toContain("2");
     // A fact about the reader's own deals, and one that says of itself that it
-    // will not fix itself — not the name of a field that was left blank.
-    expect(gap.textContent).toContain("когда была куплена");
-    expect(gap.textContent).toContain("неоткуда");
-    expect(gap.textContent).not.toContain("дат");
-    // Saying "нет курса" here would name a cause that will never be the true
-    // one and promise a number that is never coming.
-    expect(gap.textContent).not.toContain("курс");
-    expect(gap.getAttribute("title")).toContain("никогда");
+    // will not fix itself. Saying "нет курса" here would name a cause that is
+    // never the true one and promise a number that is never coming.
+    expect(note.textContent).toContain("когда куплено");
+    expect(note.textContent).not.toContain("курс");
+    expect(note.getAttribute("title")).toContain("не появится");
+  });
+
+  // A sale of shares that arrived with no purchase price: counted as bought
+  // for nothing, the whole proceeds in the figure. True in every currency, so
+  // said in both modes, and never in place of the figure.
+  it("says in both modes that some sales were counted as bought for nothing", () => {
+    for (const mode of ["base", "native"] as const) {
+      cleanup();
+      render(
+        <RealizedTotal total={makeTotal({ unknown_cost_positions: 1 })} mode={mode} />,
+      );
+      expect(screen.getByTestId("realized-total-amounts")).toBeInTheDocument();
+      const note = screen.getByTestId("realized-total-unknown-cost");
+      expect(note.textContent).toContain("купленными за 0");
+      expect(note.getAttribute("title")).toContain("завышена");
+    }
+  });
+
+  it("says nothing about left-out positions when there are none", () => {
+    render(<RealizedTotal total={makeTotal()} mode="base" />);
+    expect(
+      screen.queryByTestId("realized-total-undated"),
+    ).not.toBeInTheDocument();
   });
 
   it("says the rate is what stopped it when nothing about the deals is unknown", () => {
@@ -168,17 +196,22 @@ describe("RealizedTotal", () => {
     expect(gap.getAttribute("title")).toContain("обнов");
   });
 
-  it("names both causes when different positions were stopped by different gaps", () => {
+  it("waits for the rate and still counts what will never be valued", () => {
     render(
       <RealizedTotal
-        total={makeTotal({ in_base: null, in_base_gap: "both" })}
+        total={makeTotal({
+          in_base: null,
+          in_base_gap: "no_rate",
+          undated_positions: 1,
+        })}
         mode="base"
       />,
     );
 
-    const gap = screen.getByTestId("realized-total-gap");
-    expect(gap.textContent).toContain("когда была куплена");
-    expect(gap.textContent).toContain("курс");
+    expect(screen.getByTestId("realized-total-gap").textContent).toContain(
+      "курс",
+    );
+    expect(screen.getByTestId("realized-total-undated")).toBeInTheDocument();
   });
 
   it("keeps showing the per-currency figures when only the converted sum is missing", () => {
@@ -188,12 +221,19 @@ describe("RealizedTotal", () => {
     // screen exists to remove.
     render(
       <RealizedTotal
-        total={makeTotal({ in_base: null, in_base_gap: "undated" })}
+        total={makeTotal({
+          in_base: null,
+          in_base_gap: "no_rate",
+          undated_positions: 1,
+        })}
         mode="native"
       />,
     );
 
     expect(screen.queryByTestId("realized-total-gap")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("realized-total-undated"),
+    ).not.toBeInTheDocument();
     expect(
       norm(screen.getByTestId("realized-total-amounts").textContent ?? ""),
     ).toContain("125,00 $");

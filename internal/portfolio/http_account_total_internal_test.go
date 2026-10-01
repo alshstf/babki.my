@@ -2,8 +2,10 @@ package portfolio
 
 import (
 	"testing"
+	"time"
 
 	"github.com/oapi-codegen/nullable"
+	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/platform/apitypes"
 )
@@ -41,13 +43,16 @@ func pos(currency, quantity string, cost int64, total, settled nullable.Nullable
 	return p
 }
 
-// TestAccountTotalCountsAHoldingThatDoesNotKnowWhatItCost: shares still held
-// with a basis of nought. Their whole market value counts as profit, so the
-// total is HIGHER than the truth by whatever was really paid — and the count is
-// the only thing that says so.
+// TestAccountTotalCountsAHoldingThatDoesNotKnowWhatItCost: shares counted as
+// bought for nothing (Position.has_unknown_cost — which basis that is, is
+// decided by hasUnknownCost and tested there). Their whole market value counts
+// as profit, so the total is HIGHER than the truth by whatever was really paid —
+// and the count is the only thing that says so.
 func TestAccountTotalCountsAHoldingThatDoesNotKnowWhatItCost(t *testing.T) {
 	at := newAccountTotals("RUB")
-	if err := at.addPosition(pos("RUB", "10", 0, minor(120_000), minor(0), false), nil, inBaseSameCurrency, gapNone); err != nil {
+	row := pos("RUB", "10", 0, minor(120_000), minor(0), false)
+	row.HasUnknownCost = true
+	if err := at.addPosition(row, nil, inBaseSameCurrency, gapNone); err != nil {
 		t.Fatalf("addPosition: %v", err)
 	}
 	got := at.result()
@@ -182,5 +187,70 @@ func TestAccountTotalRowContribution(t *testing.T) {
 				t.Errorf("zero_valued_positions = %d, want %v", got.ZeroValuedPositions, c.wantAtZero)
 			}
 		})
+	}
+}
+
+// hasUnknownCost reads the lots, not the position's total basis: a paper is
+// "bought for nothing" when some of its basis arrived with no price, held or
+// already sold — and not merely because nothing is left to hold.
+func TestWhichBasisCountsAsBoughtForNothing(t *testing.T) {
+	day := func(s string) *time.Time {
+		d, err := time.Parse(time.DateOnly, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &d
+	}
+	q := decimal.RequireFromString
+	for name, tc := range map[string]struct {
+		p           Position
+		any, inSale bool
+	}{
+		"held with no price": {
+			p:   Position{Lots: []Lot{{Quantity: q("10"), CostMinor: 0}}},
+			any: true,
+		},
+		"held, one lot priced and one not": {
+			p:   Position{Lots: []Lot{{Quantity: q("5"), CostMinor: 50_000, AcquiredOn: day("2024-03-01")}, {Quantity: q("5"), CostMinor: 0}}},
+			any: true,
+		},
+		"sold with no price": {
+			p:   Position{Realizations: []Realization{{Released: []ReleasedLot{{Quantity: q("10"), CostMinor: 0}}}}},
+			any: true, inSale: true,
+		},
+		"sold out of ordinary purchases": {
+			p: Position{Realizations: []Realization{{Released: []ReleasedLot{{Quantity: q("10"), CostMinor: 49_500, AcquiredOn: day("2024-03-01")}}}}},
+		},
+		"a shareless parcel of money is not shares bought for nothing": {
+			p: Position{Lots: []Lot{{Quantity: decimal.Zero, CostMinor: 0}}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := hasUnknownCost(&tc.p); got != tc.any {
+				t.Errorf("hasUnknownCost = %v, want %v", got, tc.any)
+			}
+			if got := soldUnknownCost(&tc.p); got != tc.inSale {
+				t.Errorf("soldUnknownCost = %v, want %v", got, tc.inSale)
+			}
+		})
+	}
+}
+
+// The count follows the paper's own flag, not its total basis: a paper with one
+// priced lot and one unpriced is counted, and so is one sold out of shares that
+// had no price — the old test "held, and a basis of nought" missed both.
+func TestAccountTotalCountsEveryPaperWithUnpricedBasis(t *testing.T) {
+	at := newAccountTotals("RUB")
+	partly := pos("RUB", "10", 50_000, minor(120_000), minor(0), false)
+	partly.HasUnknownCost = true
+	soldOut := pos("RUB", "0", 0, minor(49_500), minor(49_500), false)
+	soldOut.HasUnknownCost = true
+	for _, row := range []apitypes.Position{partly, soldOut} {
+		if err := at.addPosition(row, nil, inBaseSameCurrency, gapNone); err != nil {
+			t.Fatalf("addPosition: %v", err)
+		}
+	}
+	if got := at.result(); got.UnknownCostPositions != 2 {
+		t.Errorf("unknown_cost_positions = %d, want 2", got.UnknownCostPositions)
 	}
 }
