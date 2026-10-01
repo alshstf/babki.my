@@ -311,28 +311,28 @@ func TestRealizedTotalInBaseCountsAPositionAlreadyInTheBaseCurrency(t *testing.T
 	}
 }
 
-// TestRealizedTotalNamesWhichGapStoppedTheBaseSum is the finding this response
-// field exists for. When the base-currency total cannot be struck, nothing is
-// published in its place — a total missing one of its terms reads as a smaller
-// result, not as a gap — and the REASON travels as a fact from the code that
-// knows it, not as something a reader re-derives from the positions' flags.
+// TestRealizedTotalLeavesOutWhatCanNeverBeValuedAndWaitsForWhatCan: the two
+// reasons a position's base figure is missing are not the same news, and the
+// account's total treats them differently.
 //
-// The two reasons are not interchangeable, and one of them cannot be
-// reconstructed downstream at all. `has_undated_lots` speaks about the lots
-// still HELD, while a parcel that stopped a realized sum has by definition
-// already been sold; a client reading that flag would say "no rate yet" over a
-// permanent, unrecoverable gap and promise a number that is never coming.
+// A missing RATE is on its way — the backfill brings it — so the total is
+// withheld and `in_base_gap` says `no_rate`: published without that term, the
+// figure would quietly change later.
 //
-// Three accounts in one fixture, one for each answer:
+// A missing PURCHASE DAY never arrives. A total withheld over it is withheld for
+// good: one sale of a parcel that came by a transfer with no dates used to blank
+// the account's realized figure for ever, long after the position was closed.
+// Such a position is left out and COUNTED (the owner's ruling, #195 — the same
+// bargain the account's own total has had since #158).
 //
 //	fx USD->RUB: 60 from 2026-02-01, 90 from 2026-07-01 (nothing earlier)
-//	undated — receives 10 shares by a transfer whose per-lot breakdown was
-//	          never kept, then sells them: the retired parcel has no purchase
-//	          date, and no rate answers for a date nobody recorded
-//	norate  — buys on 2026-01-05, before the fx table begins, then sells: every
-//	          date is known and one of them has no rate YET
+//	undated — 10 shares in by a transfer with no stored breakdown, then sold
+//	norate  — bought 2026-01-05, before the fx table begins, then sold
 //	both    — one position of each kind
-func TestRealizedTotalNamesWhichGapStoppedTheBaseSum(t *testing.T) {
+//	mixed   — the undated position and an ordinary one: bought at $100.00 and
+//	          sold at $150.00, both under the rate of 90 -> (150 000 - 100 000)
+//	          x 90 = 4 500 000
+func TestRealizedTotalLeavesOutWhatCanNeverBeValuedAndWaitsForWhatCan(t *testing.T) {
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
@@ -348,23 +348,26 @@ func TestRealizedTotalNamesWhichGapStoppedTheBaseSum(t *testing.T) {
 	undated := createAccount(t, c, url, `{"name":"Без дат","type":"brokerage","currency":"USD"}`)
 	norate := createAccount(t, c, url, `{"name":"Без курса","type":"brokerage","currency":"USD"}`)
 	both := createAccount(t, c, url, `{"name":"И то и то","type":"brokerage","currency":"USD"}`)
+	mixed := createAccount(t, c, url, `{"name":"Без дат и обычная","type":"brokerage","currency":"USD"}`)
 	acme := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
 	beta := createInstrument(t, c, url, `{"type":"share","name":"Бета","ticker":"BETA","currency":"USD"}`)
 	gamma := createInstrument(t, c, url, `{"type":"share","name":"Гамма","ticker":"GAMMA","currency":"USD"}`)
+	delta := createInstrument(t, c, url, `{"type":"share","name":"Дельта","ticker":"DELTA","currency":"USD"}`)
+	omega := createInstrument(t, c, url, `{"type":"share","name":"Омега","ticker":"OMEGA","currency":"USD"}`)
 
-	for _, in := range []struct{ instrument, to string }{{acme.ID, undated.ID}, {beta.ID, both.ID}} {
+	for _, in := range []struct{ instrument, to string }{{acme.ID, undated.ID}, {beta.ID, both.ID}, {delta.ID, mixed.ID}} {
 		createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 			"occurred_on":%q,"quantity":"10","price":"100",
 			"amount_minor":-100000,"currency":"USD"}`, src.ID, in.instrument, earlyBuyOn))
 		createTransfer(t, c, url, fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,
 			"quantity":"10","occurred_on":%q}`, src.ID, in.to, in.instrument, transferOn))
 	}
-	// Turn both transfers into ones recorded before breakdowns were kept: the
+	// Turn the transfers into ones recorded before breakdowns were kept: the
 	// basis survives on the operation, the dates behind it do not.
 	if _, err := pool.Exec(t.Context(), `DELETE FROM operation_transfer_lots`); err != nil {
 		t.Fatalf("drop the stored breakdowns: %v", err)
 	}
-	for _, sale := range []struct{ account, instrument string }{{undated.ID, acme.ID}, {both.ID, beta.ID}} {
+	for _, sale := range []struct{ account, instrument string }{{undated.ID, acme.ID}, {both.ID, beta.ID}, {mixed.ID, delta.ID}} {
 		createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
 			"occurred_on":"2026-07-28","quantity":"10","price":"200",
 			"amount_minor":200000,"currency":"USD"}`, sale.account, sale.instrument))
@@ -378,38 +381,61 @@ func TestRealizedTotalNamesWhichGapStoppedTheBaseSum(t *testing.T) {
 			"occurred_on":"2026-07-28","quantity":"10","price":"40",
 			"amount_minor":40000,"currency":"USD"}`, acc, gamma.ID))
 	}
+	// The ordinary pair beside the undated one.
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-07-10","quantity":"10","price":"100",
+		"amount_minor":-100000,"currency":"USD"}`, mixed.ID, omega.ID))
+	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
+		"occurred_on":"2026-07-28","quantity":"10","price":"150",
+		"amount_minor":150000,"currency":"USD"}`, mixed.ID, omega.ID))
 
+	base := func(v int64) *int64 { return &v }
+	gap := func(v string) *string { return &v }
 	for _, tc := range []struct {
-		name       string
-		account    string
-		wantGap    string
-		wantNative int64
-		why        string
+		name        string
+		account     string
+		wantInBase  *int64
+		wantGap     *string
+		wantUndated int
+		wantNative  int64
+		why         string
 	}{
 		{
-			"undated", undated.ID, "undated", 100_000,
-			"the sale retired a parcel whose purchase date nobody recorded; no rate answers for a date that does not exist, and none ever will",
+			"undated", undated.ID, base(0), nil, 1, 100_000,
+			"the only position is the one nobody can date: it is left out and counted, and what is left comes to nought — said as a figure, not withheld for ever",
 		},
 		{
-			"norate", norate.ID, "no_rate", 10_000,
-			"every date is known and the fx table simply does not reach 2026-01-05 yet — the backfill closes that gap on its own",
+			"norate", norate.ID, nil, gap("no_rate"), 0, 10_000,
+			"every date is known and the fx table simply does not reach 2026-01-05 yet — the backfill closes that gap on its own, so the figure waits for it",
 		},
 		{
-			"both", both.ID, "both", 110_000,
-			"one position was stopped by an unrecorded purchase and another by a rate that has not arrived; naming only one of them promises the whole total is coming when half of it never is",
+			"both", both.ID, nil, gap("no_rate"), 1, 110_000,
+			"a rate is still on its way, so the figure waits; the position that will never be valued is counted all the same",
+		},
+		{
+			"mixed", mixed.ID, base(4_500_000), nil, 1, 150_000,
+			"the ordinary position is valued in full and the undated one is left out and counted — one unrecorded date must not cost the account its whole figure",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := accountPositions(t, c, url, tc.account).RealizedTotal
 
-			if got.InBase != nil {
-				t.Errorf("in_base = %d, want null: %s. A total missing one of its terms is an invented number, indistinguishable from a real one on screen", *got.InBase, tc.why)
+			switch {
+			case tc.wantInBase == nil && got.InBase != nil:
+				t.Errorf("in_base = %d, want null: %s", *got.InBase, tc.why)
+			case tc.wantInBase != nil && got.InBase == nil:
+				t.Errorf("in_base = null (%s), want %d: %s", gapOf(got), *tc.wantInBase, tc.why)
+			case tc.wantInBase != nil && *got.InBase != *tc.wantInBase:
+				t.Errorf("in_base = %d, want %d: %s", *got.InBase, *tc.wantInBase, tc.why)
 			}
-			if got.InBaseGap == nil {
-				t.Fatalf("in_base_gap = null while in_base is %s — the reader is left to guess, which is exactly what this field exists to prevent", gapOf(got))
+			switch {
+			case tc.wantGap == nil && got.InBaseGap != nil:
+				t.Errorf("in_base_gap = %q, want null: %s", *got.InBaseGap, tc.why)
+			case tc.wantGap != nil && (got.InBaseGap == nil || *got.InBaseGap != *tc.wantGap):
+				t.Errorf("in_base_gap = %s, want %q: %s", gapOf(got), *tc.wantGap, tc.why)
 			}
-			if *got.InBaseGap != tc.wantGap {
-				t.Errorf("in_base_gap = %q, want %q: %s", *got.InBaseGap, tc.wantGap, tc.why)
+			if got.UndatedPositions != tc.wantUndated {
+				t.Errorf("undated_positions = %d, want %d: %s", got.UndatedPositions, tc.wantUndated, tc.why)
 			}
 			// Whatever the conversion is missing, the positions' own currency
 			// always has a complete answer: an unrecorded purchase date costs

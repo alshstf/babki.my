@@ -322,6 +322,7 @@ type realizedTotalResp struct {
 	BaseCurrency          string                      `json:"base_currency"`
 	InBase                *int64                      `json:"in_base"`
 	InBaseGap             *string                     `json:"in_base_gap"`
+	UndatedPositions      int                         `json:"undated_positions"`
 }
 
 // currencyAmountResp mirrors apitypes.CurrencyAmount.

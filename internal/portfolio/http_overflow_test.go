@@ -262,9 +262,9 @@ func TestRealizedTotalsOverflowIsNotAGap(t *testing.T) {
 	if err := rt.add("EUR", nullable.NewNullableWithValue[int64](0), big, gapNone); err == nil {
 		t.Fatal("the overflowing total was accepted; there is nothing to publish and nothing was said")
 	}
-	if rt.undated || rt.noRate {
-		t.Errorf("overflow recorded as a gap (undated=%v, no_rate=%v); the account header would then explain a broken total as data that has yet to arrive",
-			rt.undated, rt.noRate)
+	if rt.undatedPositions != 0 || rt.noRate {
+		t.Errorf("overflow recorded as a gap (undated=%d, no_rate=%v); the account header would then explain a broken total as data that has yet to arrive",
+			rt.undatedPositions, rt.noRate)
 	}
 }
 

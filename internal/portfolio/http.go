@@ -1499,7 +1499,6 @@ type accountTotals struct {
 	// result rather than as a gap.
 	unknowable     map[string]bool
 	inBaseMinor    int64
-	undated        bool
 	noRate         bool
 	zeroValued     int
 	zeroValuedCost map[string]int64
@@ -1794,17 +1793,10 @@ func (at *accountTotals) result() apitypes.AccountTotal {
 	}
 	sort.Strings(out.NoRateCurrencies)
 
-	switch {
-	case at.undated && at.noRate:
-		out.InBase = nullable.NewNullNullable[int64]()
-		out.InBaseGap = nullable.NewNullableWithValue(apitypes.Both)
-	case at.undated:
-		out.InBase = nullable.NewNullNullable[int64]()
-		out.InBaseGap = nullable.NewNullableWithValue(apitypes.Undated)
-	case at.noRate:
+	if at.noRate {
 		out.InBase = nullable.NewNullNullable[int64]()
 		out.InBaseGap = nullable.NewNullableWithValue(apitypes.NoRate)
-	default:
+	} else {
 		out.InBase = nullable.NewNullableWithValue(at.inBaseMinor)
 		out.InBaseGap = nullable.NewNullNullable[apitypes.RealizedGap]()
 	}
@@ -1872,7 +1864,13 @@ type realizedTotals struct {
 	// real one, which is the rule the base total below already stands on.
 	notInOneCurrency map[string]bool
 	inBaseMinor      int64
-	undated          bool
+	// undatedPositions counts the positions LEFT OUT of the base sum because a
+	// disposal released a parcel nobody knows the purchase day of. That gap is
+	// permanent — no rate answers for a day that was never recorded — so the
+	// position is excluded and counted rather than taking the account's whole
+	// figure down for good. The same bargain accountTotals strikes, and the
+	// owner's ruling for both (#158, #195).
+	undatedPositions int
 	noRate           bool
 }
 
@@ -1923,10 +1921,10 @@ func (rt *realizedTotals) add(currency string, nativeMinor nullable.Nullable[int
 				err, currency, nativeMinor.MustGet(), rt.byCurrency[currency])
 		}
 	}
-	inBase := rt.inBaseMinor
+	inBase, undated := rt.inBaseMinor, 0
 	switch gap {
 	case gapUndated:
-		rt.undated = true
+		undated++
 	case gapNoRate:
 		rt.noRate = true
 	default:
@@ -1938,6 +1936,7 @@ func (rt *realizedTotals) add(currency string, nativeMinor nullable.Nullable[int
 		}
 	}
 	rt.byCurrency[currency], rt.inBaseMinor = native, inBase
+	rt.undatedPositions += undated
 	return nil
 }
 
@@ -1968,21 +1967,15 @@ func (rt *realizedTotals) result() apitypes.RealizedTotal {
 		return out.ByCurrency[i].Currency < out.ByCurrency[j].Currency
 	})
 
-	// A total missing one of its terms is an invented number — smaller or
-	// larger than the truth and indistinguishable from a real one on screen —
-	// so nothing at all is published in its place, and the reason is named
-	// instead of left for the reader to guess from the rows.
-	switch {
-	case rt.undated && rt.noRate:
-		out.InBase = nullable.NewNullNullable[int64]()
-		out.InBaseGap = nullable.NewNullableWithValue(apitypes.Both)
-	case rt.undated:
-		out.InBase = nullable.NewNullNullable[int64]()
-		out.InBaseGap = nullable.NewNullableWithValue(apitypes.Undated)
-	case rt.noRate:
+	// A missing RATE withholds the figure: the rate arrives, and a total
+	// published without that position meanwhile would quietly change later. A
+	// missing purchase DAY never arrives, so those positions are left out and
+	// counted beside the figure instead (see undatedPositions).
+	out.UndatedPositions = rt.undatedPositions
+	if rt.noRate {
 		out.InBase = nullable.NewNullNullable[int64]()
 		out.InBaseGap = nullable.NewNullableWithValue(apitypes.NoRate)
-	default:
+	} else {
 		out.InBase = nullable.NewNullableWithValue(rt.inBaseMinor)
 		out.InBaseGap = nullable.NewNullNullable[apitypes.RealizedGap]()
 	}

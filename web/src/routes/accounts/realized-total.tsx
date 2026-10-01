@@ -39,20 +39,10 @@ function gapWording(
   gap: RealizedGap,
 ): { text: string; hint: string } | undefined {
   switch (gap) {
-    case "undated":
-      return {
-        text: t("positions.realizedGapUndated"),
-        hint: t("positions.realizedGapUndatedHint"),
-      };
     case "no_rate":
       return {
         text: t("positions.realizedGapNoRate"),
         hint: t("positions.realizedGapNoRateHint"),
-      };
-    case "both":
-      return {
-        text: t("positions.realizedGapBoth"),
-        hint: t("positions.realizedGapBothHint"),
       };
     default:
       return assertUnreachable(gap);
@@ -127,6 +117,11 @@ export function RealizedTotal({
           }));
 
   const wording = gap ? gapWording(t, gap) : undefined;
+  // Positions whose result in the base currency can never be struck — a parcel
+  // sold without a recorded purchase day — are left out of the figure by the
+  // server and counted. A statement about the base-currency figure alone: in
+  // the positions' own currency they are counted in full.
+  const undated = anyRealized && mode === "base" ? total.undated_positions : 0;
   // THE TAX THE ACCOUNT ITSELF WAS CHARGED, beside the result it was charged
   // against. It is not part of any position's figures and never can be — the
   // broker takes it against the year's accumulated base, not against a paper —
@@ -159,7 +154,7 @@ export function RealizedTotal({
   // what the named gap exists to prevent, so that case must fall through to the
   // same blank as no gap at all rather than render the label over an empty
   // amount.
-  if (!wording && figures.length === 0 && tax.length === 0) return null;
+  if (!wording && figures.length === 0 && tax.length === 0 && undated === 0) return null;
   return (
     <div
       className="mt-2 flex flex-wrap items-baseline gap-x-2 text-sm"
@@ -206,6 +201,15 @@ export function RealizedTotal({
               </span>
             </span>
           ))}
+        </span>
+      )}
+      {undated > 0 && (
+        <span
+          data-testid="realized-total-undated"
+          className="text-muted-foreground"
+          title={t("positions.realizedUndatedHint")}
+        >
+          {t("positions.realizedUndated", { count: undated })}
         </span>
       )}
     </div>
