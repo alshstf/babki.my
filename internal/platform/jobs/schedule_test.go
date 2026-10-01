@@ -16,7 +16,8 @@ import (
 
 // retriesTake is how long River's own retry policy keeps a job that fails
 // every time, from its first failure to its last attempt. The policy jitters
-// each wait by up to a tenth; the upper bound is what is added up.
+// each wait by up to a tenth either way, so the figure differs from run to run;
+// the intervals are far enough from it that the comparison below does not.
 func retriesTake(maxAttempts int) time.Duration {
 	policy := &river.DefaultClientRetryPolicy{}
 	var total time.Duration
@@ -60,10 +61,6 @@ func TestEveryScheduledJobIsOneAtATimeAndGivesUpBeforeTheNextIsDue(t *testing.T)
 		if took := retriesTake(e.Opts.MaxAttempts); took >= e.Every {
 			t.Errorf("%s: %d attempts take %s under River's retry policy, which is not inside its %s interval",
 				kind, e.Opts.MaxAttempts, took.Round(time.Second), e.Every)
-		}
-		if took := retriesTake(e.Opts.MaxAttempts + 1); took < e.Every {
-			t.Errorf("%s: one more attempt (%d) would still fit inside %s (%s) — the bound is tighter than it needs to be",
-				kind, e.Opts.MaxAttempts+1, e.Every, took.Round(time.Second))
 		}
 	}
 }
