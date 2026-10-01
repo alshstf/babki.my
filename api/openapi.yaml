@@ -481,6 +481,53 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/v1/operations/arrivals:
+    post:
+      operationId: createArrival
+      description: >-
+        Records shares arriving from another broker on an account — a transfer_in with no
+        sibling, for an account no importer feeds. A move between two of the owner's accounts
+        is POST /api/v1/operations/transfer instead. Without `purchases` the shares arrive
+        bought for nothing (Position.has_unknown_cost) and can be given them later with
+        PUT /api/v1/operations/{operationId}/purchases; with them, the same rules apply here.
+        409 when the account's journal cannot take the arrival — a position already held in
+        another currency, say.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateArrivalRequest" }
+      responses:
+        "201":
+          description: The arrival as stored
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Operation" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/instruments/{instrumentId}/arrivals:
+    get:
+      operationId: listArrivals
+      description: >-
+        Every occasion on which shares of this paper reached this account by a transfer, oldest
+        first, each with the purchases recorded behind it. It is what a screen asking for the
+        price of shares that arrived without one reads: an arrival from another broker can be
+        given its purchases here; one moved from another of the owner's accounts names that
+        account, which is where its purchases are to be stated.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: instrumentId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The arrivals
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ArrivalsResponse" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /api/v1/operations/transfer:
     post:
       operationId: createTransfer
@@ -961,6 +1008,51 @@ components:
           minLength: 8
           maxLength: 1024
           description: "At least eight CHARACTERS and at most 1024, counted as Unicode code points — which is what `minLength` and `maxLength` count here and what the server counts. It used to count BYTES while its own refusal said «characters», so a seven-letter Cyrillic password was fourteen bytes and went through, and this document could not state the rule without stating one stricter than the code (#117). The count moved to code points rather than the sentence to bytes, because the sentence is what the person reads. The ceiling is there so that what gets hashed has a size the server chose. NOT DECLARED ON LoginRequest — see it."
+    CreateArrivalRequest:
+      type: object
+      required: [account_id, instrument_id, occurred_on, quantity, currency]
+      properties:
+        account_id: { type: string, format: uuid }
+        instrument_id: { type: string, format: uuid }
+        occurred_on: { type: string, description: "Date YYYY-MM-DD the shares arrived; the same bounds as an operation's." }
+        quantity: { type: string, description: "Decimal as string: positive, at most 10 decimal places." }
+        currency: { type: string, pattern: "^[A-Z]{3}$", description: "The paper's currency — what its purchases were paid in." }
+        note: { type: string }
+        purchases:
+          type: array
+          items: { $ref: "#/components/schemas/StatedPurchase" }
+          description: "The purchases behind the shares, when known — the same rules as StatePurchasesRequest. Omitted or empty: bought for nothing until stated."
+    ArrivalsResponse:
+      type: object
+      required: [arrivals]
+      properties:
+        arrivals:
+          type: array
+          items: { $ref: "#/components/schemas/Arrival" }
+    Arrival:
+      type: object
+      required: [operation_id, occurred_on, quantity, currency, cost_minor, source, note, from_another_broker, from_account_id, purchases]
+      properties:
+        operation_id: { type: string, format: uuid }
+        occurred_on: { type: string, description: "Date YYYY-MM-DD the shares arrived." }
+        quantity: { type: string, description: "Decimal as string." }
+        currency: { type: string }
+        cost_minor: { type: integer, format: int64, description: "The arrival's basis in minor units of `currency`: 0 for shares that arrived bought for nothing." }
+        source: { type: string, description: "Who wrote the row: manual, or the importer that did." }
+        note: { type: string }
+        from_another_broker: { type: boolean, description: "True for shares with no other half in this program — the ones PUT /api/v1/operations/{operationId}/purchases accepts." }
+        from_account_id: { type: string, format: uuid, nullable: true, description: "For shares moved from another of the owner's accounts, that account: their purchases are stated where they first arrived. Null otherwise." }
+        purchases:
+          type: array
+          items: { $ref: "#/components/schemas/ArrivalPurchase" }
+          description: "The purchases recorded behind the shares, in the order they were stated or released. Empty when none are — a basis given by hand as a total, or none at all."
+    ArrivalPurchase:
+      type: object
+      required: [quantity, cost_minor, acquired_on]
+      properties:
+        quantity: { type: string, description: "Decimal as string." }
+        cost_minor: { type: integer, format: int64, description: "What these shares cost in all, commission included, in minor units of the arrival's currency." }
+        acquired_on: { type: string, nullable: true, description: "Date YYYY-MM-DD they were bought, or null when not recorded." }
     StatePurchasesRequest:
       type: object
       required: [purchases]

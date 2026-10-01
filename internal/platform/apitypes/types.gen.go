@@ -708,6 +708,50 @@ type AccountWithBalance struct {
 	Type          AccountType                           `json:"type"`
 }
 
+// Arrival defines model for Arrival.
+type Arrival struct {
+	// CostMinor The arrival's basis in minor units of `currency`: 0 for shares that arrived bought for nothing.
+	CostMinor int64  `json:"cost_minor"`
+	Currency  string `json:"currency"`
+
+	// FromAccountId For shares moved from another of the owner's accounts, that account: their purchases are stated where they first arrived. Null otherwise.
+	FromAccountId nullable.Nullable[openapi_types.UUID] `json:"from_account_id"`
+
+	// FromAnotherBroker True for shares with no other half in this program — the ones PUT /api/v1/operations/{operationId}/purchases accepts.
+	FromAnotherBroker bool   `json:"from_another_broker"`
+	Note              string `json:"note"`
+
+	// OccurredOn Date YYYY-MM-DD the shares arrived.
+	OccurredOn  string             `json:"occurred_on"`
+	OperationId openapi_types.UUID `json:"operation_id"`
+
+	// Purchases The purchases recorded behind the shares, in the order they were stated or released. Empty when none are — a basis given by hand as a total, or none at all.
+	Purchases []ArrivalPurchase `json:"purchases"`
+
+	// Quantity Decimal as string.
+	Quantity string `json:"quantity"`
+
+	// Source Who wrote the row: manual, or the importer that did.
+	Source string `json:"source"`
+}
+
+// ArrivalPurchase defines model for ArrivalPurchase.
+type ArrivalPurchase struct {
+	// AcquiredOn Date YYYY-MM-DD they were bought, or null when not recorded.
+	AcquiredOn nullable.Nullable[string] `json:"acquired_on"`
+
+	// CostMinor What these shares cost in all, commission included, in minor units of the arrival's currency.
+	CostMinor int64 `json:"cost_minor"`
+
+	// Quantity Decimal as string.
+	Quantity string `json:"quantity"`
+}
+
+// ArrivalsResponse defines model for ArrivalsResponse.
+type ArrivalsResponse struct {
+	Arrivals []Arrival `json:"arrivals"`
+}
+
 // BalancePoint defines model for BalancePoint.
 type BalancePoint struct {
 	AmountMinor int64 `json:"amount_minor"`
@@ -789,6 +833,25 @@ type CreateAccountRequest struct {
 	Name        string                                `json:"name"`
 	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
 	Type        AccountType                           `json:"type"`
+}
+
+// CreateArrivalRequest defines model for CreateArrivalRequest.
+type CreateArrivalRequest struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+
+	// Currency The paper's currency — what its purchases were paid in.
+	Currency     string             `json:"currency"`
+	InstrumentId openapi_types.UUID `json:"instrument_id"`
+	Note         *string            `json:"note,omitempty"`
+
+	// OccurredOn Date YYYY-MM-DD the shares arrived; the same bounds as an operation's.
+	OccurredOn string `json:"occurred_on"`
+
+	// Purchases The purchases behind the shares, when known — the same rules as StatePurchasesRequest. Omitted or empty: bought for nothing until stated.
+	Purchases *[]StatedPurchase `json:"purchases,omitempty"`
+
+	// Quantity Decimal as string: positive, at most 10 decimal places.
+	Quantity string `json:"quantity"`
 }
 
 // CreateInstrumentEventRequest A corporate action recorded by hand. Its `source` is always `manual`: the exchange's own rows are written by the job that reads the exchange, and a request claiming to be one would be a row nobody could check and the job would overwrite.
@@ -1879,6 +1942,9 @@ type UpdateMemberJSONRequestBody = UpdateMemberRequest
 
 // CreateOperationJSONRequestBody defines body for CreateOperation for application/json ContentType.
 type CreateOperationJSONRequestBody = CreateOperationRequest
+
+// CreateArrivalJSONRequestBody defines body for CreateArrival for application/json ContentType.
+type CreateArrivalJSONRequestBody = CreateArrivalRequest
 
 // CreateTransferJSONRequestBody defines body for CreateTransfer for application/json ContentType.
 type CreateTransferJSONRequestBody = TransferRequest
