@@ -327,3 +327,48 @@ func TestOperationsJournalAndTransfers(t *testing.T) {
 		t.Errorf("vera create = %d, want 403", resp.StatusCode)
 	}
 }
+
+// TestATradeWithoutAnAmountGetsTheServersOwn: a buy or a sell that states its
+// quantity and price may leave the amount out, and the server records
+// quantity × price in its own rounding. Anything else without an amount is
+// refused, and an amount that IS given is taken as given.
+func TestATradeWithoutAnAmountGetsTheServersOwn(t *testing.T) {
+	url, c := newAPI(t)
+	acc := mkAccount(t, url, c, "Брокер", "RUB")
+	inst := mkInstrument(t, url, c, `{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`)
+
+	post := func(body string) (int, journalItem) {
+		t.Helper()
+		resp := do(t, c, "POST", url+"/api/v1/operations", body)
+		var item journalItem
+		if resp.StatusCode == 201 {
+			decodeJSON(t, resp, &item)
+		}
+		return resp.StatusCode, item
+	}
+	trade := func(typ, extra string) string {
+		return fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":%q,"occurred_on":"2026-03-02","currency":"RUB"%s}`,
+			acc, inst, typ, extra)
+	}
+
+	// 3 × 0.335 = 1.005, half a kopeck over: 1.01, and a buy is money leaving.
+	if status, got := post(trade("buy", `,"quantity":"3","price":"0.335"`)); status != 201 || got.AmountMinor != -101 {
+		t.Errorf("buy without an amount: %d, amount %d; want 201 and -101", status, got.AmountMinor)
+	}
+	if status, got := post(trade("sell", `,"quantity":"1","price":"0.335"`)); status != 201 || got.AmountMinor != 34 {
+		t.Errorf("sell without an amount: %d, amount %d; want 201 and 34", status, got.AmountMinor)
+	}
+	// Given, it is the figure: a total that includes what the price does not.
+	if status, got := post(trade("buy", `,"quantity":"1","price":"100","amount_minor":-10300`)); status != 201 || got.AmountMinor != -10_300 {
+		t.Errorf("buy with its own amount: %d, amount %d; want 201 and -10300", status, got.AmountMinor)
+	}
+	for name, body := range map[string]string{
+		"a buy with no price":    trade("buy", `,"quantity":"3"`),
+		"a buy with no quantity": trade("buy", `,"price":"3"`),
+		"a dividend":             trade("dividend", ``),
+	} {
+		if status, _ := post(body); status != 400 {
+			t.Errorf("%s and no amount: %d, want 400", name, status)
+		}
+	}
+}

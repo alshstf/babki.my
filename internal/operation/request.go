@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/platform/apitypes"
 )
@@ -65,6 +66,11 @@ func OperationFromCreateRequest(req apitypes.CreateOperationRequest) (Operation,
 		instrumentID = &v
 	}
 
+	amountMinor, err := requestAmount(Type(req.Type), req.AmountMinor, quantity, price)
+	if err != nil {
+		return Operation{}, err
+	}
+
 	feeMinor := int64(0)
 	if req.FeeMinor != nil {
 		feeMinor = *req.FeeMinor
@@ -82,10 +88,28 @@ func OperationFromCreateRequest(req apitypes.CreateOperationRequest) (Operation,
 		SettledOn:    settledOn,
 		Quantity:     quantity,
 		Price:        price,
-		AmountMinor:  req.AmountMinor,
+		AmountMinor:  amountMinor,
 		Currency:     req.Currency,
 		FeeMinor:     feeMinor,
 		Note:         note,
 		SplitRatio:   splitRatio,
 	}, nil
+}
+
+// requestAmount is the amount a create request carries: the one it states, or —
+// on a buy or a sell that gives both a quantity and a price and no amount — the
+// one the server works out (see TradeAmountMinor). Anything else without an
+// amount has none to work out and is refused by name.
+func requestAmount(typ Type, given *int64, quantity, price *decimal.Decimal) (int64, error) {
+	if given != nil {
+		return *given, nil
+	}
+	if (typ != TypeBuy && typ != TypeSell) || quantity == nil || price == nil {
+		return 0, BadFieldError{Message: "amount_minor is required; only a buy or a sell that gives both quantity and price may leave it to the server"}
+	}
+	amount, err := TradeAmountMinor(typ, *quantity, *price)
+	if err != nil {
+		return 0, BadFieldError{Message: "quantity × price does not fit in an amount"}
+	}
+	return amount, nil
 }
