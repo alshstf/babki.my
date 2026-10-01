@@ -12,6 +12,11 @@ import type { StatedPurchase } from "@/api/arrivals";
 // multiplies money (see StatedPurchase in the API contract).
 export type PurchaseRow = {
   id: number;
+  // Whether the owner has typed into the row. A row filled in for them — the
+  // quantity of the shares that arrived — says nothing about what is missing
+  // until they have touched it: a form complaining about a field nobody typed
+  // in reads as an error the reader made.
+  touched: boolean;
   quantity: string;
   price: string;
   total: string;
@@ -22,7 +27,7 @@ export type PurchaseRow = {
 let nextRowId = 1;
 
 export function newPurchaseRow(quantity = ""): PurchaseRow {
-  return { id: nextRowId++, quantity, price: "", total: "", fee: "", acquiredOn: "" };
+  return { id: nextRowId++, touched: false, quantity, price: "", total: "", fee: "", acquiredOn: "" };
 }
 
 const PRICE_RE = /^\d+(\.\d{1,10})?$/;
@@ -96,7 +101,7 @@ export function PurchasesEditor({
 }) {
   const { t } = useTranslation();
   const update = (id: number, patch: Partial<PurchaseRow>) =>
-    onChange(rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+    onChange(rows.map((row) => (row.id === id ? { ...row, ...patch, touched: true } : row)));
   const quantities = rows.map((row) => normalizeQuantity(row.quantity));
   const counted = quantitySum(quantities.filter((q) => isPositiveDecimal(q)));
   const matched = quantitiesMatch(quantities, expected);
@@ -104,8 +109,7 @@ export function PurchasesEditor({
   return (
     <div className="grid gap-2" data-testid={`${idPrefix}-editor`}>
       {rows.map((row, index) => {
-        const touched = row.quantity !== "" || row.price !== "" || row.total !== "" || row.fee !== "" || row.acquiredOn !== "";
-        const problem = touched ? rowProblem(row, arrivedOn) : null;
+        const problem = row.touched ? rowProblem(row, arrivedOn) : null;
         const field = (name: string) => `${idPrefix}-${index}-${name}`;
         return (
           <div key={row.id} className="grid gap-1 rounded-md border p-2">

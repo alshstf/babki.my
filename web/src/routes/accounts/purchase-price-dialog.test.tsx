@@ -98,8 +98,10 @@ describe("PurchasePriceDialog", () => {
 
     expect(await screen.findByText(/Цена покупки не указана/)).toBeInTheDocument();
     const prefix = "arrival-op-arrival-0";
-    // The one row starts with every share that arrived.
+    // The one row starts with every share that arrived, and says nothing is
+    // missing until the owner has typed into it.
     expect((screen.getByLabelText(/Количество/) as HTMLInputElement).value).toBe("10");
+    expect(screen.queryByTestId("arrival-op-arrival-problem")).not.toBeInTheDocument();
     fireEvent.change(document.getElementById(`${prefix}-price`)!, { target: { value: "60,10" } });
     fireEvent.change(document.getElementById(`${prefix}-date`)!, { target: { value: "2025-02-03" } });
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
