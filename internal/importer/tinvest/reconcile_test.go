@@ -133,6 +133,43 @@ func TestCompareHoldingsSaysMatchedWhenBothSidesAgree(t *testing.T) {
 	}
 }
 
+// TestOnePaperHeldOnTwoListingsIsOneHolding: the broker reports a paper once per
+// listing (AAPL and AAPL-RM), both resolve to one catalog row, and the journal
+// holds their sum. Each row used to be compared against the WHOLE journal
+// position — "10 against 15" and "5 against 15" — so such an account could never
+// agree (#135).
+func TestOnePaperHeldOnTwoListingsIsOneHolding(t *testing.T) {
+	inst := uuid.New()
+	index := byUID(map[string]uuid.UUID{"uid-aapl": inst, "uid-aapl-rm": inst})
+	broker := []PortfolioPosition{
+		{InstrumentUID: "uid-aapl", Quantity: Quotation{Units: 10}},
+		{InstrumentUID: "uid-aapl-rm", Quantity: Quotation{Units: 5}},
+	}
+	labels := map[uuid.UUID]string{inst: "AAPL"}
+
+	agree := CompareHoldings(broker, nil, []operation.Operation{
+		aCashEntry(operation.TypeDeposit, 15_000, "RUB"),
+		aBuy(inst, "15", -15_000, 0, "RUB"),
+	}, index, labels)
+	if agree.Status != ReconcileMatched {
+		t.Fatalf("status = %q, want %q — 10 + 5 at the broker against 15 in the journal: %+v",
+			agree.Status, ReconcileMatched, agree.Mismatches)
+	}
+
+	differ := CompareHoldings(broker, nil, []operation.Operation{
+		aCashEntry(operation.TypeDeposit, 12_000, "RUB"),
+		aBuy(inst, "12", -12_000, 0, "RUB"),
+	}, index, labels)
+	if len(differ.Mismatches) != 1 {
+		t.Fatalf("mismatches = %+v, want exactly one row for the one paper", differ.Mismatches)
+	}
+	m := differ.Mismatches[0]
+	if !m.Broker.Equal(rub("15")) || !m.Journal.Equal(rub("12")) {
+		t.Errorf("row says broker %s against journal %s, want 15 against 12 — the broker's side is the sum of its listings",
+			m.Broker, m.Journal)
+	}
+}
+
 // TestABlockedPositionCountsAsItsWholeQuantity pins the first half of the
 // asymmetry this whole comparison turns on: the broker's Blocked on a
 // SECURITY is a boolean ("halted at the depository"), not a count, and
