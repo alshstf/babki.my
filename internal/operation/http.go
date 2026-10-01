@@ -491,23 +491,9 @@ type datedMinor struct {
 // date would reintroduce exactly the invented figure this mechanism removed.
 // See amountTerms' body for where the whole row goes null instead.
 //
-// A breakdown that has drifted from the sum it must equal is refused before
-// it becomes a ruble figure at all, via portfolio.CheckTransferLots — the
-// same check portfolio.Compute already runs on the arriving leg while
-// folding the journal into positions (see its TypeTransferIn branch),
-// reused rather than re-implemented, because "does this breakdown describe
-// the operation carrying it" is one invariant regardless of who is asking.
-// It is safe to reuse unmodified for the departing leg too:
-// Service.CreateTransfer writes Quantity, AmountMinor and OccurredOn
-// identically on both legs of a pair, and Store.attachTransferLots reads the
-// very same stored pieces onto both (see its doc), so a departing operation
-// and its arriving twin are, as far as this check can tell, indistinguishable
-// from one another. Before this, the engine's own check covered only the
-// arriving leg's POSITION — a different endpoint answering a different
-// question — and this journal path had no check of its own at all, on
-// either leg: a breakdown that ever drifted from its sum would fail loudly
-// on the receiver's positions screen while silently misleading every reader
-// of the journal, on both accounts, forever.
+// A breakdown that has drifted from the sum it must equal is refused before it
+// becomes a ruble figure, by checkStoredLots — the same check the store runs on
+// what it writes, which knows a spin-off's departing leg from a transfer's.
 func amountTerms(o Operation) (terms []datedMinor, headline rateDate, ok bool, err error) {
 	if len(o.TransferLots) == 0 {
 		if carriesCostBasis(o) {
@@ -536,7 +522,7 @@ func amountTerms(o Operation) (terms []datedMinor, headline rateDate, ok bool, e
 		own := rateDate{on: o.OccurredOn, gap: inBaseNoRateOperationDate}
 		return []datedMinor{{minor: o.AmountMinor, date: own}}, own, true, nil
 	}
-	if err := portfolio.CheckTransferLots(o); err != nil {
+	if err := checkStoredLots(o); err != nil {
 		return nil, rateDate{}, false, err
 	}
 	terms = make([]datedMinor, 0, len(o.TransferLots))

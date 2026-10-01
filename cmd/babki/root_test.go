@@ -49,6 +49,15 @@ func TestNewCbrHTTPClientHasABoundedTimeout(t *testing.T) {
 	}
 }
 
+// TestNewMoexHTTPClientHasABoundedTimeout: the same guard for MOEX ISS, which
+// used to run on http.DefaultClient with no bound at all (#191).
+func TestNewMoexHTTPClientHasABoundedTimeout(t *testing.T) {
+	c := newMoexHTTPClient()
+	if c.Timeout != moexHTTPTimeout || c.Timeout <= 0 {
+		t.Fatalf("newMoexHTTPClient().Timeout = %s, want the positive bound %s", c.Timeout, moexHTTPTimeout)
+	}
+}
+
 // TestTheJobQueueIsGivenLessTimeToStopThanTheProcessWaitsForIt keeps two
 // timeouts in the order their comments claim they are in. They live in
 // different packages and neither can see the other's value, so nothing but

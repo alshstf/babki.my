@@ -334,7 +334,12 @@ func compareInstruments(brokerPositions []PortfolioPosition, positions map[uuid.
 	index InstrumentIndex, labels map[uuid.UUID]string, passports map[string]InstrumentBrief,
 ) []ReconcileMismatch {
 	out := []ReconcileMismatch{}
-	compared := make(map[uuid.UUID]bool, len(brokerPositions))
+	// What the broker holds of each catalog row, summed: one paper on two
+	// listings is two broker positions and one holding here, and comparing each
+	// listing against the whole journal position reports the paper twice (#135).
+	// order keeps the broker's own sequence so the result is deterministic.
+	held := make(map[uuid.UUID]decimal.Decimal, len(brokerPositions))
+	var order []uuid.UUID
 
 	for _, p := range brokerPositions {
 		// THE BROKER'S LIST OF POSITIONS IS NOT A LIST OF SECURITIES: the
@@ -376,13 +381,18 @@ func compareInstruments(brokerPositions []PortfolioPosition, positions map[uuid.
 			out = append(out, m)
 			continue
 		}
-		compared[id] = true
+		if _, seen := held[id]; !seen {
+			order = append(order, id)
+		}
+		held[id] = held[id].Add(brokerQty)
+	}
 
+	for _, id := range order {
 		ours := decimal.Zero
 		if pos, found := positions[id]; found {
 			ours = pos.Quantity
 		}
-		if brokerQty.Equal(ours) {
+		if held[id].Equal(ours) {
 			continue
 		}
 		instrumentID := id
@@ -390,7 +400,7 @@ func compareInstruments(brokerPositions []PortfolioPosition, positions map[uuid.
 			Kind:         MismatchInstrument,
 			InstrumentID: &instrumentID,
 			Label:        instrumentLabel(labels, id),
-			Broker:       brokerQty,
+			Broker:       held[id],
 			Journal:      ours,
 		})
 	}
@@ -400,7 +410,7 @@ func compareInstruments(brokerPositions []PortfolioPosition, positions map[uuid.
 		// with a quantity of zero, and the broker does not report such a thing
 		// at all. Calling that a difference would put a permanent false alarm
 		// on the screen of anyone who ever closed a trade.
-		if compared[id] || pos.Quantity.IsZero() {
+		if _, compared := held[id]; compared || pos.Quantity.IsZero() {
 			continue
 		}
 		instrumentID := id
