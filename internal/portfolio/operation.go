@@ -1,6 +1,7 @@
 package portfolio
 
 import (
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -118,6 +119,17 @@ var validTypes = map[Type]bool{
 }
 
 func (t Type) Valid() bool { return validTypes[t] }
+
+// Types lists every operation type, sorted. The schema's CHECK on
+// operations.type names the same ones, and a test holds the two together.
+func Types() []Type {
+	out := make([]Type, 0, len(validTypes))
+	for t := range validTypes {
+		out = append(out, t)
+	}
+	slices.Sort(out)
+	return out
+}
 
 // RequiresInstrument reports whether the type is meaningless without one.
 // Dividend and coupon are deliberately excluded: they may be recorded at

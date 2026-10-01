@@ -802,9 +802,11 @@ type CreateInstrumentEventRequest struct {
 	// BasisShare Decimal as string, greater than 0 and less than 1. Required for a spin-off, refused on the other two. See InstrumentEvent.basis_share.
 	BasisShare nullable.Nullable[string] `json:"basis_share,omitempty"`
 
-	// EffectiveOn See InstrumentEvent.effective_on — the first day the paper trades in the new quantity at the venue where it is held, NOT the record date. Refused if later than today.
+	// EffectiveOn See InstrumentEvent.effective_on — the first day the paper trades in the new quantity at the venue where it is held, NOT the record date. Refused if later than today or earlier than 1900-01-01, the floor the journal sets for the operations an event becomes.
 	EffectiveOn openapi_types.Date `json:"effective_on"`
-	Isin        string             `json:"isin"`
+
+	// Isin ISIN (ISO 6166): two letters, nine letters or digits, one digit, e.g. US0231351067. Trimmed and upper-cased by the server before it is stored, because the catalog and the corporate-actions registry match it as a string; anything else is a 400.
+	Isin string `json:"isin"`
 
 	// Kind What happened to the paper. `split`: the quantity is rewritten and nothing else — the money spent stands and so do the acquisition dates, which is why it is tax-neutral everywhere this program models. `conversion`: one paper becomes another (a depositary receipt into the share it represented, a fund into its successor); the basis and the dates travel with it and nothing is realized (НК РФ ст. 214.1 п. 13). `spin_off`: the original stands and a second paper is handed out beside it, taking part of the basis with it (НК РФ ст. 277 п. 7).
 	//
@@ -814,7 +816,7 @@ type CreateInstrumentEventRequest struct {
 	RatioFrom int64               `json:"ratio_from"`
 	RatioTo   int64               `json:"ratio_to"`
 
-	// ResultIsin Required for a conversion and a spin-off, refused on a split. See InstrumentEvent.result_isin.
+	// ResultIsin Required for a conversion and a spin-off, refused on a split. An ISIN, normalized like `isin`. See InstrumentEvent.result_isin.
 	ResultIsin nullable.Nullable[string] `json:"result_isin,omitempty"`
 
 	// SourceRef Required: a link to the exchange's or the issuer's own announcement. See InstrumentEvent.source_ref for why this one field is not optional.
@@ -832,7 +834,9 @@ type CreateInstrumentRequest struct {
 	// FaceValueMinor A bond's face value in face_currency's minor units. Only `type: bond` may carry one: sending either half with any other type is a 400 naming the type that was sent, because an exchange quotes a bond as a PERCENTAGE of face while every other instrument this program prices is quoted in money already, so the field answers nothing on them. Must be POSITIVE, no larger than ten trillion minor units, and must be given TOGETHER with face_currency — both set, or neither. Past any rule, 400 naming the field. Zero is refused rather than stored because an exchange quotes a bond as a percentage of face: a face value of zero turns every price into no money at all, and the position it values into 0,00. The upper bound is the same cap every other money field in this API is written against (see amount_minor on SetBalanceRequest): far above any bond ever issued, and far enough below an int64's own range that multiplying it by a price and a quantity (portfolio.marketValue) cannot by itself be the reason a position's valuation overflows. A bond may be created without a face value; it simply cannot be priced until one is recorded.
 	FaceValueMinor nullable.Nullable[int64] `json:"face_value_minor,omitempty"`
 	Figi           *string                  `json:"figi,omitempty"`
-	Isin           *string                  `json:"isin,omitempty"`
+
+	// Isin ISIN (ISO 6166): two letters, nine letters or digits, one digit, e.g. US0231351067. Trimmed and upper-cased by the server before it is stored, because the catalog and the corporate-actions registry match it as a string; anything else is a 400. May be omitted or empty: an instrument need not have one.
+	Isin *string `json:"isin,omitempty"`
 
 	// Name What to call the instrument. Refused EMPTY and nothing more (internal/instrument/http.go, handleCreate): the server compares against "" and does not trim. Same floor and same reasoning as CreateAccountRequest.name — see it.
 	Name   string         `json:"name"`
@@ -875,7 +879,9 @@ type CreateOperationRequest struct {
 	Price nullable.Nullable[string] `json:"price,omitempty"`
 
 	// Quantity Decimal as string. Bounded from above as well as below: |quantity| must not exceed 10^13 (10000000000000) and, when a price is given too, |price × quantity| must not exceed 10^15 minor units — the same cap amount_minor carries, because it is the same money. Past either, 400. The bound is the money cap read as a count of units, one whole major unit apiece, and it is set there so that what the write accepts the positions screen can still value: at 10^13 units a quote of up to ~9223 per unit still fits in an int64 of minor units, which is above an ordinary share, bond or ETF. More than 10^13 units of something worth less than a whole rouble apiece is refused, deliberately — a figure no ordinary price can value is better refused as a field than discovered later by the screen that cannot render it. Rows written before the bound existed are untouched and are still returned as they stand.
-	Quantity  nullable.Nullable[string] `json:"quantity,omitempty"`
+	Quantity nullable.Nullable[string] `json:"quantity,omitempty"`
+
+	// SettledOn Date YYYY-MM-DD. Not earlier than occurred_on and not more than a year after it; anything else is a 400.
 	SettledOn nullable.Nullable[string] `json:"settled_on,omitempty"`
 
 	// SplitRatio Decimal as string: how many units one unit becomes. Must be positive and strictly less than 10^10 (10000000000) — the first value the column cannot hold — or 400. A split multiplies the whole position's quantity, so a ratio that is a mis-scaled field rather than a corporate action carries an ordinary holding past what any screen can value; the bound refuses it by name instead of letting the database answer with an overflow.
@@ -1750,7 +1756,9 @@ type UpdateInstrumentRequest struct {
 	FaceValueMinor nullable.Nullable[int64] `json:"face_value_minor,omitempty"`
 	Figi           *string                  `json:"figi,omitempty"`
 	Frozen         *bool                    `json:"frozen,omitempty"`
-	Isin           *string                  `json:"isin,omitempty"`
+
+	// Isin ISIN (ISO 6166): two letters, nine letters or digits, one digit, e.g. US0231351067. Trimmed and upper-cased by the server before it is stored, because the catalog and the corporate-actions registry match it as a string; anything else is a 400. An empty string clears it.
+	Isin *string `json:"isin,omitempty"`
 
 	// Name Same rule as on creation — refused empty, not trimmed (internal/instrument/http.go, handleUpdate). Omitting the field leaves the name as it stands; see UpdateAccountRequest.name.
 	Name   *string `json:"name,omitempty"`

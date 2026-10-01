@@ -53,12 +53,14 @@ package corporateaction
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/platform/dates"
 )
 
@@ -85,13 +87,11 @@ const (
 	KindSpinOff Kind = "spin_off"
 )
 
-func (k Kind) Valid() bool {
-	switch k {
-	case KindSplit, KindConversion, KindSpinOff:
-		return true
-	}
-	return false
-}
+// kinds is every kind there is. The schema's CHECK on instrument_events.kind
+// names the same ones, and a test holds the two together.
+var kinds = []Kind{KindSplit, KindConversion, KindSpinOff}
+
+func (k Kind) Valid() bool { return slices.Contains(kinds, k) }
 
 // Materialized reports whether this program carries this KIND into journals.
 //
@@ -250,6 +250,14 @@ func (e Event) Validate() error {
 	if e.ISIN == "" {
 		return fmt.Errorf("%w: isin is required", family.ErrValidation)
 	}
+	// Matching is by string equality, so an ISIN in another spelling is another
+	// paper: it would be stored and never find its holders.
+	if normal, err := instrument.NormalizeISIN(e.ISIN); err != nil || normal != e.ISIN {
+		return fmt.Errorf("%w: isin must be an ISIN in upper case, e.g. US0231351067", family.ErrValidation)
+	}
+	if normal, err := instrument.NormalizeISIN(e.ResultISIN); err != nil || normal != e.ResultISIN {
+		return fmt.Errorf("%w: result_isin must be an ISIN in upper case, e.g. US0231351067", family.ErrValidation)
+	}
 	if e.ISIN == e.ResultISIN {
 		return fmt.Errorf("%w: result_isin names the same paper as isin", family.ErrValidation)
 	}
@@ -264,6 +272,13 @@ func (e Event) Validate() error {
 	// would be inventing a second rule about how far back history goes.
 	if e.EffectiveOn.After(dates.LatestRecordable()) {
 		return fmt.Errorf("%w: effective_on must not be in the future", family.ErrValidation)
+	}
+	// The rows an event becomes are operations, and the journal refuses one
+	// dated before this — so an earlier event would be stored and then refused,
+	// silently, on every sweep.
+	if e.EffectiveOn.Before(dates.EarliestRecordable()) {
+		return fmt.Errorf("%w: effective_on must not be earlier than %s",
+			family.ErrValidation, dates.EarliestRecordable().Format(time.DateOnly))
 	}
 	if e.RatioFrom < 1 || e.RatioTo < 1 || e.RatioFrom > maxRatio || e.RatioTo > maxRatio {
 		return fmt.Errorf("%w: ratio_from and ratio_to must be whole numbers from 1 to %d",

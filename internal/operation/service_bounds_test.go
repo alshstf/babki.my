@@ -3,6 +3,7 @@ package operation_test
 import (
 	"errors"
 	"math"
+	"slices"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -10,6 +11,8 @@ import (
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/money"
+	"babki.my/babki/internal/platform/testdb"
+	"babki.my/babki/internal/portfolio"
 )
 
 // A quantity and a price are the two factors of one product, and that product
@@ -541,5 +544,46 @@ func TestTransferCostOverrideIsBoundedAtZeroAndAtTheCap(t *testing.T) {
 		t.Run(tc.what, func(t *testing.T) {
 			wantRefusal(t, err, "cost_minor must be within 0.."+moneyBound)
 		})
+	}
+}
+
+// TestSettledOnIsHeldToTheTradeItSettles: the column was accepted unchecked,
+// year 9999 included (#202). A settlement cannot precede its trade and does not
+// follow it by more than a year.
+func TestSettledOnIsHeldToTheTradeItSettles(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+	buy := func(settled string) error {
+		on := date(settled)
+		_, err := svc.Create(f.ctx, f.spaceID, operation.Operation{
+			AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+			OccurredOn: date("2026-03-02"), SettledOn: &on, Quantity: dec("1"), Price: dec("100"),
+			AmountMinor: -10_000, Currency: "RUB",
+		})
+		return err
+	}
+	for _, ok := range []string{"2026-03-02", "2026-03-04", "2027-03-02"} {
+		if err := buy(ok); err != nil {
+			t.Errorf("settled_on %s: %v, want accepted", ok, err)
+		}
+	}
+	for _, bad := range []string{"2026-03-01", "2027-03-04", "9999-12-31"} {
+		if err := buy(bad); !errors.Is(err, family.ErrValidation) {
+			t.Errorf("settled_on %s: err = %v, want ErrValidation", bad, err)
+		}
+	}
+}
+
+// TestTheSchemaNamesExactlyTheOperationTypesTheCodeKnows: the list lives in the
+// table's CHECK and in portfolio.Types. A type added to one and not the other is
+// a constraint violation on the first write that uses it, answered as a 500.
+func TestTheSchemaNamesExactlyTheOperationTypesTheCodeKnows(t *testing.T) {
+	f := newFixture(t)
+	inCode := make([]string, 0, len(portfolio.Types()))
+	for _, typ := range portfolio.Types() {
+		inCode = append(inCode, string(typ))
+	}
+	if inSchema := testdb.CheckLiterals(t, f.pool, "operations_type_check"); !slices.Equal(inSchema, inCode) {
+		t.Errorf("the schema allows %v, the code knows %v", inSchema, inCode)
 	}
 }
