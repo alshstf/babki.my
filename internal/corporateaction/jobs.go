@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 
 	"babki.my/babki/internal/marketdata/moex"
 )
@@ -25,6 +26,80 @@ func (RefreshMoexSplitsArgs) Kind() string { return "corporateaction.refresh_moe
 type MaterializeAllArgs struct{}
 
 func (MaterializeAllArgs) Kind() string { return "corporateaction.materialize_all" }
+
+// MaterializeISINArgs carries one paper's events into the journals of its
+// holders. It is queued when that could not be done on the spot — the request
+// that recorded or deleted an event has already answered, and the event is
+// stored either way — so that the journals do not wait for the daily sweep.
+//
+// ISIN carries the `river:"unique"` tag: two failures over one paper are one
+// job, since a run recomputes everything the registry holds about it.
+type MaterializeISINArgs struct {
+	ISIN string `json:"isin" river:"unique"`
+}
+
+func (MaterializeISINArgs) Kind() string { return "corporateaction.materialize_isin" }
+
+// materializeISINAttempts bounds the retries: River waits attempt⁴ seconds
+// after each failure, so eight attempts span about 78 minutes. A journal that
+// still cannot take the rows after that is not going to on a ninth try, and
+// the daily sweep remains behind it.
+const materializeISINAttempts = 8
+
+// MaterializeISINInsertOpts is how the job is queued: one per paper among the
+// jobs that have not finished, with bounded attempts.
+func MaterializeISINInsertOpts() *river.InsertOpts {
+	return &river.InsertOpts{
+		MaxAttempts: materializeISINAttempts,
+		UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
+			rivertype.JobStateAvailable,
+			rivertype.JobStatePending,
+			rivertype.JobStateRetryable,
+			rivertype.JobStateRunning,
+			rivertype.JobStateScheduled,
+		}},
+	}
+}
+
+// jobInserter is the queue as this package uses it. *river.Client[pgx.Tx]
+// satisfies it structurally.
+type jobInserter interface {
+	Insert(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error)
+}
+
+type materializeISINWorker struct {
+	river.WorkerDefaults[MaterializeISINArgs]
+	materializer *Materializer
+	log          *slog.Logger
+}
+
+func NewMaterializeISINWorker(materializer *Materializer, log *slog.Logger) river.Worker[MaterializeISINArgs] {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &materializeISINWorker{materializer: materializer, log: log}
+}
+
+func (w *materializeISINWorker) Timeout(*river.Job[MaterializeISINArgs]) time.Duration {
+	return refreshTimeout
+}
+
+// Work brings the paper's holders into line. An account that failed is tried
+// again by the queue; the accounts that succeeded are found already in line by
+// that attempt, and their fresh broker check is asked for now rather than held
+// back for the one that failed.
+func (w *materializeISINWorker) Work(ctx context.Context, job *river.Job[MaterializeISINArgs]) error {
+	stats, err := w.materializer.ForISIN(ctx, job.Args.ISIN)
+	w.materializer.RequestRecheck(ctx, stats)
+	if err != nil {
+		w.log.Error("corporateaction: carrying an event into the journals failed again",
+			"isin", job.Args.ISIN, "attempt", job.Attempt, "err", err)
+		return err
+	}
+	w.log.Info("corporateaction: an event that could not be applied on the spot is now in the journals",
+		"isin", job.Args.ISIN, "added", stats.Added, "removed", stats.Removed, "refused", stats.Refused)
+	return nil
+}
 
 // SplitsProvider is the slice of the exchange client this worker needs;
 // *moex.Client satisfies it structurally. Narrow and local for the same reason
@@ -168,6 +243,8 @@ func (w *refreshMoexSplitsWorker) Work(ctx context.Context, _ *river.Job[Refresh
 		}
 	}
 
+	w.materializer.RequestRecheck(ctx, totals)
+
 	w.log.Info("corporateaction: refreshed the exchange's splits",
 		"published", len(splits), "stored", stored, "left_to_hand_records", kept, "unidentified", skipped,
 		"journal_rows_added", totals.Added, "journal_rows_removed", totals.Removed)
@@ -214,6 +291,9 @@ func (w *materializeAllWorker) Timeout(*river.Job[MaterializeAllArgs]) time.Dura
 
 func (w *materializeAllWorker) Work(ctx context.Context, _ *river.Job[MaterializeAllArgs]) error {
 	stats, err := w.materializer.All(ctx)
+	// Asked before the error is looked at: a sweep that failed on one account
+	// still changed the others, and their verdicts are stale either way.
+	w.materializer.RequestRecheck(ctx, stats)
 	if err != nil {
 		w.log.Error("corporateaction: the registry sweep failed", "err", err)
 		return err

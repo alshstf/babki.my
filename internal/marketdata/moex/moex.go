@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -37,6 +38,9 @@ type board struct {
 	label string
 	// path is the endpoint path appended to baseURL.
 	path string
+	// history is the path one security's session history on this board is read
+	// from; the security id and ".json" are appended. See lastTradeDay.
+	history string
 }
 
 // boards lists every board QuotesFor queries, in precedence order: when two
@@ -124,10 +128,22 @@ type board struct {
 // bonds/SPOB's 41 are all already inside TQOB ∪ TQCB ∪ TQRD. None of them
 // need a line here.
 var boards = []board{
-	{label: "shares/TQBR", path: "/iss/engines/stock/markets/shares/boards/TQBR/securities.json"},
-	{label: "bonds/TQOB", path: "/iss/engines/stock/markets/bonds/boards/TQOB/securities.json"},
-	{label: "bonds/TQCB", path: "/iss/engines/stock/markets/bonds/boards/TQCB/securities.json"},
-	{label: "bonds/TQRD", path: "/iss/engines/stock/markets/bonds/boards/TQRD/securities.json"},
+	{
+		label: "shares/TQBR", path: "/iss/engines/stock/markets/shares/boards/TQBR/securities.json",
+		history: "/iss/history/engines/stock/markets/shares/boards/TQBR/securities/",
+	},
+	{
+		label: "bonds/TQOB", path: "/iss/engines/stock/markets/bonds/boards/TQOB/securities.json",
+		history: "/iss/history/engines/stock/markets/bonds/boards/TQOB/securities/",
+	},
+	{
+		label: "bonds/TQCB", path: "/iss/engines/stock/markets/bonds/boards/TQCB/securities.json",
+		history: "/iss/history/engines/stock/markets/bonds/boards/TQCB/securities/",
+	},
+	{
+		label: "bonds/TQRD", path: "/iss/engines/stock/markets/bonds/boards/TQRD/securities.json",
+		history: "/iss/history/engines/stock/markets/bonds/boards/TQRD/securities/",
+	},
 }
 
 // requestedColumns is sent as the securities.columns query parameter on
@@ -156,6 +172,10 @@ type Client struct {
 	http    *http.Client
 	baseURL string
 	log     *slog.Logger
+
+	// traded remembers, per security, the last answer of lastTradeDay.
+	mu     sync.Mutex
+	traded map[tradedKey]tradedAnswer
 }
 
 // New returns a Client. client may be nil, in which case http.DefaultClient
@@ -177,7 +197,7 @@ func New(client *http.Client, baseURL string, log *slog.Logger) *Client {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Client{http: client, baseURL: baseURL, log: log}
+	return &Client{http: client, baseURL: baseURL, log: log, traded: map[tradedKey]tradedAnswer{}}
 }
 
 // Name implements marketdata.QuoteProvider.
@@ -219,23 +239,25 @@ func (c *Client) Name() string { return sourceName }
 //
 // # What On is
 //
-// On is the row's own PREVDATE, parsed as a calendar day at midnight UTC —
-// the exchange's statement of which session the price belongs to, never a
-// date this process picked. Before #90 it was the caller-supplied argument,
-// and quotesWorker passed today: the previous session's price was stored
-// under today's date, so on a Monday morning the screen showed Friday's
-// price as today's and nothing anywhere said otherwise.
+// On is the last session, on or before the row's PREVDATE, in which the
+// security actually traded on that board — the day the trade PREVPRICE reports
+// was made. For a security that trades every day that is PREVDATE itself; for
+// one the exchange carried the price of, it is the older day, read from the
+// security's own session history (see lastTradeDay). It is never a date this
+// process picked.
+//
+// Before #90 it was the caller-supplied argument, and quotesWorker passed
+// today: the previous session's price was stored under today's date. Until
+// #199 it was PREVDATE as it stood, so a carried price moved forward to every
+// new session's date and a marker that asks "how old is this price" never
+// fired for a bond that had not traded in months.
 //
 // PREVDATE is a property of the BOARD's session and not of the security:
 // checked on 2026-08-03, every one of TQBR's 502 rows, TQOB's 62, TQRD's 47
 // and 3019 of TQCB's 3021 read the same 2026-07-31, non-traded securities
 // included. (ISS's own two names for the column disagree — title "дата
 // предыдущего торгового дня", short title "дата последних торгов" — and the
-// data settles which one holds.) Taken together with the paragraph above,
-// what a stored quote says is: as of the close of the session dated On, the
-// exchange's price for this instrument was Price. It does not say a trade
-// happened at that price on that day, and anything shown to a user must not
-// claim it did.
+// data settles which one holds.)
 //
 // The two remaining rows read "0000-00-00": see the undatable-row branch in
 // the loop below.
@@ -365,13 +387,22 @@ func (c *Client) QuotesFor(ctx context.Context, tickers []string) ([]marketdata.
 					"prevdate", row.priceOnRaw, "price", row.price.String())
 				continue
 			}
+			// Asked only for the rows that will be published, so the number of
+			// history requests is bounded by the catalog and not by the board.
+			// A failure fails the call, for the reason a failing board does: the
+			// alternative is to publish the price under the session's date, which
+			// is a date known to be wrong for exactly the securities this is for.
+			on, err := c.lastTradeDay(ctx, b, row.ticker, *row.priceOn)
+			if err != nil {
+				return nil, err
+			}
 			quoted[row.ticker] = true
 			quotes = append(quotes, marketdata.TickerQuote{
 				Ticker:   row.ticker,
 				ISIN:     row.isin,
 				Price:    *row.price,
 				Currency: normalizeCurrency(row.currency),
-				On:       *row.priceOn,
+				On:       on,
 			})
 		}
 	}

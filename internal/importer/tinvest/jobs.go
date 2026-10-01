@@ -12,6 +12,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
+	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/platform/secretbox"
 )
 
@@ -94,9 +95,25 @@ var syncUniqueStates = []rivertype.JobState{
 // the index sees nothing in common. Measured: with SyncMirror's lock removed,
 // two simultaneous runs leave two mirror rows AND two journal operations (see
 // TestTwoSimultaneousRunsOfOneConnectionLeaveOneMirrorAndOneJournal).
+//
+// THE ATTEMPTS ARE BOUNDED BECAUSE THE JOB IS UNIQUE. A sync parked in River's
+// backoff still holds its connection's one slot, and the backoff grows to hours:
+// with River's default of 25 attempts a connection that failed eight times in a
+// row would next be tried in over an hour, with every hourly dispatch and the
+// owner's "sync now" skipped as its duplicate in between. See SyncMaxAttempts.
 func SyncInsertOpts() *river.InsertOpts {
-	return &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: syncUniqueStates}}
+	return &river.InsertOpts{
+		MaxAttempts: SyncMaxAttempts,
+		UniqueOpts:  river.UniqueOpts{ByArgs: true, ByState: syncUniqueStates},
+	}
 }
+
+// SyncMaxAttempts is how many times one queued sync is tried. River waits
+// attempt⁴ seconds after each failure, so seven attempts span about 38 minutes
+// — inside the hour between two dispatches, which is what lets the next
+// dispatch queue a fresh job instead of colliding with a parked one. The
+// schedule's own test holds this against the interval.
+const SyncMaxAttempts = 7
 
 // jobInserter is the queue as this package uses it — a narrow local interface,
 // for the reason rebuild.go declares journalDelta. *river.Client[pgx.Tx]
@@ -306,27 +323,39 @@ type clientFactory func(token string) (*Client, error)
 // read once would be believed for as long as the process lived.
 type rebuilderFactory func() *Rebuilder
 
+// registryAligner brings one account's journal into line with the
+// corporate-actions registry. *corporateaction.Materializer satisfies it.
+//
+// Nil is a legitimate value and means no registry is wired: the journal then
+// holds what the broker sent and nothing else, which is where every test that
+// is not about this stands.
+type registryAligner interface {
+	ForAccount(ctx context.Context, spaceID, accountID uuid.UUID) (corporateaction.Stats, error)
+}
+
 type syncWorker struct {
 	river.WorkerDefaults[SyncArgs]
 	store        *Store
 	box          *secretbox.Box
 	newClient    clientFactory
 	newRebuilder rebuilderFactory
+	registry     registryAligner
 	reconciler   *Reconciler
 	log          *slog.Logger
 }
 
 // NewSyncWorker builds the River worker that brings one connection's mirror,
 // projection and reconciliation up to date. Register it with river.AddWorker.
+// registry may be nil (see registryAligner).
 func NewSyncWorker(store *Store, box *secretbox.Box, newClient clientFactory,
-	newRebuilder rebuilderFactory, reconciler *Reconciler, log *slog.Logger,
+	newRebuilder rebuilderFactory, registry registryAligner, reconciler *Reconciler, log *slog.Logger,
 ) river.Worker[SyncArgs] {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &syncWorker{
 		store: store, box: box, newClient: newClient,
-		newRebuilder: newRebuilder, reconciler: reconciler, log: log,
+		newRebuilder: newRebuilder, registry: registry, reconciler: reconciler, log: log,
 	}
 }
 
@@ -339,8 +368,10 @@ func (w *syncWorker) Timeout(*river.Job[SyncArgs]) time.Duration { return syncTi
 // and only then is the projection rebuilt over the WHOLE connection: a transfer
 // between two accounts of one connection is two mirror rows under two different
 // links, and a rebuild that ran per link would see one leg at a time and pair
-// nothing. The reconciliation comes last, when the journal it compares against
-// is the one this run just produced.
+// nothing. The registry's rows come next: a purchase the broker reports from
+// before a split the registry holds needs that split's row, and the import door
+// does not call the hook a hand entry does. The reconciliation comes last, when
+// the journal it compares against is the one this run just produced.
 //
 // Nothing here is one transaction and nothing pretends to be. Each step is
 // atomic on its own, the mirror is derived from the broker's whole history and
@@ -351,10 +382,9 @@ func (w *syncWorker) Work(ctx context.Context, job *river.Job[SyncArgs]) error {
 	trigger, err := syncTrigger(job.Args.Trigger)
 	if err != nil {
 		// NOT RETURNED, for the reason a refused token is not returned: the
-		// arguments of a queued job never change, so every one of River's two
-		// dozen attempts would fail here again and shout about it again, hours
-		// apart, forever. Nil ends it after one Error line naming the word that
-		// nothing can read.
+		// arguments of a queued job never change, so every further attempt would
+		// fail here again and shout about it again. Nil ends it after one Error
+		// line naming the word that nothing can read.
 		//
 		// No run is recorded failed either, and that is not a choice: the run
 		// log's own trigger column is a CHECK over exactly the three words this
@@ -470,6 +500,8 @@ func (w *syncWorker) sync(ctx context.Context, conn Connection, links []AccountL
 		return w.failed(ctx, conn, runs, err)
 	}
 
+	w.alignWithRegistry(ctx, links)
+
 	for _, lr := range runs {
 		// The verdict is kept whatever comes back with it: ReconcileLink
 		// returns "not checked" alongside its error, and that is the value the
@@ -533,6 +565,31 @@ func (w *syncWorker) sync(ctx context.Context, conn Connection, links []AccountL
 		return closeErr
 	}
 	return nil
+}
+
+// alignWithRegistry brings every linked account into line with the
+// corporate-actions registry, between the rebuild and the reconciliation.
+//
+// A FAILURE DOES NOT FAIL THE RUN. The broker's rows are already in the
+// journal; an account the registry could not be applied to is compared as it
+// stands, the reconciliation reports the difference a missing split leaves,
+// and the daily sweep tries again. No fresh check is asked for either: this
+// run's own reconciliation is that check.
+func (w *syncWorker) alignWithRegistry(ctx context.Context, links []AccountLink) {
+	if w.registry == nil {
+		return
+	}
+	for _, link := range links {
+		stats, err := w.registry.ForAccount(ctx, link.SpaceID, link.AccountID)
+		if err != nil {
+			logAt(ctx, w.log, err, "tinvest: the import was written but the registry's rows were not brought into line",
+				"account", link.AccountID, "err", err)
+		}
+		if stats.Added+stats.Removed+stats.Refused > 0 {
+			w.log.Info("tinvest: the registry's rows were brought into line after an import",
+				"account", link.AccountID, "added", stats.Added, "removed", stats.Removed, "refused", stats.Refused)
+		}
+	}
 }
 
 // failed closes every run this attempt opened and decides what the queue is

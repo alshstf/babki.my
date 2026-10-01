@@ -24,6 +24,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/secretbox"
@@ -343,6 +344,15 @@ type workerFixture struct {
 
 func newWorkerFixture(t *testing.T) *workerFixture {
 	t.Helper()
+	return newWorkerFixtureWith(t, false)
+}
+
+// newWorkerFixtureWith builds the worker with or without the corporate-actions
+// registry behind it. With it, the registry is the real one over the same
+// database, so a test states what one run leaves in the journal rather than
+// which method was called.
+func newWorkerFixtureWith(t *testing.T, withRegistry bool) *workerFixture {
+	t.Helper()
 	f := newFixture(t)
 
 	box, err := secretbox.New(bytes.Repeat([]byte{7}, secretbox.KeySize))
@@ -374,7 +384,12 @@ func newWorkerFixture(t *testing.T) *workerFixture {
 			operation.NewService(wf.ops), wf.ops, log)
 	}
 	reconciler := NewReconciler(f.store, wf.ops, account.NewStore(f.pool), instStore, nil, log)
-	wf.worker = NewSyncWorker(f.store, box, newClient, newRebuilder, reconciler, log)
+	var registry registryAligner
+	if withRegistry {
+		registry = corporateaction.NewMaterializer(corporateaction.NewStore(f.pool),
+			operation.NewService(wf.ops), instStore, nil, log)
+	}
+	wf.worker = NewSyncWorker(f.store, box, newClient, newRebuilder, registry, reconciler, log)
 	return wf
 }
 
@@ -865,7 +880,7 @@ func TestSyncWorkerRecordsTheUnparsedCountItTookOnARunThatFailed(t *testing.T) {
 // database error from inside a worker, on the one run that used it.
 //
 // AND IT IS NOT HANDED TO THE RETRY MACHINE. A queued job's arguments never
-// change, so returning the error would buy two dozen further attempts at
+// change, so returning the error would buy every further attempt at
 // exactly the same word, each one shouting at Error level, spread over River's
 // growing backoff — the same waste a refused token was singled out to avoid.
 // The line is written once and the job is let go.
@@ -1096,7 +1111,7 @@ func TestDispatchWorkerQueuesOneJobForEachActiveConnection(t *testing.T) {
 	// agree ON, because a change to that function moves both sides together.
 	// Measured: with ByState deleted from SyncInsertOpts, a DeepEqual against
 	// SyncInsertOpts() stays green and this literal goes red.
-	want := &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
+	want := &river.InsertOpts{MaxAttempts: 7, UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
 		rivertype.JobStateAvailable,
 		rivertype.JobStatePending,
 		rivertype.JobStateRetryable,
