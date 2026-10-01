@@ -1051,3 +1051,28 @@ func indexExists(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name str
 	}
 	return exists
 }
+
+// TestTwoMigrationRunsAtOnceBothSucceed: every long-running role migrates at
+// start-up, so an instance split into `api` and `worker` starts two runs at
+// once after an upgrade. Unserialized, two runs applying the same file collide
+// half-way through it and one process dies in a restart loop. Each run now waits
+// for the other, and the second finds nothing left to do.
+func TestTwoMigrationRunsAtOnceBothSucceed(t *testing.T) {
+	pool := testdb.NewEmpty(t)
+	ctx := context.Background()
+
+	const runs = 3
+	errs := make(chan error, runs)
+	for range runs {
+		go func() { errs <- db.Migrate(ctx, pool) }()
+	}
+	for range runs {
+		if err := <-errs; err != nil {
+			t.Errorf("Migrate: %v", err)
+		}
+	}
+	var applied int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM meta WHERE key = 'instance_id'`).Scan(&applied); err != nil || applied != 1 {
+		t.Errorf("instance_id rows = %d (%v), want exactly 1 — the first migration ran once", applied, err)
+	}
+}
