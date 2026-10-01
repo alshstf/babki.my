@@ -96,6 +96,56 @@ func TestCashIgnoresWhatMovesNoMoney(t *testing.T) {
 	}
 }
 
+// TestMovesCashClassifiesEveryType holds the predicate to an answer for EVERY
+// operation type, so a type added to the enum cannot inherit "it is money" by
+// default. A spin-off's two legs did exactly that: both carry the basis that
+// moved, and the account was credited with it twice (#185).
+func TestMovesCashClassifiesEveryType(t *testing.T) {
+	want := map[Type]bool{
+		// Money that changed the balance.
+		TypeBuy: true, TypeSell: true, TypeRedemption: true,
+		TypeDeposit: true, TypeWithdrawal: true,
+		TypeDividend: true, TypeCoupon: true, TypeAmortization: true,
+		TypeFee: true, TypeTax: true, TypeInterest: true, TypeConversion: true,
+		// A cost basis travelling with a parcel: the amount is not a payment.
+		TypeTransferIn: false, TypeTransferOut: false,
+		TypeExchangeOut: false, TypeExchangeIn: false,
+		TypeSpinoffOut: false, TypeSpinoffIn: false,
+		// Rewrites quantities and carries no amount at all.
+		TypeSplit: false,
+	}
+	if len(want) != len(validTypes) {
+		t.Fatalf("this table classifies %d types, the enum has %d — classify the new one", len(want), len(validTypes))
+	}
+	for typ, w := range want {
+		if got := MovesCash(Operation{Type: typ, AmountMinor: 1}); got != w {
+			t.Errorf("MovesCash(%s) = %v, want %v", typ, got, w)
+		}
+	}
+}
+
+// TestCashIgnoresTheBasisASpinoffMoves: a quarter of a 100 000.00 basis moves to
+// the carved-out paper, both legs name 25 000.00, and not one kopeck of it is
+// money. The balance stays what the deposit made it and no cash parcel appears.
+func TestCashIgnoresTheBasisASpinoffMoves(t *testing.T) {
+	ops := []Operation{
+		cashOp(t, TypeDeposit, "2026-01-10", "RUB", 1_000_000, 0),
+		cashOp(t, TypeSpinoffOut, "2026-02-10", "RUB", 2_500_000, 0),
+		cashOp(t, TypeSpinoffIn, "2026-02-10", "RUB", 2_500_000, 0),
+	}
+	cash, err := Cash(ops)
+	if err != nil {
+		t.Fatalf("Cash: %v", err)
+	}
+	rub := cash["RUB"]
+	if rub.Minor != 1_000_000 {
+		t.Errorf("balance = %d, want 1000000 — a spin-off moves basis, not money", rub.Minor)
+	}
+	if len(rub.Lots) != 1 {
+		t.Errorf("cash parcels = %d, want 1 — the deposit alone", len(rub.Lots))
+	}
+}
+
 // TestCashKeepsEachCurrencyApart. A conversion is TWO entries, one per side, and
 // the pair is what makes a currency balance possible at all: without it the
 // yuan a bond was bought with came from nowhere.
