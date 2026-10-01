@@ -346,6 +346,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/arrivals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Records shares arriving from another broker on an account — a transfer_in with no sibling, for an account no importer feeds. A move between two of the owner's accounts is POST /api/v1/operations/transfer instead. Without `purchases` the shares arrive bought for nothing (Position.has_unknown_cost) and can be given them later with PUT /api/v1/operations/{operationId}/purchases; with them, the same rules apply here. 409 when the account's journal cannot take the arrival — a position already held in another currency, say. */
+        post: operations["createArrival"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{accountId}/instruments/{instrumentId}/arrivals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Every occasion on which shares of this paper reached this account by a transfer, oldest first, each with the purchases recorded behind it. It is what a screen asking for the price of shares that arrived without one reads: an arrival from another broker can be given its purchases here; one moved from another of the owner's accounts names that account, which is where its purchases are to be stated. */
+        get: operations["listArrivals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/transfer": {
         parameters: {
             query?: never;
@@ -628,6 +662,61 @@ export interface components {
             display_name: string;
             /** @description At least eight CHARACTERS and at most 1024, counted as Unicode code points — which is what `minLength` and `maxLength` count here and what the server counts. It used to count BYTES while its own refusal said «characters», so a seven-letter Cyrillic password was fourteen bytes and went through, and this document could not state the rule without stating one stricter than the code (#117). The count moved to code points rather than the sentence to bytes, because the sentence is what the person reads. The ceiling is there so that what gets hashed has a size the server chose. NOT DECLARED ON LoginRequest — see it. */
             password: string;
+        };
+        CreateArrivalRequest: {
+            /** Format: uuid */
+            account_id: string;
+            /** Format: uuid */
+            instrument_id: string;
+            /** @description Date YYYY-MM-DD the shares arrived; the same bounds as an operation's. */
+            occurred_on: string;
+            /** @description Decimal as string: positive, at most 10 decimal places. */
+            quantity: string;
+            /** @description The paper's currency — what its purchases were paid in. */
+            currency: string;
+            note?: string;
+            /** @description The purchases behind the shares, when known — the same rules as StatePurchasesRequest. Omitted or empty: bought for nothing until stated. */
+            purchases?: components["schemas"]["StatedPurchase"][];
+        };
+        ArrivalsResponse: {
+            arrivals: components["schemas"]["Arrival"][];
+        };
+        Arrival: {
+            /** Format: uuid */
+            operation_id: string;
+            /** @description Date YYYY-MM-DD the shares arrived. */
+            occurred_on: string;
+            /** @description Decimal as string. */
+            quantity: string;
+            currency: string;
+            /**
+             * Format: int64
+             * @description The arrival's basis in minor units of `currency`: 0 for shares that arrived bought for nothing.
+             */
+            cost_minor: number;
+            /** @description Who wrote the row: manual, or the importer that did. */
+            source: string;
+            note: string;
+            /** @description True for shares with no other half in this program — the ones PUT /api/v1/operations/{operationId}/purchases accepts. */
+            from_another_broker: boolean;
+            /**
+             * Format: uuid
+             * @description For shares moved from another of the owner's accounts, that account: their purchases are stated where they first arrived. Null otherwise.
+             */
+            from_account_id: string | null;
+            /** @description The purchases recorded behind the shares, in the order they were stated or released. Empty when none are — a basis given by hand as a total, or none at all. */
+            purchases: components["schemas"]["ArrivalPurchase"][];
+        };
+        ArrivalPurchase: {
+            /** @description Decimal as string. */
+            quantity: string;
+            /**
+             * Format: int64
+             * @description What these shares cost in all, commission included, in minor units of the arrival's currency.
+             */
+            cost_minor: number;
+            /** @description Date YYYY-MM-DD they were bought, or null when not recorded. */
+            acquired_on: string | null;
         };
         StatePurchasesRequest: {
             /** @description Every purchase behind the arrival. Their quantities must add up to exactly the quantity that arrived, because they become the lots those shares are held as. */
@@ -2371,6 +2460,60 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    createArrival: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateArrivalRequest"];
+            };
+        };
+        responses: {
+            /** @description The arrival as stored */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Operation"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    listArrivals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+                instrumentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The arrivals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArrivalsResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     createTransfer: {

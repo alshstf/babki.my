@@ -104,6 +104,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("DELETE /api/v1/operations/{operationId}", edit(h.handleDelete))
 	srv.Mount("POST /api/v1/operations/transfer", edit(h.handleTransfer))
 	srv.Mount("PUT /api/v1/operations/{operationId}/purchases", edit(h.handleStatePurchases))
+	srv.Mount("POST /api/v1/operations/arrivals", edit(h.handleCreateArrival))
+	srv.Mount("GET /api/v1/accounts/{accountId}/instruments/{instrumentId}/arrivals", view(h.handleListArrivals))
 }
 
 // writeError maps operation-specific errors to HTTP responses, falling back
@@ -1039,20 +1041,33 @@ func (h *Handler) handleStatePurchases(w http.ResponseWriter, r *http.Request) {
 	if httpjson.Decode(w, r, &req) != nil {
 		return
 	}
-	stated := make([]StatedPurchase, 0, len(req.Purchases))
-	for i, sp := range req.Purchases {
-		bad := func(msg string) { httpjson.Error(w, http.StatusBadRequest, fmt.Sprintf("purchase %d: %s", i+1, msg)) }
+	stated, err := statedPurchases(req.Purchases)
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	op, err := h.svc.StatePurchases(r.Context(), p.SpaceID, id, stated)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, toAPI(op))
+}
+
+// statedPurchases reads the purchases of a request. A malformed field is named
+// by the purchase it is in.
+func statedPurchases(in []apitypes.StatedPurchase) ([]StatedPurchase, error) {
+	out := make([]StatedPurchase, 0, len(in))
+	for i, sp := range in {
 		quantity, err := decimal.NewFromString(sp.Quantity)
 		if err != nil {
-			bad("quantity must be a decimal string")
-			return
+			return nil, fmt.Errorf("purchase %d: quantity must be a decimal string", i+1)
 		}
 		one := StatedPurchase{Quantity: quantity}
 		if sp.Price.IsSpecified() && !sp.Price.IsNull() {
 			price, err := decimal.NewFromString(sp.Price.MustGet())
 			if err != nil {
-				bad("price must be a decimal string")
-				return
+				return nil, fmt.Errorf("purchase %d: price must be a decimal string", i+1)
 			}
 			one.Price = &price
 		}
@@ -1066,19 +1081,98 @@ func (h *Handler) handleStatePurchases(w http.ResponseWriter, r *http.Request) {
 		if sp.AcquiredOn.IsSpecified() && !sp.AcquiredOn.IsNull() {
 			on, err := parseDate(sp.AcquiredOn.MustGet())
 			if err != nil {
-				bad("acquired_on " + err.Error())
-				return
+				return nil, fmt.Errorf("purchase %d: acquired_on %v", i+1, err)
 			}
 			one.AcquiredOn = &on
 		}
-		stated = append(stated, one)
+		out = append(out, one)
 	}
-	op, err := h.svc.StatePurchases(r.Context(), p.SpaceID, id, stated)
+	return out, nil
+}
+
+func (h *Handler) handleCreateArrival(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	var req apitypes.CreateArrivalRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	occurredOn, err := parseDate(req.OccurredOn)
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "occurred_on "+err.Error())
+		return
+	}
+	quantity, err := decimal.NewFromString(req.Quantity)
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "quantity must be a decimal string")
+		return
+	}
+	var purchases []StatedPurchase
+	if req.Purchases != nil {
+		if purchases, err = statedPurchases(*req.Purchases); err != nil {
+			httpjson.Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	note := ""
+	if req.Note != nil {
+		note = *req.Note
+	}
+	op, err := h.svc.CreateArrival(r.Context(), p.SpaceID, ArrivalParams{
+		AccountID: req.AccountId, InstrumentID: req.InstrumentId, OccurredOn: occurredOn,
+		Quantity: quantity, Currency: req.Currency, Note: note, Purchases: purchases,
+	})
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	httpjson.Write(w, http.StatusOK, toAPI(op))
+	httpjson.Write(w, http.StatusCreated, toAPI(op))
+}
+
+func (h *Handler) handleListArrivals(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	accountID, err := uuid.Parse(r.PathValue("accountId"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "invalid accountId")
+		return
+	}
+	instrumentID, err := uuid.Parse(r.PathValue("instrumentId"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "invalid instrumentId")
+		return
+	}
+	arrivals, err := h.svc.Arrivals(r.Context(), p.SpaceID, accountID, instrumentID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	out := make([]apitypes.Arrival, 0, len(arrivals))
+	for _, a := range arrivals {
+		o := a.Operation
+		purchases := make([]apitypes.ArrivalPurchase, 0, len(o.TransferLots))
+		for _, pc := range o.TransferLots {
+			bought := nullable.NewNullNullable[string]()
+			if pc.AcquiredOn != nil {
+				bought = nullable.NewNullableWithValue(pc.AcquiredOn.Format("2006-01-02"))
+			}
+			purchases = append(purchases, apitypes.ArrivalPurchase{
+				Quantity: pc.Quantity.String(), CostMinor: pc.CostMinor, AcquiredOn: bought,
+			})
+		}
+		from := nullable.NewNullNullable[uuid.UUID]()
+		if a.FromAccountID != nil {
+			from = nullable.NewNullableWithValue(*a.FromAccountID)
+		}
+		quantity := ""
+		if o.Quantity != nil {
+			quantity = o.Quantity.String()
+		}
+		out = append(out, apitypes.Arrival{
+			OperationId: o.ID, OccurredOn: o.OccurredOn.Format("2006-01-02"), Quantity: quantity,
+			Currency: o.Currency, CostMinor: o.AmountMinor, Source: o.Source, Note: o.Note,
+			FromAnotherBroker: a.FromAnotherBroker, FromAccountId: from, Purchases: purchases,
+		})
+	}
+	httpjson.Write(w, http.StatusOK, apitypes.ArrivalsResponse{Arrivals: out})
 }
 
 func (h *Handler) handleTransfer(w http.ResponseWriter, r *http.Request) {
