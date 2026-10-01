@@ -30,18 +30,21 @@ import (
 type Handler struct {
 	store        *Store
 	materializer *Materializer
-	auth         *family.Auth
-	sm           *scs.SessionManager
-	log          *slog.Logger
+	// queue takes the retry of a materialization that failed inside the
+	// request. Nil means there is none, and the daily sweep is the only retry.
+	queue jobInserter
+	auth  *family.Auth
+	sm    *scs.SessionManager
+	log   *slog.Logger
 }
 
-func NewHandler(store *Store, materializer *Materializer, auth *family.Auth,
+func NewHandler(store *Store, materializer *Materializer, queue jobInserter, auth *family.Auth,
 	sm *scs.SessionManager, log *slog.Logger,
 ) *Handler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Handler{store: store, materializer: materializer, auth: auth, sm: sm, log: log}
+	return &Handler{store: store, materializer: materializer, queue: queue, auth: auth, sm: sm, log: log}
 }
 
 func (h *Handler) Mount(srv *httpserver.Server) {
@@ -203,10 +206,11 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 //
 // A FAILURE TO MATERIALIZE IS NOT A FAILURE TO RECORD. The event is stored by
 // the time this runs, and it is the truth about the paper whether or not any
-// journal could take it — the daily sweep will try again, and a refusal a
-// journal makes is logged with the account it was made for. Answering 500 here
-// would tell the owner their fact was not recorded, which would be false; the
-// figures simply say nothing changed, and the log says why.
+// journal could take it — a job is queued to try again within minutes, the
+// daily sweep stands behind that, and a refusal a journal makes is logged with
+// the account it was made for. Answering 500 here would tell the owner their
+// fact was not recorded, which would be false; the figures simply say nothing
+// changed, and the log says why.
 func (h *Handler) writeWithMaterialization(w http.ResponseWriter, r *http.Request,
 	e Event, status int,
 ) {
@@ -220,6 +224,7 @@ func (h *Handler) writeWithMaterialization(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		h.log.Error("corporateaction: the event was recorded but its journal rows were not written",
 			"event", e.ID, "isin", e.ISIN, "err", err)
+		h.retryLater(ctx, e.ISIN)
 	}
 	queued := h.materializer.RequestRecheck(ctx, stats)
 	// Asked AFTER the materialization rather than before: cataloguing the paper
@@ -239,6 +244,18 @@ func (h *Handler) writeWithMaterialization(w http.ResponseWriter, r *http.Reques
 		AccountsTouched: len(stats.Accounts),
 		RecheckQueued:   queued,
 	})
+}
+
+// retryLater queues the paper for another attempt. A queue that will not take
+// the job costs what having no queue costs: the journals wait for the sweep.
+func (h *Handler) retryLater(ctx context.Context, isin string) {
+	if h.queue == nil {
+		return
+	}
+	if _, err := h.queue.Insert(ctx, MaterializeISINArgs{ISIN: isin}, MaterializeISINInsertOpts()); err != nil {
+		h.log.Error("corporateaction: no retry could be queued, the journals wait for the daily sweep",
+			"isin", isin, "err", err)
+	}
 }
 
 // materializeTimeout bounds the work one request does after its own write. A
