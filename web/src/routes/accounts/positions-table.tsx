@@ -31,6 +31,7 @@ import type {
   MarketValueGap,
   Position,
 } from "@/api/positions";
+import type { PricedPaper } from "./purchase-price-dialog";
 
 // The one sentence that captions EVERY money cell of a row, chosen from the
 // term the server says it stopped on (Position.in_base_gap). It is the row's
@@ -430,6 +431,7 @@ export function PositionsTable({
   cash,
   mode,
   baseCurrency,
+  onPriceUnknown,
 }: {
   positions: Position[];
   // THE MONEY, AMONG THE PAPERS. Cash is a holding: yuan on the account was
@@ -445,6 +447,9 @@ export function PositionsTable({
   // "already in base, nothing to convert" apart from "conversion failed, no
   // fx rate" when a position's in_base is null (see resolveDisplayAmount).
   baseCurrency: string;
+  // What «указать цену» beside a paper with no purchase price opens. Absent for
+  // a reader who cannot write — the note then says the fact and offers nothing.
+  onPriceUnknown?: (paper: PricedPaper) => void;
 }) {
   const { t } = useTranslation();
   // A position row's money amounts are denominated in the position's own
@@ -831,12 +836,29 @@ export function PositionsTable({
                       really paid. Said on the paper itself, held or sold, so
                       the owner knows which price to go and find. */}
                   {position.has_unknown_cost && (
-                    <div
-                      data-testid="position-unknown-cost"
-                      className="text-xs text-amber-600"
-                      title={t("positions.unknownCostHint")}
-                    >
-                      {t("positions.unknownCost")}
+                    <div className="text-xs text-amber-600">
+                      <span data-testid="position-unknown-cost" title={t("positions.unknownCostHint")}>
+                        {t("positions.unknownCost")}
+                      </span>
+                      {onPriceUnknown && (
+                        <>
+                          {" · "}
+                          <button
+                            type="button"
+                            data-testid="position-unknown-cost-action"
+                            className="underline underline-offset-2 hover:text-amber-700"
+                            onClick={() =>
+                              onPriceUnknown({
+                                id: position.instrument.id,
+                                name: position.instrument.name,
+                                ticker: position.instrument.ticker,
+                              })
+                            }
+                          >
+                            {t("positions.unknownCostAction")}
+                          </button>
+                        </>
+                      )}
                     </div>
                   )}
                 </TableCell>
