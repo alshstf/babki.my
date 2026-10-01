@@ -211,3 +211,85 @@ func TestRunDrainsInFlightRequestsAndReturnsNil(t *testing.T) {
 		t.Errorf("%s still accepts connections after Run returned", addr)
 	}
 }
+
+// hardened is a server with one state-changing route and one page, behind the
+// same middleware everything is served through.
+func hardened(t *testing.T) http.Handler {
+	t.Helper()
+	srv := httpserver.New(slog.Default(), testdb.New(t))
+	srv.Mount("POST /api/v1/thing", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	srv.Mount("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("<html>spa</html>"))
+	}))
+	return srv.Handler()
+}
+
+// TestAWriteFromAnotherSiteIsRefused: the server does not leave it to a cookie
+// attribute. A browser names the site a request came from, and a write that
+// came from anywhere but this origin is refused — a sibling subdomain included.
+// A request with neither header is not a browser's and passes.
+func TestAWriteFromAnotherSiteIsRefused(t *testing.T) {
+	h := hardened(t)
+	for name, tc := range map[string]struct {
+		headers map[string]string
+		want    int
+	}{
+		"the application itself":            {map[string]string{"Sec-Fetch-Site": "same-origin"}, http.StatusNoContent},
+		"a request the user typed":          {map[string]string{"Sec-Fetch-Site": "none"}, http.StatusNoContent},
+		"another site":                      {map[string]string{"Sec-Fetch-Site": "cross-site"}, http.StatusForbidden},
+		"a sibling subdomain":               {map[string]string{"Sec-Fetch-Site": "same-site"}, http.StatusForbidden},
+		"an older browser, same origin":     {map[string]string{"Origin": "http://example.com"}, http.StatusNoContent},
+		"an older browser, another origin":  {map[string]string{"Origin": "http://evil.test"}, http.StatusForbidden},
+		"behind a proxy that rewrites Host": {map[string]string{"Origin": "https://babki.home", "X-Forwarded-Host": "babki.home"}, http.StatusNoContent},
+		"not a browser at all":              {nil, http.StatusNoContent},
+	} {
+		req := httptest.NewRequest("POST", "/api/v1/thing", nil)
+		for k, v := range tc.headers {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Errorf("%s: %d, want %d", name, rec.Code, tc.want)
+		}
+	}
+
+	// Reading is never refused on these grounds: a link from another site is
+	// how a browser arrives at all.
+	req := httptest.NewRequest("GET", "/accounts", nil)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("a cross-site GET: %d, want 200", rec.Code)
+	}
+}
+
+// TestEveryAnswerCarriesTheSecurityHeaders, and an API answer is never stored by
+// a cache.
+func TestEveryAnswerCarriesTheSecurityHeaders(t *testing.T) {
+	h := hardened(t)
+	for _, path := range []string{"/", "/api/healthz", "/api/v1/nope"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		for header, want := range map[string]string{
+			"X-Content-Type-Options": "nosniff",
+			"X-Frame-Options":        "DENY",
+			"Referrer-Policy":        "same-origin",
+		} {
+			if got := rec.Header().Get(header); got != want {
+				t.Errorf("GET %s: %s = %q, want %q", path, header, got, want)
+			}
+		}
+		csp := rec.Header().Get("Content-Security-Policy")
+		if !strings.Contains(csp, "default-src 'self'") || !strings.Contains(csp, "frame-ancestors 'none'") {
+			t.Errorf("GET %s: Content-Security-Policy = %q", path, csp)
+		}
+		isAPI := strings.HasPrefix(path, "/api/")
+		if got := rec.Header().Get("Cache-Control"); isAPI != (got == "no-store") {
+			t.Errorf("GET %s: Cache-Control = %q; an API answer is never stored, a page is left to its own handler", path, got)
+		}
+	}
+}
