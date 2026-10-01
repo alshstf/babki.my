@@ -322,6 +322,14 @@ func (c *Client) QuotesFor(ctx context.Context, tickers []string) ([]marketdata.
 			if !want[row.ticker] || row.price == nil || quoted[row.ticker] {
 				continue
 			}
+			if !row.price.IsPositive() {
+				// ISS reports 0 for a suspended issue. Stored, it would value
+				// the holding at nothing; dropped, the ticker stays open for a
+				// later board, exactly as a null price leaves it.
+				c.log.Warn("moex: price is not positive, dropping it (this instrument keeps whatever earlier quote it already has)",
+					"board", b.label, "ticker", row.ticker, "price", row.price.String())
+				continue
+			}
 			if row.priceOn == nil {
 				// A price ISS did not date. It is dropped, and the ticker is
 				// left as if no price had been reported for it — which is what

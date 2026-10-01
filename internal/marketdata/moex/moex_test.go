@@ -334,6 +334,9 @@ func TestQuotesFor_MissingPrevdateColumn(t *testing.T) {
 // rather than a silent loss of the only trace such a price leaves.
 const unreadableDateMsg = "moex: price came without a readable date, dropping it (this instrument keeps whatever earlier quote it already has)"
 
+// nonPositivePriceMsg is the line a zero or negative price must leave behind.
+const nonPositivePriceMsg = "moex: price is not positive, dropping it (this instrument keeps whatever earlier quote it already has)"
+
 // TestQuotesFor_PriceWithUnreadableDateIsDroppedAndWarned covers the decision
 // this task had to make: a row ISS priced but did not date.
 //
@@ -677,6 +680,65 @@ func TestQuotesFor_NullPriceDoesNotClaimPrecedence(t *testing.T) {
 	}
 	if want := decimal.RequireFromString("222.22"); !quotes[0].Price.Equal(want) {
 		t.Errorf("COLLIDE.Price = %s, want %s — a null on an earlier board must not block a later real price", quotes[0].Price, want)
+	}
+}
+
+// TestQuotesFor_NonPositivePriceIsNotAPrice: ISS reports 0 for a suspended
+// issue, and a stored 0 values the whole holding at nothing (#191). A zero or
+// negative PREVPRICE is dropped with a warning, costs no other row its price,
+// and — like a null — leaves the ticker open for a later board's real one.
+func TestQuotesFor_NonPositivePriceIsNotAPrice(t *testing.T) {
+	const cols = `"columns":["SECID","PREVPRICE","PREVDATE","CURRENCYID"]`
+	srv, _ := serve(t, allBoards(map[string]route{
+		sharesPath: {status: http.StatusOK, body: []byte(`{"securities":{` + cols + `,"data":[` +
+			`["SBER",305.55,"2026-07-24","SUR"],` +
+			`["ZERO",0,"2026-07-24","SUR"],` +
+			`["NEGATIVE",-1.5,"2026-07-24","SUR"],` +
+			`["COLLIDE",0,"2026-07-24","SUR"]]}}`)},
+		corpPath: {status: http.StatusOK, body: []byte(`{"securities":{` + cols + `,"data":[` +
+			`["COLLIDE",222.22,"2026-07-24","SUR"]]}}`)},
+	}))
+
+	var records []slog.Record
+	c := moex.New(srv.Client(), srv.URL, slog.New(&recordingHandler{records: &records}))
+	quotes, err := c.QuotesFor(context.Background(), []string{"SBER", "ZERO", "NEGATIVE", "COLLIDE"})
+	if err != nil {
+		t.Fatalf("QuotesFor: %v — a zero price must not fail the call", err)
+	}
+
+	got := make(map[string]string, len(quotes))
+	for _, q := range quotes {
+		got[q.Ticker] = q.Price.String()
+	}
+	want := map[string]string{"SBER": "305.55", "COLLIDE": "222.22"}
+	if len(got) != len(want) {
+		t.Fatalf("quotes = %v, want exactly %v", got, want)
+	}
+	for ticker, price := range want {
+		if got[ticker] != price {
+			t.Errorf("%s = %q, want %q", ticker, got[ticker], price)
+		}
+	}
+
+	warned := map[string]bool{}
+	for _, r := range records {
+		if r.Message != nonPositivePriceMsg {
+			continue
+		}
+		if r.Level != slog.LevelWarn {
+			t.Errorf("the dropped price was logged at %s, want WARN", r.Level)
+		}
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == "ticker" {
+				warned[a.Value.String()] = true
+			}
+			return true
+		})
+	}
+	for _, ticker := range []string{"ZERO", "NEGATIVE", "COLLIDE"} {
+		if !warned[ticker] {
+			t.Errorf("no warning named %s", ticker)
+		}
 	}
 }
 
