@@ -326,7 +326,28 @@ export const routeTree = rootRoute.addChildren([
   ]),
 ]);
 
-export const router = createRouter({ routeTree });
+// What any route shows when its screen throws. The case it exists for: the
+// server was upgraded while the tab stayed open, the screen being navigated to
+// lives in a chunk that has been replaced, and fetching it fails (the server
+// answers 404 for a hashed file that is gone). Without this React unmounts the
+// whole application and leaves a blank page with nothing to do about it (#201).
+//
+// It reloads on the reader's click, never by itself: a reload that did not help
+// would otherwise loop.
+export function ScreenCrashed() {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="min-h-screen flex flex-col items-center justify-center gap-4 bg-background p-6 text-center"
+      data-testid="screen-crashed"
+    >
+      <p className="max-w-md text-sm text-muted-foreground">{t("app.crashed")}</p>
+      <Button onClick={() => window.location.reload()}>{t("app.reload")}</Button>
+    </div>
+  );
+}
+
+export const router = createRouter({ routeTree, defaultErrorComponent: ScreenCrashed });
 
 declare module "@tanstack/react-router" {
   interface Register {

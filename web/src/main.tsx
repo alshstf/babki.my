@@ -9,6 +9,11 @@ import { router } from "./router";
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: { retry: false, refetchOnWindowFocus: false },
+    // A mutation is sent whatever the browser believes about the network: a
+    // paused one leaves its button disabled with no error and no end, and goes
+    // out on its own some unknown time later (#200). Sent at once, it either
+    // succeeds or fails where the person can see it.
+    mutations: { networkMode: "always" },
   },
 });
 

@@ -25,6 +25,8 @@ import { ApiError } from "@/api/operations";
 import { CostBasisNotice } from "@/components/cost-basis-notice";
 import { countryName } from "@/lib/country";
 import { COMMON_CURRENCIES } from "@/lib/currencies";
+import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
+import { queryState, refreshFailed } from "@/lib/query-state";
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -289,6 +291,7 @@ function ConnectionsSection() {
   const { t } = useTranslation();
   const connections = useConnections();
   const list = connections.data ?? [];
+  const state = queryState(connections);
 
   return (
     <Card className="max-w-md">
@@ -296,16 +299,9 @@ function ConnectionsSection() {
         <CardTitle>{t("connections.title")}</CardTitle>
       </CardHeader>
       <CardContent className="grid gap-4">
-        {connections.isLoading && (
-          <p className="text-sm text-muted-foreground">{t("app.loading")}</p>
-        )}
-        {connections.isError && (
-          <Alert variant="destructive">
-            <AlertDescription>{t("app.error")}</AlertDescription>
-          </Alert>
-        )}
-        {!connections.isLoading &&
-          !connections.isError &&
+        <QueryGate state={state} />
+        <RefreshFailedNotice show={refreshFailed(connections)} />
+        {state === "ready" &&
           list.length === 0 && (
             <p className="text-sm text-muted-foreground">
               {t("connections.empty")}

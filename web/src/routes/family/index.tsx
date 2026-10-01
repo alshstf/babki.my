@@ -35,6 +35,8 @@ import {
   type Role,
 } from "@/api/members";
 import { MemberDialog } from "./member-dialog";
+import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
+import { queryState, refreshFailed } from "@/lib/query-state";
 
 const ASSIGNABLE_ROLES: Role[] = ["editor", "viewer"];
 
@@ -50,16 +52,8 @@ export function FamilyPage() {
 
   const isOwner = session?.role === "owner";
 
-  if (members.isLoading) {
-    return <div className="text-muted-foreground">{t("app.loading")}</div>;
-  }
-  if (members.isError) {
-    return (
-      <Alert variant="destructive">
-        <AlertDescription>{t("app.error")}</AlertDescription>
-      </Alert>
-    );
-  }
+  const state = queryState(members);
+  if (state !== "ready") return <QueryGate state={state} />;
 
   const list = members.data ?? [];
 
@@ -76,6 +70,7 @@ export function FamilyPage() {
         <h1 className="text-2xl font-bold">{t("family.title")}</h1>
         {isOwner && <Button onClick={() => setDialogOpen(true)}>{t("family.add")}</Button>}
       </div>
+      <RefreshFailedNotice show={refreshFailed(members)} />
 
       {updateRole.isError && (
         <Alert variant="destructive">

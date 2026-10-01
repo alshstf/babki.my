@@ -17,6 +17,8 @@ import { AccountsTable } from "./accounts-table";
 import { AccountDialog } from "./account-dialog";
 import { BalanceDialog } from "./balance-dialog";
 import { RowMenu } from "./row-menu";
+import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
+import { queryState, refreshFailed } from "@/lib/query-state";
 
 export function AccountsPage() {
   const { t } = useTranslation();
@@ -50,16 +52,10 @@ export function AccountsPage() {
     ...(summary.data ? [summary.data.base_currency] : []),
   ]);
 
-  if (accounts.isLoading || summary.isLoading) {
-    return <div className="text-muted-foreground">{t("app.loading")}</div>;
-  }
-  if (accounts.isError || summary.isError) {
-    return (
-      <Alert variant="destructive">
-        <AlertDescription>{t("app.error")}</AlertDescription>
-      </Alert>
-    );
-  }
+  // Data that is already here stays on screen when a refresh of it fails, and
+  // a request the browser has not sent is not an empty list (see query-state).
+  const state = queryState(accounts, summary);
+  if (state !== "ready") return <QueryGate state={state} />;
 
   const list = accounts.data ?? [];
   // Defensive fallback only — by this point accounts.isLoading/isError and
@@ -83,6 +79,7 @@ export function AccountsPage() {
           <Button onClick={() => setDialogAccount(null)}>{t("accounts.add")}</Button>
         )}
       </div>
+      <RefreshFailedNotice show={refreshFailed(accounts, summary)} />
       {summary.data && <SummaryCards summary={summary.data} mode={mode} />}
       {list.length === 0 ? (
         <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">
