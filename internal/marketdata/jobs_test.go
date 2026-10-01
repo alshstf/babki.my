@@ -367,6 +367,62 @@ func TestQuotesWorker_RowsFollowTheExchangesSessionsNotTheRefreshes(t *testing.T
 	}
 }
 
+// A price the exchange had been carrying forward was stored under every
+// session's date; once the provider names the day the price was really made,
+// those later rows have to go, or LatestQuotes keeps answering with the newest
+// of them and the price never reads as old as it is.
+//
+// A row another source wrote for a later day stays: the exchange's dates say
+// nothing about the broker's.
+func TestQuotesWorker_APriceDatedEarlierTakesBackTheLaterRowsOfItsSource(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	store, instStore := marketdata.NewStore(pool), instrument.NewStore(pool)
+
+	bond, err := instStore.Create(ctx, instrument.Instrument{
+		Type: instrument.TypeBond, Name: "СберИОС449", Ticker: "RU000A103AP6", Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("create bond: %v", err)
+	}
+	provider := fakeQuoteProvider{}
+	traded, carried1, carried2, broker := date("2026-08-24"), date("2026-09-29"), date("2026-09-30"), date("2026-09-15")
+	if err := store.UpsertQuotes(ctx, []marketdata.Quote{
+		{InstrumentID: bond.ID, On: carried1, Price: dec("77.5"), Currency: "RUB", Source: provider.Name()},
+		{InstrumentID: bond.ID, On: carried2, Price: dec("77.5"), Currency: "RUB", Source: provider.Name()},
+		{InstrumentID: bond.ID, On: broker, Price: dec("76.02"), Currency: "RUB", Source: "tinvest"},
+	}); err != nil {
+		t.Fatalf("UpsertQuotes: %v", err)
+	}
+
+	provider.quotes = []marketdata.TickerQuote{{Ticker: "RU000A103AP6", Price: dec("77.5"), Currency: "RUB", On: traded}}
+	worker := marketdata.NewQuotesWorker(store, instStore, provider, slog.Default())
+	if err := worker.Work(ctx, &river.Job[marketdata.RefreshQuotesArgs]{Args: marketdata.RefreshQuotesArgs{}}); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	rows, err := pool.Query(ctx, `SELECT on_date, source FROM quotes WHERE instrument_id = $1 ORDER BY on_date`, bond.ID)
+	if err != nil {
+		t.Fatalf("read quotes: %v", err)
+	}
+	var got []string
+	for rows.Next() {
+		var on time.Time
+		var source string
+		if err := rows.Scan(&on, &source); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got = append(got, on.Format(time.DateOnly)+" "+source)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read quotes: %v", err)
+	}
+	want := []string{"2026-08-24 " + provider.Name(), "2026-09-15 tinvest"}
+	if !slices.Equal(got, want) {
+		t.Errorf("quotes after the refresh = %v, want %v", got, want)
+	}
+}
+
 // TestQuotesWorker_RefusesAQuoteDatedZeroOrAfterToday is the worker-side
 // guard against a quote the provider itself cannot be relied on to reject:
 // QuoteProvider.QuotesFor deliberately takes no date argument any more

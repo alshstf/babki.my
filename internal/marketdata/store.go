@@ -223,6 +223,39 @@ func (s *Store) UpsertQuotes(ctx context.Context, quotes []Quote) error {
 	return runBatch(ctx, s.db, batch, len(quotes))
 }
 
+// StoreLatestQuotes stores each quote as its source's LATEST word about the
+// instrument: the row is upserted, and every row the same source wrote for
+// that instrument under a later date is removed.
+//
+// It is for a source that answers "what is your current price, and what day
+// is it from" (see QuoteProvider.QuotesFor). When such a source dates its
+// price EARLIER than a row it wrote before, the later row was not a later
+// price: the exchange carries an untraded security's price into every new
+// session, and until #199 that carried price was stored under each session's
+// date. Left in place, those rows would go on outranking the true one in
+// LatestQuotes and the price would never read as old as it is.
+//
+// Rows of other sources are left alone: what one source says about its own
+// dates says nothing about another's.
+func (s *Store) StoreLatestQuotes(ctx context.Context, quotes []Quote) error {
+	if len(quotes) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for _, q := range quotes {
+		batch.Queue(`
+			INSERT INTO quotes (instrument_id, on_date, price, currency, source)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (instrument_id, on_date) DO UPDATE SET
+				price = EXCLUDED.price, currency = EXCLUDED.currency,
+				source = EXCLUDED.source, updated_at = now()`,
+			q.InstrumentID, q.On, q.Price, q.Currency, q.Source)
+		batch.Queue(`DELETE FROM quotes WHERE instrument_id = $1 AND source = $2 AND on_date > $3`,
+			q.InstrumentID, q.Source, q.On)
+	}
+	return runBatch(ctx, s.db, batch, 2*len(quotes))
+}
+
 // QuoteOn returns the instrument's price on the exact date, or, if missing,
 // the nearest earlier date. pgx.ErrNoRows if no quote exists on or before
 // the given date.

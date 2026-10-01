@@ -73,6 +73,9 @@ type route struct {
 	body   []byte
 }
 
+// noHistory is ISS's answer about a security it holds no sessions of.
+const noHistory = `{"history":{"columns":["TRADEDATE","NUMTRADES"],"data":[]}}`
+
 // serve starts an httptest.Server that dispatches by exact URL path to
 // routes, and records the raw query string seen for each path.
 func serve(t *testing.T, routes map[string]route) (*httptest.Server, map[string]string) {
@@ -80,6 +83,12 @@ func serve(t *testing.T, routes map[string]route) (*httptest.Server, map[string]
 	gotQueries := make(map[string]string)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rt, ok := routes[r.URL.Path]
+		if !ok && strings.HasPrefix(r.URL.Path, "/iss/history/engines/stock/") {
+			// A security whose session history the test has nothing to say
+			// about. ISS answers an unknown one with an empty block, and a
+			// price then keeps its session's date (see lastTradeDay).
+			rt, ok = route{status: http.StatusOK, body: []byte(noHistory)}, true
+		}
 		if !ok {
 			t.Errorf("unexpected request to %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
