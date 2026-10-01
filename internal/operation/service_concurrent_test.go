@@ -209,3 +209,105 @@ func TestAccountLocksAreTakenInTheAccountsOwnOrder(t *testing.T) {
 		t.Error("the lower account id was still free — the locks were taken in the order they were asked for, so two transfers in opposite directions can deadlock")
 	}
 }
+
+// TestApplyImportDeltaWaitsForTheAccountLock: the import door judges a delta by
+// replaying the journal, exactly as a hand entry does, so it has to do it under
+// the same lock. It did not: it read on the pool and wrote in a transaction of
+// its own, so an import arriving while a hand-entered sale was still uncommitted
+// saw a journal without that sale, was told its own sale fitted, and both landed
+// — a journal that no longer replays, and a positions screen answering 422 for
+// good (#186).
+//
+// Ten shares held. A hand-entered sale of eight is written under the lock and
+// not yet committed; an imported sale of eight arrives. It must wait, and once
+// it is let in it must see the first sale and be refused.
+func TestApplyImportDeltaWaitsForTheAccountLock(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+	if _, err := svc.Create(f.ctx, f.spaceID, operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-03-02"), Quantity: dec("10"), Price: dec("100"),
+		AmountMinor: -100_000, Currency: "RUB",
+	}); err != nil {
+		t.Fatalf("seed buy: %v", err)
+	}
+	sell := func(on string) operation.Operation {
+		return operation.Operation{
+			AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeSell,
+			OccurredOn: date(on), Quantity: dec("8"), Price: dec("110"),
+			AmountMinor: 88_000, Currency: "RUB",
+		}
+	}
+
+	written := make(chan struct{})
+	release := make(chan struct{})
+	manualDone := make(chan error, 1)
+	go func() {
+		manualDone <- f.store.WithAccountsLocked(f.ctx, f.spaceID, []uuid.UUID{f.accountID}, func(st *operation.Store) error {
+			if _, err := operation.NewService(st).Create(f.ctx, f.spaceID, sell("2026-03-10")); err != nil {
+				return err
+			}
+			close(written)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-written:
+	case err := <-manualDone:
+		t.Fatalf("the hand-entered sale never got written: %v", err)
+	}
+
+	type outcome struct {
+		refused []operation.ImportRefusal
+		err     error
+	}
+	importDone := make(chan outcome, 1)
+	go func() {
+		_, refused, err := svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{
+			Add: []operation.Operation{imported(sell("2026-03-11"), "import-sell")},
+		})
+		importDone <- outcome{refused, err}
+	}()
+
+	// Recorded and reported at the end, for the reason the test above gives: the
+	// first writer holds a pooled connection until `release` is closed.
+	var early *outcome
+	select {
+	case o := <-importDone:
+		early = &o
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	close(release)
+	if err := <-manualDone; err != nil {
+		t.Fatalf("hand-entered sale: %v", err)
+	}
+	var got outcome
+	if early != nil {
+		got = *early
+	} else {
+		select {
+		case got = <-importDone:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the import never got in after the hand entry released the account")
+		}
+	}
+	if early != nil {
+		t.Error("the import finished while a hand entry still held the account's journal lock")
+	}
+	if got.err != nil {
+		t.Fatalf("ApplyImportDelta: %v", got.err)
+	}
+	if len(got.refused) != 1 {
+		t.Errorf("refused = %+v, want the imported sale refused — eight of the ten shares were already sold", got.refused)
+	}
+
+	journal, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
+	if err != nil {
+		t.Fatalf("ListForEngine: %v", err)
+	}
+	if _, err := portfolio.Compute(journal); err != nil {
+		t.Errorf("the account's journal no longer replays: %v", err)
+	}
+}

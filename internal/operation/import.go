@@ -137,6 +137,13 @@ type candidate struct {
 // stamp instead (see ImportDelta).
 //
 // applied comes back in that same order, as the database stored the rows.
+//
+// THE WHOLE OF IT RUNS UNDER THE JOURNAL LOCK of every account the delta touches
+// (Store.WithAccountsLocked), read and write alike — the same lock a hand entry
+// takes. The registry writes into every account and an explanation writes hand
+// rows into imported ones, so an import and a hand entry do meet on one account,
+// and a delta judged against a journal read outside the lock can be accepted
+// beside a write it never saw (#186).
 func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d ImportDelta) (
 	applied []Operation, refused []ImportRefusal, err error,
 ) {
@@ -148,6 +155,50 @@ func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d Imp
 	if err != nil {
 		return nil, nil, err
 	}
+	accountIDs, err := s.deltaAccounts(ctx, spaceID, candidates, d.Remove)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = s.store.WithAccountsLocked(ctx, spaceID, accountIDs, func(st *Store) error {
+		var err error
+		applied, refused, err = (&Service{store: st}).applyImportDeltaLocked(ctx, spaceID, d, candidates)
+		return err
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return applied, refused, nil
+}
+
+// deltaAccounts names the accounts a delta touches, which is what has to be
+// locked before anything about it is judged. It is read outside the lock and
+// that is safe: a candidate names its own account and a stored row never
+// changes its. A row that vanishes in between is found missing again under the
+// lock, by importRemovals, and refused there.
+func (s *Service) deltaAccounts(ctx context.Context, spaceID uuid.UUID, candidates []candidate, remove []uuid.UUID) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	for _, c := range candidates {
+		for _, leg := range c.legs {
+			ids = append(ids, leg.AccountID)
+		}
+	}
+	if len(remove) > 0 {
+		rows, err := s.store.ByIDs(ctx, spaceID, remove)
+		if err != nil {
+			return nil, err
+		}
+		for _, o := range rows {
+			ids = append(ids, o.AccountID)
+		}
+	}
+	return ids, nil
+}
+
+// applyImportDeltaLocked is ApplyImportDelta's body. s.store is bound to the
+// transaction that holds the accounts' journal locks.
+func (s *Service) applyImportDeltaLocked(ctx context.Context, spaceID uuid.UUID, d ImportDelta, candidates []candidate) (
+	applied []Operation, refused []ImportRefusal, err error,
+) {
 	removals, err := s.importRemovals(ctx, spaceID, d.Remove)
 	if err != nil {
 		return nil, nil, err
@@ -231,19 +282,10 @@ func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d Imp
 	// whole path is built to avoid.
 	//
 	// IT CAN THEREFORE REACH A SHADE PAST THE PRESENT — one microsecond per row
-	// stamped, so milliseconds for a delta of thousands. An operation a person
-	// enters by hand into that window, on the same day and the same account, is
-	// stamped by its own insert's clock and lands BENEATH the rows this delta
-	// wrote, so it folds before them though it was entered after them. That much
-	// is merely surprising: the hand-entry path stamps its candidate with
-	// time.Now() when it checks it too (see journalWith), so check and read
-	// agree. What is not merely surprising is the sliver where they disagree —
-	// the check taken just under this delta's last stamp and the write's clock
-	// just over it, which reads back in an order the check never saw. Both
-	// windows are milliseconds wide, and the two paths do not share an account
-	// in the shape this program is built for: an import writes into accounts of
-	// its own (see the tinvest rebuild's precondition). That is why this is
-	// written down rather than defended against.
+	// stamped, so milliseconds for a delta of thousands. A hand entry made in
+	// that window, on the same day and account, is stamped by its own insert's
+	// clock and can land beneath the rows this delta wrote. The journal lock
+	// keeps the two writes apart; it does not order their stamps.
 	base := time.Now().UTC().Truncate(time.Microsecond)
 	if !youngest.Before(base) {
 		base = youngest.UTC().Truncate(time.Microsecond).Add(time.Microsecond)
