@@ -14,6 +14,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/httpjson"
 	"babki.my/babki/internal/platform/httpserver"
@@ -150,6 +151,14 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	// door a person types at: Validate is the one statement of what an event has
 	// to be, and running it before the insert turns every rule into a 400 that
 	// names it instead of a constraint violation that does not.
+	// A person types an ISIN in whatever case; the registry matches by string.
+	// A malformed one is left as typed for Validate to refuse by name.
+	if isin, err := instrument.NormalizeISIN(e.ISIN); err == nil {
+		e.ISIN = isin
+	}
+	if isin, err := instrument.NormalizeISIN(e.ResultISIN); err == nil {
+		e.ResultISIN = isin
+	}
 	if err := e.Validate(); err != nil {
 		family.WriteError(w, err)
 		return

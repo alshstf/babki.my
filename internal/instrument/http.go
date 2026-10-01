@@ -435,7 +435,12 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		inst.Ticker = *req.Ticker
 	}
 	if req.Isin != nil {
-		inst.ISIN = *req.Isin
+		isin, err := NormalizeISIN(*req.Isin)
+		if err != nil {
+			httpjson.Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		inst.ISIN = isin
 	}
 	if req.Figi != nil {
 		inst.FIGI = *req.Figi
@@ -490,6 +495,14 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := checkFaceUpdate(req.FaceValueMinor, req.FaceCurrency); err != nil {
 		httpjson.Error(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if req.Isin != nil {
+		isin, err := NormalizeISIN(*req.Isin)
+		if err != nil {
+			httpjson.Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		req.Isin = &isin
 	}
 	upd := Update{
 		Name:   req.Name,

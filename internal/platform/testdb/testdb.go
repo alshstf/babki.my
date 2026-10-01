@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -316,4 +318,23 @@ func infraFatal(t *testing.T, err error) {
 		"cause: %v\n"+
 		"==========================================================================",
 		err)
+}
+
+// CheckLiterals returns the quoted values a CHECK constraint names, sorted — the
+// list of an enum-like column as the schema states it. A test compares it with
+// the list the code keeps, so a value added to one and not the other is a test
+// failure rather than a 500 on the first write that uses it.
+func CheckLiterals(t *testing.T, pool *pgxpool.Pool, constraint string) []string {
+	t.Helper()
+	var def string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = $1`, constraint).Scan(&def); err != nil {
+		t.Fatalf("read constraint %s: %v", constraint, err)
+	}
+	var out []string
+	for _, m := range regexp.MustCompile(`'([^']*)'`).FindAllStringSubmatch(def, -1) {
+		out = append(out, m[1])
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }

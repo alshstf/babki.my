@@ -890,17 +890,18 @@ export interface components {
         /** @description A corporate action recorded by hand. Its `source` is always `manual`: the exchange's own rows are written by the job that reads the exchange, and a request claiming to be one would be a row nobody could check and the job would overwrite. */
         CreateInstrumentEventRequest: {
             kind: components["schemas"]["InstrumentEventKind"];
+            /** @description ISIN (ISO 6166): two letters, nine letters or digits, one digit, e.g. US0231351067. Trimmed and upper-cased by the server before it is stored, because the catalog and the corporate-actions registry match it as a string; anything else is a 400. */
             isin: string;
             /**
              * Format: date
-             * @description See InstrumentEvent.effective_on — the first day the paper trades in the new quantity at the venue where it is held, NOT the record date. Refused if later than today.
+             * @description See InstrumentEvent.effective_on — the first day the paper trades in the new quantity at the venue where it is held, NOT the record date. Refused if later than today or earlier than 1900-01-01, the floor the journal sets for the operations an event becomes.
              */
             effective_on: string;
             /** Format: int64 */
             ratio_from: number;
             /** Format: int64 */
             ratio_to: number;
-            /** @description Required for a conversion and a spin-off, refused on a split. See InstrumentEvent.result_isin. */
+            /** @description Required for a conversion and a spin-off, refused on a split. An ISIN, normalized like `isin`. See InstrumentEvent.result_isin. */
             result_isin?: string | null;
             /** @description Decimal as string, greater than 0 and less than 1. Required for a spin-off, refused on the other two. See InstrumentEvent.basis_share. */
             basis_share?: string | null;
@@ -925,6 +926,7 @@ export interface components {
             /** @description What to call the instrument. Refused EMPTY and nothing more (internal/instrument/http.go, handleCreate): the server compares against "" and does not trim. Same floor and same reasoning as CreateAccountRequest.name — see it. */
             name: string;
             ticker?: string;
+            /** @description ISIN (ISO 6166): two letters, nine letters or digits, one digit, e.g. US0231351067. Trimmed and upper-cased by the server before it is stored, because the catalog and the corporate-actions registry match it as a string; anything else is a 400. May be omitted or empty: an instrument need not have one. */
             isin?: string;
             figi?: string;
             /** @description ISO-4217 uppercase, e.g. RUB: the currency the instrument's own figures are denominated in, which is not necessarily face_currency below. Three uppercase letters is the SHAPE of a code and it is the whole of what the server checks: it holds no register, so a well-formed code it has never met is accepted, and a lowercase spelling or a currency's name is a 400. It cannot be changed afterwards — UpdateInstrumentRequest carries no currency. */
@@ -941,6 +943,7 @@ export interface components {
             /** @description Same rule as on creation — refused empty, not trimmed (internal/instrument/http.go, handleUpdate). Omitting the field leaves the name as it stands; see UpdateAccountRequest.name. */
             name?: string;
             ticker?: string;
+            /** @description ISIN (ISO 6166): two letters, nine letters or digits, one digit, e.g. US0231351067. Trimmed and upper-cased by the server before it is stored, because the catalog and the corporate-actions registry match it as a string; anything else is a 400. An empty string clears it. */
             isin?: string;
             figi?: string;
             frozen?: boolean;
@@ -1040,6 +1043,7 @@ export interface components {
             type: components["schemas"]["OperationType"];
             /** @description Date YYYY-MM-DD. Held to both ends of a range, and past either it is a 400. NOT IN THE FUTURE, with one day of slack past the UTC day boundary: a date-only field carries no zone, so someone east of UTC must be able to record what they did this evening while the server is still on yesterday. AND NOT EARLIER THAN 1900-01-01, which is a typo guard and not a rule from anywhere — no law, no broker and no data source here names it, and it is in particular not a claim about the earliest date this server can value: an operation dated 1950 is accepted, and whether it can be shown in the base currency is a separate question about which fx rates exist. What the floor catches is a fumbled leading digit (1026 for 2026, one keystroke), which is the one date mistake that is silent rather than visible: the cost basis queue is ordered by acquisition date, so such a row sorts to the FRONT of it and the next sale releases it first, and nothing on any screen remarks on a date being old. */
             occurred_on: string;
+            /** @description Date YYYY-MM-DD. Not earlier than occurred_on and not more than a year after it; anything else is a 400. */
             settled_on?: string | null;
             /** @description Decimal as string. Bounded from above as well as below: |quantity| must not exceed 10^13 (10000000000000) and, when a price is given too, |price × quantity| must not exceed 10^15 minor units — the same cap amount_minor carries, because it is the same money. Past either, 400. The bound is the money cap read as a count of units, one whole major unit apiece, and it is set there so that what the write accepts the positions screen can still value: at 10^13 units a quote of up to ~9223 per unit still fits in an int64 of minor units, which is above an ordinary share, bond or ETF. More than 10^13 units of something worth less than a whole rouble apiece is refused, deliberately — a figure no ordinary price can value is better refused as a field than discovered later by the screen that cannot render it. Rows written before the bound existed are untouched and are still returned as they stand. */
             quantity?: string | null;

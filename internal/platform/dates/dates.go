@@ -38,3 +38,12 @@ import "time"
 func LatestRecordable() time.Time {
 	return time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)
 }
+
+// EarliestRecordable is the oldest date a recorded event may carry — an
+// operation, or a corporate action that will become operations. It is a typo
+// guard, not a rule from anywhere: a year mistyped in its first digit (1026 for
+// 2026) is an ordinary date to every comparison and would stand at the front of
+// a release queue. See operation.minOccurredOn for the full argument.
+func EarliestRecordable() time.Time {
+	return time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
+}

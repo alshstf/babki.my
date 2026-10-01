@@ -244,7 +244,28 @@ const quantityScale = portfolio.QuantityScale
 // Set where no personal-finance journal reaches and every fumbled year lands:
 // the mistake this catches produces a year in the first two digits' worth of
 // wrongness (0226, 1026, 1226), never 1899.
-var minOccurredOn = time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
+var minOccurredOn = dates.EarliestRecordable()
+
+// maxSettlementLag is how long after its trade an operation may settle. Markets
+// settle in days; a year is far past any of them and still catches a mistyped
+// year, which is all this bound is for.
+const maxSettlementLag = 366 * 24 * time.Hour
+
+// checkSettledOn holds settled_on, when given, to the only range it can
+// honestly have: not before the trade it settles, and not absurdly long after.
+// The column was accepted unchecked — year 9999 included (#202).
+func checkSettledOn(o Operation) error {
+	if o.SettledOn == nil {
+		return nil
+	}
+	if o.SettledOn.Before(o.OccurredOn) {
+		return fmt.Errorf("%w: settled_on must not be earlier than occurred_on", family.ErrValidation)
+	}
+	if o.SettledOn.Sub(o.OccurredOn) > maxSettlementLag {
+		return fmt.Errorf("%w: settled_on must be within a year of occurred_on", family.ErrValidation)
+	}
+	return nil
+}
 
 // checkOccurredOn holds a date to both ends of the range an operation may be
 // entered in. One function rather than two comparisons at each of the two write
@@ -318,6 +339,9 @@ func validateFields(o Operation) error {
 		return fmt.Errorf("%w: currency must be ISO-4217 uppercase", family.ErrValidation)
 	}
 	if err := checkOccurredOn(o.OccurredOn); err != nil {
+		return err
+	}
+	if err := checkSettledOn(o); err != nil {
 		return err
 	}
 	if o.FeeMinor < 0 {

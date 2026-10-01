@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/corporateaction"
@@ -448,5 +449,40 @@ func TestTheRegistryListsWhatItHolds(t *testing.T) {
 	}
 	if listed.Events[0].SourceRef == "" {
 		t.Errorf("the evidence link is not published, so the screen cannot show what the row rests on")
+	}
+}
+
+// TestAnEventsISINIsStoredInOneSpelling: the registry finds an event's holders
+// by matching its ISIN against the catalog's, as strings. Typed in lower case
+// the event used to be stored as typed, find nobody, and say nothing (#202).
+func TestAnEventsISINIsStoredInOneSpelling(t *testing.T) {
+	f := newAPIFixture(t)
+	f.buy(t, f.accountID, "2021-05-04", "1", -323_000)
+
+	resp, body := f.do(t, "POST", "/api/v1/instrument-events",
+		`{"kind":"split","isin":" us0231351067 ","effective_on":"2022-06-06","ratio_from":1,"ratio_to":20,`+
+			`"source_ref":"https://ir.aboutamazon.com/"}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create = %d: %s", resp.StatusCode, body)
+	}
+	if got, want := f.held(t, f.accountID), decimal.RequireFromString("20"); !got.Equal(want) {
+		t.Errorf("holding = %s, want %s — the event must reach the paper it names", got, want)
+	}
+}
+
+// TestAnEventIsRefusedForWhatWouldMakeItSilentlyUseless: a malformed ISIN can
+// match no paper, and a date before the journal's own floor produces rows the
+// journal refuses on every sweep.
+func TestAnEventIsRefusedForWhatWouldMakeItSilentlyUseless(t *testing.T) {
+	f := newAPIFixture(t)
+	for name, body := range map[string]string{
+		"an isin that is not one": `{"kind":"split","isin":"AMZN","effective_on":"2022-06-06","ratio_from":1,"ratio_to":20,"source_ref":"x"}`,
+		"a result isin that is not one": `{"kind":"conversion","isin":"US0231351067","result_isin":"T","effective_on":"2022-06-06",` +
+			`"ratio_from":1,"ratio_to":1,"source_ref":"x"}`,
+		"a date before the journal's floor": `{"kind":"split","isin":"US0231351067","effective_on":"1800-06-06","ratio_from":1,"ratio_to":20,"source_ref":"x"}`,
+	} {
+		if resp, out := f.do(t, "POST", "/api/v1/instrument-events", body); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400: %s", name, resp.StatusCode, out)
+		}
 	}
 }
