@@ -880,7 +880,7 @@ func TestSyncWorkerRecordsTheUnparsedCountItTookOnARunThatFailed(t *testing.T) {
 // database error from inside a worker, on the one run that used it.
 //
 // AND IT IS NOT HANDED TO THE RETRY MACHINE. A queued job's arguments never
-// change, so returning the error would buy two dozen further attempts at
+// change, so returning the error would buy every further attempt at
 // exactly the same word, each one shouting at Error level, spread over River's
 // growing backoff — the same waste a refused token was singled out to avoid.
 // The line is written once and the job is let go.
@@ -1111,7 +1111,7 @@ func TestDispatchWorkerQueuesOneJobForEachActiveConnection(t *testing.T) {
 	// agree ON, because a change to that function moves both sides together.
 	// Measured: with ByState deleted from SyncInsertOpts, a DeepEqual against
 	// SyncInsertOpts() stays green and this literal goes red.
-	want := &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
+	want := &river.InsertOpts{MaxAttempts: 7, UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
 		rivertype.JobStateAvailable,
 		rivertype.JobStatePending,
 		rivertype.JobStateRetryable,
