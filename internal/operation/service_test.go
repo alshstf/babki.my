@@ -517,6 +517,33 @@ func TestServiceSplitValidation(t *testing.T) {
 // not lot 1) — i.e. same-day ordering by created_at, not the "no filter at
 // all" regression. TestTransferBasisConservation below is the test that
 // discriminates the filter being dropped entirely.
+// A new row is checked AFTER every row already recorded, whatever this
+// process's clock says. The stored rows are timed by the database's clock; one
+// running ahead of this process's — simulated here by a purchase recorded a
+// minute "in the future" — used to put a same-day transfer in front of the
+// purchase it moves, and refuse it for want of shares bought a moment before.
+func TestANewRowIsCheckedAfterRowsTheDatabaseClockedAhead(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+	buy, err := svc.Create(f.ctx, f.spaceID, operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2026-07-01"), Quantity: dec("10"), Price: dec("100"),
+		AmountMinor: -100_000, Currency: "RUB",
+	})
+	if err != nil {
+		t.Fatalf("buy: %v", err)
+	}
+	if _, err := f.pool.Exec(f.ctx, `UPDATE operations SET created_at = now() + interval '1 minute' WHERE id = $1`, buy.ID); err != nil {
+		t.Fatalf("move the purchase's clock ahead: %v", err)
+	}
+	if _, _, err := svc.CreateTransfer(f.ctx, f.spaceID, operation.TransferParams{
+		FromAccountID: f.accountID, ToAccountID: f.account2ID, InstrumentID: f.sberID,
+		Quantity: decimal.RequireFromString("4"), OccurredOn: date("2026-07-01"),
+	}); err != nil {
+		t.Fatalf("same-day transfer after a purchase the database clocked ahead: %v", err)
+	}
+}
+
 func TestTransferSameDayBoundary(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)

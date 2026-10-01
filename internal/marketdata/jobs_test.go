@@ -1087,7 +1087,7 @@ func (p *recordingHistoryProvider) codesAsked() []string {
 // fakeOpStore stands in for the two *operation.Store methods the backfill
 // worker uses, so these tests can set a lower bound and a currency set
 // without building a whole space/account/operation tree. err and
-// currenciesErr are independent so a test can make EarliestOccurredOn
+// currenciesErr are independent so a test can make EarliestRecordedDay
 // succeed while DistinctCurrencies fails (or vice versa) — the two are read
 // at different points in Work, and the read-currencies branch must be
 // reachable without the range-start branch tripping first.
@@ -1098,7 +1098,7 @@ type fakeOpStore struct {
 	currenciesErr error
 }
 
-func (s fakeOpStore) EarliestOccurredOn(context.Context) (time.Time, error) {
+func (s fakeOpStore) EarliestRecordedDay(context.Context) (time.Time, error) {
 	if s.err != nil {
 		return time.Time{}, s.err
 	}
@@ -1366,7 +1366,7 @@ func TestBackfillFx_AccountCurrenciesReadErrorFailsTheJob(t *testing.T) {
 
 // TestBackfillFx_OperationCurrenciesReadErrorFailsTheJob covers the
 // operation currency read in wantedCurrencies — a different call than the
-// EarliestOccurredOn read rangeStart makes, so both must fail the job on
+// EarliestRecordedDay read rangeStart makes, so both must fail the job on
 // their own, independently of one another.
 func TestBackfillFx_OperationCurrenciesReadErrorFailsTheJob(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)

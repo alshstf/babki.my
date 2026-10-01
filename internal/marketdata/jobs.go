@@ -64,7 +64,7 @@ const backfillLeadDays = 31
 // below, which additionally keeps marketdata free of an import of the
 // operation package. *operation.Store satisfies it structurally.
 type operationCurrencies interface {
-	EarliestOccurredOn(ctx context.Context) (time.Time, error)
+	EarliestRecordedDay(ctx context.Context) (time.Time, error)
 	DistinctCurrencies(ctx context.Context) ([]string, error)
 }
 
@@ -501,7 +501,7 @@ func (w *backfillGoldWorker) Timeout(*river.Job[BackfillGoldArgs]) time.Duration
 // rangeStart states at length — a rate is looked up by nearest EARLIER date, and
 // gold trades on business days like everything else.
 func (w *backfillGoldWorker) Work(ctx context.Context, _ *river.Job[BackfillGoldArgs]) error {
-	earliest, err := w.ops.EarliestOccurredOn(ctx)
+	earliest, err := w.ops.EarliestRecordedDay(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
 		w.log.Debug("marketdata: no operations yet, skipping the gold backfill")
 		return nil
@@ -712,7 +712,7 @@ func (w *backfillFxWorker) Work(ctx context.Context, _ *river.Job[BackfillFxArgs
 // answer two different questions: what to ask the source for, and whether the
 // journal's own dates make sense at all.
 func (w *backfillFxWorker) rangeStart(ctx context.Context) (time.Time, time.Time, bool, error) {
-	earliest, err := w.ops.EarliestOccurredOn(ctx)
+	earliest, err := w.ops.EarliestRecordedDay(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
 		w.log.Debug("marketdata: no operations yet, skipping fx backfill")
 		return time.Time{}, time.Time{}, false, nil
