@@ -858,14 +858,20 @@ func (s *Store) ByTransferGroup(ctx context.Context, spaceID, groupID uuid.UUID)
 		WHERE space_id = $1 AND transfer_group_id = $2`, spaceID, groupID)
 }
 
-// EarliestOccurredOn returns the earliest occurred_on across all operations
-// in the instance (not scoped to a space: the fx backfill it feeds is
-// shared, not per-space). This is a plain data query for the range's start,
-// not a decision about what to backfill. pgx.ErrNoRows if there are no
-// operations at all.
-func (s *Store) EarliestOccurredOn(ctx context.Context) (time.Time, error) {
+// EarliestRecordedDay returns the earliest day the journal records anything
+// on, across the instance (not scoped to a space: the fx backfill it feeds is
+// shared, not per-space): the earliest occurred_on, or the earliest purchase
+// date of a breakdown piece when that is older. A transfer's pieces name the
+// days their shares were bought, and purchases stated for shares from another
+// broker can predate every operation in the journal — their cost is converted
+// at those days' rates, so the backfill has to reach them. This is a plain
+// data query for the range's start, not a decision about what to backfill.
+// pgx.ErrNoRows if nothing is recorded at all.
+func (s *Store) EarliestRecordedDay(ctx context.Context) (time.Time, error) {
 	var on *time.Time
-	err := s.db.QueryRow(ctx, `SELECT MIN(occurred_on) FROM operations`).Scan(&on)
+	err := s.db.QueryRow(ctx, `SELECT LEAST(
+		(SELECT MIN(occurred_on) FROM operations),
+		(SELECT MIN(acquired_on) FROM operation_transfer_lots))`).Scan(&on)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -877,13 +883,13 @@ func (s *Store) EarliestOccurredOn(ctx context.Context) (time.Time, error) {
 
 // DistinctCurrencies returns the sorted set of currencies used by any
 // operation in the instance (not scoped to a space: same rationale as
-// EarliestOccurredOn — fx coverage is shared, not per-space). A currency can
+// EarliestRecordedDay — fx coverage is shared, not per-space). A currency can
 // appear here without appearing in account.Store's list (e.g. a one-off
 // operation in a currency no account is denominated in), so this queries
 // operations directly rather than reusing account currencies. Deciding what
 // to backfill is not this method's job — that is the fx backfill job's.
 // Returns an empty slice, not an error, when there are no operations: unlike
-// EarliestOccurredOn, "no currencies in use" is itself a meaningful answer,
+// EarliestRecordedDay, "no currencies in use" is itself a meaningful answer,
 // not a missing value.
 func (s *Store) DistinctCurrencies(ctx context.Context) ([]string, error) {
 	rows, err := s.db.Query(ctx, `SELECT DISTINCT currency FROM operations ORDER BY currency`)

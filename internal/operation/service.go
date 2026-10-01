@@ -571,8 +571,21 @@ func journalWith(ops []Operation, add []Operation, removeIDs map[uuid.UUID]bool)
 			journal = append(journal, o)
 		}
 	}
+	// A row being added is recorded after every row already there, so it is
+	// checked in that place. Its moment is NOT simply this process's clock:
+	// the stored rows carry the database's (insertSQL's clock_timestamp()), and
+	// a database clock running even a few milliseconds ahead of this one put a
+	// same-day transfer in front of the purchase it moves — «not enough
+	// quantity: have 0» for shares bought a moment earlier.
+	at := time.Now()
+	for _, o := range journal {
+		if !o.CreatedAt.Before(at) {
+			at = o.CreatedAt.Add(time.Microsecond)
+		}
+	}
 	for _, o := range add {
-		o.CreatedAt = time.Now()
+		o.CreatedAt = at
+		at = at.Add(time.Microsecond)
 		journal = append(journal, o)
 	}
 	sortJournal(journal)

@@ -180,7 +180,7 @@ func (s *Store) SetBalance(ctx context.Context, spaceID, accountID uuid.UUID, as
 // currencies to actually backfill rates for is not this method's job — that
 // belongs to the fx backfill job, which also consults operation.Store's
 // currencies. Returns an empty slice, not an error, when there are no
-// accounts: unlike EarliestOccurredOn, "no currencies in use" is itself a
+// accounts: unlike EarliestRecordedDay, "no currencies in use" is itself a
 // meaningful answer, not a missing value.
 func (s *Store) DistinctCurrencies(ctx context.Context) ([]string, error) {
 	rows, err := s.db.Query(ctx, `SELECT DISTINCT currency FROM accounts ORDER BY currency`)
