@@ -103,6 +103,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("GET /api/v1/accounts/{accountId}/operations", view(h.handleListByAccount))
 	srv.Mount("DELETE /api/v1/operations/{operationId}", edit(h.handleDelete))
 	srv.Mount("POST /api/v1/operations/transfer", edit(h.handleTransfer))
+	srv.Mount("PUT /api/v1/operations/{operationId}/purchases", edit(h.handleStatePurchases))
 }
 
 // writeError maps operation-specific errors to HTTP responses, falling back
@@ -1026,6 +1027,58 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) handleStatePurchases(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, ok := pathOperationID(w, r)
+	if !ok {
+		return
+	}
+	var req apitypes.StatePurchasesRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	stated := make([]StatedPurchase, 0, len(req.Purchases))
+	for i, sp := range req.Purchases {
+		bad := func(msg string) { httpjson.Error(w, http.StatusBadRequest, fmt.Sprintf("purchase %d: %s", i+1, msg)) }
+		quantity, err := decimal.NewFromString(sp.Quantity)
+		if err != nil {
+			bad("quantity must be a decimal string")
+			return
+		}
+		one := StatedPurchase{Quantity: quantity}
+		if sp.Price.IsSpecified() && !sp.Price.IsNull() {
+			price, err := decimal.NewFromString(sp.Price.MustGet())
+			if err != nil {
+				bad("price must be a decimal string")
+				return
+			}
+			one.Price = &price
+		}
+		if sp.CostMinor.IsSpecified() && !sp.CostMinor.IsNull() {
+			cost := sp.CostMinor.MustGet()
+			one.CostMinor = &cost
+		}
+		if sp.FeeMinor != nil {
+			one.FeeMinor = *sp.FeeMinor
+		}
+		if sp.AcquiredOn.IsSpecified() && !sp.AcquiredOn.IsNull() {
+			on, err := parseDate(sp.AcquiredOn.MustGet())
+			if err != nil {
+				bad("acquired_on " + err.Error())
+				return
+			}
+			one.AcquiredOn = &on
+		}
+		stated = append(stated, one)
+	}
+	op, err := h.svc.StatePurchases(r.Context(), p.SpaceID, id, stated)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, toAPI(op))
 }
 
 func (h *Handler) handleTransfer(w http.ResponseWriter, r *http.Request) {

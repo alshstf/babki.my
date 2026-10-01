@@ -204,10 +204,12 @@ func TestApplyImportDeltaRefusesASplitFromTheImporter(t *testing.T) {
 // The hole was opened for the corporate-actions registry, whose pairs cannot
 // have their breakdown computed from the journal: how many units of the new
 // paper N of the old become, and what share of the basis a spin-off carves
-// out, live in the registry and nowhere else. Everything else must keep the
-// old refusal — a broker's transfer names a quantity and the FIFO queue
-// answers the rest, so a breakdown arriving with it is a cost basis somebody
-// invented, and this path exists to make that impossible.
+// out, live in the registry and nowhere else. A transfer between the owner's
+// accounts must keep the old refusal — a broker's transfer names a quantity and
+// the FIFO queue answers the rest, so a breakdown arriving with it is a cost
+// basis somebody invented, and this path exists to make that impossible. (The
+// one other leg that may carry one is an arrival from another broker, with the
+// purchases its owner stated — see the test after this one.)
 //
 // WITHOUT THIS CASE THE GUARD IS UNTESTED: opening it to every caller (the
 // function simply returning true) leaves the whole suite green, because no
@@ -218,12 +220,13 @@ func TestApplyImportDeltaRefusesABreakdownFromAnyoneButTheRegistry(t *testing.T)
 	svc := operation.NewService(f.store)
 
 	on := date("2021-01-08")
-	// An ordinary imported transfer, arriving with a parcel of its own: the
-	// shape the importer is never allowed to send.
+	group := uuid.New()
+	// One leg of a move between the owner's accounts, arriving with a parcel of
+	// its own: the shape the importer is never allowed to send.
 	transfer := imported(operation.Operation{
 		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeTransferIn,
 		OccurredOn: date("2026-07-01"), Quantity: dec("10"), AmountMinor: 100_000,
-		Currency: "RUB",
+		Currency: "RUB", TransferGroupID: &group,
 		TransferLots: []operation.ReleasedLot{
 			{Quantity: *dec("10"), CostMinor: 100_000, AcquiredOn: &on},
 		},
@@ -245,6 +248,40 @@ func TestApplyImportDeltaRefusesABreakdownFromAnyoneButTheRegistry(t *testing.T)
 	}
 	if len(applied) != 0 {
 		t.Fatalf("applied %d operations, want none", len(applied))
+	}
+}
+
+// TestApplyImportDeltaTakesTheStatedPurchasesOfAnArrivalFromOutside: shares
+// arriving from a broker this program does not hold have no source account to
+// work their purchases out from, so the ones the owner stated travel with the
+// row — and come back, dated and priced, as the lots the account holds.
+func TestApplyImportDeltaTakesTheStatedPurchasesOfAnArrivalFromOutside(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+
+	early, late := date("2021-01-08"), date("2023-05-02")
+	arrival := imported(operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeTransferIn,
+		OccurredOn: date("2026-07-01"), Quantity: dec("10"), AmountMinor: 250_000,
+		Currency: "RUB",
+		TransferLots: []operation.ReleasedLot{
+			{Quantity: *dec("4"), CostMinor: 100_000, AcquiredOn: &early},
+			{Quantity: *dec("6"), CostMinor: 150_000, AcquiredOn: &late},
+		},
+	}, "op-arrival-from-outside")
+
+	if _, _, err := svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{
+		Add: []operation.Operation{arrival},
+	}); err != nil {
+		t.Fatalf("ApplyImportDelta: %v", err)
+	}
+	_, positions := journalOf(t, f, f.accountID)
+	p := positions[f.sberID]
+	if p == nil || len(p.Lots) != 2 {
+		t.Fatalf("position = %+v, want two lots", p)
+	}
+	if p.CostMinor != 250_000 || !p.Lots[0].AcquiredOn.Equal(early) || !p.Lots[1].AcquiredOn.Equal(late) {
+		t.Errorf("lots = %+v, cost %d — want the two stated purchases, 250000 in all", p.Lots, p.CostMinor)
 	}
 }
 

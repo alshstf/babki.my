@@ -78,6 +78,8 @@ type journalDelta interface {
 // already written into one account. *operation.Store satisfies it.
 type journalReader interface {
 	ListBySource(ctx context.Context, spaceID, accountID uuid.UUID, source string) ([]operation.Operation, error)
+	StatedPurchases(ctx context.Context, spaceID uuid.UUID, accountIDs []uuid.UUID, source string) (
+		map[operation.StatedKey][]operation.ReleasedLot, error)
 }
 
 // RebuildStats is what one rebuild changed.
@@ -173,6 +175,11 @@ func (r *Rebuilder) Rebuild(ctx context.Context, conn Connection, links []Accoun
 	}
 	r.settleBrokerFees(p)
 	pairTransfers(p.want)
+	// After the pairing, which is what says which arrivals have no sibling:
+	// only those can carry purchases the owner stated.
+	if err := r.applyStatedPurchases(ctx, conn.SpaceID, accountsOf(links), p.want); err != nil {
+		return RebuildStats{}, err
+	}
 
 	delta, keptByRow, err := r.difference(ctx, conn.SpaceID, accountsOf(links), p.want)
 	if err != nil {
@@ -1231,7 +1238,68 @@ func sameJournalRow(want, stored operation.Operation) bool {
 	if journalOwnsBasis(want) {
 		return true
 	}
+	// An arrival's breakdown is what the owner stated for it, and only the
+	// pieces say which: two statements can add up to the same basis on
+	// different days.
+	if want.Type == operation.TypeTransferIn && !sameLots(want.TransferLots, stored.TransferLots) {
+		return false
+	}
 	return want.AmountMinor == stored.AmountMinor
+}
+
+// sameLots compares two breakdowns piece by piece.
+func sameLots(a, b []operation.ReleasedLot) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !a[i].Quantity.Equal(b[i].Quantity) || a[i].CostMinor != b[i].CostMinor || !sameDay(a[i].AcquiredOn, b[i].AcquiredOn) {
+			return false
+		}
+	}
+	return true
+}
+
+// applyStatedPurchases puts back the purchases the owner stated for shares that
+// arrived from another broker (see operation.Service.StatePurchases). The
+// broker's record does not have them, so a projection made from it alone would
+// take them off the journal on every sync.
+//
+// A statement that no longer adds up to the shares the broker now reports — it
+// rewrote the row with another quantity — is not applied: the shares count as
+// bought for nothing again, which the paper says, until the owner states them
+// anew. Applying it would put lots on the journal for shares that are not there.
+func (r *Rebuilder) applyStatedPurchases(ctx context.Context, spaceID uuid.UUID, accounts []uuid.UUID, want []desired) error {
+	stated, err := r.reader.StatedPurchases(ctx, spaceID, accounts, Source)
+	if err != nil {
+		return fmt.Errorf("tinvest: read the purchases stated for arrivals: %w", err)
+	}
+	if len(stated) == 0 {
+		return nil
+	}
+	for i := range want {
+		op := &want[i].op
+		if op.Type != operation.TypeTransferIn || op.TransferGroupID != nil || op.ExternalID == nil || op.Quantity == nil {
+			continue
+		}
+		pieces, ok := stated[operation.StatedKey{AccountID: op.AccountID, ExternalID: *op.ExternalID}]
+		if !ok {
+			continue
+		}
+		var cost int64
+		total := decimal.Zero
+		for _, pc := range pieces {
+			cost += pc.CostMinor
+			total = total.Add(pc.Quantity)
+		}
+		if !total.Equal(*op.Quantity) {
+			r.log.Warn("tinvest: the purchases stated for an arrival no longer add up to what the broker reports, leaving them off",
+				"account", op.AccountID, "operation", *op.ExternalID, "stated", total.String(), "broker", op.Quantity.String())
+			continue
+		}
+		op.AmountMinor, op.TransferLots = cost, pieces
+	}
+	return nil
 }
 
 // journalOwnsBasis reports whether the amount of this entry is the write path's

@@ -1372,6 +1372,30 @@ type SetupStatus struct {
 	SetupNeeded bool `json:"setup_needed"`
 }
 
+// StatePurchasesRequest defines model for StatePurchasesRequest.
+type StatePurchasesRequest struct {
+	// Purchases Every purchase behind the arrival. Their quantities must add up to exactly the quantity that arrived, because they become the lots those shares are held as.
+	Purchases []StatedPurchase `json:"purchases"`
+}
+
+// StatedPurchase defines model for StatedPurchase.
+type StatedPurchase struct {
+	// AcquiredOn Date YYYY-MM-DD the shares were bought: not after the day they arrived. Optional — a price without its day still counts, but cannot be converted into another currency (Position.has_undated_lots).
+	AcquiredOn nullable.Nullable[string] `json:"acquired_on,omitempty"`
+
+	// CostMinor What these shares cost in all, in minor units of the arrival's currency, for when only the total is known. Give this or price, not both.
+	CostMinor nullable.Nullable[int64] `json:"cost_minor,omitempty"`
+
+	// FeeMinor Commission paid on the purchase, in minor units; added to its cost, as it is to every purchase's lot. 0 when omitted.
+	FeeMinor *int64 `json:"fee_minor,omitempty"`
+
+	// Price Money per share, in MAJOR units of the arrival's currency. The server strikes the cost from it, rounded as a buy's amount is, so a client never computes money. Give this or cost_minor, not both.
+	Price nullable.Nullable[string] `json:"price,omitempty"`
+
+	// Quantity Decimal as string: positive, at most 10 decimal places.
+	Quantity string `json:"quantity"`
+}
+
 // Summary defines model for Summary.
 type Summary struct {
 	// BaseCurrency ISO-4217, from the space; e.g. RUB
@@ -1858,6 +1882,9 @@ type CreateOperationJSONRequestBody = CreateOperationRequest
 
 // CreateTransferJSONRequestBody defines body for CreateTransfer for application/json ContentType.
 type CreateTransferJSONRequestBody = TransferRequest
+
+// StatePurchasesJSONRequestBody defines body for StatePurchases for application/json ContentType.
+type StatePurchasesJSONRequestBody = StatePurchasesRequest
 
 // PerformSetupJSONRequestBody defines body for PerformSetup for application/json ContentType.
 type PerformSetupJSONRequestBody = SetupRequest

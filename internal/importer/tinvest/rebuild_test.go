@@ -704,7 +704,7 @@ func TestRebuildDoesNotPairSharesCrossingToAndFromTheOutsideWorld(t *testing.T) 
 	if in.TransferGroupID != nil {
 		t.Errorf("the arrival was paired into group %s with a departure to a depositary outside this program", in.TransferGroupID)
 	}
-	if in.Note != "Перевод бумаг от другого брокера — стоимость приобретения неизвестна: брокер её не передаёт" {
+	if in.Note != "Перевод бумаг от другого брокера — стоимость приобретения брокер не передаёт" {
 		t.Errorf("the arrival's note is %q, want the mark saying its cost is unknown — nobody here knows what those shares cost", in.Note)
 	}
 	if in.AmountMinor != 0 {
@@ -806,7 +806,7 @@ func TestRebuildKeepsTheUnknownBasisNoteOnALoneArrival(t *testing.T) {
 	if in.TransferGroupID != nil {
 		t.Fatalf("the lone arrival carries group %s, want none", in.TransferGroupID)
 	}
-	if in.Note != "Перевод бумаг от другого брокера — стоимость приобретения неизвестна: брокер её не передаёт" {
+	if in.Note != "Перевод бумаг от другого брокера — стоимость приобретения брокер не передаёт" {
 		t.Errorf("the lone arrival's note is %q, want the mark saying its cost is unknown", in.Note)
 	}
 	if in.AmountMinor != 0 {

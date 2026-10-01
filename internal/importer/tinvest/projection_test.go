@@ -683,7 +683,7 @@ func TestProjectRowIncomingSecuritiesSayTheirBasisIsUnknown(t *testing.T) {
 	if op.Quantity == nil || op.Quantity.String() != "40" {
 		t.Errorf("quantity = %v, want 40", op.Quantity)
 	}
-	if op.Note != "Перевод бумаг от другого брокера — стоимость приобретения неизвестна: брокер её не передаёт" {
+	if op.Note != "Перевод бумаг от другого брокера — стоимость приобретения брокер не передаёт" {
 		t.Errorf("note = %q, want the description plus the unknown-basis mark", op.Note)
 	}
 	if op.InstrumentID == nil {

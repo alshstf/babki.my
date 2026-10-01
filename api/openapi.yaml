@@ -524,6 +524,37 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/v1/operations/{operationId}/purchases:
+    put:
+      operationId: statePurchases
+      description: >-
+        States what shares that arrived from another broker cost and when they were bought —
+        the purchases the broker that sent them did not pass on. Allowed only on a transfer_in
+        with no sibling (`transfer_group_id` null); a transfer between two of the owner's
+        accounts carries the purchases of the account it left, and is a 400. The purchases
+        become the arrival's breakdown and its `amount_minor` their sum, replacing whatever was
+        stated before. Until they are stated the shares count as bought for nothing
+        (Position.has_unknown_cost). On an imported arrival the statement is kept and put back
+        by every later sync. 409, with the engine's reason, when the rest of the journal cannot
+        take it — shares later moved on with a breakdown recorded against the old basis, say.
+      parameters:
+        - { name: operationId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StatePurchasesRequest" }
+      responses:
+        "200":
+          description: The arrival as stored, with its new basis
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Operation" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/positions:
     get:
       operationId: listAccountPositions
@@ -930,6 +961,41 @@ components:
           minLength: 8
           maxLength: 1024
           description: "At least eight CHARACTERS and at most 1024, counted as Unicode code points — which is what `minLength` and `maxLength` count here and what the server counts. It used to count BYTES while its own refusal said «characters», so a seven-letter Cyrillic password was fourteen bytes and went through, and this document could not state the rule without stating one stricter than the code (#117). The count moved to code points rather than the sentence to bytes, because the sentence is what the person reads. The ceiling is there so that what gets hashed has a size the server chose. NOT DECLARED ON LoginRequest — see it."
+    StatePurchasesRequest:
+      type: object
+      required: [purchases]
+      properties:
+        purchases:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/StatedPurchase" }
+          description: "Every purchase behind the arrival. Their quantities must add up to exactly the quantity that arrived, because they become the lots those shares are held as."
+    StatedPurchase:
+      type: object
+      required: [quantity]
+      properties:
+        quantity: { type: string, description: "Decimal as string: positive, at most 10 decimal places." }
+        price:
+          type: string
+          nullable: true
+          description: "Money per share, in MAJOR units of the arrival's currency. The server strikes the cost from it, rounded as a buy's amount is, so a client never computes money. Give this or cost_minor, not both."
+        cost_minor:
+          type: integer
+          format: int64
+          nullable: true
+          minimum: 0
+          maximum: 1000000000000000
+          description: "What these shares cost in all, in minor units of the arrival's currency, for when only the total is known. Give this or price, not both."
+        fee_minor:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 1000000000000000
+          description: "Commission paid on the purchase, in minor units; added to its cost, as it is to every purchase's lot. 0 when omitted."
+        acquired_on:
+          type: string
+          nullable: true
+          description: "Date YYYY-MM-DD the shares were bought: not after the day they arrived. Optional — a price without its day still counts, but cannot be converted into another currency (Position.has_undated_lots)."
     LoginRequest:
       type: object
       description: >-

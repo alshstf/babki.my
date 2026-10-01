@@ -635,7 +635,7 @@ func checkImportContract(op Operation) error {
 		return fmt.Errorf("%w: an imported operation must carry the id of the record it was projected from",
 			ErrImportContract)
 	}
-	if len(op.TransferLots) > 0 && !carriesRegistryBreakdown(op) {
+	if len(op.TransferLots) > 0 && !carriesRegistryBreakdown(op) && !arrivesFromOutside(op) {
 		return fmt.Errorf("%w: a transfer's FIFO breakdown is worked out from the journal here, not supplied",
 			ErrImportContract)
 	}
@@ -712,6 +712,15 @@ func isCorporatePairLeg(t Type) bool {
 // own record where it belongs and leaves the engine to check it on every fold.
 func carriesRegistryBreakdown(op Operation) bool {
 	return op.Source == SourceRegistry && isCorporatePairLeg(op.Type)
+}
+
+// arrivesFromOutside reports whether op is shares arriving from a broker this
+// program does not hold: a transfer_in with no sibling. Its basis and its
+// breakdown are the ones the owner stated for it (see Service.StatePurchases),
+// which an importer puts back on every rebuild — there is no source account in
+// this journal for them to be worked out from.
+func arrivesFromOutside(op Operation) bool {
+	return op.Type == TypeTransferIn && op.TransferGroupID == nil
 }
 
 // pairedLegs checks that a group really is one event and returns its legs with
