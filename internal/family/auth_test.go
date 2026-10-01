@@ -3,6 +3,7 @@ package family_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -228,5 +229,45 @@ func TestUnknownCountryRejectionNamesWhatItKnowsNotWhatItAnswersFor(t *testing.T
 	}
 	if strings.Contains(msg, "can only answer for") {
 		t.Errorf("error = %q, still claims the application can answer for every listed country — five of them carry a mismatch notice", msg)
+	}
+}
+
+// TestTwoSetupsAtOnceMakeOneOwner: "no user exists yet" used to be decided by a
+// count taken before the insert, so two setups arriving together both passed it
+// and both became owners, each of a space of their own. The decision is now made
+// under a lock inside the transaction that inserts.
+func TestTwoSetupsAtOnceMakeOneOwner(t *testing.T) {
+	pool := testdb.New(t)
+	svc := family.NewService(family.NewStore(pool))
+	ctx := context.Background()
+
+	const attempts = 6
+	errs := make(chan error, attempts)
+	for i := range attempts {
+		go func() {
+			_, _, err := svc.Setup(ctx, family.SetupParams{
+				SpaceName: "S", Username: fmt.Sprintf("owner%d", i), DisplayName: "O", Password: "secret123",
+			})
+			errs <- err
+		}()
+	}
+	succeeded := 0
+	for range attempts {
+		switch err := <-errs; {
+		case err == nil:
+			succeeded++
+		case !errors.Is(err, family.ErrAlreadySetUp):
+			t.Errorf("Setup: %v, want success or ErrAlreadySetUp", err)
+		}
+	}
+	if succeeded != 1 {
+		t.Errorf("%d setups succeeded, want exactly 1", succeeded)
+	}
+	var users, spaces int
+	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM users), (SELECT count(*) FROM spaces)`).Scan(&users, &spaces); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if users != 1 || spaces != 1 {
+		t.Errorf("the instance holds %d users and %d spaces, want one of each", users, spaces)
 	}
 }

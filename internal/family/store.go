@@ -96,6 +96,10 @@ func (s *Store) CreateSpaceWithOwner(ctx context.Context, name string, ownerID u
 	return sp, tx.Commit(ctx)
 }
 
+// firstUserLockKey is the advisory lock CreateFirstUserWithSpace takes. Any
+// constant will do; this one spells "babki1st" in ASCII.
+const firstUserLockKey int64 = 0x6261626b69317374
+
 // CreateFirstUserWithSpace creates the first user, the family space and the
 // owner membership in a single transaction, so a mid-way failure can never
 // orphan a user row (which would otherwise permanently wedge SetupNeeded).
@@ -105,6 +109,22 @@ func (s *Store) CreateFirstUserWithSpace(ctx context.Context, spaceName, usernam
 		return User{}, Space{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// "No user exists yet" is decided HERE, under a lock, and not by the caller's
+	// earlier count: two setups arriving together both saw an empty instance and
+	// both created an owner, each with a space of their own. The lock is held to
+	// the end of the transaction, so the second waits, counts one user, and is
+	// told the instance is already set up.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, firstUserLockKey); err != nil {
+		return User{}, Space{}, fmt.Errorf("lock the first-user setup: %w", err)
+	}
+	var existing int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&existing); err != nil {
+		return User{}, Space{}, fmt.Errorf("count users: %w", err)
+	}
+	if existing > 0 {
+		return User{}, Space{}, ErrAlreadySetUp
+	}
 
 	var u User
 	err = tx.QueryRow(ctx, `INSERT INTO users (username, display_name, password_hash)

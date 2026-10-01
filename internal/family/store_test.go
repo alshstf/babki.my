@@ -119,8 +119,10 @@ func TestBaseCurrency(t *testing.T) {
 		t.Fatalf("base_currency after update = %q, want USD", got.BaseCurrency)
 	}
 
-	// CreateFirstUserWithSpace also scans base_currency.
-	_, sp2, err := st.CreateFirstUserWithSpace(ctx, "Other", "bob", "Bob", "hash2")
+	// CreateFirstUserWithSpace also scans base_currency. It is the FIRST user's
+	// door and refuses an instance that already has one, so it gets its own.
+	fresh, freshCtx := newStore(t)
+	_, sp2, err := fresh.CreateFirstUserWithSpace(freshCtx, "Other", "bob", "Bob", "hash2")
 	if err != nil {
 		t.Fatalf("CreateFirstUserWithSpace: %v", err)
 	}
@@ -154,7 +156,8 @@ func TestTaxResidencyColumn(t *testing.T) {
 	if sp.TaxResidency != family.DefaultTaxResidency {
 		t.Fatalf("CreateSpaceWithOwner tax_residency = %q, want %s (migration default)", sp.TaxResidency, family.DefaultTaxResidency)
 	}
-	_, sp2, err := st.CreateFirstUserWithSpace(ctx, "Other", "bob", "Bob", "hash2")
+	fresh, freshCtx := newStore(t)
+	_, sp2, err := fresh.CreateFirstUserWithSpace(freshCtx, "Other", "bob", "Bob", "hash2")
 	if err != nil {
 		t.Fatalf("CreateFirstUserWithSpace: %v", err)
 	}
