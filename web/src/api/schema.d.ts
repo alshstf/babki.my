@@ -380,6 +380,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/{operationId}/purchases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description States what shares that arrived from another broker cost and when they were bought — the purchases the broker that sent them did not pass on. Allowed only on a transfer_in with no sibling (`transfer_group_id` null); a transfer between two of the owner's accounts carries the purchases of the account it left, and is a 400. The purchases become the arrival's breakdown and its `amount_minor` their sum, replacing whatever was stated before. Until they are stated the shares count as bought for nothing (Position.has_unknown_cost). On an imported arrival the statement is kept and put back by every later sync. 409, with the engine's reason, when the rest of the journal cannot take it — shares later moved on with a breakdown recorded against the old basis, say. */
+        put: operations["statePurchases"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{accountId}/positions": {
         parameters: {
             query?: never;
@@ -611,6 +628,28 @@ export interface components {
             display_name: string;
             /** @description At least eight CHARACTERS and at most 1024, counted as Unicode code points — which is what `minLength` and `maxLength` count here and what the server counts. It used to count BYTES while its own refusal said «characters», so a seven-letter Cyrillic password was fourteen bytes and went through, and this document could not state the rule without stating one stricter than the code (#117). The count moved to code points rather than the sentence to bytes, because the sentence is what the person reads. The ceiling is there so that what gets hashed has a size the server chose. NOT DECLARED ON LoginRequest — see it. */
             password: string;
+        };
+        StatePurchasesRequest: {
+            /** @description Every purchase behind the arrival. Their quantities must add up to exactly the quantity that arrived, because they become the lots those shares are held as. */
+            purchases: components["schemas"]["StatedPurchase"][];
+        };
+        StatedPurchase: {
+            /** @description Decimal as string: positive, at most 10 decimal places. */
+            quantity: string;
+            /** @description Money per share, in MAJOR units of the arrival's currency. The server strikes the cost from it, rounded as a buy's amount is, so a client never computes money. Give this or cost_minor, not both. */
+            price?: string | null;
+            /**
+             * Format: int64
+             * @description What these shares cost in all, in minor units of the arrival's currency, for when only the total is known. Give this or price, not both.
+             */
+            cost_minor?: number | null;
+            /**
+             * Format: int64
+             * @description Commission paid on the purchase, in minor units; added to its cost, as it is to every purchase's lot. 0 when omitted.
+             */
+            fee_minor?: number;
+            /** @description Date YYYY-MM-DD the shares were bought: not after the day they arrived. Optional — a price without its day still counts, but cannot be converted into another currency (Position.has_undated_lots). */
+            acquired_on?: string | null;
         };
         /**
          * @description NEITHER FIELD CARRIES THE RULE ITS TWIN ON SetupRequest CARRIES, and that is the point of this schema rather than an omission. Login reads the username straight out of the table and compares the password against the hash it finds (internal/family/auth.go, Login); no shape and no length is judged, and every failure — a malformed name, a name nobody has, a wrong password — comes back as the same 401, on purpose, so that a caller cannot enumerate users by the answers it gets.
@@ -2380,6 +2419,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    statePurchases: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StatePurchasesRequest"];
+            };
+        };
+        responses: {
+            /** @description The arrival as stored, with its new basis */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Operation"];
+                };
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];

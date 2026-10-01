@@ -572,12 +572,14 @@ const (
 	// noteDividendToCard marks both legs of a dividend the broker paid
 	// straight to a card — see projectDividendToCard.
 	noteDividendToCard = "выплата на карту, минуя брокерский счёт"
-	// noteBasisUnknown marks shares that arrived from another broker with no
-	// cost behind them. It is put ONLY on that case (INPUT_SECURITIES): a leg
-	// of a move between the owner's own accounts may yet be paired with its
-	// other half, and then the basis is known exactly — a note claiming
-	// otherwise would be false on every paired transfer.
-	noteBasisUnknown = "стоимость приобретения неизвестна: брокер её не передаёт"
+	// noteBasisUnknown marks shares that arrived from another broker, which
+	// passes on no cost for them. It is put ONLY on that case
+	// (INPUT_SECURITIES): a leg of a move between the owner's own accounts may
+	// yet be paired with its other half, and then the basis is known exactly.
+	// It says what the BROKER did and not what is known, because the owner can
+	// state the purchases afterwards (operation.Service.StatePurchases) and the
+	// note stays on the row either way.
+	noteBasisUnknown = "стоимость приобретения брокер не передаёт"
 	// noteFeeOtherCurrency marks the commission leg split off a trade whose
 	// commission was charged in another currency — see tradeCommission.
 	noteFeeOtherCurrency = "комиссия сделки, списанная в другой валюте"
