@@ -12,6 +12,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
+	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/platform/secretbox"
 )
 
@@ -306,27 +307,39 @@ type clientFactory func(token string) (*Client, error)
 // read once would be believed for as long as the process lived.
 type rebuilderFactory func() *Rebuilder
 
+// registryAligner brings one account's journal into line with the
+// corporate-actions registry. *corporateaction.Materializer satisfies it.
+//
+// Nil is a legitimate value and means no registry is wired: the journal then
+// holds what the broker sent and nothing else, which is where every test that
+// is not about this stands.
+type registryAligner interface {
+	ForAccount(ctx context.Context, spaceID, accountID uuid.UUID) (corporateaction.Stats, error)
+}
+
 type syncWorker struct {
 	river.WorkerDefaults[SyncArgs]
 	store        *Store
 	box          *secretbox.Box
 	newClient    clientFactory
 	newRebuilder rebuilderFactory
+	registry     registryAligner
 	reconciler   *Reconciler
 	log          *slog.Logger
 }
 
 // NewSyncWorker builds the River worker that brings one connection's mirror,
 // projection and reconciliation up to date. Register it with river.AddWorker.
+// registry may be nil (see registryAligner).
 func NewSyncWorker(store *Store, box *secretbox.Box, newClient clientFactory,
-	newRebuilder rebuilderFactory, reconciler *Reconciler, log *slog.Logger,
+	newRebuilder rebuilderFactory, registry registryAligner, reconciler *Reconciler, log *slog.Logger,
 ) river.Worker[SyncArgs] {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &syncWorker{
 		store: store, box: box, newClient: newClient,
-		newRebuilder: newRebuilder, reconciler: reconciler, log: log,
+		newRebuilder: newRebuilder, registry: registry, reconciler: reconciler, log: log,
 	}
 }
 
@@ -339,8 +352,10 @@ func (w *syncWorker) Timeout(*river.Job[SyncArgs]) time.Duration { return syncTi
 // and only then is the projection rebuilt over the WHOLE connection: a transfer
 // between two accounts of one connection is two mirror rows under two different
 // links, and a rebuild that ran per link would see one leg at a time and pair
-// nothing. The reconciliation comes last, when the journal it compares against
-// is the one this run just produced.
+// nothing. The registry's rows come next: a purchase the broker reports from
+// before a split the registry holds needs that split's row, and the import door
+// does not call the hook a hand entry does. The reconciliation comes last, when
+// the journal it compares against is the one this run just produced.
 //
 // Nothing here is one transaction and nothing pretends to be. Each step is
 // atomic on its own, the mirror is derived from the broker's whole history and
@@ -470,6 +485,8 @@ func (w *syncWorker) sync(ctx context.Context, conn Connection, links []AccountL
 		return w.failed(ctx, conn, runs, err)
 	}
 
+	w.alignWithRegistry(ctx, links)
+
 	for _, lr := range runs {
 		// The verdict is kept whatever comes back with it: ReconcileLink
 		// returns "not checked" alongside its error, and that is the value the
@@ -533,6 +550,31 @@ func (w *syncWorker) sync(ctx context.Context, conn Connection, links []AccountL
 		return closeErr
 	}
 	return nil
+}
+
+// alignWithRegistry brings every linked account into line with the
+// corporate-actions registry, between the rebuild and the reconciliation.
+//
+// A FAILURE DOES NOT FAIL THE RUN. The broker's rows are already in the
+// journal; an account the registry could not be applied to is compared as it
+// stands, the reconciliation reports the difference a missing split leaves,
+// and the daily sweep tries again. No fresh check is asked for either: this
+// run's own reconciliation is that check.
+func (w *syncWorker) alignWithRegistry(ctx context.Context, links []AccountLink) {
+	if w.registry == nil {
+		return
+	}
+	for _, link := range links {
+		stats, err := w.registry.ForAccount(ctx, link.SpaceID, link.AccountID)
+		if err != nil {
+			logAt(ctx, w.log, err, "tinvest: the import was written but the registry's rows were not brought into line",
+				"account", link.AccountID, "err", err)
+		}
+		if stats.Added+stats.Removed+stats.Refused > 0 {
+			w.log.Info("tinvest: the registry's rows were brought into line after an import",
+				"account", link.AccountID, "added", stats.Added, "removed", stats.Removed, "refused", stats.Refused)
+		}
+	}
 }
 
 // failed closes every run this attempt opened and decides what the queue is

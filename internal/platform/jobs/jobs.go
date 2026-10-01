@@ -183,7 +183,7 @@ func NewWorkers(
 	}
 	river.AddWorker(workers, tinvest.NewDispatchWorker(tinvestDeps.Store, enqueuer, log))
 	river.AddWorker(workers, tinvest.NewSyncWorker(tinvestDeps.Store, tinvestDeps.Box,
-		tinvestDeps.NewClient, tinvestDeps.NewRebuilder, tinvestDeps.Reconciler, log))
+		tinvestDeps.NewClient, tinvestDeps.NewRebuilder, caMaterializer, tinvestDeps.Reconciler, log))
 	river.AddWorker(workers, tinvest.NewQuotesWorker(tinvestDeps.Store, mdStore,
 		tinvestDeps.Box, tinvestDeps.NewClient, log, nil))
 	// The corporate-actions registry. The refresh worker is registered only
