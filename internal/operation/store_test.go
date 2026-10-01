@@ -250,7 +250,7 @@ func TestTransferPairAtomicity(t *testing.T) {
 	}
 }
 
-func TestEarliestOccurredOn(t *testing.T) {
+func TestEarliestRecordedDay(t *testing.T) {
 	f := newFixture(t)
 
 	old := operation.Operation{
@@ -268,21 +268,45 @@ func TestEarliestOccurredOn(t *testing.T) {
 		t.Fatalf("Create old: %v", err)
 	}
 
-	got, err := f.store.EarliestOccurredOn(f.ctx)
+	got, err := f.store.EarliestRecordedDay(f.ctx)
 	if err != nil {
-		t.Fatalf("EarliestOccurredOn: %v", err)
+		t.Fatalf("EarliestRecordedDay: %v", err)
 	}
 	if !got.Equal(date("2019-03-12")) {
-		t.Fatalf("EarliestOccurredOn = %v, want 2019-03-12", got)
+		t.Fatalf("EarliestRecordedDay = %v, want 2019-03-12", got)
 	}
 }
 
-func TestEarliestOccurredOnEmpty(t *testing.T) {
+// Purchases stated for shares from another broker can be older than anything
+// else in the journal, and their cost is converted at their own days' rates —
+// so the earliest day the fx backfill must reach is theirs.
+func TestEarliestRecordedDayReachesAPurchaseOlderThanEveryOperation(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+	bought := date("2017-05-04")
+	cost := int64(100_000)
+	if _, err := svc.CreateArrival(f.ctx, f.spaceID, operation.ArrivalParams{
+		AccountID: f.accountID, InstrumentID: f.sberID, OccurredOn: date("2026-06-15"),
+		Quantity: *dec("10"), Currency: "RUB",
+		Purchases: []operation.StatedPurchase{{Quantity: *dec("10"), CostMinor: &cost, AcquiredOn: &bought}},
+	}); err != nil {
+		t.Fatalf("CreateArrival: %v", err)
+	}
+	got, err := f.store.EarliestRecordedDay(f.ctx)
+	if err != nil {
+		t.Fatalf("EarliestRecordedDay: %v", err)
+	}
+	if !got.Equal(bought) {
+		t.Errorf("EarliestRecordedDay = %v, want the purchase's 2017-05-04 — the arrival itself is 2026", got)
+	}
+}
+
+func TestEarliestRecordedDayEmpty(t *testing.T) {
 	f := newFixture(t)
 
-	_, err := f.store.EarliestOccurredOn(f.ctx)
+	_, err := f.store.EarliestRecordedDay(f.ctx)
 	if !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("EarliestOccurredOn on empty table: err = %v, want pgx.ErrNoRows", err)
+		t.Fatalf("EarliestRecordedDay on empty table: err = %v, want pgx.ErrNoRows", err)
 	}
 }
 
