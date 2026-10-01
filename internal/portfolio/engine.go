@@ -61,9 +61,10 @@
 // leave a lot with no quantity but a live cost basis; it keeps its place in
 // the ACQUISITION queue exactly as if it still held shares — first only when
 // the lot itself has no acquisition date, otherwise a release still has to
-// work through every lot acquired earlier before reaching it — and if nothing
-// follows it, the position keeps a basis it can no longer sell. Writing that
-// basis off would treat a split as a disposal, which it is not.
+// work through every lot acquired earlier before reaching it. The release that
+// takes the position's last unit takes such lots' money with it (see
+// sweepShareless); until then the basis stays, because writing it off would
+// treat a split as a disposal, which it is not.
 //
 // A POSITION'S COST AND ITS INCOME ARE TWO FIGURES AND MAY BE IN TWO
 // CURRENCIES. The cost currency is settled by the first operation that touches
@@ -640,7 +641,32 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) ([]ReleasedLot, error) {
 	}
 	p.Quantity = p.Quantity.Sub(qty)
 	p.CostMinor -= released
+	if p.Quantity.IsZero() {
+		pieces = append(pieces, p.sweepShareless()...)
+	}
 	return pieces, nil
+}
+
+// sweepShareless empties a position that has just lost its last unit: whatever
+// lots remain hold no shares (the lots sum to the position) and may still hold
+// money (see applySplit), and that money leaves with the release that closed
+// the position, each piece under its own day.
+//
+// Without it the answer depended on where the shareless lot stood. In front of
+// the shares, the release consumed it and its cost was part of the result;
+// behind them, the release stopped first and the cost stayed on a closed
+// position for good.
+func (p *Position) sweepShareless() []ReleasedLot {
+	var pieces []ReleasedLot
+	for _, l := range p.Lots {
+		if l.CostMinor == 0 {
+			continue
+		}
+		pieces = append(pieces, ReleasedLot{Quantity: decimal.Zero, CostMinor: l.CostMinor, AcquiredOn: l.AcquiredOn})
+		p.CostMinor -= l.CostMinor
+	}
+	p.Lots = nil
+	return pieces
 }
 
 // lotShare is the cost basis that goes with taking qty units out of a lot: the
@@ -777,6 +803,26 @@ func (p *Position) releaseRecorded(o Operation) error {
 	var carried int64 // recorded cost its own lots could not cover
 	for i, pc := range o.TransferLots {
 		qty, cost := pc.Quantity, pc.CostMinor
+		if qty.IsZero() {
+			// A piece of no units is a shareless parcel leaving with the
+			// position (see sweepShareless). Its money comes out of shareless
+			// lots of its own day and nowhere else: any other parcel would
+			// re-date it.
+			for j := range p.Lots {
+				l := &p.Lots[j]
+				if !l.Quantity.IsZero() || !sameAcquisition(l.AcquiredOn, pc.AcquiredOn) {
+					continue
+				}
+				take := min(l.CostMinor, cost)
+				l.CostMinor, p.CostMinor, cost = l.CostMinor-take, p.CostMinor-take, cost-take
+			}
+			if cost > 0 {
+				return badOp(o, fmt.Sprintf(
+					"transfer lot %d moved %d minor of basis held by a parcel with no units acquired %s, and replaying this account leaves %d of it with no such parcel to come from: %s",
+					i, pc.CostMinor, acquisitionText(pc.AcquiredOn), cost, recordAndReplayDisagree))
+			}
+			continue
+		}
 		for j := range p.Lots {
 			l := &p.Lots[j]
 			if !sameAcquisition(l.AcquiredOn, pc.AcquiredOn) {
@@ -1530,7 +1576,7 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 
 // CheckTransferLots verifies that a transfer_in's stored FIFO breakdown and
 // the operation carrying it describe the same event: every piece is a real one
-// (positive quantity, non-negative cost), the pieces' quantities sum to the
+// (units or money, neither negative), the pieces' quantities sum to the
 // quantity that moved, and their costs sum to the basis that moved.
 //
 // A breakdown that does not add up means a corrupted journal, and the engine
@@ -1575,11 +1621,16 @@ func CheckTransferLots(o Operation) error {
 	qty := decimal.Zero
 	var cost int64
 	for i, pc := range o.TransferLots {
-		if !pc.Quantity.IsPositive() {
-			return badOp(o, fmt.Sprintf("transfer lot %d has quantity %s: every piece must be a positive quantity", i, pc.Quantity))
+		if pc.Quantity.IsNegative() {
+			return badOp(o, fmt.Sprintf("transfer lot %d has quantity %s: a piece cannot move a negative quantity", i, pc.Quantity))
 		}
 		if pc.CostMinor < 0 {
 			return badOp(o, fmt.Sprintf("transfer lot %d has cost %d: a piece's cost basis cannot be negative", i, pc.CostMinor))
+		}
+		// No units is legitimate only with money: the shareless parcel a
+		// reverse split left behind, travelling with the position.
+		if pc.Quantity.IsZero() && pc.CostMinor == 0 {
+			return badOp(o, fmt.Sprintf("transfer lot %d has neither units nor cost: it describes nothing", i))
 		}
 		// The acquisition date is the one field this whole mechanism exists to
 		// carry, and it is the only one the table does not constrain: the
