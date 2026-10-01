@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { renderHook } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react-query";
 import {
   Outlet,
   RouterProvider,
@@ -115,11 +115,14 @@ function renderPage(role: SessionInfo["role"] = "owner") {
     routeTree: rootRoute.addChildren([indexRoute, detailRoute]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
-  return render(
-    <QueryClientProvider client={qc}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
-  );
+  return {
+    ...render(
+      <QueryClientProvider client={qc}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    ),
+    qc,
+  };
 }
 
 // Sets the user's stored display-currency choice the way the header toggle
@@ -324,5 +327,45 @@ describe("AccountsPage — what a viewer may do", () => {
     await screen.findByTestId("account-balance-acc-1");
     expect(screen.getByRole("button", { name: "Добавить счет" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Действия" })).toBeInTheDocument();
+  });
+});
+
+// #200: the screen has an answer to show as soon as it holds one, and a refresh
+// that fails afterwards does not take it away. It used to replace the whole
+// list with «Что-то пошло не так» — over data it still held — whenever a
+// background refetch failed: the laptop waking up before the server did.
+describe("AccountsPage — data already on screen survives a failed refresh", () => {
+  it("keeps the list and says the refresh failed", async () => {
+    serve({
+      "/api/v1/accounts": { body: [makeAccount({ name: "Наличные" })] },
+      "/api/v1/summary": { body: makeSummary() },
+    });
+    const { qc } = renderPage();
+    expect(await screen.findByText("Наличные")).toBeInTheDocument();
+
+    serve({
+      "/api/v1/accounts": { status: 500, body: { error: "internal error" } },
+      "/api/v1/summary": { body: makeSummary() },
+    });
+    await qc.refetchQueries({ queryKey: ["accounts"] });
+
+    await waitFor(() => expect(screen.getByTestId("refresh-failed")).toBeInTheDocument());
+    expect(screen.getByText("Наличные")).toBeInTheDocument();
+    expect(screen.queryByText("Что-то пошло не так")).not.toBeInTheDocument();
+  });
+
+  it("says there is no connection, not that there are no accounts", async () => {
+    // The browser reports no network: the queries are paused, nothing was asked.
+    onlineManager.setOnline(false);
+    try {
+      serve({});
+      fetchMock.mockClear();
+      renderPage();
+      expect(await screen.findByTestId("query-offline")).toBeInTheDocument();
+      expect(screen.queryByText(/Пока нет ни одного счета/)).not.toBeInTheDocument();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 });

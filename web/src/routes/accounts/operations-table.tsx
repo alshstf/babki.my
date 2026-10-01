@@ -37,6 +37,8 @@ import {
 } from "@/api/operations";
 import { useInstrumentIndex, type Instrument } from "@/api/instruments";
 import type { CostBasisRules } from "@/api/tax-residencies";
+import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
+import { queryState, refreshFailed } from "@/lib/query-state";
 
 // Whether this row's amount is not money that moved on the day it is dated but
 // a cost basis some rule picked out of earlier purchases — the only kind of
@@ -427,16 +429,8 @@ export function OperationsTable({
     );
   };
 
-  if (operations.isLoading && !operations.data) {
-    return <div className="text-muted-foreground">{t("app.loading")}</div>;
-  }
-  if (operations.isError) {
-    return (
-      <Alert variant="destructive">
-        <AlertDescription>{t("app.error")}</AlertDescription>
-      </Alert>
-    );
-  }
+  const state = queryState(operations);
+  if (state !== "ready") return <QueryGate state={state} />;
 
   if (list.length === 0) {
     return (
@@ -454,6 +448,7 @@ export function OperationsTable({
 
   return (
     <div className="grid gap-3">
+      <RefreshFailedNotice show={refreshFailed(operations)} />
       <Table>
         <TableHeader>
           <TableRow>

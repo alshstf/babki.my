@@ -10,7 +10,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import "@/i18n";
-import { Gate, routeTree } from "./router";
+import { Gate, ScreenCrashed, routeTree, router as appRouter } from "./router";
 import type { SessionInfo } from "@/api/session";
 
 // openapi-fetch captures globalThis.fetch at import time
@@ -304,5 +304,38 @@ describe("the router — screens fetched when they are visited", () => {
     // signed-in screen, so putting it behind a second round trip would only
     // delay the first one that matters.
     expect(screen.getByRole("link", { name: /Счета/ })).toBeInTheDocument();
+  });
+});
+
+// #201: after the server is upgraded, a tab still open on the old build asks
+// for a chunk that is gone. The route then throws, and with no error component
+// React unmounts everything and leaves a blank page. The screen that replaces it
+// has to say what happened and offer the one thing that helps.
+describe("the router — a screen that fails to load", () => {
+  it("shows a reload offer instead of a blank page", async () => {
+    const rootRoute = createRootRoute({ component: () => <Outlet /> });
+    const brokenRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/",
+      component: () => {
+        throw new TypeError("Failed to fetch dynamically imported module");
+      },
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([brokenRoute]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+      defaultErrorComponent: ScreenCrashed,
+    });
+    // React reports the throw on the console; that is not what is under test.
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByTestId("screen-crashed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Обновить страницу" })).toBeInTheDocument();
+    quiet.mockRestore();
+  });
+
+  it("is what the application's own router falls back to", () => {
+    expect(appRouter.options.defaultErrorComponent).toBe(ScreenCrashed);
   });
 });

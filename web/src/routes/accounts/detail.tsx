@@ -24,6 +24,8 @@ import { TradeDialog } from "./trade-dialog";
 import { CashDialog } from "./cash-dialog";
 import { IncomeDialog } from "./income-dialog";
 import { TransferDialog } from "./transfer-dialog";
+import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
+import { queryState, refreshFailed } from "@/lib/query-state";
 
 // undefined = no dialog open; otherwise the action picked from the
 // "+ Add operation" menu, each mapping to one dialog below.
@@ -66,16 +68,9 @@ export function AccountDetailPage() {
     ...(baseCurrency ? [baseCurrency] : []),
   ]);
 
-  if (accounts.isLoading) {
-    return <div className="text-muted-foreground">{t("app.loading")}</div>;
-  }
-  if (accounts.isError) {
-    return (
-      <Alert variant="destructive">
-        <AlertDescription>{t("app.error")}</AlertDescription>
-      </Alert>
-    );
-  }
+  const accountsState = queryState(accounts);
+  if (accountsState !== "ready") return <QueryGate state={accountsState} />;
+  const positionsState = queryState(positions);
 
   if (!account) {
     return (
@@ -161,12 +156,9 @@ export function AccountDetailPage() {
             </DropdownMenu>
           )}
         </div>
-        {positions.isLoading ? (
-          <div className="text-muted-foreground">{t("app.loading")}</div>
-        ) : positions.isError ? (
-          <Alert variant="destructive">
-            <AlertDescription>{t("app.error")}</AlertDescription>
-          </Alert>
+        <RefreshFailedNotice show={refreshFailed(accounts, positions)} />
+        {positionsState !== "ready" ? (
+          <QueryGate state={positionsState} />
         ) : positions.data &&
           // Money counts as something to show. An account holding nothing but
           // cash used to say «пусто» over a real balance — which was true of
