@@ -241,7 +241,87 @@ func NewInsertOnlyClient(pool *pgxpool.Pool, log *slog.Logger) (*river.Client[pg
 	return river.NewClient(riverpgxv5.New(pool), &river.Config{Logger: log})
 }
 
+// scheduledJob is one line of the schedule: what is queued, and how often.
+type scheduledJob struct {
+	every time.Duration
+	args  river.JobArgs
+}
+
+// schedule is everything this process queues on a clock. Each job also runs
+// once when the process starts.
+func schedule() []scheduledJob {
+	return []scheduledJob{
+		{time.Minute, HeartbeatArgs{}},
+		{refreshFxInterval, marketdata.RefreshFxArgs{}},
+		{refreshQuotesInterval, marketdata.RefreshQuotesArgs{}},
+		{backfillFxInterval, marketdata.BackfillFxArgs{}},
+		{backfillFxInterval, marketdata.BackfillGoldArgs{}},
+		{tinvestSyncInterval, tinvest.SyncDispatchArgs{}},
+		{tinvestQuotesInterval, tinvest.RefreshQuotesArgs{}},
+		{corporateActionsInterval, corporateaction.RefreshMoexSplitsArgs{}},
+		{corporateActionsInterval, corporateaction.MaterializeAllArgs{}},
+	}
+}
+
+// unfinishedStates are the states a job that has not finished can be in — the
+// four River requires any ByState set to contain, and Retryable, because a job
+// waiting out its backoff is still work in flight.
+var unfinishedStates = []rivertype.JobState{
+	rivertype.JobStateAvailable,
+	rivertype.JobStatePending,
+	rivertype.JobStateRetryable,
+	rivertype.JobStateRunning,
+	rivertype.JobStateScheduled,
+}
+
+// scheduledOpts is how a job of the schedule is queued.
+//
+// ONE OF A KIND AT A TIME. While a job of this kind is queued, running or
+// waiting to be retried, the next tick's insert is skipped. Without it a source
+// that is down for a day collects a job per tick, each with retries of its own,
+// and they all fire together when it comes back.
+//
+// AND IT GIVES UP BEFORE THE NEXT ONE IS DUE. The two rules need each other:
+// River's backoff between attempts grows to hours, and a job parked in it holds
+// the kind's one slot — so with River's default of 25 attempts a half-hourly
+// refresh that failed ten times in a row would next run in three hours, with
+// every tick in between skipped as its duplicate. Bounded this way, the retries
+// cover a brief outage and a longer one is met by the schedule itself.
+//
+// A job a killed process left in "running" holds the slot too, until River
+// rescues it (an hour by default). That is the cost of the first rule, and it
+// only arises when the process dies without being asked to stop.
+func scheduledOpts(every time.Duration) *river.InsertOpts {
+	return &river.InsertOpts{
+		MaxAttempts: attemptsWithin(every),
+		UniqueOpts:  river.UniqueOpts{ByState: unfinishedStates},
+	}
+}
+
+// attemptsWithin is how many attempts fit inside the interval under River's
+// default retry policy, which waits attempt⁴ seconds after each failure (1s,
+// 16s, 81s, 256s, …). A test holds this against the policy itself.
+func attemptsWithin(interval time.Duration) int {
+	attempts, waited := 1, time.Duration(0)
+	for {
+		next := time.Duration(attempts*attempts*attempts*attempts) * time.Second
+		if waited+next >= interval {
+			return attempts
+		}
+		waited += next
+		attempts++
+	}
+}
+
 func newClient(pool *pgxpool.Pool, workers *river.Workers, log *slog.Logger) (*river.Client[pgx.Tx], error) {
+	periodic := make([]*river.PeriodicJob, 0, len(schedule()))
+	for _, job := range schedule() {
+		periodic = append(periodic, river.NewPeriodicJob(
+			river.PeriodicInterval(job.every),
+			func() (river.JobArgs, *river.InsertOpts) { return job.args, scheduledOpts(job.every) },
+			&river.PeriodicJobOpts{RunOnStart: true},
+		))
+	}
 	return river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Logger:          log,
 		Workers:         workers,
@@ -249,70 +329,6 @@ func newClient(pool *pgxpool.Pool, workers *river.Workers, log *slog.Logger) (*r
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 10},
 		},
-		PeriodicJobs: []*river.PeriodicJob{
-			river.NewPeriodicJob(
-				river.PeriodicInterval(time.Minute),
-				func() (river.JobArgs, *river.InsertOpts) {
-					return HeartbeatArgs{}, nil
-				},
-				&river.PeriodicJobOpts{RunOnStart: true},
-			),
-			river.NewPeriodicJob(
-				river.PeriodicInterval(refreshFxInterval),
-				func() (river.JobArgs, *river.InsertOpts) {
-					return marketdata.RefreshFxArgs{}, nil
-				},
-				&river.PeriodicJobOpts{RunOnStart: true},
-			),
-			river.NewPeriodicJob(
-				river.PeriodicInterval(refreshQuotesInterval),
-				func() (river.JobArgs, *river.InsertOpts) {
-					return marketdata.RefreshQuotesArgs{}, nil
-				},
-				&river.PeriodicJobOpts{RunOnStart: true},
-			),
-			river.NewPeriodicJob(
-				river.PeriodicInterval(backfillFxInterval),
-				func() (river.JobArgs, *river.InsertOpts) {
-					return marketdata.BackfillFxArgs{}, nil
-				},
-				&river.PeriodicJobOpts{RunOnStart: true},
-			),
-			river.NewPeriodicJob(
-				river.PeriodicInterval(backfillFxInterval),
-				func() (river.JobArgs, *river.InsertOpts) {
-					return marketdata.BackfillGoldArgs{}, nil
-				},
-				&river.PeriodicJobOpts{RunOnStart: true},
-			),
-			river.NewPeriodicJob(
-				river.PeriodicInterval(tinvestSyncInterval),
-				func() (river.JobArgs, *river.InsertOpts) {
-					return tinvest.SyncDispatchArgs{}, nil
-				},
-				&river.PeriodicJobOpts{RunOnStart: true},
-			),
-			river.NewPeriodicJob(
-				river.PeriodicInterval(tinvestQuotesInterval),
-				func() (river.JobArgs, *river.InsertOpts) {
-					return tinvest.RefreshQuotesArgs{}, nil
-				},
-				&river.PeriodicJobOpts{RunOnStart: true},
-			),
-			river.NewPeriodicJob(
-				river.PeriodicInterval(corporateActionsInterval),
-				func() (river.JobArgs, *river.InsertOpts) {
-					return corporateaction.RefreshMoexSplitsArgs{}, nil
-				},
-				&river.PeriodicJobOpts{RunOnStart: true},
-			),
-			river.NewPeriodicJob(
-				river.PeriodicInterval(corporateActionsInterval),
-				func() (river.JobArgs, *river.InsertOpts) {
-					return corporateaction.MaterializeAllArgs{}, nil
-				},
-				&river.PeriodicJobOpts{RunOnStart: true},
-			),
-		},
+		PeriodicJobs: periodic,
 	})
 }
