@@ -625,9 +625,12 @@ func TestTransferInBreakdownMismatchRejected(t *testing.T) {
 			op:   transferIn(20, "15", 155_015, piece("10", 100_010, 2), piece("5", 55_000, 9)),
 			want: []string{"155010", "155015"},
 		},
-		"piece with zero quantity": {
-			op:   transferIn(20, "15", 155_015, piece("15", 100_010, 2), portfolio.ReleasedLot{Quantity: d("0"), CostMinor: 55_005, AcquiredOn: dayp(9)}),
-			want: []string{"quantity 0"},
+		// No units WITH money is a shareless parcel and is accepted (see
+		// TestATransferRecordNamesAShareLessParcelByItsOwnDay); no units and no
+		// money describes nothing.
+		"piece with neither units nor cost": {
+			op:   transferIn(20, "15", 100_010, piece("15", 100_010, 2), portfolio.ReleasedLot{Quantity: d("0"), CostMinor: 0, AcquiredOn: dayp(9)}),
+			want: []string{"neither units nor cost"},
 		},
 		"pieces that cancel out": {
 			op: transferIn(20, "15", 155_015,

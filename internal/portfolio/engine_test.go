@@ -1879,3 +1879,128 @@ func TestRedemptionRefusesWhatASaleRefuses(t *testing.T) {
 		t.Errorf("error %q does not name the type the journal actually holds", err)
 	}
 }
+
+// TestSellingTheLastShareTakesAShareLessLotsMoneyWithIt: a lot a reverse split
+// rounded away keeps its cost and its day, and waits in the queue. When it stood
+// BEHIND the lots a full sale consumed, the release stopped before reaching it:
+// the position closed with no shares and 400 of basis nothing could ever
+// release, shown as a loss on a closed row for good. Had it stood in front, the
+// same 400 would have been part of the sale's result. One fact, one answer
+// (#193).
+func TestSellingTheLastShareTakesAShareLessLotsMoneyWithIt(t *testing.T) {
+	split := op(portfolio.TypeSplit, 3, &sber, "", "", 0, 0)
+	split.SplitRatio = dp("0.0000000001")
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "5", "100", -50_000, 0),
+		op(portfolio.TypeBuy, 2, &sber, "0.4", "10", -400, 0),
+		split, // 5 -> 0.0000000005, 0.4 -> nothing the journal can name
+		op(portfolio.TypeSell, 4, &sber, "0.0000000005", "", 60_000, 0),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	if !p.Quantity.IsZero() || p.CostMinor != 0 {
+		t.Errorf("closed position holds %s units and %d of basis, want neither", p.Quantity, p.CostMinor)
+	}
+	checkLotInvariants(t, p)
+
+	if len(p.Realizations) != 1 {
+		t.Fatalf("realizations = %d, want the one sale", len(p.Realizations))
+	}
+	released := p.Realizations[0].Released
+	if len(released) != 2 {
+		t.Fatalf("released = %+v, want the sold lot and the shareless one behind it", released)
+	}
+	last := released[1]
+	if !last.Quantity.IsZero() || last.CostMinor != 400 || !sameAcquisition(last.AcquiredOn, dayp(2)) {
+		t.Errorf("shareless piece = %s/%d/%s, want 0/400 on the day it was bought",
+			last.Quantity, last.CostMinor, acquired(last.AcquiredOn))
+	}
+	if got, ok := p.RealizedPnL(); !ok || got != 60_000-50_400 {
+		t.Errorf("realized = %d (%v), want 9600 — everything paid for the position is its cost", got, ok)
+	}
+}
+
+// TestAPartialSaleLeavesAShareLessLotWaiting: only the release that EMPTIES the
+// position takes the shareless lots along. While shares remain, so does the lot.
+func TestAPartialSaleLeavesAShareLessLotWaiting(t *testing.T) {
+	split := op(portfolio.TypeSplit, 3, &sber, "", "", 0, 0)
+	split.SplitRatio = dp("0.0000000001")
+	ops := []portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "6", "100", -60_000, 0),
+		op(portfolio.TypeBuy, 2, &sber, "0.4", "10", -400, 0),
+		split,
+		op(portfolio.TypeSell, 4, &sber, "0.0000000003", "", 40_000, 0),
+	}
+	pos, err := portfolio.Compute(ops)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	p := pos[sber]
+	if p.CostMinor != 30_400 || len(p.Lots) != 2 {
+		t.Errorf("position cost %d over %d lots, want 30400 over 2 — half the first lot and the whole shareless one", p.CostMinor, len(p.Lots))
+	}
+	checkLotInvariants(t, p)
+}
+
+// TestATransferRecordNamesAShareLessParcelByItsOwnDay: a piece of no units and
+// real money is a legitimate piece — it is the shareless lot travelling with the
+// position — and both legs fold it under its own day.
+func TestATransferRecordNamesAShareLessParcelByItsOwnDay(t *testing.T) {
+	split := op(portfolio.TypeSplit, 2, &sber, "", "", 0, 0)
+	split.SplitRatio = dp("0.0000000001")
+	pieces := []portfolio.ReleasedLot{
+		{Quantity: d("0"), CostMinor: 400, AcquiredOn: dayp(1)},
+		{Quantity: d("5"), CostMinor: 50_000, AcquiredOn: dayp(3)},
+	}
+	out := op(portfolio.TypeTransferOut, 5, &sber, "5", "", 50_400, 0)
+	out.TransferLots = pieces
+	source, err := portfolio.Compute([]portfolio.Operation{
+		op(portfolio.TypeBuy, 1, &sber, "0.4", "10", -400, 0),
+		split,
+		op(portfolio.TypeBuy, 3, &sber, "5", "100", -50_000, 0),
+		out,
+	})
+	if err != nil {
+		t.Fatalf("source: %v", err)
+	}
+	if p := source[sber]; !p.Quantity.IsZero() || p.CostMinor != 0 || len(p.Lots) != 0 {
+		t.Errorf("source keeps %s units, %d of basis, %d lots; want nothing", p.Quantity, p.CostMinor, len(p.Lots))
+	}
+
+	in := op(portfolio.TypeTransferIn, 5, &sber, "5", "", 50_400, 0)
+	in.TransferLots = pieces
+	dest, err := portfolio.Compute([]portfolio.Operation{in})
+	if err != nil {
+		t.Fatalf("destination: %v", err)
+	}
+	p := dest[sber]
+	if len(p.Lots) != 2 {
+		t.Fatalf("destination lots = %+v, want the shareless parcel and the shares", p.Lots)
+	}
+	if !p.Lots[0].Quantity.IsZero() || p.Lots[0].CostMinor != 400 || !sameAcquisition(p.Lots[0].AcquiredOn, dayp(1)) {
+		t.Errorf("shareless lot = %s/%d/%s, want 0/400 on day 1 — its money keeps the day it was spent",
+			p.Lots[0].Quantity, p.Lots[0].CostMinor, acquired(p.Lots[0].AcquiredOn))
+	}
+	checkLotInvariants(t, p)
+}
+
+// TestAShareLessPieceWithNoParcelBehindItIsRefused: the record says a shareless
+// parcel of a given day left, and replaying the account finds none. Taking the
+// money from some other parcel would re-date it; the refusal is loud.
+func TestAShareLessPieceWithNoParcelBehindItIsRefused(t *testing.T) {
+	out := op(portfolio.TypeTransferOut, 5, &sber, "5", "", 50_400, 0)
+	out.TransferLots = []portfolio.ReleasedLot{
+		{Quantity: d("0"), CostMinor: 400, AcquiredOn: dayp(1)},
+		{Quantity: d("5"), CostMinor: 50_000, AcquiredOn: dayp(3)},
+	}
+	_, err := portfolio.Compute([]portfolio.Operation{
+		op(portfolio.TypeBuy, 3, &sber, "5", "100", -50_400, 0),
+		out,
+	})
+	if !errors.Is(err, portfolio.ErrBadOperation) {
+		t.Fatalf("err = %v, want ErrBadOperation", err)
+	}
+}

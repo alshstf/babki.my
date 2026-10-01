@@ -262,24 +262,20 @@ func TestTransferQuantityFinerThanStorageIsTruncated(t *testing.T) {
 	}
 }
 
-// TestTransferDropsAPieceTooSmallToStoreButKeepsItsCost pins what a transfer
-// does with a lot the ledger has no shares left to describe — a dust lot left
-// by a reverse split deep enough to round its whole holding away.
+// TestATransferKeepsAShareLessParcelsMoneyOnItsOwnDay pins what a transfer does
+// with a lot the ledger has no shares left to describe — a dust lot left by a
+// reverse split deep enough to round its whole holding away.
 //
 //	buy 0.4 SBER on 01.07 for 4,00 ; reverse split by 0.0000000001 on 02.07
-//	  → 0.4 × 1e-10 is below anything the journal can name, so that lot keeps no
-//	    shares at all, and all 400 minor units of its cost
+//	  → that lot keeps no shares at all, and all 400 minor units of its cost
 //	buy 5 SBER on 03.07 for 500,00 (after the split, so untouched by it)
 //	transfer everything on 05.07
 //
-// The shareless lot cannot be stored as a piece — the table's CHECK (quantity
-// > 0) is right to refuse it, since a piece of nothing is not a thing that
-// moved. It is dropped from the breakdown, but its COST is real money, so it
-// is carried onto the next piece that survives (operation.quantizeLots).
-// Nothing is invented and nothing evaporates: the basis that arrives is every
-// minor unit that left, and the source is emptied to exactly zero rather than
-// keeping a fragment of cost attached to no shares.
-func TestTransferDropsAPieceTooSmallToStoreButKeepsItsCost(t *testing.T) {
+// The shareless lot travels as a piece of its own: no units, its 400, and the
+// day it was bought. Its cost used to be folded into the next piece and arrive
+// dated 03.07 — a day it was not spent on, and the day its ruble value would
+// then be struck at (#193). The source is emptied to exactly zero either way.
+func TestATransferKeepsAShareLessParcelsMoneyOnItsOwnDay(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
 
@@ -315,24 +311,26 @@ func TestTransferDropsAPieceTooSmallToStoreButKeepsItsCost(t *testing.T) {
 	}
 
 	stored := transferInOf(t, f, f.account2ID).TransferLots
-	if len(stored) != 1 {
-		t.Fatalf("stored pieces = %+v, want one (a piece of no shares is not storable)", stored)
+	if len(stored) != 2 {
+		t.Fatalf("stored pieces = %+v, want two: the shareless parcel and the shares", stored)
 	}
-	// The whole 5-share lot moves, and the shareless lot's 400 rides along with
-	// it rather than being stranded on an account that no longer holds anything.
 	const wantCost = int64(50_000 + 400)
-	if pc := stored[0]; !pc.Quantity.Equal(decimal.RequireFromString("5")) || pc.CostMinor != wantCost {
-		t.Errorf("stored piece = %s/%d, want 5/%d (the dropped piece's cost rides along)",
-			pc.Quantity, pc.CostMinor, wantCost)
+	if pc := stored[0]; !pc.Quantity.IsZero() || pc.CostMinor != 400 ||
+		pc.AcquiredOn == nil || !pc.AcquiredOn.Equal(date("2026-07-01")) {
+		t.Errorf("shareless piece = %+v, want no units and 400 acquired 2026-07-01", pc)
+	}
+	if pc := stored[1]; !pc.Quantity.Equal(decimal.RequireFromString("5")) || pc.CostMinor != 50_000 ||
+		pc.AcquiredOn == nil || !pc.AcquiredOn.Equal(date("2026-07-03")) {
+		t.Errorf("second piece = %+v, want 5 units and 50000 acquired 2026-07-03", pc)
 	}
 	if in.AmountMinor != wantCost {
 		t.Errorf("carried basis = %d, want %d — the operation's amount must be the sum of the pieces actually written",
 			in.AmountMinor, wantCost)
 	}
-	if dest := positionsOf(t, f, f.account2ID)[f.sberID]; dest.CostMinor != wantCost {
-		t.Errorf("received basis = %d, want %d", dest.CostMinor, wantCost)
+	if dest := positionsOf(t, f, f.account2ID)[f.sberID]; dest.CostMinor != wantCost || len(dest.Lots) != 2 {
+		t.Errorf("received basis = %d over %d parcels, want %d over 2", dest.CostMinor, len(dest.Lots), wantCost)
 	}
-	if src := positionsOf(t, f, f.accountID)[f.sberID]; !src.Quantity.IsZero() || src.CostMinor != 0 {
+	if src := positionsOf(t, f, f.accountID)[f.sberID]; !src.Quantity.IsZero() || src.CostMinor != 0 || len(src.Lots) != 0 {
 		t.Errorf("source after moving everything = %s/%d, want 0/0 — no cost may be left behind attached to no shares",
 			src.Quantity, src.CostMinor)
 	}

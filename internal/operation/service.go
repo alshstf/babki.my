@@ -612,93 +612,49 @@ func journalUpTo(ops []Operation, day time.Time) []Operation {
 	return out
 }
 
-// quantizeLots brings every piece of a transfer's FIFO breakdown onto the
-// quantity scale the journal can actually store, so that what the write path
-// computes is what the read path gets back. total is the quantity the transfer
-// moves, itself already on that scale.
+// quantizeLots brings every piece of a breakdown onto the quantity scale the
+// journal stores, so that what the write path computes is what the read path
+// gets back. total is the quantity the row moves, itself already on that scale.
 //
-// A piece's quantity is a fraction of a lot, and a lot's quantity used not to
-// be bound to ten decimal places: a split multiplied it by a ratio, and a
-// reverse split by 0.3333333333 turned two whole shares into 1.16666666655
-// apiece. Storing such pieces as they were meant Postgres rounded each one on
-// its own, independently, and two pieces rounding up pushed the stored sum
-// 1e-10 above the stored quantity of the transfer itself. The engine checks
-// that sum on every read (portfolio.CheckTransferLots), so the transfer was
-// accepted and the receiving account's positions screen then failed forever —
-// for data the application wrote itself.
+// The allocation is the one releaseFIFO uses for costs, applied to quantities:
+// truncate the RUNNING TOTAL to the scale and give each piece the difference
+// from the previous piece's running total; the last piece that holds any units
+// takes whatever is left of total. Every piece is then exactly representable
+// and the pieces sum to total exactly — the engine checks that sum on every
+// read (portfolio.CheckTransferLots).
 //
-// Since the engine keeps lots on the journal's scale (portfolio.QuantityScale
-// and Position.applySplit), a release of those lots cannot produce a piece off
-// the scale in the first place, and the arithmetic below normally changes
-// nothing. It stays because the two properties it enforces are not the engine's
-// to promise: that the pieces sum to the quantity the OPERATION claims to move,
-// exactly, and that nothing unstorable reaches the table. Cheap insurance on
-// the one write that both a position and a journal row are later derived from.
-//
-// The allocation is the one releaseFIFO already uses for costs, applied to
-// quantities: truncate the RUNNING TOTAL to the scale and give each piece the
-// difference from the previous piece's running total. Every piece is then
-// exactly representable, no piece can exceed its exact share by more than the
-// last digit, and the final running total is total itself, so the pieces sum
-// to the moved quantity exactly rather than approximately. Truncating each
-// piece on its own instead would leave a remainder unaccounted for.
-//
-// A piece can come out of this with nothing left — either because its share was
-// finer than the scale, or because the lot behind it holds no shares at all,
-// which is what a deep enough reverse split leaves (see portfolio.Lot). Such a
-// piece is dropped rather than stored as a zero — the table rejects zero
-// quantities, and a piece of nothing did not move — but its COST is real money
-// and is carried onto the next surviving piece, whose acquisition date it then
-// shares. Cost is never invented and never lost: the pieces still sum to the
-// same basis, which is why CreateTransfer can go on summing them for the
-// operation's own amount. The last piece always survives (its quantity is total
-// minus everything already placed, total is positive, and a shareless lot is
-// never the last thing a release consumes — the loop only stops when it has
-// taken everything it needs), so there is always somewhere for a carry to land.
+// A PIECE LEFT WITH NO UNITS KEEPS ITS MONEY AND ITS DAY. It arises two ways: a
+// lot whose shares a reverse split rounded away (see portfolio.Lot), or a share
+// of the new paper finer than the scale. Either way the cost is real and belongs
+// to the day it was spent, so the piece is stored as it is — no units, its cost,
+// its date — and arrives as a shareless lot. Folding the cost into a neighbour
+// would move it onto another day, and every figure struck at that day would then
+// be wrong. A piece with neither units nor money describes nothing and is
+// dropped.
 func quantizeLots(pieces []portfolio.ReleasedLot, total decimal.Decimal) []portfolio.ReleasedLot {
+	// The remainder goes to the last piece that has units to begin with: a
+	// shareless piece at the tail must stay shareless.
+	last := -1
+	for i, pc := range pieces {
+		if pc.Quantity.IsPositive() {
+			last = i
+		}
+	}
 	out := make([]portfolio.ReleasedLot, 0, len(pieces))
 	exact := decimal.Zero  // running total of the pieces as computed
 	placed := decimal.Zero // running total of the pieces as they will be stored
-	var carry int64        // cost of pieces too small to be stored at all
 	for i, pc := range pieces {
 		exact = exact.Add(pc.Quantity)
 		upTo := exact.Truncate(quantityScale)
-		if i == len(pieces)-1 {
-			// The pieces of a release sum to the released quantity exactly, and
-			// that quantity is already on the scale, so this is what truncating
-			// the final running total yields anyway. Saying so outright means a
-			// breakdown that somehow did not add up is caught by the write-time
-			// check as a mismatch instead of being quietly trimmed here.
+		if i == last {
 			upTo = total
 		}
 		qty := upTo.Sub(placed)
-		if qty.IsZero() {
-			carry += pc.CostMinor
+		placed = upTo
+		if qty.IsZero() && pc.CostMinor == 0 {
 			continue
 		}
-		placed = upTo
-		out = append(out, portfolio.ReleasedLot{
-			Quantity: qty, CostMinor: pc.CostMinor + carry, AcquiredOn: pc.AcquiredOn,
-		})
-		carry = 0
-	}
-	// A CARRY LEFT AT THE END GOES BACKWARD RATHER THAN NOWHERE. It is money,
-	// and the sum of the pieces must equal the basis the row carries or the
-	// engine refuses the row for ever (portfolio.CheckTransferLots).
-	//
-	// It cannot arise from a FIFO release, whose last piece always has a
-	// quantity — which is why this went unwritten until a spin-off's breakdown
-	// came through here: that one names EVERY parcel, and the last of them can
-	// be a shareless one a reverse split rounded away (see
-	// portfolio.SpinoffPieces). Adding it to the last piece that does have a
-	// quantity keeps the money in the parcel nearest it in the queue, which is
-	// the same neighbour the loop above would have given it to.
-	//
-	// With no such piece there is nothing to hold the money and nothing to hold
-	// it FOR: `total` was zero, so the caller asked to restate a parcel into no
-	// units at all, and both write paths refuse that before they get here.
-	if carry != 0 && len(out) > 0 {
-		out[len(out)-1].CostMinor += carry
+		out = append(out, portfolio.ReleasedLot{Quantity: qty, CostMinor: pc.CostMinor, AcquiredOn: pc.AcquiredOn})
 	}
 	return out
 }
