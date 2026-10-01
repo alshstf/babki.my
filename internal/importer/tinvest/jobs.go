@@ -95,9 +95,25 @@ var syncUniqueStates = []rivertype.JobState{
 // the index sees nothing in common. Measured: with SyncMirror's lock removed,
 // two simultaneous runs leave two mirror rows AND two journal operations (see
 // TestTwoSimultaneousRunsOfOneConnectionLeaveOneMirrorAndOneJournal).
+//
+// THE ATTEMPTS ARE BOUNDED BECAUSE THE JOB IS UNIQUE. A sync parked in River's
+// backoff still holds its connection's one slot, and the backoff grows to hours:
+// with River's default of 25 attempts a connection that failed eight times in a
+// row would next be tried in over an hour, with every hourly dispatch and the
+// owner's "sync now" skipped as its duplicate in between. See SyncMaxAttempts.
 func SyncInsertOpts() *river.InsertOpts {
-	return &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: syncUniqueStates}}
+	return &river.InsertOpts{
+		MaxAttempts: SyncMaxAttempts,
+		UniqueOpts:  river.UniqueOpts{ByArgs: true, ByState: syncUniqueStates},
+	}
 }
+
+// SyncMaxAttempts is how many times one queued sync is tried. River waits
+// attempt⁴ seconds after each failure, so seven attempts span about 38 minutes
+// — inside the hour between two dispatches, which is what lets the next
+// dispatch queue a fresh job instead of colliding with a parked one. The
+// schedule's own test holds this against the interval.
+const SyncMaxAttempts = 7
 
 // jobInserter is the queue as this package uses it — a narrow local interface,
 // for the reason rebuild.go declares journalDelta. *river.Client[pgx.Tx]
@@ -366,10 +382,9 @@ func (w *syncWorker) Work(ctx context.Context, job *river.Job[SyncArgs]) error {
 	trigger, err := syncTrigger(job.Args.Trigger)
 	if err != nil {
 		// NOT RETURNED, for the reason a refused token is not returned: the
-		// arguments of a queued job never change, so every one of River's two
-		// dozen attempts would fail here again and shout about it again, hours
-		// apart, forever. Nil ends it after one Error line naming the word that
-		// nothing can read.
+		// arguments of a queued job never change, so every further attempt would
+		// fail here again and shout about it again. Nil ends it after one Error
+		// line naming the word that nothing can read.
 		//
 		// No run is recorded failed either, and that is not a choice: the run
 		// log's own trigger column is a CHECK over exactly the three words this
