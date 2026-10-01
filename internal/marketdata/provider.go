@@ -71,6 +71,9 @@ type TickerQuote struct {
 	// #90 is what storing such a price under Monday cost. A provider that
 	// cannot say which day a price belongs to must leave that price out
 	// rather than supply a day of its own.
+	//
+	// For a price the source carries forward unchanged, it is the day the price
+	// was made and not the day it was last repeated on.
 	On time.Time
 }
 

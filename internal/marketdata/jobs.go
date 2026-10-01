@@ -212,8 +212,10 @@ func NewQuotesWorker(store *Store, instruments instrumentLister, provider QuoteP
 // Each stored quote carries the day the PROVIDER says its price belongs to,
 // never this worker's clock — see marketdata.TickerQuote.On. A repeat refresh
 // therefore rewrites one row per instrument instead of adding a row a day, and
-// what LatestQuotes then returns is the exchange's own most recent session
-// rather than the most recent time this job happened to run.
+// what LatestQuotes then returns is the day of the provider's own most recent
+// price rather than the most recent time this job happened to run. A provider
+// that now dates its price earlier than a row it wrote before takes that row
+// back — see Store.StoreLatestQuotes.
 //
 // A quote dated zero or after today is refused rather than stored, here and
 // not in the provider. QuotesFor deliberately takes no date argument any
@@ -437,7 +439,7 @@ func (w *quotesWorker) Work(ctx context.Context, _ *river.Job[RefreshQuotesArgs]
 		}
 	}
 
-	if err := w.store.UpsertQuotes(ctx, quotes); err != nil {
+	if err := w.store.StoreLatestQuotes(ctx, quotes); err != nil {
 		w.log.Error("marketdata: store quotes failed", "err", err)
 		return err
 	}
