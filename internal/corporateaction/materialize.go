@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -140,15 +141,19 @@ func (m *Materializer) ForISIN(ctx context.Context, isin string) (Stats, error) 
 		instruments[key] = append(instruments[key], h.instrumentID)
 	}
 
+	// One account's failure is reported and does not cost the others their rows:
+	// the registry is shared, a journal that does not replay is one account's.
 	var total Stats
+	var failed []error
 	for _, key := range order {
 		stats, err := m.forAccount(ctx, key.spaceID, key.accountID, instruments[key], events)
 		if err != nil {
-			return total, err
+			failed = append(failed, err)
+			continue
 		}
 		total.add(stats)
 	}
-	return total, nil
+	return total, errors.Join(failed...)
 }
 
 // ForAccount brings one account into line with the registry, for every paper
@@ -200,15 +205,18 @@ func (m *Materializer) All(ctx context.Context) (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
+	// ForISIN reports what it could not do and still returns what it did, so a
+	// paper one account cannot take does not end the sweep for the rest.
 	var total Stats
+	var failed []error
 	for _, isin := range isins {
 		stats, err := m.ForISIN(ctx, isin)
-		if err != nil {
-			return total, err
-		}
 		total.add(stats)
+		if err != nil {
+			failed = append(failed, err)
+		}
 	}
-	return total, nil
+	return total, errors.Join(failed...)
 }
 
 // forAccount is the whole of the arithmetic: what the registry asks this
@@ -324,7 +332,7 @@ func (m *Materializer) desired(ctx context.Context, base []operation.Operation, 
 	instrumentIDs []uuid.UUID, events []Event,
 ) ([]operation.Operation, error) {
 	var want []operation.Operation
-	working := base
+	working := slices.Clone(base)
 	for _, e := range events {
 		if !e.Kind.Materialized() {
 			continue
@@ -385,7 +393,10 @@ func (m *Materializer) desired(ctx context.Context, base []operation.Operation, 
 				continue
 			}
 			want = append(want, rows...)
+			// Back into fold order: the next event must see these rows at their
+			// own date, ahead of the trades made after them.
 			working = append(working, rows...)
+			operation.SortJournal(working)
 		}
 	}
 	return want, nil
@@ -623,24 +634,13 @@ type heldPosition struct {
 // IsPositive reports whether anything is held at all.
 func (h heldPosition) IsPositive() bool { return h.quantity.IsPositive() }
 
-// heldAtStartOf folds the journal up to, but not including, the given day and
-// reports what was held then.
-//
-// UP TO AND NOT INCLUDING is the whole rule about when an event applies: the
-// effective date is the first day the paper trades in the new quantity, so what
-// the split multiplies is the holding at the CLOSE OF THE DAY BEFORE, and a
-// trade dated the effective day is already in the new quantity. Ordering the
-// row first within its day (see operation.foldRank) is the other half of the
-// same statement — this decides whether to write it, that decides where it
-// folds.
+// heldAtStartOf reports what the account held when a registry row dated day
+// would fold: everything before the day, plus the registry's own rows of that
+// day (operation.FoldedBefore). The effective date is the first day the paper
+// trades in the new quantity, so a trade dated that day is already in it and is
+// not part of what the event acts on.
 func heldAtStartOf(journal []operation.Operation, instrumentID uuid.UUID, day time.Time) (heldPosition, error) {
-	before := make([]operation.Operation, 0, len(journal))
-	for _, o := range journal {
-		if o.OccurredOn.Before(day) {
-			before = append(before, o)
-		}
-	}
-	positions, err := portfolio.Compute(before)
+	positions, err := portfolio.Compute(operation.FoldedBefore(journal, day, operation.SourceRegistry))
 	if err != nil {
 		return heldPosition{}, err
 	}

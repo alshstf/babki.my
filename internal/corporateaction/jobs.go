@@ -2,6 +2,7 @@ package corporateaction
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -154,20 +155,23 @@ func (w *refreshMoexSplitsWorker) Work(ctx context.Context, _ *river.Job[Refresh
 		touched[isin] = true
 	}
 
+	// Every paper is carried as far as it goes; what failed is reported at the
+	// end, so one account that cannot take a split does not hold up the rest.
 	var totals Stats
+	var failed []error
 	for isin := range touched {
 		s, err := w.materializer.ForISIN(ctx, isin)
+		totals.add(s)
 		if err != nil {
 			w.log.Error("corporateaction: carrying a split into the journals failed", "isin", isin, "err", err)
-			return err
+			failed = append(failed, err)
 		}
-		totals.add(s)
 	}
 
 	w.log.Info("corporateaction: refreshed the exchange's splits",
 		"published", len(splits), "stored", stored, "left_to_hand_records", kept, "unidentified", skipped,
 		"journal_rows_added", totals.Added, "journal_rows_removed", totals.Removed)
-	return nil
+	return errors.Join(failed...)
 }
 
 // splitsSourceRef is what a row written from the exchange links to as its

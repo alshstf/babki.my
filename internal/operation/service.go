@@ -539,6 +539,32 @@ func sortJournal(journal []Operation) {
 	})
 }
 
+// SortJournal puts a journal held in memory into the order the engine folds it
+// in. It is for a caller that builds a journal by adding rows to one it read —
+// the corporate-actions registry does, one event at a time — and must hand the
+// engine the same order a read of the stored rows would.
+func SortJournal(journal []Operation) { sortJournal(journal) }
+
+// FoldedBefore returns the part of journal that folds BEFORE a new row dated
+// day and written by source: everything dated earlier, and of the day itself
+// the rows whose source ranks no later (see foldRank). For a registry row that
+// is the journal as it stands when the day begins, plus the registry's own rows
+// of that day; for any other source it is everything up to the day's end, the
+// new row being the youngest of its date.
+//
+// A row's parcels have to be worked out against exactly this, or they describe
+// a holding the row will not find when it is replayed.
+func FoldedBefore(journal []Operation, day time.Time, source string) []Operation {
+	rank := foldRank(source)
+	out := make([]Operation, 0, len(journal))
+	for _, o := range journal {
+		if o.OccurredOn.Before(day) || (o.OccurredOn.Equal(day) && foldRank(o.Source) <= rank) {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
 // checkJournalOps is checkJournal over an already-loaded journal, so a caller
 // that has fetched the account's operations for another reason (see
 // CreateTransfer) does not pay for a second round trip.
