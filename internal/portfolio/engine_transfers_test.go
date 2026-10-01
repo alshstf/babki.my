@@ -2,6 +2,7 @@ package portfolio_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -755,5 +756,36 @@ func TestReleasedCostHelper(t *testing.T) {
 	}
 	if _, err := portfolio.ReleasedCost(ops, sber, d("25")); !errors.Is(err, portfolio.ErrOversell) {
 		t.Errorf("oversell err = %v", err)
+	}
+}
+
+// TestARecordedPieceIsNotTakenFromADearerParcelOfTheSameDay: two parcels bought
+// on one day at different prices are NOT interchangeable. The transfer recorded
+// five units of the cheap one (50 000); a sale entered later and dated before
+// the transfer consumes the cheap parcel, and the record then finds only the
+// dear one. Taking five units from it for 50 000 left the source holding the
+// rest at 170 000 a unit and the destination at 10 000 — the family total
+// balanced and each account's basis was off by 400 000, silently (#197).
+func TestARecordedPieceIsNotTakenFromADearerParcelOfTheSameDay(t *testing.T) {
+	out := op(portfolio.TypeTransferOut, 5, &sber, "5", "", 50_000, 0)
+	out.TransferLots = []portfolio.ReleasedLot{piece("5", 50_000, 2)}
+	buys := []portfolio.Operation{
+		op(portfolio.TypeBuy, 2, &sber, "10", "100", -100_000, 0),
+		op(portfolio.TypeBuy, 2, &sber, "10", "900", -900_000, 0),
+	}
+
+	// As recorded, the journal replays: the piece is half of the cheap parcel.
+	if _, err := portfolio.Compute(append(slices.Clone(buys), out)); err != nil {
+		t.Fatalf("the journal the transfer was recorded against: %v", err)
+	}
+
+	// With the backdated sale underneath it, it must not.
+	sale := op(portfolio.TypeSell, 3, &sber, "10", "150", 150_000, 0)
+	_, err := portfolio.Compute(append(slices.Clone(buys), sale, out))
+	if !errors.Is(err, portfolio.ErrBadOperation) {
+		t.Fatalf("err = %v, want ErrBadOperation — the parcel the record names is gone", err)
+	}
+	if !strings.Contains(err.Error(), "50000") || !strings.Contains(err.Error(), "450000") {
+		t.Errorf("error %q does not name both figures, so it cannot be acted on", err)
 	}
 }

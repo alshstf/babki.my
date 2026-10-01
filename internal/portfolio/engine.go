@@ -731,7 +731,8 @@ const recordAndReplayDisagree = "either this account's history was edited after 
 // the bug being fixed here in a new place. The day, by contrast, is the fact
 // the breakdown was created to carry, it is what every later figure is struck
 // at (the ruble basis above all), and it is what decides the queue, so two lots
-// that share it are interchangeable for every purpose this package has.
+// that share it are interchangeable in WHEN they were bought — though not in what
+// they cost, which the loop below checks before it takes anything.
 //
 // Each piece is taken from the matching lots front-to-back, and only until its
 // QUANTITY is satisfied, so a piece never reaches into a lot a later piece
@@ -829,7 +830,20 @@ func (p *Position) releaseRecorded(o Operation) error {
 				continue
 			}
 			takeQty := decimal.Min(l.Quantity, qty)
-			takeCost := min(lotShare(*l, takeQty), cost)
+			share := lotShare(*l, takeQty)
+			// The record gives these units LESS money than the parcel they
+			// would come from holds for them: it was struck against a cheaper
+			// parcel of the same day, and that one is gone. Taking the units
+			// anyway moves them at the wrong price and leaves the difference
+			// behind on this account, unnoticed — two parcels of one day share
+			// a date, not a cost. (More money than the share is the legacy
+			// shape handled below as `carried`.)
+			if takeQty.IsPositive() && cost < share {
+				return badOp(o, fmt.Sprintf(
+					"transfer lot %d gives %s units acquired %s a basis of %d, but the parcel replaying this account finds for them holds %d for those units: %s",
+					i, takeQty, acquisitionText(pc.AcquiredOn), cost, share, recordAndReplayDisagree))
+			}
+			takeCost := min(share, cost)
 			l.Quantity, l.CostMinor = l.Quantity.Sub(takeQty), l.CostMinor-takeCost
 			p.Quantity, p.CostMinor = p.Quantity.Sub(takeQty), p.CostMinor-takeCost
 			qty, cost = qty.Sub(takeQty), cost-takeCost
