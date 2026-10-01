@@ -52,6 +52,7 @@ type contractDoc struct {
 			Properties map[string]struct {
 				Pattern   *string `yaml:"pattern"`
 				MinLength *int    `yaml:"minLength"`
+				MaxLength *int    `yaml:"maxLength"`
 			} `yaml:"properties"`
 		} `yaml:"schemas"`
 	} `yaml:"components"`
@@ -123,6 +124,10 @@ func TestTheContractStatesThePasswordLengthTheServerEnforces(t *testing.T) {
 				"enforced in validateCredentials): a client validating against this document would send "+
 				"a password the server refuses, or refuse to send one it takes",
 				schema, shownInt(prop.MinLength), family.MinPasswordRunes)
+		}
+		if prop.MaxLength == nil || *prop.MaxLength != family.MaxPasswordRunes {
+			t.Errorf("api/openapi.yaml %s.password maxLength = %s, want %d (family.MaxPasswordRunes)",
+				schema, shownInt(prop.MaxLength), family.MaxPasswordRunes)
 		}
 	}
 }

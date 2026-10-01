@@ -10,7 +10,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { useLogin } from "@/api/session";
+import { SignInLocked, useLogin } from "@/api/session";
 import { isUnauthorized } from "@/api/operations";
 
 export function LoginPage() {
@@ -54,24 +54,30 @@ export function LoginPage() {
               />
             </div>
             {login.isError && (
-              // Two sentences, chosen by the status the contract declares. 401
-              // is the only refusal this endpoint publishes (see
-              // /api/v1/auth/login in the API contract) and it is the one case
-              // where naming the cause is naming what the server named.
+              // The sentence is chosen by the status the contract declares. 401
+              // is a refusal of the credentials, and the one case where naming
+              // the cause is naming what the server named. 429 is the door
+              // closed after too many wrong passwords — the right one is
+              // refused too while it lasts, so the form says how long to wait
+              // instead of blaming the password (see <SignInLockedNotice/>).
               // Anything else — a dead connection, which useLogin now lets
               // through rather than holding silently, or a server that broke
               // its own contract — is a failure whose cause this screen has not
               // been told, so it says what it does know: the sign-in did not
               // happen, and pressing the button again is worth doing.
               //
-              // Written as two literal-key branches rather than t(cond ? a : b)
-              // so both keys stay verifiable by scripts/check-i18n.mjs, which
+              // Written as literal-key branches rather than t(cond ? a : b)
+              // so every key stays verifiable by scripts/check-i18n.mjs, which
               // only reads literals.
               <Alert variant="destructive">
                 <AlertDescription>
-                  {isUnauthorized(login.error)
-                    ? t("auth.invalidCredentials")
-                    : t("auth.signInFailed")}
+                  {login.error instanceof SignInLocked ? (
+                    <SignInLockedNotice minutesLeft={login.error.minutesLeft} />
+                  ) : isUnauthorized(login.error) ? (
+                    t("auth.invalidCredentials")
+                  ) : (
+                    t("auth.signInFailed")
+                  )}
                 </AlertDescription>
               </Alert>
             )}
@@ -86,4 +92,12 @@ export function LoginPage() {
       </Card>
     </div>
   );
+}
+
+// SignInLockedNotice says the door is closed and for how long. The wait is the
+// server's own figure; without one the sentence does not invent it.
+function SignInLockedNotice({ minutesLeft }: { minutesLeft: number | null }) {
+  const { t } = useTranslation();
+  if (minutesLeft === null) return <>{t("auth.signInLocked")}</>;
+  return <>{t("auth.signInLockedFor", { minutes: minutesLeft })}</>;
 }

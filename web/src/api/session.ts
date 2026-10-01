@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { api } from "./client";
-import { apiError } from "./operations";
+import { apiError, ApiError } from "./operations";
 import type { components } from "./schema";
 
 export type SessionInfo = components["schemas"]["SessionInfo"];
@@ -52,6 +52,22 @@ export function useSetupStatus() {
 // used to raise a bare Error and the form captioned every failure «Неверный
 // логин или пароль», which for a dead connection or a broken server sends the
 // reader to change a password that was never wrong.
+// SignInLocked is the 429 the sign-in door answers once too many wrong
+// passwords have been tried: nothing is compared until the wait is over, so the
+// right password is refused too, and the form has to say that rather than blame
+// the password. minutesLeft is the server's own Retry-After rounded up to whole
+// minutes, or null when the header did not arrive.
+export class SignInLocked extends ApiError {
+  minutesLeft: number | null;
+
+  constructor(message: string, retryAfter: string | null) {
+    super(message, 429);
+    const seconds = retryAfter === null ? NaN : Number(retryAfter);
+    this.minutesLeft =
+      Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds / 60) : null;
+  }
+}
+
 export function useLogin() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -61,6 +77,12 @@ export function useLogin() {
       const { data, error, response } = await api.POST("/api/v1/auth/login", {
         body,
       });
+      if (!data && response.status === 429) {
+        throw new SignInLocked(
+          apiError(response, error).message,
+          response.headers.get("Retry-After"),
+        );
+      }
       if (!data) throw apiError(response, error);
       return data;
     },

@@ -3,7 +3,9 @@ package family
 import (
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
+	"strconv"
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/google/uuid"
@@ -20,10 +22,11 @@ type Handler struct {
 	store *Store
 	auth  *Auth
 	sm    *scs.SessionManager
+	guard *loginGuard
 }
 
 func NewHandler(svc *Service, store *Store, auth *Auth, sm *scs.SessionManager) *Handler {
-	return &Handler{svc: svc, store: store, auth: auth, sm: sm}
+	return &Handler{svc: svc, store: store, auth: auth, sm: sm, guard: newLoginGuard()}
 }
 
 // WriteError maps domain errors to HTTP responses. Shared by other modules.
@@ -156,11 +159,26 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if httpjson.Decode(w, r, &req) != nil {
 		return
 	}
+	// Asked before anything is looked up or hashed: an attempt that is refused
+	// here costs nothing and says nothing about whether the username exists.
+	addr := clientAddr(r)
+	if wait := h.guard.wait(addr, req.Username); wait > 0 {
+		// Whole seconds, rounded up: "0" would invite the retry it refuses.
+		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
+		httpjson.Error(w, http.StatusTooManyRequests, "too many sign-in attempts, try again later")
+		return
+	}
 	u, p, err := h.svc.Login(r.Context(), req.Username, req.Password)
 	if err != nil {
+		// Only a refusal of the credentials counts. A database that is away is
+		// not a wrong password, and must not lock anybody out.
+		if errors.Is(err, ErrInvalidCredentials) {
+			h.guard.failed(addr, req.Username)
+		}
 		WriteError(w, err)
 		return
 	}
+	h.guard.succeeded(addr, req.Username)
 	h.signInAndAnswer(w, r, u, p, http.StatusOK)
 }
 

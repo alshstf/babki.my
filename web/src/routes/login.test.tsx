@@ -20,13 +20,18 @@ const fetchMock = vi.hoisted(() => {
 //
 // `networkError` is what a browser with no connection does — fetch rejects and
 // no status is ever read, the shape of a failure that carries no answer at all.
-function serveLogin(route: { status?: number; body?: unknown; networkError?: boolean }) {
+function serveLogin(route: {
+  status?: number;
+  body?: unknown;
+  networkError?: boolean;
+  headers?: Record<string, string>;
+}) {
   fetchMock.mockImplementation(() => {
     if (route.networkError) return Promise.reject(new TypeError("Failed to fetch"));
     return Promise.resolve(
       new Response(JSON.stringify(route.body ?? null), {
         status: route.status ?? 200,
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...route.headers },
       }),
     );
   });
@@ -74,6 +79,35 @@ describe("LoginPage", () => {
     attemptSignIn();
 
     expect(await screen.findByText("Неверный логин или пароль")).toBeInTheDocument();
+  });
+
+  it("says the door is closed, and for how long, after too many wrong passwords", async () => {
+    // 429 is not a wrong password: nothing is compared while the lock stands,
+    // so the right one is refused too. The form says how long to wait — the
+    // server's own figure, rounded up to minutes — and does not blame the
+    // password.
+    serveLogin({
+      status: 429,
+      body: { error: "too many sign-in attempts, try again later" },
+      headers: { "Retry-After": "95" },
+    });
+    wrap(<LoginPage />);
+
+    attemptSignIn();
+
+    expect(await screen.findByText(/Вход с этим логином закрыт ещё на 2 мин/)).toBeInTheDocument();
+    expect(screen.queryByText("Неверный логин или пароль")).not.toBeInTheDocument();
+    expect(screen.queryByText("Не удалось войти. Попробуйте ещё раз")).not.toBeInTheDocument();
+  });
+
+  it("does not invent a wait the server did not state", async () => {
+    serveLogin({ status: 429, body: { error: "too many sign-in attempts, try again later" } });
+    wrap(<LoginPage />);
+
+    attemptSignIn();
+
+    expect(await screen.findByText(/Вход с этим логином временно закрыт/)).toBeInTheDocument();
+    expect(screen.queryByText(/мин —/)).not.toBeInTheDocument();
   });
 
   it("says so when the browser reports no connection, and lets the reader try again", async () => {
