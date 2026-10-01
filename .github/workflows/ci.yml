@@ -4,6 +4,11 @@ on:
     branches: [main]
   pull_request:
 
+# The workflow reads the repository and nothing else: it publishes nothing and
+# comments on nothing, so its token is not given the right to.
+permissions:
+  contents: read
+
 jobs:
   build-test:
     runs-on: ubuntu-latest
@@ -37,6 +42,13 @@ jobs:
         uses: golangci/golangci-lint-action@v8
         with:
           args: --build-tags=embedui
+      # Known vulnerabilities in what the code actually calls (tests included)
+      # and in the dependencies the built page ships. A finding here is fixed by
+      # updating the module it names.
+      - name: Known vulnerabilities (Go)
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: Known vulnerabilities (UI, shipped dependencies)
+        run: cd web && npm audit --omit=dev
       - name: Test
         run: go test ./...
       - name: Test embedded UI
