@@ -82,7 +82,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	caStore := corporateaction.NewStore(r.pool)
 	caMaterializer := corporateaction.NewMaterializer(caStore, opSvc, instStore,
 		tinvest.NewRechecker(tinvestStore, inserter, r.log), r.log)
-	corporateaction.NewHandler(caStore, caMaterializer, famAuth, famSM, r.log).Mount(srv)
+	corporateaction.NewHandler(caStore, caMaterializer, inserter, famAuth, famSM, r.log).Mount(srv)
 	// A hand entry is followed by the registry at once: a purchase dated before
 	// a split the registry already knows must not wait for the daily sweep to
 	// be held in the right quantity. opSvc is the one service every hand-entry

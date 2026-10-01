@@ -198,6 +198,7 @@ func NewWorkers(
 			caStore, caMaterializer, splits, log))
 	}
 	river.AddWorker(workers, corporateaction.NewMaterializeAllWorker(caMaterializer, log))
+	river.AddWorker(workers, corporateaction.NewMaterializeISINWorker(caMaterializer, log))
 	return workers
 }
 

@@ -441,3 +441,26 @@ func TestSigtermLeavesARunningJobItsGracefulWindow(t *testing.T) {
 		t.Fatalf("Stop after the job finished on its own: %v", err)
 	}
 }
+
+// A registry retry queued by a request has a worker to run it. River refuses to
+// queue a kind nobody is registered for only on a client that HAS workers, and
+// the api role's client has none — so a missing registration would show as a
+// job that waits for ever, not as an error anywhere.
+func TestTheRegistrysRetryJobHasAWorker(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+
+	enqueuer := jobs.NewEnqueuer()
+	caStore, caMaterializer := stubCorporateActions(pool)
+	workers := jobs.NewWorkers(slog.Default(), pool, marketdata.NewStore(pool), instrument.NewStore(pool),
+		operation.NewStore(pool), account.NewStore(pool), family.NewStore(pool),
+		stubFxProvider{}, stubQuoteProvider{}, stubTinvestDeps(t, pool), caStore, caMaterializer, enqueuer)
+	client, err := jobs.NewClient(pool, workers, enqueuer, slog.Default())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if _, err := client.Insert(ctx, corporateaction.MaterializeISINArgs{ISIN: "US0231351067"},
+		corporateaction.MaterializeISINInsertOpts()); err != nil {
+		t.Fatalf("the worker's own queue will not take the registry's retry job: %v", err)
+	}
+}

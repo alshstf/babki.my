@@ -3,6 +3,7 @@ package corporateaction_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/account"
@@ -50,6 +53,36 @@ type apiFixture struct {
 	url     string
 	client  *http.Client
 	recheck *queuedRecheck
+	journal *flakyJournal
+	queue   *recordedQueue
+}
+
+// flakyJournal is the journal's importer door with a switch on it: while away
+// is set every write fails, as it does when the database is briefly gone.
+type flakyJournal struct {
+	real *operation.Service
+	away bool
+}
+
+func (j *flakyJournal) BuildAndApplyImportDelta(ctx context.Context, spaceID, accountID uuid.UUID,
+	build func(journal []operation.Operation) (operation.ImportDelta, error),
+) (operation.ImportDelta, []operation.Operation, []operation.ImportRefusal, error) {
+	if j.away {
+		return operation.ImportDelta{}, nil, nil, errors.New("the database is away")
+	}
+	return j.real.BuildAndApplyImportDelta(ctx, spaceID, accountID, build)
+}
+
+// recordedQueue is a job queue that keeps what it was handed.
+type recordedQueue struct {
+	args []river.JobArgs
+	opts []*river.InsertOpts
+}
+
+func (q *recordedQueue) Insert(_ context.Context, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error) {
+	q.args = append(q.args, args)
+	q.opts = append(q.opts, opts)
+	return &rivertype.JobInsertResult{}, nil
 }
 
 func newAPIFixture(t *testing.T) apiFixture {
@@ -64,11 +97,12 @@ func newAPIFixture(t *testing.T) apiFixture {
 	ops := operation.NewStore(pool)
 	svc := operation.NewService(ops)
 	recheck := &queuedRecheck{}
-	materializer := corporateaction.NewMaterializer(store, svc, instrument.NewStore(pool), recheck, nil)
+	journal, queue := &flakyJournal{real: svc}, &recordedQueue{}
+	materializer := corporateaction.NewMaterializer(store, journal, instrument.NewStore(pool), recheck, nil)
 
 	srv := httpserver.New(slog.Default(), pool)
 	family.NewHandler(family.NewService(famStore), famStore, auth, sm).Mount(srv)
-	corporateaction.NewHandler(store, materializer, auth, sm, slog.Default()).Mount(srv)
+	corporateaction.NewHandler(store, materializer, queue, auth, sm, slog.Default()).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -101,7 +135,7 @@ func newAPIFixture(t *testing.T) apiFixture {
 			materializer: materializer, spaceID: spaceID,
 			accountID: acc.ID, amazonID: amazon.ID,
 		},
-		url: ts.URL, client: client, recheck: recheck,
+		url: ts.URL, client: client, recheck: recheck, journal: journal, queue: queue,
 	}
 }
 
