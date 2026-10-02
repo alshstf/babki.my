@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { api } from "./client";
 import { apiError } from "./operations";
 import type { components } from "./schema";
@@ -34,5 +34,27 @@ export function useInstrumentPrices(instrumentId: string, from: string) {
       if (!data) throw apiError(response, error);
       return data;
     },
+  });
+}
+
+export type OperationsPage = components["schemas"]["OperationsResponse"];
+
+const PAPER_PAGE_SIZE = 50;
+
+// The paper's rows across every account, newest first, a page at a time (see
+// GET /api/v1/instruments/{instrumentId}/operations).
+export function useInstrumentOperations(instrumentId: string) {
+  return useInfiniteQuery({
+    queryKey: ["instrument-operations", instrumentId],
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }): Promise<OperationsPage> => {
+      const { data, error, response } = await api.GET("/api/v1/instruments/{instrumentId}/operations", {
+        params: { path: { instrumentId }, query: { limit: PAPER_PAGE_SIZE, offset: pageParam } },
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    getNextPageParam: (last, all) =>
+      last.has_more ? all.reduce((rows, page) => rows + page.operations.length, 0) : undefined,
   });
 }

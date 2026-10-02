@@ -105,6 +105,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("DELETE /api/v1/operations/{operationId}", edit(h.handleDelete))
 	srv.Mount("POST /api/v1/operations/transfer", edit(h.handleTransfer))
 	srv.Mount("POST /api/v1/operations/money-transfer", edit(h.handleMoneyTransfer))
+	srv.Mount("GET /api/v1/instruments/{instrumentId}/operations", view(h.handleListByInstrument))
 	srv.Mount("PUT /api/v1/operations/{operationId}/purchases", edit(h.handleStatePurchases))
 	srv.Mount("POST /api/v1/operations/arrivals", edit(h.handleCreateArrival))
 	srv.Mount("GET /api/v1/accounts/{accountId}/instruments/{instrumentId}/arrivals", view(h.handleListArrivals))
@@ -1072,7 +1073,35 @@ func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sp, err := h.spaces.SpaceByID(r.Context(), p.SpaceID)
+	h.writeJournalPage(w, r, p.SpaceID, ops, hasMore)
+}
+
+// handleListByInstrument is one paper's rows across every account, a page at a
+// time, in the same shape as an account's journal.
+func (h *Handler) handleListByInstrument(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	instrumentID, err := uuid.Parse(r.PathValue("instrumentId"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "invalid instrumentId")
+		return
+	}
+	limit, offset, ok := parsePage(w, r)
+	if !ok {
+		return
+	}
+	ops, hasMore, err := h.store.ListByInstrument(r.Context(), p.SpaceID, instrumentID, limit, offset)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	h.writeJournalPage(w, r, p.SpaceID, ops, hasMore)
+}
+
+// writeJournalPage answers a page of rows with what the journal publishes
+// beside each: the other account of a move, and the figure in the base
+// currency or why there is none.
+func (h *Handler) writeJournalPage(w http.ResponseWriter, r *http.Request, spaceID uuid.UUID, ops []Operation, hasMore bool) {
+	sp, err := h.spaces.SpaceByID(r.Context(), spaceID)
 	if err != nil {
 		family.WriteError(w, err)
 		return
@@ -1093,7 +1122,7 @@ func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {
 			ids = append(ids, o.ID)
 		}
 	}
-	counterparts, err := h.store.CounterpartAccounts(r.Context(), p.SpaceID, ids)
+	counterparts, err := h.store.CounterpartAccounts(r.Context(), spaceID, ids)
 	if err != nil {
 		family.WriteError(w, err)
 		return

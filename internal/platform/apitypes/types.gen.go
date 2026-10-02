@@ -2649,6 +2649,12 @@ type SearchInstrumentsParams struct {
 	Offset *int    `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
+// ListInstrumentOperationsParams defines parameters for ListInstrumentOperations.
+type ListInstrumentOperationsParams struct {
+	Limit  *int `form:"limit,omitempty" json:"limit,omitempty"`
+	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
 // GetInstrumentPricesParams defines parameters for GetInstrumentPrices.
 type GetInstrumentPricesParams struct {
 	// From Date YYYY-MM-DD

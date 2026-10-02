@@ -475,6 +475,25 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /api/v1/instruments/{instrumentId}/operations:
+    get:
+      operationId: listInstrumentOperations
+      description: >-
+        One paper's rows across every account of the space, newest first, a page at a time —
+        each row as the account's own journal publishes it (`account_id` says whose it is). An
+        unknown paper has no rows. 400 for a page outside the bounds the account's journal takes.
+      parameters:
+        - { name: instrumentId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 50, minimum: 1, maximum: 200 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, default: 0, minimum: 0 } }
+      responses:
+        "200":
+          description: A page of the paper's rows
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OperationsResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/instruments/{instrumentId}/return:
     get:
       operationId: getInstrumentReturn

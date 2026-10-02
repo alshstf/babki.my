@@ -20,6 +20,7 @@ import { queryState, refreshFailed } from "@/lib/query-state";
 import { PositionsTable } from "@/routes/accounts/positions-table";
 import { StatePriceDialog, type QuotedPaper } from "@/routes/accounts/state-price-dialog";
 import { PriceChart } from "./price-chart";
+import { PaperOperations } from "./paper-operations";
 import { PaperReturn } from "@/routes/accounts/account-return";
 import { priceText } from "./price-text";
 
@@ -221,6 +222,13 @@ export function InstrumentPage() {
           </>
         )}
       </div>
+
+      {holdings.data.holdings.length > 0 && (
+        <div className="grid gap-2">
+          <h2 className="text-lg font-semibold">{t("instrumentPage.operations")}</h2>
+          <PaperOperations instrumentId={instrumentId} accountName={(id) => accountOf.get(id)?.name} />
+        </div>
+      )}
 
       {quoting && (
         <StatePriceDialog open onOpenChange={(open) => !open && setQuoting(null)} paper={quoting} />
