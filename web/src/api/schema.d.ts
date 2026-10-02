@@ -337,6 +337,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instruments/{instrumentId}/return": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description What one paper earned the family between two days, across every account it has been on: its worth at either end (all the units held, at that day's closing price), the money put into it (buys with their commissions) and taken out (sales, payouts, redemptions, less taxes withheld), and the money-weighted annual rate. A move between two of the family's accounts is no flow; shares that arrived from outside or by a conversion come in at that day's closing price, and shares converted away leave at it. Figures are in the currency the paper is valued in. `complete` is false when an end has no price, a payout has no rate, or a spin-off moved part of the paper's worth onto another paper. 400 for dates as on the account's return; 404 for an unknown paper. */
+        get: operations["getInstrumentReturn"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/instruments/{instrumentId}/prices": {
         parameters: {
             query?: never;
@@ -3083,6 +3100,37 @@ export interface operations {
                     "application/json": components["schemas"]["InstrumentHoldings"];
                 };
             };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    getInstrumentReturn: {
+        parameters: {
+            query: {
+                /** @description Date YYYY-MM-DD, the day before the period */
+                from: string;
+                /** @description Date YYYY-MM-DD, the period's last day */
+                to: string;
+            };
+            header?: never;
+            path: {
+                instrumentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The period's return */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PeriodReturn"];
+                };
+            };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
             422: components["responses"]["Error"];

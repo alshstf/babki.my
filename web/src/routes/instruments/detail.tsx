@@ -20,6 +20,7 @@ import { queryState, refreshFailed } from "@/lib/query-state";
 import { PositionsTable } from "@/routes/accounts/positions-table";
 import { StatePriceDialog, type QuotedPaper } from "@/routes/accounts/state-price-dialog";
 import { PriceChart } from "./price-chart";
+import { PaperReturn } from "@/routes/accounts/account-return";
 import { priceText } from "./price-text";
 
 type Range = "year" | "all";
@@ -164,6 +165,13 @@ export function InstrumentPage() {
           )}
         </CardContent>
       </Card>
+
+      {holdings.data.holdings.length > 0 && (
+        <div className="grid gap-1">
+          <h2 className="text-lg font-semibold">{t("instrumentPage.return")}</h2>
+          <PaperReturn instrumentId={instrumentId} />
+        </div>
+      )}
 
       <div className="grid gap-2">
         <h2 className="text-lg font-semibold">{t("instrumentPage.holdings")}</h2>

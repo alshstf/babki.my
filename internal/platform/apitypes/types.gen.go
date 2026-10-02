@@ -2641,6 +2641,15 @@ type StateInstrumentPriceJSONBody struct {
 	Price string `json:"price"`
 }
 
+// GetInstrumentReturnParams defines parameters for GetInstrumentReturn.
+type GetInstrumentReturnParams struct {
+	// From Date YYYY-MM-DD, the day before the period
+	From string `form:"from" json:"from"`
+
+	// To Date YYYY-MM-DD, the period's last day
+	To string `form:"to" json:"to"`
+}
+
 // GetFamilyReturnParams defines parameters for GetFamilyReturn.
 type GetFamilyReturnParams struct {
 	From string `form:"from" json:"from"`

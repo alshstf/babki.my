@@ -36,3 +36,18 @@ export function useFamilyReturn(from: string, to: string, enabled = true) {
     },
   });
 }
+
+// What one paper earned the family between two days, across every account it
+// has been on (see GET /api/v1/instruments/{instrumentId}/return).
+export function useInstrumentReturn(instrumentId: string, from: string, to: string) {
+  return useQuery({
+    queryKey: ["return", "instrument", instrumentId, from, to],
+    queryFn: async (): Promise<PeriodReturn> => {
+      const { data, error, response } = await api.GET("/api/v1/instruments/{instrumentId}/return", {
+        params: { path: { instrumentId }, query: { from, to } },
+      });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+  });
+}
