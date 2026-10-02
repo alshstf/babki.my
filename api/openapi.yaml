@@ -551,6 +551,24 @@ paths:
               schema: { $ref: "#/components/schemas/SpaceExport" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+  /api/v1/data-sources:
+    get:
+      operationId: listDataSources
+      description: >-
+        How the background jobs that fetch outside data last ended — the exchange's prices and
+        their history, the central bank's rates, the broker's operations and prices, the
+        exchange's splits: when each last succeeded, and when and how it last failed. `stale` is
+        true when a source has not succeeded for three of its intervals, or never has while it
+        has failed.
+      responses:
+        "200":
+          description: The sources, in a fixed order
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DataSource" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/capital:
     get:
       operationId: getCapital
@@ -2086,6 +2104,16 @@ components:
         source: { type: string }
         source_ref: { type: string }
         note: { type: string }
+    DataSource:
+      type: object
+      required: [kind, every_seconds, last_success_at, last_failure_at, last_error, stale]
+      properties:
+        kind: { type: string, description: "The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, corporateaction.refresh_moex_splits" }
+        every_seconds: { type: integer, description: "How often it runs" }
+        last_success_at: { type: string, format: date-time, nullable: true }
+        last_failure_at: { type: string, format: date-time, nullable: true }
+        last_error: { type: string, description: "The last failure's text, cut to 300 characters; empty when it never failed" }
+        stale: { type: boolean }
     PeriodReturn:
       type: object
       required: [currency, from, to, start_minor, end_minor, contributions_minor, profit_minor, annual_rate, complete]

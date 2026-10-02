@@ -1264,6 +1264,21 @@ type CurrencyTotal struct {
 	NetMinor         int64 `json:"net_minor"`
 }
 
+// DataSource defines model for DataSource.
+type DataSource struct {
+	// EverySeconds How often it runs
+	EverySeconds int `json:"every_seconds"`
+
+	// Kind The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, corporateaction.refresh_moex_splits
+	Kind string `json:"kind"`
+
+	// LastError The last failure's text, cut to 300 characters; empty when it never failed
+	LastError     string                       `json:"last_error"`
+	LastFailureAt nullable.Nullable[time.Time] `json:"last_failure_at"`
+	LastSuccessAt nullable.Nullable[time.Time] `json:"last_success_at"`
+	Stale         bool                         `json:"stale"`
+}
+
 // DayPrice defines model for DayPrice.
 type DayPrice struct {
 	Currency string `json:"currency"`
