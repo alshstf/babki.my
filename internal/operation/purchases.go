@@ -194,9 +194,10 @@ func checkStatedPurchases(op Operation, pieces []ReleasedLot) (int64, error) {
 	return cost, nil
 }
 
-// journalReplacing is the journal with one row restated in its own place: the
-// same day and the same moment of recording, so it folds exactly where the row
-// it replaces did.
+// journalReplacing is the journal with one row restated under its own moment
+// of recording, in the order the engine folds it: on its own day it folds
+// exactly where the row it replaces did, and an edit that moves it to another
+// day puts it among that day's rows by the same moment.
 func journalReplacing(journal []Operation, op Operation) []Operation {
 	out := make([]Operation, len(journal))
 	copy(out, journal)
@@ -205,6 +206,7 @@ func journalReplacing(journal []Operation, op Operation) []Operation {
 			out[i] = op
 		}
 	}
+	sortJournal(out)
 	return out
 }
 

@@ -26,6 +26,8 @@ import { IncomeDialog } from "./income-dialog";
 import { TransferDialog } from "./transfer-dialog";
 import { ArrivalDialog } from "./arrival-dialog";
 import { PurchasePriceDialog, type PricedPaper } from "./purchase-price-dialog";
+import { editDialogOf, type Operation } from "@/api/operations";
+import type { Instrument } from "@/api/instruments";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
 import { queryState, refreshFailed } from "@/lib/query-state";
 
@@ -51,6 +53,11 @@ export function AccountDetailPage() {
   const closeAction = () => setAction(undefined);
   // The paper whose purchase price is being given, from its «указать цену».
   const [pricing, setPricing] = useState<PricedPaper | null>(null);
+  // The recorded operation being corrected, and the paper it names.
+  const [editing, setEditing] = useState<{
+    operation: Operation;
+    instrument: Instrument | null;
+  } | null>(null);
 
   // Reports the currencies in play on this screen so the header's toggle
   // can hide itself when there's nothing to convert (see
@@ -224,6 +231,7 @@ export function AccountDetailPage() {
           baseCurrency={baseCurrency}
           costBasisRules={session?.cost_basis_rules}
           onPurchasePrice={isViewer ? undefined : setPricing}
+          onEdit={isViewer ? undefined : (operation, instrument) => setEditing({ operation, instrument })}
         />
       </div>
 
@@ -261,6 +269,33 @@ export function AccountDetailPage() {
           open
           onOpenChange={(open) => !open && closeAction()}
           account={account}
+        />
+      )}
+      {editing && editDialogOf(editing.operation) === "trade" && (
+        <TradeDialog
+          open
+          onOpenChange={(open) => !open && setEditing(null)}
+          account={account}
+          side={editing.operation.type === "sell" ? "sell" : "buy"}
+          editing={editing.operation}
+          editingInstrument={editing.instrument}
+        />
+      )}
+      {editing && editDialogOf(editing.operation) === "cash" && (
+        <CashDialog
+          open
+          onOpenChange={(open) => !open && setEditing(null)}
+          account={account}
+          editing={editing.operation}
+        />
+      )}
+      {editing && editDialogOf(editing.operation) === "income" && (
+        <IncomeDialog
+          open
+          onOpenChange={(open) => !open && setEditing(null)}
+          account={account}
+          editing={editing.operation}
+          editingInstrument={editing.instrument}
         />
       )}
       {pricing && (

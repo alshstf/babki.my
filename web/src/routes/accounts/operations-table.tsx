@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -30,6 +30,7 @@ import { unnameableGap } from "@/lib/unnameable-gap";
 import {
   useOperations,
   useDeleteOperation,
+  editDialogOf,
   isConflict,
   JOURNAL_PAGE_SIZE,
   type Operation,
@@ -263,6 +264,7 @@ export function OperationsTable({
   baseCurrency,
   costBasisRules,
   onPurchasePrice,
+  onEdit,
 }: {
   accountId: string;
   // Delete action is editor+ (owner/editor); viewers never see it.
@@ -285,6 +287,9 @@ export function OperationsTable({
   // to its purchases once the paper no longer says its price is unknown.
   // Absent for a reader who cannot write.
   onPurchasePrice?: (paper: PricedPaper) => void;
+  // What «изменить» on a row opens: the dialog the row was entered in, filled
+  // in (see editDialogOf). Absent for a reader who cannot write.
+  onEdit?: (operation: Operation, instrument: Instrument | null) => void;
 }) {
   const { t } = useTranslation();
   // "Show more" fetches the next page and appends it (see useOperations). The
@@ -744,16 +749,34 @@ export function OperationsTable({
                     would refuse to delete (see isImported). */}
                 {canDelete && (
                   <TableCell>
-                    {!isImported(operation) && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={t("operations.delete")}
-                        onClick={() => setDeleteTarget(operation)}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
-                    )}
+                    <div className="flex">
+                      {onEdit && editDialogOf(operation) ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={t("operations.edit")}
+                          onClick={() =>
+                            onEdit(operation, instrumentOf(operation.instrument_id) ?? null)
+                          }
+                        >
+                          <Pencil className="size-4" />
+                        </Button>
+                      ) : (
+                        // Keeps the bin in its column on rows edited no other
+                        // way than by deleting and entering again.
+                        onEdit && <span aria-hidden="true" className="size-8 shrink-0" />
+                      )}
+                      {!isImported(operation) && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={t("operations.delete")}
+                          onClick={() => setDeleteTarget(operation)}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      )}
+                    </div>
                   </TableCell>
                 )}
               </TableRow>

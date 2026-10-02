@@ -22,10 +22,16 @@ import {
   MAX_AMOUNT_MINOR,
   amountRefusal,
   formatMinorCompact,
+  minorToInput,
   parseToMinor,
 } from "@/lib/money";
 import { EARLIEST_OPERATION_DATE, localToday } from "@/lib/dates";
-import { useCreateOperation, isConflict, type OperationType } from "@/api/operations";
+import {
+  useSaveOperation,
+  isConflict,
+  type Operation,
+  type OperationType,
+} from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
 import type { Instrument } from "@/api/instruments";
 import { InstrumentPicker } from "./instrument-picker";
@@ -59,13 +65,19 @@ export function IncomeDialog({
   open,
   onOpenChange,
   account,
+  editing,
+  editingInstrument,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   account: AccountWithBalance;
+  // The recorded operation this dialog was opened on, to be corrected in
+  // place, and the paper it names (null for a payment on the account itself).
+  editing?: Operation;
+  editingInstrument?: Instrument | null;
 }) {
   const { t } = useTranslation();
-  const createOperation = useCreateOperation();
+  const createOperation = useSaveOperation(editing?.id);
 
   const [type, setType] = useState<OperationType>("dividend");
   const [instrument, setInstrument] = useState<Instrument | null>(null);
@@ -75,11 +87,11 @@ export function IncomeDialog({
 
   useEffect(() => {
     if (open) {
-      setType("dividend");
-      setInstrument(null);
-      setAmount("");
-      setOccurredOn(localToday());
-      setNote("");
+      setType(editing?.type ?? "dividend");
+      setInstrument(editingInstrument ?? null);
+      setAmount(editing ? minorToInput(editing.amount_minor) : "");
+      setOccurredOn(editing?.occurred_on ?? localToday());
+      setNote(editing?.note ?? "");
       createOperation.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -116,12 +128,16 @@ export function IncomeDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{t("income.title")}</DialogTitle>
+          <DialogTitle>{editing ? t("operations.editTitle") : t("income.title")}</DialogTitle>
         </DialogHeader>
         <div className="grid gap-4">
           <div className="grid gap-2">
             <Label>{t("income.type")}</Label>
-            <Select value={type} onValueChange={(v) => setType(v as OperationType)}>
+            <Select
+              value={type}
+              onValueChange={(v) => setType(v as OperationType)}
+              disabled={editing !== undefined}
+            >
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 {INCOME_TYPES.map((incomeType) => (

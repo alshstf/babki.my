@@ -22,10 +22,16 @@ import {
   MAX_AMOUNT_MINOR,
   amountRefusal,
   formatMinorCompact,
+  minorToInput,
   parseToMinor,
 } from "@/lib/money";
 import { EARLIEST_OPERATION_DATE, localToday } from "@/lib/dates";
-import { useCreateOperation, isConflict, type OperationType } from "@/api/operations";
+import {
+  useSaveOperation,
+  isConflict,
+  type Operation,
+  type OperationType,
+} from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
 
 // Cash-level journal entries: no instrument attribution, only a signed cash
@@ -40,13 +46,16 @@ export function CashDialog({
   open,
   onOpenChange,
   account,
+  editing,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   account: AccountWithBalance;
+  // The recorded operation this dialog was opened on, to be corrected in place.
+  editing?: Operation;
 }) {
   const { t } = useTranslation();
-  const createOperation = useCreateOperation();
+  const createOperation = useSaveOperation(editing?.id);
 
   const [type, setType] = useState<OperationType>("deposit");
   const [amount, setAmount] = useState("");
@@ -55,10 +64,10 @@ export function CashDialog({
 
   useEffect(() => {
     if (open) {
-      setType("deposit");
-      setAmount("");
-      setOccurredOn(localToday());
-      setNote("");
+      setType(editing?.type ?? "deposit");
+      setAmount(editing ? minorToInput(editing.amount_minor) : "");
+      setOccurredOn(editing?.occurred_on ?? localToday());
+      setNote(editing?.note ?? "");
       createOperation.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -92,12 +101,16 @@ export function CashDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>{t("cash.title")}</DialogTitle>
+          <DialogTitle>{editing ? t("operations.editTitle") : t("cash.title")}</DialogTitle>
         </DialogHeader>
         <div className="grid gap-4">
           <div className="grid gap-2">
             <Label>{t("cash.type")}</Label>
-            <Select value={type} onValueChange={(v) => setType(v as OperationType)}>
+            <Select
+              value={type}
+              onValueChange={(v) => setType(v as OperationType)}
+              disabled={editing !== undefined}
+            >
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 {CASH_TYPES.map((cashType) => (
