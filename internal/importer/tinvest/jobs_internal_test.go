@@ -461,6 +461,8 @@ func TestSyncWorkerCarriesOneRunFromTheBrokerToTheJournal(t *testing.T) {
 	f.broker.answer(rpcOperations, http.StatusOK,
 		operationsPage(depositJSON("op-1", "2026-03-14T07:30:15Z", 1000)))
 	f.broker.answer(rpcPositions, http.StatusOK, moneyPositions("rub", 1000))
+	f.broker.answer(rpcPortfolio, http.StatusOK,
+		`{"positions":[],"totalAmountPortfolio":{"currency":"rub","units":"1000","nano":0}}`)
 
 	if err := f.work(t, "schedule"); err != nil {
 		t.Fatalf("Work: %v", err)
@@ -487,7 +489,7 @@ func TestSyncWorkerCarriesOneRunFromTheBrokerToTheJournal(t *testing.T) {
 		t.Fatalf("account ByID: %v", err)
 	}
 	if acc.Balance == nil || acc.Balance.AmountMinor != 100_000 {
-		t.Errorf("balance mark = %+v, want 100000 — the broker's own rubles", acc.Balance)
+		t.Errorf("balance mark = %+v, want 100000 — the broker's own total for the account", acc.Balance)
 	}
 
 	runs := f.runs(t)

@@ -905,10 +905,11 @@ func (r *Reconciler) ReconcileLink(ctx context.Context, c *Client, conn Connecti
 			ErrLinkOutsideSpace, link.ID, link.SpaceID, conn.ID, conn.SpaceID)
 	}
 
-	brokerPositions, err := c.GetPortfolio(ctx, link.BrokerAccountID)
+	brokerPortfolio, err := c.GetPortfolio(ctx, link.BrokerAccountID)
 	if err != nil {
 		return notChecked, err
 	}
+	brokerPositions := brokerPortfolio.Positions
 	brokerBalances, err := c.GetPositions(ctx, link.BrokerAccountID)
 	if err != nil {
 		return notChecked, err
@@ -935,7 +936,7 @@ func (r *Reconciler) ReconcileLink(ctx context.Context, c *Client, conn Connecti
 	// and the mark failing to be written are two independent accidents with
 	// two different remedies, and returning only the later one would leave the
 	// person who has to act on this looking at half of what went wrong.
-	if err := r.markBalance(ctx, conn, link, brokerBalances); err != nil {
+	if err := r.markBalance(ctx, conn, link, brokerPortfolio.Total); err != nil {
 		return res, errors.Join(cmpErr, err)
 	}
 
@@ -1059,10 +1060,22 @@ func wholeFactor(a, b decimal.Decimal) (int64, bool) {
 	return f, true
 }
 
-// markBalance files the broker's own ruble figure as the account's balance
-// mark for today, after making sure the account is one rubles may be filed
-// under at all (see ReconcileLink).
-func (r *Reconciler) markBalance(ctx context.Context, conn Connection, link AccountLink, balances []MoneyBalance) error {
+// markBalance files what the broker says the whole account is worth — its
+// securities at its own prices plus its cash, in rubles — as the account's
+// balance mark for today, after making sure the account is one rubles may be
+// filed under at all (see ReconcileLink).
+//
+// THE WHOLE ACCOUNT AND NOT ITS RUBLES. Until 2026-10-02 the mark was the
+// broker's free and blocked rubles (the owner's rule of 2026-08-04, made while
+// the family total was still a sum of marks). With the owner's ruling on Р-2 —
+// the account is valued from its journal and checked against the broker — the
+// mark is the broker's figure for that check, and a figure that leaves the
+// securities out has nothing to be checked against. The rubles themselves are
+// still compared, currency by currency, by compareHoldings.
+//
+// No total from the broker leaves the previous mark standing: there is no
+// figure of the broker's to write, and a guess would be worse than yesterday's.
+func (r *Reconciler) markBalance(ctx context.Context, conn Connection, link AccountLink, total *MoneyValue) error {
 	acc, err := r.accounts.ByID(ctx, conn.SpaceID, link.AccountID)
 	if err != nil {
 		return fmt.Errorf("tinvest: reconcile: read account %s before marking its balance: %w", link.AccountID, err)
@@ -1072,15 +1085,17 @@ func (r *Reconciler) markBalance(ctx context.Context, conn Connection, link Acco
 			ErrAccountNotInRubles, link.AccountID, acc.Currency, rubCode)
 	}
 
-	var rubles decimal.Decimal
-	for _, b := range balances {
-		if b.Currency != rubCode {
-			continue
-		}
-		rubles = rubles.Add(b.Value).Add(b.Blocked)
+	if total == nil {
+		r.log.Warn("tinvest: the broker named no total for the account, its previous balance mark stands",
+			"account", link.AccountID)
+		return nil
+	}
+	if total.Currency != rubCode {
+		return fmt.Errorf("%w: account %s: the broker stated its total in %s, and rubles were asked for",
+			ErrBalanceMarkRefused, link.AccountID, total.Currency)
 	}
 
-	minor, refusal := minorFromDecimal(rubles)
+	minor, refusal := minorFromDecimal(total.Decimal())
 	if refusal != nil {
 		// The refusal's Detail is reused and its Error() is not: the substance
 		// is right — this sum is finer than a minor unit, or larger than any

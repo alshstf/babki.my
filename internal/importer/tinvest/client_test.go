@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -458,6 +459,32 @@ func TestOperationsAll_ErrorOnSecondPageReturnsErrorNotPartialResult(t *testing.
 // GetPortfolio / GetPositions
 // -------------------------------------------------------------------------
 
+// The account's total comes in rubles, as asked for: the request names the
+// currency, and the answer's totalAmountPortfolio is what the balance mark is.
+func TestGetPortfolio_ReadsTheTotalInRubles(t *testing.T) {
+	var asked string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		asked = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"positions":[],"totalAmountPortfolio":{"currency":"rub","units":"860210","nano":500000000}}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(srv.Client(), srv.URL, "tok", nil)
+
+	portfolio, err := c.GetPortfolio(context.Background(), "2000000001")
+	if err != nil {
+		t.Fatalf("GetPortfolio: %v", err)
+	}
+	if !strings.Contains(asked, `"currency":"RUB"`) {
+		t.Errorf("request = %s, want it to ask for the total in rubles", asked)
+	}
+	if portfolio.Total == nil || portfolio.Total.Currency != "RUB" ||
+		!portfolio.Total.Decimal().Equal(decimal.RequireFromString("860210.5")) {
+		t.Errorf("Total = %+v, want 860210.5 RUB", portfolio.Total)
+	}
+}
+
 func TestGetPortfolio_ParsesFixture(t *testing.T) {
 	srv, _ := serve(t, map[string]route{
 		"/tinkoff.public.invest.api.contract.v1.OperationsService/GetPortfolio": {
@@ -467,9 +494,13 @@ func TestGetPortfolio_ParsesFixture(t *testing.T) {
 	})
 	c := NewClient(srv.Client(), srv.URL, "tok", nil)
 
-	positions, err := c.GetPortfolio(context.Background(), "2000000001")
+	portfolio, err := c.GetPortfolio(context.Background(), "2000000001")
 	if err != nil {
 		t.Fatalf("GetPortfolio: %v", err)
+	}
+	positions := portfolio.Positions
+	if portfolio.Total != nil {
+		t.Errorf("Total = %+v, want nil: the fixture names no totalAmountPortfolio", portfolio.Total)
 	}
 	if len(positions) != 2 {
 		t.Fatalf("len(positions) = %d, want 2: %+v", len(positions), positions)

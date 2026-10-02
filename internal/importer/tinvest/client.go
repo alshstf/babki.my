@@ -406,22 +406,42 @@ type PortfolioPosition struct {
 	Blocked                                     bool
 }
 
-// GetPortfolio calls OperationsService/GetPortfolio and returns the
-// account's current positions.
-func (c *Client) GetPortfolio(ctx context.Context, brokerAccountID string) ([]PortfolioPosition, error) {
+// Portfolio is OperationsService/GetPortfolio's answer: the account's positions
+// and what the broker says the whole account is worth.
+type Portfolio struct {
+	Positions []PortfolioPosition
+	// Total is the broker's totalAmountPortfolio — its securities at its own
+	// prices plus its cash — asked for in rubles. Nil when the gateway sent
+	// none. Checked on the owner's live account 2026-10-02: the field is
+	// there, in rubles.
+	Total *MoneyValue
+}
+
+// GetPortfolio calls OperationsService/GetPortfolio and returns the account's
+// current positions and its total in rubles.
+func (c *Client) GetPortfolio(ctx context.Context, brokerAccountID string) (Portfolio, error) {
 	var resp wireGetPortfolioResponse
-	if err := c.do(ctx, "OperationsService/GetPortfolio", accountIDRequest{AccountID: brokerAccountID}, &resp); err != nil {
-		return nil, err
+	req := portfolioRequest{AccountID: brokerAccountID, Currency: rubCode}
+	if err := c.do(ctx, "OperationsService/GetPortfolio", req, &resp); err != nil {
+		return Portfolio{}, err
 	}
 	positions := make([]PortfolioPosition, 0, len(resp.Positions))
 	for _, w := range resp.Positions {
 		p, err := w.parse()
 		if err != nil {
-			return nil, fmt.Errorf("tinvest: OperationsService/GetPortfolio: %w", err)
+			return Portfolio{}, fmt.Errorf("tinvest: OperationsService/GetPortfolio: %w", err)
 		}
 		positions = append(positions, p)
 	}
-	return positions, nil
+	out := Portfolio{Positions: positions}
+	if resp.TotalAmountPortfolio != nil {
+		total, err := resp.TotalAmountPortfolio.parse()
+		if err != nil {
+			return Portfolio{}, fmt.Errorf("tinvest: OperationsService/GetPortfolio: totalAmountPortfolio: %w", err)
+		}
+		out.Total = &total
+	}
+	return out, nil
 }
 
 // MoneyBalance is one currency's cash balance from OperationsService/
