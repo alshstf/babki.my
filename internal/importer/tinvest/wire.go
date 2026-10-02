@@ -301,6 +301,17 @@ func (w wirePortfolioPosition) parse() (PortfolioPosition, error) {
 // wireGetPortfolioResponse mirrors PortfolioResponse.
 type wireGetPortfolioResponse struct {
 	Positions []wirePortfolioPosition `json:"positions"`
+	// TotalAmountPortfolio is what the broker says the whole account is worth,
+	// in the currency the request asked for. Absent from some answers (a
+	// sandbox that holds nothing), so a pointer.
+	TotalAmountPortfolio *wireMoneyValue `json:"totalAmountPortfolio"`
+}
+
+// portfolioRequest asks OperationsService/GetPortfolio for an account's
+// positions with the account's total stated in rubles.
+type portfolioRequest struct {
+	AccountID string `json:"accountId"`
+	Currency  string `json:"currency"`
 }
 
 // wireGetPositionsResponse mirrors PositionsResponse's two currency-balance

@@ -844,19 +844,22 @@ func (f fixture) seedMapped(t *testing.T, uid, ticker string) uuid.UUID {
 	return inst.ID
 }
 
-// TestReconcileLinkMarksTheBalanceWithTheBrokersOwnRubles pins the owner's
-// decision of 2026-08-04: an imported account gets its balance mark from the
-// figure the BROKER named — free plus blocked rubles — rather than from any
-// sum of ours. Nobody is going to type a mark into an imported account by
-// hand, and the accounts screen would otherwise show it empty.
-func TestReconcileLinkMarksTheBalanceWithTheBrokersOwnRubles(t *testing.T) {
+// TestReconcileLinkMarksTheBalanceWithTheBrokersTotal: an imported account's
+// balance mark is the figure the BROKER names for the whole account — its
+// securities at its prices plus its cash — rather than any sum of ours. It is
+// what the account's value from the journal is checked against (the owner's
+// ruling on Р-2, 2026-10-02). Until then it was the broker's rubles alone
+// (his rule of 2026-08-04), which left the securities out of every figure the
+// mark fed.
+func TestReconcileLinkMarksTheBalanceWithTheBrokersTotal(t *testing.T) {
 	f := newFixture(t)
 	inst := f.seedMapped(t, "uid-sber", "SBER")
 
 	srv, _ := serve(t, map[string]route{
 		portfolioPath: {status: http.StatusOK, body: []byte(
 			`{"positions":[{"instrumentUid":"uid-sber","figi":"BBG004730N88","instrumentType":"share",` +
-				`"quantity":{"units":"100","nano":0},"blocked":false}]}`)},
+				`"quantity":{"units":"100","nano":0},"blocked":false}],` +
+				`"totalAmountPortfolio":{"currency":"rub","units":"36499","nano":900000000}}`)},
 		positionsPath: {status: http.StatusOK, body: []byte(
 			`{"money":[{"currency":"rub","units":"8000","nano":0}],` +
 				`"blocked":[{"currency":"rub","units":"999","nano":900000000}]}`)},
@@ -881,9 +884,9 @@ func TestReconcileLinkMarksTheBalanceWithTheBrokersOwnRubles(t *testing.T) {
 		t.Fatalf("marks = %+v, want exactly one", marker.marks)
 	}
 	got := marker.marks[0]
-	// 8 000,00 ₽ free plus 999,90 ₽ blocked, in kopecks.
-	if got.amountMinor != 899_990 {
-		t.Errorf("amount = %d, want 899990", got.amountMinor)
+	// The broker's own total, 36 499,90 ₽ — not its 8 999,90 ₽ of rubles.
+	if got.amountMinor != 3_649_990 {
+		t.Errorf("amount = %d, want 3649990 — the whole account as the broker values it", got.amountMinor)
 	}
 	if got.spaceID != f.spaceID || got.accountID != f.accountID {
 		t.Errorf("mark filed under %s/%s, want %s/%s", got.spaceID, got.accountID, f.spaceID, f.accountID)
@@ -998,7 +1001,8 @@ func TestReconcileLinkMarksTheBalanceEvenWhenTheSidesDisagree(t *testing.T) {
 	srv, _ := serve(t, map[string]route{
 		portfolioPath: {status: http.StatusOK, body: []byte(
 			`{"positions":[{"instrumentUid":"uid-nobody-mapped","instrumentType":"share",` +
-				`"quantity":{"units":"3","nano":0},"blocked":false}]}`)},
+				`"quantity":{"units":"3","nano":0},"blocked":false}],` +
+				`"totalAmountPortfolio":{"currency":"rub","units":"1","nano":0}}`)},
 		positionsPath: {status: http.StatusOK, body: []byte(
 			`{"money":[{"currency":"rub","units":"1","nano":0}]}`)},
 		// The broker knows nothing about it either: the position stays
@@ -1097,6 +1101,52 @@ func TestReconcileLinkMarksNothingWhenOurOwnJournalCannotBeRead(t *testing.T) {
 	}
 }
 
+// A broker that names no total for the account leaves the previous mark
+// standing: there is no figure of the broker's to write, and the check still
+// counts as made.
+func TestReconcileLinkLeavesTheMarkWhenTheBrokerNamesNoTotal(t *testing.T) {
+	f := newFixture(t)
+	srv, _ := serve(t, map[string]route{
+		portfolioPath: {status: http.StatusOK, body: []byte(`{"positions":[]}`)},
+		positionsPath: {status: http.StatusOK, body: []byte(`{"money":[]}`)},
+	})
+	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
+	marker := newMarker()
+	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil, nil)
+
+	res, err := r.ReconcileLink(f.ctx, c, f.conn, f.link)
+	if err != nil {
+		t.Fatalf("ReconcileLink: %v", err)
+	}
+	if res.Status != ReconcileMatched {
+		t.Errorf("status = %q, want %q", res.Status, ReconcileMatched)
+	}
+	if len(marker.marks) != 0 {
+		t.Errorf("marks = %+v, want none: the broker named no total", marker.marks)
+	}
+}
+
+// A total stated in another currency than the rubles asked for is refused
+// rather than filed under a ruble account.
+func TestReconcileLinkRefusesATotalInAnotherCurrency(t *testing.T) {
+	f := newFixture(t)
+	srv, _ := serve(t, map[string]route{
+		portfolioPath: {status: http.StatusOK, body: []byte(
+			`{"positions":[],"totalAmountPortfolio":{"currency":"usd","units":"100","nano":0}}`)},
+		positionsPath: {status: http.StatusOK, body: []byte(`{"money":[]}`)},
+	})
+	c := NewClient(srv.Client(), srv.URL, "test-token", nil)
+	marker := newMarker()
+	r := NewReconciler(f.store, fakeJournal{}, marker, instrument.NewStore(f.pool), nil, nil)
+
+	if _, err := r.ReconcileLink(f.ctx, c, f.conn, f.link); !errors.Is(err, ErrBalanceMarkRefused) {
+		t.Fatalf("error = %v, want %v", err, ErrBalanceMarkRefused)
+	}
+	if len(marker.marks) != 0 {
+		t.Errorf("marks = %+v, want none: 100 dollars under a ruble account is a wrong number", marker.marks)
+	}
+}
+
 // TestReconcileLinkRefusesToMarkANonRubleAccount pins the precondition this
 // program used to only write down. The mark is a bare int64 whose currency is
 // the account's own, and the figure being filed is the broker's RUBLES — so
@@ -1136,8 +1186,9 @@ func TestABalanceMarkFinerThanAKopeckIsRefusedForWhatItIs(t *testing.T) {
 	f := newFixture(t)
 
 	srv, _ := serve(t, map[string]route{
-		portfolioPath: {status: http.StatusOK, body: []byte(`{"positions":[]}`)},
 		// 8 000,005 ₽ — half a kopeck, which no whole number of kopecks holds.
+		portfolioPath: {status: http.StatusOK, body: []byte(
+			`{"positions":[],"totalAmountPortfolio":{"currency":"rub","units":"8000","nano":5000000}}`)},
 		positionsPath: {status: http.StatusOK, body: []byte(
 			`{"money":[{"currency":"rub","units":"8000","nano":5000000}]}`)},
 	})
@@ -1170,7 +1221,8 @@ func TestBothRefusalsSurviveWhenBothHappened(t *testing.T) {
 	inst := f.seedMapped(t, "uid-sber", "SBER")
 
 	srv, _ := serve(t, map[string]route{
-		portfolioPath: {status: http.StatusOK, body: []byte(`{"positions":[]}`)},
+		portfolioPath: {status: http.StatusOK, body: []byte(
+			`{"positions":[],"totalAmountPortfolio":{"currency":"rub","units":"1","nano":0}}`)},
 		positionsPath: {status: http.StatusOK, body: []byte(
 			`{"money":[{"currency":"rub","units":"1","nano":0}]}`)},
 	})
