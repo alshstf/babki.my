@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Info } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatMinorCompact } from "@/lib/money";
+import { formatMinor, formatMinorCompact } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { signClass } from "@/lib/money";
 import { formatDate, isRecent, localToday } from "@/lib/dates";
@@ -84,6 +84,31 @@ export function SummaryCards({
             <div className="text-lg font-medium text-muted-foreground">{t("summary.noTotal")}</div>
           )}
           {unconverted && <div className="text-xs text-muted-foreground">{unconverted}</div>}
+          {summary.journal.differing > 0 && (
+            <div
+              data-testid="summary-journal-differing"
+              className="text-xs text-red-600"
+              title={t("summary.journalDifferingHint")}
+            >
+              {t("summary.journalDiffering", {
+                count: summary.journal.differing,
+                difference: formatMinor(
+                  summary.journal.differing_difference_minor,
+                  summary.base_currency,
+                ),
+              })}
+            </div>
+          )}
+          {summary.journal.pinned_to_balance > 0 && (
+            <div data-testid="summary-journal-pinned" className="text-xs text-muted-foreground">
+              {t("summary.journalPinned", { count: summary.journal.pinned_to_balance })}
+            </div>
+          )}
+          {summary.journal.unpriced_positions > 0 && (
+            <div data-testid="summary-journal-unpriced" className="text-xs text-amber-600">
+              {t("summary.journalUnpriced", { count: summary.journal.unpriced_positions })}
+            </div>
+          )}
         </CardContent>
       </Card>
       {/* Per-currency breakdown: compact, secondary — not equal weight to

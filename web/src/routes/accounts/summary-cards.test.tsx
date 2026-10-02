@@ -4,7 +4,7 @@ import { render, screen } from "@testing-library/react";
 import "@/i18n";
 import { SummaryCards } from "./summary-cards";
 import type { Summary } from "@/api/accounts";
-import { formatMinorCompact } from "@/lib/money";
+import { formatMinor, formatMinorCompact } from "@/lib/money";
 import { localToday } from "@/lib/dates";
 
 // SummaryCards is a pure presentational component (summary comes in as a
@@ -172,6 +172,39 @@ describe("SummaryCards", () => {
     expect(screen.getByTestId("summary-total-amount")).toBeInTheDocument();
     expect(norm(screen.getByTestId("summary-total-amount").textContent ?? "")).toBe(
       norm(formatMinorCompact(summary.total_in_base_minor!, summary.base_currency)),
+    );
+  });
+
+  it("says what the total owes to journals, and only when there is something to say", () => {
+    const { rerender } = wrap(<SummaryCards summary={makeSummary()} mode="native" />);
+    expect(screen.queryByTestId("summary-journal-differing")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("summary-journal-pinned")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("summary-journal-unpriced")).not.toBeInTheDocument();
+
+    rerender(
+      <SummaryCards
+        summary={makeSummary({
+          journal: {
+            accounts: 2,
+            differing: 1,
+            differing_difference_minor: -34_500_000,
+            pinned_to_balance: 1,
+            unpriced_positions: 3,
+          },
+        })}
+        mode="native"
+      />,
+    );
+    expect(norm(screen.getByTestId("summary-journal-differing").textContent ?? "")).toBe(
+      norm(
+        `не сходятся с балансом счетов: 1 — разница ${formatMinor(-34_500_000, "RUB")}, итог может быть неточным`,
+      ),
+    );
+    expect(screen.getByTestId("summary-journal-pinned")).toHaveTextContent(
+      "считаются по балансу, а не по журналу, счетов: 1",
+    );
+    expect(screen.getByTestId("summary-journal-unpriced")).toHaveTextContent(
+      "бумаг без цены посчитано нулём: 3",
     );
   });
 });

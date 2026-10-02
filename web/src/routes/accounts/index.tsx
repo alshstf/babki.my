@@ -10,7 +10,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useSession } from "@/api/session";
-import { useAccounts, useArchiveAccount, useSummary, type AccountWithBalance } from "@/api/accounts";
+import {
+  useAccounts,
+  useArchiveAccount,
+  useSummary,
+  useUpdateAccount,
+  type AccountWithBalance,
+} from "@/api/accounts";
 import { useScreenCurrencies } from "@/lib/screen-currencies";
 import { SummaryCards } from "./summary-cards";
 import { AccountsTable } from "./accounts-table";
@@ -26,6 +32,7 @@ export function AccountsPage() {
   const accounts = useAccounts();
   const summary = useSummary();
   const archiveAccount = useArchiveAccount();
+  const valueBy = useUpdateAccount();
 
   // undefined = dialog closed, null = create mode, account = edit mode.
   const [dialogAccount, setDialogAccount] = useState<AccountWithBalance | null | undefined>(
@@ -81,6 +88,11 @@ export function AccountsPage() {
       </div>
       <RefreshFailedNotice show={refreshFailed(accounts, summary)} />
       {summary.data && <SummaryCards summary={summary.data} mode={mode} />}
+      {valueBy.isError && (
+        <Alert variant="destructive">
+          <AlertDescription>{t("accounts.journal.switchError")}</AlertDescription>
+        </Alert>
+      )}
       {list.length === 0 ? (
         <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">
           {t("accounts.empty")}
@@ -90,6 +102,13 @@ export function AccountsPage() {
           accounts={list}
           mode={mode}
           baseCurrency={baseCurrency}
+          onValueBy={
+            isViewer
+              ? undefined
+              : (account, byBalance) =>
+                  valueBy.mutate({ id: account.id, body: { valued_by_balance: byBalance } })
+          }
+          switching={valueBy.isPending ? valueBy.variables?.id : undefined}
           onRowAction={
             isViewer
               ? undefined
