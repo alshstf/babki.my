@@ -1573,6 +1573,23 @@ type MoneyInBase struct {
 	RateOn string `json:"rate_on"`
 }
 
+// MoneyTransferRequest defines model for MoneyTransferRequest.
+type MoneyTransferRequest struct {
+	// AmountMinor What left, in minor units of `currency`: positive, at most 10^15.
+	AmountMinor   int64              `json:"amount_minor"`
+	Currency      string             `json:"currency"`
+	FromAccountId openapi_types.UUID `json:"from_account_id"`
+	Note          *string            `json:"note,omitempty"`
+
+	// OccurredOn Date YYYY-MM-DD; the same bounds as an operation's.
+	OccurredOn       string                    `json:"occurred_on"`
+	ReceivedCurrency nullable.Nullable[string] `json:"received_currency,omitempty"`
+
+	// ReceivedMinor What arrived, when it differs — sent together with received_currency or not at all.
+	ReceivedMinor nullable.Nullable[int64] `json:"received_minor,omitempty"`
+	ToAccountId   openapi_types.UUID       `json:"to_account_id"`
+}
+
 // Operation defines model for Operation.
 type Operation struct {
 	AccountId openapi_types.UUID `json:"account_id"`
@@ -1581,10 +1598,13 @@ type Operation struct {
 	AmountMinor int64 `json:"amount_minor"`
 
 	// AssembledFromLots True when amount_minor is a cost basis assembled piece by piece from the purchases behind it, each acquired on its own day, rather than money that moved on occurred_on itself — a statement about how the FIGURE was arrived at, not about whether it was converted into the base currency. Set from the presence of a stored per-lot breakdown (see TransferLots / Store.attachTransferLots): true for a transfer_in/transfer_out whose parcel carries one, whether or not every piece in it has a purchase date and whether or not in_base exists for this row at all. False for every ordinary operation, which never carries a breakdown, and for a transfer given a hand-typed basis (or one recorded before breakdowns were kept), which has no breakdown to assemble from — has_undated_lots is what answers for that parcel instead. Both legs of a transfer pair answer the same way; they describe one parcel. This is also what OperationInBase.rate_on reads to decide whether it names the single rate behind amount_minor or merely the newest of several — see that field. It used to live on OperationInBase alone, which made it disappear exactly when the conversion block did: a transfer already denominated in the base currency, or one whose newest purchase has no fx rate yet, published nothing about how amount_minor was derived even though the breakdown that answers the question sits in the operation itself, entirely independent of whether it could be converted. Moving the flag here, next to has_undated_lots, closes that gap: a reader no longer has to hope a nullable in_base exists before learning what kind of number amount_minor is.
-	AssembledFromLots bool      `json:"assembled_from_lots"`
-	CreatedAt         time.Time `json:"created_at"`
-	Currency          string    `json:"currency"`
-	FeeMinor          int64     `json:"fee_minor"`
+	AssembledFromLots bool `json:"assembled_from_lots"`
+
+	// CounterpartAccountId On a journal page: for one half of a move between two of the family's accounts — shares or money — the account the other half is on. Null for everything else, and absent outside the journal.
+	CounterpartAccountId nullable.Nullable[openapi_types.UUID] `json:"counterpart_account_id,omitempty"`
+	CreatedAt            time.Time                             `json:"created_at"`
+	Currency             string                                `json:"currency"`
+	FeeMinor             int64                                 `json:"fee_minor"`
 
 	// HasUndatedLots True when this operation's amount_minor is a cost basis whose purchase dates are not all known: an in-kind transfer whose per-lot breakdown was never recorded (a basis given by hand, or one predating breakdowns), or one whose breakdown contains at least one dateless piece — shares that reached it through an earlier undated transfer. Both legs of such a pair answer the same way; they describe one parcel. False for every ordinary operation, whose amount belongs to the day it happened and needs no purchase date at all. This is the journal's twin of Position.has_undated_lots and exists for the identical reason: in_base being null has several causes, and they are not the same news to the person reading the row. A missing fx rate is a gap the backfill job closes on its own and the figure appears later; an unrecorded purchase date never resolves, because nobody wrote it down and nothing can recover it. Here the distinction is sharper still than on a position: a transfer's own date usually DOES have a rate — the demo instance has one for every transfer it records — so a client saying "no rate for this date" about such a row does not merely fail to explain it, it states something false, and promises a figure that will never arrive. `in_base_gap` draws the same line finer, separating a missing rate for the operation's own date from one for a purchase date, and is the field to caption a journal row with; this one remains the standing fact about the operation, published on the create and transfer responses too, where nothing was ever converted and no gap is published at all. Always present, never inferred by the reader from in_base being null. It changes nothing about the figures: an unknown purchase date costs no money and no shares, and amount_minor and fee_minor are published in the operation's own currency exactly as usual. Together with assembled_from_lots, published alongside it on this same object, the two fields answer completely for whether amount_minor is a cost basis at all: a full, dated breakdown makes assembled_from_lots true, a missing or partial one makes this field true, and a breakdown with one dateless piece among dated ones makes both true at once. Neither field ever needs the other to make sense of it, and neither depends on in_base — a client that reads only in_base for this answer will miss every case where the breakdown could not be converted, which is the bug both fields exist to prevent.
 	HasUndatedLots bool               `json:"has_undated_lots"`
@@ -2526,6 +2546,9 @@ type CreateOperationJSONRequestBody = CreateOperationRequest
 
 // CreateArrivalJSONRequestBody defines body for CreateArrival for application/json ContentType.
 type CreateArrivalJSONRequestBody = CreateArrivalRequest
+
+// CreateMoneyTransferJSONRequestBody defines body for CreateMoneyTransfer for application/json ContentType.
+type CreateMoneyTransferJSONRequestBody = MoneyTransferRequest
 
 // CreateTransferJSONRequestBody defines body for CreateTransfer for application/json ContentType.
 type CreateTransferJSONRequestBody = TransferRequest

@@ -131,6 +131,7 @@ function renderTable({
   costBasisRules,
   canDelete = false,
   onPurchasePrice,
+  accountName,
 }: {
   operations: Operation[];
   // The catalog the table looks names and types up in, served as one whole
@@ -151,6 +152,7 @@ function renderTable({
   // What «цена покупки» on an arrival from another broker opens; absent for a
   // reader who cannot write, as on the screen.
   onPurchasePrice?: (paper: { id: string; name: string; ticker: string }) => void;
+  accountName?: (id: string) => string | undefined;
 }) {
   serve({
     "/operations": { body: { operations, has_more: hasMore } },
@@ -168,11 +170,29 @@ function renderTable({
           baseCurrency={baseCurrency}
           costBasisRules={costBasisRules}
           onPurchasePrice={onPurchasePrice}
+          accountName={accountName}
         />
       </ScreenCurrencyCountProvider>
     </QueryClientProvider>,
   );
 }
+
+// One half of a move between two of the family's accounts says where the money
+// or the shares went, or came from; a row that is no such half says nothing.
+describe("OperationsTable: the other account of a move", () => {
+  it("names where money went and where it came from", async () => {
+    renderTable({
+      operations: [
+        makeOperation({ id: "op-out", type: "withdrawal", amount_minor: -100_000, transfer_group_id: "g1", counterpart_account_id: "acc-2" }),
+        makeOperation({ id: "op-in", type: "deposit", amount_minor: 50_000, transfer_group_id: "g2", counterpart_account_id: "acc-3" }),
+        makeOperation({ id: "op-plain", type: "deposit", amount_minor: 10_000 }),
+      ],
+      accountName: (id) => ({ "acc-2": "Альфа", "acc-3": "Т-Банк" })[id],
+    });
+    const named = await screen.findAllByTestId("operation-counterpart");
+    expect(named.map((n) => n.textContent)).toEqual(["на «Альфа»", "с «Т-Банк»"]);
+  });
+});
 
 // The way back to an arrival's purchases once the paper no longer says its
 // price is unknown: on the journal row of shares from another broker, and only

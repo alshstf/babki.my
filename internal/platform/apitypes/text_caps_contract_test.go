@@ -49,6 +49,7 @@ func TestTheContractStatesTheTextCeilingsTheServerEnforces(t *testing.T) {
 		{"CreateOperationRequest", "note", operation.MaxNoteRunes, "operation.MaxNoteRunes"},
 		{"CreateArrivalRequest", "note", operation.MaxNoteRunes, "operation.MaxNoteRunes"},
 		{"TransferRequest", "note", operation.MaxNoteRunes, "operation.MaxNoteRunes"},
+		{"MoneyTransferRequest", "note", operation.MaxNoteRunes, "operation.MaxNoteRunes"},
 		{"CreateAccountRequest", "name", account.MaxNameRunes, "account.MaxNameRunes"},
 		{"UpdateAccountRequest", "name", account.MaxNameRunes, "account.MaxNameRunes"},
 		{"CreateAccountRequest", "institution", account.MaxInstitutionRunes, "account.MaxInstitutionRunes"},

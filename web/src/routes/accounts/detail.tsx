@@ -23,6 +23,7 @@ import { AccountReturn } from "./account-return";
 import { OperationsTable } from "./operations-table";
 import { TradeDialog } from "./trade-dialog";
 import { CashDialog } from "./cash-dialog";
+import { MoneyTransferDialog } from "./money-transfer-dialog";
 import { IncomeDialog } from "./income-dialog";
 import { TransferDialog } from "./transfer-dialog";
 import { ArrivalDialog } from "./arrival-dialog";
@@ -35,7 +36,7 @@ import { queryState, refreshFailed } from "@/lib/query-state";
 
 // undefined = no dialog open; otherwise the action picked from the
 // "+ Add operation" menu, each mapping to one dialog below.
-type AddAction = "buy" | "sell" | "cash" | "income" | "transfer" | "arrival";
+type AddAction = "buy" | "sell" | "cash" | "money" | "income" | "transfer" | "arrival";
 
 export function AccountDetailPage() {
   const { t } = useTranslation();
@@ -171,6 +172,9 @@ export function AccountDetailPage() {
                 <DropdownMenuItem onSelect={() => setAction("cash")}>
                   {t("cash.menuItem")}
                 </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setAction("money")}>
+                  {t("moneyTransfer.menuItem")}
+                </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setAction("income")}>
                   {t("income.menuItem")}
                 </DropdownMenuItem>
@@ -265,6 +269,7 @@ export function AccountDetailPage() {
           costBasisRules={session?.cost_basis_rules}
           onPurchasePrice={readOnly ? undefined : setPricing}
           onEdit={readOnly ? undefined : (operation, instrument) => setEditing({ operation, instrument })}
+          accountName={(id) => accounts.data?.find((a) => a.id === id)?.name}
           papers={(positions.data?.positions ?? []).map((p) => ({
             id: p.instrument.id,
             name: p.instrument.name,
@@ -282,6 +287,13 @@ export function AccountDetailPage() {
       )}
       {action === "cash" && (
         <CashDialog
+          open
+          onOpenChange={(open) => !open && closeAction()}
+          account={account}
+        />
+      )}
+      {action === "money" && (
+        <MoneyTransferDialog
           open
           onOpenChange={(open) => !open && closeAction()}
           account={account}

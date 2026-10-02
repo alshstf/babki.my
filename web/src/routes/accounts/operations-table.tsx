@@ -280,6 +280,7 @@ export function OperationsTable({
   onPurchasePrice,
   onEdit,
   papers = [],
+  accountName,
 }: {
   accountId: string;
   // Delete action is editor+ (owner/editor); viewers never see it.
@@ -307,6 +308,9 @@ export function OperationsTable({
   onEdit?: (operation: Operation, instrument: Instrument | null) => void;
   // The papers the account has held, for the journal's filter by paper.
   papers?: { id: string; name: string }[];
+  // The name of one of the family's accounts, for a row that is one half of a
+  // move between two of them.
+  accountName?: (id: string) => string | undefined;
 }) {
   const { t } = useTranslation();
   // "Show more" fetches the next page and appends it (see useOperations). The
@@ -624,6 +628,17 @@ export function OperationsTable({
                     <SourceBadge operation={operation} />
                     <TradingModeBadge operation={operation} />
                   </div>
+                  {operation.counterpart_account_id && (
+                    <div className="text-xs text-muted-foreground" data-testid="operation-counterpart">
+                      {operation.type === "withdrawal" || operation.type === "transfer_out"
+                        ? t("operations.toAccount", {
+                            name: accountName?.(operation.counterpart_account_id) ?? t("operations.otherAccount"),
+                          })
+                        : t("operations.fromAccount", {
+                            name: accountName?.(operation.counterpart_account_id) ?? t("operations.otherAccount"),
+                          })}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell>
                   {instrumentName(operation.instrument_id)}
