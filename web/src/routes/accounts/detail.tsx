@@ -19,6 +19,7 @@ import { CostBasisNotice } from "@/components/cost-basis-notice";
 import { PositionsTable } from "./positions-table";
 import { RealizedTotal } from "./realized-total";
 import { AccountTotal } from "./account-total";
+import { AccountReturn } from "./account-return";
 import { OperationsTable } from "./operations-table";
 import { TradeDialog } from "./trade-dialog";
 import { CashDialog } from "./cash-dialog";
@@ -132,6 +133,7 @@ export function AccountDetailPage() {
         {positions.data && (
           <RealizedTotal total={positions.data.realized_total} mode={mode} />
         )}
+        {account.type === "brokerage" && <AccountReturn accountId={accountId} />}
       </div>
 
       <div className="grid gap-2">
