@@ -104,6 +104,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("PUT /api/v1/operations/{operationId}", edit(h.handleUpdate))
 	srv.Mount("DELETE /api/v1/operations/{operationId}", edit(h.handleDelete))
 	srv.Mount("POST /api/v1/operations/transfer", edit(h.handleTransfer))
+	srv.Mount("POST /api/v1/operations/money-transfer", edit(h.handleMoneyTransfer))
 	srv.Mount("PUT /api/v1/operations/{operationId}/purchases", edit(h.handleStatePurchases))
 	srv.Mount("POST /api/v1/operations/arrivals", edit(h.handleCreateArrival))
 	srv.Mount("GET /api/v1/accounts/{accountId}/instruments/{instrumentId}/arrivals", view(h.handleListArrivals))
@@ -1086,9 +1087,25 @@ func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {
 	// rateQueries, prewarmRates and rateFor).
 	h.prewarmRates(r.Context(), rateQueries(ops, sp.BaseCurrency), rates)
 
+	ids := make([]uuid.UUID, 0, len(ops))
+	for _, o := range ops {
+		if o.TransferGroupID != nil {
+			ids = append(ids, o.ID)
+		}
+	}
+	counterparts, err := h.store.CounterpartAccounts(r.Context(), p.SpaceID, ids)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+
 	page := make([]apitypes.Operation, 0, len(ops))
 	for _, o := range ops {
 		api := toAPI(o)
+		api.CounterpartAccountId = nullable.NewNullNullable[uuid.UUID]()
+		if account, ok := counterparts[o.ID]; ok {
+			api.CounterpartAccountId = nullable.NewNullableWithValue(account)
+		}
 		inBase, gap, err := h.operationInBase(r.Context(), o, sp.BaseCurrency, rates)
 		if err != nil {
 			family.WriteError(w, err)
@@ -1307,6 +1324,41 @@ func (h *Handler) handleTransfer(w http.ResponseWriter, r *http.Request) {
 		CostMinorOverride: costOverride,
 		Note:              note,
 	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusCreated, apitypes.TransferResponse{Out: toAPI(out), In: toAPI(in)})
+}
+
+func (h *Handler) handleMoneyTransfer(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	var req apitypes.MoneyTransferRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	occurredOn, err := parseDate(req.OccurredOn)
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "occurred_on "+err.Error())
+		return
+	}
+	params := MoneyTransferParams{
+		FromAccountID: req.FromAccountId, ToAccountID: req.ToAccountId, OccurredOn: occurredOn,
+		AmountMinor: req.AmountMinor, Currency: req.Currency,
+	}
+	if req.Note != nil {
+		params.Note = *req.Note
+	}
+	minor, minorErr := req.ReceivedMinor.Get()
+	currency, currencyErr := req.ReceivedCurrency.Get()
+	switch {
+	case minorErr == nil && currencyErr == nil:
+		params.Received = &Money{Minor: minor, Currency: currency}
+	case minorErr == nil || currencyErr == nil:
+		httpjson.Error(w, http.StatusBadRequest, "received_minor and received_currency are sent together or not at all")
+		return
+	}
+	out, in, err := h.svc.CreateMoneyTransfer(r.Context(), p.SpaceID, params)
 	if err != nil {
 		writeError(w, err)
 		return

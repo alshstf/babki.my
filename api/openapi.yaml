@@ -836,6 +836,33 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/v1/operations/money-transfer:
+    post:
+      operationId: createMoneyTransfer
+      description: >-
+        Moves money between two of the family's accounts: a withdrawal of `amount_minor` in
+        `currency` from one and a deposit into the other, linked as one transfer
+        (`transfer_group_id`), so that deleting either deletes both. The money arrives as it
+        left unless `received_minor` and `received_currency` say otherwise — a transfer
+        converted on the way. Both accounts' journals are replayed, as for any entry; 400 for
+        the same account twice, an archived account, an amount that is not positive or past
+        the bound every amount has, a malformed currency or date; 409 when a journal refuses.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MoneyTransferRequest" }
+      responses:
+        "201":
+          description: Created pair
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TransferResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/operations/{operationId}:
     put:
       operationId: updateOperation
@@ -2251,6 +2278,7 @@ components:
         trading_mode_kind:
           $ref: "#/components/schemas/TradingModeKind"
         transfer_group_id: { type: string, format: uuid, nullable: true }
+        counterpart_account_id: { type: string, format: uuid, nullable: true, description: "On a journal page: for one half of a move between two of the family's accounts — shares or money — the account the other half is on. Null for everything else, and absent outside the journal." }
         split_ratio: { type: string, nullable: true, description: "Decimal as string" }
         source:
           type: string
@@ -2344,6 +2372,18 @@ components:
         has_more:
           type: boolean
           description: "Whether the journal holds at least one more entry beyond this page — i.e. at `offset + len(operations)` and later. THE ONLY HONEST ANSWER TO «is that all», and it is the server's to give. The page's own length cannot answer it: not because a short page is ambiguous — since #118 it is not, a limit past the ceiling being refused rather than clamped — but because a FULL page says nothing either way, and that is the case a «показать ещё» control has to decide. A FLAG RATHER THAN A TOTAL OR A CURSOR. A total would cost a second count of a table the page has already been read from, publish a number no screen shows, and could disagree with the very page it travels with if a row were written in between; the question a reader is actually asking is binary. A cursor would be a second way of saying where to continue beside the `offset` this endpoint already takes and this client already sends, and it would still have to answer this same question separately. It is derived where the decision is made — one row beyond the page is fetched and its arrival IS this answer, after which a statement of its own trims that row away so nothing downstream can mistake it for part of the page — never by comparing the page's length against anything afterwards. False on an empty page, which is the end of the journal (or past it)."
+    MoneyTransferRequest:
+      type: object
+      required: [from_account_id, to_account_id, occurred_on, amount_minor, currency]
+      properties:
+        from_account_id: { type: string, format: uuid }
+        to_account_id: { type: string, format: uuid }
+        occurred_on: { type: string, description: "Date YYYY-MM-DD; the same bounds as an operation's." }
+        amount_minor: { type: integer, format: int64, minimum: 1, description: "What left, in minor units of `currency`: positive, at most 10^15." }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
+        received_minor: { type: integer, format: int64, minimum: 1, nullable: true, description: "What arrived, when it differs — sent together with received_currency or not at all." }
+        received_currency: { type: string, pattern: "^[A-Z]{3}$", nullable: true }
+        note: { type: string, maxLength: 1000 }
     TransferResponse:
       type: object
       required: [out, in]

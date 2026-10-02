@@ -909,6 +909,34 @@ func (s *Store) AccountsWithInstrument(ctx context.Context, spaceID, instrumentI
 	return pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
 }
 
+// CounterpartAccounts returns, for each of ids that is one half of a move
+// between two accounts, the account the other half is on. A pair on one
+// account — a conversion, a spin-off — has no counterpart.
+func (s *Store) CounterpartAccounts(ctx context.Context, spaceID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	out := make(map[uuid.UUID]uuid.UUID)
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT o.id, peer.account_id FROM operations o
+		JOIN operations peer ON peer.space_id = o.space_id
+			AND peer.transfer_group_id = o.transfer_group_id
+			AND peer.id <> o.id AND peer.account_id <> o.account_id
+		WHERE o.space_id = $1 AND o.id = ANY($2)`, spaceID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, account uuid.UUID
+		if err := rows.Scan(&id, &account); err != nil {
+			return nil, err
+		}
+		out[id] = account
+	}
+	return out, rows.Err()
+}
+
 // FirstDaysByInstrument is, for every paper any journal names, the day of its
 // first operation — instance-wide, like the market data it is asked for.
 func (s *Store) FirstDaysByInstrument(ctx context.Context) (map[uuid.UUID]time.Time, error) {

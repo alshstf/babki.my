@@ -569,6 +569,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/money-transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Moves money between two of the family's accounts: a withdrawal of `amount_minor` in `currency` from one and a deposit into the other, linked as one transfer (`transfer_group_id`), so that deleting either deletes both. The money arrives as it left unless `received_minor` and `received_currency` say otherwise — a transfer converted on the way. Both accounts' journals are replayed, as for any entry; 400 for the same account twice, an archived account, an amount that is not positive or past the bound every amount has, a malformed currency or date; 409 when a journal refuses. */
+        post: operations["createMoneyTransfer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/{operationId}": {
         parameters: {
             query?: never;
@@ -1549,6 +1566,11 @@ export interface components {
             trading_mode_kind?: components["schemas"]["TradingModeKind"];
             /** Format: uuid */
             transfer_group_id?: string | null;
+            /**
+             * Format: uuid
+             * @description On a journal page: for one half of a move between two of the family's accounts — shares or money — the account the other half is on. Null for everything else, and absent outside the journal.
+             */
+            counterpart_account_id?: string | null;
             /** @description Decimal as string */
             split_ratio?: string | null;
             /**
@@ -1644,6 +1666,27 @@ export interface components {
             operations: components["schemas"]["Operation"][];
             /** @description Whether the journal holds at least one more entry beyond this page — i.e. at `offset + len(operations)` and later. THE ONLY HONEST ANSWER TO «is that all», and it is the server's to give. The page's own length cannot answer it: not because a short page is ambiguous — since #118 it is not, a limit past the ceiling being refused rather than clamped — but because a FULL page says nothing either way, and that is the case a «показать ещё» control has to decide. A FLAG RATHER THAN A TOTAL OR A CURSOR. A total would cost a second count of a table the page has already been read from, publish a number no screen shows, and could disagree with the very page it travels with if a row were written in between; the question a reader is actually asking is binary. A cursor would be a second way of saying where to continue beside the `offset` this endpoint already takes and this client already sends, and it would still have to answer this same question separately. It is derived where the decision is made — one row beyond the page is fetched and its arrival IS this answer, after which a statement of its own trims that row away so nothing downstream can mistake it for part of the page — never by comparing the page's length against anything afterwards. False on an empty page, which is the end of the journal (or past it). */
             has_more: boolean;
+        };
+        MoneyTransferRequest: {
+            /** Format: uuid */
+            from_account_id: string;
+            /** Format: uuid */
+            to_account_id: string;
+            /** @description Date YYYY-MM-DD; the same bounds as an operation's. */
+            occurred_on: string;
+            /**
+             * Format: int64
+             * @description What left, in minor units of `currency`: positive, at most 10^15.
+             */
+            amount_minor: number;
+            currency: string;
+            /**
+             * Format: int64
+             * @description What arrived, when it differs — sent together with received_currency or not at all.
+             */
+            received_minor?: number | null;
+            received_currency?: string | null;
+            note?: string;
         };
         TransferResponse: {
             out: components["schemas"]["Operation"];
@@ -3297,6 +3340,35 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["TransferRequest"];
+            };
+        };
+        responses: {
+            /** @description Created pair */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransferResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    createMoneyTransfer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoneyTransferRequest"];
             };
         };
         responses: {

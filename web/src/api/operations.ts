@@ -13,6 +13,7 @@ export type OperationType = components["schemas"]["OperationType"];
 export type CreateOperationBody = components["schemas"]["CreateOperationRequest"];
 export type TransferBody = components["schemas"]["TransferRequest"];
 export type TransferResponse = components["schemas"]["TransferResponse"];
+export type MoneyTransferBody = components["schemas"]["MoneyTransferRequest"];
 
 // ApiError carries the HTTP status so callers can branch on 409 (journal
 // conflicts) without matching on backend message text.
@@ -224,6 +225,21 @@ export function useDeleteOperation() {
       if (!response.ok) throw apiError(response, error);
     },
     onSuccess: (_data, variables) => invalidate([variables.accountId]),
+  });
+}
+
+// useCreateMoneyTransfer moves money between two of the family's accounts: a
+// withdrawal from one and a deposit into the other, recorded as one transfer.
+export function useCreateMoneyTransfer() {
+  const invalidate = useInvalidateJournal();
+  return useMutation({
+    mutationFn: async (body: MoneyTransferBody): Promise<TransferResponse> => {
+      const { data, error, response } = await api.POST("/api/v1/operations/money-transfer", { body });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: (_data, variables) =>
+      invalidate([variables.from_account_id, variables.to_account_id]),
   });
 }
 

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/instrument"
@@ -297,5 +298,35 @@ func TestExchangeLegsCannotBeTypedInByHand(t *testing.T) {
 		if !strings.Contains(err.Error(), "corporate-actions registry") {
 			t.Errorf("%s: err = %v, want it to name the registry", typ, err)
 		}
+	}
+}
+
+// A conversion's two legs are on one account: neither names a counterpart, as
+// only a move between two accounts does.
+func TestAConversionNamesNoOtherAccount(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+	newID := newPaper(t, f, "TCSG", "ТКС Холдинг")
+	if _, err := svc.Create(f.ctx, f.spaceID, operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2021-07-02"), Quantity: dec("2"), Price: dec("100"),
+		AmountMinor: -20_000, Currency: "RUB",
+	}); err != nil {
+		t.Fatalf("seed buy: %v", err)
+	}
+	out, in, err := svc.CreateExchange(f.ctx, f.spaceID, operation.ExchangeParams{
+		AccountID: f.accountID, FromInstrumentID: f.sberID, ToInstrumentID: newID,
+		Quantity: decimal.RequireFromString("2"), ToQuantity: decimal.RequireFromString("2"),
+		OccurredOn: date("2024-02-27"), Source: operation.SourceRegistry,
+	})
+	if err != nil {
+		t.Fatalf("CreateExchange: %v", err)
+	}
+	got, err := f.store.CounterpartAccounts(f.ctx, f.spaceID, []uuid.UUID{out.ID, in.ID})
+	if err != nil {
+		t.Fatalf("CounterpartAccounts: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("a conversion's legs name counterparts %v, want none", got)
 	}
 }
