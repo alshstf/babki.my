@@ -317,6 +317,25 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/journal.csv:
+    get:
+      operationId: exportJournal
+      description: >-
+        The account's journal as a CSV table, oldest first: `;` between cells, decimal commas, a
+        byte-order mark, a header in the words the table import recognizes — so the same file
+        reads back through POST .../imports (buys, sells, money and payments; transfers and
+        corporate actions are written for the reader and not read back). Amounts are signed as
+        the journal keeps them; the paper is named by its ISIN, or its ticker without one.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The table
+          content:
+            text/csv:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/imports/papers:
     post:
       operationId: addImportPapers
