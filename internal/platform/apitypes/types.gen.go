@@ -1084,6 +1084,14 @@ type CashPosition struct {
 	InBase CashInBase `json:"in_base"`
 }
 
+// ChangePasswordRequest defines model for ChangePasswordRequest.
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+
+	// NewPassword The same rule as SetupRequest.password: eight to 1024 characters, counted as Unicode code points.
+	NewPassword string `json:"new_password"`
+}
+
 // CostBasisMethod How a jurisdiction decides WHICH of the parcels held are the ones a sale disposed of. `fifo`: the earliest acquisitions, in order. `average`: no parcels at all — one pooled average cost per instrument. `specific_lot`: the taxpayer nominates the parcel. `not_applicable`: the country does not tax an individual's capital gains, so nothing has to be matched. `unknown`: the stored country has no rules row in this application (see CostBasisNotice.unknown_country).
 type CostBasisMethod string
 
@@ -2685,6 +2693,9 @@ type PreviewTableImportJSONRequestBody = ImportPreviewRequest
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
+
+// ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
+type ChangePasswordJSONRequestBody = ChangePasswordRequest
 
 // AddImportPapersJSONRequestBody defines body for AddImportPapers for application/json ContentType.
 type AddImportPapersJSONRequestBody AddImportPapersJSONBody

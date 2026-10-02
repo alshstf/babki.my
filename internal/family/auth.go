@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/alexedwards/argon2id"
@@ -153,6 +154,11 @@ func validateCredentials(username, password string) error {
 	if !usernameRe.MatchString(username) {
 		return fmt.Errorf("%w: username must match [a-z0-9_]{3,32}", ErrValidation)
 	}
+	return validatePassword(password)
+}
+
+// validatePassword is the rule every new password is held to.
+func validatePassword(password string) error {
 	// utf8.RuneCountInString, not len: see MinPasswordRunes for why the sentence
 	// below is the rule and the byte count was the bug.
 	runes := utf8.RuneCountInString(password)
@@ -259,6 +265,45 @@ func (s *Service) Login(ctx context.Context, username, password string) (User, P
 		return User{}, Principal{}, err
 	}
 	return u, p, nil
+}
+
+// ChangePassword replaces the user's password once the current one is given,
+// and ends every session signed in before the change; the moment it took
+// effect is returned for the caller's own session to be signed in at (see
+// Auth.SignInAt). A wrong current password is ErrInvalidCredentials.
+func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, current, next string) (time.Time, error) {
+	if err := validatePassword(next); err != nil {
+		return time.Time{}, err
+	}
+	if utf8.RuneCountInString(current) > MaxPasswordRunes {
+		return time.Time{}, ErrInvalidCredentials
+	}
+	u, err := s.store.UserByID(ctx, userID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	ok, err := passwordMatches(ctx, current, u.PasswordHash)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if !ok {
+		return time.Time{}, ErrInvalidCredentials
+	}
+	hash, err := s.HashPassword(ctx, next)
+	if err != nil {
+		return time.Time{}, err
+	}
+	// Whole microseconds, as the column keeps them, so that the moment this
+	// session is signed in at is exactly the one stored, never a hair before.
+	at := time.Now().Truncate(time.Microsecond)
+	return at, s.store.SetPassword(ctx, userID, hash, at)
+}
+
+// SignOutElsewhere ends every session of the user signed in before now; the
+// moment is returned for the caller's own session to be signed in at.
+func (s *Service) SignOutElsewhere(ctx context.Context, userID uuid.UUID) (time.Time, error) {
+	at := time.Now().Truncate(time.Microsecond)
+	return at, s.store.RevokeSessions(ctx, userID, at)
 }
 
 // CreateMember lets the owner add a family member with role editor|viewer.

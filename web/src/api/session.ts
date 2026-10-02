@@ -193,3 +193,24 @@ export function useLogout() {
     },
   });
 }
+
+// useChangePassword replaces the signed-in member's password; every other
+// session of theirs ends, this one goes on.
+export function useChangePassword() {
+  return useMutation({
+    mutationFn: async (body: { current_password: string; new_password: string }) => {
+      const { error, response } = await api.POST("/api/v1/auth/password", { body });
+      if (!response.ok) throw apiError(response, error);
+    },
+  });
+}
+
+// useSignOutElsewhere ends every session of the signed-in member but this one.
+export function useSignOutElsewhere() {
+  return useMutation({
+    mutationFn: async () => {
+      const { error, response } = await api.POST("/api/v1/auth/sign-out-elsewhere");
+      if (!response.ok) throw apiError(response, error);
+    },
+  });
+}

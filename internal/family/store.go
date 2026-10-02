@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -240,6 +241,44 @@ func (s *Store) MembershipFor(ctx context.Context, userID uuid.UUID) (Principal,
 	err := s.db.QueryRow(ctx, `SELECT space_id, role FROM memberships
 		WHERE user_id = $1 ORDER BY created_at LIMIT 1`, userID).Scan(&p.SpaceID, &p.Role)
 	return p, err
+}
+
+// sessionFor is MembershipFor plus the moment the user's earlier sessions
+// stopped counting (nil when they never did), read in one round trip for every
+// authenticated request.
+func (s *Store) sessionFor(ctx context.Context, userID uuid.UUID) (Principal, *time.Time, error) {
+	p := Principal{UserID: userID}
+	var revoked *time.Time
+	err := s.db.QueryRow(ctx, `SELECT m.space_id, m.role, u.sessions_revoked_at
+		FROM memberships m JOIN users u ON u.id = m.user_id
+		WHERE m.user_id = $1 ORDER BY m.created_at LIMIT 1`, userID).Scan(&p.SpaceID, &p.Role, &revoked)
+	return p, revoked, err
+}
+
+// SetPassword stores a new password hash and ends every session signed in
+// before at.
+func (s *Store) SetPassword(ctx context.Context, userID uuid.UUID, hash string, at time.Time) error {
+	ct, err := s.db.Exec(ctx, `UPDATE users SET password_hash = $2, sessions_revoked_at = $3 WHERE id = $1`,
+		userID, hash, at)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// RevokeSessions ends every session of the user signed in before at.
+func (s *Store) RevokeSessions(ctx context.Context, userID uuid.UUID, at time.Time) error {
+	ct, err := s.db.Exec(ctx, `UPDATE users SET sessions_revoked_at = $2 WHERE id = $1`, userID, at)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) ListMembers(ctx context.Context, spaceID uuid.UUID) ([]Member, error) {

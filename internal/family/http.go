@@ -79,6 +79,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("POST /api/v1/auth/login", wrap(h.handleLogin))
 	srv.Mount("POST /api/v1/auth/logout", h.sm.LoadAndSave(h.auth.RequireAuth(http.HandlerFunc(h.handleLogout))))
 	srv.Mount("GET /api/v1/auth/me", h.sm.LoadAndSave(h.auth.RequireAuth(http.HandlerFunc(h.handleMe))))
+	srv.Mount("POST /api/v1/auth/password", h.sm.LoadAndSave(h.auth.RequireAuth(http.HandlerFunc(h.handleChangePassword))))
+	srv.Mount("POST /api/v1/auth/sign-out-elsewhere", h.sm.LoadAndSave(h.auth.RequireAuth(http.HandlerFunc(h.handleSignOutElsewhere))))
 	srv.Mount("GET /api/v1/tax-residencies", authed(h.handleListTaxResidencies))
 	srv.Mount("PATCH /api/v1/space", authed(h.handleUpdateSpace))
 	srv.Mount("GET /api/v1/members", authed(h.handleListMembers))
@@ -338,6 +340,60 @@ func (h *Handler) handleDeleteMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.RemoveMember(r.Context(), p, targetID); err != nil {
+		WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleChangePassword replaces the caller's password. A wrong current password
+// counts against the same lock the sign-in door keeps, under the caller's own
+// name, and is a 400 rather than a 401: the session is fine, the field is not.
+// The caller's session is renewed and outlives the change; every other is over.
+func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFromContext(r.Context())
+	var req apitypes.ChangePasswordRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	u, err := h.store.UserByID(r.Context(), p.UserID)
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	addr := clientAddr(r)
+	if wait := h.guard.wait(addr, u.Username); wait > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
+		httpjson.Error(w, http.StatusTooManyRequests, "too many attempts, try again later")
+		return
+	}
+	at, err := h.svc.ChangePassword(r.Context(), p.UserID, req.CurrentPassword, req.NewPassword)
+	if errors.Is(err, ErrInvalidCredentials) {
+		h.guard.failed(addr, u.Username)
+		httpjson.Error(w, http.StatusBadRequest, "the current password is wrong")
+		return
+	}
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	h.guard.succeeded(addr, u.Username)
+	if err := h.auth.SignInAt(r.Context(), p.UserID, at); err != nil {
+		WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSignOutElsewhere ends every session of the caller but this one.
+func (h *Handler) handleSignOutElsewhere(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFromContext(r.Context())
+	at, err := h.svc.SignOutElsewhere(r.Context(), p.UserID)
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	if err := h.auth.SignInAt(r.Context(), p.UserID, at); err != nil {
 		WriteError(w, err)
 		return
 	}
