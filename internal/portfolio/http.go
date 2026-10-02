@@ -2746,17 +2746,47 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-
-	sp, err := h.spaces.SpaceByID(r.Context(), p.SpaceID)
-	if err != nil {
+	resp, _, err := h.positionsResponse(r.Context(), p.SpaceID, accountID)
+	var notComputed journalDoesNotCompute
+	switch {
+	case errors.As(err, &notComputed):
+		// Practically unreachable: every write to the journal already passes
+		// through this same engine, so a stored journal that fails to replay
+		// here would mean the data is already corrupted.
+		httpjson.Error(w, http.StatusUnprocessableEntity, notComputed.Error())
+	case errors.Is(err, errInstrumentNotInCatalog):
+		httpjson.Error(w, http.StatusNotFound, "not found")
+	case err != nil:
 		family.WriteError(w, err)
-		return
+	default:
+		httpjson.Write(w, http.StatusOK, resp)
+	}
+}
+
+// journalDoesNotCompute is the engine refusing a stored journal, carried with
+// its own words (see handleList).
+type journalDoesNotCompute struct{ err error }
+
+func (e journalDoesNotCompute) Error() string { return e.err.Error() }
+func (e journalDoesNotCompute) Unwrap() error { return e.err }
+
+// errInstrumentNotInCatalog is a journal naming a paper the catalog has no row
+// for — unreachable behind the foreign key, and answered rather than skipped.
+var errInstrumentNotInCatalog = errors.New("portfolio: the journal names an instrument the catalog does not hold")
+
+// positionsResponse is the whole of what the positions screen shows for one
+// account, and the number of operations behind it. It is the one place an
+// account is valued: the screen writes it out, and the family total reads the
+// account's worth from it (see ValueFromJournal).
+func (h *Handler) positionsResponse(ctx context.Context, spaceID, accountID uuid.UUID) (apitypes.PositionsResponse, int, error) {
+	sp, err := h.spaces.SpaceByID(ctx, spaceID)
+	if err != nil {
+		return apitypes.PositionsResponse{}, 0, err
 	}
 
-	ops, err := h.ops.ListForEngine(r.Context(), p.SpaceID, accountID)
+	ops, err := h.ops.ListForEngine(ctx, spaceID, accountID)
 	if err != nil {
-		family.WriteError(w, err)
-		return
+		return apitypes.PositionsResponse{}, 0, err
 	}
 
 	positions, err := Compute(ops)
@@ -2766,8 +2796,7 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		// the journal to check consistency before committing), so a stored
 		// journal that fails to replay here would mean the data is already
 		// corrupted rather than a normal request-time error.
-		httpjson.Error(w, http.StatusUnprocessableEntity, err.Error())
-		return
+		return apitypes.PositionsResponse{}, 0, journalDoesNotCompute{err}
 	}
 
 	instrumentIDs := make([]uuid.UUID, 0, len(positions))
@@ -2777,15 +2806,13 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	// One batched round trip for every position's catalog row and one for
 	// every position's quote, never one per position (N+1) — see
 	// instrumentStore and quoteStore.
-	instruments, err := h.instruments.ByIDs(r.Context(), instrumentIDs)
+	instruments, err := h.instruments.ByIDs(ctx, instrumentIDs)
 	if err != nil {
-		family.WriteError(w, err)
-		return
+		return apitypes.PositionsResponse{}, 0, err
 	}
-	quotes, err := h.quotes.LatestQuotes(r.Context(), instrumentIDs)
+	quotes, err := h.quotes.LatestQuotes(ctx, instrumentIDs)
 	if err != nil {
-		family.WriteError(w, err)
-		return
+		return apitypes.PositionsResponse{}, 0, err
 	}
 
 	// One reading of "today" for the whole request: the market valuations, the
@@ -2809,10 +2836,9 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	// are asked for in the same batch as everything else's.
 	cashPositions, err := Cash(ops)
 	if err != nil {
-		family.WriteError(w, err)
-		return
+		return apitypes.PositionsResponse{}, 0, err
 	}
-	h.prewarmRates(r.Context(), rateQueries(positions, instruments, quotes, income, cashPositions, sp.BaseCurrency, now), rates)
+	h.prewarmRates(ctx, rateQueries(positions, instruments, quotes, income, cashPositions, sp.BaseCurrency, now), rates)
 
 	totals := newRealizedTotals(sp.BaseCurrency)
 	account := newAccountTotals(sp.BaseCurrency)
@@ -2827,13 +2853,11 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 			// every total quietly smaller and nothing on screen saying so. The
 			// same 404 the one-at-a-time read published through
 			// family.WriteError(pgx.ErrNoRows) before it was batched.
-			httpjson.Error(w, http.StatusNotFound, "not found")
-			return
+			return apitypes.PositionsResponse{}, 0, errInstrumentNotInCatalog
 		}
-		apiPos, err := h.toAPI(r.Context(), pos, inst, quotes, now, rates)
+		apiPos, err := h.toAPI(ctx, pos, inst, quotes, now, rates)
 		if err != nil {
-			family.WriteError(w, err)
-			return
+			return apitypes.PositionsResponse{}, 0, err
 		}
 
 		// Struck once and used twice: it is this position's
@@ -2841,20 +2865,17 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		// beside it. The total takes it even when the in_base object turns out
 		// to be absent — a settled result is not made unknowable by a missing
 		// quote or by a lot still held whose purchase date nobody wrote down.
-		realizedMinor, realizedGap, err := h.realizedInBase(r.Context(), pos, sp.BaseCurrency, rates)
+		realizedMinor, realizedGap, err := h.realizedInBase(ctx, pos, sp.BaseCurrency, rates)
 		if err != nil {
-			family.WriteError(w, err)
-			return
+			return apitypes.PositionsResponse{}, 0, err
 		}
 		if err := totals.add(apiPos.Currency, apiPos.RealizedPnlMinor, realizedMinor, realizedGap, soldUnknownCost(pos)); err != nil {
-			family.WriteError(w, err)
-			return
+			return apitypes.PositionsResponse{}, 0, err
 		}
 
-		inBase, gap, err := h.positionInBase(r.Context(), pos, apiPos, income[pos.InstrumentID], sp.BaseCurrency, realizedMinor, now, rates)
+		inBase, gap, err := h.positionInBase(ctx, pos, apiPos, income[pos.InstrumentID], sp.BaseCurrency, realizedMinor, now, rates)
 		if err != nil {
-			family.WriteError(w, err)
-			return
+			return apitypes.PositionsResponse{}, 0, err
 		}
 		// THE GAP DECIDES WHETHER THERE IS AN OBJECT TO PUBLISH, not a second
 		// look at the pointer. positionInBase names both in one statement, and
@@ -2886,8 +2907,7 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		// figures exist, and re-striking them here would be the second
 		// computation of one value this package keeps warning about.
 		if err := account.addPosition(apiPos, inBase, gap, realizedGap); err != nil {
-			family.WriteError(w, err)
-			return
+			return apitypes.PositionsResponse{}, 0, err
 		}
 
 		out = append(out, apiPos)
@@ -2899,15 +2919,13 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	// none.
 	cash := make([]apitypes.CashPosition, 0, len(cashPositions))
 	for _, p := range CashByCurrency(cashPositions) {
-		one, err := h.cashToAPI(r.Context(), p, sp.BaseCurrency, now, rates)
+		one, err := h.cashToAPI(ctx, p, sp.BaseCurrency, now, rates)
 		if err != nil {
-			family.WriteError(w, err)
-			return
+			return apitypes.PositionsResponse{}, 0, err
 		}
 		cash = append(cash, one)
 		if err := account.addCash(one); err != nil {
-			family.WriteError(w, err)
-			return
+			return apitypes.PositionsResponse{}, 0, err
 		}
 	}
 
@@ -2918,15 +2936,13 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	for _, o := range accountCharges(ops) {
 		minor, err := money.Sub(o.AmountMinor, o.FeeMinor)
 		if err != nil {
-			family.WriteError(w, fmt.Errorf("%w: a charge of %d less its own fee of %d", err, o.AmountMinor, o.FeeMinor))
-			return
+			return apitypes.PositionsResponse{}, 0, fmt.Errorf("%w: a charge of %d less its own fee of %d", err, o.AmountMinor, o.FeeMinor)
 		}
 		base := nullable.NewNullableWithValue(minor)
 		if o.Currency != sp.BaseCurrency {
-			converted, ok, err := h.sumInBase(r.Context(), []datedMinor{{minor: minor, from: o.Currency, on: o.OccurredOn}}, sp.BaseCurrency, rates)
+			converted, ok, err := h.sumInBase(ctx, []datedMinor{{minor: minor, from: o.Currency, on: o.OccurredOn}}, sp.BaseCurrency, rates)
 			if err != nil {
-				family.WriteError(w, err)
-				return
+				return apitypes.PositionsResponse{}, 0, err
 			}
 			if !ok {
 				base = nullable.NewNullNullable[int64]()
@@ -2935,8 +2951,7 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := account.addCharge(o.Currency, minor, base); err != nil {
-			family.WriteError(w, err)
-			return
+			return apitypes.PositionsResponse{}, 0, err
 		}
 	}
 
@@ -2949,7 +2964,7 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	// to be available. It describes the computation, not any one row, so it is
 	// attached once to the response and is present even when the account holds
 	// nothing at all.
-	httpjson.Write(w, http.StatusOK, apitypes.PositionsResponse{
+	return apitypes.PositionsResponse{
 		Positions:      out,
 		CostBasisRules: family.CostBasisRulesAPI(sp.CostBasisRules()),
 		// Added here rather than by whoever renders the list: see
@@ -2957,5 +2972,5 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		RealizedTotal: withAccountTax(totals.result(), ops),
 		AccountTotal:  account.result(),
 		Cash:          cash,
-	})
+	}, len(ops), nil
 }
