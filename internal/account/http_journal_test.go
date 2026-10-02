@@ -22,6 +22,11 @@ import (
 type fakeJournals struct {
 	byAccount map[string]account.JournalValue
 	onDay     map[string]account.JournalValue // account id + "@" + day
+	periods   map[string]account.ReturnBasis
+}
+
+func (f *fakeJournals) ReturnBasis(_ context.Context, _, accountID uuid.UUID, _, _ time.Time) (account.ReturnBasis, error) {
+	return f.periods[accountID.String()], nil
 }
 
 func (f *fakeJournals) ValueFromJournal(_ context.Context, _, accountID uuid.UUID) (account.JournalValue, error) {
@@ -391,5 +396,60 @@ func TestTheFamilysWorthIsSeriesOfMonthEnds(t *testing.T) {
 	resp := do(t, c, "GET", url+"/api/v1/capital?from=2016-01-01&step=week", "")
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("ten years by week = %d, want 400", resp.StatusCode)
+	}
+}
+
+// The family's return is reckoned over its brokerage accounts kept by their
+// journal: their worth added up at both ends, their flows together — a move of
+// shares from one of them to another cancelling out. A deposit, with a balance
+// and no record of what crossed its edge, is not in it.
+func TestTheFamilysReturnIsReckonedOverItsJournals(t *testing.T) {
+	journals := &fakeJournals{byAccount: map[string]account.JournalValue{}, periods: map[string]account.ReturnBasis{}}
+	url, c, _ := newAPIWithJournals(t, journals)
+	day := func(s string) time.Time { d, _ := time.Parse(time.DateOnly, s); return d }
+
+	a := createAccount(t, url, c, "Брокер А", "brokerage", "RUB")
+	b := createAccount(t, url, c, "Брокер Б", "brokerage", "RUB")
+	deposit := createAccount(t, url, c, "Вклад", "deposit", "RUB")
+	balanceOn(t, url, c, deposit, day("2026-01-10"), 99_000_000)
+	for _, id := range []string{a, b} {
+		journals.byAccount[id] = account.JournalValue{Currency: "RUB", Minor: 1, Operations: 3}
+	}
+	journals.periods[a] = account.ReturnBasis{
+		Start: account.JournalValue{Minor: 10_000_000}, End: account.JournalValue{Minor: 6_000_000}, Complete: true,
+		Flows: []account.ReturnFlow{
+			{Day: day("2026-03-01"), Minor: -2_000_000}, // a deposit
+			{Day: day("2026-04-01"), Minor: 5_000_000},  // shares out to Б
+		},
+	}
+	journals.periods[b] = account.ReturnBasis{
+		Start: account.JournalValue{Minor: 0}, End: account.JournalValue{Minor: 7_300_000}, Complete: true,
+		Flows: []account.ReturnFlow{
+			{Day: day("2026-04-01"), Minor: -5_000_000}, // the same shares in
+		},
+	}
+
+	var got struct {
+		StartMinor         int64   `json:"start_minor"`
+		EndMinor           int64   `json:"end_minor"`
+		ContributionsMinor int64   `json:"contributions_minor"`
+		ProfitMinor        int64   `json:"profit_minor"`
+		AnnualRate         *string `json:"annual_rate"`
+		Complete           bool    `json:"complete"`
+		Accounts           int     `json:"accounts"`
+	}
+	getJSON(t, c, url+"/api/v1/return?from=2025-12-31&to=2026-09-30", &got)
+	// 100 000 + 20 000 put in; 60 000 + 73 000 at the end: 13 000 earned.
+	if got.StartMinor != 10_000_000 || got.EndMinor != 13_300_000 || got.ContributionsMinor != 2_000_000 ||
+		got.ProfitMinor != 1_300_000 || !got.Complete || got.Accounts != 2 || got.AnnualRate == nil {
+		t.Errorf("family return = %+v, want 100 000 → 133 000 with 20 000 put in, 13 000 earned over 2 accounts", got)
+	}
+
+	inc := journals.periods[b]
+	inc.Complete = false
+	journals.periods[b] = inc
+	getJSON(t, c, url+"/api/v1/return?from=2025-12-31&to=2026-09-30", &got)
+	if got.Complete {
+		t.Error("an account valued only in part left the family's period complete")
 	}
 }

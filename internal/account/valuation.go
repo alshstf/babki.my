@@ -44,6 +44,24 @@ type journalValuer interface {
 	ValueOn(ctx context.Context, spaceID, accountID uuid.UUID, day time.Time) (JournalValue, error)
 	// ValuesOn is ValueOn for several days.
 	ValuesOn(ctx context.Context, spaceID, accountID uuid.UUID, days []time.Time) ([]JournalValue, error)
+	// ReturnBasis is what the account's period from (exclusive) to to
+	// (inclusive) is reckoned from.
+	ReturnBasis(ctx context.Context, spaceID, accountID uuid.UUID, from, to time.Time) (ReturnBasis, error)
+}
+
+// ReturnBasis mirrors the engine's: an account's worth at a period's two ends
+// and the money that crossed its edge in between, signed from the investor's
+// side and in the base currency.
+type ReturnBasis struct {
+	Start, End JournalValue
+	Flows      []ReturnFlow
+	Complete   bool
+}
+
+// ReturnFlow is one such crossing.
+type ReturnFlow struct {
+	Day   time.Time
+	Minor int64
 }
 
 // How far the journal may stand from the balance and still be said to agree

@@ -21,13 +21,10 @@ import (
 
 // ReturnFlow is money that crossed an account's edge in a period, signed
 // from the investor's side and put into the base currency on its day: put in
-// is negative, taken out positive. TransferGroup names the pair it belongs to
-// when it is one leg of a move between two of the family's accounts — inside
-// the family it is no flow at all.
+// is negative, taken out positive.
 type ReturnFlow struct {
-	Day           time.Time
-	Minor         int64
-	TransferGroup *uuid.UUID
+	Day   time.Time
+	Minor int64
 }
 
 // ReturnBasis is what a period's return is reckoned from: the account's worth
@@ -88,7 +85,7 @@ func (h *Handler) ReturnBasis(ctx context.Context, spaceID, accountID uuid.UUID,
 		default:
 			continue
 		}
-		flow := ReturnFlow{Day: o.OccurredOn, TransferGroup: o.TransferGroupID}
+		flow := ReturnFlow{Day: o.OccurredOn}
 		if known && minor != 0 {
 			converted, ok, err := h.sumInBase(ctx, []datedMinor{{minor: minor, from: currency, on: o.OccurredOn}}, out.Currency, rates)
 			if err != nil {

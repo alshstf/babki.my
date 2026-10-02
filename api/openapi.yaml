@@ -391,6 +391,26 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/return:
+    get:
+      operationId: getFamilyReturn
+      description: >-
+        GET /api/v1/accounts/{accountId}/return over the family's brokerage accounts that the
+        total counts by their journal (AccountWithBalance.counted_by `journal`): their worth
+        added up at both ends, their flows together — less the moves of shares between two of
+        them, which are no flow for the family — and the rate over all of it. Deposits, cards,
+        cash and loans have balances and no record of what crossed their edge, and are not in it.
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string } }
+        - { name: to, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The period
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FamilyReturn" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/capital:
     get:
       operationId: getCapital
@@ -1728,6 +1748,13 @@ components:
           nullable: true
           description: "The money-weighted annual rate as a decimal fraction (0.1234 is 12.34% a year), rounded to four places; null when there is none — nothing put in, or nothing at the end"
         complete: { type: boolean }
+    FamilyReturn:
+      allOf:
+        - $ref: "#/components/schemas/PeriodReturn"
+        - type: object
+          required: [accounts]
+          properties:
+            accounts: { type: integer, description: "How many accounts the period is reckoned over" }
     CapitalSeries:
       type: object
       required: [currency, points]

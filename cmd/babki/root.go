@@ -65,6 +65,15 @@ func (j journalValues) ValuesOn(ctx context.Context, spaceID, accountID uuid.UUI
 	return out, err
 }
 
+func (j journalValues) ReturnBasis(ctx context.Context, spaceID, accountID uuid.UUID, from, to time.Time) (account.ReturnBasis, error) {
+	b, err := j.positions.ReturnBasis(ctx, spaceID, accountID, from, to)
+	out := account.ReturnBasis{Start: account.JournalValue(b.Start), End: account.JournalValue(b.End), Complete: b.Complete}
+	for _, f := range b.Flows {
+		out.Flows = append(out.Flows, account.ReturnFlow(f))
+	}
+	return out, err
+}
+
 // mountModules builds each domain module and mounts its routes on srv.
 // Shared by the "all" and "api" roles so route wiring lives in one place.
 //
