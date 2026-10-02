@@ -62,6 +62,7 @@ function brokerage(
 const differs: Reconciliation = {
   status: "differs",
   balance_as_of: "2026-10-02",
+  compared_on: "2026-10-02",
   balance_in_base_minor: 54_000_000,
   difference_minor: -34_500_000,
 };
@@ -78,7 +79,7 @@ describe("a brokerage account counted by its journal", () => {
     expect(screen.getByText("по журналу операций")).toBeInTheDocument();
     expect(norm(screen.getByTestId("account-reconciliation-alfa").textContent ?? "")).toBe(
       norm(
-        `не сходится с балансом ${formatMinor(54_000_000, "RUB")} от 02.10.2026: разница ${formatMinor(-34_500_000, "RUB")} — похоже, в журнале не хватает операций`,
+        `не сходится с балансом ${formatMinor(54_000_000, "RUB")} на 02.10.2026: разница ${formatMinor(-34_500_000, "RUB")} — похоже, в журнале не хватает операций`,
       ),
     );
 
@@ -91,7 +92,7 @@ describe("a brokerage account counted by its journal", () => {
     wrap(<AccountsTable accounts={[agrees]} mode="native" baseCurrency="RUB" onValueBy={vi.fn()} />);
     expect(norm((await screen.findByTestId("account-reconciliation-alfa")).textContent ?? "")).toBe(
       norm(
-        `сходится с балансом ${formatMinor(54_000_000, "RUB")}: разница ${formatMinor(-21_000, "RUB")}`,
+        `сходится с балансом ${formatMinor(54_000_000, "RUB")} на 02.10.2026: разница ${formatMinor(-21_000, "RUB")}`,
       ),
     );
     expect(screen.queryByRole("button", { name: "считать по балансу" })).not.toBeInTheDocument();
@@ -123,14 +124,14 @@ describe("a brokerage account counted by its journal", () => {
   it("gives no verdict against an old balance", async () => {
     wrap(
       <AccountsTable
-        accounts={[brokerage({ ...differs, status: "stale", balance_as_of: "2026-03-12" })]}
+        accounts={[brokerage({ ...differs, status: "stale", balance_as_of: "2026-03-12", compared_on: "2026-03-12" })]}
         mode="native"
         baseCurrency="RUB"
       />,
     );
     expect(norm((await screen.findByTestId("account-reconciliation-alfa")).textContent ?? "")).toBe(
       norm(
-        `последний баланс ${formatMinor(54_000_000, "RUB")} — от 12.03.2026, слишком давний для сверки`,
+        `последний баланс ${formatMinor(54_000_000, "RUB")} — от 12.03.2026; сверить не по чему`,
       ),
     );
   });
@@ -151,5 +152,18 @@ describe("a brokerage account pinned to its balance", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "считать по журналу" }));
     expect(onValueBy).toHaveBeenCalledWith(account, false);
+  });
+
+  it("names the day an old balance was compared on", async () => {
+    wrap(
+      <AccountsTable
+        accounts={[
+          brokerage({ ...differs, balance_as_of: "2026-03-12", compared_on: "2026-03-12" }),
+        ]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
+    );
+    expect((await screen.findByTestId("account-reconciliation-alfa")).textContent).toContain("на 12.03.2026");
   });
 });

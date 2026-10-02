@@ -17,13 +17,19 @@ import (
 )
 
 // fakeJournals stands in for the portfolio engine: what each account is worth
-// by its journal. An account it has no entry for has no operations.
+// by its journal today, and on past days. An account it has no entry for has
+// no operations.
 type fakeJournals struct {
 	byAccount map[string]account.JournalValue
+	onDay     map[string]account.JournalValue // account id + "@" + day
 }
 
 func (f *fakeJournals) ValueFromJournal(_ context.Context, _, accountID uuid.UUID) (account.JournalValue, error) {
 	return f.byAccount[accountID.String()], nil
+}
+
+func (f *fakeJournals) ValueOn(_ context.Context, _, accountID uuid.UUID, day time.Time) (account.JournalValue, error) {
+	return f.onDay[accountID.String()+"@"+day.Format(time.DateOnly)], nil
 }
 
 type journalRow struct {
@@ -39,6 +45,7 @@ type journalRow struct {
 		Reconciliation    *struct {
 			Status             string `json:"status"`
 			BalanceAsOf        string `json:"balance_as_of"`
+			ComparedOn         string `json:"compared_on"`
 			BalanceInBaseMinor int64  `json:"balance_in_base_minor"`
 			DifferenceMinor    int64  `json:"difference_minor"`
 		} `json:"reconciliation"`
@@ -244,5 +251,60 @@ func TestAJournalInSeveralCurrenciesIsTotalledUnderEach(t *testing.T) {
 	if r.Journal == nil || r.Journal.Reconciliation == nil || r.Journal.Reconciliation.Status != "agrees" ||
 		r.Journal.Reconciliation.BalanceInBaseMinor != 8_460_000 || r.Journal.Reconciliation.DifferenceMinor != 60_000 {
 		t.Errorf("Freedom = %+v, want the dollar balance put into rubles and agreeing", r)
+	}
+}
+
+// A balance mark more than three days old is set against the journal as it
+// stood on the mark's own day — not against today's worth, which the market
+// has moved since. Where the journal cannot be valued whole on that day, no
+// verdict is given.
+func TestAnOldBalanceIsComparedOnItsOwnDay(t *testing.T) {
+	journals := &fakeJournals{byAccount: map[string]account.JournalValue{}, onDay: map[string]account.JournalValue{}}
+	url, c, md := newAPIWithJournals(t, journals)
+	march := time.Date(2026, 3, 12, 0, 0, 0, 0, time.UTC)
+	if err := md.UpsertFxRates(t.Context(), []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: march, Rate: decimal.RequireFromString("80"), Source: "test"},
+		{Base: "USD", Quote: "RUB", On: time.Now().UTC(), Rate: decimal.RequireFromString("90"), Source: "test"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A dollar balance is put into rubles at its own day's rate.
+	dollars := createAccount(t, url, c, "В долларах", "brokerage", "USD")
+	balanceOn(t, url, c, dollars, march, 100_000)
+	journals.byAccount[dollars] = account.JournalValue{Currency: "RUB", Minor: 1, Operations: 9}
+	journals.onDay[dollars+"@2026-03-12"] = account.JournalValue{Currency: "RUB", Minor: 8_000_000, Operations: 5}
+
+	agrees := createAccount(t, url, c, "Сходится", "brokerage", "RUB")
+	differs := createAccount(t, url, c, "Не сходится", "brokerage", "RUB")
+	unpriced := createAccount(t, url, c, "Без цены", "brokerage", "RUB")
+	before := createAccount(t, url, c, "Раньше журнала", "brokerage", "RUB")
+	for _, id := range []string{agrees, differs, unpriced, before} {
+		balanceOn(t, url, c, id, march, 54_000_000)
+		// Today's worth is far from March's balance for all of them: the
+		// market has moved, and that must not be the verdict.
+		journals.byAccount[id] = account.JournalValue{
+			Currency: "RUB", Minor: 70_000_000, ByCurrency: map[string]int64{"RUB": 70_000_000}, Operations: 9,
+		}
+	}
+	key := func(id string) string { return id + "@2026-03-12" }
+	journals.onDay[key(agrees)] = account.JournalValue{Currency: "RUB", Minor: 53_800_000, Operations: 5}
+	journals.onDay[key(differs)] = account.JournalValue{Currency: "RUB", Minor: 19_500_000, Operations: 5}
+	journals.onDay[key(unpriced)] = account.JournalValue{Currency: "RUB", Minor: 53_900_000, Operations: 5, Unpriced: 1}
+	journals.onDay[key(before)] = account.JournalValue{Currency: "RUB", Minor: 0, Operations: 0}
+
+	var rows []journalRow
+	getJSON(t, c, url+"/api/v1/accounts", &rows)
+	for id, want := range map[string][2]string{
+		agrees: {"agrees", "-200000"}, differs: {"differs", "-34500000"}, dollars: {"agrees", "0"},
+		unpriced: {"stale", "-100000"}, before: {"stale", "-54000000"},
+	} {
+		r := rowOf(t, rows, id)
+		if r.Journal == nil || r.Journal.Reconciliation == nil {
+			t.Fatalf("account %s has no reconciliation: %+v", id, r)
+		}
+		rec := r.Journal.Reconciliation
+		if rec.Status != want[0] || fmt.Sprint(rec.DifferenceMinor) != want[1] || rec.ComparedOn != "2026-03-12" {
+			t.Errorf("account %s = %+v, want %s, %s apart, compared on 2026-03-12", id, rec, want[0], want[1])
+		}
 	}
 }

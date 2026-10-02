@@ -943,20 +943,22 @@ export interface components {
         };
         AccountReconciliation: {
             /**
-             * @description `agrees`: within 1% of the balance. `close`: within 5% — the expected gap between a broker's figure, struck at the last trade, and this program's, struck at the previous session's close. `differs`: further apart than that — most likely operations missing from the journal. `stale`: the balance mark is more than 3 days older than today, and the market has moved since, so no verdict is given; the figures are still published. The thresholds are this program's own (see internal/account/valuation.go).
+             * @description `agrees`: within 1% of the balance. `close`: within 5% — the expected gap between a broker's figure, struck at the last trade, and this program's, struck at a session's close. `differs`: further apart than that — most likely operations missing from the journal. `stale`: no verdict — the balance mark is more than 3 days old and the journal could not be valued whole on its day (no operations by then, a paper with no closing price that day, a currency with no rate); the figures are still published. The thresholds are this program's own (see internal/account/valuation.go).
              * @enum {string}
              */
             status: "agrees" | "close" | "differs" | "stale";
             /** @description Date YYYY-MM-DD of the balance mark compared against */
             balance_as_of: string;
+            /** @description Date YYYY-MM-DD the journal is valued on for the comparison: today for a mark at most 3 days old, the mark's own day for an older one */
+            compared_on: string;
             /**
              * Format: int64
-             * @description That balance in the base currency at today's rate (the balance itself when the account is in the base currency)
+             * @description That balance in the base currency at the rate of compared_on (the balance itself when the account is in the base currency)
              */
             balance_in_base_minor: number;
             /**
              * Format: int64
-             * @description AccountJournal.amount_minor minus balance_in_base_minor: negative when the journal comes to less than the balance
+             * @description The journal's worth on compared_on minus balance_in_base_minor: negative when the journal comes to less than the balance. On compared_on today the journal's worth is AccountJournal.amount_minor.
              */
             difference_minor: number;
         };

@@ -2,12 +2,14 @@ package portfolio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
 
 	"github.com/google/uuid"
 
+	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/money"
 )
 
@@ -115,5 +117,140 @@ func (h *Handler) ValueFromJournal(ctx context.Context, spaceID, accountID uuid.
 			out.ByCurrency[currency] = minor
 		}
 	}
+	return out, nil
+}
+
+// quoteHistory is the price store as a past day needs it.
+type quoteHistory interface {
+	QuotesOn(ctx context.Context, instrumentIDs []uuid.UUID, day time.Time) (map[uuid.UUID]marketdata.Quote, error)
+}
+
+// staleQuoteDays is how much older than the day valued a closing price may be
+// and still value it: a long weekend or the New Year holidays, not a paper
+// whose prices stopped.
+const staleQuoteDays = 10
+
+// ErrNoQuoteHistory is a quote store that keeps no past prices.
+var ErrNoQuoteHistory = errors.New("portfolio: the quote store keeps no past prices")
+
+// ValueOn values an account from its journal as it stood at the end of day:
+// the operations up to that day, each holding at its closing price of that day
+// (or of a day at most staleQuoteDays earlier), each currency converted at that
+// day's rate. Holdings with no such price are Unpriced and add nothing.
+func (h *Handler) ValueOn(ctx context.Context, spaceID, accountID uuid.UUID, day time.Time) (JournalValue, error) {
+	history, ok := h.quotes.(quoteHistory)
+	if !ok {
+		return JournalValue{}, ErrNoQuoteHistory
+	}
+	sp, err := h.spaces.SpaceByID(ctx, spaceID)
+	if err != nil {
+		return JournalValue{}, err
+	}
+	all, err := h.ops.ListForEngine(ctx, spaceID, accountID)
+	if err != nil {
+		return JournalValue{}, err
+	}
+	var ops []Operation
+	for _, o := range all {
+		if !o.OccurredOn.After(day) {
+			ops = append(ops, o)
+		}
+	}
+	out := JournalValue{Currency: sp.BaseCurrency, Operations: len(ops)}
+	if len(ops) == 0 {
+		out.ByCurrency = map[string]int64{}
+		return out, nil
+	}
+	positions, err := Compute(ops)
+	if err != nil {
+		return JournalValue{}, journalDoesNotCompute{err}
+	}
+	cash, err := Cash(ops)
+	if err != nil {
+		return JournalValue{}, journalDoesNotCompute{err}
+	}
+
+	ids := make([]uuid.UUID, 0, len(positions))
+	for id, p := range positions {
+		if p.Quantity.IsPositive() {
+			ids = append(ids, id)
+		}
+	}
+	papers, err := h.instruments.ByIDs(ctx, ids)
+	if err != nil {
+		return JournalValue{}, err
+	}
+	quotes, err := history.QuotesOn(ctx, ids, day)
+	if err != nil {
+		return JournalValue{}, err
+	}
+
+	byCurrency := map[string]int64{}
+	add := func(currency string, minor int64) error {
+		sum, err := money.Add(byCurrency[currency], minor)
+		if err != nil {
+			return fmt.Errorf("%w: the value of account %s on %s in %s", err, accountID, day.Format(time.DateOnly), currency)
+		}
+		byCurrency[currency] = sum
+		return nil
+	}
+	for _, id := range ids {
+		paper, ok := papers[id]
+		if !ok {
+			return JournalValue{}, errInstrumentNotInCatalog
+		}
+		q, quoted := quotes[id]
+		if quoted && q.On.Before(day.AddDate(0, 0, -staleQuoteDays)) {
+			quoted = false
+		}
+		minor, currency, gap, err := marketValue(paper.Type, paper.FaceValueMinor, paper.FaceCurrency, positions[id].Quantity, q, quoted)
+		if err != nil {
+			return JournalValue{}, err
+		}
+		if gap != valuationStruck {
+			out.Unpriced++
+			continue
+		}
+		if err := add(currency, minor); err != nil {
+			return JournalValue{}, err
+		}
+	}
+	for _, c := range CashByCurrency(cash) {
+		if c.Minor < 0 {
+			out.NegativeCash = append(out.NegativeCash, c.Currency)
+		}
+		if err := add(c.Currency, c.Minor); err != nil {
+			return JournalValue{}, err
+		}
+	}
+
+	rates := make(map[rateKey]*rateLookup)
+	currencies := make([]string, 0, len(byCurrency))
+	for currency := range byCurrency {
+		currencies = append(currencies, currency)
+	}
+	slices.Sort(currencies)
+	out.ByCurrency = map[string]int64{}
+	for _, currency := range currencies {
+		minor := byCurrency[currency]
+		if minor != 0 {
+			out.ByCurrency[currency] = minor
+		}
+		if currency != out.Currency && minor != 0 {
+			converted, ok, err := h.sumInBase(ctx, []datedMinor{{minor: minor, from: currency, on: day}}, out.Currency, rates)
+			if err != nil {
+				return JournalValue{}, err
+			}
+			if !ok {
+				out.MissingRates = append(out.MissingRates, currency)
+				continue
+			}
+			minor = converted
+		}
+		if out.Minor, err = money.Add(out.Minor, minor); err != nil {
+			return JournalValue{}, fmt.Errorf("%w: the value of account %s on %s", err, accountID, day.Format(time.DateOnly))
+		}
+	}
+	slices.Sort(out.NegativeCash)
 	return out, nil
 }
