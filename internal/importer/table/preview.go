@@ -46,8 +46,9 @@ type journal interface {
 	ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]operation.Operation, error)
 }
 
-type checker interface {
+type writer interface {
 	CheckImportDelta(ctx context.Context, spaceID uuid.UUID, d operation.ImportDelta) ([]operation.Operation, []operation.ImportRefusal, error)
+	ApplyImportDeltaWith(ctx context.Context, spaceID uuid.UUID, d operation.ImportDelta, after operation.AfterImport) ([]operation.Operation, []operation.ImportRefusal, error)
 }
 
 // Service reads tables into an account's journal.
@@ -55,11 +56,12 @@ type Service struct {
 	accounts accounts
 	papers   catalog
 	journal  journal
-	ops      checker
+	ops      writer
+	imports  *Store
 }
 
-func NewService(accounts accounts, papers catalog, journal journal, ops checker) *Service {
-	return &Service{accounts: accounts, papers: papers, journal: journal, ops: ops}
+func NewService(accounts accounts, papers catalog, journal journal, ops writer, imports *Store) *Service {
+	return &Service{accounts: accounts, papers: papers, journal: journal, ops: ops, imports: imports}
 }
 
 // Preview reads content against the account with mapping — or with one

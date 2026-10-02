@@ -277,6 +277,67 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/imports:
+    get:
+      operationId: listTableImports
+      description: The account's table imports, newest first, rolled back ones included.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The imports
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/TableImport" } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: importTable
+      description: >-
+        Imports a CSV table into the account with the mapping given (see POST .../imports/preview,
+        whose answer carries one to start from). The rows the journal takes are written in one
+        transaction with the record of the import; duplicates are skipped; the rest of the verdicts
+        are the journal's at the moment of writing. An import that writes nothing is not recorded
+        and comes back with `import` null.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImportTableRequest" }
+      responses:
+        "200":
+          description: What the import did
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportTableResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/imports/{importId}:
+    delete:
+      operationId: rollBackTableImport
+      description: >-
+        Takes every operation the import wrote, and still in the journal, out of it, and marks
+        the import rolled back. 409, with the engine's reason, when the journal would not replay
+        without them — a later sale resting on an imported purchase, say. 400 when already
+        rolled back.
+      parameters:
+        - { name: importId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The import, rolled back
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TableImport" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/summary:
     get:
       operationId: getSummary
@@ -1510,6 +1571,37 @@ components:
       properties:
         mapping: { $ref: "#/components/schemas/ImportMapping" }
         header: { type: array, items: { type: string }, description: "The header's cells; empty when the table has none" }
+        rows: { type: array, items: { $ref: "#/components/schemas/ImportRow" } }
+    ImportTableRequest:
+      type: object
+      required: [content, mapping]
+      properties:
+        content: { type: string, description: "The CSV text, as for the preview" }
+        mapping: { $ref: "#/components/schemas/ImportMapping" }
+        file_name: { type: string, description: "The file's name, kept with the import for the person's own reference" }
+    TableImport:
+      type: object
+      required: [id, account_id, file_name, mapping, rows_written, rows_duplicate, rows_unparsed, rows_refused, created_at, rolled_back_at, operations_left]
+      properties:
+        id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        file_name: { type: string }
+        mapping: { $ref: "#/components/schemas/ImportMapping" }
+        rows_written: { type: integer }
+        rows_duplicate: { type: integer }
+        rows_unparsed: { type: integer }
+        rows_refused: { type: integer }
+        created_at: { type: string, format: date-time }
+        rolled_back_at: { type: string, format: date-time, nullable: true }
+        operations_left: { type: integer, description: "How many of the operations it wrote are still in the journal" }
+    ImportTableResult:
+      type: object
+      required: [import, rows]
+      properties:
+        import:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TableImport"
         rows: { type: array, items: { $ref: "#/components/schemas/ImportRow" } }
     Summary:
       type: object

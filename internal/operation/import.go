@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/platform/money"
 	"babki.my/babki/internal/portfolio"
 )
@@ -147,6 +148,18 @@ type candidate struct {
 func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d ImportDelta) (
 	applied []Operation, refused []ImportRefusal, err error,
 ) {
+	return s.ApplyImportDeltaWith(ctx, spaceID, d, nil)
+}
+
+// AfterImport writes what an importer keeps about a delta, in the delta's own
+// transaction: it commits with the operations or not at all.
+type AfterImport func(ctx context.Context, q db.Executor, applied []Operation) error
+
+// ApplyImportDeltaWith is ApplyImportDelta with after run inside the same
+// transaction once the delta is written (after may be nil).
+func (s *Service) ApplyImportDeltaWith(ctx context.Context, spaceID uuid.UUID, d ImportDelta, after AfterImport) (
+	applied []Operation, refused []ImportRefusal, err error,
+) {
 	if len(d.Add) == 0 && len(d.Remove) == 0 {
 		return nil, nil, nil
 	}
@@ -162,7 +175,10 @@ func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d Imp
 	err = s.store.WithAccountsLocked(ctx, spaceID, accountIDs, func(st *Store) error {
 		var err error
 		applied, refused, err = (&Service{store: st}).applyImportDeltaLocked(ctx, spaceID, d, candidates)
-		return err
+		if err != nil || after == nil {
+			return err
+		}
+		return after(ctx, st.db, applied)
 	})
 	if err != nil {
 		return nil, nil, err

@@ -1,7 +1,9 @@
 package table
 
 import (
+	"errors"
 	"net/http"
+	"time"
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/google/uuid"
@@ -29,7 +31,112 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	edit := func(fn http.HandlerFunc) http.Handler {
 		return h.sm.LoadAndSave(h.auth.RequireAuth(family.RequireRole(family.RoleEditor, fn)))
 	}
+	view := func(fn http.HandlerFunc) http.Handler {
+		return h.sm.LoadAndSave(h.auth.RequireAuth(family.RequireRole(family.RoleViewer, fn)))
+	}
 	srv.Mount("POST /api/v1/accounts/{accountId}/imports/preview", edit(h.handlePreview))
+	srv.Mount("POST /api/v1/accounts/{accountId}/imports", edit(h.handleImport))
+	srv.Mount("GET /api/v1/accounts/{accountId}/imports", view(h.handleList))
+	srv.Mount("DELETE /api/v1/imports/{importId}", edit(h.handleRollBack))
+}
+
+func pathID(w http.ResponseWriter, r *http.Request, name string) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.PathValue(name))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "invalid "+name)
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func writeError(w http.ResponseWriter, err error) {
+	if errors.Is(err, operation.ErrInconsistent) {
+		httpjson.Error(w, http.StatusConflict, err.Error())
+		return
+	}
+	family.WriteError(w, err)
+}
+
+func (h *Handler) handleImport(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	accountID, ok := pathID(w, r, "accountId")
+	if !ok {
+		return
+	}
+	var req apitypes.ImportTableRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	fileName := ""
+	if req.FileName != nil {
+		fileName = *req.FileName
+	}
+	imp, preview, err := h.svc.Import(r.Context(), p.SpaceID, p.UserID, accountID, req.Content,
+		mappingFromAPI(req.Mapping), fileName)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	out := apitypes.ImportTableResult{
+		Import: nullable.NewNullNullable[apitypes.TableImport](),
+		Rows:   previewToAPI(preview).Rows,
+	}
+	if imp.ID != uuid.Nil {
+		out.Import = nullable.NewNullableWithValue(importToAPI(imp))
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	accountID, ok := pathID(w, r, "accountId")
+	if !ok {
+		return
+	}
+	imports, err := h.svc.Imports(r.Context(), p.SpaceID, accountID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	out := make([]apitypes.TableImport, 0, len(imports))
+	for _, imp := range imports {
+		out = append(out, importToAPI(imp))
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+func (h *Handler) handleRollBack(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, ok := pathID(w, r, "importId")
+	if !ok {
+		return
+	}
+	imp, err := h.svc.RollBack(r.Context(), p.SpaceID, id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, importToAPI(imp))
+}
+
+func importToAPI(imp Import) apitypes.TableImport {
+	out := apitypes.TableImport{
+		Id:             imp.ID,
+		AccountId:      imp.AccountID,
+		FileName:       imp.FileName,
+		Mapping:        mappingToAPI(imp.Mapping),
+		RowsWritten:    imp.Written,
+		RowsDuplicate:  imp.Duplicate,
+		RowsUnparsed:   imp.Unparsed,
+		RowsRefused:    imp.Refused,
+		CreatedAt:      imp.CreatedAt,
+		RolledBackAt:   nullable.NewNullNullable[time.Time](),
+		OperationsLeft: imp.OperationsNow,
+	}
+	if imp.RolledBackAt != nil {
+		out.RolledBackAt = nullable.NewNullableWithValue(*imp.RolledBackAt)
+	}
+	return out
 }
 
 func (h *Handler) handlePreview(w http.ResponseWriter, r *http.Request) {

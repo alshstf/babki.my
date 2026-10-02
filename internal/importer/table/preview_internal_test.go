@@ -41,6 +41,10 @@ func (t *takesAll) CheckImportDelta(_ context.Context, _ uuid.UUID, d operation.
 	return d.Add, nil, nil
 }
 
+func (t *takesAll) ApplyImportDeltaWith(context.Context, uuid.UUID, operation.ImportDelta, operation.AfterImport) ([]operation.Operation, []operation.ImportRefusal, error) {
+	panic("a preview writes nothing")
+}
+
 // A row imported from a table before is recognized by its content when the
 // file — or one covering the same days — is loaded again, and is not offered
 // to the journal a second time. Of two identical rows, the second is new when
@@ -50,7 +54,7 @@ func TestARowImportedBeforeIsADuplicate(t *testing.T) {
 	csv := "Дата;Операция;Сумма\n01.07.2026;Пополнение;500\n01.07.2026;Пополнение;500\n02.07.2026;Пополнение;700\n"
 
 	first := &takesAll{}
-	svc := NewService(oneAccount{acc}, noPapers{}, storedJournal(nil), first)
+	svc := NewService(oneAccount{acc}, noPapers{}, storedJournal(nil), first, nil)
 	p, err := svc.Preview(t.Context(), uuid.New(), acc.ID, csv, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +67,7 @@ func TestARowImportedBeforeIsADuplicate(t *testing.T) {
 	imported.Source = Source
 
 	again := &takesAll{}
-	svc = NewService(oneAccount{acc}, noPapers{}, storedJournal{imported}, again)
+	svc = NewService(oneAccount{acc}, noPapers{}, storedJournal{imported}, again, nil)
 	p, err = svc.Preview(t.Context(), uuid.New(), acc.ID, csv, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +83,7 @@ func TestARowImportedBeforeIsADuplicate(t *testing.T) {
 	// A hand entry with the same content is not a table's row.
 	byHand := imported
 	byHand.Source = "manual"
-	svc = NewService(oneAccount{acc}, noPapers{}, storedJournal{byHand}, &takesAll{})
+	svc = NewService(oneAccount{acc}, noPapers{}, storedJournal{byHand}, &takesAll{}, nil)
 	if p, _ = svc.Preview(t.Context(), uuid.New(), acc.ID, csv, nil); p.Rows[0].Verdict != VerdictNew {
 		t.Errorf("a hand entry made the row a duplicate: %s", p.Rows[0].Verdict)
 	}

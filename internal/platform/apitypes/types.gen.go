@@ -1143,6 +1143,22 @@ type ImportRow struct {
 // ImportRowVerdict `new`: would be recorded. `duplicate`: a row with the same content was imported from a table before (the nth identical row of a file matches the nth). `unparsed`: cannot be read — `reason` says why. `refused`: read, but the journal would not take it — `reason` is the journal's own words.
 type ImportRowVerdict string
 
+// ImportTableRequest defines model for ImportTableRequest.
+type ImportTableRequest struct {
+	// Content The CSV text, as for the preview
+	Content string `json:"content"`
+
+	// FileName The file's name, kept with the import for the person's own reference
+	FileName *string       `json:"file_name,omitempty"`
+	Mapping  ImportMapping `json:"mapping"`
+}
+
+// ImportTableResult defines model for ImportTableResult.
+type ImportTableResult struct {
+	Import nullable.Nullable[TableImport] `json:"import"`
+	Rows   []ImportRow                    `json:"rows"`
+}
+
 // ImportedOperation defines model for ImportedOperation.
 type ImportedOperation struct {
 	// AmountMinor Signed as the journal records the type: negative for buy, withdrawal, fee and tax
@@ -1678,6 +1694,23 @@ type SummaryJournal struct {
 	UnpricedPositions int `json:"unpriced_positions"`
 }
 
+// TableImport defines model for TableImport.
+type TableImport struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+	CreatedAt time.Time          `json:"created_at"`
+	FileName  string             `json:"file_name"`
+	Id        openapi_types.UUID `json:"id"`
+	Mapping   ImportMapping      `json:"mapping"`
+
+	// OperationsLeft How many of the operations it wrote are still in the journal
+	OperationsLeft int                          `json:"operations_left"`
+	RolledBackAt   nullable.Nullable[time.Time] `json:"rolled_back_at"`
+	RowsDuplicate  int                          `json:"rows_duplicate"`
+	RowsRefused    int                          `json:"rows_refused"`
+	RowsUnparsed   int                          `json:"rows_unparsed"`
+	RowsWritten    int                          `json:"rows_written"`
+}
+
 // TinvestAccountPick defines model for TinvestAccountPick.
 type TinvestAccountPick struct {
 	// AccountName What to call the NEW babki account this broker account is imported into. A new account every time — never an existing one — so imported history is never mixed into anything hand-entered.
@@ -2127,6 +2160,9 @@ type UpdateAccountJSONRequestBody = UpdateAccountRequest
 
 // SetAccountBalanceJSONRequestBody defines body for SetAccountBalance for application/json ContentType.
 type SetAccountBalanceJSONRequestBody = SetBalanceRequest
+
+// ImportTableJSONRequestBody defines body for ImportTable for application/json ContentType.
+type ImportTableJSONRequestBody = ImportTableRequest
 
 // PreviewTableImportJSONRequestBody defines body for PreviewTableImport for application/json ContentType.
 type PreviewTableImportJSONRequestBody = ImportPreviewRequest

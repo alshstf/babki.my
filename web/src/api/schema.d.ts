@@ -217,6 +217,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{accountId}/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The account's table imports, newest first, rolled back ones included. */
+        get: operations["listTableImports"];
+        put?: never;
+        /** @description Imports a CSV table into the account with the mapping given (see POST .../imports/preview, whose answer carries one to start from). The rows the journal takes are written in one transaction with the record of the import; duplicates are skipped; the rest of the verdicts are the journal's at the moment of writing. An import that writes nothing is not recorded and comes back with `import` null. */
+        post: operations["importTable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/{importId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Takes every operation the import wrote, and still in the journal, out of it, and marks the import rolled back. 409, with the engine's reason, when the journal would not replay without them — a later sale resting on an imported purchase, say. 400 when already rolled back. */
+        delete: operations["rollBackTableImport"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/summary": {
         parameters: {
             query?: never;
@@ -1028,6 +1063,35 @@ export interface components {
             mapping: components["schemas"]["ImportMapping"];
             /** @description The header's cells; empty when the table has none */
             header: string[];
+            rows: components["schemas"]["ImportRow"][];
+        };
+        ImportTableRequest: {
+            /** @description The CSV text, as for the preview */
+            content: string;
+            mapping: components["schemas"]["ImportMapping"];
+            /** @description The file's name, kept with the import for the person's own reference */
+            file_name?: string;
+        };
+        TableImport: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            account_id: string;
+            file_name: string;
+            mapping: components["schemas"]["ImportMapping"];
+            rows_written: number;
+            rows_duplicate: number;
+            rows_unparsed: number;
+            rows_refused: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            rolled_back_at: string | null;
+            /** @description How many of the operations it wrote are still in the journal */
+            operations_left: number;
+        };
+        ImportTableResult: {
+            import: components["schemas"]["TableImport"] | null;
             rows: components["schemas"]["ImportRow"][];
         };
         Summary: {
@@ -2395,6 +2459,88 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    listTableImports: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The imports */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TableImport"][];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    importTable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportTableRequest"];
+            };
+        };
+        responses: {
+            /** @description What the import did */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportTableResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    rollBackTableImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                importId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The import, rolled back */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TableImport"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     getSummary: {
