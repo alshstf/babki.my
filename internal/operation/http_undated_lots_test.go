@@ -159,3 +159,50 @@ func TestTransferPairAnswersUndatedTheSameOnBothLegs(t *testing.T) {
 		t.Fatalf("in_base = out %+v / in %+v, want both published: every purchase date behind this parcel has a rate", outRow.InBase, inRow.InBase)
 	}
 }
+
+// Shares that arrived with no purchase price are counted as bought for nothing,
+// and nought needs no date (#226): the journal shows 0 in rubles for such a
+// transfer, as the position built from it does, rather than «не записана дата
+// покупки». Moved on together with shares that were bought, the parcel is
+// valued by the bought ones alone.
+func TestATransferBoughtForNothingIsNoughtInTheBaseCurrency(t *testing.T) {
+	url, c, mdStore := newAPIWithConverter(t)
+	seedFxRate(t, mdStore, "2026-07-20", "78.50")
+	seedFxRate(t, mdStore, "2026-08-03", "80.00")
+
+	to := mkAccount(t, url, c, "Freedom KZ", "USD")
+	onward := mkAccount(t, url, c, "Т-Банк", "USD")
+	tsla := mkInstrument(t, url, c, `{"type":"share","name":"Tesla","ticker":"TSLA","currency":"USD"}`)
+
+	// Shares from another broker, their purchases not stated.
+	resp := do(t, c, "POST", url+"/api/v1/operations/arrivals", fmt.Sprintf(
+		`{"account_id":%q,"instrument_id":%q,"occurred_on":"2026-07-20","quantity":"10","currency":"USD"}`, to, tsla))
+	if resp.StatusCode != 201 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("arrival = %d: %s", resp.StatusCode, b)
+	}
+	var arrived journalItem
+	decodeJSON(t, resp, &arrived)
+	row := findOperation(t, listJournal(t, url, c, to), arrived.ID)
+	if row.HasUndatedLots || row.InBase == nil || row.InBase.AmountMinor != 0 ||
+		row.InBase.RateOn != "2026-07-20" || row.InBase.DatedOn != "2026-07-20" {
+		t.Errorf("arrival %+v, want 0 in rubles at its own date and no missing purchase date", row)
+	}
+
+	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
+		"occurred_on":"2026-08-03","quantity":"5","price":"200","amount_minor":-100000,"currency":"USD"}`, to, tsla))
+	resp = do(t, c, "POST", url+"/api/v1/operations/transfer", fmt.Sprintf(
+		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"15","occurred_on":"2026-08-10"}`,
+		to, onward, tsla))
+	if resp.StatusCode != 201 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("moving the parcel on = %d: %s", resp.StatusCode, b)
+	}
+	var pair transferResp
+	decodeJSON(t, resp, &pair)
+	// 1 000 $ bought on 2026-08-03 at 80 and 10 shares for nothing.
+	row = findOperation(t, listJournal(t, url, c, onward), pair.In.ID)
+	if row.HasUndatedLots || row.InBase == nil || row.InBase.AmountMinor != 8_000_000 || row.InBase.DatedOn != "2026-08-03" {
+		t.Errorf("onward leg %+v, want 80 000 ₽ from the bought shares alone", row)
+	}
+}

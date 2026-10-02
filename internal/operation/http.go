@@ -165,11 +165,15 @@ func hasUndatedLots(o Operation) bool {
 	}
 	// No breakdown at all is the smallest instance of the case below, not a
 	// separate one: a basis given by hand, or one recorded before breakdowns
-	// were kept, has every piece dateless (see amountTerms).
+	// were kept, has every piece dateless (see amountTerms). A piece bought for
+	// nothing needs no date (portfolio.DatelessBasis), as on the positions
+	// screen (#226).
 	if len(o.TransferLots) == 0 {
-		return true
+		return portfolio.DatelessBasis(nil, o.AmountMinor)
 	}
-	return slices.ContainsFunc(o.TransferLots, func(l ReleasedLot) bool { return l.AcquiredOn == nil })
+	return slices.ContainsFunc(o.TransferLots, func(l ReleasedLot) bool {
+		return portfolio.DatelessBasis(l.AcquiredOn, l.CostMinor)
+	})
 }
 
 // assembledFromLots reports whether amount_minor is a cost basis assembled
@@ -516,8 +520,12 @@ func amountTerms(o Operation) (terms []datedMinor, headline rateDate, ok bool, e
 			// nowhere — which portfolio.Compute refuses outright rather than
 			// folding (see its TypeExchangeIn branch). It is answered here all
 			// the same, and answered the same way: a figure with no purchase
-			// date behind it is not one this can date.
-			return nil, rateDate{}, false, nil
+			// date behind it is not one this can date — unless it is nought,
+			// which needs no date (see costless).
+			if portfolio.DatelessBasis(nil, o.AmountMinor) {
+				return nil, rateDate{}, false, nil
+			}
+			return costless(o)
 		}
 		// The one term of an ordinary row, dated on the day its money moved:
 		// a missing rate for it is a missing rate for the operation's own date,
@@ -530,6 +538,11 @@ func amountTerms(o Operation) (terms []datedMinor, headline rateDate, ok bool, e
 	}
 	terms = make([]datedMinor, 0, len(o.TransferLots))
 	for _, pc := range o.TransferLots {
+		if pc.AcquiredOn == nil && !portfolio.DatelessBasis(pc.AcquiredOn, pc.CostMinor) {
+			// Bought for nothing: nought at any day's rate, so it needs no
+			// date and adds no term (see portfolio.DatelessBasis).
+			continue
+		}
 		if pc.AcquiredOn == nil {
 			// One piece of this parcel does not know when it was bought (see
 			// portfolio.Lot.AcquiredOn): the shares behind it arrived by an
@@ -555,7 +568,19 @@ func amountTerms(o Operation) (terms []datedMinor, headline rateDate, ok bool, e
 			headline = bought
 		}
 	}
+	if len(terms) == 0 {
+		return costless(o)
+	}
 	return terms, headline, true, nil
+}
+
+// costless answers for a parcel bought for nothing as a whole: no term, since
+// nought converts to nought, and the operation's own date for the one figure
+// left with a rate to strike — the fee, which belongs to the day it was paid —
+// and for rate_on, which then names the only rate the row was struck at (#226).
+func costless(o Operation) ([]datedMinor, rateDate, bool, error) {
+	own := rateDate{on: o.OccurredOn, gap: inBaseNoRateOperationDate}
+	return nil, own, true, nil
 }
 
 // operationInBase converts an operation's amount_minor and fee_minor from
