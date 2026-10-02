@@ -1,0 +1,4 @@
+# Generated from api/openapi.yaml by `make gen`: collapsed in review diffs and
+# left out of language statistics. Edit the contract, not these.
+internal/platform/apitypes/types.gen.go linguist-generated=true
+web/src/api/schema.d.ts linguist-generated=true
