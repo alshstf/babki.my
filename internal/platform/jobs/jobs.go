@@ -181,6 +181,10 @@ func NewWorkers(
 	if gold, ok := quoteProvider.(marketdata.GoldRateProvider); ok {
 		river.AddWorker(workers, marketdata.NewBackfillGoldWorker(mdStore, operations, gold, log))
 	}
+	// Past closing prices come from the exchange too, by the same rule.
+	if history, ok := quoteProvider.(marketdata.HistoryProvider); ok {
+		river.AddWorker(workers, marketdata.NewBackfillQuotesWorker(mdStore, operations, instruments, history, log))
+	}
 	river.AddWorker(workers, tinvest.NewDispatchWorker(tinvestDeps.Store, enqueuer, log))
 	river.AddWorker(workers, tinvest.NewSyncWorker(tinvestDeps.Store, tinvestDeps.Box,
 		tinvestDeps.NewClient, tinvestDeps.NewRebuilder, caMaterializer, tinvestDeps.Reconciler, log))
@@ -257,6 +261,7 @@ func schedule() []scheduledJob {
 		{refreshQuotesInterval, marketdata.RefreshQuotesArgs{}},
 		{backfillFxInterval, marketdata.BackfillFxArgs{}},
 		{backfillFxInterval, marketdata.BackfillGoldArgs{}},
+		{backfillFxInterval, marketdata.BackfillQuotesArgs{}},
 		{tinvestSyncInterval, tinvest.SyncDispatchArgs{}},
 		{tinvestQuotesInterval, tinvest.RefreshQuotesArgs{}},
 		{corporateActionsInterval, corporateaction.RefreshMoexSplitsArgs{}},

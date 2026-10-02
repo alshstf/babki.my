@@ -256,6 +256,32 @@ func (s *Store) StoreLatestQuotes(ctx context.Context, quotes []Quote) error {
 	return runBatch(ctx, s.db, batch, 2*len(quotes))
 }
 
+// HistoryCoverage is, for each of ids, the last day source has a price for.
+// An instrument with none is absent.
+func (s *Store) HistoryCoverage(ctx context.Context, ids []uuid.UUID, source string) (map[uuid.UUID]time.Time, error) {
+	out := make(map[uuid.UUID]time.Time, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.Query(ctx, `SELECT instrument_id, max(on_date) FROM quotes
+		WHERE source = $1 AND instrument_id = ANY($2) GROUP BY instrument_id`, source, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			id  uuid.UUID
+			day time.Time
+		)
+		if err := rows.Scan(&id, &day); err != nil {
+			return nil, err
+		}
+		out[id] = day
+	}
+	return out, rows.Err()
+}
+
 // QuoteOn returns the instrument's price on the exact date, or, if missing,
 // the nearest earlier date. pgx.ErrNoRows if no quote exists on or before
 // the given date.

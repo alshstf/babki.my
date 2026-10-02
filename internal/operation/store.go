@@ -858,6 +858,29 @@ func (s *Store) ByTransferGroup(ctx context.Context, spaceID, groupID uuid.UUID)
 		WHERE space_id = $1 AND transfer_group_id = $2`, spaceID, groupID)
 }
 
+// FirstDaysByInstrument is, for every paper any journal names, the day of its
+// first operation — instance-wide, like the market data it is asked for.
+func (s *Store) FirstDaysByInstrument(ctx context.Context) (map[uuid.UUID]time.Time, error) {
+	rows, err := s.db.Query(ctx, `SELECT instrument_id, min(occurred_on) FROM operations
+		WHERE instrument_id IS NOT NULL GROUP BY instrument_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]time.Time{}
+	for rows.Next() {
+		var (
+			id  uuid.UUID
+			day time.Time
+		)
+		if err := rows.Scan(&id, &day); err != nil {
+			return nil, err
+		}
+		out[id] = day
+	}
+	return out, rows.Err()
+}
+
 // EarliestRecordedDay returns the earliest day the journal records anything
 // on, across the instance (not scoped to a space: the fx backfill it feeds is
 // shared, not per-space): the earliest occurred_on, or the earliest purchase
