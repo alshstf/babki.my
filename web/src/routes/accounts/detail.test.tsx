@@ -80,6 +80,8 @@ function makeAccount(
     institution: "Broker Co",
     status: "active",
     created_at: "2026-01-01T00:00:00Z",
+    valued_by_balance: false,
+    counted_by: "balance",
     balance: { as_of: "2026-07-20", amount_minor: 10_000 },
     balance_in_base: {
       amount_minor: 900_000,
@@ -166,6 +168,8 @@ function makeOperation(overrides: Record<string, unknown> = {}) {
     split_ratio: null,
     source: "manual",
     created_at: "2026-07-20T00:00:00Z",
+    valued_by_balance: false,
+    counted_by: "balance",
     has_undated_lots: false,
     assembled_from_lots: false,
     in_base: null,

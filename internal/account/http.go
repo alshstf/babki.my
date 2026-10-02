@@ -66,12 +66,15 @@ type Handler struct {
 	store     *Store
 	spaces    spaceStore
 	converter converter
-	auth      *family.Auth
-	sm        *scs.SessionManager
+	// journals values brokerage accounts from their operations; nil counts
+	// every account by its balance.
+	journals journalValuer
+	auth     *family.Auth
+	sm       *scs.SessionManager
 }
 
-func NewHandler(store *Store, spaces spaceStore, converter converter, auth *family.Auth, sm *scs.SessionManager) *Handler {
-	return &Handler{store: store, spaces: spaces, converter: converter, auth: auth, sm: sm}
+func NewHandler(store *Store, spaces spaceStore, converter converter, journals journalValuer, auth *family.Auth, sm *scs.SessionManager) *Handler {
+	return &Handler{store: store, spaces: spaces, converter: converter, journals: journals, auth: auth, sm: sm}
 }
 
 func (h *Handler) Mount(srv *httpserver.Server) {
@@ -107,6 +110,11 @@ func toAPI(a WithBalance) apitypes.AccountWithBalance {
 		Institution: a.Institution,
 		Status:      apitypes.AccountStatus(a.Status),
 		CreatedAt:   a.CreatedAt,
+		// Overwritten by valuation.describe wherever the account is valued;
+		// an account nobody valued is counted by its balance.
+		ValuedByBalance: a.ValuedByBalance,
+		CountedBy:       apitypes.Balance,
+		Journal:         nullable.NewNullNullable[apitypes.AccountJournal](),
 	}
 	if a.Balance != nil {
 		out.Balance = &apitypes.BalancePoint{
@@ -294,10 +302,16 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	// below finds its answer already in the memo. Nothing here is required for
 	// the figures — see rateQueries, prewarmRates and balanceInBase.
 	h.prewarmRates(r.Context(), rateQueries(accounts, sp.BaseCurrency, now), rates)
+	vals, err := h.valuations(r.Context(), p.SpaceID, accounts, sp.BaseCurrency, now, rates)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
 
 	out := make([]apitypes.AccountWithBalance, 0, len(accounts))
 	for _, a := range accounts {
 		api := toAPI(a)
+		vals[a.ID].describe(&api)
 		inBase, err := h.balanceInBase(r.Context(), a, sp.BaseCurrency, now, rates)
 		if err != nil {
 			family.WriteError(w, err)
@@ -470,12 +484,13 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, "name must not be empty")
 		return
 	}
+	upd.ValuedByBalance = req.ValuedByBalance
 	a, err := h.store.Update(r.Context(), p.SpaceID, id, upd)
 	if err != nil {
 		family.WriteError(w, err)
 		return
 	}
-	httpjson.Write(w, http.StatusOK, toAPI(a))
+	h.writeOne(w, r, p.SpaceID, a)
 }
 
 func (h *Handler) handleArchive(w http.ResponseWriter, r *http.Request) {
@@ -534,22 +549,40 @@ func (h *Handler) handleSetBalance(w http.ResponseWriter, r *http.Request) {
 		family.WriteError(w, err)
 		return
 	}
-	httpjson.Write(w, http.StatusOK, toAPI(a))
+	h.writeOne(w, r, p.SpaceID, a)
+}
+
+// writeOne answers with one account, valued as the accounts list values it, so
+// a change to its balance or to valued_by_balance comes back already counted
+// the way the total will count it.
+func (h *Handler) writeOne(w http.ResponseWriter, r *http.Request, spaceID uuid.UUID, a WithBalance) {
+	sp, err := h.spaces.SpaceByID(r.Context(), spaceID)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	vals, err := h.valuations(r.Context(), spaceID, []WithBalance{a}, sp.BaseCurrency,
+		time.Now().UTC(), make(map[rateKey]*rateLookup))
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	out := toAPI(a)
+	vals[a.ID].describe(&out)
+	httpjson.Write(w, http.StatusOK, out)
 }
 
 // handleSummary totals the space's accounts by currency, then converts and
 // sums those per-currency totals into the space's base currency.
 //
-// The totals come exclusively from manually entered balances
-// (account_balances, see Store.SummaryByCurrency). Positions computed by the
-// portfolio engine from the operations journal are deliberately NOT added
-// here: a brokerage account's securities are already reflected in the balance
-// the user records for it, so counting positions on top would double count.
-// Valuing brokerage accounts as "positions + cash" — and folding that
-// valuation into this summary — has deliberately not been done: it would
-// silently change what every balance the user has already recorded means.
-// So the two views stay separate, and total_in_base_minor below is a sum of
-// manual balances only, not full net worth including live market values.
+// An active brokerage account kept by its operations is counted by its journal
+// — holdings at market value plus the cash its operations leave — unless the
+// family pinned it to its balance; every other account by its latest balance
+// mark (the owner's ruling on Р-2, 2026-10-02; see valuations). Each account is
+// counted once: the ones read from journals are left out of the balance sums
+// and added under the currencies they hold (addJournals). What the total owes
+// to journals, and how far a disagreeing journal is from its balance, is said
+// beside it (journalSummary).
 //
 // total_in_base_minor converts each currency's net_minor into base_currency
 // using the latest fx rate on or before today (ConvertMany, on
@@ -568,12 +601,38 @@ func (h *Handler) handleSetBalance(w http.ResponseWriter, r *http.Request) {
 // base_currency, or every currency ended up unconverted).
 func (h *Handler) handleSummary(w http.ResponseWriter, r *http.Request) {
 	p, _ := family.PrincipalFromContext(r.Context())
-	totals, err := h.store.SummaryByCurrency(r.Context(), p.SpaceID)
+	sp, err := h.spaces.SpaceByID(r.Context(), p.SpaceID)
 	if err != nil {
 		family.WriteError(w, err)
 		return
 	}
-	sp, err := h.spaces.SpaceByID(r.Context(), p.SpaceID)
+	accounts, err := h.store.ListWithBalance(r.Context(), p.SpaceID)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	now := time.Now().UTC()
+	vals, err := h.valuations(r.Context(), p.SpaceID, accounts, sp.BaseCurrency, now, make(map[rateKey]*rateLookup))
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	var byJournal []uuid.UUID
+	for id, v := range vals {
+		if v.byJournal {
+			byJournal = append(byJournal, id)
+		}
+	}
+	totals, err := h.store.SummaryByCurrency(r.Context(), p.SpaceID, byJournal)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	if totals, err = addJournals(totals, vals); err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	journal, err := journalSummary(vals)
 	if err != nil {
 		family.WriteError(w, err)
 		return
@@ -582,6 +641,7 @@ func (h *Handler) handleSummary(w http.ResponseWriter, r *http.Request) {
 	out := apitypes.Summary{
 		Totals:       make([]apitypes.CurrencyTotal, 0, len(totals)),
 		BaseCurrency: sp.BaseCurrency,
+		Journal:      journal,
 	}
 	netByCurrency := make(map[string]int64, len(totals))
 	for _, t := range totals {
@@ -605,7 +665,7 @@ func (h *Handler) handleSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	converted, missing, ratesOn, err := h.converter.ConvertMany(r.Context(), netByCurrency, sp.BaseCurrency, time.Now().UTC())
+	converted, missing, ratesOn, err := h.converter.ConvertMany(r.Context(), netByCurrency, sp.BaseCurrency, now)
 	if err != nil {
 		family.WriteError(w, err)
 		return

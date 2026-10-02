@@ -67,7 +67,7 @@ func TestSeedDemo(t *testing.T) {
 		}
 	}
 
-	totals, err := account.NewStore(pool).SummaryByCurrency(ctx, p.SpaceID)
+	totals, err := account.NewStore(pool).SummaryByCurrency(ctx, p.SpaceID, nil)
 	if err != nil || len(totals) != 2 {
 		t.Fatalf("totals = %+v, %v; want RUB+USD", totals, err)
 	}

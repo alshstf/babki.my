@@ -13,16 +13,11 @@ import (
 	"babki.my/babki/internal/platform/testdb"
 )
 
-// TestAHandEntryReachesTheRegistryInTheRunningProcess pins a piece of WIRING,
-// which no test of a module can: that the process as cmd/babki assembles it
-// hands a committed hand entry to the corporate-actions registry. The function
-// that does the work existed, was tested, and was called by nothing for a month
-// (#188) — so this goes through the real role, over HTTP, and asks for the
-// position.
-//
-// Amazon's split of 2022-06-06 is recorded first; a purchase of one share dated
-// 2021 is entered after it; the position must read twenty at once.
-func TestAHandEntryReachesTheRegistryInTheRunningProcess(t *testing.T) {
+// runAPI starts the api role as cmd/babki assembles it, waits until it
+// answers, and returns a caller that posts or gets JSON and decodes the answer
+// into out (when not nil).
+func runAPI(t *testing.T) func(method, path, body string, want int, out any) {
+	t.Helper()
 	pool := testdb.New(t)
 	addr := roleEnv(t, pool)
 
@@ -66,8 +61,7 @@ func TestAHandEntryReachesTheRegistryInTheRunningProcess(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// call posts or gets JSON and decodes the answer into out (when not nil).
-	call := func(method, path, body string, want int, out any) {
+	return func(method, path, body string, want int, out any) {
 		t.Helper()
 		req, err := http.NewRequest(method, base+path, strings.NewReader(body))
 		if err != nil {
@@ -90,6 +84,19 @@ func TestAHandEntryReachesTheRegistryInTheRunningProcess(t *testing.T) {
 			t.Fatalf("%s %s: decode %s: %v", method, path, raw, err)
 		}
 	}
+}
+
+// TestAHandEntryReachesTheRegistryInTheRunningProcess pins a piece of WIRING,
+// which no test of a module can: that the process as cmd/babki assembles it
+// hands a committed hand entry to the corporate-actions registry. The function
+// that does the work existed, was tested, and was called by nothing for a month
+// (#188) — so this goes through the real role, over HTTP, and asks for the
+// position.
+//
+// Amazon's split of 2022-06-06 is recorded first; a purchase of one share dated
+// 2021 is entered after it; the position must read twenty at once.
+func TestAHandEntryReachesTheRegistryInTheRunningProcess(t *testing.T) {
+	call := runAPI(t)
 	type withID struct {
 		ID string `json:"id"`
 	}
@@ -119,5 +126,47 @@ func TestAHandEntryReachesTheRegistryInTheRunningProcess(t *testing.T) {
 	}
 	if got := positions.Positions[0].Quantity; got != "20" {
 		t.Errorf("held = %s, want 20 — the registry's split must follow the hand entry at once, not at the next sweep", got)
+	}
+}
+
+// TestTheTotalReadsABrokerageAccountFromItsJournal pins the other piece of
+// wiring the account module cannot test alone: that the process hands it the
+// portfolio engine, so the family total counts a brokerage account by its
+// operations (the owner's ruling on Р-2) rather than by a balance typed in.
+func TestTheTotalReadsABrokerageAccountFromItsJournal(t *testing.T) {
+	call := runAPI(t)
+	call("POST", "/api/v1/setup",
+		`{"space_name":"S","username":"alex","display_name":"A","password":"secret123"}`, http.StatusCreated, nil)
+	var account struct {
+		ID string `json:"id"`
+	}
+	call("POST", "/api/v1/accounts", `{"name":"Брокер","type":"brokerage","currency":"RUB"}`, http.StatusCreated, &account)
+	call("POST", "/api/v1/operations",
+		`{"account_id":"`+account.ID+`","type":"deposit","occurred_on":"2026-07-01","amount_minor":10000000,"currency":"RUB"}`,
+		http.StatusCreated, nil)
+	call("PUT", "/api/v1/accounts/"+account.ID+"/balance",
+		`{"as_of":"`+time.Now().UTC().Format("2006-01-02")+`","amount_minor":9900000}`, http.StatusOK, nil)
+
+	var summary struct {
+		TotalInBaseMinor int64 `json:"total_in_base_minor"`
+		Journal          struct {
+			Accounts int `json:"accounts"`
+		} `json:"journal"`
+	}
+	call("GET", "/api/v1/summary", "", http.StatusOK, &summary)
+	if summary.TotalInBaseMinor != 10_000_000 || summary.Journal.Accounts != 1 {
+		t.Errorf("summary = %+v, want the 100 000 ₽ the journal holds, not the 99 000 typed in", summary)
+	}
+	var rows []struct {
+		CountedBy string `json:"counted_by"`
+		Journal   struct {
+			Reconciliation struct {
+				Status string `json:"status"`
+			} `json:"reconciliation"`
+		} `json:"journal"`
+	}
+	call("GET", "/api/v1/accounts", "", http.StatusOK, &rows)
+	if len(rows) != 1 || rows[0].CountedBy != "journal" || rows[0].Journal.Reconciliation.Status != "close" {
+		t.Errorf("accounts = %+v, want the one account counted by its journal, close to its balance", rows)
 	}
 }

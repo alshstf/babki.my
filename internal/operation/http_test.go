@@ -53,7 +53,7 @@ func newAPIOn(t *testing.T, pool *pgxpool.Pool, conv converterLike) (string, *ht
 
 	srv := httpserver.New(slog.Default(), pool)
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
-	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(mdStore), auth, sm).Mount(srv)
+	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(mdStore), nil, auth, sm).Mount(srv)
 	instrument.NewHandler(instStore, auth, sm).Mount(srv)
 	operation.NewHandler(opSvc, opStore, famStore, conv, auth, sm).Mount(srv)
 	// The positions endpoint is mounted here too, with a real converter of its

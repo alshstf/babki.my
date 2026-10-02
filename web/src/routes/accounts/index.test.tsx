@@ -70,6 +70,8 @@ function makeAccount(overrides: Partial<AccountWithBalance> = {}): AccountWithBa
     institution: "",
     status: "active",
     created_at: "2026-01-01T00:00:00Z",
+    valued_by_balance: false,
+    counted_by: "balance",
     balance: { as_of: "2026-07-20", amount_minor: 100_000 },
     ...overrides,
   };
@@ -84,6 +86,7 @@ function makeSummary(overrides: Partial<Summary> = {}): Summary {
     total_in_base_minor: 100_000,
     unconverted: [],
     rates_on: null,
+    journal: { accounts: 0, differing: 0, differing_difference_minor: 0, pinned_to_balance: 0, unpriced_positions: 0 },
     ...overrides,
   };
 }

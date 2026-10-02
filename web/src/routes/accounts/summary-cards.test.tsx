@@ -26,6 +26,7 @@ function makeSummary(overrides: Partial<Summary> = {}): Summary {
     total_in_base_minor: 123_456_700,
     unconverted: [],
     rates_on: localToday(),
+    journal: { accounts: 0, differing: 0, differing_difference_minor: 0, pinned_to_balance: 0, unpriced_positions: 0 },
     ...overrides,
   };
 }

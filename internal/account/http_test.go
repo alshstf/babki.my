@@ -36,6 +36,13 @@ func newAPI(t *testing.T) (string, *http.Client) {
 // separate DB fixture.
 func newAPIWithConverter(t *testing.T) (string, *http.Client, *marketdata.Store) {
 	t.Helper()
+	return newAPIWithJournals(t, nil)
+}
+
+// newAPIWithJournals is newAPIWithConverter with brokerage accounts valued
+// from their journals by journals, which stands in for the portfolio engine.
+func newAPIWithJournals(t *testing.T, journals *fakeJournals) (string, *http.Client, *marketdata.Store) {
+	t.Helper()
 	pool := testdb.New(t)
 	famStore := family.NewStore(pool)
 	famSvc := family.NewService(famStore)
@@ -46,7 +53,11 @@ func newAPIWithConverter(t *testing.T) (string, *http.Client, *marketdata.Store)
 
 	srv := httpserver.New(slog.Default(), pool)
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
-	account.NewHandler(account.NewStore(pool), famStore, converter, auth, sm).Mount(srv)
+	if journals != nil {
+		account.NewHandler(account.NewStore(pool), famStore, converter, journals, auth, sm).Mount(srv)
+	} else {
+		account.NewHandler(account.NewStore(pool), famStore, converter, nil, auth, sm).Mount(srv)
+	}
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -314,7 +325,7 @@ func newAPIWithConverterDouble(t *testing.T, conv converterLike) (string, *http.
 
 	srv := httpserver.New(slog.Default(), pool)
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
-	account.NewHandler(account.NewStore(pool), famStore, conv, auth, sm).Mount(srv)
+	account.NewHandler(account.NewStore(pool), famStore, conv, nil, auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)

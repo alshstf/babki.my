@@ -1240,7 +1240,7 @@ components:
       enum: [active, archived]
     AccountWithBalance:
       type: object
-      required: [id, name, type, currency, institution, status, created_at]
+      required: [id, name, type, currency, institution, status, created_at, valued_by_balance, counted_by]
       properties:
         id: { type: string, format: uuid }
         owner_user_id: { type: string, format: uuid, nullable: true }
@@ -1256,6 +1256,52 @@ components:
           description: "Account's balance converted into the space's base currency at today's fx rate. Null when the account has no balance, its currency already equals base_currency (nothing to convert), or no fx rate could be resolved."
           allOf:
             - $ref: "#/components/schemas/MoneyInBase"
+        valued_by_balance:
+          type: boolean
+          description: "The family's choice for a brokerage account kept by its operations: count it in the total by its balance rather than by its journal, while the journal's history is incomplete. False until somebody sets it (UpdateAccountRequest.valued_by_balance). On any other kind of account it is stored and means nothing — those are always counted by their balance."
+        counted_by:
+          type: string
+          enum: [journal, balance]
+          description: "Which figure GET /summary counts for this account (the owner's ruling on Р-2, 2026-10-02). `journal`: an active brokerage account with at least one operation, not valued_by_balance — its worth is journal.amount_minor, holdings at market price plus the cash its operations leave. `balance`: everything else — the latest balance mark, as before, or nothing if there is none. Archived accounts are `balance` and counted nowhere."
+        journal:
+          nullable: true
+          description: "What the account is worth by its journal, with the reconciliation against its balance. Present on every ACTIVE brokerage account with at least one operation, whichever figure counted_by names, so an account valued by its balance can still say what its journal comes to. Null on every other account."
+          allOf:
+            - $ref: "#/components/schemas/AccountJournal"
+    AccountJournal:
+      type: object
+      required: [amount_minor, currency, unpriced_positions, missing_rates, negative_cash, reconciliation]
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          description: "Open holdings at their market value plus each currency's cash by the journal, each currency converted once at today's rate into the base currency. The same figures the account's positions screen shows. Holdings with no price add nothing; currencies with no rate are left out (both named below)."
+        currency: { type: string, description: "The space's base currency (ISO-4217), same as Summary.base_currency" }
+        unpriced_positions: { type: integer, description: "Open holdings with no market value at all — no quote, or a kind of paper with no valuation model — counted as nothing." }
+        missing_rates:
+          type: array
+          items: { type: string }
+          description: "Currencies held with no rate into the base currency today; what is held in them is left out of amount_minor. Sorted; empty when everything converted."
+        negative_cash:
+          type: array
+          items: { type: string }
+          description: "Currencies whose cash by the journal is below zero: money spent that the journal never saw arrive, usually a deposit nobody recorded. Sorted; empty when none."
+        reconciliation:
+          nullable: true
+          description: "The journal's figure against the account's latest balance mark. Null when there is no balance mark, or the mark cannot be put into the base currency for want of a rate."
+          allOf:
+            - $ref: "#/components/schemas/AccountReconciliation"
+    AccountReconciliation:
+      type: object
+      required: [status, balance_as_of, balance_in_base_minor, difference_minor]
+      properties:
+        status:
+          type: string
+          enum: [agrees, close, differs, stale]
+          description: "`agrees`: within 1% of the balance. `close`: within 5% — the expected gap between a broker's figure, struck at the last trade, and this program's, struck at the previous session's close. `differs`: further apart than that — most likely operations missing from the journal. `stale`: the balance mark is more than 3 days older than today, and the market has moved since, so no verdict is given; the figures are still published. The thresholds are this program's own (see internal/account/valuation.go)."
+        balance_as_of: { type: string, description: "Date YYYY-MM-DD of the balance mark compared against" }
+        balance_in_base_minor: { type: integer, format: int64, description: "That balance in the base currency at today's rate (the balance itself when the account is in the base currency)" }
+        difference_minor: { type: integer, format: int64, description: "AccountJournal.amount_minor minus balance_in_base_minor: negative when the journal comes to less than the balance" }
     BalancePoint:
       type: object
       required: [as_of, amount_minor]
@@ -1294,6 +1340,7 @@ components:
         institution: { type: string }
         owner_user_id: { type: string, format: uuid, nullable: true }
         status: { $ref: "#/components/schemas/AccountStatus" }
+        valued_by_balance: { type: boolean, description: "See AccountWithBalance.valued_by_balance. Omitted, it stays as it is." }
     SetBalanceRequest:
       type: object
       required: [as_of, amount_minor]
@@ -1352,11 +1399,12 @@ components:
         net_minor: { type: integer, format: int64 }
     Summary:
       type: object
-      required: [totals, base_currency, unconverted]
+      required: [totals, base_currency, unconverted, journal]
       properties:
         totals:
           type: array
           items: { $ref: "#/components/schemas/CurrencyTotal" }
+          description: "Active accounts per currency. An account counted by its balance (AccountWithBalance.counted_by) adds its latest balance under its own currency, a debt among the liabilities. An account counted by its journal adds what it holds in each currency (holdings at market value plus cash) under that currency — among the assets where the account holds more than nothing in it, among the liabilities where its cash in it is below zero by more than its holdings."
         base_currency: { type: string, description: "ISO-4217, from the space; e.g. RUB" }
         total_in_base_minor:
           type: integer
@@ -1371,6 +1419,17 @@ components:
           type: string
           nullable: true
           description: "Oldest FX rate date used for the conversion; null if nothing was converted"
+        journal: { $ref: "#/components/schemas/SummaryJournal" }
+    SummaryJournal:
+      type: object
+      required: [accounts, differing, differing_difference_minor, pinned_to_balance, unpriced_positions]
+      description: "What the total owes to journals rather than balances, so the total can say it."
+      properties:
+        accounts: { type: integer, description: "Active accounts counted by their journal" }
+        differing: { type: integer, description: "Of those, how many disagree with their balance (AccountReconciliation.status `differs`)" }
+        differing_difference_minor: { type: integer, format: int64, description: "The sum of difference_minor over those accounts, in the base currency: negative when the total may be short by that much, positive when it may be over" }
+        pinned_to_balance: { type: integer, description: "Active brokerage accounts with operations counted by their balance by the family's choice (valued_by_balance)" }
+        unpriced_positions: { type: integer, description: "Holdings with no price, counted as nothing, across the accounts counted by their journal" }
     InstrumentType:
       type: string
       enum: [share, bond, etf, currency, crypto, metal, custom]

@@ -102,7 +102,7 @@ func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv conv
 
 	srv := httpserver.New(slog.Default(), pool)
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
-	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(marketdata.NewStore(pool)), auth, sm).Mount(srv)
+	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(marketdata.NewStore(pool)), nil, auth, sm).Mount(srv)
 	instrument.NewHandler(instStore, auth, sm).Mount(srv)
 	// The operation handler gets its own real converter rather than conv:
 	// these tests substitute conv to control the PORTFOLIO handler's fx

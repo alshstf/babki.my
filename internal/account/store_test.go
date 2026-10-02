@@ -109,7 +109,7 @@ func TestSummaryByCurrency(t *testing.T) {
 	_ = st.SetBalance(ctx, spaceID, arch.ID, date("2026-07-20"), 999_00)
 	_ = st.Archive(ctx, spaceID, arch.ID)
 
-	totals, err := st.SummaryByCurrency(ctx, spaceID)
+	totals, err := st.SummaryByCurrency(ctx, spaceID, nil)
 	if err != nil {
 		t.Fatalf("Summary: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestSummarySplitsEveryTypeTheWayIsLiabilitySays(t *testing.T) {
 		}
 	}
 
-	totals, err := st.SummaryByCurrency(ctx, spaceID)
+	totals, err := st.SummaryByCurrency(ctx, spaceID, nil)
 	if err != nil {
 		t.Fatalf("SummaryByCurrency: %v", err)
 	}

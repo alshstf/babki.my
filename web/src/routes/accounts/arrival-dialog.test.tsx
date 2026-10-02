@@ -20,6 +20,8 @@ const account: AccountWithBalance = {
   institution: "Freedom Finance",
   status: "active",
   created_at: "2026-01-01T00:00:00Z",
+  valued_by_balance: false,
+  counted_by: "balance",
   balance: undefined,
 };
 

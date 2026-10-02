@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/spf13/cobra"
@@ -31,6 +32,24 @@ import (
 	"babki.my/babki/web"
 )
 
+// journalValues hands the portfolio engine's valuation of an account to the
+// account module, which counts brokerage accounts in the family total by their
+// journal and must not import the engine to do it.
+type journalValues struct{ positions *portfolio.Handler }
+
+func (j journalValues) ValueFromJournal(ctx context.Context, spaceID, accountID uuid.UUID) (account.JournalValue, error) {
+	v, err := j.positions.ValueFromJournal(ctx, spaceID, accountID)
+	return account.JournalValue{
+		Currency:     v.Currency,
+		Minor:        v.Minor,
+		ByCurrency:   v.ByCurrency,
+		Operations:   v.Operations,
+		Unpriced:     v.Unpriced,
+		MissingRates: v.MissingRates,
+		NegativeCash: v.NegativeCash,
+	}, err
+}
+
 // mountModules builds each domain module and mounts its routes on srv.
 // Shared by the "all" and "api" roles so route wiring lives in one place.
 //
@@ -52,14 +71,15 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	family.NewHandler(famSvc, famStore, famAuth, famSM).Mount(srv)
 	mdStore := marketdata.NewStore(r.pool)
 	converter := marketdata.NewConverter(mdStore)
-	accStore := account.NewStore(r.pool)
-	account.NewHandler(accStore, famStore, converter, famAuth, famSM).Mount(srv)
 	instStore := instrument.NewStore(r.pool)
 	instrument.NewHandler(instStore, famAuth, famSM).Mount(srv)
 	opStore := operation.NewStore(r.pool)
 	opSvc := operation.NewService(opStore)
 	operation.NewHandler(opSvc, opStore, famStore, converter, famAuth, famSM).Mount(srv)
-	portfolio.NewHandler(opStore, instStore, mdStore, converter, famStore, famAuth, famSM).Mount(srv)
+	positions := portfolio.NewHandler(opStore, instStore, mdStore, converter, famStore, famAuth, famSM)
+	positions.Mount(srv)
+	accStore := account.NewStore(r.pool)
+	account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM).Mount(srv)
 
 	newClient, err := newTinvestClientFactory(r)
 	if err != nil {

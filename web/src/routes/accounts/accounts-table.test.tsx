@@ -43,6 +43,8 @@ function makeAccount(overrides: Partial<AccountWithBalance> = {}): AccountWithBa
     institution: "Broker Co",
     status: "active",
     created_at: "2026-01-01T00:00:00Z",
+    valued_by_balance: false,
+    counted_by: "balance",
     balance: { as_of: "2026-07-20", amount_minor: 100_000 },
     ...overrides,
   };
