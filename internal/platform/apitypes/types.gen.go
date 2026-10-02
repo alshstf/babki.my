@@ -87,16 +87,34 @@ func (e AccountType) Valid() bool {
 
 // Defines values for AccountWithBalanceCountedBy.
 const (
-	Balance AccountWithBalanceCountedBy = "balance"
-	Journal AccountWithBalanceCountedBy = "journal"
+	AccountWithBalanceCountedByBalance AccountWithBalanceCountedBy = "balance"
+	AccountWithBalanceCountedByJournal AccountWithBalanceCountedBy = "journal"
 )
 
 // Valid indicates whether the value is a known member of the AccountWithBalanceCountedBy enum.
 func (e AccountWithBalanceCountedBy) Valid() bool {
 	switch e {
-	case Balance:
+	case AccountWithBalanceCountedByBalance:
 		return true
-	case Journal:
+	case AccountWithBalanceCountedByJournal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CapitalAccountCountedBy.
+const (
+	CapitalAccountCountedByBalance CapitalAccountCountedBy = "balance"
+	CapitalAccountCountedByJournal CapitalAccountCountedBy = "journal"
+)
+
+// Valid indicates whether the value is a known member of the CapitalAccountCountedBy enum.
+func (e CapitalAccountCountedBy) Valid() bool {
+	switch e {
+	case CapitalAccountCountedByBalance:
+		return true
+	case CapitalAccountCountedByJournal:
 		return true
 	default:
 		return false
@@ -802,6 +820,24 @@ func (e TradingModeKind) Valid() bool {
 	}
 }
 
+// Defines values for GetCapitalParamsStep.
+const (
+	Month GetCapitalParamsStep = "month"
+	Week  GetCapitalParamsStep = "week"
+)
+
+// Valid indicates whether the value is a known member of the GetCapitalParamsStep enum.
+func (e GetCapitalParamsStep) Valid() bool {
+	switch e {
+	case Month:
+		return true
+	case Week:
+		return true
+	default:
+		return false
+	}
+}
+
 // AccountCurrencyTotal defines model for AccountCurrencyTotal.
 type AccountCurrencyTotal struct {
 	// AmountMinor The account's result in this currency, or null when one of its terms has no figure in this currency at all — a position that realized into another currency, or one paid in another, has no own-currency total to add (see Position.total_minor). A bucket short one term is published as null rather than as the sum of the rest: a total quietly missing a term reads as a smaller result, not as a gap, and is indistinguishable from a real figure on screen.
@@ -965,6 +1001,36 @@ type BalancePoint struct {
 
 	// AsOf Date YYYY-MM-DD
 	AsOf string `json:"as_of"`
+}
+
+// CapitalAccount defines model for CapitalAccount.
+type CapitalAccount struct {
+	AccountId   openapi_types.UUID      `json:"account_id"`
+	AmountMinor int64                   `json:"amount_minor"`
+	Complete    bool                    `json:"complete"`
+	CountedBy   CapitalAccountCountedBy `json:"counted_by"`
+}
+
+// CapitalAccountCountedBy defines model for CapitalAccount.CountedBy.
+type CapitalAccountCountedBy string
+
+// CapitalPoint defines model for CapitalPoint.
+type CapitalPoint struct {
+	Accounts []CapitalAccount `json:"accounts"`
+
+	// Complete False when some account could not be valued whole that day — a paper with no closing price, a currency with no rate — and its unvalued part is left out of total_minor
+	Complete bool `json:"complete"`
+
+	// Day Date YYYY-MM-DD
+	Day        string `json:"day"`
+	TotalMinor int64  `json:"total_minor"`
+}
+
+// CapitalSeries defines model for CapitalSeries.
+type CapitalSeries struct {
+	// Currency The space's base currency
+	Currency string         `json:"currency"`
+	Points   []CapitalPoint `json:"points"`
 }
 
 // CashGap defines model for CashGap.
@@ -2251,6 +2317,18 @@ type ListAccountOperationsParams struct {
 	Limit  *int `form:"limit,omitempty" json:"limit,omitempty"`
 	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
 }
+
+// GetCapitalParams defines parameters for GetCapital.
+type GetCapitalParams struct {
+	// From Date YYYY-MM-DD the series starts on
+	From string `form:"from" json:"from"`
+
+	// Step month when omitted
+	Step *GetCapitalParamsStep `form:"step,omitempty" json:"step,omitempty"`
+}
+
+// GetCapitalParamsStep defines parameters for GetCapital.
+type GetCapitalParamsStep string
 
 // AddImportPapersJSONBody defines parameters for AddImportPapers.
 type AddImportPapersJSONBody struct {

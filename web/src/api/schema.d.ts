@@ -269,6 +269,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/capital": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description What the family's active accounts were worth at the end of each of a run of days, in the base currency — the series a chart of the family's capital is drawn from. Each account is counted the way GET /summary counts it today: a brokerage account kept by its operations by its journal as it stood that day (holdings at that day's closing prices, cash, that day's rates), every other account by its latest balance mark on or before the day (nothing before its first mark). The days are every week (`step=week`) or every month's last day (`step=month`) from `from`, and today. At most 120 points; 400 beyond, or for a `from` in the future. */
+        get: operations["getCapital"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/summary": {
         parameters: {
             query?: never;
@@ -1132,6 +1149,29 @@ export interface components {
         ImportTableResult: {
             import: components["schemas"]["TableImport"] | null;
             rows: components["schemas"]["ImportRow"][];
+        };
+        CapitalSeries: {
+            /** @description The space's base currency */
+            currency: string;
+            points: components["schemas"]["CapitalPoint"][];
+        };
+        CapitalPoint: {
+            /** @description Date YYYY-MM-DD */
+            day: string;
+            /** Format: int64 */
+            total_minor: number;
+            /** @description False when some account could not be valued whole that day — a paper with no closing price, a currency with no rate — and its unvalued part is left out of total_minor */
+            complete: boolean;
+            accounts: components["schemas"]["CapitalAccount"][];
+        };
+        CapitalAccount: {
+            /** Format: uuid */
+            account_id: string;
+            /** Format: int64 */
+            amount_minor: number;
+            /** @enum {string} */
+            counted_by: "journal" | "balance";
+            complete: boolean;
         };
         Summary: {
             /** @description Active accounts per currency. An account counted by its balance (AccountWithBalance.counted_by) adds its latest balance under its own currency, a debt among the liabilities. An account counted by its journal adds what it holds in each currency (holdings at market value plus cash) under that currency — among the assets where the account holds more than nothing in it, among the liabilities where its cash in it is below zero by more than its holdings. */
@@ -2610,6 +2650,33 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    getCapital: {
+        parameters: {
+            query: {
+                /** @description Date YYYY-MM-DD the series starts on */
+                from: string;
+                /** @description month when omitted */
+                step?: "week" | "month";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The series */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapitalSeries"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
         };
     };
     getSummary: {

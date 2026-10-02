@@ -90,6 +90,56 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("DELETE /api/v1/accounts/{accountId}", edit(h.handleArchive))
 	srv.Mount("PUT /api/v1/accounts/{accountId}/balance", edit(h.handleSetBalance))
 	srv.Mount("GET /api/v1/summary", view(h.handleSummary))
+	srv.Mount("GET /api/v1/capital", view(h.handleCapital))
+}
+
+func (h *Handler) handleCapital(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	from, err := time.Parse("2006-01-02", r.URL.Query().Get("from"))
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, "from must be YYYY-MM-DD")
+		return
+	}
+	step := r.URL.Query().Get("step")
+	if step != "" && step != "week" && step != "month" {
+		httpjson.Error(w, http.StatusBadRequest, "step must be week or month")
+		return
+	}
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	days, err := capitalDays(from, today, step != "week")
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	sp, err := h.spaces.SpaceByID(r.Context(), p.SpaceID)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	points, err := h.capital(r.Context(), p.SpaceID, sp.BaseCurrency, days)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	out := apitypes.CapitalSeries{Currency: sp.BaseCurrency, Points: make([]apitypes.CapitalPoint, 0, len(points))}
+	for _, pt := range points {
+		item := apitypes.CapitalPoint{
+			Day: pt.Day.Format("2006-01-02"), TotalMinor: pt.Minor, Complete: pt.Complete,
+			Accounts: make([]apitypes.CapitalAccount, 0, len(pt.Accounts)),
+		}
+		for _, a := range pt.Accounts {
+			by := apitypes.CapitalAccountCountedByBalance
+			if a.ByJournal {
+				by = apitypes.CapitalAccountCountedByJournal
+			}
+			item.Accounts = append(item.Accounts, apitypes.CapitalAccount{
+				AccountId: a.AccountID, AmountMinor: a.Minor, CountedBy: by, Complete: a.Complete,
+			})
+		}
+		out.Points = append(out.Points, item)
+	}
+	httpjson.Write(w, http.StatusOK, out)
 }
 
 func toAPI(a WithBalance) apitypes.AccountWithBalance {
@@ -113,7 +163,7 @@ func toAPI(a WithBalance) apitypes.AccountWithBalance {
 		// Overwritten by valuation.describe wherever the account is valued;
 		// an account nobody valued is counted by its balance.
 		ValuedByBalance: a.ValuedByBalance,
-		CountedBy:       apitypes.Balance,
+		CountedBy:       apitypes.AccountWithBalanceCountedByBalance,
 		Journal:         nullable.NewNullNullable[apitypes.AccountJournal](),
 	}
 	if a.Balance != nil {

@@ -56,6 +56,15 @@ func (j journalValues) ValueOn(ctx context.Context, spaceID, accountID uuid.UUID
 	return account.JournalValue(v), err
 }
 
+func (j journalValues) ValuesOn(ctx context.Context, spaceID, accountID uuid.UUID, days []time.Time) ([]account.JournalValue, error) {
+	values, err := j.positions.ValuesOn(ctx, spaceID, accountID, days)
+	out := make([]account.JournalValue, len(values))
+	for i, v := range values {
+		out[i] = account.JournalValue(v)
+	}
+	return out, err
+}
+
 // mountModules builds each domain module and mounts its routes on srv.
 // Shared by the "all" and "api" roles so route wiring lives in one place.
 //

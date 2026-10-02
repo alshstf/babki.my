@@ -366,6 +366,29 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/v1/capital:
+    get:
+      operationId: getCapital
+      description: >-
+        What the family's active accounts were worth at the end of each of a run of days, in the
+        base currency — the series a chart of the family's capital is drawn from. Each account
+        is counted the way GET /summary counts it today: a brokerage account kept by its
+        operations by its journal as it stood that day (holdings at that day's closing prices,
+        cash, that day's rates), every other account by its latest balance mark on or before the
+        day (nothing before its first mark). The days are every week (`step=week`) or every
+        month's last day (`step=month`) from `from`, and today. At most 120 points; 400 beyond,
+        or for a `from` in the future.
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string }, description: "Date YYYY-MM-DD the series starts on" }
+        - { name: step, in: query, required: false, schema: { type: string, enum: [week, month] }, description: "month when omitted" }
+      responses:
+        "200":
+          description: The series
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CapitalSeries" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/summary:
     get:
       operationId: getSummary
@@ -1664,6 +1687,30 @@ components:
           allOf:
             - $ref: "#/components/schemas/TableImport"
         rows: { type: array, items: { $ref: "#/components/schemas/ImportRow" } }
+    CapitalSeries:
+      type: object
+      required: [currency, points]
+      properties:
+        currency: { type: string, description: "The space's base currency" }
+        points: { type: array, items: { $ref: "#/components/schemas/CapitalPoint" } }
+    CapitalPoint:
+      type: object
+      required: [day, total_minor, complete, accounts]
+      properties:
+        day: { type: string, description: "Date YYYY-MM-DD" }
+        total_minor: { type: integer, format: int64 }
+        complete:
+          type: boolean
+          description: "False when some account could not be valued whole that day — a paper with no closing price, a currency with no rate — and its unvalued part is left out of total_minor"
+        accounts: { type: array, items: { $ref: "#/components/schemas/CapitalAccount" } }
+    CapitalAccount:
+      type: object
+      required: [account_id, amount_minor, counted_by, complete]
+      properties:
+        account_id: { type: string, format: uuid }
+        amount_minor: { type: integer, format: int64 }
+        counted_by: { type: string, enum: [journal, balance] }
+        complete: { type: boolean }
     Summary:
       type: object
       required: [totals, base_currency, unconverted, journal]

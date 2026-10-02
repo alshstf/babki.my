@@ -239,3 +239,28 @@ func (s *Store) SummaryByCurrency(ctx context.Context, spaceID uuid.UUID, byJour
 	}
 	return out, rows.Err()
 }
+
+// BalanceHistory is every balance mark of the space's accounts, oldest first
+// within each account.
+func (s *Store) BalanceHistory(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID][]BalancePoint, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT b.account_id, b.as_of, b.amount_minor FROM account_balances b
+		JOIN accounts a ON a.id = b.account_id
+		WHERE a.space_id = $1 ORDER BY b.account_id, b.as_of`, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[uuid.UUID][]BalancePoint{}
+	for rows.Next() {
+		var (
+			id uuid.UUID
+			bp BalancePoint
+		)
+		if err := rows.Scan(&id, &bp.AsOf, &bp.AmountMinor); err != nil {
+			return nil, err
+		}
+		out[id] = append(out[id], bp)
+	}
+	return out, rows.Err()
+}
