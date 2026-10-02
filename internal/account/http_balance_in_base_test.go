@@ -172,7 +172,7 @@ func TestListBalanceInBaseNullWhenAlreadyBaseCurrency(t *testing.T) {
 // balance_in_base = null — and, crucially, the request as a whole must
 // still succeed (200), not fail just because one account's currency lacks a
 // rate. This mirrors ConvertMany's "missing" handling in handleSummary and
-// toAPI's marketdata.ErrNoRate handling in portfolio/http.go.
+// toAPI's marketdata.ErrNoRate handling in portfolio/position_api.go.
 func TestListBalanceInBaseNullWhenNoRate(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	on := pastOn()

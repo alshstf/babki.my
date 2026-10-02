@@ -65,7 +65,7 @@ type FaceGap =
 // server draws the same line on the same field for the same reason: a bond's
 // market value is denominated in its face currency, NOT in the quote's, and a
 // face value with no currency at all buys no valuation (marketValue in
-// internal/portfolio/http.go). A face value in euros cannot price a trade
+// internal/portfolio/market_value.go). A face value in euros cannot price a trade
 // booked in rubles without an fx rate, and there is none in this dialog.
 // An EMPTY face currency counts as none, and that clause is the whole reason
 // this comment names it: an empty string is not null, so without it the

@@ -193,7 +193,7 @@ function valuationGapTitle(
 //
 // The second sentence is the project's "three rates for three questions" rule
 // made legible on this cell: the valuation IS struck from this price (see
-// marketValue in internal/portfolio/http.go — every path that publishes
+// marketValue in internal/portfolio/market_value.go — every path that publishes
 // Position.price publishes a valuation computed from it, and this hint is only
 // rendered when there is one), while any conversion of that valuation is done
 // at the current rate, never at the quote's date — toAPI converts into the
@@ -235,7 +235,7 @@ function valuationGapTitle(
 //
 // For a BOND the quote is a PERCENTAGE OF FACE VALUE (the MOEX convention):
 // the server publishes q.Price untouched in Position.price, and marketValue()
-// in internal/portfolio/http.go multiplies it as faceValueMinor × price/100 ×
+// in internal/portfolio/market_value.go multiplies it as faceValueMinor × price/100 ×
 // quantity. The demo seed's ОФЗ 26238 makes the gap concrete — face value
 // 1 000,00 ₽, quote 95.20, so one bond is worth 952 ₽ while the line under its
 // ruble valuation reads "95,20". Bare, that is a money figure ten times too
