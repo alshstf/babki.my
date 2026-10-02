@@ -31,6 +31,7 @@ import {
   useOperations,
   useDeleteOperation,
   editDialogOf,
+  ownedByHand,
   isConflict,
   JOURNAL_PAGE_SIZE,
   type Operation,
@@ -185,20 +186,14 @@ function rowGapTitle(
   }
 }
 
-// WHO OWNS A JOURNAL ROW, answered exactly as the server answers it: the
-// service refuses to delete anything whose `source` is not "manual" (see
-// Service.Delete), because such a row is a projection of records held
-// elsewhere — the broker's own, kept in the import's mirror — and is written
-// again the next time the projection is rebuilt. A menu offering to delete it
-// would be offering something that cannot happen: the request is refused, and
-// even if it were not, the row would come back.
-//
-// The rule is spelled as the server spells it — "manual" and nothing else —
-// rather than as "not tinvest": the column allows a third value ('csv',
-// migration 0005) that nothing writes today, and a row carrying it must not
-// become deletable here merely because this file forgot it exists.
+// WHO OWNS A JOURNAL ROW, answered exactly as the server answers it
+// (operation.OwnedByHand): a row entered by hand, or loaded from the person's
+// own table, is theirs to edit and delete. Anything else — a broker's row, the
+// registry's — is a projection of records held elsewhere and is written again
+// the next time it is rebuilt, so offering to delete it would be offering
+// something that cannot happen.
 function isImported(operation: Operation): boolean {
-  return operation.source !== "manual";
+  return !ownedByHand(operation);
 }
 
 // Who wrote the row, drawn beside its type. Т-Инвестиции by name where the row
@@ -208,6 +203,13 @@ function isImported(operation: Operation): boolean {
 // a hand-entered row, which is the ordinary case and needs no label.
 function SourceBadge({ operation }: { operation: Operation }) {
   const { t } = useTranslation();
+  if (operation.source === "csv") {
+    return (
+      <Badge variant="outline" title={t("operations.fromTableTitle")}>
+        {t("operations.fromTable")}
+      </Badge>
+    );
+  }
   if (!isImported(operation)) return null;
   const tinvest = operation.source === "tinvest";
   return (

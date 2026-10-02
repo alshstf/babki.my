@@ -148,6 +148,8 @@ describe("which operations are edited in place", () => {
     expect(editDialogOf(operation({ type: "transfer_in" }))).toBeNull();
     expect(editDialogOf(operation({ type: "sell", transfer_group_id: "g-1" }))).toBeNull();
     expect(editDialogOf(operation({ type: "split" }))).toBeNull();
+    expect(editDialogOf(operation({ type: "buy", source: "csv" }))).toBe("trade");
+    expect(editDialogOf(operation({ type: "split", source: "registry" }))).toBeNull();
   });
 });
 

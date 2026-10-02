@@ -101,12 +101,23 @@ func TestWhatCannotBeEditedIsRefused(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), `UPDATE operations SET source = 'tinvest' WHERE id = $1`, imported); err != nil {
 		t.Fatalf("mark imported: %v", err)
 	}
+	registry := mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"type":"deposit","occurred_on":"2026-07-03","amount_minor":100,"currency":"RUB"}`, acc))
+	if _, err := pool.Exec(t.Context(), `UPDATE operations SET source = 'registry' WHERE id = $1`, registry); err != nil {
+		t.Fatalf("mark the registry's: %v", err)
+	}
+	// Neither a broker's row nor the registry's is a person's to delete.
+	for name, id := range map[string]string{"a broker's row": imported, "the registry's row": registry} {
+		if resp := do(t, c, "DELETE", url+"/api/v1/operations/"+id, ""); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("deleting %s = %d, want 400", name, resp.StatusCode)
+		}
+	}
 
 	for _, tc := range []struct {
 		name, id, body string
 		want           int
 	}{
 		{"a broker's row", imported, deposit(acc), http.StatusBadRequest},
+		{"the registry's row", registry, deposit(acc), http.StatusBadRequest},
 		{"a leg of a transfer", pair.In.ID, fmt.Sprintf(
 			`{"account_id":%q,"instrument_id":%q,"type":"transfer_in","occurred_on":"2026-07-15","quantity":"4","amount_minor":120000,"currency":"RUB"}`,
 			other, sber), http.StatusBadRequest},

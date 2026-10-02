@@ -120,3 +120,53 @@ func TestATableIsImportedOnceAndRolledBackWhole(t *testing.T) {
 		t.Errorf("reloading after the rollback = %+v, want the 2 rows written again", third.Import)
 	}
 }
+
+// Rows loaded from a table are the person's own: they are edited and deleted
+// in the journal like hand entries. Loading the same file again brings back a
+// deleted row and leaves an edited one as it was edited.
+func TestRowsFromATableAreThePersonsOwn(t *testing.T) {
+	url, c := newAPI(t)
+	var acc struct {
+		ID string `json:"id"`
+	}
+	call(t, c, "POST", url+"/api/v1/accounts", `{"name":"Счёт","type":"brokerage","currency":"RUB"}`, 201, &acc)
+	csv := "Дата;Операция;Бумага;Количество;Цена;Сумма\n" +
+		"01.07.2026;Пополнение;;;;10 000\n" +
+		"02.07.2026;Пополнение;;;;500\n"
+	imports := url + "/api/v1/accounts/" + acc.ID + "/imports"
+	call(t, c, "POST", imports, importBody(t, csv, "a.csv"), 200, nil)
+
+	var journal struct {
+		Operations []struct {
+			ID          string `json:"id"`
+			OccurredOn  string `json:"occurred_on"`
+			AmountMinor int64  `json:"amount_minor"`
+		} `json:"operations"`
+	}
+	call(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/operations", "", 200, &journal)
+	var first, second string
+	for _, o := range journal.Operations {
+		if o.OccurredOn == "2026-07-01" {
+			first = o.ID
+		} else {
+			second = o.ID
+		}
+	}
+	call(t, c, "PUT", url+"/api/v1/operations/"+first, fmt.Sprintf(
+		`{"account_id":%q,"type":"deposit","occurred_on":"2026-07-01","amount_minor":1100000,"currency":"RUB"}`, acc.ID), 200, nil)
+	call(t, c, "DELETE", url+"/api/v1/operations/"+second, "", 204, nil)
+
+	var again importResult
+	call(t, c, "POST", imports, importBody(t, csv, "a.csv"), 200, &again)
+	if again.Rows[0].Verdict != "duplicate" || again.Rows[1].Verdict != "new" {
+		t.Errorf("reload verdicts = %+v, want the edited row a duplicate and the deleted one back", again.Rows)
+	}
+	call(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/operations", "", 200, &journal)
+	amounts := map[string]int64{}
+	for _, o := range journal.Operations {
+		amounts[o.OccurredOn] = o.AmountMinor
+	}
+	if len(journal.Operations) != 2 || amounts["2026-07-01"] != 1_100_000 || amounts["2026-07-02"] != 50_000 {
+		t.Errorf("journal = %+v, want the edit kept and the deleted row back", journal.Operations)
+	}
+}

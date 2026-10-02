@@ -1392,7 +1392,7 @@ func (s *Service) Delete(ctx context.Context, spaceID, id uuid.UUID) error {
 		if err != nil {
 			return err
 		}
-		if op.Source != "manual" {
+		if !OwnedByHand(op.Source) {
 			return fmt.Errorf("%w: imported operations are managed by the importer", family.ErrValidation)
 		}
 

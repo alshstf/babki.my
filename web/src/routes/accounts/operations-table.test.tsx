@@ -1594,10 +1594,10 @@ describe("OperationsTable", () => {
     // 'csv' is the third value the column allows (migration 0005) and nothing
     // writes it today. It is not Т-Инвестиции, and it is not deletable either:
     // the rule is the server's — "manual" and nothing else.
-    it("does not put another importer's rows under the T-Invest name, nor make them deletable", async () => {
+    it("does not put another writer's rows under the T-Invest name, nor make them deletable", async () => {
       renderTable({
         canDelete: true,
-        operations: [makeOperation({ source: "csv" })],
+        operations: [makeOperation({ source: "registry" })],
       });
 
       expect(await screen.findByText("Загружено извне")).toBeInTheDocument();
@@ -1605,10 +1605,9 @@ describe("OperationsTable", () => {
       expect(screen.queryByRole("button", { name: "Удалить" })).not.toBeInTheDocument();
     });
 
-    // WHAT IS TRUE OF EVERY IMPORTED ROW is that this program will not delete
-    // it. That it comes BACK afterwards is true of the T-Invest import alone,
-    // which rebuilds its rows from the broker's mirror; nothing rebuilds a
-    // 'csv' row, and the shared hint used to promise that one would return.
+    // WHAT IS TRUE OF EVERY ROW ANOTHER WRITER OWNS is that this program will
+    // not delete it. That it comes BACK afterwards is promised for the T-Invest
+    // import alone, which rebuilds its rows from the broker's mirror.
     it("promises a rebuild only where something rebuilds", async () => {
       renderTable({ canDelete: true, operations: [makeOperation({ source: "tinvest" })] });
 
@@ -1618,13 +1617,23 @@ describe("OperationsTable", () => {
       );
     });
 
-    it("tells a row nothing rebuilds only that it cannot be deleted", async () => {
-      renderTable({ canDelete: true, operations: [makeOperation({ source: "csv" })] });
+    it("tells another writer's row only that it cannot be deleted", async () => {
+      renderTable({ canDelete: true, operations: [makeOperation({ source: "registry" })] });
 
       expect(await screen.findByText("Загружено извне")).toHaveAttribute(
         "title",
         "Эту операцию записал импорт, а не человек: удалить её здесь нельзя",
       );
+    });
+
+    // A row loaded from the person's own table is theirs: it says where it came
+    // from and can be deleted like a hand entry.
+    it("marks a row from a table and lets it be deleted", async () => {
+      renderTable({ canDelete: true, operations: [makeOperation({ source: "csv" })] });
+
+      expect(await screen.findByText("из таблицы")).toBeInTheDocument();
+      expect(screen.queryByText("Загружено извне")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Удалить" })).toBeInTheDocument();
     });
 
     it("keeps the source visible to a viewer, who has no delete column at all", async () => {
