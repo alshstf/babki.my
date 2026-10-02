@@ -203,11 +203,19 @@ func previewToAPI(p Preview) apitypes.ImportPreview {
 			Line:      row.Line.Number,
 			Cells:     row.Line.Cells,
 			Verdict:   apitypes.ImportRowVerdict(row.Verdict),
-			Reason:    nullable.NewNullNullable[string](),
+			Reason:    nullable.NewNullNullable[apitypes.ImportRowReason](),
 			Operation: nullable.NewNullNullable[apitypes.ImportedOperation](),
 		}
-		if row.Reason != "" {
-			item.Reason = nullable.NewNullableWithValue(row.Reason)
+		if why := row.Reason; why != nil {
+			reason := apitypes.ImportRowReason{
+				Code:  apitypes.ImportRowReasonCode(why.Code),
+				Field: nullable.NewNullNullable[apitypes.ImportField](),
+				Value: why.Value,
+			}
+			if why.Field != "" {
+				reason.Field = nullable.NewNullableWithValue(apitypes.ImportField(why.Field))
+			}
+			item.Reason = nullable.NewNullableWithValue(reason)
 		}
 		if op := row.Operation; op != nil {
 			o := apitypes.ImportedOperation{

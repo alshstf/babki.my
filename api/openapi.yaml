@@ -1558,13 +1558,29 @@ components:
         verdict:
           type: string
           enum: [new, duplicate, unparsed, refused]
-          description: "`new`: would be recorded. `duplicate`: a row with the same content was imported from a table before (the nth identical row of a file matches the nth). `unparsed`: cannot be read — `reason` says why. `refused`: read, but the journal would not take it — `reason` is the journal's own words."
-        reason: { type: string, nullable: true }
+          description: "`new`: would be recorded. `duplicate`: a row with the same content was imported from a table before (the nth identical row of a file matches the nth). `unparsed`: cannot be read — `reason` says why. `refused`: read, but the journal would not take it — `reason.code` is `engine_refused` and `reason.value` the journal's own words."
+        reason:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ImportRowReason"
         operation:
           nullable: true
           description: "What the row reads as; null when it is unparsed"
           allOf:
             - $ref: "#/components/schemas/ImportedOperation"
+    ImportRowReason:
+      type: object
+      required: [code, field, value]
+      description: "Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words."
+      properties:
+        code:
+          type: string
+          enum: [no_type, type_not_mapped, no_date, bad_date, no_paper, paper_not_found, bad_currency, no_number, bad_number, too_precise, too_large, engine_refused]
+        field:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ImportField"
+        value: { type: string }
     ImportPreview:
       type: object
       required: [mapping, header, rows]

@@ -1051,13 +1051,20 @@ export interface components {
             line: number;
             cells: string[];
             /**
-             * @description `new`: would be recorded. `duplicate`: a row with the same content was imported from a table before (the nth identical row of a file matches the nth). `unparsed`: cannot be read — `reason` says why. `refused`: read, but the journal would not take it — `reason` is the journal's own words.
+             * @description `new`: would be recorded. `duplicate`: a row with the same content was imported from a table before (the nth identical row of a file matches the nth). `unparsed`: cannot be read — `reason` says why. `refused`: read, but the journal would not take it — `reason.code` is `engine_refused` and `reason.value` the journal's own words.
              * @enum {string}
              */
             verdict: "new" | "duplicate" | "unparsed" | "refused";
-            reason?: string | null;
+            reason?: components["schemas"]["ImportRowReason"] | null;
             /** @description What the row reads as; null when it is unparsed */
             operation?: components["schemas"]["ImportedOperation"] | null;
+        };
+        /** @description Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words. */
+        ImportRowReason: {
+            /** @enum {string} */
+            code: "no_type" | "type_not_mapped" | "no_date" | "bad_date" | "no_paper" | "paper_not_found" | "bad_currency" | "no_number" | "bad_number" | "too_precise" | "too_large" | "engine_refused";
+            field: components["schemas"]["ImportField"] | null;
+            value: string;
         };
         ImportPreview: {
             mapping: components["schemas"]["ImportMapping"];

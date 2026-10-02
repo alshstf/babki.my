@@ -205,6 +205,45 @@ func (e CostBasisPerimeter) Valid() bool {
 	}
 }
 
+// Defines values for ImportField.
+const (
+	ImportFieldAmount     ImportField = "amount"
+	ImportFieldCurrency   ImportField = "currency"
+	ImportFieldDate       ImportField = "date"
+	ImportFieldFee        ImportField = "fee"
+	ImportFieldInstrument ImportField = "instrument"
+	ImportFieldNote       ImportField = "note"
+	ImportFieldPrice      ImportField = "price"
+	ImportFieldQuantity   ImportField = "quantity"
+	ImportFieldType       ImportField = "type"
+)
+
+// Valid indicates whether the value is a known member of the ImportField enum.
+func (e ImportField) Valid() bool {
+	switch e {
+	case ImportFieldAmount:
+		return true
+	case ImportFieldCurrency:
+		return true
+	case ImportFieldDate:
+		return true
+	case ImportFieldFee:
+		return true
+	case ImportFieldInstrument:
+		return true
+	case ImportFieldNote:
+		return true
+	case ImportFieldPrice:
+		return true
+	case ImportFieldQuantity:
+		return true
+	case ImportFieldType:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ImportRowVerdict.
 const (
 	Duplicate ImportRowVerdict = "duplicate"
@@ -223,6 +262,54 @@ func (e ImportRowVerdict) Valid() bool {
 	case Refused:
 		return true
 	case Unparsed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ImportRowReasonCode.
+const (
+	ImportRowReasonCodeBadCurrency   ImportRowReasonCode = "bad_currency"
+	ImportRowReasonCodeBadDate       ImportRowReasonCode = "bad_date"
+	ImportRowReasonCodeBadNumber     ImportRowReasonCode = "bad_number"
+	ImportRowReasonCodeEngineRefused ImportRowReasonCode = "engine_refused"
+	ImportRowReasonCodeNoDate        ImportRowReasonCode = "no_date"
+	ImportRowReasonCodeNoNumber      ImportRowReasonCode = "no_number"
+	ImportRowReasonCodeNoPaper       ImportRowReasonCode = "no_paper"
+	ImportRowReasonCodeNoType        ImportRowReasonCode = "no_type"
+	ImportRowReasonCodePaperNotFound ImportRowReasonCode = "paper_not_found"
+	ImportRowReasonCodeTooLarge      ImportRowReasonCode = "too_large"
+	ImportRowReasonCodeTooPrecise    ImportRowReasonCode = "too_precise"
+	ImportRowReasonCodeTypeNotMapped ImportRowReasonCode = "type_not_mapped"
+)
+
+// Valid indicates whether the value is a known member of the ImportRowReasonCode enum.
+func (e ImportRowReasonCode) Valid() bool {
+	switch e {
+	case ImportRowReasonCodeBadCurrency:
+		return true
+	case ImportRowReasonCodeBadDate:
+		return true
+	case ImportRowReasonCodeBadNumber:
+		return true
+	case ImportRowReasonCodeEngineRefused:
+		return true
+	case ImportRowReasonCodeNoDate:
+		return true
+	case ImportRowReasonCodeNoNumber:
+		return true
+	case ImportRowReasonCodeNoPaper:
+		return true
+	case ImportRowReasonCodeNoType:
+		return true
+	case ImportRowReasonCodePaperNotFound:
+		return true
+	case ImportRowReasonCodeTooLarge:
+		return true
+	case ImportRowReasonCodeTooPrecise:
+		return true
+	case ImportRowReasonCodeTypeNotMapped:
 		return true
 	default:
 		return false
@@ -627,64 +714,64 @@ func (e TinvestSyncTrigger) Valid() bool {
 
 // Defines values for TinvestUnparsedReason.
 const (
-	AmountOutOfBounds            TinvestUnparsedReason = "amount_out_of_bounds"
-	BrokerFeeParentExplained     TinvestUnparsedReason = "broker_fee_parent_explained"
-	BrokerFeeParentMissing       TinvestUnparsedReason = "broker_fee_parent_missing"
-	CommissionRefund             TinvestUnparsedReason = "commission_refund"
-	CurrencyTrade                TinvestUnparsedReason = "currency_trade"
-	EngineRefused                TinvestUnparsedReason = "engine_refused"
-	FundPayoutUnitsUnknown       TinvestUnparsedReason = "fund_payout_units_unknown"
-	InstrumentUnresolved         TinvestUnparsedReason = "instrument_unresolved"
-	ProjectionIncomplete         TinvestUnparsedReason = "projection_incomplete"
-	RedemptionNothingHeld        TinvestUnparsedReason = "redemption_nothing_held"
-	RedemptionWithoutQuantity    TinvestUnparsedReason = "redemption_without_quantity"
-	TradeWithoutFilledQuantity   TinvestUnparsedReason = "trade_without_filled_quantity"
-	TransferDirectionUnknown     TinvestUnparsedReason = "transfer_direction_unknown"
-	TransferQuantityContradicted TinvestUnparsedReason = "transfer_quantity_contradicted"
-	TransferWithoutQuantity      TinvestUnparsedReason = "transfer_without_quantity"
-	UnrepresentableAmount        TinvestUnparsedReason = "unrepresentable_amount"
-	UnrepresentableQuantity      TinvestUnparsedReason = "unrepresentable_quantity"
-	UnsupportedType              TinvestUnparsedReason = "unsupported_type"
+	TinvestUnparsedReasonAmountOutOfBounds            TinvestUnparsedReason = "amount_out_of_bounds"
+	TinvestUnparsedReasonBrokerFeeParentExplained     TinvestUnparsedReason = "broker_fee_parent_explained"
+	TinvestUnparsedReasonBrokerFeeParentMissing       TinvestUnparsedReason = "broker_fee_parent_missing"
+	TinvestUnparsedReasonCommissionRefund             TinvestUnparsedReason = "commission_refund"
+	TinvestUnparsedReasonCurrencyTrade                TinvestUnparsedReason = "currency_trade"
+	TinvestUnparsedReasonEngineRefused                TinvestUnparsedReason = "engine_refused"
+	TinvestUnparsedReasonFundPayoutUnitsUnknown       TinvestUnparsedReason = "fund_payout_units_unknown"
+	TinvestUnparsedReasonInstrumentUnresolved         TinvestUnparsedReason = "instrument_unresolved"
+	TinvestUnparsedReasonProjectionIncomplete         TinvestUnparsedReason = "projection_incomplete"
+	TinvestUnparsedReasonRedemptionNothingHeld        TinvestUnparsedReason = "redemption_nothing_held"
+	TinvestUnparsedReasonRedemptionWithoutQuantity    TinvestUnparsedReason = "redemption_without_quantity"
+	TinvestUnparsedReasonTradeWithoutFilledQuantity   TinvestUnparsedReason = "trade_without_filled_quantity"
+	TinvestUnparsedReasonTransferDirectionUnknown     TinvestUnparsedReason = "transfer_direction_unknown"
+	TinvestUnparsedReasonTransferQuantityContradicted TinvestUnparsedReason = "transfer_quantity_contradicted"
+	TinvestUnparsedReasonTransferWithoutQuantity      TinvestUnparsedReason = "transfer_without_quantity"
+	TinvestUnparsedReasonUnrepresentableAmount        TinvestUnparsedReason = "unrepresentable_amount"
+	TinvestUnparsedReasonUnrepresentableQuantity      TinvestUnparsedReason = "unrepresentable_quantity"
+	TinvestUnparsedReasonUnsupportedType              TinvestUnparsedReason = "unsupported_type"
 )
 
 // Valid indicates whether the value is a known member of the TinvestUnparsedReason enum.
 func (e TinvestUnparsedReason) Valid() bool {
 	switch e {
-	case AmountOutOfBounds:
+	case TinvestUnparsedReasonAmountOutOfBounds:
 		return true
-	case BrokerFeeParentExplained:
+	case TinvestUnparsedReasonBrokerFeeParentExplained:
 		return true
-	case BrokerFeeParentMissing:
+	case TinvestUnparsedReasonBrokerFeeParentMissing:
 		return true
-	case CommissionRefund:
+	case TinvestUnparsedReasonCommissionRefund:
 		return true
-	case CurrencyTrade:
+	case TinvestUnparsedReasonCurrencyTrade:
 		return true
-	case EngineRefused:
+	case TinvestUnparsedReasonEngineRefused:
 		return true
-	case FundPayoutUnitsUnknown:
+	case TinvestUnparsedReasonFundPayoutUnitsUnknown:
 		return true
-	case InstrumentUnresolved:
+	case TinvestUnparsedReasonInstrumentUnresolved:
 		return true
-	case ProjectionIncomplete:
+	case TinvestUnparsedReasonProjectionIncomplete:
 		return true
-	case RedemptionNothingHeld:
+	case TinvestUnparsedReasonRedemptionNothingHeld:
 		return true
-	case RedemptionWithoutQuantity:
+	case TinvestUnparsedReasonRedemptionWithoutQuantity:
 		return true
-	case TradeWithoutFilledQuantity:
+	case TinvestUnparsedReasonTradeWithoutFilledQuantity:
 		return true
-	case TransferDirectionUnknown:
+	case TinvestUnparsedReasonTransferDirectionUnknown:
 		return true
-	case TransferQuantityContradicted:
+	case TinvestUnparsedReasonTransferQuantityContradicted:
 		return true
-	case TransferWithoutQuantity:
+	case TinvestUnparsedReasonTransferWithoutQuantity:
 		return true
-	case UnrepresentableAmount:
+	case TinvestUnparsedReasonUnrepresentableAmount:
 		return true
-	case UnrepresentableQuantity:
+	case TinvestUnparsedReasonUnrepresentableQuantity:
 		return true
-	case UnsupportedType:
+	case TinvestUnparsedReasonUnsupportedType:
 		return true
 	default:
 		return false
@@ -1098,6 +1185,9 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
+// ImportField defines model for ImportField.
+type ImportField string
+
 // ImportMapping defines model for ImportMapping.
 type ImportMapping struct {
 	// Columns Field name → 0-based column index. A field with no column is absent. `instrument` takes an ISIN or a ticker; a trade with no `amount` has it worked out from quantity × price.
@@ -1134,14 +1224,24 @@ type ImportRow struct {
 
 	// Operation What the row reads as; null when it is unparsed
 	Operation nullable.Nullable[ImportedOperation] `json:"operation,omitempty"`
-	Reason    nullable.Nullable[string]            `json:"reason,omitempty"`
+	Reason    nullable.Nullable[ImportRowReason]   `json:"reason,omitempty"`
 
-	// Verdict `new`: would be recorded. `duplicate`: a row with the same content was imported from a table before (the nth identical row of a file matches the nth). `unparsed`: cannot be read — `reason` says why. `refused`: read, but the journal would not take it — `reason` is the journal's own words.
+	// Verdict `new`: would be recorded. `duplicate`: a row with the same content was imported from a table before (the nth identical row of a file matches the nth). `unparsed`: cannot be read — `reason` says why. `refused`: read, but the journal would not take it — `reason.code` is `engine_refused` and `reason.value` the journal's own words.
 	Verdict ImportRowVerdict `json:"verdict"`
 }
 
-// ImportRowVerdict `new`: would be recorded. `duplicate`: a row with the same content was imported from a table before (the nth identical row of a file matches the nth). `unparsed`: cannot be read — `reason` says why. `refused`: read, but the journal would not take it — `reason` is the journal's own words.
+// ImportRowVerdict `new`: would be recorded. `duplicate`: a row with the same content was imported from a table before (the nth identical row of a file matches the nth). `unparsed`: cannot be read — `reason` says why. `refused`: read, but the journal would not take it — `reason.code` is `engine_refused` and `reason.value` the journal's own words.
 type ImportRowVerdict string
+
+// ImportRowReason Why a row is not imported: a code for the screen to word, the field it stopped on and the cell's own text, untranslated — or, for engine_refused, the journal's words.
+type ImportRowReason struct {
+	Code  ImportRowReasonCode            `json:"code"`
+	Field nullable.Nullable[ImportField] `json:"field"`
+	Value string                         `json:"value"`
+}
+
+// ImportRowReasonCode defines model for ImportRowReason.Code.
+type ImportRowReasonCode string
 
 // ImportTableRequest defines model for ImportTableRequest.
 type ImportTableRequest struct {

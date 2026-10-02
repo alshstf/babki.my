@@ -29,14 +29,40 @@ type catalog interface {
 	ByTickerTradable(ctx context.Context, ticker string) (instrument.Instrument, error)
 }
 
-// Unreadable is a row this package cannot turn into an operation, with the
-// reason in words for the person who has the file open.
-type Unreadable struct{ Reason string }
+// Reason is why a row was not imported, as a code the screen words in the
+// person's language.
+type Reason string
 
-func (u *Unreadable) Error() string { return u.Reason }
+const (
+	ReasonNoType        Reason = "no_type"
+	ReasonTypeNotMapped Reason = "type_not_mapped"
+	ReasonNoDate        Reason = "no_date"
+	ReasonBadDate       Reason = "bad_date"
+	ReasonNoPaper       Reason = "no_paper"
+	ReasonPaperNotFound Reason = "paper_not_found"
+	ReasonBadCurrency   Reason = "bad_currency"
+	ReasonNoNumber      Reason = "no_number"
+	ReasonBadNumber     Reason = "bad_number"
+	ReasonTooPrecise    Reason = "too_precise"
+	ReasonTooLarge      Reason = "too_large"
+	// ReasonEngineRefused is the journal's refusal; Value carries its words.
+	ReasonEngineRefused Reason = "engine_refused"
+)
 
-func unreadable(format string, args ...any) *Unreadable {
-	return &Unreadable{Reason: fmt.Sprintf(format, args...)}
+// Unreadable is a row this package cannot turn into an operation: why, which
+// field it stopped on (empty when none), and the cell's own text.
+type Unreadable struct {
+	Code  Reason
+	Field Field
+	Value string
+}
+
+func (u *Unreadable) Error() string {
+	return fmt.Sprintf("%s %s %q", u.Code, u.Field, u.Value)
+}
+
+func unreadable(code Reason, field Field, value string) *Unreadable {
+	return &Unreadable{Code: code, Field: field, Value: value}
 }
 
 var isinPattern = regexp.MustCompile(`^[A-Z]{2}[A-Z0-9]{9}[0-9]$`)
@@ -66,9 +92,9 @@ func (r *reader) read(ctx context.Context, line Line) (operation.Operation, erro
 	typ, ok := r.mapping.Types[typeKey(typeCell)]
 	if !ok {
 		if typeCell == "" {
-			return op, unreadable("no operation type")
+			return op, unreadable(ReasonNoType, FieldType, "")
 		}
-		return op, unreadable("operation type %q is not mapped to any operation", typeCell)
+		return op, unreadable(ReasonTypeNotMapped, FieldType, typeCell)
 	}
 	op.Type = typ
 
@@ -85,7 +111,7 @@ func (r *reader) read(ctx context.Context, line Line) (operation.Operation, erro
 	if paper != nil {
 		op.InstrumentID = &paper.ID
 	} else if typ == operation.TypeBuy || typ == operation.TypeSell || typ == operation.TypeAmortization {
-		return op, unreadable("a %s names a paper, and this row names none", typ)
+		return op, unreadable(ReasonNoPaper, FieldInstrument, "")
 	}
 
 	op.Currency = r.currency
@@ -95,17 +121,17 @@ func (r *reader) read(ctx context.Context, line Line) (operation.Operation, erro
 	if c := r.cell(line, FieldCurrency); c != "" {
 		code, ok := currencyCode(c)
 		if !ok {
-			return op, unreadable("currency %q is not one this program knows", c)
+			return op, unreadable(ReasonBadCurrency, FieldCurrency, c)
 		}
 		op.Currency = code
 	}
 
 	if typ == operation.TypeBuy || typ == operation.TypeSell {
-		qty, _, err := parseNumber(r.cell(line, FieldQuantity), "quantity")
+		qty, _, err := parseNumber(r.cell(line, FieldQuantity), FieldQuantity)
 		if err != nil {
 			return op, err
 		}
-		price, _, err := parseNumber(r.cell(line, FieldPrice), "price")
+		price, _, err := parseNumber(r.cell(line, FieldPrice), FieldPrice)
 		if err != nil {
 			return op, err
 		}
@@ -120,11 +146,11 @@ func (r *reader) read(ctx context.Context, line Line) (operation.Operation, erro
 	op.AmountMinor = amount
 
 	if c := r.cell(line, FieldFee); c != "" {
-		fee, _, err := parseNumber(c, "fee")
+		fee, _, err := parseNumber(c, FieldFee)
 		if err != nil {
 			return op, err
 		}
-		if op.FeeMinor, err = minor(fee.Abs(), "fee"); err != nil {
+		if op.FeeMinor, err = minor(fee.Abs(), FieldFee, c); err != nil {
 			return op, err
 		}
 	}
@@ -142,17 +168,17 @@ func (r *reader) amount(line Line, typ operation.Type, op operation.Operation) (
 		if op.Quantity != nil && op.Price != nil {
 			v, err := operation.TradeAmountMinor(typ, *op.Quantity, *op.Price)
 			if err != nil {
-				return 0, unreadable("quantity × price: %v", err)
+				return 0, unreadable(ReasonTooLarge, FieldAmount, op.Quantity.String()+" × "+op.Price.String())
 			}
 			return v, nil
 		}
-		return 0, unreadable("no amount")
+		return 0, unreadable(ReasonNoNumber, FieldAmount, "")
 	}
-	v, _, err := parseNumber(cell, "amount")
+	v, _, err := parseNumber(cell, FieldAmount)
 	if err != nil {
 		return 0, err
 	}
-	m, err := minor(v.Abs(), "amount")
+	m, err := minor(v.Abs(), FieldAmount, cell)
 	if err != nil {
 		return 0, err
 	}
@@ -173,7 +199,7 @@ func (r *reader) instrument(ctx context.Context, cell string) (*instrument.Instr
 	}
 	if paper, seen := r.known[cell]; seen {
 		if paper == nil {
-			return nil, unreadable("paper %q is not in the catalog", cell)
+			return nil, unreadable(ReasonPaperNotFound, FieldInstrument, cell)
 		}
 		return paper, nil
 	}
@@ -188,7 +214,7 @@ func (r *reader) instrument(ctx context.Context, cell string) (*instrument.Instr
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		r.known[cell] = nil
-		return nil, unreadable("paper %q is not in the catalog", cell)
+		return nil, unreadable(ReasonPaperNotFound, FieldInstrument, cell)
 	}
 	if err != nil {
 		return nil, err
@@ -203,8 +229,9 @@ var dayLayouts = []string{"02.01.2006", "2006-01-02", "02/01/2006", "2.1.2006", 
 func parseDay(cell string) (time.Time, error) {
 	cell = strings.TrimSpace(cell)
 	if cell == "" {
-		return time.Time{}, unreadable("no date")
+		return time.Time{}, unreadable(ReasonNoDate, FieldDate, "")
 	}
+	original := cell
 	if i := strings.IndexAny(cell, " T"); i > 0 {
 		cell = cell[:i]
 	}
@@ -213,14 +240,14 @@ func parseDay(cell string) (time.Time, error) {
 			return d, nil
 		}
 	}
-	return time.Time{}, unreadable("date %q is not one of ДД.ММ.ГГГГ, ГГГГ-ММ-ДД, ДД/ММ/ГГГГ", cell)
+	return time.Time{}, unreadable(ReasonBadDate, FieldDate, original)
 }
 
 // parseNumber reads a number as exports write it: blanks and apostrophes
 // between thousands, a decimal comma or point, a minus of any dash or a
 // bracketed amount. When a cell has both a comma and a point, the last of them
 // is the decimal mark.
-func parseNumber(cell, what string) (decimal.Decimal, bool, error) {
+func parseNumber(cell string, what Field) (decimal.Decimal, bool, error) {
 	s := strings.Map(func(r rune) rune {
 		switch r {
 		case ' ', ' ', ' ', '\'', '’':
@@ -235,7 +262,7 @@ func parseNumber(cell, what string) (decimal.Decimal, bool, error) {
 		s, negative = s[1:len(s)-1], true
 	}
 	if s == "" {
-		return decimal.Zero, false, unreadable("no %s", what)
+		return decimal.Zero, false, unreadable(ReasonNoNumber, what, "")
 	}
 	comma, point := strings.LastIndex(s, ","), strings.LastIndex(s, ".")
 	switch {
@@ -246,13 +273,13 @@ func parseNumber(cell, what string) (decimal.Decimal, bool, error) {
 		s = strings.ReplaceAll(s, ",", "")
 	case comma >= 0:
 		if strings.Count(s, ",") > 1 {
-			return decimal.Zero, false, unreadable("%s %q is not a number", what, cell)
+			return decimal.Zero, false, unreadable(ReasonBadNumber, what, cell)
 		}
 		s = strings.Replace(s, ",", ".", 1)
 	}
 	d, err := decimal.NewFromString(s)
 	if err != nil {
-		return decimal.Zero, false, unreadable("%s %q is not a number", what, cell)
+		return decimal.Zero, false, unreadable(ReasonBadNumber, what, cell)
 	}
 	if negative {
 		d = d.Neg()
@@ -262,14 +289,14 @@ func parseNumber(cell, what string) (decimal.Decimal, bool, error) {
 
 // minor is an amount in minor units. More than two decimal places is refused
 // rather than rounded: a figure the file states is not changed in silence.
-func minor(d decimal.Decimal, what string) (int64, error) {
+func minor(d decimal.Decimal, what Field, cell string) (int64, error) {
 	shifted := d.Shift(2)
 	if !shifted.Equal(shifted.Truncate(0)) {
-		return 0, unreadable("%s %s has more than two decimal places", what, d)
+		return 0, unreadable(ReasonTooPrecise, what, cell)
 	}
 	v, err := money.Minor(shifted)
 	if err != nil {
-		return 0, unreadable("%s %s is too large", what, d)
+		return 0, unreadable(ReasonTooLarge, what, cell)
 	}
 	return v, nil
 }

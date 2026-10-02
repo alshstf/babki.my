@@ -27,7 +27,7 @@ const (
 type Row struct {
 	Line      Line
 	Verdict   Verdict
-	Reason    string
+	Reason    *Unreadable // why the row is unparsed or refused; nil otherwise
 	Operation *operation.Operation
 }
 
@@ -101,7 +101,7 @@ func (s *Service) Preview(ctx context.Context, spaceID, accountID uuid.UUID, con
 		var bad *Unreadable
 		switch {
 		case errors.As(err, &bad):
-			row.Verdict, row.Reason = VerdictUnparsed, bad.Reason
+			row.Verdict, row.Reason = VerdictUnparsed, bad
 		case err != nil:
 			return Preview{}, err
 		default:
@@ -141,8 +141,13 @@ func (s *Service) Preview(ctx context.Context, spaceID, accountID uuid.UUID, con
 	}
 	for _, ref := range refused {
 		if i, ok := byID[ref.ExternalID]; ok {
-			out.Rows[i].Verdict, out.Rows[i].Reason = VerdictRefused, ref.Err.Error()
+			out.Rows[i].Verdict, out.Rows[i].Reason = VerdictRefused, refusal(ref)
 		}
 	}
 	return out, nil
+}
+
+// refusal is the journal's refusal of a row, its words carried as they are.
+func refusal(ref operation.ImportRefusal) *Unreadable {
+	return unreadable(ReasonEngineRefused, "", ref.Err.Error())
 }

@@ -77,9 +77,13 @@ type preview struct {
 	} `json:"mapping"`
 	Header []string `json:"header"`
 	Rows   []struct {
-		Line      int     `json:"line"`
-		Verdict   string  `json:"verdict"`
-		Reason    *string `json:"reason"`
+		Line    int    `json:"line"`
+		Verdict string `json:"verdict"`
+		Reason  *struct {
+			Code  string  `json:"code"`
+			Field *string `json:"field"`
+			Value string  `json:"value"`
+		} `json:"reason"`
 		Operation *struct {
 			Type         string  `json:"type"`
 			OccurredOn   string  `json:"occurred_on"`
@@ -124,7 +128,7 @@ func TestATableIsPreviewedRowByRow(t *testing.T) {
 		if row.Verdict != want[row.Line] {
 			reason := ""
 			if row.Reason != nil {
-				reason = *row.Reason
+				reason = row.Reason.Code + " " + row.Reason.Value
 			}
 			t.Errorf("line %d = %s (%s), want %s", row.Line, row.Verdict, reason, want[row.Line])
 		}
@@ -139,8 +143,18 @@ func TestATableIsPreviewedRowByRow(t *testing.T) {
 	if dep := got.Rows[0].Operation; dep == nil || dep.AmountMinor != 1_000_000 || dep.Currency != "RUB" {
 		t.Errorf("line 2 reads as %+v, want a deposit of 10 000 ₽", dep)
 	}
-	if r := got.Rows[3].Reason; r == nil || !strings.Contains(*r, "quantity") {
-		t.Errorf("line 5's reason = %v, want the journal's own words about the quantity", r)
+	if r := got.Rows[3].Reason; r == nil || r.Code != "engine_refused" || !strings.Contains(r.Value, "quantity") {
+		t.Errorf("line 5's reason = %+v, want the journal's own words about the quantity", r)
+	}
+	for line, want := range map[int][3]string{
+		6: {"paper_not_found", "instrument", "GAZP"},
+		7: {"bad_date", "date", "32.07.2026"},
+		8: {"type_not_mapped", "type", "Перевод"},
+	} {
+		r := got.Rows[line-2].Reason
+		if r == nil || r.Code != want[0] || r.Field == nil || *r.Field != want[1] || r.Value != want[2] {
+			t.Errorf("line %d's reason = %+v, want %v", line, r, want)
+		}
 	}
 
 	var journal struct {

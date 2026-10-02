@@ -166,6 +166,11 @@ export function AccountDetailPage() {
                 <DropdownMenuItem onSelect={() => setAction("arrival")}>
                   {t("arrival.menuItem")}
                 </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link to="/accounts/$accountId/import" params={{ accountId }}>
+                    {t("tableImport.menuItem")}
+                  </Link>
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           )}
