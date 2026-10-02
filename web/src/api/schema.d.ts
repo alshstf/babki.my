@@ -68,6 +68,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Replaces the caller's password once the current one is given. Every other session of the caller ends; this one is renewed and goes on. 400 for a wrong current password (counted against the same lock as sign-in, 429 once it closes) or a new one outside the rule. */
+        post: operations["changePassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/sign-out-elsewhere": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Ends every session of the caller but this one, which is renewed and goes on. */
+        post: operations["signOutElsewhere"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/me": {
         parameters: {
             query?: never;
@@ -980,6 +1014,11 @@ export interface components {
             fee_minor?: number;
             /** @description Date YYYY-MM-DD the shares were bought: not after the day they arrived. Optional — a price without its day still counts, but cannot be converted into another currency (Position.has_undated_lots). */
             acquired_on?: string | null;
+        };
+        ChangePasswordRequest: {
+            current_password: string;
+            /** @description The same rule as SetupRequest.password: eight to 1024 characters, counted as Unicode code points. */
+            new_password: string;
         };
         /**
          * @description NEITHER FIELD CARRIES THE RULE ITS TWIN ON SetupRequest CARRIES, and that is the point of this schema rather than an omission. Login reads the username straight out of the table and compares the password against the hash it finds (internal/family/auth.go, Login); no shape and no length is judged, and every failure — a malformed name, a name nobody has, a wrong password — comes back as the same 401, on purpose, so that a caller cannot enumerate users by the answers it gets.
@@ -2576,6 +2615,50 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Signed out */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    changePassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Changed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    signOutElsewhere: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Done */
             204: {
                 headers: {
                     [name: string]: unknown;

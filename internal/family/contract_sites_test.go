@@ -132,6 +132,21 @@ func TestTheContractStatesThePasswordLengthTheServerEnforces(t *testing.T) {
 	}
 }
 
+// TestTheContractStatesTheNewPasswordRule ties the change-password door to the
+// same rule: a new password is held to what a first one is.
+func TestTheContractStatesTheNewPasswordRule(t *testing.T) {
+	prop, ok := readContract(t).Components.Schemas["ChangePasswordRequest"].Properties["new_password"]
+	if !ok {
+		t.Fatal("api/openapi.yaml ChangePasswordRequest has no `new_password` property")
+	}
+	if prop.MinLength == nil || *prop.MinLength != family.MinPasswordRunes {
+		t.Errorf("ChangePasswordRequest.new_password minLength = %s, want %d", shownInt(prop.MinLength), family.MinPasswordRunes)
+	}
+	if prop.MaxLength == nil || *prop.MaxLength != family.MaxPasswordRunes {
+		t.Errorf("ChangePasswordRequest.new_password maxLength = %s, want %d", shownInt(prop.MaxLength), family.MaxPasswordRunes)
+	}
+}
+
 // TestTheContractStatesTheNamesTheServerRefusesEmpty covers every name in this
 // API whose only rule is that it is not "".
 //

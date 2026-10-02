@@ -1,12 +1,13 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link, Outlet } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { LogOut, Settings, Users, Wallet } from "lucide-react";
+import { KeyRound, LogOut, Settings, Users, Wallet } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DisplayCurrencyToggle } from "@/components/display-currency-toggle";
 import { useLogout, useSession } from "@/api/session";
+import { PasswordDialog } from "@/components/password-dialog";
 import {
   ScreenCurrencyCountProvider,
   useHasMultipleScreenCurrencies,
@@ -43,6 +44,7 @@ export function AppLayout() {
   const { t } = useTranslation();
   const { data: session } = useSession();
   const logout = useLogout();
+  const [passwordOpen, setPasswordOpen] = useState(false);
 
   return (
     // The screen-currency-count provider must wrap both the header (which
@@ -86,6 +88,15 @@ export function AppLayout() {
                 <Button
                   variant="ghost"
                   size="icon"
+                  aria-label={t("password.menu")}
+                  title={t("password.menu")}
+                  onClick={() => setPasswordOpen(true)}
+                >
+                  <KeyRound className="size-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
                   aria-label={t("auth.signOut")}
                   onClick={() => logout.mutate()}
                   disabled={logout.isPending}
@@ -109,6 +120,7 @@ export function AppLayout() {
           <main className="min-w-0 flex-1 p-4 md:p-6">
             <Outlet />
           </main>
+          <PasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
         </div>
       </div>
     </ScreenCurrencyCountProvider>

@@ -17,6 +17,10 @@ import (
 
 const sessionUserKey = "user_id"
 
+// sessionSignedInKey is when the session was signed in, in Unix nanoseconds: a
+// session older than its user's sessions_revoked_at no longer counts.
+const sessionSignedInKey = "signed_in_at"
+
 type ctxKey int
 
 const principalCtxKey ctxKey = 1
@@ -44,10 +48,17 @@ func NewAuth(sm *scs.SessionManager, store *Store) *Auth { return &Auth{sm: sm, 
 
 // SignIn rotates the session token and binds it to the user.
 func (a *Auth) SignIn(ctx context.Context, userID uuid.UUID) error {
+	return a.SignInAt(ctx, userID, time.Now())
+}
+
+// SignInAt is SignIn with the moment the session counts from: the moment the
+// user's other sessions were ended, when this one is to outlive them.
+func (a *Auth) SignInAt(ctx context.Context, userID uuid.UUID, at time.Time) error {
 	if err := a.sm.RenewToken(ctx); err != nil {
 		return err
 	}
 	a.sm.Put(ctx, sessionUserKey, userID.String())
+	a.sm.Put(ctx, sessionSignedInKey, at.UnixNano())
 	return nil
 }
 
@@ -68,13 +79,21 @@ func (a *Auth) RequireAuth(next http.Handler) http.Handler {
 			httpjson.Error(w, http.StatusUnauthorized, "invalid session")
 			return
 		}
-		p, err := a.store.MembershipFor(r.Context(), userID)
+		p, revoked, err := a.store.sessionFor(r.Context(), userID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			httpjson.Error(w, http.StatusUnauthorized, "membership not found")
 			return
 		}
 		if err != nil {
 			httpjson.Error(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		// A session signed in before the user's password changed, or before they
+		// signed out everywhere else, is over. One from before signed-in times
+		// were kept reads as signed in at zero, and is over too.
+		if revoked != nil && a.sm.GetInt64(r.Context(), sessionSignedInKey) < revoked.UnixNano() {
+			_ = a.sm.Destroy(r.Context())
+			httpjson.Error(w, http.StatusUnauthorized, "session ended")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(

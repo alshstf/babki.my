@@ -63,6 +63,30 @@ paths:
       responses:
         "204": { description: Signed out }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/auth/password:
+    post:
+      operationId: changePassword
+      description: >-
+        Replaces the caller's password once the current one is given. Every other session of the
+        caller ends; this one is renewed and goes on. 400 for a wrong current password (counted
+        against the same lock as sign-in, 429 once it closes) or a new one outside the rule.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChangePasswordRequest" }
+      responses:
+        "204": { description: Changed }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /api/v1/auth/sign-out-elsewhere:
+    post:
+      operationId: signOutElsewhere
+      description: Ends every session of the caller but this one, which is renewed and goes on.
+      responses:
+        "204": { description: Done }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/auth/me:
     get:
       operationId: getMe
@@ -1502,6 +1526,16 @@ components:
           type: string
           nullable: true
           description: "Date YYYY-MM-DD the shares were bought: not after the day they arrived. Optional — a price without its day still counts, but cannot be converted into another currency (Position.has_undated_lots)."
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password: { type: string, maxLength: 1024 }
+        new_password:
+          type: string
+          minLength: 8
+          maxLength: 1024
+          description: "The same rule as SetupRequest.password: eight to 1024 characters, counted as Unicode code points."
     LoginRequest:
       type: object
       description: >-
