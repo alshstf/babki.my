@@ -26,6 +26,7 @@ import { AccountDialog } from "./account-dialog";
 import { BalanceDialog } from "./balance-dialog";
 import { RowMenu } from "./row-menu";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
+import { StaleSourcesNotice } from "@/components/data-sources";
 import { queryState, refreshFailed } from "@/lib/query-state";
 
 export function AccountsPage() {
@@ -90,6 +91,7 @@ export function AccountsPage() {
         )}
       </div>
       <RefreshFailedNotice show={refreshFailed(accounts, summary)} />
+      <StaleSourcesNotice canOpenSettings={session?.role === "owner"} />
       {summary.data && <SummaryCards summary={summary.data} mode={mode} />}
       <CapitalChart />
       <FamilyReturnLine />

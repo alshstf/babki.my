@@ -1,9 +1,12 @@
 package jobs
 
 import (
+	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // ScheduleEntry is one line of the schedule as a test reads it.
@@ -27,3 +30,8 @@ func AttemptsWithin(interval time.Duration) int { return attemptsWithin(interval
 
 // TinvestSyncInterval exposes how often a connection's sync is dispatched.
 const TinvestSyncInterval = tinvestSyncInterval
+
+// NewOutcomeHook exposes the hook that records how jobs end.
+func NewOutcomeHook(pool *pgxpool.Pool, log *slog.Logger) rivertype.HookWorkEnd {
+	return &outcomeHook{pool: pool, log: log}
+}

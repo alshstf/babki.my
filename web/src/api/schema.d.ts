@@ -389,6 +389,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/data-sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description How the background jobs that fetch outside data last ended — the exchange's prices and their history, the central bank's rates, the broker's operations and prices, the exchange's splits: when each last succeeded, and when and how it last failed. `stale` is true when a source has not succeeded for three of its intervals, or never has while it has failed. */
+        get: operations["listDataSources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/capital": {
         parameters: {
             query?: never;
@@ -1443,6 +1460,19 @@ export interface components {
             source: string;
             source_ref: string;
             note: string;
+        };
+        DataSource: {
+            /** @description The job: marketdata.refresh_quotes, marketdata.backfill_quotes, marketdata.refresh_fx, marketdata.backfill_fx, tinvest.sync, tinvest.refresh_quotes, tinvest.backfill_quotes, corporateaction.refresh_moex_splits */
+            kind: string;
+            /** @description How often it runs */
+            every_seconds: number;
+            /** Format: date-time */
+            last_success_at: string | null;
+            /** Format: date-time */
+            last_failure_at: string | null;
+            /** @description The last failure's text, cut to 300 characters; empty when it never failed */
+            last_error: string;
+            stale: boolean;
         };
         PeriodReturn: {
             /** @description The space's base currency */
@@ -3219,6 +3249,27 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+        };
+    };
+    listDataSources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sources, in a fixed order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataSource"][];
+                };
+            };
+            401: components["responses"]["Error"];
         };
     };
     getCapital: {

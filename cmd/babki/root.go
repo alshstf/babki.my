@@ -103,6 +103,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	operation.NewHandler(opSvc, opStore, famStore, converter, famAuth, famSM).Mount(srv)
 	positions := portfolio.NewHandler(opStore, instStore, mdStore, converter, famStore, famAuth, famSM)
 	positions.Mount(srv)
+	jobs.NewStatusHandler(r.pool, famAuth, famSM).Mount(srv)
 	accStore := account.NewStore(r.pool)
 	account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM).Mount(srv)
 	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(r.pool),

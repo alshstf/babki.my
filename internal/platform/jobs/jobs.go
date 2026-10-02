@@ -333,6 +333,7 @@ func newClient(pool *pgxpool.Pool, workers *river.Workers, log *slog.Logger) (*r
 	}
 	return river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Logger:          log,
+		Hooks:           []rivertype.Hook{&outcomeHook{pool: pool, log: log}},
 		Workers:         workers,
 		SoftStopTimeout: SoftStopTimeout,
 		Queues: map[string]river.QueueConfig{
