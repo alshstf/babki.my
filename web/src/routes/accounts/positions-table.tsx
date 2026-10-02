@@ -32,6 +32,7 @@ import type {
   Position,
 } from "@/api/positions";
 import type { PricedPaper } from "./purchase-price-dialog";
+import type { QuotedPaper } from "./state-price-dialog";
 
 // The one sentence that captions EVERY money cell of a row, chosen from the
 // term the server says it stopped on (Position.in_base_gap). It is the row's
@@ -432,6 +433,7 @@ export function PositionsTable({
   mode,
   baseCurrency,
   onPriceUnknown,
+  onStatePrice,
 }: {
   positions: Position[];
   // THE MONEY, AMONG THE PAPERS. Cash is a holding: yuan on the account was
@@ -450,6 +452,9 @@ export function PositionsTable({
   // What «указать цену» beside a paper with no purchase price opens. Absent for
   // a reader who cannot write — the note then says the fact and offers nothing.
   onPriceUnknown?: (paper: PricedPaper) => void;
+  // What «указать цену» on a paper nobody quotes opens. Absent for a reader
+  // who cannot write.
+  onStatePrice?: (paper: QuotedPaper) => void;
 }) {
   const { t } = useTranslation();
   // A position row's money amounts are denominated in the position's own
@@ -883,6 +888,30 @@ export function PositionsTable({
                           months out of date is still what the valuation above
                           is struck from and still what every total counts, and
                           until now the only place that said so was a tooltip. */}
+                      {position.price_by_hand && (
+                        <div data-testid="position-price-by-hand" className="text-xs text-muted-foreground">
+                          {t("positions.priceByHand")}
+                          {onStatePrice && (
+                            <>
+                              {" · "}
+                              <button
+                                type="button"
+                                className="underline underline-offset-2"
+                                onClick={() =>
+                                  onStatePrice({
+                                    id: position.instrument.id,
+                                    name: position.instrument.name,
+                                    currency: position.instrument.currency,
+                                    bond: position.instrument.type === "bond",
+                                  })
+                                }
+                              >
+                                {t("positions.statePriceAgain")}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
                       {position.price_on && staleSince(position.price_on) && (
                         <div
                           data-testid="position-price-stale"
@@ -913,6 +942,23 @@ export function PositionsTable({
                       <span className="sr-only">
                         {valuationUnconvertedTitle}
                       </span>
+                      {onStatePrice && position.market_value_gap === "no_quote" && (
+                        <button
+                          type="button"
+                          data-testid="position-state-price"
+                          className="block text-xs text-amber-600 underline underline-offset-2"
+                          onClick={() =>
+                            onStatePrice({
+                              id: position.instrument.id,
+                              name: position.instrument.name,
+                              currency: position.instrument.currency,
+                              bond: position.instrument.type === "bond",
+                            })
+                          }
+                        >
+                          {t("positions.statePrice")}
+                        </button>
+                      )}
                     </span>
                   )}
                 </TableCell>

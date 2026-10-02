@@ -115,6 +115,10 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	}
 	srv.Mount("GET /api/v1/accounts/{accountId}/positions", view(h.handleList))
 	srv.Mount("GET /api/v1/accounts/{accountId}/return", view(h.handleReturn))
+	edit := func(fn http.HandlerFunc) http.Handler {
+		return h.sm.LoadAndSave(h.auth.RequireAuth(family.RequireRole(family.RoleEditor, fn)))
+	}
+	srv.Mount("POST /api/v1/instruments/{instrumentId}/prices", edit(h.handleStatePrice))
 }
 
 func pathAccountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
@@ -591,6 +595,10 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 	}
 	out.Price = nullable.NewNullableWithValue(q.Price.String())
 	out.PriceOn = nullable.NewNullableWithValue(q.On.Format("2006-01-02"))
+	if q.Source == ManualPriceSource {
+		byHand := true
+		out.PriceByHand = &byHand
+	}
 	// Only a bond gets the money price, and only here — past every gap, so a row
 	// without a valuation carries the same null for this as it does for the
 	// quote. The face value is non-nil by construction on this path: marketValue
