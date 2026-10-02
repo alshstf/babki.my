@@ -91,6 +91,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("PUT /api/v1/accounts/{accountId}/balance", edit(h.handleSetBalance))
 	srv.Mount("GET /api/v1/summary", view(h.handleSummary))
 	srv.Mount("GET /api/v1/capital", view(h.handleCapital))
+	srv.Mount("GET /api/v1/return", view(h.handleFamilyReturn))
 }
 
 func (h *Handler) handleCapital(w http.ResponseWriter, r *http.Request) {

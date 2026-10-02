@@ -1254,6 +1254,29 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
+// FamilyReturn defines model for FamilyReturn.
+type FamilyReturn struct {
+	// Accounts How many accounts the period is reckoned over
+	Accounts int `json:"accounts"`
+
+	// AnnualRate The money-weighted annual rate as a decimal fraction (0.1234 is 12.34% a year), rounded to four places; null when there is none — nothing put in, or nothing at the end
+	AnnualRate nullable.Nullable[string] `json:"annual_rate"`
+	Complete   bool                      `json:"complete"`
+
+	// ContributionsMinor Money put in net of money taken out over the period: deposits and arriving shares less withdrawals and departing ones
+	ContributionsMinor int64 `json:"contributions_minor"`
+
+	// Currency The space's base currency
+	Currency string `json:"currency"`
+	EndMinor int64  `json:"end_minor"`
+	From     string `json:"from"`
+
+	// ProfitMinor end_minor − start_minor − contributions_minor
+	ProfitMinor int64  `json:"profit_minor"`
+	StartMinor  int64  `json:"start_minor"`
+	To          string `json:"to"`
+}
+
 // ImportAddedPaper defines model for ImportAddedPaper.
 type ImportAddedPaper struct {
 	// Code The code as the table named the paper
@@ -2369,6 +2392,12 @@ type SearchInstrumentsParams struct {
 	Query  *string `form:"query,omitempty" json:"query,omitempty"`
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 	Offset *int    `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
+// GetFamilyReturnParams defines parameters for GetFamilyReturn.
+type GetFamilyReturnParams struct {
+	From string `form:"from" json:"from"`
+	To   string `form:"to" json:"to"`
 }
 
 // ListTinvestSyncRunsParams defines parameters for ListTinvestSyncRuns.

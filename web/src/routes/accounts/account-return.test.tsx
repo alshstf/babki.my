@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@/i18n";
-import { AccountReturn } from "./account-return";
+import { AccountReturn, FamilyReturnLine } from "./account-return";
 import { formatMinor } from "@/lib/money";
 
 const asked = vi.hoisted(() => [] as URL[]);
-const state = vi.hoisted(() => ({ complete: true }));
+const state = vi.hoisted(() => ({ complete: true, accounts: 2 }));
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
@@ -25,6 +25,7 @@ fetchMock.mockImplementation(async (input: Request) => {
       profit_minor: 1_350_000,
       annual_rate: "0.1052",
       complete: state.complete,
+      accounts: state.accounts,
     }),
     { status: 200, headers: { "Content-Type": "application/json" } },
   );
@@ -34,6 +35,7 @@ afterEach(() => {
   cleanup();
   asked.length = 0;
   state.complete = true;
+  state.accounts = 2;
 });
 
 const norm = (s: string) => s.replace(/[  ]/g, " ");
@@ -70,5 +72,27 @@ describe("AccountReturn", () => {
     expect(await screen.findByTestId("account-return-incomplete")).toBeTruthy();
     expect(screen.queryByTestId("account-return-profit")).toBeNull();
     expect(screen.queryByTestId("account-return-rate")).toBeNull();
+  });
+
+  it("shows the family's return over its brokerage accounts, and nothing without any", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { unmount } = render(
+      <QueryClientProvider client={client}>
+        <FamilyReturnLine />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(/счетов: 2/)).toBeTruthy();
+    expect(asked[0].pathname).toBe("/api/v1/return");
+    unmount();
+
+    state.accounts = 0;
+    const empty = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={empty}>
+        <FamilyReturnLine />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(asked).toHaveLength(2));
+    expect(screen.queryByTestId("account-return")).toBeNull();
   });
 });

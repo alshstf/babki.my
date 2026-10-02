@@ -20,6 +20,7 @@ import {
 import { useScreenCurrencies } from "@/lib/screen-currencies";
 import { SummaryCards } from "./summary-cards";
 import { CapitalChart } from "./capital-chart";
+import { FamilyReturnLine } from "./account-return";
 import { AccountsTable } from "./accounts-table";
 import { AccountDialog } from "./account-dialog";
 import { BalanceDialog } from "./balance-dialog";
@@ -90,6 +91,7 @@ export function AccountsPage() {
       <RefreshFailedNotice show={refreshFailed(accounts, summary)} />
       {summary.data && <SummaryCards summary={summary.data} mode={mode} />}
       <CapitalChart />
+      <FamilyReturnLine />
       {valueBy.isError && (
         <Alert variant="destructive">
           <AlertDescription>{t("accounts.journal.switchError")}</AlertDescription>

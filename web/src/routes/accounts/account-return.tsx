@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { useAccountReturn } from "@/api/returns";
+import { useAccountReturn, useFamilyReturn, type PeriodReturn } from "@/api/returns";
 import { formatMinor, signClass } from "@/lib/money";
 import { localToday } from "@/lib/dates";
 import { cn } from "@/lib/utils";
@@ -37,11 +37,40 @@ function percent(rate: string): string {
 // valued, why there is no figure. Everything is the server's; this only words
 // it.
 export function AccountReturn({ accountId }: { accountId: string }) {
-  const { t } = useTranslation();
   const [period, setPeriod] = useState<Period>("year");
   const today = localToday();
   const result = useAccountReturn(accountId, fromFor(period, today), today);
-  const r = result.data;
+  return <ReturnLine r={result.data} period={period} onPeriod={setPeriod} />;
+}
+
+// The same over the family's brokerage accounts kept by their journal, with
+// how many there are; nothing when there are none.
+export function FamilyReturnLine() {
+  const { t } = useTranslation();
+  const [period, setPeriod] = useState<Period>("year");
+  const today = localToday();
+  const result = useFamilyReturn(fromFor(period, today), today);
+  if (!result.data || result.data.accounts === 0) return null;
+  return (
+    <div className="grid gap-1">
+      <div className="text-sm font-medium text-muted-foreground">
+        {t("accountReturn.family", { count: result.data.accounts })}
+      </div>
+      <ReturnLine r={result.data} period={period} onPeriod={setPeriod} />
+    </div>
+  );
+}
+
+function ReturnLine({
+  r,
+  period,
+  onPeriod,
+}: {
+  r: PeriodReturn | undefined;
+  period: Period;
+  onPeriod: (p: Period) => void;
+}) {
+  const { t } = useTranslation();
   return (
     <div className="grid gap-1" data-testid="account-return">
       <div className="flex flex-wrap items-center gap-1">
@@ -51,7 +80,7 @@ export function AccountReturn({ accountId }: { accountId: string }) {
             size="sm"
             variant={p === period ? "secondary" : "ghost"}
             className="h-7 px-2 text-xs"
-            onClick={() => setPeriod(p)}
+            onClick={() => onPeriod(p)}
           >
             {t(`accountReturn.periods.${p}`)}
           </Button>

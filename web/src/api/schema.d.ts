@@ -286,6 +286,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/return": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description GET /api/v1/accounts/{accountId}/return over the family's brokerage accounts that the total counts by their journal (AccountWithBalance.counted_by `journal`): their worth added up at both ends, their flows together — less the moves of shares between two of them, which are no flow for the family — and the rate over all of it. Deposits, cards, cash and loans have balances and no record of what crossed their edge, and are not in it. */
+        get: operations["getFamilyReturn"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/capital": {
         parameters: {
             query?: never;
@@ -1189,6 +1206,10 @@ export interface components {
             /** @description The money-weighted annual rate as a decimal fraction (0.1234 is 12.34% a year), rounded to four places; null when there is none — nothing put in, or nothing at the end */
             annual_rate: string | null;
             complete: boolean;
+        };
+        FamilyReturn: components["schemas"]["PeriodReturn"] & {
+            /** @description How many accounts the period is reckoned over */
+            accounts: number;
         };
         CapitalSeries: {
             /** @description The space's base currency */
@@ -2720,6 +2741,31 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    getFamilyReturn: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The period */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FamilyReturn"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
         };
     };
     getCapital: {
