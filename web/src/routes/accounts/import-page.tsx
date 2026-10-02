@@ -96,6 +96,23 @@ function typeValues(rows: ImportRow[], column: number | undefined): string[] {
   return [...seen].sort();
 }
 
+// The guessed mapping with the type words as the last import of the account
+// settled them — a person's choice over a guess — or null when that changes
+// nothing.
+function rememberedTypes(guessed: ImportPreview, last: ImportMapping | undefined): ImportMapping | null {
+  if (!last) return null;
+  const types = { ...guessed.mapping.types };
+  let added = false;
+  for (const value of typeValues(guessed.rows, guessed.mapping.columns.type)) {
+    const before = last.types[value];
+    if (before && types[value] !== before) {
+      types[value] = before;
+      added = true;
+    }
+  }
+  return added ? { ...guessed.mapping, types } : null;
+}
+
 export function ImportPage() {
   const { accountId } = useParams({ from: "/app/accounts/$accountId/import" });
   return <TableImport accountId={accountId} />;
@@ -111,6 +128,8 @@ export function TableImport({ accountId }: { accountId: string }) {
   const [fileName, setFileName] = useState("");
   const [current, setCurrent] = useState<ImportPreview | null>(null);
 
+  const imports = useTableImports(accountId);
+
   const ask = (body: { content: string; mapping?: ImportMapping }) => {
     importTable.reset();
     preview.mutate(body, { onSuccess: setCurrent });
@@ -122,7 +141,19 @@ export function TableImport({ accountId }: { accountId: string }) {
     setContent(text);
     setFileName(file.name);
     setCurrent(null);
-    ask({ content: text });
+    importTable.reset();
+    preview.mutate(
+      { content: text },
+      {
+        onSuccess: (guessed) => {
+          setCurrent(guessed);
+          // What the type column's words meant in this account's last import
+          // is what they mean now.
+          const remembered = rememberedTypes(guessed, imports.data?.[0]?.mapping);
+          if (remembered) ask({ content: text, mapping: remembered });
+        },
+      },
+    );
   };
 
   const remap = (mapping: ImportMapping) => {

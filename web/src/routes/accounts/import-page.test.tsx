@@ -174,4 +174,32 @@ describe("importing a table", () => {
     expect(sent.find((s) => s.path === "/api/v1/imports/papers")?.body).toEqual({ codes: ["GAZP"] });
     await waitFor(() => expect(sent.filter((s) => s.path.endsWith("/imports/preview"))).toHaveLength(2));
   });
+
+  it("remembers what the type column's words meant in the account's last import", async () => {
+    state.imports = [
+      {
+        id: "imp-0",
+        account_id: "acc-1",
+        file_name: "old.csv",
+        mapping: { has_header: true, columns: { date: 0, type: 1, amount: 2 }, types: { перевод: "withdrawal", пополнение: "interest" } },
+        rows_written: 1,
+        rows_duplicate: 0,
+        rows_unparsed: 0,
+        rows_refused: 0,
+        created_at: "2026-09-01T10:00:00Z",
+        rolled_back_at: null,
+        operations_left: 1,
+      },
+    ];
+    wrap(<TableImport accountId="acc-1" />);
+    await screen.findByText("Импорты этого счёта");
+    const file = new File(["Дата;Тип;Сумма\n"], "new.csv");
+    fireEvent.change(screen.getByLabelText("Файл"), { target: { files: [file] } });
+
+    await waitFor(() => expect(sent.filter((s) => s.path.endsWith("/imports/preview"))).toHaveLength(2));
+    const second = sent.filter((s) => s.path.endsWith("/imports/preview"))[1];
+    expect(second.body).toMatchObject({
+      mapping: { types: { пополнение: "interest", перевод: "withdrawal" } },
+    });
+  });
 });
