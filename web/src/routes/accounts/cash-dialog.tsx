@@ -34,6 +34,7 @@ import {
 } from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
 import { MAX_NOTE } from "@/lib/text-limits";
+import { submitOnEnter } from "@/lib/submit-on-enter";
 
 // Cash-level journal entries: no instrument attribution, only a signed cash
 // effect on the account. The backend enforces the sign strictly per type
@@ -100,7 +101,7 @@ export function CashDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
+      <DialogContent className="sm:max-w-sm" onKeyDown={submitOnEnter(submit, valid && !createOperation.isPending)}>
         <DialogHeader>
           <DialogTitle>{editing ? t("operations.editTitle") : t("cash.title")}</DialogTitle>
         </DialogHeader>

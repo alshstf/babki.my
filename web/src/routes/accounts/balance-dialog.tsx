@@ -20,6 +20,7 @@ import {
 } from "@/lib/money";
 import { formatDate, localToday } from "@/lib/dates";
 import { useSetBalance, type AccountWithBalance } from "@/api/accounts";
+import { submitOnEnter } from "@/lib/submit-on-enter";
 
 export function BalanceDialog({
   open,
@@ -65,9 +66,15 @@ export function BalanceDialog({
   const today = localToday();
   const futureDate = asOf !== "" && asOf > today;
 
+  const canSave = parsed !== null && !!asOf && !futureDate && !setBalance.isPending;
+  const save = () => {
+    if (parsed === null) return;
+    setBalance.mutate({ id: account.id, asOf, amountMinor: parsed }, { onSuccess: () => onOpenChange(false) });
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
+      <DialogContent className="sm:max-w-sm" onKeyDown={submitOnEnter(save, canSave)}>
         <DialogHeader>
           <DialogTitle>
             {t("accounts.balanceDialog.title", { name: account.name })}
@@ -139,15 +146,7 @@ export function BalanceDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("common.cancel")}
           </Button>
-          <Button
-            disabled={parsed === null || !asOf || futureDate || setBalance.isPending}
-            onClick={() =>
-              setBalance.mutate(
-                { id: account.id, asOf, amountMinor: parsed! },
-                { onSuccess: () => onOpenChange(false) },
-              )
-            }
-          >
+          <Button disabled={!canSave} onClick={save}>
             {t("common.save")}
           </Button>
         </DialogFooter>

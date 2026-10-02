@@ -29,6 +29,7 @@ import type { AccountWithBalance } from "@/api/accounts";
 import type { Instrument } from "@/api/instruments";
 import { InstrumentPicker } from "./instrument-picker";
 import { MAX_NOTE } from "@/lib/text-limits";
+import { submitOnEnter } from "@/lib/submit-on-enter";
 
 // Why a bond's percentage-of-face field cannot be converted into money, or
 // null when it can. Four causes, and they get four different sentences on
@@ -369,7 +370,7 @@ export function TradeDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md" onKeyDown={submitOnEnter(submit, valid && !createOperation.isPending)}>
         <DialogHeader>
           <DialogTitle>
             {editing

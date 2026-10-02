@@ -11,6 +11,7 @@ import { EARLIEST_OPERATION_DATE, localToday } from "@/lib/dates";
 import { isConflict, useCreateMoneyTransfer } from "@/api/operations";
 import { useAccounts, type AccountWithBalance } from "@/api/accounts";
 import { MAX_NOTE } from "@/lib/text-limits";
+import { submitOnEnter } from "@/lib/submit-on-enter";
 
 const CURRENCY_RE = /^[A-Z]{3}$/;
 
@@ -85,7 +86,7 @@ export function MoneyTransferDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
+      <DialogContent className="sm:max-w-sm" onKeyDown={submitOnEnter(submit, valid && !transfer.isPending)}>
         <DialogHeader>
           <DialogTitle>{t("moneyTransfer.title")}</DialogTitle>
         </DialogHeader>

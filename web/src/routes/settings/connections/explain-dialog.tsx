@@ -18,6 +18,7 @@ import type { Instrument } from "@/api/instruments";
 import { useExplainRows } from "@/api/explanations";
 import { isConflict } from "@/api/operations";
 import { MAX_NOTE } from "@/lib/text-limits";
+import { submitOnEnter } from "@/lib/submit-on-enter";
 
 // The two shapes this dialog can enter. Both take an instrument, a quantity
 // and money that comes IN, which is what every corporate event seen live so
@@ -121,7 +122,7 @@ export function ExplainDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent onKeyDown={submitOnEnter(submit, ready && !explain.isPending)}>
         <DialogHeader>
           <DialogTitle>{t("connections.detail.explain.title")}</DialogTitle>
         </DialogHeader>

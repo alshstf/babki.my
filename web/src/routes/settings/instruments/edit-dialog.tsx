@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useUpdateInstrument, type Instrument } from "@/api/instruments";
+import { submitOnEnter } from "@/lib/submit-on-enter";
 
 // The fields this dialog edits, in the order they are shown. The face value
 // pair (face_value_minor / face_currency) is deliberately NOT here: its rule is
@@ -72,9 +73,12 @@ export function InstrumentEditDialog({
   const emptyName = values.name.trim() === "";
   const nothingToSave = Object.keys(changed).length === 0;
 
+  const canSave = !emptyName && !nothingToSave && !update.isPending;
+  const save = () => update.mutate({ id: instrument.id, body: changed }, { onSuccess: () => onOpenChange(false) });
+
   return (
     <Dialog open={instrument !== undefined} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
+      <DialogContent className="sm:max-w-sm" onKeyDown={submitOnEnter(save, canSave)}>
         <DialogHeader>
           <DialogTitle>{t("instruments.edit.title")}</DialogTitle>
         </DialogHeader>
@@ -137,13 +141,8 @@ export function InstrumentEditDialog({
           </Button>
           <Button
             data-testid="instrument-save"
-            disabled={emptyName || nothingToSave || update.isPending}
-            onClick={() =>
-              update.mutate(
-                { id: instrument.id, body: changed },
-                { onSuccess: () => onOpenChange(false) },
-              )
-            }
+            disabled={!canSave}
+            onClick={save}
           >
             {t("common.save")}
           </Button>
