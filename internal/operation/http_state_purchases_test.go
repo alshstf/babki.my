@@ -219,10 +219,11 @@ func TestPurchasesCannotBeStatedForATransferBetweenOwnAccounts(t *testing.T) {
 }
 
 // Shares moved on to another account after they arrived took a breakdown with
-// them that names the old basis. A statement the journal can no longer replay
-// with is refused with the engine's reason — not written over a journal that
-// would then contradict itself.
-func TestPurchasesTheRestOfTheJournalCannotTakeAreRefusedWithItsReason(t *testing.T) {
+// them released from the old basis — bought for nothing. Stating the purchases
+// releases the move again from the restated history (#227): the shares that
+// went on carry the price and day that were stated, and those that stayed carry
+// the rest. Until #227 this was a 409 the owner had no way past.
+func TestStatingPurchasesCarriesThemToSharesMovedOnSince(t *testing.T) {
 	f := newArrivalFixture(t)
 	other := createID(t, f.c, f.url+"/api/v1/accounts", `{"name":"Другой","type":"brokerage","currency":"RUB"}`)
 	resp := do(t, f.c, "POST", f.url+"/api/v1/operations/transfer", fmt.Sprintf(
@@ -234,11 +235,20 @@ func TestPurchasesTheRestOfTheJournalCannotTakeAreRefusedWithItsReason(t *testin
 	}
 
 	resp = f.state(t, `{"purchases":[{"quantity":"10","price":"100","acquired_on":"2021-03-02"}]}`)
-	if resp.StatusCode != http.StatusConflict {
+	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 409: %s", resp.StatusCode, b)
+		t.Fatalf("status = %d, want 200: %s", resp.StatusCode, b)
 	}
-	if p := f.held(t); p.CostMinor != 0 {
-		t.Errorf("cost = %d, want the arrival untouched", p.CostMinor)
+	if p := f.held(t); p.CostMinor != 60_000 {
+		t.Errorf("cost of the six that stayed = %d, want 60000", p.CostMinor)
+	}
+	moved := arrivalFixture{pool: f.pool, spaceID: f.spaceID, accountID: other, sberID: f.sberID}.held(t)
+	if moved == nil || moved.CostMinor != 40_000 {
+		t.Fatalf("the four that moved on: %+v, want a cost of 40000", moved)
+	}
+	for _, lot := range moved.Lots {
+		if lot.AcquiredOn == nil || lot.AcquiredOn.Format("2006-01-02") != "2021-03-02" {
+			t.Errorf("a lot that moved on is dated %v, want the stated 2021-03-02", lot.AcquiredOn)
+		}
 	}
 }

@@ -3,6 +3,8 @@ package operation
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,23 +31,37 @@ import (
 // the source account's, and the place to state them is wherever the shares
 // first arrived.
 //
-// Stating them again replaces what was stated before. The account's journal is
-// replayed with the restated arrival before anything is written, so a statement
-// the rest of the journal cannot take — shares later moved on with a breakdown
-// recorded against the old basis — is refused with the engine's reason.
+// Stating them again replaces what was stated before. Shares of the arrival
+// may since have moved on to the owner's other accounts, each move carrying a
+// breakdown released from the old basis; every such later move made by hand is
+// released again from the restated history, in the order the moves happened,
+// and written with the statement in one transaction (issue #227). A move whose
+// basis was given by hand carries no breakdown and stays as it is; a move an
+// importer recorded is the importer's, and when the restated history can no
+// longer take it the statement is refused with the engine's reason.
 func (s *Service) StatePurchases(ctx context.Context, spaceID, operationID uuid.UUID, stated []StatedPurchase) (Operation, error) {
 	pieces, err := piecesOf(stated)
 	if err != nil {
 		return Operation{}, err
 	}
-	// Which account to lock cannot be learned under the lock, so the row is read
-	// once on the pool for its account alone and read again inside.
+	// Which accounts to lock cannot be learned under the lock, so the row and
+	// the accounts its shares went on to are read once on the pool and read
+	// again inside; an account that turns up only the second time means the
+	// shares moved meanwhile, and the request is refused rather than half done.
 	first, err := s.store.ByID(ctx, spaceID, operationID)
 	if err != nil {
 		return Operation{}, err
 	}
+	locked := []uuid.UUID{first.AccountID}
+	if first.Type == TypeTransferIn {
+		onward, err := onwardJournals(ctx, s.store, spaceID, first)
+		if err != nil {
+			return Operation{}, err
+		}
+		locked = slices.Collect(maps.Keys(onward))
+	}
 	var stored Operation
-	err = s.store.WithOpenAccountsLocked(ctx, spaceID, []uuid.UUID{first.AccountID}, func(st *Store) error {
+	err = s.store.WithOpenAccountsLocked(ctx, spaceID, locked, func(st *Store) error {
 		op, err := st.ByID(ctx, spaceID, operationID)
 		if err != nil {
 			return err
@@ -61,21 +77,45 @@ func (s *Service) StatePurchases(ctx context.Context, spaceID, operationID uuid.
 		restated := op
 		restated.AmountMinor, restated.TransferLots = cost, pieces
 
-		journal, err := st.ListForEngine(ctx, spaceID, op.AccountID)
+		journals, err := onwardJournals(ctx, st, spaceID, op)
 		if err != nil {
 			return err
 		}
-		if _, err := portfolio.Compute(journalReplacing(journal, restated)); err != nil {
-			return fmt.Errorf("%w: %v", ErrInconsistent, err)
+		for accountID := range journals {
+			if !slices.Contains(locked, accountID) {
+				return fmt.Errorf("%w: the shares were moved to another account meanwhile; try again", ErrInconsistent)
+			}
 		}
-		stored, err = st.setPurchases(ctx, spaceID, op, cost, pieces)
+		journals[op.AccountID] = journalReplacing(journals[op.AccountID], restated)
+		moves, err := releaseOnward(journals, restated)
 		if err != nil {
 			return err
 		}
-		// The arrival as stored, folded once more before the commit: the pieces'
-		// quantities come back from a column with a scale (see writeTransferLots).
-		if _, err := portfolio.Compute(journalReplacing(journal, stored)); err != nil {
-			return fmt.Errorf("the purchases as stored no longer replay on account %s: %v", op.AccountID, err)
+		for _, journal := range journals {
+			if _, err := portfolio.Compute(journal); err != nil {
+				return fmt.Errorf("%w: %v", ErrInconsistent, err)
+			}
+		}
+
+		if stored, err = st.setPurchases(ctx, spaceID, op, cost, pieces); err != nil {
+			return err
+		}
+		for _, m := range moves {
+			if err := st.setMoveBreakdown(ctx, spaceID, m.out, m.in); err != nil {
+				return err
+			}
+		}
+		// Every account touched, read back as stored and folded once more
+		// before the commit: the pieces' quantities come back from a column
+		// with a scale (see writeTransferLots).
+		for accountID := range journals {
+			journal, err := st.ListForEngine(ctx, spaceID, accountID)
+			if err != nil {
+				return err
+			}
+			if _, err := portfolio.Compute(journal); err != nil {
+				return fmt.Errorf("the purchases as stored no longer replay on account %s: %v", accountID, err)
+			}
 		}
 		return nil
 	})
@@ -83,6 +123,169 @@ func (s *Service) StatePurchases(ctx context.Context, spaceID, operationID uuid.
 		return Operation{}, mapWriteError(err)
 	}
 	return stored, nil
+}
+
+// onwardJournals reads the journal of the arrival's account and of every
+// account its shares went on to after it: each later transfer of the paper out
+// of an account already read is followed to the account it went into, until
+// none is left. The journals are keyed by account.
+func onwardJournals(ctx context.Context, st *Store, spaceID uuid.UUID, arrival Operation) (map[uuid.UUID][]Operation, error) {
+	journals := make(map[uuid.UUID][]Operation)
+	queue := []uuid.UUID{arrival.AccountID}
+	for len(queue) > 0 {
+		accountID := queue[0]
+		queue = queue[1:]
+		if _, read := journals[accountID]; read {
+			continue
+		}
+		journal, err := st.ListForEngine(ctx, spaceID, accountID)
+		if err != nil {
+			return nil, err
+		}
+		journals[accountID] = journal
+		for _, o := range journal {
+			if !movesOnward(o, arrival) {
+				continue
+			}
+			legs, err := st.ByTransferGroup(ctx, spaceID, *o.TransferGroupID)
+			if err != nil {
+				return nil, err
+			}
+			for _, leg := range legs {
+				if leg.Type == TypeTransferIn {
+					queue = append(queue, leg.AccountID)
+				}
+			}
+		}
+	}
+	return journals, nil
+}
+
+// movesOnward reports whether o moves shares of the arrival's paper from one of
+// the owner's accounts to another and folds after the arrival: only such a
+// move can carry the arrival's shares, wherever they have got to by then.
+func movesOnward(o, arrival Operation) bool {
+	return o.Type == TypeTransferOut && o.TransferGroupID != nil &&
+		o.InstrumentID != nil && arrival.InstrumentID != nil && *o.InstrumentID == *arrival.InstrumentID &&
+		foldsAfter(o, arrival)
+}
+
+// foldsAfter reports whether a folds after b in the engine's order (see
+// sortJournal), whichever accounts the two belong to.
+func foldsAfter(a, b Operation) bool {
+	if !a.OccurredOn.Equal(b.OccurredOn) {
+		return a.OccurredOn.After(b.OccurredOn)
+	}
+	if ra, rb := foldRank(a.Source), foldRank(b.Source); ra != rb {
+		return ra > rb
+	}
+	return a.CreatedAt.After(b.CreatedAt)
+}
+
+// move is one transfer between the owner's accounts, both legs.
+type move struct{ out, in Operation }
+
+// releaseOnward releases again, from the restated history, every later move of
+// the arrival's paper made by hand with a breakdown — in the order the moves
+// happened, so that a move out of an account the shares reached by an earlier
+// move is released from that account as the earlier one left it — exactly as
+// CreateTransfer released it when it was made: the FIFO front of the source
+// account's position at the move's place in its journal. journals is updated
+// in place; the moves whose breakdown changed are returned.
+//
+// A move whose basis was given by hand has no breakdown and nothing to
+// release, and a move an importer wrote is the importer's own record; both are
+// left as they are, for the caller's fold to accept or refuse.
+func releaseOnward(journals map[uuid.UUID][]Operation, arrival Operation) ([]move, error) {
+	var outs []Operation
+	for _, journal := range journals {
+		for _, o := range journal {
+			if movesOnward(o, arrival) {
+				outs = append(outs, o)
+			}
+		}
+	}
+	sortJournal(outs)
+
+	var changed []move
+	for _, out := range outs {
+		in, ok := arrivingLeg(journals, *out.TransferGroupID)
+		if !ok {
+			return nil, fmt.Errorf("transfer %s: its arriving leg was not read", *out.TransferGroupID)
+		}
+		if out.Source != SourceManual || in.Source != SourceManual || len(out.TransferLots) == 0 || out.Quantity == nil {
+			continue
+		}
+		source := journals[out.AccountID]
+		at := slices.IndexFunc(source, func(o Operation) bool { return o.ID == out.ID })
+		if at < 0 {
+			return nil, fmt.Errorf("transfer %s: its departing leg is not in its account's journal", *out.TransferGroupID)
+		}
+		lots, err := portfolio.ReleasedLots(source[:at], *out.InstrumentID, *out.Quantity)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInconsistent, err)
+		}
+		lots = quantizeLots(lots, *out.Quantity)
+		if sameLots(lots, out.TransferLots) {
+			continue
+		}
+		cost := portfolio.LotsCost(lots)
+		out.AmountMinor, out.TransferLots = cost, lots
+		in.AmountMinor, in.TransferLots = cost, lots
+		journals[out.AccountID] = journalReplacing(journals[out.AccountID], out)
+		journals[in.AccountID] = journalReplacing(journals[in.AccountID], in)
+		changed = append(changed, move{out: out, in: in})
+	}
+	return changed, nil
+}
+
+// arrivingLeg finds the transfer_in of a transfer group among journals.
+func arrivingLeg(journals map[uuid.UUID][]Operation, group uuid.UUID) (Operation, bool) {
+	for _, journal := range journals {
+		for _, o := range journal {
+			if o.Type == TypeTransferIn && o.TransferGroupID != nil && *o.TransferGroupID == group {
+				return o, true
+			}
+		}
+	}
+	return Operation{}, false
+}
+
+// sameLots reports whether two breakdowns name the same pieces in the same order.
+func sameLots(a, b []ReleasedLot) bool {
+	return slices.EqualFunc(a, b, func(x, y ReleasedLot) bool {
+		sameDay := (x.AcquiredOn == nil) == (y.AcquiredOn == nil) &&
+			(x.AcquiredOn == nil || x.AcquiredOn.Equal(*y.AcquiredOn))
+		return x.Quantity.Equal(y.Quantity) && x.CostMinor == y.CostMinor && sameDay
+	})
+}
+
+// setMoveBreakdown writes a move's breakdown released again: the basis on both
+// legs and the pieces beside the arriving one, where every read takes them
+// from for both (see attachTransferLots). A savepoint inside the caller's
+// transaction.
+func (s *Store) setMoveBreakdown(ctx context.Context, spaceID uuid.UUID, out, in Operation) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, leg := range []Operation{out, in} {
+		if _, err := tx.Exec(ctx, setAmountSQL, spaceID, leg.ID, leg.AmountMinor); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM operation_transfer_lots WHERE operation_id = $1`, in.ID); err != nil {
+		return err
+	}
+	stored := in
+	if stored.TransferLots, err = writeTransferLots(ctx, tx, in.ID, in.TransferLots); err != nil {
+		return err
+	}
+	if err := checkStoredLots(stored); err != nil {
+		return fmt.Errorf("a move released again, as stored: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 // StatedPurchase is one purchase as the owner states it: how many shares,
