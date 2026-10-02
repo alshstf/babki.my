@@ -263,3 +263,24 @@ func TestVersionRoleNeedsNoEncryptionKey(t *testing.T) {
 		t.Error("version command printed nothing")
 	}
 }
+
+// While a key is being replaced, the box opens what the previous one sealed;
+// a malformed previous key stops the start rather than being ignored.
+func TestBuildBoxOpensWithThePreviousKey(t *testing.T) {
+	previousHex := strings.Repeat("ab", 32)
+	previousKey, _ := secretbox.ParseKey(previousHex)
+	old, _ := secretbox.New(previousKey)
+	sealed := old.Seal([]byte("token"))
+
+	box, err := buildBox(&config.Config{EncryptionKey: validHexKey, EncryptionKeyPrevious: previousHex}, true)
+	if err != nil {
+		t.Fatalf("buildBox with a previous key: %v", err)
+	}
+	if got, err := box.Open(sealed); err != nil || string(got) != "token" {
+		t.Errorf("open what the previous key sealed = %q, %v", got, err)
+	}
+	if _, err := buildBox(&config.Config{EncryptionKey: validHexKey, EncryptionKeyPrevious: "not-hex"}, true); err == nil ||
+		!strings.Contains(err.Error(), "BABKI_ENCRYPTION_KEY_PREVIOUS") {
+		t.Errorf("a malformed previous key = %v, want a refusal naming the variable", err)
+	}
+}

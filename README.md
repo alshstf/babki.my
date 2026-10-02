@@ -49,6 +49,7 @@ openssl rand -hex 32
 |---|---|---|
 | `POSTGRES_PASSWORD` | — (обязательна) | Пароль базы; только буквы, цифры и `- _ . ~` — он попадает в адрес подключения |
 | `BABKI_ENCRYPTION_KEY` | — (обязательна) | Ключ шифрования токенов брокеров, 64 шестнадцатеричных символа (`openssl rand -hex 32`) |
+| `BABKI_ENCRYPTION_KEY_PREVIOUS` | — | Прежний ключ на время его смены (см. ниже) |
 | `BABKI_PORT` | `8080` | Порт на машине, где открывается программа |
 | `BABKI_COOKIE_SECURE` | `false` | `true` — кука входа только по HTTPS; включайте за HTTPS-прокси (см. ниже) |
 | `BABKI_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
@@ -58,6 +59,13 @@ openssl rand -hex 32
 Без docker приложение читает те же переменные и ещё `BABKI_DATABASE_URL`
 (адрес Postgres) и `BABKI_HTTP_ADDR` (адрес, который слушать, по умолчанию
 `:8080`).
+
+### Смена ключа шифрования
+
+1. Сгенерируйте новый ключ (`openssl rand -hex 32`).
+2. В `.env`: `BABKI_ENCRYPTION_KEY` — новый ключ, `BABKI_ENCRYPTION_KEY_PREVIOUS` — прежний; `docker compose up -d`. Программа шифрует новым ключом и читает старые токены прежним.
+3. Перешифруйте сохранённые токены: `docker compose exec app babki reseal`.
+4. Уберите `BABKI_ENCRYPTION_KEY_PREVIOUS` из `.env` и выполните `docker compose up -d`.
 
 ## Работа за HTTPS
 

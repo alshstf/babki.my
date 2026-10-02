@@ -35,6 +35,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("BABKI_DATABASE_URL", "postgres://u:p@localhost:5432/babki")
 	t.Setenv("BABKI_AUTO_MIGRATE", "false")
 	t.Setenv("BABKI_COOKIE_SECURE", "true")
+	t.Setenv("BABKI_ENCRYPTION_KEY_PREVIOUS", "ff")
 	t.Setenv("BABKI_ENCRYPTION_KEY", "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
 
 	cfg, err := config.Load()
@@ -52,6 +53,9 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if !cfg.CookieSecure {
 		t.Error("CookieSecure = false, want true")
+	}
+	if cfg.EncryptionKeyPrevious != "ff" {
+		t.Errorf("EncryptionKeyPrevious = %q, want ff", cfg.EncryptionKeyPrevious)
 	}
 	if cfg.EncryptionKey != "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" {
 		t.Errorf("EncryptionKey = %q", cfg.EncryptionKey)

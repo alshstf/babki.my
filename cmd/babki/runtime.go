@@ -92,7 +92,15 @@ func buildBox(cfg *config.Config, requireEncryptionKey bool) (*secretbox.Box, er
 	if err != nil {
 		return nil, err
 	}
-	return secretbox.New(key)
+	box, err := secretbox.New(key)
+	if err != nil || cfg.EncryptionKeyPrevious == "" {
+		return box, err
+	}
+	previous, err := secretbox.ParseKey(cfg.EncryptionKeyPrevious)
+	if err != nil {
+		return nil, fmt.Errorf("BABKI_ENCRYPTION_KEY_PREVIOUS: %w", err)
+	}
+	return box.WithPrevious(previous)
 }
 
 func (r *rt) close() { r.pool.Close() }

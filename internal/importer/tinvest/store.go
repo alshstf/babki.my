@@ -661,6 +661,57 @@ func (s *Store) UnparsedByConnection(ctx context.Context, connID uuid.UUID, limi
 	return rows, hasMore, nil
 }
 
+// sealer is what reseals a token: opens it with any key the box knows, seals
+// it with the current one.
+type sealer interface {
+	Open(sealed []byte) ([]byte, error)
+	Seal(plaintext []byte) []byte
+}
+
+// ResealTokens re-encrypts every connection's token with the box's current
+// key, so that a key being replaced can be dropped. All of them or none: one
+// token no key opens stops the whole run, and nothing is written. Returns how
+// many were resealed.
+func (s *Store) ResealTokens(ctx context.Context, box sealer) (int, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	rows, err := tx.Query(ctx, `SELECT id, token_ciphertext FROM tinvest_connections FOR UPDATE`)
+	if err != nil {
+		return 0, fmt.Errorf("tinvest: read tokens: %w", err)
+	}
+	type sealed struct {
+		id    uuid.UUID
+		token []byte
+	}
+	var all []sealed
+	for rows.Next() {
+		var c sealed
+		if err := rows.Scan(&c.id, &c.token); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		all = append(all, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, c := range all {
+		plain, err := box.Open(c.token)
+		if err != nil {
+			return 0, fmt.Errorf("tinvest: connection %s: no key opens its token: %w", c.id, err)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE tinvest_connections SET token_ciphertext = $2 WHERE id = $1`,
+			c.id, box.Seal(plain)); err != nil {
+			return 0, fmt.Errorf("tinvest: reseal connection %s: %w", c.id, err)
+		}
+	}
+	return len(all), tx.Commit(ctx)
+}
+
 // UnmappedHeldInstrument is a catalog row this space's journal names and this
 // connection has no broker listing for.
 type UnmappedHeldInstrument struct {
