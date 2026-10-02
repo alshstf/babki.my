@@ -115,6 +115,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	}
 	srv.Mount("GET /api/v1/accounts/{accountId}/positions", view(h.handleList))
 	srv.Mount("GET /api/v1/accounts/{accountId}/return", view(h.handleReturn))
+	srv.Mount("GET /api/v1/instruments/{instrumentId}/holdings", view(h.handleHoldings))
+	srv.Mount("GET /api/v1/instruments/{instrumentId}/prices", view(h.handlePrices))
 	edit := func(fn http.HandlerFunc) http.Handler {
 		return h.sm.LoadAndSave(h.auth.RequireAuth(family.RequireRole(family.RoleEditor, fn)))
 	}

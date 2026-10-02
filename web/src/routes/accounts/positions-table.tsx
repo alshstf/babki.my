@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
+import { Link } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import {
   Table,
@@ -434,6 +435,8 @@ export function PositionsTable({
   baseCurrency,
   onPriceUnknown,
   onStatePrice,
+  instrumentLinks = false,
+  rowLabel,
 }: {
   positions: Position[];
   // THE MONEY, AMONG THE PAPERS. Cash is a holding: yuan on the account was
@@ -455,6 +458,13 @@ export function PositionsTable({
   // What «указать цену» on a paper nobody quotes opens. Absent for a reader
   // who cannot write.
   onStatePrice?: (paper: QuotedPaper) => void;
+  // Whether a paper's name leads to its own page. Off where the table is drawn
+  // outside the application's router.
+  instrumentLinks?: boolean;
+  // ONE PAPER ON SEVERAL ACCOUNTS: the paper's page lists its position on each
+  // account, and there the first column names the account rather than the
+  // paper, which is the same on every row. Absent, it names the paper.
+  rowLabel?: (position: Position) => { key: string; label: ReactNode };
 }) {
   const { t } = useTranslation();
   // A position row's money amounts are denominated in the position's own
@@ -557,7 +567,9 @@ export function PositionsTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>{t("positions.columns.instrument")}</TableHead>
+            <TableHead>
+              {rowLabel ? t("positions.columns.account") : t("positions.columns.instrument")}
+            </TableHead>
             <TableHead className="text-right">
               {t("positions.columns.quantity")}
             </TableHead>
@@ -581,6 +593,7 @@ export function PositionsTable({
         <TableBody>
           {shown.map((position) => {
             const closed = position.quantity === "0";
+            const custom = rowLabel?.(position);
             const unconvertedTitle = rowGapTitle(t, position.in_base_gap);
             // Market value's currency can differ from the position's own
             // currency (a bond's face-value currency, for instance), so it is
@@ -804,13 +817,25 @@ export function PositionsTable({
                 valuationUnconvertedTitle;
             return (
               <TableRow
-                key={position.instrument.id}
+                key={custom?.key ?? position.instrument.id}
                 className={cn(closed && "opacity-50")}
               >
                 <TableCell>
                   <div className="font-medium">
-                    {position.instrument.name}
-                    {position.instrument.frozen && (
+                    {custom ? (
+                      custom.label
+                    ) : instrumentLinks ? (
+                      <Link
+                        to="/instruments/$instrumentId"
+                        params={{ instrumentId: position.instrument.id }}
+                        className="hover:underline"
+                      >
+                        {position.instrument.name}
+                      </Link>
+                    ) : (
+                      position.instrument.name
+                    )}
+                    {!custom && position.instrument.frozen && (
                       <Badge variant="outline" className="ml-2">
                         {t("positions.frozen")}
                       </Badge>
@@ -821,9 +846,11 @@ export function PositionsTable({
                       </Badge>
                     )}
                   </div>
-                  <div className="text-xs text-muted-foreground">
-                    {position.instrument.ticker}
-                  </div>
+                  {!custom && (
+                    <div className="text-xs text-muted-foreground">
+                      {position.instrument.ticker}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {position.quantity}

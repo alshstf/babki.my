@@ -93,7 +93,13 @@ export function InstrumentsPage() {
               >
                 <div className="grid gap-0.5">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium">{instrument.name}</span>
+                    <Link
+                      to="/instruments/$instrumentId"
+                      params={{ instrumentId: instrument.id }}
+                      className="font-medium hover:underline"
+                    >
+                      {instrument.name}
+                    </Link>
                     <Badge variant="secondary">
                       {t(`instrumentTypes.${instrument.type}`)}
                     </Badge>

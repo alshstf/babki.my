@@ -153,6 +153,7 @@
     "title": "Позиции",
     "empty": "На этом счете пока нет позиций",
     "columns": {
+      "account": "Счёт",
       "instrument": "Инструмент",
       "quantity": "Количество",
       "cost": "Стоимость",
@@ -432,6 +433,30 @@
     "ticker": "Тикер",
     "currency": "Валюта",
     "isin": "ISIN"
+  },
+  "instrumentPage": {
+    "notFound": "Бумага не найдена",
+    "holdings": "На счетах семьи",
+    "noHoldings": "Этой бумаги нет ни на одном счёте семьи",
+    "unknownAccount": "Счёт",
+    "noPrices": "Цен этой бумаги ещё нет: биржа и брокер её не котируют, и вручную цена не указана",
+    "priceOn": "на {{date}}, {{source}}",
+    "statePrice": "указать текущую цену",
+    "bondPercent": "Цена облигации — в процентах от номинала, как её котирует биржа",
+    "chartLabel": "Цена с {{from}} по {{to}}: от {{first}} до {{last}}",
+    "total": "Всего: {{quantity}} шт.",
+    "totalValue": "стоимость {{value}}",
+    "totalResult": "итог {{value}}",
+    "range": {
+      "year": "год",
+      "all": "10 лет"
+    },
+    "source": {
+      "moex": "Мосбиржа",
+      "tinvest": "Т-Инвестиции",
+      "manual": "указана вручную",
+      "other": "другой источник"
+    }
   },
   "instrumentTypes": {
     "share": "акция",

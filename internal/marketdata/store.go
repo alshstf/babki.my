@@ -318,6 +318,27 @@ func (s *Store) QuotesOn(ctx context.Context, instrumentIDs []uuid.UUID, day tim
 	return out, rows.Err()
 }
 
+// PriceSeries returns the paper's quotes from from to to inclusive, one a day,
+// oldest first.
+func (s *Store) PriceSeries(ctx context.Context, instrumentID uuid.UUID, from, to time.Time) ([]Quote, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+quoteCols+` FROM quotes
+		WHERE instrument_id = $1 AND on_date BETWEEN $2 AND $3
+		ORDER BY on_date`, instrumentID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Quote
+	for rows.Next() {
+		q, err := scanQuote(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
 // LatestQuotes returns the most recent quote for each of instrumentIDs, in
 // a single round trip. Instruments with no quotes at all are absent from
 // the result map (not zero-valued).

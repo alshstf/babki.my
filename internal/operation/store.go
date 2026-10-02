@@ -898,6 +898,17 @@ func (s *Store) ByTransferGroup(ctx context.Context, spaceID, groupID uuid.UUID)
 		WHERE space_id = $1 AND transfer_group_id = $2`, spaceID, groupID)
 }
 
+// AccountsWithInstrument returns the space's accounts whose journal names the
+// paper on any row, in no particular order.
+func (s *Store) AccountsWithInstrument(ctx context.Context, spaceID, instrumentID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT account_id FROM operations
+		WHERE space_id = $1 AND instrument_id = $2`, spaceID, instrumentID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+}
+
 // FirstDaysByInstrument is, for every paper any journal names, the day of its
 // first operation — instance-wide, like the market data it is asked for.
 func (s *Store) FirstDaysByInstrument(ctx context.Context) (map[uuid.UUID]time.Time, error) {

@@ -218,6 +218,7 @@ export function AccountDetailPage() {
               baseCurrency={baseCurrency}
               onPriceUnknown={readOnly ? undefined : setPricing}
               onStatePrice={isViewer ? undefined : setQuoting}
+              instrumentLinks
             />
           </>
         ) : (

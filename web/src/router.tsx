@@ -49,6 +49,10 @@ const AccountDetailPage = lazyRouteComponent(
   () => import("@/routes/accounts/detail"),
   "AccountDetailPage",
 );
+const InstrumentPage = lazyRouteComponent(
+  () => import("@/routes/instruments/detail"),
+  "InstrumentPage",
+);
 const ImportPage = lazyRouteComponent(
   () => import("@/routes/accounts/import-page"),
   "ImportPage",
@@ -278,6 +282,14 @@ const importRoute = createRoute({
   component: ImportPage,
 });
 
+// One paper across the family's accounts: its price and every account's
+// position in it.
+const instrumentDetailRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: "/instruments/$instrumentId",
+  component: InstrumentPage,
+});
+
 const familyRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/family",
@@ -330,6 +342,7 @@ export const routeTree = rootRoute.addChildren([
     accountsRoute,
     accountDetailRoute,
     importRoute,
+    instrumentDetailRoute,
     familyRoute,
     settingsRoute,
     instrumentsRoute,

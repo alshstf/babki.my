@@ -431,7 +431,49 @@ paths:
               schema: { $ref: "#/components/schemas/FamilyReturn" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/instruments/{instrumentId}/holdings:
+    get:
+      operationId: getInstrumentHoldings
+      description: >-
+        One paper across the family: its catalog row, and its position on every account whose
+        journal names it — exactly the row GET /accounts/{accountId}/positions shows for it there,
+        closed positions included. Archived accounts are included; the account list says which
+        they are. `total` adds the accounts up only where that needs no conversion: when every
+        position is kept in one currency; otherwise it is null. 404 for an unknown paper.
+      parameters:
+        - { name: instrumentId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The paper and its positions
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstrumentHoldings" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /api/v1/instruments/{instrumentId}/prices:
+    get:
+      operationId: getInstrumentPrices
+      description: >-
+        The paper's closing prices, one a day, from `from` to today, oldest first — the
+        exchange's, the broker's, or stated by hand, whichever the day has. A price is money per
+        unit in `currency`, or for a bond a percentage of face value, as quotes are. At most ten
+        years; 400 for a `from` that is malformed, in the future or further back than that; 404
+        for an unknown paper.
+      parameters:
+        - { name: instrumentId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: from, in: query, required: true, schema: { type: string }, description: "Date YYYY-MM-DD" }
+      responses:
+        "200":
+          description: The prices
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DayPrice" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
     post:
       operationId: stateInstrumentPrice
       description: >-
@@ -1799,6 +1841,42 @@ components:
           allOf:
             - $ref: "#/components/schemas/TableImport"
         rows: { type: array, items: { $ref: "#/components/schemas/ImportRow" } }
+    InstrumentHoldings:
+      type: object
+      required: [instrument, holdings, total]
+      properties:
+        instrument: { $ref: "#/components/schemas/Instrument" }
+        holdings:
+          type: array
+          items: { $ref: "#/components/schemas/InstrumentHolding" }
+        total:
+          allOf: [{ $ref: "#/components/schemas/InstrumentHoldingsTotal" }]
+          nullable: true
+          description: "The positions added up, when they are all kept in one currency; null otherwise."
+    InstrumentHolding:
+      type: object
+      required: [account_id, position]
+      properties:
+        account_id: { type: string, format: uuid }
+        position: { $ref: "#/components/schemas/Position" }
+    InstrumentHoldingsTotal:
+      type: object
+      description: "A figure is null when it is null on any position, or valued in another currency."
+      required: [currency, quantity, cost_minor, market_value_minor, total_minor]
+      properties:
+        currency: { type: string }
+        quantity: { type: string, description: "Decimal as string" }
+        cost_minor: { type: integer, format: int64 }
+        market_value_minor: { type: integer, format: int64, nullable: true }
+        total_minor: { type: integer, format: int64, nullable: true }
+    DayPrice:
+      type: object
+      required: [on, price, currency, source]
+      properties:
+        on: { type: string, description: "Date YYYY-MM-DD" }
+        price: { type: string, description: "Decimal as string" }
+        currency: { type: string }
+        source: { type: string, description: "Where the price came from: moex, moex_history, tinvest, tinvest_history, manual, seed, …" }
     PeriodReturn:
       type: object
       required: [currency, from, to, start_minor, end_minor, contributions_minor, profit_minor, annual_rate, complete]
