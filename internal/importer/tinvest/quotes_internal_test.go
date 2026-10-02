@@ -34,6 +34,7 @@ type quotesFixture struct {
 	quotes *recordingQuotes
 	worker river.Worker[RefreshQuotesArgs]
 	now    time.Time
+	sealer *secretbox.Box
 }
 
 // recordingQuotes stands in for marketdata.Store. A fake rather than the real
@@ -78,7 +79,8 @@ func newQuotesFixture(t *testing.T) *quotesFixture {
 		quotes:  &recordingQuotes{},
 		// A fixed "today", so the future-price guard is asserted against a
 		// literal rather than against whatever day the suite runs on.
-		now: time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC),
+		now:    time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC),
+		sealer: box,
 	}
 	log := slog.New(qf.logs)
 	newClient := func(token string) (*Client, error) {
