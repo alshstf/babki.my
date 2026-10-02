@@ -14,11 +14,13 @@ export function RowMenu({
   onEdit,
   onBalance,
   onArchive,
+  onRestore,
 }: {
   account: AccountWithBalance;
   onEdit: (account: AccountWithBalance) => void;
   onBalance: (account: AccountWithBalance) => void;
   onArchive: (account: AccountWithBalance) => void;
+  onRestore: (account: AccountWithBalance) => void;
 }) {
   const { t } = useTranslation();
   const archived = account.status === "archived";
@@ -36,13 +38,17 @@ export function RowMenu({
         <DropdownMenuItem onClick={() => onEdit(account)}>
           {t("accounts.menu.edit")}
         </DropdownMenuItem>
-        <DropdownMenuItem
-          className="text-red-500"
-          onClick={() => onArchive(account)}
-          disabled={archived}
-        >
-          {t("accounts.menu.archive")}
-        </DropdownMenuItem>
+        {/* An archived account takes no entries until it is brought back, so
+            the way back sits where the way in was. */}
+        {archived ? (
+          <DropdownMenuItem onClick={() => onRestore(account)}>
+            {t("accounts.menu.restore")}
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuItem className="text-red-500" onClick={() => onArchive(account)}>
+            {t("accounts.menu.archive")}
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

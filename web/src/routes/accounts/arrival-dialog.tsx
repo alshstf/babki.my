@@ -28,6 +28,7 @@ import {
   toStatedPurchase,
   type PurchaseRow,
 } from "./purchases-editor";
+import { MAX_NOTE } from "@/lib/text-limits";
 
 // ArrivalDialog records shares that came from another broker — one this
 // program does not hold — on an account no importer feeds. With the purchases
@@ -135,7 +136,7 @@ export function ArrivalDialog({
           </div>
           <div className="grid gap-2">
             <Label htmlFor="arrival-note">{t("arrival.note")}</Label>
-            <Input id="arrival-note" value={note} onChange={(e) => setNote(e.target.value)} />
+            <Input id="arrival-note" maxLength={MAX_NOTE} value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
           <label className="flex items-center gap-2 text-sm" htmlFor="arrival-priced">
             <Checkbox id="arrival-priced" checked={priced} onCheckedChange={(v) => setPriced(v === true)} />

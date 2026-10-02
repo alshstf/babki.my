@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/platform/db"
 	"babki.my/babki/internal/portfolio"
 )
@@ -22,6 +24,12 @@ import (
 // on its own, says nothing about which of the statement's two tables failed
 // to produce a row.
 var ErrAccountNotInSpace = errors.New("account not found in space")
+
+// ErrAccountArchived means a hand entry named an account the family has put
+// in the archive. An archived account is out of every total and its balance
+// can no longer be marked; a row typed into it would change a history nobody
+// is looking at any more, so it is brought back from the archive first.
+var ErrAccountArchived = fmt.Errorf("%w: the account is archived; bring it back from the archive to change it", family.ErrValidation)
 
 // ErrRemovalCountMismatch means ApplyDelta's own DELETE found fewer rows than
 // removeIDs named. Service.importRemovals already checks every id belongs to
@@ -49,7 +57,7 @@ func NewStore(x db.Executor) *Store { return &Store{db: x} }
 // REFERENCES the account, which is a great deal more than the mutual exclusion
 // wanted here. FOR NO KEY UPDATE conflicts with itself, which is exactly and
 // only what this needs.
-const accountLockSQL = `SELECT id FROM accounts WHERE space_id = $1 AND id = $2 FOR NO KEY UPDATE`
+const accountLockSQL = `SELECT status FROM accounts WHERE space_id = $1 AND id = $2 FOR NO KEY UPDATE`
 
 // WithAccountsLocked runs fn inside ONE transaction that holds an exclusive
 // journal lock on each of accountIDs, with a Store bound to that transaction —
@@ -78,6 +86,20 @@ const accountLockSQL = `SELECT id FROM accounts WHERE space_id = $1 AND id = $2 
 // caller's own decision about the caller's own domain, and dressing it up here
 // would hide which of the two the failure was.
 func (s *Store) WithAccountsLocked(ctx context.Context, spaceID uuid.UUID, accountIDs []uuid.UUID, fn func(*Store) error) error {
+	return s.withAccountsLocked(ctx, spaceID, accountIDs, false, fn)
+}
+
+// WithOpenAccountsLocked is WithAccountsLocked for a hand entry: it also
+// refuses, with ErrAccountArchived, when any of accountIDs is archived. The
+// status is read under the same lock, so an account archived meanwhile is
+// refused rather than written into. An importer takes WithAccountsLocked
+// instead: what a broker reports about an account is recorded whatever the
+// family has done with it since.
+func (s *Store) WithOpenAccountsLocked(ctx context.Context, spaceID uuid.UUID, accountIDs []uuid.UUID, fn func(*Store) error) error {
+	return s.withAccountsLocked(ctx, spaceID, accountIDs, true, fn)
+}
+
+func (s *Store) withAccountsLocked(ctx context.Context, spaceID uuid.UUID, accountIDs []uuid.UUID, open bool, fn func(*Store) error) error {
 	ids := slices.Clone(accountIDs)
 	slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
 	ids = slices.Compact(ids)
@@ -89,12 +111,15 @@ func (s *Store) WithAccountsLocked(ctx context.Context, spaceID uuid.UUID, accou
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	for _, id := range ids {
-		var locked uuid.UUID
-		if err := tx.QueryRow(ctx, accountLockSQL, spaceID, id).Scan(&locked); err != nil {
+		var status account.Status
+		if err := tx.QueryRow(ctx, accountLockSQL, spaceID, id).Scan(&status); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("%w: %w", ErrAccountNotInSpace, pgx.ErrNoRows)
 			}
 			return err
+		}
+		if open && status == account.StatusArchived {
+			return ErrAccountArchived
 		}
 	}
 	if err := fn(NewStore(tx)); err != nil {

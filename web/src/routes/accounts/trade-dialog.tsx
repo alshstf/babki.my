@@ -28,6 +28,7 @@ import { useSaveOperation, isConflict, type Operation } from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
 import type { Instrument } from "@/api/instruments";
 import { InstrumentPicker } from "./instrument-picker";
+import { MAX_NOTE } from "@/lib/text-limits";
 
 // Why a bond's percentage-of-face field cannot be converted into money, or
 // null when it can. Four causes, and they get four different sentences on
@@ -465,7 +466,7 @@ export function TradeDialog({
           </div>
           <div className="grid gap-2">
             <Label htmlFor="trade-note">{t("trade.note")}</Label>
-            <Input id="trade-note" value={note} onChange={(e) => setNote(e.target.value)} />
+            <Input id="trade-note" maxLength={MAX_NOTE} value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
           {totalMinor !== null && instrument && (
             <div

@@ -1102,7 +1102,7 @@ type CreateAccountRequest struct {
 	Currency    string  `json:"currency"`
 	Institution *string `json:"institution,omitempty"`
 
-	// Name What to call the account. Refused EMPTY and nothing more (internal/account/http.go, handleCreate): the server compares against "" and does not trim, so a name of nothing but blanks is accepted. The floor is stated because a client validating against this document should not need a round trip to learn that "" is not a name; no ceiling and no shape are stated because the server checks neither.
+	// Name What to call the account. Refused EMPTY or longer than 100 characters (account.MaxNameRunes, counted as Unicode code points) and nothing more (internal/account/http.go, handleCreate): the server compares against "" and does not trim, so a name of nothing but blanks is accepted. The floor is stated because a client validating against this document should not need a round trip to learn that "" is not a name; no shape is stated because the server checks none.
 	Name        string                                `json:"name"`
 	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
 	Type        AccountType                           `json:"type"`
@@ -1168,7 +1168,7 @@ type CreateInstrumentRequest struct {
 	// Isin ISIN (ISO 6166): two letters, nine letters or digits, one digit, e.g. US0231351067. Trimmed and upper-cased by the server before it is stored, because the catalog and the corporate-actions registry match it as a string; anything else is a 400. May be omitted or empty: an instrument need not have one.
 	Isin *string `json:"isin,omitempty"`
 
-	// Name What to call the instrument. Refused EMPTY and nothing more (internal/instrument/http.go, handleCreate): the server compares against "" and does not trim. Same floor and same reasoning as CreateAccountRequest.name — see it.
+	// Name What to call the instrument. Refused EMPTY or longer than 200 characters (instrument.MaxNameRunes) and nothing more (internal/instrument/http.go, handleCreate): the server compares against "" and does not trim. Same floor and same reasoning as CreateAccountRequest.name — see it.
 	Name   string         `json:"name"`
 	Ticker *string        `json:"ticker,omitempty"`
 	Type   InstrumentType `json:"type"`
@@ -1176,7 +1176,7 @@ type CreateInstrumentRequest struct {
 
 // CreateMemberRequest Adds a family member. Owner-only (403 otherwise). The three rules below are the second door user credentials are written through — internal/family/auth.go, CreateMember — and each of them is the same rule Setup applies, which is why each is declared in both places.
 type CreateMemberRequest struct {
-	// DisplayName What to call the person. Refused EMPTY and nothing more: the server compares against "" and does not trim, so a name of nothing but blanks is accepted here even though the member dialog's own Save button will not offer it.
+	// DisplayName What to call the person. Refused EMPTY or longer than 100 characters (family.MaxNameRunes) and nothing more: the server compares against "" and does not trim, so a name of nothing but blanks is accepted here even though the member dialog's own Save button will not offer it.
 	DisplayName string `json:"display_name"`
 
 	// Password Same rule as SetupRequest.password — see it, including why the count is in code points and why LoginRequest carries none.
@@ -1844,13 +1844,13 @@ type SetBalanceRequest struct {
 
 // SetupRequest Creates the first user, the space and the owner membership, and only while the instance has no users at all — a second call is a 409. The four rules below are the ones internal/family/auth.go, Setup applies, and each of them is a 400.
 type SetupRequest struct {
-	// DisplayName What to call the person. Same rule and same reasoning as space_name above: refused empty, not trimmed, no ceiling and no shape.
+	// DisplayName What to call the person. Same rule and same reasoning as space_name above: refused empty or past 100 characters, not trimmed, no shape.
 	DisplayName string `json:"display_name"`
 
 	// Password At least eight CHARACTERS and at most 1024, counted as Unicode code points — which is what `minLength` and `maxLength` count here and what the server counts. It used to count BYTES while its own refusal said «characters», so a seven-letter Cyrillic password was fourteen bytes and went through, and this document could not state the rule without stating one stricter than the code (#117). The count moved to code points rather than the sentence to bytes, because the sentence is what the person reads. The ceiling is there so that what gets hashed has a size the server chose. NOT DECLARED ON LoginRequest — see it.
 	Password string `json:"password"`
 
-	// SpaceName What to call the space. Refused EMPTY and nothing more: a name of one character is accepted, and so is one made of nothing but blanks — the server compares against "" and does not trim. The floor is declared because a client validating against this document should not have to send a request to learn that "" is not a name; the absence of a ceiling and of a shape is equally deliberate, since the server checks neither.
+	// SpaceName What to call the space. Refused EMPTY or longer than 100 characters (family.MaxNameRunes, counted as Unicode code points) and nothing more: a name of one character is accepted, and so is one made of nothing but blanks — the server compares against "" and does not trim. The floor is declared because a client validating against this document should not have to send a request to learn that "" is not a name; no shape is stated because the server checks none.
 	SpaceName string `json:"space_name"`
 
 	// Username Lowercase letters, digits and underscore, three to thirty-two of them. That is the WHOLE rule (family.UsernamePattern, applied in validateCredentials), and it is applied at both doors that create a user — here and on CreateMemberRequest — so the pattern is declared at both. Anything else is a 400. Taken already is a 409 rather than a 400: the name is well formed, the conflict is with a row that exists. NOT DECLARED ON LoginRequest, which checks no shape at all — see it.
@@ -2298,7 +2298,7 @@ type TransferResponse struct {
 type UpdateAccountRequest struct {
 	Institution *string `json:"institution,omitempty"`
 
-	// Name Same rule as on creation — refused empty, not trimmed (internal/account/http.go, handleUpdate). OMITTING the field leaves the name as it stands; that is what a PATCH does with a field it does not carry, and it is a different thing from sending "", which is the refusal this floor states.
+	// Name Same rule as on creation — refused empty or past 100 characters, not trimmed (internal/account/http.go, handleUpdate). OMITTING the field leaves the name as it stands; that is what a PATCH does with a field it does not carry, and it is a different thing from sending "", which is the refusal this floor states.
 	Name        *string                               `json:"name,omitempty"`
 	OwnerUserId nullable.Nullable[openapi_types.UUID] `json:"owner_user_id,omitempty"`
 	Status      *AccountStatus                        `json:"status,omitempty"`
@@ -2320,7 +2320,7 @@ type UpdateInstrumentRequest struct {
 	// Isin ISIN (ISO 6166): two letters, nine letters or digits, one digit, e.g. US0231351067. Trimmed and upper-cased by the server before it is stored, because the catalog and the corporate-actions registry match it as a string; anything else is a 400. An empty string clears it.
 	Isin *string `json:"isin,omitempty"`
 
-	// Name Same rule as on creation — refused empty, not trimmed (internal/instrument/http.go, handleUpdate). Omitting the field leaves the name as it stands; see UpdateAccountRequest.name.
+	// Name Same rule as on creation — refused empty or past 200 characters, not trimmed (internal/instrument/http.go, handleUpdate). Omitting the field leaves the name as it stands; see UpdateAccountRequest.name.
 	Name   *string `json:"name,omitempty"`
 	Ticker *string `json:"ticker,omitempty"`
 }

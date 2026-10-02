@@ -20,6 +20,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { isConflict } from "@/api/operations";
 import { useCreateMember, type Role } from "@/api/members";
+import { MAX_PERSON_NAME } from "@/lib/text-limits";
 
 const ASSIGNABLE_ROLES: Role[] = ["editor", "viewer"];
 
@@ -93,6 +94,7 @@ export function MemberDialog({
             <Label htmlFor="member-display">{t("family.dialog.displayName")}</Label>
             <Input
               id="member-display"
+              maxLength={MAX_PERSON_NAME}
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
             />

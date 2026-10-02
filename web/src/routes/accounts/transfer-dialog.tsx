@@ -24,6 +24,7 @@ import { useAccounts, type AccountWithBalance } from "@/api/accounts";
 import { useCreateTransfer, isConflict } from "@/api/operations";
 import type { Instrument } from "@/api/instruments";
 import { InstrumentPicker } from "./instrument-picker";
+import { MAX_NOTE } from "@/lib/text-limits";
 
 export function TransferDialog({
   open,
@@ -161,7 +162,7 @@ export function TransferDialog({
           </div>
           <div className="grid gap-2">
             <Label htmlFor="transfer-note">{t("transfer.note")}</Label>
-            <Input id="transfer-note" value={note} onChange={(e) => setNote(e.target.value)} />
+            <Input id="transfer-note" maxLength={MAX_NOTE} value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
           {errorMessage && (
             <Alert variant="destructive">

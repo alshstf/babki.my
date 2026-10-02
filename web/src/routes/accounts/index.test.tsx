@@ -267,6 +267,50 @@ describe("AccountsPage — an archive the server refused", () => {
   });
 });
 
+describe("AccountsPage — bringing an account back from the archive", () => {
+  // An archived account takes no entries until it is brought back (the server
+  // refuses them), so its menu offers the way back where «Архивировать» was —
+  // a PATCH of its status, not the DELETE that archived it.
+  it("offers «Вернуть из архива» on an archived row and sends the account back as active", async () => {
+    const sent: { method: string; url: string; body: unknown }[] = [];
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = input instanceof Request ? input.method : (init?.method ?? "GET");
+      const text = input instanceof Request ? await input.text() : String(init?.body ?? "");
+      const json = (body: unknown) =>
+        new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+      if (method !== "GET") {
+        sent.push({ method, url, body: text ? JSON.parse(text) : null });
+        return json(makeAccount());
+      }
+      if (url.includes("/api/v1/summary")) return json(makeSummary());
+      if (url.includes("/api/v1/accounts")) return json([makeAccount({ status: "archived" })]);
+      return new Response("null", { status: 404 });
+    });
+    renderPage();
+
+    fireEvent.keyDown(await screen.findByRole("button", { name: "Действия" }), { key: "Enter" });
+    expect(screen.queryByRole("menuitem", { name: "Архивировать" })).toBeNull();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Вернуть из архива" }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].method).toBe("PATCH");
+    expect(sent[0].url).toContain("/api/v1/accounts/acc-1");
+    expect(sent[0].body).toEqual({ status: "active" });
+  });
+
+  it("offers an active row «Архивировать» and not the way back", async () => {
+    serve({
+      "/api/v1/accounts": { body: [makeAccount()] },
+      "/api/v1/summary": { body: makeSummary() },
+    });
+    renderPage();
+    fireEvent.keyDown(await screen.findByRole("button", { name: "Действия" }), { key: "Enter" });
+    expect(await screen.findByRole("menuitem", { name: "Архивировать" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Вернуть из архива" })).toBeNull();
+  });
+});
+
 // buttonNames is every button this screen currently offers, by the name a
 // person actually reads off it — the accessible name, so an icon-only control
 // is named by its aria-label rather than by an empty string.

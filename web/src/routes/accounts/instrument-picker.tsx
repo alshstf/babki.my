@@ -18,6 +18,7 @@ import {
   type Instrument,
   type InstrumentType,
 } from "@/api/instruments";
+import { MAX_INSTRUMENT_NAME, MAX_TICKER } from "@/lib/text-limits";
 
 const INSTRUMENT_TYPES: InstrumentType[] = [
   "share",
@@ -141,11 +142,11 @@ export function InstrumentPicker({
         </div>
         <div className="grid gap-2">
           <Label htmlFor="new-instr-name">{t("instrumentPicker.name")}</Label>
-          <Input id="new-instr-name" value={newName} onChange={(e) => setNewName(e.target.value)} />
+          <Input id="new-instr-name" maxLength={MAX_INSTRUMENT_NAME} value={newName} onChange={(e) => setNewName(e.target.value)} />
         </div>
         <div className="grid gap-2">
           <Label htmlFor="new-instr-ticker">{t("instrumentPicker.ticker")}</Label>
-          <Input id="new-instr-ticker" value={newTicker} onChange={(e) => setNewTicker(e.target.value)} />
+          <Input id="new-instr-ticker" maxLength={MAX_TICKER} value={newTicker} onChange={(e) => setNewTicker(e.target.value)} />
         </div>
         <div className="grid gap-2">
           <Label htmlFor="new-instr-currency">{t("instrumentPicker.currency")}</Label>

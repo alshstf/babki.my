@@ -33,6 +33,7 @@ import {
   type OperationType,
 } from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
+import { MAX_NOTE } from "@/lib/text-limits";
 
 // Cash-level journal entries: no instrument attribution, only a signed cash
 // effect on the account. The backend enforces the sign strictly per type
@@ -158,7 +159,7 @@ export function CashDialog({
           </div>
           <div className="grid gap-2">
             <Label htmlFor="cash-note">{t("cash.note")}</Label>
-            <Input id="cash-note" value={note} onChange={(e) => setNote(e.target.value)} />
+            <Input id="cash-note" maxLength={MAX_NOTE} value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
           {createOperation.isError && (
             <Alert variant="destructive">

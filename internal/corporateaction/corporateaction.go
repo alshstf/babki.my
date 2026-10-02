@@ -55,6 +55,7 @@ import (
 	"fmt"
 	"slices"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -345,11 +346,28 @@ func (e Event) Validate() error {
 		if e.SourceRef == "" {
 			return fmt.Errorf("%w: a hand-recorded event must link to the evidence for it", family.ErrValidation)
 		}
+		if utf8.RuneCountInString(e.SourceRef) > MaxSourceRefRunes {
+			return fmt.Errorf("%w: source_ref must be at most %d characters", family.ErrValidation, MaxSourceRefRunes)
+		}
+		if utf8.RuneCountInString(e.Note) > MaxNoteRunes {
+			return fmt.Errorf("%w: note must be at most %d characters", family.ErrValidation, MaxNoteRunes)
+		}
 	default:
 		return fmt.Errorf("%w: source must be %s or %s", family.ErrValidation, SourceMOEX, SourceManual)
 	}
 	return nil
 }
+
+// MaxSourceRefRunes and MaxNoteRunes are the longest evidence link and note a
+// hand-recorded event takes, counted in characters (Unicode code points) as
+// api/openapi.yaml's maxLength counts them. A link is a line and a note a line
+// or two; the ceilings are there so that what the registry stores has a size
+// the server chose, not the request body limit. An event the exchange
+// reported carries the exchange's own texts and is not held to them.
+const (
+	MaxSourceRefRunes = 500
+	MaxNoteRunes      = 1000
+)
 
 // errNoSuchEvent is what Delete answers for an id the registry does not hold.
 var errNoSuchEvent = errors.New("corporateaction: no such event")

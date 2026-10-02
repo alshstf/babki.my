@@ -17,6 +17,7 @@ import { InstrumentPicker } from "@/routes/accounts/instrument-picker";
 import type { Instrument } from "@/api/instruments";
 import { useExplainRows } from "@/api/explanations";
 import { isConflict } from "@/api/operations";
+import { MAX_NOTE } from "@/lib/text-limits";
 
 // The two shapes this dialog can enter. Both take an instrument, a quantity
 // and money that comes IN, which is what every corporate event seen live so
@@ -185,6 +186,7 @@ export function ExplainDialog({
             <Label htmlFor="explain-note">{t("connections.detail.explain.note")}</Label>
             <Input
               id="explain-note"
+              maxLength={MAX_NOTE}
               value={note}
               onChange={(e) => setNote(e.target.value)}
             />

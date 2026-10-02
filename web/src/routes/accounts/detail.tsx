@@ -51,6 +51,10 @@ export function AccountDetailPage() {
   const account = accounts.data?.find((a) => a.id === accountId);
   const positions = usePositions(accountId, !!account);
   const isViewer = session?.role === "viewer";
+  // An archived account's journal is read-only until it is brought back from
+  // the archive (the server refuses hand entries into it); a viewer's is
+  // read-only always.
+  const readOnly = isViewer || account?.status === "archived";
   const [action, setAction] = useState<AddAction | undefined>(undefined);
   const closeAction = () => setAction(undefined);
   // The paper whose purchase price is being given, from its «указать цену».
@@ -138,12 +142,18 @@ export function AccountDetailPage() {
         {account.type === "brokerage" && <AccountReturn accountId={accountId} />}
       </div>
 
+      {account.status === "archived" && (
+        <Alert>
+          <AlertDescription>{t("accounts.archivedNotice")}</AlertDescription>
+        </Alert>
+      )}
+
       <div className="grid gap-2">
         <div className="flex items-center justify-between">
           <div className="flex flex-wrap items-baseline gap-x-3">
             <h2 className="text-lg font-semibold">{t("positions.title")}</h2>
           </div>
-          {!isViewer && (
+          {!readOnly && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm">
@@ -206,7 +216,7 @@ export function AccountDetailPage() {
               cash={positions.data.cash}
               mode={mode}
               baseCurrency={baseCurrency}
-              onPriceUnknown={isViewer ? undefined : setPricing}
+              onPriceUnknown={readOnly ? undefined : setPricing}
               onStatePrice={isViewer ? undefined : setQuoting}
             />
           </>
@@ -236,12 +246,12 @@ export function AccountDetailPage() {
             over the positions above is not repeated here word for word. */}
         <OperationsTable
           accountId={accountId}
-          canDelete={!isViewer}
+          canDelete={!readOnly}
           mode={mode}
           baseCurrency={baseCurrency}
           costBasisRules={session?.cost_basis_rules}
-          onPurchasePrice={isViewer ? undefined : setPricing}
-          onEdit={isViewer ? undefined : (operation, instrument) => setEditing({ operation, instrument })}
+          onPurchasePrice={readOnly ? undefined : setPricing}
+          onEdit={readOnly ? undefined : (operation, instrument) => setEditing({ operation, instrument })}
           papers={(positions.data?.positions ?? []).map((p) => ({
             id: p.instrument.id,
             name: p.instrument.name,

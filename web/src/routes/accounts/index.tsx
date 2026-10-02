@@ -35,6 +35,7 @@ export function AccountsPage() {
   const summary = useSummary();
   const archiveAccount = useArchiveAccount();
   const valueBy = useUpdateAccount();
+  const restore = useUpdateAccount();
 
   // undefined = dialog closed, null = create mode, account = edit mode.
   const [dialogAccount, setDialogAccount] = useState<AccountWithBalance | null | undefined>(
@@ -97,6 +98,11 @@ export function AccountsPage() {
           <AlertDescription>{t("accounts.journal.switchError")}</AlertDescription>
         </Alert>
       )}
+      {restore.isError && (
+        <Alert variant="destructive">
+          <AlertDescription>{t("accounts.restoreError")}</AlertDescription>
+        </Alert>
+      )}
       {list.length === 0 ? (
         <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">
           {t("accounts.empty")}
@@ -122,6 +128,9 @@ export function AccountsPage() {
                     onEdit={setDialogAccount}
                     onBalance={setBalanceTarget}
                     onArchive={setArchiveTarget}
+                    onRestore={(target) =>
+                      restore.mutate({ id: target.id, body: { status: "active" } })
+                    }
                   />
                 )
           }
