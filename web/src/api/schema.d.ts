@@ -405,7 +405,8 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put?: never;
+        /** @description Rewrites an operation entered by hand, in place: the body is the one POST /api/v1/operations takes, and account_id and type must be the operation's own (400 otherwise). The row keeps its id and its place among the operations of its day. 409, with the engine's reason, when the journal no longer replays with the edit. 400 when the operation is not editable: `source` is not `manual` (the importer owns it), or it is one leg of a transfer, conversion or spin-off, or shares that arrived from another broker — those are deleted and entered again. */
+        put: operations["updateOperation"];
         post?: never;
         /** @description Deletes the operation (whole pair for transfers). Rejected with 409 if the remaining journal no longer replays — an oversell is one cause of that and not the only one, see POST /api/v1/operations — and rejected outright when `source` is not `manual`: an imported operation belongs to the importer, which would write it back on its next rebuild, so "deleted" would be a lie. Retire such an operation by deleting its connection instead — that stops the updates and leaves the history in place. */
         delete: operations["deleteOperation"];
@@ -2601,6 +2602,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TransferResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    updateOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateOperationRequest"];
+            };
+        };
+        responses: {
+            /** @description The operation as stored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Operation"];
                 };
             };
             400: components["responses"]["Error"];

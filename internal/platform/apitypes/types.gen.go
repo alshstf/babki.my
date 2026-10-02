@@ -2068,6 +2068,9 @@ type CreateArrivalJSONRequestBody = CreateArrivalRequest
 // CreateTransferJSONRequestBody defines body for CreateTransfer for application/json ContentType.
 type CreateTransferJSONRequestBody = TransferRequest
 
+// UpdateOperationJSONRequestBody defines body for UpdateOperation for application/json ContentType.
+type UpdateOperationJSONRequestBody = CreateOperationRequest
+
 // StatePurchasesJSONRequestBody defines body for StatePurchases for application/json ContentType.
 type StatePurchasesJSONRequestBody = StatePurchasesRequest
 

@@ -553,6 +553,34 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/operations/{operationId}:
+    put:
+      operationId: updateOperation
+      description: >-
+        Rewrites an operation entered by hand, in place: the body is the one POST
+        /api/v1/operations takes, and account_id and type must be the operation's own (400
+        otherwise). The row keeps its id and its place among the operations of its day. 409, with
+        the engine's reason, when the journal no longer replays with the edit. 400 when the
+        operation is not editable: `source` is not `manual` (the importer owns it), or it is one
+        leg of a transfer, conversion or spin-off, or shares that arrived from another broker —
+        those are deleted and entered again.
+      parameters:
+        - { name: operationId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateOperationRequest" }
+      responses:
+        "200":
+          description: The operation as stored
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Operation" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteOperation
       description: >-

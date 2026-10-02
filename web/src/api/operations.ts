@@ -127,6 +127,55 @@ export function useCreateOperation() {
   });
 }
 
+// Writes what a dialog holds: a new operation, or — when the dialog was opened
+// on an existing row — that row, in place (PUT keeps its id and its place
+// among the operations of its day).
+export function useSaveOperation(editingId?: string) {
+  const invalidate = useInvalidateJournal();
+  return useMutation({
+    mutationFn: async (body: CreateOperationBody): Promise<Operation> => {
+      if (editingId) {
+        const { data, error, response } = await api.PUT("/api/v1/operations/{operationId}", {
+          params: { path: { operationId: editingId } },
+          body,
+        });
+        if (!data) throw apiError(response, error);
+        return data;
+      }
+      const { data, error, response } = await api.POST("/api/v1/operations", { body });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: (data) => invalidate([data.account_id]),
+  });
+}
+
+// The dialog an operation is edited in, or null when it is not edited in place:
+// a broker's row, one leg of a pair, shares from another broker, and the kinds
+// no dialog records (the server refuses the same — see PUT .../operations/{id}).
+export type EditDialog = "trade" | "cash" | "income";
+
+export function editDialogOf(operation: Operation): EditDialog | null {
+  if (operation.source !== "manual" || operation.transfer_group_id) return null;
+  switch (operation.type) {
+    case "buy":
+    case "sell":
+      return "trade";
+    case "deposit":
+    case "withdrawal":
+    case "fee":
+    case "tax":
+    case "interest":
+      return "cash";
+    case "dividend":
+    case "coupon":
+    case "amortization":
+      return "income";
+    default:
+      return null;
+  }
+}
+
 export function useDeleteOperation() {
   const invalidate = useInvalidateJournal();
   return useMutation({

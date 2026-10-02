@@ -101,6 +101,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	}
 	srv.Mount("POST /api/v1/operations", edit(h.handleCreate))
 	srv.Mount("GET /api/v1/accounts/{accountId}/operations", view(h.handleListByAccount))
+	srv.Mount("PUT /api/v1/operations/{operationId}", edit(h.handleUpdate))
 	srv.Mount("DELETE /api/v1/operations/{operationId}", edit(h.handleDelete))
 	srv.Mount("POST /api/v1/operations/transfer", edit(h.handleTransfer))
 	srv.Mount("PUT /api/v1/operations/{operationId}/purchases", edit(h.handleStatePurchases))
@@ -976,6 +977,34 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusCreated, toAPI(created))
+}
+
+func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
+	p, _ := family.PrincipalFromContext(r.Context())
+	id, ok := pathOperationID(w, r)
+	if !ok {
+		return
+	}
+	var req apitypes.CreateOperationRequest
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	op, err := OperationFromCreateRequest(req)
+	if err != nil {
+		var bad BadFieldError
+		if errors.As(err, &bad) {
+			httpjson.Error(w, http.StatusBadRequest, bad.Message)
+			return
+		}
+		writeError(w, err)
+		return
+	}
+	updated, err := h.svc.Update(r.Context(), p.SpaceID, id, op)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, toAPI(updated))
 }
 
 func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {

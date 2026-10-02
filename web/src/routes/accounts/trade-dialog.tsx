@@ -18,12 +18,13 @@ import {
   bondPriceFromPercent,
   formatMinor,
   formatMinorCompact,
+  minorToInput,
   multiplyToMinor,
   parseToMinor,
   isPositiveDecimal,
 } from "@/lib/money";
 import { EARLIEST_OPERATION_DATE, localToday } from "@/lib/dates";
-import { useCreateOperation, isConflict } from "@/api/operations";
+import { useSaveOperation, isConflict, type Operation } from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
 import type { Instrument } from "@/api/instruments";
 import { InstrumentPicker } from "./instrument-picker";
@@ -148,14 +149,20 @@ export function TradeDialog({
   onOpenChange,
   account,
   side,
+  editing,
+  editingInstrument,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   account: AccountWithBalance;
   side: "buy" | "sell";
+  // The recorded trade this dialog was opened on, to be corrected in place,
+  // and the paper it names.
+  editing?: Operation;
+  editingInstrument?: Instrument | null;
 }) {
   const { t } = useTranslation();
-  const createOperation = useCreateOperation();
+  const createOperation = useSaveOperation(editing?.id);
 
   const [instrument, setInstrument] = useState<Instrument | null>(null);
   const [quantity, setQuantity] = useState("");
@@ -180,13 +187,13 @@ export function TradeDialog({
 
   useEffect(() => {
     if (open) {
-      setInstrument(null);
-      setQuantity("");
-      setPrice("");
+      setInstrument(editingInstrument ?? null);
+      setQuantity(editing?.quantity ?? "");
+      setPrice(editing?.price ?? "");
       setPercentInput(null);
-      setFee("");
-      setOccurredOn(localToday());
-      setNote("");
+      setFee(editing && editing.fee_minor !== 0 ? minorToInput(editing.fee_minor) : "");
+      setOccurredOn(editing?.occurred_on ?? localToday());
+      setNote(editing?.note ?? "");
       createOperation.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -364,7 +371,11 @@ export function TradeDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {side === "buy" ? t("trade.buyTitle") : t("trade.sellTitle")}
+            {editing
+              ? t("operations.editTitle")
+              : side === "buy"
+                ? t("trade.buyTitle")
+                : t("trade.sellTitle")}
           </DialogTitle>
         </DialogHeader>
         <div className="grid gap-4">
@@ -478,7 +489,11 @@ export function TradeDialog({
             {t("common.cancel")}
           </Button>
           <Button disabled={!valid || createOperation.isPending} onClick={submit}>
-            {side === "buy" ? t("trade.buyTitle") : t("trade.sellTitle")}
+            {editing
+              ? t("common.save")
+              : side === "buy"
+                ? t("trade.buyTitle")
+                : t("trade.sellTitle")}
           </Button>
         </DialogFooter>
       </DialogContent>

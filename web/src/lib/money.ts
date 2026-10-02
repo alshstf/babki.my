@@ -268,6 +268,16 @@ function parseAmount(input: string): { minor: number } | { refusal: AmountRefusa
   return { minor: magnitude === 0 ? 0 : sign * magnitude };
 }
 
+// minorToInput is the size of an amount as an amount field takes it back —
+// «2900», «123.45» — so a dialog opened on a recorded operation shows what was
+// recorded. The sign is the dialog's to apply, as it is on a new entry.
+export function minorToInput(amountMinor: number): string {
+  const digits = String(amountMinor).replace("-", "").padStart(3, "0");
+  const whole = digits.slice(0, -2);
+  const fraction = digits.slice(-2);
+  return fraction === "00" ? whole : `${whole}.${fraction}`;
+}
+
 // parseToMinor accepts "1 234,56" / "1234.56" / "-92 000"; returns null on junk
 // and on a sum past MAX_AMOUNT_MINOR — anything it does not return a number for,
 // the field must not send. amountRefusal says which of the two it was.
