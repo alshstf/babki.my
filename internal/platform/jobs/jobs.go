@@ -190,6 +190,8 @@ func NewWorkers(
 		tinvestDeps.NewClient, tinvestDeps.NewRebuilder, caMaterializer, tinvestDeps.Reconciler, log))
 	river.AddWorker(workers, tinvest.NewQuotesWorker(tinvestDeps.Store, mdStore,
 		tinvestDeps.Box, tinvestDeps.NewClient, log, nil))
+	river.AddWorker(workers, tinvest.NewBackfillQuotesWorker(tinvestDeps.Store, mdStore, operations,
+		tinvestDeps.Box, tinvestDeps.NewClient, log))
 	// The corporate-actions registry. The refresh worker is registered only
 	// when the quote provider can also answer about splits — the same rule the
 	// gold worker follows above and for the same reason: the interface is the
@@ -264,6 +266,7 @@ func schedule() []scheduledJob {
 		{backfillFxInterval, marketdata.BackfillQuotesArgs{}},
 		{tinvestSyncInterval, tinvest.SyncDispatchArgs{}},
 		{tinvestQuotesInterval, tinvest.RefreshQuotesArgs{}},
+		{backfillFxInterval, tinvest.BackfillQuotesArgs{}},
 		{corporateActionsInterval, corporateaction.RefreshMoexSplitsArgs{}},
 		{corporateActionsInterval, corporateaction.MaterializeAllArgs{}},
 	}
