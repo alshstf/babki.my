@@ -388,6 +388,20 @@ describe("AccountDetailPage", () => {
     expect(notice.textContent).not.toContain("стоимость усредняется");
   });
 
+  it("leads from a paper's name to the paper's own page", async () => {
+    serve({
+      "/api/v1/accounts": { body: [makeAccount()] },
+      "/positions": { body: makePositionsBody(makeSession().cost_basis_rules) },
+      "/operations": { body: { operations: [], has_more: false } },
+      "/api/v1/instruments": { body: { instruments: [], has_more: false } },
+    });
+    renderPage();
+    expect(await screen.findByRole("link", { name: "Test Corp" })).toHaveAttribute(
+      "href",
+      "/instruments/instr-1",
+    );
+  });
+
   it("shows in the header what this account's closed deals have locked in", async () => {
     // The figure arrives added up, from the response that carries the rows it
     // stands over. This screen renders the server's total and computes none of

@@ -320,6 +320,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instruments/{instrumentId}/holdings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description One paper across the family: its catalog row, and its position on every account whose journal names it — exactly the row GET /accounts/{accountId}/positions shows for it there, closed positions included. Archived accounts are included; the account list says which they are. `total` adds the accounts up only where that needs no conversion: when every position is kept in one currency; otherwise it is null. 404 for an unknown paper. */
+        get: operations["getInstrumentHoldings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/instruments/{instrumentId}/prices": {
         parameters: {
             query?: never;
@@ -327,7 +344,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** @description The paper's closing prices, one a day, from `from` to today, oldest first — the exchange's, the broker's, or stated by hand, whichever the day has. A price is money per unit in `currency`, or for a bond a percentage of face value, as quotes are. At most ten years; 400 for a `from` that is malformed, in the future or further back than that; 404 for an unknown paper. */
+        get: operations["getInstrumentPrices"];
         put?: never;
         /** @description States a paper's price on a day by hand — for a paper no exchange or broker quotes: a frozen fund at its net asset value, an over-the-counter estimate. It is stored like any quote and values every holding of the paper from that day on, until a later price (from any source) takes over; the position says the price was stated by hand. A second statement for the same day replaces the first. `price` is money per unit, or for a bond a percentage of face value, as quotes are. 400 for a price that is not positive, a date in the future or a malformed one; 404 for an unknown paper. */
         post: operations["stateInstrumentPrice"];
@@ -1217,6 +1235,38 @@ export interface components {
         ImportTableResult: {
             import: components["schemas"]["TableImport"] | null;
             rows: components["schemas"]["ImportRow"][];
+        };
+        InstrumentHoldings: {
+            instrument: components["schemas"]["Instrument"];
+            holdings: components["schemas"]["InstrumentHolding"][];
+            /** @description The positions added up, when they are all kept in one currency; null otherwise. */
+            total: components["schemas"]["InstrumentHoldingsTotal"] | null;
+        };
+        InstrumentHolding: {
+            /** Format: uuid */
+            account_id: string;
+            position: components["schemas"]["Position"];
+        };
+        /** @description A figure is null when it is null on any position, or valued in another currency. */
+        InstrumentHoldingsTotal: {
+            currency: string;
+            /** @description Decimal as string */
+            quantity: string;
+            /** Format: int64 */
+            cost_minor: number;
+            /** Format: int64 */
+            market_value_minor: number | null;
+            /** Format: int64 */
+            total_minor: number | null;
+        };
+        DayPrice: {
+            /** @description Date YYYY-MM-DD */
+            on: string;
+            /** @description Decimal as string */
+            price: string;
+            currency: string;
+            /** @description Where the price came from: moex, moex_history, tinvest, tinvest_history, manual, seed, … */
+            source: string;
         };
         PeriodReturn: {
             /** @description The space's base currency */
@@ -2826,6 +2876,59 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+        };
+    };
+    getInstrumentHoldings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instrumentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The paper and its positions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstrumentHoldings"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    getInstrumentPrices: {
+        parameters: {
+            query: {
+                /** @description Date YYYY-MM-DD */
+                from: string;
+            };
+            header?: never;
+            path: {
+                instrumentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The prices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DayPrice"][];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     stateInstrumentPrice: {

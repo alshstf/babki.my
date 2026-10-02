@@ -46,7 +46,7 @@ export function StatePriceDialog({
       if (!response.ok) throw apiError(response, error);
     },
     onSuccess: () => {
-      for (const key of ["positions", "accounts", "summary", "capital", "return"]) {
+      for (const key of ["positions", "accounts", "summary", "capital", "return", "instrument-holdings", "instrument-prices"]) {
         void queryClient.invalidateQueries({ queryKey: [key] });
       }
       onOpenChange(false);

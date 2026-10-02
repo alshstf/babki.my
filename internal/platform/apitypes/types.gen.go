@@ -1249,6 +1249,20 @@ type CurrencyTotal struct {
 	NetMinor         int64 `json:"net_minor"`
 }
 
+// DayPrice defines model for DayPrice.
+type DayPrice struct {
+	Currency string `json:"currency"`
+
+	// On Date YYYY-MM-DD
+	On string `json:"on"`
+
+	// Price Decimal as string
+	Price string `json:"price"`
+
+	// Source Where the price came from: moex, moex_history, tinvest, tinvest_history, manual, seed, …
+	Source string `json:"source"`
+}
+
 // ErrorResponse defines model for ErrorResponse.
 type ErrorResponse struct {
 	Error string `json:"error"`
@@ -1489,6 +1503,32 @@ type InstrumentEventWritten struct {
 type InstrumentEventsResponse struct {
 	// Events The whole registry, newest effective date first. Not paged — see the endpoint.
 	Events []InstrumentEvent `json:"events"`
+}
+
+// InstrumentHolding defines model for InstrumentHolding.
+type InstrumentHolding struct {
+	AccountId openapi_types.UUID `json:"account_id"`
+	Position  Position           `json:"position"`
+}
+
+// InstrumentHoldings defines model for InstrumentHoldings.
+type InstrumentHoldings struct {
+	Holdings   []InstrumentHolding `json:"holdings"`
+	Instrument Instrument          `json:"instrument"`
+
+	// Total The positions added up, when they are all kept in one currency; null otherwise.
+	Total nullable.Nullable[InstrumentHoldingsTotal] `json:"total"`
+}
+
+// InstrumentHoldingsTotal A figure is null when it is null on any position, or valued in another currency.
+type InstrumentHoldingsTotal struct {
+	CostMinor        int64                    `json:"cost_minor"`
+	Currency         string                   `json:"currency"`
+	MarketValueMinor nullable.Nullable[int64] `json:"market_value_minor"`
+
+	// Quantity Decimal as string
+	Quantity   string                   `json:"quantity"`
+	TotalMinor nullable.Nullable[int64] `json:"total_minor"`
 }
 
 // InstrumentType defines model for InstrumentType.
@@ -2407,6 +2447,12 @@ type SearchInstrumentsParams struct {
 	Query  *string `form:"query,omitempty" json:"query,omitempty"`
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 	Offset *int    `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
+// GetInstrumentPricesParams defines parameters for GetInstrumentPrices.
+type GetInstrumentPricesParams struct {
+	// From Date YYYY-MM-DD
+	From string `form:"from" json:"from"`
 }
 
 // StateInstrumentPriceJSONBody defines parameters for StateInstrumentPrice.
