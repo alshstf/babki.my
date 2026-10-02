@@ -149,6 +149,12 @@ describe("InstrumentPage", () => {
           { on: "2026-10-02", price: "150", currency: "RUB", source: "moex" },
         ],
       },
+      "/return": {
+        body: {
+          currency: "RUB", from: "2025-10-03", to: "2026-10-03", start_minor: 0, end_minor: 225_000,
+          contributions_minor: 160_000, profit_minor: 65_000, annual_rate: "0.4062", complete: true,
+        },
+      },
     });
     renderPage();
 
@@ -169,6 +175,10 @@ describe("InstrumentPage", () => {
     expect(latest.textContent).toMatch(/150,00\s₽/);
     expect(latest.textContent).toContain("Мосбиржа");
     expect(screen.getByTestId("price-chart")).toBeInTheDocument();
+
+    expect(screen.getByRole("heading", { name: "Доходность бумаги" })).toBeInTheDocument();
+    expect((await screen.findByTestId("account-return-profit")).textContent).toMatch(/650,00\s₽/);
+    expect(requested.some((u) => u.includes("/api/v1/instruments/sber/return?from="))).toBe(true);
   });
 
   it("asks for ten years of prices when the reader picks them", async () => {

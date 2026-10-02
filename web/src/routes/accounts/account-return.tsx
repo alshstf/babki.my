@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { useAccountReturn, useFamilyReturn, type PeriodReturn } from "@/api/returns";
+import { useAccountReturn, useFamilyReturn, useInstrumentReturn, type PeriodReturn } from "@/api/returns";
 import { formatMinor, signClass } from "@/lib/money";
 import { localToday } from "@/lib/dates";
 import { cn } from "@/lib/utils";
@@ -59,6 +59,15 @@ export function FamilyReturnLine() {
       <ReturnLine r={result.data} period={period} onPeriod={setPeriod} />
     </div>
   );
+}
+
+// The same for one paper across the family's accounts: what went into it, what
+// came out, and what it is worth.
+export function PaperReturn({ instrumentId }: { instrumentId: string }) {
+  const [period, setPeriod] = useState<Period>("year");
+  const today = localToday();
+  const result = useInstrumentReturn(instrumentId, fromFor(period, today), today);
+  return <ReturnLine r={result.data} period={period} onPeriod={setPeriod} />;
 }
 
 function ReturnLine({
