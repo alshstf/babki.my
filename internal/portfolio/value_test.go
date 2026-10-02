@@ -2,6 +2,7 @@ package portfolio_test
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"testing"
 
@@ -76,6 +77,9 @@ func TestAnAccountIsValuedFromItsJournal(t *testing.T) {
 	// 5 000 − 3 000 − 160 + 180 = 2 020 → 5 120 ₽. In all 153 620 ₽.
 	if got.Minor != 15_362_000 {
 		t.Errorf("value = %d, want 15362000", got.Minor)
+	}
+	if want := map[string]int64{"USD": 165_000, "RUB": 512_000}; !maps.Equal(got.ByCurrency, want) {
+		t.Errorf("by currency = %v, want %v", got.ByCurrency, want)
 	}
 	if got.Currency != "RUB" || got.Operations != 7 || got.Unpriced != 1 ||
 		len(got.MissingRates) != 0 || len(got.NegativeCash) != 0 {

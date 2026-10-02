@@ -148,7 +148,7 @@ func newAPIOnPool(t *testing.T, pool *pgxpool.Pool, conv *countingConverter) (st
 
 	srv := httpserver.New(slog.Default(), pool)
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
-	account.NewHandler(account.NewStore(pool), famStore, conv, auth, sm).Mount(srv)
+	account.NewHandler(account.NewStore(pool), famStore, conv, nil, auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)

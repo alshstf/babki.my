@@ -56,7 +56,7 @@ type Store struct{ db db.Executor }
 func NewStore(x db.Executor) *Store { return &Store{db: x} }
 
 const accCols = `a.id, a.space_id, a.owner_user_id, a.name, a.type, a.currency,
-	a.institution, a.status, a.created_at, a.updated_at`
+	a.institution, a.status, a.valued_by_balance, a.created_at, a.updated_at`
 
 // withBalanceQuery joins the latest balance mark per account.
 const withBalanceQuery = `
@@ -72,7 +72,7 @@ func scanWithBalance(row pgx.Row) (WithBalance, error) {
 	var asOf *time.Time
 	var amount *int64
 	err := row.Scan(&a.ID, &a.SpaceID, &a.OwnerUserID, &a.Name, &a.Type, &a.Currency,
-		&a.Institution, &a.Status, &a.CreatedAt, &a.UpdatedAt, &asOf, &amount)
+		&a.Institution, &a.Status, &a.ValuedByBalance, &a.CreatedAt, &a.UpdatedAt, &asOf, &amount)
 	if err != nil {
 		return WithBalance{}, err
 	}
@@ -94,10 +94,11 @@ func (s *Store) Create(
 	err := s.db.QueryRow(ctx, `
 		INSERT INTO accounts (space_id, owner_user_id, name, type, currency, institution)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, space_id, owner_user_id, name, type, currency, institution, status, created_at, updated_at`,
+		RETURNING id, space_id, owner_user_id, name, type, currency, institution, status,
+			valued_by_balance, created_at, updated_at`,
 		spaceID, ownerUserID, name, t, currency, institution).
 		Scan(&a.ID, &a.SpaceID, &a.OwnerUserID, &a.Name, &a.Type, &a.Currency,
-			&a.Institution, &a.Status, &a.CreatedAt, &a.UpdatedAt)
+			&a.Institution, &a.Status, &a.ValuedByBalance, &a.CreatedAt, &a.UpdatedAt)
 	return a, wrapOwnerFK(err)
 }
 
@@ -132,10 +133,11 @@ func (s *Store) Update(ctx context.Context, spaceID, id uuid.UUID, upd Update) (
 			institution   = COALESCE($4, institution),
 			owner_user_id = CASE WHEN $5 THEN $6 ELSE owner_user_id END,
 			status        = COALESCE($7, status),
+			valued_by_balance = COALESCE($8, valued_by_balance),
 			updated_at    = now()
 		WHERE space_id = $1 AND id = $2`,
 		spaceID, id, upd.Name, upd.Institution,
-		upd.OwnerUserID != nil, ownerValue(upd.OwnerUserID), upd.Status)
+		upd.OwnerUserID != nil, ownerValue(upd.OwnerUserID), upd.Status, upd.ValuedByBalance)
 	if err != nil {
 		return WithBalance{}, wrapOwnerFK(err)
 	}
@@ -199,13 +201,18 @@ func (s *Store) DistinctCurrencies(ctx context.Context) ([]string, error) {
 	return out, rows.Err()
 }
 
-// SummaryByCurrency aggregates latest balances of active accounts per currency.
+// SummaryByCurrency aggregates latest balances of active accounts per currency,
+// leaving out the accounts named in byJournal: those are counted by their
+// journal instead (see Handler.handleSummary).
 //
 // Which types count as debt is a PARAMETER and not a literal in the statement:
 // the list comes from LiabilityTypes, which derives it from Type.IsLiability,
 // so the query cannot go on splitting by an older idea of what a debt is than
 // the rest of the package holds.
-func (s *Store) SummaryByCurrency(ctx context.Context, spaceID uuid.UUID) ([]CurrencyTotal, error) {
+func (s *Store) SummaryByCurrency(ctx context.Context, spaceID uuid.UUID, byJournal []uuid.UUID) ([]CurrencyTotal, error) {
+	if byJournal == nil {
+		byJournal = []uuid.UUID{}
+	}
 	rows, err := s.db.Query(ctx, `
 		SELECT a.currency,
 			COALESCE(SUM(CASE WHEN a.type = ANY($2) THEN 0 ELSE COALESCE(b.amount_minor, 0) END), 0),
@@ -215,8 +222,8 @@ func (s *Store) SummaryByCurrency(ctx context.Context, spaceID uuid.UUID) ([]Cur
 			SELECT amount_minor FROM account_balances
 			WHERE account_id = a.id ORDER BY as_of DESC LIMIT 1
 		) b ON true
-		WHERE a.space_id = $1 AND a.status = 'active'
-		GROUP BY a.currency ORDER BY a.currency`, spaceID, LiabilityTypes())
+		WHERE a.space_id = $1 AND a.status = 'active' AND NOT (a.id = ANY($3))
+		GROUP BY a.currency ORDER BY a.currency`, spaceID, LiabilityTypes(), byJournal)
 	if err != nil {
 		return nil, err
 	}

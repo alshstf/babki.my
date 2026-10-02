@@ -73,8 +73,12 @@ type Account struct {
 	Currency    string
 	Institution string
 	Status      Status
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// ValuedByBalance is the family's choice to count a brokerage account kept
+	// by its operations by its balance rather than by its journal (see
+	// Handler.valuations).
+	ValuedByBalance bool
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type BalancePoint struct {
@@ -97,8 +101,9 @@ type CurrencyTotal struct {
 // Update describes a partial account update; nil fields are left unchanged.
 // OwnerUserID uses a double pointer: nil = unchanged, *nil = clear to shared.
 type Update struct {
-	Name        *string
-	Institution *string
-	OwnerUserID **uuid.UUID
-	Status      *Status
+	Name            *string
+	Institution     *string
+	OwnerUserID     **uuid.UUID
+	Status          *Status
+	ValuedByBalance *bool
 }

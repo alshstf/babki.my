@@ -21,6 +21,10 @@ type JournalValue struct {
 	Currency string
 	// Minor is everything that could be valued, summed.
 	Minor int64
+	// ByCurrency is the same worth before conversion: each currency the
+	// holdings and the cash are struck in, with what is held in it. Currencies
+	// that come to nought are left out.
+	ByCurrency map[string]int64
 	// Operations is how many operations the journal holds. Nought means there
 	// is nothing to value the account from.
 	Operations int
@@ -105,5 +109,11 @@ func (h *Handler) ValueFromJournal(ctx context.Context, spaceID, accountID uuid.
 		}
 	}
 	slices.Sort(out.NegativeCash)
+	out.ByCurrency = make(map[string]int64, len(byCurrency))
+	for currency, minor := range byCurrency {
+		if minor != 0 {
+			out.ByCurrency[currency] = minor
+		}
+	}
 	return out, nil
 }
