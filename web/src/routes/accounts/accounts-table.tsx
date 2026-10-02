@@ -14,13 +14,17 @@ import { formatDate } from "@/lib/dates";
 import { resolveDisplayAmount } from "@/lib/display-amount";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
 import { MoneyCell } from "@/components/money-cell";
+import { formatMinor, signClass } from "@/lib/money";
 import type { AccountWithBalance } from "@/api/accounts";
+import { JournalNotes } from "./journal-notes";
 
 export function AccountsTable({
   accounts,
   mode,
   baseCurrency,
   onRowAction,
+  onValueBy,
+  switching,
 }: {
   accounts: AccountWithBalance[];
   mode: DisplayCurrencyMode;
@@ -31,6 +35,10 @@ export function AccountsTable({
   baseCurrency: string;
   // Optional per-row actions menu (omitted for viewers, who can't mutate).
   onRowAction?: (account: AccountWithBalance) => React.ReactNode;
+  // Switches an account between its journal and its balance (omitted for
+  // viewers), and the account a switch is under way for.
+  onValueBy?: (account: AccountWithBalance, byBalance: boolean) => void;
+  switching?: string;
 }) {
   const { t } = useTranslation();
   return (
@@ -85,7 +93,17 @@ export function AccountsTable({
                 )}
               </TableCell>
               <TableCell className="text-right">
-                {account.balance ? (
+                {account.journal && account.counted_by === "journal" ? (
+                  // Counted by its journal: the figure is already in the base
+                  // currency, whatever the account's own, because a journal
+                  // holds several currencies and the server sums them there.
+                  <div
+                    data-testid={`account-journal-value-${account.id}`}
+                    className={cn("font-medium tabular-nums", signClass(account.journal.amount_minor))}
+                  >
+                    {formatMinor(account.journal.amount_minor, account.journal.currency)}
+                  </div>
+                ) : account.balance ? (
                   <>
                     <MoneyCell
                       resolved={resolveDisplayAmount(
@@ -132,6 +150,14 @@ export function AccountsTable({
                     <span aria-hidden="true">—</span>
                     <span className="sr-only">{t("accounts.noBalanceRecorded")}</span>
                   </span>
+                )}
+                {account.journal && (
+                  <JournalNotes
+                    account={account}
+                    journal={account.journal}
+                    onValueBy={onValueBy}
+                    pending={switching === account.id}
+                  />
                 )}
               </TableCell>
               {onRowAction && <TableCell>{onRowAction(account)}</TableCell>}
