@@ -18,6 +18,10 @@ type Config struct {
 	// api, worker) — that requirement is enforced in cmd/babki, not here,
 	// same as DatabaseURL above.
 	EncryptionKey string `env:"BABKI_ENCRYPTION_KEY"`
+	// CookieSecure marks the session cookie HTTPS-only. Off by default: a home
+	// install often runs plain http on the local network, where a cookie marked
+	// so would never be sent back. Turn it on behind an HTTPS proxy.
+	CookieSecure bool `env:"BABKI_COOKIE_SECURE" envDefault:"false"`
 }
 
 // Load reads configuration from env. Does not validate DatabaseURL or
