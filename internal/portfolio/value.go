@@ -138,25 +138,47 @@ var ErrNoQuoteHistory = errors.New("portfolio: the quote store keeps no past pri
 // (or of a day at most staleQuoteDays earlier), each currency converted at that
 // day's rate. Holdings with no such price are Unpriced and add nothing.
 func (h *Handler) ValueOn(ctx context.Context, spaceID, accountID uuid.UUID, day time.Time) (JournalValue, error) {
+	values, err := h.ValuesOn(ctx, spaceID, accountID, []time.Time{day})
+	if err != nil {
+		return JournalValue{}, err
+	}
+	return values[0], nil
+}
+
+// ValuesOn is ValueOn for several days, the journal read once.
+func (h *Handler) ValuesOn(ctx context.Context, spaceID, accountID uuid.UUID, days []time.Time) ([]JournalValue, error) {
 	history, ok := h.quotes.(quoteHistory)
 	if !ok {
-		return JournalValue{}, ErrNoQuoteHistory
+		return nil, ErrNoQuoteHistory
 	}
 	sp, err := h.spaces.SpaceByID(ctx, spaceID)
 	if err != nil {
-		return JournalValue{}, err
+		return nil, err
 	}
 	all, err := h.ops.ListForEngine(ctx, spaceID, accountID)
 	if err != nil {
-		return JournalValue{}, err
+		return nil, err
 	}
+	out := make([]JournalValue, 0, len(days))
+	for _, day := range days {
+		v, err := h.valueOn(ctx, history, sp.BaseCurrency, accountID, all, day)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// valueOn values the journal all as it stood at the end of day.
+func (h *Handler) valueOn(ctx context.Context, history quoteHistory, base string, accountID uuid.UUID, all []Operation, day time.Time) (JournalValue, error) {
 	var ops []Operation
 	for _, o := range all {
 		if !o.OccurredOn.After(day) {
 			ops = append(ops, o)
 		}
 	}
-	out := JournalValue{Currency: sp.BaseCurrency, Operations: len(ops)}
+	out := JournalValue{Currency: base, Operations: len(ops)}
 	if len(ops) == 0 {
 		out.ByCurrency = map[string]int64{}
 		return out, nil

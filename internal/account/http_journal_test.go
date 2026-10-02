@@ -32,6 +32,14 @@ func (f *fakeJournals) ValueOn(_ context.Context, _, accountID uuid.UUID, day ti
 	return f.onDay[accountID.String()+"@"+day.Format(time.DateOnly)], nil
 }
 
+func (f *fakeJournals) ValuesOn(ctx context.Context, spaceID, accountID uuid.UUID, days []time.Time) ([]account.JournalValue, error) {
+	out := make([]account.JournalValue, len(days))
+	for i, day := range days {
+		out[i], _ = f.ValueOn(ctx, spaceID, accountID, day)
+	}
+	return out, nil
+}
+
 type journalRow struct {
 	ID              string `json:"id"`
 	ValuedByBalance bool   `json:"valued_by_balance"`
@@ -306,5 +314,82 @@ func TestAnOldBalanceIsComparedOnItsOwnDay(t *testing.T) {
 		if rec.Status != want[0] || fmt.Sprint(rec.DifferenceMinor) != want[1] || rec.ComparedOn != "2026-03-12" {
 			t.Errorf("account %s = %+v, want %s, %s apart, compared on 2026-03-12", id, rec, want[0], want[1])
 		}
+	}
+}
+
+type capitalSeries struct {
+	Currency string `json:"currency"`
+	Points   []struct {
+		Day        string `json:"day"`
+		TotalMinor int64  `json:"total_minor"`
+		Complete   bool   `json:"complete"`
+		Accounts   []struct {
+			AccountID   string `json:"account_id"`
+			AmountMinor int64  `json:"amount_minor"`
+			CountedBy   string `json:"counted_by"`
+			Complete    bool   `json:"complete"`
+		} `json:"accounts"`
+	} `json:"points"`
+}
+
+// The family's worth by month: a brokerage account by its journal as it
+// stood each month's end, a deposit by its latest balance mark by then (and
+// nothing before its first), a dollar card at that day's rate. A month the
+// journal could not be valued whole is marked incomplete.
+func TestTheFamilysWorthIsSeriesOfMonthEnds(t *testing.T) {
+	journals := &fakeJournals{byAccount: map[string]account.JournalValue{}, onDay: map[string]account.JournalValue{}}
+	url, c, md := newAPIWithJournals(t, journals)
+	day := func(s string) time.Time { d, _ := time.Parse(time.DateOnly, s); return d }
+	if err := md.UpsertFxRates(t.Context(), []marketdata.FxRate{
+		{Base: "USD", Quote: "RUB", On: day("2026-01-01"), Rate: decimal.RequireFromString("80"), Source: "test"},
+		{Base: "USD", Quote: "RUB", On: day("2026-03-01"), Rate: decimal.RequireFromString("90"), Source: "test"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	broker := createAccount(t, url, c, "Брокер", "brokerage", "RUB")
+	deposit := createAccount(t, url, c, "Вклад", "deposit", "RUB")
+	card := createAccount(t, url, c, "Карта", "credit_card", "USD")
+	journals.byAccount[broker] = account.JournalValue{Currency: "RUB", Minor: 1, Operations: 3}
+	journals.onDay[broker+"@2026-01-31"] = account.JournalValue{Currency: "RUB", Minor: 1_000_000, Operations: 1}
+	journals.onDay[broker+"@2026-02-28"] = account.JournalValue{Currency: "RUB", Minor: 1_200_000, Operations: 2, Unpriced: 1}
+	journals.onDay[broker+"@2026-03-31"] = account.JournalValue{Currency: "RUB", Minor: 1_500_000, Operations: 3}
+	balanceOn(t, url, c, deposit, day("2026-02-10"), 5_000_000)
+	balanceOn(t, url, c, card, day("2026-01-15"), -10_000)
+
+	var got capitalSeries
+	getJSON(t, c, url+"/api/v1/capital?from=2026-01-05&step=month", &got)
+	if got.Currency != "RUB" || len(got.Points) < 4 {
+		t.Fatalf("series = %+v, want January to March and today", got)
+	}
+	// January: broker 10 000, no deposit yet, card −100 $ × 80.
+	// February: broker 12 000 (incomplete), deposit 50 000, card −100 $ × 80.
+	// March: broker 15 000, deposit 50 000, card −100 $ × 90.
+	want := []struct {
+		day      string
+		total    int64
+		complete bool
+	}{
+		{"2026-01-31", 1_000_000 - 800_000, true},
+		{"2026-02-28", 1_200_000 + 5_000_000 - 800_000, false},
+		{"2026-03-31", 1_500_000 + 5_000_000 - 900_000, true},
+	}
+	for i, w := range want {
+		p := got.Points[i]
+		if p.Day != w.day || p.TotalMinor != w.total || p.Complete != w.complete {
+			t.Errorf("point %d = %s %d complete=%v, want %s %d complete=%v", i, p.Day, p.TotalMinor, p.Complete, w.day, w.total, w.complete)
+		}
+	}
+	for _, a := range got.Points[0].Accounts {
+		if a.AccountID == broker && a.CountedBy != "journal" {
+			t.Errorf("the broker is counted by %s, want its journal", a.CountedBy)
+		}
+	}
+	if last := got.Points[len(got.Points)-1]; last.Day != time.Now().UTC().Format(time.DateOnly) {
+		t.Errorf("last point is %s, want today", last.Day)
+	}
+
+	resp := do(t, c, "GET", url+"/api/v1/capital?from=2016-01-01&step=week", "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("ten years by week = %d, want 400", resp.StatusCode)
 	}
 }

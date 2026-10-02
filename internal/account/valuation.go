@@ -42,6 +42,8 @@ type journalValuer interface {
 	// ValueOn is the same worth as the journal stood at the end of day, at
 	// that day's prices and rates.
 	ValueOn(ctx context.Context, spaceID, accountID uuid.UUID, day time.Time) (JournalValue, error)
+	// ValuesOn is ValueOn for several days.
+	ValuesOn(ctx context.Context, spaceID, accountID uuid.UUID, days []time.Time) ([]JournalValue, error)
 }
 
 // How far the journal may stand from the balance and still be said to agree
@@ -159,9 +161,9 @@ func reconciliationStatus(diff, balance int64) apitypes.AccountReconciliationSta
 
 // describe writes v onto the account's row.
 func (v valuation) describe(row *apitypes.AccountWithBalance) {
-	row.CountedBy = apitypes.Balance
+	row.CountedBy = apitypes.AccountWithBalanceCountedByBalance
 	if v.byJournal {
-		row.CountedBy = apitypes.Journal
+		row.CountedBy = apitypes.AccountWithBalanceCountedByJournal
 	}
 	if v.journal == nil {
 		row.Journal = nullable.NewNullNullable[apitypes.AccountJournal]()
