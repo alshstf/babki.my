@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -342,12 +343,13 @@ func (w *quotesWorker) priceUnmapped(ctx context.Context, conn Connection, clien
 
 // resolveListing finds the broker's listing of a holding no import mapped, by
 // its ISIN: the listings that are this paper (see candidateListings), the one
-// still being quoted (see pickListing), and that one's currency, asked of its
-// passport because the search does not report one and the catalog row's is not
-// this listing's. ok is false — and the reason logged — when there is no ISIN to
-// search by, nothing can be chosen without guessing, or the listing is in
-// another currency than the holding: a price in another currency is not this
-// row's price. err is returned only for a token the broker no longer accepts.
+// still being quoted in the holding's own currency (see pickListing), the
+// currency asked of each listing's passport, freshest first, because the search
+// does not report one and the catalog row's is not the listing's — a price in
+// another currency is not this row's price. ok is false — and the reason
+// logged — when there is no ISIN to search by, or no listing in that currency
+// can be chosen without guessing. err is returned only for a token the broker
+// no longer accepts.
 func resolveListing(ctx context.Context, client *Client, log *slog.Logger, u UnmappedHeldInstrument) (Listing, LastPrice, string, bool, error) {
 	if u.ISIN == "" {
 		// Nothing to search by. A ticker would find something — and that
@@ -388,28 +390,34 @@ func resolveListing(ctx context.Context, client *Client, log *slog.Logger, u Unm
 	for _, p := range prices {
 		byUID[p.InstrumentUID] = p
 	}
-	listing, price, ok := pickListing(candidates, byUID)
-	if !ok {
-		log.Debug("tinvest: no listing of this paper can be chosen without guessing, leaving it unpriced",
-			"instrument_id", u.InstrumentID, "isin", u.ISIN, "candidates", len(candidates))
-		return Listing{}, LastPrice{}, "", false, nil
-	}
-	brief, err := client.InstrumentByUID(ctx, listing.UID)
-	if err != nil {
-		if errors.Is(err, ErrTokenInvalid) {
-			return Listing{}, LastPrice{}, "", false, err
+	// The freshest listing first; one in another currency is set aside and the
+	// next freshest asked, so a ruble line that traded last does not hide a
+	// dollar line of the same paper (#261).
+	remaining := candidates
+	for {
+		listing, price, ok := pickListing(remaining, byUID)
+		if !ok {
+			log.Debug("tinvest: no listing of this paper can be chosen without guessing, leaving it unpriced",
+				"instrument_id", u.InstrumentID, "isin", u.ISIN, "candidates", len(candidates))
+			return Listing{}, LastPrice{}, "", false, nil
 		}
-		log.Debug("tinvest: could not learn what the chosen listing is denominated in",
-			"instrument_uid", listing.UID, "err", err)
-		return Listing{}, LastPrice{}, "", false, nil
-	}
-	currency := upperCurrency(brief.Currency)
-	if currency == "" || !strings.EqualFold(currency, u.Currency) {
-		log.Debug("tinvest: the chosen listing is denominated in another currency than the holding",
+		brief, err := client.InstrumentByUID(ctx, listing.UID)
+		if err != nil {
+			if errors.Is(err, ErrTokenInvalid) {
+				return Listing{}, LastPrice{}, "", false, err
+			}
+			log.Debug("tinvest: could not learn what the chosen listing is denominated in",
+				"instrument_uid", listing.UID, "err", err)
+			return Listing{}, LastPrice{}, "", false, nil
+		}
+		currency := upperCurrency(brief.Currency)
+		if currency != "" && strings.EqualFold(currency, u.Currency) {
+			return listing, price, currency, true, nil
+		}
+		log.Debug("tinvest: a listing is denominated in another currency than the holding, trying the next",
 			"instrument_id", u.InstrumentID, "listing", currency, "holding", u.Currency)
-		return Listing{}, LastPrice{}, "", false, nil
+		remaining = slices.DeleteFunc(slices.Clone(remaining), func(l Listing) bool { return l.UID == listing.UID })
 	}
-	return listing, price, currency, true, nil
 }
 
 // SourceExchange and SourceDealer are what a stored quote's source says about
