@@ -388,6 +388,24 @@ describe("AccountDetailPage", () => {
     expect(notice.textContent).not.toContain("стоимость усредняется");
   });
 
+  it("leads from a paper's name in the journal to the paper's own page", async () => {
+    serve({
+      "/api/v1/accounts": { body: [makeAccount()] },
+      "/positions": { body: makePositionsBody(makeSession().cost_basis_rules, []) },
+      "/operations": {
+        body: { operations: [makeOperation({ type: "buy", instrument_id: "instr-9", quantity: "1", price: "10", amount_minor: -1000 })], has_more: false },
+      },
+      "/api/v1/instruments": {
+        body: {
+          instruments: [{ id: "instr-9", type: "share", name: "Журнальная", ticker: "JRN", isin: "", figi: "", currency: "USD", frozen: false }],
+          has_more: false,
+        },
+      },
+    });
+    renderPage();
+    expect(await screen.findByRole("link", { name: "Журнальная" })).toHaveAttribute("href", "/instruments/instr-9");
+  });
+
   it("leads from a paper's name to the paper's own page", async () => {
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },

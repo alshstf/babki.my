@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -281,6 +282,7 @@ export function OperationsTable({
   onEdit,
   papers = [],
   accountName,
+  instrumentLinks = false,
 }: {
   accountId: string;
   // Delete action is editor+ (owner/editor); viewers never see it.
@@ -311,6 +313,9 @@ export function OperationsTable({
   // The name of one of the family's accounts, for a row that is one half of a
   // move between two of them.
   accountName?: (id: string) => string | undefined;
+  // Whether a paper's name leads to its own page. Off where the table is drawn
+  // outside the application's router.
+  instrumentLinks?: boolean;
 }) {
   const { t } = useTranslation();
   // "Show more" fetches the next page and appends it (see useOperations). The
@@ -641,7 +646,17 @@ export function OperationsTable({
                   )}
                 </TableCell>
                 <TableCell>
-                  {instrumentName(operation.instrument_id)}
+                  {instrumentLinks && operation.instrument_id ? (
+                    <Link
+                      to="/instruments/$instrumentId"
+                      params={{ instrumentId: operation.instrument_id }}
+                      className="hover:underline"
+                    >
+                      {instrumentName(operation.instrument_id)}
+                    </Link>
+                  ) : (
+                    instrumentName(operation.instrument_id)
+                  )}
                   {onPurchasePrice &&
                     operation.type === "transfer_in" &&
                     operation.transfer_group_id == null &&
