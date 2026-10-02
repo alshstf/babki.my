@@ -293,10 +293,27 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description GET /api/v1/accounts/{accountId}/return over the family's brokerage accounts that the total counts by their journal (AccountWithBalance.counted_by `journal`): their worth added up at both ends, their flows together — less the moves of shares between two of them, which are no flow for the family — and the rate over all of it. Deposits, cards, cash and loans have balances and no record of what crossed their edge, and are not in it. */
+        /** @description GET /api/v1/accounts/{accountId}/return over the family's brokerage accounts that the total counts by their journal (AccountWithBalance.counted_by `journal`): their worth added up at both ends, their flows together — a move of shares between two of them cancelling out, as both legs are valued on one day at one price — and the rate over all of it. Deposits, cards, cash and loans have balances and no record of what crossed their edge, and are not in it. */
         get: operations["getFamilyReturn"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instruments/{instrumentId}/prices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description States a paper's price on a day by hand — for a paper no exchange or broker quotes: a frozen fund at its net asset value, an over-the-counter estimate. It is stored like any quote and values every holding of the paper from that day on, until a later price (from any source) takes over; the position says the price was stated by hand. A second statement for the same day replaces the first. `price` is money per unit, or for a bond a percentage of face value, as quotes are. 400 for a price that is not positive, a date in the future or a malformed one; 404 for an unknown paper. */
+        post: operations["stateInstrumentPrice"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1630,6 +1647,8 @@ export interface components {
              * @description What ONE unit of this instrument costs in money, at the quoted price. Published ONLY FOR A BOND, whose `price` is a percentage of face value rather than money, and whose reader was otherwise left multiplying by the face value in their head to compare the quote against a cost or a valuation that are both money. It is instrument.face_value_minor x price/100, denominated in instrument.face_currency (the same currency market_value_minor is struck in before any conversion — it is the same product that valuation is built from, with the quantity left out, struck and rounded ONCE on its own rather than divided out of the valuation, which would round a second time). Null for every other instrument type, where `price` is already money and this field would restate it; null too whenever there is no valuation at all, exactly like `price`. It carries the face value's drift: that snapshot is taken when the paper is catalogued and is not refreshed, so on an amortizing bond both this figure and the market valuation age together.
              */
             price_money_minor?: number | null;
+            /** @description True when the price was stated by a person (POST /api/v1/instruments/{instrumentId}/prices) rather than taken from an exchange or a broker — an over-the-counter or net-asset-value estimate for a paper nobody quotes, say. Absent or false otherwise. */
+            price_by_hand?: boolean;
             /** @description Date YYYY-MM-DD of the trading session the quote's SOURCE attaches this price to — never the day the server fetched it; a source asked at any hour of one day may answer with an earlier day's price, dated as that earlier day. Not a guarantee that the instrument traded on this date: a source can publish a price for a paper that did not trade at all in a given session. Not necessarily the most recent session either — that depends on how current the source's own data is, which this field does not describe. */
             price_on?: string | null;
             /**
@@ -2766,6 +2785,39 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+        };
+    };
+    stateInstrumentPrice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instrumentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Date YYYY-MM-DD */
+                    on: string;
+                    /** @description Decimal as string: money per unit in the paper's currency, or percent of face for a bond */
+                    price: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Stated */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     getCapital: {

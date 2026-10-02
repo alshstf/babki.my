@@ -27,6 +27,7 @@ import { IncomeDialog } from "./income-dialog";
 import { TransferDialog } from "./transfer-dialog";
 import { ArrivalDialog } from "./arrival-dialog";
 import { PurchasePriceDialog, type PricedPaper } from "./purchase-price-dialog";
+import { StatePriceDialog, type QuotedPaper } from "./state-price-dialog";
 import { editDialogOf, type Operation } from "@/api/operations";
 import type { Instrument } from "@/api/instruments";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
@@ -54,6 +55,7 @@ export function AccountDetailPage() {
   const closeAction = () => setAction(undefined);
   // The paper whose purchase price is being given, from its «указать цену».
   const [pricing, setPricing] = useState<PricedPaper | null>(null);
+  const [quoting, setQuoting] = useState<QuotedPaper | null>(null);
   // The recorded operation being corrected, and the paper it names.
   const [editing, setEditing] = useState<{
     operation: Operation;
@@ -205,6 +207,7 @@ export function AccountDetailPage() {
               mode={mode}
               baseCurrency={baseCurrency}
               onPriceUnknown={isViewer ? undefined : setPricing}
+              onStatePrice={isViewer ? undefined : setQuoting}
             />
           </>
         ) : (
@@ -304,6 +307,9 @@ export function AccountDetailPage() {
           editing={editing.operation}
           editingInstrument={editing.instrument}
         />
+      )}
+      {quoting && (
+        <StatePriceDialog open onOpenChange={(open) => !open && setQuoting(null)} paper={quoting} />
       )}
       {pricing && (
         <PurchasePriceDialog

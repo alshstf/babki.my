@@ -1697,6 +1697,9 @@ type Position struct {
 	// Price Decimal as string; latest quote price used for the valuation. What it MEANS depends on instrument.type: for share/etf it is money per unit, in the currency the QUOTE is denominated in — normally the position's own `currency`, but nothing in the model requires the two to agree: a quote carries a currency of its own, and where it differs the server converts the VALUATION into the position's currency (see market_value_minor) while this field stays exactly as quoted. That currency is therefore `market_value_source_currency` when that field is set, and `market_value_currency` otherwise. For a BOND it is instead a PERCENTAGE OF FACE VALUE (e.g. "95.20" meaning 95.20% of face, the MOEX convention) — not money, and not in any currency itself — so market_value_minor for a bond is instrument.face_value_minor × price/100 × quantity, denominated in instrument.face_currency rather than in this field's own unit.
 	Price nullable.Nullable[string] `json:"price,omitempty"`
 
+	// PriceByHand True when the price was stated by a person (POST /api/v1/instruments/{instrumentId}/prices) rather than taken from an exchange or a broker — an over-the-counter or net-asset-value estimate for a paper nobody quotes, say. Absent or false otherwise.
+	PriceByHand *bool `json:"price_by_hand,omitempty"`
+
 	// PriceMoneyMinor What ONE unit of this instrument costs in money, at the quoted price. Published ONLY FOR A BOND, whose `price` is a percentage of face value rather than money, and whose reader was otherwise left multiplying by the face value in their head to compare the quote against a cost or a valuation that are both money. It is instrument.face_value_minor x price/100, denominated in instrument.face_currency (the same currency market_value_minor is struck in before any conversion — it is the same product that valuation is built from, with the quantity left out, struck and rounded ONCE on its own rather than divided out of the valuation, which would round a second time). Null for every other instrument type, where `price` is already money and this field would restate it; null too whenever there is no valuation at all, exactly like `price`. It carries the face value's drift: that snapshot is taken when the paper is catalogued and is not refreshed, so on an amortizing bond both this figure and the market valuation age together.
 	PriceMoneyMinor nullable.Nullable[int64] `json:"price_money_minor,omitempty"`
 
@@ -2394,6 +2397,15 @@ type SearchInstrumentsParams struct {
 	Offset *int    `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
+// StateInstrumentPriceJSONBody defines parameters for StateInstrumentPrice.
+type StateInstrumentPriceJSONBody struct {
+	// On Date YYYY-MM-DD
+	On string `json:"on"`
+
+	// Price Decimal as string: money per unit in the paper's currency, or percent of face for a bond
+	Price string `json:"price"`
+}
+
 // GetFamilyReturnParams defines parameters for GetFamilyReturn.
 type GetFamilyReturnParams struct {
 	From string `form:"from" json:"from"`
@@ -2441,6 +2453,9 @@ type CreateInstrumentJSONRequestBody = CreateInstrumentRequest
 
 // UpdateInstrumentJSONRequestBody defines body for UpdateInstrument for application/json ContentType.
 type UpdateInstrumentJSONRequestBody = UpdateInstrumentRequest
+
+// StateInstrumentPriceJSONRequestBody defines body for StateInstrumentPrice for application/json ContentType.
+type StateInstrumentPriceJSONRequestBody StateInstrumentPriceJSONBody
 
 // CreateMemberJSONRequestBody defines body for CreateMember for application/json ContentType.
 type CreateMemberJSONRequestBody = CreateMemberRequest

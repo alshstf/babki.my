@@ -397,8 +397,9 @@ paths:
       description: >-
         GET /api/v1/accounts/{accountId}/return over the family's brokerage accounts that the
         total counts by their journal (AccountWithBalance.counted_by `journal`): their worth
-        added up at both ends, their flows together — less the moves of shares between two of
-        them, which are no flow for the family — and the rate over all of it. Deposits, cards,
+        added up at both ends, their flows together — a move of shares between two of them
+        cancelling out, as both legs are valued on one day at one price — and the rate over all
+        of it. Deposits, cards,
         cash and loans have balances and no record of what crossed their edge, and are not in it.
       parameters:
         - { name: from, in: query, required: true, schema: { type: string } }
@@ -411,6 +412,35 @@ paths:
               schema: { $ref: "#/components/schemas/FamilyReturn" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/instruments/{instrumentId}/prices:
+    post:
+      operationId: stateInstrumentPrice
+      description: >-
+        States a paper's price on a day by hand — for a paper no exchange or broker quotes: a
+        frozen fund at its net asset value, an over-the-counter estimate. It is stored like any
+        quote and values every holding of the paper from that day on, until a later price (from
+        any source) takes over; the position says the price was stated by hand. A second statement
+        for the same day replaces the first. `price` is money per unit, or for a bond a percentage
+        of face value, as quotes are. 400 for a price that is not positive, a date in the future
+        or a malformed one; 404 for an unknown paper.
+      parameters:
+        - { name: instrumentId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [on, price]
+              properties:
+                on: { type: string, description: "Date YYYY-MM-DD" }
+                price: { type: string, description: "Decimal as string: money per unit in the paper's currency, or percent of face for a bond" }
+      responses:
+        "204": { description: Stated }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/capital:
     get:
       operationId: getCapital
@@ -2247,6 +2277,7 @@ components:
         market_value_source_minor: { type: integer, format: int64, nullable: true, description: "Set only when market_value_minor was converted from a different currency: the original, unconverted valuation amount in market_value_source_currency. It is what a client should name when it discloses where the converted figure came from (\"converted from 1 000,00 €\"), and — since it is also what in_base.market_value_minor is struck from, at the rate of THIS currency rather than the position's — that disclosure is true of the base-currency figure as well as of market_value_minor. Null when no conversion happened." }
         price: { type: string, nullable: true, description: "Decimal as string; latest quote price used for the valuation. What it MEANS depends on instrument.type: for share/etf it is money per unit, in the currency the QUOTE is denominated in — normally the position's own `currency`, but nothing in the model requires the two to agree: a quote carries a currency of its own, and where it differs the server converts the VALUATION into the position's currency (see market_value_minor) while this field stays exactly as quoted. That currency is therefore `market_value_source_currency` when that field is set, and `market_value_currency` otherwise. For a BOND it is instead a PERCENTAGE OF FACE VALUE (e.g. \"95.20\" meaning 95.20% of face, the MOEX convention) — not money, and not in any currency itself — so market_value_minor for a bond is instrument.face_value_minor × price/100 × quantity, denominated in instrument.face_currency rather than in this field's own unit." }
         price_money_minor: { type: integer, format: int64, nullable: true, description: "What ONE unit of this instrument costs in money, at the quoted price. Published ONLY FOR A BOND, whose `price` is a percentage of face value rather than money, and whose reader was otherwise left multiplying by the face value in their head to compare the quote against a cost or a valuation that are both money. It is instrument.face_value_minor x price/100, denominated in instrument.face_currency (the same currency market_value_minor is struck in before any conversion — it is the same product that valuation is built from, with the quantity left out, struck and rounded ONCE on its own rather than divided out of the valuation, which would round a second time). Null for every other instrument type, where `price` is already money and this field would restate it; null too whenever there is no valuation at all, exactly like `price`. It carries the face value's drift: that snapshot is taken when the paper is catalogued and is not refreshed, so on an amortizing bond both this figure and the market valuation age together." }
+        price_by_hand: { type: boolean, description: "True when the price was stated by a person (POST /api/v1/instruments/{instrumentId}/prices) rather than taken from an exchange or a broker — an over-the-counter or net-asset-value estimate for a paper nobody quotes, say. Absent or false otherwise." }
         price_on: { type: string, nullable: true, description: "Date YYYY-MM-DD of the trading session the quote's SOURCE attaches this price to — never the day the server fetched it; a source asked at any hour of one day may answer with an earlier day's price, dated as that earlier day. Not a guarantee that the instrument traded on this date: a source can publish a price for a paper that did not trade at all in a given session. Not necessarily the most recent session either — that depends on how current the source's own data is, which this field does not describe." }
         unrealized_pnl_minor: { type: integer, format: int64, nullable: true, description: "market_value_minor minus cost_minor, i.e. the position's unrealized profit or loss; both are already in the same currency (market_value_minor is converted into the position's currency when needed, see above), so this is a plain integer subtraction. Null when there is no market_value_minor, or when market_value_currency still differs from currency (a conversion was needed but no fx rate was available)." }
         market_value_gap:
