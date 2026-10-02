@@ -33,6 +33,7 @@ import { useAccounts } from "@/api/accounts";
 import { useInstrumentIndex } from "@/api/instruments";
 import { isConflict, type OperationType } from "@/api/operations";
 import {
+  useAddImportPapers,
   useImportTable,
   usePreviewImport,
   useRollBackImport,
@@ -95,6 +96,23 @@ function typeValues(rows: ImportRow[], column: number | undefined): string[] {
   return [...seen].sort();
 }
 
+// The guessed mapping with the type words as the last import of the account
+// settled them — a person's choice over a guess — or null when that changes
+// nothing.
+function rememberedTypes(guessed: ImportPreview, last: ImportMapping | undefined): ImportMapping | null {
+  if (!last) return null;
+  const types = { ...guessed.mapping.types };
+  let added = false;
+  for (const value of typeValues(guessed.rows, guessed.mapping.columns.type)) {
+    const before = last.types[value];
+    if (before && types[value] !== before) {
+      types[value] = before;
+      added = true;
+    }
+  }
+  return added ? { ...guessed.mapping, types } : null;
+}
+
 export function ImportPage() {
   const { accountId } = useParams({ from: "/app/accounts/$accountId/import" });
   return <TableImport accountId={accountId} />;
@@ -110,6 +128,8 @@ export function TableImport({ accountId }: { accountId: string }) {
   const [fileName, setFileName] = useState("");
   const [current, setCurrent] = useState<ImportPreview | null>(null);
 
+  const imports = useTableImports(accountId);
+
   const ask = (body: { content: string; mapping?: ImportMapping }) => {
     importTable.reset();
     preview.mutate(body, { onSuccess: setCurrent });
@@ -121,7 +141,19 @@ export function TableImport({ accountId }: { accountId: string }) {
     setContent(text);
     setFileName(file.name);
     setCurrent(null);
-    ask({ content: text });
+    importTable.reset();
+    preview.mutate(
+      { content: text },
+      {
+        onSuccess: (guessed) => {
+          setCurrent(guessed);
+          // What the type column's words meant in this account's last import
+          // is what they mean now.
+          const remembered = rememberedTypes(guessed, imports.data?.[0]?.mapping);
+          if (remembered) ask({ content: text, mapping: remembered });
+        },
+      },
+    );
   };
 
   const remap = (mapping: ImportMapping) => {
@@ -176,6 +208,13 @@ export function TableImport({ accountId }: { accountId: string }) {
         <MappingEditor preview={current} onChange={remap} disabled={preview.isPending} />
       )}
 
+      {current && content !== null && !importTable.isSuccess && (
+        <MissingPapers
+          rows={current.rows}
+          onAdded={() => ask({ content, mapping: current.mapping })}
+        />
+      )}
+
       {current && (
         <div className="grid gap-3">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
@@ -225,6 +264,58 @@ export function TableImport({ accountId }: { accountId: string }) {
 
       <ImportsList accountId={accountId} />
     </div>
+  );
+}
+
+// The papers the table names and the catalog does not hold, and the way to
+// file the ones the exchange knows. The rows naming them are read again after.
+function MissingPapers({ rows, onAdded }: { rows: ImportRow[]; onAdded: () => void }) {
+  const { t } = useTranslation();
+  const addPapers = useAddImportPapers();
+  const codes = [
+    ...new Set(
+      rows
+        .filter((row) => row.reason?.code === "paper_not_found")
+        .map((row) => row.reason?.value ?? ""),
+    ),
+  ].filter((code) => code !== "");
+  if (codes.length === 0 && !addPapers.isSuccess) return null;
+  const result = addPapers.data;
+  return (
+    <Alert data-testid="import-missing-papers">
+      <AlertDescription className="grid gap-2">
+        {codes.length > 0 && (
+          <>
+            <span>{t("tableImport.missingPapers", { codes: codes.join(", ") })}</span>
+            <div>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={addPapers.isPending}
+                onClick={() => addPapers.mutate(codes, { onSuccess: onAdded })}
+              >
+                {t("tableImport.findPapers", { count: codes.length })}
+              </Button>
+            </div>
+          </>
+        )}
+        {result && result.added.length > 0 && (
+          <span data-testid="import-papers-added">
+            {t("tableImport.papersAdded", {
+              papers: result.added.map((p) => `${p.name} (${p.ticker})`).join(", "),
+            })}
+          </span>
+        )}
+        {result && result.not_found.length > 0 && (
+          <span className="text-amber-700">
+            {t("tableImport.papersNotFound", { codes: result.not_found.join(", ") })}
+          </span>
+        )}
+        {addPapers.isError && (
+          <span className="text-red-700">{t("tableImport.exchangeDown")}</span>
+        )}
+      </AlertDescription>
+    </Alert>
   );
 }
 

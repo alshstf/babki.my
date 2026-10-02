@@ -55,13 +55,24 @@ type writer interface {
 type Service struct {
 	accounts accounts
 	papers   catalog
+	catalog  catalogWriter
+	exchange exchange
 	journal  journal
 	ops      writer
 	imports  *Store
 }
 
-func NewService(accounts accounts, papers catalog, journal journal, ops writer, imports *Store) *Service {
-	return &Service{accounts: accounts, papers: papers, journal: journal, ops: ops, imports: imports}
+// Catalog is the instrument catalog as the service reads and writes it.
+type Catalog interface {
+	catalog
+	catalogWriter
+}
+
+func NewService(accounts accounts, papers Catalog, journal journal, ops writer, imports *Store, exchange exchange) *Service {
+	return &Service{
+		accounts: accounts, papers: papers, catalog: papers, exchange: exchange,
+		journal: journal, ops: ops, imports: imports,
+	}
 }
 
 // Preview reads content against the account with mapping — or with one

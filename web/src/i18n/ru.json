@@ -812,6 +812,11 @@
       "engine_refused": "Журнал не примет эту операцию"
     },
     "countWritten": "записано: {{count}}",
-    "writtenVerdict": "записана"
+    "writtenVerdict": "записана",
+    "missingPapers": "Этих бумаг нет в каталоге: {{codes}}",
+    "findPapers": "Найти на Мосбирже и добавить ({{count}})",
+    "papersAdded": "Добавлены в каталог: {{papers}}",
+    "papersNotFound": "Не найдены на Мосбирже: {{codes}} — добавьте их вручную в «Настройки → Инструменты»",
+    "exchangeDown": "Мосбиржа не ответила — попробуйте позже"
   }
 }

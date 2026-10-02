@@ -13,7 +13,7 @@ import "@/i18n";
 import { TableImport } from "./import-page";
 
 const sent = vi.hoisted(() => [] as { method: string; path: string; body: unknown }[]);
-const state = vi.hoisted(() => ({ imports: [] as unknown[] }));
+const state = vi.hoisted(() => ({ imports: [] as unknown[], missing: false }));
 
 const preview = (hasHeader: boolean) => ({
   mapping: {
@@ -58,7 +58,25 @@ fetchMock.mockImplementation(async (input: Request) => {
   if (path === "/api/v1/accounts") return json([]);
   if (path.endsWith("/imports/preview")) {
     const mapping = (body as { mapping?: { has_header: boolean } }).mapping;
-    return json(preview(mapping ? mapping.has_header : true));
+    const answer = preview(mapping ? mapping.has_header : true);
+    if (state.missing) {
+      answer.rows.push({
+        line: 4,
+        cells: ["03.07.2026", "Покупка", "GAZP"],
+        verdict: "unparsed",
+        reason: { code: "paper_not_found", field: "instrument", value: "GAZP" },
+        operation: null,
+      } as never);
+    }
+    return json(answer);
+  }
+  if (path === "/api/v1/imports/papers") {
+    state.missing = false;
+    return json({
+      added: [{ code: "GAZP", instrument_id: "i-gazp", name: "ГАЗПРОМ ао", ticker: "GAZP" }],
+      known: [],
+      not_found: [],
+    });
   }
   if (path.endsWith("/imports") && input.method === "POST") {
     const imported = {
@@ -87,6 +105,7 @@ afterEach(() => {
   cleanup();
   sent.length = 0;
   state.imports = [];
+  state.missing = false;
 });
 
 function wrap(ui: ReactElement) {
@@ -139,5 +158,48 @@ describe("importing a table", () => {
     expect(sent.some((s) => s.method === "DELETE")).toBe(false);
     fireEvent.click(within(confirm).getByRole("button", { name: "Откатить" }));
     await waitFor(() => expect(sent.some((s) => s.method === "DELETE" && s.path === "/api/v1/imports/imp-1")).toBe(true));
+  });
+
+  it("files the papers the catalog lacks from the exchange and reads the rows again", async () => {
+    state.missing = true;
+    wrap(<TableImport accountId="acc-1" />);
+    const file = new File(["Дата;Тип;Сумма\n"], "a.csv");
+    fireEvent.change(await screen.findByLabelText("Файл"), { target: { files: [file] } });
+
+    expect((await screen.findByTestId("import-missing-papers")).textContent).toContain(
+      "Этих бумаг нет в каталоге: GAZP",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Найти на Мосбирже и добавить (1)" }));
+    expect((await screen.findByTestId("import-papers-added")).textContent).toContain("ГАЗПРОМ ао (GAZP)");
+    expect(sent.find((s) => s.path === "/api/v1/imports/papers")?.body).toEqual({ codes: ["GAZP"] });
+    await waitFor(() => expect(sent.filter((s) => s.path.endsWith("/imports/preview"))).toHaveLength(2));
+  });
+
+  it("remembers what the type column's words meant in the account's last import", async () => {
+    state.imports = [
+      {
+        id: "imp-0",
+        account_id: "acc-1",
+        file_name: "old.csv",
+        mapping: { has_header: true, columns: { date: 0, type: 1, amount: 2 }, types: { перевод: "withdrawal", пополнение: "interest" } },
+        rows_written: 1,
+        rows_duplicate: 0,
+        rows_unparsed: 0,
+        rows_refused: 0,
+        created_at: "2026-09-01T10:00:00Z",
+        rolled_back_at: null,
+        operations_left: 1,
+      },
+    ];
+    wrap(<TableImport accountId="acc-1" />);
+    await screen.findByText("Импорты этого счёта");
+    const file = new File(["Дата;Тип;Сумма\n"], "new.csv");
+    fireEvent.change(screen.getByLabelText("Файл"), { target: { files: [file] } });
+
+    await waitFor(() => expect(sent.filter((s) => s.path.endsWith("/imports/preview"))).toHaveLength(2));
+    const second = sent.filter((s) => s.path.endsWith("/imports/preview"))[1];
+    expect(second.body).toMatchObject({
+      mapping: { types: { пополнение: "interest", перевод: "withdrawal" } },
+    });
   });
 });

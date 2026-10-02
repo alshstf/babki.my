@@ -1185,6 +1185,15 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
+// ImportAddedPaper defines model for ImportAddedPaper.
+type ImportAddedPaper struct {
+	// Code The code as the table named the paper
+	Code         string             `json:"code"`
+	InstrumentId openapi_types.UUID `json:"instrument_id"`
+	Name         string             `json:"name"`
+	Ticker       string             `json:"ticker"`
+}
+
 // ImportField defines model for ImportField.
 type ImportField string
 
@@ -1198,6 +1207,13 @@ type ImportMapping struct {
 
 	// Types Value of the type column (compared ignoring case and surrounding blanks) → operation type. Only buy, sell, deposit, withdrawal, dividend, coupon, interest, tax, fee and amortization.
 	Types map[string]OperationType `json:"types"`
+}
+
+// ImportPapersResult defines model for ImportPapersResult.
+type ImportPapersResult struct {
+	Added    []ImportAddedPaper `json:"added"`
+	Known    []string           `json:"known"`
+	NotFound []string           `json:"not_found"`
 }
 
 // ImportPreview defines model for ImportPreview.
@@ -2233,6 +2249,11 @@ type ListAccountOperationsParams struct {
 	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
+// AddImportPapersJSONBody defines parameters for AddImportPapers.
+type AddImportPapersJSONBody struct {
+	Codes []string `json:"codes"`
+}
+
 // SearchInstrumentsParams defines parameters for SearchInstruments.
 type SearchInstrumentsParams struct {
 	Query  *string `form:"query,omitempty" json:"query,omitempty"`
@@ -2269,6 +2290,9 @@ type PreviewTableImportJSONRequestBody = ImportPreviewRequest
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
+
+// AddImportPapersJSONRequestBody defines body for AddImportPapers for application/json ContentType.
+type AddImportPapersJSONRequestBody AddImportPapersJSONBody
 
 // CreateInstrumentEventJSONRequestBody defines body for CreateInstrumentEvent for application/json ContentType.
 type CreateInstrumentEventJSONRequestBody = CreateInstrumentEventRequest
