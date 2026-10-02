@@ -170,6 +170,41 @@ func (s *Service) ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d Imp
 	return applied, refused, nil
 }
 
+// errDryRun rolls back a delta that was only being checked.
+var errDryRun = errors.New("operation: dry run")
+
+// CheckImportDelta is ApplyImportDelta that writes nothing: the same judgement
+// over the same journals, under the same locks, inside a transaction that is
+// rolled back at the end. What it answers is what applying the delta now would
+// answer — a preview of an import is this.
+func (s *Service) CheckImportDelta(ctx context.Context, spaceID uuid.UUID, d ImportDelta) (
+	accepted []Operation, refused []ImportRefusal, err error,
+) {
+	if len(d.Add) == 0 && len(d.Remove) == 0 {
+		return nil, nil, nil
+	}
+	candidates, err := importCandidates(d.Add)
+	if err != nil {
+		return nil, nil, err
+	}
+	accountIDs, err := s.deltaAccounts(ctx, spaceID, candidates, d.Remove)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = s.store.WithAccountsLocked(ctx, spaceID, accountIDs, func(st *Store) error {
+		var err error
+		accepted, refused, err = (&Service{store: st}).applyImportDeltaLocked(ctx, spaceID, d, candidates)
+		if err != nil {
+			return err
+		}
+		return errDryRun
+	})
+	if err != nil && !errors.Is(err, errDryRun) {
+		return nil, nil, err
+	}
+	return accepted, refused, nil
+}
+
 // BuildAndApplyImportDelta is ApplyImportDelta for a writer that has to SEE the
 // journal to know what to write: it locks one account, hands build that
 // account's journal as read under the lock, and applies the delta build returns

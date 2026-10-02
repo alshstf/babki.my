@@ -205,6 +205,30 @@ func (e CostBasisPerimeter) Valid() bool {
 	}
 }
 
+// Defines values for ImportRowVerdict.
+const (
+	Duplicate ImportRowVerdict = "duplicate"
+	New       ImportRowVerdict = "new"
+	Refused   ImportRowVerdict = "refused"
+	Unparsed  ImportRowVerdict = "unparsed"
+)
+
+// Valid indicates whether the value is a known member of the ImportRowVerdict enum.
+func (e ImportRowVerdict) Valid() bool {
+	switch e {
+	case Duplicate:
+		return true
+	case New:
+		return true
+	case Refused:
+		return true
+	case Unparsed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for InBaseGap.
 const (
 	InBaseGapNoRateIncomeDate InBaseGap = "no_rate_income_date"
@@ -1072,6 +1096,69 @@ type CurrencyTotal struct {
 // ErrorResponse defines model for ErrorResponse.
 type ErrorResponse struct {
 	Error string `json:"error"`
+}
+
+// ImportMapping defines model for ImportMapping.
+type ImportMapping struct {
+	// Columns Field name → 0-based column index. A field with no column is absent. `instrument` takes an ISIN or a ticker; a trade with no `amount` has it worked out from quantity × price.
+	Columns map[string]int `json:"columns"`
+
+	// HasHeader Whether the table's first line is a header rather than an operation
+	HasHeader bool `json:"has_header"`
+
+	// Types Value of the type column (compared ignoring case and surrounding blanks) → operation type. Only buy, sell, deposit, withdrawal, dividend, coupon, interest, tax, fee and amortization.
+	Types map[string]OperationType `json:"types"`
+}
+
+// ImportPreview defines model for ImportPreview.
+type ImportPreview struct {
+	// Header The header's cells; empty when the table has none
+	Header  []string      `json:"header"`
+	Mapping ImportMapping `json:"mapping"`
+	Rows    []ImportRow   `json:"rows"`
+}
+
+// ImportPreviewRequest defines model for ImportPreviewRequest.
+type ImportPreviewRequest struct {
+	// Content The CSV text. ';', ',' or a tab between cells; at most 5000 rows.
+	Content string         `json:"content"`
+	Mapping *ImportMapping `json:"mapping,omitempty"`
+}
+
+// ImportRow defines model for ImportRow.
+type ImportRow struct {
+	Cells []string `json:"cells"`
+
+	// Line The row's line in the file, from 1
+	Line int `json:"line"`
+
+	// Operation What the row reads as; null when it is unparsed
+	Operation nullable.Nullable[ImportedOperation] `json:"operation,omitempty"`
+	Reason    nullable.Nullable[string]            `json:"reason,omitempty"`
+
+	// Verdict `new`: would be recorded. `duplicate`: a row with the same content was imported from a table before (the nth identical row of a file matches the nth). `unparsed`: cannot be read — `reason` says why. `refused`: read, but the journal would not take it — `reason` is the journal's own words.
+	Verdict ImportRowVerdict `json:"verdict"`
+}
+
+// ImportRowVerdict `new`: would be recorded. `duplicate`: a row with the same content was imported from a table before (the nth identical row of a file matches the nth). `unparsed`: cannot be read — `reason` says why. `refused`: read, but the journal would not take it — `reason` is the journal's own words.
+type ImportRowVerdict string
+
+// ImportedOperation defines model for ImportedOperation.
+type ImportedOperation struct {
+	// AmountMinor Signed as the journal records the type: negative for buy, withdrawal, fee and tax
+	AmountMinor  int64                                 `json:"amount_minor"`
+	Currency     string                                `json:"currency"`
+	FeeMinor     int64                                 `json:"fee_minor"`
+	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id,omitempty"`
+	Note         string                                `json:"note"`
+
+	// OccurredOn Date YYYY-MM-DD
+	OccurredOn string                    `json:"occurred_on"`
+	Price      nullable.Nullable[string] `json:"price,omitempty"`
+	Quantity   nullable.Nullable[string] `json:"quantity,omitempty"`
+
+	// Type What the entry is. `redemption` deserves a note of its own: it is a bond reaching maturity, and it is ARITHMETICALLY A SALE — the paper leaves, the money arrives, the earliest-purchases-first queue gives up the basis those bonds carried — so every figure derived from it (realized profit, remaining cost, quantity) is computed by the same rule a `sell` is, and НК РФ ст. 214.1 names the two together, «реализации (погашения)». It is a separate value because it is a different EVENT: nobody sold anything, the bond ran out, and the journal already named the partial repayment separately as `amortization`, which left the full one the only disposal wearing another name. A client may group the two wherever it groups disposals; what it must not do is call one the other on screen. `exchange_out` and `exchange_in` are the two legs of a SECURITIES CONVERSION — one paper becoming another, a depositary receipt turning into the share it represented or a fund's units reissued under a new ISIN — recorded on ONE account and one day, with N units of the old paper leaving and M of the new arriving. NOTHING IS BOUGHT OR SOLD: no result is realized and no new acquisition date is created, because the holder paid nothing and received nothing. The parcel travels whole — every lot's cost basis and the day it was acquired arrive on the new paper unchanged, and only the unit count is restated (НК РФ ст. 214.1 п. 13 keeps the receipt's own purchase price as the expense behind the shares received, and ст. 219.1 counts the holding period from the day the receipt was bought). A client must not group these with disposals or acquisitions on any screen that sums results: the amount_minor on both legs is the cost basis that moved, not money, exactly as a transfer's is. THEY ARE WRITTEN ONLY BY THE CORPORATE-ACTIONS REGISTRY (`source: registry`) and never by this API: what happened to a paper is true for everyone who held it, so it is recorded once against the instrument and applied from there to every account. There is accordingly no endpoint that creates one, and — like any non-`manual` row — neither leg can be deleted through the journal. `spinoff_out` and `spinoff_in` are the two legs of a SPIN-OFF, and the difference from a conversion is that NOTHING LEAVES: the original paper stays with the holder, keeping every unit, and a second paper appears beside it carrying only a SHARE of what was paid — Т-Капитал carving the blocked assets out of its funds into closed ones on 2023-12-22 is the case this was built for. НК РФ ст. 214.1 п. 13 abz. 8 sends the arithmetic to ст. 277 п. 7: the new units are worth the part of the original units' cost that the carved-out assets were of the fund's net assets before the carve-out, and the original units' cost goes down by exactly that, with neither income nor expense arising on the day. SO `spinoff_out` CARRIES NO `quantity` AT ALL — it is null, and a client must not render a count for it or read one into it, because no units moved; what it carries is `amount_minor`, the cost basis that went across. `spinoff_in` is an ordinary arrival of M units whose parcels keep the ORIGINAL purchase days, so a screen showing when a holding was acquired shows the day the money was really spent rather than the day the new paper appeared. Like a conversion's legs, both are written ONLY by the corporate-actions registry (`source: registry`), neither is created or deleted through this API, and neither belongs on a screen that sums disposals or acquisitions.
+	Type OperationType `json:"type"`
 }
 
 // InBaseGap Which TERM the server could not value, and so why Position.in_base — the whole object — is absent. It names the term rather than the kind of gap, unlike RealizedGap: that one sums many positions, where no single term exists to point at, while here there is exactly one position and its terms are the very figures that stand side by side in one row. `undated_lot`: one of the lots still HELD does not know when it was acquired (the same condition Position.has_undated_lots reports), so there is no date to ask the fx table about. `no_rate_lot_date`: every lot has an acquisition date, but the fx table holds no rate for at least one of those dates nor for any earlier day. `no_rate_income_date`: the same, for the day one of the position's income operations (dividend, coupon, tax) occurred. `no_rate_today`: no rate for today, nor any earlier day, for the pair the market valuation needs — the currency THAT VALUATION is denominated in against the base currency. That currency is the quote's for a share or an ETF and the face value's for a bond: on most rows it is the position's own, on a bond priced off a foreign face value it is not, and one screen can therefore ask EUR->RUB for one row and USD->RUB for the next. It CAN also be the base currency itself — a ruble-face bond in a dollar account of a ruble space — and then no rate is resolved for it at all and this value cannot arise on that row (PositionInBase.rate_on describes it and is null there). Only a position that has a valuation to convert ever needs that rate, so this value never appears on a row that has no valuation — whatever `market_value_gap` says stopped it: such a row publishes its cost and its income without asking for it. EXACTLY ONE VALUE IS PUBLISHED, AND THERE IS NO COMBINED VALUE. The server stops at the first term it cannot value, in the order listed above, so each value also says that everything before it succeeded. That order puts the one permanent cause first: `undated_lot` never resolves — nobody wrote the date down and nothing can recover it — while all three `no_rate_*` gaps are ones the fx backfill closes on its own, after which the figure appears. A row that has both therefore says `undated_lot` and never promises a figure that is not coming. Among the three temporary ones the named one is true, and closing it names the next, so the caption converges instead of ever claiming more than the server knows. RealizedTotal.in_base_gap needs its `both` value for the opposite reason: it sums MANY positions, so a permanent gap in one and a temporary gap in another are both true of that single total at once.
@@ -2040,6 +2127,9 @@ type UpdateAccountJSONRequestBody = UpdateAccountRequest
 
 // SetAccountBalanceJSONRequestBody defines body for SetAccountBalance for application/json ContentType.
 type SetAccountBalanceJSONRequestBody = SetBalanceRequest
+
+// PreviewTableImportJSONRequestBody defines body for PreviewTableImport for application/json ContentType.
+type PreviewTableImportJSONRequestBody = ImportPreviewRequest
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
