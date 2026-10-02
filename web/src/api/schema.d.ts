@@ -792,11 +792,11 @@ export interface components {
         };
         /** @description Creates the first user, the space and the owner membership, and only while the instance has no users at all — a second call is a 409. The four rules below are the ones internal/family/auth.go, Setup applies, and each of them is a 400. */
         SetupRequest: {
-            /** @description What to call the space. Refused EMPTY and nothing more: a name of one character is accepted, and so is one made of nothing but blanks — the server compares against "" and does not trim. The floor is declared because a client validating against this document should not have to send a request to learn that "" is not a name; the absence of a ceiling and of a shape is equally deliberate, since the server checks neither. */
+            /** @description What to call the space. Refused EMPTY or longer than 100 characters (family.MaxNameRunes, counted as Unicode code points) and nothing more: a name of one character is accepted, and so is one made of nothing but blanks — the server compares against "" and does not trim. The floor is declared because a client validating against this document should not have to send a request to learn that "" is not a name; no shape is stated because the server checks none. */
             space_name: string;
             /** @description Lowercase letters, digits and underscore, three to thirty-two of them. That is the WHOLE rule (family.UsernamePattern, applied in validateCredentials), and it is applied at both doors that create a user — here and on CreateMemberRequest — so the pattern is declared at both. Anything else is a 400. Taken already is a 409 rather than a 400: the name is well formed, the conflict is with a row that exists. NOT DECLARED ON LoginRequest, which checks no shape at all — see it. */
             username: string;
-            /** @description What to call the person. Same rule and same reasoning as space_name above: refused empty, not trimmed, no ceiling and no shape. */
+            /** @description What to call the person. Same rule and same reasoning as space_name above: refused empty or past 100 characters, not trimmed, no shape. */
             display_name: string;
             /** @description At least eight CHARACTERS and at most 1024, counted as Unicode code points — which is what `minLength` and `maxLength` count here and what the server counts. It used to count BYTES while its own refusal said «characters», so a seven-letter Cyrillic password was fourteen bytes and went through, and this document could not state the rule without stating one stricter than the code (#117). The count moved to code points rather than the sentence to bytes, because the sentence is what the person reads. The ceiling is there so that what gets hashed has a size the server chose. NOT DECLARED ON LoginRequest — see it. */
             password: string;
@@ -954,7 +954,7 @@ export interface components {
         CreateMemberRequest: {
             /** @description Same rule as SetupRequest.username — see it, including why LoginRequest carries none. */
             username: string;
-            /** @description What to call the person. Refused EMPTY and nothing more: the server compares against "" and does not trim, so a name of nothing but blanks is accepted here even though the member dialog's own Save button will not offer it. */
+            /** @description What to call the person. Refused EMPTY or longer than 100 characters (family.MaxNameRunes) and nothing more: the server compares against "" and does not trim, so a name of nothing but blanks is accepted here even though the member dialog's own Save button will not offer it. */
             display_name: string;
             /** @description Same rule as SetupRequest.password — see it, including why the count is in code points and why LoginRequest carries none. */
             password: string;
@@ -1048,7 +1048,7 @@ export interface components {
             rate_on: string;
         };
         CreateAccountRequest: {
-            /** @description What to call the account. Refused EMPTY and nothing more (internal/account/http.go, handleCreate): the server compares against "" and does not trim, so a name of nothing but blanks is accepted. The floor is stated because a client validating against this document should not need a round trip to learn that "" is not a name; no ceiling and no shape are stated because the server checks neither. */
+            /** @description What to call the account. Refused EMPTY or longer than 100 characters (account.MaxNameRunes, counted as Unicode code points) and nothing more (internal/account/http.go, handleCreate): the server compares against "" and does not trim, so a name of nothing but blanks is accepted. The floor is stated because a client validating against this document should not need a round trip to learn that "" is not a name; no shape is stated because the server checks none. */
             name: string;
             type: components["schemas"]["AccountType"];
             /** @description ISO-4217 uppercase, e.g. RUB. Three uppercase letters is the SHAPE of a code and it is the whole of what the server checks: it holds no register, so a well-formed code it has never met is accepted, and a lowercase spelling or a currency's name is a 400. It cannot be changed afterwards — UpdateAccountRequest carries no currency — because the balance marks recorded against the account carry no currency of their own and are denominated in this one. */
@@ -1058,7 +1058,7 @@ export interface components {
             owner_user_id?: string | null;
         };
         UpdateAccountRequest: {
-            /** @description Same rule as on creation — refused empty, not trimmed (internal/account/http.go, handleUpdate). OMITTING the field leaves the name as it stands; that is what a PATCH does with a field it does not carry, and it is a different thing from sending "", which is the refusal this floor states. */
+            /** @description Same rule as on creation — refused empty or past 100 characters, not trimmed (internal/account/http.go, handleUpdate). OMITTING the field leaves the name as it stands; that is what a PATCH does with a field it does not carry, and it is a different thing from sending "", which is the refusal this floor states. */
             name?: string;
             institution?: string;
             /** Format: uuid */
@@ -1411,7 +1411,7 @@ export interface components {
         };
         CreateInstrumentRequest: {
             type: components["schemas"]["InstrumentType"];
-            /** @description What to call the instrument. Refused EMPTY and nothing more (internal/instrument/http.go, handleCreate): the server compares against "" and does not trim. Same floor and same reasoning as CreateAccountRequest.name — see it. */
+            /** @description What to call the instrument. Refused EMPTY or longer than 200 characters (instrument.MaxNameRunes) and nothing more (internal/instrument/http.go, handleCreate): the server compares against "" and does not trim. Same floor and same reasoning as CreateAccountRequest.name — see it. */
             name: string;
             ticker?: string;
             /** @description ISIN (ISO 6166): two letters, nine letters or digits, one digit, e.g. US0231351067. Trimmed and upper-cased by the server before it is stored, because the catalog and the corporate-actions registry match it as a string; anything else is a 400. May be omitted or empty: an instrument need not have one. */
@@ -1428,7 +1428,7 @@ export interface components {
             face_currency?: string | null;
         };
         UpdateInstrumentRequest: {
-            /** @description Same rule as on creation — refused empty, not trimmed (internal/instrument/http.go, handleUpdate). Omitting the field leaves the name as it stands; see UpdateAccountRequest.name. */
+            /** @description Same rule as on creation — refused empty or past 200 characters, not trimmed (internal/instrument/http.go, handleUpdate). Omitting the field leaves the name as it stands; see UpdateAccountRequest.name. */
             name?: string;
             ticker?: string;
             /** @description ISIN (ISO 6166): two letters, nine letters or digits, one digit, e.g. US0231351067. Trimmed and upper-cased by the server before it is stored, because the catalog and the corporate-actions registry match it as a string; anything else is a 400. An empty string clears it. */

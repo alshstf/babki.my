@@ -26,6 +26,7 @@ import {
   type AccountType,
   type AccountWithBalance,
 } from "@/api/accounts";
+import { MAX_ACCOUNT_NAME, MAX_INSTITUTION } from "@/lib/text-limits";
 
 const ACCOUNT_TYPES: AccountType[] = [
   "brokerage",
@@ -124,7 +125,7 @@ export function AccountDialog({
         <div className="grid gap-4">
           <div className="grid gap-2">
             <Label htmlFor="acc-name">{t("accounts.dialog.name")}</Label>
-            <Input id="acc-name" value={name} onChange={(e) => setName(e.target.value)} />
+            <Input id="acc-name" maxLength={MAX_ACCOUNT_NAME} value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           {!isEdit && (
             <>
@@ -171,6 +172,7 @@ export function AccountDialog({
             <Label htmlFor="acc-inst">{t("accounts.dialog.institution")}</Label>
             <Input
               id="acc-inst"
+              maxLength={MAX_INSTITUTION}
               placeholder={t("accounts.dialog.institutionPlaceholder")}
               value={institution}
               onChange={(e) => setInstitution(e.target.value)}

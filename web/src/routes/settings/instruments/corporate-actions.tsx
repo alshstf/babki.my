@@ -20,6 +20,7 @@ import {
   type CreateInstrumentEventBody,
   type InstrumentEventKind,
 } from "@/api/instrument-events";
+import { MAX_EVENT_NOTE, MAX_EVENT_SOURCE } from "@/lib/text-limits";
 
 // THE REGISTRY OF WHAT HAPPENED TO THE PAPERS, and the only door a person has
 // into it. The exchange's own splits arrive by themselves, daily; everything
@@ -331,6 +332,7 @@ export function CorporateActions({ canEdit }: { canEdit: boolean }) {
               </Label>
               <Input
                 id="ca-source-ref"
+                maxLength={MAX_EVENT_SOURCE}
                 value={sourceRef}
                 onChange={(e) => setSourceRef(e.target.value)}
               />
@@ -343,6 +345,7 @@ export function CorporateActions({ canEdit }: { canEdit: boolean }) {
               <Label htmlFor="ca-note">{t("corporateActions.fields.note")}</Label>
               <Input
                 id="ca-note"
+                maxLength={MAX_EVENT_NOTE}
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
               />

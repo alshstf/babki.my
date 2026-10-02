@@ -50,6 +50,9 @@ func (s *Service) CreateArrival(ctx context.Context, spaceID uuid.UUID, p Arriva
 	if err := checkOccurredOn(p.OccurredOn); err != nil {
 		return Operation{}, err
 	}
+	if err := checkNote(p.Note); err != nil {
+		return Operation{}, err
+	}
 	instrumentID, quantity := p.InstrumentID, p.Quantity
 	op := Operation{
 		AccountID: p.AccountID, InstrumentID: &instrumentID, Type: TypeTransferIn,
@@ -72,7 +75,7 @@ func (s *Service) CreateArrival(ctx context.Context, spaceID uuid.UUID, p Arriva
 	}
 
 	var created Operation
-	err := s.store.WithAccountsLocked(ctx, spaceID, []uuid.UUID{p.AccountID}, func(st *Store) error {
+	err := s.store.WithOpenAccountsLocked(ctx, spaceID, []uuid.UUID{p.AccountID}, func(st *Store) error {
 		journal, err := st.ListForEngine(ctx, spaceID, p.AccountID)
 		if err != nil {
 			return err

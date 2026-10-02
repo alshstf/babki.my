@@ -1245,16 +1245,18 @@ components:
       properties:
         space_name:
           type: string
+          maxLength: 100
           minLength: 1
-          description: "What to call the space. Refused EMPTY and nothing more: a name of one character is accepted, and so is one made of nothing but blanks — the server compares against \"\" and does not trim. The floor is declared because a client validating against this document should not have to send a request to learn that \"\" is not a name; the absence of a ceiling and of a shape is equally deliberate, since the server checks neither."
+          description: "What to call the space. Refused EMPTY or longer than 100 characters (family.MaxNameRunes, counted as Unicode code points) and nothing more: a name of one character is accepted, and so is one made of nothing but blanks — the server compares against \"\" and does not trim. The floor is declared because a client validating against this document should not have to send a request to learn that \"\" is not a name; no shape is stated because the server checks none."
         username:
           type: string
           pattern: "^[a-z0-9_]{3,32}$"
           description: "Lowercase letters, digits and underscore, three to thirty-two of them. That is the WHOLE rule (family.UsernamePattern, applied in validateCredentials), and it is applied at both doors that create a user — here and on CreateMemberRequest — so the pattern is declared at both. Anything else is a 400. Taken already is a 409 rather than a 400: the name is well formed, the conflict is with a row that exists. NOT DECLARED ON LoginRequest, which checks no shape at all — see it."
         display_name:
           type: string
+          maxLength: 100
           minLength: 1
-          description: "What to call the person. Same rule and same reasoning as space_name above: refused empty, not trimmed, no ceiling and no shape."
+          description: "What to call the person. Same rule and same reasoning as space_name above: refused empty or past 100 characters, not trimmed, no shape."
         password:
           type: string
           minLength: 8
@@ -1269,7 +1271,7 @@ components:
         occurred_on: { type: string, description: "Date YYYY-MM-DD the shares arrived; the same bounds as an operation's." }
         quantity: { type: string, description: "Decimal as string: positive, at most 10 decimal places." }
         currency: { type: string, pattern: "^[A-Z]{3}$", description: "The paper's currency — what its purchases were paid in." }
-        note: { type: string }
+        note: { type: string, maxLength: 1000 }
         purchases:
           type: array
           items: { $ref: "#/components/schemas/StatedPurchase" }
@@ -1471,8 +1473,9 @@ components:
           description: "Same rule as SetupRequest.username — see it, including why LoginRequest carries none."
         display_name:
           type: string
+          maxLength: 100
           minLength: 1
-          description: "What to call the person. Refused EMPTY and nothing more: the server compares against \"\" and does not trim, so a name of nothing but blanks is accepted here even though the member dialog's own Save button will not offer it."
+          description: "What to call the person. Refused EMPTY or longer than 100 characters (family.MaxNameRunes) and nothing more: the server compares against \"\" and does not trim, so a name of nothing but blanks is accepted here even though the member dialog's own Save button will not offer it."
         password:
           type: string
           minLength: 8
@@ -1574,23 +1577,25 @@ components:
       properties:
         name:
           type: string
+          maxLength: 100
           minLength: 1
-          description: "What to call the account. Refused EMPTY and nothing more (internal/account/http.go, handleCreate): the server compares against \"\" and does not trim, so a name of nothing but blanks is accepted. The floor is stated because a client validating against this document should not need a round trip to learn that \"\" is not a name; no ceiling and no shape are stated because the server checks neither."
+          description: "What to call the account. Refused EMPTY or longer than 100 characters (account.MaxNameRunes, counted as Unicode code points) and nothing more (internal/account/http.go, handleCreate): the server compares against \"\" and does not trim, so a name of nothing but blanks is accepted. The floor is stated because a client validating against this document should not need a round trip to learn that \"\" is not a name; no shape is stated because the server checks none."
         type: { $ref: "#/components/schemas/AccountType" }
         currency:
           type: string
           pattern: "^[A-Z]{3}$"
           description: "ISO-4217 uppercase, e.g. RUB. Three uppercase letters is the SHAPE of a code and it is the whole of what the server checks: it holds no register, so a well-formed code it has never met is accepted, and a lowercase spelling or a currency's name is a 400. It cannot be changed afterwards — UpdateAccountRequest carries no currency — because the balance marks recorded against the account carry no currency of their own and are denominated in this one."
-        institution: { type: string }
+        institution: { type: string, maxLength: 100 }
         owner_user_id: { type: string, format: uuid, nullable: true }
     UpdateAccountRequest:
       type: object
       properties:
         name:
           type: string
+          maxLength: 100
           minLength: 1
-          description: "Same rule as on creation — refused empty, not trimmed (internal/account/http.go, handleUpdate). OMITTING the field leaves the name as it stands; that is what a PATCH does with a field it does not carry, and it is a different thing from sending \"\", which is the refusal this floor states."
-        institution: { type: string }
+          description: "Same rule as on creation — refused empty or past 100 characters, not trimmed (internal/account/http.go, handleUpdate). OMITTING the field leaves the name as it stands; that is what a PATCH does with a field it does not carry, and it is a different thing from sending \"\", which is the refusal this floor states."
+        institution: { type: string, maxLength: 100 }
         owner_user_id: { type: string, format: uuid, nullable: true }
         status: { $ref: "#/components/schemas/AccountStatus" }
         valued_by_balance: { type: boolean, description: "See AccountWithBalance.valued_by_balance. Omitted, it stays as it is." }
@@ -2017,8 +2022,9 @@ components:
           description: "Decimal as string, greater than 0 and less than 1. Required for a spin-off, refused on the other two. See InstrumentEvent.basis_share."
         source_ref:
           type: string
+          maxLength: 500
           description: "Required: a link to the exchange's or the issuer's own announcement. See InstrumentEvent.source_ref for why this one field is not optional."
-        note: { type: string }
+        note: { type: string, maxLength: 1000 }
     InstrumentEventWritten:
       type: object
       required: [event, rows_added, rows_removed, accounts_touched, recheck_queued]
@@ -2048,11 +2054,12 @@ components:
         type: { $ref: "#/components/schemas/InstrumentType" }
         name:
           type: string
+          maxLength: 200
           minLength: 1
-          description: "What to call the instrument. Refused EMPTY and nothing more (internal/instrument/http.go, handleCreate): the server compares against \"\" and does not trim. Same floor and same reasoning as CreateAccountRequest.name — see it."
-        ticker: { type: string }
+          description: "What to call the instrument. Refused EMPTY or longer than 200 characters (instrument.MaxNameRunes) and nothing more (internal/instrument/http.go, handleCreate): the server compares against \"\" and does not trim. Same floor and same reasoning as CreateAccountRequest.name — see it."
+        ticker: { type: string, maxLength: 32 }
         isin: { type: string, description: "ISIN (ISO 6166): two letters, nine letters or digits, one digit, e.g. US0231351067. Trimmed and upper-cased by the server before it is stored, because the catalog and the corporate-actions registry match it as a string; anything else is a 400. May be omitted or empty: an instrument need not have one." }
-        figi: { type: string }
+        figi: { type: string, maxLength: 32 }
         currency:
           type: string
           pattern: "^[A-Z]{3}$"
@@ -2074,11 +2081,12 @@ components:
       properties:
         name:
           type: string
+          maxLength: 200
           minLength: 1
-          description: "Same rule as on creation — refused empty, not trimmed (internal/instrument/http.go, handleUpdate). Omitting the field leaves the name as it stands; see UpdateAccountRequest.name."
-        ticker: { type: string }
+          description: "Same rule as on creation — refused empty or past 200 characters, not trimmed (internal/instrument/http.go, handleUpdate). Omitting the field leaves the name as it stands; see UpdateAccountRequest.name."
+        ticker: { type: string, maxLength: 32 }
         isin: { type: string, description: "ISIN (ISO 6166): two letters, nine letters or digits, one digit, e.g. US0231351067. Trimmed and upper-cased by the server before it is stored, because the catalog and the corporate-actions registry match it as a string; anything else is a 400. An empty string clears it." }
-        figi: { type: string }
+        figi: { type: string, maxLength: 32 }
         frozen: { type: boolean }
         face_value_minor:
           type: integer
@@ -2203,7 +2211,7 @@ components:
           minimum: 0
           maximum: 1000000000000000
           description: "What this operation cost to make, in `currency`, as a POSITIVE figure whichever way `amount_minor` went — it is money charged, never money returned. That is why the floor here is 0 rather than the -10^15 the amount gets: a negative fee is refused by a rule of its own. Omitted or 0 means no fee. The ceiling is the same 10^15 minor units the amount stops at, for the same reason — it is money in the same currency on the same row. Past either end, 400."
-        note: { type: string }
+        note: { type: string, maxLength: 1000 }
         split_ratio: { type: string, nullable: true, description: "Decimal as string: how many units one unit becomes. Must be positive and strictly less than 10^10 (10000000000) — the first value the column cannot hold — or 400. A split multiplies the whole position's quantity, so a ratio that is a mis-scaled field rather than a corporate action carries an ordinary holding past what any screen can value; the bound refuses it by name instead of letting the database answer with an overflow." }
     TransferRequest:
       type: object
@@ -2221,7 +2229,7 @@ components:
           minimum: 0
           maximum: 1000000000000000
           description: "Cost basis override; default is FIFO carryover from the source account. A basis is what the shares COST, so it is never negative: the floor is 0 and not the -10^15 an amount gets, and the ceiling is the same 10^15 minor units every other money field here is written against. Past either end, 400. Sending one has a second consequence that is not about its size: a basis given by hand replaces the parcel of purchases the queue would have released, so the shares arrive knowing no acquisition date at all — see Operation.has_undated_lots, which is what such a transfer then reports for good. AND A THIRD, WHICH IS THE ONE TO UNDERSTAND BEFORE SENDING IT: this number is what the shares arrive with, not what departs. The source account still releases its own earliest purchases for the quantity moved and gives up THAT basis, whatever it is; both recorded legs carry the number sent here, so the departing leg's `amount_minor` states the parcel's declared worth rather than the basis the source lost. The two are not reconciled and the family's total basis moves by the difference — which is the point of the field (a parcel arriving from a broker that reported a total and nothing else), and the reason to leave it unset whenever the source's own history is the truth."
-        note: { type: string }
+        note: { type: string, maxLength: 1000 }
     OperationsResponse:
       type: object
       required: [operations, has_more]

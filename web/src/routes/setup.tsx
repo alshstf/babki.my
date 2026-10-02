@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { isConflict } from "@/api/operations";
 import { useSetup } from "@/api/session";
+import { MAX_PERSON_NAME } from "@/lib/text-limits";
 
 export function SetupPage() {
   const { t } = useTranslation();
@@ -49,6 +50,7 @@ export function SetupPage() {
               <Label htmlFor="space">{t("setup.spaceName")}</Label>
               <Input
                 id="space"
+                maxLength={MAX_PERSON_NAME}
                 placeholder={t("setup.spaceNamePlaceholder")}
                 value={spaceName}
                 onChange={(e) => setSpaceName(e.target.value)}
@@ -58,6 +60,7 @@ export function SetupPage() {
               <Label htmlFor="display">{t("setup.displayName")}</Label>
               <Input
                 id="display"
+                maxLength={MAX_PERSON_NAME}
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
               />

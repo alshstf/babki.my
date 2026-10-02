@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -318,6 +319,9 @@ func validate(o Operation) error {
 	if err := validateFields(o); err != nil {
 		return err
 	}
+	if err := checkNote(o.Note); err != nil {
+		return err
+	}
 	if o.Type == TypeTransferIn || o.Type == TypeTransferOut {
 		// Unchanged: hand entry writes a transfer through the endpoint that
 		// records both legs at once, so that the shares and the basis they
@@ -345,6 +349,23 @@ func validate(o Operation) error {
 		return fmt.Errorf("%w: a conversion is recorded in the corporate-actions registry, not entered against an account", family.ErrValidation)
 	}
 	return validateByType(o)
+}
+
+// MaxNoteRunes is the longest note a hand entry takes, counted in characters
+// (Unicode code points), as api/openapi.yaml's maxLength counts them. A note
+// is a line or two about a row; the ceiling is there so that what is stored
+// and sent back with every journal page has a size the server chose, not the
+// request body limit. An importer's notes are the broker's own descriptions
+// and are not held to it: refusing a reported row for its wording would lose
+// the row.
+const MaxNoteRunes = 1000
+
+// checkNote refuses a hand-entered note longer than MaxNoteRunes.
+func checkNote(note string) error {
+	if utf8.RuneCountInString(note) > MaxNoteRunes {
+		return fmt.Errorf("%w: note must be at most %d characters", family.ErrValidation, MaxNoteRunes)
+	}
+	return nil
 }
 
 // validateFields is every check that looks at a field's own value rather than
@@ -902,7 +923,7 @@ func (s *Service) CreateReplacing(ctx context.Context, spaceID uuid.UUID, op Ope
 	}
 
 	var created Operation
-	err := s.store.WithAccountsLocked(ctx, spaceID, accountIDs, func(st *Store) error {
+	err := s.store.WithOpenAccountsLocked(ctx, spaceID, accountIDs, func(st *Store) error {
 		removeIDs, accounts, err := replacedRows(ctx, st, spaceID, replace)
 		if err != nil {
 			return err
@@ -1064,9 +1085,12 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 	if err := checkOccurredOn(p.OccurredOn); err != nil {
 		return Operation{}, Operation{}, err
 	}
+	if err := checkNote(p.Note); err != nil {
+		return Operation{}, Operation{}, err
+	}
 
 	var cOut, cIn Operation
-	err = s.store.WithAccountsLocked(ctx, spaceID, []uuid.UUID{p.FromAccountID, p.ToAccountID}, func(st *Store) error {
+	err = s.store.WithOpenAccountsLocked(ctx, spaceID, []uuid.UUID{p.FromAccountID, p.ToAccountID}, func(st *Store) error {
 		sourceJournal, err := st.ListForEngine(ctx, spaceID, p.FromAccountID)
 		if err != nil {
 			return err
@@ -1387,7 +1411,7 @@ func (s *Service) Delete(ctx context.Context, spaceID, id uuid.UUID) error {
 	if err != nil {
 		return err
 	}
-	err = s.store.WithAccountsLocked(ctx, spaceID, accountIDs, func(st *Store) error {
+	err = s.store.WithOpenAccountsLocked(ctx, spaceID, accountIDs, func(st *Store) error {
 		op, err := st.ByID(ctx, spaceID, id)
 		if err != nil {
 			return err

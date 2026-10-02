@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/google/uuid"
@@ -488,6 +489,9 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if req.Institution != nil {
 		institution = *req.Institution
 	}
+	if !textsFit(w, &req.Name, &institution) {
+		return
+	}
 	var ownerID *uuid.UUID
 	if req.OwnerUserId.IsSpecified() && !req.OwnerUserId.IsNull() {
 		v := req.OwnerUserId.MustGet()
@@ -535,6 +539,9 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, "name must not be empty")
 		return
 	}
+	if !textsFit(w, req.Name, req.Institution) {
+		return
+	}
 	upd.ValuedByBalance = req.ValuedByBalance
 	a, err := h.store.Update(r.Context(), p.SpaceID, id, upd)
 	if err != nil {
@@ -542,6 +549,30 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.writeOne(w, r, p.SpaceID, a)
+}
+
+// MaxNameRunes is the longest account name, and MaxInstitutionRunes the
+// longest institution, counted in characters (Unicode code points) as
+// api/openapi.yaml's maxLength counts them. Both are a line in a list; the
+// ceiling is there so that what every screen draws has a size the server
+// chose, not the request body limit.
+const (
+	MaxNameRunes        = 100
+	MaxInstitutionRunes = 100
+)
+
+// textsFit answers 400 and false when the name or the institution given is
+// longer than its ceiling; a nil one was not sent and fits.
+func textsFit(w http.ResponseWriter, name, institution *string) bool {
+	if name != nil && utf8.RuneCountInString(*name) > MaxNameRunes {
+		httpjson.Error(w, http.StatusBadRequest, fmt.Sprintf("name must be at most %d characters", MaxNameRunes))
+		return false
+	}
+	if institution != nil && utf8.RuneCountInString(*institution) > MaxInstitutionRunes {
+		httpjson.Error(w, http.StatusBadRequest, fmt.Sprintf("institution must be at most %d characters", MaxInstitutionRunes))
+		return false
+	}
+	return true
 }
 
 func (h *Handler) handleArchive(w http.ResponseWriter, r *http.Request) {
@@ -570,6 +601,21 @@ func (h *Handler) handleSetBalance(w http.ResponseWriter, r *http.Request) {
 	asOf, err := parseAsOf(req.AsOf)
 	if err != nil {
 		httpjson.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// An archived account is out of every total, and the screen offers no
+	// balance for it; a mark sent anyway would be a figure nobody sees until
+	// the account came back, dated whenever it was typed. It is brought back
+	// from the archive first. Only this door: the broker's own balance, which a
+	// connection records, is a fact whatever the family has done with the
+	// account.
+	current, err := h.store.ByID(r.Context(), p.SpaceID, id)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
+	if current.Status == StatusArchived {
+		httpjson.Error(w, http.StatusBadRequest, "the account is archived; bring it back from the archive to change it")
 		return
 	}
 	// The only door into account_balances.amount_minor, and until #89 it bounded

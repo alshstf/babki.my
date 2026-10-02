@@ -45,7 +45,7 @@ func (s *Service) StatePurchases(ctx context.Context, spaceID, operationID uuid.
 		return Operation{}, err
 	}
 	var stored Operation
-	err = s.store.WithAccountsLocked(ctx, spaceID, []uuid.UUID{first.AccountID}, func(st *Store) error {
+	err = s.store.WithOpenAccountsLocked(ctx, spaceID, []uuid.UUID{first.AccountID}, func(st *Store) error {
 		op, err := st.ByID(ctx, spaceID, operationID)
 		if err != nil {
 			return err

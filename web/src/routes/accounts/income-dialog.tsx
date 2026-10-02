@@ -35,6 +35,7 @@ import {
 import type { AccountWithBalance } from "@/api/accounts";
 import type { Instrument } from "@/api/instruments";
 import { InstrumentPicker } from "./instrument-picker";
+import { MAX_NOTE } from "@/lib/text-limits";
 
 // Dividend and coupon may be recorded at the cash level (no instrument) per
 // the backend's validation contract (Type.RequiresInstrument in
@@ -216,7 +217,7 @@ export function IncomeDialog({
           </div>
           <div className="grid gap-2">
             <Label htmlFor="income-note">{t("income.note")}</Label>
-            <Input id="income-note" value={note} onChange={(e) => setNote(e.target.value)} />
+            <Input id="income-note" maxLength={MAX_NOTE} value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
           {createOperation.isError && (
             <Alert variant="destructive">

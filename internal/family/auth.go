@@ -67,6 +67,23 @@ const MinPasswordRunes = 8
 // there so that what gets hashed has a size this server chose.
 const MaxPasswordRunes = 1024
 
+// MaxNameRunes is the longest display name and space name, counted the way
+// MinPasswordRunes is. A name is a word or two on a header; the ceiling is there
+// so that what every screen draws has a size this server chose.
+const MaxNameRunes = 100
+
+// checkName refuses an empty name or one past MaxNameRunes; what names the
+// field in the refusal.
+func checkName(what, name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: %s is required", ErrValidation, what)
+	}
+	if utf8.RuneCountInString(name) > MaxNameRunes {
+		return fmt.Errorf("%w: %s must be at most %d characters", ErrValidation, what, MaxNameRunes)
+	}
+	return nil
+}
+
 var usernameRe = regexp.MustCompile(UsernamePattern)
 
 // hashParams are what a password is hashed with.
@@ -185,8 +202,11 @@ func (s *Service) Setup(ctx context.Context, p SetupParams) (User, Principal, er
 	if !needed {
 		return User{}, Principal{}, ErrAlreadySetUp
 	}
-	if p.SpaceName == "" || p.DisplayName == "" {
-		return User{}, Principal{}, fmt.Errorf("%w: space name and display name are required", ErrValidation)
+	if err := checkName("space name", p.SpaceName); err != nil {
+		return User{}, Principal{}, err
+	}
+	if err := checkName("display name", p.DisplayName); err != nil {
+		return User{}, Principal{}, err
 	}
 	if err := validateCredentials(p.Username, p.Password); err != nil {
 		return User{}, Principal{}, err
@@ -249,8 +269,8 @@ func (s *Service) CreateMember(ctx context.Context, p Principal, username, displ
 	if role != RoleEditor && role != RoleViewer {
 		return Member{}, fmt.Errorf("%w: role must be editor or viewer", ErrValidation)
 	}
-	if displayName == "" {
-		return Member{}, fmt.Errorf("%w: display name is required", ErrValidation)
+	if err := checkName("display name", displayName); err != nil {
+		return Member{}, err
 	}
 	if err := validateCredentials(username, password); err != nil {
 		return Member{}, err

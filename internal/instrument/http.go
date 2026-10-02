@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/google/uuid"
@@ -403,6 +404,33 @@ func checkFaceUpdate(value nullable.Nullable[int64], code nullable.Nullable[stri
 	return checkFacePair(value, code)
 }
 
+// The longest name, ticker and FIGI a hand-made catalog row takes, counted in
+// characters (Unicode code points) as api/openapi.yaml's maxLength counts
+// them. A ticker is a few letters and a FIGI twelve; the ceilings are loose on
+// purpose, there so that what every screen draws has a size the server chose
+// rather than the request body limit. Rows a catalog sync writes do not pass
+// through here: their texts are the exchange's.
+const (
+	MaxNameRunes   = 200
+	MaxTickerRunes = 32
+	MaxFIGIRunes   = 32
+)
+
+// checkTexts refuses a name, ticker or FIGI past its ceiling; a nil one was
+// not sent and fits.
+func checkTexts(name, ticker, figi *string) error {
+	for _, f := range []struct {
+		field string
+		value *string
+		limit int
+	}{{"name", name, MaxNameRunes}, {"ticker", ticker, MaxTickerRunes}, {"figi", figi, MaxFIGIRunes}} {
+		if f.value != nil && utf8.RuneCountInString(*f.value) > f.limit {
+			return fmt.Errorf("%s must be at most %d characters", f.field, f.limit)
+		}
+	}
+	return nil
+}
+
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var req apitypes.CreateInstrumentRequest
 	if httpjson.Decode(w, r, &req) != nil {
@@ -411,6 +439,10 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if req.Name == "" || !Type(req.Type).Valid() || !currency.Valid(req.Currency) {
 		httpjson.Error(w, http.StatusBadRequest,
 			"name is required, type must be valid, currency must be ISO-4217 uppercase")
+		return
+	}
+	if err := checkTexts(&req.Name, req.Ticker, req.Figi); err != nil {
+		httpjson.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	// The type rule first: it says the pair does not belong on this row at all,
@@ -472,6 +504,10 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name != nil && *req.Name == "" {
 		httpjson.Error(w, http.StatusBadRequest, "name must not be empty")
+		return
+	}
+	if err := checkTexts(req.Name, req.Ticker, req.Figi); err != nil {
+		httpjson.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	// The type rule is the one thing here that cannot be judged from the request:

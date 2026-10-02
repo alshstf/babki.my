@@ -34,7 +34,7 @@ func (s *Service) Update(ctx context.Context, spaceID, id uuid.UUID, op Operatio
 	}
 
 	var updated Operation
-	err = s.store.WithAccountsLocked(ctx, spaceID, []uuid.UUID{current.AccountID}, func(st *Store) error {
+	err = s.store.WithOpenAccountsLocked(ctx, spaceID, []uuid.UUID{current.AccountID}, func(st *Store) error {
 		old, err := st.ByID(ctx, spaceID, id)
 		if err != nil {
 			return err
