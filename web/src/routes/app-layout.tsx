@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Link, Outlet } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { LogOut, Settings, Users, Wallet } from "lucide-react";
@@ -23,6 +24,21 @@ function HeaderCurrencyToggle() {
   return <DisplayCurrencyToggle visible={visible} />;
 }
 
+// One entry of the nav: icon and name side by side, the name shown from sm up
+// and always the link's accessible name.
+function NavLink({ to, icon, label }: { to: "/accounts" | "/family" | "/settings"; icon: ReactNode; label: string }) {
+  return (
+    <Link
+      to={to}
+      aria-label={label}
+      title={label}
+      className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent [&.active]:bg-accent"
+    >
+      {icon} <span className="hidden sm:inline">{label}</span>
+    </Link>
+  );
+}
+
 export function AppLayout() {
   const { t } = useTranslation();
   const { data: session } = useSession();
@@ -34,40 +50,31 @@ export function AppLayout() {
     // screen writes it, via useReportScreenCurrencies) — it's the shared
     // ancestor connecting the two without any direct coupling between them.
     <ScreenCurrencyCountProvider>
-      <div className="min-h-screen bg-background text-foreground flex">
-        <aside className="w-56 border-r flex flex-col">
-          <div className="px-4 py-4 text-lg font-bold tracking-tight">
+      {/* A column beside the screen from md up; on a phone the same nav is a
+          bar across the top, icons only, so the screen keeps the width. */}
+      <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row">
+        <aside className="flex items-center border-b md:w-56 md:flex-col md:items-stretch md:border-b-0 md:border-r">
+          <div className="px-4 py-3 text-lg font-bold tracking-tight md:py-4">
             {t("app.name")}
           </div>
-          <nav className="flex-1 px-2 grid gap-1 content-start">
-            <Link
-              to="/accounts"
-              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent [&.active]:bg-accent"
-            >
-              <Wallet className="size-4" /> {t("nav.accounts")}
-            </Link>
-            <Link
-              to="/family"
-              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent [&.active]:bg-accent"
-            >
-              <Users className="size-4" /> {t("nav.family")}
-            </Link>
+          <nav className="flex flex-1 gap-1 px-2 md:grid md:content-start">
+            <NavLink to="/accounts" icon={<Wallet className="size-4" />} label={t("nav.accounts")} />
+            <NavLink to="/family" icon={<Users className="size-4" />} label={t("nav.family")} />
             {session?.role === "owner" && (
-              <Link
-                to="/settings"
-                className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent [&.active]:bg-accent"
-              >
-                <Settings className="size-4" /> {t("nav.settings")}
-              </Link>
+              <NavLink to="/settings" icon={<Settings className="size-4" />} label={t("nav.settings")} />
             )}
           </nav>
         </aside>
-        <div className="flex-1 flex flex-col">
-          <header className="border-b px-6 py-3 flex items-center justify-end gap-3">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="border-b px-4 py-3 flex items-center justify-end gap-3 md:px-6">
             {session && (
               <>
-                <span className="text-sm">{session.user.display_name}</span>
-                <Badge variant="secondary">{t(`roles.${session.role}`)}</Badge>
+                {/* Who is signed in, from sm up: on a phone the row is the
+                    currency toggle's and the sign-out's. */}
+                <span className="hidden text-sm sm:inline">{session.user.display_name}</span>
+                <Badge variant="secondary" className="hidden sm:inline-flex">
+                  {t(`roles.${session.role}`)}
+                </Badge>
                 <HeaderCurrencyToggle />
                 {/* Disabled only while a request is actually in flight, which
                     is the whole of isPending now that this mutation runs with
@@ -99,7 +106,7 @@ export function AppLayout() {
               <AlertDescription>{t("auth.signOutFailed")}</AlertDescription>
             </Alert>
           )}
-          <main className="flex-1 p-6">
+          <main className="min-w-0 flex-1 p-4 md:p-6">
             <Outlet />
           </main>
         </div>
