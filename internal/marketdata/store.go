@@ -292,6 +292,32 @@ func (s *Store) QuoteOn(ctx context.Context, instrumentID uuid.UUID, on time.Tim
 		ORDER BY on_date DESC LIMIT 1`, instrumentID, on))
 }
 
+// QuotesOn returns, for each of instrumentIDs, its price on day or the nearest
+// earlier one, in a single round trip. Instruments with no quote on or before
+// day are absent from the result.
+func (s *Store) QuotesOn(ctx context.Context, instrumentIDs []uuid.UUID, day time.Time) (map[uuid.UUID]Quote, error) {
+	out := make(map[uuid.UUID]Quote, len(instrumentIDs))
+	if len(instrumentIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT DISTINCT ON (instrument_id) `+quoteCols+` FROM quotes
+		WHERE instrument_id = ANY($1) AND on_date <= $2
+		ORDER BY instrument_id, on_date DESC`, instrumentIDs, day)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		q, err := scanQuote(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[q.InstrumentID] = q
+	}
+	return out, rows.Err()
+}
+
 // LatestQuotes returns the most recent quote for each of instrumentIDs, in
 // a single round trip. Instruments with no quotes at all are absent from
 // the result map (not zero-valued).

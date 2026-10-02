@@ -51,6 +51,11 @@ func (j journalValues) ValueFromJournal(ctx context.Context, spaceID, accountID 
 	}, err
 }
 
+func (j journalValues) ValueOn(ctx context.Context, spaceID, accountID uuid.UUID, day time.Time) (account.JournalValue, error) {
+	v, err := j.positions.ValueOn(ctx, spaceID, accountID, day)
+	return account.JournalValue(v), err
+}
+
 // mountModules builds each domain module and mounts its routes on srv.
 // Shared by the "all" and "api" roles so route wiring lives in one place.
 //

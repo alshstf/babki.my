@@ -29,6 +29,7 @@ export function JournalNotes({
   const balance = rec ? formatMinor(rec.balance_in_base_minor, journal.currency) : "";
   const difference = rec ? formatMinor(rec.difference_minor, journal.currency) : "";
   const date = rec ? formatDate(rec.balance_as_of) || rec.balance_as_of : "";
+  const on = rec ? formatDate(rec.compared_on) || rec.compared_on : "";
 
   return (
     // Sentences, not figures: they wrap inside a column of their own width
@@ -47,7 +48,7 @@ export function JournalNotes({
       )}
       {rec?.status === "agrees" && (
         <div data-testid={`account-reconciliation-${account.id}`} className="text-emerald-600">
-          {t("accounts.journal.agrees", { balance, difference })}
+          {t("accounts.journal.agrees", { balance, difference, on })}
         </div>
       )}
       {rec?.status === "close" && (
@@ -56,7 +57,7 @@ export function JournalNotes({
           className="text-muted-foreground"
           title={t("accounts.journal.closeHint")}
         >
-          {t("accounts.journal.close", { balance, difference })}
+          {t("accounts.journal.close", { balance, difference, on })}
         </div>
       )}
       {rec?.status === "differs" && (
@@ -65,7 +66,7 @@ export function JournalNotes({
           className="text-red-600"
           title={t("accounts.journal.differsHint")}
         >
-          {t("accounts.journal.differs", { balance, date, difference })}
+          {t("accounts.journal.differs", { balance, difference, on })}
         </div>
       )}
       {rec?.status === "stale" && (

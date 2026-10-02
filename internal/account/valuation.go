@@ -39,6 +39,9 @@ type JournalValue struct {
 
 type journalValuer interface {
 	ValueFromJournal(ctx context.Context, spaceID, accountID uuid.UUID) (JournalValue, error)
+	// ValueOn is the same worth as the journal stood at the end of day, at
+	// that day's prices and rates.
+	ValueOn(ctx context.Context, spaceID, accountID uuid.UUID, day time.Time) (JournalValue, error)
 }
 
 // How far the journal may stand from the balance and still be said to agree
@@ -50,8 +53,9 @@ type journalValuer interface {
 const (
 	agreesWithinPercent = 1
 	closeWithinPercent  = 5
-	// A balance mark older than this is not compared at all: the market has
-	// moved since, and a verdict would blame the journal for it.
+	// A balance mark older than this is compared with the journal as it stood
+	// on the mark's own day, at that day's prices: the market has moved since,
+	// and comparing it with today's worth would blame the journal for that.
 	staleAfterDays = 3
 )
 
@@ -92,27 +96,47 @@ func (h *Handler) valuations(ctx context.Context, spaceID uuid.UUID, accounts []
 }
 
 // reconcile sets the journal's figure against a's latest balance mark, both in
-// the base currency at today's rate. Nil when there is no mark, or no rate to
-// put it into the base currency.
+// the base currency. A recent mark is compared with today's worth at today's
+// rate; an older one with the journal's worth on the mark's own day, at that
+// day's prices and rate — and when the journal cannot be valued whole on that
+// day (no operations yet, a paper with no price, a currency with no rate) no
+// verdict is given. Nil when there is no mark, or no rate for it.
 func (h *Handler) reconcile(ctx context.Context, a WithBalance, v JournalValue, baseCurrency string, now time.Time, rates map[rateKey]*rateLookup) (*apitypes.AccountReconciliation, error) {
 	if a.Balance == nil {
 		return nil, nil
 	}
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	asOf := a.Balance.AsOf
+	comparedOn, journal, complete := today, v.Minor, true
+	balanceOn := now
+	if asOf.Before(today.AddDate(0, 0, -staleAfterDays)) {
+		past, err := h.journals.ValueOn(ctx, a.SpaceID, a.ID, asOf)
+		if err != nil {
+			return nil, fmt.Errorf("value account %s on %s: %w", a.ID, asOf.Format(time.DateOnly), err)
+		}
+		comparedOn, journal, balanceOn = asOf, past.Minor, asOf
+		complete = past.Operations > 0 && past.Unpriced == 0 && len(past.MissingRates) == 0
+	}
 	balance := a.Balance.AmountMinor
 	if a.Currency != baseCurrency {
-		inBase, err := h.balanceInBase(ctx, a, baseCurrency, now, rates)
+		inBase, err := h.balanceInBase(ctx, a, baseCurrency, balanceOn, rates)
 		if err != nil || inBase == nil {
 			return nil, err
 		}
 		balance = inBase.AmountMinor
 	}
-	diff, err := money.Sub(v.Minor, balance)
+	diff, err := money.Sub(journal, balance)
 	if err != nil {
 		return nil, fmt.Errorf("%w: account %s, its journal against its balance", err, a.ID)
 	}
+	status := reconciliationStatus(diff, balance)
+	if !complete {
+		status = apitypes.Stale
+	}
 	return &apitypes.AccountReconciliation{
-		Status:             reconciliationStatus(diff, balance, a.Balance.AsOf, now),
-		BalanceAsOf:        a.Balance.AsOf.Format("2006-01-02"),
+		Status:             status,
+		BalanceAsOf:        asOf.Format("2006-01-02"),
+		ComparedOn:         comparedOn.Format("2006-01-02"),
 		BalanceInBaseMinor: balance,
 		DifferenceMinor:    diff,
 	}, nil
@@ -120,11 +144,7 @@ func (h *Handler) reconcile(ctx context.Context, a WithBalance, v JournalValue, 
 
 // reconciliationStatus grades a difference against the balance it is a
 // difference from. A balance of nought agrees only with a journal of nought.
-func reconciliationStatus(diff, balance int64, balanceAsOf, now time.Time) apitypes.AccountReconciliationStatus {
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	if balanceAsOf.Before(today.AddDate(0, 0, -staleAfterDays)) {
-		return apitypes.Stale
-	}
+func reconciliationStatus(diff, balance int64) apitypes.AccountReconciliationStatus {
 	gap := decimal.NewFromInt(diff).Abs().Mul(decimal.NewFromInt(100))
 	of := decimal.NewFromInt(balance).Abs()
 	switch {
