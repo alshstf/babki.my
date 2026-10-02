@@ -17,6 +17,7 @@ import (
 
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/corporateaction"
+	"babki.my/babki/internal/export"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/importer/table"
 	"babki.my/babki/internal/importer/tinvest"
@@ -129,6 +130,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	caMaterializer := corporateaction.NewMaterializer(caStore, opSvc, instStore,
 		tinvest.NewRechecker(tinvestStore, inserter, r.log), r.log)
 	corporateaction.NewHandler(caStore, caMaterializer, inserter, famAuth, famSM, r.log).Mount(srv)
+	export.NewHandler(famStore, accStore, opStore, instStore, caStore, mdStore, famAuth, famSM).Mount(srv)
 	// A hand entry is followed by the registry at once: a purchase dated before
 	// a split the registry already knows must not wait for the daily sweep to
 	// be held in the right quantity. opSvc is the one service every hand-entry

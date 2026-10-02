@@ -181,6 +181,13 @@ describe("SettingsPage", () => {
     expect(saveButton()).toBeDisabled();
   });
 
+  it("offers the whole space as a download", async () => {
+    wrap(makeSession());
+    const link = await screen.findByTestId("settings-export-link");
+    expect(link).toHaveAttribute("href", "/api/v1/export");
+    expect(link).toHaveAttribute("download");
+  });
+
   it("enables Save once a different currency is selected", async () => {
     wrap(makeSession({ base_currency: "RUB" }));
 

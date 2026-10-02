@@ -502,6 +502,28 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/export:
+    get:
+      operationId: exportSpace
+      description: >-
+        Everything the family has entered, as one JSON document to keep or to take elsewhere:
+        the space, its members (names and roles, never passwords), every account with its
+        balance marks and its journal as stored (each move between accounts with the purchases
+        it carried), the papers the journals name, the registry's events about those papers,
+        and the prices stated by hand. Exchange prices and rates are not in it: they are the
+        exchange's and are fetched again. Owner only; sent as a download.
+      responses:
+        "200":
+          description: The space, whole
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              description: "attachment; filename=babki-export-YYYY-MM-DD.json"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SpaceExport" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /api/v1/capital:
     get:
       operationId: getCapital
@@ -1877,6 +1899,139 @@ components:
         price: { type: string, description: "Decimal as string" }
         currency: { type: string }
         source: { type: string, description: "Where the price came from: moex, moex_history, tinvest, tinvest_history, manual, seed, …" }
+    SpaceExport:
+      type: object
+      required: [format, version, exported_at, space, members, accounts, instruments, instrument_events, manual_prices]
+      properties:
+        format: { type: string, enum: [babki.my/space-export] }
+        version: { type: integer, description: "1. Raised when a field changes meaning or goes away; new fields may appear without it." }
+        exported_at: { type: string, format: date-time }
+        space: { $ref: "#/components/schemas/ExportSpace" }
+        members:
+          type: array
+          items: { $ref: "#/components/schemas/ExportMember" }
+        accounts:
+          type: array
+          items: { $ref: "#/components/schemas/ExportAccount" }
+        instruments:
+          type: array
+          items: { $ref: "#/components/schemas/ExportInstrument" }
+        instrument_events:
+          type: array
+          items: { $ref: "#/components/schemas/ExportInstrumentEvent" }
+        manual_prices:
+          type: array
+          items: { $ref: "#/components/schemas/ExportManualPrice" }
+    ExportSpace:
+      type: object
+      required: [id, name, base_currency, tax_residency]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        base_currency: { type: string }
+        tax_residency: { type: string }
+    ExportMember:
+      type: object
+      required: [username, display_name, role]
+      properties:
+        username: { type: string }
+        display_name: { type: string }
+        role: { type: string }
+    ExportManualPrice:
+      type: object
+      required: [instrument_id, on, price, currency]
+      properties:
+        instrument_id: { type: string, format: uuid }
+        on: { type: string, description: "Date YYYY-MM-DD" }
+        price: { type: string, description: "Decimal as string: per unit, or percent of face for a bond" }
+        currency: { type: string }
+    ExportAccount:
+      type: object
+      required: [id, name, type, currency, institution, status, owner_username, valued_by_balance, created_at, balances, operations]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        type: { type: string }
+        currency: { type: string }
+        institution: { type: string }
+        status: { type: string }
+        owner_username: { type: string, nullable: true, description: "The member the account is personal to; null for a shared one" }
+        valued_by_balance: { type: boolean }
+        created_at: { type: string, format: date-time }
+        balances:
+          type: array
+          description: Balance marks, oldest first
+          items: { $ref: "#/components/schemas/ExportBalance" }
+        operations:
+          type: array
+          description: The journal as stored, in the order it is folded
+          items: { $ref: "#/components/schemas/ExportOperation" }
+    ExportOperation:
+      type: object
+      required: [id, type, occurred_on, settled_on, instrument_id, quantity, price, amount_minor, currency, fee_minor, note, trading_mode, transfer_group_id, split_ratio, source, external_id, created_at, lots]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string }
+        occurred_on: { type: string, description: "Date YYYY-MM-DD" }
+        settled_on: { type: string, nullable: true }
+        instrument_id: { type: string, format: uuid, nullable: true }
+        quantity: { type: string, nullable: true, description: "Decimal as string" }
+        price: { type: string, nullable: true, description: "Decimal as string" }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        fee_minor: { type: integer, format: int64 }
+        note: { type: string }
+        trading_mode: { type: string, nullable: true }
+        transfer_group_id: { type: string, format: uuid, nullable: true }
+        split_ratio: { type: string, nullable: true, description: "Decimal as string" }
+        source: { type: string }
+        external_id: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        lots:
+          type: array
+          description: "The purchases a move carried — quantity, cost and day bought — when it carried any"
+          items: { $ref: "#/components/schemas/ExportLot" }
+    ExportBalance:
+      type: object
+      required: [as_of, amount_minor]
+      properties:
+        as_of: { type: string, description: "Date YYYY-MM-DD" }
+        amount_minor: { type: integer, format: int64 }
+    ExportLot:
+      type: object
+      required: [quantity, cost_minor, acquired_on]
+      properties:
+        quantity: { type: string }
+        cost_minor: { type: integer, format: int64 }
+        acquired_on: { type: string, nullable: true }
+    ExportInstrument:
+      type: object
+      required: [id, type, name, ticker, isin, figi, currency, face_value_minor, face_currency, frozen]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string }
+        name: { type: string }
+        ticker: { type: string }
+        isin: { type: string }
+        figi: { type: string }
+        currency: { type: string }
+        face_value_minor: { type: integer, format: int64, nullable: true }
+        face_currency: { type: string, nullable: true }
+        frozen: { type: boolean }
+    ExportInstrumentEvent:
+      type: object
+      required: [kind, isin, effective_on, ratio_from, ratio_to, result_isin, basis_share, source, source_ref, note]
+      properties:
+        kind: { type: string }
+        isin: { type: string }
+        effective_on: { type: string, description: "Date YYYY-MM-DD" }
+        ratio_from: { type: integer, format: int64 }
+        ratio_to: { type: integer, format: int64 }
+        result_isin: { type: string }
+        basis_share: { type: string, nullable: true }
+        source: { type: string }
+        source_ref: { type: string }
+        note: { type: string }
     PeriodReturn:
       type: object
       required: [currency, from, to, start_minor, end_minor, contributions_minor, profit_minor, annual_rate, complete]
