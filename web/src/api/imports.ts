@@ -25,6 +25,21 @@ export function usePreviewImport(accountId: string) {
   });
 }
 
+export type ImportPapersResult = components["schemas"]["ImportPapersResult"];
+
+// Files the papers a table names but the catalog lacks, from the exchange.
+export function useAddImportPapers() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (codes: string[]): Promise<ImportPapersResult> => {
+      const { data, error, response } = await api.POST("/api/v1/imports/papers", { body: { codes } });
+      if (!data) throw apiError(response, error);
+      return data;
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["instruments"] }),
+  });
+}
+
 export function useTableImports(accountId: string) {
   return useQuery({
     queryKey: ["imports", accountId],

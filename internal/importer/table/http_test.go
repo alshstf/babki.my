@@ -36,7 +36,7 @@ func newAPI(t *testing.T) (string, *http.Client) {
 	account.NewHandler(accStore, famStore, conv, nil, auth, sm).Mount(srv)
 	instrument.NewHandler(instStore, auth, sm).Mount(srv)
 	operation.NewHandler(opSvc, opStore, famStore, conv, auth, sm).Mount(srv)
-	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(pool)), auth, sm).Mount(srv)
+	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(pool), exchangeStub{}), auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)

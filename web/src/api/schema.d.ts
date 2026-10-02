@@ -235,6 +235,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/imports/papers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Looks the papers a table names but the catalog does not hold — by ticker or ISIN — up on the Moscow Exchange, and files the ones traded on a board this program prices (shares, funds, ruble bonds) in the catalog. A code already in the catalog is `known`; one the exchange does not have there is `not_found` and has to be entered by hand. At most 200 codes. 502 when the exchange does not answer. */
+        post: operations["addImportPapers"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/imports/{importId}": {
         parameters: {
             query?: never;
@@ -1071,6 +1088,19 @@ export interface components {
             /** @description The header's cells; empty when the table has none */
             header: string[];
             rows: components["schemas"]["ImportRow"][];
+        };
+        ImportAddedPaper: {
+            /** @description The code as the table named the paper */
+            code: string;
+            /** Format: uuid */
+            instrument_id: string;
+            name: string;
+            ticker: string;
+        };
+        ImportPapersResult: {
+            added: components["schemas"]["ImportAddedPaper"][];
+            known: string[];
+            not_found: string[];
         };
         ImportTableRequest: {
             /** @description The CSV text, as for the preview */
@@ -2521,6 +2551,36 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    addImportPapers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    codes: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description What the lookup came to */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportPapersResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            502: components["responses"]["Error"];
         };
     };
     rollBackTableImport: {

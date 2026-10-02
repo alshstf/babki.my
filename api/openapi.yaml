@@ -317,6 +317,34 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/imports/papers:
+    post:
+      operationId: addImportPapers
+      description: >-
+        Looks the papers a table names but the catalog does not hold — by ticker or ISIN — up on
+        the Moscow Exchange, and files the ones traded on a board this program prices (shares,
+        funds, ruble bonds) in the catalog. A code already in the catalog is `known`; one the
+        exchange does not have there is `not_found` and has to be entered by hand. At most 200
+        codes. 502 when the exchange does not answer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [codes]
+              properties:
+                codes: { type: array, items: { type: string }, maxItems: 200 }
+      responses:
+        "200":
+          description: What the lookup came to
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportPapersResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
   /api/v1/imports/{importId}:
     delete:
       operationId: rollBackTableImport
@@ -1589,6 +1617,21 @@ components:
         mapping: { $ref: "#/components/schemas/ImportMapping" }
         header: { type: array, items: { type: string }, description: "The header's cells; empty when the table has none" }
         rows: { type: array, items: { $ref: "#/components/schemas/ImportRow" } }
+    ImportAddedPaper:
+      type: object
+      required: [code, instrument_id, name, ticker]
+      properties:
+        code: { type: string, description: "The code as the table named the paper" }
+        instrument_id: { type: string, format: uuid }
+        name: { type: string }
+        ticker: { type: string }
+    ImportPapersResult:
+      type: object
+      required: [added, known, not_found]
+      properties:
+        added: { type: array, items: { $ref: "#/components/schemas/ImportAddedPaper" } }
+        known: { type: array, items: { type: string } }
+        not_found: { type: array, items: { type: string } }
     ImportTableRequest:
       type: object
       required: [content, mapping]

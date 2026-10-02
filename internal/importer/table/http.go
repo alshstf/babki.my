@@ -38,6 +38,41 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("POST /api/v1/accounts/{accountId}/imports", edit(h.handleImport))
 	srv.Mount("GET /api/v1/accounts/{accountId}/imports", view(h.handleList))
 	srv.Mount("DELETE /api/v1/imports/{importId}", edit(h.handleRollBack))
+	srv.Mount("POST /api/v1/imports/papers", edit(h.handleAddPapers))
+}
+
+func (h *Handler) handleAddPapers(w http.ResponseWriter, r *http.Request) {
+	var req apitypes.AddImportPapersJSONRequestBody
+	if httpjson.Decode(w, r, &req) != nil {
+		return
+	}
+	res, err := h.svc.AddPapers(r.Context(), req.Codes)
+	if errors.Is(err, ErrExchange) {
+		httpjson.Error(w, http.StatusBadGateway, "the exchange did not answer")
+		return
+	}
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	out := apitypes.ImportPapersResult{
+		Added:    make([]apitypes.ImportAddedPaper, 0, len(res.Added)),
+		Known:    nonNil(res.Known),
+		NotFound: nonNil(res.NotFound),
+	}
+	for _, a := range res.Added {
+		out.Added = append(out.Added, apitypes.ImportAddedPaper{
+			Code: a.Code, InstrumentId: a.Instrument.ID, Name: a.Instrument.Name, Ticker: a.Instrument.Ticker,
+		})
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 func pathID(w http.ResponseWriter, r *http.Request, name string) (uuid.UUID, bool) {

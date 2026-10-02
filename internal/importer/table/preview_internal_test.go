@@ -28,6 +28,10 @@ func (noPapers) ByTickerTradable(context.Context, string) (instrument.Instrument
 	return instrument.Instrument{}, pgx.ErrNoRows
 }
 
+func (noPapers) Create(context.Context, instrument.Instrument) (instrument.Instrument, error) {
+	panic("a preview files nothing")
+}
+
 type storedJournal []operation.Operation
 
 func (s storedJournal) ListForEngine(context.Context, uuid.UUID, uuid.UUID) ([]operation.Operation, error) {
@@ -54,7 +58,7 @@ func TestARowImportedBeforeIsADuplicate(t *testing.T) {
 	csv := "Дата;Операция;Сумма\n01.07.2026;Пополнение;500\n01.07.2026;Пополнение;500\n02.07.2026;Пополнение;700\n"
 
 	first := &takesAll{}
-	svc := NewService(oneAccount{acc}, noPapers{}, storedJournal(nil), first, nil)
+	svc := NewService(oneAccount{acc}, noPapers{}, storedJournal(nil), first, nil, nil)
 	p, err := svc.Preview(t.Context(), uuid.New(), acc.ID, csv, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +71,7 @@ func TestARowImportedBeforeIsADuplicate(t *testing.T) {
 	imported.Source = Source
 
 	again := &takesAll{}
-	svc = NewService(oneAccount{acc}, noPapers{}, storedJournal{imported}, again, nil)
+	svc = NewService(oneAccount{acc}, noPapers{}, storedJournal{imported}, again, nil, nil)
 	p, err = svc.Preview(t.Context(), uuid.New(), acc.ID, csv, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +87,7 @@ func TestARowImportedBeforeIsADuplicate(t *testing.T) {
 	// A hand entry with the same content is not a table's row.
 	byHand := imported
 	byHand.Source = "manual"
-	svc = NewService(oneAccount{acc}, noPapers{}, storedJournal{byHand}, &takesAll{}, nil)
+	svc = NewService(oneAccount{acc}, noPapers{}, storedJournal{byHand}, &takesAll{}, nil, nil)
 	if p, _ = svc.Preview(t.Context(), uuid.New(), acc.ID, csv, nil); p.Rows[0].Verdict != VerdictNew {
 		t.Errorf("a hand entry made the row a duplicate: %s", p.Rows[0].Verdict)
 	}
