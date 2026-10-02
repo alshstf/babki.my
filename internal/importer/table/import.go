@@ -53,11 +53,11 @@ func (s *Service) Import(ctx context.Context, spaceID, userID, accountID uuid.UU
 		return Import{}, Preview{}, err
 	}
 	for _, i := range byID {
-		p.Rows[i].Verdict, p.Rows[i].Reason = VerdictNew, ""
+		p.Rows[i].Verdict, p.Rows[i].Reason = VerdictNew, nil
 	}
 	for _, ref := range refused {
 		if i, ok := byID[ref.ExternalID]; ok {
-			p.Rows[i].Verdict, p.Rows[i].Reason = VerdictRefused, ref.Err.Error()
+			p.Rows[i].Verdict, p.Rows[i].Reason = VerdictRefused, refusal(ref)
 		}
 	}
 	imp.Written, imp.Refused = len(applied), len(refused)

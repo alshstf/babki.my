@@ -49,6 +49,10 @@ const AccountDetailPage = lazyRouteComponent(
   () => import("@/routes/accounts/detail"),
   "AccountDetailPage",
 );
+const ImportPage = lazyRouteComponent(
+  () => import("@/routes/accounts/import-page"),
+  "ImportPage",
+);
 const FamilyPage = lazyRouteComponent(
   () => import("@/routes/family"),
   "FamilyPage",
@@ -267,6 +271,13 @@ const accountDetailRoute = createRoute({
   component: AccountDetailPage,
 });
 
+// Loading a table of operations into one account.
+const importRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: "/accounts/$accountId/import",
+  component: ImportPage,
+});
+
 const familyRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: "/family",
@@ -318,6 +329,7 @@ export const routeTree = rootRoute.addChildren([
     indexRoute,
     accountsRoute,
     accountDetailRoute,
+    importRoute,
     familyRoute,
     settingsRoute,
     instrumentsRoute,

@@ -45,20 +45,20 @@ func TestNumbersAreReadAsExportsWriteThem(t *testing.T) {
 		"0,000001":   "0.000001",
 		"1\u00a0000": "1000",
 	} {
-		got, _, err := parseNumber(cell, "amount")
+		got, _, err := parseNumber(cell, FieldAmount)
 		if err != nil || !got.Equal(decimal.RequireFromString(want)) {
 			t.Errorf("%q = %s, %v; want %s", cell, got, err, want)
 		}
 	}
 	for _, cell := range []string{"", "abc", "1,2,3"} {
-		if _, _, err := parseNumber(cell, "amount"); err == nil {
+		if _, _, err := parseNumber(cell, FieldAmount); err == nil {
 			t.Errorf("%q was read as a number", cell)
 		}
 	}
-	if _, err := minor(decimal.RequireFromString("1.005"), "amount"); err == nil {
+	if _, err := minor(decimal.RequireFromString("1.005"), FieldAmount, "1.005"); err == nil {
 		t.Error("an amount with three decimal places was rounded instead of refused")
 	}
-	if v, err := minor(decimal.RequireFromString("1234.5"), "amount"); err != nil || v != 123450 {
+	if v, err := minor(decimal.RequireFromString("1234.5"), FieldAmount, "1234.5"); err != nil || v != 123450 {
 		t.Errorf("1234.5 = %d, %v; want 123450", v, err)
 	}
 }
