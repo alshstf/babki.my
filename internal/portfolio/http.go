@@ -114,6 +114,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 		return h.sm.LoadAndSave(h.auth.RequireAuth(family.RequireRole(family.RoleViewer, fn)))
 	}
 	srv.Mount("GET /api/v1/accounts/{accountId}/positions", view(h.handleList))
+	srv.Mount("GET /api/v1/accounts/{accountId}/return", view(h.handleReturn))
 }
 
 func pathAccountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {

@@ -269,6 +269,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{accountId}/return": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description What an account earned over a period, by its journal: its worth at the end of `from` and at the end of `to` (holdings at those days' closing prices, cash, those days' rates), the money that crossed its edge in between — deposits and withdrawals at their day's rate, shares that arrived or left at their closing price that day — the profit (end − start − money put in net), and the money-weighted annual rate (XIRR). Income, fees and taxes are not flows: they are what the return is made of. `complete` is false when a figure could not be had (a holding with no price, a currency with no rate); the published figures then leave it out. 400 for dates out of order or in the future. */
+        get: operations["getAccountReturn"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/capital": {
         parameters: {
             query?: never;
@@ -1149,6 +1166,29 @@ export interface components {
         ImportTableResult: {
             import: components["schemas"]["TableImport"] | null;
             rows: components["schemas"]["ImportRow"][];
+        };
+        PeriodReturn: {
+            /** @description The space's base currency */
+            currency: string;
+            from: string;
+            to: string;
+            /** Format: int64 */
+            start_minor: number;
+            /** Format: int64 */
+            end_minor: number;
+            /**
+             * Format: int64
+             * @description Money put in net of money taken out over the period: deposits and arriving shares less withdrawals and departing ones
+             */
+            contributions_minor: number;
+            /**
+             * Format: int64
+             * @description end_minor − start_minor − contributions_minor
+             */
+            profit_minor: number;
+            /** @description The money-weighted annual rate as a decimal fraction (0.1234 is 12.34% a year), rounded to four places; null when there is none — nothing put in, or nothing at the end */
+            annual_rate: string | null;
+            complete: boolean;
         };
         CapitalSeries: {
             /** @description The space's base currency */
@@ -2650,6 +2690,36 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    getAccountReturn: {
+        parameters: {
+            query: {
+                /** @description Date YYYY-MM-DD: the period starts after its end */
+                from: string;
+                /** @description Date YYYY-MM-DD, at most today */
+                to: string;
+            };
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The period */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PeriodReturn"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     getCapital: {
