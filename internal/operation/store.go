@@ -717,6 +717,18 @@ type JournalFilter struct {
 }
 
 func (s *Store) ListByAccount(ctx context.Context, spaceID, accountID uuid.UUID, limit, offset int, f JournalFilter) ([]Operation, bool, error) {
+	return s.listJournal(ctx, spaceID, &accountID, limit, offset, f)
+}
+
+// ListByInstrument is one paper's rows across every account of the space,
+// newest first, a page at a time — the paper's own journal.
+func (s *Store) ListByInstrument(ctx context.Context, spaceID, instrumentID uuid.UUID, limit, offset int) ([]Operation, bool, error) {
+	return s.listJournal(ctx, spaceID, nil, limit, offset, JournalFilter{InstrumentID: &instrumentID})
+}
+
+// listJournal is a page of the space's rows, of one account when accountID is
+// given, narrowed by f.
+func (s *Store) listJournal(ctx context.Context, spaceID uuid.UUID, accountID *uuid.UUID, limit, offset int, f JournalFilter) ([]Operation, bool, error) {
 	if limit < 1 {
 		return nil, false, fmt.Errorf("list operations: limit must be positive, got %d", limit)
 	}
@@ -725,7 +737,7 @@ func (s *Store) ListByAccount(ctx context.Context, spaceID, accountID uuid.UUID,
 		types = append(types, string(t))
 	}
 	ops, err := s.list(ctx, `SELECT `+cols+` FROM operations
-		WHERE space_id = $1 AND account_id = $2
+		WHERE space_id = $1 AND ($2::uuid IS NULL OR account_id = $2)
 			AND (cardinality($5::text[]) = 0 OR type = ANY($5))
 			AND ($6::uuid IS NULL OR instrument_id = $6)
 			AND ($7::date IS NULL OR occurred_on >= $7)

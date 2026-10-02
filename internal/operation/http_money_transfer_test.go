@@ -165,3 +165,43 @@ func TestASharesTransferNamesTheOtherAccount(t *testing.T) {
 		t.Errorf("the arriving shares: %+v, want them to name the account they left", rows)
 	}
 }
+
+// One paper's rows across the family: both accounts' rows of it, newest first,
+// each saying whose it is; another paper's rows and money rows are not there.
+func TestAPapersRowsAcrossEveryAccount(t *testing.T) {
+	url, c := newAPI(t)
+	a := createID(t, c, url+"/api/v1/accounts", `{"name":"А","type":"brokerage","currency":"RUB"}`)
+	b := createID(t, c, url+"/api/v1/accounts", `{"name":"Б","type":"brokerage","currency":"RUB"}`)
+	sber := createID(t, c, url+"/api/v1/instruments", `{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`)
+	gazp := createID(t, c, url+"/api/v1/instruments", `{"type":"share","name":"Газпром","ticker":"GAZP","currency":"RUB"}`)
+	for _, op := range []string{
+		fmt.Sprintf(`{"account_id":%q,"type":"deposit","occurred_on":"2026-07-01","amount_minor":1000000,"currency":"RUB"}`, a),
+		fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy","occurred_on":"2026-07-02","quantity":"10","price":"100","currency":"RUB"}`, a, sber),
+		fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy","occurred_on":"2026-07-03","quantity":"1","price":"100","currency":"RUB"}`, a, gazp),
+		fmt.Sprintf(`{"account_id":%q,"type":"deposit","occurred_on":"2026-07-01","amount_minor":1000000,"currency":"RUB"}`, b),
+		fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy","occurred_on":"2026-07-04","quantity":"5","price":"110","currency":"RUB"}`, b, sber),
+	} {
+		if resp := do(t, c, "POST", url+"/api/v1/operations", op); resp.StatusCode != http.StatusCreated {
+			b, _ := io.ReadAll(resp.Body)
+			t.Fatalf("create = %d: %s", resp.StatusCode, b)
+		}
+	}
+	resp := do(t, c, "GET", url+"/api/v1/instruments/"+sber+"/operations", "")
+	var page struct {
+		Operations []struct {
+			AccountID  string `json:"account_id"`
+			OccurredOn string `json:"occurred_on"`
+		} `json:"operations"`
+		HasMore bool `json:"has_more"`
+	}
+	decodeJSON(t, resp, &page)
+	if len(page.Operations) != 2 || page.Operations[0].AccountID != b || page.Operations[1].AccountID != a ||
+		page.Operations[0].OccurredOn != "2026-07-04" || page.HasMore {
+		t.Errorf("SBER's rows = %+v, want Б's buy then А's, and nothing else", page)
+	}
+	resp = do(t, c, "GET", url+"/api/v1/instruments/"+sber+"/operations?limit=1", "")
+	decodeJSON(t, resp, &page)
+	if len(page.Operations) != 1 || !page.HasMore {
+		t.Errorf("a page of one = %+v, want one row and more to come", page)
+	}
+}

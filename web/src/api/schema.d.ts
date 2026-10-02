@@ -337,6 +337,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instruments/{instrumentId}/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description One paper's rows across every account of the space, newest first, a page at a time — each row as the account's own journal publishes it (`account_id` says whose it is). An unknown paper has no rows. 400 for a page outside the bounds the account's journal takes. */
+        get: operations["listInstrumentOperations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/instruments/{instrumentId}/return": {
         parameters: {
             query?: never;
@@ -3103,6 +3120,33 @@ export interface operations {
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
             422: components["responses"]["Error"];
+        };
+    };
+    listInstrumentOperations: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                instrumentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the paper's rows */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
         };
     };
     getInstrumentReturn: {

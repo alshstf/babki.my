@@ -149,6 +149,19 @@ describe("InstrumentPage", () => {
           { on: "2026-10-02", price: "150", currency: "RUB", source: "moex" },
         ],
       },
+      "/operations": {
+        body: {
+          operations: [
+            {
+              id: "op-2", account_id: "a2", instrument_id: "sber", type: "buy", occurred_on: "2026-09-01",
+              settled_on: null, quantity: "5", price: "120", amount_minor: -60_000, currency: "RUB", fee_minor: 0,
+              note: "", source: "manual", created_at: "2026-09-01T00:00:00Z", has_undated_lots: false,
+              assembled_from_lots: false, transfer_group_id: null, split_ratio: null,
+            },
+          ],
+          has_more: false,
+        },
+      },
       "/return": {
         body: {
           currency: "RUB", from: "2025-10-03", to: "2026-10-03", start_minor: 0, end_minor: 225_000,
@@ -162,9 +175,9 @@ describe("InstrumentPage", () => {
     expect(screen.getByText(/SBER · RU0009029540/)).toBeInTheDocument();
     const first = await screen.findByRole("link", { name: "Т-Банк" });
     expect(first).toHaveAttribute("href", "/accounts/a1");
-    const archivedRow = screen.getByRole("link", { name: "Старый" }).closest("tr") as HTMLElement;
+    const archivedRow = screen.getAllByRole("link", { name: "Старый" })[0].closest("tr") as HTMLElement;
     expect(within(archivedRow).getByText("архив")).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Счёт" })).toBeInTheDocument();
+    expect(screen.getAllByRole("columnheader", { name: "Счёт" }).length).toBeGreaterThan(0);
 
     const total = screen.getByTestId("instrument-total");
     expect(total.textContent).toContain("Всего: 15 шт.");
@@ -179,6 +192,10 @@ describe("InstrumentPage", () => {
     expect(screen.getByRole("heading", { name: "Доходность бумаги" })).toBeInTheDocument();
     expect((await screen.findByTestId("account-return-profit")).textContent).toMatch(/650,00\s₽/);
     expect(requested.some((u) => u.includes("/api/v1/instruments/sber/return?from="))).toBe(true);
+
+    const ops = await screen.findByTestId("paper-operations");
+    expect(ops.textContent).toContain("Старый");
+    expect(ops.textContent).toMatch(/−?-?600,00\s₽/);
   });
 
   it("asks for ten years of prices when the reader picks them", async () => {
