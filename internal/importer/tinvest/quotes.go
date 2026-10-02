@@ -316,78 +316,17 @@ func (w *quotesWorker) priceUnmapped(ctx context.Context, conn Connection, clien
 	today := mskDay(w.now())
 	out := []marketdata.Quote{}
 	for _, u := range want {
-		if u.ISIN == "" {
-			// Nothing to search by. A ticker would find something — and that
-			// something is routinely another issuer's paper.
-			w.log.Debug("tinvest: a holding with no ISIN cannot be looked up at the broker",
-				"instrument_id", u.InstrumentID, "ticker", u.Ticker)
-			continue
-		}
-		found, err := client.FindInstruments(ctx, u.ISIN)
+		listing, price, currency, ok, err := resolveListing(ctx, client, w.log, u)
 		if err != nil {
-			if errors.Is(err, ErrTokenInvalid) {
-				return out, err
-			}
-			w.log.Debug("tinvest: searching the broker for a hand-entered holding failed",
-				"instrument_id", u.InstrumentID, "isin", u.ISIN, "err", err)
-			continue
+			return out, err
 		}
-		candidates := candidateListings(u, found)
-		if len(candidates) == 0 {
-			w.log.Debug("tinvest: the broker lists nothing that is this paper in this currency",
-				"instrument_id", u.InstrumentID, "isin", u.ISIN, "currency", u.Currency, "found", len(found))
-			continue
-		}
-		uids := make([]string, 0, len(candidates))
-		for _, c := range candidates {
-			uids = append(uids, c.UID)
-		}
-		prices, err := client.LastPrices(ctx, uids)
-		if err != nil {
-			if errors.Is(err, ErrTokenInvalid) {
-				return out, err
-			}
-			w.log.Debug("tinvest: asking the broker for a hand-entered holding's price failed",
-				"instrument_id", u.InstrumentID, "err", err)
-			continue
-		}
-		byUID := make(map[string]LastPrice, len(prices))
-		for _, p := range prices {
-			byUID[p.InstrumentUID] = p
-		}
-		listing, price, ok := pickListing(candidates, byUID)
 		if !ok {
-			w.log.Debug("tinvest: no listing of this paper can be chosen without guessing, leaving it unpriced",
-				"instrument_id", u.InstrumentID, "isin", u.ISIN, "candidates", len(candidates))
 			continue
 		}
 		on := mskDay(price.At)
 		if on.After(today) {
 			w.log.Warn("tinvest: refusing a price dated in the future",
 				"instrument_uid", listing.UID, "on", on.Format(time.DateOnly))
-			continue
-		}
-		// THE WINNER'S CURRENCY, ASKED OF ITS PASSPORT, because the search does
-		// not report one and the catalog row's is not this listing's (migration
-		// 0017 says why). One request, for the one listing that won, rather than
-		// one per candidate.
-		brief, err := client.InstrumentByUID(ctx, listing.UID)
-		if err != nil {
-			if errors.Is(err, ErrTokenInvalid) {
-				return out, err
-			}
-			w.log.Debug("tinvest: could not learn what the chosen listing is denominated in",
-				"instrument_uid", listing.UID, "err", err)
-			continue
-		}
-		currency := upperCurrency(brief.Currency)
-		if currency == "" || !strings.EqualFold(currency, u.Currency) {
-			// A price in another currency than the row is kept in is not this
-			// row's price: filing it here would be wrong by whatever the two
-			// currencies differ by, and there is nothing on a position screen
-			// that would show it.
-			w.log.Debug("tinvest: the chosen listing is denominated in another currency than the holding",
-				"instrument_id", u.InstrumentID, "listing", currency, "holding", u.Currency)
 			continue
 		}
 		out = append(out, marketdata.Quote{
@@ -399,6 +338,78 @@ func (w *quotesWorker) priceUnmapped(ctx context.Context, conn Connection, clien
 		})
 	}
 	return out, nil
+}
+
+// resolveListing finds the broker's listing of a holding no import mapped, by
+// its ISIN: the listings that are this paper (see candidateListings), the one
+// still being quoted (see pickListing), and that one's currency, asked of its
+// passport because the search does not report one and the catalog row's is not
+// this listing's. ok is false — and the reason logged — when there is no ISIN to
+// search by, nothing can be chosen without guessing, or the listing is in
+// another currency than the holding: a price in another currency is not this
+// row's price. err is returned only for a token the broker no longer accepts.
+func resolveListing(ctx context.Context, client *Client, log *slog.Logger, u UnmappedHeldInstrument) (Listing, LastPrice, string, bool, error) {
+	if u.ISIN == "" {
+		// Nothing to search by. A ticker would find something — and that
+		// something is routinely another issuer's paper.
+		log.Debug("tinvest: a holding with no ISIN cannot be looked up at the broker",
+			"instrument_id", u.InstrumentID, "ticker", u.Ticker)
+		return Listing{}, LastPrice{}, "", false, nil
+	}
+	found, err := client.FindInstruments(ctx, u.ISIN)
+	if err != nil {
+		if errors.Is(err, ErrTokenInvalid) {
+			return Listing{}, LastPrice{}, "", false, err
+		}
+		log.Debug("tinvest: searching the broker for a hand-entered holding failed",
+			"instrument_id", u.InstrumentID, "isin", u.ISIN, "err", err)
+		return Listing{}, LastPrice{}, "", false, nil
+	}
+	candidates := candidateListings(u, found)
+	if len(candidates) == 0 {
+		log.Debug("tinvest: the broker lists nothing that is this paper in this currency",
+			"instrument_id", u.InstrumentID, "isin", u.ISIN, "currency", u.Currency, "found", len(found))
+		return Listing{}, LastPrice{}, "", false, nil
+	}
+	uids := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		uids = append(uids, c.UID)
+	}
+	prices, err := client.LastPrices(ctx, uids)
+	if err != nil {
+		if errors.Is(err, ErrTokenInvalid) {
+			return Listing{}, LastPrice{}, "", false, err
+		}
+		log.Debug("tinvest: asking the broker for a hand-entered holding's price failed",
+			"instrument_id", u.InstrumentID, "err", err)
+		return Listing{}, LastPrice{}, "", false, nil
+	}
+	byUID := make(map[string]LastPrice, len(prices))
+	for _, p := range prices {
+		byUID[p.InstrumentUID] = p
+	}
+	listing, price, ok := pickListing(candidates, byUID)
+	if !ok {
+		log.Debug("tinvest: no listing of this paper can be chosen without guessing, leaving it unpriced",
+			"instrument_id", u.InstrumentID, "isin", u.ISIN, "candidates", len(candidates))
+		return Listing{}, LastPrice{}, "", false, nil
+	}
+	brief, err := client.InstrumentByUID(ctx, listing.UID)
+	if err != nil {
+		if errors.Is(err, ErrTokenInvalid) {
+			return Listing{}, LastPrice{}, "", false, err
+		}
+		log.Debug("tinvest: could not learn what the chosen listing is denominated in",
+			"instrument_uid", listing.UID, "err", err)
+		return Listing{}, LastPrice{}, "", false, nil
+	}
+	currency := upperCurrency(brief.Currency)
+	if currency == "" || !strings.EqualFold(currency, u.Currency) {
+		log.Debug("tinvest: the chosen listing is denominated in another currency than the holding",
+			"instrument_id", u.InstrumentID, "listing", currency, "holding", u.Currency)
+		return Listing{}, LastPrice{}, "", false, nil
+	}
+	return listing, price, currency, true, nil
 }
 
 // SourceExchange and SourceDealer are what a stored quote's source says about

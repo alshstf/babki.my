@@ -120,7 +120,8 @@ func (w *backfillQuotesWorker) Timeout(*river.Job[BackfillQuotesArgs]) time.Dura
 // Work fetches, for every listing of every active connection whose paper is
 // in a journal and has no history from the exchange, the days after the last
 // one already downloaded — from a month before its first operation the first
-// time. A price is stored only in the listing's own currency.
+// time — and the same for the papers its space holds that no import mapped.
+// A price is stored only in the listing's own currency.
 func (w *backfillQuotesWorker) Work(ctx context.Context, _ *river.Job[BackfillQuotesArgs]) error {
 	conns, err := w.store.ListActiveConnections(ctx)
 	if err != nil {
@@ -182,36 +183,102 @@ func (w *backfillQuotesWorker) backfillConnection(ctx context.Context, conn Conn
 		if _, ok := fromExchange[l.InstrumentID]; ok {
 			continue
 		}
-		from := mskDay(day).AddDate(0, 0, -historyLeadDays)
-		if last, ok := covered[l.InstrumentID]; ok && !last.Before(from) {
-			from = last.AddDate(0, 0, 1)
+		if err := w.fetch(ctx, client, l.InstrumentID, l.InstrumentUID, l.Currency, w.since(day, covered[l.InstrumentID]), today); err != nil {
+			return err
 		}
-		for start := from; !start.After(today); start = start.AddDate(0, 0, candleWindow) {
-			end := start.AddDate(0, 0, candleWindow)
-			if tomorrow := today.AddDate(0, 0, 1); end.After(tomorrow) {
-				end = tomorrow
+	}
+	return w.backfillUnmapped(ctx, conn, client, first, today)
+}
+
+// backfillUnmapped fetches the history of the papers the space holds that no
+// import mapped — the ones entered by hand or loaded from another broker's
+// file — at the listing the price worker finds for them by ISIN (see
+// resolveListing), so that their past is priced as the connection's own
+// papers' is. Bounded per run as the price worker's searches are.
+func (w *backfillQuotesWorker) backfillUnmapped(ctx context.Context, conn Connection, client *Client, first map[uuid.UUID]time.Time, today time.Time) error {
+	want, err := w.store.UnmappedHeldInstruments(ctx, conn.SpaceID, conn.ID)
+	if err != nil {
+		return err
+	}
+	ids := make([]uuid.UUID, 0, len(want))
+	for _, u := range want {
+		ids = append(ids, u.InstrumentID)
+	}
+	fromExchange, err := w.quotes.HistoryCoverage(ctx, ids, marketdata.QuoteHistorySource)
+	if err != nil {
+		return err
+	}
+	covered, err := w.quotes.HistoryCoverage(ctx, ids, HistorySource)
+	if err != nil {
+		return err
+	}
+	searched := 0
+	for _, u := range want {
+		day, held := first[u.InstrumentID]
+		if !held {
+			continue
+		}
+		if _, ok := fromExchange[u.InstrumentID]; ok {
+			continue
+		}
+		if searched == unmappedSearchesPerRun {
+			w.log.Info("tinvest: more unmapped holdings than one run searches for, the rest wait for the next",
+				"connection_id", conn.ID)
+			break
+		}
+		searched++
+		listing, _, currency, ok, err := resolveListing(ctx, client, w.log, u)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		if err := w.fetch(ctx, client, u.InstrumentID, listing.UID, currency, w.since(day, covered[u.InstrumentID]), today); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// since is the first day to fetch: a month before the paper's first operation,
+// or the day after the last one already fetched.
+func (w *backfillQuotesWorker) since(firstOperation, lastFetched time.Time) time.Time {
+	from := mskDay(firstOperation).AddDate(0, 0, -historyLeadDays)
+	if !lastFetched.IsZero() && !lastFetched.Before(from) {
+		from = lastFetched.AddDate(0, 0, 1)
+	}
+	return from
+}
+
+// fetch stores a listing's daily closes from from to today, a year a request,
+// in the listing's own currency; candles in another currency are not stored.
+func (w *backfillQuotesWorker) fetch(ctx context.Context, client *Client, instrumentID uuid.UUID, uid, listingCurrency string, from, today time.Time) error {
+	for start := from; !start.After(today); start = start.AddDate(0, 0, candleWindow) {
+		end := start.AddDate(0, 0, candleWindow)
+		if tomorrow := today.AddDate(0, 0, 1); end.After(tomorrow) {
+			end = tomorrow
+		}
+		closes, currency, err := client.DailyCloses(ctx, uid, start, end)
+		if err != nil {
+			return err
+		}
+		if currency != "" && currency != listingCurrency {
+			w.log.Warn("tinvest: candles in another currency than the listing's, not stored",
+				"instrument_uid", uid, "candles", currency, "listing", listingCurrency)
+			return nil
+		}
+		quotes := make([]marketdata.Quote, 0, len(closes))
+		for _, c := range closes {
+			if c.Day.After(today) {
+				continue
 			}
-			closes, currency, err := client.DailyCloses(ctx, l.InstrumentUID, start, end)
-			if err != nil {
-				return err
-			}
-			if currency != "" && currency != l.Currency {
-				w.log.Warn("tinvest: candles in another currency than the listing's, not stored",
-					"instrument_uid", l.InstrumentUID, "candles", currency, "listing", l.Currency)
-				break
-			}
-			quotes := make([]marketdata.Quote, 0, len(closes))
-			for _, c := range closes {
-				if c.Day.After(today) {
-					continue
-				}
-				quotes = append(quotes, marketdata.Quote{
-					InstrumentID: l.InstrumentID, On: c.Day, Price: c.Close, Currency: l.Currency, Source: HistorySource,
-				})
-			}
-			if err := w.quotes.UpsertQuotes(ctx, quotes); err != nil {
-				return err
-			}
+			quotes = append(quotes, marketdata.Quote{
+				InstrumentID: instrumentID, On: c.Day, Price: c.Close, Currency: listingCurrency, Source: HistorySource,
+			})
+		}
+		if err := w.quotes.UpsertQuotes(ctx, quotes); err != nil {
+			return err
 		}
 	}
 	return nil
