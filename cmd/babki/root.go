@@ -105,7 +105,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	accStore := account.NewStore(r.pool)
 	account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM).Mount(srv)
 	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(r.pool),
-		moex.New(newMoexHTTPClient(), "", r.log)), famAuth, famSM).Mount(srv)
+		moex.New(newMoexHTTPClient(), "", r.log)), instStore, famAuth, famSM).Mount(srv)
 
 	newClient, err := newTinvestClientFactory(r)
 	if err != nil {

@@ -18,13 +18,14 @@ import (
 
 // Handler exposes table imports over HTTP.
 type Handler struct {
-	svc  *Service
-	auth *family.Auth
-	sm   *scs.SessionManager
+	svc    *Service
+	papers catalogByID
+	auth   *family.Auth
+	sm     *scs.SessionManager
 }
 
-func NewHandler(svc *Service, auth *family.Auth, sm *scs.SessionManager) *Handler {
-	return &Handler{svc: svc, auth: auth, sm: sm}
+func NewHandler(svc *Service, papers catalogByID, auth *family.Auth, sm *scs.SessionManager) *Handler {
+	return &Handler{svc: svc, papers: papers, auth: auth, sm: sm}
 }
 
 func (h *Handler) Mount(srv *httpserver.Server) {
@@ -39,6 +40,7 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("GET /api/v1/accounts/{accountId}/imports", view(h.handleList))
 	srv.Mount("DELETE /api/v1/imports/{importId}", edit(h.handleRollBack))
 	srv.Mount("POST /api/v1/imports/papers", edit(h.handleAddPapers))
+	srv.Mount("GET /api/v1/accounts/{accountId}/journal.csv", view(h.handleExport))
 }
 
 func (h *Handler) handleAddPapers(w http.ResponseWriter, r *http.Request) {

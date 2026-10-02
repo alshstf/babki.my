@@ -228,7 +228,19 @@ export function AccountDetailPage() {
       </div>
 
       <div className="grid gap-2">
-        <h2 className="text-lg font-semibold">{t("operations.title")}</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">{t("operations.title")}</h2>
+          {/* A plain link: the session cookie goes with it, and the browser
+              saves what the server names. */}
+          <a
+            href={`/api/v1/accounts/${accountId}/journal.csv`}
+            download
+            className="text-sm text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            title={t("operations.exportHint")}
+          >
+            {t("operations.export")}
+          </a>
+        </div>
         {/* The cost basis statement comes from the session, which this screen
             has already loaded, and not from the journal response — which since
             #86 does have an envelope to carry one, and deliberately does not:
