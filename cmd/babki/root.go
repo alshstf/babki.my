@@ -81,7 +81,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	positions.Mount(srv)
 	accStore := account.NewStore(r.pool)
 	account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM).Mount(srv)
-	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc), famAuth, famSM).Mount(srv)
+	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(r.pool)), famAuth, famSM).Mount(srv)
 
 	newClient, err := newTinvestClientFactory(r)
 	if err != nil {
