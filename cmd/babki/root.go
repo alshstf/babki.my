@@ -92,6 +92,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	famStore := family.NewStore(r.pool)
 	famSvc := family.NewService(famStore)
 	famSM := family.NewSessionManager(r.pool)
+	famSM.Cookie.Secure = r.cfg.CookieSecure
 	famAuth := family.NewAuth(famSM, famStore)
 	family.NewHandler(famSvc, famStore, famAuth, famSM).Mount(srv)
 	mdStore := marketdata.NewStore(r.pool)
