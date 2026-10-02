@@ -1,4 +1,13 @@
 import { useState } from "react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useTranslation } from "react-i18next";
 import { Pencil, Trash2 } from "lucide-react";
 import {
@@ -31,6 +40,9 @@ import {
   useOperations,
   useDeleteOperation,
   editDialogOf,
+  OPERATION_TYPES,
+  type JournalFilter,
+  type OperationType,
   ownedByHand,
   isConflict,
   JOURNAL_PAGE_SIZE,
@@ -267,6 +279,7 @@ export function OperationsTable({
   costBasisRules,
   onPurchasePrice,
   onEdit,
+  papers = [],
 }: {
   accountId: string;
   // Delete action is editor+ (owner/editor); viewers never see it.
@@ -292,12 +305,16 @@ export function OperationsTable({
   // What «изменить» on a row opens: the dialog the row was entered in, filled
   // in (see editDialogOf). Absent for a reader who cannot write.
   onEdit?: (operation: Operation, instrument: Instrument | null) => void;
+  // The papers the account has held, for the journal's filter by paper.
+  papers?: { id: string; name: string }[];
 }) {
   const { t } = useTranslation();
   // "Show more" fetches the next page and appends it (see useOperations). The
   // backend returns a stable occurred_on/created_at DESC order, so consecutive
   // offsets partition the journal with nothing repeated and nothing skipped.
-  const operations = useOperations(accountId, JOURNAL_PAGE_SIZE);
+  const [filter, setFilter] = useState<JournalFilter>({});
+  const filtered = Object.values(filter).some((v) => v !== undefined && v !== "");
+  const operations = useOperations(accountId, JOURNAL_PAGE_SIZE, filter);
   // Instrument names, by id, for the whole catalog — not one page of it.
   //
   // This used to be the picker's own first-page query, and it carried a note
@@ -445,10 +462,16 @@ export function OperationsTable({
   const state = queryState(operations);
   if (state !== "ready") return <QueryGate state={state} />;
 
+  const filters = (
+    <JournalFilters filter={filter} onChange={setFilter} papers={papers} active={filtered} />
+  );
   if (list.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">
-        {t("operations.empty")}
+      <div className="grid gap-3">
+        {(filtered || papers.length > 0) && filters}
+        <div className="rounded-lg border border-dashed p-10 text-center text-muted-foreground">
+          {filtered ? t("operations.emptyFiltered") : t("operations.empty")}
+        </div>
       </div>
     );
   }
@@ -461,6 +484,7 @@ export function OperationsTable({
 
   return (
     <div className="grid gap-3">
+      {filters}
       <RefreshFailedNotice show={refreshFailed(operations)} />
       <Table>
         <TableHeader>
@@ -850,6 +874,96 @@ export function OperationsTable({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+const ALL = "all";
+
+// The journal's filter: a type, a paper the account has held, a period.
+function JournalFilters({
+  filter,
+  onChange,
+  papers,
+  active,
+}: {
+  filter: JournalFilter;
+  onChange: (filter: JournalFilter) => void;
+  papers: { id: string; name: string }[];
+  active: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-wrap items-end gap-2 text-sm" data-testid="journal-filters">
+      <div className="grid gap-1">
+        <Label className="text-xs text-muted-foreground">{t("operations.filter.type")}</Label>
+        <Select
+          value={filter.type ?? ALL}
+          onValueChange={(v) => onChange({ ...filter, type: v === ALL ? undefined : (v as OperationType) })}
+        >
+          <SelectTrigger className="h-8 w-44" aria-label={t("operations.filter.type")}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>{t("operations.filter.all")}</SelectItem>
+            {OPERATION_TYPES.map((type) => (
+              <SelectItem key={type} value={type}>
+                {t(`operationTypes.${type}`)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {papers.length > 0 && (
+        <div className="grid gap-1">
+          <Label className="text-xs text-muted-foreground">{t("operations.filter.paper")}</Label>
+          <Select
+            value={filter.instrumentId ?? ALL}
+            onValueChange={(v) => onChange({ ...filter, instrumentId: v === ALL ? undefined : v })}
+          >
+            <SelectTrigger className="h-8 w-52" aria-label={t("operations.filter.paper")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>{t("operations.filter.allPapers")}</SelectItem>
+              {papers.map((paper) => (
+                <SelectItem key={paper.id} value={paper.id}>
+                  {paper.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+      <div className="grid gap-1">
+        <Label htmlFor="journal-from" className="text-xs text-muted-foreground">
+          {t("operations.filter.from")}
+        </Label>
+        <Input
+          id="journal-from"
+          type="date"
+          className="h-8 w-36"
+          value={filter.from ?? ""}
+          onChange={(e) => onChange({ ...filter, from: e.target.value || undefined })}
+        />
+      </div>
+      <div className="grid gap-1">
+        <Label htmlFor="journal-to" className="text-xs text-muted-foreground">
+          {t("operations.filter.to")}
+        </Label>
+        <Input
+          id="journal-to"
+          type="date"
+          className="h-8 w-36"
+          value={filter.to ?? ""}
+          onChange={(e) => onChange({ ...filter, to: e.target.value || undefined })}
+        />
+      </div>
+      {active && (
+        <Button variant="ghost" size="sm" className="h-8" onClick={() => onChange({})}>
+          {t("operations.filter.reset")}
+        </Button>
+      )}
     </div>
   );
 }

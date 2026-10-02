@@ -363,7 +363,7 @@ func TestSeedDemo(t *testing.T) {
 	// SERVER'S ANSWER, has_more — the very field the client now reads instead of
 	// comparing lengths — so this fails if a future seed edit trims the journal
 	// back under the page size.
-	firstPage, hasMore, err := opStore.ListByAccount(ctx, p.SpaceID, tbankID, 50, 0)
+	firstPage, hasMore, err := opStore.ListByAccount(ctx, p.SpaceID, tbankID, 50, 0, operation.JournalFilter{})
 	if err != nil {
 		t.Fatalf("ListByAccount(Т-Банк, 50, 0): %v", err)
 	}
@@ -371,7 +371,7 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("Т-Банк journal page one = %d rows, has_more = %v; want a full 50 and true — the demo must be able to show the «Показать еще» button",
 			len(firstPage), hasMore)
 	}
-	rest, restHasMore, err := opStore.ListByAccount(ctx, p.SpaceID, tbankID, 50, 50)
+	rest, restHasMore, err := opStore.ListByAccount(ctx, p.SpaceID, tbankID, 50, 50, operation.JournalFilter{})
 	if err != nil {
 		t.Fatalf("ListByAccount(Т-Банк, 50, 50): %v", err)
 	}

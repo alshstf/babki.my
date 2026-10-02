@@ -2362,6 +2362,18 @@ type Error = ErrorResponse
 type ListAccountOperationsParams struct {
 	Limit  *int `form:"limit,omitempty" json:"limit,omitempty"`
 	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
+
+	// Type Only operations of these types (repeat the parameter for several); 400 for a type that does not exist
+	Type *[]OperationType `form:"type,omitempty" json:"type,omitempty"`
+
+	// InstrumentId Only operations naming this paper
+	InstrumentId *openapi_types.UUID `form:"instrument_id,omitempty" json:"instrument_id,omitempty"`
+
+	// From Only operations on or after this date, YYYY-MM-DD
+	From *string `form:"from,omitempty" json:"from,omitempty"`
+
+	// To Only operations on or before this date, YYYY-MM-DD
+	To *string `form:"to,omitempty" json:"to,omitempty"`
 }
 
 // GetAccountReturnParams defines parameters for GetAccountReturn.

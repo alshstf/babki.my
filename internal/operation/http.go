@@ -944,6 +944,43 @@ func parsePage(w http.ResponseWriter, r *http.Request) (limit, offset int, ok bo
 	return limit, offset, true
 }
 
+// parseJournalFilter reads the journal listing's filters; a malformed one is
+// a 400 naming it.
+func parseJournalFilter(w http.ResponseWriter, r *http.Request) (JournalFilter, bool) {
+	q := r.URL.Query()
+	var f JournalFilter
+	for _, raw := range q["type"] {
+		t := Type(raw)
+		if !apitypes.OperationType(t).Valid() {
+			httpjson.Error(w, http.StatusBadRequest, fmt.Sprintf("type %q is not an operation type", raw))
+			return JournalFilter{}, false
+		}
+		f.Types = append(f.Types, t)
+	}
+	if raw := q.Get("instrument_id"); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			httpjson.Error(w, http.StatusBadRequest, "instrument_id must be a uuid")
+			return JournalFilter{}, false
+		}
+		f.InstrumentID = &id
+	}
+	for _, d := range []struct {
+		name string
+		into **time.Time
+	}{{"from", &f.From}, {"to", &f.To}} {
+		if raw := q.Get(d.name); raw != "" {
+			day, err := time.Parse(time.DateOnly, raw)
+			if err != nil {
+				httpjson.Error(w, http.StatusBadRequest, d.name+" must be YYYY-MM-DD")
+				return JournalFilter{}, false
+			}
+			*d.into = &day
+		}
+	}
+	return f, true
+}
+
 func pathOperationID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue("operationId"))
 	if err != nil {
@@ -1024,7 +1061,11 @@ func (h *Handler) handleListByAccount(w http.ResponseWriter, r *http.Request) {
 	// say whether the journal continues past it, and a client that took the
 	// length for that answer hid the only control that could have reached the
 	// older rows (#86).
-	ops, hasMore, err := h.store.ListByAccount(r.Context(), p.SpaceID, accountID, limit, offset)
+	filter, ok := parseJournalFilter(w, r)
+	if !ok {
+		return
+	}
+	ops, hasMore, err := h.store.ListByAccount(r.Context(), p.SpaceID, accountID, limit, offset, filter)
 	if err != nil {
 		family.WriteError(w, err)
 		return

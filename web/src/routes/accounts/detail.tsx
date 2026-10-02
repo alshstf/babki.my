@@ -242,6 +242,10 @@ export function AccountDetailPage() {
           costBasisRules={session?.cost_basis_rules}
           onPurchasePrice={isViewer ? undefined : setPricing}
           onEdit={isViewer ? undefined : (operation, instrument) => setEditing({ operation, instrument })}
+          papers={(positions.data?.positions ?? []).map((p) => ({
+            id: p.instrument.id,
+            name: p.instrument.name,
+          }))}
         />
       </div>
 
