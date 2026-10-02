@@ -1010,7 +1010,7 @@ func TestDeletingAConnectionLeavesTheAccountsAndTheirOperations(t *testing.T) {
 	// And what the import wrote INTO that account is the owner's data too. The
 	// migration's cascades reach the mirror, the links and the run log; they must
 	// not reach the journal, which holds no foreign key back to the connection.
-	ops, _, err := operation.NewStore(api.pool).ListByAccount(ctx, api.spaceID, before[0].ID, 10, 0)
+	ops, _, err := operation.NewStore(api.pool).ListByAccount(ctx, api.spaceID, before[0].ID, 10, 0, operation.JournalFilter{})
 	if err != nil {
 		t.Fatalf("list operations: %v", err)
 	}

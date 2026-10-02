@@ -653,6 +653,14 @@ paths:
         - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: limit, in: query, required: false, schema: { type: integer, default: 50, minimum: 1, maximum: 200 } }
         - { name: offset, in: query, required: false, schema: { type: integer, default: 0, minimum: 0 } }
+        - name: type
+          in: query
+          required: false
+          description: "Only operations of these types (repeat the parameter for several); 400 for a type that does not exist"
+          schema: { type: array, items: { $ref: "#/components/schemas/OperationType" } }
+        - { name: instrument_id, in: query, required: false, schema: { type: string, format: uuid }, description: "Only operations naming this paper" }
+        - { name: from, in: query, required: false, schema: { type: string }, description: "Only operations on or after this date, YYYY-MM-DD" }
+        - { name: to, in: query, required: false, schema: { type: string }, description: "Only operations on or before this date, YYYY-MM-DD" }
       responses:
         "200":
           description: One page of the account's journal, newest first, saying whether there is more behind it

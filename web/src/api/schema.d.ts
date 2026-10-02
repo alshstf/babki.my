@@ -3030,6 +3030,14 @@ export interface operations {
             query?: {
                 limit?: number;
                 offset?: number;
+                /** @description Only operations of these types (repeat the parameter for several); 400 for a type that does not exist */
+                type?: components["schemas"]["OperationType"][];
+                /** @description Only operations naming this paper */
+                instrument_id?: string;
+                /** @description Only operations on or after this date, YYYY-MM-DD */
+                from?: string;
+                /** @description Only operations on or before this date, YYYY-MM-DD */
+                to?: string;
             };
             header?: never;
             path: {

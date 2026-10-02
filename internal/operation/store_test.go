@@ -159,7 +159,7 @@ func TestCreateListDelete(t *testing.T) {
 	if _, err := f.store.Create(f.ctx, f.spaceID, dep, nil); err != nil {
 		t.Fatalf("Create dep: %v", err)
 	}
-	list, more, err := f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0)
+	list, more, err := f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0, operation.JournalFilter{})
 	if err != nil || len(list) != 2 || list[0].Type != operation.TypeDeposit {
 		t.Fatalf("ListByAccount = %+v, %v", list, err)
 	}
@@ -176,7 +176,7 @@ func TestCreateListDelete(t *testing.T) {
 	if n, err := f.store.Delete(f.ctx, f.spaceID, created.ID); err != nil || n != 1 {
 		t.Fatalf("Delete = %d, %v", n, err)
 	}
-	if list, _, _ = f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0); len(list) != 1 {
+	if list, _, _ = f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0, operation.JournalFilter{}); len(list) != 1 {
 		t.Fatalf("after delete = %d", len(list))
 	}
 }
@@ -203,7 +203,7 @@ func TestListByAccountRefusesNonPositiveLimit(t *testing.T) {
 	}
 
 	for _, limit := range []int{0, -1} {
-		ops, more, err := f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, limit, 0)
+		ops, more, err := f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, limit, 0, operation.JournalFilter{})
 		if err == nil {
 			t.Errorf("ListByAccount(limit=%d) = %d rows, more=%v, err=nil; want a refusal: an empty page with more=true is a button that loads nothing forever",
 				limit, len(ops), more)
@@ -245,7 +245,7 @@ func TestTransferPairAtomicity(t *testing.T) {
 	if _, _, err := f.store.CreatePair(f.ctx, f.spaceID, out, in, nil); err == nil {
 		t.Fatal("CreatePair foreign dest: want error")
 	}
-	if list, _, _ := f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0); len(list) != 0 {
+	if list, _, _ := f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0, operation.JournalFilter{}); len(list) != 0 {
 		t.Fatalf("orphan out op left: %d", len(list))
 	}
 }
@@ -597,7 +597,7 @@ func TestTransferLotFailureRollsBackPair(t *testing.T) {
 		t.Fatal("CreatePair with a rejected lot: want error")
 	}
 	for _, id := range []uuid.UUID{f.accountID, f.account2ID} {
-		ops, _, err := f.store.ListByAccount(f.ctx, f.spaceID, id, 10, 0)
+		ops, _, err := f.store.ListByAccount(f.ctx, f.spaceID, id, 10, 0, operation.JournalFilter{})
 		if err != nil {
 			t.Fatalf("ListByAccount: %v", err)
 		}

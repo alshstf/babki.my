@@ -74,14 +74,41 @@ export const JOURNAL_PAGE_SIZE = 50;
 // the server can answer (see OperationsResponse in the API contract), and each
 // further page is a request of its own at the next offset — always a page the
 // ceiling comfortably admits.
-export function useOperations(accountId: string, pageSize = JOURNAL_PAGE_SIZE) {
+// What a journal listing is narrowed to; an absent field narrows nothing.
+export type JournalFilter = {
+  type?: OperationType;
+  instrumentId?: string;
+  from?: string;
+  to?: string;
+};
+
+// The operation types, in the order a journal's filter offers them.
+export const OPERATION_TYPES: OperationType[] = [
+  "buy", "sell", "deposit", "withdrawal", "dividend", "coupon", "interest", "tax", "fee",
+  "amortization", "redemption", "transfer_in", "transfer_out", "split", "conversion",
+  "exchange_out", "exchange_in", "spinoff_out", "spinoff_in",
+];
+
+export function useOperations(accountId: string, pageSize = JOURNAL_PAGE_SIZE, filter: JournalFilter = {}) {
   return useInfiniteQuery({
-    queryKey: ["operations", accountId, pageSize],
+    queryKey: ["operations", accountId, pageSize, filter],
     initialPageParam: 0,
     queryFn: async ({ pageParam }): Promise<OperationsPage> => {
       const { data, error, response } = await api.GET(
         "/api/v1/accounts/{accountId}/operations",
-        { params: { path: { accountId }, query: { limit: pageSize, offset: pageParam } } },
+        {
+          params: {
+            path: { accountId },
+            query: {
+              limit: pageSize,
+              offset: pageParam,
+              type: filter.type ? [filter.type] : undefined,
+              instrument_id: filter.instrumentId,
+              from: filter.from,
+              to: filter.to,
+            },
+          },
+        },
       );
       if (!data) throw apiError(response, error);
       return data;

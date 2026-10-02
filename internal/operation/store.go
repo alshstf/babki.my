@@ -684,14 +684,29 @@ func (s *Store) list(ctx context.Context, sql string, args ...any) ([]Operation,
 // and refuses before it reaches here (parsePage, called from
 // handleListByAccount), so a bad limit arriving means the program is wrong, not
 // the person using it.
-func (s *Store) ListByAccount(ctx context.Context, spaceID, accountID uuid.UUID, limit, offset int) ([]Operation, bool, error) {
+// JournalFilter narrows a journal listing; a zero field narrows nothing.
+type JournalFilter struct {
+	Types        []Type
+	InstrumentID *uuid.UUID
+	From, To     *time.Time
+}
+
+func (s *Store) ListByAccount(ctx context.Context, spaceID, accountID uuid.UUID, limit, offset int, f JournalFilter) ([]Operation, bool, error) {
 	if limit < 1 {
 		return nil, false, fmt.Errorf("list operations: limit must be positive, got %d", limit)
 	}
+	types := make([]string, 0, len(f.Types))
+	for _, t := range f.Types {
+		types = append(types, string(t))
+	}
 	ops, err := s.list(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND account_id = $2
+			AND (cardinality($5::text[]) = 0 OR type = ANY($5))
+			AND ($6::uuid IS NULL OR instrument_id = $6)
+			AND ($7::date IS NULL OR occurred_on >= $7)
+			AND ($8::date IS NULL OR occurred_on <= $8)
 		ORDER BY occurred_on DESC, created_at DESC LIMIT $3 OFFSET $4`,
-		spaceID, accountID, limit+1, offset)
+		spaceID, accountID, limit+1, offset, types, f.InstrumentID, f.From, f.To)
 	if err != nil {
 		return nil, false, err
 	}
