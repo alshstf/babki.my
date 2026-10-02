@@ -249,6 +249,34 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/imports/preview:
+    post:
+      operationId: previewTableImport
+      description: >-
+        Reads a CSV table of operations for the account and says, row by row, what importing it
+        would do — and writes nothing. Without `mapping` the columns and the type values are
+        guessed from the header; the answer carries the mapping it used, for the person to correct
+        and send back. Rows already imported from a table (the same content, see
+        ImportRow.verdict) are duplicates. The journal is asked about the new rows exactly as an
+        import would ask it. 400 for a table that cannot be read at all or a mapping naming an
+        operation type a table may not hold; 404 for an account not in this space.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImportPreviewRequest" }
+      responses:
+        "200":
+          description: What importing the table would do
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportPreview" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/summary:
     get:
       operationId: getSummary
@@ -1425,6 +1453,64 @@ components:
         assets_minor: { type: integer, format: int64 }
         liabilities_minor: { type: integer, format: int64, description: "Negative or zero" }
         net_minor: { type: integer, format: int64 }
+    ImportField:
+      type: string
+      enum: [date, type, instrument, quantity, price, amount, currency, fee, note]
+    ImportMapping:
+      type: object
+      required: [has_header, columns, types]
+      properties:
+        has_header: { type: boolean, description: "Whether the table's first line is a header rather than an operation" }
+        columns:
+          type: object
+          description: "Field name → 0-based column index. A field with no column is absent. `instrument` takes an ISIN or a ticker; a trade with no `amount` has it worked out from quantity × price."
+          additionalProperties: { type: integer, minimum: 0 }
+        types:
+          type: object
+          description: "Value of the type column (compared ignoring case and surrounding blanks) → operation type. Only buy, sell, deposit, withdrawal, dividend, coupon, interest, tax, fee and amortization."
+          additionalProperties: { $ref: "#/components/schemas/OperationType" }
+    ImportPreviewRequest:
+      type: object
+      required: [content]
+      properties:
+        content: { type: string, description: "The CSV text. ';', ',' or a tab between cells; at most 5000 rows." }
+        mapping: { $ref: "#/components/schemas/ImportMapping" }
+    ImportedOperation:
+      type: object
+      required: [type, occurred_on, amount_minor, currency, fee_minor, note]
+      properties:
+        type: { $ref: "#/components/schemas/OperationType" }
+        occurred_on: { type: string, description: "Date YYYY-MM-DD" }
+        instrument_id: { type: string, format: uuid, nullable: true }
+        quantity: { type: string, nullable: true }
+        price: { type: string, nullable: true }
+        amount_minor: { type: integer, format: int64, description: "Signed as the journal records the type: negative for buy, withdrawal, fee and tax" }
+        currency: { type: string }
+        fee_minor: { type: integer, format: int64 }
+        note: { type: string }
+    ImportRow:
+      type: object
+      required: [line, cells, verdict]
+      properties:
+        line: { type: integer, description: "The row's line in the file, from 1" }
+        cells: { type: array, items: { type: string } }
+        verdict:
+          type: string
+          enum: [new, duplicate, unparsed, refused]
+          description: "`new`: would be recorded. `duplicate`: a row with the same content was imported from a table before (the nth identical row of a file matches the nth). `unparsed`: cannot be read — `reason` says why. `refused`: read, but the journal would not take it — `reason` is the journal's own words."
+        reason: { type: string, nullable: true }
+        operation:
+          nullable: true
+          description: "What the row reads as; null when it is unparsed"
+          allOf:
+            - $ref: "#/components/schemas/ImportedOperation"
+    ImportPreview:
+      type: object
+      required: [mapping, header, rows]
+      properties:
+        mapping: { $ref: "#/components/schemas/ImportMapping" }
+        header: { type: array, items: { type: string }, description: "The header's cells; empty when the table has none" }
+        rows: { type: array, items: { $ref: "#/components/schemas/ImportRow" } }
     Summary:
       type: object
       required: [totals, base_currency, unconverted, journal]

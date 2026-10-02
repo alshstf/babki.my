@@ -18,6 +18,7 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/importer/table"
 	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
@@ -80,6 +81,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	positions.Mount(srv)
 	accStore := account.NewStore(r.pool)
 	account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM).Mount(srv)
+	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc), famAuth, famSM).Mount(srv)
 
 	newClient, err := newTinvestClientFactory(r)
 	if err != nil {

@@ -200,6 +200,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{accountId}/imports/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Reads a CSV table of operations for the account and says, row by row, what importing it would do — and writes nothing. Without `mapping` the columns and the type values are guessed from the header; the answer carries the mapping it used, for the person to correct and send back. Rows already imported from a table (the same content, see ImportRow.verdict) are duplicates. The journal is asked about the new rows exactly as an import would ask it. 400 for a table that cannot be read at all or a mapping naming an operation type a table may not hold; 404 for an account not in this space. */
+        post: operations["previewTableImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/summary": {
         parameters: {
             query?: never;
@@ -956,6 +973,62 @@ export interface components {
             liabilities_minor: number;
             /** Format: int64 */
             net_minor: number;
+        };
+        /** @enum {string} */
+        ImportField: "date" | "type" | "instrument" | "quantity" | "price" | "amount" | "currency" | "fee" | "note";
+        ImportMapping: {
+            /** @description Whether the table's first line is a header rather than an operation */
+            has_header: boolean;
+            /** @description Field name → 0-based column index. A field with no column is absent. `instrument` takes an ISIN or a ticker; a trade with no `amount` has it worked out from quantity × price. */
+            columns: {
+                [key: string]: number;
+            };
+            /** @description Value of the type column (compared ignoring case and surrounding blanks) → operation type. Only buy, sell, deposit, withdrawal, dividend, coupon, interest, tax, fee and amortization. */
+            types: {
+                [key: string]: components["schemas"]["OperationType"];
+            };
+        };
+        ImportPreviewRequest: {
+            /** @description The CSV text. ';', ',' or a tab between cells; at most 5000 rows. */
+            content: string;
+            mapping?: components["schemas"]["ImportMapping"];
+        };
+        ImportedOperation: {
+            type: components["schemas"]["OperationType"];
+            /** @description Date YYYY-MM-DD */
+            occurred_on: string;
+            /** Format: uuid */
+            instrument_id?: string | null;
+            quantity?: string | null;
+            price?: string | null;
+            /**
+             * Format: int64
+             * @description Signed as the journal records the type: negative for buy, withdrawal, fee and tax
+             */
+            amount_minor: number;
+            currency: string;
+            /** Format: int64 */
+            fee_minor: number;
+            note: string;
+        };
+        ImportRow: {
+            /** @description The row's line in the file, from 1 */
+            line: number;
+            cells: string[];
+            /**
+             * @description `new`: would be recorded. `duplicate`: a row with the same content was imported from a table before (the nth identical row of a file matches the nth). `unparsed`: cannot be read — `reason` says why. `refused`: read, but the journal would not take it — `reason` is the journal's own words.
+             * @enum {string}
+             */
+            verdict: "new" | "duplicate" | "unparsed" | "refused";
+            reason?: string | null;
+            /** @description What the row reads as; null when it is unparsed */
+            operation?: components["schemas"]["ImportedOperation"] | null;
+        };
+        ImportPreview: {
+            mapping: components["schemas"]["ImportMapping"];
+            /** @description The header's cells; empty when the table has none */
+            header: string[];
+            rows: components["schemas"]["ImportRow"][];
         };
         Summary: {
             /** @description Active accounts per currency. An account counted by its balance (AccountWithBalance.counted_by) adds its latest balance under its own currency, a debt among the liabilities. An account counted by its journal adds what it holds in each currency (holdings at market value plus cash) under that currency — among the assets where the account holds more than nothing in it, among the liabilities where its cash in it is below zero by more than its holdings. */
@@ -2286,6 +2359,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountWithBalance"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    previewTableImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description What importing the table would do */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportPreview"];
                 };
             };
             400: components["responses"]["Error"];
