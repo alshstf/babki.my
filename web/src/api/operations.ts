@@ -155,8 +155,14 @@ export function useSaveOperation(editingId?: string) {
 // no dialog records (the server refuses the same — see PUT .../operations/{id}).
 export type EditDialog = "trade" | "cash" | "income";
 
+// Whether a person may edit and delete a row: one they entered, or loaded from
+// their own table. The server answers the same (operation.OwnedByHand).
+export function ownedByHand(operation: Operation): boolean {
+  return operation.source === "manual" || operation.source === "csv";
+}
+
 export function editDialogOf(operation: Operation): EditDialog | null {
-  if (operation.source !== "manual" || operation.transfer_group_id) return null;
+  if (!ownedByHand(operation) || operation.transfer_group_id) return null;
   switch (operation.type) {
     case "buy":
     case "sell":

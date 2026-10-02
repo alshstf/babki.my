@@ -457,10 +457,10 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Rewrites an operation entered by hand, in place: the body is the one POST /api/v1/operations takes, and account_id and type must be the operation's own (400 otherwise). The row keeps its id and its place among the operations of its day. 409, with the engine's reason, when the journal no longer replays with the edit. 400 when the operation is not editable: `source` is not `manual` (the importer owns it), or it is one leg of a transfer, conversion or spin-off, or shares that arrived from another broker — those are deleted and entered again. */
+        /** @description Rewrites an operation entered by hand, in place: the body is the one POST /api/v1/operations takes, and account_id and type must be the operation's own (400 otherwise). The row keeps its id and its place among the operations of its day. 409, with the engine's reason, when the journal no longer replays with the edit. 400 when the operation is not editable: `source` is neither `manual` nor `csv` (a broker or the registry owns it), or it is one leg of a transfer, conversion or spin-off, or shares that arrived from another broker — those are deleted and entered again. */
         put: operations["updateOperation"];
         post?: never;
-        /** @description Deletes the operation (whole pair for transfers). Rejected with 409 if the remaining journal no longer replays — an oversell is one cause of that and not the only one, see POST /api/v1/operations — and rejected outright when `source` is not `manual`: an imported operation belongs to the importer, which would write it back on its next rebuild, so "deleted" would be a lie. Retire such an operation by deleting its connection instead — that stops the updates and leaves the history in place. */
+        /** @description Deletes the operation (whole pair for transfers). Rejected with 409 if the remaining journal no longer replays — an oversell is one cause of that and not the only one, see POST /api/v1/operations — and rejected outright unless `source` is `manual` or `csv` (a row loaded from the person's own table): an operation from a broker or the registry belongs to its writer, which would write it back on its next rebuild, so "deleted" would be a lie. A deleted `csv` row comes back if the same table is loaded again. Retire such an operation by deleting its connection instead — that stops the updates and leaves the history in place. */
         delete: operations["deleteOperation"];
         options?: never;
         head?: never;
@@ -567,7 +567,7 @@ export interface paths {
          *
          *     THE ACCOUNTS AND THE OPERATIONS STAY. What goes is everything about the connection itself — the stored token, the links, the mirror of what the broker said, the instrument map and the run log. The babki accounts it created and the journal operations the import wrote into them are the owner's data and are left exactly as they are; they simply stop being updated.
          *
-         *     AND NOTHING HERE OFFERS A WAY TO REMOVE THEM AFTERWARDS, which this description used to promise. An account is ARCHIVED and never deleted (archiveAccount is the only endpoint that retires one), and an imported operation cannot be deleted at all: deleteOperation refuses every row whose `source` is not `manual`. Withdrawing the connection is therefore the end of the matter, not the first half of it.
+         *     AND NOTHING HERE OFFERS A WAY TO REMOVE THEM AFTERWARDS, which this description used to promise. An account is ARCHIVED and never deleted (archiveAccount is the only endpoint that retires one), and an imported operation cannot be deleted at all: deleteOperation refuses every row the broker wrote. Withdrawing the connection is therefore the end of the matter, not the first half of it.
          */
         delete: operations["deleteTinvestConnection"];
         options?: never;

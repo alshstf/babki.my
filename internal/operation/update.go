@@ -15,7 +15,8 @@ import (
 // operations of its day. The journal is checked with the row as it would stand,
 // under the account's lock, exactly as Create checks a new one.
 //
-// Only a single row entered by hand can be edited. A broker's row is the
+// Only a single row a person owns can be edited — entered by hand or loaded
+// from their table (OwnedByHand). A broker's row is the
 // importer's (it would be rewritten by the next sync); a transfer, a conversion
 // or a spin-off is a pair whose halves must agree, and shares that arrived from
 // another broker carry their purchases separately — those are deleted and
@@ -72,7 +73,7 @@ func (s *Service) Update(ctx context.Context, spaceID, id uuid.UUID, op Operatio
 // editable refuses an edit this program cannot make in place.
 func editable(old, op Operation) error {
 	switch {
-	case old.Source != "manual":
+	case !OwnedByHand(old.Source):
 		return fmt.Errorf("%w: imported operations are managed by the importer", family.ErrValidation)
 	case old.TransferGroupID != nil || carriesCostBasis(old):
 		return fmt.Errorf("%w: a transfer, a conversion or shares from another broker are deleted and entered again, not edited",

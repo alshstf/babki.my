@@ -649,7 +649,7 @@ paths:
         /api/v1/operations takes, and account_id and type must be the operation's own (400
         otherwise). The row keeps its id and its place among the operations of its day. 409, with
         the engine's reason, when the journal no longer replays with the edit. 400 when the
-        operation is not editable: `source` is not `manual` (the importer owns it), or it is one
+        operation is not editable: `source` is neither `manual` nor `csv` (a broker or the registry owns it), or it is one
         leg of a transfer, conversion or spin-off, or shares that arrived from another broker —
         those are deleted and entered again.
       parameters:
@@ -675,9 +675,10 @@ paths:
       description: >-
         Deletes the operation (whole pair for transfers). Rejected with 409 if the remaining
         journal no longer replays — an oversell is one cause of that and not the only one, see
-        POST /api/v1/operations — and rejected outright when `source` is not `manual`:
-        an imported operation belongs to the importer, which would write it back on its next
-        rebuild, so "deleted" would be a lie. Retire such an operation by deleting its
+        POST /api/v1/operations — and rejected outright unless `source` is `manual` or `csv` (a
+        row loaded from the person's own table): an operation from a broker or the registry
+        belongs to its writer, which would write it back on its next rebuild, so "deleted" would
+        be a lie. A deleted `csv` row comes back if the same table is loaded again. Retire such an operation by deleting its
         connection instead — that stops the updates and leaves the history in place.
       parameters:
         - { name: operationId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -912,7 +913,7 @@ paths:
         description used to promise. An account is ARCHIVED and never deleted
         (archiveAccount is the only endpoint that retires one), and an imported
         operation cannot be deleted at all: deleteOperation refuses every row
-        whose `source` is not `manual`. Withdrawing the connection is therefore
+        the broker wrote. Withdrawing the connection is therefore
         the end of the matter, not the first half of it.
       parameters:
         - { name: connectionId, in: path, required: true, schema: { type: string, format: uuid } }

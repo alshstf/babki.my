@@ -21,7 +21,7 @@ import (
 )
 
 // Source is what the journal calls the rows a table wrote.
-const Source = "csv"
+const Source = operation.SourceTable
 
 // catalog finds the paper a cell names.
 type catalog interface {

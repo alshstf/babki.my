@@ -57,3 +57,12 @@ const (
 // The set of sources is closed by a CHECK constraint on the column, so adding
 // one is a migration (0022) as well as a constant.
 const SourceRegistry = "registry"
+
+// SourceTable is the writer of rows loaded from a table a person uploaded
+// (internal/importer/table). They are the person's own, like a hand entry:
+// nothing writes them back, so a person edits and deletes them in the journal.
+// A broker's rows and the registry's are not theirs to change.
+const SourceTable = "csv"
+
+// OwnedByHand reports whether a person may edit and delete a row of source.
+func OwnedByHand(source string) bool { return source == SourceManual || source == SourceTable }
