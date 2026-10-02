@@ -366,6 +366,31 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/v1/accounts/{accountId}/return:
+    get:
+      operationId: getAccountReturn
+      description: >-
+        What an account earned over a period, by its journal: its worth at the end of `from` and
+        at the end of `to` (holdings at those days' closing prices, cash, those days' rates), the
+        money that crossed its edge in between — deposits and withdrawals at their day's rate,
+        shares that arrived or left at their closing price that day — the profit (end − start −
+        money put in net), and the money-weighted annual rate (XIRR). Income, fees and taxes are
+        not flows: they are what the return is made of. `complete` is false when a figure could
+        not be had (a holding with no price, a currency with no rate); the published figures then
+        leave it out. 400 for dates out of order or in the future.
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: from, in: query, required: true, schema: { type: string }, description: "Date YYYY-MM-DD: the period starts after its end" }
+        - { name: to, in: query, required: true, schema: { type: string }, description: "Date YYYY-MM-DD, at most today" }
+      responses:
+        "200":
+          description: The period
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PeriodReturn" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/capital:
     get:
       operationId: getCapital
@@ -1687,6 +1712,22 @@ components:
           allOf:
             - $ref: "#/components/schemas/TableImport"
         rows: { type: array, items: { $ref: "#/components/schemas/ImportRow" } }
+    PeriodReturn:
+      type: object
+      required: [currency, from, to, start_minor, end_minor, contributions_minor, profit_minor, annual_rate, complete]
+      properties:
+        currency: { type: string, description: "The space's base currency" }
+        from: { type: string }
+        to: { type: string }
+        start_minor: { type: integer, format: int64 }
+        end_minor: { type: integer, format: int64 }
+        contributions_minor: { type: integer, format: int64, description: "Money put in net of money taken out over the period: deposits and arriving shares less withdrawals and departing ones" }
+        profit_minor: { type: integer, format: int64, description: "end_minor − start_minor − contributions_minor" }
+        annual_rate:
+          type: string
+          nullable: true
+          description: "The money-weighted annual rate as a decimal fraction (0.1234 is 12.34% a year), rounded to four places; null when there is none — nothing put in, or nothing at the end"
+        complete: { type: boolean }
     CapitalSeries:
       type: object
       required: [currency, points]

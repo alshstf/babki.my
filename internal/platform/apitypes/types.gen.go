@@ -1606,6 +1606,26 @@ type OperationsResponse struct {
 	Operations []Operation `json:"operations"`
 }
 
+// PeriodReturn defines model for PeriodReturn.
+type PeriodReturn struct {
+	// AnnualRate The money-weighted annual rate as a decimal fraction (0.1234 is 12.34% a year), rounded to four places; null when there is none — nothing put in, or nothing at the end
+	AnnualRate nullable.Nullable[string] `json:"annual_rate"`
+	Complete   bool                      `json:"complete"`
+
+	// ContributionsMinor Money put in net of money taken out over the period: deposits and arriving shares less withdrawals and departing ones
+	ContributionsMinor int64 `json:"contributions_minor"`
+
+	// Currency The space's base currency
+	Currency string `json:"currency"`
+	EndMinor int64  `json:"end_minor"`
+	From     string `json:"from"`
+
+	// ProfitMinor end_minor − start_minor − contributions_minor
+	ProfitMinor int64  `json:"profit_minor"`
+	StartMinor  int64  `json:"start_minor"`
+	To          string `json:"to"`
+}
+
 // Position defines model for Position.
 type Position struct {
 	CostMinor int64  `json:"cost_minor"`
@@ -2316,6 +2336,15 @@ type Error = ErrorResponse
 type ListAccountOperationsParams struct {
 	Limit  *int `form:"limit,omitempty" json:"limit,omitempty"`
 	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
+// GetAccountReturnParams defines parameters for GetAccountReturn.
+type GetAccountReturnParams struct {
+	// From Date YYYY-MM-DD: the period starts after its end
+	From string `form:"from" json:"from"`
+
+	// To Date YYYY-MM-DD, at most today
+	To string `form:"to" json:"to"`
 }
 
 // GetCapitalParams defines parameters for GetCapital.
