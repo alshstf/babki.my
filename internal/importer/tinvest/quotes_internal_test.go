@@ -3,8 +3,11 @@ package tinvest
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -560,5 +563,57 @@ func TestPickListingRefusesWhenNothingIsQuoted(t *testing.T) {
 	zero := map[string]LastPrice{"uid-a": {InstrumentUID: "uid-a", At: time.Now()}}
 	if _, _, ok := pickListing([]Listing{a}, zero); ok {
 		t.Error("picked a listing whose price is nought, which is no price")
+	}
+}
+
+// A ruble line of Coca-Cola traded last and a dollar line before it: the dollar
+// holding takes the dollar line, asking passports freshest first, rather than
+// going unpriced because the freshest one was in rubles (#261).
+func TestResolveListingPassesOverAListingInAnotherCurrency(t *testing.T) {
+	passports := map[string]string{"uid-ko-rub": "rub", "uid-ko-usd": "usd"}
+	asked := []string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rpc := strings.TrimPrefix(r.URL.Path, rpcPathPrefix)
+		switch rpc {
+		case "InstrumentsService/FindInstrument":
+			_, _ = w.Write([]byte(`{"instruments":[
+				{"uid":"uid-ko-rub","isin":"US1912161007","ticker":"KO-RM","classCode":"FQBR","instrumentKind":"INSTRUMENT_TYPE_SHARE"},
+				{"uid":"uid-ko-usd","isin":"US1912161007","ticker":"KO","classCode":"SPBXM","instrumentKind":"INSTRUMENT_TYPE_SHARE"}]}`))
+		case rpcLastPrices:
+			_, _ = w.Write([]byte(lastPricesBody(
+				lastPrice("uid-ko-rub", "5000", 0, "2026-08-07T20:00:00Z", "LAST_PRICE_EXCHANGE"),
+				lastPrice("uid-ko-usd", "61", 0, "2026-08-06T20:00:00Z", "LAST_PRICE_EXCHANGE"))))
+		case "InstrumentsService/GetInstrumentBy":
+			var req struct {
+				ID string `json:"id"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			asked = append(asked, req.ID)
+			_, _ = fmt.Fprintf(w, `{"instrument":{"uid":%q,"currency":%q}}`, req.ID, passports[req.ID])
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	log := slog.New(&logCapture{})
+	client := NewClient(srv.Client(), srv.URL, testToken, log)
+
+	got, price, currency, ok, err := resolveListing(context.Background(), client, log,
+		UnmappedHeldInstrument{ISIN: "US1912161007", Ticker: "KO", Type: "share", Currency: "USD"})
+	if err != nil || !ok {
+		t.Fatalf("resolveListing: ok=%v err=%v, want the dollar line", ok, err)
+	}
+	if got.UID != "uid-ko-usd" || currency != "USD" || price.Price.String() != "61" {
+		t.Errorf("chose %s in %s at %s, want uid-ko-usd in USD at 61", got.UID, currency, price.Price)
+	}
+	if strings.Join(asked, ",") != "uid-ko-rub,uid-ko-usd" {
+		t.Errorf("asked passports %v, want the freshest first and then the next", asked)
+	}
+
+	passports["uid-ko-usd"] = "eur"
+	asked = nil
+	if _, _, _, ok, err := resolveListing(context.Background(), client, log,
+		UnmappedHeldInstrument{ISIN: "US1912161007", Ticker: "KO", Type: "share", Currency: "USD"}); ok || err != nil {
+		t.Errorf("no listing in dollars: ok=%v err=%v, want it left unpriced", ok, err)
 	}
 }
