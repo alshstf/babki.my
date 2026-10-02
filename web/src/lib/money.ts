@@ -357,7 +357,7 @@ function fractionDigitsOf(value: string): number {
 // expense side of a tax calculation with it.
 //
 // Its ALGEBRA is the server's own statement of the same arithmetic
-// (marketValue in internal/portfolio/http.go: faceValueMinor × price/100 ×
+// (marketValue in internal/portfolio/market_value.go: faceValueMinor × price/100 ×
 // quantity, in the FACE currency): this function does exactly its first two
 // factors and stops there, the quantity being applied afterwards by
 // multiplyToMinor. Not "agrees to within a rounding step": THIS function

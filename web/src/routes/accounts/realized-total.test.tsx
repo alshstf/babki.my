@@ -29,7 +29,7 @@ function makeTotal(
 }
 
 // The label's tooltip, pinned as one exact string. What it says about the
-// rates is a claim about internal/portfolio/http.go's realizedTerms, and the
+// rates is a claim about internal/portfolio/rates.go's realizedTerms, and the
 // only way a wrong claim shows up is by reading the sentence against that
 // function — so the sentence lives here in full rather than being sampled by
 // substring, and a rewording has to come past this test.

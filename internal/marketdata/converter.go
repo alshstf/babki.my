@@ -610,7 +610,7 @@ type RateQuery struct {
 // way and looks it up another — time.Now().UTC() evaluated twice, a date that
 // passed through .In() or .Truncate() on only one of the two paths — misses.
 // operation.rateKey (internal/operation/http.go) and portfolio.rateKey
-// (internal/portfolio/http.go) already hold their dates as YYYY-MM-DD strings
+// (internal/portfolio/rates.go) already hold their dates as YYYY-MM-DD strings
 // for exactly this hazard; there a miss costs a redundant query and nothing
 // else, here it would decide what number reaches the screen, so the same
 // normalization stops being an optimization and becomes the contract.

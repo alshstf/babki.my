@@ -136,7 +136,7 @@ const PRICE_SESSION_NOTE =
 // The second half of the picture, and the project's "three rates for three
 // questions" rule applied to this cell: the valuation is struck from a price
 // belonging to some past session, but any conversion of that valuation is done
-// at the CURRENT rate (internal/portfolio/http.go converts into the position's
+// at the CURRENT rate (internal/portfolio/position_api.go converts into the position's
 // currency and into the base one at `now`, never at the quote's date). The
 // conditional wording is load-bearing — a position whose valuation is already
 // in its own currency, shown in native mode, converts nothing at all.
@@ -786,7 +786,7 @@ describe("PositionsTable", () => {
 
   // A bond is quoted as a PERCENTAGE of its face value (95.20 meaning 95.20 %
   // of the face value), and that percentage is what the server publishes in
-  // Position.price — see marketValue() in internal/portfolio/http.go, where a
+  // Position.price — see marketValue() in internal/portfolio/market_value.go, where a
   // bond's valuation is faceValueMinor × price/100 × quantity. The demo seed's
   // ОФЗ 26238 is exactly this: face value 1 000,00 ₽, quote 95.20, so the money
   // one bond is worth is 952 ₽ and the figure under the valuation is 95,20.
@@ -1669,7 +1669,7 @@ describe("PositionsTable", () => {
   // A type this build cannot read a price for gets no currency claimed on its
   // behalf. Today's server never sends such a row — it publishes no valuation
   // and no price for anything but share, etf and bond (marketValue in
-  // internal/portfolio/http.go), so `hasMarketValue` is false and this hint is
+  // internal/portfolio/market_value.go), so `hasMarketValue` is false and this hint is
   // not rendered at all — and that is exactly why the branch is written and
   // pinned rather than folded into the share/etf one: the day a NEWER server
   // prices a new type, what its Position.price means will be decided there,
