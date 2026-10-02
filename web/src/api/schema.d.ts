@@ -355,6 +355,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Everything the family has entered, as one JSON document to keep or to take elsewhere: the space, its members (names and roles, never passwords), every account with its balance marks and its journal as stored (each move between accounts with the purchases it carried), the papers the journals name, the registry's events about those papers, and the prices stated by hand. Exchange prices and rates are not in it: they are the exchange's and are fetched again. Owner only; sent as a download. */
+        get: operations["exportSpace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/capital": {
         parameters: {
             query?: never;
@@ -1284,6 +1301,131 @@ export interface components {
             currency: string;
             /** @description Where the price came from: moex, moex_history, tinvest, tinvest_history, manual, seed, … */
             source: string;
+        };
+        SpaceExport: {
+            /** @enum {string} */
+            format: "babki.my/space-export";
+            /** @description 1. Raised when a field changes meaning or goes away; new fields may appear without it. */
+            version: number;
+            /** Format: date-time */
+            exported_at: string;
+            space: components["schemas"]["ExportSpace"];
+            members: components["schemas"]["ExportMember"][];
+            accounts: components["schemas"]["ExportAccount"][];
+            instruments: components["schemas"]["ExportInstrument"][];
+            instrument_events: components["schemas"]["ExportInstrumentEvent"][];
+            manual_prices: components["schemas"]["ExportManualPrice"][];
+        };
+        ExportSpace: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            base_currency: string;
+            tax_residency: string;
+        };
+        ExportMember: {
+            username: string;
+            display_name: string;
+            role: string;
+        };
+        ExportManualPrice: {
+            /** Format: uuid */
+            instrument_id: string;
+            /** @description Date YYYY-MM-DD */
+            on: string;
+            /** @description Decimal as string: per unit, or percent of face for a bond */
+            price: string;
+            currency: string;
+        };
+        ExportAccount: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            type: string;
+            currency: string;
+            institution: string;
+            status: string;
+            /** @description The member the account is personal to; null for a shared one */
+            owner_username: string | null;
+            valued_by_balance: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** @description Balance marks, oldest first */
+            balances: components["schemas"]["ExportBalance"][];
+            /** @description The journal as stored, in the order it is folded */
+            operations: components["schemas"]["ExportOperation"][];
+        };
+        ExportOperation: {
+            /** Format: uuid */
+            id: string;
+            type: string;
+            /** @description Date YYYY-MM-DD */
+            occurred_on: string;
+            settled_on: string | null;
+            /** Format: uuid */
+            instrument_id: string | null;
+            /** @description Decimal as string */
+            quantity: string | null;
+            /** @description Decimal as string */
+            price: string | null;
+            /** Format: int64 */
+            amount_minor: number;
+            currency: string;
+            /** Format: int64 */
+            fee_minor: number;
+            note: string;
+            trading_mode: string | null;
+            /** Format: uuid */
+            transfer_group_id: string | null;
+            /** @description Decimal as string */
+            split_ratio: string | null;
+            source: string;
+            external_id: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** @description The purchases a move carried — quantity, cost and day bought — when it carried any */
+            lots: components["schemas"]["ExportLot"][];
+        };
+        ExportBalance: {
+            /** @description Date YYYY-MM-DD */
+            as_of: string;
+            /** Format: int64 */
+            amount_minor: number;
+        };
+        ExportLot: {
+            quantity: string;
+            /** Format: int64 */
+            cost_minor: number;
+            acquired_on: string | null;
+        };
+        ExportInstrument: {
+            /** Format: uuid */
+            id: string;
+            type: string;
+            name: string;
+            ticker: string;
+            isin: string;
+            figi: string;
+            currency: string;
+            /** Format: int64 */
+            face_value_minor: number | null;
+            face_currency: string | null;
+            frozen: boolean;
+        };
+        ExportInstrumentEvent: {
+            kind: string;
+            isin: string;
+            /** @description Date YYYY-MM-DD */
+            effective_on: string;
+            /** Format: int64 */
+            ratio_from: number;
+            /** Format: int64 */
+            ratio_to: number;
+            result_isin: string;
+            basis_share: string | null;
+            source: string;
+            source_ref: string;
+            note: string;
         };
         PeriodReturn: {
             /** @description The space's base currency */
@@ -3005,6 +3147,30 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    exportSpace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The space, whole */
+            200: {
+                headers: {
+                    /** @description attachment; filename=babki-export-YYYY-MM-DD.json */
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpaceExport"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     getCapital: {

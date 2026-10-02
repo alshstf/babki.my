@@ -619,6 +619,21 @@ func (e Role) Valid() bool {
 	}
 }
 
+// Defines values for SpaceExportFormat.
+const (
+	BabkiMyspaceExport SpaceExportFormat = "babki.my/space-export"
+)
+
+// Valid indicates whether the value is a known member of the SpaceExportFormat enum.
+func (e SpaceExportFormat) Valid() bool {
+	switch e {
+	case BabkiMyspaceExport:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TinvestConnectionStatus.
 const (
 	TinvestConnectionStatusActive       TinvestConnectionStatus = "active"
@@ -1266,6 +1281,130 @@ type DayPrice struct {
 // ErrorResponse defines model for ErrorResponse.
 type ErrorResponse struct {
 	Error string `json:"error"`
+}
+
+// ExportAccount defines model for ExportAccount.
+type ExportAccount struct {
+	// Balances Balance marks, oldest first
+	Balances    []ExportBalance    `json:"balances"`
+	CreatedAt   time.Time          `json:"created_at"`
+	Currency    string             `json:"currency"`
+	Id          openapi_types.UUID `json:"id"`
+	Institution string             `json:"institution"`
+	Name        string             `json:"name"`
+
+	// Operations The journal as stored, in the order it is folded
+	Operations []ExportOperation `json:"operations"`
+
+	// OwnerUsername The member the account is personal to; null for a shared one
+	OwnerUsername   nullable.Nullable[string] `json:"owner_username"`
+	Status          string                    `json:"status"`
+	Type            string                    `json:"type"`
+	ValuedByBalance bool                      `json:"valued_by_balance"`
+}
+
+// ExportBalance defines model for ExportBalance.
+type ExportBalance struct {
+	AmountMinor int64 `json:"amount_minor"`
+
+	// AsOf Date YYYY-MM-DD
+	AsOf string `json:"as_of"`
+}
+
+// ExportInstrument defines model for ExportInstrument.
+type ExportInstrument struct {
+	Currency       string                    `json:"currency"`
+	FaceCurrency   nullable.Nullable[string] `json:"face_currency"`
+	FaceValueMinor nullable.Nullable[int64]  `json:"face_value_minor"`
+	Figi           string                    `json:"figi"`
+	Frozen         bool                      `json:"frozen"`
+	Id             openapi_types.UUID        `json:"id"`
+	Isin           string                    `json:"isin"`
+	Name           string                    `json:"name"`
+	Ticker         string                    `json:"ticker"`
+	Type           string                    `json:"type"`
+}
+
+// ExportInstrumentEvent defines model for ExportInstrumentEvent.
+type ExportInstrumentEvent struct {
+	BasisShare nullable.Nullable[string] `json:"basis_share"`
+
+	// EffectiveOn Date YYYY-MM-DD
+	EffectiveOn string `json:"effective_on"`
+	Isin        string `json:"isin"`
+	Kind        string `json:"kind"`
+	Note        string `json:"note"`
+	RatioFrom   int64  `json:"ratio_from"`
+	RatioTo     int64  `json:"ratio_to"`
+	ResultIsin  string `json:"result_isin"`
+	Source      string `json:"source"`
+	SourceRef   string `json:"source_ref"`
+}
+
+// ExportLot defines model for ExportLot.
+type ExportLot struct {
+	AcquiredOn nullable.Nullable[string] `json:"acquired_on"`
+	CostMinor  int64                     `json:"cost_minor"`
+	Quantity   string                    `json:"quantity"`
+}
+
+// ExportManualPrice defines model for ExportManualPrice.
+type ExportManualPrice struct {
+	Currency     string             `json:"currency"`
+	InstrumentId openapi_types.UUID `json:"instrument_id"`
+
+	// On Date YYYY-MM-DD
+	On string `json:"on"`
+
+	// Price Decimal as string: per unit, or percent of face for a bond
+	Price string `json:"price"`
+}
+
+// ExportMember defines model for ExportMember.
+type ExportMember struct {
+	DisplayName string `json:"display_name"`
+	Role        string `json:"role"`
+	Username    string `json:"username"`
+}
+
+// ExportOperation defines model for ExportOperation.
+type ExportOperation struct {
+	AmountMinor  int64                                 `json:"amount_minor"`
+	CreatedAt    time.Time                             `json:"created_at"`
+	Currency     string                                `json:"currency"`
+	ExternalId   nullable.Nullable[string]             `json:"external_id"`
+	FeeMinor     int64                                 `json:"fee_minor"`
+	Id           openapi_types.UUID                    `json:"id"`
+	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id"`
+
+	// Lots The purchases a move carried — quantity, cost and day bought — when it carried any
+	Lots []ExportLot `json:"lots"`
+	Note string      `json:"note"`
+
+	// OccurredOn Date YYYY-MM-DD
+	OccurredOn string `json:"occurred_on"`
+
+	// Price Decimal as string
+	Price nullable.Nullable[string] `json:"price"`
+
+	// Quantity Decimal as string
+	Quantity  nullable.Nullable[string] `json:"quantity"`
+	SettledOn nullable.Nullable[string] `json:"settled_on"`
+	Source    string                    `json:"source"`
+
+	// SplitRatio Decimal as string
+	SplitRatio      nullable.Nullable[string]             `json:"split_ratio"`
+	TradingMode     nullable.Nullable[string]             `json:"trading_mode"`
+	TransferGroupId nullable.Nullable[openapi_types.UUID] `json:"transfer_group_id"`
+	Type            string                                `json:"type"`
+}
+
+// ExportSpace defines model for ExportSpace.
+type ExportSpace struct {
+	BaseCurrency string             `json:"base_currency"`
+	Id           openapi_types.UUID `json:"id"`
+	Name         string             `json:"name"`
+	TaxResidency string             `json:"tax_residency"`
 }
 
 // FamilyReturn defines model for FamilyReturn.
@@ -1921,6 +2060,24 @@ type SetupRequest struct {
 type SetupStatus struct {
 	SetupNeeded bool `json:"setup_needed"`
 }
+
+// SpaceExport defines model for SpaceExport.
+type SpaceExport struct {
+	Accounts         []ExportAccount         `json:"accounts"`
+	ExportedAt       time.Time               `json:"exported_at"`
+	Format           SpaceExportFormat       `json:"format"`
+	InstrumentEvents []ExportInstrumentEvent `json:"instrument_events"`
+	Instruments      []ExportInstrument      `json:"instruments"`
+	ManualPrices     []ExportManualPrice     `json:"manual_prices"`
+	Members          []ExportMember          `json:"members"`
+	Space            ExportSpace             `json:"space"`
+
+	// Version 1. Raised when a field changes meaning or goes away; new fields may appear without it.
+	Version int `json:"version"`
+}
+
+// SpaceExportFormat defines model for SpaceExport.Format.
+type SpaceExportFormat string
 
 // StatePurchasesRequest defines model for StatePurchasesRequest.
 type StatePurchasesRequest struct {

@@ -261,6 +261,17 @@ export function SettingsPage() {
         </CardContent>
       </Card>
       <ConnectionsSection />
+      <Card className="max-w-md">
+        <CardHeader>
+          <CardTitle>{t("settings.export.title")}</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-2">
+          <a href="/api/v1/export" download className="text-sm underline" data-testid="settings-export-link">
+            {t("settings.export.link")}
+          </a>
+          <p className="text-xs text-muted-foreground">{t("settings.export.hint")}</p>
+        </CardContent>
+      </Card>
     </div>
   );
 }
