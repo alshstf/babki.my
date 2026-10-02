@@ -126,7 +126,7 @@ export function InstrumentPicker({
 
   if (creating) {
     return (
-      <div className="grid gap-3 rounded-lg border p-3">
+      <div className="grid gap-3 rounded-lg border p-3" data-enter-ignore>
         <div className="grid gap-2">
           <Label>{t("instrumentPicker.type")}</Label>
           <Select value={newType} onValueChange={(v) => setNewType(v as InstrumentType)}>
@@ -189,6 +189,7 @@ export function InstrumentPicker({
         </div>
       ) : null}
       <Input
+        data-enter-ignore
         placeholder={t("instrumentPicker.search")}
         value={query}
         onChange={(e) => setQuery(e.target.value)}

@@ -36,6 +36,7 @@ import type { AccountWithBalance } from "@/api/accounts";
 import type { Instrument } from "@/api/instruments";
 import { InstrumentPicker } from "./instrument-picker";
 import { MAX_NOTE } from "@/lib/text-limits";
+import { submitOnEnter } from "@/lib/submit-on-enter";
 
 // Dividend and coupon may be recorded at the cash level (no instrument) per
 // the backend's validation contract (Type.RequiresInstrument in
@@ -127,7 +128,7 @@ export function IncomeDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md" onKeyDown={submitOnEnter(submit, valid && !createOperation.isPending)}>
         <DialogHeader>
           <DialogTitle>{editing ? t("operations.editTitle") : t("income.title")}</DialogTitle>
         </DialogHeader>

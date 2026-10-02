@@ -16,6 +16,7 @@ import { api } from "@/api/client";
 import { apiError } from "@/api/operations";
 import { isPositiveDecimal } from "@/lib/money";
 import { EARLIEST_OPERATION_DATE, localToday } from "@/lib/dates";
+import { submitOnEnter } from "@/lib/submit-on-enter";
 
 // The paper a price is stated for.
 export type QuotedPaper = { id: string; name: string; currency: string; bond: boolean };
@@ -64,7 +65,7 @@ export function StatePriceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
+      <DialogContent className="sm:max-w-sm" onKeyDown={submitOnEnter(() => save.mutate(), valid && !save.isPending)}>
         <DialogHeader>
           <DialogTitle>{t("statePrice.title", { name: paper.name })}</DialogTitle>
         </DialogHeader>

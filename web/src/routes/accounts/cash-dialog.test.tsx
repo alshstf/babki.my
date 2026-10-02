@@ -116,3 +116,34 @@ describe("CashDialog: a sum too large to record", () => {
     expect(screen.queryByText(/Слишком большая сумма/)).toBeNull();
   });
 });
+
+// Enter in a field saves, as a form would; it saves nothing the button would
+// not, and nothing at all from a field that is not a text field.
+describe("CashDialog: Enter", () => {
+  const posts = () =>
+    fetchMock.mock.calls.filter(([input]) => input instanceof Request && input.method === "POST").length;
+
+  it("saves a valid deposit from the amount field", async () => {
+    open();
+    typeAmount("1500");
+    fireEvent.keyDown(amountField(), { key: "Enter" });
+    await vi.waitFor(() => expect(posts()).toBe(1));
+  });
+
+  it("saves nothing while the amount is not a sum", async () => {
+    open();
+    typeAmount("abc");
+    fireEvent.keyDown(amountField(), { key: "Enter" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(posts()).toBe(0);
+  });
+
+  it("saves nothing on Shift+Enter, or on Enter outside a text field", async () => {
+    open();
+    typeAmount("1500");
+    fireEvent.keyDown(amountField(), { key: "Enter", shiftKey: true });
+    fireEvent.keyDown(saveButton(), { key: "Enter" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(posts()).toBe(0);
+  });
+});

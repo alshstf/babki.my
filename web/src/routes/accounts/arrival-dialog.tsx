@@ -29,6 +29,7 @@ import {
   type PurchaseRow,
 } from "./purchases-editor";
 import { MAX_NOTE } from "@/lib/text-limits";
+import { submitOnEnter } from "@/lib/submit-on-enter";
 
 // ArrivalDialog records shares that came from another broker — one this
 // program does not hold — on an account no importer feeds. With the purchases
@@ -99,7 +100,7 @@ export function ArrivalDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl" onKeyDown={submitOnEnter(submit, valid && !createArrival.isPending)}>
         <DialogHeader>
           <DialogTitle>{t("arrival.title")}</DialogTitle>
           <DialogDescription>{t("arrival.intro")}</DialogDescription>

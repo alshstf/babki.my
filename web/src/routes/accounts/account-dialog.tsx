@@ -27,6 +27,7 @@ import {
   type AccountWithBalance,
 } from "@/api/accounts";
 import { MAX_ACCOUNT_NAME, MAX_INSTITUTION } from "@/lib/text-limits";
+import { submitOnEnter } from "@/lib/submit-on-enter";
 
 const ACCOUNT_TYPES: AccountType[] = [
   "brokerage",
@@ -116,7 +117,7 @@ export function AccountDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md" onKeyDown={submitOnEnter(submit, valid && !mutation.isPending)}>
         <DialogHeader>
           <DialogTitle>
             {isEdit ? t("accounts.dialog.editTitle") : t("accounts.dialog.createTitle")}

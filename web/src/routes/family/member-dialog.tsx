@@ -21,6 +21,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { isConflict } from "@/api/operations";
 import { useCreateMember, type Role } from "@/api/members";
 import { MAX_PERSON_NAME } from "@/lib/text-limits";
+import { submitOnEnter } from "@/lib/submit-on-enter";
 
 const ASSIGNABLE_ROLES: Role[] = ["editor", "viewer"];
 
@@ -76,7 +77,7 @@ export function MemberDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md" onKeyDown={submitOnEnter(submit, valid && !create.isPending)}>
         <DialogHeader>
           <DialogTitle>{t("family.dialog.title")}</DialogTitle>
         </DialogHeader>

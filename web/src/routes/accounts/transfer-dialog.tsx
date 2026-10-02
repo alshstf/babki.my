@@ -25,6 +25,7 @@ import { useCreateTransfer, isConflict } from "@/api/operations";
 import type { Instrument } from "@/api/instruments";
 import { InstrumentPicker } from "./instrument-picker";
 import { MAX_NOTE } from "@/lib/text-limits";
+import { submitOnEnter } from "@/lib/submit-on-enter";
 
 export function TransferDialog({
   open,
@@ -109,7 +110,7 @@ export function TransferDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md" onKeyDown={submitOnEnter(submit, valid && !createTransfer.isPending)}>
         <DialogHeader>
           <DialogTitle>{t("transfer.title")}</DialogTitle>
         </DialogHeader>
