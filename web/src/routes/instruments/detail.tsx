@@ -19,6 +19,8 @@ import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
 import { queryState, refreshFailed } from "@/lib/query-state";
 import { PositionsTable } from "@/routes/accounts/positions-table";
 import { StatePriceDialog, type QuotedPaper } from "@/routes/accounts/state-price-dialog";
+import { InstrumentEditDialog } from "@/routes/settings/instruments/edit-dialog";
+import type { Instrument } from "@/api/instruments";
 import { PriceChart } from "./price-chart";
 import { PaperOperations } from "./paper-operations";
 import { PaperReturn } from "@/routes/accounts/account-return";
@@ -71,7 +73,14 @@ export function InstrumentPage() {
   const holdings = useInstrumentHoldings(instrumentId);
   const [range, setRange] = useState<Range>("year");
   const prices = useInstrumentPrices(instrumentId, rangeStart(range));
+  // A year with no prices is not a paper with none: one the exchange stopped
+  // quoting has its last price further back, and «цен нет» would be false of
+  // it. So an empty year asks for the whole span — the same request «10 лет»
+  // makes, which is then answered from the cache.
+  const yearEmpty = range === "year" && prices.data?.length === 0;
+  const longer = useInstrumentPrices(instrumentId, rangeStart("all"), yearEmpty);
   const [quoting, setQuoting] = useState<QuotedPaper | null>(null);
+  const [editing, setEditing] = useState<Instrument | undefined>(undefined);
   const isViewer = session?.role === "viewer";
   const baseCurrency = session?.base_currency ?? "";
   const mode = useScreenCurrencies([
@@ -100,7 +109,9 @@ export function InstrumentPage() {
   const holdingOf = new Map<Position, InstrumentHolding>(holdings.data.holdings.map((h) => [h.position, h]));
   const total = holdings.data.total;
   const series = prices.data ?? [];
-  const latest = series.length > 0 ? series[series.length - 1] : null;
+  const known = series.length > 0 ? series : (longer.data ?? []);
+  const latest = known.length > 0 ? known[known.length - 1] : null;
+  const pricesPending = prices.isPending || (yearEmpty && longer.isPending);
   const subtitle = [paper.ticker, paper.isin, t(`instrumentTypes.${paper.type}`), paper.currency]
     .filter(Boolean)
     .join(" · ");
@@ -134,8 +145,30 @@ export function InstrumentPage() {
                 </span>
               </div>
             ) : (
-              <div className="text-sm text-muted-foreground" data-testid="instrument-no-prices">
-                {prices.isPending ? t("app.loading") : t("instrumentPage.noPrices")}
+              <div className="grid gap-1 text-sm text-muted-foreground" data-testid="instrument-no-prices">
+                {pricesPending ? (
+                  t("app.loading")
+                ) : paper.ticker !== "" ? (
+                  <>
+                    {/* A ticker that no source answers for is most often one
+                        typed wrong — and nothing else says so: the quote job
+                        asks for it every half hour and hears nothing (#35).
+                        The correction is one field away, so it is offered
+                        here rather than left to be found in the settings. */}
+                    <span>{t("instrumentPage.noPricesTicker", { ticker: paper.ticker })}</span>
+                    {!isViewer && (
+                      <button
+                        type="button"
+                        className="justify-self-start text-xs underline underline-offset-2"
+                        onClick={() => setEditing(paper)}
+                      >
+                        {t("instrumentPage.fixTicker")}
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  t("instrumentPage.noPrices")
+                )}
               </div>
             )}
             <div className="flex gap-1">
@@ -233,6 +266,7 @@ export function InstrumentPage() {
       {quoting && (
         <StatePriceDialog open onOpenChange={(open) => !open && setQuoting(null)} paper={quoting} />
       )}
+      <InstrumentEditDialog instrument={editing} onOpenChange={(open) => !open && setEditing(undefined)} />
     </div>
   );
 }

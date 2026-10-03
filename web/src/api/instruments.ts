@@ -177,6 +177,9 @@ export function useUpdateInstrument() {
     onSuccess: () => {
       invalidate();
       void queryClient.invalidateQueries({ queryKey: ["positions"] });
+      // And the paper's own page, which names it from the same row and is
+      // where its ticker can be corrected from.
+      void queryClient.invalidateQueries({ queryKey: ["instrument-holdings"] });
     },
   });
 }

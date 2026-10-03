@@ -23,10 +23,12 @@ export function useInstrumentHoldings(instrumentId: string) {
   });
 }
 
-// The paper's daily prices from `from` to today, oldest first.
-export function useInstrumentPrices(instrumentId: string, from: string) {
+// The paper's daily prices from `from` to today, oldest first. `enabled` false
+// holds the request back until the caller knows it needs it.
+export function useInstrumentPrices(instrumentId: string, from: string, enabled = true) {
   return useQuery({
     queryKey: ["instrument-prices", instrumentId, from],
+    enabled,
     queryFn: async (): Promise<DayPrice[]> => {
       const { data, error, response } = await api.GET("/api/v1/instruments/{instrumentId}/prices", {
         params: { path: { instrumentId }, query: { from } },
