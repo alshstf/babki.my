@@ -260,3 +260,45 @@ func TestAnEditIsCheckedAtTheRowsInstant(t *testing.T) {
 		t.Fatalf("editing the purchase's note: %v", err)
 	}
 }
+
+// The journal screen lists a day newest first in the engine's own order: the
+// operation the broker reported late but made at 09:00 sits below the 11:00
+// one, and a row entered by hand — which folds after the broker's rows of its
+// day — on top.
+func TestTheJournalListsADayInTheEnginesOrderNewestFirst(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+	buy := func(ext, clock string) operation.Operation {
+		return timed(operation.Operation{
+			AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+			OccurredOn: date("2026-07-02"), Quantity: dec("1"), Price: dec("100"),
+			AmountMinor: -10_000, Currency: "RUB",
+		}, ext, at("2026-07-02", clock))
+	}
+	if _, err := svc.Create(f.ctx, f.spaceID, operation.Operation{
+		AccountID: f.accountID, Type: operation.TypeDeposit,
+		OccurredOn: date("2026-07-02"), AmountMinor: 50_000, Currency: "RUB",
+	}); err != nil {
+		t.Fatalf("deposit by hand: %v", err)
+	}
+	for _, op := range []operation.Operation{buy("op-late", "11:00"), buy("op-early", "09:00")} {
+		if _, refused, err := svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{Add: []operation.Operation{op}}); err != nil || len(refused) > 0 {
+			t.Fatalf("import %s: %v %v", *op.ExternalID, err, refused)
+		}
+	}
+	page, _, err := f.store.ListByAccount(f.ctx, f.spaceID, f.accountID, 10, 0, operation.JournalFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, o := range page {
+		name := "by hand"
+		if o.ExternalID != nil {
+			name = *o.ExternalID
+		}
+		got = append(got, name)
+	}
+	if want := []string{"by hand", "op-late", "op-early"}; len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Errorf("the journal lists %v, want %v", got, want)
+	}
+}
