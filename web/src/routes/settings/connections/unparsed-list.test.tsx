@@ -48,6 +48,7 @@ function makeOperation(overrides: Partial<TinvestUnparsedOperation> = {}): Tinve
     reason: "unsupported_type",
     detail: 'broker operation type "OPERATION_TYPE_FUTURES_VARIATION_MARGIN"',
     raw: { id: "broker-op-1", operation_type: "OPERATION_TYPE_FUTURES_VARIATION_MARGIN" },
+    disappeared_at: null,
     ...overrides,
   };
 }
@@ -224,6 +225,41 @@ describe("UnparsedList: объяснение строк вручную", () => {
     ).toBeInTheDocument();
     // Выбрать её нельзя: у неё уже есть ответ.
     expect(screen.queryByRole("checkbox", { name: "Выбрать строку" })).not.toBeInTheDocument();
+    // Брокер её по-прежнему присылает — проверять журнал не о чем.
+    expect(screen.queryByText(/могло попасть в журнал ещё раз/)).not.toBeInTheDocument();
+  });
+
+  it("объяснённая строка, которую брокер больше не присылает, просит проверить журнал", async () => {
+    serve([
+      makeOperation({
+        id: "u-gone",
+        content_key: "key-gone",
+        reason: "" as TinvestUnparsedOperation["reason"],
+        detail: "",
+        disappeared_at: "2026-09-02T06:00:00Z",
+        explained_by: {
+          id: "exp-1",
+          operation_id: "op-1",
+          operation_on: "2026-05-21",
+          operation_type: "redemption",
+        },
+      }),
+      makeOperation({ id: "u-live", content_key: "key-live" }),
+    ]);
+    renderList();
+
+    expect(await screen.findByText(/^Брокер больше не присылает — замечено 02\.09\.2026/)).toBeInTheDocument();
+    expect(screen.getByText(/могло попасть в журнал ещё раз/)).toBeInTheDocument();
+    // Строка, которую брокер присылает, ничем таким не помечена.
+    expect(screen.getAllByText(/Брокер больше не присылает/)).toHaveLength(2);
+  });
+
+  it("неразобранная строка, которую брокер больше не присылает, говорит об этом без просьбы проверить журнал", async () => {
+    serve([makeOperation({ disappeared_at: "2026-09-02T06:00:00Z" })]);
+    renderList();
+
+    expect(await screen.findByText(/^Брокер больше не присылает — замечено 02\.09\.2026/)).toBeInTheDocument();
+    expect(screen.queryByText(/могло попасть в журнал ещё раз/)).not.toBeInTheDocument();
   });
 
   it("выбор двух строк одного счёта складывается в одну операцию", async () => {

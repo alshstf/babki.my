@@ -1559,6 +1559,51 @@ func TestTheUnparsedListCarriesTheBrokersOwnRecord(t *testing.T) {
 	}
 }
 
+// A row the broker has stopped returning says since when; one it still returns
+// says null rather than leaving the field out — the screen marks the first
+// kind, and an explained row so marked is where a rewrite the sync could not
+// recognize shows itself (#196).
+func TestTheUnparsedListSaysWhichRowsTheBrokerStoppedReturning(t *testing.T) {
+	api := newTestAPI(t)
+	id, _ := api.createConnection(t)
+	api.seedRunsAndUnparsed(t, id, 0, 2)
+	links, err := api.store.LinksByConnection(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone := time.Date(2026, 7, 21, 9, 0, 0, 0, time.UTC)
+	if _, err := api.store.SyncMirror(context.Background(), id, links[0], []OperationItem{{
+		ID: "op-a", Type: "OPERATION_TYPE_WRITING_OFF_VARMARGIN", State: "OPERATION_STATE_EXECUTED",
+		Date:    time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
+		Payment: MoneyValue{Currency: "RUB", Units: -100},
+		Raw:     json.RawMessage(`{"id":"op-a"}`),
+	}}, gone); err != nil {
+		t.Fatal(err)
+	}
+
+	var page struct {
+		Operations []map[string]json.RawMessage `json:"operations"`
+	}
+	code, body := do(t, api.owner, "GET", api.url+"/api/v1/tinvest/connections/"+id.String()+"/unparsed", "")
+	if code != http.StatusOK {
+		t.Fatalf("status %d, body %s", code, body)
+	}
+	if err := json.Unmarshal([]byte(body), &page); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	got := map[string]string{}
+	for _, op := range page.Operations {
+		got[string(op["payment"])] = string(op["disappeared_at"])
+	}
+	if got[`"-100"`] != "null" {
+		t.Errorf("the row still returned: disappeared_at = %s, want null", got[`"-100"`])
+	}
+	var at time.Time
+	if err := json.Unmarshal([]byte(got[`"-101"`]), &at); err != nil || !at.Equal(gone) {
+		t.Errorf("the row no longer returned: disappeared_at = %s, want %s", got[`"-101"`], gone)
+	}
+}
+
 // -------------------------------------------------------------------------
 // one space cannot reach another's connection
 // -------------------------------------------------------------------------

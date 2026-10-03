@@ -159,7 +159,21 @@ export function UnparsedList({ connectionId }: { connectionId: string }) {
                     )}
                   </TableCell>
                   <TableCell className="whitespace-nowrap">
-                    {formatDateTime(operation.occurred_at)}
+                    <div className="grid gap-0.5">
+                      <span>{formatDateTime(operation.occurred_at)}</span>
+                      {/* The row stays on this list after the broker stops
+                          returning it — it is still an operation nothing here
+                          accounts for — and says so, with the sync that first
+                          missed it: when it was noticed, which is all that is
+                          known of when it went. */}
+                      {operation.disappeared_at != null && (
+                        <span className="text-xs text-muted-foreground">
+                          {t("connections.detail.unparsed.disappeared", {
+                            at: formatDateTime(operation.disappeared_at),
+                          })}
+                        </span>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell>
                     {/* The broker's own word for the type, verbatim. Nothing
@@ -211,7 +225,10 @@ export function UnparsedList({ connectionId }: { connectionId: string }) {
                   <TableCell className="text-right tabular-nums whitespace-nowrap">
                     {operation.payment} {operation.currency}
                   </TableCell>
-                  <TableCell>
+                  {/* Wrapped, unlike the table's other cells: this one holds
+                      sentences — the refusal's own words, the hint beside
+                      «Снять» — and on one line they ran off the card's edge. */}
+                  <TableCell className="min-w-72 whitespace-normal">
                     <div className="grid gap-1">
                       {/* AN EXPLAINED ROW HAS NO REASON, and printing the empty
                           one would render the Russian name of a code that is
@@ -229,6 +246,17 @@ export function UnparsedList({ connectionId }: { connectionId: string }) {
                               date: formatDate(operation.explained_by.operation_on),
                             })}
                           </span>
+                          {/* An explained row the broker no longer returns is
+                              where a rewrite the sync could not recognize shows
+                              itself: the broker may have sent the same event
+                              back changed, and then it is in the journal again
+                              beside the owner's operation (#196). Said here,
+                              because this row is all the owner has to go on. */}
+                          {operation.disappeared_at != null && (
+                            <span className="text-xs text-amber-700 dark:text-amber-400">
+                              {t("connections.detail.explain.explainedGone")}
+                            </span>
+                          )}
                           <div>
                             <Button
                               size="sm"

@@ -2468,6 +2468,9 @@ type TinvestUnparsedOperation struct {
 	// The words come from this program's own journal, its instrument resolver or its projection rules, so they may name internal things — an operation type, an account's own balance, a catalog row. They never carry a credential: the broker token travels as a request header and appears in no message this program builds.
 	Detail string `json:"detail"`
 
+	// DisappearedAt When the broker stopped returning this operation, or null while it still does. Such a row stays on this list (see above), and on an explained row it is the one thing the owner has to look at: the broker may have sent the same event back in a changed form that could not be recognized as this row, and then it is counted again beside the manual operation that stands for it (#196).
+	DisappearedAt nullable.Nullable[time.Time] `json:"disappeared_at"`
+
 	// ExplainedBy The manual operation the owner entered to account for this row, or null for a row nobody has explained. Non-null exactly when this row was skipped by the projection on purpose — and such a row's `reason` is empty, since "could not be read" is not what is true of it.
 	ExplainedBy nullable.Nullable[TinvestRowExplanation] `json:"explained_by,omitempty"`
 

@@ -2463,6 +2463,11 @@ export interface components {
             detail: string;
             /** @description The broker's own JSON element for this operation, as it arrived — every field, including the ones this program does not model. Untyped on purpose: it is evidence for a person asking what the broker actually sent, and nothing here computes from it. */
             raw: unknown;
+            /**
+             * Format: date-time
+             * @description When the broker stopped returning this operation, or null while it still does. Such a row stays on this list (see above), and on an explained row it is the one thing the owner has to look at: the broker may have sent the same event back in a changed form that could not be recognized as this row, and then it is counted again beside the manual operation that stands for it (#196).
+             */
+            disappeared_at: string | null;
             /** @description The manual operation the owner entered to account for this row, or null for a row nobody has explained. Non-null exactly when this row was skipped by the projection on purpose — and such a row's `reason` is empty, since "could not be read" is not what is true of it. */
             explained_by?: components["schemas"]["TinvestRowExplanation"] | null;
         };
