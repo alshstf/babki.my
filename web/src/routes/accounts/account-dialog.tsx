@@ -131,9 +131,9 @@ export function AccountDialog({
           {!isEdit && (
             <>
               <div className="grid gap-2">
-                <Label>{t("accounts.dialog.type")}</Label>
+                <Label htmlFor="account-type">{t("accounts.dialog.type")}</Label>
                 <Select value={type} onValueChange={(v) => setType(v as AccountType)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="account-type"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {ACCOUNT_TYPES.map((accountType) => (
                       <SelectItem key={accountType} value={accountType}>
@@ -160,6 +160,7 @@ export function AccountDialog({
                 </Select>
                 {currency === "custom" && (
                   <Input
+                    aria-label={t("accounts.dialog.currencyPlaceholder")}
                     placeholder={t("accounts.dialog.currencyPlaceholder")}
                     value={customCurrency}
                     maxLength={3}
@@ -180,12 +181,12 @@ export function AccountDialog({
             />
           </div>
           <div className="grid gap-2">
-            <Label>{t("accounts.dialog.ownership")}</Label>
+            <Label htmlFor="account-ownership">{t("accounts.dialog.ownership")}</Label>
             <Select
               value={personal ? "personal" : "shared"}
               onValueChange={(v) => setPersonal(v === "personal")}
             >
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger id="account-ownership"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="shared">{t("accounts.dialog.sharedOption")}</SelectItem>
                 <SelectItem value="personal">

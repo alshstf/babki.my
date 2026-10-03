@@ -61,6 +61,7 @@ export function InstrumentsPage() {
         </CardHeader>
         <CardContent className="grid gap-4">
           <Input
+            aria-label={t("instruments.searchPlaceholder")}
             data-testid="instrument-search"
             placeholder={t("instruments.searchPlaceholder")}
             value={query}

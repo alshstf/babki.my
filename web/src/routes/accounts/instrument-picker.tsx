@@ -128,9 +128,9 @@ export function InstrumentPicker({
     return (
       <div className="grid gap-3 rounded-lg border p-3" data-enter-ignore>
         <div className="grid gap-2">
-          <Label>{t("instrumentPicker.type")}</Label>
+          <Label htmlFor="new-instr-type">{t("instrumentPicker.type")}</Label>
           <Select value={newType} onValueChange={(v) => setNewType(v as InstrumentType)}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectTrigger id="new-instr-type"><SelectValue /></SelectTrigger>
             <SelectContent>
               {INSTRUMENT_TYPES.map((instrumentType) => (
                 <SelectItem key={instrumentType} value={instrumentType}>
@@ -190,6 +190,7 @@ export function InstrumentPicker({
       ) : null}
       <Input
         data-enter-ignore
+        aria-label={t("instrumentPicker.search")}
         placeholder={t("instrumentPicker.search")}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
