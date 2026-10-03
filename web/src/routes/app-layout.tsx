@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { DisplayCurrencyToggle } from "@/components/display-currency-toggle";
 import { useLogout, useSession } from "@/api/session";
 import { PasswordDialog } from "@/components/password-dialog";
+import { TouchTitles } from "@/components/touch-titles";
 import {
   ScreenCurrencyCountProvider,
   useHasMultipleScreenCurrencies,
@@ -121,6 +122,7 @@ export function AppLayout() {
             <Outlet />
           </main>
           <PasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
+          <TouchTitles />
         </div>
       </div>
     </ScreenCurrencyCountProvider>
