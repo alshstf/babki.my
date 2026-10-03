@@ -194,6 +194,25 @@ describe("OperationsTable: the other account of a move", () => {
   });
 });
 
+// A move whose basis was typed by hand says how much it changed the family's
+// cost of the shares — the server's figure, signed — on each half; a move the
+// queue priced says nothing.
+describe("OperationsTable: a basis typed by hand", () => {
+  it("says the change on a typed basis, that it matches, or nothing", async () => {
+    renderTable({
+      operations: [
+        makeOperation({ id: "op-grew", type: "transfer_in", amount_minor: 150_000, transfer_group_id: "g1", stated_basis_change_minor: 50_000 }),
+        makeOperation({ id: "op-same", type: "transfer_out", amount_minor: 100_000, transfer_group_id: "g2", stated_basis_change_minor: 0 }),
+        makeOperation({ id: "op-queue", type: "transfer_out", amount_minor: 100_000, transfer_group_id: "g3", stated_basis_change_minor: null }),
+      ],
+    });
+    const said = await screen.findAllByTestId("operation-stated-basis");
+    expect(said).toHaveLength(2);
+    expect(said[0].textContent).toMatch(/по семье \+500,00\s\$ к стоимости у отправителя/);
+    expect(said[1].textContent).toContain("совпадает");
+  });
+});
+
 // The way back to an arrival's purchases once the paper no longer says its
 // price is unknown: on the journal row of shares from another broker, and only
 // there — a move between own accounts carries the source's purchases.

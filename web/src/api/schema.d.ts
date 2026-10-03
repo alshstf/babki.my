@@ -1820,6 +1820,11 @@ export interface components {
              * @description On a journal page: for one half of a move between two of the family's accounts — shares or money — the account the other half is on. Null for everything else, and absent outside the journal.
              */
             counterpart_account_id?: string | null;
+            /**
+             * Format: int64
+             * @description On a journal page: for each half of a move of shares between two of the family's accounts whose basis was given by hand (TransferRequest.cost_minor), how much the family's basis of those shares changed across the move, in `currency` — the figure given less the basis the departing account's own queue held for them at that moment. Positive: the family's basis grew. Both halves carry the same figure. Null for everything else (and when the departing account does not replay up to the move), absent outside the journal.
+             */
+            stated_basis_change_minor?: number | null;
             /** @description Decimal as string */
             split_ratio?: string | null;
             /**

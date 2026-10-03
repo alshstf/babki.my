@@ -1798,6 +1798,9 @@ type Operation struct {
 	// SplitRatio Decimal as string
 	SplitRatio nullable.Nullable[string] `json:"split_ratio,omitempty"`
 
+	// StatedBasisChangeMinor On a journal page: for each half of a move of shares between two of the family's accounts whose basis was given by hand (TransferRequest.cost_minor), how much the family's basis of those shares changed across the move, in `currency` — the figure given less the basis the departing account's own queue held for them at that moment. Positive: the family's basis grew. Both halves carry the same figure. Null for everything else (and when the departing account does not replay up to the move), absent outside the journal.
+	StatedBasisChangeMinor nullable.Nullable[int64] `json:"stated_basis_change_minor,omitempty"`
+
 	// TradingMode WHERE THIS OPERATION HAPPENED, in the words of whoever reported it: an exchange board's code as the broker sent it ("TQBR", "TQCB"), or the code of dealing away from an order book ("FINEX_OTC" — the over-the-counter dealing the broker opened in the FinEx funds after exchange trading in them stopped). Null for every row nobody said it about: everything entered by hand, and every imported row whose source reported no mode — money moving in and out of an account describes no instrument and carries none.
 	// IT IS THE RAW CODE AND IS NEVER TRANSLATED AWAY, because this program can name only some of them: `trading_mode_kind` says which kind it is, and for a code with no source behind it that field says `unknown` while this one still carries what the broker said. A client shows the code whenever it shows the kind, so an unnamed mode is visible as itself rather than as a blank.
 	//

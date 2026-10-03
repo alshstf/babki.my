@@ -29,7 +29,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { formatPriceIn, signClass } from "@/lib/money";
+import { formatMinor, formatPriceIn, signClass } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { resolveDisplayAmount } from "@/lib/display-amount";
 import type { DisplayCurrencyMode } from "@/lib/display-currency";
@@ -641,6 +641,22 @@ export function OperationsTable({
                           })
                         : t("operations.fromAccount", {
                             name: accountName?.(operation.counterpart_account_id) ?? t("operations.otherAccount"),
+                          })}
+                    </div>
+                  )}
+                  {/* A basis typed by hand: the departing account gave up its
+                      own parcels and the arriving one took the typed figure,
+                      so the family's total moved by the difference the
+                      server worked out. Said on both halves. */}
+                  {operation.stated_basis_change_minor != null && (
+                    <div className="max-w-64 text-xs whitespace-normal text-amber-700 dark:text-amber-400" data-testid="operation-stated-basis">
+                      {operation.stated_basis_change_minor === 0
+                        ? t("operations.statedBasisSame")
+                        : t("operations.statedBasisChange", {
+                            change: `${operation.stated_basis_change_minor > 0 ? "+" : ""}${formatMinor(
+                              operation.stated_basis_change_minor,
+                              operation.currency,
+                            )}`,
                           })}
                     </div>
                   )}

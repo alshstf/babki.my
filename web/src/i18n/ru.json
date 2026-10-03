@@ -270,6 +270,8 @@
     "toAccount": "на «{{name}}»",
     "fromAccount": "с «{{name}}»",
     "otherAccount": "другой счёт",
+    "statedBasisChange": "Стоимость указана вручную: по семье {{change}} к стоимости у отправителя",
+    "statedBasisSame": "Стоимость указана вручную и совпадает со стоимостью у отправителя",
     "columns": {
       "date": "Дата",
       "type": "Тип",
