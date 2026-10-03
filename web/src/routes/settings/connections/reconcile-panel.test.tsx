@@ -76,6 +76,7 @@ function makeUnparsed(id: string): TinvestUnparsedOperation {
     reason: "unsupported_type",
     detail: 'broker operation type "OPERATION_TYPE_FUTURES"',
     raw: { id: "broker-1" },
+    disappeared_at: null,
   };
 }
 

@@ -550,6 +550,12 @@ func (h *Handler) handleUnparsed(w http.ResponseWriter, r *http.Request) {
 			// here computes from them, and re-modelling them would be a second
 			// reading of a document this program deliberately keeps unread.
 			Raw: m.Raw,
+			// Null said outright, not left unset: an unset field of this kind
+			// is written as the zero time — a row gone since year one.
+			DisappearedAt: nullable.NewNullNullable[time.Time](),
+		}
+		if m.DisappearedAt != nil {
+			row.DisappearedAt = nullable.NewNullableWithValue(*m.DisappearedAt)
 		}
 		if e := m.ExplainedBy; e != nil {
 			row.ExplainedBy.Set(apitypes.TinvestRowExplanation{

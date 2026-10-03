@@ -3230,7 +3230,7 @@ components:
         has_more: { type: boolean, description: "Whether the log holds at least one more run beyond this page. The server's to answer: the page's own length cannot, and here it especially cannot be inferred from a short page, since an over-large `limit` is refused rather than clamped. Fetched — one row beyond the page is asked for and its arrival IS this answer — never derived by comparing lengths afterwards." }
     TinvestUnparsedOperation:
       type: object
-      required: [id, link_id, content_key, occurred_at, op_type, class_code, trading_mode_kind, payment, currency, description, reason, detail, raw]
+      required: [id, link_id, content_key, occurred_at, op_type, class_code, trading_mode_kind, payment, currency, description, reason, detail, raw, disappeared_at]
       description: >-
         One broker operation the projection could not turn into journal entries
         — OR one the owner has accounted for by hand, which it could have and
@@ -3320,6 +3320,17 @@ components:
             never carry a credential: the broker token travels as a request
             header and appears in no message this program builds.
         raw: { description: "The broker's own JSON element for this operation, as it arrived — every field, including the ones this program does not model. Untyped on purpose: it is evidence for a person asking what the broker actually sent, and nothing here computes from it." }
+        disappeared_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            When the broker stopped returning this operation, or null while it
+            still does. Such a row stays on this list (see above), and on an
+            explained row it is the one thing the owner has to look at: the
+            broker may have sent the same event back in a changed form that
+            could not be recognized as this row, and then it is counted again
+            beside the manual operation that stands for it (#196).
         explained_by:
           nullable: true
           allOf: [{ $ref: "#/components/schemas/TinvestRowExplanation" }]
