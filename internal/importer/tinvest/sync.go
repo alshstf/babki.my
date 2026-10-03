@@ -271,11 +271,19 @@ func (s *Store) SyncMirror(ctx context.Context, connID uuid.UUID, link AccountLi
 		confirmed = append(confirmed, confirmation{id: match.id, item: it})
 	}
 
-	var toDisappear []uuid.UUID
+	var leftover []mirrorMatch
 	for _, m := range existing {
 		if consumed[m.id] || m.disappeared {
 			continue
 		}
+		leftover = append(leftover, m)
+	}
+	rekeyed, leftover, toInsert := reidentify(leftover, toInsert)
+	for _, r := range rekeyed {
+		confirmed = append(confirmed, confirmation{id: r.id, item: r.item})
+	}
+	toDisappear := make([]uuid.UUID, 0, len(leftover))
+	for _, m := range leftover {
 		toDisappear = append(toDisappear, m.id)
 	}
 
@@ -287,6 +295,9 @@ func (s *Store) SyncMirror(ctx context.Context, connID uuid.UUID, link AccountLi
 	// executed, and what the test then sees restored could only have been
 	// restored by rolling them back.
 	if err := confirmMirrorRows(ctx, tx, confirmed, now); err != nil {
+		return MirrorSyncStats{}, err
+	}
+	if err := rekeyMirrorRows(ctx, tx, link.ID, rekeyed); err != nil {
 		return MirrorSyncStats{}, err
 	}
 	if len(toDisappear) > 0 {
@@ -310,6 +321,92 @@ func (s *Store) SyncMirror(ctx context.Context, connID uuid.UUID, link AccountLi
 		Added:       len(toInsert),
 		Disappeared: len(toDisappear),
 	}, nil
+}
+
+// rekeyed is a row the broker rewrote: the stored row, the key it was filed
+// under, and the item that is the same operation under new identifiers.
+type rekeyed struct {
+	id     uuid.UUID
+	oldKey string
+	item   OperationItem
+}
+
+// reidentify pairs a row this fetch did not match with an item it did not
+// match when the two differ only in the paper's identifiers — the broker
+// rewrites those on old operations, and the content key carries them. Same
+// moment, type, payment and quantity, and exactly one row and one item of
+// that shape on this link: anything less certain is left as a row gone and a
+// row new, which is what it was before. Returns the pairs, and the rows and
+// items left over.
+func reidentify(rows []mirrorMatch, items []OperationItem) ([]rekeyed, []mirrorMatch, []OperationItem) {
+	if len(rows) == 0 || len(items) == 0 {
+		return nil, rows, items
+	}
+	rowsBy := map[string][]int{}
+	for i, m := range rows {
+		rowsBy[keyWithoutPaper(m.contentKey)] = append(rowsBy[keyWithoutPaper(m.contentKey)], i)
+	}
+	itemsBy := map[string][]int{}
+	for i, it := range items {
+		k := keyWithoutPaper(contentKey(it))
+		itemsBy[k] = append(itemsBy[k], i)
+	}
+	var pairs []rekeyed
+	pairedRow, pairedItem := map[int]bool{}, map[int]bool{}
+	for k, ri := range rowsBy {
+		ii := itemsBy[k]
+		if len(ri) != 1 || len(ii) != 1 {
+			continue
+		}
+		pairs = append(pairs, rekeyed{id: rows[ri[0]].id, oldKey: rows[ri[0]].contentKey, item: items[ii[0]]})
+		pairedRow[ri[0]], pairedItem[ii[0]] = true, true
+	}
+	var restRows []mirrorMatch
+	for i, m := range rows {
+		if !pairedRow[i] {
+			restRows = append(restRows, m)
+		}
+	}
+	var restItems []OperationItem
+	for i, it := range items {
+		if !pairedItem[i] {
+			restItems = append(restItems, it)
+		}
+	}
+	return pairs, restRows, restItems
+}
+
+// keyWithoutPaper is a content key with the paper's identifier left out (see
+// contentKey: the third of its fields).
+func keyWithoutPaper(key string) string {
+	parts := strings.Split(key, "|")
+	if len(parts) < 3 {
+		return key
+	}
+	return strings.Join(append(parts[:2:2], parts[3:]...), "|")
+}
+
+// rekeyMirrorRows files each rewritten row under its new key and identifiers,
+// and moves the explanation given for it there too: a row accounted for by
+// hand stays accounted for when the broker renames its paper.
+func rekeyMirrorRows(ctx context.Context, tx pgx.Tx, linkID uuid.UUID, rows []rekeyed) error {
+	for _, r := range rows {
+		newKey := contentKey(r.item)
+		if _, err := tx.Exec(ctx, `UPDATE tinvest_operations_mirror SET content_key = $2, instrument_uid = $3 WHERE id = $1`,
+			r.id, newKey, r.item.InstrumentUID); err != nil {
+			return fmt.Errorf("tinvest: rekey mirror row %s: %w", r.id, err)
+		}
+		// Unless the new key is already explained: one explanation per row, and
+		// the sync is no place to choose between two. The old one then names no
+		// row, which is what it did before this pairing existed.
+		if _, err := tx.Exec(ctx, `UPDATE tinvest_mirror_explanations SET content_key = $3
+			WHERE link_id = $1 AND content_key = $2
+			  AND NOT EXISTS (SELECT 1 FROM tinvest_mirror_explanations o
+			                   WHERE o.link_id = $1 AND o.content_key = $3)`, linkID, r.oldKey, newKey); err != nil {
+			return fmt.Errorf("tinvest: move the explanation of mirror row %s: %w", r.id, err)
+		}
+	}
+	return nil
 }
 
 // readMirrorMatches reads the link's rows in the order the comparison
