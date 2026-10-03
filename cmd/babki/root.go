@@ -329,7 +329,7 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: false,
 	}
-	root.AddCommand(newAllCmd(), newAPICmd(), newWorkerCmd(), newMigrateCmd(), newVersionCmd(), newSeedCmd())
+	root.AddCommand(newAllCmd(), newAPICmd(), newWorkerCmd(), newMigrateCmd(), newVersionCmd(), newSeedCmd(), newResealCmd())
 	return root
 }
 
@@ -460,6 +460,32 @@ func newMigrateCmd() *cobra.Command {
 			}
 			defer r.close()
 			return db.Migrate(ctx, r.pool)
+		},
+	}
+}
+
+// newResealCmd re-encrypts every stored broker token with BABKI_ENCRYPTION_KEY,
+// reading those still sealed with BABKI_ENCRYPTION_KEY_PREVIOUS: the last step
+// of replacing the key, after which the previous one can be dropped.
+func newResealCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reseal",
+		Short: "Перешифровать токены брокеров текущим ключом",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signalCtx(cmd.Context())
+			defer stop()
+			// The key is required: resealing is nothing but using it.
+			r, err := setup(ctx, false, true)
+			if err != nil {
+				return err
+			}
+			defer r.close()
+			n, err := tinvest.NewStore(r.pool).ResealTokens(ctx, r.box)
+			if err != nil {
+				return err
+			}
+			r.log.Info("broker tokens resealed with the current key", "count", n)
+			return nil
 		},
 	}
 }

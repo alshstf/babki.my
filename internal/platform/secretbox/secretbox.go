@@ -68,6 +68,10 @@ func ParseKey(s string) ([]byte, error) {
 // that read the same secret, with no lock of its own.
 type Box struct {
 	aead cipher.AEAD
+	// previous are the keys that sealed before the current one: they still
+	// open, and never seal, so a key can be replaced without first decrypting
+	// everything (see WithPrevious and the reseal command).
+	previous []cipher.AEAD
 }
 
 // New builds a Box from a 32-byte AES-256 key, typically ParseKey's output.
@@ -89,6 +93,19 @@ func New(key []byte) (*Box, error) {
 // Seal encrypts and authenticates plaintext, returning nonce||ciphertext as
 // a single slice. A fresh random nonce is drawn from crypto/rand on every
 // call, so sealing the same plaintext twice never produces the same output.
+// WithPrevious lets the box open what earlier keys sealed. Sealing still uses
+// the box's own key only.
+func (b *Box) WithPrevious(keys ...[]byte) (*Box, error) {
+	for _, key := range keys {
+		older, err := New(key)
+		if err != nil {
+			return nil, fmt.Errorf("secretbox: previous key: %w", err)
+		}
+		b.previous = append(b.previous, older.aead)
+	}
+	return b, nil
+}
+
 func (b *Box) Seal(plaintext []byte) []byte {
 	nonce := make([]byte, b.aead.NonceSize())
 	// crypto/rand.Read cannot return a non-nil error: per its own doc
@@ -113,8 +130,13 @@ func (b *Box) Open(sealed []byte) ([]byte, error) {
 	}
 	nonce, ciphertext := sealed[:nonceSize], sealed[nonceSize:]
 	plaintext, err := b.aead.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return nil, fmt.Errorf("secretbox: open: %w", err)
+	if err == nil {
+		return plaintext, nil
 	}
-	return plaintext, nil
+	for _, older := range b.previous {
+		if plaintext, perr := older.Open(nil, nonce, ciphertext, nil); perr == nil {
+			return plaintext, nil
+		}
+	}
+	return nil, fmt.Errorf("secretbox: open: %w", err)
 }

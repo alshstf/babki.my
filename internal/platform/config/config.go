@@ -18,6 +18,10 @@ type Config struct {
 	// api, worker) — that requirement is enforced in cmd/babki, not here,
 	// same as DatabaseURL above.
 	EncryptionKey string `env:"BABKI_ENCRYPTION_KEY"`
+	// EncryptionKeyPrevious is the key BABKI_ENCRYPTION_KEY replaced, while
+	// secrets it sealed are still stored: it opens them, never seals. Empty
+	// when no key is being replaced.
+	EncryptionKeyPrevious string `env:"BABKI_ENCRYPTION_KEY_PREVIOUS"`
 	// CookieSecure marks the session cookie HTTPS-only. Off by default: a home
 	// install often runs plain http on the local network, where a cookie marked
 	// so would never be sent back. Turn it on behind an HTTPS proxy.
