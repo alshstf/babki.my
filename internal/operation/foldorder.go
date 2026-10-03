@@ -73,7 +73,18 @@ const defaultFoldRank = 1
 // It orders by the date first, the rank within the date, the instant within the
 // rank (rows without one after those with one), and created_at last — the same
 // keys, in the same order, that foldsBefore compares.
-func engineOrderSQL() string {
+func engineOrderSQL() string { return foldOrderSQL(false) }
+
+// listingOrderSQL is the journal screen's order: the engine's, newest first, so
+// a day reads from what happened last back to what happened first.
+func listingOrderSQL() string { return foldOrderSQL(true) }
+
+// foldOrderSQL writes the engine's order, or its exact reverse.
+func foldOrderSQL(reverse bool) string {
+	asc, nulls := "ASC", "NULLS LAST"
+	if reverse {
+		asc, nulls = "DESC", "NULLS FIRST"
+	}
 	sources := make([]string, 0, len(foldRanks))
 	for source := range foldRanks {
 		sources = append(sources, source)
@@ -86,10 +97,10 @@ func engineOrderSQL() string {
 	// every query dies on, which is a test going red for a reason that has
 	// nothing to do with what it checks.
 	if len(sources) == 0 {
-		return "ORDER BY occurred_on ASC, occurred_at ASC NULLS LAST, created_at ASC"
+		return fmt.Sprintf("ORDER BY occurred_on %[1]s, occurred_at %[1]s %[2]s, created_at %[1]s", asc, nulls)
 	}
 	var b strings.Builder
-	b.WriteString("ORDER BY occurred_on ASC, CASE source")
+	fmt.Fprintf(&b, "ORDER BY occurred_on %s, CASE source", asc)
 	for _, source := range sources {
 		// The sources are this package's own constants, not anything a request
 		// carries, so quoting them is a matter of writing valid SQL rather than
@@ -97,7 +108,7 @@ func engineOrderSQL() string {
 		// produce a query that fails to parse — loudly, at once, in every test.
 		fmt.Fprintf(&b, " WHEN '%s' THEN %d", source, foldRanks[source])
 	}
-	fmt.Fprintf(&b, " ELSE %d END ASC, occurred_at ASC NULLS LAST, created_at ASC", defaultFoldRank)
+	fmt.Fprintf(&b, " ELSE %[2]d END %[1]s, occurred_at %[1]s %[3]s, created_at %[1]s", asc, defaultFoldRank, nulls)
 	return b.String()
 }
 
@@ -150,3 +161,6 @@ func byInstant(a, b Operation) (before, decided bool) {
 // engineOrder is engineOrderSQL computed once. The map it is built from is a
 // package-level constant in all but name.
 var engineOrder = engineOrderSQL()
+
+// listingOrder is listingOrderSQL computed once.
+var listingOrder = listingOrderSQL()

@@ -743,7 +743,7 @@ func (s *Store) listJournal(ctx context.Context, spaceID uuid.UUID, accountID *u
 			AND ($6::uuid IS NULL OR instrument_id = $6)
 			AND ($7::date IS NULL OR occurred_on >= $7)
 			AND ($8::date IS NULL OR occurred_on <= $8)
-		ORDER BY occurred_on DESC, created_at DESC LIMIT $3 OFFSET $4`,
+		`+listingOrder+` LIMIT $3 OFFSET $4`,
 		spaceID, accountID, limit+1, offset, types, f.InstrumentID, f.From, f.To)
 	if err != nil {
 		return nil, false, err
