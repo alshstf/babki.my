@@ -105,7 +105,7 @@ export function FamilyPage() {
                         updateRole.mutate({ userId: member.id, body: { role: v as Role } })
                       }
                     >
-                      <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+                      <SelectTrigger className="w-32" aria-label={t("family.columns.role")}><SelectValue /></SelectTrigger>
                       <SelectContent>
                         {ASSIGNABLE_ROLES.map((r) => (
                           <SelectItem key={r} value={r}>{t(`roles.${r}`)}</SelectItem>

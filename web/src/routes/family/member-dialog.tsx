@@ -111,9 +111,9 @@ export function MemberDialog({
             <p className="text-xs text-muted-foreground">{t("family.dialog.passwordHint")}</p>
           </div>
           <div className="grid gap-2">
-            <Label>{t("family.columns.role")}</Label>
+            <Label htmlFor="member-role">{t("family.columns.role")}</Label>
             <Select value={role} onValueChange={(v) => setRole(v as Role)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger id="member-role"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {ASSIGNABLE_ROLES.map((r) => (
                   <SelectItem key={r} value={r}>{t(`roles.${r}`)}</SelectItem>

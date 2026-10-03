@@ -107,13 +107,13 @@ export function CashDialog({
         </DialogHeader>
         <div className="grid gap-4">
           <div className="grid gap-2">
-            <Label>{t("cash.type")}</Label>
+            <Label htmlFor="cash-type">{t("cash.type")}</Label>
             <Select
               value={type}
               onValueChange={(v) => setType(v as OperationType)}
               disabled={editing !== undefined}
             >
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger id="cash-type"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {CASH_TYPES.map((cashType) => (
                   <SelectItem key={cashType} value={cashType}>

@@ -143,6 +143,7 @@ export function SettingsPage() {
             </Select>
             {currency === "custom" && (
               <Input
+                aria-label={t("accounts.dialog.currencyPlaceholder")}
                 placeholder={t("accounts.dialog.currencyPlaceholder")}
                 value={customCurrency}
                 maxLength={3}

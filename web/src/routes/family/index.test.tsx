@@ -151,13 +151,12 @@ describe("FamilyPage — who may change the family", () => {
     await screen.findByText("Мария");
     const asEditor = controlNames();
 
-    // «редактор» is the role dropdown, named by the role currently selected in
-    // it. Written out rather than derived: a control gated somewhere new has to
-    // be added here deliberately.
+    // «Роль» is the role dropdown, named by its column. Written out rather than
+    // derived: a control gated somewhere new has to be added here deliberately.
     expect(asOwner.filter((name) => !asEditor.includes(name))).toEqual([
       "Добавить участника",
+      "Роль",
       "Удалить участника",
-      "редактор",
     ]);
     expect(asEditor.filter((name) => !asOwner.includes(name))).toEqual([]);
     // Still a screen a member can read: the roles are there, as text.

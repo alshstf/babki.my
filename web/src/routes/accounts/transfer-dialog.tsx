@@ -132,9 +132,9 @@ export function TransferDialog({
             )}
           </div>
           <div className="grid gap-2">
-            <Label>{t("transfer.toAccount")}</Label>
+            <Label htmlFor="transfer-to-account">{t("transfer.toAccount")}</Label>
             <Select value={toAccountId} onValueChange={setToAccountId}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger id="transfer-to-account" className="w-full">
                 <SelectValue placeholder={t("transfer.toAccount")} />
               </SelectTrigger>
               <SelectContent>

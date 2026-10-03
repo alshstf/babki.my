@@ -101,3 +101,22 @@ describe("AccountDialog — a refusal from the server", () => {
     expect(screen.queryByText("Не удалось создать счет")).toBeNull();
   });
 });
+
+// Every field says what it is to a screen reader: a select names itself by its
+// label, not by the value it holds, and the other-currency box has a name too.
+describe("AccountDialog — every field is named", () => {
+  it("names each field by its label", async () => {
+    open();
+    // jsdom has no layout, and Radix's Select scrolls to the chosen item when
+    // the list opens (see income-dialog.test.tsx).
+    Element.prototype.scrollIntoView = () => {};
+    fireEvent.click(screen.getByRole("combobox", { name: "Валюта" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Другая…" }));
+    const fields = [...screen.getAllByRole("combobox"), ...screen.getAllByRole("textbox")];
+    expect(fields.length).toBeGreaterThan(3);
+    for (const field of fields) {
+      expect(field).toHaveAccessibleName();
+    }
+    expect(screen.getByRole("combobox", { name: "Тип" })).toBeInTheDocument();
+  });
+});

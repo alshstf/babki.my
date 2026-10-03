@@ -134,13 +134,13 @@ export function IncomeDialog({
         </DialogHeader>
         <div className="grid gap-4">
           <div className="grid gap-2">
-            <Label>{t("income.type")}</Label>
+            <Label htmlFor="income-type">{t("income.type")}</Label>
             <Select
               value={type}
               onValueChange={(v) => setType(v as OperationType)}
               disabled={editing !== undefined}
             >
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger id="income-type"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {INCOME_TYPES.map((incomeType) => (
                   <SelectItem key={incomeType} value={incomeType}>
