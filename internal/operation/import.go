@@ -50,11 +50,15 @@ var ErrImportContract = errors.New("import delta contradicts what the journal ex
 // a FIFO basis is a property of the history, not of the broker's message.
 //
 // AN OPERATION MAY CARRY A CreatedAt, AND EXACTLY ONE THING MAY BE MEANT BY IT:
-// this row replaces one this same delta removes, and keeps its place. Within a
-// date the journal folds by created_at, and that order is the order the FIFO
-// queue breaks ties in — so a row restated by the broker and stamped afresh
-// would move to the end of its own day and change which parcel a later sale
-// consumes, which is a tax figure moving because a description was reworded.
+// this row replaces one this same delta removes, and keeps its place. Rows of
+// one date and one instant (or of one date and none) fold by created_at, and
+// that order is the order the FIFO queue breaks ties in — so a row restated by
+// the broker and stamped afresh would move behind its neighbours and change
+// which parcel a later sale consumes, which is a tax figure moving because a
+// description was reworded.
+//
+// AN OPERATION MAY ALSO CARRY AN OccurredAt — the instant its source gave — and
+// within its date it folds by that first (see foldsBefore).
 // The stamp is therefore checked against the rows being removed (see
 // checkInheritedStamps) rather than trusted: a caller free to invent one would
 // be free to choose where in a day an operation folds. A zero CreatedAt is the
@@ -125,9 +129,10 @@ type candidate struct {
 //     same ground, which is the only way to learn WHICH of them a journal
 //     cannot hold: the engine answers about a whole journal, not about a row.
 //
-// Either way they are offered in the order the engine folds them — by date, and
-// within a date in the order the caller listed them — so a sell listed before
-// the buy that covers it is still judged against the position it actually had.
+// Either way they are offered in the order the engine folds them — by date, then
+// by the instant the source gave, and otherwise in the order the caller listed
+// them — so a sell listed before the buy that covers it is still judged against
+// the position it actually had.
 //
 // The order they are checked in is then the order they are WRITTEN with:
 // created_at is stated on every row rather than left to the statement's clock,
@@ -370,8 +375,8 @@ func (s *Service) applyImportDeltaLocked(ctx context.Context, spaceID uuid.UUID,
 	// that was checked here.
 	// The base starts after the youngest row that SURVIVES this delta in the
 	// touched journals, not merely at the current time, so that a candidate
-	// always folds AFTER everything its date already holds — the same place
-	// journalWith puts one.
+	// always folds AFTER everything its date and instant already hold — the
+	// same place journalWith puts one.
 	// The clock alone does not guarantee that: a delta spreads its rows a
 	// microsecond apart, so a large one reaches milliseconds past the moment it
 	// began, and a sync that follows it closely would otherwise start numbering
@@ -572,7 +577,7 @@ func refusalsFor(legs []Operation, failed int, err error) []ImportRefusal {
 //
 // Anything else is refused as the caller's own mistake rather than as a
 // property of a broker record, because that is what it would be. A created_at
-// decides where within a date an operation folds, a date's order is the order
+// decides where within a date and instant an operation folds, that order is the order
 // the FIFO queue breaks ties in, and the queue decides which parcel a sale
 // consumes — so a caller free to state one is a caller free to set the realized
 // profit of an account by choosing a number. A stamp already in that journal
@@ -661,12 +666,18 @@ func importCandidates(add []Operation) ([]candidate, error) {
 		}
 		out[i].legs = legs
 	}
-	// The order the engine folds them in. Stable, so that operations of one day
-	// keep the order the caller listed them in — which is the only order there
-	// is for events a broker reports with a date and no time.
+	// The order the engine folds them in: by date, then by the instant the
+	// source gave, rows without one after those with one. Stable, so that
+	// operations of one day and one instant keep the order the caller listed
+	// them in — which is the only order there is for events a broker reports
+	// with a date and no time.
 	sort.SliceStable(out, func(i, j int) bool {
-		if !out[i].legs[0].OccurredOn.Equal(out[j].legs[0].OccurredOn) {
-			return out[i].legs[0].OccurredOn.Before(out[j].legs[0].OccurredOn)
+		a, b := out[i].legs[0], out[j].legs[0]
+		if !a.OccurredOn.Equal(b.OccurredOn) {
+			return a.OccurredOn.Before(b.OccurredOn)
+		}
+		if before, decided := byInstant(a, b); decided {
+			return before
 		}
 		return out[i].at < out[j].at
 	})
@@ -963,14 +974,16 @@ func releaseBasis(legs []Operation, pending map[uuid.UUID][]Operation) (int, err
 			continue
 		}
 		// The same release the manual transfer path makes, for the same
-		// reasons: against the journal as it stood on the transfer's own date
+		// reasons: against the journal as it stood at the transfer's own place
 		// rather than at the end (a backdated transfer is replayed at its
-		// chronological place, where the queue's front is different), quantized
+		// chronological place, where the queue's front is different — and an
+		// imported one at its instant, which can be the middle of its day),
+		// quantized
 		// before the basis is summed (a piece too small to store merges into
 		// its neighbour, and the amount must be the sum of the pieces actually
 		// written), and the basis taken from those very pieces rather than
 		// computed a second way.
-		lots, err := portfolio.ReleasedLots(journalUpTo(pending[legs[i].AccountID], legs[i].OccurredOn),
+		lots, err := portfolio.ReleasedLots(foldedAhead(pending[legs[i].AccountID], legs[i]),
 			*legs[i].InstrumentID, *legs[i].Quantity)
 		if err != nil {
 			return i, fmt.Errorf("%w: %v", ErrInconsistent, err)

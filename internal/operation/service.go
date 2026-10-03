@@ -615,8 +615,8 @@ func journalWith(ops []Operation, add []Operation, removeIDs map[uuid.UUID]bool)
 
 // sortJournal puts operations in the order the engine folds them, which is the
 // order ListForEngine reads them back in: by the day they happened, then by the
-// rank their source gives them within that day, then by when they were
-// recorded. One function because two paths assemble a journal to fold — this
+// rank their source gives them within that day, then by the instant the source
+// gave, then by when they were recorded (see foldsBefore). One function because two paths assemble a journal to fold — this
 // one and the import's (see ApplyImportDelta and prepareCandidate, which sort
 // journals whose rows already carry a created_at) — and an order that differs
 // between the check and the read is the fault this package spends most of its
@@ -628,15 +628,7 @@ func journalWith(ops []Operation, add []Operation, removeIDs map[uuid.UUID]bool)
 // years after them and would otherwise multiply a quantity that already counts
 // the split.
 func sortJournal(journal []Operation) {
-	sort.SliceStable(journal, func(i, j int) bool {
-		if !journal[i].OccurredOn.Equal(journal[j].OccurredOn) {
-			return journal[i].OccurredOn.Before(journal[j].OccurredOn)
-		}
-		if ri, rj := foldRank(journal[i].Source), foldRank(journal[j].Source); ri != rj {
-			return ri < rj
-		}
-		return journal[i].CreatedAt.Before(journal[j].CreatedAt)
-	})
+	sort.SliceStable(journal, func(i, j int) bool { return foldsBefore(journal[i], journal[j]) })
 }
 
 // SortJournal puts a journal held in memory into the order the engine folds it
@@ -646,11 +638,11 @@ func sortJournal(journal []Operation) {
 func SortJournal(journal []Operation) { sortJournal(journal) }
 
 // FoldedBefore returns the part of journal that folds BEFORE a new row dated
-// day and written by source: everything dated earlier, and of the day itself
-// the rows whose source ranks no later (see foldRank). For a registry row that
-// is the journal as it stands when the day begins, plus the registry's own rows
-// of that day; for any other source it is everything up to the day's end, the
-// new row being the youngest of its date.
+// day, written by source and carrying no instant: everything dated earlier, and
+// of the day itself the rows whose source ranks no later (see foldRank). For a
+// registry row that is the journal as it stands when the day begins, plus the
+// registry's own rows of that day; for any other source it is everything up to
+// the day's end, a row without an instant being the youngest of its date.
 //
 // A row's parcels have to be worked out against exactly this, or they describe
 // a holding the row will not find when it is replayed.
@@ -676,13 +668,27 @@ func checkJournalOps(ops []Operation, add []Operation, removeIDs map[uuid.UUID]b
 }
 
 // journalUpTo returns the prefix of ops that occurred on or before day —
-// the state of the journal a transfer dated day is replayed against.
-// Same-day operations are kept: within a date the engine orders by
-// created_at, and a newly created operation is the youngest of its date.
+// the state of the journal a transfer dated day, entered by hand, is replayed
+// against. Same-day operations are kept: a row entered by hand carries no
+// instant and is the youngest of its date, so it folds after all of them (see
+// foldsBefore).
 func journalUpTo(ops []Operation, day time.Time) []Operation {
 	out := make([]Operation, 0, len(ops))
 	for _, o := range ops {
 		if !o.OccurredOn.After(day) {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// foldedAhead returns the rows of ops that fold before op — the journal as it
+// stands at op's own place, which for an imported row carrying an instant can
+// be the middle of its day.
+func foldedAhead(ops []Operation, op Operation) []Operation {
+	out := make([]Operation, 0, len(ops))
+	for _, o := range ops {
+		if foldsBefore(o, op) {
 			out = append(out, o)
 		}
 	}

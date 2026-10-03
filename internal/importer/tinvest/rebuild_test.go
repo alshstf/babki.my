@@ -298,6 +298,15 @@ func TestRebuildOverAnUnchangedMirrorAsksForNothing(t *testing.T) {
 	if dividend.Type != operation.TypeDividend || dividend.AmountMinor != 135_075 {
 		t.Errorf("dividend = %s %d, want dividend 135075", dividend.Type, dividend.AmountMinor)
 	}
+	// Each entry carries the broker's instant: within a day the journal folds
+	// by it (#198).
+	for _, ext := range []string{"op-input-1", "op-buy-1", "op-div-1"} {
+		row := f.mirrorRow(t, f.link, ext)
+		entry := byExternalID(t, before, externalIDFor(row, 1))
+		if entry.OccurredAt == nil || !entry.OccurredAt.Equal(row.OccurredAt) {
+			t.Errorf("%s: occurred_at = %v, want the broker's %s", ext, entry.OccurredAt, row.OccurredAt)
+		}
+	}
 
 	mark := len(f.applier.deltas)
 	versions := f.mirrorVersions(t)
@@ -1782,6 +1791,8 @@ func comparedFields(t *testing.T) []comparedField {
 		{"Type", "type", func(o *operation.Operation) { o.Type = operation.TypeSell }},
 		{"OccurredOn", "day", func(o *operation.Operation) { o.OccurredOn = day(t, "2026-03-16") }},
 		{"SettledOn", "settlement day", func(o *operation.Operation) { o.SettledOn = &settled }},
+		{"OccurredAt", "instant", func(o *operation.Operation) { o.OccurredAt = timePtr(time.Date(2026, 3, 15, 9, 0, 0, 0, time.UTC)) }},
+		{"OccurredAt", "instant dropped", func(o *operation.Operation) { o.OccurredAt = nil }},
 		{"Quantity", "quantity", func(o *operation.Operation) { q := decimal.RequireFromString("11"); o.Quantity = &q }},
 		{"Quantity", "quantity dropped", func(o *operation.Operation) { o.Quantity = nil }},
 		{"Price", "price", func(o *operation.Operation) { p := decimal.RequireFromString("276"); o.Price = &p }},
@@ -1836,11 +1847,16 @@ func sameJournalRowBase(t *testing.T) operation.Operation {
 		// altogether. A base carrying nothing would make "dropped" identical
 		// to the base and the case would prove nothing.
 		TradingMode: strPtr("TQBR"),
-		Source:      Source,
+		// An instant for the same reason: "moved" and "dropped" are both
+		// differences only from a base that has one.
+		OccurredAt: timePtr(time.Date(2026, 3, 15, 7, 30, 15, 0, time.UTC)),
+		Source:     Source,
 	}
 }
 
 func strPtr(s string) *string { return &s }
+
+func timePtr(t time.Time) *time.Time { return &t }
 
 // TestSameJournalRowNoticesEveryFieldItCompares walks the fields one at a time.
 // A comparison that quietly stopped looking at one of them would leave the
@@ -2268,5 +2284,35 @@ func TestRebuildLeavesAFundPayoutUnparsedAndThePositionIntact(t *testing.T) {
 	}
 	if fund.Quantity.String() != "69.5" {
 		t.Errorf("the fund's position is %s, want 69.5 — 100 bought, 30.5 withdrawn, and the payout closing nothing", fund.Quantity)
+	}
+}
+
+// An installation that imported its history before the journal kept the
+// broker's instant: the first rebuild after the update puts it on every entry,
+// and each entry keeps its place in its day while it is rewritten.
+func TestRebuildPutsTheInstantOnEntriesWrittenWithoutIt(t *testing.T) {
+	f := newRebuildFixture(t)
+	f.sync(t, f.link, loadOperationItem(t, "input.json"), loadOperationItem(t, "buy.json"))
+	f.rebuild(t)
+	if _, err := f.pool.Exec(f.ctx, `UPDATE operations SET occurred_at = NULL WHERE account_id = $1`, f.accountID); err != nil {
+		t.Fatal(err)
+	}
+	before := map[string]time.Time{}
+	for _, o := range f.journalOf(t, f.accountID) {
+		before[*o.ExternalID] = o.CreatedAt
+	}
+
+	f.rebuild(t)
+	after := f.journalOf(t, f.accountID)
+	if len(after) != len(before) {
+		t.Fatalf("journal holds %d entries after the rebuild, want %d", len(after), len(before))
+	}
+	for _, o := range after {
+		if o.OccurredAt == nil {
+			t.Errorf("%s: still no instant after the rebuild", *o.ExternalID)
+		}
+		if !o.CreatedAt.Equal(before[*o.ExternalID]) {
+			t.Errorf("%s: recorded at %s, was %s — a rewrite must keep the entry's place", *o.ExternalID, o.CreatedAt, before[*o.ExternalID])
+		}
 	}
 }

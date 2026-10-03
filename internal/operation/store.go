@@ -130,14 +130,15 @@ func (s *Store) withAccountsLocked(ctx context.Context, spaceID uuid.UUID, accou
 
 const cols = `id, space_id, account_id, instrument_id, type, occurred_on,
 	settled_on, quantity, price, amount_minor, currency, fee_minor, note,
-	trading_mode, transfer_group_id, split_ratio, source, external_id, created_at`
+	trading_mode, transfer_group_id, split_ratio, source, external_id, created_at,
+	occurred_at`
 
 func scan(row pgx.Row) (Operation, error) {
 	var o Operation
 	err := row.Scan(&o.ID, &o.SpaceID, &o.AccountID, &o.InstrumentID, &o.Type,
 		&o.OccurredOn, &o.SettledOn, &o.Quantity, &o.Price, &o.AmountMinor,
 		&o.Currency, &o.FeeMinor, &o.Note, &o.TradingMode, &o.TransferGroupID,
-		&o.SplitRatio, &o.Source, &o.ExternalID, &o.CreatedAt)
+		&o.SplitRatio, &o.Source, &o.ExternalID, &o.CreatedAt, &o.OccurredAt)
 	return o, err
 }
 
@@ -165,9 +166,9 @@ const insertSQL = `
 	INSERT INTO operations (space_id, account_id, instrument_id, type,
 		occurred_on, settled_on, quantity, price, amount_minor, currency,
 		fee_minor, note, trading_mode, transfer_group_id, split_ratio, source,
-		external_id, created_at)
+		external_id, created_at, occurred_at)
 	SELECT a.space_id, a.id, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-		COALESCE(NULLIF($16, ''), 'manual'), $17, COALESCE($18::timestamptz, clock_timestamp())
+		COALESCE(NULLIF($16, ''), 'manual'), $17, COALESCE($18::timestamptz, clock_timestamp()), $19
 	FROM accounts a WHERE a.id = $2 AND a.space_id = $1
 	RETURNING ` + cols
 
@@ -178,7 +179,7 @@ func insertArgs(spaceID uuid.UUID, op Operation, createdAt *time.Time) []any {
 		spaceID, op.AccountID, op.InstrumentID, op.Type, op.OccurredOn,
 		op.SettledOn, op.Quantity, op.Price, op.AmountMinor, op.Currency,
 		op.FeeMinor, op.Note, op.TradingMode, op.TransferGroupID, op.SplitRatio,
-		op.Source, op.ExternalID, createdAt,
+		op.Source, op.ExternalID, createdAt, op.OccurredAt,
 	}
 }
 
