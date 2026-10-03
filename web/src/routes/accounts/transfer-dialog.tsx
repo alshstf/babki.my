@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { OperationDateField } from "@/components/form-fields";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -18,7 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { EARLIEST_OPERATION_DATE, localToday } from "@/lib/dates";
+import { localToday } from "@/lib/dates";
 import { isPositiveDecimal } from "@/lib/money";
 import { useAccounts, type AccountWithBalance } from "@/api/accounts";
 import { useCreateTransfer, isConflict } from "@/api/operations";
@@ -150,17 +151,7 @@ export function TransferDialog({
             )}
             {sameAccount && <p className="text-xs text-red-500">{t("transfer.sameAccount")}</p>}
           </div>
-          <div className="grid gap-2">
-            <Label htmlFor="transfer-date">{t("transfer.date")}</Label>
-            <Input
-              id="transfer-date"
-              type="date"
-              value={occurredOn}
-              min={EARLIEST_OPERATION_DATE}
-              max={localToday()}
-              onChange={(e) => setOccurredOn(e.target.value)}
-            />
-          </div>
+          <OperationDateField id="transfer-date" label={t("transfer.date")} value={occurredOn} onChange={setOccurredOn} />
           <div className="grid gap-2">
             <Label htmlFor="transfer-note">{t("transfer.note")}</Label>
             <Input id="transfer-note" maxLength={MAX_NOTE} value={note} onChange={(e) => setNote(e.target.value)} />

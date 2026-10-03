@@ -10,10 +10,11 @@ import {
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { OperationDateField } from "@/components/form-fields";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { EARLIEST_OPERATION_DATE, localToday } from "@/lib/dates";
+import { localToday } from "@/lib/dates";
 import { isPositiveDecimal } from "@/lib/money";
 import { normalizeQuantity } from "@/lib/quantity";
 import { ApiError, isConflict } from "@/api/operations";
@@ -123,17 +124,7 @@ export function ArrivalDialog({
                 <p className="text-xs text-red-500">{t("arrival.badQuantity")}</p>
               )}
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="arrival-date">{t("arrival.date")}</Label>
-              <Input
-                id="arrival-date"
-                type="date"
-                value={occurredOn}
-                min={EARLIEST_OPERATION_DATE}
-                max={localToday()}
-                onChange={(e) => setOccurredOn(e.target.value)}
-              />
-            </div>
+            <OperationDateField id="arrival-date" label={t("arrival.date")} value={occurredOn} onChange={setOccurredOn} />
           </div>
           <div className="grid gap-2">
             <Label htmlFor="arrival-note">{t("arrival.note")}</Label>

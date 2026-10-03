@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { OperationDateField } from "@/components/form-fields";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -23,7 +24,7 @@ import {
   parseToMinor,
   isPositiveDecimal,
 } from "@/lib/money";
-import { EARLIEST_OPERATION_DATE, localToday } from "@/lib/dates";
+import { localToday } from "@/lib/dates";
 import { useSaveOperation, isConflict, type Operation } from "@/api/operations";
 import type { AccountWithBalance } from "@/api/accounts";
 import type { Instrument } from "@/api/instruments";
@@ -454,17 +455,7 @@ export function TradeDialog({
               </p>
             )}
           </div>
-          <div className="grid gap-2">
-            <Label htmlFor="trade-date">{t("trade.date")}</Label>
-            <Input
-              id="trade-date"
-              type="date"
-              value={occurredOn}
-              min={EARLIEST_OPERATION_DATE}
-              max={localToday()}
-              onChange={(e) => setOccurredOn(e.target.value)}
-            />
-          </div>
+          <OperationDateField id="trade-date" label={t("trade.date")} value={occurredOn} onChange={setOccurredOn} />
           <div className="grid gap-2">
             <Label htmlFor="trade-note">{t("trade.note")}</Label>
             <Input id="trade-note" maxLength={MAX_NOTE} value={note} onChange={(e) => setNote(e.target.value)} />
