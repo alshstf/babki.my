@@ -199,10 +199,11 @@ describe("InstrumentPage", () => {
   });
 
   it("asks for ten years of prices when the reader picks them", async () => {
+    const today = new Date().toISOString().slice(0, 10);
     serve({
       "/api/v1/accounts": { body: [] },
       "/holdings": { body: { instrument: sber, holdings: [], total: null } },
-      "/prices": { body: [] },
+      "/prices": { body: [{ on: today, price: "150", currency: "RUB", source: "moex" }] },
     });
     renderPage();
     expect(await screen.findByText("Этой бумаги нет ни на одном счёте семьи")).toBeInTheDocument();
@@ -231,6 +232,55 @@ describe("InstrumentPage", () => {
     renderPage();
     expect(await screen.findByTestId("instrument-latest-price")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "указать текущую цену" })).toBeNull();
+  });
+
+  it("an empty year is not a paper without prices: the last one further back is shown", async () => {
+    // The year comes back empty; the ten-year request — made on its own — is
+    // answered with the price the exchange last gave.
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
+      requested.push(url.toString());
+      const yearAgo = new Date();
+      yearAgo.setUTCFullYear(yearAgo.getUTCFullYear() - 2);
+      const body = url.pathname.endsWith("/prices")
+        ? Number(url.searchParams.get("from")?.slice(0, 4)) < yearAgo.getUTCFullYear()
+          ? [{ on: "2023-05-12", price: "99.5", currency: "RUB", source: "moex" }]
+          : []
+        : url.pathname.endsWith("/holdings")
+          ? { instrument: sber, holdings: [], total: null }
+          : url.pathname.endsWith("/api/v1/accounts")
+            ? []
+            : null;
+      return Promise.resolve(new Response(JSON.stringify(body), { status: body === null ? 404 : 200 }));
+    });
+    renderPage();
+    const latest = await screen.findByTestId("instrument-latest-price");
+    expect(latest.textContent).toContain("12.05.2023");
+    expect(screen.queryByTestId("instrument-no-prices")).toBeNull();
+  });
+
+  it("a paper no source prices names its ticker and offers to correct it", async () => {
+    serve({
+      "/api/v1/accounts": { body: [] },
+      "/holdings": { body: { instrument: { ...sber, ticker: "SBRE" }, holdings: [], total: null } },
+      "/prices": { body: [] },
+    });
+    renderPage();
+    const note = await screen.findByText(/не прислали цену по тикеру «SBRE»/);
+    expect(note).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "исправить тикер" }));
+    expect(await screen.findByTestId("instrument-ticker")).toHaveValue("SBRE");
+  });
+
+  it("a paper with no ticker is not told to correct one", async () => {
+    serve({
+      "/api/v1/accounts": { body: [] },
+      "/holdings": { body: { instrument: { ...sber, ticker: "" }, holdings: [], total: null } },
+      "/prices": { body: [] },
+    });
+    renderPage();
+    expect(await screen.findByText(/биржа и брокер её не котируют/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "исправить тикер" })).toBeNull();
   });
 
   it("says the paper is not found on a 404", async () => {
