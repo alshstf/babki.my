@@ -1127,6 +1127,11 @@ func (h *Handler) writeJournalPage(w http.ResponseWriter, r *http.Request, space
 		family.WriteError(w, err)
 		return
 	}
+	stated, err := h.svc.StatedBasisChanges(r.Context(), spaceID, ops)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
 
 	page := make([]apitypes.Operation, 0, len(ops))
 	for _, o := range ops {
@@ -1134,6 +1139,10 @@ func (h *Handler) writeJournalPage(w http.ResponseWriter, r *http.Request, space
 		api.CounterpartAccountId = nullable.NewNullNullable[uuid.UUID]()
 		if account, ok := counterparts[o.ID]; ok {
 			api.CounterpartAccountId = nullable.NewNullableWithValue(account)
+		}
+		api.StatedBasisChangeMinor = nullable.NewNullNullable[int64]()
+		if change, ok := stated[o.ID]; ok {
+			api.StatedBasisChangeMinor = nullable.NewNullableWithValue(change)
 		}
 		inBase, gap, err := h.operationInBase(r.Context(), o, sp.BaseCurrency, rates)
 		if err != nil {

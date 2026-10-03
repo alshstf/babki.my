@@ -2545,6 +2545,19 @@ components:
           $ref: "#/components/schemas/TradingModeKind"
         transfer_group_id: { type: string, format: uuid, nullable: true }
         counterpart_account_id: { type: string, format: uuid, nullable: true, description: "On a journal page: for one half of a move between two of the family's accounts — shares or money — the account the other half is on. Null for everything else, and absent outside the journal." }
+        stated_basis_change_minor:
+          type: integer
+          format: int64
+          nullable: true
+          description: >-
+            On a journal page: for each half of a move of shares between two of
+            the family's accounts whose basis was given by hand
+            (TransferRequest.cost_minor), how much the family's basis of those
+            shares changed across the move, in `currency` — the figure given
+            less the basis the departing account's own queue held for them at
+            that moment. Positive: the family's basis grew. Both halves carry
+            the same figure. Null for everything else (and when the departing
+            account does not replay up to the move), absent outside the journal.
         split_ratio: { type: string, nullable: true, description: "Decimal as string" }
         source:
           type: string
