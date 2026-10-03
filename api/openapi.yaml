@@ -2,9 +2,20 @@ openapi: 3.0.3
 info:
   title: babki.my API
   version: 0.1.0
+tags:
+  - { name: family, description: "Setup, sign-in and sessions, the space, its members and roles (internal/family)." }
+  - { name: accounts, description: "Accounts, balance marks, the family's total and capital (internal/account)." }
+  - { name: instruments, description: "The catalog of papers (internal/instrument)." }
+  - { name: corporate-actions, description: "The registry of splits, conversions and spin-offs (internal/corporateaction)." }
+  - { name: journal, description: "Operations: entry, edit, delete, transfers, arrivals (internal/operation)." }
+  - { name: portfolio, description: "Positions, a paper's page and returns, computed from the journal (internal/portfolio)." }
+  - { name: table-import, description: "Loading a table into an account and exporting its journal as one (internal/importer/table)." }
+  - { name: tinvest, description: "The T-Invest connection: sync, unparsed operations, explanations (internal/importer/tinvest)." }
+  - { name: service, description: "The whole space's export and the state of background data sources." }
 paths:
   /api/v1/setup/status:
     get:
+      tags: [family]
       operationId: getSetupStatus
       responses:
         "200":
@@ -14,6 +25,7 @@ paths:
               schema: { $ref: "#/components/schemas/SetupStatus" }
   /api/v1/setup:
     post:
+      tags: [family]
       operationId: performSetup
       requestBody:
         required: true
@@ -31,6 +43,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/auth/login:
     post:
+      tags: [family]
       operationId: login
       requestBody:
         required: true
@@ -60,12 +73,14 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
   /api/v1/auth/logout:
     post:
+      tags: [family]
       operationId: logout
       responses:
         "204": { description: Signed out }
         "401": { $ref: "#/components/responses/Error" }
   /api/v1/auth/password:
     post:
+      tags: [family]
       operationId: changePassword
       description: >-
         Replaces the caller's password once the current one is given. Every other session of the
@@ -83,6 +98,7 @@ paths:
         "429": { $ref: "#/components/responses/Error" }
   /api/v1/auth/sign-out-elsewhere:
     post:
+      tags: [family]
       operationId: signOutElsewhere
       description: Ends every session of the caller but this one, which is renewed and goes on.
       responses:
@@ -90,6 +106,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
   /api/v1/auth/me:
     get:
+      tags: [family]
       operationId: getMe
       responses:
         "200":
@@ -100,6 +117,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
   /api/v1/tax-residencies:
     get:
+      tags: [family]
       operationId: listTaxResidencies
       description: >-
         Every country this application has cost basis rules for, with the rules
@@ -119,6 +137,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
   /api/v1/space:
     patch:
+      tags: [family]
       operationId: updateSpace
       description: Updates the space's base currency and/or the owner's country of tax residency (owner-only).
       requestBody:
@@ -137,6 +156,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
   /api/v1/members:
     get:
+      tags: [family]
       operationId: listMembers
       responses:
         "200":
@@ -148,6 +168,7 @@ paths:
                 items: { $ref: "#/components/schemas/MemberInfo" }
         "401": { $ref: "#/components/responses/Error" }
     post:
+      tags: [family]
       operationId: createMember
       requestBody:
         required: true
@@ -166,6 +187,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/members/{userId}:
     patch:
+      tags: [family]
       operationId: updateMember
       parameters:
         - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -185,6 +207,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
     delete:
+      tags: [family]
       operationId: deleteMember
       parameters:
         - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -196,6 +219,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/accounts:
     get:
+      tags: [accounts]
       operationId: listAccounts
       responses:
         "200":
@@ -207,6 +231,7 @@ paths:
                 items: { $ref: "#/components/schemas/AccountWithBalance" }
         "401": { $ref: "#/components/responses/Error" }
     post:
+      tags: [accounts]
       operationId: createAccount
       requestBody:
         required: true
@@ -224,6 +249,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}:
     patch:
+      tags: [accounts]
       operationId: updateAccount
       parameters:
         - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -243,6 +269,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
     delete:
+      tags: [accounts]
       operationId: archiveAccount
       description: Archives the account (soft delete).
       parameters:
@@ -255,6 +282,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/balance:
     put:
+      tags: [accounts]
       operationId: setAccountBalance
       description: Sets a manual balance mark for a date (upsert per account+date).
       parameters:
@@ -276,6 +304,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/imports/preview:
     post:
+      tags: [table-import]
       operationId: previewTableImport
       description: >-
         Reads a CSV table of operations for the account and says, row by row, what importing it
@@ -304,6 +333,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/imports:
     get:
+      tags: [table-import]
       operationId: listTableImports
       description: The account's table imports, newest first, rolled back ones included.
       parameters:
@@ -318,6 +348,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
     post:
+      tags: [table-import]
       operationId: importTable
       description: >-
         Imports a CSV table into the account with the mapping given (see POST .../imports/preview,
@@ -344,6 +375,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/journal.csv:
     get:
+      tags: [table-import]
       operationId: exportJournal
       description: >-
         The account's journal as a CSV table, oldest first: `;` between cells, decimal commas, a
@@ -363,6 +395,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/imports/papers:
     post:
+      tags: [table-import]
       operationId: addImportPapers
       description: >-
         Looks the papers a table names but the catalog does not hold — by ticker or ISIN — up on
@@ -391,6 +424,7 @@ paths:
         "502": { $ref: "#/components/responses/Error" }
   /api/v1/imports/{importId}:
     delete:
+      tags: [table-import]
       operationId: rollBackTableImport
       description: >-
         Takes every operation the import wrote, and still in the journal, out of it, and marks
@@ -412,6 +446,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/return:
     get:
+      tags: [portfolio]
       operationId: getAccountReturn
       description: >-
         What an account earned over a period, by its journal: its worth at the end of `from` and
@@ -437,6 +472,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/return:
     get:
+      tags: [accounts]
       operationId: getFamilyReturn
       description: >-
         GET /api/v1/accounts/{accountId}/return over the family's brokerage accounts that the
@@ -458,6 +494,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
   /api/v1/instruments/{instrumentId}/holdings:
     get:
+      tags: [portfolio]
       operationId: getInstrumentHoldings
       description: >-
         One paper across the family: its catalog row, and its position on every account whose
@@ -478,6 +515,7 @@ paths:
         "422": { $ref: "#/components/responses/Error" }
   /api/v1/instruments/{instrumentId}/operations:
     get:
+      tags: [journal]
       operationId: listInstrumentOperations
       description: >-
         One paper's rows across every account of the space, newest first, a page at a time —
@@ -497,6 +535,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
   /api/v1/instruments/{instrumentId}/return:
     get:
+      tags: [portfolio]
       operationId: getInstrumentReturn
       description: >-
         What one paper earned the family between two days, across every account it has been
@@ -524,6 +563,7 @@ paths:
         "422": { $ref: "#/components/responses/Error" }
   /api/v1/instruments/{instrumentId}/prices:
     get:
+      tags: [portfolio]
       operationId: getInstrumentPrices
       description: >-
         The paper's closing prices, one a day, from `from` to today, oldest first — the
@@ -546,6 +586,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
     post:
+      tags: [portfolio]
       operationId: stateInstrumentPrice
       description: >-
         States a paper's price on a day by hand — for a paper no exchange or broker quotes: a
@@ -575,6 +616,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/export:
     get:
+      tags: [service]
       operationId: exportSpace
       description: >-
         Everything the family has entered, as one JSON document to keep or to take elsewhere:
@@ -597,6 +639,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
   /api/v1/data-sources:
     get:
+      tags: [service]
       operationId: listDataSources
       description: >-
         How the background jobs that fetch outside data last ended — the exchange's prices and
@@ -615,6 +658,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
   /api/v1/capital:
     get:
+      tags: [accounts]
       operationId: getCapital
       description: >-
         What the family's active accounts were worth at the end of each of a run of days, in the
@@ -638,6 +682,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
   /api/v1/summary:
     get:
+      tags: [accounts]
       operationId: getSummary
       responses:
         "200":
@@ -648,6 +693,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
   /api/v1/instruments:
     get:
+      tags: [instruments]
       operationId: searchInstruments
       description: >-
         The instrument catalog, ordered by name, one page at a time. An absent
@@ -682,6 +728,7 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
     post:
+      tags: [instruments]
       operationId: createInstrument
       requestBody:
         required: true
@@ -699,6 +746,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
   /api/v1/instruments/{instrumentId}:
     patch:
+      tags: [instruments]
       operationId: updateInstrument
       parameters:
         - { name: instrumentId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -719,6 +767,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/instrument-events:
     get:
+      tags: [corporate-actions]
       operationId: listInstrumentEvents
       description: >-
         The corporate-actions registry: what happened to the PAPERS, newest
@@ -742,6 +791,7 @@ paths:
               schema: { $ref: "#/components/schemas/InstrumentEventsResponse" }
         "401": { $ref: "#/components/responses/Error" }
     post:
+      tags: [corporate-actions]
       operationId: createInstrumentEvent
       description: >-
         Record a corporate action by hand. The event is stored, and — for the
@@ -774,6 +824,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
   /api/v1/instrument-events/{eventId}:
     delete:
+      tags: [corporate-actions]
       operationId: deleteInstrumentEvent
       description: >-
         Remove a hand-recorded event, and with it the journal rows it put into
@@ -800,6 +851,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/operations:
     get:
+      tags: [journal]
       operationId: listAccountOperations
       description: >-
         One account's journal, newest first, one page at a time.
@@ -843,6 +895,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
   /api/v1/operations:
     post:
+      tags: [journal]
       operationId: createOperation
       description: >-
         Records one journal entry. The account's WHOLE journal is replayed with the new row
@@ -878,6 +931,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/operations/arrivals:
     post:
+      tags: [journal]
       operationId: createArrival
       description: >-
         Records shares arriving from another broker on an account — a transfer_in with no
@@ -905,6 +959,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/instruments/{instrumentId}/arrivals:
     get:
+      tags: [journal]
       operationId: listArrivals
       description: >-
         Every occasion on which shares of this paper reached this account by a transfer, oldest
@@ -925,6 +980,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
   /api/v1/operations/transfer:
     post:
+      tags: [journal]
       operationId: createTransfer
       description: >-
         Creates a linked transfer_out/transfer_in pair moving instrument quantity between
@@ -949,6 +1005,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/operations/money-transfer:
     post:
+      tags: [journal]
       operationId: createMoneyTransfer
       description: >-
         Moves money between two of the family's accounts: a withdrawal of `amount_minor` in
@@ -976,6 +1033,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/operations/{operationId}:
     put:
+      tags: [journal]
       operationId: updateOperation
       description: >-
         Rewrites an operation entered by hand, in place: the body is the one POST
@@ -1004,6 +1062,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
     delete:
+      tags: [journal]
       operationId: deleteOperation
       description: >-
         Deletes the operation (whole pair for transfers). Rejected with 409 if the remaining
@@ -1024,6 +1083,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/operations/{operationId}/purchases:
     put:
+      tags: [journal]
       operationId: statePurchases
       description: >-
         States what shares that arrived from another broker cost and when they were bought —
@@ -1060,6 +1120,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/accounts/{accountId}/positions:
     get:
+      tags: [portfolio]
       operationId: listAccountPositions
       parameters:
         - { name: accountId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -1073,6 +1134,7 @@ paths:
         "422": { $ref: "#/components/responses/Error" }
   /api/v1/tinvest/token-check:
     post:
+      tags: [tinvest]
       operationId: checkTinvestToken
       description: >-
         Asks the broker which of the caller's T-Invest accounts a read-only
@@ -1111,6 +1173,7 @@ paths:
         "502": { $ref: "#/components/responses/Error" }
   /api/v1/tinvest/connections:
     get:
+      tags: [tinvest]
       operationId: listTinvestConnections
       description: >-
         Every T-Invest connection of the caller's space. Owner-only.
@@ -1123,6 +1186,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
     post:
+      tags: [tinvest]
       operationId: createTinvestConnection
       description: >-
         Connects a broker token and starts the first import. Owner-only.
@@ -1183,6 +1247,7 @@ paths:
         "502": { $ref: "#/components/responses/Error" }
   /api/v1/tinvest/connections/{connectionId}:
     get:
+      tags: [tinvest]
       operationId: getTinvestConnection
       description: One connection of the caller's space. Owner-only.
       parameters:
@@ -1198,6 +1263,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
     patch:
+      tags: [tinvest]
       operationId: updateTinvestConnection
       description: >-
         Replaces the connection's token, switches it on or off, or both.
@@ -1234,6 +1300,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
     delete:
+      tags: [tinvest]
       operationId: deleteTinvestConnection
       description: >-
         Withdraws the connection to the broker. Owner-only.
@@ -1263,6 +1330,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/tinvest/connections/{connectionId}/sync:
     post:
+      tags: [tinvest]
       operationId: syncTinvestConnection
       description: >-
         Asks for this connection to be synced now. Owner-only.
@@ -1294,6 +1362,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/tinvest/connections/{connectionId}/runs:
     get:
+      tags: [tinvest]
       operationId: listTinvestSyncRuns
       description: >-
         The connection's sync log, newest first, one page at a time.
@@ -1321,6 +1390,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/tinvest/connections/{connectionId}/unparsed:
     get:
+      tags: [tinvest]
       operationId: listTinvestUnparsedOperations
       description: >-
         The connection's broker operations that this program could not turn into
@@ -1347,6 +1417,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
   /api/v1/tinvest/links/{linkId}/explanations:
     post:
+      tags: [tinvest]
       operationId: explainTinvestRows
       description: >-
         Account for one or more of this linked account's broker rows with one
@@ -1397,6 +1468,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/tinvest/explanations/{explanationId}:
     delete:
+      tags: [tinvest]
       operationId: deleteTinvestExplanation
       description: >-
         Take back an explanation. Owner-only.
