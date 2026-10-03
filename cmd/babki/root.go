@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -94,7 +95,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	famSM := family.NewSessionManager(r.pool)
 	famSM.Cookie.Secure = r.cfg.CookieSecure
 	famAuth := family.NewAuth(famSM, famStore)
-	family.NewHandler(famSvc, famStore, famAuth, famSM).Mount(srv)
+	family.NewHandler(famSvc, famStore, famAuth, famSM).WithSetupCode(setupCode(r, famSvc)).Mount(srv)
 	mdStore := marketdata.NewStore(r.pool)
 	converter := marketdata.NewConverter(mdStore)
 	instStore := instrument.NewStore(r.pool)
@@ -488,6 +489,24 @@ func newResealCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// setupCode is the one-time code first-run setup asks for, written to the log
+// at start while the instance has no owner yet, so that whoever can read this
+// server's log — and not whoever reaches its port first — becomes the owner.
+// A code is made either way: should the check below fail, setup still asks
+// for one, which is the safe side of not knowing.
+func setupCode(r *rt, svc *family.Service) string {
+	if chosen := strings.ToUpper(strings.TrimSpace(r.cfg.SetupCode)); chosen != "" {
+		return chosen
+	}
+	code := family.NewSetupCode()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if needed, err := svc.SetupNeeded(ctx); err != nil || needed {
+		r.log.Warn("first-run setup: enter this code on the setup screen", "setup_code", code)
+	}
+	return code
 }
 
 func newVersionCmd() *cobra.Command {

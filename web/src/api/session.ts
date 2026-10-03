@@ -127,6 +127,7 @@ export function useSetup() {
       username: string;
       display_name: string;
       password: string;
+      setup_code?: string;
     }) => {
       const { data, error, response } = await api.POST("/api/v1/setup", {
         body,

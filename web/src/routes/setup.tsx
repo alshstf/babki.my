@@ -10,13 +10,16 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { isConflict } from "@/api/operations";
-import { useSetup } from "@/api/session";
+import { ApiError, isConflict } from "@/api/operations";
+import { useSetup, useSetupStatus } from "@/api/session";
 import { MAX_PERSON_NAME } from "@/lib/text-limits";
 
 export function SetupPage() {
   const { t } = useTranslation();
   const setup = useSetup();
+  const status = useSetupStatus();
+  const codeRequired = status.data?.code_required ?? false;
+  const [code, setCode] = useState("");
   const [spaceName, setSpaceName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [username, setUsername] = useState("");
@@ -24,7 +27,8 @@ export function SetupPage() {
 
   const valid =
     spaceName && displayName && /^[a-z0-9_]{3,32}$/.test(username) &&
-    password.length >= 8;
+    password.length >= 8 &&
+    (!codeRequired || code.trim() !== "");
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -43,6 +47,7 @@ export function SetupPage() {
                 display_name: displayName,
                 username,
                 password,
+                ...(codeRequired ? { setup_code: code.trim() } : {}),
               });
             }}
           >
@@ -84,6 +89,19 @@ export function SetupPage() {
                 onChange={(e) => setPassword(e.target.value)}
               />
             </div>
+            {codeRequired && (
+              <div className="grid gap-2">
+                <Label htmlFor="setup-code">{t("setup.code")}</Label>
+                <Input
+                  id="setup-code"
+                  autoComplete="off"
+                  maxLength={64}
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">{t("setup.codeHint")}</p>
+              </div>
+            )}
             {setup.isError && (
               <Alert variant="destructive">
                 {/* By status, not by the server's sentence. 409 is what this
@@ -115,7 +133,9 @@ export function SetupPage() {
                 <AlertDescription>
                   {isConflict(setup.error)
                     ? t("setup.alreadySetUp")
-                    : t("setup.genericError")}
+                    : setup.error instanceof ApiError && setup.error.status === 403
+                      ? t("setup.wrongCode")
+                      : t("setup.genericError")}
                 </AlertDescription>
               </Alert>
             )}

@@ -26,6 +26,10 @@ type Config struct {
 	// install often runs plain http on the local network, where a cookie marked
 	// so would never be sent back. Turn it on behind an HTTPS proxy.
 	CookieSecure bool `env:"BABKI_COOKIE_SECURE" envDefault:"false"`
+	// SetupCode, when set, is the one-time code first-run setup asks for,
+	// chosen in advance; otherwise the server makes one and writes it to its
+	// log (see cmd/babki setupCode).
+	SetupCode string `env:"BABKI_SETUP_CODE"`
 }
 
 // Load reads configuration from env. Does not validate DatabaseURL or

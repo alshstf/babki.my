@@ -27,6 +27,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SessionInfo" }
         "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
   /api/v1/auth/login:
     post:
@@ -1438,14 +1439,16 @@ components:
         error: { type: string }
     SetupStatus:
       type: object
-      required: [setup_needed]
+      required: [setup_needed, code_required]
       properties:
         setup_needed: { type: boolean }
+        code_required: { type: boolean, description: "Whether setup asks for the one-time code the server wrote to its log when it started. True on a running installation; false where the server was built without one (tests)." }
     SetupRequest:
       type: object
       description: "Creates the first user, the space and the owner membership, and only while the instance has no users at all — a second call is a 409. The four rules below are the ones internal/family/auth.go, Setup applies, and each of them is a 400."
       required: [space_name, username, display_name, password]
       properties:
+        setup_code: { type: string, maxLength: 64, description: "The one-time code from the server's log (see SetupStatus.code_required). A wrong or missing code, where one is required, is a 403." }
         space_name:
           type: string
           maxLength: 100

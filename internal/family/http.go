@@ -1,11 +1,14 @@
 package family
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
 	"errors"
 	"log/slog"
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/google/uuid"
@@ -23,6 +26,16 @@ type Handler struct {
 	auth  *Auth
 	sm    *scs.SessionManager
 	guard *loginGuard
+	// setupCode, when set, is what first-run setup must be given: the server
+	// writes it to its log at start, so that the owner of the machine — and
+	// not whoever reaches the port first — becomes the owner of the instance.
+	setupCode string
+}
+
+// WithSetupCode makes first-run setup ask for code (see setupCode).
+func (h *Handler) WithSetupCode(code string) *Handler {
+	h.setupCode = code
+	return h
 }
 
 func NewHandler(svc *Service, store *Store, auth *Auth, sm *scs.SessionManager) *Handler {
@@ -137,13 +150,23 @@ func (h *Handler) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, err)
 		return
 	}
-	httpjson.Write(w, http.StatusOK, apitypes.SetupStatus{SetupNeeded: needed})
+	httpjson.Write(w, http.StatusOK, apitypes.SetupStatus{SetupNeeded: needed, CodeRequired: h.setupCode != ""})
 }
 
 func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 	var req apitypes.SetupRequest
 	if httpjson.Decode(w, r, &req) != nil {
 		return
+	}
+	if h.setupCode != "" {
+		given := ""
+		if req.SetupCode != nil {
+			given = strings.TrimSpace(*req.SetupCode)
+		}
+		if subtle.ConstantTimeCompare([]byte(strings.ToUpper(given)), []byte(h.setupCode)) != 1 {
+			httpjson.Error(w, http.StatusForbidden, "the setup code from the server's log is required")
+			return
+		}
 	}
 	u, p, err := h.svc.Setup(r.Context(), SetupParams{
 		SpaceName: req.SpaceName, Username: req.Username,
@@ -398,4 +421,21 @@ func (h *Handler) handleSignOutElsewhere(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// setupCodeAlphabet leaves out the letters and digits read for one another
+// (0/O, 1/I/L), since the code is copied from a log by eye.
+const setupCodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+// NewSetupCode is a fresh one-time code for first-run setup: eight characters,
+// about 39 bits, plenty against guessing over a network that the sign-in
+// door's own pace would allow.
+func NewSetupCode() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	out := make([]byte, len(b))
+	for i, v := range b {
+		out[i] = setupCodeAlphabet[int(v)%len(setupCodeAlphabet)]
+	}
+	return string(out)
 }

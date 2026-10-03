@@ -943,9 +943,13 @@ export interface components {
         };
         SetupStatus: {
             setup_needed: boolean;
+            /** @description Whether setup asks for the one-time code the server wrote to its log when it started. True on a running installation; false where the server was built without one (tests). */
+            code_required: boolean;
         };
         /** @description Creates the first user, the space and the owner membership, and only while the instance has no users at all — a second call is a 409. The four rules below are the ones internal/family/auth.go, Setup applies, and each of them is a 400. */
         SetupRequest: {
+            /** @description The one-time code from the server's log (see SetupStatus.code_required). A wrong or missing code, where one is required, is a 403. */
+            setup_code?: string;
             /** @description What to call the space. Refused EMPTY or longer than 100 characters (family.MaxNameRunes, counted as Unicode code points) and nothing more: a name of one character is accepted, and so is one made of nothing but blanks — the server compares against "" and does not trim. The floor is declared because a client validating against this document should not have to send a request to learn that "" is not a name; no shape is stated because the server checks none. */
             space_name: string;
             /** @description Lowercase letters, digits and underscore, three to thirty-two of them. That is the WHOLE rule (family.UsernamePattern, applied in validateCredentials), and it is applied at both doors that create a user — here and on CreateMemberRequest — so the pattern is declared at both. Anything else is a 400. Taken already is a 409 rather than a 400: the name is well formed, the conflict is with a row that exists. NOT DECLARED ON LoginRequest, which checks no shape at all — see it. */
@@ -2583,6 +2587,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             409: components["responses"]["Error"];
         };
     };

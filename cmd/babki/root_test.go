@@ -86,6 +86,9 @@ func TestTheJobQueueIsGivenLessTimeToStopThanTheProcessWaitsForIt(t *testing.T) 
 //
 // The database URL is read off the pool testdb hands out rather than rebuilt,
 // so the role under test connects to the very database this test owns.
+// testSetupCode is the first-run code the roles started by these tests ask for.
+const testSetupCode = "TESTCODE"
+
 func roleEnv(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
 	addr := freePort(t)
@@ -93,6 +96,7 @@ func roleEnv(t *testing.T, pool *pgxpool.Pool) string {
 	t.Setenv("BABKI_ENCRYPTION_KEY", validHexKey)
 	t.Setenv("BABKI_HTTP_ADDR", addr)
 	t.Setenv("BABKI_LOG_LEVEL", "error")
+	t.Setenv("BABKI_SETUP_CODE", testSetupCode)
 	return addr
 }
 

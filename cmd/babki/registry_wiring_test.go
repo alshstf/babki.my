@@ -102,7 +102,7 @@ func TestAHandEntryReachesTheRegistryInTheRunningProcess(t *testing.T) {
 	}
 
 	call("POST", "/api/v1/setup",
-		`{"space_name":"S","username":"alex","display_name":"A","password":"secret123"}`, http.StatusCreated, nil)
+		`{"space_name":"S","username":"alex","display_name":"A","password":"secret123","setup_code":"`+testSetupCode+`"}`, http.StatusCreated, nil)
 	var account, paper withID
 	call("POST", "/api/v1/accounts", `{"name":"Брокер","type":"brokerage","currency":"USD"}`, http.StatusCreated, &account)
 	call("POST", "/api/v1/instruments",
@@ -136,7 +136,7 @@ func TestAHandEntryReachesTheRegistryInTheRunningProcess(t *testing.T) {
 func TestTheTotalReadsABrokerageAccountFromItsJournal(t *testing.T) {
 	call := runAPI(t)
 	call("POST", "/api/v1/setup",
-		`{"space_name":"S","username":"alex","display_name":"A","password":"secret123"}`, http.StatusCreated, nil)
+		`{"space_name":"S","username":"alex","display_name":"A","password":"secret123","setup_code":"`+testSetupCode+`"}`, http.StatusCreated, nil)
 	var account struct {
 		ID string `json:"id"`
 	}
