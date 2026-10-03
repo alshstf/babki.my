@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { OperationDateField } from "@/components/form-fields";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { MAX_AMOUNT_MINOR, amountRefusal, formatMinorCompact, parseToMinor } from "@/lib/money";
-import { EARLIEST_OPERATION_DATE, localToday } from "@/lib/dates";
+import { localToday } from "@/lib/dates";
 import { isConflict, useCreateMoneyTransfer } from "@/api/operations";
 import { useAccounts, type AccountWithBalance } from "@/api/accounts";
 import { MAX_NOTE } from "@/lib/text-limits";
@@ -173,17 +174,7 @@ export function MoneyTransferDialog({
               </div>
             </div>
           )}
-          <div className="grid gap-2">
-            <Label htmlFor="mt-date">{t("cash.date")}</Label>
-            <Input
-              id="mt-date"
-              type="date"
-              value={occurredOn}
-              min={EARLIEST_OPERATION_DATE}
-              max={localToday()}
-              onChange={(e) => setOccurredOn(e.target.value)}
-            />
-          </div>
+          <OperationDateField id="mt-date" label={t("cash.date")} value={occurredOn} onChange={setOccurredOn} />
           <div className="grid gap-2">
             <Label htmlFor="mt-note">{t("cash.note")}</Label>
             <Input id="mt-note" maxLength={MAX_NOTE} value={note} onChange={(e) => setNote(e.target.value)} />

@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { AmountField, OperationDateField } from "@/components/form-fields";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -19,13 +20,10 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
-  MAX_AMOUNT_MINOR,
-  amountRefusal,
-  formatMinorCompact,
   minorToInput,
   parseToMinor,
 } from "@/lib/money";
-import { EARLIEST_OPERATION_DATE, localToday } from "@/lib/dates";
+import { localToday } from "@/lib/dates";
 import {
   useSaveOperation,
   isConflict,
@@ -101,10 +99,6 @@ export function IncomeDialog({
 
   const parsed = parseToMinor(amount);
   const amountValid = parsed !== null && parsed > 0;
-  // A sum past the bound is positive and parses perfectly well, so neither of
-  // this field's two existing complaints would be true of it (see
-  // AmountRefusal).
-  const refusal = amountRefusal(amount);
   const instrumentOk = instrument !== null || !REQUIRES_INSTRUMENT.has(type);
   const valid = amountValid && instrumentOk && occurredOn !== "";
 
@@ -181,41 +175,16 @@ export function IncomeDialog({
               <p className="text-xs text-red-500">{t("income.instrumentRequired")}</p>
             )}
           </div>
-          <div className="grid gap-2">
-            <Label htmlFor="income-amount">
-              {t("income.amount", { currency: instrument ? instrument.currency : account.currency })}
-            </Label>
-            <Input
-              id="income-amount"
-              inputMode="decimal"
-              placeholder="0"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-            />
-            {amount !== "" && !amountValid && (
-              <p className="text-xs text-red-500">
-                {refusal === "tooLarge"
-                  ? t("common.amountTooLarge", {
-                      max: formatMinorCompact(
-                        MAX_AMOUNT_MINOR,
-                        instrument ? instrument.currency : account.currency,
-                      ),
-                    })
-                  : t("income.badNumber")}
-              </p>
-            )}
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="income-date">{t("income.date")}</Label>
-            <Input
-              id="income-date"
-              type="date"
-              value={occurredOn}
-              min={EARLIEST_OPERATION_DATE}
-              max={localToday()}
-              onChange={(e) => setOccurredOn(e.target.value)}
-            />
-          </div>
+          <AmountField
+            id="income-amount"
+            label={t("income.amount", { currency: instrument ? instrument.currency : account.currency })}
+            value={amount}
+            onChange={setAmount}
+            currency={instrument ? instrument.currency : account.currency}
+            accepted={amountValid}
+            badNumber={t("income.badNumber")}
+          />
+          <OperationDateField id="income-date" label={t("income.date")} value={occurredOn} onChange={setOccurredOn} />
           <div className="grid gap-2">
             <Label htmlFor="income-note">{t("income.note")}</Label>
             <Input id="income-note" maxLength={MAX_NOTE} value={note} onChange={(e) => setNote(e.target.value)} />

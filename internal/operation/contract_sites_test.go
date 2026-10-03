@@ -178,14 +178,21 @@ var dateFloorLiteralSites = []string{
 	"web/src/lib/dates.ts",
 }
 
-// The four dialogs that write an operation. They are checked for the CONSTANT
-// and not for the date: each takes it from dates.ts, which is where the copy
-// lives and what the list above ties to the server. A dialog spelling the date
-// out itself would be a fifth copy, and this test would not want it.
+// The shared date field of the dialogs that write an operation. It is checked
+// for the CONSTANT and not for the date: it takes it from dates.ts, which is
+// where the copy lives and what the list above ties to the server. A field
+// spelling the date out itself would be another copy, and this test would not
+// want it.
 //
 // The balance dialog is deliberately absent — a balance mark has no floor. See
 // EARLIEST_OPERATION_DATE in dates.ts for why the two differ.
 var dateFloorFormSites = []string{
+	"web/src/components/form-fields.tsx",
+}
+
+// dateFloorFieldSites are the dialogs whose date is the shared field above, so
+// the floor reaches them through it.
+var dateFloorFieldSites = []string{
 	"web/src/routes/accounts/trade-dialog.tsx",
 	"web/src/routes/accounts/transfer-dialog.tsx",
 	"web/src/routes/accounts/income-dialog.tsx",
@@ -216,6 +223,15 @@ func TestTheContractAndTheDateFieldsStateTheFloorTheServerEnforces(t *testing.T)
 		}
 		if !strings.Contains(string(body), "min={EARLIEST_OPERATION_DATE}") {
 			t.Errorf("%s does not pass min={EARLIEST_OPERATION_DATE} to its date input", rel)
+		}
+	}
+	for _, rel := range dateFloorFieldSites {
+		body, err := os.ReadFile(filepath.Join("..", "..", rel))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		if !strings.Contains(string(body), "<OperationDateField") {
+			t.Errorf("%s does not take its date from OperationDateField", rel)
 		}
 	}
 	// And the contract states it on BOTH request schemas, not on one of the

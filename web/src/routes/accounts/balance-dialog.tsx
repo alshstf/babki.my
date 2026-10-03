@@ -8,14 +8,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { AmountField } from "@/components/form-fields";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
-  MAX_AMOUNT_MINOR,
   amountRefusal,
   formatMinor,
-  formatMinorCompact,
   parseToMinor,
 } from "@/lib/money";
 import { formatDate, localToday } from "@/lib/dates";
@@ -88,32 +87,23 @@ export function BalanceDialog({
               {formatDate(account.balance.as_of)})
             </p>
           )}
-          <div className="grid gap-2">
-            <Label htmlFor="bal-amount">
-              {t("accounts.balanceDialog.amount", { currency: account.currency })}
-            </Label>
-            <Input
-              id="bal-amount"
-              inputMode="decimal"
-              placeholder={isLiability ? "-45 000" : "150 000,50"}
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-            />
-            {isLiability && (
-              <p className="text-xs text-muted-foreground">
-                {t("accounts.balanceDialog.liabilityHint")}
-              </p>
-            )}
-            {amount !== "" && refusal !== null && (
-              <p className="text-xs text-red-500">
-                {refusal === "tooLarge"
-                  ? t("common.amountTooLarge", {
-                      max: formatMinorCompact(MAX_AMOUNT_MINOR, account.currency),
-                    })
-                  : t("accounts.balanceDialog.parseError")}
-              </p>
-            )}
-          </div>
+          <AmountField
+            id="bal-amount"
+            label={t("accounts.balanceDialog.amount", { currency: account.currency })}
+            value={amount}
+            onChange={setAmount}
+            currency={account.currency}
+            accepted={refusal === null}
+            badNumber={t("accounts.balanceDialog.parseError")}
+            placeholder={isLiability ? "-45 000" : "150 000,50"}
+            hint={
+              isLiability && (
+                <p className="text-xs text-muted-foreground">
+                  {t("accounts.balanceDialog.liabilityHint")}
+                </p>
+              )
+            }
+          />
           <div className="grid gap-2">
             <Label htmlFor="bal-date">{t("accounts.balanceDialog.date")}</Label>
             <Input

@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { AmountField, OperationDateField } from "@/components/form-fields";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -19,13 +20,10 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
-  MAX_AMOUNT_MINOR,
-  amountRefusal,
-  formatMinorCompact,
   minorToInput,
   parseToMinor,
 } from "@/lib/money";
-import { EARLIEST_OPERATION_DATE, localToday } from "@/lib/dates";
+import { localToday } from "@/lib/dates";
 import {
   useSaveOperation,
   isConflict,
@@ -78,10 +76,6 @@ export function CashDialog({
   const isCredit = CREDIT_TYPES.has(type);
   const parsed = parseToMinor(amount);
   const amountValid = parsed !== null && parsed > 0;
-  // A sum past the bound is positive and parses perfectly well, so «введите
-  // положительную сумму» would name a cause that is not the cause (see
-  // AmountRefusal).
-  const refusal = amountRefusal(amount);
   const valid = amountValid && occurredOn !== "";
 
   const submit = () => {
@@ -123,41 +117,21 @@ export function CashDialog({
               </SelectContent>
             </Select>
           </div>
-          <div className="grid gap-2">
-            <Label htmlFor="cash-amount">
-              {t("cash.amount", { currency: account.currency })}
-            </Label>
-            <Input
-              id="cash-amount"
-              inputMode="decimal"
-              placeholder="0"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              {isCredit ? t("cash.creditHint") : t("cash.debitHint")}
-            </p>
-            {amount !== "" && !amountValid && (
-              <p className="text-xs text-red-500">
-                {refusal === "tooLarge"
-                  ? t("common.amountTooLarge", {
-                      max: formatMinorCompact(MAX_AMOUNT_MINOR, account.currency),
-                    })
-                  : t("cash.badNumber")}
+          <AmountField
+            id="cash-amount"
+            label={t("cash.amount", { currency: account.currency })}
+            value={amount}
+            onChange={setAmount}
+            currency={account.currency}
+            accepted={amountValid}
+            badNumber={t("cash.badNumber")}
+            hint={
+              <p className="text-xs text-muted-foreground">
+                {isCredit ? t("cash.creditHint") : t("cash.debitHint")}
               </p>
-            )}
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="cash-date">{t("cash.date")}</Label>
-            <Input
-              id="cash-date"
-              type="date"
-              value={occurredOn}
-              min={EARLIEST_OPERATION_DATE}
-              max={localToday()}
-              onChange={(e) => setOccurredOn(e.target.value)}
-            />
-          </div>
+            }
+          />
+          <OperationDateField id="cash-date" label={t("cash.date")} value={occurredOn} onChange={setOccurredOn} />
           <div className="grid gap-2">
             <Label htmlFor="cash-note">{t("cash.note")}</Label>
             <Input id="cash-note" maxLength={MAX_NOTE} value={note} onChange={(e) => setNote(e.target.value)} />
