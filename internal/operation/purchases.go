@@ -171,16 +171,8 @@ func movesOnward(o, arrival Operation) bool {
 }
 
 // foldsAfter reports whether a folds after b in the engine's order (see
-// sortJournal), whichever accounts the two belong to.
-func foldsAfter(a, b Operation) bool {
-	if !a.OccurredOn.Equal(b.OccurredOn) {
-		return a.OccurredOn.After(b.OccurredOn)
-	}
-	if ra, rb := foldRank(a.Source), foldRank(b.Source); ra != rb {
-		return ra > rb
-	}
-	return a.CreatedAt.After(b.CreatedAt)
-}
+// foldsBefore), whichever accounts the two belong to.
+func foldsAfter(a, b Operation) bool { return foldsBefore(b, a) }
 
 // move is one transfer between the owner's accounts, both legs.
 type move struct{ out, in Operation }
