@@ -270,6 +270,7 @@ export function AccountDetailPage() {
           onPurchasePrice={readOnly ? undefined : setPricing}
           onEdit={readOnly ? undefined : (operation, instrument) => setEditing({ operation, instrument })}
           accountName={(id) => accounts.data?.find((a) => a.id === id)?.name}
+          instrumentLinks
           papers={(positions.data?.positions ?? []).map((p) => ({
             id: p.instrument.id,
             name: p.instrument.name,
