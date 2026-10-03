@@ -135,3 +135,34 @@ describe("SetupPage — a browser that reports no connection", () => {
     expect(createButton()).not.toBeDisabled();
   });
 });
+
+// A running server asks for the one-time code it wrote to its log: the form
+// shows the field, sends what was typed, and says plainly when the code was
+// not the right one.
+describe("SetupPage — the one-time code from the server's log", () => {
+  it("asks for the code, sends it, and names a wrong one", async () => {
+    const sent: unknown[] = [];
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const req = input as Request;
+      const path = new URL(req.url, "http://localhost").pathname;
+      if (path.endsWith("/api/v1/setup/status")) {
+        return new Response(JSON.stringify({ setup_needed: true, code_required: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      sent.push(JSON.parse(await req.text()));
+      return new Response(JSON.stringify({ error: "x" }), { status: 403, headers: { "Content-Type": "application/json" } });
+    });
+    const codeField = async () => screen.findByLabelText("Код первого запуска");
+    const renderAndFill = fillAndSubmit;
+    // fillAndSubmit fills the four fields and presses «Создать»; with a code
+    // required and none typed, the button stays disabled and nothing is sent.
+    await renderAndFill();
+    expect(sent).toHaveLength(0);
+    fireEvent.change(await codeField(), { target: { value: " k7m2p9qx " } });
+    fireEvent.click(createButton());
+    expect(await screen.findByText(/Код не подошёл/)).toBeInTheDocument();
+    expect(sent).toEqual([expect.objectContaining({ setup_code: "k7m2p9qx" })]);
+  });
+});

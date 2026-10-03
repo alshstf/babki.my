@@ -2072,6 +2072,9 @@ type SetupRequest struct {
 	// Password At least eight CHARACTERS and at most 1024, counted as Unicode code points — which is what `minLength` and `maxLength` count here and what the server counts. It used to count BYTES while its own refusal said «characters», so a seven-letter Cyrillic password was fourteen bytes and went through, and this document could not state the rule without stating one stricter than the code (#117). The count moved to code points rather than the sentence to bytes, because the sentence is what the person reads. The ceiling is there so that what gets hashed has a size the server chose. NOT DECLARED ON LoginRequest — see it.
 	Password string `json:"password"`
 
+	// SetupCode The one-time code from the server's log (see SetupStatus.code_required). A wrong or missing code, where one is required, is a 403.
+	SetupCode *string `json:"setup_code,omitempty"`
+
 	// SpaceName What to call the space. Refused EMPTY or longer than 100 characters (family.MaxNameRunes, counted as Unicode code points) and nothing more: a name of one character is accepted, and so is one made of nothing but blanks — the server compares against "" and does not trim. The floor is declared because a client validating against this document should not have to send a request to learn that "" is not a name; no shape is stated because the server checks none.
 	SpaceName string `json:"space_name"`
 
@@ -2081,7 +2084,9 @@ type SetupRequest struct {
 
 // SetupStatus defines model for SetupStatus.
 type SetupStatus struct {
-	SetupNeeded bool `json:"setup_needed"`
+	// CodeRequired Whether setup asks for the one-time code the server wrote to its log when it started. True on a running installation; false where the server was built without one (tests).
+	CodeRequired bool `json:"code_required"`
+	SetupNeeded  bool `json:"setup_needed"`
 }
 
 // SpaceExport defines model for SpaceExport.
