@@ -1366,3 +1366,111 @@ func TestSyncMirrorRefusesAConnectionThatIsNotThere(t *testing.T) {
 		t.Errorf("SyncMirror error = %v, want ErrConnectionNotFound", err)
 	}
 }
+
+// The broker renames the paper on an old operation — same moment, type,
+// payment and quantity, a new instrument uid. That is the same operation: the
+// row keeps its id (the journal points at it), takes the new key and uid, is
+// not marked gone, and the explanation given for it moves with it (#196).
+func TestSyncMirrorKnowsARowTheBrokerRewrote(t *testing.T) {
+	f := newFixture(t)
+	at := wireTime(t, "2026-03-14T07:30:15Z")
+	first := op("op-1", "OPERATION_TYPE_BUY", "uid-old", at, "RUB", -15230, 0, 10)
+	if _, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link, []OperationItem{first}, wireTime(t, "2026-03-16T00:00:00Z")); err != nil {
+		t.Fatal(err)
+	}
+	before := rowsByPayment(t, f)["-15230"]
+	var opID string
+	if err := f.pool.QueryRow(f.ctx, `INSERT INTO operations (space_id, account_id, type, occurred_on, amount_minor, currency, source)
+		VALUES ($1, $2, 'deposit', '2026-03-14', 100, 'RUB', 'manual') RETURNING id::text`, f.spaceID, f.accountID).Scan(&opID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(f.ctx, `INSERT INTO tinvest_mirror_explanations (link_id, content_key, operation_id) VALUES ($1, $2, $3)`,
+		f.link.ID, contentKey(first), opID); err != nil {
+		t.Fatal(err)
+	}
+
+	rewritten := op("op-1", "OPERATION_TYPE_BUY", "uid-new", at, "RUB", -15230, 0, 10)
+	rewritten.FIGI, rewritten.Ticker = "BBG-NEW", "NEW"
+	stats, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link, []OperationItem{rewritten}, wireTime(t, "2026-03-17T00:00:00Z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Added != 0 || stats.Disappeared != 0 {
+		t.Errorf("stats = %+v, want the rewrite neither added nor gone", stats)
+	}
+	if n := mirrorCount(t, f); n != 1 {
+		t.Fatalf("mirror holds %d rows, want the one row", n)
+	}
+	after := rowsByPayment(t, f)["-15230"]
+	if after.ID != before.ID || after.DisappearedAt != nil || after.InstrumentUID != "uid-new" || after.ContentKey != contentKey(rewritten) {
+		t.Errorf("row after the rewrite = id %s (was %s), gone %v, uid %q, key %q", after.ID, before.ID, after.DisappearedAt, after.InstrumentUID, after.ContentKey)
+	}
+	if after.FIGI != "BBG-NEW" || after.Ticker != "NEW" {
+		t.Errorf("row after the rewrite names the paper %q / %q, want what the broker says now", after.FIGI, after.Ticker)
+	}
+	var key string
+	if err := f.pool.QueryRow(f.ctx, `SELECT content_key FROM tinvest_mirror_explanations WHERE link_id = $1`, f.link.ID).Scan(&key); err != nil {
+		t.Fatal(err)
+	}
+	if key != contentKey(rewritten) {
+		t.Errorf("the explanation is filed under %q, want the row's new key", key)
+	}
+}
+
+// Two rows of one shape gone and two new of it: which is which cannot be told,
+// so nothing is paired — the rows are gone and new, as before.
+func TestSyncMirrorPairsARewriteOnlyWhenItIsUnambiguous(t *testing.T) {
+	f := newFixture(t)
+	at := wireTime(t, "2026-03-14T07:30:15Z")
+	if _, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link, []OperationItem{
+		op("op-1", "OPERATION_TYPE_BUY", "uid-a", at, "RUB", -100, 0, 1),
+		op("op-2", "OPERATION_TYPE_BUY", "uid-b", at, "RUB", -100, 0, 1),
+	}, wireTime(t, "2026-03-16T00:00:00Z")); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link, []OperationItem{
+		op("op-1", "OPERATION_TYPE_BUY", "uid-c", at, "RUB", -100, 0, 1),
+		op("op-2", "OPERATION_TYPE_BUY", "uid-d", at, "RUB", -100, 0, 1),
+	}, wireTime(t, "2026-03-17T00:00:00Z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Added != 2 || stats.Disappeared != 2 {
+		t.Errorf("stats = %+v, want two gone and two new", stats)
+	}
+}
+
+// The row's new key already has an explanation of its own: the sync keeps it
+// and does not fail on the one-explanation-per-row rule — the old explanation
+// stays where it was.
+func TestSyncMirrorLeavesAnExplanationAlreadyOnTheNewKey(t *testing.T) {
+	f := newFixture(t)
+	at := wireTime(t, "2026-03-14T07:30:15Z")
+	first := op("op-1", "OPERATION_TYPE_BUY", "uid-old", at, "RUB", -15230, 0, 10)
+	rewritten := op("op-1", "OPERATION_TYPE_BUY", "uid-new", at, "RUB", -15230, 0, 10)
+	if _, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link, []OperationItem{first}, wireTime(t, "2026-03-16T00:00:00Z")); err != nil {
+		t.Fatal(err)
+	}
+	var opID string
+	if err := f.pool.QueryRow(f.ctx, `INSERT INTO operations (space_id, account_id, type, occurred_on, amount_minor, currency, source)
+		VALUES ($1, $2, 'deposit', '2026-03-14', 100, 'RUB', 'manual') RETURNING id::text`, f.spaceID, f.accountID).Scan(&opID); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{contentKey(first), contentKey(rewritten)} {
+		if _, err := f.pool.Exec(f.ctx, `INSERT INTO tinvest_mirror_explanations (link_id, content_key, operation_id) VALUES ($1, $2, $3)`,
+			f.link.ID, key, opID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link, []OperationItem{rewritten}, wireTime(t, "2026-03-17T00:00:00Z")); err != nil {
+		t.Fatalf("sync after the rewrite: %v", err)
+	}
+	var n int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM tinvest_mirror_explanations WHERE link_id = $1 AND content_key = $2`,
+		f.link.ID, contentKey(first)).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("explanations under the old key: %d, want it left where it was", n)
+	}
+}
