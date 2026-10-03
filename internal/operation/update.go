@@ -43,6 +43,9 @@ func (s *Service) Update(ctx context.Context, spaceID, id uuid.UUID, op Operatio
 			return err
 		}
 		op.ID, op.SpaceID, op.Source, op.CreatedAt = old.ID, old.SpaceID, old.Source, old.CreatedAt
+		if op.OccurredOn.Equal(old.OccurredOn) {
+			op.OccurredAt = old.OccurredAt
+		}
 
 		journal, err := st.ListForEngine(ctx, spaceID, old.AccountID)
 		if err != nil {
@@ -88,13 +91,15 @@ func editable(old, op Operation) error {
 }
 
 // update writes op's fields over the row of the same id in spaceID, leaving
-// its account, type, source and moment of recording alone.
+// its account, type, source and moment of recording alone. An instant the row
+// carried goes when its day changes: it was the instant of the old day.
 func (s *Store) update(ctx context.Context, spaceID uuid.UUID, op Operation) (Operation, error) {
 	return scan(s.db.QueryRow(ctx, `
 		UPDATE operations SET
 			instrument_id = $3, occurred_on = $4, settled_on = $5, quantity = $6,
 			price = $7, amount_minor = $8, currency = $9, fee_minor = $10,
-			note = $11, split_ratio = $12
+			note = $11, split_ratio = $12,
+			occurred_at = CASE WHEN occurred_on = $4 THEN occurred_at END
 		WHERE space_id = $1 AND id = $2
 		RETURNING `+cols,
 		spaceID, op.ID, op.InstrumentID, op.OccurredOn, op.SettledOn, op.Quantity,

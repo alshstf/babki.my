@@ -70,8 +70,9 @@ const defaultFoldRank = 1
 // disagree. The CASE arms are generated in a fixed order (sorted by source) so
 // the string is stable across runs and shows up unchanged in a diff.
 //
-// It orders by the date first, the rank within the date, and created_at within
-// the rank — the same three keys, in the same order, that sortJournal compares.
+// It orders by the date first, the rank within the date, the instant within the
+// rank (rows without one after those with one), and created_at last — the same
+// keys, in the same order, that foldsBefore compares.
 func engineOrderSQL() string {
 	sources := make([]string, 0, len(foldRanks))
 	for source := range foldRanks {
@@ -85,7 +86,7 @@ func engineOrderSQL() string {
 	// every query dies on, which is a test going red for a reason that has
 	// nothing to do with what it checks.
 	if len(sources) == 0 {
-		return "ORDER BY occurred_on ASC, created_at ASC"
+		return "ORDER BY occurred_on ASC, occurred_at ASC NULLS LAST, created_at ASC"
 	}
 	var b strings.Builder
 	b.WriteString("ORDER BY occurred_on ASC, CASE source")
@@ -96,8 +97,54 @@ func engineOrderSQL() string {
 		// produce a query that fails to parse — loudly, at once, in every test.
 		fmt.Fprintf(&b, " WHEN '%s' THEN %d", source, foldRanks[source])
 	}
-	fmt.Fprintf(&b, " ELSE %d END ASC, created_at ASC", defaultFoldRank)
+	fmt.Fprintf(&b, " ELSE %d END ASC, occurred_at ASC NULLS LAST, created_at ASC", defaultFoldRank)
 	return b.String()
+}
+
+// foldsBefore is the order the engine folds a journal in, for two rows: the
+// day; the rank the source gives a row within its day (foldRank); then the
+// instant the source says it happened, where it says one, with the rows that
+// carry one first; then when it was recorded.
+//
+// # Why the instant, and why rows without one go last
+//
+// A broker reports the moment of a trade, and the moment is what decides a day:
+// which of two same-day parcels a sale consumes, and whether a sale is covered
+// by a purchase made that morning. When a row reached the journal decides
+// nothing about either — a broker that reports one operation late used to put it
+// at the end of its day, after rows that happened later, and the realized
+// profit moved with it (#198). A row entered by hand carries a day and no
+// moment; it goes after the timed rows of its day, in the order rows without one
+// always went — the order they were written down.
+func foldsBefore(a, b Operation) bool {
+	if !a.OccurredOn.Equal(b.OccurredOn) {
+		return a.OccurredOn.Before(b.OccurredOn)
+	}
+	if ra, rb := foldRank(a.Source), foldRank(b.Source); ra != rb {
+		return ra < rb
+	}
+	if before, decided := byInstant(a, b); decided {
+		return before
+	}
+	return a.CreatedAt.Before(b.CreatedAt)
+}
+
+// byInstant is foldsBefore's third key on its own: the instant the source gave,
+// rows that carry one ahead of rows that do not. decided is false when it does
+// not tell the two apart — the same instant, or neither has one.
+func byInstant(a, b Operation) (before, decided bool) {
+	switch {
+	case a.OccurredAt != nil && b.OccurredAt != nil:
+		if a.OccurredAt.Equal(*b.OccurredAt) {
+			return false, false
+		}
+		return a.OccurredAt.Before(*b.OccurredAt), true
+	case a.OccurredAt != nil:
+		return true, true
+	case b.OccurredAt != nil:
+		return false, true
+	}
+	return false, false
 }
 
 // engineOrder is engineOrderSQL computed once. The map it is built from is a

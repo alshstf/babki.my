@@ -116,3 +116,32 @@ func TestMigrate_TheJournalsTradingModeIsNotBackfilled(t *testing.T) {
 			"and a migration writing it too would be a second writer of one column", *mode)
 	}
 }
+
+// TestMigrate_TheJournalsInstantIsNotBackfilled is the same rule for the
+// broker's instant (migration 33): an imported row comes out of the migration
+// without one, and the importer's next rebuild — the one writer of its rows —
+// puts it there.
+func TestMigrate_TheJournalsInstantIsNotBackfilled(t *testing.T) {
+	pool := testdb.NewEmpty(t)
+	ctx := context.Background()
+
+	upTo(t, ctx, pool, 32)
+	spaceID := insertTinvestSpace(t, ctx, pool)
+	accountID := insertTinvestAccount(t, ctx, pool, spaceID, "Т-Инвестиции")
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO operations (space_id, account_id, type, occurred_on, amount_minor, currency, source, external_id)
+		 VALUES ($1, $2, 'deposit', '2026-08-01', 100000, 'RUB', 'tinvest', 'op-1')`,
+		spaceID, accountID); err != nil {
+		t.Fatalf("insert operation: %v", err)
+	}
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	var at *string
+	if err := pool.QueryRow(ctx, `SELECT occurred_at::text FROM operations WHERE external_id = 'op-1'`).Scan(&at); err != nil {
+		t.Fatalf("read occurred_at: %v", err)
+	}
+	if at != nil {
+		t.Errorf("occurred_at = %s, want nothing until the importer writes it", *at)
+	}
+}

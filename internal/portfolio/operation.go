@@ -220,13 +220,20 @@ type Operation struct {
 	InstrumentID *uuid.UUID
 	Type         Type
 	OccurredOn   time.Time
-	SettledOn    *time.Time
-	Quantity     *decimal.Decimal
-	Price        *decimal.Decimal
-	AmountMinor  int64
-	Currency     string
-	FeeMinor     int64
-	Note         string
+	// OccurredAt is the instant the source says the operation happened, when it
+	// says one — a broker reports the moment of a trade, a person entering one
+	// by hand says only the day. Within a day the journal folds rows that
+	// carry one in that order, ahead of the rows that do not (see
+	// operation.foldsBefore). THE ENGINE NEVER READS IT: it folds the journal
+	// in the order it is handed.
+	OccurredAt  *time.Time
+	SettledOn   *time.Time
+	Quantity    *decimal.Decimal
+	Price       *decimal.Decimal
+	AmountMinor int64
+	Currency    string
+	FeeMinor    int64
+	Note        string
 	// TradingMode is where this operation happened, in the words of whoever
 	// reported it: an exchange board's code ("TQBR"), or the code of dealing
 	// away from an order book ("FINEX_OTC"). Nil for every row nobody said it

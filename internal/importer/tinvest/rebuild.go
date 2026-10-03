@@ -465,6 +465,10 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 				if i == 0 {
 					owed = deferred
 				}
+				// The broker's instant goes onto the entry too: within a day
+				// the journal folds by it (see operation.foldsBefore).
+				at := row.OccurredAt
+				ops[i].OccurredAt = &at
 				p.want = append(p.want, desired{
 					op: ops[i], rowID: row.ID, at: row.OccurredAt, leg: i,
 					pairable: pairableLeg(row), deferred: owed,
@@ -615,22 +619,14 @@ type holding struct {
 //
 // THE ORDER IS THE JOURNAL'S OWN. sortDesired has already put the entries in
 // the order the write path files them — the broker's instant, then the mirror
-// row's id, then the leg — and the journal folds a day in the order its rows
-// were filed (operation.importCandidates, and the engine's own walk). So the
-// running total below is the same number the engine will have in front of it
-// when it reaches the sale, computed from the same entries in the same order.
-// It also makes the number a function of the mirror alone: the same mirror
-// sorts the same way and yields the same count on every rebuild, which is what
-// keeps a rebuild that changed nothing from rewriting the sale.
-//
-// WHERE THAT AGREEMENT ENDS, said rather than glossed over: a journal row keeps
-// the stamp it was first written with, so an operation the broker only reported
-// after its neighbours were already in the journal sits at the END of its day
-// there, while this walk puts it where its instant says. The two orders can
-// therefore differ inside ONE day, and only for such a late arrival. Nothing is
-// silent when they do: if this walk counted a purchase the journal has after
-// the sale, the sale is bigger than the position the engine has and the engine
-// refuses it, which the owner reads on the row.
+// row's id, then the leg — and the journal folds a day by the same instant,
+// which every entry carries (operation.foldsBefore). So the running total below
+// is the same number the engine will have in front of it when it reaches the
+// sale, computed from the same entries in the same order — an operation the
+// broker reported late included, since it folds at its instant and not where
+// it arrived. It also makes the number a function of the mirror alone: the
+// same mirror sorts the same way and yields the same count on every rebuild,
+// which is what keeps a rebuild that changed nothing from rewriting the sale.
 //
 // PRECONDITION, the same one the head of this file states: the accounts these
 // links feed are fed by this import and by nothing else. A purchase entered by
@@ -1125,11 +1121,12 @@ func (r *Rebuilder) difference(ctx context.Context, spaceID uuid.UUID, accounts 
 				drop(s)
 				// THE REPLACEMENT KEEPS THE ROW'S PLACE IN ITS DAY. A rewrite is
 				// a removal and an insertion, and an insertion stamped afresh is
-				// the youngest row of its date — so an operation the broker
-				// merely reworded would move to the end of the day it happened
-				// on. The journal folds a day in stamp order, that order is how
-				// the FIFO queue breaks ties between parcels bought the same
-				// day, and the queue decides which parcel a later sale consumes.
+				// the youngest row of its instant — so of two operations the
+				// broker reports at one instant, the one merely reworded would
+				// move behind the other. The journal folds such rows in stamp
+				// order, that order is how the FIFO queue breaks ties between
+				// parcels bought together, and the queue decides which parcel a
+				// later sale consumes.
 				// A description nobody asked about would then move the realized
 				// profit of the account, and the tax figure with it. The write
 				// path takes the stamp only because this row is one it is
@@ -1212,10 +1209,10 @@ func sameJournalRow(want, stored operation.Operation) bool {
 		want.FeeMinor != stored.FeeMinor {
 		return false
 	}
-	if !want.OccurredOn.Equal(stored.OccurredOn) {
+	if !want.OccurredOn.Equal(stored.OccurredOn) || !sameTime(want.OccurredAt, stored.OccurredAt) {
 		return false
 	}
-	if !sameDay(want.SettledOn, stored.SettledOn) {
+	if !sameTime(want.SettledOn, stored.SettledOn) {
 		return false
 	}
 	// The trading mode is compared like every other column the projection
@@ -1253,7 +1250,7 @@ func sameLots(a, b []operation.ReleasedLot) bool {
 		return false
 	}
 	for i := range a {
-		if !a[i].Quantity.Equal(b[i].Quantity) || a[i].CostMinor != b[i].CostMinor || !sameDay(a[i].AcquiredOn, b[i].AcquiredOn) {
+		if !a[i].Quantity.Equal(b[i].Quantity) || a[i].CostMinor != b[i].CostMinor || !sameTime(a[i].AcquiredOn, b[i].AcquiredOn) {
 			return false
 		}
 	}
@@ -1327,7 +1324,9 @@ func sameString(a, b *string) bool {
 	return *a == *b
 }
 
-func sameDay(a, b *time.Time) bool {
+// sameTime compares two optional moments — a day or an instant — by the moment
+// they name, not by how they are written down.
+func sameTime(a, b *time.Time) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
