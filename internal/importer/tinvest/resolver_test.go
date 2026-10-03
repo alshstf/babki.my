@@ -1572,3 +1572,82 @@ func TestResolveCurrency_TheBrokersOwnAnswerIsPreferred(t *testing.T) {
 		t.Errorf("the rate table was asked %d times though the broker answered", rates.asks)
 	}
 }
+
+// A paper the broker has forgotten is asked about once a run, however many
+// operations name it: "no such instrument" does not change between one
+// operation and the next, and a forgotten paper is exactly the one a history
+// is full of operations on. Both answers are that refusal.
+func TestResolve_TheBrokersRefusalIsAskedOnceARun(t *testing.T) {
+	f := newFixture(t)
+	src := newFakePassportSource()
+	src.instrumentErrs["uid-gone"] = fmt.Errorf("%w: uid-gone", ErrInstrumentNotFound)
+
+	r := NewResolver(f.store, &countingCatalog{Store: instrument.NewStore(f.pool)}, nil)
+	ref := InstrumentRef{InstrumentUID: "uid-gone", FIGI: "TCS33A101X68", Ticker: "RU000A101X68"}
+	for i := range 2 {
+		if _, err := r.Resolve(f.ctx, f.conn.ID, src, ref); !errors.Is(err, ErrInstrumentNotFound) {
+			t.Fatalf("Resolve #%d = %v, want the broker's refusal", i+1, err)
+		}
+	}
+	if src.instrumentCalls["uid-gone"] != 1 {
+		t.Errorf("InstrumentByUID called %d times, want once", src.instrumentCalls["uid-gone"])
+	}
+}
+
+// Any other failure is not an answer about the paper, and the next operation
+// asks again: the broker may answer this time.
+func TestResolve_AFailureThatIsNotARefusalIsAskedAgain(t *testing.T) {
+	f := newFixture(t)
+	src := newFakePassportSource()
+	src.instrumentErrs["uid-sber"] = errors.New("tinvest: InstrumentsService/GetInstrumentBy: request: dial tcp: connection refused")
+
+	r := NewResolver(f.store, &countingCatalog{Store: instrument.NewStore(f.pool)}, nil)
+	ref := InstrumentRef{InstrumentUID: "uid-sber"}
+	for range 2 {
+		if _, err := r.Resolve(f.ctx, f.conn.ID, src, ref); err == nil {
+			t.Fatal("Resolve succeeded, want the failure")
+		}
+	}
+	if src.instrumentCalls["uid-sber"] != 2 {
+		t.Errorf("InstrumentByUID called %d times, want twice", src.instrumentCalls["uid-sber"])
+	}
+}
+
+// The same for a currency pair the broker has forgotten: asked once, while the
+// operation's own description of the pair is still read every time — the
+// second trade below names the pair well enough to prove it, the first did not.
+func TestResolveCurrency_TheBrokersRefusalIsAskedOnceARun(t *testing.T) {
+	f := newFixture(t)
+	src := newFakePassportSource()
+	rates := ratesOf(map[string]string{"USD": "74.30"})
+
+	r := NewResolver(f.store, &countingCatalog{Store: instrument.NewStore(f.pool)}, nil).WithRates(rates)
+	if _, err := r.ResolveCurrency(f.ctx, src, "uid-usd-gone", currencyHint("GLDRUB_TOM", "74.465")); !errors.Is(err, ErrInstrumentNotFound) {
+		t.Fatalf("first ResolveCurrency = %v, want the broker's refusal", err)
+	}
+	got, err := r.ResolveCurrency(f.ctx, src, "uid-usd-gone", currencyHint("USD000UTSTOM", "74.465"))
+	if err != nil || got.Code != "USD" {
+		t.Fatalf("second ResolveCurrency = %+v, %v, want USD from the trade's own name", got, err)
+	}
+	if src.currencyNominalCalls["uid-usd-gone"] != 1 {
+		t.Errorf("CurrencyNominalByUID called %d times, want once", src.currencyNominalCalls["uid-usd-gone"])
+	}
+}
+
+// A refusal is remembered per call: a uid the general passport has forgotten is
+// not therefore one CurrencyBy has, and that call is still made.
+func TestResolve_ARefusalIsRememberedForTheCallThatGaveIt(t *testing.T) {
+	f := newFixture(t)
+	src := newFakePassportSource()
+	src.instrumentErrs["uid-usd"] = fmt.Errorf("%w: uid-usd", ErrInstrumentNotFound)
+	src.currencyNominals["uid-usd"] = MoneyValue{Currency: "usd", Units: 1}
+
+	r := NewResolver(f.store, &countingCatalog{Store: instrument.NewStore(f.pool)}, nil)
+	if _, err := r.Resolve(f.ctx, f.conn.ID, src, InstrumentRef{InstrumentUID: "uid-usd"}); !errors.Is(err, ErrInstrumentNotFound) {
+		t.Fatalf("Resolve = %v, want the passport's refusal", err)
+	}
+	got, err := r.ResolveCurrency(f.ctx, src, "uid-usd", CurrencyHint{})
+	if err != nil || got.Code != "USD" {
+		t.Errorf("ResolveCurrency = %+v, %v, want USD from CurrencyBy", got, err)
+	}
+}

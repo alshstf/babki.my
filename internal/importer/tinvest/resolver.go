@@ -199,6 +199,14 @@ type Resolver struct {
 	// passports does for Resolve's. A yuan account trades the same pair a
 	// hundred times.
 	currencies map[string]TradedCurrency
+	// forgotten holds, for the run, the broker's "no such instrument" — per
+	// call, since a uid GetInstrumentBy has forgotten is not therefore one
+	// CurrencyBy has. That answer does not change between one operation and
+	// the next, and a paper the broker has forgotten is exactly the one a
+	// history is full of operations on (see resolveOne): without this each of
+	// them asked again. Only that answer is kept — a call that failed for any
+	// other reason is asked again, since the next attempt may well succeed.
+	forgotten map[forgottenKey]error
 	// rates answers what a currency was officially worth on a day, and is used
 	// for one thing only: proving what a pair the broker has FORGOTTEN trades
 	// (see ResolveCurrency). nil disables that fallback entirely — such a pair
@@ -219,7 +227,11 @@ func NewResolver(store *Store, catalog instrumentCatalog, log *slog.Logger) *Res
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Resolver{store: store, catalog: catalog, log: log, passports: map[string]InstrumentBrief{}, currencies: map[string]TradedCurrency{}}
+	return &Resolver{
+		store: store, catalog: catalog, log: log,
+		passports: map[string]InstrumentBrief{}, currencies: map[string]TradedCurrency{},
+		forgotten: map[forgottenKey]error{},
+	}
 }
 
 // WithRates hands the resolver an oracle of official rates, which is what lets
@@ -423,7 +435,9 @@ func (r *Resolver) ResolveCurrency(ctx context.Context, src currencySource, uid 
 	if known, ok := r.currencies[uid]; ok {
 		return known, nil
 	}
-	nominal, err := src.CurrencyNominalByUID(ctx, uid)
+	nominal, err := remembered(r, forgottenCurrency, uid, func() (MoneyValue, error) {
+		return src.CurrencyNominalByUID(ctx, uid)
+	})
 	if errors.Is(err, ErrInstrumentNotFound) {
 		traded, ok, ferr := r.currencyFromHint(ctx, hint)
 		if ferr != nil {
@@ -536,12 +550,45 @@ func (r *Resolver) passport(ctx context.Context, src passportSource, uid string)
 	if brief, ok := r.passports[uid]; ok {
 		return brief, nil
 	}
-	brief, err := src.InstrumentByUID(ctx, uid)
+	brief, err := remembered(r, forgottenPassport, uid, func() (InstrumentBrief, error) {
+		brief, err := src.InstrumentByUID(ctx, uid)
+		if err != nil {
+			return InstrumentBrief{}, fmt.Errorf("tinvest: instrument passport %s: %w", uid, err)
+		}
+		return brief, nil
+	})
 	if err != nil {
-		return InstrumentBrief{}, fmt.Errorf("tinvest: instrument passport %s: %w", uid, err)
+		return InstrumentBrief{}, err
 	}
 	r.passports[uid] = brief
 	return brief, nil
+}
+
+// forgottenKey is one broker call about one uid.
+type forgottenKey struct {
+	call string
+	uid  string
+}
+
+const (
+	forgottenPassport = "passport"
+	forgottenCurrency = "currency"
+)
+
+// remembered makes a broker call about uid unless the broker has already said,
+// this run, that it has no such instrument — then that answer is given again
+// without asking (see Resolver.forgotten).
+func remembered[T any](r *Resolver, call, uid string, ask func() (T, error)) (T, error) {
+	key := forgottenKey{call, uid}
+	if err, ok := r.forgotten[key]; ok {
+		var zero T
+		return zero, err
+	}
+	v, err := ask()
+	if errors.Is(err, ErrInstrumentNotFound) {
+		r.forgotten[key] = err
+	}
+	return v, err
 }
 
 // catalogByISIN looks one row up by ISIN, telling "no such row" apart from a
