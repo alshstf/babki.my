@@ -329,23 +329,6 @@ func TestRatesRange_EmptySeries(t *testing.T) {
 	}
 }
 
-// A parseable body under a 500, as above.
-func TestRatesRange_ServerError(t *testing.T) {
-	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
-		`<ValCurs ID="R01235" DateRange1="01.12.2025" DateRange2="05.12.2025" name="Foreign Currency Market Dynamic">` +
-		`<Record Date="02.12.2025" Id="R01235"><Nominal>1</Nominal><Value>77,7027</Value></Record>` +
-		`</ValCurs>`)
-	srv, _ := serve(t, http.StatusInternalServerError, body)
-
-	c := cbr.New(srv.Client(), srv.URL)
-	from := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
-	to := time.Date(2025, 12, 5, 0, 0, 0, 0, time.UTC)
-	_, err := c.RatesRange(context.Background(), "USD", "R01235", from, to)
-	if err == nil {
-		t.Fatal("RatesRange: want error on HTTP 500, got nil")
-	}
-}
-
 // recordingTransport records the requested URL without the network, so the
 // production endpoints (cbr.New(client, "")) are actually checked; an
 // httptest server accepts any path.
@@ -403,20 +386,32 @@ func TestRatesOn_ProductionURL(t *testing.T) {
 	}
 }
 
-// The response's root ID must match the requested currency.
-func TestRatesRange_IDMismatch(t *testing.T) {
-	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
-		`<ValCurs ID="R01239" DateRange1="01.12.2025" DateRange2="05.12.2025" name="Foreign Currency Market Dynamic">` +
-		`<Record Date="02.12.2025" Id="R01239"><Nominal>1</Nominal><Value>91,2345</Value></Record>` +
-		`</ValCurs>`)
-	srv, _ := serve(t, http.StatusOK, body)
-
-	c := cbr.New(srv.Client(), srv.URL)
-	from := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
-	to := time.Date(2025, 12, 5, 0, 0, 0, 0, time.UTC)
-	_, err := c.RatesRange(context.Background(), "USD", "R01235", from, to)
-	if err == nil {
-		t.Fatal("RatesRange: want error when response ID (R01239) does not match requested currency (R01235), got nil")
+// RatesRange refuses a response for another currency, reversed dates (not an
+// empty series that would read as "nothing published"), and a parseable body
+// under a 500.
+func TestRatesRangeRefuses(t *testing.T) {
+	record := func(id string) []byte {
+		return []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
+			`<ValCurs ID="` + id + `" DateRange1="01.12.2025" DateRange2="05.12.2025" name="Foreign Currency Market Dynamic">` +
+			`<Record Date="02.12.2025" Id="` + id + `"><Nominal>1</Nominal><Value>77,7027</Value></Record>` +
+			`</ValCurs>`)
+	}
+	dec1 := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
+	dec5 := time.Date(2025, 12, 5, 0, 0, 0, 0, time.UTC)
+	for name, tc := range map[string]struct {
+		status   int
+		body     []byte
+		from, to time.Time
+	}{
+		"another currency's ID": {http.StatusOK, record("R01239"), dec1, dec5},
+		"to before from":        {http.StatusOK, record("R01235"), dec5, dec1},
+		"HTTP 500":              {http.StatusInternalServerError, record("R01235"), dec1, dec5},
+	} {
+		srv, _ := serve(t, tc.status, tc.body)
+		c := cbr.New(srv.Client(), srv.URL)
+		if _, err := c.RatesRange(context.Background(), "USD", "R01235", tc.from, tc.to); err == nil {
+			t.Errorf("%s: RatesRange succeeded, want an error", name)
+		}
 	}
 }
 
@@ -451,24 +446,6 @@ func TestRatesRange_EscapesCurrencyID(t *testing.T) {
 	want := "https://example.invalid?date_req1=01/12/2025&date_req2=05/12/2025&VAL_NM_RQ=R01235%26VAL_NM_RQ%3DR01239"
 	if rt.gotURL != want {
 		t.Errorf("request URL = %q, want %q (currencyID must be query-escaped)", rt.gotURL, want)
-	}
-}
-
-// Reversed dates are an error, not an empty series that would read as
-// "nothing published".
-func TestRatesRange_DateOrder(t *testing.T) {
-	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
-		`<ValCurs ID="R01235" DateRange1="01.12.2025" DateRange2="05.12.2025" name="Foreign Currency Market Dynamic">` +
-		`<Record Date="02.12.2025" Id="R01235"><Nominal>1</Nominal><Value>77,7027</Value></Record>` +
-		`</ValCurs>`)
-	srv, _ := serve(t, http.StatusOK, body)
-
-	c := cbr.New(srv.Client(), srv.URL)
-	from := time.Date(2025, 12, 5, 0, 0, 0, 0, time.UTC)
-	to := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC) // to before from
-	_, err := c.RatesRange(context.Background(), "USD", "R01235", from, to)
-	if err == nil {
-		t.Fatal("RatesRange: want error when to is before from, got nil")
 	}
 }
 

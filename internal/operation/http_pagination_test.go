@@ -132,37 +132,26 @@ func TestJournalSaysWhetherThereIsMore(t *testing.T) {
 	}
 }
 
-// Exactly at the ceiling with more behind it: a full page whose length says
-// nothing.
-func TestJournalAtTheCeilingSaysThereIsMore(t *testing.T) {
+// A full page at the ceiling says nothing by its length: has_more answers
+// about the journal (#86), true with a row behind the page and false when the
+// journal ends exactly there.
+func TestJournalAtTheCeilingAnswersAboutTheJournal(t *testing.T) {
 	pool, mdStore := newTestPool(t)
 	url, c := newAPIOn(t, pool, marketdata.NewConverter(mdStore))
-	acc := mkAccount(t, url, c, "Рублёвый брокер", "RUB")
-	seedDeposits(t, pool, mustAccountID(t, acc), 201)
+	for _, tc := range []struct {
+		entries int
+		more    bool
+	}{{201, true}, {200, false}} {
+		acc := mkAccount(t, url, c, fmt.Sprintf("Брокер на %d", tc.entries), "RUB")
+		seedDeposits(t, pool, mustAccountID(t, acc), tc.entries)
 
-	page := getJournalPage(t, url, c, acc, "limit=200&offset=0")
-	if len(page.Operations) != 200 {
-		t.Fatalf("page holds %d operations, want 200 — the endpoint's ceiling, which this test is not raising", len(page.Operations))
-	}
-	if !page.HasMore {
-		t.Errorf("has_more = false on a page of 200 out of 201 entries. This is the whole of #86: the page is full, its length cannot say whether the journal continues, and the answer looked exactly like the end of it")
-	}
-}
-
-// Exactly at the ceiling with nothing behind it: hasMore is not simply
-// "true at the ceiling".
-func TestJournalAtTheCeilingWithNothingBehindIt(t *testing.T) {
-	pool, mdStore := newTestPool(t)
-	url, c := newAPIOn(t, pool, marketdata.NewConverter(mdStore))
-	acc := mkAccount(t, url, c, "Рублёвый брокер", "RUB")
-	seedDeposits(t, pool, mustAccountID(t, acc), 200)
-
-	page := getJournalPage(t, url, c, acc, "limit=200&offset=0")
-	if len(page.Operations) != 200 {
-		t.Fatalf("page holds %d operations, want all 200", len(page.Operations))
-	}
-	if page.HasMore {
-		t.Errorf("has_more = true on a page holding the entire 200-entry journal — the ceiling was reached and the journal ended at the same row, and the flag must answer about the journal, not about the ceiling")
+		page := getJournalPage(t, url, c, acc, "limit=200&offset=0")
+		if len(page.Operations) != 200 {
+			t.Fatalf("%d entries: page holds %d operations, want 200, the endpoint's ceiling", tc.entries, len(page.Operations))
+		}
+		if page.HasMore != tc.more {
+			t.Errorf("%d entries: has_more = %v on a full page, want %v", tc.entries, page.HasMore, tc.more)
+		}
 	}
 }
 

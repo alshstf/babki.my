@@ -48,31 +48,24 @@ func TestParseKeyDecodesHexToRawBytes(t *testing.T) {
 	}
 }
 
-// The error names the variable and the command that makes a key.
-func TestParseKeyWrongLength(t *testing.T) {
-	_, err := secretbox.ParseKey(strings.Repeat("a", 63))
-	if err == nil {
-		t.Fatal("ParseKey(63 hex chars) succeeded, want an error (64 exactly is required)")
-	}
-	if !strings.Contains(err.Error(), "BABKI_ENCRYPTION_KEY") {
-		t.Errorf("error does not name BABKI_ENCRYPTION_KEY: %v", err)
-	}
-	if !strings.Contains(err.Error(), "openssl rand -hex 32") {
-		t.Errorf("error does not give the generation command: %v", err)
-	}
-}
-
-// Right length, not hex.
-func TestParseKeyNotHex(t *testing.T) {
-	_, err := secretbox.ParseKey(strings.Repeat("g", 64))
-	if err == nil {
-		t.Fatal("ParseKey(64 non-hex chars) succeeded, want an error")
-	}
-	if !strings.Contains(err.Error(), "BABKI_ENCRYPTION_KEY") {
-		t.Errorf("error does not name BABKI_ENCRYPTION_KEY: %v", err)
-	}
-	if !strings.Contains(err.Error(), "openssl rand -hex 32") {
-		t.Errorf("error does not give the generation command: %v", err)
+// A key of the wrong length or not in hex is refused, and the error names the
+// variable and the command that makes a key.
+func TestParseKeyRefusesAMalformedKey(t *testing.T) {
+	for name, key := range map[string]string{
+		"63 hex characters": strings.Repeat("a", 63),
+		"64, but not hex":   strings.Repeat("g", 64),
+	} {
+		_, err := secretbox.ParseKey(key)
+		if err == nil {
+			t.Errorf("%s: ParseKey succeeded, want an error", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "BABKI_ENCRYPTION_KEY") {
+			t.Errorf("%s: error does not name BABKI_ENCRYPTION_KEY: %v", name, err)
+		}
+		if !strings.Contains(err.Error(), "openssl rand -hex 32") {
+			t.Errorf("%s: error does not give the generation command: %v", name, err)
+		}
 	}
 }
 
