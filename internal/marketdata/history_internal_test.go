@@ -22,8 +22,7 @@ func (f firstDays) FirstDaysByInstrument(context.Context) (map[uuid.UUID]time.Ti
 type historyCall struct{ market, secid, from, till string }
 
 // stubExchange knows Sberbank and an OFZ by ISIN, and answers AT&T's ISIN with
-// the exchange's own «T», which trades in rubles: a ticker clash the currency
-// check has to catch.
+// the exchange's ruble «T»: a clash the currency check must catch.
 type stubExchange struct{ calls *[]historyCall }
 
 func (stubExchange) Locate(_ context.Context, code string) (string, string, string, bool, error) {
@@ -54,9 +53,8 @@ func day(s string) time.Time {
 	return d
 }
 
-// Every paper the journals hold gets its closing prices from a month before
-// its first operation, and on later runs only the days after the last one it
-// has. A paper the exchange knows under its ticker only in another currency
+// Closing prices are fetched from a month before each paper's first operation,
+// then only new days; a paper known on the exchange only in another currency
 // is not priced from it.
 func TestQuoteHistoryIsBackfilledFromTheFirstOperation(t *testing.T) {
 	pool := testdb.New(t)
@@ -72,8 +70,7 @@ func TestQuoteHistoryIsBackfilledFromTheFirstOperation(t *testing.T) {
 	sber := mk(instrument.Instrument{Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", ISIN: "RU0009029540", Currency: "RUB"})
 	att := mk(instrument.Instrument{Type: instrument.TypeShare, Name: "AT&T", Ticker: "T", ISIN: "US00206R1023", Currency: "USD"})
 	ofz := mk(instrument.Instrument{Type: instrument.TypeBond, Name: "ОФЗ 26238", Ticker: "SU26238RMFS4", ISIN: "RU000A1038V6", Currency: "RUB"})
-	// A paper of a kind the exchange keeps no history for is not asked about,
-	// whatever its ticker happens to match there.
+	// Kinds without exchange history are not asked about.
 	custom := mk(instrument.Instrument{Type: instrument.TypeCustom, Name: "Квартира", Ticker: "FLAT", Currency: "RUB"})
 
 	var calls []historyCall

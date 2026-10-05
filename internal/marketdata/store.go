@@ -8,16 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// querier is the part of *pgxpool.Pool this Store uses. It is an interface
-// rather than the pool itself for one reason: a reader that streams rows can
-// fail after it has already handed back some of them, and no fixture can make
-// a real Postgres do that on demand. Standing a result set in for the pool is
-// what lets the readers below be run against one that starts fine and then
-// breaks (see NewStoreForRows in export_test.go and store_truncated_test.go).
-//
-// It has a second use since: `babki seed` builds every store it writes through
-// on ONE open transaction, and pgx.Tx implements these three methods just as
-// the pool does. Everything else passes the pool.
+// querier is what Store needs from a pool. Tests substitute rows that fail
+// mid-stream, and `babki seed` passes a pgx.Tx.
 type querier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -26,10 +18,6 @@ type querier interface {
 
 type Store struct{ db querier }
 
-// NewStore takes the querier above rather than a pool so a Store can also be
-// built on an open transaction (pgx.Tx implements all three methods) — which
-// is what `babki seed` does, writing its whole demo world under one commit.
-// Every other caller passes the pool.
 func NewStore(x querier) *Store { return &Store{db: x} }
 
 const fxRateCols = `base, quote, on_date, rate, source`
@@ -48,9 +36,8 @@ func scanQuote(row pgx.Row) (Quote, error) {
 	return q, err
 }
 
-// runBatch sends batch and checks the result of each of its n queued
-// commands, so a mid-batch failure (e.g. a CHECK violation) is reported
-// instead of silently ignored.
+// runBatch sends batch and checks each of its n results, so a mid-batch
+// failure is reported.
 func runBatch(ctx context.Context, db querier, batch *pgx.Batch, n int) error {
 	br := db.SendBatch(ctx, batch)
 	for range n {
@@ -62,9 +49,7 @@ func runBatch(ctx context.Context, db querier, batch *pgx.Batch, n int) error {
 	return br.Close()
 }
 
-// UpsertFxRates inserts or updates a batch of daily FX rates. A repeat
-// upsert for the same (base, quote, on) replaces the existing row rather
-// than duplicating it.
+// UpsertFxRates inserts or replaces daily rates by (base, quote, on).
 func (s *Store) UpsertFxRates(ctx context.Context, rates []FxRate) error {
 	if len(rates) == 0 {
 		return nil
@@ -81,9 +66,8 @@ func (s *Store) UpsertFxRates(ctx context.Context, rates []FxRate) error {
 	return runBatch(ctx, s.db, batch, len(rates))
 }
 
-// FxRateOn returns the rate for (base, quote) on the exact date, or, if
-// missing, the nearest earlier date. pgx.ErrNoRows if no rate exists on or
-// before the given date.
+// FxRateOn returns the rate on the date or the nearest earlier one, or
+// pgx.ErrNoRows.
 func (s *Store) FxRateOn(ctx context.Context, base, quote string, on time.Time) (FxRate, error) {
 	return scanFxRate(s.db.QueryRow(ctx, `
 		SELECT `+fxRateCols+` FROM fx_rates
@@ -91,36 +75,12 @@ func (s *Store) FxRateOn(ctx context.Context, base, quote string, on time.Time) 
 		ORDER BY on_date DESC LIMIT 1`, base, quote, on))
 }
 
-// FxRatesOn resolves many (base, quote, date) lookups in a single round
-// trip, one FxRateOn call each would otherwise need. Each key's outcome is
-// exactly what FxRateOn would return for it individually: the exact date, or
-// the nearest earlier one — the two statements of that rule are held
-// together only by the differential test against FxRateOn in
-// store_test.go (TestFxRatesOnBatch), because there is no good way to share
-// the SQL fragment itself; change one only through that test. A key with
-// nothing on or before its date is absent from the result map, not
-// zero-valued — the same convention LatestQuotes uses for instruments
-// without quotes. The returned FxRate carries the resolved row's own date
-// (on_date), not the requested one, because "how stale is this rate" is
-// exactly what callers use that date for.
+// FxRatesOn answers many FxRateOn lookups in one round trip, with the same
+// semantics (held together by TestFxRatesOnBatch). Keys with no rate are
+// absent. Each result carries the row's own date.
 //
-// The lookup is expressed as unnest of the three key columns joined
-// LATERAL against fx_rates, so the row-per-key "nearest earlier date" search
-// runs inside a single query regardless of how many keys are passed — the
-// same shape LatestQuotes uses for a set of instrument ids, generalized to a
-// three-column key with its own per-row ORDER BY ... LIMIT 1 instead of a
-// flat ANY($1).
-//
-// The unnest is WITH ORDINALITY, and what comes back per row is that
-// ordinal, not the base/quote/on_date columns themselves. base and quote
-// round-trip byte-identical, but on_date does not: it goes out as `date`
-// and pgx reads dates back as midnight UTC, so a key rebuilt from the
-// returned column would only match a caller's key that already happened to
-// be exactly midnight in time.UTC — missing, for instance, every
-// time.Now().UTC() caller in this codebase. Indexing the caller's own keys
-// slice by ordinal instead makes the returned map key the caller's own
-// value by construction, so that mismatch cannot recur. See FxRateKey's
-// doc comment for the same reasoning from the caller's side.
+// Results are matched to keys by ordinal, not by the returned date: pgx reads
+// dates back as midnight UTC, which would not equal most callers' keys.
 func (s *Store) FxRatesOn(ctx context.Context, keys []FxRateKey) (map[FxRateKey]FxRate, error) {
 	out := make(map[FxRateKey]FxRate, len(keys))
 	if len(keys) == 0 {
@@ -162,14 +122,8 @@ func (s *Store) FxRatesOn(ctx context.Context, keys []FxRateKey) (map[FxRateKey]
 		r.Base, r.Quote = key.Base, key.Quote
 		out[key] = r
 	}
-	// A read that breaks partway ends the loop exactly as an exhausted one
-	// does — Next returns false either way — and only Err tells the two apart.
-	// The rows that arrived before the break are dropped rather than handed
-	// back beside the error, because what makes this dangerous is precisely
-	// that a short answer here is indistinguishable from a true one: a key
-	// missing from this map means "that pair has no rate on or before its
-	// date", which is a gap this application shows a person as honest. An
-	// outage must not be able to print itself as one (#71).
+	// A read broken partway is an error, not a shorter map: a missing key would
+	// read as an honest "no rate" (#71).
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -194,18 +148,14 @@ func (s *Store) LatestFxRates(ctx context.Context) ([]FxRate, error) {
 		}
 		out = append(out, r)
 	}
-	// Interrupted reads are a failure and never a shorter slice, for the
-	// reason FxRatesOn states above: the pairs that did not arrive are
-	// indistinguishable from pairs that have no rate at all.
+	// A broken read is an error, not a shorter slice.
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// UpsertQuotes inserts or updates a batch of daily instrument quotes. A
-// repeat upsert for the same (instrument, on) replaces the existing row
-// rather than duplicating it.
+// UpsertQuotes inserts or replaces daily quotes by (instrument, on).
 func (s *Store) UpsertQuotes(ctx context.Context, quotes []Quote) error {
 	if len(quotes) == 0 {
 		return nil
@@ -223,20 +173,10 @@ func (s *Store) UpsertQuotes(ctx context.Context, quotes []Quote) error {
 	return runBatch(ctx, s.db, batch, len(quotes))
 }
 
-// StoreLatestQuotes stores each quote as its source's LATEST word about the
-// instrument: the row is upserted, and every row the same source wrote for
-// that instrument under a later date is removed.
-//
-// It is for a source that answers "what is your current price, and what day
-// is it from" (see QuoteProvider.QuotesFor). When such a source dates its
-// price EARLIER than a row it wrote before, the later row was not a later
-// price: the exchange carries an untraded security's price into every new
-// session, and until #199 that carried price was stored under each session's
-// date. Left in place, those rows would go on outranking the true one in
-// LatestQuotes and the price would never read as old as it is.
-//
-// Rows of other sources are left alone: what one source says about its own
-// dates says nothing about another's.
+// StoreLatestQuotes stores each quote as its source's latest word: the row is
+// upserted and the same source's later-dated rows for the instrument are
+// removed. A source that now dates a price earlier had carried it forward
+// under each session's date (#199). Other sources' rows are untouched.
 func (s *Store) StoreLatestQuotes(ctx context.Context, quotes []Quote) error {
 	if len(quotes) == 0 {
 		return nil
@@ -256,8 +196,6 @@ func (s *Store) StoreLatestQuotes(ctx context.Context, quotes []Quote) error {
 	return runBatch(ctx, s.db, batch, 2*len(quotes))
 }
 
-// HistoryCoverage is, for each of ids, the last day source has a price for.
-// An instrument with none is absent.
 func (s *Store) HistoryCoverage(ctx context.Context, ids []uuid.UUID, source string) (map[uuid.UUID]time.Time, error) {
 	out := make(map[uuid.UUID]time.Time, len(ids))
 	if len(ids) == 0 {
@@ -282,9 +220,8 @@ func (s *Store) HistoryCoverage(ctx context.Context, ids []uuid.UUID, source str
 	return out, rows.Err()
 }
 
-// QuoteOn returns the instrument's price on the exact date, or, if missing,
-// the nearest earlier date. pgx.ErrNoRows if no quote exists on or before
-// the given date.
+// QuoteOn returns the price on the date or the nearest earlier one, or
+// pgx.ErrNoRows.
 func (s *Store) QuoteOn(ctx context.Context, instrumentID uuid.UUID, on time.Time) (Quote, error) {
 	return scanQuote(s.db.QueryRow(ctx, `
 		SELECT `+quoteCols+` FROM quotes
@@ -292,9 +229,8 @@ func (s *Store) QuoteOn(ctx context.Context, instrumentID uuid.UUID, on time.Tim
 		ORDER BY on_date DESC LIMIT 1`, instrumentID, on))
 }
 
-// QuotesOn returns, for each of instrumentIDs, its price on day or the nearest
-// earlier one, in a single round trip. Instruments with no quote on or before
-// day are absent from the result.
+// QuotesOn returns each instrument's price on day or the nearest earlier one.
+// Instruments with none are absent.
 func (s *Store) QuotesOn(ctx context.Context, instrumentIDs []uuid.UUID, day time.Time) (map[uuid.UUID]Quote, error) {
 	out := make(map[uuid.UUID]Quote, len(instrumentIDs))
 	if len(instrumentIDs) == 0 {
@@ -318,8 +254,7 @@ func (s *Store) QuotesOn(ctx context.Context, instrumentIDs []uuid.UUID, day tim
 	return out, rows.Err()
 }
 
-// PriceSeries returns the paper's quotes from from to to inclusive, one a day,
-// oldest first.
+// PriceSeries returns the quotes in [from, to], oldest first.
 func (s *Store) PriceSeries(ctx context.Context, instrumentID uuid.UUID, from, to time.Time) ([]Quote, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+quoteCols+` FROM quotes
 		WHERE instrument_id = $1 AND on_date BETWEEN $2 AND $3
@@ -339,9 +274,8 @@ func (s *Store) PriceSeries(ctx context.Context, instrumentID uuid.UUID, from, t
 	return out, rows.Err()
 }
 
-// LatestQuotes returns the most recent quote for each of instrumentIDs, in
-// a single round trip. Instruments with no quotes at all are absent from
-// the result map (not zero-valued).
+// LatestQuotes returns each instrument's most recent quote. Instruments with
+// none are absent.
 func (s *Store) LatestQuotes(ctx context.Context, instrumentIDs []uuid.UUID) (map[uuid.UUID]Quote, error) {
 	out := make(map[uuid.UUID]Quote, len(instrumentIDs))
 	if len(instrumentIDs) == 0 {
@@ -363,11 +297,8 @@ func (s *Store) LatestQuotes(ctx context.Context, instrumentIDs []uuid.UUID) (ma
 		}
 		out[q.InstrumentID] = q
 	}
-	// Interrupted reads are a failure and never a shorter map, for the reason
-	// FxRatesOn states above — and here the misreading is the one #71 is named
-	// for: an instrument absent from this map is an instrument with no quote,
-	// so the positions screen would price a whole account as unquotable
-	// because one read broke halfway.
+	// A broken read is an error: a missing instrument would read as unquoted
+	// (#71).
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}

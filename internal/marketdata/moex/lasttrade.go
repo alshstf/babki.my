@@ -9,9 +9,8 @@ import (
 	"time"
 )
 
-// lastTradeSessions is how many sessions back one history request looks. ISS
-// pages history by at most 100 rows, one row per session, so this is one
-// request and about five months.
+// lastTradeSessions is how far back one history request looks: ISS pages by
+// 100 rows, one per session, about five months.
 const lastTradeSessions = 100
 
 type tradedKey struct{ board, secid string }
@@ -20,27 +19,14 @@ type tradedKey struct{ board, secid string }
 type tradedAnswer struct{ session, day time.Time }
 
 // lastTradeDay returns the last session, on or before session, in which secid
-// traded on the board.
+// traded on the board. ISS keeps a history row per session with its trade count.
 //
-// ISS keeps one history row per security per session whether or not it traded,
-// with the number of trades in it: checked on 2026-10-01, RU000A103AP6 on TQCB
-// had PREVPRICE 77.5 beside PREVDATE 2026-09-30, zero trades in every session
-// back to 2026-08-24, and one trade that day closing at 77.5.
+// If history does not reach session yet, session itself is returned and nothing
+// is cached. If no session read had a trade, the oldest one read is returned:
+// the price is at least that old.
 //
-// Three answers are not that day, and each is the best this can say:
-//
-//   - History that does not reach session yet (or holds no rows at all, as for
-//     a security listed today) cannot say whether session traded. session is
-//     returned, which is what the board itself said, and nothing is remembered,
-//     so the next call asks again.
-//   - No trade in any of the sessions read: the oldest of them is returned. The
-//     price is at least that old, and a reader told "not updated since" that
-//     day is told less than the truth and nothing false.
-//
-// THE ANSWER IS REMEMBERED PER SECURITY for as long as the board reports the
-// same session, because it cannot change: the refresh runs every half hour and
-// the session moves once a day, so history is read once a day per security
-// instead of forty-eight times.
+// Answers are cached per security while the board reports the same session, so
+// history is read once a day rather than at every half-hourly refresh.
 func (c *Client) lastTradeDay(ctx context.Context, b board, secid string, session time.Time) (time.Time, error) {
 	key := tradedKey{board: b.label, secid: secid}
 	c.mu.Lock()
@@ -78,15 +64,13 @@ func (c *Client) lastTradeDay(ctx context.Context, b board, secid string, sessio
 	return day, nil
 }
 
-// tradedSession is one row of a security's history: a session and how many
-// trades it saw.
+// tradedSession is one history row: a session and its trade count.
 type tradedSession struct {
 	day    time.Time
 	trades int64
 }
 
-// fetchSessions reads the security's sessions up to and including till, newest
-// first.
+// fetchSessions reads the sessions up to till, newest first.
 func (c *Client) fetchSessions(ctx context.Context, b board, secid string, till time.Time) ([]tradedSession, error) {
 	endpoint := fmt.Sprintf("%s%s%s.json?iss.meta=off&iss.only=history&history.columns=TRADEDATE,NUMTRADES"+
 		"&sort_order=desc&limit=%d&till=%s",

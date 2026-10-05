@@ -14,22 +14,14 @@ import (
 	"babki.my/babki/internal/marketdata"
 )
 
-// historyBoards are the boards a closing price is taken from: the ones the
-// daily quote comes from, and TQTF, where funds traded before they moved to
-// TQBR (TMOS on 2026-06-22). A day on any other board — odd lots, auctions,
-// boards in another settlement currency — is not this program's price.
+// historyBoards are the boards closing prices are taken from: those the daily
+// quote uses, plus TQTF, where funds traded before moving to TQBR.
 var historyBoards = map[string]bool{"TQBR": true, "TQTF": true, "TQOB": true, "TQCB": true, "TQRD": true}
 
-// Closing prices are per unit for a share or a fund and in percent of face
-// value for a bond — the same readings the daily quote carries (see boards).
-//
-// History returns secid's closing prices from from to till inclusive, oldest
-// first. market is "shares" (shares and funds) or "bonds". The exchange's
-// official closing price is taken, its last trade where it published none; a
-// day with neither is left out rather than priced at nought.
-//
-// The exchange answers a hundred rows a page and says how many there are in a
-// cursor block, so the pages are walked until it is exhausted.
+// History returns secid's closing prices in [from, till], oldest first, from
+// market "shares" or "bonds". It takes the official close, else the last trade;
+// a day with neither is left out. Bond prices are in percent of face. Pages
+// are walked until the cursor is exhausted.
 func (c *Client) History(ctx context.Context, market, secid string, from, till time.Time) ([]marketdata.DayPrice, error) {
 	var out []marketdata.DayPrice
 	for start := 0; ; {

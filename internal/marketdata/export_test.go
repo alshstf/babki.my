@@ -8,21 +8,12 @@ import (
 	"github.com/riverqueue/river"
 )
 
-// NewStoreForRows is NewStore over a caller-supplied source of rows in place
-// of a connection pool. Test-only (this file is compiled into the test binary
-// only): it exists so a reader can be run against a result set that yields
-// rows and then fails, which is what a connection dying mid-stream looks like
-// and which no real Postgres fixture can be asked to reproduce on demand. The
-// parameter type is unexported, but an external test package can still pass
-// any value whose method set satisfies it — see store_truncated_test.go.
+// NewStoreForRows builds a Store over a caller-supplied row source, so tests
+// can simulate a read failing mid-stream.
 func NewStoreForRows(q querier) *Store { return &Store{db: q} }
 
-// mustBackfillFxWorker builds a backfillFxWorker via the public constructor
-// and unwraps it back to the concrete type, so test-only helpers can poke at
-// its unexported fields (now). NewBackfillFxWorker always returns
-// *backfillFxWorker in practice; the assertion is checked (not blindly
-// trusted) because a silent nil dereference on a failed assertion would be a
-// far more confusing test failure than this panic.
+// mustBackfillFxWorker builds the worker through the public constructor and
+// returns the concrete type.
 func mustBackfillFxWorker(
 	store *Store,
 	ops operationCurrencies,
@@ -39,13 +30,8 @@ func mustBackfillFxWorker(
 	return w
 }
 
-// NewBackfillFxWorkerWithClock is NewBackfillFxWorker with a caller-chosen
-// clock in place of time.Now. Test-only (this file is compiled into the test
-// binary only): the worker's "today" — the upper end of every range it
-// requests — is otherwise read from the wall clock independently of whatever
-// a test computes as its own expectation of "today", and a run straddling UTC
-// midnight between those two reads would disagree on the date by exactly one
-// day.
+// NewBackfillFxWorkerWithClock pins the worker's today, so a run straddling
+// midnight cannot disagree with the test's.
 func NewBackfillFxWorkerWithClock(
 	store *Store,
 	ops operationCurrencies,

@@ -24,8 +24,7 @@ func TestName(t *testing.T) {
 	}
 }
 
-// serve starts an httptest.Server that always responds with body and the
-// given status code, and records the query string of the last request.
+// serve answers every request with body and status, recording the last query.
 func serve(t *testing.T, status int, body []byte) (*httptest.Server, *string) {
 	t.Helper()
 	var gotQuery string
@@ -68,8 +67,7 @@ func TestRatesOn_ParsesFixture(t *testing.T) {
 
 	wantDate := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
 
-	// USD: Nominal=1, Value="78,5012" -> rate = 78.5012 (comma parsed, no
-	// division needed).
+	// USD: nominal 1, comma read as the decimal point.
 	usd, ok := byBase["USD"]
 	if !ok {
 		t.Fatalf("no USD rate in %+v", rates)
@@ -87,8 +85,7 @@ func TestRatesOn_ParsesFixture(t *testing.T) {
 		t.Errorf("USD.On = %v, want %v (from response Date attribute, not request)", usd.On, wantDate)
 	}
 
-	// JPY: Nominal=100, Value="52,3410" -> rate = 52.3410 / 100 = 0.523410.
-	// This is the case that would silently break if Nominal were ignored.
+	// JPY: nominal 100, so the value is divided by it.
 	jpy, ok := byBase["JPY"]
 	if !ok {
 		t.Fatalf("no JPY rate in %+v", rates)
@@ -97,8 +94,7 @@ func TestRatesOn_ParsesFixture(t *testing.T) {
 		t.Errorf("JPY.Rate (Nominal=100) = %s, want %s", jpy.Rate, want)
 	}
 
-	// KZT: Nominal=100, Value="16,3025" -> rate = 0.163025 (second
-	// Nominal>1 case, different value shape than JPY).
+	// KZT: nominal 100 with another value shape.
 	kzt, ok := byBase["KZT"]
 	if !ok {
 		t.Fatalf("no KZT rate in %+v", rates)
@@ -117,11 +113,7 @@ func TestRatesOn_ParsesFixture(t *testing.T) {
 	}
 }
 
-// TestRatesOn_ServerError serves a perfectly parseable body under a 500 on
-// purpose: with an empty body the request would fail on the XML decode no
-// matter what, and the test would pass without the status ever being
-// checked (confirmed by mutation testing: deleting the status check left
-// this test green when the body was empty).
+// A parseable body under a 500, so only the status check can fail the call.
 func TestRatesOn_ServerError(t *testing.T) {
 	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
 		`<ValCurs Date="28.07.2026" name="Foreign Currency Market">` +
@@ -176,14 +168,12 @@ func TestCurrencyIDs_ParsesFixture(t *testing.T) {
 		t.Errorf(`ids["USD"] = %q, want %q`, got, want)
 	}
 
-	// TRY's internal ID has a trailing letter ("R01700J"), which is the
-	// shape that would break an implementation assuming "R" + digits only.
+	// TRY's identifier has a letter suffix.
 	if got, want := ids["TRY"], "R01700J"; got != want {
 		t.Errorf(`ids["TRY"] = %q, want %q`, got, want)
 	}
 
-	// A currency absent from the document must be absent from the map, not
-	// present with a zero value and not an error.
+	// A currency absent from the document is absent from the map.
 	if id, ok := ids["GBP"]; ok {
 		t.Errorf(`ids["GBP"] = %q, want absent (cbr.ru does not quote it in this fixture)`, id)
 	}
@@ -205,9 +195,7 @@ func TestCurrencyIDs_EmptyValCurs(t *testing.T) {
 	}
 }
 
-// TestCurrencyIDs_ServerError serves a perfectly parseable body under a 500
-// on purpose, for the same reason as TestRatesOn_ServerError: an empty body
-// would fail on the XML decode regardless of whether the status is checked.
+// A parseable body under a 500, as above.
 func TestCurrencyIDs_ServerError(t *testing.T) {
 	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
 		`<ValCurs Date="28.07.2026" name="Foreign Currency Market">` +
@@ -222,13 +210,9 @@ func TestCurrencyIDs_ServerError(t *testing.T) {
 	}
 }
 
-// *cbr.Client must satisfy the history-capable provider interface, not just
-// the daily one: the backfill job depends on the interface, not on this type.
 var _ marketdata.FxHistoryProvider = (*cbr.Client)(nil)
 
-// TestRatesRange_ParsesFixture works from a response captured live from
-// cbr.ru's XML_dynamic.asp for USD (only the <?xml?> declaration was added to
-// the captured body, which a copy-paste of the document cannot carry).
+// Parses a response captured live from XML_dynamic.asp for USD.
 func TestRatesRange_ParsesFixture(t *testing.T) {
 	fixture, err := os.ReadFile("testdata/dynamic_usd.xml")
 	if err != nil {
@@ -244,22 +228,17 @@ func TestRatesRange_ParsesFixture(t *testing.T) {
 		t.Fatalf("RatesRange: %v", err)
 	}
 
-	// The dynamic endpoint takes slash-separated dates in date_req1/date_req2
-	// and identifies the currency by the bank's internal code, never by ISO.
+	// Slash-separated dates and the bank's identifier, never the ISO code.
 	if want := "date_req1=01/12/2025&date_req2=05/12/2025&VAL_NM_RQ=R01235"; *gotQuery != want {
 		t.Errorf("request query = %q, want %q", *gotQuery, want)
 	}
 
-	// Four <Record> elements in, four rates out, in document order. The
-	// requested range starts on 01.12.2025 but the series starts on
-	// 02.12.2025: cbr.ru publishes nothing for non-working days, and those
-	// days must stay missing rather than be invented here.
+	// Non-working days have no record and stay missing.
 	want := []struct {
 		on   time.Time
 		rate string
 	}{
-		// Nominal is 1 on every record of this series, so each rate is just
-		// the Value with its comma read as a decimal point: 77,7027 / 1.
+		// Nominal 1 throughout.
 		{time.Date(2025, 12, 2, 0, 0, 0, 0, time.UTC), "77.7027"},
 		{time.Date(2025, 12, 3, 0, 0, 0, 0, time.UTC), "77.4631"},
 		{time.Date(2025, 12, 4, 0, 0, 0, 0, time.UTC), "77.9556"},
@@ -276,8 +255,7 @@ func TestRatesRange_ParsesFixture(t *testing.T) {
 		if wantRate := decimal.RequireFromString(w.rate); !got.Rate.Equal(wantRate) {
 			t.Errorf("rates[%d].Rate = %s, want %s", i, got.Rate, wantRate)
 		}
-		// The response carries no ISO code at all, so Base can only come from
-		// the caller-supplied code.
+		// The response has no ISO code; Base comes from the caller.
 		if got.Base != "USD" {
 			t.Errorf("rates[%d].Base = %q, want USD", i, got.Base)
 		}
@@ -290,11 +268,8 @@ func TestRatesRange_ParsesFixture(t *testing.T) {
 	}
 }
 
-// TestRatesRange_NominalVariesWithinSeries is the discriminating case for
-// per-record nominals: cbr.ru quotes the Turkish lira per 10 units and has
-// changed that multiplier over time, so a series can carry more than one
-// Nominal. An implementation that reads Nominal once per document — whichever
-// record it takes it from — gets at least one of these three rates wrong.
+// The lira's nominal changes within one series, so each record's own nominal
+// must be used.
 func TestRatesRange_NominalVariesWithinSeries(t *testing.T) {
 	fixture, err := os.ReadFile("testdata/dynamic_try_nominal_change.xml")
 	if err != nil {
@@ -318,13 +293,10 @@ func TestRatesRange_NominalVariesWithinSeries(t *testing.T) {
 		{time.Date(2025, 12, 30, 0, 0, 0, 0, time.UTC), "1.82377"},
 		// Nominal=10: 18,3210 / 10 = 1.83210.
 		{time.Date(2025, 12, 31, 0, 0, 0, 0, time.UTC), "1.83210"},
-		// Nominal=1: 1,8455 / 1 = 1.8455. Dividing this one by the 10 the
-		// earlier records carry would yield 0.18455 — an order of magnitude
-		// off, and the whole point of this test.
+		// Nominal 1: dividing by the earlier 10 would be ten times off.
 		{time.Date(2026, 1, 6, 0, 0, 0, 0, time.UTC), "1.8455"},
 	}
-	// Three records for an eight-day range: the days in between are holidays
-	// with nothing published. They are not gaps to fill.
+	// The days in between are holidays, not gaps to fill.
 	if len(rates) != len(want) {
 		t.Fatalf("len(rates) = %d, want %d: %+v", len(rates), len(want), rates)
 	}
@@ -339,9 +311,7 @@ func TestRatesRange_NominalVariesWithinSeries(t *testing.T) {
 	}
 }
 
-// TestRatesRange_EmptySeries pins the difference from the daily document: an
-// empty <ValCurs> there means a broken response and is an error, but here it
-// legitimately means "this currency was not quoted in this range".
+// An empty series is valid here, unlike an empty daily document.
 func TestRatesRange_EmptySeries(t *testing.T) {
 	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
 		`<ValCurs ID="R01235" DateRange1="01.01.2014" DateRange2="05.01.2014" name="Foreign Currency Market Dynamic"></ValCurs>`)
@@ -359,9 +329,7 @@ func TestRatesRange_EmptySeries(t *testing.T) {
 	}
 }
 
-// TestRatesRange_ServerError serves a perfectly parseable body under a 500 on
-// purpose: with an empty body the request would fail on the XML decode no
-// matter what, and the test would pass without the status ever being checked.
+// A parseable body under a 500, as above.
 func TestRatesRange_ServerError(t *testing.T) {
 	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
 		`<ValCurs ID="R01235" DateRange1="01.12.2025" DateRange2="05.12.2025" name="Foreign Currency Market Dynamic">` +
@@ -378,16 +346,9 @@ func TestRatesRange_ServerError(t *testing.T) {
 	}
 }
 
-// recordingTransport is an http.RoundTripper that records the full URL of
-// the last request it was asked to make and returns a canned response,
-// without ever touching the network. Every other test in this file points
-// the client at an httptest.Server via a non-empty baseURL, which proves the
-// request shape but never proves that the *production* construction —
-// cbr.New(client, ""), exactly as cmd/babki/root.go builds it — actually
-// reaches the real cbr.ru endpoints. A reviewer once repointed
-// DefaultDynamicURL at the daily endpoint here and the rest of the suite
-// (all built on httptest.Server, which does not care what path it is asked
-// for) stayed green.
+// recordingTransport records the requested URL without the network, so the
+// production endpoints (cbr.New(client, "")) are actually checked; an
+// httptest server accepts any path.
 type recordingTransport struct {
 	gotURL string
 	body   []byte
@@ -402,10 +363,8 @@ func (rt *recordingTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	}, nil
 }
 
-// TestRatesRange_ProductionURL pins the exact request URL RatesRange sends
-// in production. The literal slashes in date_req1/date_req2 (not %2F) are
-// deliberate and already verified against the live endpoint; this test
-// freezes that.
+// The production RatesRange URL, with literal slashes in the dates as the
+// live endpoint accepts them.
 func TestRatesRange_ProductionURL(t *testing.T) {
 	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
 		`<ValCurs ID="R01235" DateRange1="01.12.2025" DateRange2="05.12.2025" name="Foreign Currency Market Dynamic"></ValCurs>`)
@@ -424,9 +383,7 @@ func TestRatesRange_ProductionURL(t *testing.T) {
 	}
 }
 
-// TestRatesOn_ProductionURL is TestRatesRange_ProductionURL's counterpart
-// for the daily endpoint, so the pair together pin both URLs a production
-// client (cbr.New(client, "")) actually calls.
+// The production RatesOn URL.
 func TestRatesOn_ProductionURL(t *testing.T) {
 	body, err := os.ReadFile("testdata/daily.xml")
 	if err != nil {
@@ -446,13 +403,7 @@ func TestRatesOn_ProductionURL(t *testing.T) {
 	}
 }
 
-// TestRatesRange_IDMismatch is the case a reviewer demonstrated live: the
-// dynamic endpoint's root <ValCurs ID="..."> is the only thing in the
-// response that says which currency the series belongs to, and nothing
-// forced it to match what was requested. Without checking it, a series for
-// a different currency (or the daily document, whose root has no ID
-// attribute at all) would be accepted and shipped labeled as the requested
-// one.
+// The response's root ID must match the requested currency.
 func TestRatesRange_IDMismatch(t *testing.T) {
 	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
 		`<ValCurs ID="R01239" DateRange1="01.12.2025" DateRange2="05.12.2025" name="Foreign Currency Market Dynamic">` +
@@ -469,11 +420,8 @@ func TestRatesRange_IDMismatch(t *testing.T) {
 	}
 }
 
-// TestRatesRange_WrongEndpointResponse is the other half of the same check:
-// if RatesRange were ever misdirected at the daily document (as happened in
-// review — see TestRatesRange_ProductionURL), that document's root <ValCurs>
-// carries no ID attribute at all, so it must fail the same comparison rather
-// than being silently decoded into zero records.
+// The daily document's root has no ID, so a misdirected request fails the same
+// check.
 func TestRatesRange_WrongEndpointResponse(t *testing.T) {
 	fixture, err := os.ReadFile("testdata/daily.xml")
 	if err != nil {
@@ -490,20 +438,14 @@ func TestRatesRange_WrongEndpointResponse(t *testing.T) {
 	}
 }
 
-// TestRatesRange_EscapesCurrencyID guards against a currencyID that would
-// otherwise inject extra query parameters into the request. Real cbr.ru
-// internal ids are always URL-safe (e.g. "R01235", "R01700J"), but the id
-// comes from CurrencyIDs, which itself reads it out of XML the bank
-// controls, so it must be escaped defensively rather than trusted.
+// The currency id is escaped: it comes from XML the bank controls.
 func TestRatesRange_EscapesCurrencyID(t *testing.T) {
 	rt := &recordingTransport{body: []byte(`<?xml version="1.0" encoding="windows-1251"?><ValCurs></ValCurs>`)}
 	c := cbr.New(&http.Client{Transport: rt}, "https://example.invalid")
 
 	from := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2025, 12, 5, 0, 0, 0, 0, time.UTC)
-	// The response's empty ID will not match this id, so RatesRange returns
-	// an error (per TestRatesRange_IDMismatch above) — irrelevant here,
-	// since only the request URL that was actually sent is being checked.
+	// Only the URL sent matters here.
 	_, _ = c.RatesRange(context.Background(), "XXX", "R01235&VAL_NM_RQ=R01239", from, to)
 
 	want := "https://example.invalid?date_req1=01/12/2025&date_req2=05/12/2025&VAL_NM_RQ=R01235%26VAL_NM_RQ%3DR01239"
@@ -512,12 +454,8 @@ func TestRatesRange_EscapesCurrencyID(t *testing.T) {
 	}
 }
 
-// TestRatesRange_DateOrder is the other silent-zero case: from and to
-// reversed produces an empty series from cbr.ru (or, as here, would never
-// even need to reach the server to know it is nonsense), and an empty slice
-// with a nil error is indistinguishable from "legitimately nothing
-// published in this range" (see TestRatesRange_EmptySeries). It must be a
-// loud error instead.
+// Reversed dates are an error, not an empty series that would read as
+// "nothing published".
 func TestRatesRange_DateOrder(t *testing.T) {
 	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
 		`<ValCurs ID="R01235" DateRange1="01.12.2025" DateRange2="05.12.2025" name="Foreign Currency Market Dynamic">` +
@@ -534,16 +472,8 @@ func TestRatesRange_DateOrder(t *testing.T) {
 	}
 }
 
-// A <Nominal> the feed did not send used to be read as zero and replaced with
-// 1. For the currencies the bank quotes per 1 unit that substitution is
-// invisible; for KZT, quoted per 100, it multiplies the rate by exactly a
-// hundred — and KZT is the currency of a real brokerage account here. The
-// inflated rate would reach fx_rates and from there balances, valuations, cost
-// basis and realized profit, looking like an ordinary number the whole way.
-//
-// So the missing element is refused rather than defaulted, and the refusal
-// names the currency: a rate nobody can tell apart from a real one is worse
-// than no rate, which the app already draws honestly as a gap.
+// A missing nominal is refused, naming the currency: reading it as 1 would
+// inflate KZT (quoted per 100) a hundredfold everywhere downstream.
 func TestRatesOn_MissingNominalIsRefusedRatherThanAssumedToBeOne(t *testing.T) {
 	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
 		`<ValCurs Date="28.07.2026" name="Foreign Currency Market">` +
@@ -567,8 +497,7 @@ func TestRatesOn_MissingNominalIsRefusedRatherThanAssumedToBeOne(t *testing.T) {
 	}
 }
 
-// The same rule on the history feed, which carries its own Nominal per record
-// because the bank re-scales how many units it quotes over the years.
+// The same rule on the history feed.
 func TestRatesRange_MissingNominalIsRefused(t *testing.T) {
 	body := []byte(`<?xml version="1.0" encoding="windows-1251"?>` +
 		`<ValCurs ID="R01335" DateRange1="01.07.2026" DateRange2="02.07.2026" name="Foreign Currency Market">` +
@@ -588,20 +517,9 @@ func TestRatesRange_MissingNominalIsRefused(t *testing.T) {
 	}
 }
 
-// TestEveryRequestNamesThisProgram is the fix for the outage that made every
-// base-currency figure in this program unavailable at once.
-//
-// The Bank of Russia answers Go's default agent — "Go-http-client/2.0", which
-// is what net/http sends when nothing sets the header — with 403, on both of
-// its endpoints (checked live on 2026-08-21). Nothing in this client set one,
-// so no rate for any historical day had ever been fetched: the table held the
-// last eleven days against a journal starting in 2020, and every figure that
-// needed a rate for the day a purchase actually happened published nothing with
-// `no_rate` beside it. Five of the owner's six accounts showed no total at all.
-//
-// The assertion is on the header being SENT AND NOT GO'S OWN, rather than on
-// its exact wording: what the feed refuses is the default, and a test pinned to
-// one spelling would fail over a version bump that changes nothing.
+// Every request sends a User-Agent other than Go's default, which the bank
+// refuses with 403 (checked 2026-08-21); without it most base-currency
+// figures were missing.
 func TestEveryRequestNamesThisProgram(t *testing.T) {
 	for _, c := range []struct {
 		name string

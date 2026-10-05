@@ -9,35 +9,15 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// TestPrefetchEnumeratesExactlyWhatTheAllAbsentWalkConsults guards the one way
-// the batched path can silently lie. Prefetching is a promise that every row
-// resolution will ask for is already in hand; if the promise is broken, the
-// missing row must not read as "this pair has no rate" — that is a real
-// answer here, shown to the user as an honest gap, and a bug wearing it would
-// be indistinguishable.
-//
-// Both halves of the promise are checked: the full enumeration answers every
-// question resolution asks (so the batch never fails loudly in production),
-// and dropping ANY single enumerated candidate makes it fail loudly (so no
-// candidate is enumerated "just in case" while resolution ignores it, and
-// none is consulted without having been enumerated).
-//
-// "Exactly" is a claim about THIS walk only, which is why the name says so.
-// The all-absent walk is the one where enumeration and resolution consult the
-// identical set: prefetchedRows here finds nothing, so resolution takes every
-// branch, just as recordingRows did. Once real rows exist, a direct hit prunes
-// the branches below it and the prefetch is legitimately a superset of what
-// resolution ends up asking for — which is the safe direction, and the one
-// errNotPrefetched exists to keep it in.
-//
-// No database here on purpose: this is about the two in-memory halves
-// agreeing with each other, and nothing else.
+// On the all-absent walk the enumeration and the resolution consult exactly
+// the same rows: the full prefetch answers every question, and dropping any
+// one candidate fails loudly instead of reading as "no rate". With real rows
+// the prefetch is a safe superset.
 func TestPrefetchEnumeratesExactlyWhatTheAllAbsentWalkConsults(t *testing.T) {
 	ctx := context.Background()
 	on := time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)
 
-	// USD -> EUR: neither side is the RUB hub, so resolution walks the whole
-	// tree — direct, inverse, then both bridge legs, each direct-or-inverse.
+	// USD -> EUR walks the whole tree: direct, inverse, both bridge legs.
 	rec := &recordingRows{}
 	if _, _, err := rateVia(ctx, rec, "USD", "EUR", on); !errors.Is(err, ErrNoRate) {
 		t.Fatalf("enumeration pass: err = %v, want ErrNoRate (recordingRows answers everything with 'absent')", err)
@@ -66,10 +46,8 @@ func TestPrefetchEnumeratesExactlyWhatTheAllAbsentWalkConsults(t *testing.T) {
 	}
 }
 
-// TestPrefetchedRowsTellsAbsenceApartFromIgnorance is the same distinction one
-// level down: a key that was prefetched and came back empty is an honest "no
-// such rate" (ok=false, no error), while a key nobody prefetched is a bug in
-// the caller (error).
+// A prefetched key with no row is an honest absence; an unprefetched key is an
+// error.
 func TestPrefetchedRowsTellsAbsenceApartFromIgnorance(t *testing.T) {
 	ctx := context.Background()
 	on := time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)
@@ -90,10 +68,8 @@ func TestPrefetchedRowsTellsAbsenceApartFromIgnorance(t *testing.T) {
 	}
 }
 
-// recordedRows is an fxRateRows that answers with one fixed row and remembers
-// every key it was asked for. It stands in for the store under warmRows, so the
-// fallback can be observed without a database: what matters is WHETHER the
-// question was passed on, not what came back.
+// recordedRows answers one fixed row and records each key it is asked, to
+// observe warmRows' fallback.
 type recordedRows struct {
 	row  FxRate
 	ok   bool
@@ -105,21 +81,8 @@ func (r *recordedRows) rateOn(_ context.Context, base, quote string, on time.Tim
 	return r.row, r.ok, nil
 }
 
-// TestWarmRowsAsksTheStoreOnlyForWhatWasNotPrefetched pins the property that
-// makes ConvertMany's prewarm safe to have at all: it is a cache, so a row it
-// does not hold costs a query and never a wrong answer.
-//
-// The two halves are opposites and both matter:
-//
-//   - a key that WAS prefetched is answered from the batch, absent or present,
-//     and the store is never asked. Retrying an absent-but-requested key would
-//     undo the whole saving, one query per pair that legitimately has no rate;
-//   - a key that was NOT prefetched is passed to the store. Answering it as
-//     absent — which is what prefetchedRows' shape would do here — would turn a
-//     hole in the enumeration into a currency reported as having no rate, and
-//     that is a figure quietly missing from a total rather than an error.
-//
-// No database: this is about which source gets the question.
+// warmRows answers prefetched keys from the batch, absent or present, and asks
+// the store only about keys the prefetch did not request.
 func TestWarmRowsAsksTheStoreOnlyForWhatWasNotPrefetched(t *testing.T) {
 	ctx := context.Background()
 	on := time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)
@@ -157,15 +120,8 @@ func TestWarmRowsAsksTheStoreOnlyForWhatWasNotPrefetched(t *testing.T) {
 	}
 }
 
-// TestPrewarmEnumeratesEveryCurrencyItIsGiven checks the half of ConvertMany's
-// prewarm that decides what the one round trip is for: every non-identity
-// currency in the map must put its whole resolution tree into the batch, and an
-// identity conversion must put nothing there at all.
-//
-// It matters because the enumeration is what the round-trip count rests on: a
-// currency left out of it is not a wrong number (warmRows asks the store) but
-// it is a query per screen, which is exactly what #72 is about, and nothing
-// else in this package would notice.
+// prewarm enumerates each non-identity currency's whole resolution tree, and
+// nothing for an identity one (#72).
 func TestPrewarmEnumeratesEveryCurrencyItIsGiven(t *testing.T) {
 	ctx := context.Background()
 	on := time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)
@@ -175,12 +131,8 @@ func TestPrewarmEnumeratesEveryCurrencyItIsGiven(t *testing.T) {
 		_, _, _ = rateVia(ctx, candidates, currency, "RUB", on)
 	}
 
-	// USD->RUB and EUR->RUB each walk direct then inverse against the hub; the
-	// from->RUB bridge leg then collapses onto those same two keys because the
-	// target IS the hub, and the RUB->to leg becomes RUB/RUB, which
-	// resolveRate asks for in earnest (only rateVia short-circuits an identity,
-	// and the bridge does not go through it). RUB->RUB as a whole conversion
-	// does short-circuit, and records nothing of its own.
+	// Into the hub, the from->RUB leg collapses onto the same keys and the RUB->to
+	// leg asks for RUB/RUB; RUB->RUB as a whole short-circuits.
 	want := []FxRateKey{
 		{Base: "USD", Quote: "RUB", On: on},
 		{Base: "RUB", Quote: "USD", On: on},
@@ -198,14 +150,8 @@ func TestPrewarmEnumeratesEveryCurrencyItIsGiven(t *testing.T) {
 	}
 }
 
-// TestIncompletePrefetchVoidsTheWholeCall pins which of the two failures gets
-// which treatment, the distinction the whole batched path rests on.
-//
-// A pair the prefetch asked about and found nothing for is that query's own
-// ErrNoRate: the map still comes back, its other rows intact. A row the
-// prefetch never asked about voids the map entirely — it is a bug here, and a
-// bug that reported itself as ErrNoRate would be shown to the user as an
-// honest missing rate, on a page where nothing else looks wrong.
+// A prefetched pair with no rate is that query's ErrNoRate; an unprefetched
+// row voids the whole result.
 func TestIncompletePrefetchVoidsTheWholeCall(t *testing.T) {
 	ctx := context.Background()
 	on := time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)
@@ -243,9 +189,7 @@ func TestIncompletePrefetchVoidsTheWholeCall(t *testing.T) {
 	if err == nil || errors.Is(err, ErrNoRate) {
 		t.Fatalf("resolveQueries over an empty prefetch: err = %v, want a loud error that is not ErrNoRate", err)
 	}
-	// The voided batch is the zero Rates, and the zero Rates refuses to answer
-	// rather than handing back a zero-valued result: a caller that dropped err
-	// on the floor still cannot read a fabricated rate out of it.
+	// The voided batch is the zero Rates, which refuses to answer.
 	if got.Len() != 0 {
 		t.Fatalf("resolveQueries over an empty prefetch returned %d entries, want none", got.Len())
 	}

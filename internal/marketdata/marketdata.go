@@ -1,8 +1,5 @@
-// Package marketdata owns daily FX rates and instrument quotes. Both are
-// append-mostly time series keyed by date: FxRate converts between two
-// currency codes, Quote prices an instrument. Lookups by date resolve to the
-// exact day or, if missing, the nearest earlier day (weekends/holidays have
-// no fresh data, so callers fall back to the last known value).
+// Package marketdata owns daily FX rates and instrument quotes, both resolved
+// by date to the exact day or the nearest earlier one.
 package marketdata
 
 import (
@@ -12,17 +9,12 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// FxRate is the number of Quote units per 1 Base unit on date On.
-// GoldCode is the code this program files gold rates under, and it is the
-// broker's code rather than ISO 4217's meaning of it.
-//
-// ISO says XAU is a troy OUNCE. The broker uses it for the exchange's spot gold,
-// whose unit is a GRAM, and the owner's journal counts grams because his
-// purchases are of that instrument. So the code travels through this program
-// meaning what his operations mean by it, and the one source that could
-// contradict it publishes no gold rate at all (see moex.GoldRates).
+// GoldCode is the code gold rates are filed under. It is the broker's "XAU",
+// which means a gram of the exchange's spot gold here, not ISO 4217's troy
+// ounce (see moex.GoldRates).
 const GoldCode = "XAU"
 
+// FxRate is the number of Quote units per one Base unit on date On.
 type FxRate struct {
 	Base   string
 	Quote  string
@@ -31,18 +23,9 @@ type FxRate struct {
 	Source string
 }
 
-// FxRateKey names a single rate lookup — the (Base, Quote) pair and the date
-// it should be resolved as of, following FxRateOn's semantics (exact date, or
-// the nearest earlier one). It is also the map key Store.FxRatesOn returns
-// results under, so a caller doing many lookups can index back into the
-// result by the same key it asked with. FxRatesOn hands back the caller's
-// own key value (via ordinal position in the slice the caller passed in),
-// not a key rebuilt from the columns Postgres returns — On does not
-// round-trip byte-identical through the database (it goes out as `date`,
-// comes back as midnight UTC), so rebuilding it from the wire would only
-// match a caller whose On already happened to be exactly midnight in
-// time.UTC. Keep it that way: re-reading On off the result row is the
-// "simplification" that reintroduces the bug.
+// FxRateKey names one lookup: the pair and the date to resolve as of.
+// Store.FxRatesOn returns results under the caller's own key values, never keys
+// rebuilt from the database's dates.
 type FxRateKey struct {
 	Base  string
 	Quote string

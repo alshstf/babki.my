@@ -9,11 +9,8 @@ import (
 	"babki.my/babki/internal/platform/money"
 )
 
-// TestConvertRefusesAnAmountThatWouldWrap covers the money path's own end of
-// #27. Nothing about the inputs looks wrong — an amount that fits in the
-// column it came out of, a rate of 2 — and the product does not fit. Before
-// the guard, decimal.IntPart() wrapped it to MINUS TWO KOPECKS and Convert
-// reported success.
+// An amount that fits times a rate of 2 can overflow; it is refused, not
+// wrapped to minus two kopecks (#27).
 func TestConvertRefusesAnAmountThatWouldWrap(t *testing.T) {
 	conv, store, ctx := newConverterFixture(t)
 	on := date("2026-07-01")
@@ -34,12 +31,8 @@ func TestConvertRefusesAnAmountThatWouldWrap(t *testing.T) {
 	}
 }
 
-// TestConvertOverflowIsNotAMissingCurrency: ConvertMany sorts its per-entry
-// failures into two piles, and they mean opposite things to a reader. A
-// currency with no rate joins `missing` and the total is published beside a
-// note naming it — an honest partial answer. An overflow must not land there:
-// the total would be published without the very holding that broke it,
-// looking exactly like a smaller portfolio. It fails the whole call instead.
+// An overflow fails ConvertMany rather than joining `missing`, which would
+// publish a total quietly short of the holding.
 func TestConvertOverflowIsNotAMissingCurrency(t *testing.T) {
 	conv, store, ctx := newConverterFixture(t)
 	on := date("2026-07-01")
@@ -60,13 +53,8 @@ func TestConvertOverflowIsNotAMissingCurrency(t *testing.T) {
 	}
 }
 
-// TestConvertManyRefusesATotalThatWouldWrap aims at the SUM rather than at any
-// one amount. Both balances below convert to a perfectly ordinary int64 on
-// their own and pass the per-amount guard; only their total leaves the range,
-// and the total is the published figure — ConvertMany's result is
-// total_in_base_minor on GET /summary. A plain += would have answered with
-// minus two kopecks and a nil error, on the one screen whose entire job is to
-// say how much there is.
+// Two balances that each convert fine can sum past int64; the total is
+// refused too.
 func TestConvertManyRefusesATotalThatWouldWrap(t *testing.T) {
 	conv, store, ctx := newConverterFixture(t)
 	on := date("2026-07-01")

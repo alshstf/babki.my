@@ -14,9 +14,8 @@ import (
 
 const bondHistoryPath = "/iss/history/engines/stock/markets/bonds/boards/TQCB/securities/RU000A103AP6.json"
 
-// exchange is a stand-in ISS that answers the corporate-bond board with one
-// bond and that bond's session history, counts the history requests and keeps
-// the last one's query. Both answers can be changed between calls.
+// exchange is a stand-in ISS with one corporate bond and its session history;
+// it counts history requests and keeps the last query.
 type exchange struct {
 	srv *httptest.Server
 
@@ -99,9 +98,8 @@ func day(s string) time.Time {
 	return d
 }
 
-// A price the exchange carried into the session is dated by the day its trade
-// was made, not by the session. The figures are the bond's own, read from ISS
-// on 2026-10-01: 77.5 beside PREVDATE 2026-09-30, no trade since 2026-08-24.
+// A carried price is dated by its last trade, not the session (the bond's own
+// ISS figures from 2026-10-01).
 func TestACarriedPriceIsDatedByItsLastTrade(t *testing.T) {
 	e := newExchange(t, "2026-09-30",
 		sessions("2026-09-30:0", "2026-09-29:0", "2026-08-25:0", "2026-08-24:1", "2026-08-21:3"))
@@ -127,9 +125,7 @@ func TestAPriceTradedInItsSessionKeepsTheSessionsDate(t *testing.T) {
 	}
 }
 
-// With no trade in anything read the price is at least as old as the oldest
-// session read, and that is the date it gets: old enough for every reader that
-// asks how old a price is, and not a day later than the truth.
+// With no trade in sight the price gets the oldest session read.
 func TestAPriceWithNoTradeInSightIsDatedByTheOldestSessionRead(t *testing.T) {
 	e := newExchange(t, "2026-09-30", sessions("2026-09-30:0", "2026-09-29:0", "2026-05-13:0"))
 	c := moex.New(e.srv.Client(), e.srv.URL, nil)
@@ -139,9 +135,8 @@ func TestAPriceWithNoTradeInSightIsDatedByTheOldestSessionRead(t *testing.T) {
 	}
 }
 
-// History that has not caught up with the board cannot say whether the session
-// traded. The session's date stands, and the question is asked again next time
-// rather than remembered as answered.
+// History behind the board leaves the session's date, and is asked again next
+// time.
 func TestHistoryThatDoesNotReachTheSessionIsAskedAgain(t *testing.T) {
 	for name, history := range map[string]string{
 		"behind": sessions("2026-09-29:4"),
@@ -162,8 +157,7 @@ func TestHistoryThatDoesNotReachTheSessionIsAskedAgain(t *testing.T) {
 	}
 }
 
-// The refresh runs every half hour and the session moves once a day: history
-// is read once per session, and again when the session changes.
+// History is read once per session.
 func TestHistoryIsReadOncePerSession(t *testing.T) {
 	e := newExchange(t, "2026-09-30", sessions("2026-09-30:0", "2026-08-24:1"))
 	c := moex.New(e.srv.Client(), e.srv.URL, nil)
@@ -186,9 +180,8 @@ func TestHistoryIsReadOncePerSession(t *testing.T) {
 	}
 }
 
-// A history request that fails fails the call: publishing the price under the
-// session's date instead would store the very date this lookup exists to
-// correct.
+// A failing history request fails the call rather than storing the session's
+// date.
 func TestAFailingHistoryFailsTheCall(t *testing.T) {
 	e := newExchange(t, "2026-09-30", `{}`)
 	e.historyStatus = http.StatusInternalServerError
