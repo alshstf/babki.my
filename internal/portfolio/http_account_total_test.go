@@ -316,6 +316,11 @@ func TestAccountTotalCountsTheCurrencyResultAlreadyBanked(t *testing.T) {
 	default:
 		t.Errorf("in_base = %d, want 3000000", *got.InBase)
 	}
+	// And all of it is the currency's (decision Р-5): said as its own part, so
+	// the screen can name it rather than pass it off as a trade's result.
+	if got.CashFxInBase == nil || *got.CashFxInBase != 3_000_000 {
+		t.Errorf("cash_fx_in_base = %v, want 3000000 — the whole result is the dollars' move", got.CashFxInBase)
+	}
 }
 
 // TestAccountTotalAddsNoCurrencyResultOnItsOwnBaseCurrency: rubles in a ruble
@@ -337,6 +342,9 @@ func TestAccountTotalAddsNoCurrencyResultOnItsOwnBaseCurrency(t *testing.T) {
 	}
 	if got.InBaseGap != nil {
 		t.Errorf("in_base_gap = %q, want null — nothing here needed a rate at all", *got.InBaseGap)
+	}
+	if got.CashFxInBase != nil {
+		t.Errorf("cash_fx_in_base = %d, want null — the account holds no money in another currency", *got.CashFxInBase)
 	}
 }
 
@@ -366,6 +374,9 @@ func TestAccountTotalNamesTheMoneyItCouldNotValue(t *testing.T) {
 	}
 	if len(got.NoRateCurrencies) != 1 || got.NoRateCurrencies[0] != "XAU" {
 		t.Errorf("no_rate_currencies = %v, want [XAU] — the dollars have rates, and naming them too would send a reader looking at money that is fine", got.NoRateCurrencies)
+	}
+	if got.CashFxInBase != nil {
+		t.Errorf("cash_fx_in_base = %d, want null: part of the money has no rate, so its currency result has no figure either", *got.CashFxInBase)
 	}
 }
 

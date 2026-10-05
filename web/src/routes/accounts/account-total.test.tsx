@@ -17,6 +17,7 @@ function makeTotal(
     base_currency: "RUB",
     in_base: 1_000_000,
     in_base_gap: null,
+    cash_fx_in_base: null,
     no_rate_currencies: [],
     undated_positions: 0,
     zero_valued_positions: 0,
@@ -187,5 +188,25 @@ describe("AccountTotal", () => {
     );
 
     expect(screen.queryByTestId("account-total")).not.toBeInTheDocument();
+  });
+});
+
+// Decision Р-5: the currency's share of the figure is named apart, never left
+// inside a number that reads as profit — and only in the base currency, where
+// money in another currency can earn anything at all.
+describe("AccountTotal: the currency result on the money", () => {
+  it("names the share in base mode", () => {
+    render(<AccountTotal total={makeTotal({ cash_fx_in_base: 2_000_000 })} mode="base" />);
+    expect(norm(screen.getByTestId("account-total-cash-fx").textContent ?? "")).toBe(
+      "из них курсовая разница по деньгам: +20 000,00 ₽",
+    );
+  });
+
+  it("says nothing when there is none, or in the positions' own currencies", () => {
+    const { unmount } = render(<AccountTotal total={makeTotal({ cash_fx_in_base: 0 })} mode="base" />);
+    expect(screen.queryByTestId("account-total-cash-fx")).toBeNull();
+    unmount();
+    render(<AccountTotal total={makeTotal({ cash_fx_in_base: 2_000_000 })} mode="native" />);
+    expect(screen.queryByTestId("account-total-cash-fx")).toBeNull();
   });
 });

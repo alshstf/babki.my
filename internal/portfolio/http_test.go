@@ -301,6 +301,7 @@ type accountTotalResp struct {
 	BaseCurrency             string                     `json:"base_currency"`
 	InBase                   *int64                     `json:"in_base"`
 	InBaseGap                *string                    `json:"in_base_gap"`
+	CashFxInBase             *int64                     `json:"cash_fx_in_base"`
 	ZeroValuedPositions      int                        `json:"zero_valued_positions"`
 	ZeroValuedCostByCurrency []currencyAmountResp       `json:"zero_valued_cost_by_currency"`
 	NoRateCurrencies         []string                   `json:"no_rate_currencies"`
