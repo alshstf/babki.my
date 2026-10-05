@@ -53,6 +53,14 @@ var ErrTokenInvalid = errors.New("tinvest: token invalid or revoked")
 // log line about it says what the broker actually answered.
 var ErrInstrumentNotFound = errors.New("tinvest: the broker has no such instrument")
 
+// errReportNotReady is the broker's answer to a broker report asked for before
+// it is built: HTTP 400 with business code 30058, "Task not completed yet,
+// please try again later" (captured from the live gateway on 2026-10-05). It
+// is not a failure of anything — the report is built asynchronously and this
+// is how the gateway says "not yet" — so it stays inside this package, where
+// TradeSettlements waits it out.
+var errReportNotReady = errors.New("tinvest: the broker report is not built yet")
+
 // defaultHTTPTimeout is the request timeout NewClient uses when the caller
 // passes a nil *http.Client. 30s: generous for a single unary REST call
 // (accounts, one page of operations, a portfolio snapshot), while still
@@ -663,6 +671,99 @@ func (c *Client) BondNominalByUID(ctx context.Context, uid string) (MoneyValue, 
 	return initial, nil
 }
 
+// TradeSettlement is one trade from the broker report and the day its money
+// settled.
+//
+// TradeID is the exchange's number for the trade — the same number an
+// operation lists under tradesInfo.trades[].num, which is what joins the two:
+// checked against the owner's account on 2026-10-05, all 18 trades of a month
+// matched. SettledOn is a calendar day at UTC midnight, the form every journal
+// date has.
+type TradeSettlement struct {
+	TradeID   string
+	TradedAt  time.Time
+	SettledOn time.Time
+}
+
+// brokerReportRPC is the one method that both orders a broker report and
+// hands it over: what it does depends on which of its two request bodies it is
+// sent.
+const brokerReportRPC = "OperationsService/GetBrokerReport"
+
+// brokerReportPollInterval is how long TradeSettlements waits before asking
+// again for a report the broker has not built yet. The method is limited to a
+// handful of calls a minute (the live gateway rate-limited the fifth poll made
+// three seconds apart), and ordering the report and polling for it count
+// against that one limit, so the wait is set to keep within it rather than to
+// learn of a finished report a few seconds sooner.
+const brokerReportPollInterval = 12 * time.Second
+
+// brokerReportMaxPolls bounds the wait for one report: ten polls are two
+// minutes, past which a report is treated as one the broker will not build
+// this time, and the month is asked for again on a later run.
+const brokerReportMaxPolls = 10
+
+// TradeSettlements asks the broker report for the trades of [from, to) and the
+// day each one settled.
+//
+// THE REPORT IS BUILT ASYNCHRONOUSLY, in two steps on one method: the first
+// request orders it and gets a task id back, the second asks for a page of the
+// finished report by that id — and answers errReportNotReady until it is
+// finished. The wait is c.sleep, so it ends with ctx and tests can skip it.
+func (c *Client) TradeSettlements(ctx context.Context, brokerAccountID string, from, to time.Time) ([]TradeSettlement, error) {
+	var ordered wireGenerateBrokerReportResponse
+	if err := c.do(ctx, brokerReportRPC, generateBrokerReportRequest{Generate: generateBrokerReport{
+		AccountID: brokerAccountID,
+		From:      from.UTC().Format(time.RFC3339),
+		To:        to.UTC().Format(time.RFC3339),
+	}}, &ordered); err != nil {
+		return nil, err
+	}
+	taskID := ordered.Generate.TaskID
+	if taskID == "" {
+		return nil, fmt.Errorf("tinvest: %s: the broker ordered a report and named no task to fetch it by", brokerReportRPC)
+	}
+
+	var out []TradeSettlement
+	for page := 0; ; page++ {
+		report, err := c.brokerReportPage(ctx, taskID, page)
+		if err != nil {
+			return nil, err
+		}
+		for _, w := range report.Rows {
+			s, ok, err := w.parse()
+			if err != nil {
+				return nil, fmt.Errorf("tinvest: %s: page %d: %w", brokerReportRPC, page, err)
+			}
+			if ok {
+				out = append(out, s)
+			}
+		}
+		if page+1 >= report.PagesCount {
+			return out, nil
+		}
+	}
+}
+
+// brokerReportPage is one page of a report already ordered, waited for while
+// the broker says it is not built yet.
+func (c *Client) brokerReportPage(ctx context.Context, taskID string, page int) (wireBrokerReport, error) {
+	for poll := 1; ; poll++ {
+		var resp wireGetBrokerReportResponse
+		err := c.do(ctx, brokerReportRPC, getBrokerReportRequest{Get: getBrokerReport{TaskID: taskID, Page: page}}, &resp)
+		if !errors.Is(err, errReportNotReady) {
+			return resp.Get, err
+		}
+		if poll >= brokerReportMaxPolls {
+			return wireBrokerReport{}, fmt.Errorf("tinvest: %s: report task %s still not built after %d polls: %w",
+				brokerReportRPC, taskID, poll, err)
+		}
+		if err := c.sleep(ctx, brokerReportPollInterval); err != nil {
+			return wireBrokerReport{}, fmt.Errorf("tinvest: %s: waiting for report task %s: %w", brokerReportRPC, taskID, err)
+		}
+	}
+}
+
 // rateLimitError signals a 429 response; do() catches it with errors.As to
 // decide whether to wait and retry, rather than treating it like any other
 // non-200 status.
@@ -805,6 +906,8 @@ func (c *Client) doOnce(ctx context.Context, rpc string, reqBody, respBody any) 
 					return ErrTokenInvalid
 				case instrumentNotFoundDescription:
 					return fmt.Errorf("%w: %w", generic, ErrInstrumentNotFound)
+				case reportNotReadyDescription:
+					return fmt.Errorf("%w: %w", generic, errReportNotReady)
 				}
 			}
 		}

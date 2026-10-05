@@ -28,4 +28,7 @@
 //     journal that projection now asks for, computed whole and applied.
 //   - reconcile.go: our own positions and cash checked against what the broker
 //     says it holds, and the balance mark that check leaves on the account.
+//   - settlements.go: the day each trade's money settled, read month by month
+//     from the broker report on the hourly run and laid onto the trades by the
+//     rebuild (decision Р-3).
 package tinvest

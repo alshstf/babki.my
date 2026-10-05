@@ -119,6 +119,10 @@ const tokenInvalidDescription = 40003
 // wireError.Description is a json.Number.
 const instrumentNotFoundDescription = 50002
 
+// reportNotReadyDescription is the broker's business error code for a broker
+// report asked for before it is built — see errReportNotReady.
+const reportNotReadyDescription = 30058
+
 // wireAccount mirrors the REST gateway's Account (UsersService/GetAccounts
 // and GetSandboxAccounts): Type and Status are left as the enum's wire
 // strings (e.g. "ACCOUNT_TYPE_TINKOFF") rather than parsed further, exactly
@@ -440,4 +444,80 @@ func (w wireLastPrice) parse() (LastPrice, bool, error) {
 		At:            at,
 		Dealer:        w.LastPriceType == "LAST_PRICE_DEALER",
 	}, true, nil
+}
+
+// generateBrokerReportRequest orders a broker report: the method's request is
+// a oneof, and this is its "generate" arm.
+type generateBrokerReportRequest struct {
+	Generate generateBrokerReport `json:"generateBrokerReportRequest"`
+}
+
+type generateBrokerReport struct {
+	AccountID string `json:"accountId"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+}
+
+// getBrokerReportRequest asks for one page of a report already ordered — the
+// oneof's other arm.
+type getBrokerReportRequest struct {
+	Get getBrokerReport `json:"getBrokerReportRequest"`
+}
+
+type getBrokerReport struct {
+	TaskID string `json:"taskId"`
+	Page   int    `json:"page"`
+}
+
+type wireGenerateBrokerReportResponse struct {
+	Generate struct {
+		TaskID string `json:"taskId"`
+	} `json:"generateBrokerReportResponse"`
+}
+
+type wireGetBrokerReportResponse struct {
+	Get wireBrokerReport `json:"getBrokerReportResponse"`
+}
+
+// wireBrokerReport is one page of a broker report. Only the fields
+// TradeSettlement needs are modeled; a row carries two dozen more (prices,
+// commissions, the counterparty) that the operations already say.
+type wireBrokerReport struct {
+	Rows       []wireBrokerReportRow `json:"brokerReport"`
+	PagesCount int                   `json:"pagesCount"`
+}
+
+type wireBrokerReportRow struct {
+	TradeID        string `json:"tradeId"`
+	TradeDatetime  string `json:"tradeDatetime"`
+	ClearValueDate string `json:"clearValueDate"`
+}
+
+// parse reads one trade. The settlement day arrives as a timestamp at UTC
+// midnight ("2024-02-27T00:00:00Z" for a trade of the 26th), so its UTC date
+// is the day itself; anything that is not a midnight is refused rather than
+// rounded to a day it might not be.
+//
+// A row with no settlement day is not an error and not a trade to record: ok
+// is false, and the operations it belongs to keep their trade day.
+func (w wireBrokerReportRow) parse() (s TradeSettlement, ok bool, err error) {
+	if w.ClearValueDate == "" {
+		return TradeSettlement{}, false, nil
+	}
+	if w.TradeID == "" {
+		return TradeSettlement{}, false, fmt.Errorf("a trade with no tradeId")
+	}
+	traded, err := parseWireTime(w.TradeDatetime)
+	if err != nil {
+		return TradeSettlement{}, false, fmt.Errorf("trade %s: tradeDatetime: %w", w.TradeID, err)
+	}
+	settled, err := parseWireTime(w.ClearValueDate)
+	if err != nil {
+		return TradeSettlement{}, false, fmt.Errorf("trade %s: clearValueDate: %w", w.TradeID, err)
+	}
+	settled = settled.UTC()
+	if !settled.Equal(settled.Truncate(24 * time.Hour)) {
+		return TradeSettlement{}, false, fmt.Errorf("trade %s: clearValueDate %s is not a calendar day", w.TradeID, w.ClearValueDate)
+	}
+	return TradeSettlement{TradeID: w.TradeID, TradedAt: traded, SettledOn: settled}, true, nil
 }
