@@ -13,41 +13,31 @@ import (
 	"babki.my/babki/internal/operation"
 )
 
-// The day a trade's money settled (decision Р-3).
+// Settlement days (Р-3). A trade in another currency is valued at the official
+// rate of the day its money moved, the settlement day, and at its trade day only
+// when that is unknown. The operations call does not say it; the broker report
+// does, per trade, under the same exchange number the operation lists in
+// tradesInfo. This file reads the report month by month, stores the days beside
+// the mirror and the rebuild lays them onto trades.
 //
-// A trade in another currency is priced at the official rate of the day its
-// money actually moved — the settlement day, a day or two after the trade on
-// an exchange — and at the trade's own day only when the settlement day is not
-// known. The operations call does not say it. The broker report does, per
-// trade, and names each trade by the same exchange number the operation lists
-// under tradesInfo; what is here reads the report month by month, keeps its
-// answers beside the mirror, and lays them onto the trades on every rebuild.
-//
-// A MISSING DAY IS NEVER AN ERROR. The report is slow to build and limited to
-// a few calls a minute, and a month the broker cannot hand over this hour
-// leaves its trades priced on their trade day — what every trade was priced on
-// before this existed — until a later run reads it.
+// A missing day is never an error: the report is slow and rate-limited, and a
+// month not read this hour keeps its trades on their trade day until a later
+// run.
 
-// settlementGrace is how long after a month ends its report is taken as final:
-// a month read later than that is not read again. Settlement takes days, so
-// ten days past the month's end every trade in it has its day.
+// settlementGrace: ten days after a month ends every trade in it has settled,
+// and a month read after that is not read again.
 const settlementGrace = 10 * 24 * time.Hour
 
-// settlementRecheck is how soon a month read before it was final may be read
-// again. Once a day is enough for trades that settle in a day or two, and it
-// keeps the hourly run from spending its few report calls on the same month.
+// settlementRecheck: a month read before it was final is read again at most
+// daily, so the hourly run does not spend its few report calls on it.
 const settlementRecheck = 20 * time.Hour
 
-// settlementBudget is how long one run goes on ordering new months' reports.
-// It is checked between months, so one report may run past it by its own
-// wait (see brokerReportMaxPolls). A long history is read over several hourly
-// runs, newest months first.
+// settlementBudget: how long one run orders new months, checked between
+// months; a long history is read over several runs, newest first.
 const settlementBudget = 3 * time.Minute
 
-// maxImportedSettlementLag is the furthest after its trade a settlement day
-// read from the report is believed. Exchange trades settle in days; a day
-// further off than a month says the numbers were matched to the wrong trade,
-// and the trade keeps its own day instead.
+// maxImportedSettlementLag: a report day more than a month after its trade
+// means a mismatched trade, and the trade keeps its own day.
 const maxImportedSettlementLag = 31 * 24 * time.Hour
 
 // tradeSettlementSource is the broker report as this file uses it. *Client
@@ -56,12 +46,10 @@ type tradeSettlementSource interface {
 	TradeSettlements(ctx context.Context, brokerAccountID string, from, to time.Time) ([]TradeSettlement, error)
 }
 
-// readSettlements reads the reports of the months whose trades have no
-// settlement day yet, for every link, until the budget is spent.
-//
-// IT FAILS NOTHING. A report the broker will not hand over is logged and ends
-// this run's reading — the next month would meet the same limit or the same
-// fault — and the sync goes on to rebuild with whatever days it has.
+// readSettlements reads the reports of months whose trades lack a settlement
+// day, per link, until the budget is spent. It fails nothing: a report the broker
+// will not give is logged and ends this run's reading, and the sync rebuilds with
+// the days it has.
 func readSettlements(ctx context.Context, store *Store, src tradeSettlementSource, links []AccountLink,
 	now func() time.Time, budget time.Duration, log *slog.Logger,
 ) {
@@ -94,9 +82,8 @@ func readSettlements(ctx context.Context, store *Store, src tradeSettlementSourc
 	}
 }
 
-// dueSettlementMonths is which months' reports to read now, newest first: those
-// with trades still missing their day that were never read, or were read
-// before they were final and not within the last settlementRecheck.
+// dueSettlementMonths is which months to read now, newest first: never read,
+// or read before final and not within settlementRecheck.
 func dueSettlementMonths(unsettled []time.Time, read map[time.Time]time.Time, now time.Time) []time.Time {
 	var due []time.Time
 	for _, month := range unsettled {
@@ -113,8 +100,7 @@ func dueSettlementMonths(unsettled []time.Time, read map[time.Time]time.Time, no
 	return due
 }
 
-// monthOf is the first day of t's month, in UTC — the calendar the report's
-// period is asked in.
+// monthOf is the first day of t's month in UTC, the report's calendar.
 func monthOf(t time.Time) time.Time {
 	u := t.UTC()
 	return time.Date(u.Year(), u.Month(), 1, 0, 0, 0, 0, time.UTC)
@@ -130,10 +116,8 @@ type wireTrades struct {
 	} `json:"tradesInfo"`
 }
 
-// settlementDay is the day a row's trades settled: the one day every trade it
-// lists has, or nil when the row lists none, any of them is not known yet, or
-// they disagree. Partial knowledge is no knowledge — the row is one journal
-// entry and has one day.
+// settlementDay is the one day every trade a row lists settled on, or nil if
+// it lists none, any is unknown, or they disagree: one journal entry, one day.
 func settlementDay(raw json.RawMessage, known map[string]time.Time) *time.Time {
 	if len(known) == 0 {
 		return nil
@@ -153,11 +137,9 @@ func settlementDay(raw json.RawMessage, known map[string]time.Time) *time.Time {
 	return &day
 }
 
-// settleOn writes day onto a trade entry as the day its money settled. Only
-// the entries that ARE the trade take it — a purchase, a sale, a currency
-// exchange — and not a commission charged beside one, which is paid when it is
-// charged. A day before the entry's own, or implausibly long after it, is not
-// believed (see maxImportedSettlementLag).
+// settleOn sets day as the settlement day of a purchase, sale or currency
+// exchange entry, not a commission beside it. A day before the entry, or past
+// maxImportedSettlementLag, is ignored.
 func settleOn(op *operation.Operation, day *time.Time) {
 	if day == nil {
 		return
@@ -204,13 +186,10 @@ func (s *Store) dueSettlementMonthsOf(ctx context.Context, linkID uuid.UUID, now
 	return dueSettlementMonths(unsettled, read, now), nil
 }
 
-// unsettledTradeMonths is the months of the trades a link's mirror lists that
-// have no settlement day stored, each once.
-//
-// The month is the TRADE's, read here rather than in SQL: a date the database
-// failed to cast would fail the whole query, and one unreadable trade would
-// then stop every month from being read. A trade whose own date does not parse
-// takes its operation's.
+// unsettledTradeMonths is the months of a link's trades with no stored
+// settlement day, each once. The month is the trade's, parsed here rather than
+// cast in SQL, so one bad date cannot fail the query; it falls back to the
+// operation's date.
 func (s *Store) unsettledTradeMonths(ctx context.Context, linkID uuid.UUID) ([]time.Time, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT COALESCE(t->>'date', ''), m.occurred_at
@@ -249,8 +228,8 @@ func (s *Store) unsettledTradeMonths(ctx context.Context, linkID uuid.UUID) ([]t
 	return months, nil
 }
 
-// saveTradeSettlements stores one month's report and that it was read, as one
-// write. A trade the report states again takes the day stated last.
+// saveTradeSettlements stores one month's report and that it was read, in one
+// write; a trade stated again takes the latest day.
 func (s *Store) saveTradeSettlements(ctx context.Context, linkID uuid.UUID, month time.Time,
 	trades []TradeSettlement, now time.Time,
 ) error {

@@ -16,16 +16,15 @@ import (
 	"babki.my/babki/internal/platform/secretbox"
 )
 
-// HistorySource is what the quotes table calls a closing price taken from the
-// broker's daily candles.
+// HistorySource is the quotes source of a close from the broker's daily
+// candles.
 const HistorySource = "tinvest_history"
 
-// candleWindow is how much history one candles request asks for: the broker
-// answers a year of daily candles at a time.
+// candleWindow: the broker answers a year of daily candles per request.
 const candleWindow = 365
 
-// historyLeadDays is how far before a paper's first operation its history is
-// fetched from, so that the first day has a price to land on.
+// historyLeadDays: history starts this many days before a paper's first
+// operation, so that day has a price.
 const historyLeadDays = 31
 
 // DayClose is one trading day's closing price of an instrument at the broker.
@@ -45,8 +44,8 @@ type wireCandle struct {
 	IsComplete bool           `json:"isComplete"`
 }
 
-// DailyCloses asks the broker for an instrument's daily closing prices from
-// from to to, and the currency they are in. Days not yet closed are left out.
+// DailyCloses returns an instrument's daily closes from from to to and their
+// currency, leaving out unclosed days.
 func (c *Client) DailyCloses(ctx context.Context, instrumentUID string, from, to time.Time) ([]DayClose, string, error) {
 	var resp wireGetCandlesResponse
 	req := struct {
@@ -78,9 +77,8 @@ func (c *Client) DailyCloses(ctx context.Context, instrumentUID string, from, to
 	return out, strings.ToUpper(resp.PriceCurrency), nil
 }
 
-// BackfillQuotesArgs asks for the closing prices of the papers the broker's
-// connections hold that the exchange's history does not cover — foreign
-// papers above all.
+// BackfillQuotesArgs asks for closes of connection papers the exchange
+// history does not cover, foreign papers above all.
 type BackfillQuotesArgs struct{}
 
 func (BackfillQuotesArgs) Kind() string { return "tinvest.backfill_quotes" }
@@ -105,23 +103,23 @@ type backfillQuotesWorker struct {
 	now       func() time.Time
 }
 
-// NewBackfillQuotesWorker builds the River worker that downloads the broker's
-// daily candles for the listings of every active connection.
+// NewBackfillQuotesWorker builds the worker that downloads daily candles for
+// every active connection's listings.
 func NewBackfillQuotesWorker(store *Store, quotes historyQuotes, ops firstDays, box *secretbox.Box, newClient clientFactory, log *slog.Logger) river.Worker[BackfillQuotesArgs] {
 	return &backfillQuotesWorker{store: store, quotes: quotes, ops: ops, box: box, newClient: newClient, log: log, now: time.Now}
 }
 
-// Timeout raises River's one-minute default: a first run asks for years of
-// every listing, a year a request.
+// Timeout: a first run asks for years of every listing, a year per
+// request.
 func (w *backfillQuotesWorker) Timeout(*river.Job[BackfillQuotesArgs]) time.Duration {
 	return 15 * time.Minute
 }
 
-// Work fetches, for every listing of every active connection whose paper is
-// in a journal and has no history from the exchange, the days after the last
-// one already downloaded — from a month before its first operation the first
-// time — and the same for the papers its space holds that no import mapped.
-// A price is stored only in the listing's own currency.
+// Work fetches, for each listing of each active connection whose paper is in a
+// journal without exchange history, the days after the last downloaded one (from
+// a month before the first operation the first time), and likewise for papers
+// the space holds that no import mapped. Prices are stored only in the listing's
+// own currency.
 func (w *backfillQuotesWorker) Work(ctx context.Context, _ *river.Job[BackfillQuotesArgs]) error {
 	conns, err := w.store.ListActiveConnections(ctx)
 	if err != nil {
@@ -190,11 +188,9 @@ func (w *backfillQuotesWorker) backfillConnection(ctx context.Context, conn Conn
 	return w.backfillUnmapped(ctx, conn, client, first, today)
 }
 
-// backfillUnmapped fetches the history of the papers the space holds that no
-// import mapped — the ones entered by hand or loaded from another broker's
-// file — at the listing the price worker finds for them by ISIN (see
-// resolveListing), so that their past is priced as the connection's own
-// papers' is. Bounded per run as the price worker's searches are.
+// backfillUnmapped fetches history for papers no import mapped (entered by
+// hand or from another broker's file), at the listing the price worker finds by
+// ISIN (resolveListing); bounded per run.
 func (w *backfillQuotesWorker) backfillUnmapped(ctx context.Context, conn Connection, client *Client, first map[uuid.UUID]time.Time, today time.Time) error {
 	want, err := w.store.UnmappedHeldInstruments(ctx, conn.SpaceID, conn.ID)
 	if err != nil {
@@ -241,8 +237,7 @@ func (w *backfillQuotesWorker) backfillUnmapped(ctx context.Context, conn Connec
 	return nil
 }
 
-// since is the first day to fetch: a month before the paper's first operation,
-// or the day after the last one already fetched.
+// since is the first day to fetch.
 func (w *backfillQuotesWorker) since(firstOperation, lastFetched time.Time) time.Time {
 	from := mskDay(firstOperation).AddDate(0, 0, -historyLeadDays)
 	if !lastFetched.IsZero() && !lastFetched.Before(from) {
@@ -251,8 +246,8 @@ func (w *backfillQuotesWorker) since(firstOperation, lastFetched time.Time) time
 	return from
 }
 
-// fetch stores a listing's daily closes from from to today, a year a request,
-// in the listing's own currency; candles in another currency are not stored.
+// fetch stores a listing's daily closes from from to today in the listing's
+// currency; candles in another currency are skipped.
 func (w *backfillQuotesWorker) fetch(ctx context.Context, client *Client, instrumentID uuid.UUID, uid, listingCurrency string, from, today time.Time) error {
 	for start := from; !start.After(today); start = start.AddDate(0, 0, candleWindow) {
 		end := start.AddDate(0, 0, candleWindow)
