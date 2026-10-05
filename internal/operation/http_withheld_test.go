@@ -11,24 +11,27 @@ import (
 	"babki.my/babki/internal/marketdata"
 )
 
-// withheldItem decodes a journal row's withheld_abroad.
+// withheldBody decodes a journal row's withheld_abroad.
+type withheldBody struct {
+	State         string  `json:"state"`
+	UnknownReason *string `json:"unknown_reason"`
+	ReceivedMinor int64   `json:"received_minor"`
+	TaxMinor      *int64  `json:"tax_minor"`
+	GrossMinor    *int64  `json:"gross_minor"`
+	RatePercent   *string `json:"rate_percent"`
+	TaxInBase     *struct {
+		Currency    string `json:"currency"`
+		AmountMinor int64  `json:"amount_minor"`
+	} `json:"tax_in_base"`
+	BrokerTax []struct {
+		Currency    string `json:"currency"`
+		AmountMinor int64  `json:"amount_minor"`
+	} `json:"broker_tax"`
+}
+
 type withheldItem struct {
-	ID             string `json:"id"`
-	WithheldAbroad *struct {
-		State         string  `json:"state"`
-		UnknownReason *string `json:"unknown_reason"`
-		ReceivedMinor int64   `json:"received_minor"`
-		TaxMinor      *int64  `json:"tax_minor"`
-		RatePercent   *string `json:"rate_percent"`
-		TaxInBase     *struct {
-			Currency    string `json:"currency"`
-			AmountMinor int64  `json:"amount_minor"`
-		} `json:"tax_in_base"`
-		BrokerTax []struct {
-			Currency    string `json:"currency"`
-			AmountMinor int64  `json:"amount_minor"`
-		} `json:"broker_tax"`
-	} `json:"withheld_abroad"`
+	ID             string        `json:"id"`
+	WithheldAbroad *withheldBody `json:"withheld_abroad"`
 }
 
 // The journal publishes the estimate on a foreign dividend, with the tax in
@@ -76,5 +79,62 @@ func TestTheJournalEstimatesTheTaxWithheldAbroad(t *testing.T) {
 	}
 	if rows[russian].WithheldAbroad != nil {
 		t.Errorf("a Russian paper's dividend carries withheld_abroad = %+v, want null", rows[russian].WithheldAbroad)
+	}
+}
+
+// A tax stated from the broker's statement takes the place of the estimate on
+// every row of the payment, a Russian paper's included; clearing it brings the
+// estimate back. Only a dividend on a paper takes one.
+func TestAStatedTaxTakesThePlaceOfTheEstimate(t *testing.T) {
+	url, c, mdStore := newAPIWithConverter(t)
+	acc := mkAccount(t, url, c, "Брокер", "USD")
+	nvda := mkInstrument(t, url, c, `{"type":"share","name":"NVIDIA","ticker":"NVDA","isin":"US67066G1040","currency":"USD"}`)
+	paid := time.Date(2021, 9, 29, 0, 0, 0, 0, time.UTC)
+	if err := mdStore.ReplaceDividends(t.Context(), uuid.MustParse(nvda), "test", []marketdata.Dividend{{
+		InstrumentID: uuid.MustParse(nvda), Source: "test", RecordDate: time.Date(2021, 9, 2, 0, 0, 0, 0, time.UTC),
+		PaymentDate: &paid, PerShare: decimal.RequireFromString("0.04"), Currency: "USD",
+	}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy","occurred_on":"2021-06-01",
+		"quantity":"5","price":"100","amount_minor":-50000,"currency":"USD"}`, acc, nvda))
+	div := mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"dividend",
+		"occurred_on":"2021-09-29","amount_minor":14,"currency":"USD"}`, acc, nvda))
+	deposit := mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"type":"deposit",
+		"occurred_on":"2021-09-29","amount_minor":1000,"currency":"USD"}`, acc))
+
+	withheldOf := func() *withheldBody {
+		t.Helper()
+		resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations", "")
+		var page struct {
+			Operations []withheldItem `json:"operations"`
+		}
+		decodeJSON(t, resp, &page)
+		for _, o := range page.Operations {
+			if o.ID == div {
+				return o.WithheldAbroad
+			}
+		}
+		t.Fatal("the dividend is not in the journal")
+		return nil
+	}
+
+	if resp := do(t, c, "PUT", url+"/api/v1/operations/"+div+"/withheld-abroad", `{"tax_minor":2}`); resp.StatusCode != 204 {
+		t.Fatalf("state the tax = %d, want 204", resp.StatusCode)
+	}
+	w := withheldOf()
+	if w.State != "stated" || *w.TaxMinor != 2 || *w.GrossMinor != 16 || *w.RatePercent != "12.5" {
+		t.Errorf("stated: %+v, want tax 2 of 16, 12.5", w)
+	}
+
+	if resp := do(t, c, "DELETE", url+"/api/v1/operations/"+div+"/withheld-abroad", ""); resp.StatusCode != 204 {
+		t.Fatalf("clear = %d, want 204", resp.StatusCode)
+	}
+	if w := withheldOf(); w.State != "estimated" || *w.TaxMinor != 6 {
+		t.Errorf("after clearing: %+v, want the estimate of 6 back", w)
+	}
+
+	if resp := do(t, c, "PUT", url+"/api/v1/operations/"+deposit+"/withheld-abroad", `{"tax_minor":2}`); resp.StatusCode != 400 {
+		t.Errorf("a tax on a deposit = %d, want 400", resp.StatusCode)
 	}
 }

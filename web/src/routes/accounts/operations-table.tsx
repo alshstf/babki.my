@@ -393,7 +393,7 @@ export function OperationsTable({
                           })}
                     </div>
                   )}
-                  {operation.withheld_abroad && <WithheldAbroadNote withheld={operation.withheld_abroad} />}
+                  {operation.withheld_abroad && <WithheldAbroadNote operation={operation} editable={canDelete} />}
                 </TableCell>
                 <TableCell>
                   {instrumentLinks && operation.instrument_id ? (
