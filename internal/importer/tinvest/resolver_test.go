@@ -16,26 +16,10 @@ import (
 	"babki.my/babki/internal/platform/money"
 )
 
-// countingCatalog wraps the REAL *instrument.Store — the one
-// instrument/store_test.go already proves ByISIN/ByTickerTradable/
-// Create/Update against — and adds nothing but call counters.
-//
-// It is not an in-memory fake, even though the task brief's own phrasing
-// ("фейковые catalog/passportSource") suggested one. tinvest_instrument_map
-// carries a real foreign key to instruments(id) (migration 0014); an
-// in-memory catalog that never writes a real row there makes every save a
-// TestResolve_* reaches for fail with a foreign-key violation, which was
-// confirmed empirically while writing these tests rather than assumed. The
-// real store is a fixed, already-tested dependency, so nothing about
-// resolver.go's own logic goes untested by using it here — only its own
-// SQL, covered separately, is exercised alongside it. passportSource below
-// stays a genuine in-memory fake: nothing about IT needs a database row to
-// exist.
-//
-// failByISIN/failUpdate, when set, replace that one catalog call's answer with
-// the given error and skip the real store — the only way to reach the
-// resolver's own handling of a catalog that is simply down, which no fixture
-// of rows can produce.
+// countingCatalog wraps the real *instrument.Store with call counters. Not an
+// in-memory fake: tinvest_instrument_map has a foreign key to instruments, so the
+// map writes need real rows. failByISIN and failUpdate replace one call's answer
+// with an error, to reach a catalog that is down.
 type countingCatalog struct {
 	*instrument.Store
 	createCalls, updateCalls int
@@ -62,11 +46,8 @@ func (c *countingCatalog) Update(ctx context.Context, id uuid.UUID, upd instrume
 	return c.Store.Update(ctx, id, upd)
 }
 
-// secondConnection adds another connection to the same space — a second
-// broker token for the same family, which is what a person holding two
-// T-Invest logins has. It exists for the tests about what the Resolver
-// carries ACROSS connections (see
-// TestResolve_PassportCacheServesASecondConnection).
+// secondConnection adds another connection to the same space (a second
+// T-Invest login), for what the Resolver carries across connections.
 func (f fixture) secondConnection(t *testing.T) Connection {
 	t.Helper()
 	conn, err := f.store.CreateConnection(f.ctx, f.spaceID, []byte("nonce||ciphertext-2"), "7b1e", StatusActive)
@@ -76,18 +57,11 @@ func (f fixture) secondConnection(t *testing.T) Connection {
 	return conn
 }
 
-// raceCatalog simulates createInstrument losing a race to a concurrent writer
-// (decision 4 of the task brief). The FIRST Create for raceOnTicker inserts
-// racedWinner through the same real store first — as if another process's
-// INSERT had already committed — so the resolver's own attempt right after it
-// hits the database's own unique_violation and gets back a genuine sentinel,
-// exactly as it would in production. Every other ticker passes straight through.
-//
-// WHICH sentinel is up to the winner, and the tests below use both: a winner
-// carrying an ISIN collides on the isin index (ErrISINTaken, and the winner is
-// the same paper), while one with no ISIN collides on the ticker index
-// (ErrTickerTaken, and the winner may be anybody). The field is still named for
-// the ticker because that is what the fake matches on, not what it produces.
+// raceCatalog simulates createInstrument losing a race: the first Create for
+// raceOnTicker inserts racedWinner through the real store, so the resolver's own
+// insert hits a real unique violation. A winner with an ISIN collides on the isin
+// index (ErrISINTaken, the same paper); one without, on the ticker index
+// (ErrTickerTaken, maybe anybody).
 type raceCatalog struct {
 	*countingCatalog
 	raceOnTicker string
@@ -97,9 +71,8 @@ type raceCatalog struct {
 func (c *raceCatalog) Create(ctx context.Context, inst instrument.Instrument) (instrument.Instrument, error) {
 	if c.raceOnTicker != "" && inst.Ticker == c.raceOnTicker {
 		c.raceOnTicker = ""
-		// Straight to the embedded *instrument.Store, deliberately past both
-		// wrappers: seeding the winner is the test's own setup, not a call the
-		// resolver made, so it must not show up in createCalls.
+		// Straight to the embedded store, so the setup is not counted as the
+		// resolver's call.
 		if _, err := c.Store.Create(ctx, c.racedWinner); err != nil {
 			return instrument.Instrument{}, fmt.Errorf("raceCatalog: seed the winning row: %w", err)
 		}
@@ -107,15 +80,9 @@ func (c *raceCatalog) Create(ctx context.Context, inst instrument.Instrument) (i
 	return c.countingCatalog.Create(ctx, inst)
 }
 
-// fakePassportSource is an in-memory stand-in for *Client, satisfying
-// passportSource without a network call. It counts calls per method so
-// tests can assert the resolver's memoization actually happens.
-//
-// instrumentErrs answers one uid with a failure instead of a passport, which
-// is how a test says which KIND of failure the broker met — the broker
-// answering "no such instrument" and the broker not answering at all are two
-// different pieces of news, and callers act differently on them (see
-// ErrInstrumentNotFound).
+// fakePassportSource is an in-memory *Client stand-in counting calls per
+// method. instrumentErrs makes one uid fail with a chosen kind of failure ("no
+// such instrument" and "unreachable" are acted on differently).
 type fakePassportSource struct {
 	instruments      map[string]InstrumentBrief
 	nominals         map[string]MoneyValue
@@ -140,10 +107,8 @@ func newFakePassportSource() *fakePassportSource {
 	}
 }
 
-// CurrencyNominalByUID answers what a currency instrument trades. Nothing is
-// registered by default, so a test that does not set one gets the broker's
-// "no such instrument" and the refusal that follows — never a silent zero
-// nominal, which is the shape that would put an unnamed currency in the journal.
+// Nothing registered by default, so a test gets "no such instrument",
+// never a silent zero nominal.
 func (s *fakePassportSource) CurrencyNominalByUID(_ context.Context, uid string) (MoneyValue, error) {
 	s.currencyNominalCalls[uid]++
 	nominal, ok := s.currencyNominals[uid]
@@ -174,14 +139,10 @@ func (s *fakePassportSource) BondNominalByUID(_ context.Context, uid string) (Mo
 	return nominal, nil
 }
 
-// -------------------------------------------------------------------------
-// map-hit paths: no catalog write, no broker
-// -------------------------------------------------------------------------
+// Map hits: no catalog write, no broker.
 
-// TestResolve_MapHitByInstrumentUID pins the cheapest and most common path:
-// a connection that has already resolved this exact instrument_uid before
-// gets its answer from tinvest_instrument_map alone, touching neither the
-// catalog nor the broker.
+// A connection that already resolved this instrument_uid answers from the
+// map alone.
 func TestResolve_MapHitByInstrumentUID(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -214,14 +175,9 @@ func TestResolve_MapHitByInstrumentUID(t *testing.T) {
 	}
 }
 
-// TestResolve_MapHitByFIGI pins the fallback lookup: an operation whose
-// instrument_uid this connection has never mapped, but whose figi matches a
-// row already on file (drift, or an operation old enough to predate
-// instrument_uid). It also pins that the hit is recorded under the NEW
-// instrument_uid too — decision 1 of the task brief, "remembered under all
-// four identifiers so any one of them can drift" — by resolving the same
-// new uid again with the broker made to fail, which only a map hit by uid
-// (not by figi) would survive.
+// The figi fallback for an unmapped instrument_uid, and the hit is then
+// recorded under the new uid too: resolving it again with the broker failing
+// succeeds only through a uid hit.
 func TestResolve_MapHitByFIGI(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -262,11 +218,7 @@ func TestResolve_MapHitByFIGI(t *testing.T) {
 	}
 }
 
-// TestResolve_MapLookupPrefersInstrumentUIDOverFIGI pins the ORDER the task
-// brief names explicitly ("по instrument_uid, затем figi"): when both would
-// match — a different row for each, a case that can arise once figi has
-// been reused across two instrument_uids over the map's history — the
-// instrument_uid match wins.
+// When uid and figi would match different rows, the uid wins.
 func TestResolve_MapLookupPrefersInstrumentUIDOverFIGI(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -304,13 +256,8 @@ func TestResolve_MapLookupPrefersInstrumentUIDOverFIGI(t *testing.T) {
 	}
 }
 
-// TestResolve_MapHitRefreshesDriftedAttributes pins that a hit REWRITES the
-// row with what the current call sees, rather than freezing it at first
-// sight — the same rule MirrorRow's own doc comment gives for confirmed
-// mirror rows, applied here to the instrument map: a figi that drifted while
-// instrument_uid stayed put must still be captured, and only a hit-path
-// write can do it, since mapByInstrumentUID alone would keep matching the
-// stale row forever otherwise.
+// A hit rewrites the row with what this call sees, so a figi that drifted
+// under a stable uid is captured.
 func TestResolve_MapHitRefreshesDriftedAttributes(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -343,19 +290,11 @@ func TestResolve_MapHitRefreshesDriftedAttributes(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// broker/catalog paths
-// -------------------------------------------------------------------------
+// Broker and catalog paths.
 
-// TestResolve_ForgottenPaperIsFoundByTheIsinTheOperationCarries is the one
-// answer left when the broker no longer knows an instrument it once traded.
-//
-// A fund wound up or a company redomiciled, and the passport answers 404 for
-// ever after — while the owner's history stays full of operations on it. For
-// exactly such an instrument the broker puts the ISIN in the operation's TICKER
-// field ("RU000A101X68", one of the FinEx funds on the owner's own account),
-// and an ISIN is a globally unique security identifier: matching it against the
-// catalog is proof, not a guess.
+// A forgotten paper (passport 404 for good) is found by the ISIN the broker
+// puts in the operation's ticker field ("RU000A101X68", a FinEx fund on the
+// owner's account).
 func TestResolve_ForgottenPaperIsFoundByTheIsinTheOperationCarries(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -373,10 +312,8 @@ func TestResolve_ForgottenPaperIsFoundByTheIsinTheOperationCarries(t *testing.T)
 	r := NewResolver(f.store, catalog, nil)
 	got, err := r.Resolve(f.ctx, f.conn.ID, src, InstrumentRef{
 		InstrumentUID: "uid-gone",
-		// The broker re-issues the figi per listing, so the one the OPERATION
-		// carries differs from the catalog's for the very same paper. Set to a
-		// different value on purpose: a resolution by figi would find nothing,
-		// and a test that left them equal could not tell the two apart.
+		// The operation's figi differs from the catalog's (reissued per listing),
+		// so a figi match cannot be what found it.
 		FIGI:   "TCS33A101X68",
 		Ticker: "RU000A101X68",
 	})
@@ -391,11 +328,8 @@ func TestResolve_ForgottenPaperIsFoundByTheIsinTheOperationCarries(t *testing.T)
 	}
 }
 
-// TestResolve_ForgottenPaperTheCatalogDoesNotKnowStaysUnresolved is the other
-// half. The fallback above matches an ISIN and does nothing else: a paper no
-// row of the catalog carries cannot be created from an operation, because
-// everything else about it — its currency above all — would have to be
-// invented. The broker's own reason stands.
+// A forgotten paper the catalog does not know stays unresolved: nothing
+// about it, its currency least of all, can be invented from an operation.
 func TestResolve_ForgottenPaperTheCatalogDoesNotKnowStaysUnresolved(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -414,10 +348,9 @@ func TestResolve_ForgottenPaperTheCatalogDoesNotKnowStaysUnresolved(t *testing.T
 	}
 }
 
-// TestResolve_AnOrdinaryTickerIsNotTreatedAsAnIsin: the fallback matches by
-// ISIN and by nothing else. A paper the broker forgot whose operations carry a
-// plain ticker finds nothing — and must not fall through to a ticker search,
-// where "T" is AT&T in one catalog and Т-Технологии in another.
+// A forgotten paper with a plain ticker finds nothing and does not fall
+// through to a ticker search ("T" is AT&T in one catalog, Т-Технологии in
+// another).
 func TestResolve_AnOrdinaryTickerIsNotTreatedAsAnIsin(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -440,19 +373,9 @@ func TestResolve_AnOrdinaryTickerIsNotTreatedAsAnIsin(t *testing.T) {
 	}
 }
 
-// TestResolve_UnsupportedInstrumentType pins decision 3 of the task brief: a
-// futures/options/etc. instrument refuses with ErrUnsupportedInstrumentType
-// before any catalog call, rather than being filed as some generic "other"
-// row the rest of the program cannot value.
-//
-// The literal is "futures" and not "future": that is the spelling the API's
-// own instrument_type carries for them. Nothing in this repository can be
-// pointed at to confirm it — the fixtures in testdata show the field's shape
-// ("share", "bond") and hold no derivative at all — which is exactly how the
-// wrong spelling survived here unread. The refusal is identical for any string
-// brokerInstrumentTypes does not hold, so this test would pass either way; a
-// test whose stated subject is futures still has to name futures the way they
-// arrive, or the case it claims to cover is not the case it runs.
+// A futures instrument refuses with ErrUnsupportedInstrumentType before any
+// catalog call. "futures" is the API's spelling; any unlisted string refuses the
+// same way, but the case should run as it arrives.
 func TestResolve_UnsupportedInstrumentType(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -472,21 +395,11 @@ func TestResolve_UnsupportedInstrumentType(t *testing.T) {
 	}
 }
 
-// TestResolve_CurrencyIsRefusedRatherThanCreated pins that "currency" is
-// outside the types this resolver accepts, and pins it as a REFUSAL — the one
-// answer that cannot go unnoticed.
-//
-// Buying and selling currency becomes a journal row of type "conversion",
-// which the engine skips without ever asking which instrument it names, so
-// nothing about a currency operation needs a catalog row and this resolver
-// should not be called for one at all. If it is called anyway, the alternative
-// to refusing is not "one harmless extra row": neither lookup can find a
-// currency (ByTickerTradable does not cover the type, and an ISIN identifies a
-// security rather than a currency), creation is what is left, and the unique
-// ticker index that would stop a duplicate share, bond or fund covers exactly
-// those three types and leaves currency out (migration 0011). Measured with
-// currency accepted: two connections resolving one currency left two rows for
-// it in the instance-wide catalog.
+// "currency" is refused, not created. A currency operation becomes a
+// conversion that names no instrument; if the resolver is called anyway,
+// creation is the only outcome and the unique ticker index does not cover
+// currencies (migration 0011): two connections left two rows when this was
+// tried.
 func TestResolve_CurrencyIsRefusedRatherThanCreated(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -506,17 +419,9 @@ func TestResolve_CurrencyIsRefusedRatherThanCreated(t *testing.T) {
 	}
 }
 
-// TestResolve_CatalogHitByISIN pins the shared-catalog path: this
-// connection has never resolved this instrument, but the catalog already
-// carries a row for its ISIN — entered by hand, or resolved first by
-// another connection.
-//
-// THE SEEDED ROW CARRIES NO TICKER ON PURPOSE, and that is what makes this a
-// test of the ISIN step rather than of Resolve in general: with a ticker of
-// "SBER" on it, deleting the ISIN lookup from findOrCreate outright left this
-// test green — the very next step found the same row by ticker, the backfill
-// had nothing to fill, and every assertion below passed. A row entered from a
-// statement that named only the ISIN can be reached by nothing but the ISIN.
+// A catalog row found by ISIN (entered by hand, or by another connection).
+// The seeded row has no ticker, so only the ISIN step can find it; with a ticker
+// the ticker step would mask a missing ISIN lookup.
 func TestResolve_CatalogHitByISIN(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -547,11 +452,8 @@ func TestResolve_CatalogHitByISIN(t *testing.T) {
 	}
 }
 
-// TestResolve_CatalogHitByTicker_BackfillsISINAndFIGI pins decision 2: a row
-// found only by ticker (its ISIN and FIGI never recorded) gets them filled
-// in from the broker's passport, because the catalog is shared and an empty
-// ISIN there would cost the next connection's exact lookup a hit it should
-// have had.
+// A row found only by ticker gets its ISIN and FIGI filled from the
+// passport, so the next exact lookup hits.
 func TestResolve_CatalogHitByTicker_BackfillsISINAndFIGI(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -588,19 +490,9 @@ func TestResolve_CatalogHitByTicker_BackfillsISINAndFIGI(t *testing.T) {
 		t.Errorf("catalog.Update called %d times, want 1", catalog.updateCalls)
 	}
 
-	// A row that already carries both must not be touched again. This has
-	// to reach findOrCreate's ticker branch a second time WITHOUT a map hit
-	// short-circuiting it first — so the second ref carries a figi neither the
-	// map nor the catalog has seen, forcing the same ByTickerTradable("LKOH")
-	// hit that did the backfill above, on a row that is now already whole.
-	//
-	// Its passport carries NO ISIN, and that is now the only way to reach this
-	// branch on a whole row: a passport naming a different ISIN is refused as a
-	// different security (see TestResolve_TickerHitWithAContradictingISINIsRefused),
-	// and one naming the same ISIN never gets past the ISIN step. A passport
-	// with no ISIN of its own is the remaining case, and the code has always
-	// treated it as a reachable one: findOrCreate guards the ISIN step with
-	// `brief.ISIN != ""` rather than assuming every passport carries one.
+	// A row with both identifiers is not touched again. The second ref has a
+	// new figi to skip the map, and its passport has no ISIN: a different ISIN
+	// is refused as another security, the same one is caught by the ISIN step.
 	src.instruments["uid-lkoh-2"] = InstrumentBrief{
 		UID: "uid-lkoh-2", FIGI: "BBG-UNRELATED",
 		Ticker: "LKOH", Name: "Лукойл", Currency: "RUB", InstrumentType: "share",
@@ -613,20 +505,10 @@ func TestResolve_CatalogHitByTicker_BackfillsISINAndFIGI(t *testing.T) {
 	}
 }
 
-// TestResolve_CatalogHitByTicker_CoversBondsAndFunds pins WHICH types the
-// exact ticker lookup reaches, which the backfill test above cannot: it holds
-// a share alone, so narrowing instrument.ByTickerTradable's own type filter to
-// shares would leave it green.
-//
-// WHAT THAT NARROWING COSTS WAS MEASURED, NOT ASSUMED, because the obvious
-// guess about it is wrong. A bond or a fund the catalog already holds stops
-// being found and falls through to creation — but it does not become a
-// duplicate: the unique ticker index covers those two types as well as shares
-// (migration 0011), so the insert loses, and the resolution ends in "instrument
-// create lost the ticker race and the re-lookup failed: no rows in result set",
-// an error blaming a race that never happened. Every bond and every fund the
-// catalog already holds would stop resolving, with that sentence in the log. (Currency is the type where duplicates really do
-// pile up, because the index leaves it out; that is a different test.)
+// The ticker lookup reaches bonds and funds as well as shares. If it
+// covered shares only, existing bonds and funds would not duplicate (the unique
+// ticker index covers them) but would fail to resolve with a misleading "lost
+// the ticker race" error.
 func TestResolve_CatalogHitByTicker_CoversBondsAndFunds(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -654,9 +536,7 @@ func TestResolve_CatalogHitByTicker_CoversBondsAndFunds(t *testing.T) {
 		UID: "uid-tmos", FIGI: "BBG333333333", ISIN: "RU000A101X76",
 		Ticker: "TMOS", Name: "Т-Капитал Индекс МосБиржи", Currency: "RUB", InstrumentType: "etf",
 	}
-	// No nominal is registered for the bond uid: if the ticker lookup stopped
-	// covering bonds, creation would be reached and would fail on the missing
-	// nominal — a second, independent way for this test to notice.
+	// No bond nominal is registered, so reaching creation would also fail.
 
 	r := NewResolver(f.store, catalog, nil)
 	gotBond, err := r.Resolve(f.ctx, f.conn.ID, src, InstrumentRef{InstrumentUID: "uid-ofz", FIGI: "BBG012XT1M09"})
@@ -678,11 +558,8 @@ func TestResolve_CatalogHitByTicker_CoversBondsAndFunds(t *testing.T) {
 	}
 }
 
-// TestResolve_CreatesShare pins plain creation for a type that carries no
-// face value, and that Frozen is always false — the API has no field
-// meaning "frozen by sanctions" (see createInstrument's own doc comment),
-// so a freshly created row must never come out frozen regardless of what
-// the passport said.
+// Plain creation of a share, never frozen: the broker has no sanctions
+// field.
 func TestResolve_CreatesShare(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -713,13 +590,8 @@ func TestResolve_CreatesShare(t *testing.T) {
 	}
 }
 
-// TestResolve_CreatesBond_CarriesNominalAndCurrency pins the one place a
-// bond differs from every other type: its face value comes from a SECOND
-// broker call, BondNominalByUID, because GetInstrumentBy (behind
-// InstrumentByUID) does not carry a nominal at all (see InstrumentBrief's
-// own doc comment). The literal here — 1000 RUB nominal -> face_value_minor
-// 100000 — mirrors the live value the task brief's controller checked
-// against the sandbox gateway for a real bond uid.
+// A bond's face value comes from a second call, BondNominalByUID: 1000 RUB
+// -> 100000, the value checked live on a sandbox bond.
 func TestResolve_CreatesBond_CarriesNominalAndCurrency(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -753,23 +625,12 @@ func TestResolve_CreatesBond_CarriesNominalAndCurrency(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// a ticker is not an identity
-// -------------------------------------------------------------------------
+// A ticker is not an identity.
 
-// TestResolve_TickerHitWithAContradictingISINGetsARowOfItsOwn runs the owner's
-// own case, and it is the case this rule has now been rewritten twice for.
-//
-// His catalog has AT&T under ticker "T"; Т-Технологии trade on MOEX under "T"
-// as well, with ISIN RU000A107UL4. The first version resolved Т-Технологии to
-// AT&T's row and stamped Т-Технологии's identifiers onto it — permanently, for
-// every space in the instance. The second refused, which stopped the damage and
-// left every one of his Т-Технологии operations unimportable, because the
-// catalog could not hold two rows under one ticker.
-//
-// Now it can (migration 0020): a ticker is not a name for a security, an ISIN
-// is. So the answer is a row of Т-Технологии's own, and the assertion is in two
-// parts — the new row is right, AND AT&T's is exactly as it was.
+// The owner's case: AT&T is in the catalog as "T"; Т-Технологии trade on
+// MOEX as "T" (RU000A107UL4). It once stamped Т-Технологии's identifiers onto
+// AT&T, then refused and left Т-Технологии unimportable. Since migration 0020
+// it gets a row of its own, and AT&T's row is unchanged.
 func TestResolve_TickerHitWithAContradictingISINGetsARowOfItsOwn(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -815,15 +676,8 @@ func TestResolve_TickerHitWithAContradictingISINGetsARowOfItsOwn(t *testing.T) {
 	}
 }
 
-// TestResolve_TickerHitOfAnotherTypeIsRefused pins the second half of the same
-// rule, on a row where the ISIN half cannot fire at all: the catalog row
-// carries no ISIN, so only the types can settle whether this is the same
-// paper.
-//
-// A type is not a label here. Every valuation in this program branches on it —
-// a bond is priced as a percentage of its face value and a fund at the quote
-// itself — so trades filed against a row of the wrong type are mispriced even
-// when the ticker really is the same string.
+// The type half of the rule, on a row with no ISIN: valuation branches on
+// type, so a different type is a different paper even under the same ticker.
 func TestResolve_TickerHitOfAnotherTypeGetsARowOfItsOwn(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -865,20 +719,10 @@ func TestResolve_TickerHitOfAnotherTypeGetsARowOfItsOwn(t *testing.T) {
 	}
 }
 
-// TestResolve_TickerRaceWinnerOfAnotherTypeIsRefused pins the one door that
-// still has nothing else to do about a stranger: the re-lookup after losing a
-// race on the TICKER.
-//
-// Since identity moved to the ISIN (migration 0020), a race is normally lost on
-// the ISIN instead, and there the winner is by definition the same paper — see
-// TestResolve_ISINRaceTakesTheWinnersRow. The ticker index is left holding only
-// the rows with NO ISIN, so this race needs both sides to have none: the broker
-// answers about a bond it will not give an ISIN for, and somebody has just
-// entered a FUND under the same ticker.
-//
-// A second row is not available there — the ticker it would need is the one it
-// just lost — so the refusal stands, and it becomes a visible unparsed entry
-// naming both sides.
+// The re-lookup after losing a ticker race still refuses a stranger: the
+// ticker index only holds ISIN-less rows now, so both sides lack an ISIN (a bond
+// without one, and a fund someone just entered), and no second row is possible.
+// The refusal names both.
 func TestResolve_TickerRaceWinnerOfAnotherTypeIsRefused(t *testing.T) {
 	f := newFixture(t)
 	catalog := &raceCatalog{
@@ -907,10 +751,8 @@ func TestResolve_TickerRaceWinnerOfAnotherTypeIsRefused(t *testing.T) {
 	}
 }
 
-// TestResolve_ISINRaceTakesTheWinnersRow is the race as it happens now. Two
-// writers resolve one paper at the same moment and collide on the ISIN, which
-// is the identity of a security — so the winner IS this paper and there is
-// nothing to check beyond finding it.
+// Losing a race on the ISIN: the winner is the same paper, so its row is
+// taken.
 func TestResolve_ISINRaceTakesTheWinnersRow(t *testing.T) {
 	f := newFixture(t)
 	catalog := &raceCatalog{
@@ -945,16 +787,8 @@ func TestResolve_ISINRaceTakesTheWinnersRow(t *testing.T) {
 	}
 }
 
-// TestResolve_RepeatedResolveMakesOnePassportCallTotal pins decision 5 at the
-// level a sync actually works at: the same instrument resolved twice for the
-// same connection costs the broker one InstrumentByUID call, not two.
-//
-// WHAT MAKES IT PASS IS THE MAP, not the passport cache, and saying so is the
-// point of this comment: after the first Resolve the answer is in
-// tinvest_instrument_map, so the second never reaches the passport step at
-// all. Deleting the cache outright leaves this test green. The cache is pinned
-// separately, by the only case that can reach it —
-// TestResolve_PassportCacheServesASecondConnection.
+// Resolving one instrument twice for one connection costs one passport
+// call; the map is what makes it pass (see the next test for the cache).
 func TestResolve_RepeatedResolveMakesOnePassportCallTotal(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -985,19 +819,9 @@ func TestResolve_RepeatedResolveMakesOnePassportCallTotal(t *testing.T) {
 	}
 }
 
-// TestResolve_PassportCacheServesASecondConnection pins the passport cache
-// itself, and it is the only shape of test that can.
-//
-// The map is per CONNECTION (its uniqueness is (connection_id,
-// instrument_uid)), so a second connection holding the same paper starts with
-// no memory of it and reaches the passport step for real. If the cache did not
-// exist, that step would call the broker a second time for an answer this run
-// already has in hand.
-//
-// It also pins WHAT the cache is keyed by: the instrument, not the connection.
-// That is deliberate — an instrument's passport is reference data about the
-// paper, identical whichever token asked for it — and it is what makes the
-// saving worth having on an account list several connections deep.
+// The passport cache, reachable only through a second connection, whose
+// map knows nothing yet. The cache is keyed by instrument, since a passport
+// does not depend on whose token asked.
 func TestResolve_PassportCacheServesASecondConnection(t *testing.T) {
 	f := newFixture(t)
 	second := f.secondConnection(t)
@@ -1034,13 +858,9 @@ func TestResolve_PassportCacheServesASecondConnection(t *testing.T) {
 	}
 }
 
-// TestResolve_EmptyInstrumentUIDIsNeverPersisted pins the guard on Resolve's
-// own final write: a ref with no instrument_uid at all is resolved but
-// never saved to the map. The table's uniqueness is per (connection_id,
-// instrument_uid) (migration 0014); writing under the empty string would
-// let two unrelated instruments' figi-only refs collide on the same row the
-// next time either was resolved, each silently overwriting the other's
-// answer.
+// A ref without instrument_uid is resolved but never saved: the map is
+// unique per (connection, uid), and "" would let unrelated figi-only refs
+// collide.
 func TestResolve_EmptyInstrumentUIDIsNeverPersisted(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -1070,21 +890,10 @@ func TestResolve_EmptyInstrumentUIDIsNeverPersisted(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// what a passport has to carry before a catalog row can be made of it
-// -------------------------------------------------------------------------
+// What a passport must carry before a catalog row is made.
 
-// TestResolve_IncompletePassportCreatesNothing pins the two fields a catalog
-// row cannot honestly be made without, on the door that has no other guard.
-//
-// instrument.Store validates nothing: name and currency are NOT NULL columns
-// with no CHECK behind them (migration 0004), so the empty string satisfies
-// both, and every rule about them lives in the catalog's HTTP handler — which
-// an importer never goes through. A nameless row would sit in the shared
-// catalog looking like a real one and answering no search; a row with no
-// currency would publish every figure about itself with no currency on it —
-// the failure instrument/http.go spells out for the face currency, one column
-// over.
+// No row from a passport without a name or currency: instrument.Store
+// validates nothing, and the HTTP handler's rules do not apply to an importer.
 func TestResolve_IncompletePassportCreatesNothing(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -1121,29 +930,11 @@ func TestResolve_IncompletePassportCreatesNothing(t *testing.T) {
 	}
 }
 
-// TestResolve_BondNominalRefusals pins the second broker call's own failure
-// modes, none of which the catalog would have said anything useful about.
-//
-// Both halves of this were confirmed by removing the checks and watching what
-// happened instead. A nominal that is zero or carries no currency reaches the
-// database as "violates check constraint instruments_face_value_sound" — an
-// error naming a constraint and no instrument, in the middle of a sync. A
-// nominal past money.MaxAmountMinor is not refused by the database at all: the
-// row inserted, and it is the account's positions screen that pays, answering
-// 500 forever afterwards (the failure instrument/http.go's sweep describes on
-// the other door into this column). Refusing here names the bond and what was
-// wrong with its nominal.
-//
-// The two fractional nominals are the third shape, and they are two rather than
-// one because rounding them fails differently: a tenth of a kopeck ON TOP of a
-// whole nominal would be quietly rounded off and nobody would ever know, while
-// a nominal SMALLER than half a kopeck would round to zero and land on the same
-// constraint violation as the zero above — from a bond the broker did report a
-// nominal for.
-//
-// The failure of the CALL is pinned alongside them because it was covered by
-// nothing: BondNominalByUID is the one request in this file whose answer
-// creation cannot proceed without.
+// BondNominalByUID's failure modes. A zero or currency-less nominal would
+// surface as a bare constraint violation mid-sync; one over money.MaxAmountMinor
+// would insert and break the positions screen. Two fractional nominals because
+// rounding fails differently: a tenth of a kopeck on top would vanish silently,
+// below half a kopeck would round to zero. The call's own failure is pinned too.
 func TestResolve_BondNominalRefusals(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -1198,15 +989,8 @@ func TestResolve_BondNominalRefusals(t *testing.T) {
 	}
 }
 
-// TestResolve_CatalogFailuresAreReported pins that a catalog which is simply
-// down is reported rather than mistaken for "no such row".
-//
-// The lookup treats pgx.ErrNoRows as a miss and everything else as a failure,
-// and reading those two the same way would make a broken catalog look like an
-// empty one — creating a duplicate row for everything the sync touched while
-// it was broken. The second half covers the backfill's write, whose failure
-// has to reach the caller for its own reason: a resolution that swallowed it
-// would report success while the shared catalog learned nothing.
+// A catalog that is down is reported, not read as "no row" (which would
+// create duplicates); and a failed backfill write reaches the caller.
 func TestResolve_CatalogFailuresAreReported(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -1228,10 +1012,7 @@ func TestResolve_CatalogFailuresAreReported(t *testing.T) {
 	}
 	catalog.failByISIN = nil
 
-	// The backfill's own write, on a row found by ticker with no ISIN of its
-	// own. Its failure must reach the caller too: the resolution is only
-	// complete once the shared catalog has been told what this connection
-	// learned.
+	// The backfill write on a ticker-found row with no ISIN.
 	if _, err := catalog.Create(f.ctx, instrument.Instrument{
 		Type: instrument.TypeShare, Name: "Сбер Банк", Ticker: "SBER", Currency: "RUB",
 	}); err != nil {
@@ -1243,26 +1024,12 @@ func TestResolve_CatalogFailuresAreReported(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// Store-level guards
-// -------------------------------------------------------------------------
+// Store-level guards.
 
-// TestSaveMap_EmptyIdentifiersDoNotEraseStoredOnes pins the rule the map's
-// write follows about the three identifiers it reads off ONE operation, while
-// the row is what the connection has learned across all of them.
-//
-// What it would erase first is the figi, which is the whole fallback that lets
-// a resolution survive an instrument_uid drifting (see mapByFIGI) — so the
-// middle assertion states that consequence rather than the storage detail: the
-// figi lookup still finds the instrument afterwards.
-//
-// The review's example for this was a dividend, and that example does not
-// hold up: this package's fixtures have no dividend without a figi (theirs
-// carries all four identifiers), and their one row with an empty figi is a
-// broker fee, which has no instrument_uid either and so never reaches the map
-// at all. The case below is therefore written as what it actually is — an
-// operation that names the paper by instrument_uid alone — and what it pins is
-// the write's rule about an empty value, reachable for any of the three.
+// saveMap never erases a stored identifier with an empty one: the row
+// accumulates what the connection learned. The figi matters most, being the drift
+// fallback, so the assertion is that a figi lookup still finds the instrument.
+// The case is an operation naming the paper by instrument_uid only.
 func TestSaveMap_EmptyIdentifiersDoNotEraseStoredOnes(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -1309,16 +1076,9 @@ func TestSaveMap_EmptyIdentifiersDoNotEraseStoredOnes(t *testing.T) {
 		t.Errorf("mapByFIGI = %v, want %v", m.InstrumentID, resolved.InstrumentID)
 	}
 
-	// AND THE SAME WHEN THE ROW REALLY IS BEING WRITTEN. Everything above also
-	// holds if the write is skipped for the OTHER reason saveMap skips writes —
-	// that nothing changed at all — so on its own it says nothing about what the
-	// SET clause does with an empty identifier. This was found by mutation:
-	// assigning the three identifiers outright, with the "nothing changed" guard
-	// left in place, kept every assertion above green.
-	//
-	// So here something genuinely changes — the catalog's ticker, which happens
-	// (Т-Технологии traded as TCSG before they were T) — while the operation
-	// still carries no figi of its own.
+	// And when the row is really being written: here the catalog's ticker
+	// changes (Т-Технологии traded as TCSG before T) while the operation still
+	// has no figi. Without this, assigning identifiers outright passed above.
 	if err := f.store.saveMap(f.ctx, f.conn.ID, resolved.InstrumentID,
 		InstrumentRef{InstrumentUID: "uid-sber"}, "RU0009029540", "SBERX", "RUB"); err != nil {
 		t.Fatalf("saveMap with a renamed ticker: %v", err)
@@ -1340,13 +1100,8 @@ func TestSaveMap_EmptyIdentifiersDoNotEraseStoredOnes(t *testing.T) {
 	}
 }
 
-// TestSaveMap_ResolutionThatChangesNothingWritesNothing pins the other half of
-// the same statement. A full history resolves the same instrument on every one
-// of its operations — hundreds of times for one paper — and each of those used
-// to be a row write saying exactly what the row already said. updated_at is
-// what witnesses it here: it is the column such a write would move, and it is
-// also the column mapByFIGI orders by, so a no-op write is not even free of
-// meaning.
+// A resolution that changes nothing writes nothing, witnessed by
+// updated_at, which mapByFIGI also orders by.
 func TestSaveMap_ResolutionThatChangesNothingWritesNothing(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -1381,9 +1136,7 @@ func TestSaveMap_ResolutionThatChangesNothingWritesNothing(t *testing.T) {
 		t.Errorf("updated_at moved from %v to %v on a resolution that changed nothing, want it left alone", before, after)
 	}
 
-	// ...and a resolution that DOES change something still writes: the
-	// no-write rule must be about sameness, not about the row already
-	// existing.
+	// A real change still writes.
 	if _, err := r.Resolve(f.ctx, f.conn.ID, src,
 		InstrumentRef{InstrumentUID: "uid-sber", FIGI: "BBG004730N88", PositionUID: "pos-sber-new"}); err != nil {
 		t.Fatalf("third Resolve: %v", err)
@@ -1393,12 +1146,7 @@ func TestSaveMap_ResolutionThatChangesNothingWritesNothing(t *testing.T) {
 	}
 }
 
-// TestInstrumentMapLookups_EmptyIdentifierIsNeverAMatch pins the guard
-// mapByInstrumentUID/mapByFIGI both open with: an empty broker identifier
-// must read as "no match", never as a query that could pick some unrelated
-// row nobody has set that identifier on. Without it, a ref with a blank
-// figi (routine — plenty of operations carry none) would risk matching
-// whatever row this connection last saved with figi = "".
+// An empty identifier is never a match in either lookup.
 func TestInstrumentMapLookups_EmptyIdentifierIsNeverAMatch(t *testing.T) {
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
@@ -1423,14 +1171,10 @@ func TestInstrumentMapLookups_EmptyIdentifierIsNeverAMatch(t *testing.T) {
 	}
 }
 
-// fakeRates answers what a currency was officially worth on a day, without a
-// database. A pair it has nothing for answers like the fx table does when the
-// backfill has not reached that day: an error, which is not the same as a
-// disagreement and must not be read as one.
+// fakeRates answers official rates without a database; a missing code
+// errors, as the table does before the backfill.
 type fakeRates struct {
-	// byCode is what the table holds. A code absent from it answers the way the
-	// real table does for a currency nobody publishes: an error, which is not a
-	// disagreement and must not be read as one.
+	// byCode is what the table holds.
 	byCode map[string]decimal.Decimal
 	err    error
 	asks   int
@@ -1465,14 +1209,8 @@ func currencyHint(ticker, price string) CurrencyHint {
 	}
 }
 
-// TestResolveCurrency_ForgottenPairIsWorkedOutFromItsNameAndProvedByTheRate is
-// the owner's own two dozen unparsed rows: dollar and euro pairs the broker
-// delisted and now answers 404 for, so nothing could say what they traded.
-//
-// The pair's NAME carries the code in its first three letters, which is a
-// guess — and the price the trade was actually struck at, against what the
-// central bank published that day, is what turns it into a fact. 74.465 ₽ for
-// one unit beside an official 74.30 is a dollar and can be nothing else.
+// A delisted pair's name gives the code (a guess); the trade price against
+// the official rate proves it: 74.465 ₽ per unit beside 74.30 is a dollar.
 func TestResolveCurrency_ForgottenPairIsWorkedOutFromItsNameAndProvedByTheRate(t *testing.T) {
 	f := newFixture(t)
 	src := newFakePassportSource() // registers no currency nominal: the broker 404s
@@ -1491,16 +1229,8 @@ func TestResolveCurrency_ForgottenPairIsWorkedOutFromItsNameAndProvedByTheRate(t
 	}
 }
 
-// TestResolveCurrency_APairQuotedPerHundredUnitsIsRefused is the case the whole
-// refusal was written for, and the reason a name alone was never enough: the
-// broker quotes some pairs per hundred units and some per ten thousand (a
-// Kyrgyz som, an Uzbek sum). Reading one for the other is wrong by exactly that
-// factor, and it is the shape of the most expensive defect this program can
-// have.
-//
-// Here the trade was struck at 110 ₽ for one quoted unit while the som stood at
-// 1.10 — a hundredfold apart, which is not a market moving and is not a
-// misprint either.
+// A pair quoted per hundred units is refused: 110 ₽ per unit against a som
+// at 1.10 is a hundredfold off, a misread nominal.
 func TestResolveCurrency_APairQuotedPerHundredUnitsIsRefused(t *testing.T) {
 	f := newFixture(t)
 	src := newFakePassportSource()
@@ -1513,16 +1243,11 @@ func TestResolveCurrency_APairQuotedPerHundredUnitsIsRefused(t *testing.T) {
 	}
 }
 
-// TestResolveCurrency_ANameThatIsNotACurrencyIsRefused: gold trades on the same
-// market under GLDRUB_TOM, and "GLD" is not a currency code. The check is made
-// before any rate is asked for, so a name that cannot be a currency never
-// becomes one by accident.
+// GLDRUB_TOM: "GLD" is not a currency, refused before any rate.
 func TestResolveCurrency_ANameThatIsNotACurrencyIsRefused(t *testing.T) {
 	f := newFixture(t)
 	src := newFakePassportSource()
-	// The table holds no GLD, because no source publishes one — that is what
-	// actually stops a name like this, and the test says so rather than
-	// pretending the shape check does.
+	// No source publishes GLD; that is what actually stops it.
 	rates := ratesOf(map[string]string{"USD": "74.30"})
 
 	r := NewResolver(f.store, &countingCatalog{Store: instrument.NewStore(f.pool)}, nil).WithRates(rates)
@@ -1535,10 +1260,7 @@ func TestResolveCurrency_ANameThatIsNotACurrencyIsRefused(t *testing.T) {
 	}
 }
 
-// TestResolveCurrency_NoOfficialRateLeavesThePairUnparsed. A rate the fx table
-// does not hold yet is not a disagreement: the backfill may bring it. Until
-// then the pair stays exactly as unparsed as it was, rather than being taken on
-// the strength of its name alone.
+// No official rate yet: the pair stays unparsed.
 func TestResolveCurrency_NoOfficialRateLeavesThePairUnparsed(t *testing.T) {
 	f := newFixture(t)
 	src := newFakePassportSource()
@@ -1551,9 +1273,7 @@ func TestResolveCurrency_NoOfficialRateLeavesThePairUnparsed(t *testing.T) {
 	}
 }
 
-// TestResolveCurrency_TheBrokersOwnAnswerIsPreferred. The fallback is for a
-// broker that cannot answer, and only for that: where it can, its nominal is
-// the authority and no rate is consulted at all.
+// Where the broker can answer, its nominal wins and no rate is asked.
 func TestResolveCurrency_TheBrokersOwnAnswerIsPreferred(t *testing.T) {
 	f := newFixture(t)
 	src := newFakePassportSource()
@@ -1573,10 +1293,8 @@ func TestResolveCurrency_TheBrokersOwnAnswerIsPreferred(t *testing.T) {
 	}
 }
 
-// A paper the broker has forgotten is asked about once a run, however many
-// operations name it: "no such instrument" does not change between one
-// operation and the next, and a forgotten paper is exactly the one a history
-// is full of operations on. Both answers are that refusal.
+// A forgotten paper is asked about once a run, however many operations
+// name it.
 func TestResolve_TheBrokersRefusalIsAskedOnceARun(t *testing.T) {
 	f := newFixture(t)
 	src := newFakePassportSource()
@@ -1613,9 +1331,8 @@ func TestResolve_AFailureThatIsNotARefusalIsAskedAgain(t *testing.T) {
 	}
 }
 
-// The same for a currency pair the broker has forgotten: asked once, while the
-// operation's own description of the pair is still read every time — the
-// second trade below names the pair well enough to prove it, the first did not.
+// Likewise for a forgotten pair, while each operation's own description
+// is still read.
 func TestResolveCurrency_TheBrokersRefusalIsAskedOnceARun(t *testing.T) {
 	f := newFixture(t)
 	src := newFakePassportSource()

@@ -18,10 +18,8 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// The two narrow interfaces the Reconciler takes must stay the real stores'
-// own methods rather than a shape that drifted from them: a signature moving
-// under either is a compile error here, not a wiring failure inside task 10's
-// worker.
+// The Reconciler's narrow interfaces must stay the real stores' methods; a
+// drifted signature fails to compile here.
 var (
 	_ balanceMarker = (*account.Store)(nil)
 	_ engineReader  = (*operation.Store)(nil)
@@ -30,17 +28,13 @@ var (
 const (
 	portfolioPath = "/tinkoff.public.invest.api.contract.v1.OperationsService/GetPortfolio"
 	positionsPath = "/tinkoff.public.invest.api.contract.v1.OperationsService/GetPositions"
-	// The check asks the broker what an unmatched position IS, so that one
-	// paper listed on two venues is not reported as two differences (see
-	// Reconciler.matchByISIN). A test whose stub does not answer it is a test
-	// whose broker position stays unmatched — which for most of these is the
-	// case under test anyway.
+	// The check asks the broker what an unmatched position is (see
+	// Reconciler.matchByISIN); a stub that does not answer leaves it
+	// unmatched, which is usually the case under test anyway.
 	instrumentByPath = "/tinkoff.public.invest.api.contract.v1.InstrumentsService/GetInstrumentBy"
 )
 
-// -------------------------------------------------------------------------
-// test fixtures: the journal side
-// -------------------------------------------------------------------------
+// Fixtures: the journal side.
 
 // instrumentWithISIN creates a catalog row carrying an ISIN, which is what the
 // cross-venue pairing matches on.
@@ -101,16 +95,13 @@ func aTransferIn(instrumentID uuid.UUID, qty string, basisMinor int64, currency 
 
 func rub(s string) decimal.Decimal { return decimal.RequireFromString(s) }
 
-// byUID is the instrument index of a connection where nothing has drifted:
-// every instrument found under the broker's instrument_uid, the figi side
-// present and empty. Tests about drift build the index by hand instead.
+// byUID is the index of a connection with no drift: everything by
+// instrument_uid, the figi side empty.
 func byUID(m map[string]uuid.UUID) InstrumentIndex {
 	return InstrumentIndex{ByUID: m, ByFIGI: map[string]uuid.UUID{}}
 }
 
-// -------------------------------------------------------------------------
-// CompareHoldings: the securities side
-// -------------------------------------------------------------------------
+// CompareHoldings: securities.
 
 func TestCompareHoldingsSaysMatchedWhenBothSidesAgree(t *testing.T) {
 	inst := uuid.New()
@@ -133,11 +124,8 @@ func TestCompareHoldingsSaysMatchedWhenBothSidesAgree(t *testing.T) {
 	}
 }
 
-// TestOnePaperHeldOnTwoListingsIsOneHolding: the broker reports a paper once per
-// listing (AAPL and AAPL-RM), both resolve to one catalog row, and the journal
-// holds their sum. Each row used to be compared against the WHOLE journal
-// position — "10 against 15" and "5 against 15" — so such an account could never
-// agree (#135).
+// One paper on two listings (AAPL, AAPL-RM) is one holding, compared once
+// against the journal's sum (#135).
 func TestOnePaperHeldOnTwoListingsIsOneHolding(t *testing.T) {
 	inst := uuid.New()
 	index := byUID(map[string]uuid.UUID{"uid-aapl": inst, "uid-aapl-rm": inst})
@@ -170,21 +158,15 @@ func TestOnePaperHeldOnTwoListingsIsOneHolding(t *testing.T) {
 	}
 }
 
-// TestABlockedPositionCountsAsItsWholeQuantity pins the first half of the
-// asymmetry this whole comparison turns on: the broker's Blocked on a
-// SECURITY is a boolean ("halted at the depository"), not a count, and
-// Quantity is already the whole position. A comparison that treated the flag
-// as a number to add would overstate every halted holding by whatever it
-// coerced the flag into — and this owner does hold frozen paper, so a halted
-// position is not an exotic case for him.
+// A security's Blocked is a flag (halted at the depository), not a count, and
+// Quantity is the whole position; the owner does hold halted paper.
 func TestABlockedPositionCountsAsItsWholeQuantity(t *testing.T) {
 	inst := uuid.New()
 	res := CompareHoldings(
 		[]PortfolioPosition{{InstrumentUID: "uid-frozen", Quantity: Quotation{Units: 10}, Blocked: true}},
 		nil,
-		// The deposit pays for the purchase exactly, so the cash side of the
-		// comparison agrees at zero and anything reported here is about the
-		// security.
+		// The deposit pays for the purchase exactly, so cash agrees and anything
+		// reported is about the security.
 		[]operation.Operation{
 			aCashEntry(operation.TypeDeposit, 10_000, "RUB"),
 			aBuy(inst, "10", -10_000, 0, "RUB"),
@@ -236,18 +218,9 @@ func TestAQuantityMismatchCarriesBothFigures(t *testing.T) {
 	}
 }
 
-// TestAnUnmappedBrokerPositionIsAMismatch pins decision 2 of the brief: the
-// broker's instruments are matched against ours ONLY through the index the
-// resolver has already built, and a SECURITY THIS PROGRAM ACCOUNTS FOR that is
-// not in it is a difference with an honest label — never a silent skip.
-//
-// THE KIND IS ITS OWN, and that is the point of checking it here. Such a row
-// used to be reported as MismatchInstrument, word for word what a paper both
-// sides know but count differently gets — and the only thing separating them on
-// screen was that the label was not a ticker from this catalog, which is a thing
-// to NOTICE rather than a thing to be told. On the owner's own account these are
-// the funds his TECH and TSPX were converted into, and the question they raise
-// is what happened to that paper rather than which operations are missing.
+// A supported security missing from the index is a difference of its own
+// kind, MismatchUnknownSecurity, never a silent skip. On the owner's account
+// these are the funds his TECH and TSPX were converted into.
 func TestAnUnmappedBrokerPositionIsAMismatch(t *testing.T) {
 	res := CompareHoldings(
 		[]PortfolioPosition{{
@@ -289,15 +262,10 @@ func TestAnUnmappedBrokerPositionIsAMismatch(t *testing.T) {
 	}
 }
 
-// TestCashIsNotAPhantomSecurity is the sharpest test of the securities side.
-// THE BROKER'S LIST OF POSITIONS IS NOT A LIST OF SECURITIES — the account's
-// own cash stands in it, as a position of type "currency" (see
-// testdata/portfolio_cash_only.json, a live sandbox account topped up with
-// 50 000 ₽ and never traded, whose portfolio came back holding exactly that
-// one position). Compared as a security it resolves to nothing of ours, so
-// every account would carry a permanent phantom position under an unreadable
-// label, could never reach "agrees", and would show the owner the very
-// complaint this whole comparison was written to answer.
+// Cash appears in the position list as type "currency"
+// (testdata/portfolio_cash_only.json: a live sandbox account with 50 000 ₽ and
+// no trades). Compared as a security it would be a permanent phantom position
+// and the account could never agree.
 func TestCashIsNotAPhantomSecurity(t *testing.T) {
 	res := CompareHoldings(
 		[]PortfolioPosition{{
@@ -319,11 +287,8 @@ func TestCashIsNotAPhantomSecurity(t *testing.T) {
 	}
 }
 
-// TestCashIsStillComparedAsCash: passing a currency position over is a
-// division of labour and not a blind spot. The same 50 000 ₽ the securities
-// side ignores is compared by the money side, and disagreeing about it is a
-// difference — otherwise the skip above would be a hole rather than a
-// handover.
+// The same cash is compared by the money side; the skip above is a
+// handover, not a hole.
 func TestCashIsStillComparedAsCash(t *testing.T) {
 	res := CompareHoldings(
 		[]PortfolioPosition{{
@@ -348,17 +313,9 @@ func TestCashIsStillComparedAsCash(t *testing.T) {
 	}
 }
 
-// TestAnAssetThisProgramCannotHoldIsItsOwnKindOfDifference: a future is not a
-// share whose operations went missing. The owner really does hold it and this
-// program really does not account for it, so passing it over would be silence
-// where the comparison promises honesty — but calling it MismatchInstrument
-// would send him looking for operations that are not missing. It gets its own
-// kind so the screen can say the other sentence.
-//
-// The exact word "futures" is not what is being pinned here and was not
-// checked against the live API: what decides the answer is that the type is
-// not in brokerInstrumentTypes, and any word outside that table behaves the
-// same way.
+// A future is MismatchUnsupported, not MismatchInstrument: held, but outside
+// what this program accounts for, so the owner should not hunt for missing
+// operations. Any type outside brokerInstrumentTypes behaves the same.
 func TestAnAssetThisProgramCannotHoldIsItsOwnKindOfDifference(t *testing.T) {
 	res := CompareHoldings(
 		[]PortfolioPosition{{
@@ -392,10 +349,7 @@ func TestAnAssetThisProgramCannotHoldIsItsOwnKindOfDifference(t *testing.T) {
 	}
 }
 
-// TestBrokerLabelPrefersWhatAPersonReads: the fallbacks, in order. A row about
-// a position that is not ours is the one row on this screen with no name of
-// OURS behind it, so the broker's own naming is all there is — and an
-// instrument_uid is a bare UUID.
+// brokerLabel's fallbacks in order; an instrument_uid is a bare UUID.
 func TestBrokerLabelPrefersWhatAPersonReads(t *testing.T) {
 	cases := []struct {
 		name string
@@ -432,13 +386,8 @@ func TestBrokerLabelPrefersWhatAPersonReads(t *testing.T) {
 	}
 }
 
-// TestAPositionWhoseUIDDriftedIsFoundByItsFIGI pins the second identifier.
-// The broker's instrument_uid on old operations has been seen to change,
-// which is why the resolver looks its map up by instrument_uid and then by
-// figi — so the operations behind this position were matched by figi and the
-// journal is in perfect order. A comparison that knew only the first
-// identifier would answer with TWO false lines: a phantom under the new uid
-// and a "the broker has none of it" under our own instrument.
+// A position whose instrument_uid drifted is found by figi, as the resolver
+// matched its operations; knowing only the uid would show two false lines.
 func TestAPositionWhoseUIDDriftedIsFoundByItsFIGI(t *testing.T) {
 	inst := uuid.New()
 	res := CompareHoldings(
@@ -467,10 +416,8 @@ func TestAPositionWhoseUIDDriftedIsFoundByItsFIGI(t *testing.T) {
 	}
 }
 
-// TestTheUIDIsTriedBeforeTheFIGI: the order is the resolver's own
-// ((*Resolver).lookupMap), so a position and the operations behind it resolve
-// to the same instrument. Both identifiers hit here, and they name different
-// instruments, so which one wins is visible.
+// uid before figi, as the resolver does; both hit different instruments
+// here, so the winner is visible.
 func TestTheUIDIsTriedBeforeTheFIGI(t *testing.T) {
 	byTheUID, byTheFIGI := uuid.New(), uuid.New()
 	res := CompareHoldings(
@@ -494,9 +441,7 @@ func TestTheUIDIsTriedBeforeTheFIGI(t *testing.T) {
 	}
 }
 
-// TestAPositionWithNoIdentifiersMatchesNothing: an entry under "" in either
-// map would answer for every position that arrived without that identifier,
-// resolving them all to a single instrument.
+// An empty identifier matches nothing.
 func TestAPositionWithNoIdentifiersMatchesNothing(t *testing.T) {
 	inst := uuid.New()
 	_, ok := InstrumentIndex{
@@ -534,11 +479,8 @@ func TestAPositionTheBrokerDoesNotReportIsAMismatch(t *testing.T) {
 	}
 }
 
-// TestAClosedPositionIsNotAMismatch: the engine keeps a position that was
-// sold out to the last unit, with a quantity of zero. The broker does not
-// report such a thing at all, and calling the difference between "nothing"
-// and "zero" a difference would put a permanent false alarm on the screen of
-// anyone who has ever closed a trade.
+// A sold-out position at zero in the engine is no difference: the broker
+// does not report it.
 func TestAClosedPositionIsNotAMismatch(t *testing.T) {
 	inst := uuid.New()
 	res := CompareHoldings(
@@ -579,16 +521,10 @@ func TestAnInstrumentWithoutALabelIsNamedByItsID(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// CompareHoldings: the money side
-// -------------------------------------------------------------------------
+// CompareHoldings: money.
 
-// TestJournalCashIsAmountsMinusFees pins the formula itself with literals.
-// It is a NEW computation — this program has never worked a cash balance out
-// of the journal before, because a balance on the accounts screen is a manual
-// mark and not a derivation — so there is nothing to check it against but the
-// numbers themselves: a deposit of 10 000,00 ₽, a purchase costing 1 000,00 ₽
-// and 10 kopecks of commission leave 8 999,90 ₽.
+// The cash formula with literals, since nothing else computes it: a 10 000,00
+// ₽ deposit and a 1 000,00 ₽ purchase with 0,10 commission leave 8 999,90 ₽.
 func TestJournalCashIsAmountsMinusFees(t *testing.T) {
 	inst := uuid.New()
 	got := journalCashMinor([]operation.Operation{
@@ -605,11 +541,8 @@ func TestJournalCashIsAmountsMinusFees(t *testing.T) {
 	}
 }
 
-// TestJournalCashIgnoresTransfers: a transfer's amount is the cost basis that
-// travelled, not money that moved (see portfolio.Operation). Summing it as
-// cash would invent a balance nobody has and put a false difference on the
-// screen of every account this importer ever moved shares into — which the
-// projection does produce, for moves between the owner's own accounts.
+// A transfer's amount is a basis, not cash; counting it would invent a
+// balance on every account shares moved into.
 func TestJournalCashIgnoresTransfers(t *testing.T) {
 	inst := uuid.New()
 	got := journalCashMinor([]operation.Operation{
@@ -623,10 +556,7 @@ func TestJournalCashIgnoresTransfers(t *testing.T) {
 	}
 }
 
-// TestCashCountsFreeAndBlockedTogether pins the other half of the asymmetry:
-// on MONEY the broker's two figures are two addends of one balance, and a
-// comparison that read only the free part would report a false difference on
-// every account with an order standing.
+// Free and blocked money are two addends of one balance.
 func TestCashCountsFreeAndBlockedTogether(t *testing.T) {
 	res := CompareHoldings(
 		nil,
@@ -674,10 +604,7 @@ func TestACurrencyMismatchCarriesBothFigures(t *testing.T) {
 	}
 }
 
-// TestACurrencyOnlyTheJournalKnowsIsAMismatch: a currency the broker did not
-// mention is a currency the broker holds none of — its answer is a complete
-// statement of its cash — so ours saying otherwise is a difference and not a
-// gap to be passed over.
+// A currency the broker does not mention is one it holds none of.
 func TestACurrencyOnlyTheJournalKnowsIsAMismatch(t *testing.T) {
 	res := CompareHoldings(
 		nil,
@@ -695,14 +622,9 @@ func TestACurrencyOnlyTheJournalKnowsIsAMismatch(t *testing.T) {
 	}
 }
 
-// TestMismatchesComeOutInAStableOrder must exercise the half of the walk that
-// is unstable to mean anything: the differences found by iterating the
-// ENGINE'S POSITIONS, which come out of a Go map whose iteration order is
-// randomized on purpose. CCC and DDD are there for that — two instruments the
-// journal holds and the broker does not report — because with the journal
-// side empty the engine's map is empty too, that loop never runs, and the
-// test would pin the order of the broker's slice alone, which was never in
-// doubt.
+// CCC and DDD, held in the journal and not reported, make the unstable half
+// (iterating the engine's map) actually run; without them only the broker's
+// slice order would be tested.
 func TestMismatchesComeOutInAStableOrder(t *testing.T) {
 	instA, instB := uuid.New(), uuid.New()
 	instC, instD := uuid.New(), uuid.New()
@@ -741,12 +663,7 @@ func TestMismatchesComeOutInAStableOrder(t *testing.T) {
 	}
 }
 
-// TestAJournalTheEngineRefusesIsNotCheckedRatherThanMatched is the sharpest
-// test in this file. When our own side of the comparison cannot be computed
-// at all, the answer is "not checked" — the third status, the one that draws
-// no tick. Calling it "agrees" would be the exact failure this project has
-// been bitten by four times: a true-looking caption over a figure nobody
-// established.
+// A journal the engine refuses is "not checked", never "agrees".
 func TestAJournalTheEngineRefusesIsNotCheckedRatherThanMatched(t *testing.T) {
 	inst := uuid.New()
 	journal := []operation.Operation{
@@ -772,9 +689,7 @@ func TestAJournalTheEngineRefusesIsNotCheckedRatherThanMatched(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// ReconcileLink
-// -------------------------------------------------------------------------
+// ReconcileLink.
 
 // markedBalance is one call to SetBalance, as the marker saw it.
 type markedBalance struct {
@@ -795,9 +710,7 @@ type recordingMarker struct {
 	err, readErr error
 }
 
-// newMarker is a marker over an account kept in rubles, which is what a link
-// of this importer is required to name. Tests about the requirement set
-// currency themselves.
+// newMarker is a marker over a rouble account, as a link must name.
 func newMarker() *recordingMarker { return &recordingMarker{currency: "RUB"} }
 
 func (m *recordingMarker) ByID(_ context.Context, spaceID, id uuid.UUID) (account.WithBalance, error) {
@@ -844,13 +757,9 @@ func (f fixture) seedMapped(t *testing.T, uid, ticker string) uuid.UUID {
 	return inst.ID
 }
 
-// TestReconcileLinkMarksTheBalanceWithTheBrokersTotal: an imported account's
-// balance mark is the figure the BROKER names for the whole account — its
-// securities at its prices plus its cash — rather than any sum of ours. It is
-// what the account's value from the journal is checked against (the owner's
-// ruling on Р-2, 2026-10-02). Until then it was the broker's rubles alone
-// (his rule of 2026-08-04), which left the securities out of every figure the
-// mark fed.
+// The balance mark is the broker's figure for the whole account, securities
+// at its prices plus cash, which the journal's valuation is checked against (Р-2,
+// 2026-10-02).
 func TestReconcileLinkMarksTheBalanceWithTheBrokersTotal(t *testing.T) {
 	f := newFixture(t)
 	inst := f.seedMapped(t, "uid-sber", "SBER")
@@ -891,25 +800,16 @@ func TestReconcileLinkMarksTheBalanceWithTheBrokersTotal(t *testing.T) {
 	if got.spaceID != f.spaceID || got.accountID != f.accountID {
 		t.Errorf("mark filed under %s/%s, want %s/%s", got.spaceID, got.accountID, f.spaceID, f.accountID)
 	}
-	// 22:30 UTC on the 4th is already the 5th in Moscow, and the broker's day
-	// is the Moscow one — the same day this importer files its journal
-	// entries under.
+	// 22:30 UTC on the 4th is the 5th in Moscow, the broker's day.
 	want := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
 	if !got.asOf.Equal(want) {
 		t.Errorf("as_of = %s, want %s", got.asOf, want)
 	}
 }
 
-// TestReconcileLinkAgreesWithAnAccountThatOnlyHoldsCash runs the owner's
-// simplest possible case end to end, through the client, from the response a
-// LIVE sandbox account actually returned: opened, topped up with 50 000 ₽,
-// nothing bought. The portfolio comes back holding one position — the rubles
-// themselves, of type "currency" — and the run must say the two sides agree.
-//
-// Before the securities side learned to tell cash from paper this returned
-// "differs" with a phantom position labelled by a UUID, on an account whose
-// whole history is one deposit. That is the complaint the whole import was
-// written to answer, reproduced by the import itself.
+// End to end from a live sandbox response: an account topped up with 50 000 ₽
+// and nothing bought must agree, its one "currency" position being the
+// cash.
 func TestReconcileLinkAgreesWithAnAccountThatOnlyHoldsCash(t *testing.T) {
 	f := newFixture(t)
 
@@ -937,10 +837,7 @@ func TestReconcileLinkAgreesWithAnAccountThatOnlyHoldsCash(t *testing.T) {
 	}
 }
 
-// TestReconcileLinkSaysNotCheckedWhenThePortfolioIsUnavailable is the other
-// half of the same honesty: a broker that did not answer leaves the run
-// saying "not checked", with the error going out and NO balance mark written
-// — a mark is the broker's own figure, and there is none.
+// A broker that did not answer: "not checked", the error returned, no mark.
 func TestReconcileLinkSaysNotCheckedWhenThePortfolioIsUnavailable(t *testing.T) {
 	f := newFixture(t)
 
@@ -992,9 +889,8 @@ func TestReconcileLinkSaysNotCheckedWhenTheCashIsUnavailable(t *testing.T) {
 	}
 }
 
-// TestReconcileLinkMarksTheBalanceEvenWhenTheSidesDisagree: the mark is what
-// the BROKER said about itself, and that figure is no less true because our
-// journal has not caught up with it.
+// The mark is the broker's statement, written even when the sides
+// disagree.
 func TestReconcileLinkMarksTheBalanceEvenWhenTheSidesDisagree(t *testing.T) {
 	f := newFixture(t)
 
@@ -1042,11 +938,9 @@ func TestReconcileLinkRefusesALinkOfAnotherConnection(t *testing.T) {
 	}
 }
 
-// TestReconcileLinkRefusesALinkOfAnotherSpace: the link names the space its
-// journal is read from and its balance mark is filed under, so a link and a
-// connection that disagree about it would check one household's broker
-// account against another household's account. The client here has no server
-// behind it — reaching one would already be the failure.
+// A link and connection in different spaces would check one household's
+// broker account against another's account; the client has no server, so
+// reaching one would already be the failure.
 func TestReconcileLinkRefusesALinkOfAnotherSpace(t *testing.T) {
 	f := newFixture(t)
 	other := f.link
@@ -1066,15 +960,9 @@ func TestReconcileLinkRefusesALinkOfAnotherSpace(t *testing.T) {
 	}
 }
 
-// TestReconcileLinkMarksNothingWhenOurOwnJournalCannotBeRead pins the last
-// clause of ReconcileLink's promise about the mark: it is not written when
-// this program's own database refused a read on the way. A broker figure
-// nobody could compare anything against is still no reason to fail silently,
-// so the run says "not checked" and the previous mark is left standing.
-//
-// This is NOT the same case as a journal the engine refuses (which does get a
-// mark, since the broker's statement is true regardless): here the journal was
-// never read at all.
+// When our own database refused a read, no mark is written and the run is
+// "not checked". Unlike a journal the engine refuses, which still gets the
+// mark: here the journal was never read.
 func TestReconcileLinkMarksNothingWhenOurOwnJournalCannotBeRead(t *testing.T) {
 	f := newFixture(t)
 
@@ -1101,9 +989,8 @@ func TestReconcileLinkMarksNothingWhenOurOwnJournalCannotBeRead(t *testing.T) {
 	}
 }
 
-// A broker that names no total for the account leaves the previous mark
-// standing: there is no figure of the broker's to write, and the check still
-// counts as made.
+// No total from the broker leaves the previous mark; the check still
+// counts.
 func TestReconcileLinkLeavesTheMarkWhenTheBrokerNamesNoTotal(t *testing.T) {
 	f := newFixture(t)
 	srv, _ := serve(t, map[string]route{
@@ -1147,12 +1034,8 @@ func TestReconcileLinkRefusesATotalInAnotherCurrency(t *testing.T) {
 	}
 }
 
-// TestReconcileLinkRefusesToMarkANonRubleAccount pins the precondition this
-// program used to only write down. The mark is a bare int64 whose currency is
-// the account's own, and the figure being filed is the broker's RUBLES — so
-// putting it on an account kept in anything else would file one currency's
-// number under another's name, and nothing on the screen would say so. The
-// refusal is loud and the mark is not written.
+// A non-rouble account is refused loudly and not marked: the mark has no
+// currency of its own, and the figure is in roubles.
 func TestReconcileLinkRefusesToMarkANonRubleAccount(t *testing.T) {
 	f := newFixture(t)
 
@@ -1176,12 +1059,8 @@ func TestReconcileLinkRefusesToMarkANonRubleAccount(t *testing.T) {
 	}
 }
 
-// TestABalanceMarkFinerThanAKopeckIsRefusedForWhatItIs: the substance of the
-// refusal — a sum finer than a minor unit, which this program will not round
-// into place — is the projection's, but the ACTION that failed is not.
-// Nothing was being projected here; a balance mark was being written, and
-// that is what the refusal has to say. A caption naming the wrong action is
-// the failure this project has been bitten by four times.
+// A sum finer than a kopeck is refused as a balance mark failure, not a
+// projection one: name the action that failed.
 func TestABalanceMarkFinerThanAKopeckIsRefusedForWhatItIs(t *testing.T) {
 	f := newFixture(t)
 
@@ -1212,10 +1091,7 @@ func TestABalanceMarkFinerThanAKopeckIsRefusedForWhatItIs(t *testing.T) {
 	}
 }
 
-// TestBothRefusalsSurviveWhenBothHappened: our journal not computing and the
-// mark failing to be written are two independent accidents with two different
-// remedies. Returning only the second would leave whoever has to act on this
-// looking at half of what went wrong.
+// Our journal not computing and the mark failing are both returned.
 func TestBothRefusalsSurviveWhenBothHappened(t *testing.T) {
 	f := newFixture(t)
 	inst := f.seedMapped(t, "uid-sber", "SBER")
@@ -1254,9 +1130,7 @@ func TestBothRefusalsSurviveWhenBothHappened(t *testing.T) {
 	}
 }
 
-// TestReconcileLinkReadsTheMapOfItsOwnConnection: the map is per connection,
-// and a reconciliation that read another connection's rows would resolve the
-// broker's positions against instruments this account never held.
+// The map read is the link's own connection's.
 func TestReconcileLinkReadsTheMapOfItsOwnConnection(t *testing.T) {
 	f := newFixture(t)
 	inst := f.seedMapped(t, "uid-sber", "SBER")
@@ -1285,11 +1159,8 @@ func TestReconcileLinkReadsTheMapOfItsOwnConnection(t *testing.T) {
 	}
 }
 
-// TestTheInstrumentIndexCarriesTheFIGIToo: the second identifier is read out
-// of the same table the resolver writes, because a drifted instrument_uid is
-// exactly what it is there for. An index built from the first column alone
-// would leave the reconciliation unable to match a position the resolver
-// itself matches without trouble.
+// The index reads the figi column too, so a drifted uid matches here as
+// in the resolver.
 func TestTheInstrumentIndexCarriesTheFIGIToo(t *testing.T) {
 	f := newFixture(t)
 	inst := f.seedMapped(t, "uid-sber", "SBER")
@@ -1303,14 +1174,9 @@ func TestTheInstrumentIndexCarriesTheFIGIToo(t *testing.T) {
 	}
 }
 
-// TestAFIGITwoRowsDisagreeAboutAnswersForNeither: when two rows of one
-// connection carry one figi against DIFFERENT instruments there is no honest
-// answer to give, and this index gives none — the position falls through to a
-// difference, which is what "we could not match this" is supposed to look
-// like. Keeping whichever row arrived last would be worse than that: rows come
-// back in no particular order, so the answer would depend on how the database
-// felt like returning them, and one run would match the position where the
-// next reported it, with nothing changed in between.
+// A figi two rows give different instruments answers for neither: the
+// position shows as a difference, rather than a match that varies with row
+// order.
 func TestAFIGITwoRowsDisagreeAboutAnswersForNeither(t *testing.T) {
 	f := newFixture(t)
 	first := f.seedMapped(t, "uid-first", "SBER")
@@ -1342,9 +1208,7 @@ func TestAFIGITwoRowsDisagreeAboutAnswersForNeither(t *testing.T) {
 	}
 }
 
-// TestAnInstrumentWithoutATickerIsLabelledByItsName: the catalog's ticker is
-// optional (a fund the owner holds abroad may have none), and the name is
-// what a person recognizes it by when it does.
+// An instrument without a ticker is labelled by its name.
 func TestAnInstrumentWithoutATickerIsLabelledByItsName(t *testing.T) {
 	f := newFixture(t)
 	inst, err := instrument.NewStore(f.pool).Create(f.ctx, instrument.Instrument{
@@ -1367,11 +1231,8 @@ func TestAnInstrumentWithoutATickerIsLabelledByItsName(t *testing.T) {
 	}
 }
 
-// TestAMapRowWithoutAnInstrumentUIDAnswersForNothing: an empty key would be
-// the answer for every broker position that arrived without an identifier,
-// resolving them all to one instrument. The row is written here by hand
-// because the resolver refuses to write one (which is exactly why this guard
-// has to be checked rather than assumed).
+// A map row without instrument_uid answers for nothing; written by hand
+// because the resolver never writes one.
 func TestAMapRowWithoutAnInstrumentUIDAnswersForNothing(t *testing.T) {
 	f := newFixture(t)
 	inst, err := instrument.NewStore(f.pool).Create(f.ctx, instrument.Instrument{
@@ -1395,9 +1256,7 @@ func TestAMapRowWithoutAnInstrumentUIDAnswersForNothing(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// FinishRun: the verdict reaching the run log
-// -------------------------------------------------------------------------
+// FinishRun: the verdict in the run log.
 
 func TestFinishRunWritesTheVerdictAndTheMomentItWasReached(t *testing.T) {
 	f := newFixture(t)
@@ -1445,9 +1304,7 @@ func TestFinishRunWritesTheVerdictAndTheMomentItWasReached(t *testing.T) {
 	}
 }
 
-// TestFinishRunLeavesARunItDidNotCheckSayingSo: a run finished by a caller
-// that never reconciled anything keeps "not checked" and says nothing about
-// when — the zero value of the new field must not be able to write a verdict.
+// A run nobody reconciled stays "not checked" with no time.
 func TestFinishRunLeavesARunItDidNotCheckSayingSo(t *testing.T) {
 	f := newFixture(t)
 	run, err := f.store.StartRun(f.ctx, f.conn.ID, f.link.ID, TriggerSchedule)
@@ -1475,9 +1332,7 @@ func TestFinishRunLeavesARunItDidNotCheckSayingSo(t *testing.T) {
 	}
 }
 
-// TestFinishRunWritesAnEmptyListForAnAgreement: "checked and nothing
-// differed" is a list of no differences, which is a different statement from
-// the null of "never looked".
+// Agreement is an empty list, not the null of "never looked".
 func TestFinishRunWritesAnEmptyListForAnAgreement(t *testing.T) {
 	f := newFixture(t)
 	run, err := f.store.StartRun(f.ctx, f.conn.ID, f.link.ID, TriggerSchedule)
@@ -1505,11 +1360,8 @@ func TestFinishRunWritesAnEmptyListForAnAgreement(t *testing.T) {
 	}
 }
 
-// TestFinishRunRefusesAVerdictItsOwnListContradicts: a run saying it found
-// differences with nothing to show, or saying it found none while carrying
-// some, is the caption-that-lies shape this project keeps being bitten by.
-// The database's CHECK constrains the word alone, so the pairing is checked
-// here.
+// A verdict its own list contradicts is refused; the CHECK covers only the
+// word.
 func TestFinishRunRefusesAVerdictItsOwnListContradicts(t *testing.T) {
 	f := newFixture(t)
 	run, err := f.store.StartRun(f.ctx, f.conn.ID, f.link.ID, TriggerSchedule)
@@ -1536,16 +1388,9 @@ func TestFinishRunRefusesAVerdictItsOwnListContradicts(t *testing.T) {
 	}
 }
 
-// TestReconcileMatchesOnePaperListedOnTwoVenues is the owner's own screen, and
-// what it looked like before this.
-//
-// A foreign share moved to another venue when trading in it was suspended: the
-// broker's portfolio reports AMZN-RM while the history that built the journal
-// named AMZN, and nothing connects the two identifiers. The check said the
-// holding twice — "the broker has 20 and we have none", "we have 20 and the
-// broker has none" — for seven of his papers at once, quantities agreeing in
-// every one. Here the quantities agree, so after the pairing there is no
-// difference at all.
+// The owner's screen: a share moved venues, the portfolio says AMZN-RM, the
+// journal AMZN. Seven papers showed twice with agreeing quantities; paired by
+// ISIN they agree.
 func TestReconcileMatchesOnePaperListedOnTwoVenues(t *testing.T) {
 	f := newFixture(t)
 
@@ -1577,9 +1422,7 @@ func TestReconcileMatchesOnePaperListedOnTwoVenues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReconcileLink: %v", err)
 	}
-	// Asserted on the SECURITIES rows alone: this fixture's journal buys
-	// dollars it was never given, so the cash comparison has a difference of
-	// its own and it is not what is under test here.
+	// Securities only: this fixture's cash differs on purpose.
 	if got := securitiesMismatches(res); len(got) != 0 {
 		t.Fatalf("got %+v, want none: one paper on two venues is one holding", got)
 	}
@@ -1596,14 +1439,8 @@ func securitiesMismatches(res ReconcileResult) []ReconcileMismatch {
 	return out
 }
 
-// TestReconcileStillReportsARealDifferenceAcrossVenues is the other half, and
-// the reason the pairing is worth doing: once the phantom pairs are gone, what
-// is left is a difference somebody has to act on.
-//
-// The quantities here are the owner's Amazon: 1 in the journal against 20 at
-// the broker, which is the 20-for-1 split of June 2022 that no operation ever
-// reported. Pairing the listings is what makes that visible as ONE line about
-// one paper instead of two lines that cancel in the reader's head.
+// After pairing, a real difference is one line: the owner's Amazon, 1 in the
+// journal against 20 at the broker (the unreported 20:1 split of June 2022).
 func TestReconcileStillReportsARealDifferenceAcrossVenues(t *testing.T) {
 	f := newFixture(t)
 
@@ -1645,14 +1482,9 @@ func TestReconcileStillReportsARealDifferenceAcrossVenues(t *testing.T) {
 	}
 }
 
-// TestReconcileUnknownSecurityCarriesTheBrokersPassport: a position nothing of
-// ours matched used to reach the screen as a bare broker ticker — «TECH2»,
-// which is not a name of ours and says nothing about what the broker holds —
-// although the check had already asked the broker exactly that and thrown the
-// answer away. The row now carries the passport: ISIN, name, currency (in the
-// uppercase shape a catalog row requires), and the instrument type translated
-// by the importer's own table. This is the owner's live case: the fund his
-// TECH was converted into, under an ISIN this catalog has no row for.
+// An unknown security carries the broker's passport (ISIN, name, upper-case
+// currency, translated type) instead of a bare ticker like «TECH2». The owner's
+// live case: the fund his TECH was converted into.
 func TestReconcileUnknownSecurityCarriesTheBrokersPassport(t *testing.T) {
 	f := newFixture(t)
 
@@ -1690,9 +1522,7 @@ func TestReconcileUnknownSecurityCarriesTheBrokersPassport(t *testing.T) {
 	if m.BrokerName == nil || *m.BrokerName != "Заблокированные активы Тинькофф Технологии" {
 		t.Errorf("broker_name = %v, want the passport's name", m.BrokerName)
 	}
-	// Uppercased on the way in (InstrumentBrief), because that is the shape
-	// CreateInstrumentRequest.currency requires — the whole point of carrying
-	// the field is that a catalog row can be made from it as it stands.
+	// Upper case, as CreateInstrumentRequest requires.
 	if m.BrokerCurrency == nil || *m.BrokerCurrency != "RUB" {
 		t.Errorf("broker_currency = %v, want RUB", m.BrokerCurrency)
 	}
@@ -1702,14 +1532,8 @@ func TestReconcileUnknownSecurityCarriesTheBrokersPassport(t *testing.T) {
 	}
 }
 
-// TestReconcileUnsupportedAssetCarriesNoPassport: the passport is attached to
-// an unknown-security row and to nothing else, and this is the case that says
-// so. A future is an asset this program does not account for at all, and the
-// check asks the broker about it exactly as it asks about any position nothing
-// of ours matched — so a passport for it EXISTS by the time the row is built,
-// and only the kind stops it reaching the screen. Publishing it would offer a
-// reader the makings of a catalog row for a paper no rule of this program can
-// book, under a line that says the opposite.
+// A future gets no passport, though one was fetched: it is not something
+// a catalog row can be made for.
 func TestReconcileUnsupportedAssetCarriesNoPassport(t *testing.T) {
 	f := newFixture(t)
 
@@ -1744,13 +1568,9 @@ func TestReconcileUnsupportedAssetCarriesNoPassport(t *testing.T) {
 	}
 }
 
-// TestReconcileUnknownSecurityWithoutPassportSaysSo: when the broker will not
-// say what its own position is (404 — the live case is a paper the broker
-// forgot, like the owner's TCS Group receipts), the row carries no ISIN, no
-// name and no currency — an explicit «the passport was not obtained», not a
-// passport of empty strings. The TYPE is still published: it comes off the
-// position itself, and it is the very fact that classified the row as an
-// unknown security rather than an unsupported asset.
+// When the broker will not say (404, a forgotten paper like the owner's
+// TCS Group receipts), ISIN, name and currency are nil; the type still
+// comes from the position.
 func TestReconcileUnknownSecurityWithoutPassportSaysSo(t *testing.T) {
 	f := newFixture(t)
 
