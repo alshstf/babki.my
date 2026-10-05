@@ -5,8 +5,8 @@ import "@/i18n";
 import { CorporateActions } from "./corporate-actions";
 import type { InstrumentEvent } from "@/api/instrument-events";
 
-// openapi-fetch captures globalThis.fetch at import time, so the double has to
-// be installed before the imports above run — hence vi.hoisted.
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
@@ -15,8 +15,7 @@ const fetchMock = vi.hoisted(() => {
 
 type Route = { path: string; method?: string; status?: number; body?: unknown };
 
-// A fresh Response per call: mockResolvedValue's single object breaks on the
-// second, since a body can only be read once.
+// A fresh Response per call: a body can be read only once.
 function serve(routes: Route[]) {
   fetchMock.mockImplementation(
     (input: RequestInfo | URL, init?: RequestInit) => {
@@ -91,9 +90,8 @@ beforeEach(() => {
 
 describe("CorporateActions", () => {
   it("shows the evidence behind a recorded event", async () => {
-    // A ratio nobody can check is a number this program carries into every
-    // holder's journal on one person's word, so the link is required when the
-    // event is recorded — and shown, so it can actually be followed.
+    // A ratio enters every holder's journal on one person's word, so the
+    // source link is required and shown.
     serve([
       { path: "/api/v1/instrument-events", body: { events: [makeEvent()] } },
     ]);
@@ -149,23 +147,21 @@ describe("CorporateActions", () => {
     const [sent] = await bodiesSent("POST");
     expect(sent).toEqual({
       kind: "split",
-      // Uppercased on the way out: the ISIN is an identity, and the registry
-      // matches on it exactly.
+      // Uppercased on the way out: the registry matches the ISIN exactly.
       isin: "US0231351067",
       effective_on: "2022-06-06",
       ratio_from: 1,
       ratio_to: 20,
       source_ref: "https://ir.aboutamazon.com/",
     });
-    // A split produces no second paper and moves no basis, and the server
-    // refuses either field on one — so a form left alone must not send them.
+    // A split has no second paper and moves no basis; the server refuses
+    // either field on one.
     expect(sent).not.toHaveProperty("result_isin");
     expect(sent).not.toHaveProperty("basis_share");
   });
 
   it("offers no delete on the exchange's own row", async () => {
-    // The job that wrote it reads the exchange's table on every run and would
-    // write it back, so the button would undo itself.
+    // The writing job would put it back on its next run.
     serve([
       {
         path: "/api/v1/instrument-events",
@@ -185,8 +181,7 @@ describe("CorporateActions", () => {
 
     expect(await screen.findByTestId("corporate-action-row")).toBeInTheDocument();
     expect(screen.queryByTestId("corporate-action-delete-moex-1")).toBeNull();
-    // The source line reads «Московская биржа · Источник», so the text is
-    // matched inside its line rather than as a whole node.
+    // Matched inside the line «Московская биржа · Источник».
     expect(
       screen.getByText((_, el) => el?.textContent?.startsWith("Московская биржа") === true, {
         selector: "div",
@@ -195,10 +190,8 @@ describe("CorporateActions", () => {
   });
 
   it("says on the row itself when a kind is recorded but not yet counted", async () => {
-    // The facts are perishable — a fund converted in 2023 and nobody can go
-    // back and ask the registrar again — so they are stored before the engine
-    // can fold them, and the row says so rather than looking like a holding
-    // that silently did not change.
+    // The facts are perishable, so they are stored before the engine can fold
+    // them, and the row says so.
     serve([
       {
         path: "/api/v1/instrument-events",
@@ -222,11 +215,8 @@ describe("CorporateActions", () => {
   });
 
   it("says which paper a recorded conversion is waiting for", async () => {
-    // A conversion IS carried into journals now; what can still hold one back is
-    // a catalog with no row for the paper it produces, and the two answers are
-    // different fields because they are different questions. The row must show
-    // the waiting one — a person who has just recorded a fact and sees nothing
-    // change is owed the reason, and "not counted yet" would now be false.
+    // What holds a conversion back is a missing catalog row for the paper it
+    // produces: a separate field and question. The row shows the reason.
     serve([
       {
         path: "/api/v1/instrument-events",
@@ -254,8 +244,7 @@ describe("CorporateActions", () => {
     expect(screen.queryByText("Пока не учитывается в журнале")).toBeNull();
   });
 
-  // No `not_counted_reason` at all, which is how the server says "nothing is in
-  // the way": the field is omitted rather than sent as null.
+  // The server omits `not_counted_reason` when nothing is in the way.
   it("says nothing extra about an event that is fully counted", async () => {
     serve([
       {

@@ -5,20 +5,16 @@ import "@/i18n";
 import { IncomeDialog } from "./income-dialog";
 import type { AccountWithBalance } from "@/api/accounts";
 
-// The API client captures globalThis.fetch once, when @/api/client is first
-// imported (openapi-fetch: `fetch: baseFetch = globalThis.fetch`), so the double
-// has to be in place *before* that import — hence vi.hoisted, which runs ahead
-// of the import statements above.
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// An empty catalog, served fresh on every call: this dialog mounts an
-// InstrumentPicker, which queries the catalog whether or not the test is about
-// instruments, and a single Response handed to mockResolvedValue would work
-// once and then throw, because a body can only be consumed once.
+// The dialog's InstrumentPicker always queries the catalog; a fresh
+// Response per call, since a body can be read only once.
 function serveEmptyCatalog() {
   fetchMock.mockImplementation(() =>
     Promise.resolve(
@@ -65,12 +61,8 @@ afterEach(() => {
   cleanup();
 });
 
-// A dividend past the bound is a dividend nobody will ever be paid, and this
-// field takes it exactly as seriously as the deposit field beside it does —
-// same number, same screen, same currency. What is pinned here is WHICH
-// sentence it gets: «Введите положительную сумму» would be false of
-// 20 000 000 000 000, which is positive and parses, and a caption naming a
-// cause that is not the cause is the mistake this repository keeps rediscovering.
+// A payout past the bound gets «Слишком большая сумма», not «Введите
+// положительную сумму», which is false of a positive, parseable number.
 describe("IncomeDialog: a sum too large to record", () => {
   it("says it is too large rather than asking for a positive number", () => {
     open();
@@ -85,9 +77,7 @@ describe("IncomeDialog: a sum too large to record", () => {
     open();
     typeAmount("10000000000000,01"); // one kopeck past the bound
 
-    // \s, not a literal space: Intl separates thousands with a non-breaking one
-    // and puts a narrow one before the sign, neither of which is the character
-    // in this file's source.
+    // \s, not a space: Intl uses non-breaking and narrow spaces.
     const hint = (screen.getByText(/Слишком большая сумма/).textContent ?? "").replace(/\s/g, " ");
     expect(hint).toContain("10 000 000 000 000 ₽");
   });
@@ -119,15 +109,9 @@ describe("IncomeDialog: a sum too large to record", () => {
   });
 });
 
-// #109.2. This form records three operation types and the engine treats them
-// as two different things: dividend and coupon add to Position.IncomeByCurrency,
-// while amortization is written as a DISPOSAL — p.realize(...) with the
-// returned principal as proceeds, the retired basis as its released pieces,
-// and the income untouched (the TypeAmortization branch in
-// internal/portfolio/engine.go). So an amortization never appears in the
-// «Доход» column of the positions table, no matter how large it is, and a
-// form that called it «Доход по инструменту» promised a figure that is not
-// coming.
+// #109.2: dividend and coupon add to income, but the engine records an
+// amortization as a disposal (TypeAmortization in
+// internal/portfolio/engine.go), so it never reaches the «Доход» column.
 const AMORTIZATION_NOTE =
   "Амортизация — это возврат части номинала. Программа записывает её как выбытие, а не как доход: в колонке «Доход» она не появится";
 
@@ -135,11 +119,7 @@ describe("IncomeDialog: an amortization is not income", () => {
   const typeSelect = () => screen.getByRole("combobox");
 
   function chooseType(label: string) {
-    // jsdom implements no layout, so Element.prototype.scrollIntoView simply
-    // does not exist — and Radix's Select calls it on the selected item when
-    // the list opens. The stub fills a hole in the environment, not in the
-    // component: nothing below asserts anything about scrolling, and without
-    // it the list cannot be opened at all.
+    // jsdom lacks scrollIntoView, which Radix Select calls on open.
     Element.prototype.scrollIntoView = () => {};
     fireEvent.click(typeSelect());
     fireEvent.click(screen.getByText(label));
@@ -148,8 +128,7 @@ describe("IncomeDialog: an amortization is not income", () => {
   it("does not call the whole form income", () => {
     open();
 
-    // «Выплата» is true of all three: a dividend, a coupon and a return of
-    // principal are all money the issuer pays out. «Доход» was true of two.
+    // «Выплата» is true of all three; «Доход» was true of two.
     expect(screen.getByText("Выплата по инструменту")).toBeInTheDocument();
     expect(screen.queryByText("Доход по инструменту")).toBeNull();
   });

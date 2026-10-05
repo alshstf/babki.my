@@ -5,16 +5,15 @@ import "@/i18n";
 import { UnparsedList } from "./unparsed-list";
 import type { TinvestUnparsedOperation } from "@/api/connections";
 
-// openapi-fetch captures globalThis.fetch at import time, so the double has to
-// be installed before the imports above run.
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// A fresh Response per call — a body is readable once, and the paging test
-// makes two requests.
+// A fresh Response per call: a body can be read only once.
 function servePages(pages: { operations: TinvestUnparsedOperation[]; has_more: boolean }[]) {
   fetchMock.mockImplementation((input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
@@ -73,8 +72,7 @@ describe("UnparsedList", () => {
     renderList();
 
     expect(await screen.findByText("Тип операции пока не поддерживается")).toBeInTheDocument();
-    // The broker's own type word, kept as it came: this row exists precisely
-    // because nothing here knew what it meant.
+    // The broker's type word as it came: nothing here knew what it meant.
     expect(
       screen.getByText("OPERATION_TYPE_FUTURES_VARIATION_MARGIN"),
     ).toBeInTheDocument();
@@ -97,11 +95,8 @@ describe("UnparsedList", () => {
     expect(screen.getByText("Операцию отклонил движок журнала")).toBeInTheDocument();
   });
 
-  // «Операцию отклонил движок журнала» is the same sentence over a sale with
-  // nothing behind it, an amount the journal will not hold, and a transfer whose
-  // other leg failed. The detail is the only thing that tells one such row from
-  // the next — 134 of the owner's rows carried that code and nothing else, and
-  // none of them could be acted on.
+  // The reason name alone covers several refusals; the detail tells the
+  // rows apart (134 of the owner's rows had only the code).
   it("prints what refused the row, beside the name of the refusal", async () => {
     serve([
       makeOperation({
@@ -118,13 +113,8 @@ describe("UnparsedList", () => {
     ).toBeInTheDocument();
   });
 
-  // A row refused before the server kept details carries none, which is an
-  // ordinary state rather than a fault: the name of the reason stands on its
-  // own, and a blank line under it would read as something still loading.
-  //
-  // Asserted on the SHAPE of the cell and not on its text, because the defect
-  // this pins — rendering the detail unconditionally — puts an EMPTY element on
-  // the screen, and no query by text can see one.
+  // Older rows carry no detail: the reason stands alone. Asserted on the
+  // cell's shape, since an empty element is invisible to text queries.
   it("adds nothing under the reason when nothing was written down", async () => {
     serve([makeOperation({ id: "u-1", reason: "engine_refused", detail: "" })]);
     renderList();
@@ -136,8 +126,7 @@ describe("UnparsedList", () => {
     expect(stack?.lastElementChild?.tagName).toBe("DETAILS");
   });
 
-  // An amount finer than a minor unit is one of the reasons a row is on this
-  // list at all, so rounding it for display would erase the evidence.
+  // Sub-minor amounts are one reason a row is here: no rounding.
   it("prints the broker's amount exactly as it arrived", async () => {
     serve([
       makeOperation({ payment: "0.123456789", currency: "USD", reason: "unrepresentable_amount" }),
@@ -155,17 +144,14 @@ describe("UnparsedList", () => {
     expect(screen.getByText(/broker-op-1/)).toBeInTheDocument();
   });
 
-  // Empty means nothing on this list — which is also true of a connection that
-  // has never read a single operation, where «все операции разобраны» would be
-  // a claim about work that was never done.
+  // Empty is not «все операции разобраны»: a connection may never have
+  // read anything.
   it("says there are none, not that everything was understood", async () => {
     serve([]);
     renderList();
 
     expect(await screen.findByText("Неразобранных операций нет")).toBeInTheDocument();
-    // «Брокер ИХ отдал, программа сохранила ИХ как есть» is a sentence about
-    // rows, and over an empty list «их» has no subject — it was printed
-    // directly above «Неразобранных операций нет», which answers it.
+    // The sentence about rows has no subject over an empty list.
     expect(
       screen.queryByText(
         "Брокер их отдал, программа сохранила их как есть — но записями журнала они не стали: ни позиции, ни прибыль их не учитывают",

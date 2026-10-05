@@ -7,14 +7,12 @@ import type { Summary } from "@/api/accounts";
 import { formatMinor, formatMinorCompact } from "@/lib/money";
 import { localToday } from "@/lib/dates";
 
-// SummaryCards is a pure presentational component (summary comes in as a
-// prop), so a bare render is enough — no QueryClientProvider needed.
+// A presentational component: a bare render is enough.
 function wrap(ui: ReactElement) {
   return render(ui);
 }
 
-// NBSP-insensitive compare: Intl.NumberFormat uses non-breaking spaces
-// (matches the helper in money.test.ts).
+// NBSP-insensitive compare.
 const norm = (s: string) => s.replace(/[  ]/g, " ");
 
 function makeSummary(overrides: Partial<Summary> = {}): Summary {
@@ -31,12 +29,9 @@ function makeSummary(overrides: Partial<Summary> = {}): Summary {
   };
 }
 
-// The stale-rates icon's tooltip, pinned in full. It is a claim about
-// Summary.rates_on, and what that field IS decides what the sentence may say:
-// the OLDEST fx rate date used across every currency the total was converted
-// from (ConvertMany in internal/marketdata/converter.go keeps the minimum), on
-// a total that is struck one currency at a time. The singular «курс от …» it
-// used to say described a single rate the server never claimed to have used.
+// The stale-rates tooltip, pinned whole. Summary.rates_on is the oldest
+// rate date across the converted currencies (ConvertMany keeps the
+// minimum), one rate per currency.
 const RATES_ON =
   "Валюты пересчитаны каждая по своему курсу, и самый старый из этих курсов — от 20.07.2026";
 
@@ -68,15 +63,8 @@ describe("SummaryCards", () => {
     expect(icon).toHaveAttribute("title", RATES_ON);
   });
 
-  // #109.3. Summary.rates_on is the date of the OLDEST rate used across every
-  // converted currency — ConvertMany keeps the minimum
-  // (internal/marketdata/converter.go), and the total is struck from one rate
-  // per currency, not from one rate. «курс от 20.07.2026» named a single rate
-  // that does not exist: on a screen with dollars, euros and tenge behind the
-  // total, three rates stand behind it and this date belongs to whichever of
-  // them is furthest back. The reader was left to conclude the whole total was
-  // valued on that day, which understates how current it is and, worse, is a
-  // claim the server never made.
+  // #109.3: with several currencies behind the total, the date belongs to
+  // the furthest-back rate; «курс от …» named one rate that does not exist.
   it("says the named rate is the oldest of several, not the one rate behind the total", () => {
     wrap(
       <SummaryCards
@@ -94,9 +82,7 @@ describe("SummaryCards", () => {
 
     const title = screen.getByTestId("summary-rates-stale-icon").getAttribute("title") ?? "";
     expect(title).toBe(RATES_ON);
-    // The two claims, each asserted on its own: that there is a rate per
-    // currency, and that the date shown is the oldest of them. Dropping
-    // either one puts the caption back to describing a single rate.
+    // Both claims, each on its own: a rate per currency, and the oldest date.
     expect(title).toContain("каждая по своему курсу");
     expect(title).toContain("самый старый");
   });
@@ -132,18 +118,14 @@ describe("SummaryCards", () => {
   });
 
   it("does not print a coloured zero on the headline card for a total that is not zero", () => {
-    // #107 where it actually hurts. The total card pairs the figure with
-    // signClass, so forty kopecks used to be shown as «0 ₽» in the green of a
-    // gain: a zero and a sign, contradicting each other, on the largest number
-    // on the screen. Asserted against the zero rendering as a whole string —
-    // looking for the character "0" would match «1 385 000 ₽» just as well.
+    // #107: forty kopecks showed as a green «0 ₽» on the total card. Compared
+    // with the zero rendering as a whole string.
     wrap(<SummaryCards summary={makeSummary({ total_in_base_minor: 40 })} mode="native" />);
 
     const amount = screen.getByTestId("summary-total-amount");
     expect(norm(amount.textContent ?? "")).toBe("0,40 ₽");
     expect(amount.textContent).not.toBe(formatMinorCompact(0, "RUB"));
-    // The colour is right and stays: this total IS a gain, and the number now
-    // agrees with it.
+    // The colour stays: this total is a gain.
     expect(amount.className).toContain("emerald");
   });
 
@@ -152,8 +134,7 @@ describe("SummaryCards", () => {
       <SummaryCards summary={makeSummary({ rates_on: "garbage" })} mode="native" />,
     );
 
-    // Ensure the rate date fragment is not present (no rates wording at all),
-    // and no stale-rates icon either since there's no valid date to show in it.
+    // No rates wording and no stale-rates icon without a valid date.
     expect(screen.queryByText(/курс/)).not.toBeInTheDocument();
     expect(screen.queryByTestId("summary-rates-stale-icon")).not.toBeInTheDocument();
   });

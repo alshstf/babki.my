@@ -6,23 +6,20 @@ import { TransferDialog } from "./transfer-dialog";
 import type { AccountWithBalance } from "@/api/accounts";
 import type { Instrument } from "@/api/instruments";
 
-// openapi-fetch captures globalThis.fetch at import time, so the double has to
-// be installed before the imports above run — hence vi.hoisted.
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// jsdom implements no layout and therefore ships no
-// Element.prototype.scrollIntoView, which Radix's Select calls on the
-// highlighted option the moment the listbox opens. Stubbed in this file rather
-// than in src/test-setup.ts so that no other file's environment changes —
-// vitest gives each test file its own.
+// jsdom lacks scrollIntoView, which Radix Select calls on open; stubbed
+// here so no other file's environment changes.
 Element.prototype.scrollIntoView = () => {};
 
-// What POST /api/v1/operations/transfer answers with. The status is the only
-// thing this dialog is allowed to read (see isConflict).
+// What POST /api/v1/operations/transfer answers; only the status may be
+// read (see isConflict).
 let transferStatus = 201;
 
 const source: AccountWithBalance = {
@@ -66,8 +63,7 @@ function serve() {
     if (path.endsWith("/api/v1/accounts")) return json(200, [source, target]);
     if (path.endsWith("/api/v1/operations/transfer")) {
       if (transferStatus !== 201) {
-        // The shape a refusal really has: the server's own English prose,
-        // written for a log rather than for a reader of this dialog.
+        // The server's English log prose.
         return json(transferStatus, {
           error: "journal would become inconsistent: not enough quantity: have 4, need 10",
         });
@@ -87,8 +83,8 @@ async function openAndSubmit() {
     </QueryClientProvider>,
   );
   fireEvent.click(await screen.findByRole("button", { name: /Сбербанк/ }));
-  // Radix's Select opens on pointerdown, and jsdom has no PointerEvent to fire;
-  // the trigger's own keyboard path opens the same listbox.
+  // Radix's Select opens on pointerdown, which jsdom lacks; Enter opens it
+  // too.
   fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
   fireEvent.click(await screen.findByRole("option", { name: "ИИС" }));
   fireEvent.change(screen.getByLabelText(/Количество/), { target: { value: "10" } });
@@ -105,9 +101,8 @@ afterEach(() => {
   cleanup();
 });
 
-// The same defect #23 found in the trade dialog, on the endpoint next door: a
-// 409 says a replay refused and nothing finer, and here it does not even say
-// WHICH of the two accounts refused, since both journals are replayed.
+// #23 again: a 409 means a replay refused, and here not even which of the
+// two accounts.
 describe("TransferDialog: a journal the server would not replay", () => {
   it("says a journal did not add up, and never that the source is short of securities", async () => {
     transferStatus = 409;

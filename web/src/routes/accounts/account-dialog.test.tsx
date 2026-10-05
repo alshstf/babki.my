@@ -6,17 +6,15 @@ import { AccountDialog } from "./account-dialog";
 import type { SessionInfo } from "@/api/session";
 import type { AccountWithBalance } from "@/api/accounts";
 
-// openapi-fetch captures globalThis.fetch at import time
-// (`fetch: baseFetch = globalThis.fetch`), so the double has to be installed
-// *before* the imports above run — hence vi.hoisted.
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// A fresh Response per call: a single one handed to mockResolvedValue works
-// once and then throws, because a body can only be consumed once.
+// A fresh Response per call: a body can be read only once.
 function serve(status: number, body: unknown) {
   fetchMock.mockImplementation(() =>
     Promise.resolve(
@@ -72,9 +70,7 @@ afterEach(() => {
   fetchMock.mockReset();
 });
 
-// #95: whatever the server wrote in its error body was printed straight into
-// the red panel — English, and phrased for whoever reads the server's log
-// rather than for whoever is filling in this form.
+// #95: the server's English log prose was printed in the red panel.
 describe("AccountDialog — a refusal from the server", () => {
   it("says a new account was not created, in Russian", async () => {
     serve(400, {
@@ -89,9 +85,7 @@ describe("AccountDialog — a refusal from the server", () => {
   });
 
   it("says the changes were not saved, in Russian", async () => {
-    // A different sentence from the one above on purpose: «не удалось создать»
-    // over a form that was editing an account that already exists would be
-    // telling the reader about an event that was never attempted.
+    // «Не удалось создать» would be false over an edit.
     serve(404, { error: "not found" });
     open(account);
     fireEvent.change(screen.getByLabelText("Название"), { target: { value: "Другое имя" } });
@@ -102,13 +96,12 @@ describe("AccountDialog — a refusal from the server", () => {
   });
 });
 
-// Every field says what it is to a screen reader: a select names itself by its
-// label, not by the value it holds, and the other-currency box has a name too.
+// Every field has an accessible name: a select by its label, not its
+// value.
 describe("AccountDialog — every field is named", () => {
   it("names each field by its label", async () => {
     open();
-    // jsdom has no layout, and Radix's Select scrolls to the chosen item when
-    // the list opens (see income-dialog.test.tsx).
+    // jsdom lacks scrollIntoView, which Radix Select calls on open.
     Element.prototype.scrollIntoView = () => {};
     fireEvent.click(screen.getByRole("combobox", { name: "Валюта" }));
     fireEvent.click(await screen.findByRole("option", { name: "Другая…" }));

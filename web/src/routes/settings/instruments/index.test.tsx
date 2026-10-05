@@ -14,8 +14,8 @@ import { InstrumentsPage } from "./index";
 import type { SessionInfo } from "@/api/session";
 import type { Instrument } from "@/api/instruments";
 
-// openapi-fetch captures globalThis.fetch at import time, so the double has to
-// be installed before the imports above run — hence vi.hoisted.
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
@@ -24,8 +24,7 @@ const fetchMock = vi.hoisted(() => {
 
 type Route = { path: string; method?: string; status?: number; body?: unknown };
 
-// A fresh Response per call: mockResolvedValue's single object breaks on the
-// second, since a body can only be read once.
+// A fresh Response per call: a body can be read only once.
 function serve(routes: Route[]) {
   fetchMock.mockImplementation(
     (input: RequestInfo | URL, init?: RequestInit) => {
@@ -49,8 +48,7 @@ function serve(routes: Route[]) {
   );
 }
 
-// The bodies actually sent by `method` to a path, in order — what the screen
-// asked the server for, not what it drew afterwards.
+// The bodies sent by `method`, in order.
 async function bodiesSent(method: string): Promise<Record<string, unknown>[]> {
   const calls = fetchMock.mock.calls.filter(([input, init]) => {
     const sent =
@@ -141,11 +139,8 @@ beforeEach(() => {
 
 describe("InstrumentsPage", () => {
   it("lists the catalog and warns on a paper that can never be priced", async () => {
-    // THE REASON THIS SCREEN EXISTS. An ISIN is the field the quote worker
-    // searches the broker by, so a paper without one is never valued — and an
-    // unpriced holding goes into the account's total counted at nought,
-    // dragging it down by whatever the paper cost. The owner's Apple and Tesla
-    // are exactly this, and nothing in the interface could correct them.
+    // The quote worker searches by ISIN, so a paper without one is never
+    // valued and counts as nought in the total (the owner's Apple and Tesla).
     serve([
       {
         path: "/api/v1/instruments",
@@ -160,9 +155,7 @@ describe("InstrumentsPage", () => {
   });
 
   it("says nothing about a missing ISIN on a paper this program never prices", async () => {
-    // A currency has no quote coming either way, so the sentence would be true
-    // about the field and false about the consequence — which is the whole of
-    // what it says.
+    // A currency has no quote either way, so the sentence would be false.
     serve([
       {
         path: "/api/v1/instruments",
@@ -182,9 +175,7 @@ describe("InstrumentsPage", () => {
   });
 
   it("sends only the fields that changed", async () => {
-    // A PATCH carrying every field would rewrite values nobody touched —
-    // harmless while this form holds all of them, and a silent overwrite the
-    // moment it does not. The face value pair is not on this form at all.
+    // Only changed fields are sent; the face pair is not on this form.
     serve([
       {
         path: "/api/v1/instruments",
@@ -228,8 +219,7 @@ describe("InstrumentsPage", () => {
   });
 
   it("cannot save when nothing was changed", async () => {
-    // An empty PATCH is a round trip that can only fail or do nothing, and a
-    // save button that answers a form nobody touched invites both.
+    // No empty PATCH: Save does nothing for an untouched form.
     serve([
       {
         path: "/api/v1/instruments",
@@ -244,9 +234,8 @@ describe("InstrumentsPage", () => {
   });
 
   it("offers no editing to anyone but the owner", async () => {
-    // The catalog is instance-wide: correcting a row changes it for every
-    // member, and the server allows only the owner (403 otherwise). Said by the
-    // absence of the control rather than discovered by a save that fails.
+    // The catalog is instance-wide and only the owner may edit it (403
+    // otherwise): the control is absent.
     serve([
       {
         path: "/api/v1/instruments",
