@@ -4,18 +4,9 @@
 const knownCurrency = (currency: string) =>
   ["RUB", "USD", "EUR", "KZT", "GBP", "CHF", "CNY"].includes(currency);
 
-// Writes a number in a currency, however many digits the caller's own rule
-// asks for. It is the ONE place a currency becomes a sign or a code, shared by
-// formatWith below (an amount in minor units) and formatPriceIn (a quote, which
-// is a decimal string and not minor units at all) — so a dollar reads as «$» in
-// a money cell and as «$» in the price line under it, and a currency this
-// program does not style reads as its bare code in both. Two renderings of one
-// currency on one screen is exactly the drift this codebase keeps paying for.
-//
-// The digit options come from the caller because the two quantities genuinely
-// differ: an amount is an integer number of minor units and is always written
-// with the same fixed width, while a price is an unbounded decimal that picks
-// its own scale below a hundredth (see formatPrice).
+// Writes a number in a currency with the caller's digit options. The one place
+// a currency becomes a sign or a code, shared by formatWith (minor units) and
+// formatPriceIn (a decimal quote), so both read the same on one screen.
 function withCurrency(
   value: number,
   currency: string,
@@ -32,7 +23,7 @@ function formatWith(
   currency: string,
   fractionDigits: number,
 ): string {
-  // Normalize -0 to +0 to prevent "-0,00" formatting
+  // -0 would print as "-0,00".
   const normalized = amountMinor === 0 ? 0 : amountMinor;
   return withCurrency(normalized / 100, currency, {
     minimumFractionDigits: fractionDigits,
@@ -40,10 +31,8 @@ function formatWith(
   });
 }
 
-// How many fraction digits a money amount is written with in full, and in the
-// compact form the summary cards use. Two numbers rather than two literals
-// scattered about, because formatMinorCompact below is defined in terms of
-// BOTH: it is the full form it falls back to.
+// Fraction digits of a money amount written in full and in the compact form
+// the summary cards use; formatMinorCompact falls back to the full one.
 const FULL_FRACTION_DIGITS = 2;
 const COMPACT_FRACTION_DIGITS = 0;
 
@@ -51,16 +40,9 @@ export function formatMinor(amountMinor: number, currency: string): string {
   return formatWith(amountMinor, currency, FULL_FRACTION_DIGITS);
 }
 
-// Whether the compact form would render this amount's MAGNITUDE the way it
-// renders zero — asked of the formatter itself rather than worked out from a
-// threshold of its own. A threshold ("under half a major unit") would be a
-// second copy of Intl's rounding rule kept here, correct only for as long as
-// that rule is halfExpand, and wrong silently if it ever were not.
-//
-// Asked on the magnitude because a small negative renders as «-0 ₽», which is
-// a fake zero wearing a sign and would not compare equal to «0 ₽» — the one
-// shape this check must not miss, since formatWith's own -0 guard only catches
-// an amount that IS zero, not one that merely rounds to it.
+// Whether the compact form would render this amount's magnitude as zero,
+// asked of the formatter rather than of a threshold copying Intl's rounding.
+// On the magnitude, because a small negative renders as «-0 ₽».
 function compactWouldReadAsZero(amountMinor: number, currency: string): boolean {
   return (
     formatWith(Math.abs(amountMinor), currency, COMPACT_FRACTION_DIGITS) ===
@@ -68,47 +50,23 @@ function compactWouldReadAsZero(amountMinor: number, currency: string): boolean 
   );
 }
 
-// The most fraction digits a quantity or a price may carry: the scale the
-// backend stores them at (NUMERIC(30,10)). Both the validator below and every
-// guarantee in this file that a DERIVED value is one the form will accept back
-// are written from this single number rather than from copies of it — two
-// copies of one figure eventually drift apart, and this drift would surface as
-// a form complaining about a field the user never typed in.
+// The most fraction digits a quantity or price may carry, the backend's
+// NUMERIC(30,10). Everything here that promises a derived value the form will
+// accept back is written from this one number.
 const MAX_FRACTION_DIGITS = 10;
 
-// isPositiveDecimal validates a positive decimal string with up to
-// MAX_FRACTION_DIGITS fraction digits (matches backend NUMERIC(30,10)
-// validation for quantity fields).
+// isPositiveDecimal: a positive decimal with up to MAX_FRACTION_DIGITS
+// fraction digits, as the backend validates quantities.
 const DECIMAL_RE = new RegExp(`^\\d+(\\.\\d{1,${MAX_FRACTION_DIGITS}})?$`);
 
 export function isPositiveDecimal(value: string): boolean {
   return DECIMAL_RE.test(value) && Number(value) > 0;
 }
 
-// formatMinorCompact writes a money amount without its minor units: 1 385
-// 000,00 ₽ as «1 385 000 ₽». It is what the summary cards use, where the
-// kopecks of a seven-figure total are noise.
-//
-// A ZERO IT PRINTS IS A ZERO (#107). Dropping the minor units used to drop
-// them for a sum that is nothing BUT minor units too: forty kopecks printed as
-// «0 ₽», a number that is neither the sum nor zero — and on the headline total
-// card that arrived paired with signClass, so the reader was shown a green
-// zero, a figure and a colour contradicting each other. A small debt was worse
-// still: −40 rendered «-0 ₽», a fake zero wearing a sign, which formatWith's
-// own -0 guard does not catch because it only normalises an amount that IS
-// zero, not one that merely rounds to one.
-//
-// This is the same fake zero formatPrice already refuses for a sub-cent quote,
-// and it is refused the same way — by rendering the value rather than a zero.
-// The remedy differs from formatPrice's because the two quantities differ:
-// a price is an unbounded decimal and needs a significant-digit rendering with
-// no natural floor, while a money amount IS an integer number of minor units,
-// so its full form is always exactly FULL_FRACTION_DIGITS wide and is the whole
-// truth about it. Falling back to the full form is therefore not an
-// approximation of the compact one — it is the same number, written out.
-//
-// Rounding the amount is not on the table and never was: this function
-// formats, it does not compute, and the sum it is handed is the published one.
+// formatMinorCompact writes an amount without minor units (1 385 000,00 ₽ as
+// «1 385 000 ₽») for the summary cards. An amount that would read as zero is
+// written in full instead (#107): forty kopecks are not «0 ₽», and a small debt
+// is not «-0 ₽». The full form is the same number, not an approximation.
 export function formatMinorCompact(amountMinor: number, currency: string): string {
   if (amountMinor !== 0 && compactWouldReadAsZero(amountMinor, currency)) {
     return formatWith(amountMinor, currency, FULL_FRACTION_DIGITS);
@@ -116,136 +74,66 @@ export function formatMinorCompact(amountMinor: number, currency: string): strin
   return formatWith(amountMinor, currency, COMPACT_FRACTION_DIGITS);
 }
 
-// A quote below a hundredth, but not zero: whole part 0 — possibly written
-// with extra leading zeros ("00.0001"), which this function's own validator
-// two lines below accepts (`\d+` matches any run of digits) — fraction
-// starting "00", and a non-zero digit somewhere in it. Without the `0*`
-// prefix, "00.0001" would fall through to the ordinary two-fraction-digit
-// branch and print the fake zero this regex exists to prevent; the leading
-// zeros are never on the wire (decimal.String() emits none), but the
-// contract is the regex, not the sender — same standard as the underflow
-// guard below. Matched on the DIGITS rather than on the parsed double on
-// purpose — see formatPrice.
+// A quote below a hundredth but not zero, matched on the digits: the whole
+// part zero (leading zeros allowed, as the validator below accepts), the
+// fraction starting "00", a non-zero digit somewhere.
 const SUB_CENT_PRICE_RE = /^0*0\.00\d*[1-9]/;
 
-// How many digits of a sub-cent price are worth showing. Three is the same
-// order of detail two fraction digits give an ordinary quote (95,20 is four
-// significant digits, 0,05 is one), enough to tell 0,000123 from 0,000456 —
-// and unlike a fixed fraction-digit count it needs no ceiling: the price
-// picks its own scale.
+// Significant digits shown for a sub-cent price, about the detail two
+// fraction digits give an ordinary quote, with no ceiling on scale.
 const SUB_CENT_SIGNIFICANT_DIGITS = 3;
 
-// formatPrice renders a raw decimal-string price (a quote, not minor units)
-// as a ru-RU number. A price of a hundredth or more gets exactly two fraction
-// digits, e.g. "305.5" -> "305,50" — the ordinary share and bond quote, and
-// what every quote in the demo seed but one is.
-//
-// Below a hundredth those two digits would print "0,00" (#30): a number that
-// is neither the price nor zero, one cell away from the column where this
-// program refuses to publish a figure it cannot vouch for. So a sub-cent
-// price is rendered by significant digits instead — "0.0001" -> "0,0001",
-// "0.000123456" -> "0,000123" — and never as a zero. That branch is not held
-// in reserve for a currency this program has yet to meet: it runs every time
-// the demo stand draws the Freedom KZ account's positions, where WeWork is
-// quoted at $0.0025 after its bankruptcy (cmd/babki/seed.go), and a delisted
-// share reaches these digits the same way a coin does.
-//
-// The branch is chosen from the input STRING, not from the parsed double, for
-// the same reason the threshold exists at all: a decimal string small enough
-// to underflow to exactly 0 would compare as "not below a hundredth" and take
-// the ordinary branch, printing the very "0,00" this avoids.
-//
-// Returns null on unparseable input so callers can skip the hint entirely
-// rather than render garbage — an honest omission over a fake display.
+// formatPrice renders a decimal-string quote in ru-RU. A hundredth or more gets
+// two fraction digits ("305.5" -> "305,50"); below that, significant digits
+// ("0.0001" -> "0,0001", "0.000123456" -> "0,000123"), never "0,00" (#30). The
+// demo's WeWork at $0.0025 takes that branch. The branch is chosen from the
+// string, since a value small enough to underflow would compare as large. Null on
+// unparseable input.
 export function formatPrice(value: string): string | null {
   const parsed = parsePrice(value);
   return parsed && new Intl.NumberFormat("ru-RU", parsed.digits).format(parsed.num);
 }
 
-// The decision formatPrice and formatPriceIn share: is this string a price at
-// all, and how many digits of it are worth showing. ONE function rather than
-// two copies of the rule, because the two renderings of a quote differ only in
-// whether a currency is named beside it — a sub-cent quote that kept its
-// significant digits bare and lost them the moment it gained a «$» would be
-// #30 reopened by #76's own fix, and nothing about the number would say so.
-//
-// Null means there is nothing honest to render: input outside the shape a
-// price takes, or a value that underflows the double to exactly zero (see
-// below).
+// The decision formatPrice and formatPriceIn share: is this a price, and how
+// many digits are shown. One function, so a sub-cent quote keeps its digits with
+// or without a currency. Null for anything not shaped like a price, or a value
+// that underflows to zero.
 function parsePrice(value: string): { num: number; digits: Intl.NumberFormatOptions } | null {
   if (!/^\d+(\.\d+)?$/.test(value)) return null;
   const num = Number(value);
   if (!Number.isFinite(num)) return null;
   if (SUB_CENT_PRICE_RE.test(value)) {
-    // The digits said non-zero and the double says zero, so the value
-    // underflowed and there are no significant digits left to show. Out of
-    // reach from the wire — quotes are NUMERIC(30,10), whose smallest
-    // non-zero is 1e-10 — but this function's contract is the regex above,
-    // and "0" is not an answer it is allowed to give.
+    // The digits say non-zero and the double says zero: it underflowed. Not
+    // reachable from the wire (NUMERIC(30,10)), but "0" is never an answer.
     if (num === 0) return null;
     return { num, digits: { maximumSignificantDigits: SUB_CENT_SIGNIFICANT_DIGITS } };
   }
   return { num, digits: { minimumFractionDigits: 2, maximumFractionDigits: 2 } };
 }
 
-// formatPriceIn is formatPrice with the currency the price is quoted in said
-// out loud: "305.5" in USD as «305,50 $».
-//
-// This is #76. A quote is money per unit for a share or an ETF, and the number
-// alone does not say in which money. Under the position's own currency that
-// went unnoticed, because the amount above it carried the same sign; in the
-// base-currency display mode the amount above converts and this number does
-// not — it is the quote, published exactly as quoted — so a foreign share
-// printed «274 950,00 ₽» with a bare «305,50» underneath, and nothing on the
-// row said the second figure was dollars. #32 had already fixed the same shape
-// for bonds by adding «%» and left this half open.
-//
-// It formats and computes nothing: the currency is a code read off the payload
-// (Position.market_value_source_currency, else market_value_currency — see the
-// contract's description of Position.price) and the number is the wire's own
-// string. Deriving a per-unit money figure for a bond WOULD be arithmetic, and
-// is refused elsewhere for that reason.
-//
-// Null exactly when formatPrice is null, and for the same reasons: one parse
-// answers both.
+// formatPriceIn is formatPrice with the quote's currency named: "305.5" in USD
+// as «305,50 $» (#76). In base-currency mode the amount above converts and the
+// quote does not, so a bare number would hide that it is dollars. It computes
+// nothing: the currency is read off the payload (market_value_source_currency,
+// else market_value_currency). Null exactly when formatPrice is.
 export function formatPriceIn(value: string, currency: string): string | null {
   const parsed = parsePrice(value);
   return parsed && withCurrency(parsed.num, currency, parsed.digits);
 }
 
-// MAX_AMOUNT_MINOR is the largest sum of money, in minor units, any field here
-// will hand to the server: 10^15 — ten trillion whole roubles or dollars — which
-// is the figure the server itself refuses past (money.MaxAmountMinor in Go, one
-// number for the balance a user records and the operation he enters, because
-// they are the same money on the same screen). The server's copy is the one that
-// matters; this one exists so the field refuses at the keystroke instead of
-// after a round trip.
-//
-// It also settles what the parser below could not say before. Its magnitude is
-// computed as a double, and a double stops being exact above
-// Number.MAX_SAFE_INTEGER (≈9.007×10^15): past that the parser returned a number
-// that was NOT what had been typed and handed it on as if it were — the silent
-// falsification multiplyToMinor already refuses to commit. This bound sits below
-// MAX_SAFE_INTEGER, so every value the parser now returns is exact, and no
-// separate safe-integer check is needed to make that true.
+// MAX_AMOUNT_MINOR is the largest sum a field sends: 10^15 minor units, the
+// server's money.MaxAmountMinor, here so the field refuses at the keystroke. It is
+// also below Number.MAX_SAFE_INTEGER, so every value the parser returns is
+// exact.
 export const MAX_AMOUNT_MINOR = 1_000_000_000_000_000;
 
-// Why an amount field cannot send what was typed. "malformed" — the text is not
-// a number of the shape the field takes at all; "tooLarge" — it is one, and it
-// is past MAX_AMOUNT_MINOR.
-//
-// They are two different sentences to the person typing, and telling them apart
-// is the whole reason this type exists: a field answering «не удалось разобрать
-// сумму» to a perfectly well-formed number states something false, and a caption
-// naming a cause that is not the cause is the mistake this codebase has been
-// caught by more than once. Callers pick the wording; this only says which.
+// Why an amount field cannot send what was typed: "malformed" (not a number
+// of the field's shape) or "tooLarge" (past MAX_AMOUNT_MINOR). Two different
+// sentences; callers pick the wording.
 export type AmountRefusal = "malformed" | "tooLarge";
 
-// parseAmount is the one parser behind both exports below, so what counts as an
-// acceptable amount is stated once. Two parsers, one answering with the number
-// and one with the reason, would eventually disagree about a value — and would
-// disagree silently, the field refusing while the caption explained why it had
-// not.
+// parseAmount is the one parser behind both exports below, so the number and
+// the reason cannot disagree.
 function parseAmount(input: string): { minor: number } | { refusal: AmountRefusal } {
   const cleaned = input.replace(/\s/g, "").replace(",", "."); // \s matches NBSP (U+00A0) too
   if (!/^-?\d+(\.\d{1,2})?$/.test(cleaned)) {
@@ -255,22 +143,19 @@ function parseAmount(input: string): { minor: number } | { refusal: AmountRefusa
   const fracPadded = (frac + "00").slice(0, 2);
   const sign = whole.startsWith("-") ? -1 : 1;
   const wholeAbs = whole.replace("-", "");
-  // Compute magnitude first to avoid IEEE -0; integer exactness holds below
-  // Number.MAX_SAFE_INTEGER, and the bound checked immediately below keeps every
-  // value this returns well inside that.
+  // Magnitude first, avoiding IEEE -0; exact below MAX_SAFE_INTEGER, which
+  // the bound below keeps.
   const magnitude = Number(wholeAbs) * 100 + Number(fracPadded);
-  // Compared as a magnitude, so a debt of the same size is refused exactly as an
-  // asset of it is. A whole part of hundreds of digits makes this Infinity,
-  // which is past the bound like anything else.
+  // On the magnitude, so a debt is bounded like an asset; a huge whole part
+  // is Infinity and fails too.
   if (magnitude > MAX_AMOUNT_MINOR) {
     return { refusal: "tooLarge" };
   }
   return { minor: magnitude === 0 ? 0 : sign * magnitude };
 }
 
-// minorToInput is the size of an amount as an amount field takes it back —
-// «2900», «123.45» — so a dialog opened on a recorded operation shows what was
-// recorded. The sign is the dialog's to apply, as it is on a new entry.
+// minorToInput is an amount's size as an amount field takes it back
+// («2900», «123.45»); the dialog applies the sign.
 export function minorToInput(amountMinor: number): string {
   const digits = String(amountMinor).replace("-", "").padStart(3, "0");
   const whole = digits.slice(0, -2);
@@ -278,17 +163,15 @@ export function minorToInput(amountMinor: number): string {
   return fraction === "00" ? whole : `${whole}.${fraction}`;
 }
 
-// parseToMinor accepts "1 234,56" / "1234.56" / "-92 000"; returns null on junk
-// and on a sum past MAX_AMOUNT_MINOR — anything it does not return a number for,
-// the field must not send. amountRefusal says which of the two it was.
+// parseToMinor accepts "1 234,56", "1234.56", "-92 000"; null on junk and past
+// MAX_AMOUNT_MINOR (amountRefusal says which).
 export function parseToMinor(input: string): number | null {
   const parsed = parseAmount(input);
   return "minor" in parsed ? parsed.minor : null;
 }
 
-// amountRefusal reports why an amount field cannot send `input`, or null when it
-// can — the companion of parseToMinor returning null, and derived from the same
-// parse so the two cannot come to different verdicts.
+// amountRefusal says why an amount cannot be sent, or null; from the same
+// parse as parseToMinor.
 export function amountRefusal(input: string): AmountRefusal | null {
   const parsed = parseAmount(input);
   return "refusal" in parsed ? parsed.refusal : null;
@@ -300,33 +183,23 @@ export function signClass(amountMinor: number): string {
   return "text-muted-foreground";
 }
 
-// Parses a non-negative plain decimal string ("10", "305.5", "0.001") into an
-// exact integer mantissa plus its decimal-digit count. No sign, no exponent,
-// no thousands separators — trade quantity/price fields are validated with
-// their own stricter regex before reaching here; this parser is intentionally
-// a bit more permissive (unbounded decimal digits) so multiplyToMinor stays
-// reusable. Returns null for anything that isn't a bare non-negative decimal.
+// Parses a non-negative plain decimal ("10", "305.5", "0.001") into an exact
+// mantissa and digit count; no sign, exponent or separators. Unbounded digits so
+// multiplyToMinor stays reusable; fields validate with a stricter regex first.
 function parseDecimalString(input: string): { mantissa: bigint; decimals: number } | null {
   if (!/^\d+(\.\d+)?$/.test(input)) return null;
   const [wholePart, fracPart = ""] = input.split(".");
   return { mantissa: BigInt(wholePart + fracPart), decimals: fracPart.length };
 }
 
-// How many fraction digits a derived price or percentage is written with at
-// minimum — two, so 980 prints as "980.00" and 98 as "98.00", the way a quote
-// is written everywhere else on this screen and in the broker's terminal the
-// number was copied out of. It is a MINIMUM and never a ceiling: renderDecimal
-// keeps every digit the exact value actually has, because the money side of
-// this pair is on its way into a cost basis and a dropped digit there is money
-// the position never gets back.
+// Minimum fraction digits of a derived price or percentage ("980.00",
+// "98.00"); a minimum only, since renderDecimal keeps every digit the exact
+// value has.
 const MIN_DERIVED_FRACTION_DIGITS = 2;
 
-// renderDecimal writes an exact BigInt mantissa with `decimals` decimal places
-// as a plain decimal string, trailing zeros trimmed down to (but never below)
-// MIN_DERIVED_FRACTION_DIGITS. The point separator is "." rather than the
-// Russian ",", because what this produces goes straight into an <input> whose
-// contents are validated by isPositiveDecimal and sent on the wire — it is a
-// value, not a rendering, and formatPrice is what turns a value into Russian.
+// renderDecimal writes an exact mantissa with `decimals` places as a plain
+// decimal, trailing zeros trimmed to MIN_DERIVED_FRACTION_DIGITS. A "." separator:
+// it is an input value for the wire, not a rendering.
 function renderDecimal(mantissa: bigint, decimals: number): string {
   const digits = mantissa.toString().padStart(decimals + 1, "0");
   const whole = digits.slice(0, digits.length - decimals);
@@ -335,163 +208,71 @@ function renderDecimal(mantissa: bigint, decimals: number): string {
   return `${whole}.${frac.padEnd(MIN_DERIVED_FRACTION_DIGITS, "0")}`;
 }
 
-// How many digits a rendered decimal string carries after the point. Counted
-// on the RENDERED text rather than on the decimal count the arithmetic was
-// carried out at, because renderDecimal trims trailing zeros: 98,000000 % of a
-// 1 000,00 ₽ face is computed at ten decimal places and written as "980.00",
-// and judging that by the width of its intermediate would refuse an exact,
-// perfectly ordinary price.
+// Fraction digits of a rendered decimal, counted on the text, since
+// renderDecimal trims zeros ("980.00" from a ten-place computation).
 function fractionDigitsOf(value: string): number {
   const point = value.indexOf(".");
   return point < 0 ? 0 : value.length - point - 1;
 }
 
-// bondPriceFromPercent converts an exchange's bond quote — a PERCENTAGE OF
-// FACE VALUE, e.g. "98" — into the money one bond costs, as a decimal string
-// in the face value's currency: 98 % of a 1 000,00 ₽ face is "980.00".
+// bondPriceFromPercent turns a bond quote in percent of face ("98") into the
+// money one bond costs in the face currency: 98 % of a 1 000,00 ₽ face is
+// "980.00" (#77). Entered as money per unit, 98 would record a cost basis ten
+// times too small.
 //
-// This is #77. A broker quotes a bond in percent and nothing about the number
-// says so: 98 is a perfectly good price, a form that asks for «цена за
-// единицу» accepts it without a murmur, and 10 bonds bought at it record
-// 980 ₽ instead of 9 800 ₽ — a cost basis ten times too small, and the
-// expense side of a tax calculation with it.
+// It is the first two factors of the server's marketValue (faceValueMinor ×
+// price/100), exact: the product of minor units and a finite decimal is finite and
+// written in full. Only multiplyToMinor's total rounds, half away from zero like
+// money.Minor (#94): 98,0005 % of a 1 000,00 ₽ face is 98 001 kopecks on both
+// sides.
 //
-// Its ALGEBRA is the server's own statement of the same arithmetic
-// (marketValue in internal/portfolio/market_value.go: faceValueMinor × price/100 ×
-// quantity, in the FACE currency): this function does exactly its first two
-// factors and stops there, the quantity being applied afterwards by
-// multiplyToMinor. Not "agrees to within a rounding step": THIS function
-// rounds nothing at all. The exact product of an integer number of minor
-// units and a finite decimal percentage is itself a finite decimal, so it is
-// written out in full however many digits that takes, and the only place a
-// fraction of a kopeck can be dropped is the total — once, exactly as it
-// always was for a share.
-//
-// That last step now rounds the same way on both sides (#94): multiplyToMinor
-// rounds half away from zero, which is what the server's money.Minor
-// (internal/platform/money/money.go) has always done. 98,0005 % of a
-// 1 000,00 ₽ face, one bond, is 980,005 ₽ exactly, and both sides make 98 001
-// kopecks of it. The two figures still answer different questions — what this
-// trade cost versus what the position is worth today — so they are free to
-// differ for honest reasons, such as a quote that moved; what they are no
-// longer free to do is differ because one of them truncated.
-//
-// Returns null rather than a number whenever there is no conversion to
-// publish. A malformed percentage, a percentage of exactly zero, or a face
-// value that is absent, zero or negative: any of the three is refused rather
-// than multiplied, because 0 × anything is 0 and a fabricated zero in a price
-// field is precisely the plausible-looking number this project does not
-// publish — that holds whichever of the two factors is the zero one. And an
-// exact price too fine to be written down — see the digit ceiling at the end
-// of the function. The caller's job is then to say what is missing — never to
-// show the percentage as if it were money.
+// Null when there is nothing to publish: a malformed or zero percentage, a face
+// that is absent, zero or negative, or an exact price too fine to store (see the
+// end).
 export function bondPriceFromPercent(percentOfFace: string, faceValueMinor: number): string | null {
   const percent = parseDecimalString(percentOfFace);
   if (!percent || percent.mantissa === 0n) return null;
   if (!Number.isSafeInteger(faceValueMinor) || faceValueMinor <= 0) return null;
-  // Two divisions by a hundred, and they are different divisions: one takes
-  // the face value from minor units into major ones, the other takes the
-  // quote from percent into a fraction. Folding them into a single /100 is
-  // the off-by-a-hundred this whole function exists to prevent, so they are
-  // spelled out as two separate decimal shifts of two each.
+  // Two different divisions by a hundred, minor to major and percent to
+  // fraction, kept apart: folding them is the error this function prevents.
   const price = renderDecimal(BigInt(faceValueMinor) * percent.mantissa, percent.decimals + 2 + 2);
-  // The same guarantee the percentage direction gives (see
-  // PERCENT_FRACTION_DIGITS): what this function returns is always a value the
-  // form will take back. A percentage fine enough — "98.0000000001" against a
-  // 1,00 ₽ face — makes an exact price with more fraction digits than a price
-  // is stored with, and isPositiveDecimal then rejects it, so the dialog would
-  // complain about a price field the user never typed in and cannot correct
-  // from the percentage he did type. Rounding it to fit is not on the table:
-  // this number is on its way into a cost basis, and this function's whole
-  // claim is that it drops nothing. So the conversion is refused instead, the
-  // money field is left empty, and the percentage that could not be converted
-  // stays on screen where its author can see it.
+  // A percentage fine enough gives an exact price with more digits than a
+  // price is stored with, which the form would refuse; refused here instead of
+  // rounded, leaving the typed percentage visible.
   return fractionDigitsOf(price) > MAX_FRACTION_DIGITS ? null : price;
 }
 
-// How many fraction digits the derived PERCENTAGE is computed to. The scale
-// prices are stored at and the ceiling isPositiveDecimal enforces on what the
-// field will accept back — one and the same number, MAX_FRACTION_DIGITS — so
-// the WIDTH of a value this function produces never exceeds one the form
-// would take. The money direction gives the same guarantee by refusing
-// anything wider; here it is had by construction, since a quotient computed
-// to N places has N.
-//
-// Width is not the only thing isPositiveDecimal checks, though, and rounding
-// to N places can still produce a string that check refuses outright: a price
-// too small to move the percentage at this many places — "0.0000000001" ₽
-// against a face that makes it round to zero at ten digits — renders as
-// "0.00", which isPositiveDecimal's own positivity clause rejects. This
-// function does not guard against that case the way bondPriceFromPercent
-// guards its own zero: its output is a display-only derived value, shown but
-// never itself submitted, so a misleading "0.00" here costs a stale caption,
-// not a fabricated cost basis.
+// Fraction digits the derived percentage is computed to: the stored price
+// scale, so its width always fits what the field accepts. A price small enough
+// can still round to "0.00", which the field would refuse; acceptable, since this
+// value is a display-only caption, never submitted.
 const PERCENT_FRACTION_DIGITS = MAX_FRACTION_DIGITS;
 
-// bondPercentFromPrice is the same conversion read backwards: given the money
-// one bond costs, what percentage of face is the exchange quoting? 980 ₽
-// against a 1 000,00 ₽ face is "98.00".
-//
-// The direction matters for where a rounding may live. Percent → money is
-// always exact (see above) and is the figure that gets recorded; money →
-// percent need not be, because a face value whose denominator is not built
-// out of 2s and 5s makes the quotient non-terminating — 100 ₽ against a
-// 3,00 ₽ face is 3333,333… %. That last digit is therefore rounded
-// half-up at PERCENT_FRACTION_DIGITS, and it is allowed to be: a percentage
-// is not money (the same standing exception that lets the positions screen
-// compute a profit percentage in the browser), and this particular percentage
-// is a caption on a number the user typed rather than the number itself. What
-// gets sent is always the money price, exactly as entered.
-//
-// Rounded half-away-from-zero rather than truncated, which for a
-// non-negative quotient is floor(n/d + 1/2) — written as (2n + d) / 2d so the
-// halving happens in integers and no double is created on the way.
+// bondPercentFromPrice reads the conversion backwards: 980 ₽ against a 1 000,00 ₽
+// face is "98.00". Money to percent need not terminate (100 ₽ against a 3,00 ₽
+// face is 3333,333… %), so the last digit is rounded half up at
+// PERCENT_FRACTION_DIGITS; a percentage is a caption, and the money price is what
+// is sent. Computed as (2n + d) / 2d in integers.
 export function bondPercentFromPrice(pricePerUnit: string, faceValueMinor: number): string | null {
   const price = parseDecimalString(pricePerUnit);
   if (!price) return null;
   if (!Number.isSafeInteger(faceValueMinor) || faceValueMinor <= 0) return null;
-  // percent = price / (faceValueMinor / 100) × 100 = price × 10000 / faceValueMinor.
+  // percent = price × 10000 / faceValueMinor.
   const numerator = price.mantissa * 10_000n * 10n ** BigInt(PERCENT_FRACTION_DIGITS);
   const denominator = BigInt(faceValueMinor) * 10n ** BigInt(price.decimals);
   return renderDecimal((2n * numerator + denominator) / (2n * denominator), PERCENT_FRACTION_DIGITS);
 }
 
-// multiplyToMinor computes qty × price as integer minor units (e.g. kopecks)
-// with no floating-point arithmetic anywhere in the path. Both operands are
-// non-negative decimal strings (trade quantity and price-per-unit); the
-// caller applies the buy/sell sign afterwards.
+// multiplyToMinor computes qty × price in integer minor units with BigInt only;
+// both operands are non-negative decimal strings and the caller applies the sign.
 //
-// Algorithm: parse each operand into a BigInt mantissa + decimal-digit count,
-// multiply the mantissas as BigInt (exact — no float rounding is possible),
-// then reduce the combined decimal-digit count down to 2 (minor units).
+// The reduction to two decimals rounds half away from zero, the server's
+// money.Minor rule (#94), so a trade's cost and the server's valuation agree to the
+// kopeck. For a non-negative magnitude negated afterwards that is half away from
+// zero on the signed figure. (2n + d) / 2d keeps the halving in integers.
 //
-// THE REDUCTION ROUNDS HALF AWAY FROM ZERO, WHICH IS THE SERVER'S RULE (#94).
-// money.Minor in Go (internal/platform/money/money.go) rounds every figure the
-// server publishes that way — decimal.Decimal.Round(0)'s own behaviour — and
-// this is the same arithmetic on the same money, so it has to reach the same
-// integer. It used to truncate: 98,0005 % of a 1 000,00 ₽ face is 980,005 ₽
-// for one bond, from which this side took 98 000 kopecks while the server's
-// valuation of that identical holding took 98 001. One kopeck, always, and
-// invisible — which is exactly the shape this codebase names as the defect
-// that eventually bites: two independent computations of one value.
-//
-// Half away from zero rather than half up, because the two differ on the
-// negative side and this program's rule is the first: a debt's magnitude is
-// never shrunk by rounding. Both operands here are non-negative by contract
-// (the caller negates the result for a buy — see trade-dialog.tsx), so what is
-// computed below is a MAGNITUDE, and rounding a magnitude away from zero and
-// negating afterwards is precisely half away from zero on the signed figure.
-//
-// Written as (2n + d) / 2d so the halving happens in integers and no double is
-// created on the way — the same form bondPercentFromPrice uses, and for the
-// same reason. Sub-minor-unit remainders below a half still vanish: 1 × 0.001
-// is 0,1 of a kopeck and rounds to 0 minor units.
-//
-// Returns null on malformed input or on overflow past Number.MAX_SAFE_INTEGER
-// (BigInt math can't silently lose precision the way float math would, so
-// overflow is detected exactly). The bound is checked AFTER the rounding, on
-// the figure actually returned, for the reason money.Minor gives for checking
-// its own after rounding: the rounded figure is the one that gets published.
+// Null on malformed input or past Number.MAX_SAFE_INTEGER, checked after rounding
+// on the figure returned.
 export function multiplyToMinor(qty: string, price: string): number | null {
   const q = parseDecimalString(qty);
   const p = parseDecimalString(price);
@@ -507,9 +288,8 @@ export function multiplyToMinor(qty: string, price: string): number | null {
   } else if (totalDecimals < MINOR_DECIMALS) {
     minorBig = productMantissa * 10n ** BigInt(MINOR_DECIMALS - totalDecimals);
   } else {
-    // floor(n/d + 1/2) — half away from zero for the non-negative n this
-    // function accepts, since BigInt division of a non-negative numerator
-    // truncates toward zero and so is a floor.
+    // floor(n/d + 1/2): BigInt division of a non-negative numerator is a
+    // floor.
     const divisor = 10n ** BigInt(totalDecimals - MINOR_DECIMALS);
     minorBig = (2n * productMantissa + divisor) / (2n * divisor);
   }

@@ -32,53 +32,25 @@ import { InstrumentPicker } from "./instrument-picker";
 import { MAX_NOTE } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
 
-// Why a bond's percentage-of-face field cannot be converted into money, or
-// null when it can. Four causes, and they get four different sentences on
-// screen for the reason this project keeps relearning: a caption that names
-// the wrong missing thing is a wrong answer wearing the shape of a right one,
-// and «номинал не записан» over a bond whose номинал is recorded in another
-// currency is exactly that.
+// Why a bond's percentage-of-face field cannot convert into money, or null.
+// Four causes, four sentences: «номинал не записан» over a face recorded in
+// another currency would name the wrong missing thing.
 type FaceGap =
   | "no_face_value"
   | "bad_face_value"
   | "no_face_currency"
   | "face_currency_mismatch";
 
-// faceGapOf answers, for the instrument currently picked, whether the percent
-// field can do its job — and if not, which of the four things is in the way.
-// Null means the conversion is available; null is also what every non-bond
-// gets, because the field it describes is not rendered for them at all.
-//
-// The order is the order the causes stop the conversion in, so the sentence a
-// reader sees is about the FIRST thing missing rather than an arbitrary one:
-// with no face value at all, its currency is not the interesting news.
-//
-// A face value of zero or less gets a cause of its own rather than being
-// folded into "not recorded": the catalog DOES hold a number for it, so a
-// sentence saying nobody wrote one down would be false, and the remedy is a
-// different one (fix the instrument, not merely type a price here). It cannot
-// simply be multiplied either — every percentage of zero is zero, and a price
-// field filled with 0,00 ₽ is the plausible-looking fabrication this project
-// refuses to print.
-//
-// The currency comparison is against the instrument's own currency because
-// that is the currency the operation is recorded in (see submit below), and
-// therefore the currency the amount this dialog computes has to be in. The
-// server draws the same line on the same field for the same reason: a bond's
-// market value is denominated in its face currency, NOT in the quote's, and a
-// face value with no currency at all buys no valuation (marketValue in
-// internal/portfolio/market_value.go). A face value in euros cannot price a trade
-// booked in rubles without an fx rate, and there is none in this dialog.
-// An EMPTY face currency counts as none, and that clause is the whole reason
-// this comment names it: an empty string is not null, so without it the
-// instrument falls past this check into the mismatch one below and is captioned
-// «Номинал в , а сделка в RUB» — a sentence naming a currency that is not there,
-// which in this repository is not a typo but the defect class itself. The API
-// refuses to store one now (checkFacePair in internal/instrument/http.go, and
-// the CHECK constraint in migration 0012), so no server this client talks to
-// should produce it — which is the same standing this file already gives a null
-// face currency, and for the same reason: a client is a separate program from
-// the API version in front of it.
+// faceGapOf says whether the percent field can convert for the picked
+// instrument, and if not, the first thing in the way. Null means it can, and for
+// every non-bond (the field is not shown). A face of zero or less is its own
+// cause: a number is recorded, and every percentage of zero is a fabricated 0,00
+// ₽. The face currency must equal the instrument's, the currency the trade is
+// booked in, since the dialog has no fx rate (the server values a bond in its
+// face currency too, see marketValue). An empty face currency counts as none, or
+// the mismatch sentence would read «Номинал в , а сделка в RUB»; the API refuses
+// one now (checkFacePair, migration 0012), but a client may face an older
+// server.
 function faceGapOf(instrument: Instrument | null): FaceGap | null {
   if (!instrument || instrument.type !== "bond") return null;
   if (instrument.face_value_minor == null) return "no_face_value";
@@ -88,10 +60,8 @@ function faceGapOf(instrument: Instrument | null): FaceGap | null {
   return null;
 }
 
-// The sentence that goes under the two price fields when the conversion is
-// unavailable. Written as a switch over literal keys rather than a lookup
-// table so every key stays a literal at the t() call site — the only shape
-// scripts/check-i18n.mjs can verify.
+// The sentence under the price fields when conversion is unavailable; literal
+// t() keys for scripts/check-i18n.mjs.
 function faceGapMessage(
   t: (key: string, opts?: Record<string, string>) => string,
   gap: FaceGap,
@@ -112,31 +82,11 @@ function faceGapMessage(
   }
 }
 
-// What the fee field says when the sum typed into it is past the bound, and
-// the whole of it is WHICH CURRENCY the bound is named in (#109).
-//
-// The bound itself is currency-agnostic — MAX_AMOUNT_MINOR is 10^15 minor
-// units of whatever the operation is denominated in, and the server refuses
-// past the same figure (money.MaxAmountMinor) — so naming a currency here is a
-// claim about the fee, not about the limit. The fee travels on the operation
-// this dialog posts, and that operation's currency follows the INSTRUMENT
-// rather than the account: a USD-denominated fund inside a RUB brokerage
-// account is ordinary, and submit() sends `currency: instrument.currency`
-// because a position's currency is fixed by its first operation. Formatting
-// the ceiling in the account's currency therefore refused a dollar fee by
-// naming a limit in rubles — the right number wearing the wrong sign, which on
-// a screen about money is a different number.
-//
-// With no instrument picked there IS no currency yet, and the second sentence
-// says so instead of guessing one. Reachable: the fee field is enabled from
-// the moment the dialog opens and nothing forces the picker to come first. The
-// account's currency is available and is exactly the wrong answer; a
-// currency-free rendering of the number would leave the reader to guess
-// whether it was units or kopecks. So the message names the number's owner
-// instead — pick an instrument and the limit will be named in its currency.
-//
-// Two literal keys rather than one call with a computed key, so both stay
-// verifiable by scripts/check-i18n.mjs.
+// The fee field's message past the bound, named in the instrument's currency
+// (#109): the operation is in the instrument's currency, not the account's (a USD
+// fund in a RUB account), so a limit in roubles over a dollar fee would be the
+// wrong sign. With no instrument picked there is no currency yet, and the message
+// says to pick one. Two literal keys for scripts/check-i18n.mjs.
 function feeCeilingMessage(
   t: (key: string, opts?: Record<string, string>) => string,
   instrument: Instrument | null,
@@ -159,8 +109,7 @@ export function TradeDialog({
   onOpenChange: (open: boolean) => void;
   account: AccountWithBalance;
   side: "buy" | "sell";
-  // The recorded trade this dialog was opened on, to be corrected in place,
-  // and the paper it names.
+  // The recorded trade being corrected in place, and its paper.
   editing?: Operation;
   editingInstrument?: Instrument | null;
 }) {
@@ -169,20 +118,13 @@ export function TradeDialog({
 
   const [instrument, setInstrument] = useState<Instrument | null>(null);
   const [quantity, setQuantity] = useState("");
-  // MONEY PER UNIT, always, for every instrument type — this is the one price
-  // this dialog records and the one the total is struck from. A bond's
-  // percentage of face is an input for it (see percentShown), never a
-  // substitute: `price` goes on the wire as Operation.price, which is money
-  // per unit everywhere else in this application — the journal renders a row
-  // as «quantity × price» beside its amount, and a percentage there would be
-  // a multiplication that visibly does not come out.
+  // Money per unit for every type: the one price recorded and the one the total
+  // uses. A bond's percentage is an input to it (see percentShown), never a
+  // substitute: the journal shows «quantity × price» beside the amount.
   const [price, setPrice] = useState("");
-  // The percentage-of-face field WHILE THE USER IS TYPING IN IT, and null the
-  // rest of the time — when it is null the field shows the percentage derived
-  // from `price`, which is what keeps the pair honest with no synchronising
-  // code: outside of its own edits the percent field is a pure function of
-  // the money one, so the two cannot drift apart, and a change of instrument
-  // (a different face value) re-answers it on its own.
+  // The percent field's text while the user types in it, null otherwise; then
+  // the field shows the percentage derived from `price`, so the two cannot drift
+  // and a new face value re-derives it.
   const [percentInput, setPercentInput] = useState<string | null>(null);
   const [fee, setFee] = useState("");
   const [occurredOn, setOccurredOn] = useState(localToday());
@@ -204,34 +146,21 @@ export function TradeDialog({
 
   const isBond = instrument?.type === "bond";
   const faceGap = faceGapOf(instrument);
-  // The face value this dialog multiplies by, and null when there is none it
-  // may use. No gap means faceGapOf has already established everything this
-  // conversion needs: a face value is recorded, it is positive, and it is
-  // denominated in the very currency the trade will be booked in.
+  // The face value used for conversion, or null; no gap means it is recorded,
+  // positive and in the trade's currency.
   const faceValueMinor = isBond && faceGap === null ? (instrument.face_value_minor ?? null) : null;
   const canConvertFace = faceValueMinor !== null;
 
-  // The percent field's displayed value. Its own draft while it is being
-  // edited; otherwise whatever percentage the money price works out to.
+  // The percent field's value: its draft while edited, else derived from the
+  // money price.
   const percentShown =
     percentInput ?? (canConvertFace ? (bondPercentFromPrice(price, faceValueMinor) ?? "") : "");
 
-  // The two halves of the link. Each sets its own field and re-derives the
-  // other; neither is allowed to set only itself, which is the whole point of
-  // showing both. Editing the money field drops the percent draft so the
-  // percentage goes back to following the money.
-  //
-  // A percentage that does not convert — «98,5», typed with the Russian
-  // decimal comma this application accepts nowhere — EMPTIES the money field
-  // rather than leaving the last value that did convert standing there. That
-  // costs a user his typing, and it is still the right way round: the money
-  // field is the one that gets recorded, so a stale 980,00 sitting beside a
-  // freshly typed 98,5 would leave the Buy button enabled over a price the
-  // user can plainly see is not the one he wrote — a wrong cost basis, entered
-  // in silence, which is the exact failure this pair of fields was built to
-  // end. Emptied, the price is invalid, the button is disabled and
-  // «Проверьте количество и цену» appears. The price is retyped; nothing wrong
-  // is recorded.
+  // Each field sets itself and re-derives the other; editing money drops the
+  // percent draft. A percentage that does not convert («98,5», with the comma
+  // this application does not accept) empties the money field rather than leaving
+  // a stale price under the Buy button: the price becomes invalid and the button is
+  // disabled.
   const changePercent = (value: string) => {
     setPercentInput(value);
     if (!canConvertFace) return;
@@ -241,10 +170,8 @@ export function TradeDialog({
     setPercentInput(null);
     setPrice(value);
   };
-  // A new instrument brings a new face value, so a percentage typed against
-  // the old one describes nothing. Dropping the draft re-derives it from the
-  // money price under the new face value instead of leaving a stale number
-  // beside a live one.
+  // A new instrument brings a new face value, so the percent draft is
+  // dropped and re-derived.
   const changeInstrument = (picked: Instrument) => {
     setInstrument(picked);
     setPercentInput(null);
@@ -254,18 +181,14 @@ export function TradeDialog({
   const priceValid = isPositiveDecimal(price);
   const feeParsed = fee.trim() === "" ? 0 : parseToMinor(fee);
   const feeValid = feeParsed !== null && feeParsed >= 0;
-  // Read through the same "blank means no fee" rule as feeParsed above, so the
-  // field cannot complain about a fee it just accepted as zero. A fee past the
-  // bound parses perfectly well, and «проверьте комиссию» would leave its author
-  // checking a number that is not wrong in any way he can see (see
-  // AmountRefusal).
+  // Blank means no fee, as in feeParsed, so the field never complains about a
+  // fee it accepted; a fee past the bound is reported as such, not as malformed
+  // (see AmountRefusal).
   const feeRefusal = fee.trim() === "" ? null : amountRefusal(fee);
 
-  // A PREVIEW, and nothing that is recorded: the request carries quantity and
-  // price, and the server works the amount out in its own rounding (see
-  // CreateOperationRequest.amount_minor). The two are held to one table of
-  // examples (src/lib/testdata/trade-amounts.json), so what is previewed here is
-  // what the server records — but the server's figure is the lot's cost.
+  // A preview only: the server works the amount out from quantity and price in
+  // its own rounding (CreateOperationRequest.amount_minor). Both are held to one
+  // table (src/lib/testdata/trade-amounts.json).
   const totalMinor = qtyValid && priceValid ? multiplyToMinor(quantity, price) : null;
   const overflow = qtyValid && priceValid && totalMinor === null;
 
@@ -287,11 +210,8 @@ export function TradeDialog({
         occurred_on: occurredOn,
         quantity,
         price,
-        // The operation's currency follows the instrument being traded (a
-        // position's currency is fixed by its first operation and must stay
-        // consistent thereafter — see internal/portfolio/engine.go), not the
-        // account's own currency, which can differ (e.g. a USD-denominated
-        // fund held inside a RUB brokerage account).
+        // The operation's currency follows the instrument (a position's currency is
+        // fixed by its first operation), not the account's.
         currency: instrument.currency,
         fee_minor: feeParsed,
         note,
@@ -300,44 +220,21 @@ export function TradeDialog({
     );
   };
 
-  // A 409 from POST /api/v1/operations says the account's journal did not
-  // replay with this row in it — and NOTHING FINER, which is why the sentence
-  // below names no cause (#23).
-  //
-  // It used to say «Недостаточно бумаг на счете на эту дату», and that is false
-  // twice over. The engine refuses for several unrelated reasons that all arrive
-  // as this one status: a release exceeding the held quantity, an operation
-  // whose currency is not the one the position's cost is already kept in, a
-  // transfer whose stored FIFO breakdown no longer matches the history it is
-  // replayed against, and an income total that has left the int64 range (see
-  // internal/portfolio/engine.go). Worse, THE ROW REFUSED NEED NOT BE THE ROW
-  // POSTED: every write replays the account's WHOLE journal, so a purchase —
-  // which releases nothing and can only add to a position — comes back 409 over
-  // an entry stored months earlier, on a date the client never sent. «на эту
-  // дату» was a claim about the user's input in a message about someone else's
-  // row. TestConflictIsNotOnlyAnOversell holds both halves of that down.
-  //
-  // The alternative was to make the server tell its conflicts apart, as the
-  // importer does by lifting "this broker account cannot be imported" out of 409
-  // into 422. It does not fit here: the split would be oversell versus
-  // everything else, and "everything else" is itself a grab-bag needing a
-  // cause-free sentence of its own, so one honest caption would be bought and
-  // another owed. The overflow above is in neither group, and no status can
-  // promise the refusal is about what the client sent.
-  //
-  // Same key as the cash and income dialogs, not a copy of its wording: all
-  // three post to this endpoint and get the same undifferentiated status, so
-  // there is one answer to keep true rather than three.
+  // A 409 says only that the account's journal did not replay with this row
+  // (#23), so the sentence names no cause: the engine refuses for several reasons,
+  // and every write replays the whole journal, so the refused row may be one stored
+  // months earlier (TestConflictIsNotOnlyAnOversell). Splitting the status would buy
+  // one honest caption and owe another. The same key as the cash and income
+  // dialogs, which post to the same endpoint.
   const errorMessage = createOperation.isError
     ? isConflict(createOperation.error)
       ? t("operations.conflict")
       : t("app.error")
     : null;
 
-  // The two fields every trade has, held as JSX values rather than as inner
-  // components so a bond can lay them out differently without either input
-  // being remounted (a component declared inside a render is a new type on
-  // every render, and the field would lose focus on each keystroke).
+  // The two fields every trade has, as JSX values rather than inner components,
+  // so a bond can lay them out differently without remounting an input (and losing
+  // focus on each keystroke).
   const quantityField = (
     <div className="grid gap-2">
       <Label htmlFor="trade-qty">{t("trade.quantity")}</Label>
@@ -349,11 +246,8 @@ export function TradeDialog({
       />
     </div>
   );
-  // The money price, and the only price this dialog records. Its label is the
-  // one thing that changes for a bond: «за единицу» is what a share costs
-  // apiece, «за одну облигацию» is what the percentage above works out to,
-  // and next to a field showing a percentage the generic word would be the
-  // ambiguity that started all this.
+  // The money price, the only one recorded. For a bond its label says «за одну
+  // облигацию», what the percentage works out to.
   const priceField = (
     <div className="grid gap-2">
       <Label htmlFor="trade-price">
@@ -388,9 +282,8 @@ export function TradeDialog({
           </div>
           {isBond && instrument ? (
             <>
-              {/* The owner's own layout: the percentage first, because that is
-                  the number he copies out of the terminal, then the money it
-                  works out to, then the quantity. */}
+              {/* The owner's order: the percentage first (what the terminal shows),
+                 then the money, then the quantity. */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <Label htmlFor="trade-price-percent">{t("trade.pricePercentOfFace")}</Label>
@@ -409,15 +302,9 @@ export function TradeDialog({
                   {faceGapMessage(t, faceGap, instrument)}
                 </p>
               ) : faceValueMinor !== null ? (
-                // The face value is spelled out rather than merely alluded to:
-                // it is the number the percentage above is a percentage OF,
-                // the user can check it against his broker's document, and a
-                // wrong one in the catalog is otherwise invisible right up
-                // until it has silently mispriced a trade.
-                //
-                // Formatted in the instrument's currency, which faceGapOf has
-                // just proved is the face value's own — the same equality that
-                // makes the conversion publishable at all.
+                // The face value is spelled out: it is what the percentage is of, and a
+                // wrong one in the catalog would otherwise misprice a trade unseen. In the
+                // instrument's currency, which faceGapOf proved is the face's own.
                 <p data-testid="trade-bond-hint" className="text-xs text-muted-foreground">
                   {t("trade.bondPriceHint", {
                     face: formatMinor(faceValueMinor, instrument.currency),
