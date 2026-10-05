@@ -18,21 +18,13 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// These tests run against a real database and the REAL operation.Service —
-// the rebuild's whole job is to hand a difference to the journal's own write
-// path, and a fake journal would leave every rule that path enforces (the
-// engine's replay, the FIFO release behind a transfer, the per-type
-// validation) unexercised by the very tests that are supposed to prove the
-// difference was computed right.
-//
-// EVERY EXPECTED VALUE IS A LITERAL, for the reason projection_test.go states
-// at its own head: an expectation derived from the implementation moves with
-// it and stays green through a change of rule.
+// These tests use a real database and the real operation.Service, so every rule
+// of the write path (engine replay, FIFO release, per-type validation) is
+// exercised. Expected values are literals, so they do not move with the
+// implementation.
 
 const (
-	// uidSber and uidAAPL are the instrument_uids the operation fixtures in
-	// testdata/ops carry. They are spelled here so a passport can be put
-	// behind them; nothing computes them.
+	// The instrument_uids the testdata/ops fixtures carry.
 	uidSber    = "e6123145-9665-43e0-8413-cd61b8aa9b13"
 	uidAAPL    = "9654c2dd-6993-427e-80fa-04e80a1cf4da"
 	uidFutures = "b0e1a5f2-1a3c-4f0e-9b7a-9d6a6f4c1a11"
@@ -40,11 +32,9 @@ const (
 	uidBond    = "00e0a5a6-3f9a-4b26-bdb9-95cbbaa1c0f2"
 )
 
-// recordingDelta wraps the real operation.Service and remembers every delta it
-// was handed. It is what lets a test say "the second rebuild asked for
-// nothing" rather than merely "the journal ended up the same" — a rebuild that
-// deleted every row and wrote it back would satisfy the second sentence and
-// break the property this whole file exists for.
+// recordingDelta wraps the real operation.Service and remembers every delta, so
+// a test can say "the second rebuild asked for nothing", which a delete-and-rewrite
+// rebuild would fail while leaving the same journal.
 type recordingDelta struct {
 	inner  *operation.Service
 	deltas []operation.ImportDelta
@@ -71,9 +61,8 @@ func newRebuildFixture(t *testing.T) *rebuildFixture {
 	t.Helper()
 	f := newFixture(t)
 	catalog := &countingCatalog{Store: instrument.NewStore(f.pool)}
-	// An empty rate table by default: the fallback that reads a forgotten
-	// currency pair from its name needs an official rate to check against, and
-	// a test that wants it says so by putting one in (see fakeRates).
+	// No rates by default; a test that wants the forgotten-pair fallback adds
+	// one (see fakeRates).
 	rates := ratesOf(map[string]string{})
 	src := newFakePassportSource()
 	src.instruments[uidSber] = InstrumentBrief{
@@ -84,10 +73,8 @@ func newRebuildFixture(t *testing.T) *rebuildFixture {
 		UID: uidAAPL, FIGI: "BBG000BVPV84", ISIN: "US0378331005",
 		Ticker: "AAPL", Name: "Apple", Currency: "USD", InstrumentType: "share",
 	}
-	// The broker answers about a futures contract and about a currency too,
-	// and both answers are ones this program cannot use. They are here so that
-	// the tests below fail on the CALL — a rebuild that asks about these is
-	// asking for nothing — rather than on a fake that had no answer ready.
+	// Answers about a futures contract and a currency, both unusable, so a
+	// rebuild that asks about them fails on the call count.
 	src.instruments[uidFutures] = InstrumentBrief{
 		UID: uidFutures, FIGI: "FUTSI0323000", Ticker: "SiH3",
 		Name: "Фьючерс USD/RUB", Currency: "RUB", InstrumentType: "futures",
@@ -96,11 +83,9 @@ func newRebuildFixture(t *testing.T) *rebuildFixture {
 		UID: uidUSDRUB, FIGI: "BBG0013HGFT4", Ticker: "USDRUB_TOM",
 		Name: "Доллар США", Currency: "RUB", InstrumentType: "currency",
 	}
-	// The bond the redemption fixtures redeem, drawn from the owner's own
-	// account: denominated in yuan and traded and redeemed in roubles. The two
-	// currencies are the point rather than colour — they are why the count of
-	// bonds cannot be divided out of the payment, and why it has to come from
-	// the journal.
+	// The redeemed bond, from the owner's account: yuan-denominated, traded
+	// and redeemed in roubles, which is why its count cannot be divided out of
+	// the payment.
 	src.instruments[uidBond] = InstrumentBrief{
 		UID: uidBond, FIGI: "BBG00T22WKV5", ISIN: "RU000A1075J3",
 		Ticker: "RU000A1075J3", Name: "МФК Быстроденьги", Currency: "CNY", InstrumentType: "bond",
@@ -115,9 +100,8 @@ func newRebuildFixture(t *testing.T) *rebuildFixture {
 	}
 }
 
-// sync puts one broker account's WHOLE history into the mirror through the
-// real SyncMirror — the mirror rows a rebuild reads have to be rows the sync
-// could actually have written.
+// sync puts one broker account's whole history into the mirror through the
+// real SyncMirror.
 func (f *rebuildFixture) sync(t *testing.T, link AccountLink, items ...OperationItem) {
 	t.Helper()
 	if _, err := f.store.SyncMirror(f.ctx, f.conn.ID, link, items, time.Now().UTC()); err != nil {
@@ -137,10 +121,7 @@ func (f *rebuildFixture) rebuild(t *testing.T, links ...AccountLink) RebuildStat
 	return stats
 }
 
-// journalOf reads one account's imported operations back out of the database,
-// which is the only place an assertion may look: what the rebuild handed over
-// and what the journal kept are exactly the two things this path must not let
-// diverge.
+// journalOf reads one account's imported operations back from the database.
 func (f *rebuildFixture) journalOf(t *testing.T, accountID uuid.UUID) []operation.Operation {
 	t.Helper()
 	ops, err := f.ops.ListBySource(f.ctx, f.spaceID, accountID, Source)
@@ -150,9 +131,8 @@ func (f *rebuildFixture) journalOf(t *testing.T, accountID uuid.UUID) []operatio
 	return ops
 }
 
-// mustListForEngine reads one account's whole journal the way every later read
-// does — through the engine's own listing, not through what a rebuild returned.
-// Those two are exactly the pair this path must not let diverge.
+// mustListForEngine reads one account's journal through the engine's listing,
+// not from what a rebuild returned.
 func mustListForEngine(t *testing.T, f *rebuildFixture, accountID uuid.UUID) []operation.Operation {
 	t.Helper()
 	ops, err := f.ops.ListForEngine(f.ctx, f.spaceID, accountID)
@@ -162,11 +142,8 @@ func mustListForEngine(t *testing.T, f *rebuildFixture, accountID uuid.UUID) []o
 	return ops
 }
 
-// realizedOf folds one account's WHOLE journal — read back through the engine's
-// own listing, not through what a rebuild returned — and sums the realized
-// profit over every position in it. It goes through portfolio.Compute because
-// that is what every screen and every tax figure is derived from: a number this
-// test could compute for itself would only prove this test's arithmetic.
+// realizedOf folds an account's journal through portfolio.Compute and sums
+// realized profit, the figure screens and taxes come from.
 func (f *rebuildFixture) realizedOf(t *testing.T, accountID uuid.UUID) int64 {
 	t.Helper()
 	positions, err := portfolio.Compute(mustListForEngine(t, f, accountID))
@@ -201,11 +178,8 @@ func (f *rebuildFixture) deltasSince(mark int) []operation.ImportDelta {
 	return f.applier.deltas[mark:]
 }
 
-// mirrorVersions is each mirror row's xmin — the transaction that last wrote
-// it. It is how a test can say that a rebuild wrote NOTHING to the mirror,
-// which no read of the rows' own columns could: a statement that sets a column
-// to the value it already holds leaves the row looking identical and still
-// makes a new version of it.
+// mirrorVersions is each mirror row's xmin, so a test can tell that a rebuild
+// wrote nothing: rewriting a value with itself still makes a new row version.
 func (f *rebuildFixture) mirrorVersions(t *testing.T) map[uuid.UUID]string {
 	t.Helper()
 	rows, err := f.pool.Query(f.ctx,
@@ -240,24 +214,17 @@ func byExternalID(t *testing.T, ops []operation.Operation, id string) operation.
 	return operation.Operation{}
 }
 
-// externalIDFor is the name the projection gives the n-th (1-based) journal
-// entry of one mirror row. The scheme is spelled out here rather than imported
-// from the implementation so that a change to it reddens these tests instead
-// of moving with them.
+// externalIDFor is the projection's name for a row's n-th (1-based) entry,
+// spelled out so a change to the scheme reddens these tests.
 func externalIDFor(row MirrorRow, leg int) string {
 	return row.ID.String() + "/" + strconv.Itoa(leg)
 }
 
-// -------------------------------------------------------------------------
-// idempotence — the property the whole architecture rests on
-// -------------------------------------------------------------------------
+// Idempotence.
 
-// TestRebuildOverAnUnchangedMirrorAsksForNothing is the load-bearing test of
-// this file. A rebuild that recomputed the journal from scratch every hour
-// would still leave the right rows there — and would renumber every one of
-// them, break every external reference to them, and make "what changed" a
-// question nothing could answer. So the assertion is on the DELTA, not on the
-// journal: the second rebuild must ask for nothing at all.
+// The assertion is on the delta: a rebuild over an unchanged mirror must ask
+// for nothing. A rebuild that rewrote everything would leave the right rows but
+// renumber them.
 func TestRebuildOverAnUnchangedMirrorAsksForNothing(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link,
@@ -315,10 +282,7 @@ func TestRebuildOverAnUnchangedMirrorAsksForNothing(t *testing.T) {
 		t.Errorf("second rebuild reported %+v, want a rebuild that changed nothing", second)
 	}
 	versionsNow := f.mirrorVersions(t)
-	// The count first: the loop below walks the rows that are there NOW and
-	// looks each one up among the rows that were there BEFORE, so a row the
-	// rebuild deleted would be invisible to it — the missing id is simply never
-	// asked about.
+	// Count first: the loop below would not notice a deleted row.
 	if len(versionsNow) != len(versions) {
 		t.Errorf("the mirror holds %d rows after a rebuild that changed nothing, and held %d before",
 			len(versionsNow), len(versions))
@@ -352,20 +316,9 @@ func TestRebuildOverAnUnchangedMirrorAsksForNothing(t *testing.T) {
 	}
 }
 
-// TestRebuildRewritesAnOperationWhoseMirrorRowChanged is the other half of
-// idempotence: the difference is by external id but the COMPARISON is by
-// value. A mirror row carries the broker's latest word, so a commission the
-// broker corrected has to reach the journal — and a rebuild that stopped at
-// "this id is already there" would leave the old number in place for good.
-// TestRebuildResolvesAPaperTheBrokerForgotByTheIsinTheOperationCarries is the
-// wiring that makes the resolver's last resort reachable at all: the ticker the
-// OPERATION carries has to travel from the mirror row into the ref.
-//
-// A fund wound up and its passport answers 404 for ever, while the owner's
-// history stays full of operations on it. For such an instrument the broker
-// writes the ISIN into the ticker field, and the catalog already knows the
-// paper by that ISIN — so the operation lands in the journal instead of joining
-// the unparsed list.
+// The ticker the operation carries reaches the resolver: a wound-up fund's
+// passport answers 404, the broker puts its ISIN in the ticker field, and the
+// catalog knows the paper by that ISIN, so the operation lands in the journal.
 func TestRebuildResolvesAPaperTheBrokerForgotByTheIsinTheOperationCarries(t *testing.T) {
 	f := newRebuildFixture(t)
 	const uidGone = "11111111-2222-3333-4444-555555555555"
@@ -380,9 +333,8 @@ func TestRebuildResolvesAPaperTheBrokerForgotByTheIsinTheOperationCarries(t *tes
 	item := loadOperationItem(t, "buy.json")
 	item.ID = "op-forgotten-1"
 	item.InstrumentUID = uidGone
-	// The figi the OPERATION carries differs from the catalog's for the same
-	// paper — the broker re-issues it per listing — so nothing but the ISIN
-	// can join the two.
+	// The operation's figi differs from the catalog's (reissued per listing);
+	// only the ISIN joins them.
 	item.FIGI = "TCS33A101X68"
 	item.Ticker = "RU000A101X68"
 	f.sync(t, f.link, item)
@@ -400,6 +352,8 @@ func TestRebuildResolvesAPaperTheBrokerForgotByTheIsinTheOperationCarries(t *tes
 	}
 }
 
+// The difference is by external id but the comparison is by value: a commission
+// the broker corrected reaches the journal.
 func TestRebuildRewritesAnOperationWhoseMirrorRowChanged(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link, loadOperationItem(t, "buy.json"))
@@ -409,10 +363,8 @@ func TestRebuildRewritesAnOperationWhoseMirrorRowChanged(t *testing.T) {
 		t.Fatalf("journal = %d rows with fee %d, want 1 row with fee 825", len(before), before[0].FeeMinor)
 	}
 
-	// The same operation, with the commission the broker now reports. The
-	// content key is built from the instant, the type, the paper, the currency,
-	// the payment and the quantity — not from the commission — so this is the
-	// SAME mirror row, refreshed.
+	// The same operation with a corrected commission; the commission is not
+	// in the content key, so it is the same mirror row refreshed.
 	corrected := loadOperationItem(t, "buy.json")
 	corrected.Commission = MoneyValue{Currency: "rub", Units: -5, Nano: 0}
 	f.sync(t, f.link, corrected)
@@ -440,22 +392,15 @@ func TestRebuildRewritesAnOperationWhoseMirrorRowChanged(t *testing.T) {
 	}
 }
 
-// TestRebuildKeepsRealizedProfitWhenTheBrokerRewordsAPurchase is the reason a
-// rewritten row inherits the created_at of the row it replaces.
+// A rewritten row inherits the replaced row's created_at. Otherwise a
+// purchase the broker merely rewords moves to the end of its day, changing which
+// same-day parcel a later sale consumes, and the realized profit (a final tax
+// figure) moves with it.
 //
-// A rewrite is a removal and an insertion, and an insertion stamped afresh is
-// the YOUNGEST row of its day — so a purchase the broker merely REWORDED moves
-// to the end of its own day. Within a day the journal's order is the order the
-// FIFO queue breaks ties in, and the queue is what a later sale consumes from.
-// So a description nobody asked about changes which parcel was sold, and the
-// realized profit — a tax figure, final once it is struck — moves with it.
-//
-// The numbers are literal and the two purchases are deliberately far apart in
-// price: ten shares at 30 000 ₽ in the morning, ten at 33 000 ₽ in the
-// afternoon of the SAME day, ten sold a month later for 32 000 ₽. Selling the
-// morning parcel realizes +200 000 kopecks; selling the afternoon one realizes
-// −100 000. The sale is never touched by the rebuild below — only the wording
-// of the morning purchase is — and the profit must not move at all.
+// Ten at 30 000 ₽ in the morning, ten at 33 000 ₽ in the afternoon of the same
+// day, ten sold a month later at 32 000 ₽: the morning parcel realizes +200 000
+// kopecks, the afternoon one −100 000. Only the morning purchase's wording
+// changes.
 func TestRebuildKeepsRealizedProfitWhenTheBrokerRewordsAPurchase(t *testing.T) {
 	f := newRebuildFixture(t)
 
@@ -491,9 +436,8 @@ func TestRebuildKeepsRealizedProfitWhenTheBrokerRewordsAPurchase(t *testing.T) {
 		t.Fatalf("realized profit before the rewording is %d, want 200000 — the morning parcel is the one FIFO sells", before)
 	}
 
-	// The broker rewords the MORNING purchase and says nothing new about
-	// anything else. The description is not part of the content key, so this is
-	// the same mirror row refreshed rather than a new one.
+	// Only the morning purchase is reworded; the description is not in the
+	// content key.
 	reworded := morning
 	reworded.Description = "Покупка ценных бумаг, 10 шт."
 	f.sync(t, f.link, reworded, afternoon, sale)
@@ -548,14 +492,10 @@ func TestRebuildRemovesTheJournalRowOfAVanishedMirrorRow(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// transfers
-// -------------------------------------------------------------------------
+// Transfers.
 
-// TestRebuildPairsTwoLegsOfOneConnection pins the reason a rebuild is done per
-// CONNECTION rather than per account: the two sides of a move between the
-// owner's own accounts are two mirror rows under two links, and only something
-// looking at both at once can see that they are one event.
+// The two sides of a move between the owner's accounts are rows under two
+// links; a per-connection rebuild pairs them.
 func TestRebuildPairsTwoLegsOfOneConnection(t *testing.T) {
 	f := newRebuildFixture(t)
 	second := f.secondLink(t)
@@ -575,18 +515,13 @@ func TestRebuildPairsTwoLegsOfOneConnection(t *testing.T) {
 	if out.TransferGroupID == nil || in.TransferGroupID == nil || *out.TransferGroupID != *in.TransferGroupID {
 		t.Fatalf("legs carry groups %v and %v, want one group on both", out.TransferGroupID, in.TransferGroupID)
 	}
-	// The note is the broker's own wording and nothing else. A leg that can be
-	// paired never carries the mark saying its cost is unknown — the projection
-	// puts that only on shares arriving from outside — so there is nothing here
-	// for the pairing to take back, and a mark appearing on a leg whose basis
-	// the journal knows exactly would be a false caption on a true number.
+	// The broker's own note only: a pairable leg never carries the "cost
+	// unknown" mark.
 	if in.Note != "Перевод бумаг между счетами" {
 		t.Errorf("the paired arrival's note is %q, want the broker's own description alone", in.Note)
 	}
-	// The 100 shares cost 27508.25 — the 27500.00 paid plus the 8.25
-	// commission — so five of them carry 1375.4125, and the journal holds whole
-	// minor units. The broker says nothing about any of this; the journal
-	// worked it out from the buy.
+	// 100 shares cost 27 508.25 (27 500.00 plus 8.25 commission), so five
+	// carry 1 375.4125, held as whole minor units. The journal worked it out.
 	if out.AmountMinor != 137_541 || in.AmountMinor != 137_541 {
 		t.Errorf("the pair moved %d out and %d in, want 137541 on both — the basis released from the source account",
 			out.AmountMinor, in.AmountMinor)
@@ -616,12 +551,8 @@ func TestRebuildPairsTwoLegsOfOneConnection(t *testing.T) {
 	}
 }
 
-// TestRebuildRewritesBothLegsWhenOneOfThemChanged is why a transfer is diffed
-// as one event rather than leg by leg. The journal refuses to remove one leg of
-// a pair and leave the other (operation.importRemovals), and it refuses the
-// WHOLE difference when asked to — so a difference that noticed only the leg
-// that changed would not write half a transfer, it would write nothing at all
-// and fail the rebuild.
+// A transfer is diffed as one event: the journal refuses removing one leg
+// of a pair, and would refuse the whole difference.
 func TestRebuildRewritesBothLegsWhenOneOfThemChanged(t *testing.T) {
 	f := newRebuildFixture(t)
 	second := f.secondLink(t)
@@ -632,9 +563,7 @@ func TestRebuildRewritesBothLegsWhenOneOfThemChanged(t *testing.T) {
 	group := *byExternalID(t, f.journalOf(t, f.accountID),
 		externalIDFor(f.mirrorRow(t, f.link, "op-trans-2"), 1)).TransferGroupID
 
-	// The broker rewords the departure and nothing else. The description is not
-	// part of the content key, so this is the same mirror row — with a note the
-	// journal has to follow.
+	// Only the departure is reworded: same mirror row, a new note.
 	departure.Description = "Перевод бумаг между счетами (уточнено)"
 	f.sync(t, f.link, loadOperationItem(t, "buy.json"), departure)
 
@@ -677,23 +606,11 @@ func TestRebuildLeavesAnUnpairedLegAlone(t *testing.T) {
 	}
 }
 
-// TestRebuildDoesNotPairSharesCrossingToAndFromTheOutsideWorld is the sharp
-// case of "pair only what is one event". Shares leaving for a depositary
-// outside this program and shares arriving from one are, by the names of the
-// broker's own operation types, moves with the OUTSIDE WORLD — so two of them
-// that happen to agree on paper, count and day are two unrelated parcels, and
-// joining them would invent an event nobody reported.
-//
-// What that invention costs is why it is refused rather than merely doubted:
-// the arriving account would be handed a cost basis and acquisition dates
-// released from ANOTHER account's queue — a tax basis that is not its own —
-// and the honest mark saying the cost of those shares is unknown would be
-// wiped off in the bargain.
-//
-// If a broker turns out to report a move between two of the owner's own
-// accounts under these types after all — still unasked, since the owner's
-// history holds no such move — the answer is two lone
-// legs with the honest mark on the arrival — the safe side of the mistake.
+// Shares leaving for and arriving from outside depositaries are, by type,
+// moves with the outside world; two that agree on paper, count and day are
+// unrelated parcels. Pairing them would hand the arrival another account's basis
+// and dates and wipe the "cost unknown" mark. An own-account move reported under
+// these types would stay two lone legs with the mark, the safe error.
 func TestRebuildDoesNotPairSharesCrossingToAndFromTheOutsideWorld(t *testing.T) {
 	f := newRebuildFixture(t)
 	second := f.secondLink(t)
@@ -724,9 +641,7 @@ func TestRebuildDoesNotPairSharesCrossingToAndFromTheOutsideWorld(t *testing.T) 
 	if out.TransferGroupID != nil {
 		t.Errorf("the departure was paired into group %s", out.TransferGroupID)
 	}
-	// 40 of the 100 shares that cost 27508.25 — the payment plus the
-	// commission — is 11003.30. The departing leg gives up its basis whether or
-	// not anything is paired with it.
+	// 40 of the 100 shares that cost 27 508.25 is 11 003.30, paired or not.
 	if out.AmountMinor != 1_100_330 {
 		t.Errorf("the departure moved %d, want 1100330", out.AmountMinor)
 	}
@@ -735,23 +650,10 @@ func TestRebuildDoesNotPairSharesCrossingToAndFromTheOutsideWorld(t *testing.T) 
 	}
 }
 
-// TestRebuildTakesATransferLegsCurrencyFromThePaper pins the one entry whose
-// currency is not the currency of the money that moved, because no money moved.
-//
-// The broker attaches a currency to the zero payment of a securities transfer,
-// and the documented shape attaches roubles to it whatever the paper is. Taken
-// as the leg's currency, that is not merely untidy: the engine fixes a
-// position's currency by the first operation on the instrument that touches
-// cost or quantity — a transfer leg is one — and refuses every later such
-// operation that disagrees. The dollar purchase and the rouble leg below
-// are the same paper in the same account, so one of the two would be refused —
-// the owner reading "the journal refused this" and nothing anywhere saying that
-// the currency had been read off the wrong field.
-//
-// The pairing is asserted with it because the currency is part of the key two
-// legs are matched on (see transferPair): a leg that took roubles from the
-// payment and another that took dollars would fail to match and become two lone
-// legs, each with a cost basis nobody released.
+// A transfer leg's currency is the paper's: the broker attaches roubles to
+// the zero payment whatever the paper. Taken as the leg's currency, the engine
+// would refuse either the dollar purchase or the leg. Pairing is asserted too,
+// since currency is part of the pairing key (transferPair).
 func TestRebuildTakesATransferLegsCurrencyFromThePaper(t *testing.T) {
 	f := newRebuildFixture(t)
 	second := f.secondLink(t)
@@ -823,11 +725,8 @@ func TestRebuildKeepsTheUnknownBasisNoteOnALoneArrival(t *testing.T) {
 	}
 }
 
-// TestPairableLegIsOnlyAMoveBetweenTheOwnersOwnAccounts names the broker's own
-// operation types in full, as literals. The table test below drives the rule
-// with a boolean, so it says nothing about WHICH broker types set that boolean
-// — and a rule read out of the same table it is meant to pin would move with
-// it in silence.
+// The broker's own-account move types, as literals; the table test below
+// drives the rule with a boolean and cannot say which types set it.
 func TestPairableLegIsOnlyAMoveBetweenTheOwnersOwnAccounts(t *testing.T) {
 	want := map[string]bool{
 		"OPERATION_TYPE_TRANS_IIS_BS":      true,
@@ -856,12 +755,8 @@ func TestPairableLegIsOnlyAMoveBetweenTheOwnersOwnAccounts(t *testing.T) {
 	}
 }
 
-// TestPairTransfersJoinsOnlyWhatIsOneEvent walks the pairing rule one
-// condition at a time, straight over the function, with no database in the
-// way. The database tests above prove what the journal then does with a pair;
-// this proves the LIST — and the list is the thing that is easy to get one
-// short, because every item on it is a separate way for two legs that are not
-// one event to look like one.
+// The pairing rule one condition at a time, without a database: every item
+// on the list is a separate way for unrelated legs to look like one event.
 func TestPairTransfersJoinsOnlyWhatIsOneEvent(t *testing.T) {
 	accountA := uuid.MustParse("11111111-1111-4111-8111-111111111111")
 	accountB := uuid.MustParse("22222222-2222-4222-8222-222222222222")
@@ -959,13 +854,10 @@ func TestPairTransfersJoinsOnlyWhatIsOneEvent(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// refusals
-// -------------------------------------------------------------------------
+// Refusals.
 
-// TestRebuildRecordsTheJournalsOwnRefusalAgainstTheMirrorRow: an operation the
-// journal will not take must cost the owner one visible row, not the other
-// four thousand.
+// An operation the journal will not take costs one visible row, not the
+// rest.
 func TestRebuildRecordsTheJournalsOwnRefusalAgainstTheMirrorRow(t *testing.T) {
 	f := newRebuildFixture(t)
 	// A sale of 100 shares of a position that was never bought.
@@ -986,15 +878,9 @@ func TestRebuildRecordsTheJournalsOwnRefusalAgainstTheMirrorRow(t *testing.T) {
 	if got := refused.UnparsedReason; got != string(ReasonEngineRefused) {
 		t.Errorf("the refused row's reason is %q, want %q", got, ReasonEngineRefused)
 	}
-	// AND WHAT THE JOURNAL SAID, not only that it said no. The code is the same
-	// over a sale with nothing behind it, an amount the journal will not hold,
-	// and a transfer whose other leg failed: the owner met 134 rows carrying it
-	// and could act on none of them, because the sentence behind it went to a
-	// log line and nowhere else.
-	//
-	// The assertion is that the words are THERE and say something the code does
-	// not, never that they read one particular way — nothing may depend on their
-	// wording, this test least of all.
+	// And what the journal said: the code covers many faults (134 such rows
+	// on the owner's account). Only that the words are there is checked, never
+	// their wording.
 	if refused.UnparsedDetail == "" {
 		t.Errorf("the refused row's detail is empty — the journal's own words about it were dropped")
 	}
@@ -1009,10 +895,8 @@ func TestRebuildRecordsTheJournalsOwnRefusalAgainstTheMirrorRow(t *testing.T) {
 	}
 }
 
-// TestRebuildClearsAReasonThatStoppedBeingTrue: the refusal above is the
-// journal's answer about the journal AS IT IS, and the answer changes when the
-// missing history arrives. Nothing about the refused row is remembered as a
-// verdict — it is offered again on the next rebuild.
+// A refusal is about the journal as it is; when the missing history
+// arrives, the row is accepted.
 func TestRebuildClearsAReasonThatStoppedBeingTrue(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link, loadOperationItem(t, "sell.json"))
@@ -1038,18 +922,14 @@ func TestRebuildClearsAReasonThatStoppedBeingTrue(t *testing.T) {
 	if got := now.UnparsedReason; got != "" {
 		t.Errorf("the sale's reason is %q, want empty — the journal takes it now", got)
 	}
-	// AND THE WORDS GO WITH THE CODE. A sentence explaining a refusal that is
-	// no longer being made is the exact shape this project keeps being bitten
-	// by: it would sit under whatever code lands on this row next, describing
-	// something else entirely, and it would read as current.
+	// The detail goes with the code, or it would describe the wrong
+	// refusal.
 	if got := now.UnparsedDetail; got != "" {
 		t.Errorf("the sale still carries %q, the detail of a refusal that has stopped being true", got)
 	}
 }
 
-// TestRebuildRefusesTheProjectionsOwnUnreadableRow pins that a refusal the
-// projection makes — not the journal — reaches the mirror with the
-// projection's own code on it, and that the reason is not a stand-in.
+// A projection refusal reaches the mirror with the projection's own code.
 func TestRebuildRefusesTheProjectionsOwnUnreadableRow(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link, loadOperationItem(t, "input.json"), loadOperationItem(t, "delivery_buy.json"))
@@ -1061,23 +941,15 @@ func TestRebuildRefusesTheProjectionsOwnUnreadableRow(t *testing.T) {
 	if got := f.mirrorRow(t, f.link, "op-delivery-1").UnparsedReason; got != string(ReasonUnsupportedType) {
 		t.Errorf("the futures delivery's reason is %q, want %q", got, ReasonUnsupportedType)
 	}
-	// The broker was never asked about a futures contract: the row's own
-	// instrument type is outside what this program accounts for, and paying for
-	// a passport to be told so would be a call for nothing.
+	// The broker was not asked about a futures contract.
 	if calls := f.src.instrumentCalls[uidFutures]; calls != 0 {
 		t.Errorf("the broker was asked %d times about the futures instrument, want 0", calls)
 	}
 }
 
-// TestRebuildTurnsACurrencyTradeIntoBothItsLegs is what a currency purchase
-// actually is: money left the account in one currency and arrived in another,
-// on the same day. Neither leg alone is true of anything — a single one would
-// say the rubles vanished.
-//
-// The traded currency comes from the broker (CurrencyBy) and from nowhere else:
-// the operation row names its own PAYMENT currency, which is the rubles handed
-// over, and says nothing about what was bought. The fixture buys 1 000 units at
-// 90 ₽, so 90 000 ₽ leave and 1 000 $ arrive.
+// A currency purchase is two legs: money left in one currency and arrived in
+// another. The traded currency comes from the broker (CurrencyBy); the row names
+// only its payment. 1 000 units at 90 ₽: 90 000 ₽ leave, 1 000 $ arrive.
 func TestRebuildTurnsACurrencyTradeIntoBothItsLegs(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.src.currencyNominals[uidUSDRUB] = MoneyValue{Currency: "usd", Units: 1}
@@ -1128,11 +1000,9 @@ func TestRebuildTurnsACurrencyTradeIntoBothItsLegs(t *testing.T) {
 	}
 }
 
-// TestRebuildRefusesACurrencyTradeTheBrokerWillNotNameIsTheOtherHalf: the
-// broker cannot say what the instrument trades, so the row stays visible with
-// its own reason. NOT «this program does not account for that kind of asset» —
-// the journal has a type for a conversion and the rule is written — but «the one
-// fact needed is missing», which is a different sentence to whoever reads it.
+// When the broker cannot say what the instrument trades, the row stays
+// visible as a currency trade with a missing fact, not as an unsupported
+// asset.
 func TestRebuildRefusesACurrencyTradeTheBrokerWillNotName(t *testing.T) {
 	f := newRebuildFixture(t)
 	// No nominal registered: the broker answers "no such instrument".
@@ -1151,16 +1021,10 @@ func TestRebuildRefusesACurrencyTradeTheBrokerWillNotName(t *testing.T) {
 	}
 }
 
-// TestRebuildOrdersOneDayByTheBrokersClock pins where the order of two
-// operations of the same day comes from. The journal keeps a DAY, and the write
-// path folds one day's operations in the order they are handed to it, so this
-// is the last place the time of day can say anything.
-//
-// The sale below is the mirror's OLDER row — it was seen first, on a sync that
-// refused it — and the purchase that covers it arrives later and is dated
-// earlier the same day. Ordered by when the mirror met them, the sale would be
-// offered against a position that is not there yet and refused for a reason
-// that is not true.
+// Same-day order comes from the broker's clock. The sale is the older
+// mirror row (seen first and refused) and its covering purchase arrives later but
+// is dated earlier the same day; ordered by first sight, the sale would be
+// refused falsely.
 func TestRebuildOrdersOneDayByTheBrokersClock(t *testing.T) {
 	f := newRebuildFixture(t)
 	sale := loadOperationItem(t, "sell.json") // 2026-05-20T07:05:00Z
@@ -1172,9 +1036,8 @@ func TestRebuildOrdersOneDayByTheBrokersClock(t *testing.T) {
 
 	purchase := loadOperationItem(t, "buy.json")
 	purchase.Date = time.Date(2026, 5, 20, 6, 0, 0, 0, time.UTC) // the same day, an hour earlier
-	// Two more of that same day, so that the assertion below is about an ORDER
-	// and not about a coin toss: four operations have twenty-four orders, and
-	// only one of them is the broker's.
+	// Two more of the same day, so the order is not a coin toss: one of
+	// twenty-four orders is right.
 	dividend := loadOperationItem(t, "dividend.json")
 	dividend.Date = time.Date(2026, 5, 20, 8, 0, 0, 0, time.UTC)
 	fee := loadOperationItem(t, "service_fee.json")
@@ -1200,16 +1063,13 @@ func TestRebuildOrdersOneDayByTheBrokersClock(t *testing.T) {
 	}
 }
 
-// TestRebuildAppliesBothEntriesOfOneRowOrNeither is the owner's decision 6:
-// half an event in the journal is a lie. A trade whose commission was charged
-// in another currency becomes two journal entries, and the batch below treats
-// them as two independent candidates — so when the trade is refused and the
-// commission is not, the commission must not be left behind.
+// Owner's decision 6: half an event is a lie. A trade with a commission in
+// another currency is two entries; when the trade is refused and the commission
+// is not, the commission must not stay.
 func TestRebuildAppliesBothEntriesOfOneRowOrNeither(t *testing.T) {
 	f := newRebuildFixture(t)
-	// The fixture is a purchase; turned into a sale it is a sale of shares the
-	// account never held, which the engine refuses — while its commission,
-	// charged in another currency, is an ordinary fee the journal would take.
+	// As a sale it sells shares never held, refused, while its commission
+	// alone would be taken.
 	sale := loadOperationItem(t, "buy_fee_in_another_currency.json")
 	sale.Type = "OPERATION_TYPE_SELL"
 	sale.Payment = MoneyValue{Currency: "usd", Units: 1200, Nano: 500000000}
@@ -1219,10 +1079,7 @@ func TestRebuildAppliesBothEntriesOfOneRowOrNeither(t *testing.T) {
 	if stats.Added != 1 {
 		t.Errorf("rebuild added %d operations, want 1 — only the top-up survives", stats.Added)
 	}
-	// The commission WAS written and then taken back, and this run will do it
-	// again every hour for as long as the sale is refused. A summary that
-	// reported that hour as nothing at all would hide the one piece of work
-	// that keeps repeating.
+	// Written and withdrawn, and reported, since it repeats every hour.
 	if stats.Withdrawn != 1 {
 		t.Errorf("rebuild reports %d entries written and withdrawn, want 1 — the commission the journal took before refusing the sale",
 			stats.Withdrawn)
@@ -1242,17 +1099,9 @@ func TestRebuildAppliesBothEntriesOfOneRowOrNeither(t *testing.T) {
 	}
 }
 
-// TestRebuildWithdrawsTheHalfOfAnEventItHadLeftInPlace is the case the
-// withdrawal above does NOT catch on its own, and the one that makes "whole or
-// not at all" a promise rather than a hope.
-//
-// The two entries of one mirror row are two units of the difference, and they
-// need not both be offered: when only ONE of them changes, the other matches
-// what the journal already holds and is left alone. If the changed one is then
-// refused, the untouched half is still sitting there — money leaving the
-// account for a dividend that is not in the journal. Nothing this rebuild
-// applied is involved, so a withdrawal that looks only at what it just wrote
-// leaves that half in place for ever.
+// When only one entry of a row changes, the other already matches and is left
+// alone; if the changed one is refused, the untouched half must still be
+// withdrawn.
 func TestRebuildWithdrawsTheHalfOfAnEventItHadLeftInPlace(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link, loadOperationItem(t, "div_ext.json"))
@@ -1260,11 +1109,9 @@ func TestRebuildWithdrawsTheHalfOfAnEventItHadLeftInPlace(t *testing.T) {
 		t.Fatalf("the first rebuild added %d entries, want 2 — a dividend paid to a card is income and the money leaving", stats.Added)
 	}
 
-	// A rule that changes ONE of that row's two entries and leaves the other
-	// exactly as the journal holds it — which is what a corrected instrument
-	// match does in real life, since only the income entry names a security.
-	// The income entry becomes a move of shares the account never held, which
-	// the engine refuses; the withdrawal beside it is not offered at all.
+	// A rule that changes only the income entry (as a corrected instrument
+	// match does) into one the engine refuses; the withdrawal beside it is
+	// not offered.
 	inner := f.reb.project
 	f.reb.project = func(row MirrorRow, accountID uuid.UUID, resolved *Resolved, traded *TradedCurrency) ([]operation.Operation, Deferred, *UnparsedError) {
 		ops, deferred, refusal := inner(row, accountID, resolved, traded)
@@ -1301,13 +1148,9 @@ func TestRebuildWithdrawsTheHalfOfAnEventItHadLeftInPlace(t *testing.T) {
 	}
 }
 
-// TestRebuildResolvesASecurityWhoseTypeTheBrokerDidNotState: the gate in front
-// of the resolver reads a set of PASSPORT types, and what an operation row
-// carries is not a passport. The broker's own documentation warns that history
-// after a corporate action can be incomplete and that identifiers on old
-// operations have been rewritten, so a row whose instrument_type is empty —
-// and whose instrument_uid the broker will answer about perfectly well — must
-// reach the resolver rather than be refused with a type nobody stated.
+// A row with an empty instrument_type but a resolvable instrument_uid
+// reaches the resolver: the gate reads passport types, and the broker warns old
+// rows can be incomplete.
 func TestRebuildResolvesASecurityWhoseTypeTheBrokerDidNotState(t *testing.T) {
 	f := newRebuildFixture(t)
 	purchase := loadOperationItem(t, "buy.json")
@@ -1333,11 +1176,8 @@ func TestRebuildResolvesASecurityWhoseTypeTheBrokerDidNotState(t *testing.T) {
 	}
 }
 
-// TestRebuildRefusesOneRowWhenTheBrokerHasNoSuchInstrument: a delisted paper
-// the broker will never answer about again must cost the owner one visible
-// row. Taking the whole rebuild down over it would mean the connection never
-// synced again, for ever — and the broker says "no such instrument" plainly
-// enough to tell it from being briefly unreachable (see ErrInstrumentNotFound).
+// A delisted paper the broker will never answer about costs one visible
+// row, not every future sync (see ErrInstrumentNotFound).
 func TestRebuildRefusesOneRowWhenTheBrokerHasNoSuchInstrument(t *testing.T) {
 	f := newRebuildFixture(t)
 	const brokersWords = "tinvest: InstrumentsService/GetInstrumentBy: status 404: " +
@@ -1354,14 +1194,8 @@ func TestRebuildRefusesOneRowWhenTheBrokerHasNoSuchInstrument(t *testing.T) {
 		t.Errorf("the purchase's reason is %q, want %q — the security was not matched, and that is what happened",
 			got, ReasonInstrumentUnresolved)
 	}
-	// AND WHICH OF THE THREE WAYS IT WAS NOT MATCHED. One code covers a paper
-	// the broker has never heard of, a passport too incomplete to file, and a
-	// catalog row that carries this ticker for a DIFFERENT security — three
-	// faults with three different remedies. The words that tell them apart are
-	// the resolver's, and they have to reach the row.
-	//
-	// The expectation is this test's own input rather than any production
-	// wording, so what is pinned is that the sentence travels, not how it reads.
+	// And which of the resolver's three faults it was; the expectation is
+	// this test's input, so only that the sentence travels is pinned.
 	if !strings.Contains(refused.UnparsedDetail, brokersWords) {
 		t.Errorf("the refused row's detail is %q, want it to carry what the resolver said (%q)",
 			refused.UnparsedDetail, brokersWords)
@@ -1372,12 +1206,8 @@ func TestRebuildRefusesOneRowWhenTheBrokerHasNoSuchInstrument(t *testing.T) {
 	}
 }
 
-// TestRebuildFailsWhenAPassportCannotBeFetchedAtAll is the boundary of the
-// test above. A broker that could not be reached says nothing about the
-// instrument, and marking the row "the security was not matched" would blame
-// the operation for the network — a mark that would then sit there until
-// something happened to rebuild that row again. The run fails instead, and the
-// next one, which is likely to succeed, states everything afresh.
+// An unreachable broker fails the run rather than blaming the operation
+// with "not matched".
 func TestRebuildFailsWhenAPassportCannotBeFetchedAtAll(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.src.instrumentErrs[uidSber] = errors.New("tinvest: InstrumentsService/GetInstrumentBy: request: dial tcp: connection refused")
@@ -1394,11 +1224,8 @@ func TestRebuildFailsWhenAPassportCannotBeFetchedAtAll(t *testing.T) {
 	}
 }
 
-// TestRebuildLeavesTheReasonOfAnOperationThatDidNotHappen: a row the broker
-// cancelled produces no journal entries — and the rebuild says nothing about
-// it either way. The reason it already carries is a true statement about the
-// row ("this program could not read it"), and withdrawing it because the
-// broker changed its mind would drop the row off the owner's list in silence.
+// A cancelled row produces nothing and keeps its stored reason, still true
+// of it.
 func TestRebuildLeavesTheReasonOfAnOperationThatDidNotHappen(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link, loadOperationItem(t, "delivery_buy.json"))
@@ -1423,12 +1250,8 @@ func TestRebuildLeavesTheReasonOfAnOperationThatDidNotHappen(t *testing.T) {
 	}
 }
 
-// TestRebuildLeavesTheReasonOfAWithdrawnOperation is the same decision for the
-// other way a row stops being an operation: the broker stops reporting it. Such
-// rows stay on the owner's list of things this program could not read, with
-// DisappearedAt beside them to say what became of them — which is
-// UnparsedByConnection's own deliberate choice, and a rebuild that withdrew the
-// reason would take them off that list in silence.
+// A withdrawn row keeps its reason too: UnparsedByConnection lists it with
+// DisappearedAt.
 func TestRebuildLeavesTheReasonOfAWithdrawnOperation(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link, loadOperationItem(t, "delivery_buy.json"))
@@ -1450,9 +1273,7 @@ func TestRebuildLeavesTheReasonOfAWithdrawnOperation(t *testing.T) {
 	}
 }
 
-// TestRebuildProducesNothingFromAnOperationThatDidNotHappen pins the two
-// shapes that project to nothing at all: a cancelled order and a row the
-// broker has stopped returning.
+// A cancelled order and a withdrawn row project to nothing.
 func TestRebuildProducesNothingFromAnOperationThatDidNotHappen(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link, loadOperationItem(t, "cancelled_buy.json"))
@@ -1469,21 +1290,11 @@ func TestRebuildProducesNothingFromAnOperationThatDidNotHappen(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// a full redemption closes the position the journal holds
-// -------------------------------------------------------------------------
+// A full redemption closes the position the journal holds.
 
-// TestRebuildClosesAFullRedemptionWithThePositionTheJournalHolds is the
-// property this whole path exists for. The broker reports a bond's full
-// redemption as a payment and nothing else — no count, no price — so the
-// number of bonds it retires is the position the journal holds when it
-// happens, and only the rebuild can know that.
-//
-// THE COUNT IS NOWHERE IN THE FIXTURES. Eight bonds were bought and two sold,
-// so the redemption closes six — a number no fixture carries and no row of the
-// mirror holds. Nor can it be divided out of the money: the payment is 10 000 ₽
-// and the bond's nominal is 100 CNY, so payment over nominal answers 100, which
-// looks like a count of bonds and is not one.
+// The broker reports a full redemption as money only, so the count is the
+// position held then. Eight bought and two sold: six, a number in no fixture. The
+// payment (10 000 ₽) over the 100 CNY nominal gives 100, which is not a count.
 func TestRebuildClosesAFullRedemptionWithThePositionTheJournalHolds(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link,
@@ -1517,9 +1328,7 @@ func TestRebuildClosesAFullRedemptionWithThePositionTheJournalHolds(t *testing.T
 		t.Errorf("the redemption's day is %s, want 2026-06-03", redemption.OccurredOn.Format("2006-01-02"))
 	}
 
-	// What the owner sees afterwards, which is the whole complaint this fixes:
-	// a redeemed bond that stays in the journal shows up as a position that no
-	// longer exists at the broker.
+	// A redeemed bond must not linger as a position.
 	positions, err := portfolio.Compute(mustListForEngine(t, f, f.accountID))
 	if err != nil {
 		t.Fatalf("the journal that was written does not replay when read back: %v", err)
@@ -1535,9 +1344,7 @@ func TestRebuildClosesAFullRedemptionWithThePositionTheJournalHolds(t *testing.T
 		t.Errorf("the bond's position is %s after it was redeemed, want 0", bond.Quantity)
 	}
 
-	// Idempotence, on the entry whose number this rebuild worked out for
-	// itself: the count is derived from the same rows in the same order every
-	// time, so a rebuild over an unchanged mirror must ask for nothing.
+	// Idempotent on the derived count too.
 	mark := len(f.applier.deltas)
 	if second := f.rebuild(t); second != (RebuildStats{}) {
 		t.Errorf("the second rebuild reported %+v, want a rebuild that changed nothing", second)
@@ -1559,16 +1366,9 @@ func TestRebuildClosesAFullRedemptionWithThePositionTheJournalHolds(t *testing.T
 	}
 }
 
-// TestRebuildLeavesARedemptionOfNothingUnparsed is the honest refusal beside
-// the rule above. When the journal holds none of the bond — the purchase is
-// older than the window this connection imports, or stayed unparsed for a
-// reason of its own — there is no count to take, and the alternatives are a
-// sale of nothing and a number this program made up.
-//
-// THE REASON MUST BE THE NEW ONE. "The broker named no quantity" and "this
-// program's journal has nothing to close" are different faults with different
-// things to go and look at, and this repository has been caught four times
-// printing a true figure under a false cause.
+// With none of the bond held there is nothing to count, and the reason is
+// "nothing held", not "no quantity named": different faults, different places
+// to look.
 func TestRebuildLeavesARedemptionOfNothingUnparsed(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link, loadOperationItem(t, "bond_repayment_full_no_quantity.json"))
@@ -1592,12 +1392,8 @@ func TestRebuildLeavesARedemptionOfNothingUnparsed(t *testing.T) {
 	}
 }
 
-// TestRebuildStopsRatherThanCountAPositionItCannotRead pins the one thing
-// worse than refusing: closing a redemption with a number counted through an
-// entry whose effect on the position this rebuild cannot state. A split
-// multiplies a position instead of adding to it, and no shape in this package
-// produces one — so this is reachable only from a change to this program, and
-// what it must do then is stop rather than guess.
+// A redemption counted through an entry whose effect cannot be stated (a
+// split; no shape here produces one) stops the rebuild rather than guessing.
 func TestRebuildStopsRatherThanCountAPositionItCannotRead(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link,
@@ -1631,16 +1427,8 @@ func TestRebuildStopsRatherThanCountAPositionItCannotRead(t *testing.T) {
 	}
 }
 
-// TestUnitsMovedAgreesWithTheEngine is what keeps this file's second statement
-// of the engine's arithmetic from drifting from the engine's own. The journal
-// below is folded by portfolio.Compute — the code every screen and every tax
-// figure comes from — and the position it hands back is compared with the sum
-// of unitsMoved over the very same entries.
-//
-// It is a differential test and it is not blind: the two sides share no code
-// at all, so a sign or a type dropped from unitsMoved moves one and not the
-// other. The literal at the end is written out rather than derived for the
-// same reason.
+// unitsMoved against portfolio.Compute on the same entries. The two share
+// no code, and the final literal is written out.
 func TestUnitsMovedAgreesWithTheEngine(t *testing.T) {
 	instrumentID := uuid.MustParse("33333333-3333-4333-8333-333333333333")
 	accountID := uuid.MustParse("22222222-2222-4222-8222-222222222222")
@@ -1692,13 +1480,10 @@ func TestUnitsMovedAgreesWithTheEngine(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// changing the rule
-// -------------------------------------------------------------------------
+// Changing the rule.
 
-// TestRebuildChangesTheJournalWhenTheRuleChanges is what the mirror is FOR: a
-// projection rule that is corrected must be able to reach the whole history
-// again without the broker being asked for any of it a second time.
+// A corrected rule reaches the whole history without asking the broker
+// again.
 func TestRebuildChangesTheJournalWhenTheRuleChanges(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link, loadOperationItem(t, "input.json"), loadOperationItem(t, "buy.json"))
@@ -1735,9 +1520,7 @@ func TestRebuildChangesTheJournalWhenTheRuleChanges(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// what the rebuild refuses to be asked
-// -------------------------------------------------------------------------
+// What the rebuild refuses to be asked.
 
 func TestRebuildRefusesALinkOfAnotherConnection(t *testing.T) {
 	f := newRebuildFixture(t)
@@ -1749,11 +1532,8 @@ func TestRebuildRefusesALinkOfAnotherConnection(t *testing.T) {
 	}
 }
 
-// TestRebuildRefusesALinkOfAnotherSpace is the second half of that guard. A
-// link naming a space other than the connection's would have this rebuild
-// compute a difference against one space's journal and hand it to another's,
-// and the write path — which is told the space by the CONNECTION — would
-// remove rows it was never shown.
+// A link of another space would diff one space's journal and hand it to
+// another's.
 func TestRebuildRefusesALinkOfAnotherSpace(t *testing.T) {
 	f := newRebuildFixture(t)
 	stranger := f.link
@@ -1764,15 +1544,10 @@ func TestRebuildRefusesALinkOfAnotherSpace(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// the comparison itself
-// -------------------------------------------------------------------------
+// The comparison itself.
 
-// comparedField is one change to a journal row that sameJournalRow has to
-// notice. field names the struct field of operation.Operation it touches,
-// which is what makes the list checkable against the type itself (see
-// TestSameJournalRowLooksAtEveryFieldAnOperationHas) rather than against
-// somebody's memory of what the type holds.
+// comparedField is one change sameJournalRow must notice; field names the
+// operation.Operation field, checked against the type by reflection.
 type comparedField struct {
 	field  string
 	label  string
@@ -1810,10 +1585,8 @@ func comparedFields(t *testing.T) []comparedField {
 	}
 }
 
-// notComparedFields is every field of an operation that sameJournalRow
-// deliberately does NOT look at, each with the reason. A field is in here or
-// in comparedFields, never in neither and never in both — which is what the
-// reflection test below enforces.
+// notComparedFields is every field sameJournalRow ignores, with the reason.
+// Each field is in exactly one of the two lists.
 var notComparedFields = map[string]string{
 	"ID": "the journal's own identity, invented when the row was written; " +
 		"the projection never has one to compare",
@@ -1843,10 +1616,8 @@ func sameJournalRowBase(t *testing.T) operation.Operation {
 		Currency:     "RUB",
 		FeeMinor:     825,
 		Note:         "Покупка 100 шт.",
-		// A mode the base row HAS, so that both directions are a real
-		// difference: one code replaced by another, and one dropped
-		// altogether. A base carrying nothing would make "dropped" identical
-		// to the base and the case would prove nothing.
+		// The base has a mode, so both replacing and dropping it are real
+		// differences.
 		TradingMode: strPtr("TQBR"),
 		// An instant for the same reason: "moved" and "dropped" are both
 		// differences only from a base that has one.
@@ -1859,10 +1630,7 @@ func strPtr(s string) *string { return &s }
 
 func timePtr(t time.Time) *time.Time { return &t }
 
-// TestSameJournalRowNoticesEveryFieldItCompares walks the fields one at a time.
-// A comparison that quietly stopped looking at one of them would leave the
-// journal holding a value the mirror no longer says, and nothing anywhere
-// would report a difference.
+// Each compared field, one at a time.
 func TestSameJournalRowNoticesEveryFieldItCompares(t *testing.T) {
 	base := sameJournalRowBase(t)
 	if !sameJournalRow(base, base) {
@@ -1880,17 +1648,9 @@ func TestSameJournalRowNoticesEveryFieldItCompares(t *testing.T) {
 	}
 }
 
-// TestSameJournalRowLooksAtEveryFieldAnOperationHas is what makes the promise
-// in sameJournalRow's own documentation — "every column the projection could
-// set is compared" — checkable rather than merely stated.
-//
-// Both the comparison and the table above it are written and maintained BY
-// HAND. A field added to operation.Operation tomorrow would slip out of both
-// in the same silence: the mirror would stop being able to correct it, and a
-// broker's correction would stop reaching the journal with nothing anywhere
-// saying so. So the fields are read off the type itself, and every one of them
-// must be either exercised by a case above or named in notComparedFields with
-// the reason it is not.
+// Every field of operation.Operation, read by reflection, is either exercised
+// above or named in notComparedFields, so a new field cannot slip out of the
+// comparison unnoticed.
 func TestSameJournalRowLooksAtEveryFieldAnOperationHas(t *testing.T) {
 	covered := map[string]bool{}
 	for _, c := range comparedFields(t) {
@@ -1923,13 +1683,9 @@ func TestSameJournalRowLooksAtEveryFieldAnOperationHas(t *testing.T) {
 	}
 }
 
-// TestSameJournalRowIgnoresTheBasisTheJournalOwns pins the ONE exclusion, and
-// pins its boundary. The basis of a departing leg and of a paired arrival is
-// worked out by the write path from the source account's own history — the
-// projection is forbidden from supplying it (operation.checkImportContract) —
-// so comparing the zero it hands over against the figure the journal computed
-// would report a difference on every rebuild, for ever. A LONE arrival is the
-// other case: it declares its own basis, so a change in it is a real change.
+// The one exclusion and its boundary: a departing leg's or paired arrival's
+// basis is the write path's, and would differ every rebuild; a lone arrival
+// declares its own, so a change there is real.
 func TestSameJournalRowIgnoresTheBasisTheJournalOwns(t *testing.T) {
 	instrumentA := uuid.MustParse("33333333-3333-4333-8333-333333333333")
 	group := uuid.MustParse("55555555-5555-4555-8555-555555555555")
@@ -1958,12 +1714,9 @@ func TestSameJournalRowIgnoresTheBasisTheJournalOwns(t *testing.T) {
 	}
 }
 
-// realizedOf is a position's realized result, and it FAILS THE TEST when the
-// position has none — a disposal that settled in another currency leaves no
-// figure in any single one (see portfolio.Position.RealizedPnL). Every call
-// below therefore asserts two things at once: the number, and that there is a
-// number, which is what keeps a test from quietly comparing a zero against a
-// zero the moment the currency rule starts refusing to answer.
+// realizedOf is a position's realized result and fails the test when there is
+// none (settled in another currency), so a missing figure is never read as
+// zero.
 func realizedOf(t *testing.T, p *portfolio.Position) int64 {
 	t.Helper()
 	minor, inOneCurrency := p.RealizedPnL()
@@ -1973,17 +1726,10 @@ func realizedOf(t *testing.T, p *portfolio.Position) int64 {
 	return minor
 }
 
-// -------------------------------------------------------------------------
-// a commission charged as an operation of its own (#138)
-// -------------------------------------------------------------------------
+// A commission charged as an operation of its own (#138).
 
-// TestRebuildDropsABrokerFeeTheTradeAlreadyCarries is the ordinary case, and
-// the one the old blanket rule got right 310 times out of 311: the trade
-// reports the commission in its own field, the broker reports it a second time
-// as an operation, and booking both would charge it twice.
-//
-// The mirror row is left CLEAN rather than marked unparsed — nothing failed to
-// be read.
+// The ordinary case, 310 of 311: the trade carries the commission and the
+// fee is a duplicate. Dropped, and the row stays read, not unparsed.
 func TestRebuildDropsABrokerFeeTheTradeAlreadyCarries(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link,
@@ -2010,13 +1756,8 @@ func TestRebuildDropsABrokerFeeTheTradeAlreadyCarries(t *testing.T) {
 	}
 }
 
-// TestRebuildKeepsABrokerFeeItsTradeDoesNotCarry is the 311th, and the reason
-// the rule is no longer "drop them all".
-//
-// The purchase carries no commission field, so the separate operation is the
-// only record of that 11,34 ₽. Dropping it put the charge in neither the
-// journal nor the unparsed list — money gone with nothing on any screen saying
-// so, which is the one outcome this program forbids in capitals.
+// The 311th: the purchase has no commission field, so the 11,34 ₽ fee is
+// the only record and is kept.
 func TestRebuildKeepsABrokerFeeItsTradeDoesNotCarry(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link,
@@ -2050,11 +1791,8 @@ func TestRebuildKeepsABrokerFeeItsTradeDoesNotCarry(t *testing.T) {
 	}
 }
 
-// TestRebuildRefusesABrokerFeeWhoseTradeIsNotHere. With the trade absent, both
-// answers are guesses that cost money in opposite directions: dropping the fee
-// loses a real charge, keeping it books a commission twice. The row becomes a
-// visible unparsed entry saying exactly that, and the detail names the trade so
-// the owner can look it up in the broker's own app.
+// With the trade absent either answer costs money, so the fee is unparsed
+// and its detail names the trade.
 func TestRebuildRefusesABrokerFeeWhoseTradeIsNotHere(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link, loadOperationItem(t, "broker_fee_orphan.json"))
@@ -2078,17 +1816,9 @@ func TestRebuildRefusesABrokerFeeWhoseTradeIsNotHere(t *testing.T) {
 	}
 }
 
-// TestRebuildDropsABrokerFeeWhoseTradeIsItselfUnparsed is a regression the
-// live data caught and the fixtures did not.
-//
-// A currency purchase the broker will not explain is not imported — it answers
-// nothing about what the pair trades or what one unit of it is — so the trade
-// sits on the unparsed list with its own reason. Its commission then has no commission in the journal to duplicate,
-// and the rule as first written kept it: 79 of the owner's currency trades each
-// grew a SECOND unparsed row, saying nothing the first did not, and saying it
-// under a reason about the instrument rather than about the trade.
-//
-// A commission belongs where its trade went.
+// Found on live data: a currency trade the broker will not explain is
+// unparsed, and its commission goes with it rather than becoming a second
+// unparsed row (79 on the owner's account).
 func TestRebuildDropsABrokerFeeWhoseTradeIsItselfUnparsed(t *testing.T) {
 	f := newRebuildFixture(t)
 	trade := loadOperationItem(t, "currency_buy.json")
@@ -2112,11 +1842,7 @@ func TestRebuildDropsABrokerFeeWhoseTradeIsItselfUnparsed(t *testing.T) {
 	}
 }
 
-// TestRebuildChargesABrokerFeeToTheAccountNotToAPosition. The security named on
-// a commission row is the TRADE's; the commission itself is money off the
-// account. Reading it as the fee's own security refused every commission on a
-// paper this program does not account for — and attributed the rest to a
-// position, which is not what a broker's commission is.
+// A broker fee is charged to the account, not to the trade's paper.
 func TestRebuildChargesABrokerFeeToTheAccountNotToAPosition(t *testing.T) {
 	f := newRebuildFixture(t)
 	trade := loadOperationItem(t, "buy_without_commission.json")
@@ -2147,13 +1873,9 @@ func TestRebuildChargesABrokerFeeToTheAccountNotToAPosition(t *testing.T) {
 	}
 }
 
-// TestRebuildWorksOutAForgottenCurrencyPairFromItsName is the owner's two dozen
-// unparsed rows, end to end: dollar and euro pairs the broker delisted and now
-// answers 404 for, so nothing could say what a trade in them bought.
-//
-// The wiring is what this test is for — the pair's name and the trade's own
-// price have to travel from the mirror row into the resolver, where the official
-// rate turns a guess into a fact.
+// The owner's two dozen delisted dollar and euro pair trades: the pair's name
+// and the trade price travel from the mirror to the resolver, where the official
+// rate proves the currency.
 func TestRebuildWorksOutAForgottenCurrencyPairFromItsName(t *testing.T) {
 	f := newRebuildFixture(t)
 	// The rate the central bank published that day. The fixture's trade bought
@@ -2192,10 +1914,7 @@ func TestRebuildWorksOutAForgottenCurrencyPairFromItsName(t *testing.T) {
 	}
 }
 
-// TestRebuildLeavesAForgottenPairUnparsedWithoutARate is the same row with the
-// proof missing. A name alone settles nothing — that is the whole design — so
-// until the rate table reaches that day the trade stays exactly as unparsed as
-// it was.
+// Without the rate the forgotten pair stays unparsed.
 func TestRebuildLeavesAForgottenPairUnparsedWithoutARate(t *testing.T) {
 	f := newRebuildFixture(t)
 
@@ -2210,20 +1929,12 @@ func TestRebuildLeavesAForgottenPairUnparsedWithoutARate(t *testing.T) {
 	}
 }
 
-// TestRebuildLeavesAFundPayoutUnparsedAndThePositionIntact is the owner's own
-// October 2025 (checked live 2026-08-22): Т-Капитал redeemed part of a fund's
-// units, and the broker reported it as an OUTPUT_SECURITIES of "44380.35"
-// units (the fraction only in the prose, the field truncated) followed two
-// weeks later by a BOND_REPAYMENT_FULL of the money. Before this branch's two
-// rules, the transfer lost its fraction AND the payout closed the rest of the
-// position as if a bond had matured — a fabricated loss on units the broker
-// still shows as held.
-//
-// End to end through the real rebuild: the fraction is read with the field as
-// proof, the payout stays a visible unparsed row, and the position afterwards
-// is exactly what the broker holds. The rows here name no paper (asset_uid), so
-// nothing pairs them into one redemption — that is TestRebuildBooksAFund-
-// RedemptionFromItsTwoRows.
+// The owner's October 2025 (live, 2026-08-22): Т-Капитал redeemed part of a
+// fund; the broker reported OUTPUT_SECURITIES of "44380.35" (fraction only in the
+// prose) and two weeks later BOND_REPAYMENT_FULL. The fraction is read with the
+// field as proof, the payout stays unparsed, and the position equals the
+// broker's. These rows name no asset_uid, so nothing pairs them (see
+// TestRebuildBooksAFundRedemptionFromItsTwoRows).
 func TestRebuildLeavesAFundPayoutUnparsedAndThePositionIntact(t *testing.T) {
 	const uidTech = "7c3f9a2e-1111-4222-8333-abcdefabcdef"
 	f := newRebuildFixture(t)
@@ -2241,11 +1952,8 @@ func TestRebuildLeavesAFundPayoutUnparsedAndThePositionIntact(t *testing.T) {
 	out.InstrumentUID, out.FIGI, out.InstrumentType = uidTech, "TCS20A101X68", "etf"
 	out.Quantity = 30
 	out.Description = "Вывод 30.5 лотов фонда Технологии Америки в другой депозитарий"
-	// A day of its own rather than the fixture's, which is dated after this
-	// test was written: the journal refuses an operation in the future, and
-	// this test would then fail for a reason that has nothing to do with what
-	// it checks. It sits between the purchase and the payout, which is the
-	// order the owner's own three rows came in.
+	// Its own day, between purchase and payout, since the fixture's date is
+	// in the future relative to when this was written.
 	out.Date = time.Date(2026, 5, 20, 8, 0, 0, 0, time.UTC)
 
 	payout := loadOperationItem(t, "bond_repayment_full_no_quantity.json")
@@ -2290,9 +1998,8 @@ func TestRebuildLeavesAFundPayoutUnparsedAndThePositionIntact(t *testing.T) {
 	}
 }
 
-// An installation that imported its history before the journal kept the
-// broker's instant: the first rebuild after the update puts it on every entry,
-// and each entry keeps its place in its day while it is rewritten.
+// History imported before the instant was kept gets it on the next rebuild,
+// each entry keeping its place in its day.
 func TestRebuildPutsTheInstantOnEntriesWrittenWithoutIt(t *testing.T) {
 	f := newRebuildFixture(t)
 	f.sync(t, f.link, loadOperationItem(t, "input.json"), loadOperationItem(t, "buy.json"))
@@ -2320,14 +2027,10 @@ func TestRebuildPutsTheInstantOnEntriesWrittenWithoutIt(t *testing.T) {
 	}
 }
 
-// TestRebuildBooksAFundRedemptionFromItsTwoRows is decision Р-13 on the shape
-// the owner's October 2025 came in (live data, 2026-10-05): the units leave as
-// an OUTPUT_SECURITIES of an over-the-counter listing the broker no longer
-// knows, the money comes two weeks later as a BOND_REPAYMENT_FULL of the
-// exchange listing, and the only thing the two rows share is the paper itself
-// (asset_uid). Together they are one redemption on the day of the payout: the
-// withdrawn units leave, the money arrives, and the withdrawal is no transfer
-// of its own.
+// Р-13 on the shape of the owner's October 2025 (live, 2026-10-05): units
+// leave as OUTPUT_SECURITIES of an OTC listing, money comes two weeks later as
+// BOND_REPAYMENT_FULL of the exchange listing, sharing only asset_uid. Together:
+// one redemption on the payout day.
 func TestRebuildBooksAFundRedemptionFromItsTwoRows(t *testing.T) {
 	const (
 		uidTech = "7c3f9a2e-1111-4222-8333-abcdefabcdef"
@@ -2394,9 +2097,7 @@ func TestRebuildBooksAFundRedemptionFromItsTwoRows(t *testing.T) {
 	}
 }
 
-// Two withdrawals of the paper before one payout: which units it pays for
-// cannot be told, so nothing is paired — the withdrawals stay transfers out and
-// the payout a visible unparsed row, as before Р-13.
+// Two withdrawals before one payout: ambiguous, so nothing is paired.
 func TestRebuildPairsAFundPayoutOnlyWhenItIsUnambiguous(t *testing.T) {
 	const (
 		uidTech = "7c3f9a2e-1111-4222-8333-abcdefabcdef"
