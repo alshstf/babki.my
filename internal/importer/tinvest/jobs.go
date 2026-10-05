@@ -493,6 +493,16 @@ func (w *syncWorker) sync(ctx context.Context, conn Connection, links []AccountL
 		runs[len(runs)-1].stats = stats
 	}
 
+	// The settlement days of the trades just mirrored (decision Р-3), on the
+	// hourly run only: the broker builds its report slowly and lets it be asked
+	// for a few times a minute, and the owner pressing "sync now" or linking an
+	// account is waiting for the journal, not for this. The rebuild below uses
+	// whatever days are stored by then; a trade still without one keeps its
+	// trade day until a later hour reads its month.
+	if trigger == TriggerSchedule {
+		readSettlements(ctx, w.store, client, links, time.Now, settlementBudget, w.log)
+	}
+
 	// One rebuild for the whole connection, over every link at once — see
 	// Work's own note, and Rebuild's, on why a subset is not merely narrower.
 	rebuilt, err := w.newRebuilder().Rebuild(ctx, conn, links, client)

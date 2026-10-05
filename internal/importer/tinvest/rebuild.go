@@ -370,6 +370,13 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 			return nil, err
 		}
 		paidFor, withdrawn := pairFundRedemptions(rows)
+		// The days the broker report says each trade settled on (decision Р-3),
+		// read by the sync and kept beside the mirror. Empty until a report has
+		// been read, and then every trade keeps its trade day.
+		settledDays, err := r.store.tradeSettlementsByLink(ctx, link.ID)
+		if err != nil {
+			return nil, err
+		}
 		for _, row := range rows {
 			p.stored[row.ID] = UnparsedVerdict{Reason: row.UnparsedReason, Detail: row.UnparsedDetail}
 			if explained[row.ContentKey] {
@@ -483,6 +490,7 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 			if len(ops) > 0 {
 				p.projected[brokerRef{link.ID, row.BrokerOperationID}] = true
 			}
+			settled := settlementDay(row.Raw, settledDays)
 			for i := range ops {
 				if ops[i].FeeMinor != 0 {
 					// This row put a commission of its own into the journal,
@@ -508,6 +516,7 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 				// the journal folds by it (see operation.foldsBefore).
 				at := row.OccurredAt
 				ops[i].OccurredAt = &at
+				settleOn(&ops[i], settled)
 				p.want = append(p.want, desired{
 					op: ops[i], rowID: row.ID, at: row.OccurredAt, leg: i,
 					pairable: pairableLeg(row), deferred: owed,
