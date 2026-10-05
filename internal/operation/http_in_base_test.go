@@ -1,7 +1,6 @@
 package operation_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -266,30 +265,10 @@ func TestListOperationInBaseNullWhenNoRateOnOrBeforeDate(t *testing.T) {
 	}
 }
 
-// converterLike mirrors the handler's unexported converter interface so this
-// package can name the double's type.
-type converterLike interface {
-	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
-	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
-}
-
-// failingConverter fails every lookup with err, standing in for an outage
-// rather than marketdata.ErrNoRate, which a real converter cannot be made to
-// produce on demand.
-type failingConverter struct{ err error }
-
-func (c failingConverter) Rate(_ context.Context, _, _ string, _ time.Time) (decimal.Decimal, time.Time, error) {
-	return decimal.Decimal{}, time.Time{}, c.err
-}
-
-func (c failingConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
-	return ratetest.BatchFrom(ctx, c, queries)
-}
-
 // A genuine failure resolving a rate fails the request rather than becoming
 // in_base: null, or an outage would look like an ordinary missing rate.
 func TestListOperationInBaseRealRateErrorFailsRequest(t *testing.T) {
-	url, c := newAPIWithConverterDouble(t, failingConverter{err: errors.New("connection reset by peer")})
+	url, c := newAPIWithConverterDouble(t, ratetest.Failing{Err: errors.New("connection reset by peer")})
 
 	// USD in a RUB space, so the lookup really happens.
 	acc := mkAccount(t, url, c, "US брокер", "USD")

@@ -34,7 +34,7 @@ func newTestPool(t *testing.T) (*pgxpool.Pool, *marketdata.Store) {
 // newAPIOn wires the full stack on pool as cmd/babki mounts it, with conv as
 // the operation handler's converter, and returns the server URL and a logged-in
 // client.
-func newAPIOn(t *testing.T, pool *pgxpool.Pool, conv converterLike) (string, *http.Client) {
+func newAPIOn(t *testing.T, pool *pgxpool.Pool, conv marketdata.RateSource) (string, *http.Client) {
 	t.Helper()
 	famStore := family.NewStore(pool)
 	famSvc := family.NewService(famStore)
@@ -80,7 +80,7 @@ func newAPIWithConverter(t *testing.T) (string, *http.Client, *marketdata.Store)
 
 // newAPIWithConverterDouble swaps the operation handler's converter for
 // conv.
-func newAPIWithConverterDouble(t *testing.T, conv converterLike) (string, *http.Client) {
+func newAPIWithConverterDouble(t *testing.T, conv marketdata.RateSource) (string, *http.Client) {
 	t.Helper()
 	pool, _ := newTestPool(t)
 	return newAPIOn(t, pool, conv)

@@ -35,12 +35,6 @@ type quoteStoreLike interface {
 	LatestQuotes(ctx context.Context, instrumentIDs []uuid.UUID) (map[uuid.UUID]marketdata.Quote, error)
 }
 
-// converterLike mirrors the handler's unexported converter, as above.
-type converterLike interface {
-	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
-	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
-}
-
 // journalStoreLike, instrumentStoreLike and spaceStoreLike mirror the rest of
 // the handler's dependencies.
 type (
@@ -67,7 +61,7 @@ type portfolioStores struct {
 // cmd/babki does. The caller provides pool and quotes. wrap, when given,
 // replaces the portfolio handler's stores only, so a double counts one
 // screen's round trips and not the fixture's writes.
-func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv converterLike, wrap ...func(portfolioStores) portfolioStores) (string, *http.Client) {
+func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv marketdata.RateSource, wrap ...func(portfolioStores) portfolioStores) (string, *http.Client) {
 	t.Helper()
 	famStore := family.NewStore(pool)
 	famSvc := family.NewService(famStore)
@@ -946,22 +940,11 @@ func mustDate(t *testing.T, s string) time.Time {
 	return d
 }
 
-// failingConverter fails every lookup with a real error, not ErrNoRate.
-type failingConverter struct{ err error }
-
-func (c failingConverter) Rate(_ context.Context, _, _ string, _ time.Time) (decimal.Decimal, time.Time, error) {
-	return decimal.Decimal{}, time.Time{}, c.err
-}
-
-func (c failingConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
-	return ratetest.BatchFrom(ctx, c, queries)
-}
-
 // A real rate failure fails the request rather than showing in_base: null.
 func TestPositionsRealRateErrorFailsRequest(t *testing.T) {
 	pool := testdb.New(t)
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
-	url, c := setupAPI(t, pool, quotes, failingConverter{err: errors.New("connection reset by peer")})
+	url, c := setupAPI(t, pool, quotes, ratetest.Failing{Err: errors.New("connection reset by peer")})
 
 	// A USD account in a RUB space, so conversion is attempted.
 	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)

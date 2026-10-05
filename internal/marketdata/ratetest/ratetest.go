@@ -88,6 +88,22 @@ func (Fixed) ConvertMany(context.Context, map[string]int64, string, time.Time) (
 	panic("ratetest.Fixed: ConvertMany not used")
 }
 
+// Failing fails every lookup with Err: an outage, which a real converter
+// cannot be made to have on demand, as opposed to marketdata.ErrNoRate.
+type Failing struct{ Err error }
+
+func (f Failing) Rate(context.Context, string, string, time.Time) (decimal.Decimal, time.Time, error) {
+	return decimal.Decimal{}, time.Time{}, f.Err
+}
+
+func (f Failing) RatesOn(context.Context, []marketdata.RateQuery) (marketdata.Rates, error) {
+	return marketdata.Rates{}, f.Err
+}
+
+func (f Failing) ConvertMany(context.Context, map[string]int64, string, time.Time) (int64, []string, time.Time, error) {
+	return 0, nil, time.Time{}, f.Err
+}
+
 // Resolver is the one-pair half of a converter.
 type Resolver interface {
 	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)

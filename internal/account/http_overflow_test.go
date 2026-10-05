@@ -9,6 +9,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/ratetest"
 	"babki.my/babki/internal/platform/money"
 )

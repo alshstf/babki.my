@@ -20,6 +20,7 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/marketdata/ratetest"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 )
@@ -270,24 +271,6 @@ type converterLike interface {
 	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
 }
 
-// failingConverter fails every lookup with a real error, not ErrNoRate: an
-// outage a real converter cannot be made to have.
-type failingConverter struct{ err error }
-
-func (c failingConverter) ConvertMany(_ context.Context, _ map[string]int64, _ string, _ time.Time) (int64, []string, time.Time, error) {
-	return 0, nil, time.Time{}, c.err
-}
-
-func (c failingConverter) Rate(_ context.Context, _, _ string, _ time.Time) (decimal.Decimal, time.Time, error) {
-	return decimal.Decimal{}, time.Time{}, c.err
-}
-
-// RatesOn fails the whole batch; the prewarm ignores it, so the per-currency
-// fallback has to discover and report the outage.
-func (c failingConverter) RatesOn(_ context.Context, _ []marketdata.RateQuery) (marketdata.Rates, error) {
-	return marketdata.Rates{}, c.err
-}
-
 // newAPIWithConverterDouble wires conv as the account handler's converter.
 func newAPIWithConverterDouble(t *testing.T, conv converterLike) (string, *http.Client) {
 	t.Helper()
@@ -318,7 +301,7 @@ func newAPIWithConverterDouble(t *testing.T, conv converterLike) (string, *http.
 // null, which would look like an ordinary missing rate. Only the status tells
 // them apart.
 func TestListRealRateErrorFailsRequest(t *testing.T) {
-	url, c := newAPIWithConverterDouble(t, failingConverter{err: errors.New("connection reset by peer")})
+	url, c := newAPIWithConverterDouble(t, ratetest.Failing{Err: errors.New("connection reset by peer")})
 
 	// A USD account with a balance in a RUB space, so the lookup is attempted.
 	id := mkAccount(t, url, c, "US cash", "USD")
