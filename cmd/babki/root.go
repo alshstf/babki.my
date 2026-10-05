@@ -210,6 +210,9 @@ func newTinvestDeps(r *rt, instStore *instrument.Store, opStore *operation.Store
 				"exchange rates, quotes — will run either; nothing about this instance's "+
 				"configuration causes it: %w", err)
 	}
+	// One exchange client for every rebuild, so the repayment schedules it
+	// remembers outlive a single sync.
+	faces := moex.New(newMoexHTTPClient(), "", r.log)
 	return jobs.TinvestDeps{
 		Store:     store,
 		Box:       r.box,
@@ -219,7 +222,10 @@ func newTinvestDeps(r *rt, instStore *instrument.Store, opStore *operation.Store
 			// what a currency pair the broker has FORGOTTEN trades, from the
 			// price the trade was struck at (see Resolver.currencyFromHint).
 			resolver := tinvest.NewResolver(store, instStore, r.log).WithRates(converter)
-			return tinvest.NewRebuilder(store, resolver, operation.NewService(opStore), opStore, r.log)
+			// The exchange's repayment schedules measure a bond's partial
+			// repayments against its outstanding face (decision Р-4).
+			return tinvest.NewRebuilder(store, resolver, operation.NewService(opStore), opStore, r.log).
+				WithFaceSchedule(faces)
 		},
 		Reconciler: tinvest.NewReconciler(store, opStore, accStore, instStore, corporateaction.NewStore(r.pool), r.log),
 	}, nil

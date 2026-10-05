@@ -1793,6 +1793,7 @@ func comparedFields(t *testing.T) []comparedField {
 		{"SettledOn", "settlement day", func(o *operation.Operation) { o.SettledOn = &settled }},
 		{"OccurredAt", "instant", func(o *operation.Operation) { o.OccurredAt = timePtr(time.Date(2026, 3, 15, 9, 0, 0, 0, time.UTC)) }},
 		{"OccurredAt", "instant dropped", func(o *operation.Operation) { o.OccurredAt = nil }},
+		{"FaceBeforeMinor", "face value before a repayment", func(o *operation.Operation) { v := int64(80_000); o.FaceBeforeMinor = &v }},
 		{"Quantity", "quantity", func(o *operation.Operation) { q := decimal.RequireFromString("11"); o.Quantity = &q }},
 		{"Quantity", "quantity dropped", func(o *operation.Operation) { o.Quantity = nil }},
 		{"Price", "price", func(o *operation.Operation) { p := decimal.RequireFromString("276"); o.Price = &p }},

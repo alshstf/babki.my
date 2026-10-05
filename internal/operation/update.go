@@ -98,10 +98,10 @@ func (s *Store) update(ctx context.Context, spaceID uuid.UUID, op Operation) (Op
 		UPDATE operations SET
 			instrument_id = $3, occurred_on = $4, settled_on = $5, quantity = $6,
 			price = $7, amount_minor = $8, currency = $9, fee_minor = $10,
-			note = $11, split_ratio = $12,
+			note = $11, split_ratio = $12, face_before_minor = $13,
 			occurred_at = CASE WHEN occurred_on = $4 THEN occurred_at END
 		WHERE space_id = $1 AND id = $2
 		RETURNING `+cols,
 		spaceID, op.ID, op.InstrumentID, op.OccurredOn, op.SettledOn, op.Quantity,
-		op.Price, op.AmountMinor, op.Currency, op.FeeMinor, op.Note, op.SplitRatio))
+		op.Price, op.AmountMinor, op.Currency, op.FeeMinor, op.Note, op.SplitRatio, op.FaceBeforeMinor))
 }
