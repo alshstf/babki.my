@@ -521,3 +521,66 @@ func (w wireBrokerReportRow) parse() (s TradeSettlement, ok bool, err error) {
 	}
 	return TradeSettlement{TradeID: w.TradeID, TradedAt: traded, SettledOn: settled}, true, nil
 }
+
+// getDividendsRequest mirrors GetDividendsRequest.
+type getDividendsRequest struct {
+	InstrumentID string `json:"instrumentId"`
+	From         string `json:"from"`
+	To           string `json:"to"`
+}
+
+type wireGetDividendsResponse struct {
+	Dividends []wireDividend `json:"dividends"`
+}
+
+// wireDividend mirrors Dividend (InstrumentsService/GetDividends). Only the
+// fields DeclaredDividend needs are modeled. dividendNet is, despite its name,
+// the amount per share BEFORE tax: on the owner's papers it is the issuer's
+// declared figure (NVIDIA's 0,04 $ for September 2021, of which 0,028 $ a share
+// reached the account).
+type wireDividend struct {
+	DividendNet wireMoneyValue `json:"dividendNet"`
+	RecordDate  string         `json:"recordDate"`
+	PaymentDate string         `json:"paymentDate"`
+	LastBuyDate string         `json:"lastBuyDate"`
+}
+
+// parse reads one dividend; ok is false for one declared as nothing. A
+// dividend with no record date is refused: it is the day the whole estimate
+// hangs on.
+func (w wireDividend) parse() (d DeclaredDividend, ok bool, err error) {
+	per, err := w.DividendNet.parse()
+	if err != nil {
+		return DeclaredDividend{}, false, fmt.Errorf("dividendNet: %w", err)
+	}
+	if !per.Decimal().IsPositive() {
+		return DeclaredDividend{}, false, nil
+	}
+	record, err := parseWireTime(w.RecordDate)
+	if err != nil {
+		return DeclaredDividend{}, false, fmt.Errorf("recordDate: %w", err)
+	}
+	if record.IsZero() {
+		return DeclaredDividend{}, false, fmt.Errorf("a dividend of %s %s with no recordDate", per.Decimal(), per.Currency)
+	}
+	d = DeclaredDividend{PerShare: per, RecordDate: mskDay(record)}
+	if d.PaymentDate, err = optionalDay(w.PaymentDate); err != nil {
+		return DeclaredDividend{}, false, fmt.Errorf("paymentDate: %w", err)
+	}
+	if d.LastBuyDate, err = optionalDay(w.LastBuyDate); err != nil {
+		return DeclaredDividend{}, false, fmt.Errorf("lastBuyDate: %w", err)
+	}
+	return d, true, nil
+}
+
+// optionalDay is a calendar day the gateway may leave out: nil when it does.
+// The broker's calendar sends its days as Moscow midnights or UTC ones
+// depending on the paper, and either is the same Moscow day.
+func optionalDay(s string) (*time.Time, error) {
+	t, err := parseWireTime(s)
+	if err != nil || t.IsZero() {
+		return nil, err
+	}
+	day := mskDay(t)
+	return &day, nil
+}

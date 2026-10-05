@@ -23,6 +23,8 @@ function sourceName(t: TFunction, kind: string): string {
       return t("dataSources.kinds.tinvestQuotes");
     case "tinvest.backfill_quotes":
       return t("dataSources.kinds.tinvestHistory");
+    case "tinvest.refresh_dividends":
+      return t("dataSources.kinds.tinvestDividends");
     case "corporateaction.refresh_moex_splits":
       return t("dataSources.kinds.moexSplits");
     default:

@@ -764,6 +764,49 @@ func (c *Client) brokerReportPage(ctx context.Context, taskID string, page int) 
 	}
 }
 
+// DeclaredDividend is one dividend from the broker's calendar of a paper:
+// what the issuer declared per share before any tax, the day whose holders it
+// is paid to, and the days around it (decision Р-14). The days are calendar
+// days at UTC midnight; a day the broker leaves out is nil.
+type DeclaredDividend struct {
+	PerShare    MoneyValue
+	RecordDate  time.Time
+	PaymentDate *time.Time
+	LastBuyDate *time.Time
+}
+
+// Dividends asks the broker's calendar for a paper's dividends with a record
+// date in [from, to). instrumentID is any identifier the broker accepts for
+// the paper — its uid or its figi.
+//
+// THE CALENDAR IS THE BROKER'S, NOT THE ACCOUNT'S: it answers for any paper
+// the broker knows, held or not, which is what lets one connection serve the
+// papers of every account in the space, a second broker's included.
+//
+// A dividend declared as nothing — the broker lists a cancelled one with a
+// zero amount — is left out: it was paid to nobody.
+func (c *Client) Dividends(ctx context.Context, instrumentID string, from, to time.Time) ([]DeclaredDividend, error) {
+	var resp wireGetDividendsResponse
+	if err := c.do(ctx, "InstrumentsService/GetDividends", getDividendsRequest{
+		InstrumentID: instrumentID,
+		From:         from.UTC().Format(time.RFC3339),
+		To:           to.UTC().Format(time.RFC3339),
+	}, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]DeclaredDividend, 0, len(resp.Dividends))
+	for _, w := range resp.Dividends {
+		d, ok, err := w.parse()
+		if err != nil {
+			return nil, fmt.Errorf("tinvest: InstrumentsService/GetDividends(%s): %w", instrumentID, err)
+		}
+		if ok {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
 // rateLimitError signals a 429 response; do() catches it with errors.As to
 // decide whether to wait and retry, rather than treating it like any other
 // non-200 status.

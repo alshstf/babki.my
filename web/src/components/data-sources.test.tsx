@@ -64,10 +64,12 @@ describe("data sources", () => {
       }),
       source("tinvest.sync", { last_success_at: "2026-10-03T00:00:00Z", last_failure_at: "2026-10-01T00:00:00Z", last_error: "old" }),
       source("tinvest.refresh_quotes", { last_success_at: null }),
+      source("tinvest.refresh_dividends"),
     ]);
     renderIn(<DataSourcesList />);
     const list = await screen.findByTestId("data-sources");
     expect(list.textContent).toContain("Мосбиржа — текущие цены");
+    expect(list.textContent).toContain("Т-Инвестиции — календарь дивидендов");
     expect(list.textContent).toContain("ЦБ — курсы валют");
     expect(list.textContent).toContain("cbr: unexpected status 503");
     expect(list.textContent).not.toContain("old");

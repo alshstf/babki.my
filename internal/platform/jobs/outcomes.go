@@ -94,6 +94,7 @@ func sources() []struct {
 		{tinvest.SyncArgs{}.Kind(), tinvestSyncInterval},
 		{tinvest.RefreshQuotesArgs{}.Kind(), tinvestQuotesInterval},
 		{tinvest.BackfillQuotesArgs{}.Kind(), backfillFxInterval},
+		{tinvest.RefreshDividendsArgs{}.Kind(), tinvestDividendsInterval},
 		{corporateaction.RefreshMoexSplitsArgs{}.Kind(), corporateActionsInterval},
 	}
 }

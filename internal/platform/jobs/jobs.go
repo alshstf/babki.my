@@ -34,6 +34,9 @@ const (
 	backfillFxInterval    = 24 * time.Hour
 	tinvestSyncInterval   = time.Hour
 	tinvestQuotesInterval = 30 * time.Minute
+	// Dividends are declared weeks ahead and paid quarterly at most; reading
+	// the broker's calendar once a day is plenty.
+	tinvestDividendsInterval = 24 * time.Hour
 
 	// Splits are announced days ahead and take effect on a date.
 	corporateActionsInterval = 24 * time.Hour
@@ -114,6 +117,8 @@ func NewWorkers(
 		tinvestDeps.Box, tinvestDeps.NewClient, log, nil))
 	river.AddWorker(workers, tinvest.NewBackfillQuotesWorker(tinvestDeps.Store, mdStore, operations,
 		tinvestDeps.Box, tinvestDeps.NewClient, log))
+	river.AddWorker(workers, tinvest.NewDividendsWorker(tinvestDeps.Store, mdStore,
+		tinvestDeps.Box, tinvestDeps.NewClient, log, nil))
 	// The corporate-actions registry. The refresh worker is registered only
 	// when the quote provider can also answer about splits — the same rule the
 	// gold worker follows above and for the same reason: the interface is the
@@ -167,6 +172,7 @@ func schedule() []scheduledJob {
 		{tinvestSyncInterval, tinvest.SyncDispatchArgs{}},
 		{tinvestQuotesInterval, tinvest.RefreshQuotesArgs{}},
 		{backfillFxInterval, tinvest.BackfillQuotesArgs{}},
+		{tinvestDividendsInterval, tinvest.RefreshDividendsArgs{}},
 		{corporateActionsInterval, corporateaction.RefreshMoexSplitsArgs{}},
 		{corporateActionsInterval, corporateaction.MaterializeAllArgs{}},
 	}

@@ -73,8 +73,8 @@ func TestEachAttemptOfAJobIsRecorded(t *testing.T) {
 	if heartbeats != 0 {
 		t.Error("the heartbeat was recorded as a source")
 	}
-	if len(list) != 8 || list[0].Kind != (marketdata.RefreshQuotesArgs{}).Kind() {
-		t.Errorf("sources = %d starting with %q, want the eight in their fixed order", len(list), list[0].Kind)
+	if len(list) != 9 || list[0].Kind != (marketdata.RefreshQuotesArgs{}).Kind() {
+		t.Errorf("sources = %d starting with %q, want the nine in their fixed order", len(list), list[0].Kind)
 	}
 }
 
