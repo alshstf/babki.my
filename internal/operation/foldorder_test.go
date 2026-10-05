@@ -8,24 +8,10 @@ import (
 	"babki.my/babki/internal/operation"
 )
 
-// TestSQLAndMemoryFoldADayInTheSameOrder is the proof behind the fold rank
-// living in one place (see operation.foldRank).
-//
-// THE JOURNAL IS READ TWO WAYS. The database orders it — every query that feeds
-// the engine — and the write paths order it in memory while they are deciding
-// whether a request may be accepted. If those two ever disagree about one day,
-// an operation is checked against one journal and replayed against another, and
-// this package has met that fault twice: accepted on the write, refused on
-// every later read, for ever.
-//
-// THE CASE THAT SEPARATES THEM is a registry split and a same-day trade with
-// ADVERSE stamps: the split is written last, so by created_at alone it folds
-// last, and by rank it folds first. A test whose split was stamped earliest
-// would pass whichever rule was in force and prove nothing.
-//
-// It checks the ORDER rather than an arithmetic result, because that is the
-// thing the two spellings have to agree about;
-// TestASameDayBuyIsNotMultipliedByThatDaysSplit is the arithmetic half.
+// SQL and in-memory sorting fold a day in the same order (see foldRank). The
+// split is stamped after the same-day trade, so created_at alone and the rank
+// disagree; a split stamped first would prove nothing. The arithmetic half is
+// TestASameDayBuyIsNotMultipliedByThatDaysSplit.
 func TestSQLAndMemoryFoldADayInTheSameOrder(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -68,18 +54,9 @@ func TestSQLAndMemoryFoldADayInTheSameOrder(t *testing.T) {
 	}
 }
 
-// TestASameDayBuyIsNotMultipliedByThatDaysSplit is the arithmetic the order
-// above exists for.
-//
-// A split's effective date is the FIRST DAY THE PAPER TRADES IN THE NEW
-// QUANTITY, so a purchase made that day is already made in post-split units and
-// must not be multiplied again. Ten shares bought on the split day, ten more
-// held from before, one-into-ten: the position is 100 + 10 = 110, not
-// (100 + 10) × ... nor 200.
-//
-// Without the rank the split folds last (it is written last) and multiplies the
-// same-day purchase too, giving 200 — a holding twice what the broker reports,
-// with nothing on any screen to say which of the two numbers is wrong.
+// A buy on a split's effective day is already in post-split units. Ten held
+// before, ten bought that day, one into ten: 100 + 10 = 110. Folded last, the
+// split would multiply the same-day buy too: 200.
 func TestASameDayBuyIsNotMultipliedByThatDaysSplit(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)

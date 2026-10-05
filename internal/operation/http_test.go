@@ -23,21 +23,17 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// newTestPool spins up a migrated test database and returns it together
-// with a marketdata.Store on it, so a test can seed fx_rates on the very
-// pool the handler under test reads from.
+// newTestPool returns a migrated test database and a marketdata.Store on it
+// for seeding fx_rates.
 func newTestPool(t *testing.T) (*pgxpool.Pool, *marketdata.Store) {
 	t.Helper()
 	pool := testdb.New(t)
 	return pool, marketdata.NewStore(pool)
 }
 
-// newAPIOn wires the full stack on an existing pool: family + account +
-// instrument + operation modules, mirroring how cmd/babki/root.go's
-// mountModules assembles them, with the operation handler's fx converter
-// supplied by the caller (conv) so a test can substitute a double for the
-// real, Postgres-backed one. It returns the server URL and a logged-in
-// client for the space created by /api/v1/setup.
+// newAPIOn wires the full stack on pool as cmd/babki mounts it, with conv as
+// the operation handler's converter, and returns the server URL and a logged-in
+// client.
 func newAPIOn(t *testing.T, pool *pgxpool.Pool, conv converterLike) (string, *http.Client) {
 	t.Helper()
 	famStore := family.NewStore(pool)
@@ -56,11 +52,8 @@ func newAPIOn(t *testing.T, pool *pgxpool.Pool, conv converterLike) (string, *ht
 	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(mdStore), nil, auth, sm).Mount(srv)
 	instrument.NewHandler(instStore, auth, sm).Mount(srv)
 	operation.NewHandler(opSvc, opStore, famStore, conv, auth, sm).Mount(srv)
-	// The positions endpoint is mounted here too, with a real converter of its
-	// own rather than the caller's double: a journal row and the position built
-	// from the same purchases must agree on what those purchases cost in the
-	// base currency, and that claim can only be checked by asking both
-	// endpoints of one running stack (see http_transfer_in_base_test.go).
+	// Positions use a real converter, so a journal row and its position can be
+	// compared on one running stack (http_transfer_in_base_test.go).
 	portfolio.NewHandler(opStore, instStore, mdStore, marketdata.NewConverter(mdStore), famStore, auth, sm).Mount(srv)
 
 	ts := httptest.NewServer(srv.Handler())
@@ -76,9 +69,8 @@ func newAPIOn(t *testing.T, pool *pgxpool.Pool, conv converterLike) (string, *ht
 	return ts.URL, client
 }
 
-// newAPIWithConverter is the standard fixture: the full stack on a fresh
-// pool with a real, Postgres-backed fx converter, plus the marketdata store
-// behind it so the test can seed the fx rates that converter will resolve.
+// newAPIWithConverter is the standard fixture: the full stack with a real
+// converter and its store for seeding rates.
 func newAPIWithConverter(t *testing.T) (string, *http.Client, *marketdata.Store) {
 	t.Helper()
 	pool, mdStore := newTestPool(t)
@@ -86,9 +78,8 @@ func newAPIWithConverter(t *testing.T) (string, *http.Client, *marketdata.Store)
 	return url, c, mdStore
 }
 
-// newAPIWithConverterDouble is newAPIWithConverter with the operation
-// handler's fx converter replaced by conv, for tests that need a specific
-// failure mode out of it.
+// newAPIWithConverterDouble swaps the operation handler's converter for
+// conv.
 func newAPIWithConverterDouble(t *testing.T, conv converterLike) (string, *http.Client) {
 	t.Helper()
 	pool, _ := newTestPool(t)
@@ -137,15 +128,9 @@ type opResp struct {
 	Quantity    *string `json:"quantity"`
 	Price       *string `json:"price"`
 	AmountMinor int64   `json:"amount_minor"`
-	// HasUndatedLots is published on every operation, this response included
-	// (see the API contract) — the two legs of one transfer must answer it
-	// identically, which is what TestTransferPairAnswersUndatedTheSameOnBothLegs
-	// reads it here for.
+	// Published on every operation, this response included.
 	HasUndatedLots bool `json:"has_undated_lots"`
-	// AssembledFromLots, like HasUndatedLots, is a property of the operation
-	// and travels on this response too — unlike in_base, which this response
-	// omits entirely (see the API contract) and which AssembledFromLots used
-	// to live inside before #67 moved it up.
+	// Also on this response, which omits in_base (#67).
 	AssembledFromLots bool `json:"assembled_from_lots"`
 }
 
@@ -328,10 +313,9 @@ func TestOperationsJournalAndTransfers(t *testing.T) {
 	}
 }
 
-// TestATradeWithoutAnAmountGetsTheServersOwn: a buy or a sell that states its
-// quantity and price may leave the amount out, and the server records
-// quantity × price in its own rounding. Anything else without an amount is
-// refused, and an amount that IS given is taken as given.
+// A buy or sell with quantity and price may omit the amount; the server
+// records quantity × price. Anything else without an amount is refused, and a
+// given amount is taken as given.
 func TestATradeWithoutAnAmountGetsTheServersOwn(t *testing.T) {
 	url, c := newAPI(t)
 	acc := mkAccount(t, url, c, "Брокер", "RUB")

@@ -12,18 +12,12 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// storageScale is how many decimal places the journal keeps for a quantity
-// (operations.quantity and operation_transfer_lots.quantity are both
-// NUMERIC(30,10)). The tests below assert against the storage contract itself,
-// so they name it rather than reaching for the service's unexported constant.
+// storageScale is the journal's quantity scale (NUMERIC(30,10)), named here
+// rather than taken from the service.
 const storageScale = int32(10)
 
-// positionsOf replays an account's journal exactly the way GET
-// /accounts/{id}/positions does — store.ListForEngine, then portfolio.Compute
-// — and fails the test with the error that endpoint would answer 422 with.
-// This is the check that matters for a transfer: a breakdown the engine
-// refuses does not spoil one instrument's row, it takes the account's whole
-// positions screen down.
+// positionsOf replays an account the way GET /accounts/{id}/positions does
+// and fails with the error that endpoint would answer 422 with.
 func positionsOf(t *testing.T, f fixture, accountID uuid.UUID) map[uuid.UUID]*portfolio.Position {
 	t.Helper()
 	ops, err := f.store.ListForEngine(f.ctx, f.spaceID, accountID)
@@ -37,8 +31,7 @@ func positionsOf(t *testing.T, f fixture, accountID uuid.UUID) map[uuid.UUID]*po
 	return positions
 }
 
-// transferInOf returns the transfer_in recorded on an account, read back the
-// way the rest of the system consumes the journal.
+// transferInOf returns the transfer_in recorded on an account.
 func transferInOf(t *testing.T, f fixture, accountID uuid.UUID) operation.Operation {
 	t.Helper()
 	ops, err := f.store.ListForEngine(f.ctx, f.spaceID, accountID)
@@ -52,34 +45,16 @@ func transferInOf(t *testing.T, f fixture, accountID uuid.UUID) operation.Operat
 	return *in
 }
 
-// TestTransferAfterReverseSplitStaysReadable is the reviewer's reproduction,
-// end to end through the real service, of the branch's worst bug: a
-// legitimate transfer that permanently broke the receiving account's
-// positions screen.
+// A transfer after a reverse split leaves the receiving account readable.
 //
-//	buy 3.5 SBER on 01.07 for 350,00 ; buy 3.5 SBER on 02.07 for 700,00
-//	reverse split 1:3 on 03.07 (ratio 0.3333333333, the natural way to record it)
-//	  → two lots of 1.16666666655, a position of 2.3333333331
+//	buy 3.5 SBER on 01.07 ; buy 3.5 SBER on 02.07
+//	reverse split 1:3 on 03.07 -> two lots of 1.16666666655, total 2.3333333331
 //	transfer all 2.3333333331 on 05.07
 //
-// Lot quantities are not bound to ten decimal places — a split multiplies
-// them by a ratio — but the columns that store them are. Each piece was
-// written on its own and rounded on its own: both 1.16666666655 pieces rounded
-// UP to 1.1666666666, so the stored breakdown summed to 2.3333333332 while the
-// stored operation said it moved 2.3333333331. The write path checked the
-// exact pieces and was happy (201 Created); every later read checked the
-// stored ones and was not, so GET .../positions answered
-//
-//	422: transfer lots sum to quantity 2.3333333332, but the operation moves 2.3333333331
-//
-// for that account, forever, for every instrument in it.
-//
-// The pieces are now brought onto the storage scale as the breakdown is built,
-// the remainder going to the last piece (operation.quantizeLots), so what is
-// written is exactly what is read back: 1.1666666665 + 1.1666666666, summing
-// to the 2.3333333331 that moved. The 1e-10 the first piece gives up shows up
-// on the last one — the same "floor the share, the last piece takes the
-// remainder" rule releaseFIFO has always applied to costs.
+// Each piece used to be stored and rounded on its own, up to 1.1666666666, so the
+// stored breakdown summed to 2.3333333332 against an operation of 2.3333333331
+// and the account answered 422 for good. quantizeLots now stores 1.1666666665 +
+// 1.1666666666, the remainder on the last piece.
 func TestTransferAfterReverseSplitStaysReadable(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -105,8 +80,7 @@ func TestTransferAfterReverseSplitStaysReadable(t *testing.T) {
 	}
 	seedSplit(t, f, svc, split)
 
-	// What the source holds after the split, and therefore what the transfer
-	// below moves in full: two lots of 3.5 × 0.3333333333.
+	// What the source holds after the split, moved in full.
 	moved := decimal.RequireFromString("2.3333333331")
 	if src := positionsOf(t, f, f.accountID)[f.sberID]; !src.Quantity.Equal(moved) {
 		t.Fatalf("source quantity after the split = %s, want %s", src.Quantity, moved)
@@ -120,8 +94,7 @@ func TestTransferAfterReverseSplitStaysReadable(t *testing.T) {
 		t.Fatalf("transfer of a split position: %v", err)
 	}
 
-	// The receiving account's positions must READ — the whole point. Before the
-	// fix this call is where the reproduction ends, with the 422 above.
+	// The receiving account's positions must read.
 	dest := positionsOf(t, f, f.account2ID)[f.sberID]
 	if dest == nil {
 		t.Fatalf("no position on the receiving account")
@@ -133,9 +106,8 @@ func TestTransferAfterReverseSplitStaysReadable(t *testing.T) {
 		t.Errorf("received basis = %d, want 105000 (35000 + 70000, unchanged by the move)", dest.CostMinor)
 	}
 
-	// Every stored piece is representable, and the pieces still describe the
-	// same two purchases: the remainder went to the last piece, not into thin
-	// air.
+	// Every stored piece is representable and the remainder went to the
+	// last one.
 	want := []operation.ReleasedLot{
 		{Quantity: decimal.RequireFromString("1.1666666665"), CostMinor: 35_000, AcquiredOn: datep("2026-07-01")},
 		{Quantity: decimal.RequireFromString("1.1666666666"), CostMinor: 70_000, AcquiredOn: datep("2026-07-02")},
@@ -162,9 +134,7 @@ func TestTransferAfterReverseSplitStaysReadable(t *testing.T) {
 		t.Errorf("stored pieces sum to %s, but the operation moves %s — this is the mismatch that broke the screen", sum, moved)
 	}
 
-	// The 201 must describe the rows that exist, not the ones the service had
-	// in hand: before the fix these differed in the tenth decimal place, so the
-	// API answered with a breakdown that was nowhere in the database.
+	// The 201 describes the stored rows.
 	if len(in.TransferLots) != len(stored) {
 		t.Fatalf("returned pieces = %+v, stored = %+v", in.TransferLots, stored)
 	}
@@ -181,22 +151,14 @@ func TestTransferAfterReverseSplitStaysReadable(t *testing.T) {
 	}
 }
 
-// TestTransferQuantityFinerThanStorageIsTruncated covers the other half of the
-// same fault, on the operation's own quantity rather than the pieces'.
-// operations.quantity keeps ten decimal places too, and nothing stopped a
-// request from asking to move more of them.
+// The operation's own quantity is truncated to the scale too.
 //
-//	buy 1 SBER on 01.07 (cost 100) ; buy 5 SBER on 02.07 (cost 500)
-//	transfer 1.00000000004 on 05.07
+//	buy 1 SBER (cost 100) ; buy 5 SBER (cost 500)
+//	transfer 1.00000000004
 //
-// Released at full precision that is lot 1 whole plus 4e-11 of lot 2 — a piece
-// the quantity column cannot hold at all: it rounds to zero and the table's
-// CHECK (quantity > 0) rejects the write, so a perfectly ordinary transfer
-// dies with a server error. The quantity is instead brought onto the scale
-// first, and DOWNWARD: rounding to nearest could round a "move everything I
-// hold" up past the position it is emptying and answer it with an oversell,
-// which is a loud refusal of healthy data — the thing this branch must not do.
-// One unit moves, five stay, and the 4e-11 stays with them.
+// At full precision that is lot 1 plus 4e-11 of lot 2, a piece the column rounds
+// to zero and its CHECK refuses. Truncated down (nearest could turn "move
+// everything" into an oversell): one unit moves, five stay.
 func TestTransferQuantityFinerThanStorageIsTruncated(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -251,8 +213,7 @@ func TestTransferQuantityFinerThanStorageIsTruncated(t *testing.T) {
 		t.Errorf("source keeps %s, want 5 (one whole unit left, nothing shaved off the rest)", src.Quantity)
 	}
 
-	// A quantity that is nothing BUT tail cannot be recorded at all, and is
-	// refused as the input error it is rather than silently becoming zero.
+	// A quantity that is all tail is refused, not stored as zero.
 	if _, _, err := svc.CreateTransfer(f.ctx, f.spaceID, operation.TransferParams{
 		FromAccountID: f.accountID, ToAccountID: f.account2ID,
 		InstrumentID: f.sberID, Quantity: decimal.RequireFromString("0.00000000004"),
@@ -262,19 +223,13 @@ func TestTransferQuantityFinerThanStorageIsTruncated(t *testing.T) {
 	}
 }
 
-// TestATransferKeepsAShareLessParcelsMoneyOnItsOwnDay pins what a transfer does
-// with a lot the ledger has no shares left to describe — a dust lot left by a
-// reverse split deep enough to round its whole holding away.
+// A lot with no shares left (a reverse split rounded them away) travels as a
+// piece of its own: no units, its cost, its own day.
 //
 //	buy 0.4 SBER on 01.07 for 4,00 ; reverse split by 0.0000000001 on 02.07
-//	  → that lot keeps no shares at all, and all 400 minor units of its cost
-//	buy 5 SBER on 03.07 for 500,00 (after the split, so untouched by it)
-//	transfer everything on 05.07
+//	buy 5 SBER on 03.07 for 500,00 ; transfer everything on 05.07
 //
-// The shareless lot travels as a piece of its own: no units, its 400, and the
-// day it was bought. Its cost used to be folded into the next piece and arrive
-// dated 03.07 — a day it was not spent on, and the day its ruble value would
-// then be struck at (#193). The source is emptied to exactly zero either way.
+// Its 400 used to be folded into the next piece and dated 03.07 (#193).
 func TestATransferKeepsAShareLessParcelsMoneyOnItsOwnDay(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)

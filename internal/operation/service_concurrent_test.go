@@ -12,22 +12,9 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// TestConcurrentSellsOfOneHoldingLeaveAJournalThatReplays is issue #17's
-// check-then-write race, written as the damage it does rather than as the
-// mechanism that does it.
-//
-// Two clients sell the same ten shares at the same moment. Each is a perfectly
-// good request on its own: the account holds ten, ten is what it asks for. What
-// the account must not be left with is BOTH of them — a journal that sells
-// twenty out of ten replays for nobody, so every later read of that account's
-// positions answers 422, for ever, and nobody who did anything wrong is
-// anywhere near it. Exactly one of the two has to be refused, which is what
-// would have happened had they arrived a second apart.
-//
-// SEVERAL ROUNDS, ON A FRESH ACCOUNT EACH TIME, because the fault it guards is
-// a window rather than a rule: one round that happens to serialize by itself
-// proves nothing. Each round is its own account, so the rounds cannot mask each
-// other by leaving a position behind.
+// Two concurrent sells of the same ten shares: exactly one is refused, and
+// the account still replays (#17). Several rounds on fresh accounts, since the
+// fault is a window, not a rule.
 func TestConcurrentSellsOfOneHoldingLeaveAJournalThatReplays(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -71,8 +58,7 @@ func TestConcurrentSellsOfOneHoldingLeaveAJournalThatReplays(t *testing.T) {
 			t.Errorf("round %d: %d of the two sells were accepted, want exactly 1 (errors: %v, %v)",
 				round, accepted, errs[0], errs[1])
 		}
-		// The refusal is only half the property. What the account is actually
-		// left holding has to fold, which is the thing the owner sees.
+		// And what the account holds still folds.
 		journal, err := f.store.ListForEngine(f.ctx, f.spaceID, accountID)
 		if err != nil {
 			t.Fatalf("round %d: list: %v", round, err)
@@ -83,9 +69,7 @@ func TestConcurrentSellsOfOneHoldingLeaveAJournalThatReplays(t *testing.T) {
 	}
 }
 
-// TestAccountLockSerializesTwoWriters pins the mutual exclusion itself: while
-// one caller holds an account's journal lock, a second one waits outside rather
-// than reading the journal the first is about to change.
+// While one caller holds an account's journal lock, a second waits.
 func TestAccountLockSerializesTwoWriters(t *testing.T) {
 	f := newFixture(t)
 	ids := []uuid.UUID{f.accountID}
@@ -111,11 +95,9 @@ func TestAccountLockSerializesTwoWriters(t *testing.T) {
 		})
 	}()
 
-	// The verdict is recorded and reported at the end rather than fataled here:
-	// the first writer is parked on `release` holding a pooled connection, and a
-	// test that leaves this function without closing that channel leaves the
-	// connection out for good — the pool's own shutdown then waits for it and
-	// the whole package hangs instead of reporting a failure.
+	// Reported at the end, not fataled: the first writer holds a pooled
+	// connection until release is closed, and leaving it out hangs the
+	// package.
 	gotInEarly := false
 	select {
 	case <-secondInside:
@@ -140,22 +122,10 @@ func TestAccountLockSerializesTwoWriters(t *testing.T) {
 	}
 }
 
-// TestAccountLocksAreTakenInTheAccountsOwnOrder pins the one thing that keeps a
-// transfer from deadlocking against a transfer going the other way: the locks
-// are taken in an order that belongs to the ACCOUNTS, not to the caller's
-// argument list. Two transfers naming the same pair in opposite orders would
-// otherwise take them in opposite orders, each holding what the other is
-// waiting for, and Postgres would abort one of them a second later with a
-// deadlock nobody could act on.
-//
-// It is checked directly rather than by racing two transfers and hoping the
-// interleaving lands, because "no deadlock was observed this time" is exactly
-// what a broken version says most runs. A separate transaction holds the HIGHER
-// of the two account ids; a caller then asks for the pair HIGH-first. If the
-// order is the caller's, it blocks on the high id and never touches the low one,
-// which is then free to lock elsewhere. If the order is the accounts' own, the
-// low id is already taken before the wait begins — so a NOWAIT attempt on it
-// must fail, and that failure is the assertion.
+// Locks are taken in the accounts' own order, so opposite transfers cannot
+// deadlock. Checked directly: another transaction holds the higher id, a caller
+// asks for the pair high first, and a NOWAIT attempt on the lower id must then
+// fail because the caller already took it.
 func TestAccountLocksAreTakenInTheAccountsOwnOrder(t *testing.T) {
 	f := newFixture(t)
 	lo, hi := f.accountID, f.newAccount(t)
@@ -178,8 +148,8 @@ func TestAccountLocksAreTakenInTheAccountsOwnOrder(t *testing.T) {
 		waiting <- f.store.WithAccountsLocked(f.ctx, f.spaceID,
 			[]uuid.UUID{hi, lo}, func(*operation.Store) error { return nil })
 	}()
-	// Long enough for the waiter to have taken whatever it takes first and to
-	// have blocked on the other; it cannot get past the holder's lock at all.
+	// Long enough for the waiter to take the first lock and block on the
+	// other.
 	time.Sleep(500 * time.Millisecond)
 
 	probe, err := f.pool.Begin(f.ctx)
@@ -191,10 +161,8 @@ func TestAccountLocksAreTakenInTheAccountsOwnOrder(t *testing.T) {
 		`SELECT id FROM accounts WHERE id = $1 FOR NO KEY UPDATE NOWAIT`, lo)
 	_ = probe.Rollback(f.ctx)
 
-	// Everything is released and the waiter is collected BEFORE anything is
-	// reported: a connection left parked in a goroutine outlives the test and
-	// the pool's shutdown then waits on it for ever, which turns a failure into
-	// a hang.
+	// Release everything and collect the waiter before reporting, or a parked
+	// connection hangs the pool's shutdown.
 	_ = holder.Rollback(f.ctx)
 	select {
 	case err := <-waiting:
@@ -210,17 +178,9 @@ func TestAccountLocksAreTakenInTheAccountsOwnOrder(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaWaitsForTheAccountLock: the import door judges a delta by
-// replaying the journal, exactly as a hand entry does, so it has to do it under
-// the same lock. It did not: it read on the pool and wrote in a transaction of
-// its own, so an import arriving while a hand-entered sale was still uncommitted
-// saw a journal without that sale, was told its own sale fitted, and both landed
-// — a journal that no longer replays, and a positions screen answering 422 for
-// good (#186).
-//
-// Ten shares held. A hand-entered sale of eight is written under the lock and
-// not yet committed; an imported sale of eight arrives. It must wait, and once
-// it is let in it must see the first sale and be refused.
+// The import door replays under the same lock as a hand entry (#186). Ten
+// held; a hand sale of eight is uncommitted under the lock; an imported sale of
+// eight must wait, then see the first and be refused.
 func TestApplyImportDeltaWaitsForTheAccountLock(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -270,8 +230,7 @@ func TestApplyImportDeltaWaitsForTheAccountLock(t *testing.T) {
 		importDone <- outcome{refused, err}
 	}()
 
-	// Recorded and reported at the end, for the reason the test above gives: the
-	// first writer holds a pooled connection until `release` is closed.
+	// Reported at the end, as above.
 	var early *outcome
 	select {
 	case o := <-importDone:

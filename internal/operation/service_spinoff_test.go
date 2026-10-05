@@ -10,11 +10,9 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// TestCreateSpinoffKeepsTheUnitsAndCarvesOutAShareOfTheMoney is the owner's own
-// case run through the service: Т-Капитал carved the blocked assets out of a
-// fund into a closed one, one unit for one, on 2023-12-22. The units of the
-// original stayed exactly where they were and part of what was paid for them
-// moved across, keeping the days it was spent on (НК РФ ст. 214.1 п. 13 abz. 8,
+// The owner's case: Т-Капитал carved blocked assets out of a fund into a
+// closed one, one for one, on 2023-12-22. The original keeps its units and part
+// of its cost moves across with its days (НК РФ ст. 214.1 п. 13 абз. 8,
 // ст. 277 п. 7).
 func TestCreateSpinoffKeepsTheUnitsAndCarvesOutAShareOfTheMoney(t *testing.T) {
 	f := newFixture(t)
@@ -66,9 +64,7 @@ func TestCreateSpinoffKeepsTheUnitsAndCarvesOutAShareOfTheMoney(t *testing.T) {
 	if out.TransferGroupID == nil || in.TransferGroupID == nil || *out.TransferGroupID != *in.TransferGroupID {
 		t.Error("the legs do not share a transfer group")
 	}
-	// Each leg stores its own breakdown: the departing one names the original's
-	// parcels, the arriving one the carved-out paper's. Read back from the
-	// database rather than from the response.
+	// Each leg stores its own breakdown, read back from the database.
 	if n := f.lotRows(t, out.ID); n != 2 {
 		t.Errorf("departing leg stored %d pieces, want 2", n)
 	}
@@ -112,30 +108,18 @@ func TestCreateSpinoffKeepsTheUnitsAndCarvesOutAShareOfTheMoney(t *testing.T) {
 	}
 }
 
-// TestCreateSpinoffOutOfAPositionWhoseLastParcelIsShareless is the case the
-// allocation's tail depends on, and it is reachable only through a reverse
-// split: one deep enough leaves a parcel with no units and real money in it
-// (see portfolio.applySplit), and when that parcel is the LAST in the queue,
-// restating the breakdown in the new paper's units has nowhere further forward
-// to put its money.
-//
-// The money must not evaporate there. If it does, the arriving leg's pieces sum
-// to less than the basis its own row carries, and the pair is refused — by this
-// service on the way in, and by the engine on every later read if it ever got
-// past. quantizeLots therefore folds a trailing remainder BACKWARD, into the
-// last parcel that does have units, which is the neighbour it would have gone
-// to had one more parcel followed.
+// A reverse split can leave the last parcel with no units and real money.
+// Restating it in the new paper's units must not lose that money, or the arriving
+// pieces fall short of the row's basis and the pair is refused; quantizeLots folds
+// a trailing remainder back into the last parcel with units.
 func TestCreateSpinoffOutOfAPositionWhoseLastParcelIsShareless(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
 	carvedID := newPaper(t, f, "TIPO2", "Тинькофф индекс IPO заблокированные активы")
 
-	// 1.5 units of a fund and then 0.4, reversed by the deepest ratio the
-	// journal can record (1e-10, ten decimal places — finer is refused on the
-	// way in). The first parcel's running total truncates to 1e-10 and the total
-	// of both truncates to 1e-10 as well, so the second is left holding no units
-	// and all of its money. Whole numbers cannot produce this: the truncated
-	// running totals of two integer parcels always differ.
+	// 1.5 and 0.4 units reversed by 1e-10, the finest ratio the journal keeps:
+	// both running totals truncate to 1e-10, so the second parcel keeps no units
+	// and all its money. Whole numbers cannot produce this.
 	for _, op := range []operation.Operation{{
 		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
 		OccurredOn: date("2021-01-04"), Quantity: dec("1.5"), Price: dec("100"),
@@ -205,9 +189,7 @@ func TestCreateSpinoffOutOfAPositionWhoseLastParcelIsShareless(t *testing.T) {
 	}
 }
 
-// TestCreateSpinoffRefusesWhatItCannotAccountFor: every refusal states a rule of
-// its own, and each is here because getting it wrong would put a number in the
-// journal that no later reader could question.
+// Each refusal is a rule of its own.
 func TestCreateSpinoffRefusesWhatItCannotAccountFor(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -273,11 +255,9 @@ func TestCreateSpinoffRefusesWhatItCannotAccountFor(t *testing.T) {
 	}
 }
 
-// TestCreateSpinoffResolvesAgainstTheDayItTookEffect: a spin-off recorded now
-// but dated years back is struck against the parcels of THAT day. A purchase
-// made after it is no part of what was carved out — and if the allocation were
-// taken from the end state instead, the pair would refuse to replay for ever,
-// because the record would name a position the journal never had on the day.
+// A spin-off dated years back is struck against that day's parcels; a later
+// purchase is no part of it, and the end state would name a position the journal
+// never had then.
 func TestCreateSpinoffResolvesAgainstTheDayItTookEffect(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -336,9 +316,8 @@ func TestCreateSpinoffResolvesAgainstTheDayItTookEffect(t *testing.T) {
 	}
 }
 
-// Decision Р-16, the broker's way: a share of 0. The carved-out fund arrives
-// with its units and no cost, the original keeps every kopeck it was bought for,
-// and the journal replays.
+// Р-16: a share of 0. The new fund arrives with no cost, the original keeps
+// its whole basis, and the journal replays.
 func TestCreateSpinoffWithNoShareKeepsTheWholeBasisOnTheOriginal(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)

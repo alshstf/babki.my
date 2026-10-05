@@ -44,9 +44,8 @@ func checkLots(t *testing.T, f fixture, accountID uuid.UUID, want []lotSummary) 
 	}
 }
 
-// twoLots seeds the standard source history these tests share:
-// buy 10 @ 100.00 on 01.07 (lot cost 100000) and buy 10 @ 900.00 on 03.07
-// (lot cost 900000).
+// twoLots seeds buy 10 @ 100.00 on 01.07 (100000) and buy 10 @ 900.00 on
+// 03.07 (900000).
 func twoLots(t *testing.T, f fixture, svc *operation.Service) {
 	t.Helper()
 	buy1 := operation.Operation{
@@ -65,13 +64,8 @@ func twoLots(t *testing.T, f fixture, svc *operation.Service) {
 	}
 }
 
-// TestTransferChainKeepsOriginalPurchaseDates covers the only case where a
-// breakdown is built out of lots that a breakdown itself restored: A → B → C.
-// B never saw the purchases; everything it knows about them arrived in the
-// pieces A sent. When B passes the position on to C, the dates C receives can
-// only be right if the second release read them off the lots the first one
-// rebuilt — the round trip works once by construction, twice only if the
-// restored lots are indistinguishable from bought ones.
+// A -> B -> C: the second release reads dates off lots the first one
+// rebuilt, so they must be indistinguishable from bought ones.
 func TestTransferChainKeepsOriginalPurchaseDates(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -97,9 +91,7 @@ func TestTransferChainKeepsOriginalPurchaseDates(t *testing.T) {
 		t.Fatalf("B → C: %v", err)
 	}
 
-	// Neither move is a purchase, so after two of them the shares still cost
-	// what they cost and were still bought on the days they were bought —
-	// 01.07 and 03.07, not 05.07 and not 08.07.
+	// Still bought on 01.07 and 03.07, not on either move's day.
 	want := []lotSummary{
 		{"10", 100_000, "2026-07-01"},
 		{"10", 900_000, "2026-07-03"},
@@ -124,17 +116,9 @@ func TestTransferChainKeepsOriginalPurchaseDates(t *testing.T) {
 	checkLots(t, f, f.accountID, nil)
 }
 
-// TestTransferBackToTheAccountItCameFrom covers the round trip: shares sent to
-// another broker and then brought home. They must come back with the days they
-// were bought, not the day either move happened — a position that has been
-// away and returned is not a position bought this morning.
-//
-// They also come back to their old PLACE in the queue, since the queue is
-// ordered by the day each lot was acquired and neither move touched that day
-// (see portfolio.Position.Lots). Nothing here was sold in between and the
-// account was emptied by the first move, so this test cannot observe the order
-// and does not pin it; portfolio.TestTransferredLotBoughtEarlierIsSoldFirst is
-// where that rule is held.
+// Shares sent away and brought home keep their purchase days. The queue
+// order is held by portfolio.TestTransferredLotBoughtEarlierIsSoldFirst; this
+// account is emptied in between, so it cannot observe it.
 func TestTransferBackToTheAccountItCameFrom(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -166,13 +150,8 @@ func TestTransferBackToTheAccountItCameFrom(t *testing.T) {
 	}
 }
 
-// TestPartialTransferLeavesTheRestOfTheLotBehind looks at the half nobody was
-// looking at: TestTransferCarriesSourceLotDates checks the 15 units that
-// LEAVE, and stops there. What stays must be the other half of the same split
-// — 5 units of the second lot, holding the 450000 the released piece did not
-// take, still dated on the day that lot was bought. A source lot that lost its
-// date or its remaining cost on the way out would misprice everything computed
-// from it afterwards, and nothing was watching for it.
+// What stays behind after a partial transfer: 5 units of the second lot with
+// the 450000 the released piece did not take, still dated.
 func TestPartialTransferLeavesTheRestOfTheLotBehind(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -205,16 +184,12 @@ func TestPartialTransferLeavesTheRestOfTheLotBehind(t *testing.T) {
 	})
 }
 
-// TestTransferAfterAmortizationCarriesTheReducedBasis covers a bond whose
-// principal has been partly returned. Amortization does not touch quantities;
-// it drains cost out of the lots front to back, so what a later transfer moves
-// is the SHRUNKEN basis. Carrying the original cost instead would hand the
-// receiving account a bond that cost more than the owner still has in it, and
-// pay out the same principal twice on paper.
+// Amortization drains cost front to back, so a later transfer moves the
+// reduced basis.
 //
-//	buy 10 bonds on 01.07 for 1 000,00 (lot cost 100000)
-//	amortization of 300,00 on 03.07 → the lot now holds 70000
-//	transfer 5 on 05.07 → floor(70000 × 5 / 10) = 35000, still dated 01.07
+//	buy 10 bonds on 01.07 for 1 000,00 (100000)
+//	amortization of 300,00 on 03.07 -> the lot holds 70000
+//	transfer 5 on 05.07 -> 70000 × 5 / 10 = 35000, dated 01.07
 func TestTransferAfterAmortizationCarriesTheReducedBasis(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)

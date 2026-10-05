@@ -7,33 +7,16 @@ import (
 	"testing"
 )
 
-// TestConflictIsNotOnlyAnOversell pins the two facts any caption for this
-// endpoint's 409 has to survive, because a client has nothing but the status to
-// write that caption from (#23).
+// What a client may say about a 409 (#23):
 //
-// FACT ONE: A BUY GETS 409. A purchase releases nothing — it can only add to a
-// position — so a refusal of one cannot be "you sold more than you hold" under
-// any reading. Here it is the currency rule that refuses (see Compute's get in
-// internal/portfolio/engine.go: everything that moves cost, quantity or fees
-// must repeat the currency the position's cost is already kept in, and only a
-// dividend, a coupon or a tax may arrive in another).
+//   - A buy can get one: here the currency rule refuses it.
+//   - The refused row need not be the posted one: every write replays the whole
+//     journal, and this backdated buy makes a stored row fail, named with its own
+//     date.
+//   - An ordinary oversell gets the same 409.
 //
-// FACT TWO: THE ROW REFUSED NEED NOT BE THE ROW POSTED. Every write replays the
-// account's WHOLE journal (Service.Create → checkJournalOps), so the entry the
-// engine names can be one stored long ago. The backdated buy below is what makes
-// that visible: sorted into the journal ahead of the row already there, it
-// settles the position's currency itself, and the refusal then names the STORED
-// operation and the STORED operation's date — neither of which the client sent.
-// A caption saying anything about "this operation" or "this date" is therefore
-// false here, and «Недостаточно бумаг на счете на эту дату» was both.
-//
-// FACT THREE, in the last leg: an ordinary oversell is the SAME 409. Two
-// unrelated causes, one status, nothing to tell them apart by — which is the
-// whole of why the screen names no cause (see operations.conflict in
-// web/src/i18n/ru.json).
-//
-// This test is meant to go red if the server ever does learn to tell its
-// conflicts apart — that would be the moment the screen may name one.
+// So the screen names no cause (operations.conflict in web/src/i18n/ru.json).
+// This test should go red if the server learns to tell its conflicts apart.
 func TestConflictIsNotOnlyAnOversell(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -75,10 +58,7 @@ func TestConflictIsNotOnlyAnOversell(t *testing.T) {
 	if resp.StatusCode != 409 {
 		t.Fatalf("buy in a second currency = %d, want 409: %s", resp.StatusCode, body)
 	}
-	// The whole point of the two dates: the engine names the row it could not
-	// fold, and that is the one already in the journal. Checked in both
-	// directions — a message naming the posted date instead would mean the
-	// refusal IS about what the client sent, and a caption could then say so.
+	// The engine names the stored row and its date, not the posted one.
 	if !strings.Contains(string(body), "2026-07-10") {
 		t.Fatalf("refusal does not name the stored row's date 2026-07-10: %s", body)
 	}
@@ -86,9 +66,7 @@ func TestConflictIsNotOnlyAnOversell(t *testing.T) {
 		t.Fatalf("refusal names the posted row's date 2026-07-01, so it is about the posted row: %s", body)
 	}
 
-	// And an oversell — a different cause entirely — comes back as the same
-	// status, from the same endpoint, with nothing in the response to separate
-	// the two.
+	// An oversell: the same status, nothing to tell them apart.
 	oversell := fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
 		"occurred_on":"2026-07-20","quantity":"999","amount_minor":999000,"currency":"RUB"}`,
 		acc.ID, sber.ID)

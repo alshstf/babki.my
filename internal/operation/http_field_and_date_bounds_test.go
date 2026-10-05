@@ -8,19 +8,9 @@ import (
 	"time"
 )
 
-// TestTransferWithoutAnInstrumentNamesTheMissingField pins the sentence a
-// transfer request with no instrument_id comes back with (#19).
-//
-// It used to come back «no source history for instrument», which is the message
-// for a DIFFERENT and perfectly plausible mistake: you asked to move a paper
-// this account has never held. A reader given that sentence goes and reads the
-// source account's journal — which is fine — instead of the one field they left
-// out. The status was 400 either way; only the sentence was wrong, and a wrong
-// sentence over a right number is the failure this project keeps finding.
-//
-// Both halves are asserted, and the negative half is the load-bearing one: a
-// check that only looked for the new wording would stay green if the old
-// sentence were appended to it.
+// A transfer with no instrument_id says the field is missing (#19), not
+// "no source history for instrument", which names a different mistake. The old
+// sentence must be absent too.
 func TestTransferWithoutAnInstrumentNamesTheMissingField(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -57,16 +47,8 @@ func TestTransferWithoutAnInstrumentNamesTheMissingField(t *testing.T) {
 	}
 }
 
-// TestTransferFromAnAccountThatIsNotThereSaysSo is the same lesson one field
-// along, and it arrived with the journal lock (#17): the write path now settles
-// which accounts it is about BEFORE it reads anything, so an account id that is
-// not this space's is answered as a missing account — 404 — rather than by
-// searching a journal that does not exist.
-//
-// It used to be answered with «no source history for instrument», 400: a
-// sentence about a paper the account has never held, said about an account that
-// is not there at all. A reader given that goes looking through a journal for a
-// row that was never the problem, exactly as in #19.
+// An account outside the space is a 404 for a missing account, not a
+// search of a journal that does not exist.
 func TestTransferFromAnAccountThatIsNotThereSaysSo(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -101,28 +83,11 @@ func TestTransferFromAnAccountThatIsNotThereSaysSo(t *testing.T) {
 	}
 }
 
-// TestOccurredOnIsHeldToBothEndsOfItsRangeOnBothWritePaths pins the dates an
-// operation may carry, on the ordinary write path and on the transfer one
-// alike (#19).
-//
-// WHY A FLOOR AT ALL, given that a date nine centuries old harms nothing by
-// being old: this journal's queue is ordered by acquisition date, so the row
-// does not sit somewhere visibly odd — it sits at the FRONT, and the next sale
-// releases it first and reports a cost basis built from it. Nothing on any
-// screen remarks on a strange date, because to a comparison there is nothing
-// strange about one. A mistyped leading digit (1026 for 2026) is one keystroke.
-//
-// The year below is written as a literal rather than derived from the bound the
-// code holds — the whole point of a bound test is to disagree with a bound that
-// has been moved. Same for the year in the accepted case: 1900-01-01 is the
-// first date on the allowed side, and asserting that it passes is what tells a
-// floor apart from a floor set one day too high.
-//
-// THE CEILING IS HERE BECAUSE NOTHING IN THIS PACKAGE COVERED IT. It has been
-// enforced since the beginning and was checked twice, once per write path;
-// measured by loosening it a year, every test in internal/operation stayed
-// green. Now that both ends are one function, an accident to either would go
-// unnoticed just as easily, so both ends are pinned in one place.
+// occurred_on is held to both ends of its range on both write paths (#19).
+// The floor is a typo guard: a mistyped year lands at the front of the
+// acquisition-date queue and is sold first. Years are literals, so a moved bound
+// is caught; 1900-01-01 is the first allowed day. Both ends are pinned because
+// loosening either went unnoticed before.
 func TestOccurredOnIsHeldToBothEndsOfItsRangeOnBothWritePaths(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -172,18 +137,13 @@ func TestOccurredOnIsHeldToBothEndsOfItsRangeOnBothWritePaths(t *testing.T) {
 		t.Errorf("refusal = %s, want it to name the earliest date accepted", got)
 	}
 
-	// The first date on the allowed side. It is a genuine 201, not merely "not
-	// a 400": a floor that also swallowed its own boundary would be a different
-	// bug, and this is the assertion that separates them.
+	// The first allowed day is a genuine 201.
 	if status, got := buy("1900-01-01"); status != 201 {
 		t.Errorf("buy dated 1900-01-01 = %d, want 201: %s", status, got)
 	}
 
-	// The other end. Day-after-tomorrow in UTC is outside the one day of slack
-	// from whatever zone this runs in, and tomorrow is the last day inside it —
-	// the slack exists so someone east of UTC can record what they did this
-	// evening, and a test that only refused a far-future date would pass on a
-	// ceiling that had swallowed the slack entirely.
+	// Tomorrow in UTC is the last day inside the one day of slack (for
+	// someone east of UTC); the day after is outside.
 	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
 	if status, got := buy(tomorrow); status != 201 {
 		t.Errorf("buy dated tomorrow (%s) = %d, want 201: %s", tomorrow, status, got)
@@ -197,10 +157,7 @@ func TestOccurredOnIsHeldToBothEndsOfItsRangeOnBothWritePaths(t *testing.T) {
 		t.Errorf("refusal = %s, want it to say the date is in the future", got)
 	}
 
-	// And the transfer endpoint, which had the ceiling and not the floor until
-	// both moved behind one check. Its own refusal is what is being read here —
-	// the buy above landed on acc1, so a transfer of it would otherwise be a
-	// perfectly good request.
+	// The transfer endpoint's own refusal: the transfer is otherwise valid.
 	transfer := fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,
 		"instrument_id":%q,"quantity":"4","occurred_on":"1026-07-05"}`,
 		acc1.ID, acc2.ID, sber.ID)

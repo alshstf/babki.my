@@ -12,13 +12,9 @@ import (
 	"babki.my/babki/internal/operation"
 )
 
-// sellEverything sells exactly what the account's positions screen says is
-// held — the one request a user is guaranteed to make sooner or later, and the
-// one that used to be impossible to record faithfully. The quantity is taken
-// from the screen rather than hard-coded on purpose: the bug this reproduces is
-// precisely that the number the screen shows could not be written into the
-// journal, so a test that types in a hand-picked, already-storable quantity
-// would sail past it.
+// sellEverything sells exactly what the positions screen says is held. The
+// quantity comes from the screen because the fault was that this number could
+// not be written into the journal.
 func sellEverything(t *testing.T, f fixture, svc *operation.Service, accountID uuid.UUID, on string) decimal.Decimal {
 	t.Helper()
 	held := positionsOf(t, f, accountID)[f.sberID].Quantity
@@ -32,9 +28,8 @@ func sellEverything(t *testing.T, f fixture, svc *operation.Service, accountID u
 	return held
 }
 
-// storedSell returns the quantity the journal actually holds for the account's
-// only sell — what every later read of that account compares against, as
-// opposed to what the service had in hand when it accepted the request.
+// storedSell returns the quantity the journal holds for the account's only
+// sell.
 func storedSell(t *testing.T, f fixture, accountID uuid.UUID) decimal.Decimal {
 	t.Helper()
 	ops, err := f.store.ListForEngine(f.ctx, f.spaceID, accountID)
@@ -48,30 +43,15 @@ func storedSell(t *testing.T, f fixture, accountID uuid.UUID) decimal.Decimal {
 	return *sell.Quantity
 }
 
-// TestSellingEverythingAfterASplitStaysReadable is the reviewer's reproduction
-// of the same fault the transfer path had, on the path nobody had looked at:
-// an ordinary sell, with no transfer anywhere in the journal.
+// Selling everything after a reverse split stays readable.
 //
-//	buy 0.35 SBER on 01.07 for 35,00
-//	reverse split 1:3 on 02.07 (ratio 0.3333333333)
-//	sell everything on 03.07
+//	buy 0.35 SBER on 01.07 ; reverse split 1:3 on 02.07 ; sell everything on 03.07
 //
-// 0.35 × 0.3333333333 is 0.116666666655, and the journal keeps ten decimal
-// places. Selling "everything" was checked against the exact figure in memory
-// and recorded as 0.1166666667 — Postgres rounds to NEAREST, which is UP here —
-// so from that moment every read of the account compared a recorded 0.1166666667
-// against a position of 0.116666666655 and answered
-//
-//	422: not enough quantity: have 0.116666666655, need 0.1166666667
-//
-// forever, for every instrument on the account. Accepted with a 201, broken on
-// every later read, by data this program wrote itself.
-//
-// Both halves are closed now. The split no longer produces a quantity the
-// journal cannot name (portfolio.Position.applySplit), so "everything" is a
-// number a sell row can hold; and the request is brought onto that scale before
-// it is checked (operation.normalizeForStorage), so what was validated is what
-// was written. The position closes exactly, with no unsellable dust behind it.
+// 0.35 × 0.3333333333 = 0.116666666655, but the journal keeps ten places. The
+// sell was checked at that figure and stored rounded up to 0.1166666667, so every
+// later read answered 422 "not enough quantity". Now the split's result is on the
+// scale (Position.applySplit) and the request is normalized before the check
+// (normalizeForStorage).
 func TestSellingEverythingAfterASplitStaysReadable(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -93,16 +73,13 @@ func TestSellingEverythingAfterASplitStaysReadable(t *testing.T) {
 
 	held := positionsOf(t, f, f.accountID)[f.sberID].Quantity
 	if want := decimal.RequireFromString("0.1166666666"); !held.Equal(want) {
-		// Reported, not fatal: the rest of this test is the reproduction
-		// proper, and it is worth running against a position like this to see
-		// where it ends up.
+		// Reported, not fatal, so the rest still runs.
 		t.Errorf("position after the split = %s, want %s (the journal cannot name 0.116666666655, so neither may a position)", held, want)
 	}
 
 	sold := sellEverything(t, f, svc, f.accountID, "2026-07-03")
 
-	// What the row says must be what the request said. Rounded up, this is the
-	// 0.1166666667 that broke the account.
+	// What the row says is what the request said.
 	if stored := storedSell(t, f, f.accountID); !stored.Equal(sold) {
 		t.Errorf("the sell was accepted for %s and recorded as %s — every later read compares against the recorded one", sold, stored)
 	}
@@ -120,20 +97,12 @@ func TestSellingEverythingAfterASplitStaysReadable(t *testing.T) {
 	}
 }
 
-// TestSellingWhatATransferLeftBehindStaysReadable covers the reviewer's second
-// route to the same 422, the one the previous wave's own fix opened: a transfer
-// truncates the quantity it moves DOWN to the journal's scale, so whatever it
-// leaves on the source is a remainder — and a remainder of an unrecordable
-// position was itself unrecordable.
+// Selling what a transfer left behind stays readable.
 //
-//	buy 0.35 SBER on 01.07 ; reverse split 1:3 on 02.07 ; move 0.05 away on 03.07
-//	  → the source keeps 0.066666666655 : twenty-digit dust nobody can sell
-//	sell the rest on 04.07 → accepted (201), recorded as 0.0666666667
-//	  → the source account's positions screen: 422, forever
+//	buy 0.35 SBER ; reverse split 1:3 ; move 0.05 away ; sell the rest
 //
-// With the split's own result on the scale, every remainder is on the scale
-// too: a transfer subtracts a recordable quantity from a recordable position.
-// The rest sells in one entry and the source closes at exactly zero.
+// The remainder used to be 0.066666666655, unsellable dust; with the split on the
+// scale every remainder is too, and the source closes at zero.
 func TestSellingWhatATransferLeftBehindStaysReadable(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -171,8 +140,7 @@ func TestSellingWhatATransferLeftBehindStaysReadable(t *testing.T) {
 		t.Errorf("the sell was accepted for %s and recorded as %s", sold, stored)
 	}
 
-	// Both screens must read: the source's, which the oversell used to take
-	// down, and the destination's, which the previous wave was about.
+	// Both accounts' screens must read.
 	if src := positionsOf(t, f, f.accountID)[f.sberID]; !src.Quantity.IsZero() {
 		t.Errorf("source quantity after selling the remainder = %s, want 0", src.Quantity)
 	}
@@ -181,26 +149,15 @@ func TestSellingWhatATransferLeftBehindStaysReadable(t *testing.T) {
 	}
 }
 
-// TestSplitRatioIsRecordedAtTheScaleItIsCheckedAt is the same divergence on the
-// other field the engine replays. split_ratio is NUMERIC(20,10) like every
-// quantity, and a ratio is a multiplier: rounding it on the way into the table
-// moves every later quantity in the position.
+// split_ratio is normalized before the check too.
 //
 //	buy 10 SBER on 01.07 ; sell 5.0000000004 on 03.07
-//	then, backdated, a 1:2 split on 02.07 recorded as 0.500000000049
+//	then a backdated 1:2 split on 02.07 typed as 0.500000000049
 //
-// Checked against the ratio as typed, the position after the split is
-// 5.00000000049 and the existing sell of 5.0000000004 fits inside it, so the
-// split was accepted. Stored, the ratio is 0.5000000000 — the twelfth digit is
-// not kept — the position after the split is 5, the sell no longer fits, and
-// the account's positions screen answers 422 from then on. Nothing the user did
-// was wrong; the program checked one journal and wrote another.
-//
-// The ratio is now brought onto the scale BEFORE the check, so the check is
-// made against the journal that will exist. This request is genuinely
-// inconsistent with that journal and is refused as one, at the moment it is
-// made, with an explanation — instead of being accepted and breaking every
-// later read by somebody else.
+// As typed the post-split position is 5.00000000049 and the sell fits; stored the
+// ratio is 0.5, the position 5, and the sell does not. The check now runs against
+// the stored ratio, so the split is refused at entry instead of breaking every
+// later read.
 func TestSplitRatioIsRecordedAtTheScaleItIsCheckedAt(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -230,18 +187,14 @@ func TestSplitRatioIsRecordedAtTheScaleItIsCheckedAt(t *testing.T) {
 		t.Fatalf("backdated split with a ratio finer than the journal: err = %v, want ErrInconsistent — accepting it records a ratio that makes the existing sell an oversell", err)
 	}
 
-	// Refused means refused: the journal is exactly as it was, and the screen
-	// this used to break still reads.
+	// Refused means the journal is unchanged and still reads.
 	if p := positionsOf(t, f, f.accountID)[f.sberID]; !p.Quantity.Equal(decimal.RequireFromString("4.9999999996")) {
 		t.Errorf("position = %s, want 4.9999999996 (10 − 5.0000000004, the split never happened)", p.Quantity)
 	}
 }
 
-// TestQuantityFinerThanTheJournalIsRefusedRatherThanRoundedToNothing is the
-// counterpart of the transfer endpoint's own rule: a request whose entire
-// quantity lives past the tenth decimal place cannot be recorded at all, and
-// says so as the input error it is instead of quietly becoming a zero-quantity
-// buy the engine would then reject with a confusing complaint of its own.
+// A quantity entirely past the tenth decimal is refused as an input error,
+// not stored as zero.
 func TestQuantityFinerThanTheJournalIsRefusedRatherThanRoundedToNothing(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)

@@ -12,12 +12,9 @@ import (
 	"babki.my/babki/internal/operation"
 )
 
-// An archived account is out of every total and offers no balance on the
-// screen; a hand entry into it would change a history nobody is looking at.
-// Every hand door is asked here, each one about a row it could otherwise
-// write, so that a door switched back to the plain lock is named by the case
-// that goes through. The importer is asked too, and must still write: what a
-// broker reports about an account is a fact whatever the family did with it.
+// An archived account is out of every total; every hand door refuses it, each
+// asked about a row it could otherwise write. The importer still writes: a
+// broker's report is a fact whatever the family did with the account.
 func TestHandEntriesRefuseAnArchivedAccount(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -115,10 +112,8 @@ func TestHandEntriesRefuseAnArchivedAccount(t *testing.T) {
 	}
 }
 
-// The note ceiling counts characters, not bytes: a thousand Cyrillic letters
-// are two thousand bytes and still a note of a thousand characters. It holds
-// at every hand door that takes a note, and not at the importer's, whose notes
-// are the broker's own wording.
+// The note ceiling counts characters, not bytes, at every hand door, and not
+// at the importer's.
 func TestHandEnteredNotesAreBoundedInCharacters(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)

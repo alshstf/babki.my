@@ -65,10 +65,8 @@ func newFixture(t *testing.T) fixture {
 	}
 }
 
-// newAccount adds one more brokerage account to the fixture's space, for tests
-// that need an account nothing else has written to — a round of a concurrency
-// test, say, which must not be able to pass because an earlier round left a
-// position behind.
+// newAccount adds a fresh brokerage account to the fixture's space, for tests
+// that must not inherit a position from an earlier round.
 func (f fixture) newAccount(t *testing.T) uuid.UUID {
 	t.Helper()
 	a, err := f.accStore.Create(f.ctx, f.spaceID, nil, "Брокер "+uuid.NewString(), account.TypeBrokerage, "RUB", "")
@@ -78,9 +76,9 @@ func (f fixture) newAccount(t *testing.T) uuid.UUID {
 	return a.ID
 }
 
-// lotRows counts the transfer-lot rows persisted for one operation, reading
-// the table directly: whether the rows are really gone after a delete cannot
-// be observed through the store's own API once the operation itself is gone.
+// lotRows counts the persisted transfer-lot rows of one operation, read from
+// the table directly since the store cannot show them once the operation is
+// gone.
 func (f fixture) lotRows(t *testing.T, operationID uuid.UUID) int {
 	t.Helper()
 	var n int
@@ -97,16 +95,13 @@ func date(s string) time.Time {
 	return d
 }
 
-// datep is date as an acquisition date a lot actually knows: portfolio.Lot and
-// portfolio.ReleasedLot hold that date as a pointer, nil meaning the lot does
-// not know when it was acquired (see portfolio.Lot.AcquiredOn).
+// datep is an acquisition date as lots hold it: a pointer, nil for unknown.
 func datep(s string) *time.Time {
 	d := date(s)
 	return &d
 }
 
-// acquired renders an acquisition date for a failure message, naming the
-// unknown case instead of printing a stand-in date for it.
+// acquired renders an acquisition date for a failure message.
 func acquired(t *time.Time) string {
 	if t == nil {
 		return "unknown"
@@ -114,10 +109,8 @@ func acquired(t *time.Time) string {
 	return t.Format("2006-01-02")
 }
 
-// sameAcquisition compares two acquisition dates including the unknown case:
-// two unknowns match, an unknown never matches a date. Assertions go through
-// it rather than calling Equal on a pointer, which panics on an unknown date
-// and would turn a lost date into a crash in the test's own reporting.
+// sameAcquisition compares acquisition dates, unknown included, without
+// dereferencing a nil.
 func sameAcquisition(a, b *time.Time) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -181,16 +174,9 @@ func TestCreateListDelete(t *testing.T) {
 	}
 }
 
-// A page size of zero used to be documented as forbidden and accepted anyway,
-// and what it produced was the worst answer available: LIMIT 0+1 returns the
-// probe row, the trim leaves an EMPTY page, and hasMore comes back true — a
-// journal that shows nothing while insisting there is more, behind a «показать
-// ещё» button that loads nothing however many times it is pressed. Whether the
-// journal continues is the one thing this method exists to answer and the one
-// thing a caller cannot check for itself, so it refuses instead of answering
-// wrongly. Today's only caller defaults and refuses before it reaches here
-// (parsePage, called from handleListByAccount); this is the precondition being
-// enforced rather than merely written down for the next one.
+// A zero limit would return the probe row, trim the page to nothing and report
+// hasMore: an empty journal with a "show more" that loads nothing. The handler
+// refuses it first; this enforces the precondition.
 func TestListByAccountRefusesNonPositiveLimit(t *testing.T) {
 	f := newFixture(t)
 
@@ -277,9 +263,8 @@ func TestEarliestRecordedDay(t *testing.T) {
 	}
 }
 
-// Purchases stated for shares from another broker can be older than anything
-// else in the journal, and their cost is converted at their own days' rates —
-// so the earliest day the fx backfill must reach is theirs.
+// Stated purchases can predate every operation, and their cost is converted
+// at their own days, so the fx backfill must reach them.
 func TestEarliestRecordedDayReachesAPurchaseOlderThanEveryOperation(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -313,8 +298,7 @@ func TestEarliestRecordedDayEmpty(t *testing.T) {
 func TestDistinctCurrencies(t *testing.T) {
 	f := newFixture(t)
 
-	// both fixture accounts are RUB; add operations in RUB and in USD, a
-	// currency that does not appear on any account.
+	// Both fixture accounts are RUB; USD appears only in operations.
 	rub := operation.Operation{
 		AccountID: f.accountID, Type: operation.TypeDeposit,
 		OccurredOn: date("2026-07-01"), AmountMinor: 1000, Currency: "RUB",
@@ -339,9 +323,7 @@ func TestDistinctCurrencies(t *testing.T) {
 		t.Fatalf("operation DistinctCurrencies = %v, want %v", got, want)
 	}
 
-	// USD exists only in operations, not on any account: the two lists
-	// must differ, proving operation.Store queries its own table rather
-	// than delegating to account currencies.
+	// The lists differ: operation.Store reads its own table.
 	accCurrencies, err := f.accStore.DistinctCurrencies(f.ctx)
 	if err != nil {
 		t.Fatalf("account DistinctCurrencies: %v", err)
@@ -364,8 +346,8 @@ func TestDistinctCurrenciesEmpty(t *testing.T) {
 	}
 }
 
-// transferPair builds a 5-unit SBER transfer pair between the fixture's two
-// accounts, with the given breakdown riding on the receiving leg.
+// transferPair builds a 5-unit SBER pair between the fixture's accounts with
+// the breakdown on the arriving leg.
 func (f fixture) transferPair(lots []operation.ReleasedLot) (out, in operation.Operation) {
 	out = operation.Operation{
 		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeTransferOut,
@@ -387,11 +369,8 @@ func findByType(ops []operation.Operation, typ operation.Type) *operation.Operat
 	return nil
 }
 
-// TestTransferLotsRoundTrip pins the breakdown surviving a write/read cycle:
-// the pieces are stored with the receiving operation and come back in FIFO
-// order, each keeping the day its source lot was acquired — the whole point
-// of the table, since without it the destination can only date the arrived
-// position on the transfer day.
+// The breakdown survives a write and read: stored with the arrival, back in
+// FIFO order, each piece with its purchase day.
 func TestTransferLotsRoundTrip(t *testing.T) {
 	f := newFixture(t)
 
@@ -428,12 +407,7 @@ func TestTransferLotsRoundTrip(t *testing.T) {
 		}
 	}
 
-	// The rows are stored next to the arrival, but they describe the parcel,
-	// not the arrival — so the departing leg is read with the very same pieces,
-	// in the very same order. Without them it was the last row in the system
-	// converting a basis assembled from old purchases at the rate of the day
-	// the shares changed brokers, contradicting both of the destination's
-	// screens about the same shares.
+	// The departing leg reads the same pieces in the same order.
 	srcOps, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
 	if err != nil {
 		t.Fatalf("ListForEngine source: %v", err)
@@ -453,25 +427,15 @@ func TestTransferLotsRoundTrip(t *testing.T) {
 				w.Quantity, w.CostMinor, acquired(w.AcquiredOn))
 		}
 	}
-	// Read, not copied: the pieces still live in exactly one place, attached to
-	// the operation that stores them.
+	// Read, not copied: stored once.
 	if n := f.lotRows(t, srcLeg.ID); n != 0 {
 		t.Errorf("transfer_out has %d rows of its own, want 0 — the breakdown is one fact with one owner", n)
 	}
 }
 
-// TestTransferLotWithoutAcquisitionDateRoundTrips pins that the absence of a
-// date survives storage as an absence. The column was NOT NULL until migration
-// 0008, which meant a piece whose source lot did not know its purchase day
-// could not be written at all unless some day was made up for it. Now the row
-// holds NULL and reads back as "unknown".
-//
-// The mixed breakdown below is the realistic shape, not a contrived one: a
-// parcel is moved on a second time and part of it came from an earlier
-// transfer that carried no dates. The dated piece beside it is what makes the
-// test discriminating — a storage layer that lost the distinction by
-// substituting a date, or by dropping the undated piece, changes one of these
-// two rows and not the other.
+// An unknown purchase date is stored as NULL and read back as unknown (the
+// column allows NULL since migration 0008). The dated piece beside it catches a
+// storage layer that substitutes a date or drops the undated piece.
 func TestTransferLotWithoutAcquisitionDateRoundTrips(t *testing.T) {
 	f := newFixture(t)
 
@@ -503,13 +467,11 @@ func TestTransferLotWithoutAcquisitionDateRoundTrips(t *testing.T) {
 				w.Quantity, w.CostMinor, acquired(w.AcquiredOn))
 		}
 	}
-	// Said outright: the unknown must not come back as the transfer's own date,
-	// which is the value this whole change removed from the write path.
+	// Not the transfer's own date.
 	if got.TransferLots[0].AcquiredOn != nil {
 		t.Errorf("the undated piece read back dated %s, want unknown", acquired(got.TransferLots[0].AcquiredOn))
 	}
-	// And the column really holds NULL, rather than the read papering over some
-	// substitute value the write put there.
+	// The column really holds NULL.
 	var nulls int
 	if err := f.pool.QueryRow(f.ctx,
 		`SELECT count(*) FROM operation_transfer_lots WHERE acquired_on IS NULL`).Scan(&nulls); err != nil {
@@ -520,9 +482,8 @@ func TestTransferLotWithoutAcquisitionDateRoundTrips(t *testing.T) {
 	}
 }
 
-// TestNonTransferOperationsHaveNoLots guards against the read attaching one
-// operation's breakdown to another: an ordinary buy sitting in the same
-// journal as a transfer_in must come back with an empty list.
+// An ordinary buy in the same journal as a transfer_in reads back with no
+// breakdown.
 func TestNonTransferOperationsHaveNoLots(t *testing.T) {
 	f := newFixture(t)
 
@@ -554,10 +515,8 @@ func TestNonTransferOperationsHaveNoLots(t *testing.T) {
 	}
 }
 
-// TestTransferWithoutLotsStillReadable covers the transfers recorded before
-// this table existed: there is no breakdown for them and none can be
-// invented, so they must simply read back with an empty list and an
-// unchanged carried basis.
+// A transfer with no stored breakdown reads back with an empty list and its
+// basis unchanged.
 func TestTransferWithoutLotsStillReadable(t *testing.T) {
 	f := newFixture(t)
 
@@ -582,11 +541,8 @@ func TestTransferWithoutLotsStillReadable(t *testing.T) {
 	}
 }
 
-// TestTransferLotFailureRollsBackPair pins that the breakdown is written in
-// the same transaction as the pair: a transfer half-recorded without the lots
-// it moved is not a state the store may leave behind. The lot below is
-// rejected by the table's own CHECK, so if the pieces were written after the
-// pair was committed the two operations would survive without them.
+// The breakdown is written in the pair's transaction: a lot refused by the
+// table's CHECK leaves neither operation behind.
 func TestTransferLotFailureRollsBackPair(t *testing.T) {
 	f := newFixture(t)
 
@@ -607,9 +563,7 @@ func TestTransferLotFailureRollsBackPair(t *testing.T) {
 	}
 }
 
-// TestDeleteTransferRemovesLots pins that the breakdown cannot outlive the
-// operation it describes — the rows go with the transfer, without the store
-// having to remember to remove them.
+// The breakdown goes with the transfer it describes.
 func TestDeleteTransferRemovesLots(t *testing.T) {
 	f := newFixture(t)
 
@@ -650,17 +604,9 @@ func TestExternalIDDedup(t *testing.T) {
 	}
 }
 
-// TestCreateRollsBackWhatItCannotConfirm pins the guard that stands
-// between the journal and the one thing no amount of care upstream can rule
-// out: that the row Postgres keeps is not the row that was checked.
-//
-// Quantity and split_ratio are stored on a fixed scale, so a value can come
-// back from the INSERT a shade different from the one that went in. The service
-// brings both onto that scale first (operation.normalizeForStorage), which is
-// what makes the two equal today — but "today they are equal" is an argument,
-// and this is the mechanism that makes it a property: the row as stored is
-// replayed before the transaction commits, and a row that fails leaves nothing
-// behind. The same guard protects a transfer's breakdown (see CreatePair).
+// The row as stored is replayed before the commit, and a row that fails leaves
+// nothing behind. normalizeForStorage makes stored and checked rows equal today;
+// this makes it a property.
 func TestCreateRollsBackWhatItCannotConfirm(t *testing.T) {
 	f := newFixture(t)
 
@@ -678,9 +624,8 @@ func TestCreateRollsBackWhatItCannotConfirm(t *testing.T) {
 	}); !errors.Is(err, refuse) {
 		t.Fatalf("Create = %v, want the verifier's own error", err)
 	}
-	// The verifier is handed the row as the database made it — id, created_at
-	// and all — not the argument echoed back, or it could not detect anything
-	// the database did.
+	// The verifier sees the row as the database made it, id and created_at
+	// included.
 	if seen.ID == uuid.Nil || seen.CreatedAt.IsZero() {
 		t.Errorf("verifier saw %+v, want the row as stored", seen)
 	}
@@ -693,8 +638,7 @@ func TestCreateRollsBackWhatItCannotConfirm(t *testing.T) {
 		t.Errorf("journal holds %d operations after a refused write, want none — a rolled-back row that survives is the bug this guards", len(list))
 	}
 
-	// And it commits when the verifier is satisfied, or it would be a very
-	// thorough way of never writing anything.
+	// And it commits when the verifier is satisfied.
 	created, err := f.store.Create(f.ctx, f.spaceID, buy, func(operation.Operation) error { return nil })
 	if err != nil {
 		t.Fatalf("Create with a satisfied verifier: %v", err)
@@ -704,19 +648,9 @@ func TestCreateRollsBackWhatItCannotConfirm(t *testing.T) {
 	}
 }
 
-// TestCreatePairRollsBackWhatItCannotConfirm is the twin of the test above, for
-// the write the departing leg's release now depends on.
-//
-// Create has always replayed the row AS STORED before committing. CreatePair had
-// no such hook, which was defensible while the transfer_out row was inert — the
-// engine took a fresh FIFO slice for it and read nothing off the row but its
-// quantity. It is not inert any more: the pieces stored in this transaction are
-// the ones the source account gives up at every later read (see
-// portfolio.Position.releaseRecorded), so the row that will be replayed from now
-// on is this one, with whatever the columns rounded to, and not the candidate
-// the service checked in memory. This pins that the caller gets to look at that
-// row, and that refusing it leaves nothing behind — neither leg, and none of the
-// pieces.
+// CreatePair's guard: the departing leg replays the pieces stored here (see
+// portfolio.Position.releaseRecorded), so the caller confirms the stored pair, and
+// refusing it leaves neither leg nor any piece.
 func TestCreatePairRollsBackWhatItCannotConfirm(t *testing.T) {
 	f := newFixture(t)
 
@@ -731,8 +665,8 @@ func TestCreatePairRollsBackWhatItCannotConfirm(t *testing.T) {
 	}); !errors.Is(err, refuse) {
 		t.Fatalf("CreatePair = %v, want the verifier's own error", err)
 	}
-	// The DEPARTING leg, as stored, breakdown and all: that is the operation the
-	// source account replays, so it is the one worth confirming.
+	// The departing leg as stored, breakdown included: the row the source
+	// account replays.
 	if seen.ID == uuid.Nil || seen.Type != operation.TypeTransferOut || len(seen.TransferLots) != 1 {
 		t.Errorf("verifier saw %+v with %d pieces, want the stored transfer_out carrying the parcel's breakdown",
 			seen.Type, len(seen.TransferLots))
@@ -758,8 +692,7 @@ func TestCreatePairRollsBackWhatItCannotConfirm(t *testing.T) {
 	}
 }
 
-// importedDeposit is the plainest row a batch delta carries: no instrument, no
-// breakdown, one broker record behind it.
+// importedDeposit is the plainest delta row: no instrument, no breakdown.
 func importedDeposit(f fixture, externalID string, on string, amountMinor int64) operation.Operation {
 	return operation.Operation{
 		AccountID: f.accountID, Type: operation.TypeDeposit, OccurredOn: date(on),
@@ -767,11 +700,8 @@ func importedDeposit(f fixture, externalID string, on string, amountMinor int64)
 	}
 }
 
-// TestApplyDeltaRollsBackWhatItCannotConfirm is Create's guard at batch size,
-// and it covers the half a single insert does not have: the REMOVALS. A delta
-// that deletes some rows and writes others is one transaction or it is a
-// journal in a state nobody asked for — the rows that were to be replaced gone,
-// the ones replacing them never written.
+// ApplyDelta's guard covers the removals too: a refused delta leaves the
+// replaced rows in place.
 func TestApplyDeltaRollsBackWhatItCannotConfirm(t *testing.T) {
 	f := newFixture(t)
 
@@ -792,8 +722,7 @@ func TestApplyDeltaRollsBackWhatItCannotConfirm(t *testing.T) {
 	if !errors.Is(err, refuse) {
 		t.Fatalf("ApplyDelta = %v, want the verifier's own error", err)
 	}
-	// The verifier is handed the rows as the database made them — not the
-	// arguments echoed back, or it could not detect anything the database did.
+	// The verifier sees the rows as the database made them.
 	if len(seen) != 1 || seen[0].ID == uuid.Nil || seen[0].CreatedAt.IsZero() {
 		t.Errorf("verifier saw %+v, want the row as stored", seen)
 	}
@@ -806,8 +735,7 @@ func TestApplyDeltaRollsBackWhatItCannotConfirm(t *testing.T) {
 		t.Fatalf("journal = %d rows, want the one row the refused delta was going to replace", len(list))
 	}
 
-	// And it commits when the verifier is satisfied: the old row gone, the new
-	// one in its place.
+	// And it commits when satisfied: the old row gone, the new one in place.
 	stored, err := f.store.ApplyDelta(f.ctx, f.spaceID,
 		[]operation.Operation{importedDeposit(f, "op-new", "2026-07-02", 2_000)},
 		[]uuid.UUID{existing.ID},
@@ -824,11 +752,8 @@ func TestApplyDeltaRollsBackWhatItCannotConfirm(t *testing.T) {
 	}
 }
 
-// TestApplyDeltaDeletesBeforeItInserts pins the order the two halves run in,
-// and it is not a preference: a broker record that was corrected keeps its
-// identity, so the row replacing it carries the very external id the row being
-// removed still holds. Insert first and the unique index refuses a correction
-// that is perfectly legitimate.
+// Removals run first: a corrected record keeps its external id, which the
+// unique index would refuse alongside the old row.
 func TestApplyDeltaDeletesBeforeItInserts(t *testing.T) {
 	f := newFixture(t)
 
@@ -854,15 +779,8 @@ func TestApplyDeltaDeletesBeforeItInserts(t *testing.T) {
 	}
 }
 
-// TestApplyDeltaRefusesARemovalItCannotFind pins that "remove these ids" means
-// all of them: a caller that computed its difference against a journal that has
-// since moved must be told, not quietly obeyed in part.
-//
-// The check is against ErrRemovalCountMismatch specifically, not merely
-// err != nil: any error at all used to satisfy this test, which could not
-// tell "the removal did not fully match" apart from an unrelated failure of
-// the write itself — exactly the kind of ambiguity later callers (see
-// Service.ApplyImportDelta) need to be able to rule out.
+// A removal that cannot find every id fails with ErrRemovalCountMismatch,
+// not merely some error.
 func TestApplyDeltaRefusesARemovalItCannotFind(t *testing.T) {
 	f := newFixture(t)
 
@@ -879,10 +797,8 @@ func TestApplyDeltaRefusesARemovalItCannotFind(t *testing.T) {
 	}
 }
 
-// TestApplyDeltaNamesAnAccountNotInTheSpace pins the sentinel behind an insert
-// whose account does not belong to the caller's own space — insertSQL's own
-// guard (see its doc), surfaced as a value later callers of ApplyDelta can
-// test for instead of a bare pgx.ErrNoRows that explains nothing on its own.
+// An insert into an account outside the space fails with
+// ErrAccountNotInSpace rather than a bare pgx.ErrNoRows.
 func TestApplyDeltaNamesAnAccountNotInTheSpace(t *testing.T) {
 	f := newFixture(t)
 
@@ -907,8 +823,8 @@ func (c deltaCost) String() string {
 		c.rows, c.trips, c.acquires, c.stored, c.written)
 }
 
-// writeDelta applies one delta of n rows on a database of its own and reports
-// what it cost.
+// writeDelta applies one delta of n rows on its own database and reports the
+// cost.
 func writeDelta(t *testing.T, n int) deltaCost {
 	t.Helper()
 	f := newFixture(t)
@@ -931,8 +847,7 @@ func writeDelta(t *testing.T, n int) deltaCost {
 	if err != nil {
 		t.Fatalf("ApplyDelta of %d rows: %v", n, err)
 	}
-	// Counted through the fixture's own pool, after the measurement, so the
-	// check does not appear in it.
+	// Counted on the fixture's pool after the measurement.
 	list, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
 	if err != nil {
 		t.Fatalf("list journal: %v", err)
@@ -941,25 +856,15 @@ func writeDelta(t *testing.T, n int) deltaCost {
 	return cost
 }
 
-// TestApplyDeltaCostsTheSameWhateverItsSize is the reason this method exists at
-// all: the first load of a broker's history is thousands of operations, and one
-// round trip apiece is what makes it unusable. Three hundred rows must cost what
-// one row costs.
-//
-// Two sizes rather than one pinned number, as the transfer breakdown's twin
-// test explains: what must be true is not "four", it is "the same".
-//
-// THE POOL ACQUISITION COUNT IS REPORTED, NOT RELIED ON. A transaction takes
-// one connection at Begin and sends everything else down it, so that counter
-// reads 1 whatever this code does — it can tell you the delta is one
-// transaction, and nothing at all about how many statements travelled inside
-// it. The trip count comes off the driver instead (see tripCounter).
+// A first broker load is thousands of rows; three hundred must cost what one
+// does. Two sizes, because the claim is "the same", not a number. The pool
+// acquisition count is always 1 inside a transaction, so the trip count comes
+// from the driver (see tripCounter).
 func TestApplyDeltaCostsTheSameWhateverItsSize(t *testing.T) {
 	small := writeDelta(t, 1)
 	large := writeDelta(t, 300)
 
-	// A write that stored nothing is the cheapest write there is, and must not
-	// be able to pass a performance test.
+	// A write that stored nothing must not pass a performance test.
 	for _, c := range []deltaCost{small, large} {
 		if c.stored != c.rows || c.written != c.rows {
 			t.Fatalf("%s — every row must be written and handed back", c)
@@ -976,11 +881,8 @@ func TestApplyDeltaCostsTheSameWhateverItsSize(t *testing.T) {
 	}
 }
 
-// TestApplyDeltaKeepsTheCreatedAtItWasGiven pins the one column this path sets
-// by hand. Rows of the same date sharing one created_at leave the engine's own
-// listing nothing to order them by, and a batch written back to back cannot
-// promise its clock separates them — so the caller that checked them in an
-// order gets to state it.
+// ApplyDelta keeps the created_at it is given: the caller checked the rows in
+// an order, and a batch's clock may not separate them.
 func TestApplyDeltaKeepsTheCreatedAtItWasGiven(t *testing.T) {
 	f := newFixture(t)
 
@@ -1005,8 +907,7 @@ func TestApplyDeltaKeepsTheCreatedAtItWasGiven(t *testing.T) {
 		t.Errorf("journal = %+v, want the two rows in the order they were written", list)
 	}
 
-	// A row that names no time still gets the database's own, as every other
-	// write path does.
+	// A row with no stamp gets the database's.
 	third := importedDeposit(f, "op-3", "2026-07-02", 3_000)
 	stored, err = f.store.ApplyDelta(f.ctx, f.spaceID, []operation.Operation{third}, nil, nil)
 	if err != nil {
@@ -1017,21 +918,9 @@ func TestApplyDeltaKeepsTheCreatedAtItWasGiven(t *testing.T) {
 	}
 }
 
-// TestARunOfWritesInsideOneTransactionGetsAnInstantEach covers the shape the
-// demo seed has: a whole journal written ONE OPERATION AT A TIME, all of it
-// under a single commit (cmd/babki's seedDemo wraps the demo in one transaction
-// so that a half-written seed cannot survive a failure part way through).
-//
-// The row-at-a-time paths leave created_at to the database, and which clock the
-// database reads decides whether that shape works. now() is the TRANSACTION's
-// timestamp — one instant for every statement under the commit — so with it the
-// two rows below would claim the same moment, and ListForEngine, which orders by
-// occurred_on and then created_at with nothing after it, would be free to hand
-// the sell back first.
-//
-// THE SELL IS THE ASSERTION AND NOT DECORATION: folded before the buy that
-// covers it, it is an oversell of the whole position — accepted on write and
-// refused on every later read, which is the fault this package has met twice.
+// The demo seed writes a journal row by row under one commit. With now() both
+// rows below would share the transaction's instant and ListForEngine could return
+// the sell first, an oversell; clock_timestamp() gives each its own.
 func TestARunOfWritesInsideOneTransactionGetsAnInstantEach(t *testing.T) {
 	f := newFixture(t)
 
@@ -1077,10 +966,8 @@ func TestARunOfWritesInsideOneTransactionGetsAnInstantEach(t *testing.T) {
 	}
 }
 
-// TestListBySourceAndByIDsCarryTheBreakdown pins that a row these two hand out
-// is a row the engine can fold: a transfer without its pieces folds into a
-// position with no acquisition dates and a basis nobody can convert, and
-// nothing about the row says it is incomplete.
+// Rows from ListBySource and ByIDs carry their breakdowns, or they would fold
+// undated.
 func TestListBySourceAndByIDsCarryTheBreakdown(t *testing.T) {
 	f := newFixture(t)
 

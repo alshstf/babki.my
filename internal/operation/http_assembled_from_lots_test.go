@@ -6,26 +6,10 @@ import (
 	"testing"
 )
 
-// TestAssembledFromLotsSurvivesWhenTheOperationIsAlreadyInTheBaseCurrency is
-// the exact gap #67 tracked: a family whose base currency is RUB (the setup
-// default — see newAPIOn) moving RUB-denominated shares between two of its
-// own RUB accounts. The transfer's parcel has a complete, dated breakdown —
-// one purchase, one date, nothing missing — so has_undated_lots is false on
-// both legs. in_base is nonetheless null on both, for the most ordinary of
-// its three reasons: `currency` already equals the space's base currency, so
-// there is nothing to convert at all, and no fx rate is even asked for.
-//
-// Before this fix, assembled_from_lots lived only inside in_base
-// (OperationInBase.AssembledFromLots) and vanished together with it whenever
-// in_base did — including for this exact reason. A client reading
-// has_undated_lots (false, correctly) and in_base.assembled_from_lots
-// (absent, because in_base itself is absent) had no way left to learn that
-// this row's amount is a cost basis at all, and the only remaining way to
-// find out was a client-side list of operation types — the copy of a server
-// rule this whole branch removes. This is not a synthetic corner: a RUB
-// space with RUB brokerage accounts, moving RUB-denominated shares between
-// them, is the ordinary case for a Russian-resident owner, not the unusual
-// one.
+// assembled_from_lots is published even when in_base is null because the
+// row is already in the base currency (#67): a RUB transfer between RUB accounts,
+// the ordinary case for a Russian resident. Inside in_base it vanished, leaving a
+// client nothing but its own list of types.
 func TestAssembledFromLotsSurvivesWhenTheOperationIsAlreadyInTheBaseCurrency(t *testing.T) {
 	url, c := newAPI(t) // RUB base currency, no fx converter needed at all
 
@@ -47,10 +31,7 @@ func TestAssembledFromLotsSurvivesWhenTheOperationIsAlreadyInTheBaseCurrency(t *
 	var pair transferResp
 	decodeJSON(t, resp, &pair)
 
-	// The create/transfer response itself: assembled_from_lots is a property
-	// of the operation, not of an in_base block this response never carries
-	// (see the API contract), so it must already be true here — before the
-	// journal is even read back.
+	// True on the transfer response itself, which carries no in_base.
 	if !pair.Out.AssembledFromLots || !pair.In.AssembledFromLots {
 		t.Errorf("transfer response assembled_from_lots: out = %v, in = %v, want true on both",
 			pair.Out.AssembledFromLots, pair.In.AssembledFromLots)

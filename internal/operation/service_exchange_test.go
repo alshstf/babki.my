@@ -25,13 +25,9 @@ func newPaper(t *testing.T, f fixture, ticker, name string) (id [16]byte) {
 	return inst.ID
 }
 
-// TestCreateExchangeCarriesTheParcelToTheNewPaper is the owner's own case, run
-// through the service: four depositary receipts bought on two days in 2021
-// become four shares of the company that redomiciled, and the sale that follows
-// is measured against what was paid for the RECEIPTS (НК РФ ст. 214.1 п. 13).
-//
-// Before this type existed that sale was refused outright — the account held
-// nothing of the new paper — which is what the owner saw on live data.
+// The owner's case: four depositary receipts bought on two days in 2021
+// become four shares of the redomiciled company, and the later sale is measured
+// against what the receipts cost (НК РФ ст. 214.1 п. 13).
 func TestCreateExchangeCarriesTheParcelToTheNewPaper(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -164,11 +160,8 @@ func TestCreateExchangeRestatesUnitsAndKeepsTheMoney(t *testing.T) {
 	}
 }
 
-// TestCreateExchangeSumsToTheNewQuantityOnAnUnevenRatio is the arithmetic that
-// makes the stored breakdown legal at all: three equal lots converted 3-for-1
-// cannot each take a third of one unit, and the pieces must still sum to
-// exactly what the row claims — or portfolio.CheckTransferLots refuses the
-// account's positions on every later read.
+// Three equal lots converted 3-for-1 still sum to exactly one unit, or
+// CheckTransferLots refuses the account on every later read.
 func TestCreateExchangeSumsToTheNewQuantityOnAnUnevenRatio(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -192,9 +185,8 @@ func TestCreateExchangeSumsToTheNewQuantityOnAnUnevenRatio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateExchange: %v", err)
 	}
-	// 1/3 truncated to ten places is 0.3333333333; the running totals give
-	// 0.3333333333, 0.3333333333 and — the last piece being pinned to the
-	// quantity of the row — 0.3333333334.
+	// Running totals truncated to ten places; the last piece is pinned to the
+	// row's quantity.
 	want := []string{"0.3333333333", "0.3333333333", "0.3333333334"}
 	if len(in.TransferLots) != len(want) {
 		t.Fatalf("pieces = %d, want %d", len(in.TransferLots), len(want))
@@ -280,9 +272,7 @@ func TestCreateExchangeRefusals(t *testing.T) {
 	}
 }
 
-// TestExchangeLegsCannotBeTypedInByHand: the hand-entry path has no door for a
-// conversion at all, and says why rather than falling through to a generic
-// refusal.
+// The hand-entry path has no door for a conversion and says why.
 func TestExchangeLegsCannotBeTypedInByHand(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)

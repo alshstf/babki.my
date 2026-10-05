@@ -28,10 +28,9 @@ type ArrivalParams struct {
 }
 
 // CreateArrival records shares arriving from another broker on an account no
-// importer feeds: a transfer_in with no sibling, which until now only an
-// importer could write. The hand-entry door refuses transfer legs because a move
-// between two of the owner's accounts has to be written as a pair; shares from a
-// broker this program does not hold have no other half to write.
+// importer feeds: a transfer_in with no sibling. The ordinary hand-entry door
+// refuses transfer legs, since a move between the owner's accounts is written as
+// a pair; shares from a broker this program does not hold have no other half.
 //
 // Without purchases the shares arrive bought for nothing (see
 // portfolio.UnknownCost) and can be given their purchases later

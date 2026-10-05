@@ -6,35 +6,14 @@ import (
 	"testing"
 )
 
-// TestJournalSaysWhenATransferHasNoPurchaseDates is what lets the journal
-// explain a missing ruble figure instead of guessing at it — the twin of
-// TestPositionSaysWhenALotHasNoAcquisitionDate in package portfolio_test, and
-// here for the identical reason.
+// has_undated_lots says why in_base is null when the cause is an unrecorded
+// purchase date, which never resolves, unlike a missing rate. The twin of
+// TestPositionSaysWhenALotHasNoAcquisitionDate. The transfer day here has a rate,
+// so "no rate for the operation date" would be false.
 //
-// A row whose in_base is null already tells a reader that no base-currency
-// figure could be published; it does not tell them WHY, and the two reasons are
-// not interchangeable. "No fx rate for that day" is a gap the backfill job
-// closes on its own — the number appears later. "Nobody recorded when these
-// shares were bought" never resolves.
-//
-// On a journal row the difference is sharper than on a position, which is what
-// makes the wrong sentence not merely unhelpful but false: a transfer's own
-// date usually HAS a rate — this fixture seeds one for 2026-07-20, the day the
-// shares moved — and it is precisely the rate that must not value a basis
-// assembled on other days. A screen saying "нет курса на дату операции" over
-// that row names a rate that exists, blames a cause that is not the cause, and
-// promises a figure that will never come.
-//
-// FOUR rows in TWO journals pin it, and each kills a different wrong
-// implementation:
-//
-//	transfer_out / transfer_in of a hand-typed basis — has_undated_lots true,
-//	        in_base null, on BOTH legs: one parcel, one answer.
-//	an ordinary buy with a rate on its own day — has_undated_lots false,
-//	        in_base present. (Kills "always true".)
-//	an ordinary buy dated EARLIER than any seeded rate — has_undated_lots
-//	        false, in_base null. (Kills "has_undated_lots is in_base == null
-//	        renamed" — the row that most needs the two told apart is this one.)
+//	hand-typed transfer, both legs  has_undated_lots true,  in_base null
+//	buy with a rate on its day      has_undated_lots false, in_base present
+//	buy older than every rate       has_undated_lots false, in_base null
 func TestJournalSaysWhenATransferHasNoPurchaseDates(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	// Deliberately no rate on 2026-01-05: that is the early buy's own day.
@@ -99,20 +78,8 @@ func TestJournalSaysWhenATransferHasNoPurchaseDates(t *testing.T) {
 	}
 }
 
-// TestTransferPairAnswersUndatedTheSameOnBothLegs pins that the pair agrees
-// with itself in the response that creates it, not only in the journal read
-// back afterwards.
-//
-// The breakdown is stored next to the arriving leg alone, but it describes THE
-// PARCEL, and every later read hands it to both legs for exactly that reason
-// (see Store.attachTransferLots). The create path used to return the departing
-// leg without it, which cost nothing while nothing was published from it — and
-// the moment has_undated_lots was, that leg answered "these shares do not know
-// when they were bought" about a parcel whose purchase dates had just been
-// written in the same transaction. One transfer would then have contradicted
-// itself inside a single 201 response.
-//
-// Both legs are checked in both places: the response and the journal listing.
+// The pair agrees with itself in the 201 that creates it as well as in the
+// journal: the departing leg returns the breakdown it shares.
 func TestTransferPairAnswersUndatedTheSameOnBothLegs(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2026-05-13", "60.00")
@@ -160,11 +127,9 @@ func TestTransferPairAnswersUndatedTheSameOnBothLegs(t *testing.T) {
 	}
 }
 
-// Shares that arrived with no purchase price are counted as bought for nothing,
-// and nought needs no date (#226): the journal shows 0 in rubles for such a
-// transfer, as the position built from it does, rather than «не записана дата
-// покупки». Moved on together with shares that were bought, the parcel is
-// valued by the bought ones alone.
+// Shares that arrived with no price count as bought for nothing, and zero
+// needs no date (#226): the journal shows 0 in roubles, as the position does.
+// Moved together with bought shares, the parcel is valued by the bought ones.
 func TestATransferBoughtForNothingIsNoughtInTheBaseCurrency(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2026-07-20", "78.50")

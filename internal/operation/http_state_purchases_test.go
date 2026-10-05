@@ -16,10 +16,9 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// arrivalFixture is the full stack with one account holding shares that
-// arrived from another broker: an imported transfer_in with no sibling and no
-// basis, which is the only shape purchases can be stated for — and which only
-// an importer writes, so it is written here through the import door.
+// arrivalFixture is the full stack with an account holding an imported
+// transfer_in with no sibling and no basis, the only shape purchases can be
+// stated for; only an importer writes it.
 type arrivalFixture struct {
 	url       string
 	c         *http.Client
@@ -218,11 +217,9 @@ func TestPurchasesCannotBeStatedForATransferBetweenOwnAccounts(t *testing.T) {
 	}
 }
 
-// Shares moved on to another account after they arrived took a breakdown with
-// them released from the old basis — bought for nothing. Stating the purchases
-// releases the move again from the restated history (#227): the shares that
-// went on carry the price and day that were stated, and those that stayed carry
-// the rest. Until #227 this was a 409 the owner had no way past.
+// Shares moved on after arriving carried a breakdown bought for nothing;
+// stating the purchases releases the move again (#227), so the moved shares
+// carry the stated price and day.
 func TestStatingPurchasesCarriesThemToSharesMovedOnSince(t *testing.T) {
 	f := newArrivalFixture(t)
 	other := createID(t, f.c, f.url+"/api/v1/accounts", `{"name":"Другой","type":"brokerage","currency":"RUB"}`)

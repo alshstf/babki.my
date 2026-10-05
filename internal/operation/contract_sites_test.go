@@ -10,28 +10,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The bounds this listing enforces are written down twice: once in Go, as the
-// constants parsePage refuses past, and once in api/openapi.yaml, where a client
-// reads them. Go cannot import a YAML literal, so the second copy is typed by
-// hand — and a change that touched only one of the two would leave the contract
-// promising something the server does not do, with every other test in this
-// repository still green.
-//
-// THAT IS NOT A HYPOTHETICAL HERE. It is what #118 was: the document stated
-// `maximum: 200` and the server clamped to 200 instead of refusing, so a
-// schema-aware client would not send limit=250 that the server would have
-// answered, and one that sent it anyway got 200 rows back with nothing saying
-// the number it sent was not the number applied. The catalog's copy of this
-// file (internal/instrument/contract_sites_test.go) is where that was first
-// closed; this is the endpoint it was first FOUND on.
-//
-// This file does not remove the duplication. It removes the SILENCE. It is its
-// own copy rather than a shared helper for the reason parsePage is: the two
-// endpoints' bounds are separate numbers that must be free to move separately.
-//
-// It lives in `package operation` rather than in the `operation_test` package
-// beside it precisely so it CAN read those constants. Everything else in this
-// directory tests the module through its front door.
+// The listing's bounds are written in Go (parsePage) and in api/openapi.yaml,
+// which Go cannot import, so these tests keep the two in step (#118). The
+// catalog has its own copy: the two endpoints' numbers move separately. Package
+// operation, not operation_test, so it can read the constants.
 
 func contractFile(t *testing.T) []byte {
 	t.Helper()
@@ -116,12 +98,7 @@ func TestTheContractStatesTheJournalPageBoundsTheServerEnforces(t *testing.T) {
 	if !ok {
 		t.Fatalf("GET %s declares no `offset` query parameter, but the server reads one", journalPath)
 	}
-	// The floor is declarable at all only because parsePage now refuses a
-	// negative offset. It used to IGNORE one and answer the first page, and
-	// #118 said in as many words that `minimum: 0` could not be declared while
-	// that was so — a stated minimum would have described a refusal that did
-	// not exist, which is the same defect as the unstated ceiling, pointing the
-	// other way.
+	// minimum: 0 is declarable because parsePage refuses a negative offset.
 	if offset.Schema.Minimum == nil || *offset.Schema.Minimum != 0 {
 		t.Errorf("GET %s offset.minimum = %s, want 0: parsePage refuses a negative offset",
 			journalPath, shownBound(offset.Schema.Minimum))
@@ -131,11 +108,8 @@ func TestTheContractStatesTheJournalPageBoundsTheServerEnforces(t *testing.T) {
 	}
 }
 
-// TestTheContractStatesTheJournalAnswers400 ties the status code parsePage
-// answers to the document that has to name it. This endpoint declared 401 and
-// nothing else, which was accurate while it clamped and ignored; a document
-// that states bounds and no refusal reads as though the bounds were advisory,
-// and that reading is exactly what #118 was.
+// The contract names the 400 parsePage answers; bounds with no refusal
+// read as advisory (#118).
 func TestTheContractStatesTheJournalAnswers400(t *testing.T) {
 	doc := readJournalContract(t)
 	if _, ok := doc.Paths[journalPath].Get.Responses["400"]; !ok {
@@ -144,54 +118,26 @@ func TestTheContractStatesTheJournalAnswers400(t *testing.T) {
 	}
 }
 
-// The oldest date an operation may carry is written down four times, in three
-// languages, and only one of them is the rule. minOccurredOn is what the
-// service refuses past; api/openapi.yaml states it twice, once per request
-// schema a client can validate against; and web/src/lib/dates.ts holds a copy
-// so the four dialogs that write an operation refuse it in the date field
-// instead of after a round trip.
+// The oldest operation date lives in four places: minOccurredOn (the rule),
+// api/openapi.yaml twice (one per request schema), and web/src/lib/dates.ts for
+// the dialogs. Nothing else makes them agree. Checked as written (YYYY-MM-DD);
+// the prose around each must be re-read by hand when the date moves.
 //
-// Nothing makes them agree — Go cannot import a YAML literal and TypeScript
-// cannot import a Go constant — so a change to the floor that touched only some
-// of them would leave a date field refusing what the server takes, or a
-// contract promising a range the server does not apply, with every other test
-// in this repository still green. That is the shape of gap
-// TestTheAmountFieldRefusesAtTheBoundTheServerEnforces closed for
-// money.MaxAmountMinor and TestTheCurrencyFormsRefuseAtTheShapeTheServerEnforces
-// for currency.Pattern; this is the same closure for this bound.
-//
-// The check is on the DATE AS WRITTEN, not on a parsed structure: all four
-// sites spell it YYYY-MM-DD and a reader compares them by eye that way. What it
-// cannot check is the prose around it — each site also explains in words what
-// the floor is for, and those sentences are read by people. Whoever moves this
-// number re-reads them by hand.
-// The two sites that write the date out as a literal. In the contract it is
-// prose a client reads; in dates.ts it is the frontend's single copy of the
-// number, which the dialogs then take by name.
-//
-// The contract states it on the two REQUEST schemas only. The Operation
-// RESPONSE schema's occurred_on deliberately says nothing about a range: it
-// describes a row already stored, and rows written before the floor existed are
-// untouched and still returned as they stand.
+// These are the two literal sites. The Operation response schema states no range:
+// rows written before the floor are returned as they are.
 var dateFloorLiteralSites = []string{
 	"api/openapi.yaml",
 	"web/src/lib/dates.ts",
 }
 
-// The shared date field of the dialogs that write an operation. It is checked
-// for the CONSTANT and not for the date: it takes it from dates.ts, which is
-// where the copy lives and what the list above ties to the server. A field
-// spelling the date out itself would be another copy, and this test would not
-// want it.
-//
-// The balance dialog is deliberately absent — a balance mark has no floor. See
-// EARLIEST_OPERATION_DATE in dates.ts for why the two differ.
+// The shared date field takes the constant from dates.ts; a field spelling
+// the date itself would be another copy. The balance dialog has no floor (see
+// EARLIEST_OPERATION_DATE).
 var dateFloorFormSites = []string{
 	"web/src/components/form-fields.tsx",
 }
 
-// dateFloorFieldSites are the dialogs whose date is the shared field above, so
-// the floor reaches them through it.
+// dateFloorFieldSites are the dialogs that use the shared field.
 var dateFloorFieldSites = []string{
 	"web/src/routes/accounts/trade-dialog.tsx",
 	"web/src/routes/accounts/transfer-dialog.tsx",
@@ -212,10 +158,7 @@ func TestTheContractAndTheDateFieldsStateTheFloorTheServerEnforces(t *testing.T)
 				"what it refuses", rel, want)
 		}
 	}
-	// Each dialog must actually hand the constant to its date input, not merely
-	// import it: a file that names EARLIEST_OPERATION_DATE in an import line and
-	// passes nothing would satisfy a check for the name while its field still
-	// took any year.
+	// The constant must reach the input, not merely be imported.
 	for _, rel := range dateFloorFormSites {
 		body, err := os.ReadFile(filepath.Join("..", "..", rel))
 		if err != nil {
@@ -234,9 +177,8 @@ func TestTheContractAndTheDateFieldsStateTheFloorTheServerEnforces(t *testing.T)
 			t.Errorf("%s does not take its date from OperationDateField", rel)
 		}
 	}
-	// And the contract states it on BOTH request schemas, not on one of the
-	// two: a bound declared at one door and not the other is #100 and #102,
-	// where the money cap was declared on a single schema out of four.
+	// Both request schemas state it (#100, #102: a bound on one door of
+	// several).
 	body, err := os.ReadFile(filepath.Join("..", "..", "api", "openapi.yaml"))
 	if err != nil {
 		t.Fatalf("read api/openapi.yaml: %v", err)

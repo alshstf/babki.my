@@ -5,29 +5,17 @@ import (
 	"testing"
 )
 
-// The journal used to publish a null in_base and leave the screen to guess at
-// the reason, which it did with one sentence — «Нет курса на дату операции» —
-// over every one of them. These tests pin the server's answer instead, one per
-// branch where the conversion stops, and each asserts ITS OWN value rather than
-// merely "some gap is set": a caption that names the wrong cause is worse than
-// the vague one it replaced, because it reads as knowledge (#79).
+// Each branch where conversion stops publishes its own in_base_gap, and each
+// test asserts that value: a caption naming the wrong cause reads as knowledge
+// (#79).
 //
-// The three values, and what makes each of them the honest one:
-//
-//	no_rate_operation_date — the amount is money that moved on the row's own
-//	        date and the fx table cannot reach that day. Closes on its own.
-//	no_rate_lot_date       — the amount is a cost basis assembled from
-//	        purchases on other days and one of THOSE days has no rate. The
-//	        transfer's own day usually does, which is what makes the old
-//	        sentence false rather than merely unhelpful. Closes on its own.
-//	undated_lot            — nobody ever recorded when the parcel was bought.
-//	        Never closes.
+// 	no_rate_operation_date  money moved on the row's date, which has no rate
+// 	no_rate_lot_date        a purchase day behind a basis has no rate
+// 	undated_lot             nobody recorded when the parcel was bought; never
+// 	                        closes
 
-// TestJournalGapNamesTheOperationsOwnDate is the ordinary row: money that moved
-// on the day the row is dated, and no rate for that day nor any earlier one.
-// Here — and only here — the old blanket sentence happened to be true, so this
-// case exists to keep the new field from over-correcting: the value must still
-// be the one about the operation's own date.
+// Money that moved on the row's date, no rate for it: the operation-date
+// gap.
 func TestJournalGapNamesTheOperationsOwnDate(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	// Seeded AFTER the operation: nothing on or before 2026-01-05.
@@ -47,24 +35,12 @@ func TestJournalGapNamesTheOperationsOwnDate(t *testing.T) {
 	}
 }
 
-// TestJournalGapNamesThePurchaseDateNotTheTransferDate is the case issue #79 is
-// named for, and the one the whole field exists to make sayable.
-//
-// The parcel was bought on 2026-01-05, a day the fx table cannot reach. It was
-// moved between two accounts of the same family on 2026-07-20, a day whose rate
-// IS seeded — the fixture proves it by converting an ordinary withdrawal on
-// that very date in the same journal. So the row shows no ruble figure while
-// the rate for its own date sits in the table unused, and the sentence «нет
-// курса на дату операции» over it is not vague, it is false.
-//
-// Both legs are asserted. The breakdown is stored once, beside the arriving
-// leg, and read onto the departing one (see Store.attachTransferLots): one
-// parcel, one set of purchases, one answer — a pair that explained itself
-// differently on the two accounts would be the same defect one screen away.
+// The parcel was bought on 2026-01-05, unreachable; it moved on 2026-07-20,
+// which has a rate (a control withdrawal that day converts). The gap is the
+// purchase date, on both legs.
 func TestJournalGapNamesThePurchaseDateNotTheTransferDate(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
-	// Nothing on or before the 2026-01-05 purchase; the transfer's own day has
-	// a rate and so does the control row below.
+	// Nothing on or before 2026-01-05; the transfer day has a rate.
 	seedFxRate(t, mdStore, "2026-07-20", "78.50")
 
 	from := mkAccount(t, url, c, "Т-Банк", "USD")
@@ -73,15 +49,12 @@ func TestJournalGapNamesThePurchaseDateNotTheTransferDate(t *testing.T) {
 		`{"type":"share","name":"Tesla","ticker":"TSLA","currency":"USD"}`)
 	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-01-05","quantity":"10","price":"180","amount_minor":-180000,"currency":"USD"}`, from, tsla))
-	// The control: an ordinary row on the transfer's own date. If this one fails
-	// to convert, the fixture has stopped testing what it claims — the point is
-	// that 2026-07-20's rate exists and is deliberately not the one that may
-	// value shares bought in January.
+	// The control: an ordinary row on the transfer day converts.
 	control := mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"type":"withdrawal",
 		"occurred_on":"2026-07-20","amount_minor":-10000,"currency":"USD"}`, from))
 
-	// No cost_minor: the basis is released from the source's own lot, so the
-	// purchase date travels with the parcel.
+	// No cost_minor: the basis and its purchase date come from the source's
+	// lot.
 	pair := mkTransfer(t, url, c, fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20"}`,
 		from, to, tsla))
@@ -110,20 +83,13 @@ func TestJournalGapNamesThePurchaseDateNotTheTransferDate(t *testing.T) {
 	}
 }
 
-// TestJournalGapNamesThePurchaseDateWhenOnlyAnOlderPieceLacksARate reaches the
-// same value down the other road.
-//
-// A transfer's figure is struck at one rate per piece, and the headline — the
-// newest purchase, the one rate_on names — is resolved separately from the rest
-// (it also values the fee). Here the headline SUCCEEDS: the 2026-06-14 piece is
-// valued from the Friday before. It is the older 2026-01-05 piece, deep in the
-// loop, that the fx table cannot reach. Without this fixture the per-term branch
-// is never exercised: every other case in this file stops on the headline, so an
-// implementation that named its cause from anywhere at all would pass.
+// The headline (the newest piece, 2026-06-14, valued from Friday) resolves;
+// the older 2026-01-05 piece does not. This is the only fixture reaching the
+// per-term branch.
 func TestJournalGapNamesThePurchaseDateWhenOnlyAnOlderPieceLacksARate(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
-	// Nothing on or before 2026-01-05; the newest purchase and the transfer day
-	// are both reachable.
+	// Nothing on or before 2026-01-05; the newest purchase and the transfer
+	// day are reachable.
 	seedFxRate(t, mdStore, "2026-06-12", "64.00")
 	seedFxRate(t, mdStore, "2026-07-20", "78.50")
 
@@ -150,13 +116,8 @@ func TestJournalGapNamesThePurchaseDateWhenOnlyAnOlderPieceLacksARate(t *testing
 	}
 }
 
-// TestJournalGapNamesTheUndatedParcel covers the one cause no backfill closes:
-// the basis was typed in by hand, so no purchase date exists for it anywhere.
-//
-// Every rate this row could possibly want is seeded, which is what separates
-// this value from the two no_rate_* ones: nothing here is waiting on the fx
-// table, and a caption promising the figure later would be a promise nobody can
-// keep.
+// A basis typed by hand has no purchase date at all; every rate is seeded,
+// so nothing is waiting on the fx table.
 func TestJournalGapNamesTheUndatedParcel(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2026-05-13", "60.00")
@@ -169,8 +130,7 @@ func TestJournalGapNamesTheUndatedParcel(t *testing.T) {
 	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-05-13","quantity":"10","price":"180","amount_minor":-180000,"currency":"USD"}`, from, tsla))
 
-	// cost_minor given by hand: no source lots are released, so no acquisition
-	// dates travel with the parcel and none exist for it anywhere.
+	// cost_minor by hand: no lots released, no dates carried.
 	pair := mkTransfer(t, url, c, fmt.Sprintf(
 		`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,"quantity":"10","occurred_on":"2026-07-20","cost_minor":190000}`,
 		from, to, tsla))
@@ -192,19 +152,12 @@ func TestJournalGapNamesTheUndatedParcel(t *testing.T) {
 	}
 }
 
-// TestJournalGapPrefersTheUndatedParcelOverAMissingRate pins the ORDER, which
-// is load-bearing rather than incidental: the parcel's dates are settled before
-// any rate is looked up, so a row that has both an undated piece and an
-// unreachable fx table reports the piece.
-//
-// The two are not equally true to a reader. A missing rate is a gap the
-// backfill closes on its own and the figure appears later; a purchase date
-// nobody recorded never resolves. Reporting the closeable one on a row that
-// also has the permanent one promises a number that is not coming.
+// An undated piece and a missing rate together report the undated piece,
+// which never closes; the missing rate would promise a figure that is not
+// coming.
 func TestJournalGapPrefersTheUndatedParcelOverAMissingRate(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
-	// A rate exists, but far in the future of everything in this fixture: no
-	// date any row here could ask about is reachable.
+	// A rate exists, but after every date here.
 	seedFxRate(t, mdStore, "2030-01-09", "100")
 
 	from := mkAccount(t, url, c, "Т-Банк", "USD")
@@ -225,10 +178,7 @@ func TestJournalGapPrefersTheUndatedParcelOverAMissingRate(t *testing.T) {
 	}
 }
 
-// TestJournalPublishesNoGapWhenThereIsAFigure and its base-currency twin below
-// keep the field from degenerating into "in_base is null", which is the shape a
-// reader can already see and which would caption two entirely different rows
-// with the same sentence.
+// A row with a figure publishes no gap.
 func TestJournalPublishesNoGapWhenThereIsAFigure(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2026-05-13", "60.00")
@@ -246,14 +196,10 @@ func TestJournalPublishesNoGapWhenThereIsAFigure(t *testing.T) {
 	}
 }
 
-// TestJournalPublishesNoGapWhenAlreadyInTheBaseCurrency covers the row where
-// there was never anything to convert. in_base is null exactly as it is over a
-// genuine gap, and the difference matters: «не пересчитано» over an amount that
-// IS the base-currency amount is a caption about nothing.
+// A row already in the base currency publishes no gap either.
 func TestJournalPublishesNoGapWhenAlreadyInTheBaseCurrency(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
-	// A rate exists, so a null here can only come from the base-currency
-	// short-circuit and never from a failed lookup.
+	// A rate exists, so null comes from the base-currency case only.
 	seedFxRate(t, mdStore, "2026-05-13", "60.00")
 
 	acc := mkAccount(t, url, c, "Рублёвый брокер", "RUB")
@@ -270,12 +216,8 @@ func TestJournalPublishesNoGapWhenAlreadyInTheBaseCurrency(t *testing.T) {
 	}
 }
 
-// TestJournalDatedOnIsTheDateAskedForNotTheRatesOwn is issue #80 on an ordinary
-// row. The operation is dated Sunday 2019-03-17; the CBR published nothing that
-// weekend, so the rate comes from Friday 2019-03-15. rate_on has always said
-// Friday, correctly — it is the rate actually used — and a caption reading it as
-// the date the money moved names a day nothing happened on. dated_on says the
-// Sunday.
+// #80 on an ordinary row: dated Sunday 2019-03-17, rate from Friday
+// 2019-03-15. rate_on says Friday, dated_on says Sunday.
 func TestJournalDatedOnIsTheDateAskedForNotTheRatesOwn(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2019-03-15", "65")
@@ -301,20 +243,9 @@ func TestJournalDatedOnIsTheDateAskedForNotTheRatesOwn(t *testing.T) {
 	}
 }
 
-// TestJournalDatedOnIsThePurchaseDateOnATransfer is issue #80 where it actually
-// bites, and where no client can work around it.
-//
-// The parcel's newest purchase is Sunday 2026-06-14; its rate comes from Friday
-// 2026-06-12. The transfer itself is dated 2026-07-20. All three dates are
-// different, and the screen's sentence — "converted at the rates of the purchase
-// dates, the newest of them being X" — is only true of the first. Before
-// dated_on the client had rate_on and occurred_on to choose between, and BOTH
-// are wrong here: one is a day nothing was bought on, the other is the day the
-// paperwork moved, which is the one rate deliberately not used.
-//
-// A weekend purchase date is one way to reach this; a public holiday — a
-// weekday with no CBR rate — is another, and it is why the field is not a
-// weekend special case.
+// #80 on a transfer: newest purchase Sunday 2026-06-14, rate from Friday
+// 2026-06-12, transfer on 2026-07-20. Neither rate_on nor occurred_on is the
+// purchase day; dated_on is. A weekday holiday reaches the same case.
 func TestJournalDatedOnIsThePurchaseDateOnATransfer(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2026-05-13", "60.00")
