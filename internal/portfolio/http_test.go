@@ -22,6 +22,7 @@ import (
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/marketdata/ratetest"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
@@ -953,31 +954,7 @@ func (c failingConverter) Rate(_ context.Context, _, _ string, _ time.Time) (dec
 }
 
 func (c failingConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
-	return ratesFromRate(ctx, c, queries)
-}
-
-// rateResolver is the one-pair half of converterLike.
-type rateResolver interface {
-	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
-}
-
-// ratesFromRate answers a batch from the double's own Rate, so a double cannot
-// answer the batch and the pair differently. ErrNoRate stays with its query;
-// anything else voids the batch, as RatesOn does.
-func ratesFromRate(ctx context.Context, r rateResolver, queries []marketdata.RateQuery) (marketdata.Rates, error) {
-	out := make(map[marketdata.RateQuery]marketdata.RateResult, len(queries))
-	for _, q := range queries {
-		rate, on, err := r.Rate(ctx, q.From, q.To, q.On)
-		switch {
-		case err == nil:
-			out[q] = marketdata.RateResult{Rate: rate, RateDate: on}
-		case errors.Is(err, marketdata.ErrNoRate):
-			out[q] = marketdata.RateResult{Err: err}
-		default:
-			return marketdata.Rates{}, err
-		}
-	}
-	return marketdata.NewRates(out), nil
+	return ratetest.BatchFrom(ctx, c, queries)
 }
 
 // A real rate failure fails the request rather than showing in_base: null.

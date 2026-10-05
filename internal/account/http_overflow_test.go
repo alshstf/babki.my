@@ -9,29 +9,12 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/marketdata/ratetest"
 	"babki.my/babki/internal/platform/money"
 )
 
 // A balance times a rate can overflow int64 (#27); it is an error, never the
 // (nil, nil) that means "no rate".
-
-// fixedRateConverter answers every lookup with the same rate.
-type fixedRateConverter struct{ rate decimal.Decimal }
-
-func (c fixedRateConverter) Rate(context.Context, string, string, time.Time) (decimal.Decimal, time.Time, error) {
-	return c.rate, time.Time{}, nil
-}
-
-func (c fixedRateConverter) ConvertMany(context.Context, map[string]int64, string, time.Time) (int64, []string, time.Time, error) {
-	panic("fixedRateConverter: ConvertMany not used")
-}
-
-// RatesOn panics: balanceInBase is the fallback and must never reach for the
-// batch.
-func (c fixedRateConverter) RatesOn(context.Context, []marketdata.RateQuery) (marketdata.Rates, error) {
-	panic("fixedRateConverter: RatesOn not used")
-}
 
 // overflowOn is any fixed date; the double ignores it.
 var overflowOn = time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
@@ -44,7 +27,7 @@ func withBalance(minor int64) WithBalance {
 }
 
 func TestBalanceInBaseRefusesABalanceThatWouldWrap(t *testing.T) {
-	h := &Handler{converter: fixedRateConverter{rate: decimal.NewFromInt(2)}}
+	h := &Handler{converter: ratetest.Fixed{At: decimal.NewFromInt(2)}}
 
 	got, err := h.balanceInBase(context.Background(), withBalance(math.MaxInt64), "RUB", overflowOn, marketdata.NewRateMemo(h.converter))
 	if !errors.Is(err, money.ErrOverflow) {
@@ -57,7 +40,7 @@ func TestBalanceInBaseRefusesABalanceThatWouldWrap(t *testing.T) {
 
 // An overflow is an error, not the uncovered-currency null.
 func TestBalanceInBaseOverflowIsNotAnUncoveredCurrency(t *testing.T) {
-	h := &Handler{converter: fixedRateConverter{rate: decimal.NewFromInt(2)}}
+	h := &Handler{converter: ratetest.Fixed{At: decimal.NewFromInt(2)}}
 
 	if _, err := h.balanceInBase(context.Background(), withBalance(math.MaxInt64), "RUB", overflowOn, marketdata.NewRateMemo(h.converter)); err == nil {
 		t.Fatal("balanceInBase answered an overflow with a nil error, which this screen renders as a currency with no rate")
@@ -66,7 +49,7 @@ func TestBalanceInBaseOverflowIsNotAnUncoveredCurrency(t *testing.T) {
 
 // The same balance at a rate of 1 converts exactly.
 func TestBalanceInBasePublishesTheLargestBalanceThatFits(t *testing.T) {
-	h := &Handler{converter: fixedRateConverter{rate: decimal.NewFromInt(1)}}
+	h := &Handler{converter: ratetest.Fixed{At: decimal.NewFromInt(1)}}
 
 	got, err := h.balanceInBase(context.Background(), withBalance(math.MaxInt64), "RUB", overflowOn, marketdata.NewRateMemo(h.converter))
 	if err != nil {

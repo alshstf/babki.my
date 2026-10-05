@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/marketdata/ratetest"
 )
 
 // journalCost is what one GET of the journal page cost and answered.
@@ -34,10 +35,10 @@ func (c journalCost) String() string {
 // journalScreen builds an account whose journal grows with size, fetches its
 // page once and reports the cost. tune bends the converter double (dropping,
 // failingBatch).
-func journalScreen(t *testing.T, size int, tune func(*countingConverter)) journalCost {
+func journalScreen(t *testing.T, size int, tune func(*ratetest.Counting)) journalCost {
 	t.Helper()
 	pool, mdStore := newTestPool(t)
-	conv := &countingConverter{inner: marketdata.NewConverter(mdStore)}
+	conv := &ratetest.Counting{Inner: marketdata.NewConverter(mdStore)}
 	if tune != nil {
 		tune(conv)
 	}
@@ -51,9 +52,7 @@ func journalScreen(t *testing.T, size int, tune func(*countingConverter)) journa
 	accountID := seedJournal(t, url, c, size)
 
 	// Reset after the fixture is built, so the counts are the GET's alone.
-	conv.rate.Store(0)
-	conv.batch.Store(0)
-	conv.queries.Store(0)
+	conv.Reset()
 	before := poolTrips(pool)
 
 	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/operations?limit=200", "")
@@ -61,21 +60,11 @@ func journalScreen(t *testing.T, size int, tune func(*countingConverter)) journa
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET operations = %d, want 200: %s", resp.StatusCode, b)
 	}
-	cost := journalCost{trips: poolTrips(pool) - before, rate: conv.rate.Load(), batch: conv.batch.Load()}
+	cost := journalCost{trips: poolTrips(pool) - before, rate: conv.Singles.Load(), batch: conv.Batches.Load()}
 	var page journalPage
 	decodeJSON(t, resp, &page)
 	cost.body = page.Operations
 	return cost
-}
-
-// dropping and failingBatch bend the double: a prefetch with a hole, and a
-// batch statement that dies on its own.
-func dropping(pred func(marketdata.RateQuery) bool) func(*countingConverter) {
-	return func(c *countingConverter) { c.keep = pred }
-}
-
-func failingBatch(err error) func(*countingConverter) {
-	return func(c *countingConverter) { c.batchErr = err }
 }
 
 // poolTrips is the pool's lifetime count of acquired connections, so the
@@ -218,7 +207,7 @@ func TestJournalIncompletePrewarmCostsTripsNotNumbers(t *testing.T) {
 		{"nothing is prewarmed", func(marketdata.RateQuery) bool { return false }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			partial := journalScreen(t, 2, dropping(tc.keep))
+			partial := journalScreen(t, 2, ratetest.Dropping(tc.keep))
 
 			// Separate databases, so ids differ; everything else must match.
 			if !reflect.DeepEqual(blankJournalIDs(partial.body), blankJournalIDs(full.body)) {
@@ -243,7 +232,7 @@ func TestJournalFailedBatchCostsTripsNotNumbers(t *testing.T) {
 	full := journalScreen(t, 2, nil)
 	assertJournalIsFullyWorked(t, full.body)
 
-	dead := journalScreen(t, 2, failingBatch(errors.New("statement timeout on the batched fx lookup")))
+	dead := journalScreen(t, 2, ratetest.FailingBatch(errors.New("statement timeout on the batched fx lookup")))
 	assertJournalIsFullyWorked(t, dead.body)
 
 	// Separate databases, so ids differ; everything else must match.
@@ -264,7 +253,7 @@ func TestJournalFailedBatchCostsTripsNotNumbers(t *testing.T) {
 // way; only the fallback count shows a gap being asked for twice.
 func TestJournalGapIsFiledNotAskedAgain(t *testing.T) {
 	pool, mdStore := newTestPool(t)
-	conv := &countingConverter{inner: marketdata.NewConverter(mdStore)}
+	conv := &ratetest.Counting{Inner: marketdata.NewConverter(mdStore)}
 	url, c := newAPIOn(t, pool, conv)
 
 	// Rates start in 2025: the 2025 operation resolves, the 2024 one does
@@ -276,8 +265,7 @@ func TestJournalGapIsFiledNotAskedAgain(t *testing.T) {
 	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"type":"withdrawal",
 		"occurred_on":"2024-06-01","amount_minor":-20000,"currency":"USD"}`, acc))
 
-	conv.rate.Store(0)
-	conv.batch.Store(0)
+	conv.Reset()
 	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc+"/operations?limit=200", "")
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
@@ -298,10 +286,10 @@ func TestJournalGapIsFiledNotAskedAgain(t *testing.T) {
 	if gaps != 1 || converted != 1 {
 		t.Fatalf("page shows %d gap(s) and %d converted rows, want 1 and 1 — the fixture is not exercising a gap beside a working conversion", gaps, converted)
 	}
-	if got := conv.batch.Load(); got != 1 {
+	if got := conv.Batches.Load(); got != 1 {
 		t.Fatalf("the page made %d batched rate resolutions, want exactly 1", got)
 	}
-	if got := conv.rate.Load(); got != 0 {
+	if got := conv.Singles.Load(); got != 0 {
 		t.Fatalf("the page fell back to %d one-pair lookups — the batch answered «no rate» for 2024-06-01 and that answer must be filed in the memo, not thrown away and asked for again",
 			got)
 	}

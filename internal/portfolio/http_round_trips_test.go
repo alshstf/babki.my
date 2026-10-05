@@ -17,6 +17,7 @@ import (
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/marketdata/ratetest"
 	"babki.my/babki/internal/platform/testdb"
 	"babki.my/babki/internal/portfolio"
 )
@@ -36,51 +37,6 @@ func formatText(p *string) string {
 		return "<nil>"
 	}
 	return strconv.Quote(*p)
-}
-
-// countingConverter counts what a screen asks of the fx layer while a real
-// converter answers. RatesOn is one query, a Rate up to six, so counting a
-// Rate as one understates fallbacks — the safe direction. keep filters the
-// batch (a hole in the enumeration); batchErr fails the batch alone (#70).
-type countingConverter struct {
-	inner    *marketdata.Converter
-	keep     func(marketdata.RateQuery) bool
-	batchErr error
-	rate     int
-	batch    int
-}
-
-// dropping and failingBatch tune the double: a hole in the enumeration, or a
-// batch that dies alone.
-func dropping(pred func(marketdata.RateQuery) bool) func(*countingConverter) {
-	return func(c *countingConverter) { c.keep = pred }
-}
-
-func failingBatch(err error) func(*countingConverter) {
-	return func(c *countingConverter) { c.batchErr = err }
-}
-
-func (c *countingConverter) Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error) {
-	c.rate++
-	return c.inner.Rate(ctx, from, to, on)
-}
-
-func (c *countingConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
-	c.batch++
-	if c.batchErr != nil {
-		// The zero Rates with the error, as RatesOn returns on failure.
-		return marketdata.Rates{}, c.batchErr
-	}
-	if c.keep == nil {
-		return c.inner.RatesOn(ctx, queries)
-	}
-	kept := make([]marketdata.RateQuery, 0, len(queries))
-	for _, q := range queries {
-		if c.keep(q) {
-			kept = append(kept, q)
-		}
-	}
-	return c.inner.RatesOn(ctx, kept)
 }
 
 // countingInstruments, countingJournal and countingSpaces count a request's
@@ -143,7 +99,7 @@ func (c screenCost) String() string {
 
 // positionsScreen builds an account of the given size, fetches its positions
 // once, and reports the cost. tune bends the converter first.
-func positionsScreen(t *testing.T, size int, tune func(*countingConverter)) screenCost {
+func positionsScreen(t *testing.T, size int, tune func(*ratetest.Counting)) screenCost {
 	t.Helper()
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
@@ -158,7 +114,7 @@ func positionsScreen(t *testing.T, size int, tune func(*countingConverter)) scre
 	}
 
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
-	conv := &countingConverter{inner: marketdata.NewConverter(mdStore)}
+	conv := &ratetest.Counting{Inner: marketdata.NewConverter(mdStore)}
 	if tune != nil {
 		tune(conv)
 	}
@@ -175,7 +131,7 @@ func positionsScreen(t *testing.T, size int, tune func(*countingConverter)) scre
 	accountID := seedPositions(t, url, c, quotes, size)
 
 	// Zero the counters so they hold only the GET below.
-	*conv = countingConverter{inner: conv.inner, keep: conv.keep, batchErr: conv.batchErr}
+	conv.Reset()
 	instruments.calls, journal.calls, spaces.calls, quotes.calls = 0, 0, 0, 0
 	before := poolTrips(pool)
 
@@ -185,7 +141,7 @@ func positionsScreen(t *testing.T, size int, tune func(*countingConverter)) scre
 	}
 	cost := screenCost{
 		spaces: spaces.calls, journal: journal.calls, instruments: instruments.calls,
-		quotes: quotes.calls, rate: conv.rate, batch: conv.batch,
+		quotes: quotes.calls, rate: int(conv.Singles.Load()), batch: int(conv.Batches.Load()),
 	}
 	decodeJSON(t, resp, &cost.body)
 	// Read trips after the body is drained, so a handler still working after the
@@ -335,7 +291,7 @@ func TestPositionsIncompletePrewarmCostsTripsNotNumbers(t *testing.T) {
 		{"nothing is prewarmed", func(marketdata.RateQuery) bool { return false }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			partial := positionsScreen(t, 2, dropping(tc.keep))
+			partial := positionsScreen(t, 2, ratetest.Dropping(tc.keep))
 
 			// Separate databases: only instrument ids differ.
 			blankIDs := func(r positionsResp) positionsResp {
@@ -364,7 +320,7 @@ func TestPositionsFailedBatchCostsTripsNotNumbers(t *testing.T) {
 	full := positionsScreen(t, 2, nil)
 	assertScreenIsFullyWorked(t, full.body)
 
-	dead := positionsScreen(t, 2, failingBatch(errors.New("statement timeout on the batched fx lookup")))
+	dead := positionsScreen(t, 2, ratetest.FailingBatch(errors.New("statement timeout on the batched fx lookup")))
 	assertScreenIsFullyWorked(t, dead.body)
 
 	// Separate databases: only instrument ids differ.
@@ -398,7 +354,7 @@ func TestPositionsGapIsFiledNotAskedAgain(t *testing.T) {
 		t.Fatalf("seed fx rates: %v", err)
 	}
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
-	conv := &countingConverter{inner: marketdata.NewConverter(mdStore)}
+	conv := &ratetest.Counting{Inner: marketdata.NewConverter(mdStore)}
 	url, c := setupAPI(t, pool, quotes, conv)
 
 	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
@@ -412,7 +368,7 @@ func TestPositionsGapIsFiledNotAskedAgain(t *testing.T) {
 		"amount_minor":-200000,"currency":"USD"}`, acc.ID, fine.ID, lateBuyOn))
 
 	// Zero the counters so they hold only the GET below.
-	*conv = countingConverter{inner: conv.inner}
+	conv.Reset()
 	resp := do(t, c, "GET", url+"/api/v1/accounts/"+acc.ID+"/positions", "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET positions = %d, want 200", resp.StatusCode)
@@ -431,12 +387,12 @@ func TestPositionsGapIsFiledNotAskedAgain(t *testing.T) {
 	if gaps != 1 || converted != 1 {
 		t.Fatalf("screen shows %d gap(s) and %d converted positions, want 1 and 1 — the fixture is not exercising a gap beside a working conversion", gaps, converted)
 	}
-	if conv.batch != 1 {
-		t.Fatalf("the screen made %d batched rate resolutions, want exactly 1", conv.batch)
+	if conv.Batches.Load() != 1 {
+		t.Fatalf("the screen made %d batched rate resolutions, want exactly 1", conv.Batches.Load())
 	}
-	if conv.rate != 0 {
+	if conv.Singles.Load() != 0 {
 		t.Fatalf("the screen fell back to %d one-pair lookups — the batch answered «no rate» for the %s lot and that answer must be filed in the memo, not thrown away and asked for again",
-			conv.rate, earlyBuyOn)
+			conv.Singles.Load(), earlyBuyOn)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/marketdata/ratetest"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/money"
 )
@@ -23,19 +24,6 @@ import (
 // which mean data that may yet arrive.
 
 func dec(s string) decimal.Decimal { return decimal.RequireFromString(s) }
-
-// fixedRateConverter answers every lookup with one rate.
-type fixedRateConverter struct{ rate decimal.Decimal }
-
-func (c fixedRateConverter) Rate(context.Context, string, string, time.Time) (decimal.Decimal, time.Time, error) {
-	return c.rate, time.Time{}, nil
-}
-
-// RatesOn panics: these tests call handler functions directly, and an empty
-// Rates would read as a missing rate, passing for the wrong reason.
-func (c fixedRateConverter) RatesOn(context.Context, []marketdata.RateQuery) (marketdata.Rates, error) {
-	panic("fixedRateConverter: RatesOn not used")
-}
 
 // A quantity of 10^15 (a hundred times the write bound) at 100 overflows; a
 // position can grow there through many writes, a split, or old rows.
@@ -118,7 +106,7 @@ func TestApplyRateRefusesAConvertedAmountThatWouldWrap(t *testing.T) {
 
 // Two terms that fit can sum past int64; the total is refused.
 func TestSumInBaseRefusesATotalThatWouldWrap(t *testing.T) {
-	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(1)}}
+	h := &Handler{conv: ratetest.Fixed{At: decimal.NewFromInt(1)}}
 	on := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	terms := []datedMinor{{minor: math.MaxInt64, from: "USD", on: on}, {minor: math.MaxInt64, from: "USD", on: on}}
 
@@ -133,7 +121,7 @@ func TestSumInBaseRefusesATotalThatWouldWrap(t *testing.T) {
 
 // An overflow is an error, not ok=false, which means a missing rate.
 func TestSumInBaseOverflowIsNotAMissingRate(t *testing.T) {
-	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(1)}}
+	h := &Handler{conv: ratetest.Fixed{At: decimal.NewFromInt(1)}}
 	on := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	terms := []datedMinor{{minor: math.MaxInt64, from: "USD", on: on}, {minor: math.MaxInt64, from: "USD", on: on}}
 
@@ -232,7 +220,7 @@ func TestPositionInBaseRefusesAnUnrealizedFigureThatWouldWrap(t *testing.T) {
 		MarketValueMinor:    nullable.NewNullableWithValue(int64(-9_000_000_000_000_000_000)),
 		MarketValueCurrency: nullable.NewNullableWithValue("USD"),
 	}
-	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(1)}}
+	h := &Handler{conv: ratetest.Fixed{At: decimal.NewFromInt(1)}}
 
 	out, gap, err := h.positionInBase(context.Background(), p, apiPos, nil, "RUB",
 		nullable.NewNullNullable[int64](), time.Now(), marketdata.NewRateMemo(h.conv))
@@ -276,7 +264,7 @@ func TestToAPIRefusesAValuationThatCannotBeConvertedToThePositionCurrency(t *tes
 	inst := instrument.Instrument{ID: id, Type: instrument.TypeShare, Currency: "USD"}
 	// price × quantity × 100 is exactly MaxInt64.
 	quotes := map[uuid.UUID]marketdata.Quote{id: {InstrumentID: id, Price: dec("92233720368547758.07"), Currency: "USD"}}
-	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(2)}}
+	h := &Handler{conv: ratetest.Fixed{At: decimal.NewFromInt(2)}}
 
 	out, err := h.toAPI(context.Background(), p, inst, quotes, time.Now(), marketdata.NewRateMemo(h.conv))
 	if !errors.Is(err, money.ErrOverflow) {
@@ -301,7 +289,7 @@ func TestPositionInBaseRefusesAValuationThatCannotBeStruckInTheBaseCurrency(t *t
 		MarketValueMinor:    nullable.NewNullableWithValue(int64(math.MaxInt64)),
 		MarketValueCurrency: nullable.NewNullableWithValue("USD"),
 	}
-	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(2)}}
+	h := &Handler{conv: ratetest.Fixed{At: decimal.NewFromInt(2)}}
 
 	out, gap, err := h.positionInBase(context.Background(), p, apiPos, nil, "RUB",
 		nullable.NewNullNullable[int64](), time.Now(), marketdata.NewRateMemo(h.conv))

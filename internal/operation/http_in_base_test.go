@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/marketdata/ratetest"
 )
 
 // operationInBase mirrors apitypes.OperationInBase for decoding in tests.
@@ -283,32 +283,7 @@ func (c failingConverter) Rate(_ context.Context, _, _ string, _ time.Time) (dec
 }
 
 func (c failingConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
-	return ratesFromRate(ctx, c, queries)
-}
-
-// rateResolver is the one-pair half of converterLike.
-type rateResolver interface {
-	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
-}
-
-// ratesFromRate answers a batch by asking the double's own Rate per query, so
-// a double's batch and pair answers cannot disagree, as RatesOn guarantees for
-// the real converter. ErrNoRate is that query's answer; any other error voids the
-// batch. portfolio's tests have their own twin.
-func ratesFromRate(ctx context.Context, r rateResolver, queries []marketdata.RateQuery) (marketdata.Rates, error) {
-	out := make(map[marketdata.RateQuery]marketdata.RateResult, len(queries))
-	for _, q := range queries {
-		rate, on, err := r.Rate(ctx, q.From, q.To, q.On)
-		switch {
-		case err == nil:
-			out[q] = marketdata.RateResult{Rate: rate, RateDate: on}
-		case errors.Is(err, marketdata.ErrNoRate):
-			out[q] = marketdata.RateResult{Err: err}
-		default:
-			return marketdata.Rates{}, err
-		}
-	}
-	return marketdata.NewRates(out), nil
+	return ratetest.BatchFrom(ctx, c, queries)
 }
 
 // A genuine failure resolving a rate fails the request rather than becoming
@@ -329,49 +304,6 @@ func TestListOperationInBaseRealRateErrorFailsRequest(t *testing.T) {
 	}
 }
 
-// countingConverter wraps a real *marketdata.Converter and counts what one
-// request asks of the fx layer (atomic: the handler runs on another goroutine).
-// These are not database round trips (#45); journalCost.trips in
-// http_round_trips_test.go measures those.
-//
-// keep filters the batch to an incomplete enumeration
-// (TestJournalIncompletePrewarmCostsTripsNotNumbers). batchErr fails only the
-// batch, leaving one-pair lookups working (#70).
-type countingConverter struct {
-	inner    *marketdata.Converter
-	keep     func(marketdata.RateQuery) bool
-	batchErr error
-	// rate counts one-pair lookups, batch counts batch calls, queries counts
-	// rates asked for in batches before keep drops any.
-	rate    atomic.Int64
-	batch   atomic.Int64
-	queries atomic.Int64
-}
-
-func (c *countingConverter) Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error) {
-	c.rate.Add(1)
-	return c.inner.Rate(ctx, from, to, on)
-}
-
-func (c *countingConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
-	c.batch.Add(1)
-	c.queries.Add(int64(len(queries)))
-	if c.batchErr != nil {
-		// The zero Rates with the error, as RatesOn returns on failure.
-		return marketdata.Rates{}, c.batchErr
-	}
-	if c.keep == nil {
-		return c.inner.RatesOn(ctx, queries)
-	}
-	kept := make([]marketdata.RateQuery, 0, len(queries))
-	for _, q := range queries {
-		if c.keep(q) {
-			kept = append(kept, q)
-		}
-	}
-	return c.inner.RatesOn(ctx, kept)
-}
-
 // The memo key includes the date: two USD operations on different dates get
 // different rates, and two on the same date share one lookup.
 //
@@ -379,7 +311,7 @@ func (c *countingConverter) RatesOn(ctx context.Context, queries []marketdata.Ra
 //	2019-04-12 @ 70: -10_000 * 70 =  -700_000
 func TestListOperationInBaseMemoizesRatePerCurrencyAndDate(t *testing.T) {
 	pool, mdStore := newTestPool(t)
-	conv := &countingConverter{inner: marketdata.NewConverter(mdStore)}
+	conv := &ratetest.Counting{Inner: marketdata.NewConverter(mdStore)}
 	url, c := newAPIOn(t, pool, conv)
 
 	seedFxRate(t, mdStore, "2019-03-12", "60")
@@ -394,9 +326,7 @@ func TestListOperationInBaseMemoizesRatePerCurrencyAndDate(t *testing.T) {
 		"occurred_on":"2019-04-12","amount_minor":-10000,"currency":"USD"}`, acc))
 
 	// Only the listing below is under measurement.
-	conv.rate.Store(0)
-	conv.batch.Store(0)
-	conv.queries.Store(0)
+	conv.Reset()
 	list := listJournal(t, url, c, acc)
 
 	for _, tc := range []struct {
@@ -425,13 +355,13 @@ func TestListOperationInBaseMemoizesRatePerCurrencyAndDate(t *testing.T) {
 	// One rate per distinct (currency, date), in one batch, nothing left for
 	// the fallback. Round-trip cost is pinned by
 	// TestJournalRoundTripsDoNotGrowWithTheData.
-	if got := conv.queries.Load(); got != 2 {
+	if got := conv.Queries.Load(); got != 2 {
 		t.Errorf("rates asked for = %d, want 2 — one per distinct (currency, date), so the two 2019-03-12 operations share a single one", got)
 	}
-	if got := conv.batch.Load(); got != 1 {
+	if got := conv.Batches.Load(); got != 1 {
 		t.Errorf("batched resolutions = %d, want 1 — the whole page's rates are resolved in one go", got)
 	}
-	if got := conv.rate.Load(); got != 0 {
+	if got := conv.Singles.Load(); got != 0 {
 		t.Errorf("one-pair fallback lookups = %d, want 0 — every date this page needs was enumerated and prewarmed", got)
 	}
 }

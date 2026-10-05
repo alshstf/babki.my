@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/marketdata/ratetest"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -316,7 +317,7 @@ func (c oneDateConverter) Rate(_ context.Context, _, _ string, on time.Time) (de
 
 // RatesOn answers from this double's Rate, so the hole is in the prewarm too.
 func (c oneDateConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
-	return ratesFromRate(ctx, c, queries)
+	return ratetest.BatchFrom(ctx, c, queries)
 }
 
 // realizedRateHoleAPI: a USD position bought 20 and sold 10, against a
