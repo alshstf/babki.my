@@ -119,6 +119,21 @@ export function AccountTotal({
       >
         {t("positions.accountTotalTitle")}
       </div>
+      {/* The currency's share of the figure, named (decision Р-5): a
+          revaluation of money, not a trade's result, so it is said apart
+          rather than left inside a number that reads as profit. Base mode
+          only — in its own currency money earns nothing. */}
+      {mode === "base" && total.cash_fx_in_base != null && total.cash_fx_in_base !== 0 && (
+        <div
+          data-testid="account-total-cash-fx"
+          className="text-xs text-muted-foreground"
+          title={t("positions.accountTotalCashFxHint")}
+        >
+          {t("positions.accountTotalCashFx", {
+            amount: `${total.cash_fx_in_base > 0 ? "+" : ""}${formatMinor(total.cash_fx_in_base, total.base_currency)}`,
+          })}
+        </div>
+      )}
       {unknowable.length > 0 && (
         <div
           data-testid="account-total-unknowable"

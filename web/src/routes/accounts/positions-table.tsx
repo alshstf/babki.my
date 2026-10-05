@@ -1202,7 +1202,7 @@ export function PositionsTable({
                       leaves nothing to revalue, so the figure above it is a
                       truthful nought and the whole result is here. Drawn only
                       when there IS one, so an account whose money never moved
-                      does not carry a row of «реализовано 0,00». */}
+                      does not carry a row of noughts. */}
                   {showInBase &&
                     inBase.realized_pnl_minor != null &&
                     inBase.realized_pnl_minor !== 0 && (

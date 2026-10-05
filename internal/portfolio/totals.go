@@ -66,6 +66,13 @@ type accountTotals struct {
 	// about the currency its valuation is struck in rather than its own, and
 	// naming that one would be a guess (see AccountTotal.no_rate_currencies).
 	noRateCurrencies map[string]bool
+	// cashFXMinor is the part of inBaseMinor that is the currency result on the
+	// account's money — held and spent (decision Р-5: shown as its own line).
+	// cashFXSeen says some money in another currency contributed; cashFXGap
+	// that a rate behind it is missing, so the part has no figure.
+	cashFXMinor int64
+	cashFXSeen  bool
+	cashFXGap   bool
 }
 
 func newAccountTotals(baseCurrency string) *accountTotals {
@@ -279,8 +286,10 @@ func (at *accountTotals) addCash(c apitypes.CashPosition) error {
 	if !c.InBase.Gap.IsNull() && c.InBase.Gap.MustGet() == apitypes.CashGapNegativeBalance {
 		halves = []nullable.Nullable[int64]{c.InBase.RealizedPnlMinor}
 	}
+	at.cashFXSeen = true
 	for _, half := range halves {
 		if half.IsNull() {
+			at.cashFXGap = true
 			// A rate behind this money is missing, so the account has no single
 			// figure — and the currency is named, because «нет курса» alone
 			// cannot tell a gap that closes when the backfill catches up from
@@ -297,6 +306,12 @@ func (at *accountTotals) addCash(c apitypes.CashPosition) error {
 				err, at.baseCurrency, half.MustGet(), at.inBaseMinor)
 		}
 		at.inBaseMinor = sum
+		fx, err := money.Add(at.cashFXMinor, half.MustGet())
+		if err != nil {
+			return fmt.Errorf("%w: the account's currency result in %s, adding %d to %d",
+				err, at.baseCurrency, half.MustGet(), at.cashFXMinor)
+		}
+		at.cashFXMinor = fx
 	}
 	return nil
 }
@@ -354,6 +369,10 @@ func (at *accountTotals) result() apitypes.AccountTotal {
 	} else {
 		out.InBase = nullable.NewNullableWithValue(at.inBaseMinor)
 		out.InBaseGap = nullable.NewNullNullable[apitypes.RealizedGap]()
+	}
+	out.CashFxInBase = nullable.NewNullNullable[int64]()
+	if at.cashFXSeen && !at.cashFXGap {
+		out.CashFxInBase = nullable.NewNullableWithValue(at.cashFXMinor)
 	}
 	return out
 }

@@ -2934,8 +2934,8 @@ components:
           description: "The account's result in this currency, or null when one of its terms has no figure in this currency at all — a position that realized into another currency, or one paid in another, has no own-currency total to add (see Position.total_minor). A bucket short one term is published as null rather than as the sum of the rest: a total quietly missing a term reads as a smaller result, not as a gap, and is indistinguishable from a real figure on screen."
     AccountTotal:
       type: object
-      required: [by_currency, base_currency, in_base, in_base_gap, no_rate_currencies, zero_valued_positions, zero_valued_cost_by_currency, undated_positions, unknown_cost_positions]
-      description: "WHAT THE ACCOUNT HAS MADE, ALL IN — the account-level twin of Position.total_minor, plus the money no position can see. It is the sum of every position's total (realized result + income + unrealized revaluation) and, beside it, the account's own charges: interest credited on the cash, every commission booked as an operation of its own, and the tax the broker took from the account rather than from a payment. Deposits and withdrawals are NOT in it — putting money in is not earning it — and neither is the revaluation of idle cash, which no position covers and which this figure therefore does not claim. Both forms are always published, because the client cannot know which one a screen is about to show and the choice is a display preference, not a fact about the money."
+      required: [by_currency, base_currency, in_base, in_base_gap, cash_fx_in_base, no_rate_currencies, zero_valued_positions, zero_valued_cost_by_currency, undated_positions, unknown_cost_positions]
+      description: "WHAT THE ACCOUNT HAS MADE, ALL IN — the account-level twin of Position.total_minor, plus the money no position can see. It is the sum of every position's total (realized result + income + unrealized revaluation) and, beside it, the account's own charges: interest credited on the cash, every commission booked as an operation of its own, and the tax the broker took from the account rather than from a payment, and — in the base currency only — the currency result on the account's money in other currencies, held and spent (cash_fx_in_base says how much of in_base that is). Deposits and withdrawals are NOT in it — putting money in is not earning it. Both forms are always published, because the client cannot know which one a screen is about to show and the choice is a display preference, not a fact about the money."
       properties:
         by_currency:
           type: array
@@ -2947,6 +2947,20 @@ components:
           format: int64
           nullable: true
           description: "The same result as ONE figure in the space's base currency, and the only form in which an account holding several currencies has a single answer. Each position contributes the total its own in_base object carries — every term struck at the rate of its own date, the valuation at today's — and each of the account's own charges is converted at the rate of the day it was charged. THE ROUNDED PER-POSITION FIGURES ARE WHAT IS ADDED, for the reason RealizedTotal.in_base states at length: this total is defined as the sum of figures published in the same response, and a header disagreeing by a minor unit with the rows one field away would be a number nobody could check. Null when at least one term could not be valued; `in_base_gap` then says which kind of gap stopped it, and nothing partial is published in its place. THE ONE TERM THAT DOES NOT STOP IT is a holding whose purchase dates nobody recorded: it is left out and counted in `undated_positions` instead, because a date cannot arrive later the way a rate can, and suppressing the figure for ever over it would answer nothing."
+        cash_fx_in_base:
+          type: integer
+          format: int64
+          nullable: true
+          description: >-
+            Of in_base, the part that is the currency result on the account's
+            money in currencies other than the base one — what that money is
+            worth in the base currency against what it was worth when it
+            arrived, for the money still held and the money already spent. A
+            revaluation of currency, not the result of a trade and not a tax
+            figure; which portions of a currency count as spent first is this
+            program's assumption (the earliest to arrive). Null when the account
+            holds no money in another currency, or when a rate behind it is
+            missing (in_base is null then too).
         in_base_gap:
           nullable: true
           description: "Why `in_base` is null, or null when there is a figure."
