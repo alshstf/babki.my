@@ -19,21 +19,16 @@ import { useDisplayCurrency } from "@/lib/display-currency";
 import type { SessionInfo } from "@/api/session";
 import type { AccountWithBalance } from "@/api/accounts";
 
-// The API client captures globalThis.fetch once, when @/api/client is first
-// imported (openapi-fetch: `fetch: baseFetch = globalThis.fetch`), so the
-// double has to be in place *before* that import — hence vi.hoisted, which
-// runs ahead of the import statements above.
+// The API client captures globalThis.fetch on first import, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// Serves the given endpoints and 404s everything else, so an unexpected
-// request is loud rather than silent. Routes match on the path's *suffix*,
-// not on a substring: "/api/v1/accounts/acc-1/positions" contains
-// "/api/v1/accounts", so substring matching would quietly serve the account
-// body for a positions request and leave the table rendering nothing.
+// Serves the given endpoints by path suffix and 404s the rest. A substring
+// match would serve the account body for its positions request.
 function serve(routes: Record<string, { status?: number; body?: unknown }>) {
   const paths = Object.keys(routes);
   fetchMock.mockImplementation((input: RequestInfo | URL) => {
@@ -92,13 +87,11 @@ function makeAccount(
   };
 }
 
-// NBSP-insensitive compare: Intl.NumberFormat uses non-breaking spaces
-// (same helper as in positions-table.test.tsx).
+// NBSP-insensitive compare.
 const norm = (s: string) => s.replace(/[\u00A0\u202F]/g, " ");
 
-// One position as the wire sends it — not typed as Position on purpose: these
-// bodies stand in for the server's JSON, and a test that needs a field the
-// generated type doesn't have yet must still be able to send it.
+// Untyped on purpose: these bodies stand in for the server's JSON and may
+// carry fields the generated type lacks.
 function makePosition({
   instrument_id = "instr-1",
   ...overrides
@@ -118,9 +111,7 @@ function makePosition({
     cost_minor: 250_000,
     realized_pnl_minor: 0,
     income_minor: 0,
-    // Required by the contract and always sent, empty here: this position was
-    // never paid anything, and the table reads the list itself to draw the
-    // income arriving in a currency other than the position's.
+    // Always sent; empty here, nothing was paid.
     income_by_currency: [],
     fees_minor: 0,
     currency: "USD",
@@ -130,26 +121,20 @@ function makePosition({
   };
 }
 
-// The account's realized total as the server publishes it, both forms at once
-// (see RealizedTotal in the API contract). Untyped for the same reason
-// makePosition is: these bodies stand in for the server's JSON.
+// The account's realized total, both forms; untyped like makePosition.
 function makeRealizedTotal(overrides: Record<string, unknown> = {}) {
   return {
     by_currency: [{ currency: "USD", realized_pnl_minor: 0 }],
     base_currency: "RUB",
     in_base: 0,
     in_base_gap: null,
-    // Required by the contract and always sent, empty here: nothing was
-    // withheld from this account. An absent list is not a shape the server can
-    // produce, and a fixture that omitted it would be a screen crash nobody saw
-    // until production.
+    // Always sent; empty here, nothing was withheld.
     tax_withheld_by_currency: [],
     ...overrides,
   };
 }
 
-// One journal row as the wire sends it. Untyped for the same reason
-// makePosition is: these bodies stand in for the server's JSON.
+// One journal row; untyped like makePosition.
 function makeOperation(overrides: Record<string, unknown> = {}) {
   return {
     id: "op-1",
@@ -177,9 +162,8 @@ function makeOperation(overrides: Record<string, unknown> = {}) {
   };
 }
 
-// A country whose rules are not what this application computes, in two
-// separate ways at once. Shared by the tests below so the statement they look
-// for is the same statement wherever it is shown.
+// A country whose rules differ in two ways; shared so every test looks
+// for the same statement.
 const britain: SessionInfo["cost_basis_rules"] = {
   country: "GB",
   method: "average",
@@ -188,14 +172,9 @@ const britain: SessionInfo["cost_basis_rules"] = {
   notices: ["method_mismatch", "perimeter_mismatch"],
 };
 
-// The other answer entirely: this application's queue IS this country's rule,
-// so nothing is said about the figures at all. It exists so the two publishers
-// of this statement can be told apart. The session and the positions response
-// carry it independently (see SessionInfo.cost_basis_rules and
-// PositionsResponse.cost_basis_rules in the API contract), and a fixture that
-// hands both of them one object cannot tell which one a screen actually read —
-// the assertion passes either way and the contract goes untested. Wherever a
-// test is about the SOURCE, one publisher gets britain and the other gets this.
+// A country whose rule is the queue, so nothing is said. The session and
+// the positions response publish the rules separately; a test about the
+// source gives one britain and the other this.
 const russia: SessionInfo["cost_basis_rules"] = {
   country: "RU",
   method: "fifo",
@@ -204,10 +183,8 @@ const russia: SessionInfo["cost_basis_rules"] = {
   notices: [],
 };
 
-// One position, enough of one for the table to render a row. The cost basis
-// statement below qualifies exactly these figures, so the tests about it need
-// a row for it to sit next to. realized_total describes the whole list rather
-// than any one row, so it travels alongside them.
+// One position for the cost-basis statement to sit next to;
+// realized_total describes the whole list.
 function makePositionsBody(
   rules: SessionInfo["cost_basis_rules"],
   positions: unknown[] = [makePosition()],
@@ -216,9 +193,7 @@ function makePositionsBody(
 ) {
   return {
     positions,
-    // Required by the contract on every positions response, empty by default:
-    // most tests here are about the papers, and a body without the field is not
-    // a shape the server can produce.
+    // Always sent; empty by default.
     cash: [],
     cost_basis_rules: rules,
     realized_total: realizedTotal,
@@ -226,10 +201,7 @@ function makePositionsBody(
   };
 }
 
-// The account's headline figure as the server publishes it. Required by the
-// contract on every positions response — a body without it is not a shape the
-// server can produce, and a fixture that omitted it would be a screen crash
-// nobody saw until production.
+// The account's headline figure; always sent.
 function makeAccountTotal(overrides: Record<string, unknown> = {}) {
   return {
     by_currency: [{ currency: "USD", amount_minor: 0 }],
@@ -243,18 +215,15 @@ function makeAccountTotal(overrides: Record<string, unknown> = {}) {
   };
 }
 
-// Stand-in for the header's display-currency toggle, mounted beside the page
-// under one provider exactly as AppLayout mounts the real one beside its
-// <Outlet/>: visible only when the provider says there is more than one
-// currency on the screen.
+// Stands in for the header toggle, mounted beside the page as AppLayout
+// mounts the real one: visible only for more than one currency.
 function ToggleProbe() {
   const visible = useHasMultipleScreenCurrencies();
   return <div data-testid="toggle">{visible ? "visible" : "hidden"}</div>;
 }
 
-// Renders AccountDetailPage under the route id it reads its params from
-// ("/app/accounts/$accountId", see router.tsx), inside the screen-currency
-// provider AppLayout normally supplies.
+// Under the route id the page reads params from, inside the
+// screen-currency provider AppLayout supplies.
 function renderPage(session: SessionInfo = makeSession()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(["session"], session);
@@ -303,9 +272,7 @@ describe("AccountDetailPage", () => {
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": {
-        // An account with no positions: the server's total is empty too —
-        // by_currency has no entries and in_base is the plain zero of no
-        // deals at all.
+        // No positions: by_currency is empty and in_base is plain zero.
         body: makePositionsBody(
           makeSession().cost_basis_rules,
           [],
@@ -316,8 +283,8 @@ describe("AccountDetailPage", () => {
       },
       "/operations": { body: { operations: [], has_more: false } },
       "/api/v1/instruments": { body: { instruments: [], has_more: false } },
-      // The space-wide summary is deliberately broken in every test here:
-      // this page must not depend on it at all.
+      // The space-wide summary is broken in every test: this page must not
+      // depend on it.
       "/api/v1/summary": { status: 500, body: { error: "internal error" } },
     });
   });
@@ -328,10 +295,7 @@ describe("AccountDetailPage", () => {
   });
 
   it("still shows the account when the space-wide summary endpoint fails", async () => {
-    // /summary is one shared, space-wide total; this page shows one account.
-    // Letting the former's outage blank out the latter — account, positions
-    // and journal alike — costs the user everything for a number that isn't
-    // even on this screen.
+    // A space-wide total's outage must not blank out one account's page.
     renderPage();
 
     expect(await screen.findByText("Брокерский")).toBeInTheDocument();
@@ -341,11 +305,8 @@ describe("AccountDetailPage", () => {
   });
 
   it("says next to the positions that the figures are not this country's cost basis", async () => {
-    // The whole point of the residency work: the response already carries
-    // "these numbers are not what your country's rules produce", and until
-    // this appears on the screen the statement only exists for whoever reads
-    // the JSON. It sits with the positions because that is where the figures
-    // it qualifies are shown.
+    // The statement that these figures are not the country's rules, beside
+    // the positions it qualifies.
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": {
@@ -363,23 +324,17 @@ describe("AccountDetailPage", () => {
 
     renderPage();
 
-    // Both divergences are named, not just the first: Britain differs in the
-    // method AND in the perimeter, and reporting one hides the other.
+    // Both divergences are named: method and perimeter.
     expect(
       await screen.findByText(/не самая ранняя покупка/),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/сразу по всем счетам владельца/),
     ).toBeInTheDocument();
-    // The country is named, so "в этой стране" has a referent on a screen
-    // that never mentions the residency otherwise.
+    // The country is named, so "в этой стране" has a referent.
     const notice = screen.getByTestId("cost-basis-notice");
     expect(notice.textContent).toContain("Великобритания");
-    // The mechanics — what this country's rule actually is — belong in the
-    // tooltip, not in the text of a screen full of figures (the owner's
-    // standing rule about technical detail being visual noise). Translated
-    // there too: "average"/"owner" would be the wire format talking to a
-    // person.
+    // The mechanics are in the tooltip, translated, not in the text.
     expect(notice.getAttribute("title")).toContain("стоимость усредняется");
     expect(notice.getAttribute("title")).toContain(
       "сразу по всем счетам владельца",
@@ -421,10 +376,8 @@ describe("AccountDetailPage", () => {
   });
 
   it("shows in the header what this account's closed deals have locked in", async () => {
-    // The figure arrives added up, from the response that carries the rows it
-    // stands over. This screen renders the server's total and computes none of
-    // its own — the positions below deliberately do NOT add up to it, so a
-    // client that went back to summing them would print 125,00 $ and fail.
+    // The server's total: the positions below deliberately do not add up to
+    // it, so summing them would print 125,00 $ and fail.
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": {
@@ -456,8 +409,7 @@ describe("AccountDetailPage", () => {
   });
 
   it("follows the display-currency toggle into the base currency", async () => {
-    // The header line is not a second, independent opinion about which
-    // currency to speak: it obeys the same toggle every other figure does.
+    // The header line obeys the same toggle.
     storeMode("base");
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
@@ -482,8 +434,7 @@ describe("AccountDetailPage", () => {
   });
 
   it("says nothing about locked-in results on an account with no positions", async () => {
-    // The default body served in beforeEach has no positions at all, and a
-    // "0,00" over an empty account answers a question nobody asked.
+    // No "0,00" over an empty account.
     renderPage();
 
     expect(
@@ -493,20 +444,10 @@ describe("AccountDetailPage", () => {
   });
 
   it("takes the journal's cost basis caveat from the session, not from the positions response", async () => {
-    // Issue #61. A transfer's amount is the cost basis of the shares it moved,
-    // picked by the same earliest-purchases-first queue the positions screen
-    // uses — so the statement "that queue is not your country's" describes it
-    // too. The journal response does not carry the statement (one truth, one
-    // publisher — see SessionInfo.cost_basis_rules in the API contract), so the
-    // screen takes it from the session it has already loaded. Until it did, a
-    // client that faithfully read the caveat in both places the server offers
-    // it still showed this figure with nothing said about it.
-    //
-    // The two publishers are given OPPOSITE answers here on purpose: the
-    // session says the queue is not this country's, the positions response says
-    // it is. A journal that read the wrong one would fall silent, so this
-    // asserts the source and not merely that something appeared. The account
-    // also has no positions at all, so nothing above can leak down the page.
+    // #61: a transfer's amount is a queue-picked cost basis. The journal does
+    // not carry the rules, so the screen takes them from the session. The two
+    // publishers disagree here on purpose, so the test asserts the source; no
+    // positions, so nothing leaks down the page.
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": {
@@ -522,10 +463,8 @@ describe("AccountDetailPage", () => {
             makeOperation({
               id: "op-transfer",
               type: "transfer_in",
-              // The server's own statement that this amount was assembled out
-              // of the purchases behind it — what makes the row a cost basis.
-              // A property of the operation itself (see the API contract), not
-              // of in_base, though this fixture also converts.
+              // What makes the row a cost basis; a property of the operation, not of
+              // in_base.
               assembled_from_lots: true,
               in_base: {
                 amount_minor: 900_000,
@@ -548,21 +487,15 @@ describe("AccountDetailPage", () => {
     const caveat = await screen.findByTestId("operation-amount-caveat");
     const title = caveat.getAttribute("title") ?? "";
     expect(title).toContain("Великобритания");
-    // Both divergences, exactly as beside the positions: reporting one hides
-    // the other.
+    // Both divergences, as beside the positions.
     expect(title).toContain("не самая ранняя покупка");
     expect(title).toContain("сразу по всем счетам владельца");
-    // And it says what the figure is, which the banner used to get from the
-    // table it stood over and a cell tooltip has to say for itself.
+    // And what the figure is, since a cell tooltip says it alone.
     expect(title).toContain("стоимость бумаг");
   });
 
   it("says nothing about the rules over a journal row that publishes no cost basis", async () => {
-    // A deposit's amount is money that moved on the day the row is dated; no
-    // queue picked it and no cost basis rule has any part in it. A caveat on
-    // such a figure is a caveat about nothing, and noise is what makes a real
-    // warning invisible — the same reason the positions notice stays away from
-    // an empty table.
+    // A deposit was not picked by any queue; a caveat on it is noise.
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": {
@@ -588,10 +521,7 @@ describe("AccountDetailPage", () => {
   });
 
   it("states the cost basis rules once on a screen that shows both positions and a transfer", async () => {
-    // The banner over the journal was the same paragraph the positions above
-    // already carry, character for character, on the one screen that renders
-    // both. Two identical warnings one section apart do not warn twice; they
-    // teach the reader to scroll past the first one.
+    // No second copy of the positions paragraph over the journal.
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": { body: makePositionsBody(britain) },
@@ -601,12 +531,8 @@ describe("AccountDetailPage", () => {
             makeOperation({
               id: "op-transfer",
               type: "transfer_out",
-              // A parcel with a stored breakdown: the source account's queue
-              // picked every piece of it, so this amount IS a figure some rule
-              // chose and the caveat is true of it. The fixture used to be a
-              // parcel with NO breakdown (has_undated_lots alone), where the
-              // caveat's «её выбрало то же правило очереди» is false — see
-              // wasAssembledFromLots and #81.
+              // A parcel with a stored breakdown, so a rule chose this amount and the
+              // caveat is true of it (#81).
               assembled_from_lots: true,
             }),
           ],
@@ -626,9 +552,7 @@ describe("AccountDetailPage", () => {
   });
 
   it("says nothing about the rules when the computation is the country's own", async () => {
-    // Russia's rule is exactly what the engine computes. A banner on every
-    // visit for a reader with nothing to be warned about is noise, and noise
-    // is what makes a real warning invisible.
+    // Russia's rule is what the engine computes: no banner.
     serve({
       "/api/v1/accounts": { body: [makeAccount()] },
       "/positions": { body: makePositionsBody(makeSession().cost_basis_rules) },
@@ -642,36 +566,18 @@ describe("AccountDetailPage", () => {
     expect(screen.queryByTestId("cost-basis-notice")).not.toBeInTheDocument();
   });
 
-  // #48. This screen has TWO independent currency reporters — the page itself
-  // (its account and positions) and the operations journal, which owns its own
-  // paginated query and is a child component. Until now nothing exercised the
-  // pair: the provider's merge was covered with synthetic reporters in
-  // lib/screen-currencies.test.tsx, the journal was covered alone in
-  // operations-table.test.tsx with no second reporter in the tree, and every
-  // test on this screen served an empty journal, so its reporter never said
-  // anything at all.
+  // #48: two currency reporters on the real screen, the page and the
+  // journal. These pin that each reporter's set reaches the mode the other
+  // half is drawn in; deleting either turns one red.
   //
-  // WHAT THESE TWO PIN is the wiring on the real screen: that each reporter's
-  // set genuinely reaches the mode the OTHER half is drawn in. Deleting either
-  // reporter's contribution turns one of them red.
-  //
-  // WHAT THEY DO NOT PIN is the merge rule itself, and the reason is worth
-  // writing down rather than being discovered again. A counter that replaced
-  // instead of merging would leave only the reporter that spoke LAST, and
-  // which one that is here depends on which of two fetches resolves last —
-  // measured on both fixtures, it is the one carrying two currencies, so both
-  // tests stay green with the merge removed. Making it deterministic is not
-  // available either: a reporter only speaks again when its own set CHANGES,
-  // and the one lever this screen offers for that — the journal's «Показать
-  // еще» — can only add currencies to a set, never take one out.
-  // Replacement is caught, decisively and by four tests, where the reporters
-  // are synthetic and their order is the test's to choose.
+  // They do not pin the merge rule: a replacing counter keeps the last
+  // speaker, which here is the two-currency fetch on both fixtures, and no
+  // lever on this screen can make the order deterministic. Replacement is
+  // caught by the synthetic reporters in lib/screen-currencies.test.tsx.
   describe("two currency reporters on one screen", () => {
     it("keeps the journal's currencies when the page reports only the base one", async () => {
-      // A ruble account, ruble base, no positions: everything the page itself
-      // knows about is one currency. The journal holds a dollar deposit, so
-      // the screen does have something to convert — and only the journal knows
-      // it.
+      // A rouble account, rouble base, no positions; only the journal knows
+      // about its dollar deposit.
       serve({
         "/api/v1/accounts": {
           body: [
@@ -715,18 +621,15 @@ describe("AccountDetailPage", () => {
 
       await screen.findByTestId("operation-amount");
       expect(screen.getByTestId("toggle")).toHaveTextContent("visible");
-      // Not just the toggle: the mode the page settles on is handed down to
-      // the journal, so the row the journal reported for is the row that gets
-      // converted. A count the page overwrote would leave this in dollars.
+      // The mode is handed down too: the journal's row gets converted.
       expect(
         norm(screen.getByTestId("operation-amount").textContent ?? ""),
       ).toContain("7 850,00 ₽");
     });
 
     it("keeps the page's currencies when the journal reports only the base one", async () => {
-      // The mirror: a dollar account against a ruble base, and a journal
-      // entirely in rubles. The journal's report is the narrower one, and it
-      // must not be able to take the account's dollars off the count.
+      // The mirror: a dollar account, a rouble journal. The narrower report must
+      // not take the account's dollars off the count.
       serve({
         "/api/v1/accounts": { body: [makeAccount()] },
         "/positions": {

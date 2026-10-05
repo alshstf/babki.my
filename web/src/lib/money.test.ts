@@ -42,10 +42,8 @@ describe("formatMinorCompact", () => {
   });
 
   it("keeps abbreviating millions, thousands and whole units exactly as before", () => {
-    // The half of the behaviour that must not move. Everything at or above
-    // half a major unit keeps its kopecks dropped, rounded the way it always
-    // was — including the rounding itself, which is what makes 1 234,56 read
-    // as 1 235 and not 1 234.
+    // At or above half a major unit the kopecks are still dropped and
+    // rounded: 1 234,56 reads 1 235.
     expect(norm(formatMinorCompact(1_234_56, "RUB"))).toBe("1 235 ₽");
     expect(norm(formatMinorCompact(-1_234_56, "RUB"))).toBe("-1 235 ₽");
     expect(norm(formatMinorCompact(99, "RUB"))).toBe("1 ₽");
@@ -53,16 +51,9 @@ describe("formatMinorCompact", () => {
   });
 
   it("shows a sum too small to survive the abbreviation instead of printing it as zero", () => {
-    // #107. Forty kopecks printed as «0 ₽» — a number that is neither the sum
-    // nor zero, and on the headline total card it arrives paired with the
-    // sign's own colour, so the reader is shown a GREEN ZERO: two statements
-    // that contradict each other over one figure. The same fake zero was
-    // already fixed once next door, in formatPrice for a sub-cent quote (#30).
-    //
-    // What replaces it is the amount at full precision. Unlike a price, a
-    // money amount has a smallest unit of its own — it IS an integer number of
-    // minor units — so "every digit it has" is always two digits and needs
-    // none of formatPrice's significant-digit machinery.
+    // #107: forty kopecks printed «0 ₽», a green zero on the total card. A
+    // money amount is an integer of minor units, so full precision is always
+    // two digits.
     expect(norm(formatMinorCompact(40, "RUB"))).toBe("0,40 ₽");
     expect(norm(formatMinorCompact(1, "RUB"))).toBe("0,01 ₽");
     expect(norm(formatMinorCompact(49, "RUB"))).toBe("0,49 ₽");
@@ -71,10 +62,8 @@ describe("formatMinorCompact", () => {
   });
 
   it("does not print a minus zero for a small debt either", () => {
-    // The negative side is worse than the positive one, because it survives
-    // the -0 guard in formatWith: that guard only catches an amount that IS
-    // zero, and -40 is not — it merely rounds to one, taking its minus sign
-    // with it. «-0 ₽» is a fake zero wearing a sign.
+    // The negative side survives formatWith's -0 guard (-40 is not zero), so
+    // it would print «-0 ₽».
     expect(norm(formatMinorCompact(-40, "RUB"))).toBe("-0,40 ₽");
     expect(norm(formatMinorCompact(-1, "RUB"))).toBe("-0,01 ₽");
     expect(norm(formatMinorCompact(-49, "RUB"))).toBe("-0,49 ₽");
@@ -86,11 +75,7 @@ describe("formatMinorCompact", () => {
   });
 
   it("renders no non-zero amount the way it renders zero, at any magnitude", () => {
-    // The guarantee stated as the property it is, rather than as the handful
-    // of cases above: whatever this function prints for a sum that is not
-    // zero, it is not what it prints for zero. Compared against the zero
-    // rendering as a whole string — asserting the absence of the character "0"
-    // would be meaningless, since «1 385 000 ₽» is full of them.
+    // The property: a non-zero sum never prints as zero does.
     const zero = formatMinorCompact(0, "RUB");
     for (const amountMinor of [
       1, 5, 40, 49, 50, 51, 99, 100, 1_00, 999_99, 1_385_000_00,
@@ -122,19 +107,12 @@ describe("parseToMinor", () => {
   });
 });
 
-// #89: this parser fed the one endpoint that bounded nothing, PUT
-// /accounts/{id}/balance. Its sibling multiplyToMinor has refused a product past
-// Number.MAX_SAFE_INTEGER from the day it was written; this one computed a
-// magnitude as a double and returned whatever came out — so a sum too large to
-// be exact was quietly turned into a DIFFERENT number and sent as if it were the
-// one typed. The server now refuses past MAX_AMOUNT_MINOR, which is the bound
-// that matters; the field refuses at the keystroke so nobody learns it from a
-// red box.
+// #89: the balance endpoint sent a sum past exact doubles as a different
+// number. The server refuses past MAX_AMOUNT_MINOR; the field refuses at
+// the keystroke.
 describe("parseToMinor at the bound", () => {
   it("takes the largest sum there is, exactly", () => {
-    // On the bound, both signs: a debt of ten trillion is as recordable as an
-    // asset of it. Exactly, not approximately — the whole point is that what is
-    // sent is what was typed.
+    // The bound is exact on both signs: a debt is as recordable as an asset.
     expect(parseToMinor("10000000000000")).toBe(MAX_AMOUNT_MINOR);
     expect(parseToMinor("-10000000000000")).toBe(-MAX_AMOUNT_MINOR);
     expect(parseToMinor("9999999999999,99")).toBe(MAX_AMOUNT_MINOR - 1);
@@ -146,26 +124,22 @@ describe("parseToMinor at the bound", () => {
   });
 
   it("refuses a sum a double could not carry", () => {
-    // 10^17 kopecks: past Number.MAX_SAFE_INTEGER, where the old parser stopped
-    // being exact and started inventing.
+    // 10^17 kopecks: past Number.MAX_SAFE_INTEGER.
     expect(parseToMinor("1000000000000000")).toBeNull();
     // And a whole part no double can hold at all, which computes to Infinity.
     expect(parseToMinor("9".repeat(400))).toBeNull();
   });
 
   it("stays below the point where a double stops being exact", () => {
-    // Not a restatement of the constant: this is the property the bound is
-    // CHOSEN for. Every value the parser returns is an exact integer, so the
-    // number sent is the number typed.
+    // The property the bound is chosen for: every parsed value is exact.
     expect(MAX_AMOUNT_MINOR).toBeLessThan(Number.MAX_SAFE_INTEGER);
   });
 });
 
 describe("amountRefusal", () => {
   it("tells a number that cannot be sent from text that is not a number", () => {
-    // The two refusals are different sentences to the person typing, and a
-    // field that answers "не удалось разобрать" to a well-formed sum states
-    // something false.
+    // Two different sentences: "не удалось разобрать" for a well-formed
+    // sum would be false.
     expect(amountRefusal("10000000000000,01")).toBe("tooLarge");
     expect(amountRefusal("abc")).toBe("malformed");
     expect(amountRefusal("")).toBe("malformed");
@@ -179,10 +153,8 @@ describe("amountRefusal", () => {
   });
 
   it("never disagrees with parseToMinor", () => {
-    // The two are derived from one parse; this is what that buys. A field asks
-    // both — one to decide whether it may send, one to say why not — and a
-    // disagreement would be a disabled button with no explanation beside it, or
-    // an explanation beside a button that works.
+    // Both come from one parse, so a field never disables its button
+    // without a reason or explains a working one.
     for (const input of [
       "0",
       "abc",
@@ -200,11 +172,8 @@ describe("amountRefusal", () => {
 });
 
 describe("formatPrice", () => {
-  // The ordinary case, pinned digit for digit: every quote this program has
-  // met so far is a hundredth or more, and none of them may move because of
-  // what the sub-cent branch below does. Thousands separator included — the
-  // adaptive branch, applied to the whole range, would print 1234.5 as
-  // "1 230".
+  // The ordinary case pinned digit for digit, separator included: the
+  // sub-cent branch must not touch it.
   it.each([
     ["305.567", "305,57"],
     ["100", "100,00"],
@@ -214,13 +183,9 @@ describe("formatPrice", () => {
     // A quote that really is zero is not a fake zero, and still prints as one.
     ["0", "0,00"],
     ["0.00", "0,00"],
-    // Pins the sub-cent threshold's UPPER edge. SUB_CENT_PRICE_RE requires
-    // "0.00" right after the point; a price in [0.01, 0.1) has a non-"00"
-    // pair there and must stay on the ordinary two-fraction-digit branch. The
-    // nearby "0.01" case above doesn't pin this: it happens to format the
-    // same whether or not the regex is widened to match "0.0" instead of
-    // "0.00". This one, with three fraction digits and a value that only the
-    // ordinary branch rounds this way, does not.
+    // The sub-cent threshold's upper edge: a price in [0.01, 0.1) stays on
+    // the two-digit branch. Only this value tells "0.0" from "0.00" in the
+    // regex.
     ["0.0567", "0,06"],
   ])("formats %s as %s", (input, want) => {
     expect(norm(formatPrice(input) ?? "")).toBe(want);
@@ -230,12 +195,8 @@ describe("formatPrice", () => {
     expect(formatPrice(input)).toBeNull();
   });
 
-  // #30: two fraction digits turn any price below a hundredth into "0,00" — a
-  // number that is neither the price nor zero, printed one cell away from the
-  // column where this program refuses to show a figure it cannot vouch for.
-  // Below a hundredth the price is rendered by significant digits instead.
-  // Compared exactly, not by substring: "0" is a substring of nearly every
-  // number this function returns.
+  // #30: below a hundredth, significant digits instead of a fake "0,00".
+  // Compared exactly: "0" is in nearly every result.
   it.each([
     ["0.0001", "0,0001"],
     ["0.000123456", "0,000123"],
@@ -248,35 +209,23 @@ describe("formatPrice", () => {
     expect(got).not.toBe("0,00");
   });
 
-  // formatPrice's own input validator (`/^\d+(\.\d+)?$/`) accepts extra
-  // leading zeros before the point, but SUB_CENT_PRICE_RE used to anchor on
-  // a literal "0\." and so never matched "00.0001" — that input fell to the
-  // ordinary branch and printed the fake "0,00" this whole function exists to
-  // avoid. Unreachable from the wire (decimal.String() never emits a leading
-  // zero), but out of reach is not the same contract as "cannot happen": the
-  // regex is what decides, same as the double-underflow guard just below.
+  // Extra leading zeros pass the input check, so the sub-cent regex must
+  // match them too. Unreachable from the wire, but the regex decides.
   it("shows significant digits, not a fake zero, for a sub-cent price with a leading zero", () => {
     const got = norm(formatPrice("00.0001") ?? "");
     expect(got).toBe("0,0001");
     expect(got).not.toBe("0,00");
   });
 
-  // The one input this function accepts that has no honest rendering at all:
-  // a decimal string so small it underflows the double to exactly zero, so
-  // there are no significant digits left to show. The server cannot send one
-  // (quotes are NUMERIC(30,10), and 1e-10 is nowhere near the underflow
-  // boundary), but this function's contract is its own regex, not its
-  // caller's table — and omitting the hint is what it already does for every
-  // other input it cannot render.
+  // A decimal that underflows the double to zero has no digits left: no
+  // hint, as for any input that cannot be rendered.
   it("omits the hint entirely for a price too small to have any digits left", () => {
     expect(formatPrice("0." + "0".repeat(400) + "1")).toBeNull();
   });
 });
 
-// formatPriceIn is formatPrice with the currency the price is quoted in said
-// out loud (#76). Every digit rule above is shared rather than restated, and
-// these cases exist to prove that: the same value must not read one way with a
-// sign on it and another way without.
+// formatPrice with the quote currency named (#76); the digit rules are
+// shared, so a value reads the same with or without a sign.
 describe("formatPriceIn", () => {
   it.each([
     ["305.5", "USD", "305,50 $"],
@@ -286,28 +235,21 @@ describe("formatPriceIn", () => {
     expect(norm(formatPriceIn(input, currency) ?? "")).toBe(want);
   });
 
-  // The sub-cent branch survives the currency style. It is not a hypothetical:
-  // the demo stand's WeWork is quoted at $0.0025 (cmd/babki/seed.go), and a
-  // currency-styled formatter left to its own devices would give that quote
-  // USD's own two fraction digits and print «0,00 $» — the fake zero #30 was
-  // about, reintroduced by the fix for #76.
+  // The demo WeWork quote ($0.0025, cmd/babki/seed.go): a currency style
+  // would give it USD's two digits and print «0,00 $».
   it("keeps the significant digits of a sub-cent price and still names the currency", () => {
     const got = norm(formatPriceIn("0.0025", "USD") ?? "");
     expect(got).toBe("0,0025 $");
     expect(got).not.toBe("0,00 $");
   });
 
-  // The same guard formatMinor has: a code this build has no business handing
-  // to Intl is appended as a code rather than styled. Intl would accept any
-  // three well-formed letters and quietly invent a symbol-less rendering of
-  // its own; the point of the shared list is that one currency reads the same
-  // in a price line and in a money cell.
+  // A code outside the shared list is appended plain, as formatMinor
+  // does, so a currency reads the same in a price and a money cell.
   it("appends the plain code for a currency the money formatter does not style", () => {
     expect(norm(formatPriceIn("305.5", "JPY") ?? "")).toBe("305,50 JPY");
   });
 
-  // Refusal is inherited too: an input formatPrice will not render is one this
-  // will not render either, sign or no sign. The caller drops the whole hint.
+  // Refusal is inherited: the caller drops the whole hint.
   it.each([[""], ["-5"], ["abc"], ["1,5"]])("rejects %s exactly as formatPrice does", (input) => {
     expect(formatPriceIn(input, "USD")).toBeNull();
     expect(formatPrice(input)).toBeNull();
@@ -324,8 +266,7 @@ describe("isPositiveDecimal", () => {
 });
 
 describe("multiplyToMinor", () => {
-  // The preview and the server's own figure, held to one table: the Go test of
-  // operation.TradeAmountMinor reads the same file.
+  // Held to one table with the Go test of operation.TradeAmountMinor.
   it.each(shared.cases)("agrees with the server on $quantity × $price", ({ quantity, price, minor }) => {
     expect(multiplyToMinor(quantity, price)).toBe(minor);
   });
@@ -352,21 +293,12 @@ describe("multiplyToMinor", () => {
   });
 
   it("rounds many fractional digits up rather than dropping them", () => {
-    // 1 × 0.129999999999 = 12,9999999999 kopecks. Under the rule this file
-    // now shares with the server that is 13, not the 12 truncation used to
-    // give — the same figure decimal.Decimal.Round(0) produces in Go. This
-    // expectation moved with the rule, not to fit the code: a remainder of
-    // 0,9999999999 of a kopeck is nearer to the next kopeck than to this one
-    // by every definition of nearer.
+    // 12,9999999999 kopecks round to 13, as decimal.Round(0) does in Go.
     expect(multiplyToMinor("1", "0.129999999999")).toBe(13);
   });
 
-  // THE case from #94, digit for digit. An exchange quotes an OFZ at
-  // 98,0005 % of its 1 000,00 ₽ face; bondPriceFromPercent turns that into
-  // 980,005 ₽ per bond exactly, and one bond of it is 98 000,5 kopecks — a
-  // figure sitting exactly on the half. The server's own valuation of that
-  // same holding (money.Minor, half away from zero) says 98 001. Anything but
-  // 98 001 here is the client and the server rounding one number two ways.
+  // #94: 98,0005 % of a 1 000,00 ₽ face is 98 000,5 kopecks for one bond;
+  // the server (money.Minor, half away from zero) says 98 001.
   it("rounds a half kopeck the way the server rounds it", () => {
     const price = bondPriceFromPercent("98.0005", 100_000);
     expect(price).toBe("980.005");
@@ -376,26 +308,20 @@ describe("multiplyToMinor", () => {
   it.each([
     // Exactly half a minor unit, away from zero — the whole rule in one case.
     ["1", "0.005", 1],
-    // Just under and just over it, so "away from zero" is not satisfied by a
-    // rule that simply rounds everything up.
+    // Just under and over the half, so rounding everything up fails.
     ["1", "0.0049", 0],
     ["1", "0.0051", 1],
     // Half a kopeck on top of a whole one: 1,5 kopecks → 2, not 1.
     ["1", "0.015", 2],
-    // The half rule survives the sub-minor-unit floor: 0,005 of a kopeck is
-    // still nowhere near half of one.
+    // 0,005 of a kopeck is nowhere near half of one.
     ["1", "0.00005", 0],
   ])("rounds %s × %s half away from zero", (qty, price, want) => {
     expect(multiplyToMinor(qty, price)).toBe(want);
   });
 
-  // The sell side of a trade sends this magnitude as it is; the buy side sends
-  // it negated (trade-dialog.tsx). Rounding the MAGNITUDE half away from zero
-  // and negating afterwards is what "half away from zero" means for the signed
-  // figure — 98 000,5 kopecks of debt becomes −98 001, never −98 000 — so the
-  // magnitude of a debt is never shrunk by the rounding. This is the same
-  // guarantee money.Minor states in Go, reached from the other direction
-  // because this function's operands are non-negative by contract.
+  // A buy negates this magnitude (trade-dialog.tsx); rounding the
+  // magnitude half away from zero first gives −98 001, never −98 000, as
+  // money.Minor does in Go.
   it("never shrinks the magnitude a buy will negate", () => {
     const magnitude = multiplyToMinor("1", "980.005");
     expect(magnitude).toBe(98_001);
@@ -403,9 +329,7 @@ describe("multiplyToMinor", () => {
   });
 
   it("handles many decimal digits on both operands without precision loss", () => {
-    // Exact BigInt math: 0.123456789 × 0.000000001 = 0.000000000123456789,
-    // far below HALF a minor unit — rounds to 0, not NaN/Infinity as float
-    // multiplication of such small magnitudes might risk.
+    // Exact BigInt math: far below half a unit rounds to 0, not NaN.
     expect(multiplyToMinor("0.123456789", "0.000000001")).toBe(0);
   });
 
@@ -418,41 +342,32 @@ describe("multiplyToMinor", () => {
   });
 
   it("accepts a large-but-safe product", () => {
-    // 90_000 × 100 = 9_000_000 rubles = 900_000_000 minor units, safely
-    // under Number.MAX_SAFE_INTEGER (~9.007e15).
+    // 9 000 000 rubles, safely under Number.MAX_SAFE_INTEGER.
     expect(multiplyToMinor("90000", "100")).toBe(900_000_000);
   });
 });
 
-// The two halves of the bond quote convention (#77): an exchange quotes a bond
-// as a PERCENTAGE OF FACE VALUE, so 98 against a 1 000 ₽ face means 980 ₽ per
-// bond. Both directions are exact integer arithmetic — the whole point of the
-// pair is that the money side of it is a figure the user is about to record as
-// a cost basis, and a float would put an invented kopeck in it.
+// An exchange quotes a bond as a percentage of face (#77): 98 of a
+// 1 000 ₽ face is 980 ₽. Both directions are exact integer arithmetic,
+// since the money side becomes a cost basis.
 describe("bondPriceFromPercent", () => {
-  // THE case from the issue, digit for digit: the owner copies 98 out of his
-  // broker's terminal for an OFZ with a 1 000,00 ₽ face. Anything but 980
-  // here is the ten-times-too-small cost basis the whole task exists to end.
+  // The owner's case from the issue; anything but 980 is the
+  // ten-times-too-small basis.
   it("turns the owner's 98 % of a 1 000 ₽ face into 980 per bond", () => {
     expect(bondPriceFromPercent("98", 100_000)).toBe("980.00");
   });
 
   it.each([
-    // A face value's own scale must not leak into the answer: the same 98 %
-    // against a 100,00 ₽ face is 98 ₽, against a 1,00 ₽ face 0,98 ₽. These
-    // pin the two /100 steps (minor→major, percent→fraction) separately —
-    // dropping either turns 980,00 into 98 000,00 or 9,80.
+    // The face's scale must not leak: these pin the two /100 steps
+    // separately.
     ["98", 10_000, "98.00"],
     ["98", 100, "0.98"],
     // Par, premium and deep discount against the 1 000 ₽ face.
     ["100", 100_000, "1000.00"],
     ["104.5", 100_000, "1045.00"],
     ["7.25", 100_000, "72.50"],
-    // Fraction digits the money price genuinely needs are kept, not rounded
-    // away: 98,005 % of 1 000 ₽ is 980,05 ₽ exactly, 33,3333 % is 333,333 ₽
-    // exactly, and 33,3333 % of a 1,00 ₽ face is 0,333333 ₽ exactly — six
-    // digits, kept. No rounding happens anywhere in this conversion, which is
-    // what lets the total round exactly once, in multiplyToMinor.
+    // Needed fraction digits are kept, not rounded: nothing rounds here, so
+    // the total rounds once, in multiplyToMinor.
     ["98.005", 100_000, "980.05"],
     ["33.3333", 100_000, "333.333"],
     ["33.3333", 100, "0.333333"],
@@ -460,10 +375,8 @@ describe("bondPriceFromPercent", () => {
     expect(bondPriceFromPercent(percent, faceMinor)).toBe(want);
   });
 
-  // Honesty over silence, in its arithmetic form: with no usable face value
-  // there is no conversion to perform, and 0 would be a fabricated answer
-  // rather than an absent one. The caller renders the absence; it must never
-  // receive a number here.
+  // No usable face, no conversion: the caller renders the absence, never
+  // a 0.
   it.each([[0], [-100_000]])("refuses a face value of %d", (faceMinor) => {
     expect(bondPriceFromPercent("98", faceMinor)).toBeNull();
   });
@@ -472,30 +385,20 @@ describe("bondPriceFromPercent", () => {
     expect(bondPriceFromPercent(percent, 100_000)).toBeNull();
   });
 
-  // Zero is not malformed input, but it is the same fabricated-answer problem
-  // as a zero face value read the other way round: 0 % of any face is 0, a
-  // plausible-looking price this project does not publish either.
+  // 0 % of any face is 0, a plausible price this project does not publish.
   it.each([["0"], ["0.00"]])("refuses a percentage of %s", (percent) => {
     expect(bondPriceFromPercent(percent, 100_000)).toBeNull();
   });
 
-  // The guarantee this direction owes the form, and the one the percentage
-  // direction has had all along: whatever comes back, the price field's own
-  // validator takes. An exact price finer than a price is stored has no honest
-  // rendering here — rounding it would drop money out of a cost basis — so the
-  // conversion is refused, and the caller is left with the absence it already
-  // knows how to show. Handing back a value the form rejects would instead
-  // make the dialog complain about a price field the user never typed in and
-  // cannot correct from the percentage he did type.
+  // Whatever comes back, the price field's validator accepts; a price
+  // finer than storable would need rounding money, so it is refused.
   it("refuses a percentage whose exact price is finer than a stored price", () => {
-    // 98,0000000001 % of a 1,00 ₽ face is 0,980000000001 ₽ exactly: twelve
-    // fraction digits, two past what isPositiveDecimal accepts.
+    // Twelve fraction digits, two past what isPositiveDecimal accepts.
     expect(bondPriceFromPercent("98.0000000001", 100)).toBeNull();
   });
 
   it("still converts the finest percentage whose price does fit", () => {
-    // Exactly ten fraction digits — the last accepted width, pinned so the
-    // refusal above cannot creep inward and start refusing storable prices.
+    // Exactly ten, the widest accepted, so the refusal cannot creep inward.
     expect(bondPriceFromPercent("98.00000001", 100)).toBe("0.9800000001");
   });
 
@@ -503,8 +406,7 @@ describe("bondPriceFromPercent", () => {
     ["98", 100_000],
     ["33.3333", 100],
     ["98.00000001", 100],
-    // Ten decimal places of arithmetic, two digits of answer: the trailing
-    // zeros are trimmed, so the width that matters is the rendered one.
+    // Trailing zeros are trimmed, so the rendered width is what counts.
     ["98.000000", 100_000],
   ])("returns %s of a face of %d minor units as a price the form takes back", (percent, faceMinor) => {
     const price = bondPriceFromPercent(percent, faceMinor);
@@ -514,9 +416,7 @@ describe("bondPriceFromPercent", () => {
 });
 
 describe("bondPercentFromPrice", () => {
-  // The other direction of the owner's own case: 980 ₽ per bond against a
-  // 1 000 ₽ face is 98 %, and the field must say so with the two fraction
-  // digits a quote is written with.
+  // The owner's case backwards, with a quote's two fraction digits.
   it("turns 980 per bond against a 1 000 ₽ face back into 98 %", () => {
     expect(bondPercentFromPrice("980", 100_000)).toBe("98.00");
   });
@@ -525,8 +425,7 @@ describe("bondPercentFromPrice", () => {
     ["98", 10_000, "98.00"],
     ["0.98", 100, "98.00"],
     ["1000", 100_000, "100.00"],
-    // A price with kopecks in it: 983,75 ₽ of a 1 000 ₽ face is 98,375 %,
-    // exactly — the third digit is kept rather than rounded to 98,38.
+    // The third digit is kept, not rounded to 98,38.
     ["983.75", 100_000, "98.375"],
   ])("converts a price of %s against a face of %d minor units", (price, faceMinor, want) => {
     expect(bondPercentFromPrice(price, faceMinor)).toBe(want);
@@ -540,30 +439,16 @@ describe("bondPercentFromPrice", () => {
     expect(bondPercentFromPrice(price, 100_000)).toBeNull();
   });
 
-  // The one place a rounding is allowed to appear in this pair, and it is on
-  // the PERCENTAGE — a ratio, not money (the project's standing exception).
-  // A face value whose denominator is not built from 2s and 5s makes the
-  // percentage non-terminating: 100 ₽ per bond against a 6,00 ₽ face is
-  // 1666,666… %. Every face value a real bond carries (1, 10, 100, 1 000,
-  // 10 000 units) divides exactly, so this branch is reachable only from
-  // hand-entered data — and it still may not print a wrong digit, only a
-  // rounded last one.
-  //
-  // The 6,00 ₽ face is the fixture on purpose: a repeating 6 makes the digit
-  // past the tenth round the last one UP, so half-away-from-zero and plain
-  // truncation give different strings and only one of them passes. The 3,00 ₽
-  // face this case used to carry cannot tell them apart — a repeating 3 gives
-  // "3333.3333333333" under either rule, which pinned the digit count and
-  // nothing whatever about the rounding.
+  // The one allowed rounding, on the percentage (a ratio, not money).
+  // Real faces divide exactly, so this needs hand-entered data. A 6,00 ₽
+  // face repeats 6s, so half-away and truncation give different strings.
   it("rounds a non-terminating percentage rather than truncating it", () => {
     expect(bondPercentFromPrice("100", 600)).toBe("1666.6666666667");
   });
 });
 
-// The pair as a whole: whatever the user types into one field, the other must
-// describe the SAME trade, and the money one must survive a round trip.
-// A conversion that is off by a factor of a hundred in one direction and back
-// would pass each single-direction assertion above; this catches it.
+// Whatever is typed in one field, the other describes the same trade;
+// a hundredfold error there and back passes each one-way test.
 describe("bond price and percent round-trip", () => {
   it.each([
     ["98", 100_000],
