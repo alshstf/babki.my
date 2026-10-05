@@ -113,3 +113,26 @@ func TestAmortizationRetiresNoMoreThanTheWholeBasis(t *testing.T) {
 		}
 	}
 }
+
+// The basis a repayment retires keeps the day its purchase settled (decision
+// Р-3): it is priced in another currency at that day's rate, as a sale's
+// released basis is.
+func TestAmortizationRetiresBasisWithItsSettlementDay(t *testing.T) {
+	buy := op(portfolio.TypeBuy, 1, &ofz, "10", "950", -950_000, 0)
+	settled := buy.OccurredOn.AddDate(0, 0, 1)
+	buy.SettledOn = &settled
+	pos, err := portfolio.Compute([]portfolio.Operation{
+		buy,
+		withFace(op(portfolio.TypeAmortization, 10, &ofz, "", "", 200_000, 0), 100_000),
+	})
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	r := pos[ofz].Realizations
+	if len(r) != 1 || len(r[0].Released) != 1 {
+		t.Fatalf("realizations = %+v, want one repayment retiring one piece", r)
+	}
+	if got := r[0].Released[0].RateOn; got == nil || !got.Equal(settled) {
+		t.Errorf("the retired piece is priced on %v, want the purchase's settlement day %s", got, settled.Format("2006-01-02"))
+	}
+}

@@ -1771,7 +1771,7 @@ func takeLotsShare(p *Position, share decimal.Decimal) []ReleasedLot {
 			continue
 		}
 		p.Lots[i].CostMinor -= piece.CostMinor
-		out = append(out, ReleasedLot{Quantity: decimal.Zero, CostMinor: piece.CostMinor, AcquiredOn: piece.AcquiredOn})
+		out = append(out, ReleasedLot{Quantity: decimal.Zero, CostMinor: piece.CostMinor, AcquiredOn: piece.AcquiredOn, RateOn: piece.RateOn})
 	}
 	return out
 }
