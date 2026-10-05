@@ -11,42 +11,32 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// ErrRowNotInLink is returned when a content key named for an explanation is
-// not one of that link's mirror rows. It is a 404 rather than a 400: the
-// request is well formed and names a row this connection does not hold.
+// ErrRowNotInLink: a named content key is not one of the link's mirror rows.
+// A 404.
 var ErrRowNotInLink = errors.New("tinvest: no mirror row of this link carries that content key")
 
-// ErrRowAlreadyExplained is returned when a mirror row named for an
-// explanation already has one. A 409: the row is real, the request is well
-// formed, and the conflict is with a record that exists.
+// ErrRowAlreadyExplained: a named mirror row already has an explanation.
+// A 409.
 var ErrRowAlreadyExplained = errors.New("tinvest: this mirror row is already accounted for by hand")
 
 // ErrExplanationNotFound is returned when no explanation of this space carries
 // the id asked for.
 var ErrExplanationNotFound = errors.New("tinvest: explanation not found")
 
-// RowExplanation is the manual operation that accounts for one mirror row,
-// as a listing shows it.
-//
-// It carries the operation's DATE AND TYPE and not its amount, because it is
-// a caption on the mirror row rather than a copy of the journal entry: what a
-// reader needs here is which entry to look at, and the journal is where that
-// entry is read. Copying the figures would be a second statement of the same
-// money, and the two would part company the first time the operation is
-// edited.
+// RowExplanation is the manual operation accounting for one mirror row, as a
+// listing shows it: date and type to find it in the journal, not a copy of its
+// figures.
 type RowExplanation struct {
 	ID          uuid.UUID
 	OperationID uuid.UUID
-	// OperationOn is the journal date of the operation, i.e. the day the owner
-	// says the event happened, which need not be the broker's own date for
-	// either of the rows explained — the two halves of a fund's redemption are
-	// a fortnight apart and one operation stands for both.
+	// OperationOn is the operation's journal date, which need not match either
+	// explained row (a fund redemption's two halves are a fortnight apart).
 	OperationOn   time.Time
 	OperationType string
 }
 
-// Explanation is one row of the explanations table, with the connection it
-// belongs to for the authorization the caller has to do.
+// Explanation is one explanations row with its connection, for the caller's
+// authorization.
 type Explanation struct {
 	ID           uuid.UUID
 	LinkID       uuid.UUID
@@ -57,10 +47,8 @@ type Explanation struct {
 	CreatedAt    time.Time
 }
 
-// ExplainedKeysByLink is the set of this link's mirror rows the owner has
-// accounted for by hand — the one question the projection asks of this table,
-// asked once per link and answered by content key, which is what a mirror row
-// is identified by.
+// ExplainedKeysByLink is the set of the link's mirror rows explained by hand,
+// by content key.
 func (s *Store) ExplainedKeysByLink(ctx context.Context, linkID uuid.UUID) (map[string]bool, error) {
 	rows, err := s.db.Query(ctx,
 		`SELECT content_key FROM tinvest_mirror_explanations WHERE link_id = $1`, linkID)
@@ -82,16 +70,9 @@ func (s *Store) ExplainedKeysByLink(ctx context.Context, linkID uuid.UUID) (map[
 	return out, nil
 }
 
-// attachExplanations fills ExplainedBy on every row that has one.
-//
-// A SECOND QUERY RATHER THAN A JOIN, so that the mirror's own columns are read
-// by the one scanner every other mirror query uses. A join would need a
-// scanner of its own, and two readings of one row's columns are how the two
-// eventually disagree about what a column means.
-//
-// The keys are matched on (link_id, content_key) — the pair the explanation is
-// unique by — and never on the mirror row's id, which the explanation
-// deliberately does not name (see the migration).
+// attachExplanations fills ExplainedBy. A second query, not a join, so mirror
+// columns are read by the one scanner every mirror query uses. Matched on
+// (link_id, content_key), never the mirror row id.
 func (s *Store) attachExplanations(ctx context.Context, rows []MirrorRow) error {
 	if len(rows) == 0 {
 		return nil
@@ -103,12 +84,9 @@ func (s *Store) attachExplanations(ctx context.Context, rows []MirrorRow) error 
 		keys[i] = m.ContentKey
 	}
 
-	// WITH ORDINALITY, so each answer comes back knowing WHICH of the pairs
-	// asked for it. Rebuilding the key on this side to look the answer up in a
-	// map is the fault this codebase has already paid for once: a value that
-	// travels to the database and back is not always the value that was sent
-	// (a date goes as a date and returns as midnight UTC), and the second
-	// computation of the key is where the two part company.
+	// WITH ORDINALITY: each answer knows which pair asked for it, rather than
+	// rebuilding the key from values that come back changed (a date returns as
+	// midnight UTC).
 	q := `SELECT p.ord, e.id, e.operation_id, o.occurred_on, o.type
 		    FROM unnest($1::uuid[], $2::text[]) WITH ORDINALITY AS p(link_id, content_key, ord)
 		    JOIN tinvest_mirror_explanations e
@@ -138,23 +116,17 @@ func (s *Store) attachExplanations(ctx context.Context, rows []MirrorRow) error 
 	return nil
 }
 
-// MirrorRowsByKeys returns the rows of one link named by content key, in no
-// particular order. It is what the service checks a request against: every key
-// it was given must be one of this link's rows.
+// MirrorRowsByKeys returns the link's rows with these content keys, in no
+// order.
 func (s *Store) MirrorRowsByKeys(ctx context.Context, linkID uuid.UUID, keys []string) ([]MirrorRow, error) {
 	return s.listMirrorRows(ctx, "list mirror rows by content key",
 		`SELECT `+mirrorCols+` FROM tinvest_operations_mirror
 		 WHERE link_id = $1 AND content_key = ANY($2)`, linkID, keys)
 }
 
-// CreateExplanations records that one manual operation accounts for these
-// mirror rows of this link.
-//
-// All of them or none: one statement inside a transaction, so a request that
-// names a key already explained leaves nothing behind. The unique violation is
-// translated into ErrRowAlreadyExplained rather than passed on, because the
-// caller has already checked for that case and this is the race — two requests
-// explaining one row at once — where the database is the only authority.
+// CreateExplanations records, all or none, that one manual operation accounts
+// for these mirror rows. A unique violation (two requests racing) becomes
+// ErrRowAlreadyExplained.
 func (s *Store) CreateExplanations(ctx context.Context, linkID, operationID uuid.UUID, keys []string) error {
 	if len(keys) == 0 {
 		return fmt.Errorf("tinvest: create explanations: no content keys given")

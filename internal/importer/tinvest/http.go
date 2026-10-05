@@ -22,31 +22,17 @@ import (
 	"babki.my/babki/internal/platform/tradingmode"
 )
 
-// defaultPageLimit and maxPageLimit bound the two paged endpoints below, and
-// they are the figures api/openapi.yaml states as `default` and `maximum` on
-// both of them (internal/importer/tinvest/contract_sites_test.go is what keeps
-// the two spellings in step).
-//
-// A LIMIT ABOVE THE MAXIMUM IS REFUSED, NOT CLAMPED. The journal listing does
-// clamp, and #118 is the record of why that is a defect rather than a
-// convenience: a ceiling the contract states and the server does not apply is
-// not a rule, and a client that sent 250 would be answered as though it had
-// asked for 200 with nothing in the answer saying so. Refusing says it once, in
-// the only channel a client may read — the status code — and costs a round trip
-// on a request that was outside the contract to begin with.
+// defaultPageLimit and maxPageLimit are the default and maximum openapi states
+// for the two paged endpoints (contract_sites_test.go keeps them in step). A limit
+// outside them is refused, not clamped (#118).
 const (
 	defaultPageLimit = 50
 	maxPageLimit     = 200
 )
 
-// Handler exposes the T-Invest importer over HTTP.
-//
-// IT HOLDS NO STORE. Every path here goes through Service, including the reads,
-// because every one of them is owner-only and the role check lives there (see
-// the Service doc, and family.Service.UpdateSpace for the same arrangement in
-// the module this one copies). A handler with a store beside the service is a
-// handler where the next read can quietly be written without a role check and
-// nothing will notice.
+// Handler exposes the T-Invest importer over HTTP. It holds no store: every
+// path goes through Service, where the owner-only check lives, so no read can
+// skip it.
 type Handler struct {
 	svc  *Service
 	auth *family.Auth
@@ -57,13 +43,8 @@ func NewHandler(svc *Service, auth *family.Auth, sm *scs.SessionManager) *Handle
 	return &Handler{svc: svc, auth: auth, sm: sm}
 }
 
-// Mount registers the importer's routes.
-//
-// The middleware requires a signed-in member and NOTHING MORE: the owner-only
-// rule is Service's, applied to every method it has, and stating it here as well
-// would be a second copy of one rule — the kind that eventually disagrees with
-// the first. What the middleware still owes is the session and the principal,
-// without which the service could not check anything at all.
+// Mount registers the routes. The middleware requires a signed-in member
+// only; the owner rule is Service's.
 func (h *Handler) Mount(srv *httpserver.Server) {
 	authed := func(fn http.HandlerFunc) http.Handler {
 		return h.sm.LoadAndSave(h.auth.RequireAuth(fn))
@@ -81,27 +62,13 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("DELETE /api/v1/tinvest/explanations/{explanationId}", authed(h.handleRemoveExplanation))
 }
 
-// writeError maps this package's own sentinels onto status codes and hands
-// everything else to family.WriteError.
-//
-// THE SEPARATIONS BELOW ARE THE WHOLE POINT OF HAVING SENTINELS AT ALL. A
-// refused token (400) and an unreachable broker (502) are opposite advice —
-// paste a new token, or wait — and a client can only tell them apart by the
-// code, since the text is prose. A connection that is switched off (409) is not
-// a missing one (404). A broker account already imported (409) is not a
-// malformed request (400). And a picked broker account this token cannot import
-// (422) is not a refused token (400).
-//
-// THAT LAST ONE USED TO BE A 400 BESIDE THE REFUSED TOKEN, and the two share a
-// path: POST /api/v1/tinvest/connections asks the broker for its account list
-// afresh, so a list that changed since the wizard's token-check — an account
-// closed, a token's access narrowed — refuses the create with a request that is
-// perfectly well formed and a token that still works. Under one status code the
-// client had to caption it as a refused token, telling the owner to check and
-// re-issue a token that never stopped working; 422 says the other thing this
-// call can mean, which is that the request was understood and cannot be carried
-// out. Only this path can produce it (Service.CreateConnection), which is why
-// only this path declares it in api/openapi.yaml.
+// writeError maps this package's sentinels to status codes and hands the rest
+// to family.WriteError. The codes are the advice: a refused token (400) means
+// paste a new one, an unreachable broker (502) means wait; a disabled connection
+// (409) is not a missing one (404); an already imported account (409) is not a
+// bad request. A picked account the token cannot import is 422, not 400: the
+// broker's list may have changed since the wizard checked the token, which still
+// works (Service.CreateConnection, the only path declaring it).
 func writeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrTokenRejected):
@@ -110,30 +77,15 @@ func writeError(w http.ResponseWriter, err error) {
 		httpjson.Error(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, ErrConnectionNotActive), errors.Is(err, ErrBrokerAccountAlreadyLinked),
 		errors.Is(err, ErrRowAlreadyExplained), errors.Is(err, operation.ErrInconsistent):
-		// THE JOURNAL'S OWN REFUSAL IS ANSWERED THE WAY THE JOURNAL ANSWERS IT.
-		// An explanation hands the operation service a manual operation, and
-		// when the engine will not replay the journal it would leave, that
-		// service says so with ErrInconsistent — which the journal screen
-		// answers with 409 and the engine's own sentence (see
-		// operation.writeError). Without this branch it fell through to
-		// family.WriteError's default and reached the owner as «internal
-		// error», 500: the program telling them it had broken, when what
-		// happened is that their history cannot hold that operation. Live, on
-		// the very case this feature exists for — a redemption of 44 380,35
-		// units offered while a transfer_out still held them.
+		// The journal's refusal answered as the journal answers it: 409 with the
+		// engine's sentence, not a 500 (see operation.writeError).
 		httpjson.Error(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrRowNotInLink), errors.Is(err, ErrExplanationNotFound), errors.Is(err, ErrLinkNotFound):
-		// 404 rather than 400: each names something well formed that this
-		// space does not have — a content key none of the link's rows carries,
-		// an explanation or a link that is not here. A 400 would tell the
-		// owner to fix the request they sent, which is not what is wrong.
+		// 404: each names something well formed this space does not have.
 		httpjson.Error(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrBrokerUnreachable):
-		// Logged as well as answered, through the same default logger
-		// family.WriteError uses for the errors behind its 500s: this branch
-		// never reaches that function, so without the line the one failure an
-		// operator would most want in the log — the broker being down — leaves
-		// no trace of what actually went wrong beyond a 502 the user saw.
+		// Logged too: this branch skips family.WriteError, and a broker outage
+		// should leave a trace beyond the 502.
 		slog.Default().Error("tinvest: request failed at the broker", "err", err.Error())
 		httpjson.Error(w, http.StatusBadGateway, err.Error())
 	default:
@@ -150,9 +102,8 @@ func pathConnectionID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) 
 	return id, true
 }
 
-// parsePage reads `limit` and `offset` and enforces the bounds the contract
-// states. See defaultPageLimit for why an over-large limit is a 400 rather than
-// a quietly smaller page.
+// parsePage reads limit and offset and refuses anything outside the stated
+// bounds.
 func parsePage(w http.ResponseWriter, r *http.Request) (limit, offset int, ok bool) {
 	limit = defaultPageLimit
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -175,11 +126,8 @@ func parsePage(w http.ResponseWriter, r *http.Request) (limit, offset int, ok bo
 	return limit, offset, true
 }
 
-// dateOrNull renders an optional calendar date the way every other date in this
-// API is rendered: YYYY-MM-DD, or an explicit null. An explicit null and not an
-// omitted key: "the broker told us nothing about when this account was opened"
-// is a statement, and a missing field would read as this server having forgotten
-// to answer.
+// dateOrNull renders an optional date as YYYY-MM-DD or an explicit null: "the
+// broker told us nothing" is a statement, not a forgotten field.
 func dateOrNull(t *time.Time) nullable.Nullable[string] {
 	if t == nil {
 		return nullable.NewNullNullable[string]()
@@ -187,10 +135,7 @@ func dateOrNull(t *time.Time) nullable.Nullable[string] {
 	return nullable.NewNullableWithValue(t.Format("2006-01-02"))
 }
 
-// nullableString is dateOrNull for a text the check may not have: an absent
-// one is an explicit null, for the same reason — «the broker's passport was
-// not obtained» is a statement, and an omitted key would read as the server
-// having forgotten to answer.
+// nullableString is dateOrNull for an optional text.
 func nullableString(s *string) nullable.Nullable[string] {
 	if s == nil {
 		return nullable.NewNullNullable[string]()
@@ -198,8 +143,7 @@ func nullableString(s *string) nullable.Nullable[string] {
 	return nullable.NewNullableWithValue(*s)
 }
 
-// timeOrNull is dateOrNull for the instants: an absent one is an explicit null,
-// for the same reason.
+// timeOrNull is dateOrNull for an instant.
 func timeOrNull(t *time.Time) nullable.Nullable[time.Time] {
 	if t == nil {
 		return nullable.NewNullNullable[time.Time]()
@@ -227,14 +171,10 @@ func linkAPI(l AccountLink) apitypes.TinvestLinkedAccount {
 	}
 }
 
-// mismatchesAPI decodes the differences a run recorded. The column holds what
-// json.Marshal wrote from []ReconcileMismatch, so this round-trips; a value that
-// will not decode is corruption and is reported rather than published as an
-// empty list, which would read as "the check found nothing".
-//
-// A null column — a run nobody checked — decodes into no elements and no error,
-// and comes back as the empty list the contract requires. What tells that apart
-// from a check that found nothing is reconcile_status, published beside it.
+// mismatchesAPI decodes a run's recorded differences. A value that will not
+// decode is corruption and reported, not published as "nothing found". A null
+// column (unchecked run) is an empty list; reconcile_status tells the two
+// apart.
 func mismatchesAPI(raw json.RawMessage) ([]apitypes.TinvestReconcileMismatch, error) {
 	var list []ReconcileMismatch
 	if len(raw) > 0 {
@@ -255,9 +195,8 @@ func mismatchesAPI(raw json.RawMessage) ([]apitypes.TinvestReconcileMismatch, er
 		} else {
 			item.InstrumentId = nullable.NewNullNullable[uuid.UUID]()
 		}
-		// The passport, field by field: each is null exactly when the check
-		// recorded none — including every row of a run recorded before these
-		// fields existed, whose jsonb carries no such keys and decodes to nil.
+		// The passport fields are null when the check recorded none, including
+		// runs from before they existed.
 		item.BrokerIsin = nullableString(m.BrokerISIN)
 		item.BrokerName = nullableString(m.BrokerName)
 		item.BrokerCurrency = nullableString(m.BrokerCurrency)
@@ -306,12 +245,9 @@ func connectionAPI(v ConnectionView) (apitypes.TinvestConnection, error) {
 	for _, l := range v.Links {
 		out.Accounts = append(out.Accounts, linkAPI(l))
 	}
-	// ONE VERDICT PER LINKED ACCOUNT, WALKED OFF THE LINKS THEMSELVES, so the
-	// two lists are the same accounts in the same order by construction and an
-	// account nobody checked cannot go missing: it is written out as
-	// not_checked — the verdict it has — rather than being left for a reader to
-	// notice was absent. Both lists take the account's name from the same link
-	// row read once, so they cannot come to disagree about it.
+	// One verdict per linked account, built from the links themselves, so an
+	// unchecked account shows as not_checked rather than missing, under the
+	// same name.
 	out.Reconciles = make([]apitypes.TinvestAccountReconcile, 0, len(v.Links))
 	for _, l := range v.Links {
 		item := apitypes.TinvestAccountReconcile{
@@ -321,10 +257,8 @@ func connectionAPI(v ConnectionView) (apitypes.TinvestConnection, error) {
 			Status:            apitypes.TinvestReconcileStatus(ReconcileNotChecked),
 			At:                nullable.NewNullNullable[time.Time](),
 			Mismatches:        []apitypes.TinvestReconcileMismatch{},
-			// Published on EVERY verdict, including not_checked and matched,
-			// because it is a fact about the account rather than about the
-			// comparison: a reader deciding what a cash difference means needs
-			// it, and a reader seeing none needs to know there is none.
+			// On every verdict: a fact about the account, needed to read a cash
+			// difference.
 			CurrencyTradesUnparsed: v.CurrencyTradesUnparsedByLink[l.ID],
 		}
 		if run, ok := v.LastReconcileByLink[l.ID]; ok {
@@ -461,9 +395,7 @@ func (h *Handler) handleSync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	// 202 in both cases: the sync is queued, never performed here. `queued`
-	// says whether THIS request is what put it there — see the field's own
-	// description for why a false is not "one is running".
+	// 202 either way; queued says whether this request queued it.
 	httpjson.Write(w, http.StatusAccepted, apitypes.TinvestSyncAcceptedResponse{Queued: queued})
 }
 
@@ -519,39 +451,26 @@ func (h *Handler) handleUnparsed(w http.ResponseWriter, r *http.Request) {
 	for _, m := range rows {
 		row := apitypes.TinvestUnparsedOperation{
 			Id: m.ID,
-			// Which linked account the row is on: this list is per connection
-			// and a connection may feed several, so without it a client could
-			// not tell which link's endpoint to explain the row through.
+			// Which linked account the row is on.
 			LinkId: m.LinkID,
-			// What an explanation names this row by, and the reason it is
-			// published at all: the broker's own operation id is documented to
-			// change, so a client sending one back would be naming a row that
-			// may no longer be there (see MirrorRow.ContentKey).
+			// What an explanation names the row by: the broker's operation id may
+			// change (see MirrorRow.ContentKey).
 			ContentKey: m.ContentKey,
 			OccurredAt: m.OccurredAt,
 			OpType:     m.OpType,
-			// Where the broker says it happened, and what this program can
-			// call that: the code verbatim (empty when the broker sent none),
-			// and the kind beside it. The kind is published even for an empty
-			// code, where it says `unknown` — on THIS list that is the honest
-			// answer, since the list exists to show what the broker sent and
-			// an absent field would look like a field this screen forgot.
+			// The code as sent (empty when none) and its kind, unknown for empty:
+			// this list shows what the broker sent.
 			ClassCode:       m.ClassCode,
 			TradingModeKind: nullable.NewNullableWithValue(apitypes.TradingModeKind(tradingmode.Of(m.ClassCode))),
 			Payment:         m.Payment.String(),
 			Currency:        m.Currency,
 			Description:     m.Description,
 			Reason:          apitypes.TinvestUnparsedReason(m.UnparsedReason),
-			// The refuser's own words, handed on as they were written. The
-			// interface still chooses what to SAY from Reason alone; this is
-			// shown, never read.
+			// The refuser's own words: shown, never read.
 			Detail: m.UnparsedDetail,
-			// The broker's own bytes, handed on rather than re-encoded: nothing
-			// here computes from them, and re-modelling them would be a second
-			// reading of a document this program deliberately keeps unread.
+			// The broker's own bytes, not re-encoded.
 			Raw: m.Raw,
-			// Null said outright, not left unset: an unset field of this kind
-			// is written as the zero time — a row gone since year one.
+			// Explicitly null; unset would be the zero time.
 			DisappearedAt: nullable.NewNullNullable[time.Time](),
 		}
 		if m.DisappearedAt != nil {
@@ -583,9 +502,7 @@ func (h *Handler) handleExplain(w http.ResponseWriter, r *http.Request) {
 	if httpjson.Decode(w, r, &req) != nil {
 		return
 	}
-	// THE JOURNAL'S OWN READING OF ITS OWN REQUEST SHAPE. A second parser here
-	// would be a second set of rules about what a date or a decimal is, and the
-	// two would part company the first time either moved.
+	// The journal's own request parser, not a second one.
 	op, err := operation.OperationFromCreateRequest(req.Operation)
 	if err != nil {
 		var bad operation.BadFieldError
@@ -608,9 +525,8 @@ func (h *Handler) handleExplain(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleRemoveExplanation deletes an explanation together with the manual
-// operation it names — see Service.RemoveExplanation for why that is one
-// action and not two.
+// handleRemoveExplanation deletes an explanation and its manual operation
+// (see Service.RemoveExplanation).
 func (h *Handler) handleRemoveExplanation(w http.ResponseWriter, r *http.Request) {
 	p, _ := family.PrincipalFromContext(r.Context())
 	id, err := uuid.Parse(r.PathValue("explanationId"))
