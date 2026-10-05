@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ApiError, isConflict } from "@/api/operations";
-import { useSetup, useSetupStatus } from "@/api/session";
+import { SessionNotKept, useSetup, useSetupStatus } from "@/api/session";
 import { MAX_PERSON_NAME } from "@/lib/text-limits";
 
 export function SetupPage() {
@@ -131,7 +131,9 @@ export function SetupPage() {
                     client has actually been told: it did not work, and trying
                     again is available. */}
                 <AlertDescription>
-                  {isConflict(setup.error)
+                  {setup.error instanceof SessionNotKept
+                    ? t("auth.sessionNotKept")
+                    : isConflict(setup.error)
                     ? t("setup.alreadySetUp")
                     : setup.error instanceof ApiError && setup.error.status === 403
                       ? t("setup.wrongCode")

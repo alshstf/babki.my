@@ -30,7 +30,7 @@ services:
       BABKI_LOG_LEVEL: ${BABKI_LOG_LEVEL:-info}
       BABKI_LOG_FORMAT: ${BABKI_LOG_FORMAT:-json}
       BABKI_AUTO_MIGRATE: ${BABKI_AUTO_MIGRATE:-true}
-      BABKI_COOKIE_SECURE: ${BABKI_COOKIE_SECURE:-false}
+      BABKI_COOKIE_SECURE: ${BABKI_COOKIE_SECURE:-true}
       BABKI_SETUP_CODE: ${BABKI_SETUP_CODE:-}
     depends_on:
       postgres:

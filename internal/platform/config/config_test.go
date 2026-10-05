@@ -25,8 +25,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.EncryptionKey != "" {
 		t.Errorf("EncryptionKey default = %q, want empty (no envDefault)", cfg.EncryptionKey)
 	}
-	if cfg.CookieSecure {
-		t.Error("CookieSecure default = true, want false: a plain-http home install would never get its cookie back")
+	if !cfg.CookieSecure {
+		t.Error("CookieSecure default = false, want true: the sign-in cookie must not travel over plain http unless an install says so")
 	}
 }
 
@@ -34,7 +34,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("BABKI_HTTP_ADDR", ":9090")
 	t.Setenv("BABKI_DATABASE_URL", "postgres://u:p@localhost:5432/babki")
 	t.Setenv("BABKI_AUTO_MIGRATE", "false")
-	t.Setenv("BABKI_COOKIE_SECURE", "true")
+	t.Setenv("BABKI_COOKIE_SECURE", "false")
 	t.Setenv("BABKI_ENCRYPTION_KEY_PREVIOUS", "ff")
 	t.Setenv("BABKI_ENCRYPTION_KEY", "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
 
@@ -51,8 +51,8 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.AutoMigrate {
 		t.Error("AutoMigrate = true, want false")
 	}
-	if !cfg.CookieSecure {
-		t.Error("CookieSecure = false, want true")
+	if cfg.CookieSecure {
+		t.Error("CookieSecure = true, want false")
 	}
 	if cfg.EncryptionKeyPrevious != "ff" {
 		t.Errorf("EncryptionKeyPrevious = %q, want ff", cfg.EncryptionKeyPrevious)
