@@ -1599,3 +1599,34 @@ describe("примечание операции", () => {
     expect(screen.queryByTestId("operation-note")).toBeNull();
   });
 });
+
+// Р-14: a foreign dividend carries the tax withheld abroad under its type; any
+// other row carries nothing.
+describe("OperationsTable — the tax withheld abroad", () => {
+  it("shows it under a dividend that has it, and nowhere else", async () => {
+    renderTable({
+      operations: [
+        makeOperation({
+          id: "op-div",
+          type: "dividend",
+          amount_minor: 14,
+          currency: "USD",
+          withheld_abroad: {
+            state: "unknown",
+            unknown_reason: "no_calendar",
+            currency: "USD",
+            received_minor: 14,
+            broker_tax: [],
+          },
+        }),
+        makeOperation({ id: "op-dep" }),
+      ],
+    });
+
+    expect(await screen.findAllByTestId("operation-withheld")).toHaveLength(1);
+    expect(screen.getByTestId("operation-withheld-unknown")).toHaveAttribute(
+      "title",
+      "Календаря дивидендов по этой бумаге нет — оценить не из чего",
+    );
+  });
+});

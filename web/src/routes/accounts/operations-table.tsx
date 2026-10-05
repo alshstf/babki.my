@@ -55,6 +55,7 @@ import type { CostBasisRules } from "@/api/tax-residencies";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
 import { queryState, refreshFailed } from "@/lib/query-state";
 import type { PricedPaper } from "./purchase-price-dialog";
+import { WithheldAbroadNote } from "./withheld-abroad";
 
 // Whether this row's amount is a cost basis assembled from earlier purchases,
 // the only figure the cost-basis caveat is true of. Answered by the server's
@@ -392,6 +393,7 @@ export function OperationsTable({
                           })}
                     </div>
                   )}
+                  {operation.withheld_abroad && <WithheldAbroadNote withheld={operation.withheld_abroad} />}
                 </TableCell>
                 <TableCell>
                   {instrumentLinks && operation.instrument_id ? (
