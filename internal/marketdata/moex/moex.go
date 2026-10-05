@@ -176,6 +176,9 @@ type Client struct {
 	// traded remembers, per security, the last answer of lastTradeDay.
 	mu     sync.Mutex
 	traded map[tradedKey]tradedAnswer
+	// schedules remembers bonds' repayment schedules by ISIN (see
+	// FaceBeforeByISIN).
+	schedules map[string]cachedSchedule
 }
 
 // New returns a Client. client may be nil, in which case http.DefaultClient
@@ -197,7 +200,7 @@ func New(client *http.Client, baseURL string, log *slog.Logger) *Client {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Client{http: client, baseURL: baseURL, log: log, traded: map[tradedKey]tradedAnswer{}}
+	return &Client{http: client, baseURL: baseURL, log: log, traded: map[tradedKey]tradedAnswer{}, schedules: map[string]cachedSchedule{}}
 }
 
 // Name implements marketdata.QuoteProvider.

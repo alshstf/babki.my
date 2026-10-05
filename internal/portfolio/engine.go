@@ -1457,13 +1457,24 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 					"returns principal on instrument %s, which this account has never acquired: with no purchase behind it the whole payment would be recorded as realized profit; record how the paper was acquired (a buy, or a transfer carrying its basis) first",
 					o.InstrumentID))
 			}
-			reduce := min(o.AmountMinor, p.CostMinor)
-			p.CostMinor -= reduce
+			var released []ReleasedLot
+			if share, ok := amortizedShare(o, p); ok {
+				// As the tax code does it (decision Р-4): the repayment retires
+				// the share of the basis that it is of the outstanding principal,
+				// from every parcel alike, and the rest of the payment is this
+				// year's result.
+				released = takeLotsShare(p, share)
+			} else {
+				// No face value to measure the repayment against: the old rule,
+				// which retires basis until none is left.
+				released = drainLotsCost(p, min(o.AmountMinor, p.CostMinor))
+			}
+			p.CostMinor -= LotsCost(released)
 			p.realize(Realization{
 				OccurredOn:    o.OccurredOn,
 				ProceedsMinor: o.AmountMinor,
 				Currency:      o.Currency,
-				Released:      drainLotsCost(p, reduce),
+				Released:      released,
 			})
 		case TypeTransferOut, TypeExchangeOut:
 			if len(o.TransferLots) == 0 {
@@ -1701,6 +1712,37 @@ func CheckTransferLots(o Operation) error {
 // transfer's breakdown carried beyond its own lots. That is not a realization
 // of anything — see Position.Realizations — so it has nothing to do with the
 // pieces.
+// amortizedShare is the fraction of the holding's outstanding principal a
+// repayment returns: its amount over the face value per unit before it times
+// the units held, at most the whole. Not known without a face value, or with
+// nothing held to measure against.
+func amortizedShare(o Operation, p *Position) (decimal.Decimal, bool) {
+	if o.FaceBeforeMinor == nil || *o.FaceBeforeMinor <= 0 || !p.Quantity.IsPositive() {
+		return decimal.Zero, false
+	}
+	principal := decimal.NewFromInt(*o.FaceBeforeMinor).Mul(p.Quantity)
+	share := decimal.NewFromInt(o.AmountMinor).Div(principal)
+	if share.GreaterThan(decimal.NewFromInt(1)) {
+		share = decimal.NewFromInt(1)
+	}
+	return share, true
+}
+
+// takeLotsShare retires share of every lot's cost — the allocation a spin-off
+// uses, so the pieces sum to exactly the floor of the whole — and returns the
+// pieces taken, dated, with no units: nothing was sold.
+func takeLotsShare(p *Position, share decimal.Decimal) []ReleasedLot {
+	var out []ReleasedLot
+	for i, piece := range SpinoffPieces(p.Lots, share) {
+		if piece.CostMinor <= 0 {
+			continue
+		}
+		p.Lots[i].CostMinor -= piece.CostMinor
+		out = append(out, ReleasedLot{Quantity: decimal.Zero, CostMinor: piece.CostMinor, AcquiredOn: piece.AcquiredOn})
+	}
+	return out
+}
+
 func drainLotsCost(p *Position, amount int64) []ReleasedLot {
 	var pieces []ReleasedLot
 	for i := range p.Lots {

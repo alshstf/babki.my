@@ -104,6 +104,7 @@ type instrumentCatalog interface {
 	ByTickerTradable(ctx context.Context, ticker string) (instrument.Instrument, error)
 	Create(ctx context.Context, inst instrument.Instrument) (instrument.Instrument, error)
 	Update(ctx context.Context, id uuid.UUID, upd instrument.Update) (instrument.Instrument, error)
+	ByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]instrument.Instrument, error)
 }
 
 // passportSource is the broker calls Resolve needs to identify an

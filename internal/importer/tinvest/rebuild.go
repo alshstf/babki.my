@@ -122,6 +122,21 @@ type Rebuilder struct {
 	reader   journalReader
 	log      *slog.Logger
 	project  projection
+	// faces measures a bond's repayments against its outstanding face value
+	// (see fillFaceBefore); nil leaves every repayment to the old rule.
+	faces faceSchedule
+}
+
+// faceSchedule answers a bond's outstanding face value per unit just before a
+// repayment on day on, by the bond's ISIN.
+type faceSchedule interface {
+	FaceBeforeByISIN(ctx context.Context, isin string, on time.Time) (decimal.Decimal, string, bool, error)
+}
+
+// WithFaceSchedule gives the rebuild the exchange's repayment schedules.
+func (r *Rebuilder) WithFaceSchedule(faces faceSchedule) *Rebuilder {
+	r.faces = faces
+	return r
 }
 
 func NewRebuilder(store *Store, resolver *Resolver, ops journalDelta, reader journalReader, log *slog.Logger) *Rebuilder {
@@ -171,6 +186,9 @@ func (r *Rebuilder) Rebuild(ctx context.Context, conn Connection, links []Accoun
 	// redemption is waiting for is the position built by the entries in front
 	// of it, and that is only a number once they are in order.
 	if err := r.closeRedemptions(p); err != nil {
+		return RebuildStats{}, err
+	}
+	if err := r.fillFaceBefore(ctx, p); err != nil {
 		return RebuildStats{}, err
 	}
 	r.settleBrokerFees(p)
@@ -1225,6 +1243,9 @@ func sameJournalRow(want, stored operation.Operation) bool {
 	if !want.OccurredOn.Equal(stored.OccurredOn) || !sameTime(want.OccurredAt, stored.OccurredAt) {
 		return false
 	}
+	if !sameMinor(want.FaceBeforeMinor, stored.FaceBeforeMinor) {
+		return false
+	}
 	if !sameTime(want.SettledOn, stored.SettledOn) {
 		return false
 	}
@@ -1331,6 +1352,14 @@ func sameID(a, b *uuid.UUID) bool {
 // empty string" are different answers — the distinction trading_mode's own
 // column keeps (see migration 0026).
 func sameString(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+// sameMinor compares two optional amounts.
+func sameMinor(a, b *int64) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}

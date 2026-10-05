@@ -281,7 +281,14 @@ type Operation struct {
 	// mixture as it is, and nothing invents the missing half.
 	TransferLots []ReleasedLot
 	SplitRatio   *decimal.Decimal
-	Source       string
-	ExternalID   *string
-	CreatedAt    time.Time
+	// FaceBeforeMinor is, on an amortization, a bond's outstanding face value
+	// per unit just before this repayment, in the operation's currency. With
+	// it the repayment retires the cost basis in proportion to the share of
+	// the outstanding principal it returns, as the tax code does (НК РФ
+	// ст. 214.1 п. 13, decision Р-4); without it the old rule applies — the
+	// repayment retires basis until none is left. Nil on every other type.
+	FaceBeforeMinor *int64
+	Source          string
+	ExternalID      *string
+	CreatedAt       time.Time
 }
