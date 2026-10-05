@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/logtest"
 )
 
 const rpcBrokerReport = "OperationsService/GetBrokerReport"
@@ -445,13 +446,13 @@ func TestSyncWorkerFinishesARunWhoseReportFailed(t *testing.T) {
 		t.Errorf("runs = %+v, want one finished ok", runs)
 	}
 	found := false
-	for _, r := range f.logs.all() {
+	for _, r := range f.logs.Records() {
 		if strings.Contains(r.Message, "settlement days failed") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("no log line says the report failed: %s", describeRecords(f.logs.all()))
+		t.Errorf("no log line says the report failed: %s", logtest.Describe(f.logs.Records()))
 	}
 }
 
@@ -490,7 +491,7 @@ func TestReadSettlementsStopsWhenItsTimeIsSpent(t *testing.T) {
 	src := &fakeReport{tick: func() { clock = clock.Add(time.Minute) }}
 
 	readSettlements(f.ctx, f.store, src, []AccountLink{f.link}, func() time.Time { return clock },
-		90*time.Second, slog.New(&logCapture{}))
+		90*time.Second, slog.New(&logtest.Capture{}))
 
 	if fmt.Sprint(src.asked) != fmt.Sprint([]time.Time{on("2026-03-01"), on("2026-02-01")}) {
 		t.Errorf("asked for %v, want March then February and no more", src.asked)

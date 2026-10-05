@@ -1,4 +1,4 @@
-package jobs_test
+package background_test
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/background"
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/importer/tinvest"
@@ -25,7 +26,7 @@ import (
 // brokerFixture is one of the importer's own recorded broker documents.
 func brokerFixture(t *testing.T, name ...string) string {
 	t.Helper()
-	path := filepath.Join(append([]string{"..", "..", "importer", "tinvest", "testdata"}, name...)...)
+	path := filepath.Join(append([]string{"..", "importer", "tinvest", "testdata"}, name...)...)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read the broker fixture %s: %v", path, err)
@@ -99,10 +100,10 @@ func TestAnImportInTheQueueGetsTheRegistrysRows(t *testing.T) {
 
 	enqueuer := jobs.NewEnqueuer()
 	opStore := operation.NewStore(pool)
-	workers := jobs.NewWorkers(slog.Default(), pool, marketdata.NewStore(pool), instrument.NewStore(pool),
+	workers := background.NewWorkers(slog.Default(), pool, marketdata.NewStore(pool), instrument.NewStore(pool),
 		opStore, account.NewStore(pool), fam,
 		stubFxProvider{}, stubQuoteProvider{}, deps, caStore, caMaterializer, enqueuer)
-	client, err := jobs.NewClient(pool, workers, enqueuer, slog.Default())
+	client, err := background.NewClient(pool, workers, enqueuer, slog.Default())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
