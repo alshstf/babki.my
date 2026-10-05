@@ -156,6 +156,9 @@ func toAPI(o Operation) apitypes.Operation {
 	if o.SplitRatio != nil {
 		out.SplitRatio = nullable.NewNullableWithValue(o.SplitRatio.String())
 	}
+	if o.FaceBeforeMinor != nil {
+		out.FaceBeforeMinor = nullable.NewNullableWithValue(*o.FaceBeforeMinor)
+	}
 	if o.TransferGroupID != nil {
 		out.TransferGroupId = nullable.NewNullableWithValue(*o.TransferGroupID)
 	}

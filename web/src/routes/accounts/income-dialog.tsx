@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
+  formatMinor,
   minorToInput,
   parseToMinor,
 } from "@/lib/money";
@@ -71,6 +72,9 @@ export function IncomeDialog({
   const [amount, setAmount] = useState("");
   const [occurredOn, setOccurredOn] = useState(localToday());
   const [note, setNote] = useState("");
+  // The bond's face value per unit before an amortization (Р-4): optional, so
+  // an empty field is valid and sends nothing.
+  const [faceBefore, setFaceBefore] = useState("");
 
   useEffect(() => {
     if (open) {
@@ -79,6 +83,7 @@ export function IncomeDialog({
       setAmount(editing ? minorToInput(editing.amount_minor) : "");
       setOccurredOn(editing?.occurred_on ?? localToday());
       setNote(editing?.note ?? "");
+      setFaceBefore(editing?.face_before_minor != null ? minorToInput(editing.face_before_minor) : "");
       createOperation.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -87,10 +92,18 @@ export function IncomeDialog({
   const parsed = parseToMinor(amount);
   const amountValid = parsed !== null && parsed > 0;
   const instrumentOk = instrument !== null || !REQUIRES_INSTRUMENT.has(type);
-  const valid = amountValid && instrumentOk && occurredOn !== "";
+  const asksFace = type === "amortization";
+  const currency = instrument ? instrument.currency : account.currency;
+  const faceParsed = parseToMinor(faceBefore);
+  const faceValid = !asksFace || faceBefore === "" || (faceParsed !== null && faceParsed > 0);
+  const valid = amountValid && instrumentOk && faceValid && occurredOn !== "";
+  const catalogFace =
+    instrument?.face_value_minor != null && instrument.face_currency === currency
+      ? formatMinor(instrument.face_value_minor, currency)
+      : null;
 
   const submit = () => {
-    if (!amountValid || parsed === null || !instrumentOk) return;
+    if (!amountValid || parsed === null || !instrumentOk || !faceValid) return;
     createOperation.mutate(
       {
         account_id: account.id,
@@ -100,8 +113,9 @@ export function IncomeDialog({
         amount_minor: parsed,
         // Follows the instrument's currency when one is attributed; falls
         // back to the account's own currency for a cash-level entry.
-        currency: instrument ? instrument.currency : account.currency,
+        currency,
         note,
+        ...(asksFace && faceParsed !== null && faceBefore !== "" ? { face_before_minor: faceParsed } : {}),
       },
       { onSuccess: () => onOpenChange(false) },
     );
@@ -164,13 +178,36 @@ export function IncomeDialog({
           </div>
           <AmountField
             id="income-amount"
-            label={t("income.amount", { currency: instrument ? instrument.currency : account.currency })}
+            label={t("income.amount", { currency })}
             value={amount}
             onChange={setAmount}
-            currency={instrument ? instrument.currency : account.currency}
+            currency={currency}
             accepted={amountValid}
             badNumber={t("income.badNumber")}
           />
+          {asksFace && (
+            <AmountField
+              id="income-face-before"
+              label={t("income.faceBefore", { currency })}
+              value={faceBefore}
+              onChange={setFaceBefore}
+              currency={currency}
+              accepted={faceValid}
+              badNumber={t("income.badFace")}
+              hint={
+                <>
+                  <p data-testid="income-face-hint" className="text-xs text-muted-foreground">
+                    {t("income.faceBeforeHint")}
+                  </p>
+                  {catalogFace && (
+                    <p data-testid="income-face-catalog" className="text-xs text-muted-foreground">
+                      {t("income.faceInCatalog", { face: catalogFace })}
+                    </p>
+                  )}
+                </>
+              }
+            />
+          )}
           <OperationDateField id="income-date" label={t("income.date")} value={occurredOn} onChange={setOccurredOn} />
           <div className="grid gap-2">
             <Label htmlFor="income-note">{t("income.note")}</Label>

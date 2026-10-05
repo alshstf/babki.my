@@ -2168,7 +2168,7 @@ components:
           items: { $ref: "#/components/schemas/ExportOperation" }
     ExportOperation:
       type: object
-      required: [id, type, occurred_on, settled_on, instrument_id, quantity, price, amount_minor, currency, fee_minor, note, trading_mode, transfer_group_id, split_ratio, source, external_id, created_at, lots]
+      required: [id, type, occurred_on, settled_on, instrument_id, quantity, price, amount_minor, currency, fee_minor, note, trading_mode, transfer_group_id, split_ratio, face_before_minor, source, external_id, created_at, lots]
       properties:
         id: { type: string, format: uuid }
         type: { type: string }
@@ -2184,6 +2184,7 @@ components:
         trading_mode: { type: string, nullable: true }
         transfer_group_id: { type: string, format: uuid, nullable: true }
         split_ratio: { type: string, nullable: true, description: "Decimal as string" }
+        face_before_minor: { type: integer, format: int64, nullable: true, description: "On an amortization: the outstanding face value per unit before it, in minor units" }
         source: { type: string }
         external_id: { type: string, nullable: true }
         created_at: { type: string, format: date-time }
@@ -2631,6 +2632,7 @@ components:
             the same figure. Null for everything else (and when the departing
             account does not replay up to the move), absent outside the journal.
         split_ratio: { type: string, nullable: true, description: "Decimal as string" }
+        face_before_minor: { type: integer, format: int64, nullable: true, description: "On an amortization: the bond's outstanding face value per unit just before the repayment, in minor units of `currency`, when it is known (see CreateOperationRequest.face_before_minor). Null on every other row." }
         source:
           type: string
           enum: [manual, csv, tinvest, registry]
@@ -2694,6 +2696,13 @@ components:
           description: "What this operation cost to make, in `currency`, as a POSITIVE figure whichever way `amount_minor` went — it is money charged, never money returned. That is why the floor here is 0 rather than the -10^15 the amount gets: a negative fee is refused by a rule of its own. Omitted or 0 means no fee. The ceiling is the same 10^15 minor units the amount stops at, for the same reason — it is money in the same currency on the same row. Past either end, 400."
         note: { type: string, maxLength: 1000 }
         split_ratio: { type: string, nullable: true, description: "Decimal as string: how many units one unit becomes. Must be positive and strictly less than 10^10 (10000000000) — the first value the column cannot hold — or 400. A split multiplies the whole position's quantity, so a ratio that is a mis-scaled field rather than a corporate action carries an ordinary holding past what any screen can value; the bound refuses it by name instead of letting the database answer with an overflow." }
+        face_before_minor:
+          type: integer
+          format: int64
+          nullable: true
+          minimum: 1
+          maximum: 1000000000000000
+          description: "On an amortization only: the bond's outstanding face value per unit just before this repayment, in minor units of `currency`. With it the repayment retires the cost basis in the share of principal it returns — amount ÷ (face before × units held), at most all of it — as НК РФ ст. 214.1 п. 13 has it (decision Р-4), and only the excess over that share is a result; without it the repayment retires basis equal to its own amount. Refused on any other type. On an update it replaces the stored value, and omitting it clears it."
     TransferRequest:
       type: object
       required: [from_account_id, to_account_id, instrument_id, quantity, occurred_on]
