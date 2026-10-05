@@ -25,7 +25,7 @@ import {
 import { ApiError } from "@/api/operations";
 import { CostBasisNotice } from "@/components/cost-basis-notice";
 import { countryName } from "@/lib/country";
-import { COMMON_CURRENCIES } from "@/lib/currencies";
+import { COMMON_CURRENCIES, isCurrencyCode } from "@/lib/currencies";
 import { QueryGate, RefreshFailedNotice } from "@/components/query-notice";
 import { queryState, refreshFailed } from "@/lib/query-state";
 
@@ -62,7 +62,7 @@ export function SettingsPage() {
 
   const effectiveCurrency =
     currency === "custom" ? customCurrency.toUpperCase() : currency;
-  const validCurrency = /^[A-Z]{3}$/.test(effectiveCurrency);
+  const validCurrency = isCurrencyCode(effectiveCurrency);
   const currencyChanged = effectiveCurrency !== session?.base_currency;
   const countryChanged = country !== session?.tax_residency;
   const canSave =

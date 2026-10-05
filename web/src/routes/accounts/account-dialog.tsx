@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useSession } from "@/api/session";
-import { COMMON_CURRENCIES } from "@/lib/currencies";
+import { COMMON_CURRENCIES, isCurrencyCode } from "@/lib/currencies";
 import {
   useCreateAccount,
   useUpdateAccount,
@@ -77,7 +77,7 @@ export function AccountDialog({
   }, [open, account]);
 
   const effectiveCurrency = currency === "custom" ? customCurrency.toUpperCase() : currency;
-  const valid = name.trim() !== "" && /^[A-Z]{3}$/.test(effectiveCurrency);
+  const valid = name.trim() !== "" && isCurrencyCode(effectiveCurrency);
 
   const submit = () => {
     // In edit mode, keep the existing owner when the account stays personal —

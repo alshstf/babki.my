@@ -18,6 +18,7 @@ import {
   type Instrument,
   type InstrumentType,
 } from "@/api/instruments";
+import { isCurrencyCode } from "@/lib/currencies";
 import { MAX_INSTRUMENT_NAME, MAX_TICKER } from "@/lib/text-limits";
 
 const INSTRUMENT_TYPES: InstrumentType[] = [
@@ -67,7 +68,7 @@ export function InstrumentPicker({
     createInstrument.reset();
   }, [creating]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const newValid = newName.trim() !== "" && /^[A-Z]{3}$/.test(newCurrency.toUpperCase());
+  const newValid = newName.trim() !== "" && isCurrencyCode(newCurrency.toUpperCase());
 
   // Has this query answered? Rows from the previous key stay as placeholder
   // data, so the two verdicts below (nothing found, offline) use
