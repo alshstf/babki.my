@@ -177,14 +177,19 @@ func Cash(ops []Operation) (map[string]*CashPosition, error) {
 			return nil, fmt.Errorf("%w: the %s balance, adding %d to %d", err, o.Currency, effect, p.Minor)
 		}
 		p.Minor = balance
+		// Money moves on the day it settles (decision Р-3): a purchase's
+		// dollars leave, and a sale's arrive, on the settlement day when it is
+		// known, so the currency's rate is that day's — the same day the
+		// paper's own basis and proceeds are priced on.
+		on := RateDay(o)
 		switch {
 		case effect > 0:
-			p.receive(effect, o.OccurredOn)
+			p.receive(effect, on)
 		case effect < 0:
 			released := p.spend(-effect)
 			if len(released) > 0 {
 				p.Realizations = append(p.Realizations, CashRealization{
-					OccurredOn: o.OccurredOn, Released: released,
+					OccurredOn: on, Released: released,
 				})
 			}
 		}

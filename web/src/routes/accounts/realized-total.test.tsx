@@ -41,7 +41,7 @@ function makeTotal(
 // покупок», which is false of a commission the broker charged on the day of
 // the sale.
 const REALIZED_HINT =
-  "Результат уже закрытых сделок по этому счёту — он больше не изменится. Стоимость проданного взята по курсам на дни покупок, а выручка и комиссия продажи — по курсу на день продажи, поэтому в базовой валюте сюда входит и изменение курса. Это только сделки: выплаты по бумагам сюда не входят, они складываются с этой суммой в колонке «Зафиксировано»";
+  "Результат уже закрытых сделок по этому счёту. От цен рынка он не зависит, а меняется, только если меняется сама история операций. Стоимость проданного взята по курсам на дни расчётов по покупкам, а выручка и комиссия продажи — по курсу на день расчётов по продаже (если день расчётов неизвестен — на день сделки), поэтому в базовой валюте сюда входит и изменение курса. Это только сделки: выплаты по бумагам сюда не входят, они складываются с этой суммой в колонке «Зафиксировано»";
 
 describe("RealizedTotal", () => {
   it("shows the figure under its own label", () => {
@@ -61,9 +61,13 @@ describe("RealizedTotal", () => {
 
     const hint =
       screen.getByTestId("realized-total-label").getAttribute("title") ?? "";
-    expect(hint).toContain("на дни покупок");
-    expect(hint).toContain("на день продажи");
+    expect(hint).toContain("на дни расчётов по покупкам");
+    expect(hint).toContain("на день расчётов по продаже");
+    expect(hint).toContain("если день расчётов неизвестен — на день сделки");
     expect(hint).toContain("изменение курса");
+    // A settlement day learned later restates the figure, so the hint does not
+    // promise it is final.
+    expect(hint).not.toContain("не изменится");
     // The label itself stays a label; the mechanics are not printed as text.
     // And it is NOT the table's word: «Зафиксировано» there adds the payments
     // the paper made to this figure, so one word over both would name two
@@ -84,10 +88,10 @@ describe("RealizedTotal", () => {
     // to the sale day" nor "the basis stayed on the purchase days" can be
     // dropped without this failing.
     expect(REALIZED_HINT).toContain(
-      "комиссия продажи — по курсу на день продажи",
+      "комиссия продажи — по курсу на день расчётов по продаже",
     );
     expect(REALIZED_HINT).toContain(
-      "Стоимость проданного взята по курсам на дни покупок",
+      "Стоимость проданного взята по курсам на дни расчётов по покупкам",
     );
   });
 
@@ -165,7 +169,10 @@ describe("RealizedTotal", () => {
     for (const mode of ["base", "native"] as const) {
       cleanup();
       render(
-        <RealizedTotal total={makeTotal({ unknown_cost_positions: 1 })} mode={mode} />,
+        <RealizedTotal
+          total={makeTotal({ unknown_cost_positions: 1 })}
+          mode={mode}
+        />,
       );
       expect(screen.getByTestId("realized-total-amounts")).toBeInTheDocument();
       const note = screen.getByTestId("realized-total-unknown-cost");

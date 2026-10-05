@@ -258,9 +258,9 @@ func (s *Store) Create(ctx context.Context, spaceID uuid.UUID, op Operation, ver
 // One statement per piece, but not one round trip per piece: the pieces are
 // queued into a single pgx.Batch (see writeTransferLots).
 const insertLotSQL = `
-	INSERT INTO operation_transfer_lots (operation_id, seq, quantity, cost_minor, acquired_on)
-	VALUES ($1, $2, $3, $4, $5)
-	RETURNING quantity, cost_minor, acquired_on`
+	INSERT INTO operation_transfer_lots (operation_id, seq, quantity, cost_minor, acquired_on, rate_on)
+	VALUES ($1, $2, $3, $4, $5, $6)
+	RETURNING quantity, cost_minor, acquired_on, rate_on`
 
 // writeTransferLots stores a transfer's FIFO breakdown next to the operation
 // carrying it and returns the pieces AS THE DATABASE KEPT THEM, in the order
@@ -311,13 +311,13 @@ const insertLotSQL = `
 func writeTransferLots(ctx context.Context, tx pgx.Tx, operationID uuid.UUID, lots []ReleasedLot) ([]ReleasedLot, error) {
 	batch := &pgx.Batch{}
 	for i, lot := range lots {
-		batch.Queue(insertLotSQL, operationID, i, lot.Quantity, lot.CostMinor, lot.AcquiredOn)
+		batch.Queue(insertLotSQL, operationID, i, lot.Quantity, lot.CostMinor, lot.AcquiredOn, lot.RateOn)
 	}
 	br := tx.SendBatch(ctx, batch)
 	stored := make([]ReleasedLot, 0, len(lots))
 	for i := range lots {
 		var back ReleasedLot
-		if err := br.QueryRow().Scan(&back.Quantity, &back.CostMinor, &back.AcquiredOn); err != nil {
+		if err := br.QueryRow().Scan(&back.Quantity, &back.CostMinor, &back.AcquiredOn, &back.RateOn); err != nil {
 			_ = br.Close()
 			return nil, fmt.Errorf("transfer lot %d: %w", i, err)
 		}
@@ -831,7 +831,7 @@ func (s *Store) attachTransferLots(ctx context.Context, spaceID uuid.UUID, ops [
 				AND peer.type = 'transfer_in'
 			WHERE o.space_id = $1 AND o.id = ANY($2)
 		)
-		SELECT c.id, l.quantity, l.cost_minor, l.acquired_on
+		SELECT c.id, l.quantity, l.cost_minor, l.acquired_on, l.rate_on
 		FROM carriers c
 		JOIN operation_transfer_lots l ON l.operation_id = c.carrier
 		ORDER BY c.id, l.seq`, spaceID, ids)
@@ -843,7 +843,7 @@ func (s *Store) attachTransferLots(ctx context.Context, spaceID uuid.UUID, ops [
 	for rows.Next() {
 		var id uuid.UUID
 		var lot ReleasedLot
-		if err := rows.Scan(&id, &lot.Quantity, &lot.CostMinor, &lot.AcquiredOn); err != nil {
+		if err := rows.Scan(&id, &lot.Quantity, &lot.CostMinor, &lot.AcquiredOn, &lot.RateOn); err != nil {
 			return err
 		}
 		byOperation[id] = append(byOperation[id], lot)
