@@ -222,7 +222,9 @@ const (
 	// OUTPUT_SECURITIES of the redeemed units; booked as a full redemption, the
 	// payout closed the 27 % the broker still shows as held and recorded a loss
 	// on units nobody redeemed. So the row is refused: the money is visible
-	// here, the units are the owner's to name.
+	// here, the units are the owner's to name — unless the withdrawal of those
+	// units pairs with it, and then the two are one redemption (see
+	// pairFundRedemptions).
 	ReasonFundPayoutUnitsUnknown UnparsedReason = "fund_payout_units_unknown"
 	// ReasonCommissionRefund: the broker's commission on this operation is
 	// POSITIVE, i.e. money that came back. FeeMinor is a magnitude by the
@@ -583,6 +585,10 @@ const (
 	// noteFeeOtherCurrency marks the commission leg split off a trade whose
 	// commission was charged in another currency — see tradeCommission.
 	noteFeeOtherCurrency = "комиссия сделки, списанная в другой валюте"
+	// noteFundRedeemedUnits marks a fund's redemption assembled from the
+	// broker's two rows: it names the day the units left — see
+	// projectFundRedemption.
+	noteFundRedeemedUnits = "паи выведены под погашение %s"
 )
 
 // ProjectRow turns one mirror row into the journal entries it means: none,
