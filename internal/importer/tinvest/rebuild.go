@@ -343,6 +343,7 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 		if err != nil {
 			return nil, err
 		}
+		paidFor, withdrawn := pairFundRedemptions(rows)
 		for _, row := range rows {
 			p.stored[row.ID] = UnparsedVerdict{Reason: row.UnparsedReason, Detail: row.UnparsedDetail}
 			if explained[row.ContentKey] {
@@ -385,6 +386,13 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 				continue
 			}
 			p.seen[brokerRef{link.ID, row.BrokerOperationID}] = true
+			if withdrawn[row.ID] {
+				// The units left for the redemption their payout books (see
+				// pairFundRedemptions): they are part of that entry, not a
+				// transfer of their own, and this row is read.
+				p.verdicts[row.ID] = UnparsedVerdict{}
+				continue
+			}
 			resolved, refusal, err := r.resolve(ctx, conn.ID, src, row, resolutions)
 			if err != nil {
 				return nil, err
@@ -427,7 +435,12 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 				ops      []operation.Operation
 				deferred Deferred
 			)
-			if refusal == nil {
+			if w, paired := paidFor[row.ID]; refusal == nil && paired {
+				ops, refusal = projectFundRedemption(row, w, link.AccountID, resolved)
+				if refusal == nil {
+					ops = withExternalIDs(row.ID, ops)
+				}
+			} else if refusal == nil {
 				ops, deferred, refusal = r.project(row, link.AccountID, resolved, traded)
 			}
 			if refusal != nil {

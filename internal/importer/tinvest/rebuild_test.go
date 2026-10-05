@@ -2220,7 +2220,9 @@ func TestRebuildLeavesAForgottenPairUnparsedWithoutARate(t *testing.T) {
 //
 // End to end through the real rebuild: the fraction is read with the field as
 // proof, the payout stays a visible unparsed row, and the position afterwards
-// is exactly what the broker holds.
+// is exactly what the broker holds. The rows here name no paper (asset_uid), so
+// nothing pairs them into one redemption — that is TestRebuildBooksAFund-
+// RedemptionFromItsTwoRows.
 func TestRebuildLeavesAFundPayoutUnparsedAndThePositionIntact(t *testing.T) {
 	const uidTech = "7c3f9a2e-1111-4222-8333-abcdefabcdef"
 	f := newRebuildFixture(t)
@@ -2314,5 +2316,117 @@ func TestRebuildPutsTheInstantOnEntriesWrittenWithoutIt(t *testing.T) {
 		if !o.CreatedAt.Equal(before[*o.ExternalID]) {
 			t.Errorf("%s: recorded at %s, was %s — a rewrite must keep the entry's place", *o.ExternalID, o.CreatedAt, before[*o.ExternalID])
 		}
+	}
+}
+
+// TestRebuildBooksAFundRedemptionFromItsTwoRows is decision Р-13 on the shape
+// the owner's October 2025 came in (live data, 2026-10-05): the units leave as
+// an OUTPUT_SECURITIES of an over-the-counter listing the broker no longer
+// knows, the money comes two weeks later as a BOND_REPAYMENT_FULL of the
+// exchange listing, and the only thing the two rows share is the paper itself
+// (asset_uid). Together they are one redemption on the day of the payout: the
+// withdrawn units leave, the money arrives, and the withdrawal is no transfer
+// of its own.
+func TestRebuildBooksAFundRedemptionFromItsTwoRows(t *testing.T) {
+	const (
+		uidTech = "7c3f9a2e-1111-4222-8333-abcdefabcdef"
+		asset   = "76d078d5-8bf9-4377-8e60-36026972fe24"
+	)
+	f := newRebuildFixture(t)
+	f.src.instruments[uidTech] = InstrumentBrief{
+		UID: uidTech, FIGI: "TCS97A101X68", ISIN: "RU000A101X68",
+		Ticker: "TECH", Name: "Технологии Америки", Currency: "RUB", InstrumentType: "etf",
+	}
+
+	buy := loadOperationItem(t, "buy.json")
+	buy.ID = "op-tech-buy"
+	buy.InstrumentUID, buy.FIGI, buy.InstrumentType, buy.AssetUID = uidTech, "TCS97A101X68", "etf", asset
+
+	out := loadOperationItem(t, "output_securities.json")
+	out.ID = "op-tech-out"
+	// The over-the-counter listing: a uid the broker answers 404 for, which is
+	// never asked about — the withdrawal is part of the redemption.
+	out.InstrumentUID, out.FIGI, out.InstrumentType, out.AssetUID = "uid-tech-otc", "TCS33A101X68", "etf", asset
+	out.Ticker = "RU000A101X68"
+	out.Quantity = 30
+	out.Description = "Вывод 30.5 лотов фонда Технологии Америки в другой депозитарий"
+	out.Date = time.Date(2026, 5, 20, 8, 0, 0, 0, time.UTC)
+
+	payout := loadOperationItem(t, "bond_repayment_full_no_quantity.json")
+	payout.ID = "op-tech-payout"
+	payout.InstrumentUID, payout.FIGI, payout.InstrumentType, payout.AssetUID = uidTech, "TCS97A101X68", "etf", asset
+	payout.Date = time.Date(2026, 6, 3, 14, 0, 0, 0, time.UTC)
+
+	f.sync(t, f.link, buy, out, payout)
+	stats := f.rebuild(t)
+
+	if stats.Unparsed != 0 {
+		t.Errorf("rebuild left %d rows unparsed, want none", stats.Unparsed)
+	}
+	if row := f.mirrorRow(t, f.link, "op-tech-out"); row.UnparsedReason != "" {
+		t.Errorf("the withdrawal carries the reason %q, want it read as part of the redemption", row.UnparsedReason)
+	}
+	journal := f.journalOf(t, f.accountID)
+	if len(journal) != 2 {
+		t.Fatalf("journal holds %d entries, want 2 — the purchase and the redemption", len(journal))
+	}
+	redeemed := byExternalID(t, journal, externalIDFor(f.mirrorRow(t, f.link, "op-tech-payout"), 1))
+	if redeemed.Type != operation.TypeRedemption {
+		t.Errorf("the payout is a %s, want a redemption — the holder did not sell", redeemed.Type)
+	}
+	if redeemed.Quantity == nil || redeemed.Quantity.String() != "30.5" {
+		t.Errorf("the redemption retired %v units, want the 30.5 withdrawn", redeemed.Quantity)
+	}
+	if !redeemed.OccurredOn.Equal(day(t, "2026-06-03")) {
+		t.Errorf("the redemption is dated %s, want the payout's day", redeemed.OccurredOn.Format("2006-01-02"))
+	}
+	if !strings.Contains(redeemed.Note, "паи выведены под погашение 20.05.2026") {
+		t.Errorf("the redemption's note is %q, want the day the units left", redeemed.Note)
+	}
+
+	positions, err := portfolio.Compute(mustListForEngine(t, f, f.accountID))
+	if err != nil {
+		t.Fatalf("the journal does not replay: %v", err)
+	}
+	if fund := positions[*redeemed.InstrumentID]; fund == nil || fund.Quantity.String() != "69.5" {
+		t.Errorf("the fund's position is %v, want 69.5 — 100 bought, 30.5 redeemed", fund)
+	}
+}
+
+// Two withdrawals of the paper before one payout: which units it pays for
+// cannot be told, so nothing is paired — the withdrawals stay transfers out and
+// the payout a visible unparsed row, as before Р-13.
+func TestRebuildPairsAFundPayoutOnlyWhenItIsUnambiguous(t *testing.T) {
+	const (
+		uidTech = "7c3f9a2e-1111-4222-8333-abcdefabcdef"
+		asset   = "76d078d5-8bf9-4377-8e60-36026972fe24"
+	)
+	f := newRebuildFixture(t)
+	f.src.instruments[uidTech] = InstrumentBrief{
+		UID: uidTech, FIGI: "TCS97A101X68", ISIN: "RU000A101X68",
+		Ticker: "TECH", Name: "Технологии Америки", Currency: "RUB", InstrumentType: "etf",
+	}
+	buy := loadOperationItem(t, "buy.json")
+	buy.ID = "op-tech-buy"
+	buy.InstrumentUID, buy.FIGI, buy.InstrumentType, buy.AssetUID = uidTech, "TCS97A101X68", "etf", asset
+	var outs []OperationItem
+	for i, d := range []time.Time{time.Date(2026, 5, 20, 8, 0, 0, 0, time.UTC), time.Date(2026, 5, 22, 8, 0, 0, 0, time.UTC)} {
+		out := loadOperationItem(t, "output_securities.json")
+		out.ID = fmt.Sprintf("op-tech-out-%d", i)
+		out.InstrumentUID, out.FIGI, out.InstrumentType, out.AssetUID = uidTech, "TCS97A101X68", "etf", asset
+		out.Quantity = 10
+		out.Description = "Вывод 10 лотов фонда Технологии Америки в другой депозитарий"
+		out.Date = d
+		outs = append(outs, out)
+	}
+	payout := loadOperationItem(t, "bond_repayment_full_no_quantity.json")
+	payout.ID = "op-tech-payout"
+	payout.InstrumentUID, payout.FIGI, payout.InstrumentType, payout.AssetUID = uidTech, "TCS97A101X68", "etf", asset
+	payout.Date = time.Date(2026, 6, 3, 14, 0, 0, 0, time.UTC)
+
+	f.sync(t, f.link, buy, outs[0], outs[1], payout)
+	f.rebuild(t)
+	if row := f.mirrorRow(t, f.link, "op-tech-payout"); row.UnparsedReason != string(ReasonFundPayoutUnitsUnknown) {
+		t.Errorf("the payout's reason is %q, want %s", row.UnparsedReason, ReasonFundPayoutUnitsUnknown)
 	}
 }
