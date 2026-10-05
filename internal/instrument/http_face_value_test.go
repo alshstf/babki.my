@@ -171,7 +171,8 @@ func TestUpdateRefusesAFaceValueTooLarge(t *testing.T) {
 	}
 }
 
-// A bond with no face value yet is an ordinary row.
+// An instrument with no face value, a bond with none yet included, is an
+// ordinary row; explicit nulls are absence.
 func TestCreateStillTakesAnInstrumentWithNoFaceValue(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -179,6 +180,8 @@ func TestCreateStillTakesAnInstrumentWithNoFaceValue(t *testing.T) {
 		`{"type":"bond","name":"Без номинала","currency":"RUB"}`,
 		`{"type":"bond","name":"Явные null","currency":"RUB","face_value_minor":null,"face_currency":null}`,
 		`{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`,
+		`{"type":"crypto","name":"Bitcoin","currency":"USD"}`,
+		`{"type":"etf","name":"Фонд","currency":"RUB","face_value_minor":null,"face_currency":null}`,
 	} {
 		if resp := do(t, c, "POST", url+"/api/v1/instruments", body); resp.StatusCode != http.StatusCreated {
 			b, _ := io.ReadAll(resp.Body)
@@ -346,23 +349,6 @@ func TestCreateRefusesAFaceValueOnAnythingButABond(t *testing.T) {
 	} {
 		wantFaceRefusal(t, do(t, c, "POST", url+"/api/v1/instruments", tc.body),
 			faceBondOnlyRule("share"), tc.what)
-	}
-}
-
-// A non-bond without a face value is accepted.
-func TestCreateStillTakesANonBondWithNoFaceValue(t *testing.T) {
-	url, c := newAPI(t)
-
-	for _, body := range []string{
-		`{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`,
-		`{"type":"crypto","name":"Bitcoin","currency":"USD"}`,
-		// Explicit nulls are absence.
-		`{"type":"etf","name":"Фонд","currency":"RUB","face_value_minor":null,"face_currency":null}`,
-	} {
-		if resp := do(t, c, "POST", url+"/api/v1/instruments", body); resp.StatusCode != http.StatusCreated {
-			b, _ := io.ReadAll(resp.Body)
-			t.Errorf("create %s = %d, want 201: %s", body, resp.StatusCode, b)
-		}
 	}
 }
 

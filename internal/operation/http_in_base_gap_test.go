@@ -14,24 +14,33 @@ import (
 // 	undated_lot             nobody recorded when the parcel was bought; never
 // 	                        closes
 
-// Money that moved on the row's date, no rate for it: the operation-date
-// gap.
-func TestJournalGapNamesTheOperationsOwnDate(t *testing.T) {
+// An ordinary row: money that moved on its date with no rate for it names the
+// operation-date gap; a row with a figure, or already in the base currency,
+// names none. The only rate is 2026-05-13's.
+func TestJournalGapOfAnOrdinaryRow(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
-	// Seeded AFTER the operation: nothing on or before 2026-01-05.
 	seedFxRate(t, mdStore, "2026-05-13", "60.00")
 
-	acc := mkAccount(t, url, c, "US брокер", "USD")
-	wd := mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"type":"withdrawal",
-		"occurred_on":"2026-01-05","amount_minor":-10000,"currency":"USD"}`, acc))
+	for name, tc := range map[string]struct {
+		currency, on string
+		wantFigure   bool
+		wantGap      string
+	}{
+		"no rate on or before its date": {"USD", "2026-01-05", false, "no_rate_operation_date"},
+		"a rate on its date":            {"USD", "2026-05-13", true, ""},
+		"already the base currency":     {"RUB", "2026-05-13", false, ""},
+	} {
+		acc := mkAccount(t, url, c, name, tc.currency)
+		wd := mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"type":"withdrawal",
+			"occurred_on":%q,"amount_minor":-10000,"currency":%q}`, acc, tc.on, tc.currency))
 
-	row := findOperation(t, listJournal(t, url, c, acc), wd)
-	if row.InBase != nil {
-		t.Fatalf("in_base = %+v, want null — no USD->RUB rate on or before 2026-01-05", *row.InBase)
-	}
-	if row.InBaseGap != "no_rate_operation_date" {
-		t.Errorf("in_base_gap = %q, want no_rate_operation_date: this amount is money that moved on 2026-01-05 and that is the day whose rate is missing",
-			row.InBaseGap)
+		row := findOperation(t, listJournal(t, url, c, acc), wd)
+		if (row.InBase != nil) != tc.wantFigure {
+			t.Errorf("%s: in_base = %+v, want a figure: %v", name, row.InBase, tc.wantFigure)
+		}
+		if row.InBaseGap != tc.wantGap {
+			t.Errorf("%s: in_base_gap = %q, want %q", name, row.InBaseGap, tc.wantGap)
+		}
 	}
 }
 
@@ -174,44 +183,6 @@ func TestJournalGapPrefersTheUndatedParcelOverAMissingRate(t *testing.T) {
 	row := findOperation(t, listJournal(t, url, c, to), pair.In.ID)
 	if row.InBaseGap != "undated_lot" {
 		t.Errorf("in_base_gap = %q, want undated_lot. This row has no rate for any date it could name AND no purchase date at all; the permanent cause is the one to report, because the other one implies the figure arrives with the next backfill and it does not",
-			row.InBaseGap)
-	}
-}
-
-// A row with a figure publishes no gap.
-func TestJournalPublishesNoGapWhenThereIsAFigure(t *testing.T) {
-	url, c, mdStore := newAPIWithConverter(t)
-	seedFxRate(t, mdStore, "2026-05-13", "60.00")
-
-	acc := mkAccount(t, url, c, "US брокер", "USD")
-	wd := mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"type":"withdrawal",
-		"occurred_on":"2026-05-13","amount_minor":-10000,"currency":"USD"}`, acc))
-
-	row := findOperation(t, listJournal(t, url, c, acc), wd)
-	if row.InBase == nil {
-		t.Fatalf("in_base = null, but 2026-05-13's rate is seeded")
-	}
-	if row.InBaseGap != "" {
-		t.Errorf("in_base_gap = %q, want null: nothing stopped this conversion", row.InBaseGap)
-	}
-}
-
-// A row already in the base currency publishes no gap either.
-func TestJournalPublishesNoGapWhenAlreadyInTheBaseCurrency(t *testing.T) {
-	url, c, mdStore := newAPIWithConverter(t)
-	// A rate exists, so null comes from the base-currency case only.
-	seedFxRate(t, mdStore, "2026-05-13", "60.00")
-
-	acc := mkAccount(t, url, c, "Рублёвый брокер", "RUB")
-	wd := mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"type":"withdrawal",
-		"occurred_on":"2026-05-13","amount_minor":-10000,"currency":"RUB"}`, acc))
-
-	row := findOperation(t, listJournal(t, url, c, acc), wd)
-	if row.InBase != nil {
-		t.Fatalf("in_base = %+v, want null (already the base currency)", *row.InBase)
-	}
-	if row.InBaseGap != "" {
-		t.Errorf("in_base_gap = %q, want null: this row's own amounts ARE the base-currency ones, so nothing was withheld and no cause exists to name",
 			row.InBaseGap)
 	}
 }

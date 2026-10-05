@@ -635,66 +635,33 @@ func TestBondNominalByUID_PropagatesTransportError(t *testing.T) {
 
 // Errors: 401/40003, generic status, encoding.
 
-func TestGetAccounts_401ReturnsErrTokenInvalid(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"code":16,"message":"authentication token is missing or invalid","description":40003}`))
-	}))
-	t.Cleanup(srv.Close)
+// The gateway refuses a token as 401, or as 40003 under another status: quoted
+// as the live gateway sends it, unquoted as the spec declares (json.Number
+// parses the two on different paths). A 401 is enough even with no body.
+func TestGetAccountsRecognisesARefusedToken(t *testing.T) {
+	const refused = `{"code":16,"message":"authentication token is missing or invalid","description":%s}`
+	for name, tc := range map[string]struct {
+		status int
+		body   string
+	}{
+		"401":                 {http.StatusUnauthorized, fmt.Sprintf(refused, "40003")},
+		"401 with no body":    {http.StatusUnauthorized, ""},
+		"40003 quoted, 400":   {http.StatusBadRequest, fmt.Sprintf(refused, `"40003"`)},
+		"40003 unquoted, 400": {http.StatusBadRequest, fmt.Sprintf(refused, "40003")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(srv.Close)
 
-	c := NewClient(srv.Client(), srv.URL, "stale-token", nil)
-	_, err := c.GetAccounts(context.Background())
-	if !errors.Is(err, ErrTokenInvalid) {
-		t.Fatalf("GetAccounts error = %v, want ErrTokenInvalid", err)
-	}
-}
-
-func TestGetAccounts_401WithEmptyBodyStillReturnsErrTokenInvalid(t *testing.T) {
-	// 401 alone is enough, even with an unparsable body.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	t.Cleanup(srv.Close)
-
-	c := NewClient(srv.Client(), srv.URL, "tok", nil)
-	_, err := c.GetAccounts(context.Background())
-	if !errors.Is(err, ErrTokenInvalid) {
-		t.Fatalf("GetAccounts error = %v, want ErrTokenInvalid", err)
-	}
-}
-
-func TestGetAccounts_NonAuthStatusWithDescription40003ReturnsErrTokenInvalid(t *testing.T) {
-	// 40003 under another status, quoted as the live gateway sent it
-	// ("40003"); wireError.Description is a json.Number for this.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"code":16,"message":"authentication token is missing or invalid","description":"40003"}`))
-	}))
-	t.Cleanup(srv.Close)
-
-	c := NewClient(srv.Client(), srv.URL, "tok", nil)
-	_, err := c.GetAccounts(context.Background())
-	if !errors.Is(err, ErrTokenInvalid) {
-		t.Fatalf("GetAccounts error = %v, want ErrTokenInvalid", err)
-	}
-}
-
-func TestGetAccounts_NonAuthStatusWithNumericDescription40003ReturnsErrTokenInvalid(t *testing.T) {
-	// 40003 unquoted, as the spec declares; a separate case because
-	// json.Number parses the two forms on different paths.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"code":16,"message":"authentication token is missing or invalid","description":40003}`))
-	}))
-	t.Cleanup(srv.Close)
-
-	c := NewClient(srv.Client(), srv.URL, "tok", nil)
-	_, err := c.GetAccounts(context.Background())
-	if !errors.Is(err, ErrTokenInvalid) {
-		t.Fatalf("GetAccounts error = %v, want ErrTokenInvalid", err)
+			c := NewClient(srv.Client(), srv.URL, "stale-token", nil)
+			if _, err := c.GetAccounts(context.Background()); !errors.Is(err, ErrTokenInvalid) {
+				t.Fatalf("GetAccounts error = %v, want ErrTokenInvalid", err)
+			}
+		})
 	}
 }
 
