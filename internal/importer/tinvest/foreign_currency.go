@@ -89,7 +89,8 @@ func (r *Rebuilder) convertToPositionCurrency(ctx context.Context, p *projected)
 		}
 		kept = append(kept, d)
 	}
-	p.want = append(kept, added...)
+	kept = append(kept, added...)
+	p.want = kept
 	sortDesired(p.want)
 	return nil
 }
