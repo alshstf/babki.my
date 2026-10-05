@@ -54,21 +54,10 @@ export function LoginPage() {
               />
             </div>
             {login.isError && (
-              // The sentence is chosen by the status the contract declares. 401
-              // is a refusal of the credentials, and the one case where naming
-              // the cause is naming what the server named. 429 is the door
-              // closed after too many wrong passwords — the right one is
-              // refused too while it lasts, so the form says how long to wait
-              // instead of blaming the password (see <SignInLockedNotice/>).
-              // Anything else — a dead connection, which useLogin now lets
-              // through rather than holding silently, or a server that broke
-              // its own contract — is a failure whose cause this screen has not
-              // been told, so it says what it does know: the sign-in did not
-              // happen, and pressing the button again is worth doing.
-              //
-              // Written as literal-key branches rather than t(cond ? a : b)
-              // so every key stays verifiable by scripts/check-i18n.mjs, which
-              // only reads literals.
+              // By the status the contract declares: 401 wrong credentials; 429 locked
+              // after too many attempts, with the wait (SignInLockedNotice); anything
+              // else (a dead connection, a broken server) says only that sign-in did not
+              // happen. Literal t() keys for scripts/check-i18n.mjs.
               <Alert variant="destructive">
                 <AlertDescription>
                   {login.error instanceof SignInLocked ? (

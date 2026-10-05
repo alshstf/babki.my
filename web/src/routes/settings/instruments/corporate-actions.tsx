@@ -22,14 +22,10 @@ import {
 } from "@/api/instrument-events";
 import { MAX_EVENT_NOTE, MAX_EVENT_SOURCE } from "@/lib/text-limits";
 
-// THE REGISTRY OF WHAT HAPPENED TO THE PAPERS, and the only door a person has
-// into it. The exchange's own splits arrive by themselves, daily; everything
-// else — a foreign split the Moscow Exchange never listed, a conversion, a
-// spin-off — is known to the owner and to nobody else in this program.
-//
-// It sits on the catalog screen because it is the same kind of fact a catalog
-// row is: about the SECURITY, one copy for the whole instance, true for every
-// account that holds it.
+// The registry of what happened to papers, and a person's door into it. The
+// exchange's splits arrive daily by themselves; foreign splits, conversions and
+// spin-offs are known only to the owner. On the catalog screen because it is
+// also a fact about the security, instance-wide.
 export function CorporateActions({ canEdit }: { canEdit: boolean }) {
   const { t } = useTranslation();
   const events = useInstrumentEvents();
@@ -130,14 +126,9 @@ export function CorporateActions({ canEdit }: { canEdit: boolean }) {
                   <span className="tabular-nums text-muted-foreground">
                     {event.effective_on}
                   </span>
-                  {/* Two different answers, and the row shows whichever
-                      applies. `materialized` is about the KIND — false only for
-                      a kind this program records but cannot yet apply, of which
-                      there are none today. `not_counted_reason` is about THIS
-                      event: the one thing that still holds a recorded fact back
-                      is a catalog with no row for the paper it produces. Both
-                      come from the server rather than being derived here, so no
-                      list of kinds lives in the client. */}
+                  {/* Two answers from the server: `materialized` is about the kind (none
+                     unapplicable today), `not_counted_reason` about this event (its
+                     produced paper not catalogued). */}
                   {!event.materialized && (
                     <Badge variant="outline">
                       {t("corporateActions.notCounted")}
@@ -177,11 +168,8 @@ export function CorporateActions({ canEdit }: { canEdit: boolean }) {
                   <div className="text-xs text-muted-foreground">{event.note}</div>
                 )}
               </div>
-              {/* AN EXCHANGE ROW HAS NO DELETE, and not because the screen is
-                  being tidy: the job that wrote it reads the exchange's table
-                  on every run and would write it back, so the button would
-                  undo itself. The server refuses it too (400) — this is the
-                  same rule said where a person can see it. */}
+              {/* No delete for an exchange row: the job would write it back; the
+                 server refuses it too (400). */}
               {canEdit && event.source === "manual" && (
                 <Button
                   variant="outline"

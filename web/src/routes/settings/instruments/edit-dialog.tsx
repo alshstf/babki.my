@@ -15,12 +15,9 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useUpdateInstrument, type Instrument } from "@/api/instruments";
 import { submitOnEnter } from "@/lib/submit-on-enter";
 
-// The fields this dialog edits, in the order they are shown. The face value
-// pair (face_value_minor / face_currency) is deliberately NOT here: its rule is
-// "send both or neither, and only a bond may carry one", which is a form of its
-// own rather than two more inputs, and no paper in the owner's catalog has a
-// wrong one. Nothing here silently drops it — an omitted field leaves the
-// stored value exactly as it stands (see UpdateInstrumentRequest).
+// The fields edited, in order. The face value pair is not here: "both or
+// neither, bonds only" is a form of its own, and an omitted field is left as
+// stored.
 const TEXT_FIELDS = ["name", "ticker", "isin", "figi"] as const;
 type TextField = (typeof TEXT_FIELDS)[number];
 
@@ -58,10 +55,8 @@ export function InstrumentEditDialog({
 
   if (!instrument) return null;
 
-  // ONLY WHAT CHANGED IS SENT. A PATCH that carried every field would rewrite
-  // values nobody touched — harmless while this form holds all of them, and a
-  // silent overwrite the moment it does not (the face value pair is not on this
-  // form at all, and neither is anything a later version adds).
+  // Only changed fields are sent, so untouched or absent fields are never
+  // overwritten.
   const changed: Record<string, unknown> = {};
   for (const field of TEXT_FIELDS) {
     if (values[field] !== instrument[field]) changed[field] = values[field];
@@ -122,11 +117,9 @@ export function InstrumentEditDialog({
           <p className="text-xs text-muted-foreground">
             {t("instruments.edit.frozenHint")}
           </p>
-          {/* What the client knows about a refusal is that this save did not
-              happen. WHY is the server's own business: its message is English
-              prose written for a log and is not part of the contract. The two
-              causes a reader could act on — an empty name, and nothing having
-              changed — are answered above without sending anything. */}
+          {/* The client knows only that the save did not happen; the server's
+             English is not the contract. An empty name and no changes are caught
+             before sending. */}
           {update.isError && (
             <Alert variant="destructive">
               <AlertDescription>

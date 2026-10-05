@@ -28,10 +28,8 @@ export function AccountsTable({
 }: {
   accounts: AccountWithBalance[];
   mode: DisplayCurrencyMode;
-  // The space's base currency (Summary.base_currency) — needed to tell
-  // "already in base, nothing to convert" apart from "conversion failed,
-  // no fx rate" when an account's balance_in_base is null (see
-  // resolveDisplayAmount).
+  // The base currency, to tell "nothing to convert" from "no rate" when
+  // balance_in_base is null (see resolveDisplayAmount).
   baseCurrency: string;
   // Optional per-row actions menu (omitted for viewers, who can't mutate).
   onRowAction?: (account: AccountWithBalance) => React.ReactNode;
@@ -111,11 +109,9 @@ export function AccountsTable({
                         account.currency,
                         account.balance.amount_minor,
                         baseCurrency,
-                        // The converted balance is printed in the currency it
-                        // itself carries (MoneyInBase.currency, required by
-                        // the contract), never in the session's answer to the
-                        // same question — which this cached row may already
-                        // have outlived (#106).
+                        // In the currency the converted balance carries
+                        // (MoneyInBase.currency), not the session's, which a cached row
+                        // may have outlived (#106).
                         account.balance_in_base && {
                           amountMinor: account.balance_in_base.amount_minor,
                           currency: account.balance_in_base.currency,
@@ -130,18 +126,9 @@ export function AccountsTable({
                     </div>
                   </>
                 ) : (
-                  // No balance mark has ever been recorded for this account:
-                  // the server joins the latest row of account_balances and
-                  // publishes nothing when there is none. Until #31 this cell
-                  // was a bare dash with no hint of any kind — not even a
-                  // tooltip — so it was the one place on these two screens
-                  // where a missing figure said nothing to ANY reader about
-                  // why it was missing.
-                  //
-                  // The sentence says what is absent, not who failed to enter
-                  // it: an import writes balance marks as well as a person
-                  // does, so «не вносили» would be a guess about how this
-                  // account got here. What is certain is that there is no mark.
+                  // No balance mark was ever recorded: the server publishes none
+                  // (#31). Says what is absent, not who failed to enter it, since
+                  // imports write marks too.
                   <span
                     data-testid={`account-balance-${account.id}-none`}
                     className="text-muted-foreground"

@@ -1,13 +1,9 @@
-// What a screen may honestly show about the queries it draws from.
-//
-// A screen has an answer to show as soon as every query HOLDS one — and a
-// refetch that fails afterwards does not take it away: the data is still there,
-// it is merely not fresh. `isError` alone cannot tell those apart, which is how
-// a laptop waking from sleep replaced a whole screen with «Ошибка» over data it
-// still held; and `isLoading` is false for a query paused offline, which is how
-// a screen said «пока нет ни одного счёта» about a server nobody had asked
-// (#200). The start-up gate learned both lessons first (see Gate in router.tsx);
-// this is the same rule for every other screen.
+// What a screen may honestly show about its queries. It has an answer once
+// every query holds one, and a failed refetch does not take it away; isError
+// alone cannot tell (a waking laptop replaced a screen with «Ошибка»), and
+// isLoading is false while paused offline (a screen said «пока нет ни одного
+// счёта» about a server nobody asked, #200). The same rule as Gate in
+// router.tsx.
 
 type Queryish = {
   data: unknown;
