@@ -14,35 +14,18 @@ import (
 	"babki.my/babki/internal/platform/secretbox"
 )
 
-// validHexKey is a literal 64-character hex string (32 bytes) — an
-// AES-256-valid BABKI_ENCRYPTION_KEY — used wherever a test needs *a* key
-// that secretbox.ParseKey accepts and does not care which bytes it decodes
-// to. Mirrors internal/platform/secretbox/secretbox_test.go's constant of
-// the same name; the two packages cannot share one without an import this
-// value is too small to justify.
+// validHexKey is a valid 64-hex-character BABKI_ENCRYPTION_KEY for tests that
+// need any key. secretbox's tests have their own copy.
 const validHexKey = "0123456789abcdef" +
 	"0123456789abcdef" +
 	"0123456789abcdef" +
 	"0123456789abcdef"
 
-// TestSetupInstallsTheConfiguredLoggerAsTheDefault pins the slog.SetDefault
-// call in setup. Nothing else pinned it: deleting the line left the whole
-// suite green, while family.WriteError's doc claims the error behind every 500
-// "lands in the same stream, level and format as every other" — and that claim
-// rests entirely on this one statement. WriteError takes no logger (it is
-// called from forty-odd places across five packages) and reads slog.Default,
-// so without the install its lines would go to Go's built-in default: a text
-// handler at level info, which is neither the configured format nor the
-// configured level. On an instance running at level error that turns the only
-// diagnosis of a 500 into noise in a second, differently shaped stream.
-//
-// All three of stream, level and format are asserted, because the claim names
-// all three and a test that checked only one would leave the other two free to
-// move.
-//
-// setup fails here on the missing BABKI_DATABASE_URL — deliberately, since
-// that keeps the test off a database it does not need. The install happens
-// before that check, and the point of the test is that it happens at all.
+// setup installs the configured logger as slog's default, which
+// family.WriteError (no logger parameter, forty-odd callers) relies on to log the
+// error behind every 500 in the configured stream, level and format. All three are
+// asserted. setup fails on the missing database URL afterwards, keeping the test
+// off a database.
 func TestSetupInstallsTheConfiguredLoggerAsTheDefault(t *testing.T) {
 	ctx := context.Background()
 
@@ -55,9 +38,7 @@ func TestSetupInstallsTheConfiguredLoggerAsTheDefault(t *testing.T) {
 	t.Setenv("BABKI_LOG_LEVEL", "error")
 	t.Setenv("BABKI_LOG_FORMAT", "json")
 
-	// logging.New writes to whatever os.Stderr is when it is called, so the
-	// swap has to be in place before setup runs. The handler keeps the pipe
-	// afterwards, which is what makes "the stream" assertable at all.
+	// logging.New captures os.Stderr when called, so the pipe goes in first.
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
@@ -98,9 +79,8 @@ func TestSetupInstallsTheConfiguredLoggerAsTheDefault(t *testing.T) {
 		t.Fatalf("close pipe reader: %v", err)
 	}
 
-	// Stream: it arrived on the pipe that stood in for stderr. Format: it
-	// parses as one JSON object with slog's own field names, which a text
-	// handler's output does not.
+	// Stream: it arrived on the pipe. Format: one JSON object with slog's
+	// field names.
 	if len(out) == 0 {
 		t.Fatal("nothing reached stderr: the default logger does not write to the stream setup configured")
 	}
@@ -119,16 +99,9 @@ func TestSetupInstallsTheConfiguredLoggerAsTheDefault(t *testing.T) {
 	}
 }
 
-// TestSetupRefusesToStartWithoutEncryptionKeyWhenRequired covers the worker
-// role (and, by the same requireEncryptionKey=true path, all/api): started
-// without BABKI_ENCRYPTION_KEY, it must refuse rather than come up unable to
-// ever decrypt a broker token it will later be asked to read.
-//
-// BABKI_DATABASE_URL is set to a syntactically valid but unreachable value —
-// setup must reject the missing key BEFORE it ever dials the database, so
-// this test needs no Docker/testdb dependency. If a future change reordered
-// the two checks, this test would start timing out against a connection
-// instead of failing fast, which is itself a signal something moved.
+// A role that requires the key refuses to start without it, before dialling
+// the database: the URL is valid but unreachable, so a reordered check would hang
+// instead of failing fast.
 func TestSetupRefusesToStartWithoutEncryptionKeyWhenRequired(t *testing.T) {
 	ctx := context.Background()
 	prev := slog.Default()
@@ -150,27 +123,10 @@ func TestSetupRefusesToStartWithoutEncryptionKeyWhenRequired(t *testing.T) {
 	}
 }
 
-// TestSetupKeylessRolesReachDatabaseConnectWithoutAKey covers the migrate
-// role's own shape directly: setup(ctx, false, false).
-//
-// The pre-existing end-to-end coverage for "migrate and seed work without a
-// key" is TestSeedDemo (cmd/babki/seed_test.go) — but that test calls
-// seedDemo directly against a container-provided pool, never setup, so it
-// cannot see whether setup's requireEncryptionKey=false path actually skips
-// secretbox.ParseKey. The only thing standing between "migrate and seed work
-// without a key" and "every role requires one" is two boolean literals at
-// setup's two keyless call sites (newMigrateCmd in root.go, newSeedCmd in
-// seed.go); flipping either back to true would leave the whole suite green
-// without this test, because nothing else calls setup with both arguments
-// false. This pins the fact at the unit that does the gating.
-//
-// BABKI_DATABASE_URL points at 127.0.0.1:1 — a port nothing can be listening
-// on, since binding a listener there needs root — rather than the
-// port-5432-but-unreachable style DSN used above, on purpose: this test's
-// point is the OPPOSITE of that one's. setup(ctx, true, true) must fail on
-// the key WITHOUT reaching db.Connect; setup(ctx, false, false) must reach
-// db.Connect and fail there instead. No Docker is needed either way — the
-// connection is refused immediately rather than timing out.
+// setup(ctx, false, false), the migrate and seed shape, reaches db.Connect
+// without a key. Nothing else calls setup with both false; TestSeedDemo calls
+// seedDemo directly. 127.0.0.1:1 refuses at once, so the failure is at the
+// database, not the key.
 func TestSetupKeylessRolesReachDatabaseConnectWithoutAKey(t *testing.T) {
 	ctx := context.Background()
 	prev := slog.Default()
@@ -188,16 +144,9 @@ func TestSetupKeylessRolesReachDatabaseConnectWithoutAKey(t *testing.T) {
 	}
 }
 
-// TestBuildBoxCarriesTheValidatedKeyIntoOneBox pins buildBox's whole reason
-// to exist: the *secretbox.Box it returns when the key is required is built
-// from the SAME key material cfg.EncryptionKey decodes to — not a stray
-// zero value, and not some other key that merely happens to round-trip
-// against itself. A Seal-then-Open on buildBox's own Box alone would not
-// tell the two apart (any working Box round-trips against itself
-// regardless of which key it holds), so this instead builds a second,
-// independent Box straight from secretbox.ParseKey/New — bypassing buildBox
-// entirely — and requires each Box to be able to open what the OTHER
-// sealed. That only holds if both were built from the same key.
+// buildBox's Box uses the validated key: it and a Box built independently from
+// the same key must open each other's seals, which a self round-trip would not
+// prove.
 func TestBuildBoxCarriesTheValidatedKeyIntoOneBox(t *testing.T) {
 	cfg := &config.Config{EncryptionKey: validHexKey}
 	box, err := buildBox(cfg, true)
@@ -228,13 +177,8 @@ func TestBuildBoxCarriesTheValidatedKeyIntoOneBox(t *testing.T) {
 	}
 }
 
-// TestBuildBoxNilWhenKeyNotRequired covers the migrate/seed/version shape at
-// the unit that decides it: requireEncryptionKey=false must return a nil Box
-// and no error, without even looking at whether cfg.EncryptionKey parses.
-// The empty key here is deliberate — the zero value config.Config.Load
-// produces when BABKI_ENCRYPTION_KEY is unset — so a regression that started
-// validating the key regardless of requireEncryptionKey would fail on the
-// returned error, not silently hand back a Box nobody asked for.
+// When the key is not required, buildBox returns nil and no error without
+// parsing the (empty) key.
 func TestBuildBoxNilWhenKeyNotRequired(t *testing.T) {
 	cfg := &config.Config{EncryptionKey: ""}
 	box, err := buildBox(cfg, false)
@@ -246,9 +190,7 @@ func TestBuildBoxNilWhenKeyNotRequired(t *testing.T) {
 	}
 }
 
-// TestVersionRoleNeedsNoEncryptionKey exercises the version command through
-// the real cobra tree, the way it is actually invoked: it never calls setup
-// at all, so BABKI_ENCRYPTION_KEY being unset must not matter to it.
+// version runs through the real command tree and never calls setup.
 func TestVersionRoleNeedsNoEncryptionKey(t *testing.T) {
 	t.Setenv("BABKI_ENCRYPTION_KEY", "")
 

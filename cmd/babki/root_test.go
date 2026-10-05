@@ -33,12 +33,9 @@ func TestRootHasCommands(t *testing.T) {
 	}
 }
 
-// TestNewCbrHTTPClientHasABoundedTimeout guards against startJobClient going
-// back to an unbounded client (cbr.New(nil, "") falls back to
-// http.DefaultClient, whose Timeout is 0): the backfill job fires one
-// request per currency in use under a 15-minute job Timeout, so one stalled
-// TCP connection on an unbounded client could pin a worker slot for that
-// whole budget.
+// The cbr client is bounded; cbr.New(nil, "") would use http.DefaultClient
+// with no timeout, and one stalled connection could hold a worker for the job's
+// 15 minutes.
 func TestNewCbrHTTPClientHasABoundedTimeout(t *testing.T) {
 	c := newCbrHTTPClient()
 	if c.Timeout != cbrHTTPTimeout {
@@ -58,16 +55,9 @@ func TestNewMoexHTTPClientHasABoundedTimeout(t *testing.T) {
 	}
 }
 
-// TestTheJobQueueIsGivenLessTimeToStopThanTheProcessWaitsForIt keeps two
-// timeouts in the order their comments claim they are in. They live in
-// different packages and neither can see the other's value, so nothing but
-// this stops someone raising jobs.SoftStopTimeout past the bound that covers
-// it — after which every shutdown that used the whole soft window would report
-// a graceful stop that "did not complete in time" and escalate to
-// StopAndCancel, cancelling exactly the jobs the soft window exists to spare.
-//
-// STRICTLY LESS, not less-or-equal: equal values race, and which of the two
-// fires first would decide whether a shutdown looked clean or looked broken.
+// jobs.SoftStopTimeout must stay strictly below stopJobClientTimeout; the two
+// live in different packages, and equal values race. Otherwise every full soft
+// stop would escalate and cancel the jobs it meant to spare.
 func TestTheJobQueueIsGivenLessTimeToStopThanTheProcessWaitsForIt(t *testing.T) {
 	if jobs.SoftStopTimeout <= 0 {
 		t.Fatalf("jobs.SoftStopTimeout = %s; a non-positive value is how River spells "+
@@ -80,15 +70,12 @@ func TestTheJobQueueIsGivenLessTimeToStopThanTheProcessWaitsForIt(t *testing.T) 
 	}
 }
 
-// roleEnv points the process configuration at a private test database and
-// gives it everything the roles that decrypt secrets demand, then hands back
-// the address the HTTP roles will listen on.
-//
-// The database URL is read off the pool testdb hands out rather than rebuilt,
-// so the role under test connects to the very database this test owns.
-// testSetupCode is the first-run code the roles started by these tests ask for.
+// testSetupCode is the first-run code the roles in these tests ask for.
 const testSetupCode = "TESTCODE"
 
+// roleEnv points the configuration at a private test database (its URL read off
+// the pool testdb returned), supplies what the key-requiring roles demand, and
+// returns the address the HTTP roles will listen on.
 func roleEnv(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
 	addr := freePort(t)
@@ -100,10 +87,9 @@ func roleEnv(t *testing.T, pool *pgxpool.Pool) string {
 	return addr
 }
 
-// freePort is httpserver's trick, repeated here because the two packages
-// cannot share a test helper: bind a port, let it go, hand back the address.
-// If something takes it in between, the role fails to listen and returns the
-// error, which the assertions below read.
+// freePort binds a port, releases it and returns the address (httpserver's
+// trick; test helpers cannot be shared). If it is taken meanwhile, the role
+// fails to listen and the assertions see the error.
 func freePort(t *testing.T) string {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -117,24 +103,11 @@ func freePort(t *testing.T) string {
 	return addr
 }
 
-// TestAPIRoleServesHealthzAndStopsCleanly runs the "api" role as a person
-// would — through the root command, from argv — and checks the two things a
-// role has to do: come up far enough to answer on its port, and go back down
-// when its context ends, returning no error.
-//
-// It is a SMOKE test and deliberately shallow: what it covers is the wiring in
-// cmd/babki (config, pool, migrations, module mounting, the insert-only River
-// client, the listener) rather than any behaviour of the modules themselves,
-// each of which is tested where it lives.
-//
-// THE OTHER TWO LONG-RUNNING ROLES ARE NOT HERE, and the reason is not that
-// they matter less. "worker" and "all" call startJobClient, which registers
-// four periodic jobs with RunOnStart against cbr.New and moex.New — whose base
-// URLs are production ones with no configuration knob (see startJobClient's
-// own comment) — so starting either role in a test makes real requests to
-// cbr.ru and iss.moex.com within milliseconds. The queue's own startup is
-// covered against stub providers instead, one layer down, in
-// internal/platform/jobs.
+// A smoke test of the "api" role from argv: it answers on its port and stops
+// cleanly when its context ends. It covers cmd/babki's wiring, not module
+// behaviour. "worker" and "all" are not run here: their periodic jobs start at
+// once against the production cbr.ru and iss.moex.com; the queue's startup is
+// tested against stubs in internal/platform/jobs.
 func TestAPIRoleServesHealthzAndStopsCleanly(t *testing.T) {
 	pool := testdb.New(t)
 	addr := roleEnv(t, pool)
@@ -186,14 +159,8 @@ func TestAPIRoleServesHealthzAndStopsCleanly(t *testing.T) {
 	}
 }
 
-// TestMigrateRoleAppliesTheSchemaAndExits covers the one role that has to work
-// on a machine where nothing else does yet: it is what a first deployment runs
-// before any secret has been provisioned, and it must apply the schema to an
-// empty database and exit rather than block.
-//
-// NO ENCRYPTION KEY IS SET, on purpose — that is the role's whole promise (see
-// setup's requireEncryptionKey), and a test that provided one would not notice
-// the promise being broken.
+// migrate applies the schema to an empty database and exits, with no
+// encryption key set, which is its promise.
 func TestMigrateRoleAppliesTheSchemaAndExits(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()

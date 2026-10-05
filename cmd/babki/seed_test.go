@@ -21,19 +21,10 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// mustAcquired asserts that a lot (or a piece of a transfer's breakdown) knows
-// when it was acquired, and returns that date. Nil is a legitimate value in
-// general — a transfer with no recoverable purchase dates produces lots that
-// carry none (see portfolio.Lot.AcquiredOn) — and the seed contains EXACTLY ONE
-// such lot on purpose: the Intel parcel that arrives at Freedom KZ with a
-// hand-typed basis, which is the demo's permanent-gap row (see the INTC
-// transfer). Nowhere else: every other lot comes from a real buy or from a
-// transfer that carries those buys' own dates across, and that survival is
-// exactly what the demo exists to show. This is therefore called only on the
-// lots that must be dated — never on Intel's, which has an assertion of its own
-// stating the opposite — and an unknown date at any of those call sites means
-// the seed has stopped demonstrating something, so it fails rather than
-// skipping the arithmetic.
+// mustAcquired asserts a lot knows its purchase date and returns it. The seed
+// has exactly one dateless lot, the Intel parcel (see the INTC transfer), which
+// has its own opposite assertion; anywhere else a missing date means a
+// demonstration broke.
 func mustAcquired(t *testing.T, on *time.Time, what string) time.Time {
 	t.Helper()
 	if on == nil {
@@ -72,9 +63,7 @@ func TestSeedDemo(t *testing.T) {
 		t.Fatalf("totals = %+v, %v; want RUB+USD", totals, err)
 	}
 
-	// seeded instruments and operations produce live positions with realized
-	// P&L and income — verified via the stores directly (positions are a
-	// pure projection of the journal, computed by portfolio.Compute).
+	// Positions are a projection of the journal, checked through the stores.
 	var tbankID, freedomID uuid.UUID
 	for _, a := range accounts {
 		switch a.Name {
@@ -91,25 +80,10 @@ func TestSeedDemo(t *testing.T) {
 	opStore := operation.NewStore(pool)
 	instStore := instrument.NewStore(pool)
 
-	// WHAT THE QUOTES JOB WILL ACTUALLY ASK THE EXCHANGE FOR (#35). It sends
-	// the tickers of ListTradable to the provider verbatim (see
-	// marketdata.quotesWorker.Work), and MOEX answers by SECID, so a ticker
-	// that is not a SECID matches no row on any board this application queries
-	// and its instrument is never priced — not today and not ever. On this seed
-	// that read as a broken refresh job rather than as a typo, because SBER and
-	// LKOH beside it updated normally.
-	//
-	// The expected string is written out rather than derived from anything the
-	// seed itself holds, because the literal IS the decision (the same reason
-	// money_test.go spells its wrapped number out in full): it is the
-	// exchange's own security id for ОФЗ 26238, checked against iss.moex.com on
-	// 2026-08-08 — board bonds/TQOB, ISIN RU000A1038V6, SHORTNAME «ОФЗ 26238».
-	// "OFZ26238", which this seed carried until #35, is on none of the four
-	// boards. Nothing else can catch this: no test here may call the exchange.
-	//
-	// The other seeded instruments are foreign papers MOEX does not list at
-	// all, and they keep the tickers their own exchanges use; of the three the
-	// queried exchange can price, this was the only one it could not find.
+	// The quotes job sends ListTradable's tickers to MOEX verbatim, which answers
+	// by SECID, so a non-SECID ticker is never priced (#35). The literal is the
+	// exchange's id for ОФЗ 26238 (iss.moex.com, 2026-08-08: bonds/TQOB, ISIN
+	// RU000A1038V6); no test may call the exchange, so only this catches it.
 	tradable, err := instStore.ListTradable(ctx)
 	if err != nil {
 		t.Fatalf("ListTradable: %v", err)
@@ -161,12 +135,9 @@ func TestSeedDemo(t *testing.T) {
 	if lkoh := tbankPositions["LKOH"]; realizedOf(t, lkoh) <= 0 {
 		t.Errorf("LKOH realized P&L = %d, want > 0", realizedOf(t, lkoh))
 	}
-	// TSLA was bought entirely at Т-Банк and then transferred whole to
-	// Freedom KZ (see the transfer arithmetic below): the source keeps the
-	// position as closed history — zero quantity, zero cost, no lots left —
-	// rather than dropping it, mirroring
-	// TestPositionInBaseTransferredLotsKeepTheirPurchaseDates's own source
-	// check.
+	// TSLA left Т-Банк whole: the source keeps it as closed history (zero
+	// quantity, cost and lots), as
+	// TestPositionInBaseTransferredLotsKeepTheirPurchaseDates checks.
 	tsla, ok := tbankPositions["TSLA"]
 	if !ok {
 		t.Fatal("missing Т-Банк position TSLA (closed by the transfer)")
@@ -191,13 +162,8 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("AAPL lots = %d, want 2 — the two buys must stay two lots with two acquisition dates", len(aapl.Lots))
 	}
 
-	// TSLA is this seed's demonstration of plan 7a: the position arrives at
-	// Freedom KZ entirely by transfer, and the two source lots — bought on
-	// different days at different fx rates — must still be two lots here,
-	// each keeping the day it was ACTUALLY bought rather than the day it
-	// changed brokers. The shape is pinned now; the ruble arithmetic (which
-	// needs the fx converter, set up below) is pinned further down, right
-	// after rateToday — see the block near the MSFT arithmetic.
+	// TSLA arrived by transfer and keeps two lots with their purchase days;
+	// the rouble arithmetic is checked further down, after rateToday.
 	tsla, ok = freedomPositions["TSLA"]
 	if !ok {
 		t.Fatal("missing Freedom position TSLA")
@@ -225,9 +191,7 @@ func TestSeedDemo(t *testing.T) {
 		}
 	}
 
-	// seeded fx rates let the converter bridge 100 USD into RUB at the
-	// seeded rate (78.50): 100 USD = 10000 minor units -> 785000 minor
-	// units = 7850.00 RUB.
+	// 100 USD = 10000 minor -> 785000 minor = 7850.00 RUB at 78.50.
 	converter := marketdata.NewConverter(marketdata.NewStore(pool))
 	on := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
 	got, err := converter.Convert(ctx, 100_00, "USD", "RUB", on)
@@ -238,13 +202,9 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("Convert(100 USD -> RUB) = %d, want 785000 (7850.00 RUB)", got)
 	}
 
-	// USD/RUB is seeded as a HISTORY, not a single date, and the demo's
-	// screens depend on the shape of that history rather than on any one
-	// number in it: the journal converts every foreign-currency entry at the
-	// rate of its own date. These three cases are exactly what the demo is
-	// supposed to show on screen, so they are pinned here — a future seed
-	// edit that flattens the history would otherwise silently turn the demo
-	// back into "everything at today's rate" with all tests still green.
+	// USD/RUB is a history, and the demo depends on its shape: each entry
+	// converts at its own date's rate. These cases fail if a seed edit flattens
+	// it.
 	day := func(s string) time.Time {
 		t.Helper()
 		parsed, err := time.Parse(time.DateOnly, s)
@@ -281,10 +241,8 @@ func TestSeedDemo(t *testing.T) {
 	if _, _, err := converter.Rate(ctx, "USD", "RUB", day("2026-05-06")); !errors.Is(err, marketdata.ErrNoRate) {
 		t.Errorf("Rate(USD -> RUB, 2026-05-06) error = %v, want ErrNoRate", err)
 	}
-	// (d) that same gap swallows one of AAPL's two lots, so the position as a
-	// whole has no ruble figures to publish — the position-level twin of (c),
-	// and the reason the demo can show what "no rate for one lot" looks like
-	// on a real row instead of only in portfolio's unit tests.
+	// (d) the same gap takes one of AAPL's lots, so the position has no
+	// rouble figures.
 	lotsWithoutRate := 0
 	for _, l := range aapl.Lots {
 		if _, _, err := converter.Rate(ctx, "USD", "RUB", mustAcquired(t, l.AcquiredOn, "an AAPL lot")); errors.Is(err, marketdata.ErrNoRate) {
@@ -295,27 +253,15 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("AAPL lots with no fx rate on their acquisition date = %d, want exactly 1 — seeding a rate for the early buy would remove the demo's only position that honestly refuses to convert", lotsWithoutRate)
 	}
 
-	// AMZN carries the journal's last two sentences, and both of them are
-	// properties of ITS TWO LOTS' DATES rather than of anything on the position
-	// itself — so this pins the dates and what the fx table answers for each.
+	// AMZN's two lot dates carry the journal's last two sentences:
 	//
-	//	2026-05-11 — before the seeded history begins, so NO rate at all and no
-	//	             earlier one to fall back on. The transfer that carries this
-	//	             parcel is the demo's only row saying the missing rate is one
-	//	             for a PURCHASE day (in_base_gap = no_rate_lot_date), while
-	//	             its own day, 2026-07-20, has an exact rate that may not be
-	//	             used (#79).
-	//	2026-06-12 — Russia Day: no rate of its own, and the nearest earlier is
-	//	             2026-06-11's 81.00. That inequality is the demo's only place
-	//	             where a TRANSFER's dated_on (the purchase) and rate_on (the
-	//	             day the rate came from) are different days, which is the
-	//	             whole of #80 — every other transfer here moves lots whose
-	//	             own days all have rates, so the two collapse and the
-	//	             sentence's choice between them cannot be seen.
+	// 	2026-05-11 — before the history, no rate at all: its transfer is the only
+	// 	             row naming a missing purchase-day rate (no_rate_lot_date),
+	// 	             while its own day has a rate that may not be used (#79).
+	// 	2026-06-12 — Russia Day: the nearest rate is 2026-06-11's 81.00, the only
+	// 	             transfer where dated_on and rate_on differ (#80).
 	//
-	// Seeding a rate for 2026-05-11, or moving either buy onto a day that has
-	// one, silently removes a demonstration while leaving every other test
-	// green — so both are named here by value.
+	// Both are named by value, so moving either fails.
 	amzn, ok := freedomPositions["AMZN"]
 	if !ok {
 		t.Fatal("missing Freedom position AMZN — the seed no longer shows a missing rate for a purchase date")
@@ -355,14 +301,9 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("AMZN's datable parcel in rubles = %d, want 16200000 (162 000,00 ₽ = 200000 × 81.00) — the figure the transfer row and the buy row four lines above it must agree on", got)
 	}
 
-	// The demo's Т-Банк journal must be LONGER THAN ONE PAGE, or «Показать еще»
-	// never appears on the stand and the truncation fix (#86) can only be seen
-	// in a test. 50 is the page: the client asks for that many (JOURNAL_PAGE_SIZE
-	// in web/src/api/operations.ts) and it is also this handler's own default
-	// (defaultListLimit in internal/operation/http.go). What is asserted is the
-	// SERVER'S ANSWER, has_more — the very field the client now reads instead of
-	// comparing lengths — so this fails if a future seed edit trims the journal
-	// back under the page size.
+	// Т-Банк's journal must run past one 50-row page (JOURNAL_PAGE_SIZE, also
+	// defaultListLimit), so "show more" appears on the stand (#86); the server's
+	// has_more is what is asserted.
 	firstPage, hasMore, err := opStore.ListByAccount(ctx, p.SpaceID, tbankID, 50, 0, operation.JournalFilter{})
 	if err != nil {
 		t.Fatalf("ListByAccount(Т-Банк, 50, 0): %v", err)
@@ -379,11 +320,8 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("Т-Банк journal page two = %d rows, has_more = %v; want a non-empty last page and false — the button must also be able to go away",
 			len(rest), restHasMore)
 	}
-	// The rows that buy the length are the ones dated before the scenarios
-	// begin, and they must stay inert: base currency (so nothing about them
-	// converts, and no rate, gap or caption can attach to one) and no instrument
-	// (so no position, basis or realized figure moves). Page one therefore opens
-	// on the scenarios and the housekeeping trails behind them.
+	// The padding rows stay inert: base currency and no instrument, so
+	// nothing converts or moves.
 	for _, o := range append(firstPage, rest...) {
 		if !o.OccurredOn.Before(day("2026-05-05")) {
 			continue
@@ -394,23 +332,14 @@ func TestSeedDemo(t *testing.T) {
 		}
 	}
 
-	// The demo must contain one position whose unrealized profit has a
-	// DIFFERENT SIGN in its own currency and in rubles. That is the whole
-	// consequence of the owner's decision (2026-07-29) — ruble return carries
-	// the currency's own move, position-currency return does not — and
-	// without such a position in the seed it cannot be seen on demo data at
-	// all, only asserted in portfolio's unit tests.
+	// One open position whose unrealized profit has opposite signs in dollars
+	// and roubles (owner's decision 2026-07-29). Redone from the seeded ingredients so
+	// a seed edit that flattens it fails:
 	//
-	// The arithmetic is redone here from the seeded ingredients (lot dates,
-	// the rate on each of those dates, today's rate, the quote) rather than
-	// borrowed from the handler, so a seed edit that quietly flattens the
-	// story — a different quote, a lot moved to another date, a rate nudged —
-	// fails here rather than on the owner's screen:
-	//
-	//	cost    1_000_000 minor USD × 81.40 (the lot's own day) = 81_400_000 ₽
-	//	value   1_020_000 minor USD × 78.50 (today)             = 80_070_000 ₽
-	//	USD profit = 1_020_000 − 1_000_000 =    +20_000 (a gain)
-	//	RUB profit = 80_070_000 − 81_400_000 = −1_330_000 (a loss)
+	// 	cost    1_000_000 minor USD × 81.40 (the lot's own day) = 81_400_000 ₽
+	// 	value   1_020_000 minor USD × 78.50 (today)             = 80_070_000 ₽
+	// 	USD profit = 1_020_000 − 1_000_000 =    +20_000 (a gain)
+	// 	RUB profit = 80_070_000 − 81_400_000 = −1_330_000 (a loss)
 	msft, ok := freedomPositions["MSFT"]
 	if !ok {
 		t.Fatal("missing Freedom position MSFT")
@@ -461,19 +390,12 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("basis at today's rate = %d gives a ruble profit of %d: the seed no longer distinguishes the historical basis from the current one, and the demo has nothing left to show", oldCostRUB, marketRUB-oldCostRUB)
 	}
 
-	// TSLA's ruble arithmetic, plan 7a's own demonstration: the position
-	// arrived at Freedom KZ entirely by transfer, and each of its two lots
-	// must be converted at the rate of the day it was ACTUALLY bought, not
-	// the day it changed brokers (2026-07-20). Redone from the seeded
-	// ingredients the same way MSFT's is above, so a seed edit that quietly
-	// re-dates or re-rates a lot fails here instead of only looking slightly
-	// off on the owner's screen.
+	// TSLA's lots converted at their purchase days, not the transfer day:
 	//
-	//	lot 1: 5 @ $180.00 on 2026-05-13 -> 90_000 minor USD, rate 60.00 -> 5_400_000
-	//	lot 2: 5 @ $200.00 on 2026-06-15 -> 100_000 minor USD, rate 64.00 -> 6_400_000
-	//	correct in_base.cost_minor = 5_400_000 + 6_400_000 = 11_800_000 (118 000,00 ₽)
-	//	transfer-date (2026-07-20, rate 78.50) collapse instead:
-	//	  190_000 * 78.50 = 14_915_000 (149 150,00 ₽) — 31_150,00 ₽ too much
+	// 	lot 1: 5 @ $180.00 on 2026-05-13 -> 90_000 minor USD, rate 60.00 -> 5_400_000
+	// 	lot 2: 5 @ $200.00 on 2026-06-15 -> 100_000 minor USD, rate 64.00 -> 6_400_000
+	// 	correct in_base.cost_minor = 5_400_000 + 6_400_000 = 11_800_000 (118 000,00 ₽)
+	// 	collapsed to 2026-07-20 (78.50): 190_000 * 78.50 = 14_915_000 (149 150,00 ₽)
 	var correctBaseCost int64
 	for _, l := range tsla.Lots {
 		lotOn := mustAcquired(t, l.AcquiredOn, "a TSLA lot")
@@ -493,21 +415,13 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("whole-basis-at-transfer-date TSLA cost = %d, want 14915000 (149 150,00 ₽ = 190000 * 78.50)", collapsedBaseCost)
 	}
 
-	// The same arithmetic has to come out of the SOURCE account's journal row,
-	// not just the destination's position: the departing leg carries the same
-	// breakdown (see operation.Store.attachTransferLots), so the journal at
-	// Т-Банк converts it from the same two purchase dates. While it did not,
-	// this one row was the last place in the demo still showing the invented
-	// 149 150,00 ₽ — the figure README.md and the transfer call above describe
-	// as what a collapse to the transfer day would produce.
+	// The source account's journal row converts the same breakdown (see
+	// operation.Store.attachTransferLots), so it shows 118 000,00 ₽ too.
 	tbankJournal, err := opStore.ListForEngine(ctx, p.SpaceID, tbankID)
 	if err != nil {
 		t.Fatalf("ListForEngine Т-Банк: %v", err)
 	}
-	// TSLA's leg specifically: the account also sends NVDA away on the same
-	// day (see the NVDA block below), and a scan that took whichever
-	// transfer_out came last would silently start checking the other one's
-	// arithmetic against TSLA's expected figures.
+	// TSLA's leg specifically: NVDA leaves the same day.
 	var outLeg *operation.Operation
 	for i := range tbankJournal {
 		op := &tbankJournal[i]
@@ -532,31 +446,23 @@ func TestSeedDemo(t *testing.T) {
 			len(outLeg.TransferLots), outLegBaseCost, correctBaseCost)
 	}
 
-	// NVDA is plan 7c's own demonstration, and the one thing in this seed that
-	// only became true with it: a parcel that ARRIVED BY TRANSFER but was
-	// BOUGHT EARLIER than the one already sitting in the account leaves the
-	// queue first. Moving shares between one's own accounts is not a purchase
-	// (НК РФ ст. 214.1 п. 13 releases "первых по времени приобретений";
-	// 26 CFR 1.1012-1(c)(1)(i) names "the earliest lot the taxpayer purchased
-	// or acquired"), so it cannot decide what is sold first either.
+	// NVDA: a parcel that arrived by transfer but was bought earlier leaves first
+	// (НК РФ ст. 214.1 п. 13; 26 CFR 1.1012-1(c)(1)(i)).
 	//
-	//	transferred parcel: 10 @ $100.00 bought 2026-05-14 at Т-Банк -> 100_000 minor USD
-	//	parcel already there: 10 @ $150.00 bought 2026-06-20 at Freedom -> 150_000
-	//	sale: 10 @ $200.00 on 2026-07-22 -> 200_000
+	// 	transferred parcel: 10 @ $100.00 bought 2026-05-14 at Т-Банк -> 100_000 minor USD
+	// 	parcel already there: 10 @ $150.00 bought 2026-06-20 at Freedom -> 150_000
+	// 	sale: 10 @ $200.00 on 2026-07-22 -> 200_000
 	//
-	//	by ACQUISITION (what this application now does) the 2026-05-14 parcel goes:
-	//	  realized = 200_000 − 100_000 = +100_000 (+$1 000.00)
-	//	  left      = the 2026-06-20 parcel, cost 150_000 ($1 500.00)
-	//	    in rubles 150_000 × 65.00 (ITS own day) = 9_750_000 (97 500,00 ₽)
-	//	by ARRIVAL (what it did before this plan) the parcel already in the
-	//	account would have gone instead:
-	//	  realized =  200_000 − 150_000 = +50_000 (+$500.00) — half as much
-	//	  left      = the transferred parcel, cost 100_000 ($1 000.00)
-	//	    in rubles 100_000 × 60.50 = 6_050_000 (60 500,00 ₽) — 37 000,00 ₽ less
+	// 	by purchase day:
+	// 	  realized = 200_000 − 100_000 = +100_000 (+$1 000.00)
+	// 	  left      = the 2026-06-20 parcel, cost 150_000 ($1 500.00)
+	// 	    in rubles 150_000 × 65.00 = 9_750_000 (97 500,00 ₽)
+	// 	by arrival (wrong):
+	// 	  realized =  200_000 − 150_000 = +50_000 (+$500.00)
+	// 	  left      = the transferred parcel, cost 100_000 ($1 000.00)
+	// 	    in rubles 100_000 × 60.50 = 6_050_000 (60 500,00 ₽)
 	//
-	// Every one of those four figures is named below, the wrong ones by value,
-	// so a regression to arrival order fails here rather than quietly halving
-	// the profit on the owner's screen.
+	// The wrong figures are named by value.
 	nvda, ok := freedomPositions["NVDA"]
 	if !ok {
 		t.Fatal("missing Freedom position NVDA — the seed no longer demonstrates the acquisition-ordered queue")
@@ -603,19 +509,11 @@ func TestSeedDemo(t *testing.T) {
 			tbankNvda.Quantity.String(), tbankNvda.CostMinor)
 	}
 
-	// realizedInBase redoes, from the engine's own record of WHAT EACH DISPOSAL
-	// WAS MADE OF, the very sum the server publishes as
-	// in_base.realized_pnl_minor: the proceeds and the fee at the rate of the
-	// day the disposal happened, every released parcel of basis at the rate of
-	// the day THAT parcel was bought (НК РФ ст. 210 п. 5), summed as decimals
-	// and rounded once for the position — exactly portfolio's realizedTerms +
-	// sumInBase, rebuilt here from the seeded ingredients rather than borrowed,
-	// so a seed edit that quietly flattens the story fails here instead of on
-	// the owner's screen.
-	//
-	// A position that has never disposed of anything contributes an exact zero
-	// and asks the rate table for nothing at all — which is why AAPL, whose
-	// earliest lot has no rate, is no obstacle to the account total below.
+	// realizedInBase rebuilds in_base.realized_pnl_minor from each disposal's
+	// parcels: proceeds and fee at the disposal day's rate, each parcel at its own
+	// purchase day's (НК РФ ст. 210 п. 5), summed as decimals and rounded once, as
+	// portfolio's realizedTerms and sumInBase do. A position with no disposals is
+	// zero and asks for no rate, so AAPL's gap does not block the total.
 	realizedInBase := func(pos *portfolio.Position, what string) int64 {
 		total := decimal.Zero
 		term := func(minor int64, on time.Time) {
@@ -635,21 +533,14 @@ func TestSeedDemo(t *testing.T) {
 		return total.Round(0).IntPart()
 	}
 
-	// Alphabet is plan 7b's own demonstration, and the demo's only CLOSED deal
-	// whose SETTLED result has a different sign in its own currency and in
-	// rubles. MSFT above makes the same point about a holding still open, where
-	// the figure keeps moving; this one is over and will never move again, which
-	// is the whole difference «Зафиксировано» exists to state.
+	// Alphabet: the closed deal whose settled result has opposite signs.
 	//
-	//	buy  50 @ $200.00 on 2026-06-10 -> 1_000_000 minor USD, rate 81.40 -> 81_400_000
-	//	sell 50 @ $210.00 on 2026-06-20 -> 1_050_000 minor USD, rate 65.00 -> 68_250_000
-	//	  in USD: 1_050_000 −  1_000_000 =     +50_000 (+$500.00, a gain)
-	//	  in RUB: 68_250_000 − 81_400_000 = −13_150_000 (−131 500,00 ₽, a loss)
+	// 	buy  50 @ $200.00 on 2026-06-10 -> 1_000_000 minor USD, rate 81.40 -> 81_400_000
+	// 	sell 50 @ $210.00 on 2026-06-20 -> 1_050_000 minor USD, rate 65.00 -> 68_250_000
+	// 	  in USD: 1_050_000 −  1_000_000 =     +50_000 (+$500.00, a gain)
+	// 	  in RUB: 68_250_000 − 81_400_000 = −13_150_000 (−131 500,00 ₽, a loss)
 	//
-	// Converting the dollar result at ANY single rate in this table lands
-	// between +30 000,00 ₽ (60.00, the lowest seeded) and +40 700,00 ₽ (81.40,
-	// the highest) — a profit, for a deal that lost 131 500,00 ₽. That gap is
-	// the demonstration.
+	// Any single seeded rate gives +30 000,00 to +40 700,00 ₽, a profit.
 	googl, ok := freedomPositions["GOOGL"]
 	if !ok {
 		t.Fatal("missing Freedom position GOOGL — the seed no longer demonstrates a settled result that flips sign in rubles")
@@ -682,32 +573,27 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("GOOGL result converted at the sale day's rate alone = %d, want 3250000 (+32 500,00 ₽, a PROFIT) — the point of this deal is that no single rate reproduces −131 500,00 ₽", flat)
 	}
 
-	// NVDA's own settled result, the other half of the account's line: a
-	// disposal whose ruble figure differs from any single-rate conversion
-	// WITHOUT flipping sign, so the demo shows both shapes.
+	// NVDA's settled result differs from a single-rate conversion without
+	// flipping sign:
 	//
-	//	proceeds 200_000 on 2026-07-22 -> the rate table publishes nothing that
-	//	  day, so the ordinary nearest-earlier rule gives 2026-07-20's 78.50
-	//	  -> 15_700_000
-	//	basis    100_000 bought 2026-05-14, rate 60.50 -> 6_050_000
-	//	  in RUB: 15_700_000 − 6_050_000 = +9_650_000 (+96 500,00 ₽)
+	// 	proceeds 200_000 on 2026-07-22 -> nearest earlier rate, 2026-07-20's 78.50
+	// 	  -> 15_700_000
+	// 	basis    100_000 bought 2026-05-14, rate 60.50 -> 6_050_000
+	// 	  in RUB: 15_700_000 − 6_050_000 = +9_650_000 (+96 500,00 ₽)
 	nvdaBase := realizedInBase(nvda, "NVDA")
 	if nvdaBase != 9_650_000 {
 		t.Errorf("NVDA realized P&L in RUB = %d, want 9650000 (15 700 000 − 6 050 000 = +96 500,00 ₽)", nvdaBase)
 	}
 
-	// And the account's «Зафиксировано» line itself — the sum of the rounded
-	// per-position figures, exactly as portfolio.realizedTotals adds them.
-	// It disagrees with itself in SIGN across the display-currency toggle, one
-	// click apart, on real demo data:
+	// The account's «Зафиксировано» line, summed as portfolio.realizedTotals
+	// does, with opposite signs across the display toggle:
 	//
-	//	NVDA     +100_000 USD    +9_650_000 ₽
-	//	GOOGL     +50_000 USD   −13_150_000 ₽
-	//	AAPL, MSFT, TSLA, KAZ32EUR, WEWKQ, INTC: no disposals, exactly zero in
-	//	  both — and, crucially, no rate asked for either, which is why AAPL's
-	//	  rate-less lot and INTC's dateless one cannot stop this total
-	//	total    +150_000 USD    −3_500_000 ₽
-	//	        (+$1 500.00)     (−35 000,00 ₽)
+	// 	NVDA     +100_000 USD    +9_650_000 ₽
+	// 	GOOGL     +50_000 USD   −13_150_000 ₽
+	// 	AAPL, MSFT, TSLA, KAZ32EUR, WEWKQ, INTC: no disposals, zero in both,
+	// 	  and no rate asked for
+	// 	total    +150_000 USD    −3_500_000 ₽
+	// 	        (+$1 500.00)     (−35 000,00 ₽)
 	var accountUSD, accountRUB int64
 	for ticker, pos := range freedomPositions {
 		accountUSD += realizedOf(t, pos)
@@ -721,21 +607,14 @@ func TestSeedDemo(t *testing.T) {
 			accountUSD, accountRUB)
 	}
 
-	// THE DEMO'S DATELESS PARCEL, and the reason this seed can put two
-	// DIFFERENT "no ruble figures here" sentences on one screen (#66):
+	// Two different "no rouble figures" sentences on one screen (#66):
 	//
-	//	Apple — one lot's purchase date has no fx rate. The backfill job fills
-	//	        that date from cbr.ru and the row converts on its own. Pinned
-	//	        above, by lotsWithoutRate.
-	//	Intel — the parcel has no purchase date at all, because its basis was
-	//	        typed in by hand and nothing was released behind it. No job can
-	//	        close that.
+	// 	Apple — one lot's purchase date has no rate; the backfill closes it
+	// 	        (pinned above by lotsWithoutRate).
+	// 	Intel — no purchase date at all: a hand-typed basis; nothing closes it.
 	//
-	// This is the ONE lot in the whole seed that legitimately has no date (see
-	// mustAcquired), and both halves are asserted: that Intel's has none, and
-	// that Apple's all have one. Without the second, a seed edit that made
-	// Apple dateless too would leave the screen showing one sentence twice with
-	// every test still green — and the pair is the entire point.
+	// Intel's lot is the only dateless one, and Apple's are all dated; without the
+	// second check both could read the same sentence.
 	intc, ok := freedomPositions["INTC"]
 	if !ok {
 		t.Fatal("missing Freedom position INTC — the seed no longer shows a parcel whose purchase date was never recorded")
@@ -763,28 +642,17 @@ func TestSeedDemo(t *testing.T) {
 			tbankIntc.Quantity.String(), tbankIntc.CostMinor)
 	}
 
-	// THE DEMO'S THIRD-CURRENCY VALUATION (#39). A bond with a euro face value,
-	// held in a dollar position, inside a ruble space: three distinct
-	// currencies on one row, which is the only shape in which valuing it twice
-	// over can go wrong. Redone here from the seeded ingredients — face value,
-	// face currency, quote, and the two fx rows the bridge is built from —
-	// exactly as portfolio.marketValue and Handler.positionInBase strike it, so
-	// a seed edit that quietly brings any two of the three currencies back into
-	// agreement fails here instead of leaving the path untested on screen.
+	// The third-currency valuation (#39): a euro face, a dollar position, a rouble
+	// space. Redone from the seeded face, quote and rates as portfolio.marketValue
+	// and Handler.positionInBase do. The face and position currencies differing is
+	// also the trade dialog's refusal case (#77, faceGapOf in
+	// web/src/routes/accounts/trade-dialog.tsx); the OFZ is the agreeing case.
 	//
-	// The face-vs-position disagreement asserted below now carries a second
-	// demonstration as well: it is the one case the trade dialog refuses to
-	// convert a percentage of face into money, having no fx rate to do it with,
-	// so it names the mismatch instead (#77 — faceGapOf in
-	// web/src/routes/accounts/trade-dialog.tsx). The OFZ further down is the
-	// same dialog with the two currencies agreeing and the link intact.
-	//
-	//	valuation  100_000 (€1 000,00 face) × 98.00 % × 5 =    490_000 minor EUR
-	//	  in $     490_000 × (92.30 ÷ 78.50)              =    576_140 ($5 761,40)
-	//	  in ₽     490_000 × 92.30, from the EUROS        = 45_227_000 (452 270,00 ₽)
-	//	  in ₽     576_140 × 78.50, chained via the dollar = 45_226_990 — ten
-	//	           kopecks short, the fraction the intermediate cent threw away
-	//	cost       575_000 minor USD × 65.00 (its lot's own day) = 37_375_000
+	// 	valuation  100_000 (€1 000,00 face) × 98.00 % × 5 =    490_000 minor EUR
+	// 	  in $     490_000 × (92.30 ÷ 78.50)              =    576_140 ($5 761,40)
+	// 	  in ₽     490_000 × 92.30, from the euros        = 45_227_000 (452 270,00 ₽)
+	// 	  in ₽     576_140 × 78.50, chained via the dollar = 45_226_990 (ten kopecks short)
+	// 	cost       575_000 minor USD × 65.00 (its lot's own day) = 37_375_000
 	bond, ok := freedomPositions["KAZ32EUR"]
 	if !ok {
 		t.Fatal("missing Freedom position KAZ32EUR — the seed no longer holds anything valued in a third currency")
@@ -811,9 +679,8 @@ func TestSeedDemo(t *testing.T) {
 	if rawEUR != 490_000 {
 		t.Errorf("KAZ32EUR raw valuation = %d minor %s, want 490000 (€4 900,00)", rawEUR, *bondInst.FaceCurrency)
 	}
-	// No EUR/USD pair is seeded: the converter bridges it through the ruble out
-	// of the two rows that are (see marketdata.resolveRate). Asking for it here
-	// rather than computing it is what makes this the same rate the handler got.
+	// EUR/USD is bridged through the rouble (marketdata.resolveRate); asked
+	// of the converter so it is the handler's rate.
 	eurToPosition, _, err := converter.Rate(ctx, *bondInst.FaceCurrency, bond.Currency, on)
 	if err != nil {
 		t.Fatalf("Rate(%s -> %s, today): %v — the bridge the eurobond's row depends on is gone", *bondInst.FaceCurrency, bond.Currency, err)
@@ -847,12 +714,8 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("KAZ32EUR cost in RUB = %d, want 37375000 (373 750,00 ₽ = 575000 × 65.00, that lot's own day)", got)
 	}
 
-	// THE DEMO'S SUB-CENT QUOTE (#30). Two fraction digits print it as «0,00» —
-	// neither the price nor zero — so the screen renders it by significant
-	// digits instead. Pinned by the PROPERTY that makes it the demo's example,
-	// not just by its value: below a hundredth, above nothing, and on a share,
-	// because marketValue has no valuation model for crypto/currency/metal/
-	// custom and a row of those types carries no price line to render at all.
+	// The sub-cent quote (#30), pinned by its property: below a hundredth,
+	// above zero, on a share (other types have no price line).
 	wework, ok := freedomPositions["WEWKQ"]
 	if !ok {
 		t.Fatal("missing Freedom position WEWKQ — the seed no longer holds anything quoted below a hundredth")
@@ -879,10 +742,8 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("WEWKQ valuation = %d, want 1250 ($12,50 = 5000 × 0.0025) — a real, nonzero holding priced at a fraction of a cent", got)
 	}
 
-	// every currency the demo space holds (RUB, USD) now has a seeded rate
-	// into the space's base currency (RUB, the default), so GET /summary's
-	// total_in_base_minor comes out nonzero with nothing left unconverted —
-	// this mirrors handleSummary's own zero-filter + ConvertMany call.
+	// Every held currency has a rate into RUB, so GET /summary's total has
+	// nothing unconverted; mirrors handleSummary.
 	netByCurrency := make(map[string]int64, len(totals))
 	for _, ct := range totals {
 		if ct.NetMinor != 0 {
@@ -899,16 +760,13 @@ func TestSeedDemo(t *testing.T) {
 	if converted == 0 {
 		t.Errorf("ConvertMany total = 0, want nonzero")
 	}
-	// USD is the only non-RUB currency in netByCurrency, seeded with a rate
-	// exactly on 2026-07-20 (== on), so that's the oldest (and only) rate
-	// used.
+	// USD's only rate used is 2026-07-20's.
 	if !ratesOn.Equal(on) {
 		t.Errorf("ConvertMany ratesOn = %v, want %v (seeded USD/RUB rate date)", ratesOn, on)
 	}
 
-	// SBER has a seeded quote, so its position in Т-Банк carries a market
-	// valuation — the same LatestQuotes + marketValue path GET
-	// .../positions uses (internal/portfolio/http.go).
+	// SBER has a quote, so its position is valued, as GET .../positions
+	// does.
 	sber, ok := tbankPositions["SBER"]
 	if !ok {
 		t.Fatal("missing Т-Банк position SBER")
@@ -921,26 +779,13 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("SBER quote price = %s, want %s", sberQuote.Price.String(), want.String())
 	}
 
-	// THE DEMO'S BOND PRICE (#77). A broker quotes a bond as a percentage of
-	// its face value; this application records money per bond; and the trade
-	// dialog now shows both fields with each deriving the other. What is pinned
-	// here is that the seed's OFZ row is the row that dialog produces out of a
-	// round 95,00 %, so the stand shows the feature agreeing with the data
-	// rather than merely sitting beside it:
+	// The OFZ row is what the trade dialog produces from 95,00 % (#77):
 	//
-	//	1 000,00 ₽ face × 95 % = 950,00 ₽ a bond × 100 = 95 000,00 ₽ recorded
+	// 	1 000,00 ₽ face × 95 % = 950,00 ₽ a bond × 100 = 95 000,00 ₽ recorded
 	//
-	// The expected price is recomputed from the seeded FACE VALUE rather than
-	// compared against a literal, so moving the face value without moving the
-	// price — the exact edit that would turn the comment on that operation into
-	// a false claim — fails here.
-	//
-	// The face value's currency being the instrument's own is asserted too, and
-	// it is not decoration: that equality is the entire condition under which
-	// the dialog is willing to convert at all (faceGapOf in
-	// web/src/routes/accounts/trade-dialog.tsx). The eurobond above is the
-	// demo's other side of the same coin, where the two currencies differ and
-	// the dialog names the mismatch instead of producing a number.
+	// The price is recomputed from the seeded face value, so moving one without the
+	// other fails. The face currency equals the instrument's, the dialog's condition
+	// for converting (faceGapOf); the eurobond is the other case.
 	ofz, ok := tbankPositions["SU26238RMFS4"]
 	if !ok {
 		t.Fatal("missing Т-Банк position SU26238RMFS4 — the seed no longer holds the bond whose price the trade dialog is demonstrated on")
@@ -953,9 +798,8 @@ func TestSeedDemo(t *testing.T) {
 		t.Fatalf("OFZ face = %v %v against instrument currency %s, want a face value denominated in the instrument's own currency: without that equality the trade dialog refuses the conversion and this row demonstrates nothing",
 			ofzInst.FaceValueMinor, ofzInst.FaceCurrency, ofzInst.Currency)
 	}
-	// The same two decimal shifts bondPriceFromPercent performs (see
-	// web/src/lib/money.ts): minor units into major ones, and percent into a
-	// fraction. Two divisions by a hundred, deliberately not folded into one.
+	// bondPriceFromPercent's two shifts (web/src/lib/money.ts): minor to
+	// major, percent to fraction.
 	wantOFZPrice := decimal.NewFromInt(*ofzInst.FaceValueMinor).Shift(-2).
 		Mul(decimal.RequireFromString("95")).Shift(-2)
 	tbankOps, err := operation.NewStore(pool).ListForEngine(ctx, p.SpaceID, tbankID)
@@ -987,23 +831,10 @@ func TestSeedDemo(t *testing.T) {
 		t.Errorf("OFZ buys = %d, want exactly 1 — the arithmetic above is stated for a single purchase", ofzBuys)
 	}
 
-	// THE DEMO'S QUOTE DATES (#90). A quote's date is the trading SESSION its
-	// price belongs to — not the day anything was fetched, and not the day the
-	// seed ran — and the positions screen prints it as «Цена на …». Two
-	// properties keep that legible on the stand, and neither follows from the
-	// other:
-	//
-	//   - the quotes do NOT all share one date. One date across every row is
-	//     indistinguishable from a stamp the screen puts on the whole page,
-	//     which is precisely the reading this field stopped deserving;
-	//   - every date is a weekday, and none is later than the demo's own today.
-	//     A Saturday is not a session any exchange held, and a date in the
-	//     future is one the quotes worker refuses to store outright (see
-	//     jobs.go) — a seed writing either would be showing a state the running
-	//     system cannot reach.
-	//
-	// Read through LatestQuotes, the same call GET .../positions makes, so what
-	// is checked is what a row would actually be captioned with.
+	// Quote dates are sessions (#90), shown as «Цена на …». They do not all
+	// share one date (that would read as a page stamp), and each is a weekday no
+	// later than the demo's today (the worker refuses future dates). Read through
+	// LatestQuotes, as the positions handler does.
 	instrumentIDs := make([]uuid.UUID, 0, len(tbankPositions)+len(freedomPositions))
 	for _, pos := range tbankPositions {
 		instrumentIDs = append(instrumentIDs, pos.InstrumentID)
@@ -1038,14 +869,9 @@ func TestSeedDemo(t *testing.T) {
 	}
 }
 
-// TestSeedTinvestDemoIsSelfConsistentAndCannotReachTheBroker checks the two
-// things the demo connection has to be: honest about itself, and incapable of
-// making a broker call from a stand.
-//
-// The counters are compared against the mirror rather than against the numbers
-// written in seed.go. A run log whose figures its own data contradicts is
-// exactly the failure the importer's screens exist to make impossible, and it
-// would be sitting on the demo instance that is supposed to demonstrate them.
+// The demo connection is consistent with its own data and cannot reach the
+// broker. Counters are compared against the mirror, not against seed.go's
+// numbers.
 func TestSeedTinvestDemoIsSelfConsistentAndCannotReachTheBroker(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -1137,12 +963,8 @@ func TestSeedTinvestDemoIsSelfConsistentAndCannotReachTheBroker(t *testing.T) {
 	if len(runs) != 2 {
 		t.Fatalf("runs = %d, want 2", len(runs))
 	}
-	// The two runs are picked BY TRIGGER and not by position, so that every
-	// check below says which run it is about — and so that the log's ORDER gets
-	// a check of its own instead of being smuggled into all of them. Read
-	// positionally, a log handed back the wrong way round failed four assertions
-	// that have nothing to do with ordering — down to a JSON decode of the run
-	// that never reconciled anything — and not one of them named the cause.
+	// Runs are picked by trigger, and the log's order is checked on its own,
+	// so a reversed log fails with the right message.
 	byTrigger := map[tinvest.SyncTrigger]tinvest.SyncRun{}
 	for _, r := range runs {
 		byTrigger[r.Trigger] = r
@@ -1165,16 +987,9 @@ func TestSeedTinvestDemoIsSelfConsistentAndCannotReachTheBroker(t *testing.T) {
 		}
 	}
 
-	// THE TWO RUNS CARRY STATED INSTANTS, AN HOUR APART, AND NOT THE CLOCK THE
-	// SEED HAPPENED TO RUN AT. The whole seed is one transaction, and now() is
-	// that transaction's timestamp — one instant shared by every statement in
-	// it — so a run log left to the database's clock stamps both runs
-	// identically. RunsByConnection orders by started_at DESC with the row id as
-	// its only tie-break, so which of them counted as the later one was then
-	// decided by a random uuid: green here, red on the next machine. The times
-	// are written out in full rather than read back off the mirror rows, because
-	// a fixture that derives them from the same source as the code proves
-	// nothing about either.
+	// Stated instants an hour apart, not the transaction's single now(), or
+	// the order would depend on random uuids. Written out, not read from the
+	// mirror.
 	wantFirst := time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC)
 	wantSecond := time.Date(2026, 7, 20, 10, 0, 0, 0, time.UTC)
 	if !first.StartedAt.Equal(wantFirst) || !second.StartedAt.Equal(wantSecond) {
@@ -1220,22 +1035,10 @@ func TestSeedTinvestDemoIsSelfConsistentAndCannotReachTheBroker(t *testing.T) {
 	}
 }
 
-// TestASeedThatFailsPartWayLeavesTheInstanceSeedableAgain is the regression
-// this command's transaction exists for.
-//
-// THE FAILURE IS PROVOKED WHERE IT HURTS: after the space and its two users
-// have been written and before the seed is anywhere near done. A row already
-// holding the ticker "SBER" makes the catalogue's first instrument collide with
-// migration 0011's unique index, so the seed stops with a real error of its own
-// making — no fake, no injected fault. Before the seed ran under one commit,
-// the users written a moment earlier survived that error, the instance stopped
-// being "empty", and `babki seed` refused it from then on: the only way back
-// was deleting rows by hand.
-//
-// The obstacle is then removed and the seed run again. That second run is the
-// whole assertion — it can only succeed if the first one left nothing behind,
-// and it fails on the very first line of seedDemo (the emptiness guard) if
-// anything was committed.
+// A seed failing after the users are written leaves the instance seedable.
+// A pre-existing "SBER" collides with the catalogue's first instrument (migration
+// 0011's index), a real error; the obstacle is removed and the second run must
+// pass the emptiness guard.
 func TestASeedThatFailsPartWayLeavesTheInstanceSeedableAgain(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -1283,12 +1086,9 @@ func TestASeedThatFailsPartWayLeavesTheInstanceSeedableAgain(t *testing.T) {
 	}
 }
 
-// realizedOf is a position's realized result, and it FAILS THE TEST when the
-// position has none — a disposal that settled in another currency leaves no
-// figure in any single one (see portfolio.Position.RealizedPnL). Every call
-// below therefore asserts two things at once: the number, and that there is a
-// number, which is what keeps a test from quietly comparing a zero against a
-// zero the moment the currency rule starts refusing to answer.
+// realizedOf is a position's realized result and fails the test when there is
+// none (settled in another currency), so a missing figure is never read as
+// zero.
 func realizedOf(t *testing.T, p *portfolio.Position) int64 {
 	t.Helper()
 	minor, inOneCurrency := p.RealizedPnL()
