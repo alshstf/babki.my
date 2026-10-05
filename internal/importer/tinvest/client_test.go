@@ -20,9 +20,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// This file is package tinvest (not tinvest_test) so it can reach the
-// unexported Client.sleep field to control the 429 backoff in tests without
-// a real wait — see the field's own doc comment.
+// Package tinvest, to control Client.sleep for the 429 backoff.
 
 // readFixture returns one testdata file's contents.
 func readFixture(t *testing.T, name string) []byte {
@@ -41,9 +39,8 @@ type route struct {
 	header http.Header
 }
 
-// serve starts an httptest.Server that dispatches by exact URL path to
-// routes, and records the raw request body seen for each path (last one
-// wins, matching internal/marketdata/moex/moex_test.go's serve helper).
+// serve dispatches by exact path to routes and records each path's last
+// request body.
 func serve(t *testing.T, routes map[string]route) (*httptest.Server, map[string][]byte) {
 	t.Helper()
 	gotBodies := make(map[string][]byte)
@@ -56,12 +53,7 @@ func serve(t *testing.T, routes map[string]route) (*httptest.Server, map[string]
 		}
 		body, err := readRequestBody(r)
 		if err != nil {
-			// t.Fatal/t.Fatalf must only ever be called from the test's own
-			// goroutine (testing's own documented rule): this handler runs
-			// on an httptest.Server connection goroutine, where Fatal's
-			// runtime.Goexit would unwind the wrong stack instead of ending
-			// the test, risking a hang or a false pass rather than a clean
-			// failure.
+			// Not Fatal: this runs on a server goroutine.
 			t.Errorf("read request body: %v", err)
 			return
 		}
@@ -89,9 +81,7 @@ func readRequestBody(r *http.Request) ([]byte, error) {
 
 const opsPath = "/tinkoff.public.invest.api.contract.v1.OperationsService/GetOperationsByCursor"
 
-// -------------------------------------------------------------------------
-// GetAccounts
-// -------------------------------------------------------------------------
+// GetAccounts.
 
 func TestGetAccounts_ParsesFixture(t *testing.T) {
 	srv, gotBodies := serve(t, map[string]route{
@@ -123,10 +113,7 @@ func TestGetAccounts_ParsesFixture(t *testing.T) {
 		t.Errorf("accounts[0].OpenedOn = %s, want %s", first.OpenedOn, wantOpened)
 	}
 
-	// Third account has no openedDate field at all in the fixture: OpenedOn
-	// must come back nil, not the zero time.Time — a caller checking "do we
-	// know when this was opened" must be able to tell "unknown" apart from
-	// "opened at 0001-01-01".
+	// No openedDate: OpenedOn is nil, not the zero time.
 	if got := accounts[2]; got.OpenedOn != nil {
 		t.Errorf("accounts[2].OpenedOn = %v, want nil (fixture has no openedDate)", got.OpenedOn)
 	}
@@ -173,9 +160,7 @@ func TestGetAccounts_SetsAuthAndContentType(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// OperationsAll: cursor pagination
-// -------------------------------------------------------------------------
+// OperationsAll: cursor pagination.
 
 func TestOperationsAll_WalksTwoPages(t *testing.T) {
 	page1 := readFixture(t, "operations_page1.json")
@@ -275,9 +260,7 @@ func TestOperationsAll_WalksTwoPages(t *testing.T) {
 		t.Errorf("items[0].Raw decodes to id %q, want op-1", rawDecoded.ID)
 	}
 
-	// The third operation (page 2) is OPERATION_STATE_CANCELED: it must be
-	// present in the result, proving state is never filtered — the mirror
-	// needs canceled operations too.
+	// The canceled operation is present: state is never filtered.
 	op3 := items[2]
 	if op3.ID != "op-3" || op3.State != "OPERATION_STATE_CANCELED" {
 		t.Fatalf("items[2] = %+v, want the canceled dividend operation (state must not be filtered)", op3)
@@ -333,13 +316,8 @@ func TestOperationsAll_SendsFromWhenSet(t *testing.T) {
 	}
 }
 
-// TestOperationsAll_StuckCursorErrorsRatherThanLoopingForever reproduces a
-// gateway bug this client must survive without hanging: hasNext=true but
-// next_cursor never actually moves past what was requested. The fake
-// server also caps itself at a handful of requests and then answers
-// hasNext=false regardless, so that if the guard this test exists to check
-// were ever removed by mistake, this test fails fast (empty result, no
-// error) instead of hanging until the whole test binary's deadline.
+// hasNext with a cursor that never moves is an error. The fake caps its own
+// requests, so a missing guard fails fast instead of hanging.
 func TestOperationsAll_StuckCursorErrorsRatherThanLoopingForever(t *testing.T) {
 	const forcedStopAfter = 5
 	var requestCount int
@@ -370,15 +348,8 @@ func TestOperationsAll_StuckCursorErrorsRatherThanLoopingForever(t *testing.T) {
 	}
 }
 
-// TestOperationsAll_TwoCursorCycleErrorsRatherThanLoopingForever reproduces
-// a gateway bug the single-previous-cursor check alone would miss: the
-// cursor alternates A -> B -> A -> B -> ... instead of repeating the same
-// one twice in a row. A guard that only compares against the immediately
-// preceding cursor would never catch this — cursor B always differs from
-// whatever came right before it — and would spin until the context's own
-// deadline, accumulating items in memory the whole time. The seen-cursors
-// set this test exercises catches it on the first repeat regardless of the
-// cycle's length.
+// A two-cursor cycle (A, B, A, ...) is caught on the first repeat, which a
+// check against only the previous cursor would miss.
 func TestOperationsAll_TwoCursorCycleErrorsRatherThanLoopingForever(t *testing.T) {
 	const forcedStopAfter = 6
 	var requestCount int
@@ -390,10 +361,7 @@ func TestOperationsAll_TwoCursorCycleErrorsRatherThanLoopingForever(t *testing.T
 			_, _ = w.Write([]byte(`{"hasNext":false,"nextCursor":"","items":[]}`))
 			return
 		}
-		// Alternates: request 1 (cursor "") answers nextCursor "A"; request 2
-		// (cursor "A") answers nextCursor "B"; request 3 (cursor "B") answers
-		// nextCursor "A" again — a two-step cycle, never repeating the
-		// immediately preceding cursor.
+		// Odd requests answer "A", even ones "B".
 		if requestCount%2 == 1 {
 			_, _ = w.Write([]byte(`{"hasNext":true,"nextCursor":"A","items":[]}`))
 		} else {
@@ -417,11 +385,8 @@ func TestOperationsAll_TwoCursorCycleErrorsRatherThanLoopingForever(t *testing.T
 	}
 }
 
-// TestOperationsAll_ErrorOnSecondPageReturnsErrorNotPartialResult closes the
-// main risk in a multi-page walk: silently truncating history because a
-// later page failed. The first page succeeds and would, on its own, be a
-// perfectly good (if incomplete) result; the second page 500s. The whole
-// call must fail — not return the one good page as if it were everything.
+// A failed second page fails the call; the first page alone is not
+// returned as the whole history.
 func TestOperationsAll_ErrorOnSecondPageReturnsErrorNotPartialResult(t *testing.T) {
 	page1 := readFixture(t, "operations_page1.json")
 
@@ -455,9 +420,7 @@ func TestOperationsAll_ErrorOnSecondPageReturnsErrorNotPartialResult(t *testing.
 	}
 }
 
-// -------------------------------------------------------------------------
-// GetPortfolio / GetPositions
-// -------------------------------------------------------------------------
+// GetPortfolio and GetPositions.
 
 // The account's total comes in rubles, as asked for: the request names the
 // currency, and the answer's totalAmountPortfolio is what the balance mark is.
@@ -510,9 +473,7 @@ func TestGetPortfolio_ParsesFixture(t *testing.T) {
 	if share.FIGI != "BBG004730N88" || share.InstrumentUID != "uid-sber" || share.InstrumentType != "share" {
 		t.Fatalf("positions[0] = %+v, unexpected", share)
 	}
-	// The ticker is decoded because a position that resolves to no instrument
-	// of ours has to be NAMED, and the other two identifiers are a UUID and a
-	// figi (see brokerLabel).
+	// Decoded so an unmatched position can be named (see brokerLabel).
 	if share.Ticker != "SBER" {
 		t.Errorf("positions[0].Ticker = %q, want %q", share.Ticker, "SBER")
 	}
@@ -569,9 +530,7 @@ func TestGetPositions_MergesMoneyAndBlockedByCurrency(t *testing.T) {
 		t.Errorf("RUB.Blocked = %s, want %s", rub.Blocked, wantRUBBlocked)
 	}
 
-	// USD appears only in "money", not "blocked": Blocked must default to
-	// zero rather than being treated as an error or left as decimal's own
-	// zero-value struct with a different internal representation of zero.
+	// USD only in money: Blocked defaults to zero.
 	wantUSDValue := decimal.RequireFromString("42")
 	if !usd.Value.Equal(wantUSDValue) {
 		t.Errorf("USD.Value = %s, want %s", usd.Value, wantUSDValue)
@@ -581,9 +540,7 @@ func TestGetPositions_MergesMoneyAndBlockedByCurrency(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// InstrumentByUID
-// -------------------------------------------------------------------------
+// InstrumentByUID.
 
 func TestInstrumentByUID_ParsesFixture(t *testing.T) {
 	var gotBody map[string]any
@@ -622,9 +579,7 @@ func TestInstrumentByUID_ParsesFixture(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// BondNominalByUID
-// -------------------------------------------------------------------------
+// BondNominalByUID.
 
 func TestBondNominalByUID_ParsesFixture(t *testing.T) {
 	var gotBody map[string]any
@@ -678,9 +633,7 @@ func TestBondNominalByUID_PropagatesTransportError(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// Errors: 401/40003, generic status, request encode failures
-// -------------------------------------------------------------------------
+// Errors: 401/40003, generic status, encoding.
 
 func TestGetAccounts_401ReturnsErrTokenInvalid(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -698,9 +651,7 @@ func TestGetAccounts_401ReturnsErrTokenInvalid(t *testing.T) {
 }
 
 func TestGetAccounts_401WithEmptyBodyStillReturnsErrTokenInvalid(t *testing.T) {
-	// The documented pairing is 401 + description 40003, but the brief's own
-	// rule is "40003/401" — either signal alone must be enough. An empty (or
-	// otherwise unparsable) body must not defeat the plain HTTP status check.
+	// 401 alone is enough, even with an unparsable body.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
@@ -714,15 +665,8 @@ func TestGetAccounts_401WithEmptyBodyStillReturnsErrTokenInvalid(t *testing.T) {
 }
 
 func TestGetAccounts_NonAuthStatusWithDescription40003ReturnsErrTokenInvalid(t *testing.T) {
-	// Defensive branch: description 40003 arriving under some status other
-	// than 401 must still be recognized. The body uses the QUOTED-STRING
-	// form of description ("40003", not 40003 unquoted) — that is the shape
-	// a live 400 response actually carried when this client was exercised
-	// against the real gateway (invest-public-api.tinkoff.ru; see
-	// task-3-report.md), even though the published OpenAPI spec declares
-	// this field a bare integer. wireError.Description is json.Number
-	// specifically so both forms parse; this is the one this test proves
-	// against real-world evidence, not just the spec's own examples.
+	// 40003 under another status, quoted as the live gateway sent it
+	// ("40003"); wireError.Description is a json.Number for this.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -738,15 +682,8 @@ func TestGetAccounts_NonAuthStatusWithDescription40003ReturnsErrTokenInvalid(t *
 }
 
 func TestGetAccounts_NonAuthStatusWithNumericDescription40003ReturnsErrTokenInvalid(t *testing.T) {
-	// Same defensive branch, but with description as a bare (unquoted)
-	// JSON number — the form the published OpenAPI spec actually declares
-	// for this field (ErrorResponse.description: type "integer"; every one
-	// of the spec's own ~400 example error bodies uses this unquoted form,
-	// checked 2026-08-05 against RussianInvestments/investAPI's openapi.yaml).
-	// Kept as a second, separate test from the quoted-string one above
-	// rather than folded into it, since the two exercise different branches
-	// of json.Number's own parsing (see literalStore in encoding/json) and
-	// a regression in either one should fail on its own.
+	// 40003 unquoted, as the spec declares; a separate case because
+	// json.Number parses the two forms on different paths.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -784,16 +721,12 @@ func TestGetAccounts_GenericErrorStatusIsNotErrTokenInvalid(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// Errors: 404/50002, the instrument the broker does not have
-// -------------------------------------------------------------------------
+// Errors: 404/50002.
 
-// TestInstrumentByUID_404ReturnsErrInstrumentNotFound pins the answer a live
-// gateway gave on 2026-08-05 for an unknown uid: HTTP 404 with
-// {"code":5,"message":"Instrument not found","description":"50002"}. It is
-// what makes "there is no such paper" a different outcome from "the broker
-// could not be reached", and a caller can only refuse one operation instead
-// of a whole run because the two are told apart here.
+// The live answer for an unknown uid (2026-08-05): 404 with
+// {"code":5,"message":"Instrument not found","description":"50002"}. Telling it
+// from an unreachable broker is what lets one operation be refused instead of a
+// run.
 func TestInstrumentByUID_404ReturnsErrInstrumentNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -815,9 +748,7 @@ func TestInstrumentByUID_404ReturnsErrInstrumentNotFound(t *testing.T) {
 	}
 }
 
-// TestInstrumentByUID_404WithEmptyBodyStillReturnsErrInstrumentNotFound: the
-// status alone is enough, exactly as it is for a 401. A gateway that answers
-// 404 with nothing in the body has still said the instrument is not there.
+// 404 with an empty body is still not found.
 func TestInstrumentByUID_404WithEmptyBodyStillReturnsErrInstrumentNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -831,9 +762,7 @@ func TestInstrumentByUID_404WithEmptyBodyStillReturnsErrInstrumentNotFound(t *te
 	}
 }
 
-// TestInstrumentByUID_Description50002UnderAnotherStatusIsStillNotFound is the
-// other half of the same rule the token sentinel already follows: the business
-// code is a statement of its own, whatever status carried it.
+// 50002 under another status is still not found.
 func TestInstrumentByUID_Description50002UnderAnotherStatusIsStillNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -849,11 +778,8 @@ func TestInstrumentByUID_Description50002UnderAnotherStatusIsStillNotFound(t *te
 	}
 }
 
-// TestInstrumentByUID_GatewayFailureIsNotAMissingInstrument is the boundary
-// that gives the sentinel its meaning. A 500, a 502, a refused connection are
-// all reasons to try again later; if any of them read as "no such
-// instrument", an operation would be marked unreadable for ever because the
-// broker was briefly down.
+// A 500, a 502 or a refused connection is not "no such instrument", or an
+// outage would mark operations unreadable forever.
 func TestInstrumentByUID_GatewayFailureIsNotAMissingInstrument(t *testing.T) {
 	for _, status := range []int{http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -872,10 +798,7 @@ func TestInstrumentByUID_GatewayFailureIsNotAMissingInstrument(t *testing.T) {
 	}
 }
 
-// TestBondNominalByUID_404ReturnsErrInstrumentNotFound: a bond whose passport
-// the broker has and whose nominal it does not is the same news about the same
-// paper, and the caller that refuses one operation over it needs the same
-// sentinel from both calls.
+// BondNominalByUID's 404 is the same sentinel.
 func TestBondNominalByUID_404ReturnsErrInstrumentNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -891,9 +814,7 @@ func TestBondNominalByUID_404ReturnsErrInstrumentNotFound(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// 429 rate limiting
-// -------------------------------------------------------------------------
+// 429 rate limiting.
 
 func TestDo_429ThenSuccessWaitsAndRetriesOnce(t *testing.T) {
 	var requestCount int
@@ -994,10 +915,7 @@ func TestParseRateLimitReset(t *testing.T) {
 		{"one second", "1", 1 * time.Second},
 		{"missing header defaults to the cap", "", 65 * time.Second},
 		{"unparsable defaults to the cap", "soon", 65 * time.Second},
-		// An explicit "0"/negative is the gateway answering "already clear",
-		// not the gateway saying nothing — it must get the small floor, not
-		// the full 65s cap a missing/garbled header gets (see
-		// minRateLimitWait's own doc comment).
+		// An explicit "0" is an answer: the floor, not the cap.
 		{"explicit zero gets the floor, not the cap", "0", minRateLimitWait},
 		{"explicit negative gets the floor, not the cap", "-5", minRateLimitWait},
 		{"excessive value is capped", "100000", 65 * time.Second},
@@ -1043,9 +961,7 @@ func TestCtxSleep_WaitsOutTheDurationWhenNotCanceled(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// MoneyValue.Decimal / Quotation.Decimal edge cases
-// -------------------------------------------------------------------------
+// MoneyValue.Decimal and Quotation.Decimal edge cases.
 
 func TestMoneyValue_Decimal(t *testing.T) {
 	cases := []struct {
@@ -1094,9 +1010,7 @@ func TestQuotation_Decimal(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// NewClient / NewHTTPClient
-// -------------------------------------------------------------------------
+// NewClient and NewHTTPClient.
 
 func TestNewClient_Defaults(t *testing.T) {
 	c := NewClient(nil, "", "tok", nil)
@@ -1135,10 +1049,7 @@ func TestNewHTTPClient_TimeoutIsSetAsGiven(t *testing.T) {
 	}
 }
 
-// systemPoolBaseline reproduces NewHTTPClient's own fallback (system pool,
-// or a fresh empty one if unavailable) so the "how many certs does the
-// system contribute" baseline is measured the same way in the test as it
-// is inside the function under test.
+// systemPoolBaseline builds the system pool the way NewHTTPClient does.
 func systemPoolBaseline(t *testing.T) *x509.CertPool {
 	t.Helper()
 	pool, err := x509.SystemCertPool()
@@ -1150,14 +1061,10 @@ func systemPoolBaseline(t *testing.T) *x509.CertPool {
 
 func TestNewHTTPClient_PoolHasExactlyOneCertMoreThanSystem_AndItIsOurs(t *testing.T) {
 	baseline := systemPoolBaseline(t)
-	//nolint:staticcheck // Subjects() is deprecated but is the only stdlib
-	// way to count and identify individual certs in a CertPool; the count
-	// difference is measured against a baseline pool built the same way (not
-	// assumed to be some fixed number), so it holds regardless of whether a
-	// given platform's SystemCertPool populates Subjects() with real system
-	// entries (Linux does) or leaves it empty and delegates to the OS
-	// verifier (observed on this darwin dev machine) — either way, our own
-	// AppendCertsFromPEM call always adds exactly one Subjects() entry.
+	//nolint:staticcheck // Subjects() is deprecated but the only way to count a
+	// pool's certs. Counted against a baseline built the same way: some platforms
+	// populate it (Linux), some leave it empty (darwin); our append adds one
+	// either way.
 	baseCount := len(baseline.Subjects())
 
 	hc, err := NewHTTPClient(time.Second)
@@ -1231,16 +1138,8 @@ func TestEmbeddedCert_FingerprintMatchesWhatWasVerifiedOutOfBand(t *testing.T) {
 	}
 	got := strings.Join(hexParts, ":")
 
-	// Literal on purpose, not a shared constant with russianTrustedRootCAPEM's
-	// own doc comment (client.go): that value was verified out-of-band, with
-	// `openssl x509 -in russian_trusted_root_ca.pem -noout -fingerprint
-	// -sha256` run against the file actually embedded in this package,
-	// 2026-08-04 — this test's whole point is to catch a future re-embedding
-	// (rotation, or someone swapping the file) that silently changes what
-	// gets trusted. Pulling the expected value from a constant computed by
-	// this package's own code would make the test compare the code against
-	// itself and pass no matter what the file changed to; it has to stay an
-	// independent, hand-copied number to mean anything.
+	// A literal, verified out of band (openssl on the embedded file,
+	// 2026-08-04), so a swapped file cannot pass by comparing with itself.
 	const want = "D2:6D:2D:02:31:B7:C3:9F:92:CC:73:85:12:BA:54:10:35:19:E4:40:5D:68:B5:BD:70:3E:97:88:CA:8E:CF:31"
 	if got != want {
 		t.Fatalf("embedded certificate fingerprint = %s, want %s", got, want)
@@ -1290,17 +1189,10 @@ func TestWireMoneyValue_CurrencyIsUppercased(t *testing.T) {
 	}
 }
 
-// A redeemed bond is quoted with a nominal of zero: the face value has been
-// paid back, so none of it is outstanding. Refusing such an instrument costs
-// the owner every purchase, coupon and redemption it ever had — on the first
-// real import that was 349 operations across 23 bonds, which is most of the
-// mismatch the reconciliation then reported. The face value is not lost,
-// though: initialNominal keeps what the bond was issued at.
-//
-// Checked live against the gateway: МФК Быстроденьги Ю002Р-01 (matured
-// 2026-06-03) answers nominal 0 with initialNominal 100 CNY, and ОФЗ 29014
-// (matured 2026-03-25) answers 0 with 1000 RUB, while a bond maturing in 2030
-// answers 1000 for both. This fixture is the first of those.
+// A redeemed bond reports nominal 0; refusing it cost 349 operations across
+// 23 bonds on the first real import. initialNominal keeps the issue face. Live:
+// Быстроденьги Ю002Р-01 answers 0 with 100 CNY, ОФЗ 29014 0 with 1000 RUB, a 2030
+// bond 1000 for both. This fixture is the first.
 func TestBondNominalByUID_RedeemedBondFallsBackToWhatItWasIssuedAt(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

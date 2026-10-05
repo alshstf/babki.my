@@ -17,17 +17,11 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// carvedFundRows is the owner's October 2025 as the broker sent it, at the
-// live figures: 60 795 units of «Технологии Америки» bought, 44 380,35 of them
-// withdrawn "to another depositary" on 15.10.2025 — which the projection reads
-// as a transfer, believing it — and 2 559,80 ₽ paid a fortnight later under the
-// bond-redemption type, which #174 leaves unparsed.
-//
-// IT DIFFERS FROM techFundRows IN THE ONE FIGURE THAT MATTERS: the withdrawal
-// takes MOST of the position rather than a third of it, leaving 16 414,65. That
-// is what makes the owner's own answer — one redemption of the 44 380,35 units
-// that were actually redeemed — impossible to write while the withdrawal still
-// stands, and it is the shape the feature met the first time it was used.
+// carvedFundRows is the owner's October 2025 at live figures: 60 795 units of
+// «Технологии Америки» bought, 44 380,35 withdrawn "to another depositary" on
+// 15.10.2025 (read as a transfer), 2 559,80 ₽ paid a fortnight later as a bond
+// redemption (unparsed, #174). The withdrawal takes most of the position, leaving
+// 16 414,65, which is what blocked the owner's redemption.
 func carvedFundRows(t *testing.T, f *rebuildFixture) (buy, out, payout OperationItem) {
 	t.Helper()
 	f.src.instruments[uidTechFund] = InstrumentBrief{
@@ -69,18 +63,10 @@ func explainService(f *rebuildFixture) *Service {
 	return NewService(f.store, nil, operation.NewService(f.ops), f.ops, nil, nil, &fakeInserter{}, slog.Default())
 }
 
-// TestExplainRowsReplacesTheReadingItCorrects is the case this feature exists
-// for, at the figures it was first used at, and until the replacement existed
-// it was the case the feature could not do.
-//
-// The broker's two rows are one partial redemption: 44 380,35 units of the fund
-// were retired and 2 559,80 ₽ paid for them. This program reads the first row
-// as a transfer to another broker — wrongly, but successfully — so the units it
-// names are gone from the position before the owner's own operation is checked,
-// and a redemption of exactly those units met «not enough quantity: have
-// 16414.65, need 44380.35». Naming the entries for replacement is what makes
-// the question the right one: not "does this fit beside the old reading" but
-// "does the journal replay once the old reading is gone".
+// The two rows are one partial redemption. The transfer_out reading removed
+// the units before the owner's operation was checked, giving «not enough
+// quantity: have 16414.65, need 44380.35»; replacing those entries makes the
+// check run on the journal without the old reading.
 func TestExplainRowsReplacesTheReadingItCorrects(t *testing.T) {
 	f := newRebuildFixture(t)
 	buy, out, payout := carvedFundRows(t, f)
@@ -153,11 +139,7 @@ func TestExplainRowsReplacesTheReadingItCorrects(t *testing.T) {
 	}
 }
 
-// TestARebuildAfterAnExplanationLeavesTheJournalAlone is the other half of the
-// same promise: the rebuild that follows must not put back what the
-// explanation took out. It is already the projection's rule — an explained row
-// produces nothing — but the removal is new, and a rule stated in one place and
-// relied on in another is exactly the pair worth pinning.
+// The following rebuild does not put back what the explanation removed.
 func TestARebuildAfterAnExplanationLeavesTheJournalAlone(t *testing.T) {
 	f := newRebuildFixture(t)
 	buy, out, payout := carvedFundRows(t, f)
@@ -194,14 +176,8 @@ func TestARebuildAfterAnExplanationLeavesTheJournalAlone(t *testing.T) {
 	}
 }
 
-// TestExplainRowsTakesEVERYEntryOfARowItReplaces: one broker row can produce
-// several journal entries, and a replacement that took only the first would
-// leave the other standing — money the owner's own operation is now also
-// accounting for, counted twice with nothing on any screen to say so.
-//
-// A dividend paid to a card is the shape: the broker pays it and it leaves the
-// brokerage account in the same breath, so the projection writes two entries
-// (see projectDividendToCard).
+// Every entry of a replaced row goes: a dividend paid to a card produces two
+// (see projectDividendToCard), and leaving one would count the money twice.
 func TestExplainRowsTakesEVERYEntryOfARowItReplaces(t *testing.T) {
 	f := newRebuildFixture(t)
 	divExt := loadOperationItem(t, "div_ext.json")
@@ -237,14 +213,9 @@ func TestExplainRowsTakesEVERYEntryOfARowItReplaces(t *testing.T) {
 	}
 }
 
-// TestAJournalRefusalIsAnsweredAsTheJournalAnswersIt pins defect 2. The engine
-// refusing an operation is news about the owner's history, not about this
-// program: the journal screen answers it with 409 and the engine's own
-// sentence, and until this branch existed the same refusal came back from this
-// endpoint as «internal error» with a 500 — the program saying it had broken.
-//
-// The refusal is taken FROM THE SERVICE rather than invented, so what is
-// rendered here is the error the path really produces.
+// The engine's refusal reaches this endpoint as the journal answers it, 409
+// with the engine's sentence, not a 500. The refusal comes from the real
+// service.
 func TestAJournalRefusalIsAnsweredAsTheJournalAnswersIt(t *testing.T) {
 	f := newRebuildFixture(t)
 	buy, out, payout := carvedFundRows(t, f)

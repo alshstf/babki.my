@@ -13,22 +13,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Every bound and every vocabulary this module publishes is written down twice:
-// once in Go, where the server enforces it, and once in api/openapi.yaml, where
-// a client reads it. Go cannot import a YAML literal, so the second copy is
-// typed by hand — and a change that touched only one of the two would leave the
-// contract promising something the server does not do, with every other test in
-// this repository still green. That is #120's lesson, and #118's: a ceiling the
-// document states and the server does not apply is a defect in its own right.
-//
-// This file does not remove the duplication. It removes the SILENCE.
-//
-// TWO OF THE CHECKS BELOW READ THE GO SOURCE RATHER THAN THE GO CONSTANTS, and
-// that is on purpose: comparing the contract against a list of constants spelled
-// out here would say nothing about a THIRTEENTH reason code added tomorrow — the
-// list here would simply not mention it, and the contract's enum would go on
-// looking complete. Reading the declarations out of the file that declares them
-// makes an unlisted value a failure.
+// Every bound and vocabulary this module publishes is written in Go and in
+// api/openapi.yaml, which Go cannot import, so these tests keep them in step (#118,
+// #120). Two checks read the Go source rather than constants, so a value added in
+// Go and missing from the contract fails.
 
 // repoFile reads a path relative to the repository root. Tests run with their
 // own package directory as the working directory, and the contract lives outside
@@ -162,29 +150,11 @@ func TestTheContractStatesThePageBoundsTheServerEnforces(t *testing.T) {
 	}
 }
 
-// TestTheContractStatesWhichPathCanAnswer422 ties the one status code this
-// module answers on a single path to the document that declares it.
-//
-// 422 is the answer to a picked broker account this token cannot import, and
-// ONLY POST /api/v1/tinvest/connections can produce it: it is the only call that
-// takes picks (Service.CreateConnection, ErrBrokerAccountNotImportable). Two
-// things could go wrong silently, and this checks both. The create path could
-// stop declaring what it answers, leaving a client with no name for the code it
-// meets. Or a later path could copy the declaration without being able to
-// produce it — a promise nothing keeps, which is #120's whole lesson in reverse.
-//
-// THE EXPLAIN PATH DECLARED ONE AND COULD NOT ANSWER IT. The reasoning written
-// down at the time was that the manual operation it takes goes through the
-// journal's own service, whose refusals reach the client unchanged — true, and
-// it does not produce a 422: that service answers ErrValidation with 400 and
-// ErrInconsistent with 409 (operation.writeError), and nothing on that path
-// makes a 422 at all. The declaration was checked against what the sentence
-// SAID rather than against what the code answers, and this test then held the
-// mistake in place. It is gone from the document and from here.
-//
-// The count is asserted for the reason goConstantValues asserts its own: a
-// renamed prefix or a moved path would otherwise leave this test iterating over
-// nothing and passing.
+// 422 (a picked account the token cannot import) is declared only on POST
+// /api/v1/tinvest/connections, the only path that can produce it
+// (Service.CreateConnection). The explain path once declared it without being able
+// to answer it (its service answers 400 or 409); it was removed. The count guards
+// against iterating over nothing.
 func TestTheContractStatesWhichPathCanAnswer422(t *testing.T) {
 	doc := readContract(t)
 	const createPath = "/api/v1/tinvest/connections"
@@ -232,10 +202,8 @@ func TestTheContractStatesWhichPathCanAnswer422(t *testing.T) {
 	}
 }
 
-// TestTheContractStatesTheFieldsTheServerRefusesEmpty covers the bounds that are
-// not numbers: the request fields whose emptiness the service turns into a 400.
-// Each one below names where that refusal lives, so a reader can go and check
-// the claim rather than take this table's word for it.
+// Request fields whose emptiness the service refuses with a 400; each names
+// where the refusal lives.
 func TestTheContractStatesTheFieldsTheServerRefusesEmpty(t *testing.T) {
 	doc := readContract(t)
 	for _, site := range []struct {
@@ -276,14 +244,9 @@ func TestTheContractStatesTheFieldsTheServerRefusesEmpty(t *testing.T) {
 	}
 }
 
-// goConstantValues reads the string values of every constant of the named Go
-// type out of the files that declare it. Reading the SOURCE rather than the
-// constants is what makes a value added in Go and forgotten in the contract a
-// failure here — see the note at the top of this file.
-//
-// want is how many declarations the pattern must find. It is checked because a
-// rename or a reformat would otherwise leave this matching nothing at all, and a
-// test comparing two empty sets passes.
+// goConstantValues reads the string values of every constant of typeName from
+// the declaring files' source. want is the expected count, so a rename that
+// matches nothing fails.
 func goConstantValues(t *testing.T, typeName string, want int, files ...string) []string {
 	t.Helper()
 	re := regexp.MustCompile(`(?m)^\s*(?:const\s+)?\w+\s+` + typeName + `\s*=\s*"([^"]*)"`)

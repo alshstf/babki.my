@@ -12,9 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// This file is package tinvest (not tinvest_test) so it can reach contentKey
-// and dedupInPage, which are unexported on purpose: the content key is the
-// mirror's identity and nothing outside this package may build one.
+// Package tinvest, to reach contentKey and dedupInPage.
 
 // wireTime parses one of the broker's own timestamps the way the client does.
 func wireTime(t *testing.T, s string) time.Time {
@@ -44,10 +42,7 @@ func TestContentKeyHasTheShapeTheMirrorIsMatchedOn(t *testing.T) {
 	}
 }
 
-// The broker's own identifiers are precisely what the key must NOT depend on:
-// the API's documentation says an operation's id may change over time and is
-// not to be relied on as a primary key. If any of them leaked into the key, a
-// reissued id would present a known operation as a new one.
+// The key must not depend on the broker's ids, which may be reissued.
 func TestContentKeyIgnoresTheBrokersOwnIdentifiers(t *testing.T) {
 	base := OperationItem{
 		ID:                "id-before",
@@ -98,9 +93,8 @@ func TestContentKeyLeavesTheInstrumentEmptyWhenTheBrokerNamedNone(t *testing.T) 
 	}
 }
 
-// The broker splits a money value into a signed integer part and a signed
-// nano part, and a value between -1 and 0 arrives as units "-0" plus a
-// negative nano. The key must read that as one number, not as two.
+// A value between -1 and 0 arrives as units "-0" plus a negative nano; the
+// key reads it as one number.
 func TestContentKeySurvivesTheBrokersNegativeZero(t *testing.T) {
 	payment, err := wireMoneyValue{Currency: "rub", Units: "-0", Nano: -200000000}.parse()
 	if err != nil {
@@ -130,9 +124,8 @@ func TestContentKeyIsTheSameInstantWhateverOffsetItArrivedIn(t *testing.T) {
 	}
 }
 
-// The currency reaches this package lower case ("rub") and the client
-// upper-cases it. The key upper-cases it too, so that a change on that path
-// could never split one operation into two mirror rows.
+// The key upper-cases the currency, so a case change cannot split one
+// operation into two rows.
 func TestContentKeyReadsTheCurrencyInOneCaseOnly(t *testing.T) {
 	got := contentKey(OperationItem{
 		Type:    "OPERATION_TYPE_INPUT",
@@ -194,9 +187,7 @@ func TestDedupInPageKeepsTheFirstOfARepeatedBrokerID(t *testing.T) {
 	}
 }
 
-// An operation the broker left unidentified cannot be deduplicated by
-// identifier, and collapsing two of them would silently drop a real
-// operation — the one thing the mirror exists to prevent.
+// Unidentified operations are kept: collapsing two would drop a real one.
 func TestDedupInPageKeepsOperationsTheBrokerLeftUnidentified(t *testing.T) {
 	got := dedupInPage([]OperationItem{
 		{ID: "", Payment: MoneyValue{Currency: "RUB", Units: 1}},
@@ -220,9 +211,7 @@ func TestDedupInPageLeavesADistinctPageAlone(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// SyncMirror. Everything below needs a database.
-// ---------------------------------------------------------------------------
+// SyncMirror; everything below needs a database.
 
 // op builds an OperationItem the way the client hands one over: raw bytes
 // included, since the mirror keeps them.
@@ -239,9 +228,7 @@ func op(id, opType, instrumentUID string, at time.Time, currency string, units i
 	}
 }
 
-// rowsByPayment indexes the link's mirror rows by the decimal string of their
-// payment, which the tests below use to name a row without depending on the
-// order they come back in.
+// rowsByPayment indexes the link's rows by payment, independent of order.
 func rowsByPayment(t *testing.T, f fixture) map[string]MirrorRow {
 	t.Helper()
 	rows, err := f.store.MirrorRowsByLink(f.ctx, f.link.ID)
@@ -375,10 +362,8 @@ func TestSyncMirrorStoresWhatTheBrokerSaid(t *testing.T) {
 	if r.AccruedInt == nil || r.AccruedInt.String() != "3.25" {
 		t.Errorf("accrued interest = %v, want 3.25", r.AccruedInt)
 	}
-	// Both counts survive the trip, and they are DIFFERENT numbers here on
-	// purpose: an order of 10 with 4 of it executed. A fixture that made them
-	// equal could not tell a column that stores the wrong one from a column
-	// that stores the right one (#131).
+	// An order of 10 with 4 filled: different numbers, so a swapped column is
+	// caught (#131).
 	if r.Quantity != 10 {
 		t.Errorf("quantity = %d, want 10 — the size of the order", r.Quantity)
 	}
@@ -407,12 +392,8 @@ func TestSyncMirrorStoresWhatTheBrokerSaid(t *testing.T) {
 	}
 }
 
-// THE REASON THE KEY IS NEVER REBUILT FROM THE STORED COLUMNS, demonstrated
-// rather than asserted: PostgreSQL keeps a timestamptz to the microsecond,
-// so the broker's nanoseconds do not survive the round trip — while the key,
-// built once from the wire, keeps every one of them. Rebuilding a key from
-// occurred_at would produce a string that matches nothing the mirror holds,
-// and every operation would look new on every single run.
+// Postgres keeps microseconds, the broker sends nanoseconds, so a key rebuilt
+// from occurred_at would match nothing; the key is built once from the wire.
 func TestSyncMirrorStoresTheInstantLessPreciselyThanTheKeyDoes(t *testing.T) {
 	f := newFixture(t)
 	now := wireTime(t, "2026-03-16T00:00:00Z")
@@ -437,9 +418,7 @@ func TestSyncMirrorStoresTheInstantLessPreciselyThanTheKeyDoes(t *testing.T) {
 		t.Errorf("the key lost the nanoseconds too: %q", rows[0].ContentKey)
 	}
 
-	// And the proof that this matters: a second run of the very same
-	// operation adds nothing, because the comparison uses the stored key and
-	// not the stored instant.
+	// A second run adds nothing: the comparison uses the stored key.
 	stats, err := f.store.SyncMirror(f.ctx, f.conn.ID, f.link, []OperationItem{item},
 		wireTime(t, "2026-03-16T01:00:00Z"))
 	if err != nil {
@@ -450,9 +429,7 @@ func TestSyncMirrorStoresTheInstantLessPreciselyThanTheKeyDoes(t *testing.T) {
 	}
 }
 
-// A money value the broker did not send at all is stored as nothing, not as
-// zero: "the broker charged no commission" and "the broker said nothing about
-// commission" are different statements and the mirror must not merge them.
+// No commission sent is stored as nothing, not zero.
 func TestSyncMirrorKeepsAbsentMoneyApartFromZeroMoney(t *testing.T) {
 	f := newFixture(t)
 	now := wireTime(t, "2026-03-16T00:00:00Z")
@@ -546,16 +523,9 @@ func TestSyncMirrorReissuedBrokerIDDoesNotCreateASecondRow(t *testing.T) {
 	}
 }
 
-// A mirror row carries the LAST thing the broker said about the operation,
-// not the first. The content key answers "which row is this"; everything
-// outside the key is what the broker says about it now, and a broker that
-// corrects a commission must not leave the mirror wrong for good.
-//
-// Every attribute a confirmation may refresh is corrected here at once, so
-// that dropping any single one of them from the confirming statement shows up
-// as a failure. What must survive is checked too: the row's own id (the
-// journal points at it), the moment it was first seen, the content key, and
-// the unparsed reason, which belongs to the projection and not to this.
+// A mirror row carries the broker's latest word. Every refreshable attribute
+// is corrected at once, so dropping any one from the confirming statement fails;
+// the id, first sighting, key and unparsed reason must survive.
 func TestSyncMirrorRefreshesEveryAttributeTheBrokerCorrected(t *testing.T) {
 	f := newFixture(t)
 	first := wireTime(t, "2026-03-16T00:00:00Z")
@@ -593,12 +563,8 @@ func TestSyncMirrorRefreshesEveryAttributeTheBrokerCorrected(t *testing.T) {
 		t.Fatalf("SetUnparsedVerdicts: %v", err)
 	}
 
-	// Everything outside the content key, corrected at once. The key's own
-	// fields — the instant, the operation type, the instrument uid, the
-	// currency, the payment and the quantity — are left as they were, because
-	// changing one of them makes it a different operation, and this test would
-	// then be about something else. FIGI is free to move because this
-	// operation names an instrument uid, which is what the key took.
+	// Everything outside the key changes; the key's fields stay, or it would
+	// be another operation. FIGI may move because the key used the uid.
 	after := before
 	after.ID = "op-after"
 	after.ParentOperationID = "parent-after"
@@ -612,9 +578,8 @@ func TestSyncMirrorRefreshesEveryAttributeTheBrokerCorrected(t *testing.T) {
 	after.AccruedInt = MoneyValue{Currency: "RUB", Units: 4, Nano: 750000000}
 	after.Description = "Покупка ценных бумаг"
 	after.Raw = json.RawMessage(`{"id":"op-after"}`)
-	// The three the confirming statement used to leave at their first sighting
-	// (#192): the filled size the broker completes later, the ticker it replaces
-	// with an ISIN once it forgets the paper, and the trading mode.
+	// The three once left at first sighting (#192): fill size, ticker (an
+	// ISIN once forgotten) and trading mode.
 	after.QuantityDone = 10
 	after.Ticker = "US0378331005"
 	after.ClassCode = "TQBR"
@@ -712,10 +677,8 @@ func TestSyncMirrorRefreshesEveryAttributeTheBrokerCorrected(t *testing.T) {
 	}
 }
 
-// TestEveryMirrorColumnIsEitherRefreshedOrDeliberatelyLeftAlone makes a column
-// added to the mirror answer one question: does a confirmation rewrite it? Three
-// columns added by later migrations were never added to the confirming
-// statement, and nothing noticed (#192).
+// Every mirror column is either refreshed by a confirmation or deliberately
+// left alone; three later columns were once missed (#192).
 func TestEveryMirrorColumnIsEitherRefreshedOrDeliberatelyLeftAlone(t *testing.T) {
 	refreshed := map[string]bool{
 		// What the broker says about the operation now.
@@ -754,10 +717,8 @@ func TestEveryMirrorColumnIsEitherRefreshedOrDeliberatelyLeftAlone(t *testing.T)
 	}
 }
 
-// The broker returns an operation before it has settled and again once it
-// has. If the mirror kept the state it first saw, that operation would read
-// "in progress" for good and never reach the journal at all, since the
-// projection takes only executed ones.
+// An operation first seen in progress becomes executed, or it would never
+// reach the journal.
 func TestSyncMirrorFollowsAnOperationOutOfProgressIntoExecuted(t *testing.T) {
 	f := newFixture(t)
 	first := wireTime(t, "2026-03-16T00:00:00Z")
@@ -786,9 +747,7 @@ func TestSyncMirrorFollowsAnOperationOutOfProgressIntoExecuted(t *testing.T) {
 	}
 }
 
-// raw promises what the broker actually sent. The broker's identifier is
-// refreshed on every confirmation, so leaving raw at the first document seen
-// would put the two side by side saying different things about one row.
+// raw is refreshed with the id beside it, so the two cannot disagree.
 func TestSyncMirrorRefreshesRawSoItCannotContradictTheIDBesideIt(t *testing.T) {
 	f := newFixture(t)
 	first := wireTime(t, "2026-03-16T00:00:00Z")
@@ -995,10 +954,8 @@ func TestSyncMirrorAddsOnlyTheDifferenceInMultiplicity(t *testing.T) {
 	}
 }
 
-// THE MUTATION ANCHOR for contentKey. Strip the payment out of the key and
-// the second run below stops seeing a correction: the −200 operation would
-// be matched against the stored −100 row and reported as a confirmation
-// (Added 0, Disappeared 0) instead of as one row gone and one row new.
+// The payment is part of the key: without it a −200 correction of a −100
+// operation would read as a confirmation instead of one gone and one new.
 func TestSyncMirrorKeepsTwoOperationsThatDifferOnlyInAmountApart(t *testing.T) {
 	f := newFixture(t)
 	first := wireTime(t, "2026-03-16T00:00:00Z")
@@ -1049,9 +1006,8 @@ func TestSyncMirrorKeepsTwoOperationsThatDifferOnlyInAmountApart(t *testing.T) {
 	}
 }
 
-// The broker's own docs warn that a page can repeat rows. Within one read the
-// identifier is stable, so a repeat is caught by it — and a repeat is not a
-// second operation.
+// A row the broker's page repeats (same id within one read) is one
+// operation.
 func TestSyncMirrorCollapsesTheBrokersOwnDuplicateRow(t *testing.T) {
 	f := newFixture(t)
 	now := wireTime(t, "2026-03-16T00:00:00Z")
@@ -1073,9 +1029,8 @@ func TestSyncMirrorCollapsesTheBrokersOwnDuplicateRow(t *testing.T) {
 	}
 }
 
-// When a bucket holds both a live row and a marked one, the fetch confirms
-// the live one. Matching the marked one instead would raise a row from the
-// dead and bury a live one on every single run, forever.
+// With a live and a marked row on one key, the live one is confirmed, or
+// a dead row would be revived and a live one buried on every run.
 func TestSyncMirrorConfirmsTheLiveRowBeforeTheMarkedOne(t *testing.T) {
 	f := newFixture(t)
 	now := wireTime(t, "2026-03-16T02:00:00Z")
@@ -1083,9 +1038,7 @@ func TestSyncMirrorConfirmsTheLiveRowBeforeTheMarkedOne(t *testing.T) {
 	item := op("op-1", "OPERATION_TYPE_INPUT", "", wireTime(t, "2026-01-09T05:00:00Z"), "RUB", 50000, 0, 0)
 	key := contentKey(item)
 
-	// Two rows on one key, and the MARKED one is the older: nothing this
-	// package writes can arrange that (a bucket is consumed oldest first),
-	// so it is arranged directly.
+	// Arranged directly: this package never leaves the marked row older.
 	old := f.insertMirrorRow(t, key, wireTime(t, "2026-03-16T00:00:00Z"), &marked)
 	young := f.insertMirrorRow(t, key, wireTime(t, "2026-03-16T00:30:00Z"), nil)
 
@@ -1146,11 +1099,8 @@ func TestSyncMirrorLeavesAnotherLinksRowsAlone(t *testing.T) {
 	}
 }
 
-// A run is all or nothing. The failing row below is rejected by PostgreSQL
-// itself — its description carries a byte sequence that is not valid UTF-8 —
-// so every statement of the run that came before it really did execute on
-// the server, and what the assertions see is a rollback rather than a run
-// that never started.
+// All or nothing: the last row is rejected by Postgres (invalid UTF-8), after
+// the earlier statements really ran, so what the assertions see is a rollback.
 func TestSyncMirrorRollsBackEverythingWhenOneRowCannotBeWritten(t *testing.T) {
 	f := newFixture(t)
 	first := wireTime(t, "2026-03-16T00:00:00Z")
@@ -1171,9 +1121,7 @@ func TestSyncMirrorRollsBackEverythingWhenOneRowCannotBeWritten(t *testing.T) {
 	if err == nil {
 		t.Fatalf("SyncMirror accepted a row PostgreSQL cannot store")
 	}
-	// The refusal has to come from the server for this test to mean what it
-	// says: only then did the confirmation and the mark really execute before
-	// it, and only then is what the assertions below see a rollback.
+	// The refusal must come from the server for that to hold.
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
 		t.Fatalf("the row was refused before it reached PostgreSQL (%v); this test would then prove nothing", err)
@@ -1191,23 +1139,10 @@ func TestSyncMirrorRollsBackEverythingWhenOneRowCannotBeWritten(t *testing.T) {
 	}
 }
 
-// The comparison and the writes sit behind a lock on the connection row,
-// taken as the transaction's first statement. Two runs of one connection have
-// to serialize on it: without it both would compute their difference against
-// the same stored state and both would insert the same new rows.
-//
-// The lock is held HERE, by the test itself, so that the waiting is observed
-// rather than raced for.
-//
-// FOR NO KEY UPDATE, and not the FOR UPDATE the sync takes, is what makes
-// this test mean anything. Inserting a mirror row makes PostgreSQL check the
-// row's foreign key back to the connection, and that check takes FOR KEY
-// SHARE on this very row — which FOR UPDATE blocks. Held that way, the sync
-// would wait here whether or not it locked anything itself, and the test
-// would pass with the lock taken out. FOR NO KEY UPDATE conflicts with FOR
-// UPDATE and not with FOR KEY SHARE, so what is being waited on is the sync's
-// own lock and nothing else. (Checked: with the FOR UPDATE removed from
-// SyncMirror this test goes red, and it did not before this note was written.)
+// Two runs of one connection serialize on the lock SyncMirror takes first. The
+// test holds the lock itself, with FOR NO KEY UPDATE: FOR UPDATE would also block
+// the inserts' foreign-key checks (FOR KEY SHARE), so the sync would wait even
+// without its own lock. With the sync's lock removed this test fails.
 func TestSyncMirrorWaitsForAnotherRunOfTheSameConnection(t *testing.T) {
 	f := newFixture(t)
 	now := wireTime(t, "2026-03-16T00:00:00Z")
@@ -1252,14 +1187,8 @@ func TestSyncMirrorWaitsForAnotherRunOfTheSameConnection(t *testing.T) {
 	}
 }
 
-// waitUntilBlocked waits until n backends of this test's own database are
-// stopped on a lock. Every test database is private to its test, so nothing
-// else can be counted here by mistake.
-//
-// It exists so that "both runs have reached the gate" is observed rather than
-// assumed: a sleep long enough on this machine today is too short on a loaded
-// one tomorrow, and a run that had not yet reached the gate would let the
-// wrong order through green.
+// waitUntilBlocked waits until n backends of this test's private database are
+// blocked on a lock, so arrival at the gate is observed rather than slept for.
 func (f fixture) waitUntilBlocked(t *testing.T, n int) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -1280,24 +1209,11 @@ func (f fixture) waitUntilBlocked(t *testing.T, n int) {
 	}
 }
 
-// THE LOCK IS TAKEN BEFORE THE MIRROR IS READ, and this is the test that
-// tells that order apart from the other one. The test above proves only that
-// a second run WAITS, which it does either way — move the lock down past the
-// read and it stays green. What the order decides is whether a run that
-// waited then acts on what it read BEFORE it waited.
-//
-// PostgreSQL reads at READ COMMITTED here, so each statement takes its own
-// snapshot. With the read first, both runs see the empty mirror while the
-// gate is shut and each then inserts the operation it believes is new: two
-// rows for one operation, on every pair of runs that overlap. With the lock
-// first, neither has read anything while it waits, so the second run reads
-// the mirror the first one left behind and confirms that row instead.
-//
-// The gate is a lock the test itself holds, so that both runs are demonstrably
-// inside SyncMirror and stopped at the same statement before either is let on.
-// FOR NO KEY UPDATE for the reason the test above spells out: it conflicts
-// with the sync's FOR UPDATE and not with the FOR KEY SHARE that an insert's
-// foreign-key check takes.
+// The lock is taken before the mirror is read. The test above passes either
+// way; here both runs are held inside SyncMirror at the gate. At READ COMMITTED a
+// read before the wait would see an empty mirror in both runs and insert the
+// operation twice; with the lock first, the second run sees the first's row.
+// FOR NO KEY UPDATE as above.
 func TestSyncMirrorTakesTheLockBeforeItReadsTheMirror(t *testing.T) {
 	f := newFixture(t)
 	item := op("op-1", "OPERATION_TYPE_BUY", "uid-1", wireTime(t, "2026-03-14T07:30:15Z"), "RUB", -100, 0, 1)
@@ -1367,10 +1283,9 @@ func TestSyncMirrorRefusesAConnectionThatIsNotThere(t *testing.T) {
 	}
 }
 
-// The broker renames the paper on an old operation — same moment, type,
-// payment and quantity, a new instrument uid. That is the same operation: the
-// row keeps its id (the journal points at it), takes the new key and uid, is
-// not marked gone, and the explanation given for it moves with it (#196).
+// The broker renames the paper on an old operation (same moment, type,
+// payment and quantity, new uid): the row keeps its id, takes the new key, is not
+// marked gone, and its explanation moves with it (#196).
 func TestSyncMirrorKnowsARowTheBrokerRewrote(t *testing.T) {
 	f := newFixture(t)
 	at := wireTime(t, "2026-03-14T07:30:15Z")
@@ -1440,9 +1355,8 @@ func TestSyncMirrorPairsARewriteOnlyWhenItIsUnambiguous(t *testing.T) {
 	}
 }
 
-// The row's new key already has an explanation of its own: the sync keeps it
-// and does not fail on the one-explanation-per-row rule — the old explanation
-// stays where it was.
+// If the new key already has an explanation, the sync keeps it and leaves
+// the old one where it was.
 func TestSyncMirrorLeavesAnExplanationAlreadyOnTheNewKey(t *testing.T) {
 	f := newFixture(t)
 	at := wireTime(t, "2026-03-14T07:30:15Z")

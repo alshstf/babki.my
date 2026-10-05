@@ -25,10 +25,8 @@ func reportRow(tradeID, tradedAt, clearValueDate string) string {
 		tradeID, tradedAt, clearValueDate)
 }
 
-// brokerReport is one answer of the report method that serves BOTH of its
-// requests: the order's task id and a finished one-page report. The stub
-// answers every call to one rpc alike, and each of the two decoders reads only
-// its own half.
+// brokerReport answers both requests of the report method: the task id and
+// a finished one-page report; each decoder reads its own half.
 func brokerReport(rows ...string) string {
 	return `{"generateBrokerReportResponse":{"taskId":"task-1"},` +
 		`"getBrokerReportResponse":{"brokerReport":[` + strings.Join(rows, ",") + `],` +
@@ -64,10 +62,9 @@ func on(s string) time.Time {
 // the report, on the wire
 // -------------------------------------------------------------------------
 
-// The report is ordered, waited for while the broker says it is not built,
-// and read page by page; the waits are the client's own sleep, at the stated
-// interval, and a trade with no settlement day is left out rather than
-// failing the month.
+// The report is ordered, waited for (the client's sleep, at the stated
+// interval) and read page by page; a trade without a settlement day is
+// skipped.
 func TestTradeSettlementsWaitsForTheReportAndReadsEveryPage(t *testing.T) {
 	var calls []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
