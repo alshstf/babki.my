@@ -1,7 +1,6 @@
 package account_test
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,9 +11,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
@@ -22,6 +19,7 @@ import (
 	"babki.my/babki/internal/account"
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/marketdata/ratetest"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
 )
@@ -45,59 +43,10 @@ func (c screenCost) String() string {
 // RUB rate, so the unbatched cost is one lookup per distinct currency.
 var screenCurrencies = []string{"USD", "EUR", "GBP", "CHF", "CNY", "KZT", "TRY", "SEK"}
 
-// countingConverter counts what a screen asks of the fx layer while a real
-// converter answers. keep filters the batch (a hole in the enumeration);
-// batchErr fails the batch alone (#70), unlike failingConverter's outage.
-// Counts are atomic: the handler runs on the server's goroutine.
-type countingConverter struct {
-	inner    *marketdata.Converter
-	keep     func(marketdata.RateQuery) bool
-	batchErr error
-	rate     atomic.Int64
-	batch    atomic.Int64
-}
-
-// dropping and failingBatch tune the double: a hole in the enumeration, or a
-// batch that dies alone.
-func dropping(pred func(marketdata.RateQuery) bool) func(*countingConverter) {
-	return func(c *countingConverter) { c.keep = pred }
-}
-
-func failingBatch(err error) func(*countingConverter) {
-	return func(c *countingConverter) { c.batchErr = err }
-}
-
-func (c *countingConverter) ConvertMany(ctx context.Context, amounts map[string]int64, to string, on time.Time) (int64, []string, time.Time, error) {
-	return c.inner.ConvertMany(ctx, amounts, to, on)
-}
-
-func (c *countingConverter) Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error) {
-	c.rate.Add(1)
-	return c.inner.Rate(ctx, from, to, on)
-}
-
-func (c *countingConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
-	c.batch.Add(1)
-	if c.batchErr != nil {
-		// The zero Rates with the error, as RatesOn returns on failure.
-		return marketdata.Rates{}, c.batchErr
-	}
-	if c.keep == nil {
-		return c.inner.RatesOn(ctx, queries)
-	}
-	kept := make([]marketdata.RateQuery, 0, len(queries))
-	for _, q := range queries {
-		if c.keep(q) {
-			kept = append(kept, q)
-		}
-	}
-	return c.inner.RatesOn(ctx, kept)
-}
-
 // newAPIOnPool wires family and account onto pool with conv as the converter
 // and returns the URL and a logged-in client, so tests count acquisitions on
 // the handler's own pool.
-func newAPIOnPool(t *testing.T, pool *pgxpool.Pool, conv *countingConverter) (string, *http.Client) {
+func newAPIOnPool(t *testing.T, pool *pgxpool.Pool, conv *ratetest.Counting) (string, *http.Client) {
 	t.Helper()
 	famStore := family.NewStore(pool)
 	famSvc := family.NewService(famStore)
@@ -124,14 +73,14 @@ func newAPIOnPool(t *testing.T, pool *pgxpool.Pool, conv *countingConverter) (st
 // accountsFixture builds two accounts in each of the first `currencies`
 // screen currencies, each currency with a direct RUB rate. Two per currency so
 // the measured growth is in currencies, not rows.
-func accountsFixture(t *testing.T, currencies int, tune func(*countingConverter)) (string, *http.Client, *pgxpool.Pool, *countingConverter) {
+func accountsFixture(t *testing.T, currencies int, tune func(*ratetest.Counting)) (string, *http.Client, *pgxpool.Pool, *ratetest.Counting) {
 	t.Helper()
 	if currencies > len(screenCurrencies) {
 		t.Fatalf("fixture asks for %d currencies, only %d are defined", currencies, len(screenCurrencies))
 	}
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
-	conv := &countingConverter{inner: marketdata.NewConverter(mdStore)}
+	conv := &ratetest.Counting{Inner: marketdata.NewConverter(mdStore)}
 	if tune != nil {
 		tune(conv)
 	}
@@ -165,10 +114,9 @@ func poolTrips(pool *pgxpool.Pool) int64 { return pool.Stat().AcquireCount() }
 
 // getScreen fetches path once and reports what that request cost; counters are
 // reset just before it.
-func getScreen(t *testing.T, url, path string, c *http.Client, pool *pgxpool.Pool, conv *countingConverter, out any) screenCost {
+func getScreen(t *testing.T, url, path string, c *http.Client, pool *pgxpool.Pool, conv *ratetest.Counting, out any) screenCost {
 	t.Helper()
-	conv.rate.Store(0)
-	conv.batch.Store(0)
+	conv.Reset()
 	before := poolTrips(pool)
 
 	resp := do(t, c, "GET", url+path, "")
@@ -176,14 +124,14 @@ func getScreen(t *testing.T, url, path string, c *http.Client, pool *pgxpool.Poo
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("GET %s = %d, want 200: %s", path, resp.StatusCode, b)
 	}
-	cost := screenCost{trips: poolTrips(pool) - before, rate: conv.rate.Load(), batch: conv.batch.Load()}
+	cost := screenCost{trips: poolTrips(pool) - before, rate: conv.Singles.Load(), batch: conv.Batches.Load()}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		t.Fatalf("decode %s: %v", path, err)
 	}
 	return cost
 }
 
-func accountsScreen(t *testing.T, currencies int, tune func(*countingConverter)) (screenCost, []accountListItem) {
+func accountsScreen(t *testing.T, currencies int, tune func(*ratetest.Counting)) (screenCost, []accountListItem) {
 	t.Helper()
 	url, c, pool, conv := accountsFixture(t, currencies, tune)
 	var body []accountListItem
@@ -192,7 +140,7 @@ func accountsScreen(t *testing.T, currencies int, tune func(*countingConverter))
 }
 
 // summaryScreen is accountsScreen's twin for GET /summary.
-func summaryScreen(t *testing.T, currencies int, tune func(*countingConverter)) (screenCost, summaryResponse) {
+func summaryScreen(t *testing.T, currencies int, tune func(*ratetest.Counting)) (screenCost, summaryResponse) {
 	t.Helper()
 	url, c, pool, conv := accountsFixture(t, currencies, tune)
 	var body summaryResponse
@@ -287,7 +235,7 @@ func TestAccountsIncompletePrewarmCostsTripsNotNumbers(t *testing.T) {
 		{"nothing is prewarmed", func(marketdata.RateQuery) bool { return false }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			partial, partialBody := accountsScreen(t, 3, dropping(tc.keep))
+			partial, partialBody := accountsScreen(t, 3, ratetest.Dropping(tc.keep))
 
 			// Separate databases: only account ids differ.
 			if !reflect.DeepEqual(blankAccountIDs(partialBody), blankAccountIDs(fullBody)) {
@@ -311,7 +259,7 @@ func TestAccountsFailedBatchCostsTripsNotNumbers(t *testing.T) {
 	full, fullBody := accountsScreen(t, 3, nil)
 	assertAccountsAreFullyWorked(t, fullBody, 3)
 
-	dead, deadBody := accountsScreen(t, 3, failingBatch(errors.New("statement timeout on the batched fx lookup")))
+	dead, deadBody := accountsScreen(t, 3, ratetest.FailingBatch(errors.New("statement timeout on the batched fx lookup")))
 	assertAccountsAreFullyWorked(t, deadBody, 3)
 
 	// Separate databases: only account ids differ.

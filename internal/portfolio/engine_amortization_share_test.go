@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"babki.my/babki/internal/portfolio"
+	"babki.my/babki/internal/portfolio/portfoliotest"
 )
 
 // withFace puts the face value per unit before the repayment on an
@@ -28,7 +29,7 @@ func TestAmortizationRetiresBasisInProportionToThePrincipal(t *testing.T) {
 	if got := pos[ofz].CostMinor; got != 760_000 {
 		t.Errorf("after the first repayment the cost is %d, want 760000 — 9 500 ₽ less 20 %%", got)
 	}
-	if got := realizedOf(t, pos[ofz]); got != 10_000 {
+	if got := portfoliotest.Realized(t, pos[ofz]); got != 10_000 {
 		t.Errorf("the first repayment's result is %d, want 10000 (+100 ₽)", got)
 	}
 
@@ -41,7 +42,7 @@ func TestAmortizationRetiresBasisInProportionToThePrincipal(t *testing.T) {
 	if got := pos[ofz].CostMinor; got != 475_000 {
 		t.Errorf("after the second repayment the cost is %d, want 475000", got)
 	}
-	if got := realizedOf(t, pos[ofz]); got != 25_000 {
+	if got := portfoliotest.Realized(t, pos[ofz]); got != 25_000 {
 		t.Errorf("the two repayments' result is %d, want 25000 (+100 + +150 ₽)", got)
 	}
 
@@ -51,7 +52,7 @@ func TestAmortizationRetiresBasisInProportionToThePrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compute 3: %v", err)
 	}
-	if got := realizedOf(t, pos[ofz]); got != 50_000 {
+	if got := portfoliotest.Realized(t, pos[ofz]); got != 50_000 {
 		t.Errorf("the bond's whole result is %d, want 50000 — the same +500 ₽ either rule gives over its life", got)
 	}
 }
@@ -67,8 +68,8 @@ func TestAmortizationWithoutAFaceValueKeepsTheOldRule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compute: %v", err)
 	}
-	if pos[ofz].CostMinor != 750_000 || realizedOf(t, pos[ofz]) != 0 {
-		t.Errorf("cost=%d realized=%d, want 750000/0", pos[ofz].CostMinor, realizedOf(t, pos[ofz]))
+	if pos[ofz].CostMinor != 750_000 || portfoliotest.Realized(t, pos[ofz]) != 0 {
+		t.Errorf("cost=%d realized=%d, want 750000/0", pos[ofz].CostMinor, portfoliotest.Realized(t, pos[ofz]))
 	}
 }
 
@@ -101,8 +102,8 @@ func TestAmortizationRetiresNoMoreThanTheWholeBasis(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compute: %v", err)
 	}
-	if pos[ofz].CostMinor != 0 || realizedOf(t, pos[ofz]) != 550_000 {
-		t.Errorf("cost=%d realized=%d, want 0/550000", pos[ofz].CostMinor, realizedOf(t, pos[ofz]))
+	if pos[ofz].CostMinor != 0 || portfoliotest.Realized(t, pos[ofz]) != 550_000 {
+		t.Errorf("cost=%d realized=%d, want 0/550000", pos[ofz].CostMinor, portfoliotest.Realized(t, pos[ofz]))
 	}
 	for _, lot := range pos[ofz].Lots {
 		if lot.CostMinor < 0 {

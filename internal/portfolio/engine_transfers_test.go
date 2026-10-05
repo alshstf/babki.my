@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"babki.my/babki/internal/portfolio"
+	"babki.my/babki/internal/portfolio/portfoliotest"
 )
 
 func TestSplitAdjustsQuantity(t *testing.T) {
@@ -29,8 +30,8 @@ func TestSplitAdjustsQuantity(t *testing.T) {
 	if p.CostMinor != 1_500_000 {
 		t.Errorf("cost = %d, want 1500000", p.CostMinor)
 	}
-	if realizedOf(t, p) != 1_550_000-1_500_000 {
-		t.Errorf("realized = %d", realizedOf(t, p))
+	if portfoliotest.Realized(t, p) != 1_550_000-1_500_000 {
+		t.Errorf("realized = %d", portfoliotest.Realized(t, p))
 	}
 }
 
@@ -45,7 +46,7 @@ func TestTransferOutInCarryover(t *testing.T) {
 		t.Fatalf("Compute out: %v", err)
 	}
 	p := pos[sber]
-	if !p.Quantity.Equal(d("6")) || p.CostMinor != 60_000 || realizedOf(t, p) != 0 {
+	if !p.Quantity.Equal(d("6")) || p.CostMinor != 60_000 || portfoliotest.Realized(t, p) != 0 {
 		t.Fatalf("source pos = %+v", p)
 	}
 
@@ -58,8 +59,8 @@ func TestTransferOutInCarryover(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compute in: %v", err)
 	}
-	if realizedOf(t, pos[sber]) != 8_000 {
-		t.Errorf("dest realized = %d, want 8000", realizedOf(t, pos[sber]))
+	if portfoliotest.Realized(t, pos[sber]) != 8_000 {
+		t.Errorf("dest realized = %d, want 8000", portfoliotest.Realized(t, pos[sber]))
 	}
 }
 
@@ -466,13 +467,13 @@ func TestTransferredLotsReleaseInFIFOOrder(t *testing.T) {
 	}
 	p := pos[sber]
 	// The first piece is released whole; a merged lot would give 16 657.
-	if realizedOf(t, p) == 120_000-103_343 {
+	if portfoliotest.Realized(t, p) == 120_000-103_343 {
 		t.Fatalf("realized = %d — that is a proportional share of ONE merged lot; the sale must consume the first piece of the breakdown whole",
-			realizedOf(t, p))
+			portfoliotest.Realized(t, p))
 	}
-	if realizedOf(t, p) != 120_000-100_010 {
+	if portfoliotest.Realized(t, p) != 120_000-100_010 {
 		t.Errorf("realized = %d, want %d (120000 − the first piece's cost 100010)",
-			realizedOf(t, p), 120_000-100_010)
+			portfoliotest.Realized(t, p), 120_000-100_010)
 	}
 	if len(p.Lots) != 1 {
 		t.Fatalf("lots = %+v, want 1 (the younger piece)", p.Lots)

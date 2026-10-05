@@ -12,6 +12,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/marketdata/ratetest"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -306,7 +307,7 @@ func (c twoDateConverter) Rate(_ context.Context, _, _ string, on time.Time) (de
 
 // RatesOn answers from this double's Rate.
 func (c twoDateConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
-	return ratesFromRate(ctx, c, queries)
+	return ratetest.BatchFrom(ctx, c, queries)
 }
 
 // With holes under the income date and today, the income date is named: the

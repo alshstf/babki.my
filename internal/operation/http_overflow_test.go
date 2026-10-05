@@ -10,6 +10,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/marketdata/ratetest"
 	"babki.my/babki/internal/platform/money"
 )
 
@@ -17,19 +18,8 @@ import (
 // int64, and an overflow is an error, never a null in_base, which would read as a
 // rate the backfill will bring.
 
-// fixedRateConverter answers every lookup with the same rate.
-type fixedRateConverter struct{ rate decimal.Decimal }
-
-func (c fixedRateConverter) Rate(context.Context, string, string, time.Time) (decimal.Decimal, time.Time, error) {
-	return c.rate, time.Time{}, nil
-}
-
-func (c fixedRateConverter) RatesOn(context.Context, []marketdata.RateQuery) (marketdata.Rates, error) {
-	return marketdata.Rates{}, nil
-}
-
 func overflowFixture() (*Handler, Operation) {
-	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(2)}}
+	h := &Handler{conv: ratetest.Fixed{At: decimal.NewFromInt(2)}}
 	return h, Operation{
 		Type:        TypeDeposit,
 		AmountMinor: 10_000,
@@ -78,7 +68,7 @@ func TestOperationInBaseOverflowIsNotAMissingRate(t *testing.T) {
 
 // At rate 1, maxint64 converts to itself and is published.
 func TestOperationInBasePublishesTheLargestFigureThatFits(t *testing.T) {
-	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(1)}}
+	h := &Handler{conv: ratetest.Fixed{At: decimal.NewFromInt(1)}}
 	op := Operation{
 		Type:        TypeDeposit,
 		AmountMinor: math.MaxInt64,

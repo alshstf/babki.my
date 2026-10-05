@@ -16,6 +16,7 @@ import (
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/portfolio"
+	"babki.my/babki/internal/portfolio/portfoliotest"
 )
 
 // These tests use a real database and the real operation.Service, so every rule
@@ -152,7 +153,7 @@ func (f *rebuildFixture) realizedOf(t *testing.T, accountID uuid.UUID) int64 {
 	}
 	var total int64
 	for _, p := range positions {
-		total += realizedOf(t, p)
+		total += portfoliotest.Realized(t, p)
 	}
 	return total
 }
@@ -1712,18 +1713,6 @@ func TestSameJournalRowIgnoresTheBasisTheJournalOwns(t *testing.T) {
 	if sameJournalRow(leg(operation.TypeTransferIn, nil, 0), leg(operation.TypeTransferIn, nil, 137_500)) {
 		t.Error("a lone arrival's basis is its own and a change in it must be seen")
 	}
-}
-
-// realizedOf is a position's realized result and fails the test when there is
-// none (settled in another currency), so a missing figure is never read as
-// zero.
-func realizedOf(t *testing.T, p *portfolio.Position) int64 {
-	t.Helper()
-	minor, inOneCurrency := p.RealizedPnL()
-	if !inOneCurrency {
-		t.Fatalf("position %s has no realized result in one currency: a disposal settled in another", p.InstrumentID)
-	}
-	return minor
 }
 
 // A commission charged as an operation of its own (#138).

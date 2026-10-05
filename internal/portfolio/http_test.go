@@ -22,6 +22,7 @@ import (
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/marketdata/ratetest"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/httpserver"
 	"babki.my/babki/internal/platform/testdb"
@@ -32,12 +33,6 @@ import (
 // package can name setupAPI's parameter.
 type quoteStoreLike interface {
 	LatestQuotes(ctx context.Context, instrumentIDs []uuid.UUID) (map[uuid.UUID]marketdata.Quote, error)
-}
-
-// converterLike mirrors the handler's unexported converter, as above.
-type converterLike interface {
-	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
-	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
 }
 
 // journalStoreLike, instrumentStoreLike and spaceStoreLike mirror the rest of
@@ -66,7 +61,7 @@ type portfolioStores struct {
 // cmd/babki does. The caller provides pool and quotes. wrap, when given,
 // replaces the portfolio handler's stores only, so a double counts one
 // screen's round trips and not the fixture's writes.
-func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv converterLike, wrap ...func(portfolioStores) portfolioStores) (string, *http.Client) {
+func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv marketdata.RateSource, wrap ...func(portfolioStores) portfolioStores) (string, *http.Client) {
 	t.Helper()
 	famStore := family.NewStore(pool)
 	famSvc := family.NewService(famStore)
@@ -945,46 +940,11 @@ func mustDate(t *testing.T, s string) time.Time {
 	return d
 }
 
-// failingConverter fails every lookup with a real error, not ErrNoRate.
-type failingConverter struct{ err error }
-
-func (c failingConverter) Rate(_ context.Context, _, _ string, _ time.Time) (decimal.Decimal, time.Time, error) {
-	return decimal.Decimal{}, time.Time{}, c.err
-}
-
-func (c failingConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
-	return ratesFromRate(ctx, c, queries)
-}
-
-// rateResolver is the one-pair half of converterLike.
-type rateResolver interface {
-	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
-}
-
-// ratesFromRate answers a batch from the double's own Rate, so a double cannot
-// answer the batch and the pair differently. ErrNoRate stays with its query;
-// anything else voids the batch, as RatesOn does.
-func ratesFromRate(ctx context.Context, r rateResolver, queries []marketdata.RateQuery) (marketdata.Rates, error) {
-	out := make(map[marketdata.RateQuery]marketdata.RateResult, len(queries))
-	for _, q := range queries {
-		rate, on, err := r.Rate(ctx, q.From, q.To, q.On)
-		switch {
-		case err == nil:
-			out[q] = marketdata.RateResult{Rate: rate, RateDate: on}
-		case errors.Is(err, marketdata.ErrNoRate):
-			out[q] = marketdata.RateResult{Err: err}
-		default:
-			return marketdata.Rates{}, err
-		}
-	}
-	return marketdata.NewRates(out), nil
-}
-
 // A real rate failure fails the request rather than showing in_base: null.
 func TestPositionsRealRateErrorFailsRequest(t *testing.T) {
 	pool := testdb.New(t)
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
-	url, c := setupAPI(t, pool, quotes, failingConverter{err: errors.New("connection reset by peer")})
+	url, c := setupAPI(t, pool, quotes, ratetest.Failing{Err: errors.New("connection reset by peer")})
 
 	// A USD account in a RUB space, so conversion is attempted.
 	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)

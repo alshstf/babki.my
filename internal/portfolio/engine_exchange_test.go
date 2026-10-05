@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/portfolio"
+	"babki.my/babki/internal/portfolio/portfoliotest"
 )
 
 // exchangeLegs builds a conversion pair with the given pieces; the service's
@@ -51,8 +52,8 @@ func TestExchangeCarriesBasisAndDatesOntoTheNewPaper(t *testing.T) {
 	if !old.Quantity.IsZero() || old.CostMinor != 0 {
 		t.Errorf("the converted paper still holds qty=%s cost=%d, want nothing left", old.Quantity, old.CostMinor)
 	}
-	if realizedOf(t, old) != 0 {
-		t.Errorf("the conversion realized %d, want 0: nothing was sold", realizedOf(t, old))
+	if portfoliotest.Realized(t, old) != 0 {
+		t.Errorf("the conversion realized %d, want 0: nothing was sold", portfoliotest.Realized(t, old))
 	}
 
 	got := pos[sber]
@@ -67,8 +68,8 @@ func TestExchangeCarriesBasisAndDatesOntoTheNewPaper(t *testing.T) {
 	if got.CostMinor != 1_940_281 {
 		t.Errorf("cost = %d, want 1940281", got.CostMinor)
 	}
-	if realizedOf(t, got) != 0 {
-		t.Errorf("realized = %d, want 0", realizedOf(t, got))
+	if portfoliotest.Realized(t, got) != 0 {
+		t.Errorf("realized = %d, want 0", portfoliotest.Realized(t, got))
 	}
 	if len(got.Lots) != 2 {
 		t.Fatalf("lots = %d, want 2 — one per purchase", len(got.Lots))
@@ -111,8 +112,8 @@ func TestExchangeRestatesQuantityWithoutRestatingCost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compute with sale: %v", err)
 	}
-	if realizedOf(t, pos[sber]) != 1_000_000 {
-		t.Errorf("realized = %d, want 1000000", realizedOf(t, pos[sber]))
+	if portfoliotest.Realized(t, pos[sber]) != 1_000_000 {
+		t.Errorf("realized = %d, want 1000000", portfoliotest.Realized(t, pos[sber]))
 	}
 }
 
@@ -251,7 +252,7 @@ func TestExchangeConservesBasisOverRandomJournals(t *testing.T) {
 		if !pos[sber].Quantity.Equal(to) {
 			t.Fatalf("case %d: qty = %s, want %s", i, pos[sber].Quantity, to)
 		}
-		if realizedOf(t, pos[sber]) != 0 || realizedOf(t, pos[lkoh]) != 0 {
+		if portfoliotest.Realized(t, pos[sber]) != 0 || portfoliotest.Realized(t, pos[lkoh]) != 0 {
 			t.Fatalf("case %d: a conversion realized a result", i)
 		}
 	}
