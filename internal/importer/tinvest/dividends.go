@@ -16,33 +16,26 @@ import (
 	"babki.my/babki/internal/platform/secretbox"
 )
 
-// THE BROKER'S DIVIDEND CALENDAR, for the tax a foreign dividend lost abroad
-// (decision Р-14).
-//
-// A foreign dividend reaches the account already net of the tax the issuer's
-// country withheld, and the operation says only what arrived. What the issuer
-// declared per share is in the broker's calendar, and the calendar answers for
-// any paper the broker knows — held or not, imported or typed in, at this
-// broker or at a second one — so one connection's token serves every account
-// in its space. That is what this job does with it: once a day, for every
-// foreign paper the space has received a dividend on, it stores the calendar
-// beside the prices, and the journal works the withheld tax out of it.
+// The broker's dividend calendar, for the tax a foreign dividend lost abroad
+// (Р-14). A foreign dividend arrives net of the issuer country's tax and the
+// operation says only what arrived. The calendar has the declared amount per
+// share and answers for any paper the broker knows, held here or not, so one
+// connection's token serves its whole space. Once a day this job stores the
+// calendar of every foreign paper the space has received a dividend on; the
+// journal works the withheld tax out of it.
 
 // DividendSource is what a stored calendar row says it came from.
 const DividendSource = "tinvest"
 
-// dividendHistoryBefore is how far before the space's first dividend on a
-// paper the calendar is asked from: the record date of a payment lies before
-// the payment, by weeks, and by more when the payment was held up.
+// dividendHistoryBefore: the record date precedes the payment by weeks, more
+// when the payment was delayed.
 const dividendHistoryBefore = 365 * 24 * time.Hour
 
-// dividendHorizon is how far ahead of today the calendar is asked to: a
-// dividend already declared is stored the day it appears, before it is paid.
+// dividendHorizon: a declared dividend is stored before it is paid.
 const dividendHorizon = 365 * 24 * time.Hour
 
-// brokerIDsPerPaper bounds how many of the broker's identifiers for one paper
-// a run tries before giving up on it: the import's own, the catalog's figi,
-// and the listings a search by ISIN finds.
+// brokerIDsPerPaper bounds the identifiers tried per paper: the import's,
+// the catalog's figi and the ISIN search's listings.
 const brokerIDsPerPaper = 4
 
 // RefreshDividendsArgs is the daily job that reads the dividend calendar of
@@ -82,12 +75,9 @@ func (w *dividendsWorker) Timeout(*river.Job[RefreshDividendsArgs]) time.Duratio
 	return 5 * time.Minute
 }
 
-// Work reads the calendar for every active connection's space.
-//
-// ONE CONNECTION'S FAILURE DOES NOT STOP THE OTHERS, for the reason the price
-// job gives (see quotesWorker.Work), and a paper one connection has served is
-// not asked about again through the next: the calendar is the broker's, not
-// the connection's.
+// Work reads the calendar for each active connection's space. One
+// connection's failure does not stop the others (as in quotesWorker.Work), and a
+// paper served once is not asked again: the calendar is the broker's.
 func (w *dividendsWorker) Work(ctx context.Context, _ *river.Job[RefreshDividendsArgs]) error {
 	conns, err := w.store.ListActiveConnections(ctx)
 	if err != nil {
@@ -174,11 +164,9 @@ func (w *dividendsWorker) fillConnection(ctx context.Context, conn Connection, s
 	return stored, nil
 }
 
-// calendarOf asks the broker for one paper's dividends under each identifier
-// the broker may know it by, until one answers with any. ok is false — and the
-// stored calendar is left as it was — when none does: the space HAS received
-// dividends on this paper, so an empty calendar says the identifier was not
-// the paper's, not that it pays none.
+// calendarOf asks for a paper's dividends under each identifier until one
+// answers with any. ok is false, and the stored calendar kept, when none does:
+// the space has received dividends on it, so empty means a wrong identifier.
 func (w *dividendsWorker) calendarOf(ctx context.Context, client *Client, p DividendPaper, now time.Time,
 ) ([]DeclaredDividend, bool, error) {
 	from := p.FirstDividendOn.Add(-dividendHistoryBefore)
@@ -203,9 +191,8 @@ func (w *dividendsWorker) calendarOf(ctx context.Context, client *Client, p Divi
 }
 
 // brokerIDsOf is every identifier the broker may know a paper by, best first:
-// the listing the import mapped it to, the catalog's figi, and the listings of
-// its ISIN a search finds. A search failure leaves just the first two: the
-// calendar is worth a try with what is in hand.
+// the import's listing, the catalog's figi, the ISIN search's listings. A failed
+// search leaves the first two.
 func brokerIDsOf(ctx context.Context, client *Client, log *slog.Logger, p DividendPaper) []string {
 	var ids []string
 	add := func(id string) {
@@ -241,15 +228,10 @@ type DividendPaper struct {
 	FirstDividendOn time.Time
 }
 
-// ForeignDividendPapers lists the papers of a foreign issuer — an ISIN that is
-// not Russian — that any account of the space has a dividend on, with the
-// listing this connection's import mapped each to, if any, and the day of the
-// space's first dividend on it.
-//
-// FOREIGN BY ISIN, which names the issuer's country: a Russian issuer's
-// dividend is taxed in Russia and the broker sends that tax as a line of its
-// own, while a foreign one's is taken abroad, out of sight, and is what the
-// calendar is for.
+// ForeignDividendPapers lists non-Russian-ISIN papers any account of the space
+// has a dividend on, with this connection's mapped listing and the first dividend
+// day. Foreign by ISIN country: a Russian issuer's tax comes as its own broker
+// line; a foreign one is taken abroad, out of sight.
 func (s *Store) ForeignDividendPapers(ctx context.Context, spaceID, connID uuid.UUID) ([]DividendPaper, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT i.id, i.isin, i.figi,
