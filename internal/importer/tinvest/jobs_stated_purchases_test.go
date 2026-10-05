@@ -11,6 +11,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/logtest"
 )
 
 // arrivalOf is the one transfer_in the sync wrote: shares from another broker.
@@ -119,7 +120,7 @@ func (r statedReader) StatedPurchases(context.Context, uuid.UUID, []uuid.UUID, s
 // on the journal for shares that are not there, so they are left off and the
 // log says why.
 func TestAPurchaseStatementThatNoLongerAddsUpIsLeftOffAndSaidSo(t *testing.T) {
-	logs := &logCapture{}
+	logs := &logtest.Capture{}
 	account, instrument := uuid.New(), uuid.New()
 	name := "row:0"
 	stated := map[operation.StatedKey][]operation.ReleasedLot{
@@ -139,7 +140,7 @@ func TestAPurchaseStatementThatNoLongerAddsUpIsLeftOffAndSaidSo(t *testing.T) {
 		t.Errorf("basis %d, pieces %+v — want the statement left off", want[0].op.AmountMinor, want[0].op.TransferLots)
 	}
 	found := false
-	for _, rec := range logs.all() {
+	for _, rec := range logs.Records() {
 		if rec.Level == slog.LevelWarn && strings.Contains(rec.Message, "no longer add up") {
 			found = true
 		}

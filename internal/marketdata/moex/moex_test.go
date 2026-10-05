@@ -15,6 +15,7 @@ import (
 
 	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/marketdata/moex"
+	"babki.my/babki/internal/platform/logtest"
 )
 
 // Every board path QuotesFor must query, spelled out so a board dropped from
@@ -306,8 +307,8 @@ func TestQuotesFor_PriceWithUnreadableDateIsDroppedAndWarned(t *testing.T) {
 				`["NEVERTRADED",null,"0000-00-00","SUR"]]}}`)},
 	}))
 
-	var records []slog.Record
-	c := moex.New(srv.Client(), srv.URL, slog.New(&recordingHandler{records: &records}))
+	logs := &logtest.Capture{}
+	c := moex.New(srv.Client(), srv.URL, logs.Logger())
 	quotes, err := c.QuotesFor(context.Background(), []string{"SBER", "NODATE", "NEVERTRADED"})
 	if err != nil {
 		t.Fatalf("QuotesFor: %v — one undatable row must not fail the call", err)
@@ -325,7 +326,7 @@ func TestQuotesFor_PriceWithUnreadableDateIsDroppedAndWarned(t *testing.T) {
 	}
 
 	var warned []string
-	for _, r := range records {
+	for _, r := range logs.Records() {
 		if r.Message != unreadableDateMsg {
 			continue
 		}
@@ -374,7 +375,7 @@ func TestQuotesFor_WhatCountsAsAnUnreadableDate(t *testing.T) {
 					`{"securities":{"columns":["SECID","PREVPRICE","PREVDATE","CURRENCYID"],"data":[["SBER",305.55,` + tc.cell + `,"SUR"]]}}`)},
 			}))
 
-			c := moex.New(srv.Client(), srv.URL, slog.New(&recordingHandler{records: &[]slog.Record{}}))
+			c := moex.New(srv.Client(), srv.URL, (&logtest.Capture{}).Logger())
 			quotes, err := c.QuotesFor(context.Background(), []string{"SBER"})
 			if err != nil {
 				t.Fatalf("QuotesFor: %v — an unreadable date costs the price, it does not fail the call", err)
@@ -576,8 +577,8 @@ func TestQuotesFor_NonPositivePriceIsNotAPrice(t *testing.T) {
 			`["COLLIDE",222.22,"2026-07-24","SUR"]]}}`)},
 	}))
 
-	var records []slog.Record
-	c := moex.New(srv.Client(), srv.URL, slog.New(&recordingHandler{records: &records}))
+	logs := &logtest.Capture{}
+	c := moex.New(srv.Client(), srv.URL, logs.Logger())
 	quotes, err := c.QuotesFor(context.Background(), []string{"SBER", "ZERO", "NEGATIVE", "COLLIDE"})
 	if err != nil {
 		t.Fatalf("QuotesFor: %v — a zero price must not fail the call", err)
@@ -598,7 +599,7 @@ func TestQuotesFor_NonPositivePriceIsNotAPrice(t *testing.T) {
 	}
 
 	warned := map[string]bool{}
-	for _, r := range records {
+	for _, r := range logs.Records() {
 		if r.Message != nonPositivePriceMsg {
 			continue
 		}
@@ -649,17 +650,6 @@ func TestQuotesFor_NoTickersRequested(t *testing.T) {
 	}
 }
 
-// recordingHandler captures records so tests assert levels and attributes.
-type recordingHandler struct{ records *[]slog.Record }
-
-func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
-func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
-	*h.records = append(*h.records, r)
-	return nil
-}
-func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
-func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
-
 // A board answering no securities is warned about (it has stopped being a
 // live board), and the other boards' prices survive.
 func TestQuotesFor_EmptyBoardIsWarned(t *testing.T) {
@@ -668,8 +658,8 @@ func TestQuotesFor_EmptyBoardIsWarned(t *testing.T) {
 		sharesPath: {status: http.StatusOK, body: shares},
 	}))
 
-	var records []slog.Record
-	c := moex.New(srv.Client(), srv.URL, slog.New(&recordingHandler{records: &records}))
+	logs := &logtest.Capture{}
+	c := moex.New(srv.Client(), srv.URL, logs.Logger())
 	quotes, err := c.QuotesFor(context.Background(), []string{"SBER"})
 	if err != nil {
 		t.Fatalf("QuotesFor: %v — an empty board must not fail the whole call", err)
@@ -680,7 +670,7 @@ func TestQuotesFor_EmptyBoardIsWarned(t *testing.T) {
 
 	// Three empty boards, three lines, each naming its board.
 	var warned []string
-	for _, r := range records {
+	for _, r := range logs.Records() {
 		if r.Message != "moex: board returned no securities at all, everything listed on it will have no price" {
 			continue
 		}

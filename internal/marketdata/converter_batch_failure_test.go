@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/logtest"
 )
 
 // A failed batch fetch is answered correctly by per-pair lookups, so only a log
@@ -19,9 +20,9 @@ const deadBatchMessage = "batched fx rate lookup failed"
 
 // assertOneWarning requires exactly one dead-batch record, at WARN, naming the
 // cause: DEBUG would be invisible, ERROR would read as a failed request.
-func assertOneWarning(t *testing.T, capture *marketdata.LogCapture, cause string) {
+func assertOneWarning(t *testing.T, capture *logtest.Capture, cause string) {
 	t.Helper()
-	marketdata.AssertOneRecordAt(t, capture, deadBatchMessage, slog.LevelWarn, cause)
+	logtest.AssertOne(t, capture, deadBatchMessage, slog.LevelWarn, cause)
 }
 
 // deadBatch fails the batch Query while single-row QueryRow lookups answer
@@ -64,7 +65,7 @@ func deadBatchConverter(boom error) *marketdata.Converter {
 func TestRatesOnLogsADeadBatchAsAWarning(t *testing.T) {
 	boom := errors.New("canceling statement due to statement timeout")
 	conv := deadBatchConverter(boom)
-	capture := marketdata.CaptureLogs(t)
+	capture := logtest.Default(t)
 
 	got, err := conv.RatesOn(context.Background(), []marketdata.RateQuery{
 		{From: "USD", To: "RUB", On: date("2026-07-01")},
@@ -83,7 +84,7 @@ func TestRatesOnLogsADeadBatchAsAWarning(t *testing.T) {
 func TestConvertManyLogsADeadBatchAsAWarning(t *testing.T) {
 	boom := errors.New("canceling statement due to statement timeout")
 	conv := deadBatchConverter(boom)
-	capture := marketdata.CaptureLogs(t)
+	capture := logtest.Default(t)
 
 	converted, missing, ratesOn, err := conv.ConvertMany(context.Background(),
 		map[string]int64{"USD": 10000}, "RUB", date("2026-07-01"))
@@ -112,22 +113,22 @@ func TestRatesOnDoesNotSoundTheAlarmForACanceledRequest(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	conv := deadBatchConverter(context.Canceled)
-	capture := marketdata.CaptureLogs(t)
+	capture := logtest.Default(t)
 
 	if _, err := conv.RatesOn(ctx, []marketdata.RateQuery{
 		{From: "USD", To: "RUB", On: date("2026-07-01")},
 	}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("RatesOn err = %v, want context.Canceled — a cancellation still fails the call, it just is not news", err)
 	}
-	marketdata.AssertOneRecordAt(t, capture, canceledBatchMessage, slog.LevelDebug, "context canceled")
-	marketdata.AssertNoRecord(t, capture, deadBatchMessage)
+	logtest.AssertOne(t, capture, canceledBatchMessage, slog.LevelDebug, "context canceled")
+	logtest.AssertNone(t, capture, deadBatchMessage)
 }
 
 // An expired deadline still warns: it is the server's own slowness, the thing
 // the warning exists to reveal.
 func TestRatesOnStillWarnsWhenADeadlineExpires(t *testing.T) {
 	conv := deadBatchConverter(context.DeadlineExceeded)
-	capture := marketdata.CaptureLogs(t)
+	capture := logtest.Default(t)
 
 	if _, err := conv.RatesOn(context.Background(), []marketdata.RateQuery{
 		{From: "USD", To: "RUB", On: date("2026-07-01")},
@@ -135,5 +136,5 @@ func TestRatesOnStillWarnsWhenADeadlineExpires(t *testing.T) {
 		t.Fatalf("RatesOn err = %v, want context.DeadlineExceeded", err)
 	}
 	assertOneWarning(t, capture, "deadline exceeded")
-	marketdata.AssertNoRecord(t, capture, canceledBatchMessage)
+	logtest.AssertNone(t, capture, canceledBatchMessage)
 }

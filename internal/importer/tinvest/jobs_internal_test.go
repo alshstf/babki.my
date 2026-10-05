@@ -27,118 +27,12 @@ import (
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/logtest"
 	"babki.my/babki/internal/platform/secretbox"
 )
 
 // Package tinvest, to reach the worker's unexported factories and reads and
 // drive Work directly. Expected values are literals.
-
-// Capturing log records whole.
-
-// logCapture keeps every record so a test can assert a line's level, not just
-// its text: a line demoted to Debug is invisible in production. Enabled is true
-// for every level so a demotion shows up as the wrong level. (marketdata has its
-// own copy.)
-type logCapture struct {
-	mu      sync.Mutex
-	records []slog.Record
-}
-
-func (c *logCapture) Enabled(context.Context, slog.Level) bool { return true }
-
-func (c *logCapture) Handle(_ context.Context, r slog.Record) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.records = append(c.records, r.Clone())
-	return nil
-}
-
-func (c *logCapture) WithAttrs([]slog.Attr) slog.Handler { return c }
-func (c *logCapture) WithGroup(string) slog.Handler      { return c }
-
-func (c *logCapture) all() []slog.Record {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]slog.Record, len(c.records))
-	copy(out, c.records)
-	return out
-}
-
-// assertOneRecordAt fails unless exactly one record carries msg, at exactly
-// want, with attributes naming cause. It returns the record (see
-// assertAttrIs).
-func assertOneRecordAt(t *testing.T, c *logCapture, msg string, want slog.Level, cause string) slog.Record {
-	t.Helper()
-	records := c.all()
-	var matched []slog.Record
-	for _, r := range records {
-		if r.Message == msg {
-			matched = append(matched, r)
-		}
-	}
-	if len(matched) != 1 {
-		t.Fatalf("%d records say %q, want exactly 1; everything captured: %s",
-			len(matched), msg, describeRecords(records))
-	}
-	if matched[0].Level != want {
-		t.Fatalf("%q was logged at %s, want %s; everything captured: %s",
-			msg, matched[0].Level, want, describeRecords(records))
-	}
-	if got := attrsOf(matched[0]); !strings.Contains(got, cause) {
-		t.Fatalf("%q carried %s, which does not name the cause %q — a line nobody can act on is barely better than silence",
-			msg, got, cause)
-	}
-	return matched[0]
-}
-
-// assertAttrIs checks an attribute's exact value: "0" is a substring of
-// "connections=10".
-func assertAttrIs(t *testing.T, r slog.Record, key, want string) {
-	t.Helper()
-	var got string
-	found := false
-	r.Attrs(func(a slog.Attr) bool {
-		if a.Key == key {
-			got, found = a.Value.String(), true
-			return false
-		}
-		return true
-	})
-	if !found {
-		t.Fatalf("%q carries no %q attribute at all; it has %s", r.Message, key, attrsOf(r))
-	}
-	if got != want {
-		t.Fatalf("%q says %s=%q, want %q", r.Message, key, got, want)
-	}
-}
-
-func describeRecords(records []slog.Record) string {
-	if len(records) == 0 {
-		return "(nothing at all was logged)"
-	}
-	var b strings.Builder
-	for i, r := range records {
-		if i > 0 {
-			b.WriteString("; ")
-		}
-		b.WriteString(r.Level.String())
-		b.WriteString(" ")
-		b.WriteString(r.Message)
-	}
-	return b.String()
-}
-
-func attrsOf(r slog.Record) string {
-	var b strings.Builder
-	r.Attrs(func(a slog.Attr) bool {
-		b.WriteString(a.Key)
-		b.WriteString("=")
-		b.WriteString(a.Value.String())
-		b.WriteString(" ")
-		return true
-	})
-	return b.String()
-}
 
 // A broker to sync against.
 
@@ -300,7 +194,7 @@ type workerFixture struct {
 	fixture
 	ops    *operation.Store
 	broker *brokerStub
-	logs   *logCapture
+	logs   *logtest.Capture
 	worker river.Worker[SyncArgs]
 
 	mu     sync.Mutex
@@ -332,7 +226,7 @@ func newWorkerFixtureWith(t *testing.T, withRegistry bool) *workerFixture {
 	}
 	f.conn = conn
 
-	wf := &workerFixture{fixture: f, ops: operation.NewStore(f.pool), broker: newBrokerStub(t), logs: &logCapture{}}
+	wf := &workerFixture{fixture: f, ops: operation.NewStore(f.pool), broker: newBrokerStub(t), logs: &logtest.Capture{}}
 	log := slog.New(wf.logs)
 
 	instStore := instrument.NewStore(f.pool)
@@ -642,7 +536,7 @@ func TestSyncWorkerLeavesAConnectionThatIsSwitchedOffAlone(t *testing.T) {
 	if runs := f.runs(t); len(runs) != 0 {
 		t.Errorf("%d runs recorded for a switched-off connection, want 0", len(runs))
 	}
-	assertOneRecordAt(t, f.logs, connectionNotActiveMessage, slog.LevelDebug, "disabled")
+	logtest.AssertOne(t, f.logs, connectionNotActiveMessage, slog.LevelDebug, "disabled")
 }
 
 // A refused token parks the connection, records the run failed and returns
@@ -752,11 +646,11 @@ func TestSyncWorkerStillSummarisesARunWhoseLogEntryCannotBeClosed(t *testing.T) 
 		t.Fatal("Work returned nil though the run's log entry could not be closed")
 	}
 
-	rec := assertOneRecordAt(t, f.logs, "tinvest: a sync run finished", slog.LevelInfo, f.conn.ID.String())
+	rec := logtest.AssertOne(t, f.logs, "tinvest: a sync run finished", slog.LevelInfo, f.conn.ID.String())
 	// The figures too: a summary that survived but reported nothing would be
 	// the same silence in a different shape.
-	assertAttrIs(t, rec, "read", "1")
-	assertAttrIs(t, rec, "added", "1")
+	logtest.AttrIs(t, rec, "read", "1")
+	logtest.AttrIs(t, rec, "added", "1")
 }
 
 // A failed run records the unparsed count it took, not a zero that would read
@@ -805,7 +699,7 @@ func TestSyncWorkerDropsAJobNamingATriggerTheRunLogCannotStore(t *testing.T) {
 	}
 	// That line is visible at the production level and names the word: it is
 	// the only record.
-	assertOneRecordAt(t, f.logs,
+	logtest.AssertOne(t, f.logs,
 		"tinvest: a sync job names a trigger the run log cannot store, dropping it",
 		slog.LevelError, `unknown sync trigger: "whenever"`)
 }
@@ -825,7 +719,7 @@ func TestSyncWorkerSaysThereIsNothingToSyncWithoutLinkedAccounts(t *testing.T) {
 	if n := f.broker.callCount(rpcOperations); n != 0 {
 		t.Errorf("the broker was called %d times for a connection with no linked accounts, want 0", n)
 	}
-	assertOneRecordAt(t, f.logs, noLinksMessage, slog.LevelDebug, f.conn.ID.String())
+	logtest.AssertOne(t, f.logs, noLinksMessage, slog.LevelDebug, f.conn.ID.String())
 }
 
 // The owner may delete a connection while a job for it is already queued. That
@@ -839,7 +733,7 @@ func TestSyncWorkerSaysNothingIsThereWhenTheConnectionIsGone(t *testing.T) {
 	if err := f.work(t, "schedule"); err != nil {
 		t.Fatalf("Work returned %v, want nil — a deleted connection is nothing to retry", err)
 	}
-	assertOneRecordAt(t, f.logs, connectionGoneMessage, slog.LevelDebug, f.conn.ID.String())
+	logtest.AssertOne(t, f.logs, connectionGoneMessage, slog.LevelDebug, f.conn.ID.String())
 }
 
 // A cancelled pass (shutdown) is logged as routine, not Error, in both
@@ -849,12 +743,12 @@ func TestACancelledPassIsLoggedAsRoutineAndNotAsAFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(f.ctx)
 	cancel()
 
-	dispatchLogs := &logCapture{}
+	dispatchLogs := &logtest.Capture{}
 	dispatcher := NewDispatchWorker(f.store, &recordingInserter{}, slog.New(dispatchLogs))
 	if err := dispatcher.Work(ctx, &river.Job[SyncDispatchArgs]{JobRow: &rivertype.JobRow{ID: 1}}); err == nil {
 		t.Fatal("the dispatcher returned nil though its context was cancelled")
 	}
-	assertOneRecordAt(t, dispatchLogs,
+	logtest.AssertOne(t, dispatchLogs,
 		"tinvest: list the active connections failed", slog.LevelDebug, "context canceled")
 
 	if err := f.worker.Work(ctx, &river.Job[SyncArgs]{
@@ -863,7 +757,7 @@ func TestACancelledPassIsLoggedAsRoutineAndNotAsAFailure(t *testing.T) {
 	}); err == nil {
 		t.Fatal("the sync worker returned nil though its context was cancelled")
 	}
-	assertOneRecordAt(t, f.logs,
+	logtest.AssertOne(t, f.logs,
 		"tinvest: read the connection to sync failed", slog.LevelDebug, "context canceled")
 }
 
@@ -961,7 +855,7 @@ func TestDispatchWorkerQueuesOneJobForEachActiveConnection(t *testing.T) {
 	}
 
 	inserter := &recordingInserter{}
-	w := NewDispatchWorker(f.store, inserter, slog.New(&logCapture{}))
+	w := NewDispatchWorker(f.store, inserter, slog.New(&logtest.Capture{}))
 	if err := w.Work(f.ctx, &river.Job[SyncDispatchArgs]{JobRow: &rivertype.JobRow{ID: 1}}); err != nil {
 		t.Fatalf("Work: %v", err)
 	}
@@ -994,7 +888,7 @@ func TestDispatchWorkerSaysThereIsNothingToSyncWhenNoConnectionIsActive(t *testi
 	if err := f.store.UpdateConnectionStatus(f.ctx, f.conn.ID, StatusDisabled); err != nil {
 		t.Fatalf("UpdateConnectionStatus: %v", err)
 	}
-	logs := &logCapture{}
+	logs := &logtest.Capture{}
 	inserter := &recordingInserter{}
 
 	w := NewDispatchWorker(f.store, inserter, slog.New(logs))
@@ -1004,8 +898,8 @@ func TestDispatchWorkerSaysThereIsNothingToSyncWhenNoConnectionIsActive(t *testi
 	if len(inserter.args) != 0 {
 		t.Errorf("%d jobs queued, want 0", len(inserter.args))
 	}
-	rec := assertOneRecordAt(t, logs, nothingToSyncMessage, slog.LevelDebug, "connections")
-	assertAttrIs(t, rec, "connections", "0")
+	rec := logtest.AssertOne(t, logs, nothingToSyncMessage, slog.LevelDebug, "connections")
+	logtest.AttrIs(t, rec, "connections", "0")
 }
 
 // A queue that will not take the job is this worker's own failure, so it comes
@@ -1013,7 +907,7 @@ func TestDispatchWorkerSaysThereIsNothingToSyncWhenNoConnectionIsActive(t *testi
 func TestDispatchWorkerReturnsAQueueThatWillNotTakeTheJob(t *testing.T) {
 	f := newFixture(t)
 	boom := errors.New("queue is down")
-	w := NewDispatchWorker(f.store, &recordingInserter{err: boom}, slog.New(&logCapture{}))
+	w := NewDispatchWorker(f.store, &recordingInserter{err: boom}, slog.New(&logtest.Capture{}))
 
 	if err := w.Work(f.ctx, &river.Job[SyncDispatchArgs]{JobRow: &rivertype.JobRow{ID: 1}}); !errors.Is(err, boom) {
 		t.Fatalf("Work returned %v, want %v", err, boom)
@@ -1081,7 +975,7 @@ func TestASecondSyncIsQueuedOnceTheFirstHasFinished(t *testing.T) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, worker)
 	client, err := river.NewClient(riverpgxv5.New(f.pool), &river.Config{
-		Logger:  slog.New(&logCapture{}),
+		Logger:  slog.New(&logtest.Capture{}),
 		Workers: workers,
 		Queues:  map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 1}},
 	})

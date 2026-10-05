@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
@@ -22,6 +21,7 @@ import (
 
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/logtest"
 	"babki.my/babki/internal/platform/testdb"
 )
 
@@ -115,7 +115,8 @@ func TestFxWorker_ProviderErrorReturnsFromWork(t *testing.T) {
 func TestFxWorker_NonPositiveRateIsDroppedAndTheRestIsStored(t *testing.T) {
 	store, _, ctx := newJobsFixture(t)
 	on := date("2026-07-25")
-	log, records := newRecordingLogger()
+	logs := &logtest.Capture{}
+	log := logs.Logger()
 
 	// Zero and negative: both refused by the CHECK, both possible from a source.
 	provider := fakeFxProvider{rates: []marketdata.FxRate{
@@ -142,20 +143,20 @@ func TestFxWorker_NonPositiveRateIsDroppedAndTheRestIsStored(t *testing.T) {
 	}
 
 	// Each drop is a Warn line naming the pair and value.
-	dropped := linesFor(*records, droppedRateMsg)
+	dropped := logs.Lines(droppedRateMsg)
 	if len(dropped) != 2 {
-		t.Fatalf("%d dropped-rate lines, want 2 (one per dropped rate):\n%s", len(dropped), showLines(*records))
+		t.Fatalf("%d dropped-rate lines, want 2 (one per dropped rate):\n%s", len(dropped), logtest.Describe(logs.Records()))
 	}
 	for _, line := range dropped {
-		if line.level != slog.LevelWarn {
-			t.Fatalf("dropped-rate line at %s, want WARN:\n%s", line.level, showLines(*records))
+		if line.Level != slog.LevelWarn {
+			t.Fatalf("dropped-rate line at %s, want WARN:\n%s", line.Level, logtest.Describe(logs.Records()))
 		}
 	}
-	if bases := []string{dropped[0].attrs["base"], dropped[1].attrs["base"]}; !slices.Equal(bases, []string{"XXX", "YYY"}) {
-		t.Fatalf("dropped-rate lines name %v, want [XXX YYY]:\n%s", bases, showLines(*records))
+	if bases := []string{logtest.Attr(dropped[0], "base"), logtest.Attr(dropped[1], "base")}; !slices.Equal(bases, []string{"XXX", "YYY"}) {
+		t.Fatalf("dropped-rate lines name %v, want [XXX YYY]:\n%s", bases, logtest.Describe(logs.Records()))
 	}
-	if got := dropped[0].attrs["rate"]; got != "0" {
-		t.Fatalf("dropped-rate line for XXX says rate=%q, want the value that was refused:\n%s", got, showLines(*records))
+	if got := logtest.Attr(dropped[0], "rate"); got != "0" {
+		t.Fatalf("dropped-rate line for XXX says rate=%q, want the value that was refused:\n%s", got, logtest.Describe(logs.Records()))
 	}
 }
 
@@ -407,7 +408,8 @@ func TestQuotesWorker_RefusesAQuoteDatedZeroOrAfterToday(t *testing.T) {
 			provider := fakeQuoteProvider{quotes: []marketdata.TickerQuote{
 				{Ticker: "SBER", Price: dec("305.5"), Currency: "RUB", On: tt.on},
 			}}
-			log, records := newRecordingLogger()
+			logs := &logtest.Capture{}
+			log := logs.Logger()
 			worker := marketdata.NewQuotesWorker(store, instStore, provider, log)
 
 			if err := worker.Work(ctx, quotesJob()); err != nil {
@@ -423,19 +425,19 @@ func TestQuotesWorker_RefusesAQuoteDatedZeroOrAfterToday(t *testing.T) {
 					"and LatestQuotes would keep returning it forever", q)
 			}
 
-			line := onlyLine(t, *records, futureOrZeroQuoteDateMsg)
-			if line.level != slog.LevelWarn {
+			line := logtest.Only(t, logs, futureOrZeroQuoteDateMsg)
+			if line.Level != slog.LevelWarn {
 				t.Errorf("the bad date was logged at %s, want WARN: this is not a routine absence like a "+
-					"missing price, it is data that cannot be true", line.level)
+					"missing price, it is data that cannot be true", line.Level)
 			}
-			if got := line.attrs["ticker"]; got != "SBER" {
+			if got := logtest.Attr(line, "ticker"); got != "SBER" {
 				t.Errorf("ticker attribute = %q, want SBER", got)
 			}
 
 			// The "no price" line must not also fire for it.
-			if lines := linesFor(*records, "marketdata: no price for ticker, skipping"); len(lines) != 0 {
+			if lines := logs.Lines("marketdata: no price for ticker, skipping"); len(lines) != 0 {
 				t.Errorf("also logged the no-price line, want only the refusal above: the provider DID "+
-					"answer for this ticker, just not with a storable date:\n%s", showLines(lines))
+					"answer for this ticker, just not with a storable date:\n%s", logtest.Describe(lines))
 			}
 		})
 	}
@@ -517,55 +519,6 @@ func TestQuotesWorker_ProviderErrorReturnsFromWork(t *testing.T) {
 
 // --- structured log capture -------------------------------------------------
 
-// logLine is a captured record with its level and attributes kept apart, so
-// a test can tell a Warn from a Debug.
-type logLine struct {
-	level slog.Level
-	msg   string
-	attrs map[string]string
-}
-
-// recordingHandler collects every record, at every level, into records.
-type recordingHandler struct {
-	records *[]logLine
-	base    []slog.Attr
-}
-
-func newRecordingLogger() (*slog.Logger, *[]logLine) {
-	var records []logLine
-	return slog.New(&recordingHandler{records: &records}), &records
-}
-
-// Every level is enabled; tests assert the level directly.
-func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
-
-func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
-	line := logLine{
-		level: r.Level,
-		msg:   r.Message,
-		attrs: make(map[string]string, len(h.base)+r.NumAttrs()),
-	}
-	for _, a := range h.base {
-		line.attrs[a.Key] = a.Value.String()
-	}
-	r.Attrs(func(a slog.Attr) bool {
-		line.attrs[a.Key] = a.Value.String()
-		return true
-	})
-	*h.records = append(*h.records, line)
-	return nil
-}
-
-// WithAttrs keeps attributes, in case a worker starts using logger.With.
-func (h *recordingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &recordingHandler{records: h.records, base: append(slices.Clip(h.base), attrs...)}
-}
-
-// WithGroup panics: grouped attributes would be misread as flat ones.
-func (h *recordingHandler) WithGroup(string) slog.Handler {
-	panic("recordingHandler: grouped attributes are not modelled; teach it if a worker starts using them")
-}
-
 const droppedRateMsg = "marketdata: source published a rate that is not positive, dropping it (this pair keeps whatever earlier rate it already has)"
 
 // The backfill's three verdicts on a currency's series.
@@ -574,34 +527,6 @@ const (
 	allRefusedMsg  = "marketdata: every rate the source published for this currency was refused as not positive (its amounts keep whatever earlier rates they already have)"
 	downloadedMsg  = "marketdata: downloaded fx history"
 )
-
-func linesFor(records []logLine, msg string) []logLine {
-	var found []logLine
-	for _, r := range records {
-		if r.msg == msg {
-			found = append(found, r)
-		}
-	}
-	return found
-}
-
-// onlyLine returns the single captured record carrying this exact message.
-func onlyLine(t *testing.T, records []logLine, msg string) logLine {
-	t.Helper()
-	found := linesFor(records, msg)
-	if len(found) != 1 {
-		t.Fatalf("%d records with message %q, want exactly 1:\n%s", len(found), msg, showLines(records))
-	}
-	return found[0]
-}
-
-func showLines(records []logLine) string {
-	out := make([]string, len(records))
-	for i, r := range records {
-		out[i] = r.level.String() + " " + r.msg + " " + fmt.Sprint(r.attrs)
-	}
-	return strings.Join(out, "\n")
-}
 
 // --- ticker collisions ------------------------------------------------------
 
@@ -700,7 +625,8 @@ func TestQuotesWorker_TwoInstrumentsUnderOneTickerAndCurrencyArePricedNeitherWay
 			{Ticker: "SBER", Price: dec("305.5"), Currency: "RUB", On: date("2026-07-25")},
 		},
 	}
-	log, records := newRecordingLogger()
+	logs := &logtest.Capture{}
+	log := logs.Logger()
 	worker := marketdata.NewQuotesWorker(store,
 		fakeInstrumentLister{insts: []instrument.Instrument{sber, twin}}, provider, log)
 
@@ -708,22 +634,22 @@ func TestQuotesWorker_TwoInstrumentsUnderOneTickerAndCurrencyArePricedNeitherWay
 		t.Fatalf("Work: %v — one duplicated ticker must not cost the whole refresh", err)
 	}
 
-	line := onlyLine(t, *records, "marketdata: two instruments share a ticker AND a currency, so neither can be priced by that alone")
-	if line.level != slog.LevelWarn {
+	line := logtest.Only(t, logs, "marketdata: two instruments share a ticker AND a currency, so neither can be priced by that alone")
+	if line.Level != slog.LevelWarn {
 		t.Errorf("the collision was logged at %s, want WARN: Debug is off on a production instance, "+
-			"which is exactly where this went unnoticed", line.level)
+			"which is exactly where this went unnoticed", line.Level)
 	}
 	// The line names the ticker and both instruments.
-	if got := line.attrs["ticker"]; got != "SBER" {
+	if got := logtest.Attr(line, "ticker"); got != "SBER" {
 		t.Errorf("ticker attribute = %q, want SBER", got)
 	}
-	if got := line.attrs["currency"]; got != "RUB" {
+	if got := logtest.Attr(line, "currency"); got != "RUB" {
 		t.Errorf("currency attribute = %q, want RUB — it is half of what a price is matched by", got)
 	}
-	if got := line.attrs["instrument_id"]; got != sber.ID.String() {
+	if got := logtest.Attr(line, "instrument_id"); got != sber.ID.String() {
 		t.Errorf("instrument_id = %q, want %s", got, sber.ID)
 	}
-	if got := line.attrs["other_instrument_id"]; got != twin.ID.String() {
+	if got := logtest.Attr(line, "other_instrument_id"); got != twin.ID.String() {
 		t.Errorf("other_instrument_id = %q, want %s", got, twin.ID)
 	}
 
@@ -761,22 +687,23 @@ func TestQuotesWorker_TickerTheCatalogDoesNotHoldIsLoggedAtDebug(t *testing.T) {
 		{Ticker: "SBER", Price: dec("305.5"), Currency: "RUB", On: date("2026-07-25")},
 		{Ticker: "SBER-RM", Price: dec("306.0"), Currency: "RUB", On: date("2026-07-25")},
 	}}
-	log, records := newRecordingLogger()
+	logs := &logtest.Capture{}
+	log := logs.Logger()
 	worker := marketdata.NewQuotesWorker(store, instStore, provider, log)
 
 	if err := worker.Work(ctx, quotesJob()); err != nil {
 		t.Fatalf("Work: %v — an unknown ticker must not fail the batch", err)
 	}
 
-	line := onlyLine(t, *records, "marketdata: provider reported a ticker the catalog does not hold, ignoring it")
-	if line.level != slog.LevelDebug {
+	line := logtest.Only(t, logs, "marketdata: provider reported a ticker the catalog does not hold, ignoring it")
+	if line.Level != slog.LevelDebug {
 		t.Errorf("the unknown ticker was logged at %s, want DEBUG: it costs no instrument its price, "+
-			"and a louder level would fill every production log with something nobody can act on", line.level)
+			"and a louder level would fill every production log with something nobody can act on", line.Level)
 	}
-	if got := line.attrs["ticker"]; got != "SBER-RM" {
+	if got := logtest.Attr(line, "ticker"); got != "SBER-RM" {
 		t.Errorf("ticker attribute = %q, want SBER-RM", got)
 	}
-	if got := line.attrs["provider"]; got != "fake-quotes" {
+	if got := logtest.Attr(line, "provider"); got != "fake-quotes" {
 		t.Errorf("provider attribute = %q, want fake-quotes", got)
 	}
 
@@ -808,7 +735,8 @@ func TestQuotesWorker_InstrumentsWithNoTickerAreNotReportedAsACollision(t *testi
 
 	var calls [][]string
 	provider := fakeQuoteProvider{calls: &calls}
-	log, records := newRecordingLogger()
+	logs := &logtest.Capture{}
+	log := logs.Logger()
 	worker := marketdata.NewQuotesWorker(store,
 		fakeInstrumentLister{insts: tickerless}, provider, log)
 
@@ -816,20 +744,20 @@ func TestQuotesWorker_InstrumentsWithNoTickerAreNotReportedAsACollision(t *testi
 		t.Fatalf("Work: %v", err)
 	}
 
-	for _, r := range *records {
-		if r.msg == "marketdata: two instruments share a ticker, only one of them can be priced" {
+	for _, r := range logs.Records() {
+		if r.Message == "marketdata: two instruments share a ticker, only one of them can be priced" {
 			t.Errorf("two tickerless instruments were reported as sharing a ticker (ticker=%q): "+
-				"they share the absence of one, and neither is priced either way", r.attrs["ticker"])
+				"they share the absence of one, and neither is priced either way", logtest.Attr(r, "ticker"))
 		}
 	}
 	// Each is still logged, by id.
 	var seen []string
-	for _, r := range *records {
-		if r.msg == "marketdata: instrument has no ticker, there is nothing to ask a price for" {
-			if r.level != slog.LevelDebug {
-				t.Errorf("a tickerless instrument was logged at %s, want DEBUG: it loses no price it could have had", r.level)
+	for _, r := range logs.Records() {
+		if r.Message == "marketdata: instrument has no ticker, there is nothing to ask a price for" {
+			if r.Level != slog.LevelDebug {
+				t.Errorf("a tickerless instrument was logged at %s, want DEBUG: it loses no price it could have had", r.Level)
 			}
-			seen = append(seen, r.attrs["instrument_id"])
+			seen = append(seen, logtest.Attr(r, "instrument_id"))
 		}
 	}
 	for _, inst := range tickerless {
@@ -1343,7 +1271,8 @@ func TestBackfillFx_EmptySeriesIsWarnedNotReportedAsADownload(t *testing.T) {
 func TestBackfillFx_NonPositiveRateIsDroppedAndTheRestOfTheSeriesStored(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
-	log, records := newRecordingLogger()
+	logs := &logtest.Capture{}
+	log := logs.Logger()
 	// GBP's older record is zero; USD's series is sound.
 	provider := &recordingHistoryProvider{ids: cbrIDs, zeroFor: "GBP"}
 	worker := newBackfillWorker(store,
@@ -1373,13 +1302,13 @@ func TestBackfillFx_NonPositiveRateIsDroppedAndTheRestOfTheSeriesStored(t *testi
 		t.Fatalf("USD rates missing after the run: %v", err)
 	}
 
-	dropped := linesFor(*records, droppedRateMsg)
+	dropped := logs.Lines(droppedRateMsg)
 	if len(dropped) != 1 {
-		t.Fatalf("%d dropped-rate lines, want exactly 1:\n%s", len(dropped), showLines(*records))
+		t.Fatalf("%d dropped-rate lines, want exactly 1:\n%s", len(dropped), logtest.Describe(logs.Records()))
 	}
-	if dropped[0].level != slog.LevelWarn || dropped[0].attrs["base"] != "GBP" {
+	if dropped[0].Level != slog.LevelWarn || logtest.Attr(dropped[0], "base") != "GBP" {
 		t.Fatalf("dropped-rate line = %s base=%q, want WARN for GBP:\n%s",
-			dropped[0].level, dropped[0].attrs["base"], showLines(*records))
+			dropped[0].Level, logtest.Attr(dropped[0], "base"), logtest.Describe(logs.Records()))
 	}
 }
 
@@ -1388,7 +1317,8 @@ func TestBackfillFx_NonPositiveRateIsDroppedAndTheRestOfTheSeriesStored(t *testi
 func TestBackfillFx_WholeSeriesRefusedIsNotReportedAsAnEmptySeries(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
-	log, records := newRecordingLogger()
+	logs := &logtest.Capture{}
+	log := logs.Logger()
 	provider := &recordingHistoryProvider{ids: cbrIDs, allZero: "GBP"}
 	worker := newBackfillWorker(store,
 		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"GBP"}},
@@ -1400,21 +1330,21 @@ func TestBackfillFx_WholeSeriesRefusedIsNotReportedAsAnEmptySeries(t *testing.T)
 		t.Fatalf("Work: %v, want an entirely unusable series to be reported, not to fail the run", err)
 	}
 
-	if n := len(linesFor(*records, emptySeriesMsg)); n != 0 {
+	if n := len(logs.Lines(emptySeriesMsg)); n != 0 {
 		t.Fatalf("%d empty-series lines, want 0: the source published two records, they were refused here:\n%s",
-			n, showLines(*records))
+			n, logtest.Describe(logs.Records()))
 	}
-	line := onlyLine(t, *records, allRefusedMsg)
-	if line.level != slog.LevelWarn {
+	line := logtest.Only(t, logs, allRefusedMsg)
+	if line.Level != slog.LevelWarn {
 		t.Fatalf("all-refused line at %s, want WARN — it leaves the currency unconverted exactly as an empty series does:\n%s",
-			line.level, showLines(*records))
+			line.Level, logtest.Describe(logs.Records()))
 	}
-	if line.attrs["currency"] != "GBP" {
-		t.Fatalf("all-refused line names currency=%q, want GBP:\n%s", line.attrs["currency"], showLines(*records))
+	if logtest.Attr(line, "currency") != "GBP" {
+		t.Fatalf("all-refused line names currency=%q, want GBP:\n%s", logtest.Attr(line, "currency"), logtest.Describe(logs.Records()))
 	}
-	for _, l := range linesFor(*records, downloadedMsg) {
-		if l.attrs["currency"] == "GBP" {
-			t.Fatalf("GBP reported as a download:\n%s", showLines(*records))
+	for _, l := range logs.Lines(downloadedMsg) {
+		if logtest.Attr(l, "currency") == "GBP" {
+			t.Fatalf("GBP reported as a download:\n%s", logtest.Describe(logs.Records()))
 		}
 	}
 	// The sound currency in the same run still lands.
