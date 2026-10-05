@@ -2618,6 +2618,11 @@ components:
           $ref: "#/components/schemas/TradingModeKind"
         transfer_group_id: { type: string, format: uuid, nullable: true }
         counterpart_account_id: { type: string, format: uuid, nullable: true, description: "On a journal page: for one half of a move between two of the family's accounts — shares or money — the account the other half is on. Null for everything else, and absent outside the journal." }
+        withheld_abroad:
+          nullable: true
+          description: "On a journal page, on a dividend of a FOREIGN paper (its ISIN is not Russian): the tax its issuer's country withheld before the money arrived (decision Р-14). Null on every other row, and absent outside the journal. Never part of any figure: income stays what arrived."
+          allOf:
+            - $ref: "#/components/schemas/WithheldAbroad"
         stated_basis_change_minor:
           type: integer
           format: int64
@@ -2654,6 +2659,37 @@ components:
           description: "Which term stopped `in_base`, or null when nothing did. Null therefore covers two situations and `currency` tells them apart: either `in_base` is present, or `currency` already equals the space's base currency and there was nothing to convert in the first place — the operation's own amounts ARE the base-currency ones and no «not converted» caption belongs over them at all. Non-null exactly when `in_base` is null and `currency` differs from the base currency. Published wherever `in_base` is, and only there: the journal listing (GET /accounts/{accountId}/operations) computes both, while the create and transfer responses omit both, since those hand back an operation the client just submitted rather than a journal to read. It is the sharper twin of `has_undated_lots`: that one is a standing fact about the operation, published on every response that returns one whether or not there was ever anything to convert, while this one names the term the conversion actually stopped on — and this is the one to caption a row with, since an undated parcel is only the FIRST of three things that can stop it. Before this field existed the screen said «Нет курса на дату операции» over all three, which is false about a parcel whose purchase dates nobody ever recorded, and false again about a transfer whose own date has a perfectly good rate and whose PURCHASE date has none (#79)."
           allOf:
             - $ref: "#/components/schemas/OperationInBaseGap"
+    WithheldAbroad:
+      type: object
+      required: [state, currency, received_minor, broker_tax]
+      description: "The tax withheld abroad from one foreign dividend. A broker reports only what arrived, so the figure is an ESTIMATE from the broker's dividend calendar: the declared dividend per share times the shares the account held when the right was fixed is the gross, and the gross less what arrived is the tax. A reader must show it as an estimate (≈) to be checked against the broker's statement. Where it cannot be estimated honestly, `state` says so and `unknown_reason` why."
+      properties:
+        state:
+          type: string
+          enum: [estimated, unknown, reported]
+          description: "`estimated`: gross, tax and rate below are the estimate. `unknown`: no honest estimate, see `unknown_reason`. `reported`: the broker sent the payment whole and the tax as its own row (`broker_tax`), which is the withholding as reported; nothing is estimated."
+        unknown_reason:
+          type: string
+          nullable: true
+          enum: [no_calendar, not_in_calendar, another_currency, no_holding, implausible]
+          description: "Why there is no estimate: no calendar is stored for the paper; no declared dividend in it matches this payment; the payment arrived in another currency than the dividend was declared in, at a rate nobody reported; the account held no shares when the right was fixed; or the arithmetic gives a tax below zero or above half the gross, which says the inputs do not describe this payment. Null unless `state` is `unknown`."
+        currency: { type: string, description: "The payment's currency, which every amount here is in, broker_tax and tax_in_base excepted." }
+        received_minor: { type: integer, format: int64, description: "What arrived for this dividend, every row of the journal that pays it summed (a payment may come in parts)." }
+        gross_minor: { type: integer, format: int64, nullable: true, description: "≈ The dividend before withholding: per_share × shares, rounded to a minor unit. Only when `state` is `estimated`." }
+        tax_minor: { type: integer, format: int64, nullable: true, description: "≈ gross_minor − received_minor, positive: money taken. Only when `state` is `estimated`." }
+        rate_percent: { type: string, nullable: true, description: "≈ tax_minor ÷ gross_minor as a percentage with one decimal, e.g. \"10.0\". Only when `state` is `estimated`." }
+        per_share: { type: string, nullable: true, description: "The declared dividend per share, from the calendar, in `currency`'s major units. Only when `state` is `estimated`." }
+        shares: { type: string, nullable: true, description: "The shares the account held at the end of the last day a purchase still carried the right (the record date's eve when the calendar does not say). Only when `state` is `estimated`." }
+        record_date: { type: string, nullable: true, description: "Date YYYY-MM-DD: the matched dividend's record date. Set whenever a calendar entry was matched." }
+        tax_in_base:
+          nullable: true
+          description: "≈ tax_minor in the space's base currency at the official rate of the payment's day, as a guide; null when not estimated, when the payment is already in the base currency, or when that day has no rate."
+          allOf:
+            - $ref: "#/components/schemas/CurrencyAmount"
+        broker_tax:
+          type: array
+          description: "Tax the broker reported as its own rows on this paper on the payment's day, per currency, sign preserved (negative). Those rows stay in the journal as they are; this repeats them beside the payment they belong to. Empty when there are none."
+          items: { $ref: "#/components/schemas/CurrencyAmount" }
     OperationInBaseGap:
       type: string
       enum: [undated_lot, no_rate_operation_date, no_rate_lot_date]

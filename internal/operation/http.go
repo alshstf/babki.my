@@ -48,6 +48,10 @@ type Handler struct {
 	conv   marketdata.RateSource
 	auth   *family.Auth
 	sm     *scs.SessionManager
+	// calendar and catalog estimate the tax withheld abroad (withheld.go);
+	// nil publishes none.
+	calendar dividendCalendar
+	catalog  instrumentCatalog
 }
 
 func NewHandler(svc *Service, store *Store, spaces spaceStore, conv marketdata.RateSource, auth *family.Auth, sm *scs.SessionManager) *Handler {
@@ -638,6 +642,11 @@ func (h *Handler) writeJournalPage(w http.ResponseWriter, r *http.Request, space
 		family.WriteError(w, err)
 		return
 	}
+	withheld, err := h.withheldAbroad(r.Context(), spaceID, ops, sp.BaseCurrency, rates)
+	if err != nil {
+		family.WriteError(w, err)
+		return
+	}
 
 	page := make([]apitypes.Operation, 0, len(ops))
 	for _, o := range ops {
@@ -649,6 +658,10 @@ func (h *Handler) writeJournalPage(w http.ResponseWriter, r *http.Request, space
 		api.StatedBasisChangeMinor = nullable.NewNullNullable[int64]()
 		if change, ok := stated[o.ID]; ok {
 			api.StatedBasisChangeMinor = nullable.NewNullableWithValue(change)
+		}
+		api.WithheldAbroad = nullable.NewNullNullable[apitypes.WithheldAbroad]()
+		if wa, ok := withheld[o.ID]; ok {
+			api.WithheldAbroad = nullable.NewNullableWithValue(wa)
 		}
 		inBase, gap, err := h.operationInBase(r.Context(), o, sp.BaseCurrency, rates)
 		if err != nil {

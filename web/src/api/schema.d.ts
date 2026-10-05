@@ -1825,6 +1825,8 @@ export interface components {
              * @description On a journal page: for one half of a move between two of the family's accounts — shares or money — the account the other half is on. Null for everything else, and absent outside the journal.
              */
             counterpart_account_id?: string | null;
+            /** @description On a journal page, on a dividend of a FOREIGN paper (its ISIN is not Russian): the tax its issuer's country withheld before the money arrived (decision Р-14). Null on every other row, and absent outside the journal. Never part of any figure: income stays what arrived. */
+            withheld_abroad?: components["schemas"]["WithheldAbroad"] | null;
             /**
              * Format: int64
              * @description On a journal page: for each half of a move of shares between two of the family's accounts whose basis was given by hand (TransferRequest.cost_minor), how much the family's basis of those shares changed across the move, in `currency` — the figure given less the basis the departing account's own queue held for them at that moment. Positive: the family's basis grew. Both halves carry the same figure. Null for everything else (and when the departing account does not replay up to the move), absent outside the journal.
@@ -1852,6 +1854,48 @@ export interface components {
             in_base?: components["schemas"]["OperationInBase"] | null;
             /** @description Which term stopped `in_base`, or null when nothing did. Null therefore covers two situations and `currency` tells them apart: either `in_base` is present, or `currency` already equals the space's base currency and there was nothing to convert in the first place — the operation's own amounts ARE the base-currency ones and no «not converted» caption belongs over them at all. Non-null exactly when `in_base` is null and `currency` differs from the base currency. Published wherever `in_base` is, and only there: the journal listing (GET /accounts/{accountId}/operations) computes both, while the create and transfer responses omit both, since those hand back an operation the client just submitted rather than a journal to read. It is the sharper twin of `has_undated_lots`: that one is a standing fact about the operation, published on every response that returns one whether or not there was ever anything to convert, while this one names the term the conversion actually stopped on — and this is the one to caption a row with, since an undated parcel is only the FIRST of three things that can stop it. Before this field existed the screen said «Нет курса на дату операции» over all three, which is false about a parcel whose purchase dates nobody ever recorded, and false again about a transfer whose own date has a perfectly good rate and whose PURCHASE date has none (#79). */
             in_base_gap?: components["schemas"]["OperationInBaseGap"] | null;
+        };
+        /** @description The tax withheld abroad from one foreign dividend. A broker reports only what arrived, so the figure is an ESTIMATE from the broker's dividend calendar: the declared dividend per share times the shares the account held when the right was fixed is the gross, and the gross less what arrived is the tax. A reader must show it as an estimate (≈) to be checked against the broker's statement. Where it cannot be estimated honestly, `state` says so and `unknown_reason` why. */
+        WithheldAbroad: {
+            /**
+             * @description `estimated`: gross, tax and rate below are the estimate. `unknown`: no honest estimate, see `unknown_reason`. `reported`: the broker sent the payment whole and the tax as its own row (`broker_tax`), which is the withholding as reported; nothing is estimated.
+             * @enum {string}
+             */
+            state: "estimated" | "unknown" | "reported";
+            /**
+             * @description Why there is no estimate: no calendar is stored for the paper; no declared dividend in it matches this payment; the payment arrived in another currency than the dividend was declared in, at a rate nobody reported; the account held no shares when the right was fixed; or the arithmetic gives a tax below zero or above half the gross, which says the inputs do not describe this payment. Null unless `state` is `unknown`.
+             * @enum {string|null}
+             */
+            unknown_reason?: "no_calendar" | "not_in_calendar" | "another_currency" | "no_holding" | "implausible" | null;
+            /** @description The payment's currency, which every amount here is in, broker_tax and tax_in_base excepted. */
+            currency: string;
+            /**
+             * Format: int64
+             * @description What arrived for this dividend, every row of the journal that pays it summed (a payment may come in parts).
+             */
+            received_minor: number;
+            /**
+             * Format: int64
+             * @description ≈ The dividend before withholding: per_share × shares, rounded to a minor unit. Only when `state` is `estimated`.
+             */
+            gross_minor?: number | null;
+            /**
+             * Format: int64
+             * @description ≈ gross_minor − received_minor, positive: money taken. Only when `state` is `estimated`.
+             */
+            tax_minor?: number | null;
+            /** @description ≈ tax_minor ÷ gross_minor as a percentage with one decimal, e.g. "10.0". Only when `state` is `estimated`. */
+            rate_percent?: string | null;
+            /** @description The declared dividend per share, from the calendar, in `currency`'s major units. Only when `state` is `estimated`. */
+            per_share?: string | null;
+            /** @description The shares the account held at the end of the last day a purchase still carried the right (the record date's eve when the calendar does not say). Only when `state` is `estimated`. */
+            shares?: string | null;
+            /** @description Date YYYY-MM-DD: the matched dividend's record date. Set whenever a calendar entry was matched. */
+            record_date?: string | null;
+            /** @description ≈ tax_minor in the space's base currency at the official rate of the payment's day, as a guide; null when not estimated, when the payment is already in the base currency, or when that day has no rate. */
+            tax_in_base?: components["schemas"]["CurrencyAmount"] | null;
+            /** @description Tax the broker reported as its own rows on this paper on the payment's day, per currency, sign preserved (negative). Those rows stay in the journal as they are; this repeats them beside the payment they belong to. Empty when there are none. */
+            broker_tax: components["schemas"]["CurrencyAmount"][];
         };
         /**
          * @description Which TERM the server could not value, and so why Operation.in_base — the whole object — is absent. It is the journal's twin of InBaseGap and names terms for the same reason that one does: there is exactly one operation here, and the terms are the very figures standing side by side in its row. `undated_lot`: amount_minor is the cost basis of a transferred parcel and at least one piece of that parcel does not know when it was bought — a breakdown that was never recorded (a basis given by hand, or a transfer predating breakdowns) or one carrying a dateless piece inherited from an earlier undated transfer. There is no date to ask the fx table about and none will ever be recovered, because nobody wrote it down. This is the same condition Operation.has_undated_lots reports. `no_rate_operation_date`: amount_minor is money that moved on `occurred_on`, and the fx table holds no rate for that day nor for any earlier one. `no_rate_lot_date`: amount_minor is a cost basis assembled from a stored breakdown whose every piece IS dated, and the fx table holds no rate for one of those PURCHASE days nor for any earlier one. The transfer's own date is not the date at issue and usually has a perfectly good rate — it is simply not a rate that may value shares bought on other days — so a caption naming it would blame a day that had nothing to do with the gap, which is the whole of #79. EXACTLY ONE VALUE IS PUBLISHED, AND THERE IS NO COMBINED VALUE. `undated_lot` is settled before any rate is looked up, so a row that has both an undated piece and a missing rate reports the undated piece: it is the one cause no backfill will ever close, and reporting it never promises a figure that is not coming. The two `no_rate_*` values need no order between them because they cannot both arise on one row: an amount is either money that moved on the operation's own date or a basis assembled from a stored breakdown, never both, so all of its terms are dated the one way or all the other — and `assembled_from_lots` is the field that says which, published on the operation whether or not this gap is.

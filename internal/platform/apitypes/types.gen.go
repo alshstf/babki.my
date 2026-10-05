@@ -838,6 +838,54 @@ func (e TradingModeKind) Valid() bool {
 	}
 }
 
+// Defines values for WithheldAbroadState.
+const (
+	WithheldAbroadStateEstimated WithheldAbroadState = "estimated"
+	WithheldAbroadStateReported  WithheldAbroadState = "reported"
+	WithheldAbroadStateUnknown   WithheldAbroadState = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the WithheldAbroadState enum.
+func (e WithheldAbroadState) Valid() bool {
+	switch e {
+	case WithheldAbroadStateEstimated:
+		return true
+	case WithheldAbroadStateReported:
+		return true
+	case WithheldAbroadStateUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WithheldAbroadUnknownReason.
+const (
+	AnotherCurrency WithheldAbroadUnknownReason = "another_currency"
+	Implausible     WithheldAbroadUnknownReason = "implausible"
+	NoCalendar      WithheldAbroadUnknownReason = "no_calendar"
+	NoHolding       WithheldAbroadUnknownReason = "no_holding"
+	NotInCalendar   WithheldAbroadUnknownReason = "not_in_calendar"
+)
+
+// Valid indicates whether the value is a known member of the WithheldAbroadUnknownReason enum.
+func (e WithheldAbroadUnknownReason) Valid() bool {
+	switch e {
+	case AnotherCurrency:
+		return true
+	case Implausible:
+		return true
+	case NoCalendar:
+		return true
+	case NoHolding:
+		return true
+	case NotInCalendar:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GetCapitalParamsStep.
 const (
 	Month GetCapitalParamsStep = "month"
@@ -1831,6 +1879,9 @@ type Operation struct {
 
 	// Type What the entry is. `redemption` deserves a note of its own: it is a bond reaching maturity, and it is ARITHMETICALLY A SALE — the paper leaves, the money arrives, the earliest-purchases-first queue gives up the basis those bonds carried — so every figure derived from it (realized profit, remaining cost, quantity) is computed by the same rule a `sell` is, and НК РФ ст. 214.1 names the two together, «реализации (погашения)». It is a separate value because it is a different EVENT: nobody sold anything, the bond ran out, and the journal already named the partial repayment separately as `amortization`, which left the full one the only disposal wearing another name. A client may group the two wherever it groups disposals; what it must not do is call one the other on screen. `exchange_out` and `exchange_in` are the two legs of a SECURITIES CONVERSION — one paper becoming another, a depositary receipt turning into the share it represented or a fund's units reissued under a new ISIN — recorded on ONE account and one day, with N units of the old paper leaving and M of the new arriving. NOTHING IS BOUGHT OR SOLD: no result is realized and no new acquisition date is created, because the holder paid nothing and received nothing. The parcel travels whole — every lot's cost basis and the day it was acquired arrive on the new paper unchanged, and only the unit count is restated (НК РФ ст. 214.1 п. 13 keeps the receipt's own purchase price as the expense behind the shares received, and ст. 219.1 counts the holding period from the day the receipt was bought). A client must not group these with disposals or acquisitions on any screen that sums results: the amount_minor on both legs is the cost basis that moved, not money, exactly as a transfer's is. THEY ARE WRITTEN ONLY BY THE CORPORATE-ACTIONS REGISTRY (`source: registry`) and never by this API: what happened to a paper is true for everyone who held it, so it is recorded once against the instrument and applied from there to every account. There is accordingly no endpoint that creates one, and — like any non-`manual` row — neither leg can be deleted through the journal. `spinoff_out` and `spinoff_in` are the two legs of a SPIN-OFF, and the difference from a conversion is that NOTHING LEAVES: the original paper stays with the holder, keeping every unit, and a second paper appears beside it carrying only a SHARE of what was paid — Т-Капитал carving the blocked assets out of its funds into closed ones on 2023-12-22 is the case this was built for. НК РФ ст. 214.1 п. 13 abz. 8 sends the arithmetic to ст. 277 п. 7: the new units are worth the part of the original units' cost that the carved-out assets were of the fund's net assets before the carve-out, and the original units' cost goes down by exactly that, with neither income nor expense arising on the day. SO `spinoff_out` CARRIES NO `quantity` AT ALL — it is null, and a client must not render a count for it or read one into it, because no units moved; what it carries is `amount_minor`, the cost basis that went across. `spinoff_in` is an ordinary arrival of M units whose parcels keep the ORIGINAL purchase days, so a screen showing when a holding was acquired shows the day the money was really spent rather than the day the new paper appeared. Like a conversion's legs, both are written ONLY by the corporate-actions registry (`source: registry`), neither is created or deleted through this API, and neither belongs on a screen that sums disposals or acquisitions.
 	Type OperationType `json:"type"`
+
+	// WithheldAbroad On a journal page, on a dividend of a FOREIGN paper (its ISIN is not Russian): the tax its issuer's country withheld before the money arrived (decision Р-14). Null on every other row, and absent outside the journal. Never part of any figure: income stays what arrived.
+	WithheldAbroad nullable.Nullable[WithheldAbroad] `json:"withheld_abroad,omitempty"`
 }
 
 // OperationSource Who wrote this row. `manual` is a person, through this API; `registry` is the corporate-actions registry, which materializes one recorded fact about an INSTRUMENT (a split, a conversion) into a row on every account that held it; anything else is an importer, and the set is closed by a CHECK constraint on the column rather than only by the code that writes it, which is why it is enumerated on a response at all. It is not decoration: an operation whose source is not `manual` cannot be deleted (see deleteOperation) because the importer that owns it would write it back on its next rebuild, so a client must not offer a delete control on such a row.
@@ -2620,6 +2671,51 @@ type UserInfo struct {
 	Id          openapi_types.UUID `json:"id"`
 	Username    string             `json:"username"`
 }
+
+// WithheldAbroad The tax withheld abroad from one foreign dividend. A broker reports only what arrived, so the figure is an ESTIMATE from the broker's dividend calendar: the declared dividend per share times the shares the account held when the right was fixed is the gross, and the gross less what arrived is the tax. A reader must show it as an estimate (≈) to be checked against the broker's statement. Where it cannot be estimated honestly, `state` says so and `unknown_reason` why.
+type WithheldAbroad struct {
+	// BrokerTax Tax the broker reported as its own rows on this paper on the payment's day, per currency, sign preserved (negative). Those rows stay in the journal as they are; this repeats them beside the payment they belong to. Empty when there are none.
+	BrokerTax []CurrencyAmount `json:"broker_tax"`
+
+	// Currency The payment's currency, which every amount here is in, broker_tax and tax_in_base excepted.
+	Currency string `json:"currency"`
+
+	// GrossMinor ≈ The dividend before withholding: per_share × shares, rounded to a minor unit. Only when `state` is `estimated`.
+	GrossMinor nullable.Nullable[int64] `json:"gross_minor,omitempty"`
+
+	// PerShare The declared dividend per share, from the calendar, in `currency`'s major units. Only when `state` is `estimated`.
+	PerShare nullable.Nullable[string] `json:"per_share,omitempty"`
+
+	// RatePercent ≈ tax_minor ÷ gross_minor as a percentage with one decimal, e.g. "10.0". Only when `state` is `estimated`.
+	RatePercent nullable.Nullable[string] `json:"rate_percent,omitempty"`
+
+	// ReceivedMinor What arrived for this dividend, every row of the journal that pays it summed (a payment may come in parts).
+	ReceivedMinor int64 `json:"received_minor"`
+
+	// RecordDate Date YYYY-MM-DD: the matched dividend's record date. Set whenever a calendar entry was matched.
+	RecordDate nullable.Nullable[string] `json:"record_date,omitempty"`
+
+	// Shares The shares the account held at the end of the last day a purchase still carried the right (the record date's eve when the calendar does not say). Only when `state` is `estimated`.
+	Shares nullable.Nullable[string] `json:"shares,omitempty"`
+
+	// State `estimated`: gross, tax and rate below are the estimate. `unknown`: no honest estimate, see `unknown_reason`. `reported`: the broker sent the payment whole and the tax as its own row (`broker_tax`), which is the withholding as reported; nothing is estimated.
+	State WithheldAbroadState `json:"state"`
+
+	// TaxInBase ≈ tax_minor in the space's base currency at the official rate of the payment's day, as a guide; null when not estimated, when the payment is already in the base currency, or when that day has no rate.
+	TaxInBase nullable.Nullable[CurrencyAmount] `json:"tax_in_base,omitempty"`
+
+	// TaxMinor ≈ gross_minor − received_minor, positive: money taken. Only when `state` is `estimated`.
+	TaxMinor nullable.Nullable[int64] `json:"tax_minor,omitempty"`
+
+	// UnknownReason Why there is no estimate: no calendar is stored for the paper; no declared dividend in it matches this payment; the payment arrived in another currency than the dividend was declared in, at a rate nobody reported; the account held no shares when the right was fixed; or the arithmetic gives a tax below zero or above half the gross, which says the inputs do not describe this payment. Null unless `state` is `unknown`.
+	UnknownReason nullable.Nullable[WithheldAbroadUnknownReason] `json:"unknown_reason,omitempty"`
+}
+
+// WithheldAbroadState `estimated`: gross, tax and rate below are the estimate. `unknown`: no honest estimate, see `unknown_reason`. `reported`: the broker sent the payment whole and the tax as its own row (`broker_tax`), which is the withholding as reported; nothing is estimated.
+type WithheldAbroadState string
+
+// WithheldAbroadUnknownReason Why there is no estimate: no calendar is stored for the paper; no declared dividend in it matches this payment; the payment arrived in another currency than the dividend was declared in, at a rate nobody reported; the account held no shares when the right was fixed; or the arithmetic gives a tax below zero or above half the gross, which says the inputs do not describe this payment. Null unless `state` is `unknown`.
+type WithheldAbroadUnknownReason string
 
 // Error defines model for Error.
 type Error = ErrorResponse
