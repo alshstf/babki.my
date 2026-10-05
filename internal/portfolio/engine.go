@@ -1,91 +1,34 @@
 // Package portfolio computes positions from the operations journal.
-// The engine is pure: it takes one account's operations ordered by
-// (occurred_on, created_at) ascending and returns per-instrument positions.
-// It never touches the database — determinism is the point: the journal is
-// the single source of truth and positions are always recomputable.
 //
-// Transfer cost basis is a snapshot: when a transfer pair is created, the
-// lots it consumes are resolved once (see ReleasedLots) and stored alongside
-// the transfer_in operation, their summed cost on the operation itself. That
-// breakdown is then THE RECORD OF WHAT LEFT, and BOTH legs are folded from it:
-// the receiving account rebuilds those lots and the departing one gives up
-// those very lots (see Position.releaseRecorded), so a pair is consistent by
-// construction rather than because two independent derivations happen to agree.
+// The engine is pure: it folds one account's operations, in journal order, into
+// per-instrument positions and touches no database, so positions are always
+// recomputable from the journal.
 //
-// They did once, and then stopped. The departing leg used to release a FRESH
-// FIFO slice of its own and throw the cost away, which reproduced the stored
-// snapshot only for as long as the queue rule stayed put. It did not: ordering
-// the queue by acquisition rather than by arrival made every already-recorded
-// transfer resolve to DIFFERENT lots than the ones it had frozen, with no edit
-// by anyone — the same parcel could then sit on both accounts at once while
-// another vanished, and the family's basis was overstated by the difference,
-// silently, because the integrity check only ever compared a leg against its
-// own frozen numbers (issue #60). Reading the release off the record instead of
-// re-deriving it makes the pair immune to any future change of that rule.
+// Transfers. When a transfer pair is created, the lots it consumes are resolved
+// once (ReleasedLots) and stored with the transfer_in. That breakdown is the
+// record of what moved, and both legs fold from it: the receiving account
+// rebuilds those lots with their purchase dates, and the sending account gives
+// up exactly those lots (Position.releaseRecorded). Re-deriving the release on
+// the sending side made pairs disagree once the queue rule changed (#60). A
+// transfer without a breakdown creates one lot with an unknown acquisition
+// date: the transfer's own date is not a purchase date (see Lot.AcquiredOn).
 //
-// The receiving account rebuilds those very lots (see Compute's transfer_in
-// branch), each keeping the day it was bought: moving shares between the
-// family's own accounts is not a purchase, so it must change neither the basis
-// nor the dates that basis is later valued at. A transfer with no stored
-// breakdown — basis given by hand, or recorded before breakdowns were kept —
-// produces one lot that DOES NOT KNOW when it was acquired: the original dates
-// do not exist to be restored, and the transfer's own date is not one of them.
-// Dating such a lot on the day the shares changed brokers would state, in the
-// same field and the same format as a real purchase date, something nobody
-// ever recorded — and every figure struck at that date afterwards (the ruble
-// basis, above all) would be an invention indistinguishable from a fact. An
-// unknown date is therefore carried as unknown, all the way through (see
-// Lot.AcquiredOn).
+// FIFO is by acquisition date, not by arrival: a transfer carrying older shares
+// takes its place among those already held (НК РФ ст. 214.1 п. 13 — «по
+// стоимости первых по времени приобретений»; 26 CFR 1.1012-1(c)(1)(i)). Lots
+// of unknown date lead; same-day lots keep journal order (see addLot).
 //
-// FIFO here means first by ACQUISITION, not first by arrival. The release queue
-// is ordered by the day each lot was bought, wherever in the journal that lot
-// is mentioned, so a transfer carrying older shares takes its place among the
-// ones already held instead of queuing behind them. This is what every
-// jurisdiction the owner files in actually says — НК РФ ст. 214.1 п. 13
-// releases "по стоимости первых по времени приобретений", 26 CFR
-// 1.1012-1(c)(1)(i) names "the earliest lot the taxpayer purchased or
-// acquired" — and it follows from the paragraph above: if moving shares between
-// one's own accounts is not a purchase, it cannot decide what is sold first
-// either. Lots whose acquisition is unknown lead the queue, and lots acquired
-// on the same day keep the order they entered the account (see addLot for both
-// rules and for why the tie-break is spelled out at all).
+// Quantities are kept at QuantityScale, the journal's own scale, so a split
+// truncates rather than producing a quantity no entry can name. Truncation does
+// not compose, so a full sale recorded by an older build after a
+// reverse-then-forward split may no longer fit and is refused. A deep reverse
+// split can leave a lot with no shares but real cost; it keeps its place in the
+// queue and its money leaves with the position's last unit (sweepShareless).
 //
-// Quantities are tracked to QuantityScale decimal places, the same scale the
-// journal stores them at, so a split truncates its product rather than letting
-// a position hold a quantity that could never be written down. Two consequences
-// are worth knowing. Truncation does not compose: a reverse split followed by a
-// forward one can land a hair below what the pre-truncation engine computed, so
-// a full-position sell recorded by an older build may no longer fit the
-// position it was meant to empty — the refusal is loud, and deleting and
-// re-entering that operation resolves it. And a deep enough reverse split can
-// leave a lot with no quantity but a live cost basis; it keeps its place in
-// the ACQUISITION queue exactly as if it still held shares — first only when
-// the lot itself has no acquisition date, otherwise a release still has to
-// work through every lot acquired earlier before reaching it. The release that
-// takes the position's last unit takes such lots' money with it (see
-// sweepShareless); until then the basis stays, because writing it off would
-// treat a split as a disposal, which it is not.
-//
-// A POSITION'S COST AND ITS INCOME ARE TWO FIGURES AND MAY BE IN TWO
-// CURRENCIES. The cost currency is settled by the first operation that touches
-// cost, quantity or fees, and every later such operation must repeat it: those
-// figures are single int64s of minor units, and mixing two currencies inside
-// one is corruption nothing downstream could detect. Income is under no such
-// rule — it is kept per currency (see Position.IncomeByCurrency) — because a
-// yuan bond pays its coupons in rubles and a dollar share's dividend and
-// withheld tax arrive in rubles, which is what Russian brokers do rather than
-// what broken data looks like. Minor amounts of different currencies are still
-// never mixed into one int64; there is simply more than one int64 now.
-//
-// No double counting with account summaries: positions computed here are
-// NOT part of GET /api/v1/summary. Account summaries are still built
-// exclusively from manually entered balances (table account_balances), so an
-// instrument's value never lands in the family totals twice — once as a
-// position and once inside a brokerage balance. Market quotes have since
-// arrived, but the two views have deliberately not been merged: switching
-// brokerage accounts over to a computed "positions + cash" valuation would
-// silently change what every recorded balance means, and that is its own
-// piece of work.
+// A position's cost is in one currency, settled by the first operation that
+// touches cost, quantity or fees; income is kept per currency, since Russian
+// brokers pay coupons and dividends in roubles on papers bought in other
+// currencies (see Position.IncomeByCurrency).
 package portfolio
 
 import (
@@ -103,272 +46,113 @@ import (
 )
 
 var (
-	// ErrOversell means a sell/transfer_out exceeds the held quantity.
 	ErrOversell = errors.New("not enough quantity")
-	// ErrBadOperation means the journal entry violates engine invariants.
+	// ErrBadOperation means a journal entry violates the engine's invariants.
 	ErrBadOperation = errors.New("invalid operation")
 )
 
-// QuantityScale is how many decimal places the journal keeps for a quantity:
-// operations.quantity and operation_transfer_lots.quantity are both
-// NUMERIC(30,10) (see the migrations).
-//
-// It lives in the engine rather than next to the SQL because it is not merely a
-// column width. It is the precision the ledger itself works at, and a position
-// is nothing but a fold of ledger entries — so a position holding a quantity
-// finer than the ledger can name is a position no entry can ever fully release:
-// "sell everything I hold" cannot be written down, and whatever IS written down
-// is not the number that was checked. Keeping positions on this scale is
-// therefore a property of the journal-to-positions contract, and it is the
-// engine that has to hold it (see Position.applySplit, the only place a
-// quantity can leave the scale).
-//
-// Naming a scale is not knowing about a database: Compute still takes a journal
-// and returns positions, and touches nothing else.
+// QuantityScale is the decimal places the journal keeps for a quantity
+// (NUMERIC(30,10)). Positions are kept at this scale so every holding can be
+// named by a journal entry; applySplit is the only place a quantity could leave
+// it.
 const QuantityScale = 10
 
-// Lot is one acquisition that is still (partly) held: the quantity left of
-// it, the cost basis still attributed to that quantity, and the day it was
-// acquired. AcquiredOn is what lets a caller value each lot at the exchange
-// rate of its own purchase date instead of one rate for the whole position;
-// a transfer_in rebuilds one lot per piece of its stored breakdown, each
-// keeping the day it was bought.
+// Lot is one acquisition still (partly) held: its remaining quantity, the cost
+// attributed to it, and the day it was acquired, which values it at that day's
+// rate in another currency.
 //
-// AcquiredOn IS NIL WHEN THE DATE IS NOT KNOWN, which is a real and permanent
-// state, not a temporary gap: a transfer with no stored breakdown carries a
-// basis whose purchase dates were never recorded (see the package doc), and
-// nothing can recover them later. A buy always knows its date, so nil never
-// means "not filled in yet". It is also what places the lot in the release
-// queue, and an unknown date places it at the head — see addLot.
+// AcquiredOn is nil when the date is not known — permanently, as for a transfer
+// without a breakdown — never a placeholder. It is a pointer so "unknown"
+// cannot pass for a real date (a zero time.Time sorts and converts like one);
+// callers must decide what unknown means and never substitute a date. Such lots
+// lead the queue (see addLot).
 //
-// The absence is a pointer rather than a zero time.Time on purpose. A zero
-// time.Time is a perfectly usable date — the first of January, year 1 — so
-// every date operation accepts it and answers confidently: it sorts before
-// every real purchase, formats as a plausible-looking string, and asks the fx
-// tables for a rate as if year 1 were a Tuesday. "Unknown" would then travel
-// disguised as "very long ago", and each place that forgot to check would be
-// silently, unfalsifiably wrong. A nil pointer cannot be quietly mistaken for
-// a date: code that ignores the case panics on the spot, at the line that
-// ignored it, instead of publishing a number nobody can tell apart from a
-// correct one. Every caller must decide what an unknown date means for it, and
-// the answer is never a substitute date (see Handler.positionInBase, which
-// publishes nothing rather than a partial basis).
-//
-// Quantity is positive for every lot an acquisition creates, but can be zero
-// afterwards: a reverse split deep enough to round a lot's whole holding away
-// leaves it with no shares and its cost basis intact (see applySplit). The lot
-// stays in the queue — the money is real and belongs to the day it was spent.
+// Quantity can be zero after a deep reverse split; the lot keeps its cost and
+// its day.
 type Lot struct {
 	Quantity   decimal.Decimal
 	CostMinor  int64
 	AcquiredOn *time.Time
-	// RateOn is the day whose official rate prices this lot's cost in another
-	// currency: the purchase's settlement day when it is known (decision Р-3,
-	// НК РФ ст. 210 п. 5 — the day the expense was actually incurred), nil to
-	// take AcquiredOn.
+	// RateOn is the day whose official rate prices the lot's cost: the purchase's
+	// settlement day when known (decision Р-3, НК РФ ст. 210 п. 5), nil to use
+	// AcquiredOn.
 	RateOn *time.Time
 }
 
-// CurrencyMinor is an amount of minor units together with the currency they
-// are units of. It exists because one figure of a position — its income — is
-// not necessarily denominated in the position's own currency, and minor units
-// of two currencies must never meet inside one int64 (see
-// Position.IncomeByCurrency).
+// CurrencyMinor is an amount of minor units with their currency, for figures
+// that may be in several currencies.
 type CurrencyMinor struct {
 	Currency string
 	Minor    int64
 }
 
-// Position is the running state of one instrument within one account.
-// Closed positions (zero quantity) are kept: realized P&L and income
-// remain meaningful history.
+// Position is the running state of one instrument within one account. Closed
+// positions are kept for their realized result and income.
 type Position struct {
 	InstrumentID uuid.UUID
-	// Currency is the currency of the position's COST AND QUANTITY: of
-	// CostMinor, of every lot's cost, of FeesMinor, and of everything a
-	// Realization is made of. It is NOT "the one currency of the position" —
-	// income can arrive in another one, and on a Russian broker routinely does
-	// (see IncomeByCurrency).
+	// Currency is the currency of the position's cost and quantity: CostMinor, the
+	// lots, and what Realizations are made of. Income may be in others.
 	//
-	// It is settled by the first operation that touches any of those figures
-	// (see Type.mustMatchPositionCurrency), and every later such operation must
-	// repeat it. Until one arrives, a position that has seen nothing but income
-	// carries a currency PROVISIONALLY, and the first such operation replaces
-	// it.
-	//
-	// A POSITION THAT NEVER SEES ONE — every payment recorded, no purchase, no
-	// transfer leg, no commission, which is how a paper bought before the
-	// import window or received by transfer looks — KEEPS THAT PROVISIONAL
-	// VALUE, AND THEN THIS FIELD IS A CONVENTION FOR DRAWING THE ROW, NOT A
-	// FACT ABOUT WHAT WAS PAID. There is no cost, no lot, no fee and no
-	// realization for it to be the currency OF — every operation that makes one
-	// settles this field, so that is checkable rather than a matter of care —
-	// and the paper's own currency is simply not in this journal to be found. A
-	// caller must therefore not read it as the currency the paper is priced in,
-	// and must not put a figure under it that is not itself in it: the income
-	// beside it may be in that currency, in another, or in several at once, and
-	// IncomeByCurrency is where that question is answered.
-	//
-	// The value chosen is the LOWEST CURRENCY CODE among the payments received,
-	// which is the very order the income is kept in, so it is always
-	// IncomeByCurrency[0].Currency. It is borrowed from the income and is no
-	// summary of it. Determinism is the whole requirement: two accounts holding
-	// the same payments listed in a different order must draw the same row, and
-	// taking the currency from whichever payment the journal happened to list
-	// first drew a dollar share under a ruble sign in one order and under a
-	// dollar sign in the other.
+	// It is settled by the first operation touching those figures
+	// (Type.mustMatchPositionCurrency), which every later one must repeat. A
+	// position that has seen only income keeps a provisional currency — the lowest
+	// code among its payments, IncomeByCurrency[0].Currency, chosen for
+	// determinism. It then only labels the row: there is no cost for it to be the
+	// currency of, and it must not be read as the paper's currency.
 	Currency  string
 	Quantity  decimal.Decimal
 	CostMinor int64 // remaining FIFO cost basis (fees capitalized on buy)
-	// IncomeByCurrency is what the paper PAID — dividends and coupons received,
-	// less the taxes attributed to this instrument — KEPT PER CURRENCY, ordered
-	// by currency code.
-	//
-	// Per currency because income and cost need not be denominated alike. A
-	// yuan bond is bought for yuan and pays its coupons in rubles, converted by
-	// the broker on the day of the payment; a dollar share's dividend and the
-	// tax withheld on it arrive in rubles too. That is ordinary Russian
-	// brokerage practice rather than damaged data, and adding the two into one
-	// int64 of minor units — the shape this field replaced — is exactly the
-	// silent corruption the currency rule exists to prevent. So the cost stays
-	// in the currency the paper was paid for and the income stays in the
-	// currency it arrived in, and neither is converted here: the engine knows no
-	// exchange rates and must not (see the package doc).
-	//
-	// ONE ENTRY PER CURRENCY, ORDERED BY CURRENCY CODE — a property of the money
-	// rather than of the journal. Two accounts holding the same payments listed
-	// in a different order must render and compare identically, so the order
-	// cannot be the arrival order; and it is a slice rather than a map because
-	// Go's map iteration is deliberately random and these figures go onto a
-	// screen. addIncome is the only thing that writes it, and it maintains both
-	// properties.
-	//
-	// An entry can be zero or negative, and neither is a defect: a coupon and
-	// the tax withheld from it cancelling exactly is not the same statement as
-	// no income at all, and a tax on a payment made before this account's
-	// journal begins leaves a negative one.
+	// IncomeByCurrency is what the paper paid — dividends and coupons less taxes
+	// on them — one entry per currency, ordered by code (deterministic, unlike map
+	// order). A yuan bond's rouble coupon stays in roubles; the engine holds no
+	// rates. An entry may be zero or negative (a tax on a payment before the
+	// journal starts). addIncome is its only writer.
 	IncomeByCurrency []CurrencyMinor
-	// FeesByCurrency is what holding and trading this paper COST IN CHARGES —
-	// commissions capitalized into a purchase are not here, they are in the
-	// lots — kept per currency and ordered by currency code, exactly as the
-	// income above and for the same reason.
-	//
-	// A commission need not be denominated like the paper. The broker charges
-	// in the currency the money moved in: selling a yuan bond settles in
-	// rubles and the commission on that sale is charged in rubles too. One
-	// int64 for the pair would be the same silent corruption a single income
-	// figure was, so this is the same shape and shares its machinery
-	// (addToCurrencyList writes both).
-	//
-	// A commission on an ACQUISITION never reaches this list: it is added to
-	// the lot's cost, in the position's own currency, which the purchase had
-	// to be denominated in anyway (see Operation.mustMatchPositionCurrency).
+	// FeesByCurrency is the commissions charged, per currency and ordered like
+	// IncomeByCurrency: a sale of a yuan bond is charged in roubles. A commission
+	// on an acquisition is part of the lot's cost instead.
 	FeesByCurrency []CurrencyMinor
-	// Lots are the acquisitions still held, ordered by the day each was
-	// ACQUIRED — oldest first — which is the order releases consume them
-	// (FIFO). Not by the order they entered this account: a transfer_in brings
-	// in lots bought before ones already held, and they take their place among
-	// them. Moving shares between one's own accounts is not a purchase and does
-	// not restart anything, so the queue must not be built out of when the
-	// paperwork happened (see addLot, which maintains this order, for the rule
-	// and for the law behind it). Lots that do not know when they were acquired
-	// stand at the head, ahead of every dated one; ties keep the order the lots
-	// entered the account.
-	//
-	// Their quantities sum to Quantity and their costs sum to CostMinor
-	// exactly. A position closed by selling everything has none; one whose
-	// shares were rounded away by a reverse split keeps the shareless lots that
-	// still hold the money spent on them (see Lot and applySplit).
+	// Lots are the acquisitions still held, oldest acquisition first, which is
+	// the release order; undated lots lead, ties keep journal order (see addLot).
+	// Their quantities and costs sum exactly to Quantity and CostMinor.
 	Lots []Lot
-	// Realizations are the disposals that PRODUCED RealizedPnLMinor, each
-	// recorded as what it was made of (see Realization), in journal order.
-	//
-	// Their results sum to RealizedPnLMinor exactly, and by construction rather
-	// than by two derivations that happen to agree: realize is the only thing
-	// that moves the total and it moves it by the event's own figure, so a
-	// branch wanting to realize something without saying what it was made of
-	// would have to go round that one method. This package has been bitten
-	// before by a number and its breakdown maintained separately (see the
-	// package doc on issue #60), and the lesson is the same one — the moment
-	// they can disagree, they eventually do, silently.
-	//
-	// A TRANSFER OUT PRODUCES NONE. Moving shares between the family's own
-	// accounts is a disposal in none of the jurisdictions this was researched
-	// against, and the departing leg has no proceeds to record: its AmountMinor
-	// is the basis that travelled, not money received. Nor is anything left
-	// unaccounted for by leaving it out — that leg has never added to
-	// RealizedPnLMinor either (see the transfer_out branch in Compute), so
-	// there is no term to remove and the sum above is untouched by the
-	// decision.
+	// Realizations are the disposals behind the realized result, in journal order,
+	// each recorded as what it was made of (see Realization). A transfer out is
+	// not a disposal and produces none.
 	Realizations []Realization
-	// heldALot records that this account has, at some point in this journal,
-	// ACQUIRED the paper — that a lot was created for it, by a purchase or by a
-	// transfer bringing one in. It is fold state and not a fact for a caller, so
-	// it is unexported: nothing outside this package can read it, and the only
-	// thing it decides is whether an amortization is believable (see Compute's
-	// amortization branch).
-	//
-	// It is set by addLot rather than by the branches that call addLot, for the
-	// reason addLot's own doc gives about the queue's order: addLot is the one
-	// door a lot can enter a position through, so a branch added later cannot
-	// create a lot and forget to record that it did. Nothing ever clears it —
-	// selling everything, or transferring everything away, does not un-acquire
-	// what was acquired.
+	// heldALot records that this account acquired the paper at some point (a
+	// purchase or an arriving transfer). It is set by addLot, the only way a lot
+	// enters, and decides whether an amortization is believable.
 	heldALot bool
 	// realizedPnLMinor and realizedInOneCurrency are what RealizedPnL returns,
-	// and they are unexported together so that no caller can reach the number
-	// without the answer to whether it is one. See finishRealized, which is the
-	// only thing that writes them.
+	// written only by finishRealized.
 	realizedPnLMinor      int64
 	realizedInOneCurrency bool
 }
 
-// realize records one disposal. It does NOT move a running total: what the
-// disposals add up to is decided once, at the end of the fold, by
-// finishRealized — see there for why it cannot be decided here.
+// realize records one disposal; the total is settled by finishRealized.
 func (p *Position) realize(r Realization) {
 	p.Realizations = append(p.Realizations, r)
 }
 
-// RealizedPnL is what the position's closed deals came to, and whether that is
-// a figure at all.
-//
-// THE SECOND RESULT IS FALSE WHEN A DISPOSAL SETTLED IN ANOTHER CURRENCY, and
-// then there is no number to publish IN ANY CURRENCY — which is what makes this
-// unlike income and fees, and why those are lists and this is not. A yuan bond
-// redeemed for rubles has proceeds in rubles and a basis in yuan, and their
-// difference is not a quantity of either one: converting it needs a rate, the
-// engine holds none by design, and the only honest thing this package can do is
-// say so and let the layer that does hold rates strike the figure from the
-// disposals themselves (see Realization, which records what each was made of
-// for exactly that purpose).
-//
-// A position with no disposals returns 0 and true. Nothing was realized, and
-// nought is the whole of it — an answer, not an absence.
+// RealizedPnL is the position's realized result in its currency, and whether
+// there is one: false when a disposal settled in another currency (a yuan
+// bond redeemed for roubles), since the difference is a quantity of neither
+// and the engine holds no rates. Callers holding rates use Realizations. No
+// disposals is 0 and true.
 func (p *Position) RealizedPnL() (minor int64, inOneCurrency bool) {
 	return p.realizedPnLMinor, p.realizedInOneCurrency
 }
 
-// finishRealized settles what RealizedPnL reports, once, after the whole
-// journal has been folded.
-//
-// IT CANNOT BE DONE WHILE FOLDING, and the reason is Position.Currency: until
-// the fold ends that field may still be provisional and may still change (see
-// its own doc), so a disposal compared against it mid-walk could be judged to
-// match a currency the position turns out not to be in. Deciding it here means
-// the comparison is against the final answer, whatever order the journal
-// happened to list its entries in.
-//
-// The addition is guarded for the reason addToCurrencyList's is: every term is
-// an ordinary figure and a total of ordinary figures need not be, and a wrapped
-// int64 is a plausible sum of the wrong magnitude and often the wrong sign.
+// finishRealized settles the realized total after the fold, when
+// Position.Currency is final; mid-fold it may still be provisional. The sum is
+// overflow-checked.
 func (p *Position) finishRealized() error {
 	var sum int64
 	for _, r := range p.Realizations {
 		if r.Currency != p.Currency {
-			// One is enough: the total is not expressible, and a sum of the
-			// rest would be a figure smaller than the truth wearing the name
-			// of the whole.
+			// One foreign disposal makes the total inexpressible; a partial sum would
+			// understate it.
 			p.realizedPnLMinor, p.realizedInOneCurrency = 0, false
 			return nil
 		}
@@ -383,29 +167,18 @@ func (p *Position) finishRealized() error {
 	return nil
 }
 
-// findIncome locates a currency in IncomeByCurrency by a binary search over the
-// very order that slice is kept in, and reports where it is — or, when it is
-// absent, where it would have to go to keep that order.
-//
-// BOTH LOOKUPS BY CURRENCY GO THROUGH IT — addIncome's and IncomeMinorIn's,
-// which are all there are — and that is the point of it being a function:
-// "where this currency belongs" and "where this currency is found" are then one
-// answer rather than two that must agree, and the ordering is written down
-// once. A position holds a handful of currencies at most, so this is for the
-// invariant and not for speed.
+// findInCurrencyList binary-searches a per-currency list and reports where the
+// currency is, or where it would be inserted. Every lookup by currency uses
+// it, so the ordering is defined once.
 func findInCurrencyList(list []CurrencyMinor, currency string) (int, bool) {
 	return slices.BinarySearchFunc(list, currency, func(e CurrencyMinor, c string) int {
 		return strings.Compare(e.Currency, c)
 	})
 }
 
-// addToCurrencyList books minor units into a per-currency list, keeping it
-// ordered by currency code with one entry per currency. It is the only thing
-// that writes IncomeByCurrency and FeesByCurrency, so the two lists cannot
-// drift into different orders or different notions of "an entry".
-//
-// what names the total for the error message; money.Add names no figure by
-// design, and "which total overflowed" is the part a reader needs.
+// addToCurrencyList books minor units into a per-currency list, ordered by code
+// with one entry per currency, overflow-checked; what names the total in the
+// error. It is the only writer of IncomeByCurrency and FeesByCurrency.
 func addToCurrencyList(list []CurrencyMinor, currency string, minor int64, what string) ([]CurrencyMinor, error) {
 	at, found := findInCurrencyList(list, currency)
 	if !found {
@@ -419,7 +192,7 @@ func addToCurrencyList(list []CurrencyMinor, currency string, minor int64, what 
 	return list, nil
 }
 
-// minorInCurrencyList is one currency's entry, and zero when the list has none.
+// minorInCurrencyList is one currency's entry, zero if absent.
 func minorInCurrencyList(list []CurrencyMinor, currency string) int64 {
 	at, found := findInCurrencyList(list, currency)
 	if !found {
@@ -428,24 +201,8 @@ func minorInCurrencyList(list []CurrencyMinor, currency string) int64 {
 	return list[at].Minor
 }
 
-// addIncome books minor units of income in the currency they arrived in. It is
-// the only thing that writes IncomeByCurrency, and it keeps that slice ordered
-// by currency code with one entry per currency — see the field for why the
-// order is not the journal's.
-//
-// THE ADDITION IS GUARDED, and Go's int64 + is what it is guarded against: it
-// wraps silently past the range, and a wrapped total is a plausible-looking sum
-// of money of the wrong magnitude and often the wrong sign. Every payment
-// arriving here is an ordinary figure — it had to survive money.Minor to be an
-// int64 at all — and a total of ordinary figures need not be, so the guard
-// belongs on the total (the same argument money.Add itself is written on).
-// Whether a journal can actually reach it is not the test: the alternative is a
-// silently wrong figure, and this one is a named refusal.
-//
-// Nothing is half-booked by a refusal. The only path that can fail is the one
-// adding to an entry that already exists, and it fails before the assignment —
-// a currency seen for the first time is simply inserted, its amount being an
-// int64 already — so a refused payment leaves the slice exactly as it found it.
+// addIncome books income in the currency it arrived in. The addition is
+// overflow-checked, and a refused payment leaves the list unchanged.
 func (p *Position) addIncome(currency string, minor int64) error {
 	list, err := addToCurrencyList(p.IncomeByCurrency, currency, minor, "income")
 	if err != nil {
@@ -455,9 +212,7 @@ func (p *Position) addIncome(currency string, minor int64) error {
 	return nil
 }
 
-// addFee books minor units of commission in the currency it was charged in. It
-// is addIncome's twin in every way — see FeesByCurrency for what a fee in
-// another currency is and why it is not an error.
+// addFee books a commission in the currency it was charged in.
 func (p *Position) addFee(currency string, minor int64) error {
 	list, err := addToCurrencyList(p.FeesByCurrency, currency, minor, "fees")
 	if err != nil {
@@ -467,21 +222,13 @@ func (p *Position) addFee(currency string, minor int64) error {
 	return nil
 }
 
-// IncomeMinorIn is the income booked in one currency, and zero when the
-// position received none in it.
-//
-// Zero is therefore two answers at once — no payment ever arrived in this
-// currency, or the payments that did cancel out — and a caller that must tell
-// them apart reads IncomeByCurrency itself. Callers that publish this figure
-// have to say which currency it is in; it is not "the position's income" unless
-// the position received income in nothing else.
+// IncomeMinorIn is the income booked in one currency, zero if none (or if the
+// payments cancel). Callers publishing it must name its currency.
 func (p *Position) IncomeMinorIn(currency string) int64 {
 	return minorInCurrencyList(p.IncomeByCurrency, currency)
 }
 
-// FeesMinorIn is the commission charged in one currency, and zero when none was
-// charged in it. IncomeMinorIn's twin, and the same caution applies: a caller
-// publishing this has to say which currency it is in.
+// FeesMinorIn is the commission charged in one currency, zero if none.
 func (p *Position) FeesMinorIn(currency string) int64 {
 	return minorInCurrencyList(p.FeesByCurrency, currency)
 }
@@ -490,109 +237,54 @@ func badOp(o Operation, msg string) error {
 	return fmt.Errorf("%w: %s %s: %s", ErrBadOperation, o.Type, o.OccurredOn.Format("2006-01-02"), msg)
 }
 
-// ReleasedLot is one piece of a FIFO release: the quantity taken from a
-// single source lot, the cost basis attributed to that quantity, and the day
-// the source lot was acquired (see Lot.AcquiredOn — the same rules apply: a
-// partial piece inherits its lot's date, a lot that itself arrived by transfer
-// passes on whatever date it carries, and nil means the source lot does not
-// know when it was acquired, which a release copies rather than resolves). A
-// release that spans several lots yields several pieces, in the order the lots
-// are consumed.
+// ReleasedLot is one piece of a FIFO release: the quantity taken from one lot,
+// its cost, and the lot's acquisition day (nil copied as nil). A release
+// across several lots yields pieces in consumption order.
 type ReleasedLot struct {
 	Quantity   decimal.Decimal
 	CostMinor  int64
 	AcquiredOn *time.Time
-	// RateOn is the source lot's (see Lot.RateOn), carried with it.
+	// RateOn is the source lot's (see Lot.RateOn).
 	RateOn *time.Time
 }
 
-// Realization is one disposal recorded as WHAT IT WAS MADE OF rather than as
-// the single number it contributes to Position.RealizedPnLMinor.
+// Realization is one disposal recorded by what it was made of, so it can be
+// valued in another currency: proceeds and fee at the disposal's rate, each
+// released piece at the rate of its own purchase (НК РФ ст. 210 п. 5).
 //
-// In the position's own currency the two carry the same information and the
-// number is enough. In rubles they do not. A settled result is converted at the
-// rates of the days it actually happened on — the proceeds and the fee at the
-// day of the disposal, each released parcel of basis at the day THAT parcel was
-// bought (НК РФ ст. 210 п. 5) — so an accumulated figure in dollars cannot be
-// converted at all: it has no one date, and the gap between those rates is part
-// of the result rather than a rounding of it. What has to survive the fold is
-// therefore the breakdown, one record per disposal: when it happened, what came
-// in, what it cost in fees, and which parcels of basis went out under which
-// purchase dates.
-//
-// This is also why a realization is FINAL in a way an unrealized gain never is.
-// Both of its ends are past events with dates of their own, so the ruble figure
-// struck from it will never move again; an open position's two ends both float
-// with today's quote and today's rate, and "in rubles" there can only ever mean
-// "valued today".
-//
-// Released may be EMPTY — an amortization arriving after the basis is spent
-// returns principal that is pure gain — and a piece in it may not know when it
-// was acquired, because a parcel that reached this account through a transfer
-// with no recoverable dates keeps that absence through every later disposal
-// (see Lot.AcquiredOn). Both are legitimate and are recorded as they are. No
-// ruble expense can be struck for an undated piece, and deciding what to
-// publish then belongs to the caller: substituting the disposal's own date here
-// would produce a figure nothing downstream could tell from a real one, which
-// is the invention this package exists to refuse.
+// Released may be empty (an amortization after the basis is spent is pure
+// gain), and a piece may have no acquisition date; callers decide what to
+// publish then, and nothing substitutes a date.
 type Realization struct {
-	// OccurredOn is the day of the disposal. It dates the proceeds and the fee,
-	// and it dates NONE of the released basis — those days are the pieces' own.
+	// OccurredOn is the disposal's day. It dates the proceeds and fee, not the
+	// released basis.
 	OccurredOn time.Time
-	// RateOn is the day whose official rate prices the proceeds and the fee:
-	// the sale's settlement day when it is known (decision Р-3), nil to take
-	// OccurredOn.
+	// RateOn is the day whose rate prices the proceeds and fee: the sale's
+	// settlement day when known (decision Р-3), nil to use OccurredOn.
 	RateOn *time.Time
-	// ProceedsMinor is what came in: a sale's amount, an amortization's returned
-	// principal. Positive.
+	// ProceedsMinor is what came in; positive.
 	ProceedsMinor int64
-	// Currency is what the proceeds and the fee arrived in — NOT necessarily
-	// the currency the released basis is in, which is the position's.
-	//
-	// A yuan bond redeemed for rubles is the case this field exists for, and it
-	// is ordinary rather than damaged: the issuer settles in rubles at the day's
-	// rate while the bonds were bought for yuan. The two ends of the result then
-	// have different currencies and the difference between them is a quantity of
-	// neither, which is why the difference is not computed here at all — the
-	// terms are kept, dated and denominated, and whoever holds fx rates strikes
-	// the figure (see Position.RealizedPnL and the handler's realizedTerms).
-	//
-	// An AMORTIZATION always repeats the position's currency and cannot do
-	// otherwise: it retires basis BY AMOUNT, so how much of a yuan basis a ruble
-	// payment retires would have to be answered with a rate — and the answer
-	// would then live on in the remaining basis, changing every later result for
-	// that bond. A sale has no such problem: what it retires is decided by the
-	// QUANTITY sold, and the queue gives up the same parcels whatever currency
-	// the money arrived in. That asymmetry is the whole of why one is accepted
-	// and the other refused (see Operation.mustMatchPositionCurrency).
+	// Currency is what the proceeds and fee arrived in, not necessarily the
+	// position's: a yuan bond is redeemed for roubles. An amortization must be in
+	// the position's currency, since it retires basis by amount, which would need
+	// a rate; a sale retires by quantity (see Operation.mustMatchPositionCurrency).
 	Currency string
-	// FeeMinor is what this disposal cost to make, valued at the same day as
-	// the proceeds and denominated in Currency alongside them. Zero for an
-	// amortization: the engine attributes no fee to one anywhere (see the
-	// amortization branch in Compute).
+	// FeeMinor is the disposal's fee in Currency; zero for an amortization.
 	FeeMinor int64
-	// Released is the basis given up, one piece per source lot, in the order
-	// the queue gave them up (see ReleasedLot). An amortization's pieces carry
-	// no quantity — it returns principal without moving a single share.
+	// Released is the basis given up, one piece per source lot in queue order.
+	// An amortization's pieces carry no quantity.
 	Released []ReleasedLot
 }
 
-// PnLMinor is this one event's settled result in the position's currency.
-//
-// It is the ONLY definition of that number anywhere: Position.realize moves the
-// running total by exactly this, so the total cannot come to say something the
-// events do not (see Position.Realizations).
+// PnLMinor is the disposal's result in the position's currency, the only
+// definition of it.
 func (r Realization) PnLMinor() int64 {
 	return r.ProceedsMinor - r.FeeMinor - LotsCost(r.Released)
 }
 
-// releaseFIFO removes qty from the position's lots front-to-back and returns
-// the pieces released, in queue order — which is acquisition order, oldest
-// first, undated lots ahead of all of them (see Position.Lots; addLot is what
-// keeps the queue in that order, so nothing has to be sorted here). Partial lot
-// pieces use floor proportioning; the final piece of a lot takes the lot's
-// remaining cost so that the sum of released piece costs always equals the
-// original lot cost exactly.
+// releaseFIFO takes qty from the head of the queue and returns the pieces in
+// order. A partial piece takes the floor of its proportional cost; a whole lot
+// takes its remaining cost, so piece costs sum exactly to the lots'.
 func (p *Position) releaseFIFO(qty decimal.Decimal) ([]ReleasedLot, error) {
 	if qty.GreaterThan(p.Quantity) {
 		return nil, fmt.Errorf("%w: have %s, need %s", ErrOversell, p.Quantity, qty)
@@ -603,46 +295,17 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) ([]ReleasedLot, error) {
 	for remaining.IsPositive() {
 		l := &p.Lots[0]
 		if l.Quantity.LessThanOrEqual(remaining) {
-			// A lot that is entirely consumed here produces a piece EVEN WHEN
-			// its CostMinor is 0 — unlike drainLotsCost, which skips a lot
-			// that gives up nothing (see drainLotsCost). The two look like
-			// they should agree, and they deliberately do not.
-			//
-			// drainLotsCost's pieces never carry a quantity — an amortization
-			// moves no shares, see its own doc — so a zero-cost piece there is
-			// empty on both axes and skipping it discards nothing. A piece
-			// here always carries the REAL quantity taken from the lot,
-			// because these pieces are not only a sale's own record
-			// (Realization.Released) but, via ReleasedLots, the very rows a
-			// transfer stores as its FIFO breakdown (Operation.TransferLots) —
-			// and CheckTransferLots later reconstructs the operation's
-			// quantity by summing exactly those rows. Dropping a whole
-			// zero-cost lot's piece would leave its quantity unaccounted for,
-			// and a transfer moving nothing but such a lot would then read as
-			// journal corruption ("transfer lots sum to quantity 0, but the
-			// operation moves N") for a perfectly legitimate, zero-basis
-			// parcel — confirmed by temporarily mirroring the guard here and
-			// watching CheckTransferLots reject exactly that transfer.
-			//
-			// The cost of keeping it: a sale (or transfer) that empties an
-			// undated zero-cost lot puts an undated, zero-cost piece into
-			// Realization.Released, and realizedTerms (see http.go) will then
-			// decline to strike a ruble figure for the whole disposal — even
-			// though a zero-cost term needs no fx rate to be valued at all.
-			// That reads as a silence the number did not have to pay, but the
-			// piece is not a lie the way an empty drainLotsCost piece would
-			// have been: real shares, from a real lot, really left, and the
-			// lot really has no date. Suppressing it here to avoid that
-			// silence would trade an honest gap for a corrupted transfer.
+			// A wholly consumed lot yields a piece even at zero cost, unlike drainLotsCost:
+			// these pieces become a transfer's breakdown, whose quantities
+			// CheckTransferLots sums. The cost: an undated zero-cost piece makes the
+			// disposal's rouble figure unavailable, though it needs no rate.
 			pieces = append(pieces, ReleasedLot{Quantity: l.Quantity, CostMinor: l.CostMinor, AcquiredOn: l.AcquiredOn, RateOn: l.RateOn})
 			released += l.CostMinor
 			remaining = remaining.Sub(l.Quantity)
 			p.Lots = p.Lots[1:]
 			continue
 		}
-		// partial piece: floor share, remainder stays in the lot together
-		// with its acquisition date — what is left was bought on the same
-		// day as the part just released.
+		// Partial piece: floor share; the rest stays in the lot with its date.
 		share := lotShare(*l, remaining)
 		pieces = append(pieces, ReleasedLot{Quantity: remaining, CostMinor: share, AcquiredOn: l.AcquiredOn, RateOn: l.RateOn})
 		l.CostMinor -= share
@@ -658,15 +321,9 @@ func (p *Position) releaseFIFO(qty decimal.Decimal) ([]ReleasedLot, error) {
 	return pieces, nil
 }
 
-// sweepShareless empties a position that has just lost its last unit: whatever
-// lots remain hold no shares (the lots sum to the position) and may still hold
-// money (see applySplit), and that money leaves with the release that closed
-// the position, each piece under its own day.
-//
-// Without it the answer depended on where the shareless lot stood. In front of
-// the shares, the release consumed it and its cost was part of the result;
-// behind them, the release stopped first and the cost stayed on a closed
-// position for good.
+// sweepShareless empties a position that just lost its last unit: remaining
+// lots hold no shares but may hold money (see applySplit), which leaves with
+// this release, each piece under its own day.
 func (p *Position) sweepShareless() []ReleasedLot {
 	var pieces []ReleasedLot
 	for _, l := range p.Lots {
@@ -680,25 +337,11 @@ func (p *Position) sweepShareless() []ReleasedLot {
 	return pieces
 }
 
-// lotShare is the cost basis that goes with taking qty units out of a lot: the
-// lot's WHOLE cost when the whole lot goes, the floor of its proportional share
-// otherwise. Flooring means a release never takes more money than the shares it
-// takes are worth, and what stays in the lot keeps the difference — a ledger may
-// leave a minor unit behind, but it must never hand out one that was not there.
-//
-// BOTH ways of releasing go through it: the queue-driven one (releaseFIFO) and
-// the record-driven one (Position.releaseRecorded). That is not tidiness. The
-// breakdown a transfer froze was computed by the first, and the second has to
-// reproduce it lot for lot when the journal has not moved — so the two must
-// answer the same for the same lot and the same quantity, and the way to be sure
-// of that is to have one answer rather than two that agree today.
-//
-// "The whole lot goes" is written as "qty is not less than the lot's quantity"
-// rather than "equal" so that a SHARELESS lot gives up all its money: taking
-// nothing out of a lot that holds nothing is taking the whole of it, and a lot
-// whose shares a reverse split rounded away still holds real basis (see
-// applySplit). A proportional share would be zero there, and the money would be
-// stranded in a lot no release can ever reach.
+// lotShare is the cost taken with qty units of a lot: all of it when qty covers
+// the lot (including a shareless lot), the floor of the proportional share
+// otherwise, so a release never takes money that is not there. Both
+// releaseFIFO and releaseRecorded use it, so a recorded breakdown replays
+// exactly.
 func lotShare(l Lot, qty decimal.Decimal) int64 {
 	if !qty.LessThan(l.Quantity) {
 		return l.CostMinor
@@ -706,106 +349,33 @@ func lotShare(l Lot, qty decimal.Decimal) int64 {
 	return decimal.NewFromInt(l.CostMinor).Mul(qty).Div(l.Quantity).Floor().IntPart()
 }
 
-// recordAndReplayDisagree is the tail both of releaseRecorded's refusals end
-// with, and it names TWO possible causes because naming one would name the wrong
-// one nearly every time.
-//
-// Rows this build writes cannot reach either refusal through the API at all:
-// every write path — recording an operation, recording a transfer, deleting
-// either — replays the account's journal first and turns the request down before
-// anything is stored (see operation.Service). So the reachable case is a journal
-// written by an EARLIER build, one whose release queue picked lots by another
-// rule, and in that case nobody edited anything. Stating "its history was edited
-// after the transfer was recorded" as a fact would accuse the owner of something
-// they did not do and send them looking for an edit that does not exist, while
-// the screen they came for stays blank. Both possibilities are named, and so is
-// the way out, which is the same one either way — the same recovery a quantity
-// that no longer fits after a split already has (see the package doc).
+// recordAndReplayDisagree ends releaseRecorded's refusals. It names both
+// causes: this build's writes cannot reach the refusal (every write replays
+// first), so the usual cause is a transfer written by an earlier build, not an
+// edit.
 const recordAndReplayDisagree = "either this account's history was edited after the transfer was recorded, " +
 	"or the transfer was recorded by a build whose release queue picked lots by a different rule; " +
 	"delete the transfer and record it again either way"
 
-// releaseRecorded gives up the lots a transfer's stored breakdown says left
-// this account, instead of deriving a fresh release from the queue as it stands
-// now. The breakdown IS the record of what went (see Operation.TransferLots);
-// re-deriving it means the two legs of one pair are two independent guesses
-// that agree only while nothing about the guessing changes, and the moment the
-// queue rule changed they stopped agreeing for every transfer already written
-// (see the package doc). Reading it off the record instead is what makes a pair
-// consistent by construction.
+// releaseRecorded gives up the lots a transfer's breakdown says left, rather
+// than a fresh FIFO release, so both legs of a pair agree by construction.
 //
-// PIECES ARE MATCHED TO LOTS BY THE DAY OF ACQUISITION, and by nothing else.
-// That day is the only durable identity a lot has: quantity and cost are
-// whatever is left of it after the releases and amortizations that came before,
-// so they name no lot on their own, and a lot's POSITION in the queue is
-// exactly the thing that just proved unstable — matching on it would rebuild
-// the bug being fixed here in a new place. The day, by contrast, is the fact
-// the breakdown was created to carry, it is what every later figure is struck
-// at (the ruble basis above all), and it is what decides the queue, so two lots
-// that share it are interchangeable in WHEN they were bought — though not in what
-// they cost, which the loop below checks before it takes anything.
+// Pieces are matched to lots by acquisition day — the only durable identity a
+// lot has. Each piece takes units front-to-back among lots of its day, and each
+// lot gives up the money that goes with its units (lotShare). Basis a piece
+// carries beyond that — a shareless lot's money folded into the next piece by
+// operation.quantizeLots — is drained from the head of the queue afterwards.
+// Proportioning matters: clamping by a lot's whole cost would take a shareless
+// lot's money from an innocent parcel of the same day.
 //
-// Each piece is taken from the matching lots front-to-back, and only until its
-// QUANTITY is satisfied, so a piece never reaches into a lot a later piece
-// needs. Its cost comes out of those same lots, and each of them gives up
-// exactly the money that goes with the shares it gives up — all of its cost only
-// when all of its shares go, the floor of its proportional share otherwise,
-// which is the very allocation the release that built this breakdown used (see
-// lotShare). Whatever the piece still carries after that is drained from the
-// front of the queue once every piece has been served. The leftover is not an
-// oddity to be tolerated but a case with a name: a lot whose entire holding was
-// rounded away by a reverse split has no quantity and real money still in it,
-// the release that built this breakdown consumed it as a piece of nothing, and
-// operation.quantizeLots — unable to store a piece with no quantity — folded
-// its cost into the next piece along. So a piece can legitimately carry more
-// basis than the lot its date points at, and the money is sitting in a
-// shareless lot ahead of it. Refusing that would refuse a transfer this program
-// itself wrote, which is the one thing a loud check must never do.
+// A piece whose day has no shares left is refused loudly (see
+// recordAndReplayDisagree): taking units from another day would re-date them.
 //
-// PROPORTIONING THE COST IS WHAT MAKES THAT LEFTOVER ARRIVE, and the obvious
-// alternative fails silently. Clamping a piece by the whole cost of the lot it
-// lands in — "take whatever the lot still holds" — is correct only while the
-// piece consumes that lot entirely; the moment it takes the lot in part, the
-// lot's whole cost is more than the piece asks for, the clamp never binds,
-// nothing is left over, and the shareless lot's money comes out of an innocent
-// parcel of the same day instead. The shareless lot then stays on the account
-// holding money the destination already holds. Every total still balances — the
-// account gives up the basis the record names, the family holds what it paid —
-// so nothing anywhere notices; only the parcels are wrong, which is precisely
-// the failure this whole mechanism exists to make impossible.
+// A split entered after a transfer but dated before it still replays, and the
+// recorded basis then comes off twice the shares it was struck against. The
+// family's totals are right; re-entering the transfer evens the pair.
 //
-// WHAT CANNOT BE MATCHED IS REFUSED, LOUDLY. A piece whose acquisition day has
-// no shares left behind it means the journal, replayed under today's rules, does
-// not contain the parcel the record says departed: either the source's history
-// was edited after the transfer, or the transfer was written down by a build
-// whose queue rule picked other lots than today's (see
-// recordAndReplayDisagree). There is no quiet answer to that: taking the
-// quantity from some other day's lot would re-date shares that are still held
-// and reprice them at a rate from a day they were never bought on, and taking
-// nothing would leave the family holding a basis twice. The account's positions
-// then fail to compute until the transfer is deleted and re-entered, which is
-// the same recovery a quantity that no longer fits already has (see the package
-// doc on truncation).
-//
-// ONE SKEW SURVIVES ALL OF THIS, and it is worth naming rather than leaving to
-// be discovered. The record is honoured even when the account's shares have been
-// multiplied underneath it: a split entered AFTER a transfer but dated BEFORE it
-// doubles the lot the breakdown points at, so the recorded basis comes off twice
-// the shares it was struck against, and the source is left holding shares with
-// none of it while the destination holds all of it. The family still holds
-// exactly what it paid, and the money sits where the record says it went, so
-// this is strictly better than the re-derivation it replaced — but it is a
-// lopsided pair, and it arrives quietly, because a backdated split still
-// replays. Re-deriving the release would even it out, at the price of throwing
-// the record away, which is the bug this exists to prevent. Deleting the
-// transfer, recording the split, and recording the transfer again is the answer,
-// as it is for every other way a history can move underneath a record.
-//
-// Quantities and costs are conserved exactly: the position loses the pieces'
-// summed quantity and their summed cost, which CheckTransferLots has already
-// established are the operation's own. So whatever the two accounts hold
-// afterwards adds up to what was actually spent, which is the property issue
-// #60 found broken.
+// Quantity and cost are conserved exactly (#60).
 func (p *Position) releaseRecorded(o Operation) error {
 	if o.Quantity.GreaterThan(p.Quantity) {
 		return fmt.Errorf("%s %s %s: %w: have %s, need %s",
@@ -816,10 +386,8 @@ func (p *Position) releaseRecorded(o Operation) error {
 	for i, pc := range o.TransferLots {
 		qty, cost := pc.Quantity, pc.CostMinor
 		if qty.IsZero() {
-			// A piece of no units is a shareless parcel leaving with the
-			// position (see sweepShareless). Its money comes out of shareless
-			// lots of its own day and nowhere else: any other parcel would
-			// re-date it.
+			// A piece of no units is a shareless parcel; its money comes only from
+			// shareless lots of its own day.
 			for j := range p.Lots {
 				l := &p.Lots[j]
 				if !l.Quantity.IsZero() || !sameAcquisition(l.AcquiredOn, pc.AcquiredOn) {
@@ -842,13 +410,9 @@ func (p *Position) releaseRecorded(o Operation) error {
 			}
 			takeQty := decimal.Min(l.Quantity, qty)
 			share := lotShare(*l, takeQty)
-			// The record gives these units LESS money than the parcel they
-			// would come from holds for them: it was struck against a cheaper
-			// parcel of the same day, and that one is gone. Taking the units
-			// anyway moves them at the wrong price and leaves the difference
-			// behind on this account, unnoticed — two parcels of one day share
-			// a date, not a cost. (More money than the share is the legacy
-			// shape handled below as `carried`.)
+			// The record gives these units less money than their parcel holds: it was
+			// struck against a cheaper parcel of the same day, now gone. Taking them
+			// anyway would move them at the wrong price.
 			if takeQty.IsPositive() && cost < share {
 				return badOp(o, fmt.Sprintf(
 					"transfer lot %d gives %s units acquired %s a basis of %d, but the parcel replaying this account finds for them holds %d for those units: %s",
@@ -878,16 +442,13 @@ func (p *Position) releaseRecorded(o Operation) error {
 		drainLotsCost(p, carried)
 		p.CostMinor -= carried
 	}
-	// A lot with neither shares nor money in it is spent — the same thing
-	// releaseFIFO expresses by dropping a lot it consumed whole. One with a
-	// quantity of zero and a cost still in it is NOT spent and stays (see
-	// applySplit).
+	// A lot with neither shares nor money is spent; one with money but no shares
+	// stays (see applySplit).
 	p.Lots = slices.DeleteFunc(p.Lots, func(l Lot) bool { return l.Quantity.IsZero() && l.CostMinor == 0 })
 	return nil
 }
 
-// acquisitionText renders a lot's acquisition day for an error message,
-// including the case where there is none to render.
+// acquisitionText renders an acquisition day, or its absence, for an error.
 func acquisitionText(t *time.Time) string {
 	if t == nil {
 		return "on an unknown day"
@@ -895,43 +456,13 @@ func acquisitionText(t *time.Time) string {
 	return "on " + t.Format("2006-01-02")
 }
 
-// SpinoffPieces is the whole arithmetic of a spin-off's departing leg: which
-// lot gives up how much of the basis, when a share of the position's money
-// moves to a paper carved out of it (see TypeSpinoffOut).
-//
-// ONE PIECE PER LOT, IN QUEUE ORDER, INCLUDING THE LOTS THAT GIVE UP NOTHING.
-// The pieces are not only a record of money — they are the record of the LOT
-// LIST as it stood when the spin-off was worked out, which is what lets a later
-// fold notice that the journal has grown a parcel underneath it
-// (applySpinoffOut). Leaving out a lot with no cost, or one whose share rounds
-// to nothing, would make the record describe a shorter position than the one it
-// was struck against.
-//
-// THE TOTAL IS ROUNDED ONCE AND THE PIECES ARE AN EXACT ALLOCATION OF IT. The
-// money that moves is floor(total basis x share) — one rounding, on the one
-// figure that is published — and it is then divided among the lots in
-// proportion to what each holds, by largest remainders, so the pieces sum to
-// that figure exactly rather than to whatever a per-lot rounding happens to
-// leave. Rounding each lot on its own would be the ordinary way to lose or
-// invent a minor unit here: eleven lots each 0.5 short is five rubles of basis
-// that either never arrives on the new paper or arrives from nowhere.
-//
-// FLOOR, AND NOT NEAREST, for the total. What stays with the original paper is
-// what the holder can still be taxed on later, so a half-unit ambiguity is
-// resolved in favour of the paper that keeps it — the same direction lotShare
-// takes for the same reason (a ledger may leave a minor unit behind; it must
-// never hand out one that was not there). The invariant this package actually
-// guards does not depend on the choice: the position loses exactly what these
-// pieces name and the new paper gains exactly that, whichever way the total
-// was struck.
-//
-// THE REMAINDERS ARE COMPARED EXACTLY, as the remainder of an integer division
-// rather than as a rounded quotient. decimal.QuoRem answers both halves at once
-// and neither is approximate, so two lots whose ideal shares differ in the
-// sixteenth digit are still ordered by which of them is really larger — and,
-// where they are genuinely equal, the earlier lot wins, so the allocation is a
-// function of the lots alone and folding the same journal twice cannot produce
-// two answers.
+// SpinoffPieces allocates a spin-off's moving basis: floor(total × share),
+// divided among the lots by largest remainders so the pieces sum exactly. One
+// piece per lot, in queue order, including lots giving nothing: the pieces
+// record the lot list the allocation was struck against (applySpinoffOut).
+// Floor keeps a half-unit with the original paper, as lotShare does.
+// Remainders are compared exactly (decimal.QuoRem), ties to the earlier lot,
+// so the allocation is deterministic.
 func SpinoffPieces(lots []Lot, share decimal.Decimal) []ReleasedLot {
 	pieces := make([]ReleasedLot, len(lots))
 	var total int64
@@ -940,10 +471,7 @@ func SpinoffPieces(lots []Lot, share decimal.Decimal) []ReleasedLot {
 		total += l.CostMinor
 	}
 	if total <= 0 {
-		// Nothing to divide. A position can hold real shares bought for nothing
-		// — a transfer that arrived with no basis behind it — and a spin-off out
-		// of it moves no money, which is the truthful answer rather than a
-		// degenerate one.
+		// Nothing to divide: shares received with no basis move no money.
 		return pieces
 	}
 	moved := decimal.NewFromInt(total).Mul(share).Floor().IntPart()
@@ -968,9 +496,8 @@ func SpinoffPieces(lots []Lot, share decimal.Decimal) []ReleasedLot {
 		placed += pieces[i].CostMinor
 		rems = append(rems, remainder{at: i, rem: r})
 	}
-	// The leftover is what the flooring above did not place: at most one minor
-	// unit per lot, by construction. It goes to the largest remainders first,
-	// earliest lot first among equals.
+	// The leftover — at most a unit per lot — goes to the largest remainders,
+	// earlier lots first among equals.
 	sort.SliceStable(rems, func(i, j int) bool { return rems[i].rem.GreaterThan(rems[j].rem) })
 	for i := 0; placed < moved && i < len(rems); i++ {
 		pieces[rems[i].at].CostMinor++
@@ -979,21 +506,10 @@ func SpinoffPieces(lots []Lot, share decimal.Decimal) []ReleasedLot {
 	return pieces
 }
 
-// CheckSpinoffLots verifies that a spin-off leg and its breakdown describe one
-// event: every piece is real (a quantity that is not negative, a cost that is
-// not negative) and the costs sum to the basis the row carries.
-//
-// IT DOES NOT CHECK THE QUANTITIES AGAINST THE ROW, which is the whole
-// difference from CheckTransferLots and follows from what the two rows are. A
-// transfer's pieces are the shares that moved, so their sum IS the operation's
-// quantity; a spin-off's departing leg moves no shares at all and carries no
-// quantity to sum to — its pieces carry each lot's own count as the lot's
-// identity (see TypeSpinoffOut). What matches those counts against something is
-// applySpinoffOut, which holds them to the lots themselves, where they mean
-// something.
-//
-// The arriving leg is an ordinary parcel and is checked by CheckTransferLots
-// like any other.
+// CheckSpinoffLots checks that a spin-off leg's pieces are non-negative and
+// sum to the row's basis. Quantities are not summed against the row: the
+// departing leg moves no shares, and applySpinoffOut matches the pieces'
+// counts against the lots. The arriving leg is checked by CheckTransferLots.
 func CheckSpinoffLots(o Operation) error {
 	if len(o.TransferLots) == 0 {
 		return badOp(o, "a spin-off must carry the breakdown of the lots whose basis it moved")
@@ -1018,31 +534,11 @@ func CheckSpinoffLots(o Operation) error {
 	return nil
 }
 
-// applySpinoffOut takes the recorded basis out of the very lots the record
-// names, leaving every quantity where it was.
-//
-// THE PIECES ARE MATCHED TO THE LOTS POSITION BY POSITION, and all of them must
-// match — which is stricter than releaseRecorded's matching by acquisition day,
-// deliberately and for a reason of this event's own. A release names a PARCEL,
-// so it need only find lots of the right days to take it from; a spin-off names
-// the WHOLE POSITION, because a share of every lot's money moves at once, and
-// the list of pieces therefore is a photograph of the lot list. A journal that
-// has since grown a lot, lost one, or had one's quantity changed underneath the
-// record is a journal in which this allocation is no longer the allocation that
-// was struck — and re-allocating quietly would take money out of parcels the
-// record never touched, which is exactly the silent re-dating this package
-// refuses everywhere else.
-//
-// So the refusal is loud and says which half moved. The way out is the one
-// every other record-versus-replay disagreement has: delete the operation and
-// record it again, at which point the allocation is struck against the journal
-// as it now stands (see recordAndReplayDisagree).
-//
-// A SHARELESS LOT IS MATCHED AND DRAINED LIKE ANY OTHER. A lot whose entire
-// holding a reverse split rounded away keeps real money and a real acquisition
-// day (see applySplit), and a share of that money belongs to the carved-out
-// paper as much as any other lot's does. Its piece carries a quantity of zero,
-// which is the lot's true count and not a piece of nothing.
+// applySpinoffOut takes the recorded basis out of exactly the lots the record
+// names, position by position, leaving quantities alone. A spin-off names the
+// whole lot list, so a journal that has since gained, lost or changed a lot is
+// refused (see recordAndReplayDisagree) rather than silently reallocated.
+// Shareless lots are matched and drained like any other.
 func (p *Position) applySpinoffOut(o Operation) error {
 	if len(o.TransferLots) != len(p.Lots) {
 		return badOp(o, fmt.Sprintf(
@@ -1068,10 +564,8 @@ func (p *Position) applySpinoffOut(o Operation) error {
 	return nil
 }
 
-// LotsCost sums the pieces' costs — the one number most callers of a FIFO
-// release actually need. It is exported so a caller that already holds the
-// breakdown (see ReleasedLots) derives the total from those very pieces
-// instead of computing the same quantity a second, independent way.
+// LotsCost sums the pieces' costs, so callers derive the total from the
+// breakdown rather than computing it separately.
 func LotsCost(pieces []ReleasedLot) int64 {
 	var total int64
 	for _, pc := range pieces {
@@ -1080,38 +574,15 @@ func LotsCost(pieces []ReleasedLot) int64 {
 	return total
 }
 
-// applySplit multiplies every lot by ratio — a split rewrites quantities and
-// nothing else, neither a lot's cost basis nor the day it was acquired — and
-// brings the results back onto the journal's quantity scale.
+// applySplit multiplies every lot's quantity by ratio — cost and dates are
+// untouched — and brings the results back to QuantityScale.
 //
-// Multiplying is the one thing the engine does that can carry a quantity off
-// that scale: a reverse split by 0.3333333333 turns 3.5 shares into
-// 1.16666666655, eleven decimal places for a lot that arrived with one. Left
-// there, the extra digit is not a display detail but a trap. The position would
-// hold a quantity no journal entry can name, so "sell all of it" would be
-// checked against the exact number in memory, recorded as the rounded one, and
-// every later read would compare that recorded quantity against the exact
-// position and find an oversell: a 201 followed by a positions screen that
-// answers 422 forever, for rows the application wrote itself. The same fault
-// reached the transfer breakdown first and was patched there
-// (operation.quantizeLots); this is where it comes from, and fixing it here
-// means no quantity anywhere in the system is finer than the ledger — the
-// journal's own entries never are, so nothing else can introduce one.
-//
-// The allocation is the one releaseFIFO already uses for costs: truncate the
-// RUNNING TOTAL to the scale and give each lot the difference from the previous
-// lot's running total, the last lot taking whatever is left of the position's
-// own new quantity. Every lot is then exactly representable, the lots still sum
-// to the position exactly rather than approximately, and the rounding is always
-// DOWN — a ledger may lose a ten-billionth of a share to arithmetic it cannot
-// express, but it must never invent one.
-//
-// A lot whose entire share rounds away is kept, with a quantity of zero, rather
-// than dropped: its COST is real money, and the day it was bought is what
-// values that money in another currency (see Lot.AcquiredOn). Dropping it would
-// have to move that cost onto some other lot's day, which is exactly the
-// re-dating this package exists to prevent. It holds no shares and waits in the
-// queue until a release consumes it.
+// Without that, a reverse split by 0.3333333333 leaves quantities no journal
+// entry can name, so "sell everything" is checked against one number and
+// recorded as another, and every later read finds an oversell. The running
+// total is truncated and each lot takes the difference, the last lot the rest,
+// so lots sum exactly and rounding is always down. A lot rounded to no shares
+// is kept with its cost and day.
 func (p *Position) applySplit(ratio decimal.Decimal) {
 	total := p.Quantity.Mul(ratio).Truncate(QuantityScale)
 	exact, placed := decimal.Zero, decimal.Zero
@@ -1119,9 +590,7 @@ func (p *Position) applySplit(ratio decimal.Decimal) {
 		exact = exact.Add(p.Lots[i].Quantity.Mul(ratio))
 		upTo := exact.Truncate(QuantityScale)
 		if i == len(p.Lots)-1 {
-			// The lots sum to the position, so truncating the final running
-			// total yields exactly this anyway. Saying it outright keeps the two
-			// equal by construction instead of by argument.
+			// The lots sum to the position; this keeps them equal by construction.
 			upTo = total
 		}
 		p.Lots[i].Quantity = upTo.Sub(placed)
@@ -1130,29 +599,11 @@ func (p *Position) applySplit(ratio decimal.Decimal) {
 	p.Quantity = total
 }
 
-// acquiredBefore reports whether a lot acquired on a must leave the queue
-// ahead of one acquired on b, for two dates that are not equal.
-//
-// An UNKNOWN acquisition comes before every known one. The reason is this
-// package's own and needs no outside support: the head of the queue is the ONLY
-// placement that does not require inventing a date. Anywhere else is defined by
-// comparing the unknown against real days, which means quietly choosing a day
-// for it — the very thing Lot.AcquiredOn exists to refuse. It also has a
-// practical edge: sales drain the undated lots out of an account first, after
-// which the position can be valued in another currency again
-// (Handler.positionInBase publishes nothing while a single lot is undated).
-//
-// US practice points the same way BY ANALOGY, and only by analogy: 26 CFR
-// 1.6045A-1(b)(10) has a transferring broker report securities of unknown
-// acquisition date as the earliest acquired ones. That is a rule about what a
-// broker must REPORT when part of a position moves, not about which shares
-// count as sold — the default lot-relief rule (1.1012-1(c)(1)(i)) has no
-// "unknown date" tier at all. So it corroborates the ordering and does not
-// license it; the argument above is the one that carries this function.
-//
-// Dates are calendar days at UTC midnight — occurred_on and acquired_on are
-// both DATE columns — so comparing instants compares days, as CheckTransferLots
-// already does.
+// acquiredBefore reports whether a lot acquired on a leaves the queue before
+// one acquired on b, for unequal dates. An unknown date comes first: the head
+// is the only place that needs no invented date, and selling clears undated
+// lots first. (26 CFR 1.6045A-1(b)(10) reports unknown-date securities as
+// earliest, which corroborates but does not decide this.) Dates are UTC days.
 func acquiredBefore(a, b *time.Time) bool {
 	switch {
 	case a == nil:
@@ -1164,67 +615,21 @@ func acquiredBefore(a, b *time.Time) bool {
 	}
 }
 
-// sameAcquisition reports whether two lots were acquired on the same day, an
-// unknown day counting as the same as another unknown one — which is what
-// matching a transfer's recorded pieces against the queue needs (see
-// Position.releaseRecorded).
-//
-// It is DERIVED from acquiredBefore rather than written out again, so "equal"
-// and "neither one before the other" cannot drift apart: whatever
-// acquiredBefore treats as one position in the queue, this treats as one
-// acquisition. Spelling out a nil check and a t.Equal here would be the same
-// answer today and a second, forgettable place to keep in step tomorrow.
+// sameAcquisition reports whether two lots share an acquisition day, unknown
+// equal to unknown; derived from acquiredBefore so the two cannot drift.
 func sameAcquisition(a, b *time.Time) bool {
 	return !acquiredBefore(a, b) && !acquiredBefore(b, a)
 }
 
-// addLot puts one acquisition into the queue AT ITS PLACE BY ACQUISITION DATE,
-// which is what makes the queue a FIFO over purchases rather than over
-// paperwork (see Position.Lots). A nil acquiredOn is not a missing argument but
-// an answer: this lot's acquisition date is not knowable (see Lot.AcquiredOn),
-// and such a lot goes to the head (see acquiredBefore).
+// addLot inserts a lot at its place by acquisition date (nil first, see
+// acquiredBefore). It is the only way a lot enters a position, so the queue
+// order is an invariant kept here rather than sorted later; releases,
+// amortizations (drainLotsCost) and splits all work from the head in place.
 //
-// The order is maintained here, as an invariant of the queue, rather than
-// established by sorting somewhere later. addLot is the only door a lot can
-// enter a position through — a buy and both branches of a transfer_in all come
-// through it — so making it the place the order is decided means no caller can
-// build an out-of-order queue, and no future caller can forget to. Sorting at
-// release time instead would have to be repeated in releaseFIFO, in
-// ReleasedLots and in every path a later reader adds that takes the head of the
-// queue; the one that forgot would silently fall back to arrival order, which
-// is precisely the bug this replaced. Nothing else here reorders: releaseFIFO
-// takes from the head and shrinks a lot in place, applySplit rewrites
-// quantities in place, drainLotsCost rewrites costs in place — front-to-back,
-// the same head this queue now hands to releaseFIFO. So an amortization
-// drains whichever lot is oldest by ACQUISITION, not whichever lot the
-// journal happened to mention first (see
-// TestAmortizationDrainsTheOlderTransferredLotFirst) — not because
-// drainLotsCost was taught the new rule, but because it never had a rule of
-// its own: it just walks p.Lots from index 0, so whatever order addLot
-// leaves the queue in is the order amortization drains it in too.
-//
-// TIES KEEP THE ORDER THE LOTS ENTERED THE ACCOUNT. The law names no rule finer
-// than the day — НК РФ ст. 214.1 п. 13 says "по стоимости первых по времени
-// приобретений", 26 CFR 1.1012-1(c)(1)(i) says "the earliest lot the taxpayer
-// purchased or acquired", and neither says anything about two lots bought on
-// one day — so the tie-break is ours to pick, and it must be picked explicitly:
-// these figures go into a tax return, and a number that depends on which
-// sorting algorithm the build happened to use is not a number anybody can
-// defend. Journal order is the choice because it is total and already recorded
-// rather than derived — Compute is fed operations ordered by (occurred_on,
-// created_at), both facts in the table — and because it is what the queue did
-// before dates entered it, so this change moves exactly the lots the
-// acquisition rule requires to move and no others.
-//
-// The insertion point is found by walking back from the tail while the lot
-// behind is strictly later, so the new lot lands AFTER every lot acquired no
-// later than itself. That is exactly where a STABLE sort by acquisition date
-// would put it, which means the invariant and "stable sort of the arrival
-// sequence" are the same order, reached two ways. The walk costs nothing in the
-// ordinary case: the journal arrives in date order, so a purchase stops at the
-// first comparison and appends. Only a lot that arrives out of order — a
-// transfer carrying older shares, the case this exists for — walks, and only as
-// far as it must.
+// Ties keep journal order: the law says nothing finer than the day, and a
+// tax figure must not depend on a sort algorithm. Walking back from the tail
+// while the previous lot is strictly later gives exactly a stable sort's
+// order, and costs nothing for a journal in date order.
 func (p *Position) addLot(qty decimal.Decimal, costMinor int64, acquiredOn, rateOn *time.Time) {
 	at := len(p.Lots)
 	for at > 0 && acquiredBefore(acquiredOn, p.Lots[at-1].AcquiredOn) {
@@ -1236,51 +641,19 @@ func (p *Position) addLot(qty decimal.Decimal, costMinor int64, acquiredOn, rate
 	p.heldALot = true
 }
 
-// Compute folds the journal into positions. See package doc for semantics.
+// Compute folds the journal into positions. See the package doc.
 func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 	positions := make(map[uuid.UUID]*Position)
-	// settled names the instruments whose currency has been fixed, i.e. that
-	// have already seen an operation touching cost, quantity or fees. It is the
-	// fold's own state rather than a field on Position: it says how far this
-	// walk has got, not what the position is.
+	// settled holds the instruments whose currency is fixed: the walk's state,
+	// not the position's.
 	settled := make(map[uuid.UUID]bool)
-	// get returns the position for the operation's instrument, creating it on
-	// first sight, and enforces the currency rule.
-	//
-	// THE RULE IS ABOUT COST, NOT ABOUT THE PAPER. Minor amounts of two
-	// currencies summed into one int64 would be silent corruption, and the
-	// service layer only validates the ISO-4217 shape, not consistency — so
-	// every operation whose amount lands in CostMinor, in a lot, in FeesMinor or
-	// in a realization must repeat the currency of the first such operation
-	// (Type.mustMatchPositionCurrency lists them, and says why a fee is among
-	// them). Income does not have to: a dividend, a coupon or the tax withheld
-	// from either may arrive in any currency and is booked in the currency it
-	// arrived in (see Position.IncomeByCurrency).
-	//
-	// INCOME DOES NOT SETTLE THE CURRENCY EITHER, which is the same rule seen
-	// from the other end and not a separate kindness. A ruble coupon on a yuan
-	// bond is no statement that the position is in rubles; taking it for one
-	// would refuse the yuan purchase that follows — the very refusal this
-	// removes, merely moved to another journal order, and journals do open with
-	// a payment (the paper was bought before the import window, or arrived by
-	// transfer). So a position that has seen only income carries a currency
-	// provisionally — which one is the next paragraph's business — and the first
-	// cost-touching operation replaces it.
-	//
-	// Nothing computed can be invalidated by that replacement, and the reason is
-	// checkable rather than a matter of care: until it happens the position has
-	// no cost, no lot, no fee and no realization, because every operation that
-	// could make one settles the currency itself.
-	//
-	// AND WHILE IT IS PROVISIONAL IT IS STILL THE LOWEST CURRENCY CODE SEEN, not
-	// the first one listed. A journal that never settles it is an ordinary
-	// journal — a paper bought before the import window pays its dividends, has
-	// tax withheld from them, and is never purchased here at all — so that
-	// provisional value is what its row ends up being drawn under (see
-	// Position.Currency). Taking it from the earliest payment made the same two
-	// payments draw two different rows depending on which of them the journal
-	// listed first; the lowest code is the order the income itself is kept in,
-	// so there is one order here and not a second one to keep in step with it.
+	// get returns the operation's position, creating it, and applies the currency
+	// rule: every operation touching cost, lots, fees or realizations must repeat
+	// the first such one's currency (Type.mustMatchPositionCurrency), since two
+	// currencies in one int64 would be undetectable corruption. Income does not
+	// settle the currency: a journal may open with a rouble coupon on a yuan bond.
+	// Until settled, the provisional currency is the lowest code seen; nothing
+	// computed depends on it, since anything that would settles it.
 	get := func(o Operation) (*Position, error) {
 		p, ok := positions[*o.InstrumentID]
 		if !ok {
@@ -1288,10 +661,7 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			positions[*o.InstrumentID] = p
 		}
 		if !o.mustMatchPositionCurrency() {
-			// While unsettled, and only there. Past that point this field is
-			// the currency of CostMinor, of the lots and of FeesMinor, and a
-			// payment arriving in a lower-coded one would rename those figures
-			// without touching them.
+			// Only while unsettled: afterwards the field names CostMinor's currency.
 			if !settled[*o.InstrumentID] {
 				p.Currency = min(p.Currency, o.Currency)
 			}
@@ -1328,11 +698,8 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 				return nil, badOp(o, "positive quantity required")
 			}
 		case TypeSpinoffOut:
-			// THE ABSENCE IS THE STATEMENT. A spin-off's departing leg moves no
-			// units, and a count in this field would be read as units leaving by
-			// everything that renders a journal row (see TypeSpinoffOut). Its
-			// pieces carry the lots' own counts, where they are an identity
-			// rather than a movement.
+			// A spin-off's departing leg moves no units; a quantity would read as units
+			// leaving. Its pieces carry the lots' counts as identity.
 			if o.Quantity != nil {
 				return nil, badOp(o, "a spin-off moves no units, so it must carry no quantity")
 			}
@@ -1342,7 +709,7 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			}
 		}
 
-		// Handle conversion ops before get() since they don't mutate positions
+		// Conversions do not touch positions.
 		if o.Type == TypeConversion {
 			continue
 		}
@@ -1356,19 +723,15 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			if o.AmountMinor >= 0 {
 				return nil, badOp(o, "buy amount must be negative")
 			}
-			// A purchase always knows its date: it is the day the operation
-			// itself records. The local copy is what the lot points at, so the
-			// lot never aliases the journal entry it came from.
+			// A purchase dates its lot; the copy keeps the lot off the journal entry.
 			boughtOn := o.OccurredOn
 			p.addLot(*o.Quantity, -o.AmountMinor+o.FeeMinor, &boughtOn, settledCopy(o))
 			if err := p.addFee(o.Currency, o.FeeMinor); err != nil {
 				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 			}
 		case TypeSell, TypeRedemption:
-			// ONE BRANCH FOR BOTH, and it must stay one: a redemption differs
-			// from a sale in what happened, not in what it comes to (see
-			// TypeRedemption). Splitting this would be two implementations of
-			// one computation, which this package has been bitten by before.
+			// A sale and a redemption differ in what happened, not in the computation:
+			// keep them in one branch.
 			if o.AmountMinor <= 0 {
 				return nil, badOp(o, fmt.Sprintf("%s amount must be positive", o.Type))
 			}
@@ -1388,82 +751,32 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 			}
 		case TypeDividend, TypeCoupon, TypeTax:
-			// In the currency the payment ARRIVED in, which need not be the one
-			// the paper is priced in — see Position.IncomeByCurrency. A tax
-			// arrives here too, through its negative amount, and in its own
-			// currency like any other payment.
-			//
-			// The refusal this can return says a TOTAL left the int64 range,
-			// not that the entry is bad, so it is wrapped the way a release's
-			// is (see the sell branch): the type, instrument and date that
-			// name the entry which reached the edge, over the error that says
-			// what the edge was.
+			// Booked in the currency the payment arrived in; taxes arrive here as negative
+			// amounts. An overflow refers to the total, so it is wrapped with the entry
+			// that reached it.
 			if err := p.addIncome(o.Currency, o.AmountMinor); err != nil {
 				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 			}
 		case TypeFee:
-			// Amount negative → positive fee, in the currency it was charged in.
+			// A negative amount is a positive fee, in its own currency.
 			if err := p.addFee(o.Currency, -o.AmountMinor); err != nil {
 				return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 			}
 		case TypeAmortization:
-			// Return of principal: it retires cost basis, and in THIS currency
-			// only the excess over what is left of that basis is a result.
-			//
-			// It is nonetheless a disposal and is recorded as one, even when
-			// that result is zero, because in rubles the covered part is not
-			// neutral: the principal comes back at the rate of the day it was
-			// paid while the basis it retires was struck at the rates of the
-			// days those lots were bought, and that difference is as much of a
-			// result as any sale's (see Realization). Its released pieces are
-			// the lot costs the drain took, which carry dates and cost but no
-			// quantity — nothing was sold.
-			//
-			// No fee is attributed, here or to FeesMinor: the engine has never
-			// modelled a fee on an amortization, and inventing one on the event
-			// alone would put a number in it that the running total does not
-			// contain.
+			// Return of principal retires basis; in this currency only the excess is a
+			// result. It is still recorded as a disposal, since in roubles the covered
+			// part is not neutral: principal comes back at today's rate against basis
+			// struck at purchase rates. Its pieces carry cost and date, no quantity. No
+			// fee is attributed.
 			if o.AmountMinor <= 0 {
 				return nil, badOp(o, "amortization amount must be positive")
 			}
-			// PRINCIPAL CANNOT COME BACK FROM A PAPER THIS ACCOUNT NEVER
-			// ACQUIRED, and until this refusal existed the engine said it did.
-			// With no basis to retire, reduce below is min(amount, 0) = 0, the
-			// realization releases nothing, and PnLMinor is the WHOLE payment:
-			// a mistyped instrument on one amortization credited the account
-			// with a gain of the entire sum, under a position with no shares,
-			// no cost and no purchase anywhere behind it. Nothing on any screen
-			// distinguishes that from a real result, and realized profit is a
-			// figure that goes into a tax return.
-			//
-			// THE TEST IS "WAS THIS PAPER EVER ACQUIRED HERE", not "does the
-			// position hold shares or basis now" (which is what issue #17
-			// proposed). The narrower test is not a weaker version of the
-			// broader one — the broader one refuses journals this program
-			// itself writes, which is the one thing a loud check must never do:
-			//
-			//   - A bond whose basis is fully amortized but which is still
-			//     held: quantity positive, cost 0. Further principal really is
-			//     pure gain there (see Realization), and that case is
-			//     deliberately supported.
-			//   - A bond redeemed on its maturity date with a final partial
-			//     repayment recorded the same day. Within a date the journal
-			//     folds by created_at, so the repayment can land AFTER the
-			//     redemption that emptied the position — quantity 0, cost 0 —
-			//     and the whole account's positions screen would then fail for
-			//     a history the importer wrote from what the broker sent.
-			//
-			// Both of those have a purchase (or an arriving transfer) behind
-			// them, so both pass here. What does not pass is the case the
-			// figure is actually meaningless in: no acquisition of this paper
-			// anywhere in this account's journal.
-			//
-			// A dividend or a coupon on such a paper stays legitimate and is
-			// deliberately not touched: a payment is booked as INCOME, in the
-			// currency it arrived in, and claims nothing about what was paid
-			// for the paper (see Position.IncomeByCurrency — a journal opening
-			// with payments alone is ordinary). An amortization is the one
-			// payment the engine turns into a claim about cost.
+			// Principal cannot come back from a paper this account never acquired:
+			// otherwise a mistyped instrument credits the whole payment as a gain. The
+			// test is "ever acquired here", not "holds shares or basis now", which would
+			// refuse journals this program writes: a fully amortized bond still held, and
+			// a final repayment folded after the same-day redemption. Dividends and
+			// coupons on such a paper remain fine: they claim nothing about cost.
 			if !p.heldALot {
 				return nil, badOp(o, fmt.Sprintf(
 					"returns principal on instrument %s, which this account has never acquired: with no purchase behind it the whole payment would be recorded as realized profit; record how the paper was acquired (a buy, or a transfer carrying its basis) first",
@@ -1471,14 +784,11 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			}
 			var released []ReleasedLot
 			if share, ok := amortizedShare(o, p); ok {
-				// As the tax code does it (decision Р-4): the repayment retires
-				// the share of the basis that it is of the outstanding principal,
-				// from every parcel alike, and the rest of the payment is this
-				// year's result.
+				// As the tax code does it (decision Р-4): the repayment retires its share of
+				// the outstanding principal from every lot; the rest is this year's result.
 				released = takeLotsShare(p, share)
 			} else {
-				// No face value to measure the repayment against: the old rule,
-				// which retires basis until none is left.
+				// No face value: the old rule retires basis until none is left.
 				released = drainLotsCost(p, min(o.AmountMinor, p.CostMinor))
 			}
 			p.CostMinor -= LotsCost(released)
@@ -1490,35 +800,21 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 			})
 		case TypeTransferOut, TypeExchangeOut:
 			if len(o.TransferLots) == 0 {
-				// A CONVERSION HAS NO SUCH CASE. Its breakdown is what carries
-				// the parcel onto the other paper — the arriving leg is built
-				// from the departing one's pieces, piece for piece (see
-				// TypeExchangeOut) — so a conversion without one is not a leg
-				// with a hand-given basis but a leg with nothing on the other
-				// side of it. There is no endpoint that can produce it: the
-				// registry writes both legs together or neither.
+				// A conversion always has a breakdown: the arriving leg is built from the
+				// departing leg's pieces, and the registry writes both or neither.
 				if o.Type == TypeExchangeOut {
 					return nil, badOp(o, "a conversion must carry the breakdown of the lots it converted")
 				}
-				// Nothing was recorded about which lots left, so there is
-				// nothing to give up but a fresh slice of the queue, and the
-				// released cost is discarded: the pair's transfer_in carries a
-				// basis that was named by hand and has no source lots behind it
-				// (or predates the breakdown entirely). This is the one case
-				// where the two legs are NOT reconciled — the owner said what
-				// the parcel was worth and the journal cannot contradict them —
-				// and it is legitimate rather than a gap to be closed.
+				// No breakdown: the arriving leg's basis was given by hand, so a fresh slice
+				// of the queue is released and its cost discarded. The one case the legs are
+				// not reconciled, legitimately.
 				if _, err := p.releaseFIFO(*o.Quantity); err != nil {
 					return nil, fmt.Errorf("%s %s %s: %w", o.Type, o.InstrumentID, o.OccurredOn.Format("2006-01-02"), err)
 				}
 				break
 			}
-			// A breakdown exists, so the account gives up exactly what it says
-			// went (see releaseRecorded), not what today's queue rule would
-			// pick. The same guard the arriving leg applies runs first: the two
-			// legs read one set of rows (see Operation.TransferLots), and a set
-			// that no longer sums to the operation carrying it is damage on
-			// both.
+			// Give up exactly what the breakdown says went (releaseRecorded), after the
+			// same check the arriving leg applies.
 			if err := CheckTransferLots(o); err != nil {
 				return nil, err
 			}
@@ -1530,54 +826,26 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 				return nil, badOp(o, fmt.Sprintf("%s amount (cost basis) must be >= 0", o.Type))
 			}
 			if len(o.TransferLots) == 0 {
-				// See the departing leg above: a conversion's arriving leg is
-				// built from the pieces the departing one gave up, so one
-				// without them describes a parcel that came from nowhere.
+				// A conversion's arriving leg without pieces came from nowhere.
 				if o.Type == TypeExchangeIn {
 					return nil, badOp(o, "a conversion must carry the breakdown of the lots it converted")
 				}
-				// The same for a spin-off's arriving leg, and for the same
-				// reason: it is built from the pieces the departing leg named,
-				// so one without them describes money that came from nowhere.
+				// So does a spin-off's arriving leg.
 				if o.Type == TypeSpinoffIn {
 					return nil, badOp(o, "a spin-off must carry the breakdown of the lots whose basis it moved")
 				}
-				// No breakdown: the basis was given by hand (nothing was
-				// released, so there are no source lots behind that number) or
-				// the transfer was recorded before breakdowns were kept. Either
-				// way the original purchase dates do not exist to be restored,
-				// so the lot is created WITHOUT one.
-				//
-				// The transfer's own date used to be put here as "the honest
-				// best answer". It is not an answer at all: shares that changed
-				// brokers on that day were not bought on it, and the field says
-				// bought. Written down, that guess became indistinguishable from
-				// the real dates beside it — the ruble basis converted it at the
-				// transfer day's fx rate and published the product as fact, and
-				// the release queue sorted the parcel by a day that describes
-				// paperwork rather than a purchase. Absence is the only truthful
-				// value here, and everything downstream now has to face it.
+				// No breakdown (basis given by hand, or a transfer from before breakdowns):
+				// the lot's purchase date is unknown, and the transfer's own date would be a
+				// false one — it used to be used, and was priced at that day's rate as fact.
 				p.addLot(*o.Quantity, o.AmountMinor, nil, nil)
 				break
 			}
 			if err := CheckTransferLots(o); err != nil {
 				return nil, err
 			}
-			// Rebuild what was released, piece by piece, in the FIFO order it
-			// was released in: each lot keeps its own quantity, its own cost and
-			// the day it was actually bought. A transfer between the family's
-			// own accounts is not a purchase, so it must not reprice anything —
-			// and a lot's date is what later values it at the fx rate of its own
-			// purchase day.
-			//
-			// A CONVERSION'S PIECES ARE THE DEPARTING LEG'S RESTATED IN THE NEW
-			// PAPER'S UNITS, and only their quantities differ from the pieces
-			// the other leg gave up: the cost and the date of each one are the
-			// same numbers, because the parcel is the same parcel under a new
-			// name (see TypeExchangeOut). Nothing here has to know which of the
-			// two it is folding — a piece is a piece, and both legs' breakdowns
-			// were checked to sum to the quantity and basis their own row
-			// carries.
+			// Rebuild the released lots in order, each with its quantity, cost and day: a
+			// transfer is not a purchase and reprices nothing. A conversion's pieces are
+			// the departing ones restated in the new paper's units, same cost and day.
 			for _, pc := range o.TransferLots {
 				p.addLot(pc.Quantity, pc.CostMinor, pc.AcquiredOn, pc.RateOn)
 			}
@@ -1592,17 +860,13 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 				return nil, err
 			}
 		case TypeSplit:
-			// A split rewrites quantities only — see applySplit, which also
-			// keeps the rewritten quantities expressible in the journal they
-			// will be compared against.
+			// A split rewrites quantities only, kept on the journal's scale.
 			p.applySplit(*o.SplitRatio)
 		default:
 			return nil, badOp(o, "type not applicable to instrument operations")
 		}
 	}
-	// The disposals are added up only now: Position.Currency is final at last,
-	// and until it is, no disposal can be judged to be in it (see
-	// finishRealized).
+	// Realized totals are settled now that every Position.Currency is final.
 	for _, p := range positions {
 		if err := p.finishRealized(); err != nil {
 			return nil, err
@@ -1611,49 +875,15 @@ func Compute(ops []Operation) (map[uuid.UUID]*Position, error) {
 	return positions, nil
 }
 
-// CheckTransferLots verifies that a transfer_in's stored FIFO breakdown and
-// the operation carrying it describe the same event: every piece is a real one
-// (units or money, neither negative), the pieces' quantities sum to the
-// quantity that moved, and their costs sum to the basis that moved.
+// CheckTransferLots verifies that a transfer's stored breakdown matches its
+// row: every piece non-negative, quantities summing to the quantity moved and
+// costs to the basis moved. A mismatch is a corrupted journal and the whole
+// computation is refused rather than worked around.
 //
-// A breakdown that does not add up means a corrupted journal, and the engine
-// refuses the whole computation rather than working around it. The tempting
-// alternative, quietly falling back to a single lot dated on the transfer day,
-// would replace damaged data with a plausible number that looks exactly like a
-// normal old-style transfer, so nobody would ever learn the journal is broken
-// — and the basis behind every figure derived from it would be silently wrong.
-// Loud is the point.
-//
-// Loud on damage, though, is only defensible if healthy data can never trip
-// it, and getting there took more than summing the pieces. The costs are
-// int64 and the write path derives the operation's basis by summing these very
-// pieces (see operation.Service.CreateTransfer and LotsCost), so that half has
-// always been exact. The QUANTITIES were not: they are stored with ten decimal
-// places, while a piece computed in memory had no such limit — a reverse split
-// multiplied lot quantities by a ratio like 0.3333333333 and landed well past
-// the tenth digit. Each piece was then rounded on its own on the way into the
-// table, and two pieces rounding up put the stored sum a whole 1e-10 above the
-// stored quantity: a perfectly legitimate transfer, accepted with a 201, after
-// which this function failed forever and took the receiving account's entire
-// positions screen down with it.
-//
-// That is now closed at the source rather than patched per path: applySplit
-// keeps every lot on the journal's own scale (see QuantityScale), so a release
-// of scale-bound lots yields scale-bound pieces and there is nothing left to
-// round. Three guards remain behind it, each cheap and each a different kind of
-// insurance: the breakdown is quantized as it is built (operation.quantizeLots),
-// the moved quantity is normalized to the scale on the way in, and the store
-// re-reads its own rows and runs them through this very function before
-// committing (see operation.Store.CreatePair). What is written is therefore
-// exactly what is read back, and a mismatch here now genuinely means the rows
-// were damaged after the fact — at which point neither reading is trustworthy:
-// the pieces may be wrong, or the total may be, and nothing here can tell
-// which.
-//
-// An operation with no breakdown at all is not this function's business — see
-// the transfer_in branch in Compute for why that case is legitimate — and
-// callers must not pass one; it would be reported as a mismatch against a
-// non-zero quantity.
+// Healthy data cannot trip it: costs are summed from these very pieces when
+// written, and quantities stay on the journal's scale (applySplit), with the
+// breakdown quantized as built and re-read and re-checked by the store before
+// commit. Do not pass an operation without a breakdown.
 func CheckTransferLots(o Operation) error {
 	qty := decimal.Zero
 	var cost int64
@@ -1664,31 +894,14 @@ func CheckTransferLots(o Operation) error {
 		if pc.CostMinor < 0 {
 			return badOp(o, fmt.Sprintf("transfer lot %d has cost %d: a piece's cost basis cannot be negative", i, pc.CostMinor))
 		}
-		// No units is legitimate only with money: the shareless parcel a
-		// reverse split left behind, travelling with the position.
+		// No units is legitimate only with money: a shareless parcel from a reverse
+		// split.
 		if pc.Quantity.IsZero() && pc.CostMinor == 0 {
 			return badOp(o, fmt.Sprintf("transfer lot %d has neither units nor cost: it describes nothing", i))
 		}
-		// The acquisition date is the one field this whole mechanism exists to
-		// carry, and it is the only one the table does not constrain: the
-		// columns bound quantity and cost, this function checks their sums, and
-		// the date travels guarded only from here.
-		//
-		// A piece with NO date is legitimate and must pass. It says the source
-		// lot did not know when it was acquired — which happens whenever the
-		// parcel contains shares that themselves arrived by a transfer with no
-		// recoverable dates (see the transfer_in branch in Compute), and moving
-		// them on a second time cannot conjure the dates the first move already
-		// lacked. Refusing it, as this function once did, would have forced the
-		// write path to supply some date for such a piece, and the only date on
-		// hand is the transfer's own — the very invention the absence exists to
-		// avoid.
-		//
-		// A date that IS given may not postdate the transfer that moved it: the
-		// source lots are resolved against the journal as it stood on the
-		// transfer's own date, so anything later is damage. Unknown is not
-		// "later" and not "earlier"; it is simply outside what this check can
-		// speak about.
+		// A piece's acquisition date may be absent (shares that arrived by a transfer
+		// without dates), but a given date may not postdate the transfer: the source
+		// lots are resolved as of the transfer's day.
 		if pc.AcquiredOn != nil && pc.AcquiredOn.After(o.OccurredOn) {
 			return badOp(o, fmt.Sprintf("transfer lot %d was acquired on %s, after the transfer on %s: a lot cannot move before it exists",
 				i, pc.AcquiredOn.Format("2006-01-02"), o.OccurredOn.Format("2006-01-02")))
@@ -1705,9 +918,8 @@ func CheckTransferLots(o Operation) error {
 	return nil
 }
 
-// settledCopy is the operation's settlement day as a value of its own, so a
-// lot or a realization never aliases the journal entry it came from; nil when
-// the settlement day is not known.
+// settledCopy is the operation's settlement day as a value of its own, or nil
+// when unknown.
 func settledCopy(o Operation) *time.Time {
 	if o.SettledOn == nil {
 		return nil
@@ -1716,9 +928,8 @@ func settledCopy(o Operation) *time.Time {
 	return &day
 }
 
-// RateDay is the day whose official rate prices an operation's money in
-// another currency: its settlement day when known (decision Р-3), else the day
-// it occurred.
+// RateDay is the day whose official rate prices an operation's money: its
+// settlement day when known (decision Р-3), else its own day.
 func RateDay(o Operation) time.Time {
 	if o.SettledOn != nil {
 		return *o.SettledOn
@@ -1726,29 +937,9 @@ func RateDay(o Operation) time.Time {
 	return o.OccurredOn
 }
 
-// drainLotsCost subtracts amount from lot costs front-to-back (amortization
-// keeps quantities intact; only the cost basis shrinks) and REPORTS which lots
-// gave up which part of it, in queue order.
-//
-// The report is what lets a return of principal be valued in another currency
-// at all: the money retired belongs to the day each lot was bought, exactly as
-// a sale's released basis does, and a caller that only learned the total would
-// have no date to convert it at (see Realization). The pieces carry NO
-// quantity, which is not an omission — an amortization moves no shares, and
-// writing the lot's remaining quantity there would claim it did.
-//
-// A lot with nothing left to give produces no piece at all: an empty piece
-// would record a lot as having taken part in an event it took no part in, and
-// every reader would then have to know to discount it.
-//
-// The caller that ignores the report is releaseRecorded, which drains basis a
-// transfer's breakdown carried beyond its own lots. That is not a realization
-// of anything — see Position.Realizations — so it has nothing to do with the
-// pieces.
 // amortizedShare is the fraction of the holding's outstanding principal a
-// repayment returns: its amount over the face value per unit before it times
-// the units held, at most the whole. Not known without a face value, or with
-// nothing held to measure against.
+// repayment returns: amount / (face value per unit before it × units held), at
+// most 1. Unknown without a face value or with nothing held.
 func amortizedShare(o Operation, p *Position) (decimal.Decimal, bool) {
 	if o.FaceBeforeMinor == nil || *o.FaceBeforeMinor <= 0 || !p.Quantity.IsPositive() {
 		return decimal.Zero, false
@@ -1761,9 +952,9 @@ func amortizedShare(o Operation, p *Position) (decimal.Decimal, bool) {
 	return share, true
 }
 
-// takeLotsShare retires share of every lot's cost — the allocation a spin-off
-// uses, so the pieces sum to exactly the floor of the whole — and returns the
-// pieces taken, dated, with no units: nothing was sold.
+// takeLotsShare retires share of every lot's cost (the spin-off allocation, so
+// pieces sum to the floor of the whole) and returns dated pieces without
+// units.
 func takeLotsShare(p *Position, share decimal.Decimal) []ReleasedLot {
 	var out []ReleasedLot
 	for i, piece := range SpinoffPieces(p.Lots, share) {
@@ -1776,6 +967,10 @@ func takeLotsShare(p *Position, share decimal.Decimal) []ReleasedLot {
 	return out
 }
 
+// drainLotsCost subtracts amount from lot costs front-to-back, leaving
+// quantities alone, and reports the pieces taken in queue order — dated, so a
+// return of principal can be valued in another currency, and without units. A
+// lot giving nothing yields no piece. releaseRecorded ignores the report.
 func drainLotsCost(p *Position, amount int64) []ReleasedLot {
 	var pieces []ReleasedLot
 	for i := range p.Lots {
@@ -1795,13 +990,9 @@ func drainLotsCost(p *Position, amount int64) []ReleasedLot {
 	return pieces
 }
 
-// ReleasedLots computes the FIFO lot breakdown that releasing qty units of
-// the instrument would consume, after folding the given journal, without
-// mutating anything: which source lots, in what quantity/cost pieces, in
-// FIFO order (see ReleasedLot). The transfer service stores this breakdown
-// with the destination account's operation, so the moved lots keep their own
-// purchase dates instead of collapsing into the transfer date — which is
-// what a single carried number forces.
+// ReleasedLots returns the FIFO breakdown that releasing qty units would
+// consume after folding ops, without changing anything. Transfers store it so
+// moved lots keep their purchase dates.
 func ReleasedLots(ops []Operation, instrumentID uuid.UUID, qty decimal.Decimal) ([]ReleasedLot, error) {
 	positions, err := Compute(ops)
 	if err != nil {
@@ -1814,20 +1005,8 @@ func ReleasedLots(ops []Operation, instrumentID uuid.UUID, qty decimal.Decimal) 
 	return p.releaseFIFO(qty)
 }
 
-// ReleasedCost computes the FIFO cost basis of qty units of the instrument
-// after folding the given journal, without mutating anything, for callers
-// that need the total and not the breakdown.
-//
-// NOTHING IN PRODUCTION CALLS IT any more: the transfer service was its one
-// caller and now stores the pieces and sums them itself (see ReleasedLots and
-// LotsCost). It survives, and stays exported, purely as a test oracle: it is
-// the "what should the whole release cost" side of
-// TestReleasedLotsSumMatchesReleasedCost, which pins that a breakdown never
-// drifts from the total it must add up to. Today it cannot drift, because this
-// is deliberately a thin sum over ReleasedLots; the test earns its keep the
-// day anyone computes either side a second, independent way — exactly the
-// change that would otherwise slip through. Do not mistake it for a live path
-// and do not build one on it.
+// ReleasedCost is the cost of releasing qty units after folding ops: the sum
+// of ReleasedLots.
 func ReleasedCost(ops []Operation, instrumentID uuid.UUID, qty decimal.Decimal) (int64, error) {
 	pieces, err := ReleasedLots(ops, instrumentID, qty)
 	if err != nil {

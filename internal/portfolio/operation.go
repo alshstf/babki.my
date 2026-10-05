@@ -8,32 +8,17 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// Operation and Type are defined here (rather than in package operation)
-// because the engine in this file is the base of the dependency: it must
-// stay free of any dependency on package operation's Store/Service so that
-// operation.Service (which needs to call portfolio.Compute for consistency
-// checks) can depend on this package without creating an import cycle.
-// Package operation re-exports both by alias, so operation.Operation and
-// operation.Type remain the canonical names used by the rest of the system;
-// this is purely a placement detail.
+// Operation and Type live here so the engine does not import package operation,
+// which calls the engine; operation re-exports both by alias.
 
 type Type string
 
 const (
 	TypeBuy  Type = "buy"
 	TypeSell Type = "sell"
-	// TypeRedemption is a bond reaching maturity: the issuer takes the paper
-	// back and pays the principal. THE ARITHMETIC IS A SALE'S, exactly — the
-	// bonds leave, the money arrives, and the queue gives up the basis they
-	// carried — and the engine therefore treats the two as one throughout.
-	//
-	// It is a type of its own all the same, for two reasons that are not about
-	// arithmetic. The journal already names the PARTIAL repayment separately
-	// (TypeAmortization), so the full one masquerading as a sale was the odd
-	// one out; and the word on the screen was a lie about what happened —
-	// nobody sold anything, the bond ran out. НК РФ ст. 214.1 names the two
-	// together ("реализации (погашения)"), which is why one computation serves
-	// both and why nothing here needs a second rule.
+	// TypeRedemption is a bond reaching maturity. The arithmetic is a sale's and
+	// the engine treats them alike; it is a type of its own because nobody sold
+	// anything (НК РФ ст. 214.1: «реализации (погашения)»).
 	TypeRedemption   Type = "redemption"
 	TypeDeposit      Type = "deposit"
 	TypeWithdrawal   Type = "withdrawal"
@@ -44,62 +29,21 @@ const (
 	TypeTax          Type = "tax"
 	TypeTransferIn   Type = "transfer_in"
 	TypeTransferOut  Type = "transfer_out"
-	// TypeExchangeOut and TypeExchangeIn are the two legs of a SECURITIES
-	// CONVERSION: one paper becomes another — a depositary receipt converted
-	// into the share it represented, a fund's units reissued under a new ISIN —
-	// with N units of the old giving M units of the new, on ONE account, on one
-	// day.
-	//
-	// IT IS NOT A DISPOSAL AND MUST NEVER BE FOLDED AS ONE. Nothing was sold and
-	// nothing was bought: the holder paid nothing and received nothing, so no
-	// result is realized and no new basis is created. НК РФ ст. 214.1 п. 13
-	// abz. 17 says as much for the case this was built for — the expense behind
-	// shares received when a depositary receipt is redeemed is the price the
-	// RECEIPT was acquired at — and ст. 219.1 (as amended by 389-ФЗ of
-	// 2023-07-31) counts the holding period from the receipt's own acquisition.
-	// So the parcel travels whole: its cost basis and the days behind that basis
-	// arrive on the new paper unchanged, and only the number of units is
-	// restated.
-	//
-	// THE TWO LEGS DESCRIBE DIFFERENT PARCELS, which is what separates this pair
-	// from a transfer's. A transfer moves the same shares to another account, so
-	// one breakdown serves both legs and is stored once; a conversion changes
-	// the instrument AND the count, so the departing leg's pieces sum to N units
-	// of the old paper and the arriving leg's to M of the new. Each leg
-	// therefore carries and stores its OWN breakdown (see
-	// operation.carriesOwnLots), and the piece-for-piece correspondence between
-	// them is what carries a date and a cost from one paper to the other.
+	// TypeExchangeOut and TypeExchangeIn are the legs of a securities conversion
+	// on one account (a depositary receipt into its share, a fund under a new
+	// ISIN): N units of one paper become M of another. It is not a disposal: the
+	// basis and its days travel whole (НК РФ ст. 214.1 п. 13 абз. 17; holding period
+	// per ст. 219.1 as amended by 389-ФЗ). Each leg stores its own breakdown, piece
+	// for piece, since the instrument and the count change.
 	TypeExchangeOut Type = "exchange_out"
 	TypeExchangeIn  Type = "exchange_in"
-	// TypeSpinoffOut and TypeSpinoffIn are the two legs of a SPIN-OFF: paper A
-	// STAYS with the holder and paper B appears beside it, N units of A giving
-	// M units of B, on one account, on one day. The owner's own case is
-	// Т-Капитал carving the blocked assets out of TECH, TSPX and TUSD into the
-	// closed funds TECH2, TSPX2 and TUSD2 on 2023-12-22, units one for one —
-	// and the broker sent no operation for any of it.
-	//
-	// WHAT SEPARATES IT FROM A CONVERSION IS THAT NOTHING LEAVES. A conversion
-	// retires the old paper and its whole basis travels; a spin-off keeps the
-	// old paper, its units untouched, and moves only a SHARE of the money that
-	// was paid for it — possibly none (decision Р-16: 0 by default, as the
-	// broker keeps it; no rule of the tax code divides the basis for an
-	// individual). The original units' cost is reduced by exactly what moves.
-	// Neither income nor expense arises on the day.
-	//
-	// SO THE DEPARTING LEG MOVES NO UNITS AT ALL, and it carries no quantity —
-	// the field is nil, exactly as a split's is, because there is no count to
-	// put in it and any count put there would be read as shares leaving. What
-	// it carries instead is the money: AmountMinor is the basis moved, and
-	// TransferLots names, lot by lot and in queue order, which parcel gave up
-	// how much of it. Those pieces carry each lot's OWN quantity — not as
-	// something that moved, but as the lot's identity, so that a journal which
-	// has grown a parcel underneath the record is caught rather than silently
-	// re-allocated (see Position.applySpinoffOut).
-	//
-	// THE ARRIVING LEG IS THE ORDINARY ONE: M units of B, built from the very
-	// pieces the departing leg named, each keeping its cost and the day the
-	// original parcel was acquired — a spin-off is not a purchase, and the day
-	// the new paper appeared is not the day its money was spent.
+	// TypeSpinoffOut and TypeSpinoffIn are the legs of a spin-off: paper A stays
+	// and paper B appears beside it (TECH, TSPX, TUSD into TECH2, TSPX2, TUSD2 on
+	// 2023-12-22). Only a share of A's basis moves — by default none (decision
+	// Р-16, as the broker keeps it). The departing leg moves no units and has no
+	// quantity; its pieces carry each lot's own count as identity (see
+	// Position.applySpinoffOut). The arriving leg is an ordinary parcel built from
+	// those pieces, keeping the original acquisition days.
 	TypeSpinoffOut Type = "spinoff_out"
 	TypeSpinoffIn  Type = "spinoff_in"
 	TypeSplit      Type = "split"
@@ -118,8 +62,8 @@ var validTypes = map[Type]bool{
 
 func (t Type) Valid() bool { return validTypes[t] }
 
-// Types lists every operation type, sorted. The schema's CHECK on
-// operations.type names the same ones, and a test holds the two together.
+// Types lists every operation type, sorted; a test holds it to the schema's
+// CHECK.
 func Types() []Type {
 	out := make([]Type, 0, len(validTypes))
 	for t := range validTypes {
@@ -129,11 +73,9 @@ func Types() []Type {
 	return out
 }
 
-// RequiresInstrument reports whether the type is meaningless without one.
-// Dividend and coupon are deliberately excluded: they may be recorded at
-// the cash level (no specific instrument attribution) per the operation
-// service's validation contract; amortization always tracks a bond
-// position, so it keeps the requirement.
+// RequiresInstrument reports whether the type needs an instrument. Dividends
+// and coupons may be recorded at the cash level; amortization always needs a
+// bond.
 func (t Type) RequiresInstrument() bool {
 	switch t {
 	case TypeBuy, TypeSell, TypeRedemption, TypeAmortization,
@@ -145,61 +87,21 @@ func (t Type) RequiresInstrument() bool {
 	return false
 }
 
-// mustMatchPositionCurrency reports whether this entry has to be denominated in
-// the currency of the position it touches — and, by the same token, settles that
-// currency when nothing has settled it yet (see Compute's get, which is the only
-// caller).
+// mustMatchPositionCurrency reports whether the entry must be in its
+// position's currency, and so settles it when unsettled (Compute's get).
 //
-// THE QUESTION IT ANSWERS IS WHETHER THIS ENTRY PUTS MONEY INTO A FIGURE THAT
-// HOLDS ONE CURRENCY. Those figures are CostMinor, the cost of a lot, and the
-// basis a disposal retires: each is a single int64 of minor units, and two
-// currencies inside one is nonsense no rounding can rescue and no reader could
-// detect. Everything else about a position is kept per currency or per event,
-// and has nothing for a second currency to corrupt.
+// The rule protects the single-currency figures: CostMinor, lot costs, and the
+// basis a disposal retires.
+//   - Dividend, coupon, tax: false; income is kept per currency.
+//   - Fee: false; fees are kept per currency (a rouble commission on selling a
+//     yuan bond).
+//   - Sell and redemption: false; proceeds and fee go to a Realization with its
+//     own currency, and what is retired is decided by quantity.
+//   - Amortization: true; it retires basis by amount, which would need a rate.
+//   - Anything moving no money (a zero-basis transfer, a split): false.
 //
-// FALSE FOR DIVIDEND, COUPON AND TAX, which produce nothing but income, kept per
-// currency (Position.IncomeByCurrency). This is what lets a yuan bond pay its
-// coupons in rubles and a dollar share pay its dividend, and have its tax
-// withheld, in rubles: the broker converts on the day of the payment, the paper
-// stays priced in its own currency, and both facts are recorded as they happened
-// instead of one of them being refused.
-//
-// FALSE FOR A FEE, which is kept per currency too (Position.FeesByCurrency). It
-// used to be strict, on the argument that the fee total was one number in the
-// position's currency — which was true of the figure and is no longer, because
-// the figure is a list now. The commission charged in rubles on the sale of a
-// yuan bond is the case: refusing it lost the whole sale over a charge of four
-// rubles, and capitalizing it into a yuan basis would have been worse.
-//
-// FALSE FOR A SALE AND FOR A REDEMPTION, which the engine treats as one thing
-// (see TypeRedemption), and this is the exemption that needs the argument. Its proceeds
-// and its fee go to a Realization, which carries its own currency
-// (Realization.Currency), and what it retires is decided by the QUANTITY sold —
-// the queue gives up the same parcels of the same basis whatever currency the
-// money arrived in. So nothing of a sale reaches a single-currency figure, and
-// it need not settle the position's currency either: a sale can only ever follow
-// an acquisition that already did (with nothing acquired there is nothing to
-// release, and the engine refuses it for that instead).
-//
-// TRUE FOR AN AMORTIZATION, which looks like a sale and is not. It retires basis
-// BY AMOUNT, so a ruble payment against a yuan basis would need a rate to say how
-// much of it was retired — and that rate would live on in the REMAINING basis,
-// changing every later figure for that bond. A refusal naming that is honest; a
-// rate invented here would not be.
-//
-// TRUE FOR ANYTHING THAT MOVES NO MONEY AT ALL — false, rather. A transfer whose
-// basis is zero, a split, an entry with nothing in its amount, its fee or its
-// carried lots: there is no sum for its currency to be wrong about. This is what
-// admits the securities transfer that arrives with no cost attached, which the
-// broker denominates in the paper's own currency while the receiving account
-// holds it in another, and which was refused for years over a number that is
-// nought either way.
-//
-// The types the engine never folds into a position — deposit, withdrawal,
-// interest, conversion — answer by the money rule and it costs nothing: a
-// conversion is skipped before this is reached and the rest are refused by type
-// moments later. What the default buys is that a type added to the enum later is
-// treated strictly until somebody decides otherwise.
+// Types the engine does not fold are refused elsewhere; new types default to
+// strict.
 func (o Operation) mustMatchPositionCurrency() bool {
 	switch o.Type {
 	case TypeDividend, TypeCoupon, TypeTax, TypeFee, TypeSell, TypeRedemption:
@@ -208,9 +110,9 @@ func (o Operation) mustMatchPositionCurrency() bool {
 	return o.AmountMinor != 0 || o.FeeMinor != 0 || LotsCost(o.TransferLots) != 0
 }
 
-// Operation is one journal entry. AmountMinor is the signed cash effect on
-// the account (buy < 0, sell > 0, ...); for transfers it carries the moved
-// cost basis and has zero cash meaning; for splits it is 0.
+// Operation is one journal entry. AmountMinor is the signed cash effect (buy <
+// 0, sell > 0); on a transfer it is the moved basis with no cash meaning; on a
+// split 0.
 type Operation struct {
 	ID           uuid.UUID
 	SpaceID      uuid.UUID
@@ -218,12 +120,8 @@ type Operation struct {
 	InstrumentID *uuid.UUID
 	Type         Type
 	OccurredOn   time.Time
-	// OccurredAt is the instant the source says the operation happened, when it
-	// says one — a broker reports the moment of a trade, a person entering one
-	// by hand says only the day. Within a day the journal folds rows that
-	// carry one in that order, ahead of the rows that do not (see
-	// operation.foldsBefore). THE ENGINE NEVER READS IT: it folds the journal
-	// in the order it is handed.
+	// OccurredAt is the source's instant, when it gives one; within a day the
+	// journal folds by it (operation.foldsBefore). The engine never reads it.
 	OccurredAt  *time.Time
 	SettledOn   *time.Time
 	Quantity    *decimal.Decimal
@@ -232,59 +130,24 @@ type Operation struct {
 	Currency    string
 	FeeMinor    int64
 	Note        string
-	// TradingMode is where this operation happened, in the words of whoever
-	// reported it: an exchange board's code ("TQBR"), or the code of dealing
-	// away from an order book ("FINEX_OTC"). Nil for every row nobody said it
-	// about — everything entered by hand, and every imported row whose source
-	// reported no mode.
-	//
-	// THE ENGINE NEVER READS IT, and it is here for the same reason Note is:
-	// the journal carries what it was told, and one struct describes a row.
-	// Nothing about a position, a basis or a result depends on where a trade
-	// was struck.
+	// TradingMode is where the operation happened, in the reporter's code ("TQBR",
+	// "FINEX_OTC"); nil when unreported. The engine never reads it.
 	TradingMode     *string
 	TransferGroupID *uuid.UUID
-	// TransferLots is the FIFO breakdown of what a transfer moved: the
-	// source lots it consumed, in FIFO order, each with the day it was
-	// acquired (see ReleasedLot).
+	// TransferLots is the FIFO breakdown of what a transfer moved, each piece with
+	// its acquisition day. It is stored once with the transfer_in but belongs to
+	// both legs, which both fold from it (see Position.releaseRecorded).
 	//
-	// It is STORED once, next to the receiving (transfer_in) leg, whose
-	// account has no other way to know those days — but it belongs to BOTH
-	// legs and is read onto both (see operation.Store.attachTransferLots).
-	// The pieces describe the parcel, not the arrival: the same instrument,
-	// quantity and basis leave the source that reach the destination, and the
-	// days behind that basis are the same days on either side. Both legs are
-	// folded from them — the arriving account rebuilds these lots, the
-	// departing one gives up these lots (see Position.releaseRecorded) — which
-	// is what keeps a pair from describing two different parcels. It did not
-	// always: the departing leg used to work out a release of its own from the
-	// queue, and the day the queue's rule changed, every transfer already
-	// recorded started releasing lots other than the ones it had frozen (see
-	// the package doc).
-	//
-	// Empty for every other type, for transfers whose basis was supplied by
-	// hand (no source lots exist behind such a number), and for transfers
-	// recorded before the breakdown was stored at all. For those the original
-	// acquisition dates are simply not knowable, and both things derived from
-	// the row agree about it: the LOT such a transfer creates carries no date
-	// at all, because a lot's date claims to say when the shares were bought
-	// and nobody knows (see Lot.AcquiredOn) — and the ROW's ruble equivalent
-	// (operation.amountTerms) is null for the same reason, on both legs alike,
-	// rather than converting on the transfer's own date as it once did. A
-	// figure struck at that date would be exactly the invented number this
-	// whole mechanism exists to remove: the shares were not bought on it.
-	//
-	// A piece INSIDE a breakdown can likewise carry no date, once a parcel
-	// that arrived undated is moved on again. The breakdown then records the
-	// mixture as it is, and nothing invents the missing half.
+	// It is empty for other types and for transfers with a hand-given basis or from
+	// before breakdowns; their purchase dates are unknowable, so the created lot is
+	// undated and the row's base-currency figure is null. A piece may itself be
+	// undated when an undated parcel moves on.
 	TransferLots []ReleasedLot
 	SplitRatio   *decimal.Decimal
-	// FaceBeforeMinor is, on an amortization, a bond's outstanding face value
-	// per unit just before this repayment, in the operation's currency. With
-	// it the repayment retires the cost basis in proportion to the share of
-	// the outstanding principal it returns, as the tax code does (НК РФ
-	// ст. 214.1 п. 13, decision Р-4); without it the old rule applies — the
-	// repayment retires basis until none is left. Nil on every other type.
+	// FaceBeforeMinor is, on an amortization, the bond's outstanding face value
+	// per unit before this repayment, in the operation's currency: the repayment
+	// then retires basis in proportion (НК РФ ст. 214.1 п. 13, decision Р-4).
+	// Without it the old rule applies. Nil on other types.
 	FaceBeforeMinor *int64
 	Source          string
 	ExternalID      *string
