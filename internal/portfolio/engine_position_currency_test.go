@@ -2,21 +2,9 @@ package portfolio
 
 import "testing"
 
-// TestMustMatchPositionCurrencyClassifiesEveryType pins, type by type and as
-// literals, which operations have to be denominated in the position's own
-// currency. The behaviour is exercised through Compute elsewhere
-// (engine_income_currency_test.go), but only for the types that fixture can
-// reach; this is the whole enum, so widening the exemption by one case — an
-// amortization, say, whose amount really does retire basis — turns red here
-// instead of quietly mixing two currencies into CostMinor.
-//
-// EVERY ENTRY CARRIES MONEY, because the rule is no longer about the type
-// alone: an entry that moves nothing is exempt whatever its type, and a table
-// of bare types could not tell that half of the rule from the other. The
-// moneyless half is the table below this one.
-//
-// The count check is the other half: a Type added to the enum without a line
-// here fails rather than inheriting an answer nobody chose.
+// Which types must match the position's currency, for the whole enum as
+// literals; every entry here carries money (moneyless entries are the next
+// test), and a type missing from the table fails the count.
 func TestMustMatchPositionCurrencyClassifiesEveryType(t *testing.T) {
 	want := map[Type]bool{
 		// Money into a figure that holds one currency: a lot's cost, the
@@ -25,24 +13,15 @@ func TestMustMatchPositionCurrencyClassifiesEveryType(t *testing.T) {
 		TypeAmortization: true,
 		TypeTransferIn:   true,
 		TypeTransferOut:  true,
-		// A conversion's legs carry the very same kind of figure a transfer's
-		// do — the parcel's cost basis — into the very same single-currency
-		// int64. The arriving leg is the one that makes the rule bite: it is
-		// what SETTLES the new paper's cost currency, and it must settle it to
-		// the currency the money was actually paid in rather than to whatever
-		// the new paper is quoted in.
+		// Conversion legs carry the parcel's basis into a single-currency figure; the
+		// arriving one settles the new paper's currency to the money's.
 		TypeExchangeOut: true,
 		TypeExchangeIn:  true,
-		// A spin-off's legs answer the same way and for the same reason: the
-		// departing one takes money out of the single-currency basis and the
-		// arriving one settles the carved-out paper's cost currency to the
-		// currency that money was paid in. The departing leg moves no units at
-		// all, which changes nothing here — the question is about the money.
+		// Spin-off legs likewise, though the departing one moves no units.
 		TypeSpinoffOut: true,
 		TypeSpinoffIn:  true,
-		// A sale's proceeds and fee go to a Realization, which carries its own
-		// currency, and what it retires is decided by the quantity sold. A
-		// redemption is the same event by another name and answers the same.
+		// A sale's proceeds go to a Realization with its own currency; a redemption
+		// is the same.
 		TypeSell:       false,
 		TypeRedemption: false,
 		// Income and commissions, both kept per currency and free to arrive in
@@ -51,18 +30,13 @@ func TestMustMatchPositionCurrencyClassifiesEveryType(t *testing.T) {
 		TypeCoupon:   false,
 		TypeTax:      false,
 		TypeFee:      false,
-		// Never folded into a position at all: Compute skips a conversion and
-		// refuses the rest by type. They answer with the safe default, which is
-		// what a type added later inherits until somebody decides otherwise.
+		// Never folded into a position; they take the strict default a new type
+		// inherits.
 		TypeDeposit:    true,
 		TypeWithdrawal: true,
 		TypeInterest:   true,
 		TypeConversion: true,
-		// A split rewrites quantities and moves no money — but it is in this
-		// table with a true because the answer here is the one for an entry
-		// that DOES carry an amount, and every entry below does. A split's own
-		// amount is always zero, so what it really answers is in the other
-		// table; see TestAnEntryThatMovesNoMoneyNeedNotMatchTheCurrency.
+		// A split's amount is always zero, so its real answer is in the other table.
 		TypeSplit: true,
 	}
 	if len(want) != len(validTypes) {
@@ -78,13 +52,8 @@ func TestMustMatchPositionCurrencyClassifiesEveryType(t *testing.T) {
 	}
 }
 
-// TestAnEntryThatMovesNoMoneyNeedNotMatchTheCurrency is the other half of the
-// rule: a currency is a claim about a sum, and an entry with no sum makes none.
-//
-// This is what lets a securities transfer arrive with no cost attached under
-// the paper's own currency while the receiving account holds it in another —
-// the case that kept an incoming transfer of 2400 shares out of the owner's
-// journal, over an amount of zero.
+// An entry moving no money need not match: it makes no claim (the owner's
+// zero-cost transfer of 2 400 shares).
 func TestAnEntryThatMovesNoMoneyNeedNotMatchTheCurrency(t *testing.T) {
 	cases := []struct {
 		name string

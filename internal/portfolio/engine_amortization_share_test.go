@@ -13,11 +13,9 @@ func withFace(o portfolio.Operation, minor int64) portfolio.Operation {
 	return o
 }
 
-// Decision Р-4, on the memo's own example: ten bonds of 1 000 ₽ bought at 950 ₽
-// (9 500 ₽), repaid 20 % of the face in one year, 30 % in the next, the last
-// 50 % at maturity. As the tax code does it, each repayment retires the share
-// of the basis it is of the outstanding principal, and the result comes year
-// by year — +100, +150, +250 ₽ — rather than all at the end.
+// Decision Р-4 on the memo's example: ten 1 000 ₽ bonds bought at 950 ₽, 20%,
+// 30% and 50% repaid in three years; each repayment retires its share of the
+// basis: +100, +150, +250 ₽.
 func TestAmortizationRetiresBasisInProportionToThePrincipal(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 1, &ofz, "10", "950", -950_000, 0),
@@ -92,9 +90,8 @@ func TestAmortizationTakesTheShareFromEveryParcel(t *testing.T) {
 	}
 }
 
-// A repayment larger than the principal its face value says is outstanding
-// (a stale schedule, a premium) retires the whole basis and no more: no
-// parcel is left owing a negative cost.
+// A repayment beyond the outstanding face retires the whole basis and no
+// more.
 func TestAmortizationRetiresNoMoreThanTheWholeBasis(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 1, &ofz, "10", "950", -950_000, 0),
@@ -114,9 +111,7 @@ func TestAmortizationRetiresNoMoreThanTheWholeBasis(t *testing.T) {
 	}
 }
 
-// The basis a repayment retires keeps the day its purchase settled (decision
-// Р-3): it is priced in another currency at that day's rate, as a sale's
-// released basis is.
+// The retired basis keeps its purchase's settlement day (decision Р-3).
 func TestAmortizationRetiresBasisWithItsSettlementDay(t *testing.T) {
 	buy := op(portfolio.TypeBuy, 1, &ofz, "10", "950", -950_000, 0)
 	settled := buy.OccurredOn.AddDate(0, 0, 1)

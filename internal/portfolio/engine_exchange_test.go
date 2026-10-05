@@ -11,11 +11,8 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// exchangeLegs builds the pair the service would write for converting `from`
-// units of instrument a into `to` units of instrument b, using the pieces the
-// caller names. It exists so a test states the BREAKDOWN it is exercising and
-// nothing else; the service's own construction of that breakdown is tested in
-// package operation.
+// exchangeLegs builds a conversion pair with the given pieces; the service's
+// own construction is tested in package operation.
 func exchangeLegs(dayN int, a, b *uuid.UUID, from, to string,
 	outLots, inLots []portfolio.ReleasedLot,
 ) (portfolio.Operation, portfolio.Operation) {
@@ -36,11 +33,8 @@ func lot(qty string, cost int64, dayN int) portfolio.ReleasedLot {
 	return l
 }
 
-// TestExchangeCarriesBasisAndDatesOntoTheNewPaper is the load-bearing test of
-// the pair: a depositary receipt bought on two days becomes the share it
-// represented, one for one, and the position that results must be
-// indistinguishable — in money and in dates — from the one that was held before,
-// except for the paper's identity.
+// A receipt bought on two days becomes its share one for one, with the same
+// money and dates.
 func TestExchangeCarriesBasisAndDatesOntoTheNewPaper(t *testing.T) {
 	// 2 receipts at 6414.60 (fee 6.41 capitalized) and 1 at 6567.20.
 	buy1 := op(portfolio.TypeBuy, 2, &lkoh, "2", "6414.60", -1_282_920, 641)
@@ -79,9 +73,8 @@ func TestExchangeCarriesBasisAndDatesOntoTheNewPaper(t *testing.T) {
 	if len(got.Lots) != 2 {
 		t.Fatalf("lots = %d, want 2 — one per purchase", len(got.Lots))
 	}
-	// THE DATES ARE THE POINT. НК РФ ст. 219.1 counts the holding period from
-	// the day the receipt was bought, and every ruble figure downstream is
-	// struck at the rate of a lot's own acquisition day.
+	// The dates matter: НК РФ ст. 219.1 counts the holding period from the
+	// receipt's purchase.
 	if got.Lots[0].AcquiredOn == nil || !got.Lots[0].AcquiredOn.Equal(day(2)) {
 		t.Errorf("first lot acquired %v, want %v", got.Lots[0].AcquiredOn, day(2))
 	}
@@ -93,10 +86,7 @@ func TestExchangeCarriesBasisAndDatesOntoTheNewPaper(t *testing.T) {
 	}
 }
 
-// TestExchangeRestatesQuantityWithoutRestatingCost is the case a wrong
-// implementation is likeliest to produce: scaling the money along with the
-// units. A 1-for-10 conversion that did so would hand the owner a nine-tenths
-// loss the law says did not happen.
+// A 1-for-10 conversion restates units, not cost.
 func TestExchangeRestatesQuantityWithoutRestatingCost(t *testing.T) {
 	buy := op(portfolio.TypeBuy, 2, &lkoh, "10", "500", -5_000_000, 0)
 	outLots := []portfolio.ReleasedLot{lot("10", 5_000_000, 2)}
@@ -126,9 +116,7 @@ func TestExchangeRestatesQuantityWithoutRestatingCost(t *testing.T) {
 	}
 }
 
-// TestExchangeKeepsAnUndatedParcelUndated: shares that reached the account by a
-// transfer carrying no dates cannot gain one by being converted, and the
-// position that results must still refuse to be valued in another currency.
+// An undated parcel stays undated through a conversion.
 func TestExchangeKeepsAnUndatedParcelUndated(t *testing.T) {
 	arrive := op(portfolio.TypeTransferIn, 2, &lkoh, "5", "", 500_000, 0)
 	pieces := []portfolio.ReleasedLot{lot("5", 500_000, 0)}
@@ -152,10 +140,8 @@ func TestExchangeKeepsAnUndatedParcelUndated(t *testing.T) {
 	}
 }
 
-// TestExchangeOutReleasesTheRecordedLotsNotAFreshSlice: the departing leg must
-// give up the parcel its breakdown names even when the queue, replayed today,
-// would pick another. This is the property issue #60 established for transfers,
-// asked of the new pair.
+// The departing leg gives up the recorded parcel, not today's queue head
+// (#60's property).
 func TestExchangeOutReleasesTheRecordedLotsNotAFreshSlice(t *testing.T) {
 	// Two lots: day 2 (cheap) and day 3 (dear). The breakdown names the DAY 3
 	// one, which is not what a fresh FIFO release would take.
@@ -180,10 +166,8 @@ func TestExchangeOutReleasesTheRecordedLotsNotAFreshSlice(t *testing.T) {
 	}
 }
 
-// TestExchangeLegWithoutABreakdownIsRefused: a transfer may legitimately carry
-// a hand-given basis and no pieces; a conversion may not, because its arriving
-// leg is built from the departing one's pieces and nothing else can supply
-// them.
+// A conversion leg without a breakdown is refused: the arriving leg is built
+// from the pieces.
 func TestExchangeLegWithoutABreakdownIsRefused(t *testing.T) {
 	buy := op(portfolio.TypeBuy, 2, &lkoh, "10", "100", -1_000_000, 0)
 	for _, tc := range []struct {
@@ -210,10 +194,7 @@ func TestExchangeLegWithoutABreakdownIsRefused(t *testing.T) {
 	}
 }
 
-// TestExchangeBreakdownMustSumToItsOwnLeg is what makes the in-leg quantity a
-// checked figure rather than a claim: the two legs carry DIFFERENT pieces, each
-// summing to the quantity of the row it rides on, and a disagreement is refused
-// on every read.
+// Each leg's pieces must sum to its own row's quantity.
 func TestExchangeBreakdownMustSumToItsOwnLeg(t *testing.T) {
 	buy := op(portfolio.TypeBuy, 2, &lkoh, "10", "100", -1_000_000, 0)
 	outLots := []portfolio.ReleasedLot{lot("10", 1_000_000, 2)}
@@ -230,10 +211,7 @@ func TestExchangeBreakdownMustSumToItsOwnLeg(t *testing.T) {
 	}
 }
 
-// TestExchangeConservesBasisOverRandomJournals asserts the VALUE the pair is
-// built to preserve — the money the family has spent — rather than the
-// agreement of two code paths, which is the shape this package has watched go
-// green while both paths were wrong together.
+// Over random journals, the money spent is conserved.
 func TestExchangeConservesBasisOverRandomJournals(t *testing.T) {
 	rng := rand.New(rand.NewSource(20260823))
 	for i := 0; i < 300; i++ {
@@ -279,9 +257,7 @@ func TestExchangeConservesBasisOverRandomJournals(t *testing.T) {
 	}
 }
 
-// TestExchangeIsNotCash pins the other half of what these types mean: their
-// amount is a cost basis, and a reader that sums the journal as money must skip
-// them — both of them, on the SAME account, which is the shape no transfer has.
+// Conversion legs are not cash: a money reader skips both, on one account.
 func TestExchangeIsNotCash(t *testing.T) {
 	for _, typ := range []portfolio.Type{portfolio.TypeExchangeOut, portfolio.TypeExchangeIn} {
 		if portfolio.MovesCash(portfolio.Operation{Type: typ}) {

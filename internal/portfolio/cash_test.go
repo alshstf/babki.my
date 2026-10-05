@@ -8,10 +8,8 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// The money an account holds is a HOLDING, and these tests are about the two
-// things that makes it: a balance made of every cash effect in the journal, and
-// the parcels behind it, each knowing the day it arrived. What a parcel is worth
-// in another currency is decided a layer up — this package holds no rates.
+// An account's money is a holding: a balance of every cash effect, and dated
+// parcels behind it. Rates are applied a layer up.
 
 func day(t *testing.T, s string) time.Time {
 	t.Helper()
@@ -30,20 +28,17 @@ func cashOp(t *testing.T, typ Type, on, currency string, amountMinor, feeMinor i
 	}
 }
 
-// TestCashCountsEveryEffectIncludingTheOnesNoPositionSees is the balance in one
-// fixture, with every kind of entry that moves money present at once — including
-// the four the position engine refuses by type (deposit, withdrawal, interest
-// and a conversion's legs), which are exactly what a cash balance is made of.
+// Every money-moving entry counts, including those the engine refuses by type
+// (deposit, withdrawal, interest, conversion legs).
 //
-//	deposit                 +1 000 000
-//	a purchase of shares      -250 000, commission 200   -> -250 200
-//	its later sale            +300 000, commission 300   -> +299 700
-//	a coupon                    +5 000
-//	a commission of its own       -900
-//	interest on the balance       +700
-//	a withdrawal              -100 000
-//	                          ==========
-//	                             954 300
+//	deposit           +1 000 000
+//	buy shares          −250 200 (incl. 200 fee)
+//	sell them           +299 700 (300 000 − 300 fee)
+//	coupon                +5 000
+//	own commission          −900
+//	interest                +700
+//	withdrawal          −100 000
+//	                       954 300
 func TestCashCountsEveryEffectIncludingTheOnesNoPositionSees(t *testing.T) {
 	ops := []Operation{
 		cashOp(t, TypeDeposit, "2026-01-10", "RUB", 1_000_000, 0),
@@ -72,10 +67,7 @@ func TestCashCountsEveryEffectIncludingTheOnesNoPositionSees(t *testing.T) {
 	}
 }
 
-// TestCashIgnoresWhatMovesNoMoney: a securities transfer carries a COST BASIS in
-// its amount, not cash. Shares moving between two of the owner's accounts change
-// no balance on either — and an amount of 300 000 read as money would be a
-// third of a million rubles appearing from nowhere.
+// A securities transfer's amount is a cost basis, not money.
 func TestCashIgnoresWhatMovesNoMoney(t *testing.T) {
 	ratio := decimal.RequireFromString("2")
 	ops := []Operation{
@@ -96,10 +88,8 @@ func TestCashIgnoresWhatMovesNoMoney(t *testing.T) {
 	}
 }
 
-// TestMovesCashClassifiesEveryType holds the predicate to an answer for EVERY
-// operation type, so a type added to the enum cannot inherit "it is money" by
-// default. A spin-off's two legs did exactly that: both carry the basis that
-// moved, and the account was credited with it twice (#185).
+// MovesCash answers for every type, so a new one cannot default to "money" (a
+// spin-off's legs once credited the basis twice, #185).
 func TestMovesCashClassifiesEveryType(t *testing.T) {
 	want := map[Type]bool{
 		// Money that changed the balance.
@@ -124,9 +114,7 @@ func TestMovesCashClassifiesEveryType(t *testing.T) {
 	}
 }
 
-// TestCashIgnoresTheBasisASpinoffMoves: a quarter of a 100 000.00 basis moves to
-// the carved-out paper, both legs name 25 000.00, and not one kopeck of it is
-// money. The balance stays what the deposit made it and no cash parcel appears.
+// A spin-off's moved basis (25 000 of 100 000) is not money.
 func TestCashIgnoresTheBasisASpinoffMoves(t *testing.T) {
 	ops := []Operation{
 		cashOp(t, TypeDeposit, "2026-01-10", "RUB", 1_000_000, 0),
@@ -146,9 +134,7 @@ func TestCashIgnoresTheBasisASpinoffMoves(t *testing.T) {
 	}
 }
 
-// TestCashKeepsEachCurrencyApart. A conversion is TWO entries, one per side, and
-// the pair is what makes a currency balance possible at all: without it the
-// yuan a bond was bought with came from nowhere.
+// A conversion's two entries keep each currency's balance apart.
 func TestCashKeepsEachCurrencyApart(t *testing.T) {
 	ops := []Operation{
 		cashOp(t, TypeDeposit, "2026-01-10", "RUB", 10_000_000, 0),
@@ -174,10 +160,7 @@ func TestCashKeepsEachCurrencyApart(t *testing.T) {
 	}
 }
 
-// TestCashLotsKeepTheDayMoneyArrived is what separates this from a balance. The
-// parcels are consumed oldest-first, so what is LEFT knows when it came — which
-// is the only thing that makes it valuable in another currency (a layer up
-// strikes each parcel at its own day's rate, exactly as a share's lots are).
+// Parcels are spent oldest first, so what is left knows its day.
 func TestCashLotsKeepTheDayMoneyArrived(t *testing.T) {
 	ops := []Operation{
 		cashOp(t, TypeConversion, "2026-01-10", "CNY", 100_000, 0), // 1 000 ¥
@@ -204,12 +187,8 @@ func TestCashLotsKeepTheDayMoneyArrived(t *testing.T) {
 	}
 }
 
-// TestCashGoesNegativeRatherThanRefusing is the owner's own account. Some of his
-// currency purchases are trades the broker will not explain, so the journal
-// spends yuan it never saw arrive. A share position that went negative would be
-// a broken journal and is refused; a cash balance that does is an ordinary
-// consequence of a gap already reported elsewhere, and hiding it behind a floor
-// of zero would hide exactly the discrepancy a reader needs to see.
+// Spending yuan never seen arriving (an unexplained broker trade) makes the
+// balance negative, reported rather than refused or floored.
 func TestCashGoesNegativeRatherThanRefusing(t *testing.T) {
 	ops := []Operation{
 		cashOp(t, TypeCoupon, "2026-01-10", "CNY", 10_000, 0),
@@ -228,10 +207,7 @@ func TestCashGoesNegativeRatherThanRefusing(t *testing.T) {
 	}
 }
 
-// TestCashNamesACurrencyWhoseBalanceCameToNought: an account that bought dollars
-// and sold them all again HAS held dollars. Saying nothing about them is a
-// different claim from saying the balance is zero, and the second is the true
-// one.
+// A currency held and fully spent is still named, with a zero balance.
 func TestCashNamesACurrencyWhoseBalanceCameToNought(t *testing.T) {
 	ops := []Operation{
 		cashOp(t, TypeConversion, "2026-01-10", "USD", 100_000, 0),
@@ -272,11 +248,8 @@ func TestCashByCurrencyIsOrdered(t *testing.T) {
 	}
 }
 
-// TestCashRecordsWhatLeftAndWhen is what makes a banked currency result
-// visible at all. The parcels a departure took, and the day it went, are the two
-// halves of "sold at a better rate than it was bought" — and a screen holding
-// only balances reports a gain of exactly nought on money that has already been
-// turned back.
+// A departure records its parcels and its day, so a banked currency gain is
+// visible.
 func TestCashRecordsWhatLeftAndWhen(t *testing.T) {
 	ops := []Operation{
 		cashOp(t, TypeConversion, "2026-01-10", "USD", 100_000, 0), // $1 000 in
@@ -306,10 +279,7 @@ func TestCashRecordsWhatLeftAndWhen(t *testing.T) {
 	}
 }
 
-// TestCashSplitsADepartureAcrossTheParcelsItTakes: one payment can reach back
-// through several arrivals, and each carries its own day. Valuing the whole
-// departure at the oldest parcel's rate — or at the newest — is a different
-// number, and the split is what makes it the right one.
+// One payment can take several parcels, each with its own day.
 func TestCashSplitsADepartureAcrossTheParcelsItTakes(t *testing.T) {
 	ops := []Operation{
 		cashOp(t, TypeConversion, "2026-01-10", "USD", 100_000, 0),
@@ -333,11 +303,8 @@ func TestCashSplitsADepartureAcrossTheParcelsItTakes(t *testing.T) {
 	}
 }
 
-// TestCashRecordsNoDepartureForMoneyItNeverSaw. Spending yuan whose purchase the
-// broker would not explain releases nothing: there is no parcel to take, and a
-// departure recorded with an empty hand would be a profit struck against a cost
-// of nought — the whole payment counted as gain. The negative balance is where
-// that gap is reported instead.
+// Spending money never seen arriving records no departure: there is no parcel,
+// and a cost of nought would make the whole payment a gain.
 func TestCashRecordsNoDepartureForMoneyItNeverSaw(t *testing.T) {
 	ops := []Operation{cashOp(t, TypeBuy, "2026-02-10", "CNY", -50_000, 0)}
 
@@ -353,18 +320,8 @@ func TestCashRecordsNoDepartureForMoneyItNeverSaw(t *testing.T) {
 	}
 }
 
-// TestCashCoversAnOverdraftBeforeHoldingAnything is the invariant this position
-// lives or dies by: WHAT THE PARCELS SAY MUST BE WHAT THE BALANCE SAYS.
-//
-// The case is the owner's own, and it is not exotic. A share is bought with
-// dollars whose purchase the journal never saw (a currency trade the broker
-// would not explain), so the balance goes below nought; a later sale brings
-// dollars in. Without an overdraft to pay off first, the whole arrival becomes a
-// parcel and the position claims to hold eight times what it has — and every
-// figure struck from those parcels is wrong in the same proportion.
-//
-// Found by an account total that came out at minus three and a half million on
-// a fixture whose answer was plus four.
+// Arriving money pays off an overdraft first, so the parcels match the balance
+// (without it, an account total came out at −3.5 million instead of +4).
 func TestCashCoversAnOverdraftBeforeHoldingAnything(t *testing.T) {
 	ops := []Operation{
 		cashOp(t, TypeBuy, "2026-03-10", "USD", -100_000, 0), // spent, never seen arriving
@@ -391,9 +348,8 @@ func TestCashCoversAnOverdraftBeforeHoldingAnything(t *testing.T) {
 	default:
 		t.Errorf("the parcels hold %d, want 15000 — as much as the balance", held)
 	}
-	// The departure recorded is the fee alone. Covering an overdraft is not a
-	// disposal: the spending it pays off had no known cost, and pairing it with
-	// the arriving money's own day would invent one.
+	// The recorded departure is the fee alone; covering an overdraft is not a
+	// disposal.
 	if len(usd.Realizations) != 1 || usd.Realizations[0].Minor() != 5_000 {
 		t.Errorf("realizations = %+v, want the 5000 fee alone", usd.Realizations)
 	}

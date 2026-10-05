@@ -11,10 +11,8 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// spinoffLegs builds the pair the registry would write when a share of one
-// paper's basis is carved out onto another: the departing leg names the lots
-// and the money each gives up and carries NO quantity, the arriving leg is an
-// ordinary parcel of `to` units of the new paper.
+// spinoffLegs builds the registry's pair: the departing leg names lots and
+// money with no quantity, the arriving leg is `to` units of the new paper.
 func spinoffLegs(dayN int, a, b *uuid.UUID, to string,
 	outLots, inLots []portfolio.ReleasedLot,
 ) (portfolio.Operation, portfolio.Operation) {
@@ -26,18 +24,15 @@ func spinoffLegs(dayN int, a, b *uuid.UUID, to string,
 	return out, in
 }
 
-// TestSpinoffLeavesTheUnitsAndMovesAShareOfTheMoney is the load-bearing test of
-// the pair, on the owner's own shape: units bought on two days stay exactly
-// where they were, a share of what was paid for them appears on the carved-out
-// paper, and the days behind that money are the days it was really spent.
+// Units stay put, a share of their cost moves to the carved-out paper, dated
+// by the original purchases.
 func TestSpinoffLeavesTheUnitsAndMovesAShareOfTheMoney(t *testing.T) {
 	// 5 400 units at 0.0957 and 9 668 at 0.1028, in kopecks: 51 678 and 99 387.
 	buy1 := op(portfolio.TypeBuy, 2, &lkoh, "5400", "0.0957", -51_678, 0)
 	buy2 := op(portfolio.TypeBuy, 3, &lkoh, "9668", "0.1028", -99_387, 0)
 
-	// A third of the basis moves: floor((51678+99387) x 0.3333333333) = 50 354,
-	// allocated 17 225 / 33 129 — the exact largest-remainder split of that
-	// figure between the two parcels.
+	// A third moves: floor((51678+99387) × 0.3333333333) = 50 354, split 17 225 /
+	// 33 129 by largest remainders.
 	outLots := []portfolio.ReleasedLot{lot("5400", 17_225, 2), lot("9668", 33_129, 3)}
 	inLots := []portfolio.ReleasedLot{lot("5400", 17_225, 2), lot("9668", 33_129, 3)}
 	out, in := spinoffLegs(5, &lkoh, &sber, "15068", outLots, inLots)
@@ -68,9 +63,8 @@ func TestSpinoffLeavesTheUnitsAndMovesAShareOfTheMoney(t *testing.T) {
 	if len(carved.Lots) != 2 {
 		t.Fatalf("the carved-out paper has %d parcels, want 2 — one per parcel of the original", len(carved.Lots))
 	}
-	// THE DATES ARE THE ORIGINAL PURCHASES', not the day the new paper
-	// appeared. This is the assertion the tax rule turns on: the holding period
-	// and the ruble basis are both struck at the day the money was really spent.
+	// The dates are the original purchases', which the holding period and rouble
+	// basis turn on.
 	if !sameAcquisition(carved.Lots[0].AcquiredOn, dayp(2)) {
 		t.Errorf("first carved parcel acquired %s, want 2026-07-02", acquired(carved.Lots[0].AcquiredOn))
 	}
@@ -84,10 +78,7 @@ func TestSpinoffLeavesTheUnitsAndMovesAShareOfTheMoney(t *testing.T) {
 	}
 }
 
-// TestSpinoffPiecesAllocateTheWholeAndNothingMore is the allocation on its own,
-// at the scale where a per-lot rounding would show: eleven equal parcels of a
-// basis that does not divide, where flooring each lot on its own loses minor
-// units and rounding each up invents them.
+// Eleven equal parcels of an indivisible basis: the pieces sum exactly.
 func TestSpinoffPiecesAllocateTheWholeAndNothingMore(t *testing.T) {
 	lots := make([]portfolio.Lot, 11)
 	for i := range lots {
@@ -120,10 +111,7 @@ func TestSpinoffPiecesAllocateTheWholeAndNothingMore(t *testing.T) {
 	}
 }
 
-// TestSpinoffPiecesNameEveryParcelIncludingTheEmptyOnes: the record is a
-// photograph of the lot list, so a parcel that gives up nothing is still in it.
-// Without that, applySpinoffOut could not tell a journal that has grown a
-// parcel from one that had a penniless parcel all along.
+// Parcels giving nothing are still named: the record is the lot list.
 func TestSpinoffPiecesNameEveryParcelIncludingTheEmptyOnes(t *testing.T) {
 	free := day(1)
 	paid := day(2)
@@ -144,10 +132,8 @@ func TestSpinoffPiecesNameEveryParcelIncludingTheEmptyOnes(t *testing.T) {
 	}
 }
 
-// TestSpinoffRefusesWhenTheJournalGrewAParcelUnderneathIt: the record names the
-// whole position, so a purchase inserted before the spin-off's own date makes
-// the allocation describe a position that no longer exists. Re-allocating
-// quietly would take money out of a parcel the record never touched.
+// A purchase inserted before the spin-off's date is refused: the record no
+// longer describes the position.
 func TestSpinoffRefusesWhenTheJournalGrewAParcelUnderneathIt(t *testing.T) {
 	buy1 := op(portfolio.TypeBuy, 2, &lkoh, "100", "10", -100_000, 0)
 	backdated := op(portfolio.TypeBuy, 3, &lkoh, "50", "10", -50_000, 0)
@@ -166,10 +152,7 @@ func TestSpinoffRefusesWhenTheJournalGrewAParcelUnderneathIt(t *testing.T) {
 	}
 }
 
-// TestSpinoffRefusesWhenAParcelChangedUnderneathIt: same list, same days, but a
-// parcel is a different size than the one the allocation was struck against —
-// a split folded before it, say. The proportion the record carries is no longer
-// the proportion of anything.
+// A parcel of a different size than recorded is refused.
 func TestSpinoffRefusesWhenAParcelChangedUnderneathIt(t *testing.T) {
 	buy := op(portfolio.TypeBuy, 2, &lkoh, "100", "10", -100_000, 0)
 	split := op(portfolio.TypeSplit, 3, &lkoh, "", "", 0, 0)
@@ -186,9 +169,7 @@ func TestSpinoffRefusesWhenAParcelChangedUnderneathIt(t *testing.T) {
 	}
 }
 
-// TestSpinoffRefusesMovingMoreThanAParcelHolds guards the direction a bug would
-// take money in: a piece bigger than its parcel would drive a lot's basis
-// negative and the position's with it.
+// A piece bigger than its parcel is refused.
 func TestSpinoffRefusesMovingMoreThanAParcelHolds(t *testing.T) {
 	buy := op(portfolio.TypeBuy, 2, &lkoh, "100", "10", -100_000, 0)
 	outLots := []portfolio.ReleasedLot{lot("100", 150_000, 2)}
@@ -203,9 +184,7 @@ func TestSpinoffRefusesMovingMoreThanAParcelHolds(t *testing.T) {
 	}
 }
 
-// TestSpinoffOutRefusesAQuantity: the field is empty because the event moves no
-// units, and a count in it would be rendered as units leaving on every screen
-// that draws a journal.
+// The departing leg must carry no quantity.
 func TestSpinoffOutRefusesAQuantity(t *testing.T) {
 	buy := op(portfolio.TypeBuy, 2, &lkoh, "100", "10", -100_000, 0)
 	outLots := []portfolio.ReleasedLot{lot("100", 40_000, 2)}
@@ -238,14 +217,11 @@ func TestSpinoffBreakdownMustSumToTheBasisItCarries(t *testing.T) {
 	}
 }
 
-// TestSpinoffOutOfAParcelWhoseSharesASplitRoundedAway: a reverse split can
-// leave a parcel with no units and real money in it (see applySplit). That
-// money is as much a part of the paper's cost as any other, so a share of it
-// moves — and the piece that names the parcel carries its true count of zero.
+// A parcel a reverse split rounded to no units still gives up a share of its
+// money, under a count of zero.
 func TestSpinoffOutOfAParcelWhoseSharesASplitRoundedAway(t *testing.T) {
-	// Two parcels; a reverse split deep enough to round the first away entirely
-	// — one unit multiplied by 1e-11 is finer than the ten decimal places the
-	// journal keeps — while the second keeps a hundredth of a unit.
+	// Two parcels; a 1e-11 split rounds the first away and leaves the second a
+	// hundredth.
 	buy1 := op(portfolio.TypeBuy, 2, &lkoh, "1", "1000", -100_000, 0)
 	buy2 := op(portfolio.TypeBuy, 3, &lkoh, "1000000000", "0.1", -100_000_000, 0)
 	split := op(portfolio.TypeSplit, 4, &lkoh, "", "", 0, 0)
@@ -272,15 +248,9 @@ func TestSpinoffOutOfAParcelWhoseSharesASplitRoundedAway(t *testing.T) {
 	}
 }
 
-// TestSpinoffConservesBasisOverRandomJournals is the invariant, asserted on
-// VALUES rather than on two computations agreeing: whatever the journal, the
-// money the original paper loses is exactly the money the carved-out paper
-// gains, and the two together are exactly what the position held before.
-//
-// The alternative — comparing the engine's answer against a second
-// implementation of the same allocation — would pass just as happily with both
-// of them wrong, which is the failure mode this codebase has already met (see
-// the package doc on differential tests).
+// Over random journals, the original loses exactly what the carved-out paper
+// gains, and together they hold what was held — values, not two
+// implementations agreeing.
 func TestSpinoffConservesBasisOverRandomJournals(t *testing.T) {
 	rng := rand.New(rand.NewSource(20260824))
 	shares := []string{"0.5", "0.3333333333", "0.115", "0.01", "0.9999999999", "0.73"}

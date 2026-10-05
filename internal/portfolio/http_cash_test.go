@@ -9,10 +9,8 @@ import (
 	"babki.my/babki/internal/marketdata"
 )
 
-// The money an account holds is published beside the papers, as a holding: a
-// balance, and what it is worth against what it cost. These tests are about the
-// two rates that answer those two questions — today's for the value, the day
-// each parcel arrived for the cost — and about what is said when one is missing.
+// An account's money is published as a holding: worth at today's rate, cost
+// at each parcel's arrival rate, and what is said when a rate is missing.
 
 // cashOf finds one currency's row, failing the test when the account does not
 // hold that currency at all.
@@ -27,23 +25,12 @@ func cashOf(t *testing.T, body positionsResp, currency string) cashPositionResp 
 	return cashPositionResp{}
 }
 
-// TestCashIsWorthTodaysRateAndCostTheRatesOfItsOwnDays is the heart of it. A
-// dollar balance bought when the dollar was 50 and held while it went to 90 has
-// made real money, and a screen valuing both ends at today's rate would report
-// exactly nought — for ever, on every account.
+// Dollars bought at 50 and held to 90 made money.
 //
-//	fx USD->RUB: 50 from 2026-02-01, 80 from 2026-05-01, 90 from 2026-07-01
-//	  (nothing newer, so today's lookup lands on 90)
-//	deposit  $1 000.00 on 2026-03-10 (rate 50) -> a parcel of 100_000 minor
-//	deposit    $500.00 on 2026-05-10 (rate 80) -> a parcel of  50_000 minor
-//
-//	balance          150_000 minor USD
-//	value  150_000 * 90                        = 13_500_000
-//	cost   100_000 * 50 + 50_000 * 80          =  9_000_000
-//	profit                                     =  4_500_000
-//
-// The number a today's-rate cost would print instead is 13_500_000, and the
-// profit it would print is 0.
+//	USD->RUB 50 (02-01), 80 (05-01), 90 (07-01)
+//	deposit $1 000 (03-10), $500 (05-10)
+//	value 150_000 × 90 = 13_500_000; cost 100_000×50 + 50_000×80 = 9_000_000
+//	profit 4_500_000 (today's-rate cost would make it 0)
 func TestCashIsWorthTodaysRateAndCostTheRatesOfItsOwnDays(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes,
@@ -81,16 +68,11 @@ func TestCashIsWorthTodaysRateAndCostTheRatesOfItsOwnDays(t *testing.T) {
 	}
 }
 
-// TestCashSpendsTheOldestParcelsFirst pins the queue on the money, and does it
-// through the figures rather than through the parcels: what is LEFT after
-// spending is the newer money, so its cost is struck at the newer rate.
+// Spending takes the oldest money, so what remains is costed at the newer
+// rate.
 //
-//	deposit $1 000.00 on 2026-03-10 (rate 50)
-//	deposit $1 000.00 on 2026-05-10 (rate 80)
-//	a share bought for $1 000.00 on 2026-05-20
-//
-//	what remains is the MAY parcel: cost 100_000 * 80 = 8_000_000
-//	the March parcel would have cost                    5_000_000
+//	deposit $1 000 at 50 (03-10), $1 000 at 80 (05-10); buy a share for $1 000
+//	remaining May parcel: 8_000_000 (the March one would be 5_000_000)
 func TestCashSpendsTheOldestParcelsFirst(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes,
@@ -121,9 +103,7 @@ func TestCashSpendsTheOldestParcelsFirst(t *testing.T) {
 	}
 }
 
-// TestCashInItsOwnBaseCurrencyHasNoProfit: rubles in a ruble space cost rubles
-// and are worth rubles. The row is still published — the balance is a fact worth
-// showing — and its profit is an honest nought rather than a gap.
+// Base-currency money is published with a zero profit, not a gap.
 func TestCashInItsOwnBaseCurrencyHasNoProfit(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -144,11 +124,8 @@ func TestCashInItsOwnBaseCurrencyHasNoProfit(t *testing.T) {
 	}
 }
 
-// TestCashGoesNegativeAndSaysSo is the owner's own account, where some currency
-// purchases are trades the broker will not explain: the journal spends yuan it
-// never saw arrive. The balance is published negative rather than floored,
-// because that IS the discrepancy — and a floor at nought would hide it while
-// the unparsed rows beside it say something is missing.
+// Spending money never seen arriving makes the balance negative, published
+// as such.
 func TestCashGoesNegativeAndSaysSo(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes, datedRate{earlyRateOn, "50"}, datedRate{lateRateOn, "90"})
@@ -168,10 +145,8 @@ func TestCashGoesNegativeAndSaysSo(t *testing.T) {
 	if usd.InBase.ValueMinor == nil || *usd.InBase.ValueMinor != -1_800_000 {
 		t.Errorf("value = %v, want -1800000: money owed in dollars is worth something in rubles too", usd.InBase.ValueMinor)
 	}
-	// AND NO GAIN, which is the half that used to be published and was the whole
-	// of the debt under another name. Cost is a structural nought here — nothing
-	// is held — so value less cost is the debt itself, and calling it a profit
-	// put -18 000,00 ₽ in a column headed «Прибыль» on the owner's own account.
+	// And no gain: value less a zero cost would show the debt as profit
+	// (−18 000 ₽ on the owner's account).
 	if usd.InBase.UnrealizedPnlMinor != nil {
 		t.Errorf("unrealized = %d, want null: there is no gain on money the account does not have, and this figure is the debt wearing a profit's name", *usd.InBase.UnrealizedPnlMinor)
 	}
@@ -180,14 +155,8 @@ func TestCashGoesNegativeAndSaysSo(t *testing.T) {
 	}
 }
 
-// TestAccountTotalDoesNotCountAnOverdraftAsALoss is the same rule where it
-// mattered most. The debt used to reach the account's own figure through the
-// cash's unrealized half — on the owner's account two currencies together put
-// 185 000 ₽ of «loss» into what the account had supposedly earned, and every
-// kopeck of it was the journal missing the purchases behind those balances.
-//
-// What the overdrawn currency still contributes is what it EARNED on the way
-// out, which is real money and dated on both ends.
+// An overdraft is not a loss in the account total (it once added 185 000 ₽);
+// the currency still contributes what it earned leaving.
 func TestAccountTotalDoesNotCountAnOverdraftAsALoss(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes,
@@ -220,11 +189,8 @@ func TestAccountTotalDoesNotCountAnOverdraftAsALoss(t *testing.T) {
 	}
 }
 
-// TestCashNamesTheRateThatIsMissing. Two gaps, and they stop different figures:
-// no rate for today leaves the whole row unvalued, while a parcel's day without
-// one leaves the value standing and takes the cost and the profit with it. A
-// screen that published a profit against a cost it could not strike would be
-// subtracting from nothing.
+// No rate today leaves the row unvalued; a parcel day without one leaves the
+// value and nulls the cost and profit.
 func TestCashNamesTheRateThatIsMissing(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	// One rate, and it is NEWER than the deposit below: today resolves to it,

@@ -12,30 +12,13 @@ import (
 	"babki.my/babki/internal/platform/testdb"
 )
 
-// This file is issue #78's server half. A position's valuation cell can be
-// empty for three different reasons, and the payload used to say only that it
-// was: market_value_minor went null and the screen put «Нет котировки» over
-// every one of them. That sentence is false about an instrument whose TYPE this
-// program has no valuation model for — crypto, currency, metal, custom — where
-// a quote may exist and be perfectly good, and false again about a bond whose
-// face value nobody recorded, whose quote is a percentage with nothing to take
-// a percentage of. Both send the reader off to wait for data that is not
-// missing. market_value_gap names the cause instead.
-//
-// Every test here asserts the SPECIFIC value, never merely that some gap is
-// set — the same rule http_position_in_base_gap_test.go states and for the same
-// reason: a cause that is published but wrong is worse than the vague sentence
-// it replaces.
-//
-// Each test also asserts that market_value_minor is null beside it. The two are
-// one claim in the contract ("the first three say there is no valuation at
-// all"), and a gap naming an absent figure that is in fact present would be a
-// dash-caption sitting over a number.
+// market_value_gap names why a valuation is missing (#78): no quote, a type
+// without a valuation model (crypto, currency, metal, custom — a quote may be
+// present), or a bond without a face value. Each test asserts the specific
+// value and the null valuation beside it.
 
-// quotedAPI wires an RUB-based space (setupAPI's default) with the given quote
-// store and a real, unseeded converter. Nothing here needs an fx rate: every
-// fixture below holds a RUB position in a RUB-based space, so no conversion is
-// ever attempted and market_value_gap is the only thing under test.
+// quotedAPI wires a RUB space with the given quotes and an unseeded converter;
+// every fixture is RUB, so nothing converts.
 func quotedAPI(t *testing.T, quotes quoteStoreLike) (string, *http.Client) {
 	t.Helper()
 	pool := testdb.New(t)
@@ -53,10 +36,7 @@ func mustUUID(t *testing.T, s string) uuid.UUID {
 	return id
 }
 
-// TestPositionMarketValueGapNamesTheMissingQuote is the value that keeps its
-// old meaning, and the only one of the three an arriving quote closes: the
-// instrument is a share, which this program prices, and its catalog row holds
-// everything the valuation needs. Nothing but the price is missing.
+// no_quote: a priced type with a complete catalog row and no price.
 func TestPositionMarketValueGapNamesTheMissingQuote(t *testing.T) {
 	url, c := quotedAPI(t, &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}})
 
@@ -76,12 +56,8 @@ func TestPositionMarketValueGapNamesTheMissingQuote(t *testing.T) {
 	}
 }
 
-// TestPositionMarketValueGapNamesAnUnpricedTypeThatHasAQuote is #78 itself.
-// The quote is there, it is fresh, and it is never going to become a
-// valuation, because this program computes none for a crypto position. A
-// payload that answered `no_quote` here would not merely be vague — it would
-// name a thing that is present, and point the reader at a refresh that changes
-// nothing.
+// type_not_priced: a crypto position with a fresh quote that will never value
+// it.
 func TestPositionMarketValueGapNamesAnUnpricedTypeThatHasAQuote(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := quotedAPI(t, quotes)
@@ -104,21 +80,14 @@ func TestPositionMarketValueGapNamesAnUnpricedTypeThatHasAQuote(t *testing.T) {
 		t.Fatalf("market_value_gap = %s, want type_not_priced: the quote for this instrument exists and is not what is missing",
 			gapText(p.MarketValueGap))
 	}
-	// The price line is not published either, and that is the same fact from
-	// the other side: this program did not value the position FROM that price,
-	// so putting it on the row would show a number the empty cell beside it is
-	// not derived from.
+	// No price line either: the cell is not derived from it.
 	if p.Price != nil || p.PriceOn != nil {
 		t.Errorf("price/price_on = %v/%v, want both null: no valuation was struck from this quote", p.Price, p.PriceOn)
 	}
 }
 
-// TestPositionMarketValueGapPrefersTheUnpricedTypeToTheMissingQuote is the
-// ordering rule, and it is the same one InBaseGap follows: the cause an
-// arriving quote would NOT close is reported ahead of the cause it would.
-// Both statements are true of this row — there is no quote AND the type is not
-// priced — and answering `no_quote` would promise that a quote is what stands
-// between this row and a figure. It is not; nothing does.
+// With no quote and an unpriced type, the type is named: a quote would close
+// nothing.
 func TestPositionMarketValueGapPrefersTheUnpricedTypeToTheMissingQuote(t *testing.T) {
 	url, c := quotedAPI(t, &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}})
 
@@ -135,12 +104,8 @@ func TestPositionMarketValueGapPrefersTheUnpricedTypeToTheMissingQuote(t *testin
 	}
 }
 
-// TestPositionMarketValueGapNamesTheMissingFaceValue is the third cause, and
-// the one #78 does not mention while the plan's own definition of done does
-// («Нет котировки» is to be said only where there is no quote). A bond's quote
-// is a PERCENTAGE of face value, so with no face value recorded there is
-// nothing to take the percentage of — and the quote sitting right there is not
-// what is missing.
+// no_face_value: a bond without a face value has nothing to apply its
+// percentage to.
 func TestPositionMarketValueGapNamesTheMissingFaceValue(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := quotedAPI(t, quotes)
@@ -167,10 +132,7 @@ func TestPositionMarketValueGapNamesTheMissingFaceValue(t *testing.T) {
 	}
 }
 
-// TestPositionMarketValueGapPrefersTheMissingFaceValueToTheMissingQuote is the
-// ordering rule again, on the pair that can both be true of one bond. A quote
-// arriving for a bond with no face value closes nothing, so the face value is
-// what gets named.
+// With no quote and no face value, the face value is named.
 func TestPositionMarketValueGapPrefersTheMissingFaceValueToTheMissingQuote(t *testing.T) {
 	url, c := quotedAPI(t, &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}})
 
@@ -187,10 +149,7 @@ func TestPositionMarketValueGapPrefersTheMissingFaceValueToTheMissingQuote(t *te
 	}
 }
 
-// TestPositionMarketValueGapNullWhenTheValuationIsStruck is the negative half
-// of all of the above: a share this program prices, with a quote, in its own
-// currency. There is a figure, so there is nothing to explain, and a gap
-// published here would put a dash-caption over a number.
+// A struck valuation has a null gap.
 func TestPositionMarketValueGapNullWhenTheValuationIsStruck(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := quotedAPI(t, quotes)
