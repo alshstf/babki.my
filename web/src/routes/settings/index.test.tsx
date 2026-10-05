@@ -16,26 +16,21 @@ import type { CostBasisRules } from "@/api/tax-residencies";
 import type { TinvestConnection } from "@/api/connections";
 import { AccountDialog } from "@/routes/accounts/account-dialog";
 
-// openapi-fetch captures globalThis.fetch at import time
-// (`fetch: baseFetch = globalThis.fetch`), so the double has to be installed
-// *before* the imports above run — hence vi.hoisted.
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// jsdom doesn't implement scrollIntoView, but Radix's Select content calls
-// it when positioning the open listbox — polyfill it as a no-op so the
-// "open the select and click an item" flow doesn't throw.
+// jsdom lacks scrollIntoView, which Radix Select calls on open.
 if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
 
-// Serves the given endpoints and 404s everything else, matching on the path's
-// suffix. Path-aware rather than one blanket response because this screen
-// reads two different endpoints — the session and the country list — and a
-// blanket mock would hand the session object to whichever asked first.
+// Serves the given endpoints by path suffix and 404s the rest; this
+// screen reads both the session and the country list.
 function serve(routes: Record<string, { status?: number; body?: unknown }>) {
   const paths = Object.keys(routes);
   fetchMock.mockImplementation((input: RequestInfo | URL) => {
@@ -52,11 +47,8 @@ function serve(routes: Record<string, { status?: number; body?: unknown }>) {
   });
 }
 
-// The bodies the PATCH was actually called with, in order — what the screen
-// asked the server to change, as opposed to what it rendered afterwards.
-// openapi-fetch hands globalThis.fetch a single Request object rather than
-// (url, init), so both shapes are read: the Request is cloned before its body
-// is consumed, since a body can only be read once.
+// The PATCH bodies sent, in order. openapi-fetch passes a Request, which
+// is cloned before its one-shot body is read.
 async function patchBodies(): Promise<Record<string, unknown>[]> {
   const calls = fetchMock.mock.calls.filter(([input, init]) => {
     const url = input instanceof Request ? input.url : String(input);
@@ -83,9 +75,7 @@ const RU_RULES: CostBasisRules = {
   notices: [],
 };
 
-// Britain diverges from what this application computes in BOTH ways at once,
-// which is why it is the fixture here: it proves the screen shows every
-// divergence rather than the first one.
+// Britain diverges in both ways, proving every divergence is shown.
 const GB_RULES: CostBasisRules = {
   country: "GB",
   method: "average",
@@ -115,16 +105,10 @@ function makeSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
   };
 }
 
-// SettingsPage reads the session straight from the query cache (useSession),
-// so seeding ["session"] directly is the whole setup; the country list is
-// served over the network like the real thing, because "the list comes from
-// the server" is one of the things under test.
-//
-// Wrapped in a router because the connections section links to
-// /settings/connections/new and to each connection's own screen — the two
-// sibling routes below stand in for them (stubs, since what they render is
-// not this page's concern), the same pattern detail.test.tsx and
-// accounts/index.test.tsx use for a page that links elsewhere.
+// The session is seeded into the query cache; the country list is served
+// over the network, since "the list comes from the server" is under test.
+// The router's stub routes stand in for the connection screens this page
+// links to.
 function wrap(session: SessionInfo) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(["session"], session);
@@ -198,10 +182,8 @@ describe("SettingsPage", () => {
   });
 
   it("invalidates cached account balances after the base currency changes", async () => {
-    // Account rows carry balance_in_base — money converted into the *old*
-    // base currency. Leaving that cache alone would relabel those figures
-    // with the new currency while they still hold the old one's arithmetic,
-    // so the cached list has to be marked stale alongside the summary.
+    // Account rows carry balance_in_base in the old currency, so the
+    // cached list is marked stale with the summary.
     serve({
       "/api/v1/auth/me": { body: makeSession() },
       "/api/v1/tax-residencies": { body: [RU_RULES, GB_RULES, DE_RULES] },
@@ -224,15 +206,9 @@ describe("SettingsPage", () => {
   });
 
   it("invalidates cached operations and positions after the base currency changes", async () => {
-    // The account detail screen keeps the journal and the positions table
-    // cached under ["operations", accountId, ...] / ["positions", accountId]
-    // while it's mounted. Both carry figures converted into the *old* base
-    // currency (in_base on operations, the base-converted columns on
-    // positions). Leaving those two caches alone — while ["accounts"] and
-    // ["summary"] do get invalidated — means a background refetch can land
-    // between the currency switch and the account screen re-rendering, and
-    // in that window the row shows an amount computed in the old base
-    // currency under the new base currency's symbol.
+    // The account screen's journal and positions caches hold old-currency
+    // figures; a refetch landing between the switch and a re-render would
+    // print them under the new symbol.
     serve({
       "/api/v1/auth/me": { body: makeSession() },
       "/api/v1/tax-residencies": { body: [RU_RULES, GB_RULES, DE_RULES] },
@@ -255,11 +231,8 @@ describe("SettingsPage", () => {
   });
 
   it("says the settings were saved, and stops saying it once the form changes again", async () => {
-    // #33. Nothing else on this screen reports a successful save: the fields
-    // already showed the new values before the request went out, and the Save
-    // button greying out afterwards is indistinguishable from a form nobody
-    // has touched. The settings themselves only become visible on another
-    // screen entirely.
+    // #33: the only sign a save succeeded; the fields already showed the new
+    // values.
     serve({
       "/api/v1/auth/me": { body: makeSession() },
       "/api/v1/tax-residencies": { body: [RU_RULES, GB_RULES, DE_RULES] },
@@ -277,13 +250,10 @@ describe("SettingsPage", () => {
 
     const saved = await screen.findByTestId("settings-saved");
     expect(saved).toHaveTextContent("Сохранено");
-    // Announced as status, not as an alert: the Alert component's own
-    // role="alert" gets the assertive treatment screen readers reserve for
-    // problems, and this is confirmation of something the reader asked for.
+    // A status, not an alert: this confirms what the reader asked for.
     expect(saved).toHaveAttribute("role", "status");
 
-    // Touching a field again makes the confirmation false — it would then be
-    // standing over a form holding something else — so it has to go.
+    // Touching a field again makes the confirmation false, so it goes.
     fireEvent.click(screen.getByRole("combobox", { name: "Базовая валюта" }));
     fireEvent.click(screen.getByText("EUR"));
 
@@ -308,17 +278,9 @@ describe("SettingsPage", () => {
     expect(screen.queryByTestId("settings-saved")).not.toBeInTheDocument();
   });
 
-  // #33. The two selectors that offer a currency — the base currency here and
-  // an account's own in the account dialog — were two identical lists written
-  // out separately. What matters is not which codes they hold, which is a
-  // product decision the owner may change any day, but that ONE decision
-  // reaches both places: a code offered for an account and not for the base
-  // currency leaves a reader holding money the space cannot be totalled in.
-  //
-  // So both lists are read off the RENDERED options and compared with each
-  // other, never with the constant they come from. Comparing either one
-  // against COMMON_CURRENCIES would pass just as happily with a second copy of
-  // the list restored to one of the screens, which is the exact defect.
+  // #33: one decision reaches both currency selectors. The rendered options
+  // are compared with each other, never with COMMON_CURRENCIES, which would
+  // pass with a second copy restored on one screen.
   it("offers the same ready-made currencies the account dialog does", async () => {
     const optionLabels = () =>
       screen.getAllByRole("option").map((option) => option.textContent ?? "");
@@ -338,9 +300,7 @@ describe("SettingsPage", () => {
     fireEvent.click(await screen.findByRole("combobox", { name: "Валюта" }));
     const inAccountDialog = optionLabels();
 
-    // Both selectors end their list with the same «Другая…» escape hatch, so
-    // the comparison covers the offer as a whole: the ready-made codes, their
-    // order, and the fact that neither list is a limit.
+    // Both end with the same «Другая…», so the whole offer is compared.
     expect(inSettings).toEqual(inAccountDialog);
     expect(inSettings.at(-1)).toBe("Другая…");
     // Not a tautology of two empty lists.
@@ -359,10 +319,8 @@ describe("SettingsPage", () => {
 
   describe("tax residency", () => {
     it("offers exactly the countries the server sent, by name", async () => {
-      // A list kept in the frontend would drift from the server's table the
-      // first time a country is added there — offering one the server
-      // rejects, or hiding one it accepts. So the options must come from the
-      // response and nowhere else.
+      // The options come from the response only, so they cannot drift from
+      // the server's table.
       wrap(makeSession({ tax_residency: "RU" }));
 
       await waitFor(() => expect(countrySelect()).toBeEnabled());
@@ -375,9 +333,7 @@ describe("SettingsPage", () => {
     it("states what the selected country means for the figures before it is saved", async () => {
       wrap(makeSession({ tax_residency: "RU" }));
 
-      // The saved country is one the application does compute for, and it
-      // says so rather than staying silent: the owner asked a question by
-      // opening this screen.
+      // A computed country says so: the owner opened this screen to ask.
       expect(
         await screen.findByText(/соответствует правилам этой страны/),
       ).toBeInTheDocument();
@@ -386,8 +342,7 @@ describe("SettingsPage", () => {
       fireEvent.click(countrySelect());
       fireEvent.click(screen.getByText("Великобритания"));
 
-      // Both of Britain's divergences, from the list the server sent with
-      // that country — no save round trip needed to learn them.
+      // Both of Britain's divergences, from the list the server sent.
       const notice = screen.getByTestId("cost-basis-notice");
       expect(within(notice).getByText(/не самая ранняя покупка/)).toBeInTheDocument();
       expect(within(notice).getByText(/сразу по всем счетам владельца/)).toBeInTheDocument();
@@ -395,15 +350,9 @@ describe("SettingsPage", () => {
     });
 
     it("names a stored country the list does not offer instead of rendering nothing", async () => {
-      // Reachable only by editing the row outside this form (or by a country
-      // later dropped from the server's table), which is exactly the case
-      // MethodUnknown/PerimeterUnknown exist for: the server reports "no rules
-      // for this one" rather than guessing, and the notice below the selector
-      // says so. The selector itself has no option to match: Radix portals the
-      // SELECTED ITEM's text into the trigger, and shows its placeholder only
-      // for an empty value, so a stored country with no option renders an
-      // empty box — the screen goes silent about the one setting it exists to
-      // show, right above a notice explaining that very country.
+      // A stored country with no rules (edited outside the form, or later
+      // dropped): the server says so rather than guessing. The selector has no
+      // matching option, and Radix shows an empty trigger for one.
       const unknownRules: CostBasisRules = {
         country: "FR",
         method: "unknown",
@@ -446,14 +395,12 @@ describe("SettingsPage", () => {
       fireEvent.click(screen.getByText("Великобритания"));
       fireEvent.click(saveButton());
 
-      // cost_basis_rules travels with the positions payload, so a cache kept
-      // from before the change would show the old country's statement over
-      // the new country's figures.
+      // cost_basis_rules travels with the positions, so a stale cache would
+      // show the old country's statement.
       await waitFor(() => {
         expect(qc.getQueryState(["positions", "acc-1"])?.isInvalidated).toBe(true);
       });
-      // Only what changed is sent: picking a country must not rewrite the
-      // base currency as a side effect.
+      // Only what changed is sent.
       expect(await patchBodies()).toEqual([{ tax_residency: "GB" }]);
     });
   });
@@ -494,9 +441,7 @@ describe("SettingsPage", () => {
       wrap(makeSession());
 
       expect(await screen.findByText("Токен ···wxyz")).toBeInTheDocument();
-      // token_revoked, not active — the badge names the SERVER's own verdict
-      // (see TinvestConnectionStatus in the API contract), not a guess this
-      // screen would have to keep in sync with it by hand.
+      // The badge names the server's verdict (TinvestConnectionStatus).
       expect(screen.getByText("Нужен новый токен")).toBeInTheDocument();
 
       const links = screen.getAllByRole("link");
@@ -526,11 +471,8 @@ describe("SettingsPage", () => {
       const off = screen.getByText("Отключено");
       const active = screen.getByText("Активно");
 
-      // `token_revoked` is the server's own verdict and the connection has
-      // stopped importing until the owner pastes a new token; `disabled` is
-      // the owner's own doing and asks nothing of anyone. The two must not
-      // read alike, which is what they did — both quiet grey, the one waiting
-      // for a person indistinguishable from the one waiting for nobody.
+      // A revoked token waits for the owner; `disabled` waits for nobody. The
+      // two must not read alike.
       expect(revoked).toHaveAttribute("data-variant", "destructive");
       expect(off).toHaveAttribute("data-variant", "secondary");
       expect(active).toHaveAttribute("data-variant", "default");

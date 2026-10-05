@@ -4,15 +4,11 @@ import "@/i18n";
 import { RealizedTotal } from "./realized-total";
 import type { RealizedTotal as RealizedTotalPayload } from "@/api/positions";
 
-// NBSP-insensitive compare: Intl.NumberFormat uses non-breaking spaces
-// (matches the helper in positions-table.test.tsx / money.test.ts).
+// NBSP-insensitive compare.
 const norm = (s: string) => s.replace(/[\u00A0\u202F]/g, " ");
 
-// The account's total exactly as the server publishes it: both forms at once,
-// because the response cannot know which one the toggle is on (see
-// RealizedTotal in the API contract). This component adds nothing to it — every
-// test here is about which of the server's figures reaches the screen and what
-// is said when there is none.
+// The account's total as published, both forms: the response does not
+// know the toggle. The component adds nothing to it.
 function makeTotal(
   overrides: Partial<RealizedTotalPayload> = {},
 ): RealizedTotalPayload {
@@ -28,18 +24,10 @@ function makeTotal(
   };
 }
 
-// The label's tooltip, pinned as one exact string. What it says about the
-// rates is a claim about internal/portfolio/rates.go's realizedTerms, and the
-// only way a wrong claim shows up is by reading the sentence against that
-// function — so the sentence lives here in full rather than being sampled by
-// substring, and a rewording has to come past this test.
-//
-// #109.1 is the clause about the FEE. realizedTerms emits a disposal's fee as
-// {minor: -e.FeeMinor, on: e.OccurredOn} — the day of the disposal, the same
-// day as its proceeds — while the purchase dates value the retired basis and
-// nothing else. The caption used to put every expense «по курсам на дни
-// покупок», which is false of a commission the broker charged on the day of
-// the sale.
+// The label's tooltip, pinned whole: its rate claims mirror
+// internal/portfolio/rates.go's realizedTerms, so a rewording must come
+// past this test. #109.1: a disposal's fee is valued on the sale day; only
+// the retired basis uses purchase days.
 const REALIZED_HINT =
   "Результат уже закрытых сделок по этому счёту. От цен рынка он не зависит, а меняется, только если меняется сама история операций. Стоимость проданного взята по курсам на дни расчётов по покупкам, а выручка и комиссия продажи — по курсу на день расчётов по продаже (если день расчётов неизвестен — на день сделки), поэтому в базовой валюте сюда входит и изменение курса. Это только сделки: выплаты по бумагам сюда не входят, они складываются с этой суммой в колонке «Зафиксировано»";
 
@@ -54,9 +42,7 @@ describe("RealizedTotal", () => {
   });
 
   it("explains in a tooltip how this differs from the profit on paper", () => {
-    // Which rates stand behind the two ends of the figure is exactly the
-    // detail that belongs in a tooltip rather than in the text of a screen
-    // full of numbers (the owner's standing rule).
+    // Which rates stand behind the figure belongs in the tooltip.
     render(<RealizedTotal total={makeTotal()} mode="native" />);
 
     const hint =
@@ -68,10 +54,8 @@ describe("RealizedTotal", () => {
     // A settlement day learned later restates the figure, so the hint does not
     // promise it is final.
     expect(hint).not.toContain("не изменится");
-    // The label itself stays a label; the mechanics are not printed as text.
-    // And it is NOT the table's word: «Зафиксировано» there adds the payments
-    // the paper made to this figure, so one word over both would name two
-    // different numbers on the same screen.
+    // The label is not the table's «Зафиксировано», which adds the paper's
+    // payments: one word would name two numbers on one screen.
     expect(screen.getByTestId("realized-total-label").textContent).toBe(
       "Реализованная прибыль",
     );
@@ -83,10 +67,8 @@ describe("RealizedTotal", () => {
     expect(
       screen.getByTestId("realized-total-label").getAttribute("title"),
     ).toBe(REALIZED_HINT);
-    // The specific thing that was false: an expense clause that swept the fee
-    // in with the basis. Both halves are asserted, so neither "the fee moved
-    // to the sale day" nor "the basis stayed on the purchase days" can be
-    // dropped without this failing.
+    // Both halves of the expense clause are asserted: fee on the sale day,
+    // basis on the purchase days.
     expect(REALIZED_HINT).toContain(
       "комиссия продажи — по курсу на день расчётов по продаже",
     );
@@ -116,9 +98,8 @@ describe("RealizedTotal", () => {
   });
 
   it("shows the base-currency figure, not the position-currency ones, in base mode", () => {
-    // The two are different numbers on purpose: the base figure carries the
-    // currency's move between purchase and sale (see PositionInBase in the API
-    // contract), so showing the wrong one is a silently wrong total.
+    // Different numbers on purpose: the base figure carries the currency's
+    // move between purchase and sale.
     render(
       <RealizedTotal
         total={makeTotal({
@@ -136,10 +117,8 @@ describe("RealizedTotal", () => {
     expect(shown).not.toContain("125,00 $");
   });
 
-  // #195: a parcel sold without a recorded purchase day can never be valued in
-  // the base currency. It used to blank the whole figure for good; the server
-  // now leaves such positions out and counts them, and the screen shows the
-  // figure with the count beside it.
+  // #195: a parcel sold without a purchase day can never be valued; the
+  // server leaves such positions out and counts them.
   it("shows the sum of what can be valued and counts what was left out", () => {
     render(
       <RealizedTotal
@@ -154,17 +133,15 @@ describe("RealizedTotal", () => {
     expect(screen.queryByTestId("realized-total-gap")).not.toBeInTheDocument();
     const note = screen.getByTestId("realized-total-undated");
     expect(note.textContent).toContain("2");
-    // A fact about the reader's own deals, and one that says of itself that it
-    // will not fix itself. Saying "нет курса" here would name a cause that is
-    // never the true one and promise a number that is never coming.
+    // A fact about the reader's deals that will not fix itself; "нет курса"
+    // would name a false cause.
     expect(note.textContent).toContain("когда куплено");
     expect(note.textContent).not.toContain("курс");
     expect(note.getAttribute("title")).toContain("не появится");
   });
 
-  // A sale of shares that arrived with no purchase price: counted as bought
-  // for nothing, the whole proceeds in the figure. True in every currency, so
-  // said in both modes, and never in place of the figure.
+  // A sale of shares with no purchase price, counted as bought for nothing:
+  // said in both modes, never instead of the figure.
   it("says in both modes that some sales were counted as bought for nothing", () => {
     for (const mode of ["base", "native"] as const) {
       cleanup();
@@ -222,10 +199,8 @@ describe("RealizedTotal", () => {
   });
 
   it("keeps showing the per-currency figures when only the converted sum is missing", () => {
-    // A gap is a fact about the base-currency sum alone. In the positions' own
-    // currency every figure is published unconditionally, and withholding a
-    // complete answer because another one is incomplete is the silence this
-    // screen exists to remove.
+    // A gap is about the base sum alone; the native figures are always
+    // published and shown.
     render(
       <RealizedTotal
         total={makeTotal({
@@ -246,11 +221,8 @@ describe("RealizedTotal", () => {
     ).toContain("125,00 $");
   });
 
-  // THE TAX THE ACCOUNT ITSELF WAS CHARGED. In Russia the broker withholds at
-  // the moment money leaves the account, against the year's accumulated base —
-  // so the charge belongs to no paper and cannot be spread over the rows. The
-  // owner met it as 36 000 ₽ he could not attribute to anything; these tests
-  // are about that figure having a place on the screen and an honest sentence.
+  // The tax the account was charged: a Russian broker withholds against
+  // the year's base when money leaves, so it belongs to no paper.
   it("shows what the broker withheld from the account, beside the result it was charged against", () => {
     render(
       <RealizedTotal
@@ -271,10 +243,7 @@ describe("RealizedTotal", () => {
   });
 
   it("keeps the withheld tax in its own currency even in base mode", () => {
-    // Everything else on this line converts; this does not, and the difference
-    // is not an oversight. A withholding is money taken on a day, and the
-    // response carries no per-charge dates to convert it by — so it is shown as
-    // what it is rather than as a figure struck at a rate nobody chose.
+    // Shown unconverted: the response has no per-charge dates to convert by.
     render(
       <RealizedTotal
         total={makeTotal({
@@ -294,9 +263,8 @@ describe("RealizedTotal", () => {
   });
 
   it("lists two currencies side by side and drops a bucket that is nought", () => {
-    // Nought withheld is not news, and a "0,00 $" beside a real charge reads as
-    // a second charge. The server publishes the bucket all the same — it is the
-    // sum of the operations it found — so the dropping happens here.
+    // A zero bucket is published but dropped here: "0,00 $" beside a real
+    // charge reads as a second one.
     render(
       <RealizedTotal
         total={makeTotal({
@@ -317,11 +285,8 @@ describe("RealizedTotal", () => {
   });
 
   it("shows a withholding on an account that has closed no deals at all", () => {
-    // The case that has nothing to do with sales: a broker that records the tax
-    // on a dividend as its own operation with no paper attached charges the
-    // ACCOUNT, and an account whose every position is still open then has a
-    // withholding and no realized result anywhere. The line must appear for the
-    // tax alone — and say nothing about a realized total it does not have.
+    // A dividend tax recorded as its own operation charges the account even
+    // with every position open: the line appears for the tax alone.
     render(
       <RealizedTotal
         total={makeTotal({
@@ -342,9 +307,8 @@ describe("RealizedTotal", () => {
   });
 
   it("renders nothing when the account has no positions at all", () => {
-    // by_currency is empty exactly then, and a "0,00" over an empty account
-    // answers a question nobody asked. The base figure is a real zero here —
-    // the sum of no deals — and it must not be what decides.
+    // by_currency is empty then; the base figure is a real zero and must not
+    // decide.
     render(
       <RealizedTotal
         total={makeTotal({ by_currency: [], in_base: 0 })}
@@ -356,8 +320,8 @@ describe("RealizedTotal", () => {
   });
 
   it("renders nothing rather than a reason of its own when the server names none", () => {
-    // The contract publishes a figure or a gap, never neither. If that ever
-    // breaks, an unexplained blank is honest and a cause guessed here is not.
+    // The contract publishes a figure or a gap. If neither, a blank is
+    // honest and a guessed cause is not.
     render(
       <RealizedTotal
         total={makeTotal({ in_base: null, in_base_gap: null })}
@@ -369,12 +333,8 @@ describe("RealizedTotal", () => {
   });
 
   it("renders nothing, not the label over an empty amount, when the wire names a gap kind this build cannot word", () => {
-    // A client can run slightly behind the server it talks to: RealizedGap
-    // grows a member the bundle in the browser was built before. That value
-    // is still valid JSON and still passes through the type assertion at the
-    // API boundary unchanged — TypeScript's exhaustiveness check on
-    // gapWording's switch cannot see it, because it never saw the string at
-    // compile time. The cast below stands in for exactly that value.
+    // A gap value newer than this bundle passes the API boundary unchecked;
+    // the cast stands in for it.
     const unknownGap =
       "future_gap_kind" as unknown as RealizedTotalPayload["in_base_gap"];
     render(
@@ -392,9 +352,8 @@ describe("RealizedTotal", () => {
   });
 });
 
-// Одна из позиций продана в другой валюте: у корзины этой валюты нет итога
-// в одной валюте вообще, и строка не имеет права нарисовать вместо него ноль.
-// Ноль — это тоже настоящий результат, и два случая стали бы неразличимы.
+// Одна из позиций продана в другой валюте: итога в одной валюте нет, и
+// ноль на его месте нельзя было бы отличить от настоящего.
 describe("корзина без итога в одной валюте", () => {
   it("не рисуется, а остальные валюты остаются на месте", () => {
     render(

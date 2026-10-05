@@ -15,21 +15,16 @@ import { ConnectWizardPage } from "./connect";
 import type { SessionInfo } from "@/api/session";
 import type { TinvestBrokerAccount } from "@/api/connections";
 
-// openapi-fetch captures globalThis.fetch at import time
-// (`fetch: baseFetch = globalThis.fetch`), so the double has to be installed
-// *before* the imports above run — hence vi.hoisted.
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// Method-aware, unlike a plain path match: POST /api/v1/tinvest/connections
-// and GET /api/v1/tinvest/connections (the settings list) share a path, and a
-// mock keyed on the path alone would answer the wizard's create with a list
-// envelope instead of a connection. A fresh Response per matched route per
-// call — mockResolvedValue's single object breaks on a second call because a
-// body can only be read once.
+// Method-aware: the create POST and the settings list GET share a path. A
+// fresh Response per call, since a body can be read only once.
 function serve(
   routes: { path: string; method?: string; status?: number; body?: unknown }[],
 ) {
@@ -49,10 +44,7 @@ function serve(
   });
 }
 
-// The bodies actually sent to `path` by POST, in order — what the wizard
-// asked the server for, not what it rendered afterwards. openapi-fetch hands
-// globalThis.fetch a single Request object, so the body is read off a clone
-// (it can only be consumed once).
+// The bodies POSTed to `path`, in order, read off a clone of the Request.
 async function postBodies(path: string): Promise<Record<string, unknown>[]> {
   const calls = fetchMock.mock.calls.filter(([input, init]) => {
     const url = input instanceof Request ? input.url : String(input);
@@ -101,34 +93,22 @@ const BROKER_ACCOUNTS: TinvestBrokerAccount[] = [
   { broker_account_id: "b-2", name: "ИИС", type: "ACCOUNT_TYPE_TINKOFF_IIS", opened_on: null },
 ];
 
-// Stands in for the real connection screen (a later task's job): it only
-// prints the id it was given, which is all a test here needs to tell that the
-// wizard actually navigated there — with the right connection — rather than
-// merely calling the mutation. A named function (not an inline arrow passed
-// as `component:`) because it calls a hook, and the lint rule that checks
-// hooks are called only from components or other hooks goes by the binding's
-// name.
+// Stands in for the connection screen: prints its id, so a test sees the
+// wizard navigated to the right one. A named function, since the hooks
+// lint rule goes by the binding's name.
 function DetailStub() {
   const { connectionId } = useParams({ from: "/app/settings/connections/$connectionId" });
   return <div>DETAIL:{connectionId}</div>;
 }
 
-// Renders the wizard the way the router does (/settings/connections/new),
-// with the two screens it can go to as stand-ins: /settings (cancel target)
-// and the created connection's own screen, which just prints the id it was
-// given so a test can tell the wizard actually navigated there rather than
-// merely calling the mutation.
+// As the router renders it, with /settings and the created connection's
+// screen as stubs.
 function renderWizard(session: SessionInfo = makeSession()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(["session"], session);
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
-  // Nested under a pathless "app" id, mirroring router.tsx's own layoutRoute:
-  // useParams({ from: ... }) below is type-checked against the PRODUCTION
-  // router (the global Register — see router.tsx), so the id has to read
-  // "/app/settings/connections/$connectionId" regardless of this test's own
-  // tree, and only matches something real at runtime if that tree actually
-  // has the same "app" layer (the same reason detail.test.tsx nests one for
-  // the accounts screen's equivalent route).
+  // A pathless "app" layout, as in router.tsx: useParams is typed against
+  // the production router.
   const layoutRoute = createRoute({
     getParentRoute: () => rootRoute,
     id: "app",
@@ -215,10 +195,8 @@ describe("ConnectWizardPage — the happy path", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Подключить" }));
 
-    // The token went to the check exactly once, and the create carries the
-    // SAME token plus only the account that was checked, under the name
-    // typed for it — never the broker's own name for it, and never the
-    // account that was left unchecked (ИИС).
+    // The token is checked once; the create carries the same token and only
+    // the checked account, under the typed name.
     expect(await postBodies("/api/v1/tinvest/token-check")).toEqual([
       { token: "secret-token-123" },
     ]);
@@ -285,10 +263,7 @@ describe("ConnectWizardPage — token check errors", () => {
 
 describe("ConnectWizardPage — an answer that arrives late", () => {
   it("does not move the wizard forward once the owner has gone back", async () => {
-    // The check is held open so the owner can leave the step it was started
-    // from — the ordinary case of a slow broker, not a contrived one. The
-    // «Назад» button is not disabled while the check runs, so leaving is
-    // something the screen invites.
+    // The check is held open; «Назад» stays enabled, so leaving is invited.
     let answer: (r: Response) => void = () => {};
     fetchMock.mockImplementation(
       () =>
@@ -314,14 +289,11 @@ describe("ConnectWizardPage — an answer that arrives late", () => {
       );
     });
 
-    // The owner is where they put themselves. A late answer that walks the
-    // wizard two steps forward reads as the screen having a mind of its own.
+    // A late answer must not walk the wizard forward.
     expect(screen.getByText("Шаг 1 из 3. Выпустите токен у брокера")).toBeInTheDocument();
     expect(screen.queryByText("Шаг 3 из 3. Выберите счета для импорта")).not.toBeInTheDocument();
 
-    // Going forward is still going forward: the wizard walks its own steps in
-    // order, and the next one is the token, not the accounts the late answer
-    // happened to carry.
+    // Forward is the next step, not the accounts the late answer carried.
     fireEvent.click(screen.getByRole("button", { name: "Далее" }));
     expect(await screen.findByText("Шаг 2 из 3. Вставьте токен")).toBeInTheDocument();
     expect(screen.queryByText("Шаг 3 из 3. Выберите счета для импорта")).not.toBeInTheDocument();
@@ -366,10 +338,8 @@ describe("ConnectWizardPage — the accounts step", () => {
     ).toBeInTheDocument();
   });
 
-  // The two refusals create can answer that both used to be one 400. The
-  // pair is checked together, and each leg asserts the OTHER sentence is
-  // absent: a screen that showed both, or showed the token's sentence for
-  // either, would pass a test that only looked for the one it expected.
+  // The create's two refusals, checked together: each asserts the other
+  // sentence is absent.
   it("names the changed account list for a 422, and does not blame the token", async () => {
     serve([
       {
@@ -397,9 +367,7 @@ describe("ConnectWizardPage — the accounts step", () => {
           "Вернитесь на шаг назад, проверьте токен заново и выберите счета из свежего списка",
       ),
     ).toBeInTheDocument();
-    // The token in this request is the one the broker just accepted at the
-    // check. Telling the owner to re-issue it sends them to fix what is not
-    // broken — the whole reason the server stopped answering 400 here.
+    // The broker just accepted this token, so re-issuing it fixes nothing.
     expect(
       screen.queryByText(
         "Брокер не принял токен. Проверьте, что он скопирован целиком, не просрочен и выпущен с доступом на чтение",

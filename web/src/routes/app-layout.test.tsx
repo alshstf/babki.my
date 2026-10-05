@@ -13,23 +13,17 @@ import { AppLayout } from "./app-layout";
 import { useReportScreenCurrencies } from "@/lib/screen-currencies";
 import type { SessionInfo } from "@/api/session";
 
-// The API client captures globalThis.fetch once, when @/api/client is first
-// imported (openapi-fetch: `fetch: baseFetch = globalThis.fetch`), so the double
-// has to be in place *before* that import — hence vi.hoisted, which runs ahead
-// of the import statements above.
+// The API client captures globalThis.fetch on first import, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// Serves the given endpoints (matched on the path's suffix) and 404s the rest,
-// so an unexpected request is loud rather than silently hanging. A fresh
-// Response per call: a single one handed to mockResolvedValue works once and
-// then throws, because a body can only be consumed once.
-//
-// `networkError` is what a browser with no connection does: fetch rejects, and
-// no status is ever read — the shape of a failure that carries no answer at all.
+// Serves the given endpoints by path suffix and 404s the rest; a fresh
+// Response per call. `networkError` makes fetch reject, as a browser with
+// no connection does.
 function serve(
   routes: Record<string, { status?: number; body?: unknown; networkError?: boolean }>,
 ) {
@@ -41,8 +35,7 @@ function serve(
     const route = match ? routes[match] : undefined;
     if (route?.networkError) return Promise.reject(new TypeError("Failed to fetch"));
     const status = route ? (route.status ?? 200) : 404;
-    // 204 is the sign-out's own success status, and a Response may not carry a
-    // body with it at all — JSON.stringify(null) there throws in undici.
+    // A 204 Response may carry no body at all.
     if (status === 204) return Promise.resolve(new Response(null, { status }));
     return Promise.resolve(
       new Response(JSON.stringify(route?.body ?? null), {
@@ -53,17 +46,10 @@ function serve(
   });
 }
 
-// AppLayout renders <Outlet/> (needs a router context) and reads the
-// session via useSession (needs a QueryClient with ["session"] seeded —
-// same pattern as settings/index.test.tsx). The mounted "screen" here is a
-// stand-in that reports whatever currency set the test wants, standing in
-// for /accounts, /accounts/$id, or a screen (like /family) that never
-// reports at all.
+// AppLayout needs a router and a seeded session; this stub screen reports
+// the currency set a test wants, or nothing (like /family).
 function ScreenStub({ currencies }: { currencies: string[] | null }) {
-  // The hook itself must always be called (Rules of Hooks) — null just
-  // means "report nothing", which is equivalent to a screen (like /family)
-  // that never calls useReportScreenCurrencies at all: both leave the
-  // provider's count at 0.
+  // The hook is always called; null reports nothing.
   useReportScreenCurrencies(currencies ?? []);
   return <div data-testid="screen-stub" />;
 }
@@ -77,8 +63,7 @@ function wrap(currencies: string[] | null, session: SessionInfo) {
     path: "/",
     component: () => <ScreenStub currencies={currencies} />,
   });
-  // Where a completed sign-out lands. Present so that "did the screen believe
-  // the sign-out happened?" is answerable by what is on screen.
+  // Where a completed sign-out lands, so the outcome is visible.
   const loginRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/login",
@@ -91,8 +76,7 @@ function wrap(currencies: string[] | null, session: SessionInfo) {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
-  // The client comes back so a test can ask what this browser still holds after
-  // a sign-out.
+  // Returned so a test can check what the browser still holds.
   return qc;
 }
 
@@ -145,12 +129,9 @@ describe("AppLayout — display-currency toggle visibility", () => {
   });
 });
 
-// #88: sign-out was the one mutation in this application that never looked at
-// its own answer. Whatever the server said — 500, a dropped connection, nothing
-// at all — the screen cleared its caches and went to the login form, and the
-// session on the server went on living (handleLogout in internal/family/http.go
-// only destroys it when it is actually reached). Someone walks away from a
-// shared computer believing they are out.
+// #88: sign-out ignored its answer and went to the login form on any
+// failure, while the server session lived on: someone leaves a shared
+// computer believing they are out.
 describe("AppLayout — sign-out", () => {
   it("says so when the server did not confirm, and does not leave for the login screen", async () => {
     serve({
@@ -163,8 +144,7 @@ describe("AppLayout — sign-out", () => {
     fireEvent.click(signOutButton());
 
     expect(await screen.findByText(/сервер не подтвердил выход/i)).toBeInTheDocument();
-    // The login screen is the picture of a completed sign-out. It must not be
-    // the picture of a failed one.
+    // The login screen means a completed sign-out, never a failed one.
     expect(screen.queryByTestId("login-screen")).not.toBeInTheDocument();
   });
 
@@ -183,14 +163,9 @@ describe("AppLayout — sign-out", () => {
   });
 
   it("says so when the browser reports no connection, and lets the reader try again", async () => {
-    // The state this whole branch taught the gate and the picker to recognise,
-    // in the one place where recognising it matters most. react-query's default
-    // for mutations, networkMode "online", would PAUSE this one: nothing sent,
-    // isError false so the banner above never appears, and isPending true so
-    // the button that would try again is disabled until the connection returns
-    // — at which point the held request goes out and the app leaves for the
-    // login screen on its own. useLogout runs with networkMode "always" so that
-    // a dead connection is an ordinary failure, said out loud, at once.
+    // Offline, the default networkMode "online" would pause the mutation:
+    // no error banner, a disabled retry, and a delayed sign-out later.
+    // useLogout uses networkMode "always", so a dead connection fails at once.
     onlineManager.setOnline(false);
     serve({
       "/api/v1/auth/me": { body: makeSession() },
@@ -204,8 +179,7 @@ describe("AppLayout — sign-out", () => {
 
     expect(await screen.findByText(/сервер не подтвердил выход/i)).toBeInTheDocument();
     expect(screen.queryByTestId("login-screen")).not.toBeInTheDocument();
-    // Attempted, not held: the browser's own idea of being offline does not get
-    // to decide this one, and it is the request that reports the answer.
+    // Attempted, not held.
     expect(fetchMock).toHaveBeenCalled();
     // And the reader can try again — a locked button is the same silence.
     expect(signOutButton()).not.toBeDisabled();
@@ -217,11 +191,8 @@ describe("AppLayout — sign-out", () => {
       "/api/v1/auth/logout": { status: 204 },
     });
     const qc = wrap(null, makeSession());
-    // Something only the person now signing out was allowed to see, already
-    // read and sitting in the cache. Nothing in this tree asks for it, so the
-    // sign-out is the only thing that can remove it — and if it does not, the
-    // next person at a shared computer is shown it from memory, before any
-    // refetch can come back 401.
+    // Data only the signing-out person could see, cached: only the sign-out
+    // can remove it before the next person sees it.
     qc.setQueryData(["accounts"], [{ id: "acc-1", name: "Брокерский счёт" }]);
     await screen.findByTestId("screen-stub");
 
@@ -232,10 +203,8 @@ describe("AppLayout — sign-out", () => {
   });
 
   it("counts a session the server no longer knows as signed out", async () => {
-    // 401 from this endpoint means RequireAuth found no usable session to
-    // destroy (internal/family/session.go) — there is nothing left to sign out
-    // of, so refusing to leave the screen would report a failure that did not
-    // happen. useSession already reads 401 on /auth/me the same way.
+    // A 401 means there was no session left to destroy, so leaving is right
+    // (useSession reads a 401 on /auth/me the same way).
     serve({
       "/api/v1/auth/me": { body: makeSession() },
       "/api/v1/auth/logout": { status: 401, body: { error: "authentication required" } },

@@ -14,9 +14,8 @@ import { ConnectionDetailPage } from "./detail";
 import type { SessionInfo } from "@/api/session";
 import type { TinvestConnection } from "@/api/connections";
 
-// openapi-fetch captures globalThis.fetch at import time
-// (`fetch: baseFetch = globalThis.fetch`), so the double has to be installed
-// *before* the imports above run — hence vi.hoisted.
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
@@ -25,10 +24,8 @@ const fetchMock = vi.hoisted(() => {
 
 type Route = { path: string; method?: string; status?: number; body?: unknown };
 
-// Method-aware, because this screen sends a GET, a PATCH, a POST and a DELETE
-// at paths that overlap. A fresh Response per matched route per call —
-// mockResolvedValue's single object breaks on a second call, since a body can
-// only be read once.
+// Method-aware: GET, PATCH, POST and DELETE go to overlapping paths. A
+// fresh Response per call, since a body can be read only once.
 function serve(routes: Route[]) {
   fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : String(input);
@@ -49,9 +46,8 @@ function serve(routes: Route[]) {
   });
 }
 
-// The bodies actually sent to `path` by `method`, in order — what the screen
-// asked the server for, not what it drew afterwards. openapi-fetch hands
-// globalThis.fetch one Request, so the body is read off a clone.
+// The bodies sent to `path` by `method`, in order, read off a clone of
+// the Request.
 async function bodiesSent(path: string, method: string): Promise<Record<string, unknown>[]> {
   const calls = fetchMock.mock.calls.filter(([input, init]) => {
     const url = input instanceof Request ? input.url : String(input);
@@ -71,8 +67,7 @@ async function bodiesSent(path: string, method: string): Promise<Record<string, 
   );
 }
 
-// Requests to a path that carries a query string — the run log is fetched with
-// limit and offset on it, so `endsWith` on the whole URL would never match.
+// The run log carries a query string, so the path is matched before it.
 function requestsTo(pathSuffix: string): number {
   return fetchMock.mock.calls.filter(([input]) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
@@ -125,8 +120,7 @@ function makeConnection(overrides: Partial<TinvestConnection> = {}): TinvestConn
       },
     ],
     last_successful_sync_at: "2026-08-04T09:15:00Z",
-    // One verdict per linked account, the shape the server always sends: an
-    // account nothing ever checked is present here saying so.
+    // One verdict per linked account, unchecked ones included.
     reconciles: [
       {
         link_id: "link-1",
@@ -142,8 +136,8 @@ function makeConnection(overrides: Partial<TinvestConnection> = {}): TinvestConn
   };
 }
 
-// Everything the screen fetches beyond the connection itself, answered empty,
-// so a test about the header is not also a test of the three panels below it.
+// The other fetches answered empty, so a header test does not test the
+// panels below.
 function quietBackground(): Route[] {
   return [
     { path: "/api/v1/accounts", body: [{ id: "acc-1", name: "Т-Инвестиции: брокерский" }] },
@@ -158,9 +152,7 @@ function quietBackground(): Route[] {
   ];
 }
 
-// `extra` goes first: the first matching route answers, so a test that wants
-// to say something about the run log or the unparsed list overrides the quiet
-// defaults rather than being shadowed by them.
+// `extra` goes first, so it overrides the quiet defaults.
 function serveConnection(connection: TinvestConnection, extra: Route[] = []) {
   serve([
     ...extra,
@@ -169,12 +161,8 @@ function serveConnection(connection: TinvestConnection, extra: Route[] = []) {
   ]);
 }
 
-// Renders the screen the way router.tsx does, nested under a pathless "app"
-// layout with that same id: useParams({ from: ... }) is type-checked against
-// the PRODUCTION router, so the id has to read
-// "/app/settings/connections/$connectionId" whatever this tree looks like. The
-// two places the screen can send the owner — /settings after a delete, an
-// account behind a link — are stubs that only say where they are.
+// Under a pathless "app" layout, as router.tsx nests it: useParams is
+// typed against the production router. The two destinations are stubs.
 function renderPage(session: SessionInfo = makeSession()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(["session"], session);
@@ -212,9 +200,8 @@ function renderPage(session: SessionInfo = makeSession()) {
   );
 }
 
-// The card that lists the linked accounts. The screen names an account in two
-// places — here, and beside that account's own reconcile verdict — so an
-// assertion about this card is scoped to it rather than to the whole page.
+// Scoped to the accounts card: the account is also named beside its
+// reconcile verdict.
 async function accountsCard(): Promise<HTMLElement> {
   const title = await screen.findByText("Связанные счета");
   const card = title.closest("[data-slot=card]");
@@ -261,8 +248,8 @@ describe("ConnectionDetailPage — the header", () => {
     expect(screen.getByText("Активно")).toBeInTheDocument();
   });
 
-  // The field is keyed by the connection while runs are made per account, so
-  // for several accounts it means at least one of them synced then.
+  // Keyed by connection while runs are per account: with several accounts
+  // it means at least one synced then.
   it("does not claim every account synced when the connection feeds more than one", async () => {
     serveConnection(
       makeConnection({
@@ -295,8 +282,7 @@ describe("ConnectionDetailPage — the header", () => {
     expect(await screen.findByText("Удачных синхронизаций ещё не было")).toBeInTheDocument();
   });
 
-  // Deleting a babki account takes its link with it and leaves the connection
-  // standing, so a connection with no accounts left is reachable.
+  // Deleting a babki account takes its link and leaves the connection.
   it("says a connection has nowhere to import into, without claiming it once had", async () => {
     serveConnection(makeConnection({ accounts: [] }));
     renderPage();
@@ -322,9 +308,8 @@ describe("ConnectionDetailPage — the header", () => {
     ).toBeInTheDocument();
   });
 
-  // Both labels are written when the link is made and neither is re-read on a
-  // sync, so the warning belongs to both. It used to be on the name alone,
-  // which left the type reading as what the broker calls it today.
+  // Both labels are written at link time and never re-read, so the warning
+  // covers the type as well as the name.
   it("says of the type, as of the name, that it is what the broker said then", async () => {
     renderPage();
 
@@ -351,8 +336,7 @@ describe("ConnectionDetailPage — a token the broker refused", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Вставить новый токен" })).toBeInTheDocument();
-    // Neither switch: «включить» would set active on a token the broker has
-    // already refused, and the next run would park it right back.
+    // Neither switch: «включить» on a refused token would park it again.
     expect(screen.queryByRole("button", { name: "Включить" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Выключить" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Синхронизировать сейчас" })).toBeDisabled();
@@ -417,9 +401,7 @@ describe("ConnectionDetailPage — switching the import off and on", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Выключить" }));
 
-    // The request itself is the observable effect here: the GET behind this
-    // screen keeps answering with the connection as it was, so nothing on the
-    // screen would change to wait for.
+    // The request is the effect: the GET keeps answering the old connection.
     await waitFor(async () => {
       expect(await bodiesSent("/api/v1/tinvest/connections/conn-1", "PATCH")).toEqual([
         { status: "disabled" },
@@ -438,8 +420,7 @@ describe("ConnectionDetailPage — switching the import off and on", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Включить" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Синхронизировать сейчас" })).toBeDisabled();
-    // Said in text rather than in a tooltip: a disabled button carries
-    // pointer-events-none, so a `title` on it is unreachable.
+    // In text, not a tooltip: a disabled button gets no pointer events.
     expect(
       screen.getByText("Синхронизировать можно только активное подключение"),
     ).toBeInTheDocument();
@@ -473,9 +454,8 @@ describe("ConnectionDetailPage — the sync button", () => {
     expect(await screen.findByText("Синхронизация поставлена в очередь")).toBeInTheDocument();
   });
 
-  // `queued: false` covers a job waiting out a failed attempt's backoff, which
-  // River grows into the hours — so «уже идёт» would be false for as long as
-  // that wait lasts.
+  // `queued: false` covers a job in River's backoff, which can last hours,
+  // so «уже идёт» would be false.
   it("does not claim a sync is running when the server only said one was already queued", async () => {
     serveConnection(makeConnection(), [
       {
@@ -497,10 +477,7 @@ describe("ConnectionDetailPage — the sync button", () => {
     expect(screen.queryByText("Синхронизация поставлена в очередь")).not.toBeInTheDocument();
   });
 
-  // The queued run only becomes visible in the log below, so the log is what
-  // has to be asked again: without that the owner presses the button, is told
-  // the sync is queued, and sees a log that stays exactly as it was until the
-  // page is reloaded.
+  // The queued run shows in the log below, so the log is asked again.
   it("asks the run log again after queueing a sync", async () => {
     serveConnection(makeConnection(), [
       {
@@ -521,9 +498,7 @@ describe("ConnectionDetailPage — the sync button", () => {
     });
   });
 
-  // «Поставлена в очередь» is about the press that produced it. It used to
-  // stay on screen for the rest of the visit — including over a replaced
-  // token, where it says something about a queue nobody has looked at since.
+  // «Поставлена в очередь» belongs to the press that produced it.
   it("stops saying a sync was queued once another action is taken", async () => {
     serveConnection(makeConnection(), [
       {
@@ -685,11 +660,8 @@ describe("ConnectionDetailPage — the panels below", () => {
     expect(screen.getByText("Неразобранных операций: 1")).toBeInTheDocument();
   });
 
-  // THE CASE THE SCREEN USED TO GET WRONG, end to end. Two broker accounts:
-  // one differs, the other agrees and was checked a moment later. A single
-  // verdict for the connection was the newest of the two, so the screen drew a
-  // tick and «Сходится с брокером» — while the run log two cards below showed
-  // the differing account's run saying «Расхождение».
+  // Two accounts: one differs, the other agrees a moment later. One
+  // connection-wide verdict drew a tick over a differing account.
   it("shows a verdict per account and claims no agreement when one of them differs", async () => {
     serveConnection(
       makeConnection({

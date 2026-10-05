@@ -4,26 +4,21 @@ import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react
 import "@/i18n";
 import { InstrumentPicker } from "./instrument-picker";
 
-// openapi-fetch captures globalThis.fetch at import time
-// (`fetch: baseFetch = globalThis.fetch`), so the double has to be installed
-// *before* the imports above run — hence vi.hoisted.
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// One page of the catalog as the endpoint answers it: an envelope saying
-// whether anything is behind this page, never the bare array it used to be
-// (#104). Spelled out here rather than defaulted inside `serve`, so that a
-// test about paging says what the server told the client and every other test
-// says «this is the whole catalog» out loud.
+// One catalog page as the endpoint answers (#104), so every test states
+// whether anything is behind it.
 function catalog(instruments: unknown[], hasMore = false) {
   return { instruments, has_more: hasMore };
 }
 
-// A fresh Response per call: a single one handed to mockResolvedValue works
-// once and then throws, because a body can only be consumed once.
+// A fresh Response per call: a body can be read only once.
 function serve(status: number, body: unknown) {
   fetchMock.mockImplementation(() =>
     Promise.resolve(
@@ -49,11 +44,8 @@ afterEach(() => {
   onlineManager.setOnline(true);
 });
 
-// #88: the search was the one query in this application with no error branch.
-// A request that failed rendered the same «Ничего не найдено» as a request that
-// succeeded and found nothing — and the next thing the reader does is create
-// the instrument that already exists, which nothing in this application can
-// then merge or delete.
+// #88: a failed search rendered «Ничего не найдено», and the reader then
+// creates a duplicate this application can neither merge nor delete.
 describe("InstrumentPicker — a search that did not answer", () => {
   it("does not call a failed search «ничего не найдено»", async () => {
     serve(500, { error: "internal error" });
@@ -71,12 +63,9 @@ describe("InstrumentPicker — a search that did not answer", () => {
     expect(screen.queryByText(/не удалось получить список инструментов/i)).not.toBeInTheDocument();
   });
 
-  // The three below start from an answer already on screen, which is what the
-  // first version of this fix could not see: it went offline BEFORE the first
-  // render, so there was no previous answer for the next query to inherit, and
-  // a picker keyed on `data === undefined` alone passed. useInstruments hands
-  // the previous key's rows to the next key (placeholderData: keepPreviousData),
-  // so from the second search onwards there is always something in `data`.
+  // These start from an answer already on screen: keepPreviousData carries
+  // the previous key's rows, so `data` is never empty after the first
+  // search.
   it("does not carry an empty answer over to a request the browser never sent", async () => {
     serve(200, catalog([]));
     renderPicker();
@@ -98,9 +87,8 @@ describe("InstrumentPicker — a search that did not answer", () => {
     renderPicker();
     expect(await screen.findByText("Ничего не найдено")).toBeInTheDocument();
 
-    // The refined search never comes back, so the window between the keystroke
-    // and the answer — milliseconds online, and enough of them to click
-    // «Создать инструмент» in — stays open for the assertion.
+    // The refined search never answers, keeping the keystroke-to-answer
+    // window open.
     fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
     fireEvent.change(screen.getByPlaceholderText("Поиск инструмента"), {
       target: { value: "SBERBANK" },
@@ -111,9 +99,8 @@ describe("InstrumentPicker — a search that did not answer", () => {
   });
 
   it("keeps the rows of the previous search on screen while the next one is in flight", async () => {
-    // The other half of the decision: rows carried over are not a verdict, but
-    // they are real instruments and picking one is right whatever query fetched
-    // them, so they stay rather than flashing away on every keystroke.
+    // Carried-over rows are not a verdict, but they are real instruments, so
+    // they stay pickable.
     serve(
       200,
       catalog([
@@ -140,11 +127,8 @@ describe("InstrumentPicker — a search that did not answer", () => {
   });
 
   it("does not call a request the browser never sent «ничего не найдено»", async () => {
-    // react-query holds a query instead of sending it while the browser reports
-    // itself offline (networkMode "online", the default): status stays
-    // "pending" while fetchStatus is "paused", so isLoading — which is
-    // isPending && isFetching — is FALSE here, and a list keyed on isLoading
-    // alone falls straight through to the empty caption.
+    // Offline, react-query pauses the query: status "pending", fetchStatus
+    // "paused", isLoading false.
     onlineManager.setOnline(false);
     serve(200, catalog([]));
     renderPicker();
@@ -155,15 +139,11 @@ describe("InstrumentPicker — a search that did not answer", () => {
   });
 });
 
-// #104: this list IS the catalog when the search box is empty, and it used to
-// stop dead at the first page with no way past it — the endpoint took no
-// `offset` at all. What made that expensive rather than merely annoying is the
-// control right underneath: «Создать инструмент», whose duplicate this
-// application can neither merge nor delete.
+// #104: with an empty search box this list is the catalog, and it
+// stopped at page one, right above «Создать инструмент».
 describe("InstrumentPicker — a catalog longer than one page", () => {
-  // The catalog served by offset, so a request that ignored the offset would
-  // get page one again. The pages carry DIFFERENT instruments, so appending
-  // and replacing are told apart by what is on screen and not by a count.
+  // By offset, with different instruments per page, so appending and
+  // replacing differ on screen.
   function serveByOffset(pages: { instruments: unknown[]; has_more: boolean }[]) {
     const asked: string[] = [];
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
@@ -197,12 +177,10 @@ describe("InstrumentPicker — a catalog longer than one page", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Показать ещё" }));
 
-    // Both pages at once: the second is added to the first, not put in its
-    // place — the reader keeps what they were already looking at.
+    // Both pages: the second is appended.
     expect(await screen.findByText("Ветер")).toBeInTheDocument();
     expect(screen.getByText("Алроса")).toBeInTheDocument();
-    // And the second request asked where the first page ended, which is the
-    // whole of what «offset» is for.
+    // The second request starts where the first page ended.
     expect(asked).toEqual(["0", "2"]);
   });
 
@@ -220,9 +198,7 @@ describe("InstrumentPicker — a catalog longer than one page", () => {
   });
 
   it("offers nothing more when the first page is the whole catalog", async () => {
-    // A full-looking page with nothing behind it. The client is told so and
-    // must not offer a control that would fetch an empty page — the same page
-    // length as the case above, and the opposite fact.
+    // A full-looking page with nothing behind it: no control to fetch more.
     serveByOffset([{ instruments: [share("i-1", "Алроса"), share("i-2", "Банк")], has_more: false }]);
     renderPicker();
 
@@ -231,16 +207,9 @@ describe("InstrumentPicker — a catalog longer than one page", () => {
   });
 
   it("does not offer to page through a search nobody is running any more", async () => {
-    // Rows from the previous query stay on screen while the next keystroke is
-    // in flight (keepPreviousData), and «has_more» travels with them — but it
-    // is an answer about the OLD text in the box. Paging on it would fetch the
-    // second page of a search the reader has already typed past.
-    //
-    // The picker carries no guard for this: react-query reports no next page
-    // while the rows on screen are the previous query's, so the control is
-    // already gone. That is a property of the library rather than of this
-    // file, which is exactly why it is pinned here — if it ever stops holding,
-    // this goes red and the picker needs a guard of its own.
+    // Carried-over rows bring the old query's has_more. The picker has no
+    // guard: react-query reports no next page for previous-query rows. Pinned
+    // because that is the library's property, not this file's.
     serveByOffset([
       { instruments: [share("i-1", "Алроса"), share("i-2", "Банк")], has_more: true },
     ]);
