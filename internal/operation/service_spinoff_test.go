@@ -238,12 +238,12 @@ func TestCreateSpinoffRefusesWhatItCannotAccountFor(t *testing.T) {
 		edit func(*operation.SpinoffParams)
 	}{{
 		name: "a share of everything is a conversion, not a spin-off",
-		want: "greater than 0 and less than 1",
+		want: "at least 0 and less than 1",
 		edit: func(p *operation.SpinoffParams) { p.BasisShare = decimal.RequireFromString("1") },
 	}, {
-		name: "a share of nothing records an event that says nothing",
-		want: "greater than 0 and less than 1",
-		edit: func(p *operation.SpinoffParams) { p.BasisShare = decimal.Zero },
+		name: "a negative share",
+		want: "at least 0 and less than 1",
+		edit: func(p *operation.SpinoffParams) { p.BasisShare = decimal.RequireFromString("-0.1") },
 	}, {
 		name: "the same paper on both sides",
 		want: "different paper",
@@ -333,5 +333,46 @@ func TestCreateSpinoffResolvesAgainstTheDayItTookEffect(t *testing.T) {
 	}
 	if positions[carvedID].CostMinor != 50_000 {
 		t.Errorf("the carved-out paper carries %d, want 50000", positions[carvedID].CostMinor)
+	}
+}
+
+// Decision Р-16, the broker's way: a share of 0. The carved-out fund arrives
+// with its units and no cost, the original keeps every kopeck it was bought for,
+// and the journal replays.
+func TestCreateSpinoffWithNoShareKeepsTheWholeBasisOnTheOriginal(t *testing.T) {
+	f := newFixture(t)
+	svc := operation.NewService(f.store)
+	carvedID := newPaper(t, f, "TECH2", "Тинькофф Технологии заблокированные активы")
+	if _, err := svc.Create(f.ctx, f.spaceID, operation.Operation{
+		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
+		OccurredOn: date("2021-01-25"), Quantity: dec("100"), Price: dec("60"),
+		AmountMinor: -600_000, Currency: "RUB",
+	}); err != nil {
+		t.Fatalf("seed buy: %v", err)
+	}
+	out, in, err := svc.CreateSpinoff(f.ctx, f.spaceID, operation.SpinoffParams{
+		AccountID: f.accountID, FromInstrumentID: f.sberID, ToInstrumentID: carvedID,
+		RatioFrom: decimal.RequireFromString("1"), RatioTo: decimal.RequireFromString("1"),
+		BasisShare: decimal.Zero, OccurredOn: date("2023-12-22"), Source: operation.SourceRegistry,
+	})
+	if err != nil {
+		t.Fatalf("CreateSpinoff with a share of 0: %v", err)
+	}
+	if out.AmountMinor != 0 || in.AmountMinor != 0 {
+		t.Errorf("legs carry %d/%d, want 0 on both — nothing moves", out.AmountMinor, in.AmountMinor)
+	}
+	journal, err := f.store.ListForEngine(f.ctx, f.spaceID, f.accountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	positions, err := portfolio.Compute(journal)
+	if err != nil {
+		t.Fatalf("the journal does not replay: %v", err)
+	}
+	if p := positions[f.sberID]; p == nil || p.CostMinor != 600_000 {
+		t.Errorf("the original's cost is %v, want all 600000", p)
+	}
+	if p := positions[carvedID]; p == nil || p.CostMinor != 0 || p.Quantity.String() != "100" {
+		t.Errorf("the carved-out fund is %+v, want 100 units at no cost", p)
 	}
 }

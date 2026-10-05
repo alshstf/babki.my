@@ -139,7 +139,9 @@ func BuildSpinoff(journal []Operation, p SpinoffParams) (out, in Operation, err 
 
 	pieces := portfolio.SpinoffPieces(held.Lots, p.BasisShare)
 	cost := portfolio.LotsCost(pieces)
-	if cost <= 0 {
+	// A share that rounds to nothing was meant to move money and moves none;
+	// a share of 0 moves none on purpose (decision Р-16).
+	if cost <= 0 && p.BasisShare.IsPositive() {
 		return Operation{}, Operation{}, fmt.Errorf(
 			"%w: %s of the %d minor this account paid for the paper rounds to nothing, so the spin-off would move no money at all",
 			family.ErrValidation, p.BasisShare, held.CostMinor)
@@ -211,16 +213,17 @@ func checkSpinoffParams(p SpinoffParams) error {
 	if !p.RatioFrom.IsPositive() || !p.RatioTo.IsPositive() {
 		return fmt.Errorf("%w: both sides of the ratio must be positive", family.ErrValidation)
 	}
-	// STRICTLY BETWEEN NOTHING AND EVERYTHING. A share of 0 moves no money and
-	// would write a pair that says nothing; a share of 1 moves ALL of it, which is
+	// FROM NOTHING TO LESS THAN EVERYTHING. A share of 0 moves no money: the new
+	// paper arrives bought for nothing, which is how the broker keeps a
+	// carve-out (decision Р-16). A share of 1 moves ALL of it, which is
 	// a conversion — the original paper would be left holding units with no basis
 	// behind them, so every later sale of it would show the whole proceeds as
 	// profit. The registry refuses both as well (corporateaction.Event's
 	// Validate); it is stated here too because this function does not route
 	// through that one, and a rule only the other door enforces is a rule this
 	// door does not have.
-	if !p.BasisShare.IsPositive() || !p.BasisShare.LessThan(decimal.NewFromInt(1)) {
-		return fmt.Errorf("%w: the share of the basis that moves must be greater than 0 and less than 1", family.ErrValidation)
+	if p.BasisShare.IsNegative() || !p.BasisShare.LessThan(decimal.NewFromInt(1)) {
+		return fmt.Errorf("%w: the share of the basis that moves must be at least 0 and less than 1", family.ErrValidation)
 	}
 	return checkOccurredOn(p.OccurredOn)
 }

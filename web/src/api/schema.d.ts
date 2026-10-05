@@ -1683,7 +1683,7 @@ export interface components {
             ratio_to: number;
             /** @description The paper a conversion or a spin-off produces. Required on those two and refused on a split, which produces no new paper. Never equal to `isin`. */
             result_isin?: string | null;
-            /** @description Decimal as string: the fraction of the original's cost basis a spin-off moves across (НК РФ ст. 277 п. 7 — the share of the fund's assets that was carved out). Greater than 0 and less than 1. Required on a spin-off and refused on the other two, where the whole basis either stays or travels. */
+            /** @description Decimal as string: the fraction of the original's cost basis a spin-off moves across. At least 0 and less than 1; 0 — the new paper arrives bought for nothing and the whole basis stays on the original — is how the broker keeps a carve-out and the program's default. Required on a spin-off and refused on the other two, where the whole basis either stays or travels. */
             basis_share?: string | null;
             source: components["schemas"]["InstrumentEventSource"];
             /** @description Where the fact can be checked: the exchange's own URL for a `moex_iss` row, and for a `manual` one whatever its recorder linked to. Required on a manual event — a ratio nobody can check is a number this program would carry into every holder's journal on one person's word. */
@@ -1724,7 +1724,7 @@ export interface components {
             ratio_to: number;
             /** @description Required for a conversion and a spin-off, refused on a split. An ISIN, normalized like `isin`. See InstrumentEvent.result_isin. */
             result_isin?: string | null;
-            /** @description Decimal as string, greater than 0 and less than 1. Required for a spin-off, refused on the other two. See InstrumentEvent.basis_share. */
+            /** @description Decimal as string, at least 0 and less than 1. Required for a spin-off, refused on the other two. See InstrumentEvent.basis_share. */
             basis_share?: string | null;
             /** @description Required: a link to the exchange's or the issuer's own announcement. See InstrumentEvent.source_ref for why this one field is not optional. */
             source_ref: string;

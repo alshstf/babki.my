@@ -2436,7 +2436,7 @@ components:
         basis_share:
           type: string
           nullable: true
-          description: "Decimal as string: the fraction of the original's cost basis a spin-off moves across (НК РФ ст. 277 п. 7 — the share of the fund's assets that was carved out). Greater than 0 and less than 1. Required on a spin-off and refused on the other two, where the whole basis either stays or travels."
+          description: "Decimal as string: the fraction of the original's cost basis a spin-off moves across. At least 0 and less than 1; 0 — the new paper arrives bought for nothing and the whole basis stays on the original — is how the broker keeps a carve-out and the program's default. Required on a spin-off and refused on the other two, where the whole basis either stays or travels."
         source: { $ref: "#/components/schemas/InstrumentEventSource" }
         source_ref:
           type: string
@@ -2486,7 +2486,7 @@ components:
         basis_share:
           type: string
           nullable: true
-          description: "Decimal as string, greater than 0 and less than 1. Required for a spin-off, refused on the other two. See InstrumentEvent.basis_share."
+          description: "Decimal as string, at least 0 and less than 1. Required for a spin-off, refused on the other two. See InstrumentEvent.basis_share."
         source_ref:
           type: string
           maxLength: 500

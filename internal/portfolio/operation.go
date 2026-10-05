@@ -81,12 +81,10 @@ const (
 	// WHAT SEPARATES IT FROM A CONVERSION IS THAT NOTHING LEAVES. A conversion
 	// retires the old paper and its whole basis travels; a spin-off keeps the
 	// old paper, its units untouched, and moves only a SHARE of the money that
-	// was paid for it. НК РФ ст. 214.1 п. 13 abz. 8 sends the question to
-	// ст. 277 п. 7, which fixes the share exactly: the units of the additional
-	// fund are worth the part of the original units' cost that the carved-out
-	// assets were of the fund's net assets before the carve-out, and the
-	// original units' cost is reduced by that same figure. Neither income nor
-	// expense arises on the day.
+	// was paid for it — possibly none (decision Р-16: 0 by default, as the
+	// broker keeps it; no rule of the tax code divides the basis for an
+	// individual). The original units' cost is reduced by exactly what moves.
+	// Neither income nor expense arises on the day.
 	//
 	// SO THE DEPARTING LEG MOVES NO UNITS AT ALL, and it carries no quantity —
 	// the field is nil, exactly as a split's is, because there is no count to
