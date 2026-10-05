@@ -47,16 +47,8 @@ func TestDecode(t *testing.T) {
 	}
 }
 
-// TestDecodeRefusesABodyOverTheLimit covers Decode's 413 branch, which had no
-// test: the limit is a MaxBytesReader, so what proves it is a body that
-// actually exceeds it, not an assertion about the constant.
-//
-// The body is valid JSON for the destination type and is refused anyway — a
-// refusal on the size and not on the shape. It is written as one enormous
-// string field rather than as garbage so that a Decode which had lost its
-// MaxBytesReader would succeed and return 200 rather than fail on the parse and
-// return 400 by accident, which is the way this test could otherwise pass
-// without the branch existing.
+// A valid body over the limit gets 413. One big string field, so a Decode
+// without MaxBytesReader would answer 200, not 400 by accident.
 func TestDecodeRefusesABodyOverTheLimit(t *testing.T) {
 	type req struct {
 		Name string `json:"name"`

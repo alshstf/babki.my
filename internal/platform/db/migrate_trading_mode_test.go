@@ -10,17 +10,8 @@ import (
 
 const tradingModeMigration = 26
 
-// TestMigrate_TradingModeIsRecoveredFromTheStoredPayload is the upgrade half
-// of making the trading mode visible. The mirror has kept the broker's payload
-// verbatim from the first day, so an installation that already imported its
-// history recovers the mode of every operation from what it stored — nobody
-// has to ask the broker again for a field that was in the bytes all along.
-//
-// The rows are the shapes the live mirror holds on the owner's own account: an
-// ordinary Moscow Exchange board, the broker's own over-the-counter dealing in
-// the FinEx funds, a Saint Petersburg board this program cannot name, and an
-// operation the broker sent no such field for at all — money moving in or out,
-// which describes no instrument.
+// The upgrade recovers each mirror row's trading mode from the stored broker
+// payload: an exchange board, FINEX_OTC, an unnamed board, and none.
 func TestMigrate_TradingModeIsRecoveredFromTheStoredPayload(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -37,12 +28,8 @@ func TestMigrate_TradingModeIsRecoveredFromTheStoredPayload(t *testing.T) {
 		want string
 	}{
 		{"exchange-board", `{"classCode": "TQBR"}`, "TQBR"},
-		// The owner's own: the funds he bought after exchange trading in them
-		// stopped, and the case this whole column exists for.
 		{"off-exchange", `{"classCode": "FINEX_OTC"}`, "FINEX_OTC"},
-		// A code this program has no source for. The mirror keeps it exactly
-		// the same way: what can be NAMED is decided later and elsewhere, and
-		// nothing about that decision belongs in the column.
+		// Kept verbatim; naming it is decided elsewhere.
 		{"unnamed-board", `{"classCode": "SPBXM"}`, "SPBXM"},
 		{"no-such-field", `{"quantity": "1000"}`, ""},
 	}
@@ -73,20 +60,8 @@ func TestMigrate_TradingModeIsRecoveredFromTheStoredPayload(t *testing.T) {
 	}
 }
 
-// TestMigrate_TheJournalsTradingModeIsNotBackfilled states the other half of
-// the same migration, and it is a deliberate ABSENCE rather than an omission.
-//
-// operations.trading_mode is filled by the importer alone: it recomputes the
-// whole desired journal from the mirror and diffs it against what is stored,
-// so an imported row gets its mode on the next sync by the one path that
-// writes imported rows at all. A backfill here would be a second writer of one
-// column, and the two would answer differently the first time a rule changed —
-// the class of fault this codebase has watched happen more than once.
-//
-// The row below is what an existing installation holds: an imported operation
-// written before the column existed. It must come out of the migration
-// carrying nothing, so that the difference the next rebuild computes is what
-// puts the mode there.
+// operations.trading_mode is not backfilled: the importer is its only writer
+// and fills it on the next rebuild.
 func TestMigrate_TheJournalsTradingModeIsNotBackfilled(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -117,10 +92,7 @@ func TestMigrate_TheJournalsTradingModeIsNotBackfilled(t *testing.T) {
 	}
 }
 
-// TestMigrate_TheJournalsInstantIsNotBackfilled is the same rule for the
-// broker's instant (migration 33): an imported row comes out of the migration
-// without one, and the importer's next rebuild — the one writer of its rows —
-// puts it there.
+// The broker's instant (migration 33) is not backfilled either.
 func TestMigrate_TheJournalsInstantIsNotBackfilled(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()

@@ -8,16 +8,8 @@ import (
 	"babki.my/babki/internal/platform/tradingmode"
 )
 
-// TestEveryClaimCitesItsAuthority is what keeps this package's table from
-// becoming a list of opinions.
-//
-// Every row says a code is one kind of mode rather than another, and every row
-// carries the evidence for saying so. The two are checked against each other
-// here: a Moscow Exchange board is classified BY THE EXCHANGE'S OWN TITLE for
-// it — whose last word is «безадрес.» for an anonymous order book and «адрес.»
-// for a negotiated deal — so the kind is read off the citation rather than
-// judged. A row whose title stopped agreeing with its kind would be a row
-// where someone changed the claim and left the evidence behind.
+// Each Moscow Exchange row's kind agrees with the last word of the
+// exchange's own title for the board: «безадрес.» or «адрес.».
 func TestEveryClaimCitesItsAuthority(t *testing.T) {
 	for code, fact := range tradingmode.Modes {
 		switch fact.Why {
@@ -26,8 +18,6 @@ func TestEveryClaimCitesItsAuthority(t *testing.T) {
 				t.Errorf("%s cites the exchange's board index and quotes no title from it", code)
 				continue
 			}
-			// The exchange's own last word, and the only thing this program
-			// reads from the title.
 			anonymous := strings.Contains(fact.MoexTitle, "безадрес")
 			addressed := strings.Contains(fact.MoexTitle, "адрес") && !anonymous
 			switch {
@@ -47,9 +37,7 @@ func TestEveryClaimCitesItsAuthority(t *testing.T) {
 				t.Errorf("%s is a board of the exchange's own index and is classified off_exchange", code)
 			}
 		case tradingmode.CodeNamesItself:
-			// The one evidence that rests on the code rather than on a
-			// register: it may be used ONLY where the code really does say
-			// what it is, which for this program means naming itself OTC.
+			// CodeNamesItself is only for a code that says OTC.
 			if !strings.Contains(code, "OTC") {
 				t.Errorf("%s claims its own name is the evidence, but the name says nothing: "+
 					"this evidence is for a code that states its nature, not for one that merely looks familiar", code)
@@ -64,15 +52,8 @@ func TestEveryClaimCitesItsAuthority(t *testing.T) {
 	}
 }
 
-// TestUnnamedCodesAreAnsweredUnknown: the codes on the owner's own account
-// that this program cannot source. Each is real live data and each is
-// deliberately absent from the table — the Saint Petersburg boards, the two
-// off-exchange-looking codes from 2023, the fourth PS* board whose siblings
-// ARE in the exchange's index, and the broker's own placeholder.
-//
-// The test exists because "we do not know" is an ANSWER here and must not
-// quietly become a guess: adding any of these to the table with a plausible
-// label turns this red, and the reviewer then has to produce the source.
+// Codes seen on the owner's account with no source stay Unknown; adding one
+// with a guessed label must come with a source.
 func TestUnnamedCodesAreAnsweredUnknown(t *testing.T) {
 	for _, code := range []string{"SPBXM", "SPBOPT", "BQUOTE_SHR", "A29", "PSSU", "FAKE_OLD_MEX"} {
 		if got := tradingmode.Of(code); got != tradingmode.Unknown {
@@ -82,10 +63,7 @@ func TestUnnamedCodesAreAnsweredUnknown(t *testing.T) {
 	}
 }
 
-// TestOfNamesTheModesItCan walks the ones it can, with the answers written out
-// as literals rather than read back out of the table the code under test uses:
-// a test that asks the table what the table says would agree with it however
-// wrong it became.
+// Answers written as literals, not read back from the table.
 func TestOfNamesTheModesItCan(t *testing.T) {
 	for code, want := range map[string]tradingmode.Kind{
 		// Moscow Exchange, anonymous.
@@ -108,11 +86,7 @@ func TestOfNamesTheModesItCan(t *testing.T) {
 	}
 }
 
-// TestEveryKindIsAContractValue: the kinds this package decides are the kinds
-// the API publishes, and the two are separate declarations — one in Go, one
-// generated from the contract. A value renamed on either side without the
-// other would reach a client as a word its schema forbids, and the client
-// would show a row it cannot render rather than the mode it asked for.
+// Every Kind is a value of the contract's enum.
 func TestEveryKindIsAContractValue(t *testing.T) {
 	for _, kind := range []tradingmode.Kind{
 		tradingmode.OrderBook, tradingmode.Negotiated,

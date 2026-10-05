@@ -1,17 +1,5 @@
-// Package secretbox provides authenticated symmetric encryption for secrets
-// this application has to keep at rest but also read back later — today the
-// only consumer is the broker API token behind the T-Invest importer, which
-// a background worker needs to decrypt on every sync run.
-//
-// AES-256-GCM, built from the standard library only (crypto/aes,
-// crypto/cipher, crypto/rand): no third-party dependency for the one
-// cryptographic primitive this codebase needs.
-//
-// Sealed output is one []byte: a fresh random nonce followed by the
-// ciphertext (nonce||ciphertext), with no format version byte and no key
-// rotation. Both are deliberately absent — the only consumer today is one
-// secret column, and a rotation mechanism nobody has exercised is worse than
-// no rotation mechanism at all.
+// Package secretbox seals secrets kept at rest, such as broker tokens, with
+// AES-256-GCM from the standard library. Sealed output is nonce||ciphertext.
 package secretbox
 
 import (
@@ -25,28 +13,16 @@ import (
 // KeySize is the required raw key length in bytes: AES-256.
 const KeySize = 32
 
-// hexKeyLen is the required length of the BABKI_ENCRYPTION_KEY value: two
-// hex characters per byte of KeySize.
+// hexKeyLen is the length of BABKI_ENCRYPTION_KEY: two hex characters a byte.
 const hexKeyLen = KeySize * 2
 
-// keyHelp names the environment variable and the exact command that produces
-// a value ParseKey accepts. Appended to every ParseKey error, because the
-// startup log line an operator reads is the only place either fact reaches
-// them.
+// keyHelp is appended to ParseKey errors: the startup log is where an operator
+// learns how to make a valid key.
 const keyHelp = "set BABKI_ENCRYPTION_KEY to 64 hex characters (32 bytes); generate one with `openssl rand -hex 32`"
 
-// ParseKey decodes s — the value of BABKI_ENCRYPTION_KEY — into a 32-byte
-// AES-256 key. s must be exactly 64 hex characters. Hex rather than base64:
-// it can be read aloud or typed by hand without a case-sensitivity mistake.
+// ParseKey decodes BABKI_ENCRYPTION_KEY, exactly 64 hex characters, into a
+// 32-byte key. Hex rather than base64 so it can be typed without case errors.
 func ParseKey(s string) ([]byte, error) {
-	// len(s) counts bytes, not characters. That is the honest count to
-	// report here: a valid value is required to be hex, i.e. plain ASCII,
-	// so bytes and characters agree for every value that could ever pass
-	// this check, and the one case where they would not — a non-ASCII value
-	// — is exactly the case a "characters" claim would get wrong. Counting
-	// runes to say something true about a string this function is about to
-	// reject as invalid anyway would be effort spent on the wrong half of
-	// the check.
 	if len(s) != hexKeyLen {
 		return nil, fmt.Errorf("secretbox: BABKI_ENCRYPTION_KEY is %d bytes long, want exactly %d; %s",
 			len(s), hexKeyLen, keyHelp)
@@ -58,19 +34,11 @@ func ParseKey(s string) ([]byte, error) {
 	return key, nil
 }
 
-// Box seals and opens secrets with AES-256-GCM under one fixed key.
-//
-// A Box is safe for concurrent use by multiple goroutines. cipher.AEAD's own
-// documentation makes no such promise, but the standard library's GCM
-// implementation keeps no mutable state between calls — every Seal and Open
-// runs entirely on the arguments it is given — which is what lets a single
-// Box be shared between the hourly background worker and the HTTP handlers
-// that read the same secret, with no lock of its own.
+// Box seals with one key and opens with it or any previous key. It is safe for
+// concurrent use: the standard library's GCM keeps no state between calls.
 type Box struct {
 	aead cipher.AEAD
-	// previous are the keys that sealed before the current one: they still
-	// open, and never seal, so a key can be replaced without first decrypting
-	// everything (see WithPrevious and the reseal command).
+	// previous open what earlier keys sealed and never seal.
 	previous []cipher.AEAD
 }
 
@@ -90,11 +58,8 @@ func New(key []byte) (*Box, error) {
 	return &Box{aead: aead}, nil
 }
 
-// Seal encrypts and authenticates plaintext, returning nonce||ciphertext as
-// a single slice. A fresh random nonce is drawn from crypto/rand on every
-// call, so sealing the same plaintext twice never produces the same output.
-// WithPrevious lets the box open what earlier keys sealed. Sealing still uses
-// the box's own key only.
+// WithPrevious lets the box open what earlier keys sealed, so a key can be
+// rotated before every secret is resealed.
 func (b *Box) WithPrevious(keys ...[]byte) (*Box, error) {
 	for _, key := range keys {
 		older, err := New(key)
@@ -106,22 +71,17 @@ func (b *Box) WithPrevious(keys ...[]byte) (*Box, error) {
 	return b, nil
 }
 
+// Seal encrypts and authenticates plaintext under a fresh random nonce and
+// returns nonce||ciphertext.
 func (b *Box) Seal(plaintext []byte) []byte {
 	nonce := make([]byte, b.aead.NonceSize())
-	// crypto/rand.Read cannot return a non-nil error: per its own doc
-	// (verified against the go1.26 toolchain this module's go.mod requires),
-	// it either fills nonce completely or crashes the process irrecoverably
-	// inside crypto/rand before Read ever returns. There is therefore no
-	// error path left for Seal to report, and the return values are
-	// discarded rather than checked against a condition that cannot happen.
+	// crypto/rand.Read never returns an error; it crashes the process instead.
 	_, _ = rand.Read(nonce)
 	return b.aead.Seal(nonce, nonce, plaintext, nil)
 }
 
-// Open authenticates and decrypts sealed — the output of Seal — returning
-// the original plaintext. It reports an error, rather than panicking, on
-// input shorter than a nonce, on a corrupted ciphertext, and on a Box built
-// from a different key: GCM's authentication tag catches the latter two.
+// Open decrypts the output of Seal. Short, corrupted or foreign-key input is
+// an error.
 func (b *Box) Open(sealed []byte) ([]byte, error) {
 	nonceSize := b.aead.NonceSize()
 	if len(sealed) < nonceSize {

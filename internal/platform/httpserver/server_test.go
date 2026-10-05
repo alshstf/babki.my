@@ -57,10 +57,7 @@ func TestHealthzDegraded(t *testing.T) {
 	}
 }
 
-// TestRoutesListsWhatWasMounted covers the three things Routes promises, since
-// tests elsewhere derive their coverage from it: that a mounted pattern comes
-// back with its method attached, that the framework's own routes are not in the
-// list, and that the list handed out is a copy.
+// Routes returns mounted patterns with their method, omits the framework's own, and hands out a copy.
 func TestRoutesListsWhatWasMounted(t *testing.T) {
 	pool := testdb.New(t)
 	srv := httpserver.New(slog.Default(), pool)
@@ -79,9 +76,7 @@ func TestRoutesListsWhatWasMounted(t *testing.T) {
 		t.Fatalf("Routes() = %v, want %v", got, want)
 	}
 
-	// A caller writing into what it got back does not rewrite the router's own
-	// record. Written in place rather than appended to, because appending to a
-	// slice of exact capacity copies it whether or not Routes did.
+	// Written in place: appending to an exact-capacity slice would copy anyway.
 	got[0] = "DELETE /api/v1/everything"
 	if again := srv.Routes(); !slices.Equal(again, want) {
 		t.Errorf("Routes() = %v after a caller overwrote an earlier result, want %v", again, want)
@@ -107,13 +102,8 @@ func TestAPINotFoundIsJSON(t *testing.T) {
 	}
 }
 
-// freePort returns a TCP port nothing is listening on, by binding one and
-// letting go of it again. There is a gap between the release and Run's own
-// bind, and nothing can close it — (*Server).Run takes an address and does its
-// own Listen, so a test cannot hand it a listener. The gap is not silent,
-// which is what makes it acceptable: if something takes the port in between,
-// ListenAndServe fails and Run returns that error to the assertions below,
-// rather than the test hanging or passing on nothing.
+// freePort returns a port nothing listens on. Something may take it before
+// Run binds; then Run returns the error and the test fails visibly.
 func freePort(t *testing.T) string {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -127,20 +117,8 @@ func freePort(t *testing.T) string {
 	return addr
 }
 
-// TestRunDrainsInFlightRequestsAndReturnsNil covers (*Server).Run, which had
-// no test of its own: a real listener, a request still being handled when the
-// context is cancelled, and what the method hands back afterwards.
-//
-// THE IN-FLIGHT REQUEST IS THE POINT. Shutdown differs from Close in exactly
-// one visible way — it lets a handler that has already started finish and
-// answer — so the slow handler below is started, then the context is cancelled
-// while it is still inside, and its answer must arrive intact. Swapping
-// Shutdown for Close turns this red, and nothing else in the package notices.
-//
-// The other two claims are Run's own postconditions: it returns nil rather
-// than http.ErrServerClosed (the caller asked for the shutdown; it is not an
-// error), and it does not return until the listener is closed — checked by
-// dialling the port afterwards and requiring a refusal.
+// Run lets an in-flight request finish (Shutdown, not Close), returns nil
+// rather than ErrServerClosed, and closes the listener before returning.
 func TestRunDrainsInFlightRequestsAndReturnsNil(t *testing.T) {
 	pool := testdb.New(t)
 	srv := httpserver.New(slog.Default(), pool)
@@ -157,8 +135,7 @@ func TestRunDrainsInFlightRequestsAndReturnsNil(t *testing.T) {
 	runErr := make(chan error, 1)
 	go func() { runErr <- srv.Run(ctx, addr) }()
 
-	// Wait for the listener to come up: Run starts it on a goroutine of its
-	// own, so there is no moment before this at which a request would arrive.
+	// Wait for the listener, which Run starts on its own goroutine.
 	client := &http.Client{Timeout: 10 * time.Second}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -212,8 +189,7 @@ func TestRunDrainsInFlightRequestsAndReturnsNil(t *testing.T) {
 	}
 }
 
-// hardened is a server with one state-changing route and one page, behind the
-// same middleware everything is served through.
+// hardened serves one write route and one page through the real middleware.
 func hardened(t *testing.T) http.Handler {
 	t.Helper()
 	srv := httpserver.New(slog.Default(), testdb.New(t))
@@ -226,10 +202,8 @@ func hardened(t *testing.T) http.Handler {
 	return srv.Handler()
 }
 
-// TestAWriteFromAnotherSiteIsRefused: the server does not leave it to a cookie
-// attribute. A browser names the site a request came from, and a write that
-// came from anywhere but this origin is refused — a sibling subdomain included.
-// A request with neither header is not a browser's and passes.
+// A write from another site, a sibling subdomain included, is refused; a
+// request with neither header is not a browser's and passes.
 func TestAWriteFromAnotherSiteIsRefused(t *testing.T) {
 	h := hardened(t)
 	for name, tc := range map[string]struct {
@@ -256,8 +230,7 @@ func TestAWriteFromAnotherSiteIsRefused(t *testing.T) {
 		}
 	}
 
-	// Reading is never refused on these grounds: a link from another site is
-	// how a browser arrives at all.
+	// Reads are never refused: links from other sites are how browsers arrive.
 	req := httptest.NewRequest("GET", "/accounts", nil)
 	req.Header.Set("Sec-Fetch-Site", "cross-site")
 	rec := httptest.NewRecorder()
@@ -267,8 +240,7 @@ func TestAWriteFromAnotherSiteIsRefused(t *testing.T) {
 	}
 }
 
-// TestEveryAnswerCarriesTheSecurityHeaders, and an API answer is never stored by
-// a cache.
+// Every answer carries the security headers, and API answers are not cached.
 func TestEveryAnswerCarriesTheSecurityHeaders(t *testing.T) {
 	h := hardened(t)
 	for _, path := range []string{"/", "/api/healthz", "/api/v1/nope"} {

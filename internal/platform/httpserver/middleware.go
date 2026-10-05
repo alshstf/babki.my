@@ -26,13 +26,11 @@ func withRequestLog(log *slog.Logger, next http.Handler) http.Handler {
 	})
 }
 
-// withRecover converts handler panics into 500 and logging without crashing the process.
+// withRecover turns a handler panic into a logged 500.
 func withRecover(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				// The stack is the whole diagnosis: a recovered panic without it
-				// says that something broke and nothing about where.
 				log.Error("panic in handler", "path", r.URL.Path, "panic", rec, "stack", string(debug.Stack()))
 				httpjson.Error(w, http.StatusInternalServerError, "internal server error")
 			}
@@ -51,27 +49,22 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-// Unwrap lets http.ResponseController reach the underlying writer
-// (Flusher/Hijacker passthrough for streaming handlers).
+// Unwrap lets http.ResponseController reach the underlying writer.
 func (w *statusWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
 }
 
-// contentSecurityPolicy is what the application's own page needs and nothing
-// else: its scripts, styles, fonts and images come from this origin. Inline
-// STYLE attributes are allowed because the component library positions its
-// popovers with them; inline scripts are not, and the page has none.
+// contentSecurityPolicy keeps the page to its own origin. Inline style
+// attributes are allowed because the component library positions popovers
+// with them; inline scripts are not.
 const contentSecurityPolicy = "default-src 'self'; " +
 	"style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' data:; " +
 	"font-src 'self' data:; " +
 	"object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 
-// withSecurityHeaders sets the response headers that cost nothing and close a
-// class of browser attack each: no MIME sniffing, no framing by another site,
-// no referrer to other origins, and a content policy that keeps the page to its
-// own origin. API answers are additionally never stored by a cache — they are
-// one family's finances.
+// withSecurityHeaders sets the standard hardening headers, and keeps API
+// answers out of caches.
 func withSecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -86,20 +79,12 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// withSameOrigin refuses a state-changing request that a browser sent from
-// another site.
+// withSameOrigin refuses state-changing requests a browser sent from another
+// site. SameSite=Lax cookies are not enough: login CSRF needs no cookie.
 //
-// The session cookie is SameSite=Lax, which already keeps it off most
-// cross-site requests — but that is one browser default, and it does nothing
-// for a request that needs no cookie at all: a page elsewhere can submit the
-// login form and leave the reader signed in to somebody else's account. So the
-// server checks for itself.
-//
-// A browser says where a request came from: Sec-Fetch-Site on every request it
-// makes, Origin on every cross-origin write. "same-origin" (and "none", a
-// request the user typed) pass; another site, or a sibling subdomain, does not.
-// A request carrying neither header is not from a browser — a script, a test,
-// curl — and has no ambient cookie to be tricked out of, so it passes.
+// Browsers send Sec-Fetch-Site, and Origin on cross-origin writes; a request
+// with neither is not from a browser and carries no ambient cookie, so it
+// passes.
 func withSameOrigin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -123,9 +108,8 @@ func withSameOrigin(next http.Handler) http.Handler {
 	})
 }
 
-// originIsOurs reports whether an Origin header names the host this request was
-// addressed to — as the server sees it, or as a reverse proxy in front of it
-// says the browser saw it.
+// originIsOurs reports whether origin names this request's host, directly or
+// as forwarded by a reverse proxy.
 func originIsOurs(origin string, r *http.Request) bool {
 	u, err := url.Parse(origin)
 	if err != nil || u.Host == "" {
