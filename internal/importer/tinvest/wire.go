@@ -8,18 +8,9 @@ import (
 	"time"
 )
 
-// parseWireInt64 parses one of the REST gateway's string-encoded int64
-// fields (protobuf's int64 goes over JSON as a decimal string, since a JSON
-// number cannot hold the full int64 range without losing precision in some
-// decoders — the published OpenAPI spec marks every such field
-// `format: int64, type: string`). An absent field unmarshals to "", which is
-// treated as 0 rather than a parse error, on the assumption that the
-// gateway omits zero-valued fields entirely (protojson's default). That
-// assumption is checked against the spec's documented examples, not against
-// a live response: this session's live sandbox calls never exercised a
-// populated int64-string field (GetAccounts has none, and the one
-// OperationsAll run that reached the gateway saw an empty operations list —
-// see the task report for why).
+// parseWireInt64 parses a string-encoded int64 (protobuf int64 over JSON is a
+// string). An absent field is "" and reads as 0, since protojson omits zero
+// values.
 func parseWireInt64(s string) (int64, error) {
 	if s == "" {
 		return 0, nil
@@ -27,11 +18,8 @@ func parseWireInt64(s string) (int64, error) {
 	return strconv.ParseInt(s, 10, 64)
 }
 
-// parseWireTime parses one of the gateway's date-time fields (RFC 3339,
-// e.g. "2026-01-10T10:00:00Z" — protobuf's google.protobuf.Timestamp over
-// JSON). An empty string returns the zero time and no error; callers that
-// need to tell "absent" apart from "parses to the zero time" (Account's
-// OpenedOn) check for "" themselves before calling this.
+// parseWireTime parses an RFC 3339 timestamp; "" is the zero time. Callers
+// that must tell absent from zero check for "" first.
 func parseWireTime(s string) (time.Time, error) {
 	if s == "" {
 		return time.Time{}, nil
@@ -43,12 +31,8 @@ func parseWireTime(s string) (time.Time, error) {
 	return t, nil
 }
 
-// wireMoneyValue mirrors the REST gateway's MoneyValue: units arrives as a
-// JSON string (see parseWireInt64), nano as a plain JSON number (int32
-// always fits exactly in a float64/json.Number, so no precision is at
-// risk). Currency arrives lower-case ("rub"); parse normalizes it to upper
-// case, since every currency code stored or compared elsewhere in this
-// codebase is upper case.
+// wireMoneyValue is the gateway's MoneyValue: units a string, nano a number,
+// currency lower case (upper-cased by parse).
 type wireMoneyValue struct {
 	Currency string `json:"currency"`
 	Units    string `json:"units"`
@@ -67,9 +51,7 @@ func (w wireMoneyValue) parse() (MoneyValue, error) {
 	}, nil
 }
 
-// wireQuotation mirrors the REST gateway's Quotation: the same units+nano
-// shape as wireMoneyValue, minus the currency (a Quotation is a bare
-// number, e.g. an instrument quantity).
+// wireQuotation is the gateway's Quotation: units and nano, no currency.
 type wireQuotation struct {
 	Units string `json:"units"`
 	Nano  int32  `json:"nano"`
@@ -83,51 +65,28 @@ func (w wireQuotation) parse() (Quotation, error) {
 	return Quotation{Units: units, Nano: w.Nano}, nil
 }
 
-// wireError mirrors the REST gateway's error body (components/schemas/
-// ErrorResponse in the published OpenAPI spec, re-checked 2026-08-05
-// against RussianInvestments/investAPI's src/docs/swagger-ui/openapi.yaml):
-// Code is the gRPC status code, Message is human text, and Description is
-// the broker's own numeric business error code — e.g. 40003,
-// "authentication token is missing or invalid", which the spec's own
-// documented example pairs with HTTP 401 and gRPC code 16 (Unauthenticated).
-//
-// The spec declares Description's JSON type as a bare integer — every one
-// of its ~400 example error bodies shows it unquoted (e.g. `description:
-// 30011`) — but the live gateway does not honor that: a real 400 response
-// captured against invest-public-api.tinkoff.ru during this package's own
-// sandbox testing (see task-3-report.md) carried `"description":"30079"`,
-// a quoted string, and json.Unmarshal into an int field fails outright on
-// that shape. json.Number accepts either wire form as-is (it stores
-// whatever text arrived and parses it on demand via Int64()), so this field
-// uses that type instead of plain int.
+// wireError is the gateway's error body: Code is the gRPC status, Description
+// the broker's business code (40003: bad token, with HTTP 401). The spec says
+// Description is an integer, but the live gateway sends it quoted
+// ("description":"30079"), so it is a json.Number.
 type wireError struct {
 	Code        int         `json:"code"`
 	Message     string      `json:"message"`
 	Description json.Number `json:"description"`
 }
 
-// tokenInvalidDescription is the broker's business error code for an
-// unusable token (expired, revoked, or never valid) — see wireError.
+// tokenInvalidDescription: an expired, revoked or invalid token.
 const tokenInvalidDescription = 40003
 
-// instrumentNotFoundDescription is the broker's business error code for an
-// instrument it does not know — see wireError. Captured from the live
-// gateway on 2026-08-05, asking InstrumentsService/GetInstrumentBy about an
-// unknown uid: HTTP 404 with
-// {"code":5,"message":"Instrument not found","description":"50002"}. Note
-// the QUOTED form the live gateway used here too, which is why
-// wireError.Description is a json.Number.
+// instrumentNotFoundDescription: an unknown instrument (live, 2026-08-05:
+// HTTP 404 with "description":"50002", quoted).
 const instrumentNotFoundDescription = 50002
 
-// reportNotReadyDescription is the broker's business error code for a broker
-// report asked for before it is built — see errReportNotReady.
+// reportNotReadyDescription: a broker report not built yet
+// (errReportNotReady).
 const reportNotReadyDescription = 30058
 
-// wireAccount mirrors the REST gateway's Account (UsersService/GetAccounts
-// and GetSandboxAccounts): Type and Status are left as the enum's wire
-// strings (e.g. "ACCOUNT_TYPE_TINKOFF") rather than parsed further, exactly
-// as OperationItem.Type/State are — this package hands them on verbatim and
-// leaves interpreting them to the caller.
+// wireAccount is the gateway's Account; Type and Status stay wire strings.
 type wireAccount struct {
 	ID         string `json:"id"`
 	Type       string `json:"type"`
@@ -153,13 +112,8 @@ type wireGetAccountsResponse struct {
 	Accounts []wireAccount `json:"accounts"`
 }
 
-// wireOperationItem mirrors the REST gateway's OperationItem
-// (OperationsService/GetOperationsByCursor). Only the fields OperationItem
-// (client.go) surfaces are declared; the rest of the wire shape (name,
-// trades_info, child_operations, cancel_date_time/reason,
-// yield/yield_relative, quantity_rest, ...) is preserved verbatim in
-// OperationItem.Raw instead of being modeled here, since no caller of this
-// package needs it decoded yet.
+// wireOperationItem is the gateway's OperationItem, only the fields
+// OperationItem surfaces; the rest stays in OperationItem.Raw.
 type wireOperationItem struct {
 	ID                string         `json:"id"`
 	ParentOperationID string         `json:"parentOperationId"`
@@ -236,13 +190,9 @@ func (w wireOperationItem) parse(raw json.RawMessage) (OperationItem, error) {
 	}, nil
 }
 
-// getOperationsByCursorRequest mirrors GetOperationsByCursorRequest. State
-// is deliberately not a field here at all (not merely omitted via
-// omitempty): the mirror is a wire, not a copy of an empty pointer, so
-// "not present in the struct" reads directly as the request's guarantee
-// that it never filters by state — the mirror is append-only ("зеркало и
-// проекция"), so canceled and in-progress operations must reach it exactly
-// as executed ones do.
+// getOperationsByCursorRequest has no state field at all: the mirror is
+// append-only, so canceled and in-progress operations must arrive like executed
+// ones.
 type getOperationsByCursorRequest struct {
 	AccountID string `json:"accountId"`
 	From      string `json:"from,omitempty"`
@@ -250,34 +200,24 @@ type getOperationsByCursorRequest struct {
 	Limit     int    `json:"limit"`
 }
 
-// wireGetOperationsByCursorResponse mirrors
-// GetOperationsByCursorResponse. Items is decoded as raw JSON per element
-// rather than straight into []wireOperationItem so that OperationItem.Raw
-// can carry each element exactly as the gateway sent it, byte for byte.
+// wireGetOperationsByCursorResponse keeps items raw so OperationItem.Raw is
+// each element byte for byte.
 type wireGetOperationsByCursorResponse struct {
 	HasNext    bool              `json:"hasNext"`
 	NextCursor string            `json:"nextCursor"`
 	Items      []json.RawMessage `json:"items"`
 }
 
-// accountIDRequest is the shared {accountId} request body for
-// OperationsService/GetPortfolio and OperationsService/GetPositions — both
-// take exactly one field.
+// accountIDRequest is the {accountId} body of GetPortfolio and
+// GetPositions.
 type accountIDRequest struct {
 	AccountID string `json:"accountId"`
 }
 
-// wirePortfolioPosition mirrors PortfolioPosition (OperationsService/
-// GetPortfolio's response). Only the fields PortfolioPosition (client.go)
-// surfaces are modeled; the response carries many more (average price,
-// expected yield, ...) that no caller of this package needs yet.
-//
-// Ticker is decoded because the reconciliation has to NAME a position that
-// resolves to no instrument of ours, and the two identifiers that always
-// arrive are a UUID and a twelve-character figi — neither of which a person
-// reads. The gateway sends it on a portfolio position (seen on a live sandbox
-// response, 2026-08-05, on a position this program does not account for at
-// all), and an absent ticker is simply an empty string here.
+// wirePortfolioPosition is the gateway's PortfolioPosition, only the fields
+// PortfolioPosition surfaces. Ticker names a position that resolves to nothing of
+// ours, since a uid and figi mean nothing to a person (present in the live
+// sandbox, 2026-08-05).
 type wirePortfolioPosition struct {
 	FIGI           string        `json:"figi"`
 	InstrumentType string        `json:"instrumentType"`
@@ -305,56 +245,37 @@ func (w wirePortfolioPosition) parse() (PortfolioPosition, error) {
 // wireGetPortfolioResponse mirrors PortfolioResponse.
 type wireGetPortfolioResponse struct {
 	Positions []wirePortfolioPosition `json:"positions"`
-	// TotalAmountPortfolio is what the broker says the whole account is worth,
-	// in the currency the request asked for. Absent from some answers (a
-	// sandbox that holds nothing), so a pointer.
+	// TotalAmountPortfolio is the account's worth in the requested currency;
+	// absent from some answers (an empty sandbox).
 	TotalAmountPortfolio *wireMoneyValue `json:"totalAmountPortfolio"`
 }
 
-// portfolioRequest asks OperationsService/GetPortfolio for an account's
-// positions with the account's total stated in rubles.
+// portfolioRequest asks for positions with the total in roubles.
 type portfolioRequest struct {
 	AccountID string `json:"accountId"`
 	Currency  string `json:"currency"`
 }
 
-// wireGetPositionsResponse mirrors PositionsResponse's two currency-balance
-// arrays. Money and Blocked are independent lists of MoneyValue, one entry
-// per currency that has a nonzero amount in that list — a currency present
-// in one and absent from the other is not documented as an error case, so
-// GetPositions (client.go) treats "absent" as zero rather than rejecting
-// the response.
+// wireGetPositionsResponse holds the money and blocked lists; a currency in
+// one and not the other is zero on the missing side.
 type wireGetPositionsResponse struct {
 	Money   []wireMoneyValue `json:"money"`
 	Blocked []wireMoneyValue `json:"blocked"`
 }
 
-// instrumentByRequest mirrors InstrumentRequest for the one lookup this
-// package performs: by instrument_uid. classCode is omitted — it is
-// required only when idType is ticker, which InstrumentByUID never sends.
+// instrumentByRequest looks up by uid; classCode is needed only for tickers.
 type instrumentByRequest struct {
 	IDType string `json:"idType"`
 	ID     string `json:"id"`
 }
 
-// instrumentIDTypeUID is InstrumentIdType's wire value for a lookup by
-// instrument_uid (INSTRUMENT_ID_TYPE_UID = 3 in the proto enum; the REST
-// gateway sends and expects enum members by name, not by number).
+// instrumentIDTypeUID is the enum member by name, as REST expects.
 const instrumentIDTypeUID = "INSTRUMENT_ID_TYPE_UID"
 
-// wireInstrument mirrors the REST gateway's v1Instrument — the base
-// Instrument message InstrumentsService/GetInstrumentBy actually returns.
-//
-// It carries no nominal and no blocked field. Checked two ways: the
-// published OpenAPI spec (RussianInvestments/investAPI's
-// src/docs/swagger-ui/openapi.yaml, schema v1Instrument, re-checked
-// 2026-08-05 — no "nominal" or "blocked" property; the only blocked-shaped
-// field on this message is "blockedTcaFlag", a service-contract lock, not
-// the sanctions freeze this codebase's own "frozen" flag means), and a live
-// sandbox GetInstrumentBy call for a bond, whose response carried no
-// "nominal" key at all (this task's own review, not re-run in this fix). A
-// bond's nominal lives on the separate Bond message — see
-// BondNominalByUID (client.go).
+// wireInstrument is v1Instrument, GetInstrumentBy's answer. It has no nominal
+// and no sanctions flag (spec re-checked 2026-08-05; blockedTcaFlag is a contract
+// lock, not a freeze; a live bond lookup had no "nominal"). A bond's nominal comes
+// from BondNominalByUID.
 type wireInstrument struct {
 	UID            string `json:"uid"`
 	FIGI           string `json:"figi"`
@@ -370,10 +291,8 @@ type wireInstrumentResponse struct {
 	Instrument wireInstrument `json:"instrument"`
 }
 
-// wireBondResponse mirrors BondResponse (InstrumentsService/BondBy), trimmed
-// to the one field BondNominalByUID (client.go) needs: the wire schema
-// (v1BondResponse -> v1Bond, per the published OpenAPI spec) nests it under
-// "instrument", same as wireInstrumentResponse does for GetInstrumentBy.
+// wireBondResponse is BondBy's answer, trimmed to the nominal, nested under
+// "instrument".
 type wireBondResponse struct {
 	Instrument struct {
 		Nominal        wireMoneyValue `json:"nominal"`
@@ -381,21 +300,16 @@ type wireBondResponse struct {
 	} `json:"instrument"`
 }
 
-// wireCurrencyResponse mirrors CurrencyResponse (InstrumentsService/CurrencyBy),
-// trimmed to the one field CurrencyNominalByUID (client.go) needs. Same nesting
-// under "instrument" as the bond and instrument responses above: the published
-// OpenAPI spec gives v1CurrencyResponse -> v1Currency, and every By-method in
-// that service is shaped this way.
+// wireCurrencyResponse is CurrencyBy's answer, trimmed to the nominal, nested
+// under "instrument" like every By-method.
 type wireCurrencyResponse struct {
 	Instrument struct {
 		Nominal wireMoneyValue `json:"nominal"`
 	} `json:"instrument"`
 }
 
-// wireFindInstrumentResponse mirrors InstrumentsService/FindInstrument. Its
-// element is a shape of its own (InstrumentShort) rather than the full
-// instrument GetInstrumentBy returns, and it carries exactly the four fields
-// the search is for.
+// wireFindInstrumentResponse is FindInstrument's answer: InstrumentShort
+// elements with the four fields the search needs.
 type wireFindInstrumentResponse struct {
 	Instruments []struct {
 		UID            string `json:"uid"`
@@ -407,10 +321,8 @@ type wireFindInstrumentResponse struct {
 	} `json:"instruments"`
 }
 
-// wireGetLastPricesResponse mirrors MarketDataService/GetLastPrices. The
-// response carries NO CURRENCY — see LastPrice and migration 0017 for where the
-// currency of a price comes from instead, and why it cannot be the catalog
-// row's.
+// wireGetLastPricesResponse is GetLastPrices' answer, which has no currency
+// (see LastPrice and migration 0017).
 type wireGetLastPricesResponse struct {
 	LastPrices []wireLastPrice `json:"lastPrices"`
 }
@@ -422,9 +334,8 @@ type wireLastPrice struct {
 	LastPriceType string         `json:"lastPriceType"`
 }
 
-// parse reports ok=false for an entry the broker sent no price for, which it
-// really does send: the whole entry arrives with a uid and nothing else. A zero
-// would be a price of nothing and is not what that means.
+// parse reports ok=false for an entry with a uid and no price, which the
+// broker does send; it is not a price of zero.
 func (w wireLastPrice) parse() (LastPrice, bool, error) {
 	if w.Price == nil {
 		return LastPrice{}, false, nil
@@ -446,8 +357,7 @@ func (w wireLastPrice) parse() (LastPrice, bool, error) {
 	}, true, nil
 }
 
-// generateBrokerReportRequest orders a broker report: the method's request is
-// a oneof, and this is its "generate" arm.
+// generateBrokerReportRequest is the request oneof's "generate" arm.
 type generateBrokerReportRequest struct {
 	Generate generateBrokerReport `json:"generateBrokerReportRequest"`
 }
@@ -458,8 +368,8 @@ type generateBrokerReport struct {
 	To        string `json:"to"`
 }
 
-// getBrokerReportRequest asks for one page of a report already ordered — the
-// oneof's other arm.
+// getBrokerReportRequest is the oneof's other arm: one page of an ordered
+// report.
 type getBrokerReportRequest struct {
 	Get getBrokerReport `json:"getBrokerReportRequest"`
 }
@@ -479,9 +389,8 @@ type wireGetBrokerReportResponse struct {
 	Get wireBrokerReport `json:"getBrokerReportResponse"`
 }
 
-// wireBrokerReport is one page of a broker report. Only the fields
-// TradeSettlement needs are modeled; a row carries two dozen more (prices,
-// commissions, the counterparty) that the operations already say.
+// wireBrokerReport is one report page, only the fields TradeSettlement
+// needs.
 type wireBrokerReport struct {
 	Rows       []wireBrokerReportRow `json:"brokerReport"`
 	PagesCount int                   `json:"pagesCount"`
@@ -493,13 +402,10 @@ type wireBrokerReportRow struct {
 	ClearValueDate string `json:"clearValueDate"`
 }
 
-// parse reads one trade. The settlement day arrives as a timestamp at UTC
-// midnight ("2024-02-27T00:00:00Z" for a trade of the 26th), so its UTC date
-// is the day itself; anything that is not a midnight is refused rather than
-// rounded to a day it might not be.
-//
-// A row with no settlement day is not an error and not a trade to record: ok
-// is false, and the operations it belongs to keep their trade day.
+// parse reads one trade. The settlement day arrives as UTC midnight
+// ("2024-02-27T00:00:00Z" for a trade of the 26th); anything else is refused
+// rather than rounded. A row without one is ok=false and its operations keep
+// their trade day.
 func (w wireBrokerReportRow) parse() (s TradeSettlement, ok bool, err error) {
 	if w.ClearValueDate == "" {
 		return TradeSettlement{}, false, nil
@@ -533,11 +439,9 @@ type wireGetDividendsResponse struct {
 	Dividends []wireDividend `json:"dividends"`
 }
 
-// wireDividend mirrors Dividend (InstrumentsService/GetDividends). Only the
-// fields DeclaredDividend needs are modeled. dividendNet is, despite its name,
-// the amount per share BEFORE tax: on the owner's papers it is the issuer's
-// declared figure (NVIDIA's 0,04 $ for September 2021, of which 0,028 $ a share
-// reached the account).
+// wireDividend is GetDividends' Dividend, trimmed. dividendNet is, despite
+// the name, per share before tax: NVIDIA's 0,04 $ for September 2021, of which
+// 0,028 $ reached the account.
 type wireDividend struct {
 	DividendNet wireMoneyValue `json:"dividendNet"`
 	RecordDate  string         `json:"recordDate"`
@@ -545,9 +449,8 @@ type wireDividend struct {
 	LastBuyDate string         `json:"lastBuyDate"`
 }
 
-// parse reads one dividend; ok is false for one declared as nothing. A
-// dividend with no record date is refused: it is the day the whole estimate
-// hangs on.
+// parse reads one dividend; ok=false for one declared as zero. No record
+// date is an error: the estimate hangs on it.
 func (w wireDividend) parse() (d DeclaredDividend, ok bool, err error) {
 	per, err := w.DividendNet.parse()
 	if err != nil {
@@ -573,9 +476,9 @@ func (w wireDividend) parse() (d DeclaredDividend, ok bool, err error) {
 	return d, true, nil
 }
 
-// optionalDay is a calendar day the gateway may leave out: nil when it does.
-// The broker's calendar sends its days as Moscow midnights or UTC ones
-// depending on the paper, and either is the same Moscow day.
+// optionalDay is a day the gateway may omit (nil). The calendar sends
+// Moscow or UTC midnights depending on the paper; both are the same Moscow
+// day.
 func optionalDay(s string) (*time.Time, error) {
 	t, err := parseWireTime(s)
 	if err != nil || t.IsZero() {
