@@ -13,9 +13,8 @@ import (
 	"babki.my/babki/internal/platform/testdb"
 )
 
-// runAPI starts the api role as cmd/babki assembles it, waits until it
-// answers, and returns a caller that posts or gets JSON and decodes the answer
-// into out (when not nil).
+// runAPI starts the api role as cmd/babki assembles it, waits for it, and
+// returns a JSON caller.
 func runAPI(t *testing.T) func(method, path, body string, want int, out any) {
 	t.Helper()
 	pool := testdb.New(t)
@@ -86,15 +85,10 @@ func runAPI(t *testing.T) func(method, path, body string, want int, out any) {
 	}
 }
 
-// TestAHandEntryReachesTheRegistryInTheRunningProcess pins a piece of WIRING,
-// which no test of a module can: that the process as cmd/babki assembles it
-// hands a committed hand entry to the corporate-actions registry. The function
-// that does the work existed, was tested, and was called by nothing for a month
-// (#188) — so this goes through the real role, over HTTP, and asks for the
-// position.
-//
-// Amazon's split of 2022-06-06 is recorded first; a purchase of one share dated
-// 2021 is entered after it; the position must read twenty at once.
+// The running process hands a committed hand entry to the registry; the hook
+// was once tested but called by nothing (#188). Amazon's 2022-06-06 split is
+// recorded, a 2021 purchase of one share is entered, and the position reads
+// twenty.
 func TestAHandEntryReachesTheRegistryInTheRunningProcess(t *testing.T) {
 	call := runAPI(t)
 	type withID struct {
@@ -129,10 +123,8 @@ func TestAHandEntryReachesTheRegistryInTheRunningProcess(t *testing.T) {
 	}
 }
 
-// TestTheTotalReadsABrokerageAccountFromItsJournal pins the other piece of
-// wiring the account module cannot test alone: that the process hands it the
-// portfolio engine, so the family total counts a brokerage account by its
-// operations (the owner's ruling on Р-2) rather than by a balance typed in.
+// The process hands the account module the portfolio engine, so the family
+// total counts a brokerage account by its journal (Р-2).
 func TestTheTotalReadsABrokerageAccountFromItsJournal(t *testing.T) {
 	call := runAPI(t)
 	call("POST", "/api/v1/setup",
