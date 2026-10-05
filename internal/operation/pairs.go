@@ -12,31 +12,16 @@ import (
 )
 
 // BuildExchange and BuildSpinoff are the arithmetic of a corporate action's
-// journal pair, with no database under them: given an account's journal and
-// what the registry says happened, they answer with the two legs — the parcels
-// released, the basis they carry, the currency, and the counts on the scale the
-// columns store.
-//
-// THEY EXIST BECAUSE TWO PATHS WRITE THESE PAIRS AND ONLY ONE ARITHMETIC MAY
-// DECIDE THEM. CreateExchange and CreateSpinoff write one pair against one
-// locked account; the corporate-actions materializer writes many, for every
-// account that held the paper, as one difference against the journal (see
-// internal/corporateaction). Before these functions the second path had no way
-// to reach the first's reasoning except by restating it, and a restated FIFO
-// release is exactly the pair of independent computations of one figure this
-// codebase has watched drift more than once.
-//
-// WHAT THEY DO NOT DO is take a lock, read a journal, check the result against
-// the engine, or name the row: the journal is the caller's to supply and to
-// have locked, and Source, ExternalID, TransferGroupID and Note are the
-// caller's to set. What they return is not yet a row anyone may write.
+// journal pair with no database under them. Both CreateExchange/CreateSpinoff and
+// the corporate-actions materializer use them, so one arithmetic decides every
+// pair. They take no lock, read nothing and check nothing against the engine:
+// the journal is the caller's to supply and lock, and Source, ExternalID,
+// TransferGroupID and Note are the caller's to set.
 
-// BuildExchange returns the exchange_out/exchange_in pair for a conversion of
-// p.Quantity units of one paper into p.ToQuantity units of another, resolved
-// against journal as it stood on p.OccurredOn.
-//
-// The counts are truncated to the journal's scale first, and DOWNWARDS: "convert
-// everything I hold" must never round up past the position it empties.
+// BuildExchange returns the exchange_out/exchange_in pair converting p.Quantity
+// units of one paper into p.ToQuantity of another, against journal as of
+// p.OccurredOn. Counts are truncated down to the journal's scale, so "convert
+// everything" never rounds past the position.
 func BuildExchange(journal []Operation, p ExchangeParams) (out, in Operation, err error) {
 	if err := checkExchangeParams(p); err != nil {
 		return Operation{}, Operation{}, err
@@ -54,21 +39,15 @@ func BuildExchange(journal []Operation, p ExchangeParams) (out, in Operation, er
 		return Operation{}, Operation{}, err
 	}
 
-	// The currency the old paper's cost is denominated in, read off the
-	// account's own history exactly as a transfer reads it. The new paper
-	// inherits it, and must: what arrives is the money that was paid, and that
-	// money has a currency of its own regardless of what the new paper is quoted
-	// in. If the account already holds the new paper in a different currency the
-	// engine refuses the pair, loudly, rather than mixing two currencies inside
-	// one basis.
+	// The new paper inherits the currency the old paper's cost was paid in.
+	// If the account already holds it in another currency the engine refuses
+	// the pair rather than mixing currencies in one basis.
 	currency := currencyOf(journal, p.FromInstrumentID)
 	if currency == "" {
 		return Operation{}, Operation{}, fmt.Errorf("%w: no history for the instrument being converted", family.ErrValidation)
 	}
 
-	// Resolved against the journal as it stood on the conversion's own date, not
-	// against the end state: a backdated conversion is replayed at its
-	// chronological place, where the FIFO front is a different one.
+	// Released as of the conversion's own date, where the replay puts it.
 	lots, err := portfolio.ReleasedLots(FoldedBefore(journal, p.OccurredOn, p.Source), p.FromInstrumentID, quantity)
 	if err != nil {
 		return Operation{}, Operation{}, fmt.Errorf("%w: %v", ErrInconsistent, err)
@@ -76,13 +55,8 @@ func BuildExchange(journal []Operation, p ExchangeParams) (out, in Operation, er
 	lots = quantizeLots(lots, quantity)
 	cost := portfolio.LotsCost(lots)
 	arriving := rescaleLots(lots, quantity, toQuantity)
-	// NOT AN ARGUMENT ABOUT rescaleLots BUT A CHECK ON IT. The two legs carry one
-	// and the same amount_minor, and portfolio.CheckTransferLots holds each leg's
-	// pieces to the amount of the row carrying them — so a basis lost or invented
-	// in the restating would surface as a refusal on every later read of this
-	// account rather than here. Saying it outright, on the write that caused it,
-	// is the difference between a bug reported against the request that made it
-	// and one reported against whoever next opens the screen.
+	// A check on rescaleLots: a basis lost in restating would otherwise
+	// surface on every later read rather than on this write.
 	if got := portfolio.LotsCost(arriving); got != cost {
 		return Operation{}, Operation{}, fmt.Errorf(
 			"restating the breakdown in the new paper's units changed the basis from %d to %d minor units", cost, got)
@@ -103,21 +77,16 @@ func BuildExchange(journal []Operation, p ExchangeParams) (out, in Operation, er
 	return out, in, nil
 }
 
-// BuildSpinoff returns the spinoff_out/spinoff_in pair for a carve-out of
-// p.BasisShare of the cost onto a second paper, resolved against journal as it
-// stood on p.OccurredOn.
-//
-// HOW MANY UNITS ARRIVE IS DECIDED HERE and is not the caller's to state: it
-// follows from the holding, and a caller passing an absolute count would be a
-// second computation of the same figure made against a journal that may have
-// moved (see SpinoffParams).
+// BuildSpinoff returns the spinoff_out/spinoff_in pair carving p.BasisShare of
+// the cost onto a second paper, against journal as of p.OccurredOn. The arriving
+// count follows from the holding and is computed here (see SpinoffParams).
 func BuildSpinoff(journal []Operation, p SpinoffParams) (out, in Operation, err error) {
 	if err := checkSpinoffParams(p); err != nil {
 		return Operation{}, Operation{}, err
 	}
 
-	// The holding the row will find when it is replayed: a registry row folds at
-	// the start of its day, ahead of that day's trades (see FoldedBefore).
+	// The holding the row will find on replay: a registry row folds at the
+	// start of its day (see FoldedBefore).
 	positions, err := portfolio.Compute(FoldedBefore(journal, p.OccurredOn, p.Source))
 	if err != nil {
 		return Operation{}, Operation{}, fmt.Errorf("%w: %v", ErrInconsistent, err)
@@ -146,10 +115,9 @@ func BuildSpinoff(journal []Operation, p SpinoffParams) (out, in Operation, err 
 			"%w: %s of the %d minor this account paid for the paper rounds to nothing, so the spin-off would move no money at all",
 			family.ErrValidation, p.BasisShare, held.CostMinor)
 	}
-	// The arriving parcel: the same money and the same days, restated in the new
-	// paper's units by the one allocation this package has (see rescaleLots). The
-	// departing leg's pieces are NOT restated — they name the original's own
-	// parcels, which is what a later replay matches them against.
+	// The arriving parcel: same money and days in the new paper's units (see
+	// rescaleLots). The departing pieces stay in the original's units, which
+	// is what a replay matches them against.
 	arriving := rescaleLots(pieces, held.Quantity, toQuantity)
 	if got := portfolio.LotsCost(arriving); got != cost {
 		return Operation{}, Operation{}, fmt.Errorf(
@@ -180,11 +148,7 @@ func checkExchangeParams(p ExchangeParams) error {
 	if p.FromInstrumentID == uuid.Nil || p.ToInstrumentID == uuid.Nil {
 		return fmt.Errorf("%w: from and to instruments are required", family.ErrValidation)
 	}
-	// THE SAME PAPER ON BOTH SIDES IS NOT A CONVERSION, it is a split written
-	// with extra steps — and it would fold as one position releasing lots and
-	// immediately re-adding them, whose result depends on the order of two rows
-	// sharing a date. A split is the type for "the same paper, a different count"
-	// and it already exists.
+	// The same paper on both sides is a split, which has its own type.
 	if p.FromInstrumentID == p.ToInstrumentID {
 		return fmt.Errorf("%w: from and to instruments must differ; the same paper in a new count is a split", family.ErrValidation)
 	}
@@ -203,33 +167,25 @@ func checkSpinoffParams(p SpinoffParams) error {
 	if p.FromInstrumentID == uuid.Nil || p.ToInstrumentID == uuid.Nil {
 		return fmt.Errorf("%w: from and to instruments are required", family.ErrValidation)
 	}
-	// THE SAME PAPER ON BOTH SIDES IS NOT A SPIN-OFF. It would take money out of
-	// the position's parcels and add it back to the same position as new parcels
-	// — the basis unchanged, the parcel list doubled, and the FIFO queue silently
-	// rearranged.
+	// The same paper on both sides would rearrange the FIFO queue and
+	// double the parcel list with the basis unchanged.
 	if p.FromInstrumentID == p.ToInstrumentID {
 		return fmt.Errorf("%w: a spin-off must name a different paper than the one it comes out of", family.ErrValidation)
 	}
 	if !p.RatioFrom.IsPositive() || !p.RatioTo.IsPositive() {
 		return fmt.Errorf("%w: both sides of the ratio must be positive", family.ErrValidation)
 	}
-	// FROM NOTHING TO LESS THAN EVERYTHING. A share of 0 moves no money: the new
-	// paper arrives bought for nothing, which is how the broker keeps a
-	// carve-out (decision Р-16). A share of 1 moves ALL of it, which is
-	// a conversion — the original paper would be left holding units with no basis
-	// behind them, so every later sale of it would show the whole proceeds as
-	// profit. The registry refuses both as well (corporateaction.Event's
-	// Validate); it is stated here too because this function does not route
-	// through that one, and a rule only the other door enforces is a rule this
-	// door does not have.
+	// 0 moves no money (the broker's way, Р-16); 1 would be a conversion and
+	// leave the original with no basis. corporateaction.Event.Validate
+	// refuses the same, but this path does not go through it.
 	if p.BasisShare.IsNegative() || !p.BasisShare.LessThan(decimal.NewFromInt(1)) {
 		return fmt.Errorf("%w: the share of the basis that moves must be at least 0 and less than 1", family.ErrValidation)
 	}
 	return checkOccurredOn(p.OccurredOn)
 }
 
-// currencyOf is the currency an account's cost in one paper is denominated in,
-// read off the newest row that names it.
+// currencyOf is the currency of an account's cost in one paper, read off the
+// newest row naming it.
 func currencyOf(journal []Operation, instrumentID uuid.UUID) string {
 	for i := len(journal) - 1; i >= 0; i-- {
 		o := journal[i]

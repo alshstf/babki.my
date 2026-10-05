@@ -17,84 +17,50 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// ErrAccountNotInSpace means an operation named an account id that insertSQL's
-// own WHERE clause could not find inside the caller's space (see insertSQL's
-// doc: zero rows back means the account is not in the caller's space). Named
-// so a caller can test for it instead of matching a bare pgx.ErrNoRows that,
-// on its own, says nothing about which of the statement's two tables failed
-// to produce a row.
+// ErrAccountNotInSpace means an operation named an account outside the caller's
+// space: insertSQL's WHERE clause found no row.
 var ErrAccountNotInSpace = errors.New("account not found in space")
 
-// ErrAccountArchived means a hand entry named an account the family has put
-// in the archive. An archived account is out of every total and its balance
-// can no longer be marked; a row typed into it would change a history nobody
-// is looking at any more, so it is brought back from the archive first.
+// ErrAccountArchived means a hand entry named an archived account. It is out of
+// every total, so it is brought back from the archive before it is written to.
 var ErrAccountArchived = fmt.Errorf("%w: the account is archived; bring it back from the archive to change it", family.ErrValidation)
 
-// ErrRemovalCountMismatch means ApplyDelta's own DELETE found fewer rows than
-// removeIDs named. Service.importRemovals already checks every id belongs to
-// this space and is an importer's to remove before ApplyDelta ever runs (see
-// ErrImportContract, the same fault named one layer up), so reaching this in
-// practice means the journal moved between that check and this transaction.
-// Either way, writing the part of the removal that still holds would leave
-// half of a difference computed against a journal that no longer exists.
+// ErrRemovalCountMismatch means ApplyDelta's DELETE found fewer rows than
+// removeIDs named: the journal moved after Service.importRemovals checked them.
+// Writing the rest would apply half of a stale difference.
 var ErrRemovalCountMismatch = errors.New("asked to remove operations that are not all there")
 
 type Store struct{ db db.Executor }
 
 func NewStore(x db.Executor) *Store { return &Store{db: x} }
 
-// accountLockSQL takes the lock that makes an account's journal one writer's at
-// a time, and doubles as the proof that the account is the caller's: no row back
-// means it is not in this space, the same thing insertSQL's own WHERE clause
-// says (see ErrAccountNotInSpace).
+// accountLockSQL takes the lock that gives an account's journal one writer at a
+// time, and proves the account is the caller's (no row: not in this space).
 //
-// FOR NO KEY UPDATE, not FOR UPDATE, and the difference is not cosmetic. Every
-// INSERT into operations takes a FOR KEY SHARE lock on the account row for its
-// foreign key, as does every balance written for that account — and FOR UPDATE
-// conflicts with FOR KEY SHARE while FOR NO KEY UPDATE does not. The stronger
-// mode would therefore have journal writers block anything that merely
-// REFERENCES the account, which is a great deal more than the mutual exclusion
-// wanted here. FOR NO KEY UPDATE conflicts with itself, which is exactly and
-// only what this needs.
+// FOR NO KEY UPDATE, not FOR UPDATE: every insert into operations, and every
+// balance written for the account, takes FOR KEY SHARE on the account row for its
+// foreign key, and FOR UPDATE would block those too. FOR NO KEY UPDATE conflicts
+// only with itself.
 const accountLockSQL = `SELECT status FROM accounts WHERE space_id = $1 AND id = $2 FOR NO KEY UPDATE`
 
-// WithAccountsLocked runs fn inside ONE transaction that holds an exclusive
-// journal lock on each of accountIDs, with a Store bound to that transaction —
-// so a caller can read an account's journal, decide on it, and write, with
-// nothing able to slip in between.
+// WithAccountsLocked runs fn in one transaction holding an exclusive journal
+// lock on each of accountIDs, with a Store bound to that transaction, so a caller
+// can read a journal, decide and write with nothing slipping in between. Without
+// it, two concurrent sells of one holding were both accepted and left a journal
+// that no longer replays (#17).
 //
-// THAT WINDOW IS THE WHOLE REASON IT EXISTS (issue #17). The write paths judge a
-// request by replaying the account's journal through the engine, and until this
-// existed the replay ran on the pool, outside any transaction: two sells of the
-// same holding, submitted at once, each saw a journal without the other, each
-// was told it fitted, and both landed. The account then held a journal that no
-// longer replays at all — every later read of its positions answering 422, for
-// two requests that were each individually fine. Reading INSIDE the lock is what
-// makes the second request see the first, so it is refused exactly as it would
-// have been had the two arrived a second apart.
-//
-// The lock is taken one account at a time, in a sorted order, and both halves of
-// that matter. Sorted, because a transfer locks two accounts and two transfers
-// in opposite directions would otherwise take them in opposite orders and
-// deadlock. One statement at a time, because a single statement locking several
-// rows would have to rest on where the planner puts its locking step relative to
-// its sort — a claim about the planner that nothing here needs to make. Two
-// round trips is the most any caller of this package pays.
-//
-// fn's error is returned unchanged and rolls the transaction back: it is the
-// caller's own decision about the caller's own domain, and dressing it up here
-// would hide which of the two the failure was.
+// Locks are taken one account per statement in sorted order: sorted so that two
+// opposite transfers cannot deadlock, one at a time so nothing rests on where the
+// planner puts the lock relative to the sort. fn's error is returned unchanged
+// and rolls back.
 func (s *Store) WithAccountsLocked(ctx context.Context, spaceID uuid.UUID, accountIDs []uuid.UUID, fn func(*Store) error) error {
 	return s.withAccountsLocked(ctx, spaceID, accountIDs, false, fn)
 }
 
-// WithOpenAccountsLocked is WithAccountsLocked for a hand entry: it also
-// refuses, with ErrAccountArchived, when any of accountIDs is archived. The
-// status is read under the same lock, so an account archived meanwhile is
-// refused rather than written into. An importer takes WithAccountsLocked
-// instead: what a broker reports about an account is recorded whatever the
-// family has done with it since.
+// WithOpenAccountsLocked is WithAccountsLocked for a hand entry: it also refuses
+// an archived account with ErrAccountArchived, reading the status under the same
+// lock. An importer uses WithAccountsLocked: what a broker reports is recorded
+// whatever the family has done with the account since.
 func (s *Store) WithOpenAccountsLocked(ctx context.Context, spaceID uuid.UUID, accountIDs []uuid.UUID, fn func(*Store) error) error {
 	return s.withAccountsLocked(ctx, spaceID, accountIDs, true, fn)
 }
@@ -142,26 +108,14 @@ func scan(row pgx.Row) (Operation, error) {
 	return o, err
 }
 
-// insertSQL guards space ownership of the account in the same statement:
-// zero rows returned means the account is not in the caller's space.
+// insertSQL checks the account belongs to the space in the same statement: no
+// row back means it does not.
 //
-// created_at is the one column of this statement a caller may either state or
-// leave alone: NULL — what every path but ApplyDelta passes — takes this
-// statement's own clock, and anything else is used as given. It became statable
-// because a batch writes a whole history under one commit and the caller is the
-// only one who knows the order it checked that history in (see ApplyDelta).
-//
-// THE CLOCK IS clock_timestamp() AND NOT now(), which is the difference between
-// "when this row was written" and "when the enclosing transaction began". The
-// two agree, to within the moment it took, for a caller that writes one row per
-// transaction; they do not for one that writes several under one commit — a
-// transfer pair, or the demo seed, which writes its whole journal a row at a
-// time inside a single transaction. With now() every one of those rows claims
-// one and the same instant, and
-// two operations of the same date sharing one created_at leave the reads below
-// nothing to order them by: ListForEngine would fold them in an order the
-// database picks — in one of which a same-day sell precedes its buy and is an
-// oversell — and the paged listing would have no total order to page over.
+// created_at may be stated (ApplyDelta, which knows the order it checked) or left
+// NULL, which takes clock_timestamp(). Not now(): several rows written under one
+// commit (a transfer pair, the demo seed) would share one instant, and same-day
+// rows with equal created_at give ListForEngine nothing to order by, so a same-day
+// sell could fold before its buy.
 const insertSQL = `
 	INSERT INTO operations (space_id, account_id, instrument_id, type,
 		occurred_on, settled_on, quantity, price, amount_minor, currency,
@@ -172,8 +126,8 @@ const insertSQL = `
 	FROM accounts a WHERE a.id = $2 AND a.space_id = $1
 	RETURNING ` + cols
 
-// insertArgs is insertSQL's argument list, in one place because two callers
-// send that statement — one row at a time, and a whole delta as a batch.
+// insertArgs is insertSQL's argument list, shared by the single-row and batch
+// callers.
 func insertArgs(spaceID uuid.UUID, op Operation, createdAt *time.Time) []any {
 	return []any{
 		spaceID, op.AccountID, op.InstrumentID, op.Type, op.OccurredOn,
@@ -183,8 +137,7 @@ func insertArgs(spaceID uuid.UUID, op Operation, createdAt *time.Time) []any {
 	}
 }
 
-// scanInserted reads back one row insertSQL returned, naming the one thing its
-// WHERE clause can refuse: an account that is not the caller's.
+// scanInserted reads back one row insertSQL returned.
 func scanInserted(row pgx.Row) (Operation, error) {
 	created, err := scan(row)
 	if err == pgx.ErrNoRows {
@@ -193,13 +146,8 @@ func scanInserted(row pgx.Row) (Operation, error) {
 	return created, err
 }
 
-// insertOne writes one operation and lets the database date it. The literal nil
-// is the point: the row-at-a-time paths (Create, CreatePair) leave created_at to
-// the statement's own clock, and cannot be made to state one by an operation
-// that happens to carry a CreatedAt from somewhere. What that leaves them is the
-// moment each row was actually written, rather than one moment shared by every
-// row a caller wrote under the same commit — see insertSQL on why the clock has
-// to be the statement's and not the transaction's.
+// insertOne writes one operation and lets the database date it: nil created_at,
+// whatever CreatedAt the operation carries (see insertSQL).
 func insertOne(ctx context.Context, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, spaceID uuid.UUID, op Operation,
@@ -207,25 +155,12 @@ func insertOne(ctx context.Context, q interface {
 	return scanInserted(q.QueryRow(ctx, insertSQL, insertArgs(spaceID, op, nil)...))
 }
 
-// Create inserts one operation and hands the row AS STORED to verify before
-// the transaction commits, so a row the database cannot hold faithfully is
-// rolled back instead of published.
-//
-// The distinction between the two is the whole point: quantity and split_ratio
-// are stored on a fixed scale, so the operation Postgres keeps is not
-// necessarily the one the caller checked, and a quantity that comes back a
-// shade larger than the one validated is an oversell nobody learns about until
-// somebody else's later read (see Service.Create for the fault this caught).
-// Confirming the returned row closes that gap whatever rounding a column
-// applies: the committed journal is always one that replays.
-//
-// verify's error is returned as-is and aborts the write. It describes a
-// disagreement between this program and its own storage, not a bad request, so
-// callers must not dress it up as a domain error. The transfer pair has the
-// same guard for the same reason (see CreatePair).
-//
-// A nil verify means the caller has nothing to confirm — it is a plain insert
-// then, for tests exercising storage itself rather than the journal.
+// Create inserts one operation and hands the row as stored to verify before the
+// commit. quantity and split_ratio are stored on a fixed scale, so the stored row
+// may differ from the checked one; verifying it keeps the committed journal one
+// that replays. verify's error is returned as is: it is a disagreement between
+// this program and its storage, not a bad request. A nil verify is a plain insert,
+// for storage tests.
 func (s *Store) Create(ctx context.Context, spaceID uuid.UUID, op Operation, verify func(Operation) error) (Operation, error) {
 	if verify == nil {
 		return insertOne(ctx, s.db, spaceID, op)
@@ -246,68 +181,25 @@ func (s *Store) Create(ctx context.Context, spaceID uuid.UUID, op Operation, ver
 	return created, tx.Commit(ctx)
 }
 
-// insertLotSQL writes one piece of a transfer's FIFO breakdown. seq keeps
-// the pieces in the FIFO order they were released in; the table's foreign
-// key removes them with the operation they describe.
-//
-// It RETURNS the stored row rather than nothing, because quantity is
-// NUMERIC(30,10) and what goes in is not always what comes out — the column
-// has a scale and the value in memory does not. The caller publishes and
-// checks the row Postgres kept, not the one it sent (see CreatePair).
-//
-// One statement per piece, but not one round trip per piece: the pieces are
-// queued into a single pgx.Batch (see writeTransferLots).
+// insertLotSQL writes one piece of a transfer's FIFO breakdown; seq keeps FIFO
+// order and the foreign key removes pieces with their operation. It returns the
+// stored row because quantity is NUMERIC(30,10) and may come back rounded.
 const insertLotSQL = `
 	INSERT INTO operation_transfer_lots (operation_id, seq, quantity, cost_minor, acquired_on, rate_on)
 	VALUES ($1, $2, $3, $4, $5, $6)
 	RETURNING quantity, cost_minor, acquired_on, rate_on`
 
-// writeTransferLots stores a transfer's FIFO breakdown next to the operation
-// carrying it and returns the pieces AS THE DATABASE KEPT THEM, in the order
-// they were released in.
+// writeTransferLots stores a breakdown next to the operation carrying it and
+// returns the pieces as stored, in release order. The pieces go out as one
+// pgx.Batch, so a long-held position's 120 pieces cost one round trip, not 120
+// (#73). Each statement returns its stored row, and those rows travel on, never
+// the arguments.
 //
-// The pieces go out as one batch rather than one statement at a time. What they
-// cost used to grow with the parcel's history rather than with the transfer: a
-// position built up by a decade of monthly buying moves as some 120 pieces, and
-// that was 120 statements, each waiting for the one before it (#73). Queued
-// together they are a single write and a single wait, whatever the parcel has
-// been through.
-//
-// What the batch was NOT allowed to change is which pieces come back. Each
-// statement still RETURNS its stored row, and it is those rows that are handed
-// on to be checked and published — never the arguments echoed back. The
-// distinction is the whole reason the RETURNING is there: quantity is stored on
-// a fixed scale, so a piece can come back a shade different from the one that
-// went in, and a breakdown that was checked before the rounding and committed
-// after it is the fault this project has already met twice (see CreatePair).
-//
-// Reading them back in queue order is the driver's documented behaviour, not an
-// observation: pgx.BatchResults.Query "reads the results from the NEXT query in
-// the batch", and the underlying protocol returns one result per queued
-// statement in the order they were sent. Nothing here depends on the rows of
-// any one statement arriving in a particular order — each statement writes and
-// returns exactly one piece.
-//
-// A failure part way through behaves as the one-at-a-time loop did: the caller
-// gets the FIRST error, naming the piece that caused it. That is not because
-// the pieces queued behind it come back with some other, distinguishable
-// error — they come back with nothing at all. pgx sends every statement in
-// the batch before reading a single result back — one pipeline, synced once,
-// after every statement is queued (see (*pgx.Conn).sendBatchExtendedWithDescription)
-// — so when Postgres reaches the bad statement it discards whatever is still
-// queued behind it, unread and unexecuted, all the way to that sync; the
-// statement that would have been read next produces no result of its own, not
-// an "aborted" one. Even a loop that kept reading past the first failure would
-// not see a different error: pgx's own reader makes the first error sticky
-// (pipelineBatchResults.Query returns the error already recorded on the batch
-// rather than reading further once one read has failed), so what actually
-// names the failing piece is the two things this loop does — it reads results
-// in order, and it returns on the first error, before asking for a second one.
-// Since every statement of the batch runs inside the transaction CreatePair
-// opened, the pieces written before the bad one go with the pair when it is
-// rolled back. The results are closed before returning either way: the
-// connection cannot be used again, not even to roll back, while a batch's
-// results are outstanding.
+// Results are read in queue order, as pgx documents. On failure the first error
+// names the failing piece: Postgres discards everything queued after it, and pgx
+// keeps the first error sticky. The enclosing transaction rolls back the pieces
+// written before it. Results are closed either way, since the connection is
+// unusable while they are outstanding.
 func writeTransferLots(ctx context.Context, tx pgx.Tx, operationID uuid.UUID, lots []ReleasedLot) ([]ReleasedLot, error) {
 	batch := &pgx.Batch{}
 	for i, lot := range lots {
@@ -329,41 +221,16 @@ func writeTransferLots(ctx context.Context, tx pgx.Tx, operationID uuid.UUID, lo
 	return stored, nil
 }
 
-// CreatePair inserts a transfer_out/transfer_in pair atomically with a
-// shared transfer_group_id, together with the FIFO breakdown carried on the
-// receiving leg (in.TransferLots). All of it lands in one transaction: a
-// transfer_in that lost its breakdown would arrive as a single lot that knows
-// nothing about when it was bought (see portfolio.Lot.AcquiredOn), and the
-// destination's whole ruble basis with it — dates that were resolvable at
-// write time and are not resolvable ever again.
+// CreatePair inserts a transfer_out/transfer_in pair with a shared
+// transfer_group_id and the breakdown carried on the arriving leg, in one
+// transaction: an arrival that lost its breakdown would lose its purchase dates
+// for good (see portfolio.Lot.AcquiredOn).
 //
-// Both returned legs carry that breakdown, though only one of them stores it,
-// for the reason attachTransferLots gives at every later read: the pieces
-// describe one parcel and the departing leg is that same parcel leaving.
-//
-// Everything it returns has been read back out of the database, never handed
-// through from the arguments — both operations come from the INSERT's
-// RETURNING, and so now do the pieces. That is not ceremony: quantities are
-// stored with a fixed scale, so a piece can come back a shade different from
-// the one that went in, and a response describing pieces that are not in the
-// table is a response nobody can act on. The pieces as stored are then run
-// through the engine's own check before the transaction commits, so a pair
-// whose breakdown does not add up in the database is never committed at all
-// — instead of being accepted and failing every later read of the receiving
-// account (see portfolio.CheckTransferLots).
-//
-// verify is the caller's own last look at the pair AS STORED, before the
-// transaction commits, and it is the same guard Create has for a single
-// operation — for a reason that has grown sharper. The departing leg no longer
-// merely records a quantity: it RELEASES the very pieces stored here (see
-// portfolio.Position.releaseRecorded), so the row that will be replayed on the
-// source account from now on is this one, with the quantities the columns
-// rounded to and the pieces the table gave back, not the one the service
-// checked in memory. Confirming the stored pair replays is what keeps "accepted
-// with a 201, then refused on every later read" from returning by a new door;
-// the project has been through that door twice already (see quantizeLots and
-// normalizeForStorage). A nil verify means the caller has nothing to confirm —
-// a plain insert, for tests exercising storage itself.
+// Everything returned is read back from the database, and the stored pieces pass
+// portfolio.CheckTransferLots before the commit. verify is the caller's last look
+// at the stored pair, as for Create: the departing leg replays the stored pieces
+// (see portfolio.Position.releaseRecorded), so it is that row, not the checked
+// one, that later reads fold. A nil verify is a plain insert.
 func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Operation, verify func(out, in Operation) error) (Operation, Operation, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -389,41 +256,22 @@ func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Opera
 			return Operation{}, Operation{}, err
 		}
 		cIn.TransferLots = stored
-		// The departing leg gets them too, WHEN THE PAIR IS ONE PARCEL. The rows
-		// are stored next to the arriving leg only, but they describe THE
-		// PARCEL, and a transfer's pair is one parcel with the opposite sign —
-		// which is exactly what attachTransferLots decided for every later read
-		// (see its doc). Handing back an out leg with an empty breakdown made
-		// the pair contradict itself within a single response: whether a
-		// transfer knows when its shares were bought is published per operation
-		// (Operation.has_undated_lots, see the API contract), and the departing
-		// leg would have answered "no" about a parcel whose dates are sitting in
-		// the same transaction.
-		//
-		// A CONVERSION IS NOT ONE PARCEL and so is not copied here: its legs
-		// name different papers and different counts, and the departing one
-		// carries and stores a breakdown of its own just below (see
-		// carriesOwnLots). Copying the arriving leg's pieces onto it would put M
-		// units of the NEW paper on the row that gave up N of the old — a
-		// breakdown that does not sum to the quantity of the row carrying it,
-		// which is precisely what the check below refuses.
+		// The departing leg of a transfer gets the same pieces: one parcel with
+		// the opposite sign, as attachTransferLots reads it later, so the pair
+		// does not contradict itself on has_undated_lots. A conversion is two
+		// parcels; its out leg stores its own below (see carriesOwnLots).
 		if !carriesOwnLots(out) {
 			cOut.TransferLots = stored
 		}
 		if err := checkStoredLots(cIn); err != nil {
-			// The rows are already in this transaction, so refusing here rolls
-			// them back. Reaching this means the write path built a breakdown
-			// the storage cannot hold faithfully — a bug in this program, not
-			// something the caller did — so it is not one of the domain errors
-			// and surfaces as a server error, loudly, on the request that
-			// caused it rather than on every future read by someone else.
+			// Refusing rolls the rows back. A breakdown the storage cannot hold
+			// faithfully is this program's bug, so it surfaces as a server error on
+			// the request that caused it.
 			return Operation{}, Operation{}, fmt.Errorf("transfer lots as stored: %w", err)
 		}
 	}
-	// The departing leg's own breakdown, for the pair whose two legs are two
-	// different parcels. Written and checked exactly like the arriving one, and
-	// against ITS row: a conversion's out leg claims N units of the old paper and
-	// its pieces must sum to N, while the in leg's sum to M of the new.
+	// A conversion's out leg: N units of the old paper, checked against its
+	// own row.
 	if carriesOwnLots(out) {
 		stored, err := writeTransferLots(ctx, tx, cOut.ID, out.TransferLots)
 		if err != nil {
@@ -442,20 +290,10 @@ func (s *Store) CreatePair(ctx context.Context, spaceID uuid.UUID, out, in Opera
 	return cOut, cIn, tx.Commit(ctx)
 }
 
-// checkStoredLots holds a leg's breakdown, AS THE DATABASE GAVE IT BACK, to
-// whatever "adding up" means for that leg's type.
-//
-// For everything that moves units it means the pieces sum to the quantity of
-// the row and to its basis (portfolio.CheckTransferLots). A spin-off's
-// departing leg moves no units and carries no quantity to sum to, so it is held
-// to its basis alone and its pieces are matched against the account's parcels
-// where they mean something, on every fold (portfolio.CheckSpinoffLots and
-// Position.applySpinoffOut). Calling the transfer check on one would not merely
-// be too strict — it dereferences a quantity that is deliberately absent.
-//
-// One function because both call sites ask the same question of two legs whose
-// types they do not otherwise care about, and a `switch` repeated at each of
-// them is a switch that eventually differs between them.
+// checkStoredLots holds a stored breakdown to what adding up means for its leg:
+// pieces summing to the row's quantity and basis (portfolio.CheckTransferLots),
+// or, for a spin-off's departing leg, which has no quantity, to its basis alone
+// (portfolio.CheckSpinoffLots).
 func checkStoredLots(op Operation) error {
 	if op.Type == TypeSpinoffOut {
 		return portfolio.CheckSpinoffLots(op)
@@ -463,25 +301,11 @@ func checkStoredLots(op Operation) error {
 	return portfolio.CheckTransferLots(op)
 }
 
-// carriesOwnLots reports whether this operation's FIFO breakdown is stored next
-// to the operation itself.
-//
-// It is the WRITE side of attachTransferLots' carrier resolution and has to
-// stay its mirror: that query reads a departing leg's pieces off the arriving
-// leg it shares a group with, and falls back to the row itself only when there
-// is no such sibling. So a transfer_out that has a group stores nothing of its
-// own — the pieces would be written twice and read once, and two copies of one
-// fact eventually disagree — while a transfer_out with no sibling anywhere
-// (shares that left for another broker, which only an import can record) stores
-// its own, because it is then the only row that can hold them.
-//
-// BOTH LEGS OF A CONVERSION STORE THEIR OWN, and that is not an exception to the
-// rule above but the same rule applied to a pair whose legs describe DIFFERENT
-// parcels: a conversion changes the paper and the number of units, so the
-// departing leg's pieces sum to N of the old and the arriving leg's to M of the
-// new (see portfolio.TypeExchangeOut). Neither list can be read off the other,
-// and the query above never tries — its sibling join fires for transfer_out
-// alone, so an exchange_out resolves to itself and finds the rows written here.
+// carriesOwnLots reports whether an operation's breakdown is stored next to it.
+// It mirrors attachTransferLots: a transfer_out in a group reads its sibling's
+// pieces and stores none; a transfer_out with no sibling (shares that left for
+// another broker) stores its own. Both conversion legs store their own, since they
+// describe different parcels (N old, M new).
 func carriesOwnLots(op Operation) bool {
 	if len(op.TransferLots) == 0 {
 		return false
@@ -493,40 +317,19 @@ func carriesOwnLots(op Operation) bool {
 	return op.TransferGroupID == nil
 }
 
-// ApplyDelta applies one importer's difference to the journal: removals first,
-// then every insertion as a single batch, then the caller's own look at the
-// result AS STORED, and only then a commit. All of it in ONE transaction, over
-// however many accounts of the space the difference touches.
+// ApplyDelta applies an importer's difference in one transaction, across any
+// accounts of the space: removals, then all insertions as one batch, then verify
+// on the rows as stored, then the commit.
 //
-// THE ORDER OF THE TWO HALVES IS PART OF THE CONTRACT. A broker record that was
-// corrected keeps its identity, so the row replacing it carries the very
-// external id the row being replaced still holds, and the journal's unique
-// index would refuse the pair of them. Removing first is what makes a
-// correction expressible at all.
+// Removals go first because a corrected broker record keeps its external id,
+// which the unique index would refuse while the old row exists. Every id in
+// removeIDs must still be there; otherwise the difference was computed against
+// another journal (ErrRemovalCountMismatch).
 //
-// EVERY id IN removeIDs MUST BE THERE. A caller that asks to remove a row that
-// is gone computed its difference against a journal that has since moved, and
-// the rest of that difference cannot be trusted either; obeying the part that
-// still applies would write half of a stale decision.
-//
-// created_at is stated by the caller rather than left to the statement's clock
-// (see insertSQL). It is not decoration. The rows of a delta go out as one
-// batch, back to back, and a clock read microseconds apart is not a promise
-// that two of them differ — while two operations of the same date sharing one
-// created_at leave ListForEngine's ORDER BY nothing to separate them by, so
-// the journal would fold in an order the database picks rather than the order
-// the caller checked. That is the shape of "accepted on write, refused on every
-// later read" this package has met twice. The caller is also the only one that
-// knows that order, and the only one that can put a rewritten row back where
-// the row it replaces stood (see ImportDelta).
-//
-// verify is handed the rows AS STORED — from the INSERT's RETURNING, with the
-// breakdowns the lot table gave back — for the reason Create and CreatePair
-// both give: quantities are stored on a fixed scale, so what was checked in
-// memory is not necessarily what the columns kept, and a delta whose stored
-// form no longer replays must be rolled back on the sync that caused it rather
-// than break every later read. Its error is returned as-is: it describes a
-// disagreement between this program and its own storage, not a bad request.
+// created_at is stated by the caller, who alone knows the order it checked: rows
+// sent back to back can share a clock reading, and equal same-day created_at
+// leaves the fold order to the database. verify sees the stored rows, as for
+// Create and CreatePair; its error is returned as is.
 func (s *Store) ApplyDelta(ctx context.Context, spaceID uuid.UUID, add []Operation, removeIDs []uuid.UUID,
 	verify func(stored []Operation) error,
 ) ([]Operation, error) {
@@ -562,20 +365,9 @@ func (s *Store) ApplyDelta(ctx context.Context, spaceID uuid.UUID, add []Operati
 	return stored, tx.Commit(ctx)
 }
 
-// insertBatch writes every operation of a delta as one batch and returns the
-// rows the database kept, in the order they were given.
-//
-// One batch and not one statement apiece: the first load of a broker's history
-// is thousands of operations, and a statement that waits for the one before it
-// makes that a thousand waits (the same argument writeTransferLots makes for
-// the pieces of one transfer). What the batch is not allowed to change is which
-// rows come back — each statement still RETURNS its stored row, and it is those
-// that travel on, never the arguments echoed back.
-//
-// A failure part way through behaves as a loop would: the caller gets the FIRST
-// error, naming the row that caused it, and the rows written before it go with
-// the transaction when it rolls back. See writeTransferLots for why the
-// statements queued behind the failing one cannot produce a competing error.
+// insertBatch writes a delta's operations as one batch and returns the stored
+// rows in the order given. A first broker load is thousands of rows, so one round
+// trip rather than thousands. Failure handling is writeTransferLots'.
 func insertBatch(ctx context.Context, tx pgx.Tx, spaceID uuid.UUID, add []Operation) ([]Operation, error) {
 	if len(add) == 0 {
 		return nil, nil
@@ -605,11 +397,9 @@ func insertBatch(ctx context.Context, tx pgx.Tx, spaceID uuid.UUID, add []Operat
 	return stored, nil
 }
 
-// storeBreakdowns writes the FIFO breakdown of every transfer in the delta that
-// owns one (see carriesOwnLots) and puts the STORED pieces on every row that
-// reads them — including the departing leg of a pair, whose pieces live next to
-// its sibling. Both halves matter to what verify then sees: the source account
-// folds the pieces the table gave back, not the ones that went in.
+// storeBreakdowns writes the breakdown of every transfer in the delta that owns
+// one (see carriesOwnLots) and puts the stored pieces on every row that reads
+// them, the departing leg included, so verify folds what the table gave back.
 func storeBreakdowns(ctx context.Context, tx pgx.Tx, add, stored []Operation) error {
 	byGroup := make(map[uuid.UUID][]ReleasedLot)
 	for i := range stored {
@@ -621,17 +411,10 @@ func storeBreakdowns(ctx context.Context, tx pgx.Tx, add, stored []Operation) er
 			return err
 		}
 		stored[i].TransferLots = back
-		// checkStoredLots and not CheckTransferLots, for the reason that function
-		// gives: a spin-off's departing leg carries no quantity, and the transfer
-		// check dereferences one. CreatePair learned this when the spin-off was
-		// written; this path learned it when the registry began writing pairs
-		// through the import door, and until then it was a panic waiting for the
-		// first materialized spin-off rather than a refusal.
+		// Not CheckTransferLots: a spin-off's departing leg has no quantity.
 		if err := checkStoredLots(stored[i]); err != nil {
-			// The rows are already in this transaction, so refusing here rolls
-			// them back. Same reasoning as CreatePair: a breakdown the storage
-			// cannot hold faithfully is a bug in this program, surfaced loudly
-			// now rather than on every future read.
+			// A breakdown the storage cannot hold faithfully: rolled back, as in
+			// CreatePair.
 			return fmt.Errorf("transfer lots as stored: %w", err)
 		}
 		if stored[i].TransferGroupID != nil {
@@ -647,10 +430,8 @@ func storeBreakdowns(ctx context.Context, tx pgx.Tx, add, stored []Operation) er
 			continue
 		}
 		if len(add[i].TransferLots) > 0 {
-			// A departing leg was given a breakdown but its arriving leg is not
-			// in this delta, so nothing stored those pieces and nothing will read
-			// them back. Silently dropping them would leave the row folding a
-			// fresh slice of the queue instead of the parcel that was checked.
+			// Nothing would store these pieces or read them back, and the row
+			// would fold a fresh FIFO slice instead of the checked parcel.
 			return fmt.Errorf("operation %d carries a transfer breakdown but the leg that stores it is not in this delta", i)
 		}
 	}
@@ -674,42 +455,6 @@ func (s *Store) list(ctx context.Context, sql string, args ...any) ([]Operation,
 	return out, rows.Err()
 }
 
-// ListByAccount returns one page of the account's journal, newest first, with
-// the FIFO breakdown attached to the transfers that have one, and whether the
-// journal holds anything beyond that page.
-//
-// The breakdown is here for the same reason the engine gets it: a transfer's
-// amount is a basis assembled from purchases on several days, and expressing it
-// in the space's base currency means converting each piece at the rate of the
-// day it was bought (see Handler.operationInBase). Without the pieces the row
-// would have to be converted at the rate of the day the shares changed brokers,
-// which is exactly the misvaluation this whole mechanism exists to prevent —
-// and the journal would print a different number than the position screen for
-// the same shares.
-//
-// THE SECOND RESULT IS FETCHED, NOT INFERRED. One row beyond the page is asked
-// for, and whether it arrives IS the answer: the query reads it, and the trim
-// three statements later drops it again before anything downstream can mistake
-// it for part of the page. Nothing may substitute a comparison of the page's
-// length against the limit for this: a full page is exactly where that
-// comparison has nothing to say, and it was wrong outright while the handler
-// clamped an over-large limit — which is how a truncated journal came to present
-// itself as a whole one (#86). The clamp is gone (#118) and the substitution is
-// still not available, because the full-page case is the one the flag is for.
-// Counting the
-// table instead would cost a second pass over rows just read, to publish a total
-// nothing displays and that a concurrent write could put at odds with the very
-// page it travels with.
-//
-// limit is the size of the page the caller wants and must be positive — enforced
-// below rather than merely asked for, since a zero asks the query for the probe
-// row alone and then trims the page down to nothing, which publishes an empty
-// page with hasMore true: a journal showing nothing behind a control that loads
-// nothing however often it is pressed, and a negative panics on the same trim.
-// The refusal is a plain error, not a validation one: today's caller defaults
-// and refuses before it reaches here (parsePage, called from
-// handleListByAccount), so a bad limit arriving means the program is wrong, not
-// the person using it.
 // JournalFilter narrows a journal listing; a zero field narrows nothing.
 type JournalFilter struct {
 	Types        []Type
@@ -717,6 +462,9 @@ type JournalFilter struct {
 	From, To     *time.Time
 }
 
+// ListByAccount returns one page of the account's journal, newest first, with
+// breakdowns attached so each piece can be valued at its purchase day, and
+// whether anything lies beyond the page.
 func (s *Store) ListByAccount(ctx context.Context, spaceID, accountID uuid.UUID, limit, offset int, f JournalFilter) ([]Operation, bool, error) {
 	return s.listJournal(ctx, spaceID, &accountID, limit, offset, f)
 }
@@ -728,7 +476,10 @@ func (s *Store) ListByInstrument(ctx context.Context, spaceID, instrumentID uuid
 }
 
 // listJournal is a page of the space's rows, of one account when accountID is
-// given, narrowed by f.
+// given, narrowed by f. hasMore is fetched, not inferred: one extra row is
+// asked for and trimmed, because a full page cannot tell whether the journal
+// continues (#86). limit must be positive; the handler refuses anything else
+// first, so a bad one here is a program error.
 func (s *Store) listJournal(ctx context.Context, spaceID uuid.UUID, accountID *uuid.UUID, limit, offset int, f JournalFilter) ([]Operation, bool, error) {
 	if limit < 1 {
 		return nil, false, fmt.Errorf("list operations: limit must be positive, got %d", limit)
@@ -752,17 +503,15 @@ func (s *Store) listJournal(ctx context.Context, spaceID uuid.UUID, accountID *u
 	if hasMore {
 		ops = ops[:limit]
 	}
-	// After the trim, never before: the probe row is not part of the page and
-	// must not have its breakdown fetched, let alone published.
+	// After the trim: the probe row is not part of the page.
 	if err := s.attachTransferLots(ctx, spaceID, ops); err != nil {
 		return nil, false, err
 	}
 	return ops, hasMore, nil
 }
 
-// ListForEngine returns the account's full journal in engine order, with the
-// FIFO breakdown attached to the transfers that have one. The breakdown is
-// journal data the engine needs: it dates the lots a transfer brought in.
+// ListForEngine returns the account's whole journal in engine order, with
+// breakdowns attached: they date the lots a transfer brought in.
 func (s *Store) ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]Operation, error) {
 	ops, err := s.list(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND account_id = $2
@@ -776,42 +525,16 @@ func (s *Store) ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID)
 	return ops, nil
 }
 
-// attachTransferLots fills TransferLots on the given operations. It is a
-// separate query rather than a join onto the journal so that an operation
-// with several pieces stays a single journal entry. Anything without stored
-// pieces keeps an empty list: every row that is neither a transfer nor a
-// conversion leg, a transfer whose basis was given by hand, and a transfer
-// recorded before the breakdown was kept.
+// attachTransferLots fills TransferLots on ops with a separate query, so a
+// many-piece operation stays one journal entry. Rows without stored pieces keep
+// an empty list.
 //
-// A CONVERSION'S TWO LEGS EACH READ THEIR OWN, and the query below already does
-// that without a word about them: its sibling join is conditioned on
-// `o.type = 'transfer_out'`, so an exchange_out resolves to itself and picks up
-// the rows written next to it (see carriesOwnLots for why it has its own at
-// all — the legs of a conversion are two different parcels, N units of the old
-// paper and M of the new).
-//
-// BOTH legs of a transfer pair get the breakdown, though only one of them
-// stores it. The rows are written next to the receiving leg, whose account
-// cannot recover the acquisition dates any other way (see the 0007 migration),
-// but the pieces do not describe an arrival — they describe the parcel, and the
-// departing leg is the same parcel with the opposite sign: same instrument,
-// same quantity, same basis, same purchases behind it. Leaving the sending leg
-// without them meant it was the one row in the system still converting that
-// basis at the rate of the day the shares changed brokers, so the source
-// account's journal printed 149 150 ₽ for the very shares the destination's
-// journal and positions both printed 118 000 ₽ for. One pair, one set of
-// purchases, one answer.
-//
-// Resolving the sibling here rather than duplicating rows keeps the breakdown a
-// single fact with a single owner: nothing can drift, and a transfer recorded
-// before this table still has no pieces on either leg, which is the honest
-// answer for it.
-//
-// It selects by the operations in hand rather than by their account, so one
-// page of a journal costs one page's worth of pieces rather than every
-// transfer the account has ever received. Every join stays scoped to the
-// caller's space: an id is not by itself proof of ownership, and neither is a
-// transfer_group_id.
+// Both legs of a transfer get the breakdown stored with the arriving leg: it
+// describes the parcel, and the departing leg is the same parcel leaving, so the
+// source journal values it at the purchase days too. Conversion legs each read
+// their own: the sibling join applies to transfer_out only (see carriesOwnLots).
+// Pieces are selected by the operations in hand, and every join stays within the
+// caller's space.
 func (s *Store) attachTransferLots(ctx context.Context, spaceID uuid.UUID, ops []Operation) error {
 	if len(ops) == 0 {
 		return nil
@@ -857,15 +580,9 @@ func (s *Store) attachTransferLots(ctx context.Context, spaceID uuid.UUID, ops [
 	return nil
 }
 
-// ListBySource returns every operation of the account that came from the named
-// source, in engine order, with the FIFO breakdown attached — the journal side
-// of what an importer has to diff its own rows against.
-//
-// It carries the breakdown for the same reason ListForEngine does, and it is
-// not optional here either: these rows are folded to work out what the account
-// already holds, and a transfer that lost its pieces folds into a position with
-// no acquisition dates and a basis nothing can convert, while nothing about the
-// row says it came back incomplete.
+// ListBySource returns the account's rows from one source, in engine order, with
+// breakdowns attached: the importer folds them to learn what the account holds,
+// and a transfer without its pieces would fold undated.
 func (s *Store) ListBySource(ctx context.Context, spaceID, accountID uuid.UUID, source string) ([]Operation, error) {
 	ops, err := s.list(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND account_id = $2 AND source = $3
@@ -879,10 +596,8 @@ func (s *Store) ListBySource(ctx context.Context, spaceID, accountID uuid.UUID, 
 	return ops, nil
 }
 
-// ByIDs returns the operations of the space with the given ids, in engine
-// order, with the FIFO breakdown attached (see ListBySource for why that is not
-// optional). Ids that are not in the space simply do not come back: whether a
-// caller may act on a missing row is the caller's rule, not this query's.
+// ByIDs returns the space's operations with the given ids, in engine order, with
+// breakdowns attached. Ids outside the space are simply absent.
 func (s *Store) ByIDs(ctx context.Context, spaceID uuid.UUID, ids []uuid.UUID) ([]Operation, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -904,8 +619,8 @@ func (s *Store) ByID(ctx context.Context, spaceID, id uuid.UUID) (Operation, err
 		WHERE space_id = $1 AND id = $2`, spaceID, id))
 }
 
-// ByTransferGroup returns every operation sharing groupID (the two legs of a
-// transfer pair, which live on two different accounts).
+// ByTransferGroup returns the two legs of a transfer pair, which live on two
+// accounts.
 func (s *Store) ByTransferGroup(ctx context.Context, spaceID, groupID uuid.UUID) ([]Operation, error) {
 	return s.list(ctx, `SELECT `+cols+` FROM operations
 		WHERE space_id = $1 AND transfer_group_id = $2`, spaceID, groupID)
@@ -973,15 +688,11 @@ func (s *Store) FirstDaysByInstrument(ctx context.Context) (map[uuid.UUID]time.T
 	return out, rows.Err()
 }
 
-// EarliestRecordedDay returns the earliest day the journal records anything
-// on, across the instance (not scoped to a space: the fx backfill it feeds is
-// shared, not per-space): the earliest occurred_on, or the earliest purchase
-// date of a breakdown piece when that is older. A transfer's pieces name the
-// days their shares were bought, and purchases stated for shares from another
-// broker can predate every operation in the journal — their cost is converted
-// at those days' rates, so the backfill has to reach them. This is a plain
-// data query for the range's start, not a decision about what to backfill.
-// pgx.ErrNoRows if nothing is recorded at all.
+// EarliestRecordedDay returns the earliest occurred_on across the instance, or
+// the earliest breakdown purchase date when older: stated purchases can predate
+// every operation, and their cost is converted at those days' rates. Not scoped
+// to a space, as the fx backfill it feeds is shared. pgx.ErrNoRows when nothing
+// is recorded.
 func (s *Store) EarliestRecordedDay(ctx context.Context) (time.Time, error) {
 	var on *time.Time
 	err := s.db.QueryRow(ctx, `SELECT LEAST(
@@ -996,16 +707,9 @@ func (s *Store) EarliestRecordedDay(ctx context.Context) (time.Time, error) {
 	return *on, nil
 }
 
-// DistinctCurrencies returns the sorted set of currencies used by any
-// operation in the instance (not scoped to a space: same rationale as
-// EarliestRecordedDay — fx coverage is shared, not per-space). A currency can
-// appear here without appearing in account.Store's list (e.g. a one-off
-// operation in a currency no account is denominated in), so this queries
-// operations directly rather than reusing account currencies. Deciding what
-// to backfill is not this method's job — that is the fx backfill job's.
-// Returns an empty slice, not an error, when there are no operations: unlike
-// EarliestRecordedDay, "no currencies in use" is itself a meaningful answer,
-// not a missing value.
+// DistinctCurrencies returns the sorted currencies of every operation in the
+// instance (fx coverage is shared). A currency can appear here without an
+// account in it. Empty, not an error, when there are no operations.
 func (s *Store) DistinctCurrencies(ctx context.Context) ([]string, error) {
 	rows, err := s.db.Query(ctx, `SELECT DISTINCT currency FROM operations ORDER BY currency`)
 	if err != nil {

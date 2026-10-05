@@ -20,9 +20,9 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// ErrInconsistent means applying an operation (or removing one) would make
-// the account's journal fail to replay through the portfolio engine — e.g.
-// an oversell or a broken transfer chain.
+// ErrInconsistent means writing or removing an operation would leave the
+// account's journal unable to replay through the portfolio engine: an oversell,
+// a broken transfer chain.
 var ErrInconsistent = errors.New("journal would become inconsistent")
 
 // pgForeignKeyViolation and pgUniqueViolation are the SQLSTATE codes Postgres
@@ -32,132 +32,61 @@ const (
 	pgUniqueViolation     = "23505"
 )
 
-// THE MONEY CAP THIS FILE BOUNDS EVERYTHING ELSE AGAINST is
-// money.MaxAmountMinor: 10^15 minor units, ≈10 trillion roubles — far above any
-// real portfolio, yet far enough from math.MaxInt64 that summing a whole journal
-// of such values cannot overflow. Without it, a single amount_minor =
-// math.MinInt64 poisons the FIFO cost basis and wraps realized P&L.
-//
-// It sat here as this package's own constant until the balance a user records
-// for an account needed the very same cap (#89). The two figures meet — the
-// accounts screen sums balances, the journal sums amounts, both are money in an
-// account's currency, and the same screen shows them — so there is one constant
-// in one place instead of two that eventually differ. Its doc comment carries
-// the whole argument.
+// Every money bound here is money.MaxAmountMinor, shared with account
+// balances (#89) because the accounts screen adds the two together.
 
-// minorUnitScale is how many decimal places a major currency unit is split into
-// for storage: amount_minor and fee_minor are counts of those, and a price is
-// on the wire in MAJOR units, so it is shifted by this before the two are
-// compared. Same two-decimal convention as marketdata.Converter and
-// portfolio.centsPerUnit.
+// minorUnitScale is how many decimal places a major currency unit is split
+// into for storage. A price travels in major units, so it is shifted by this
+// before it is compared with amount_minor.
 const minorUnitScale = 2
 
-// maxQuantity, maxPrice and maxSplitRatio bound the three decimal fields an
-// operation carries. Not one of them is money, and all three decide how much
-// money the row stands for, so each comes from what has to fit — an int64 of
-// minor units, or the column that holds the value — rather than from a guess at
-// how many shares a person might sensibly own.
+// maxQuantity, maxPrice and maxSplitRatio bound the decimal fields that decide
+// how much money a row stands for, each by what has to fit rather than by a guess
+// at how many shares a person might own.
 //
-// THE QUANTITY IS THE ONE THE SCREEN BREAKS ON, so it is the one to read first.
-// Everything that later reads the journal multiplies a quantity by a QUOTE's
-// price and then by an fx rate, and the result has to be an int64 of minor
-// units. A quantity this program accepted and no ordinary quote can value is a
-// positions screen answering 500 for as long as the row exists (#84) — the whole
-// reason there is a write-time bound at all.
+//   - maxQuantity is the money cap read as a count of units at one major unit
+//     apiece. The read side multiplies a quantity by a quote and an fx rate into
+//     an int64 of minor units; at this bound a quote of up to ~9223 per unit
+//     still fits, so the largest accepted quantity is not by itself why an
+//     ordinary quote cannot be valued (#84). Read as minor units the same cap
+//     would leave 92.24 per unit, below most share prices.
+//   - maxPrice is the money cap read as a price per unit. It equals maxQuantity
+//     by coincidence; nothing may rest on that, which is why tests compare
+//     refusals whole.
+//   - maxSplitRatio is split_ratio's own ceiling: NUMERIC(20,10) keeps ten
+//     integer digits.
 //
-//   - maxQuantity is the money cap read as a COUNT of units: at one MAJOR unit
-//     apiece — a whole rouble or dollar for a single unit — 10^13 units are
-//     worth exactly money.MaxAmountMinor. What the bound LEAVES is the number that
-//     matters: math.MaxInt64 / 100 / 10^13 ≈ 9223 units of money per unit of
-//     instrument can still be published at the largest quantity accepted here,
-//     which is above an ordinary share, bond or ETF unit. Read as a count of
-//     MINOR units instead — one kopeck apiece, 10^15 units — the same cap leaves
-//     92.24, BELOW the price of most securities: the bound would then admit a
-//     quantity that breaks the screen at an entirely ordinary quote, which is
-//     the failure it exists to prevent rather than a smaller version of it.
-//     What the read side actually refuses is a VALUATION above ~9.2×10^16 major
-//     units of money, however the price and the quantity divide it, and no
-//     bound on one factor can promise anything about that product (a share of
-//     the priciest kind there is, ~7×10^5 dollars, still reaches it at 10^13
-//     units — a holding worth 7×10^18 dollars). The bound's job is narrower and
-//     achievable: that the largest quantity accepted here is not by itself the
-//     reason an ordinary quote cannot be valued.
-//   - maxPrice is the money cap read as a PRICE per unit: one unit may not cost
-//     more than a whole operation is allowed to be for. It comes out at the same
-//     10^13, both being the cap expressed in major units. They are two constants
-//     and not one because they are two different quantities — a count of units
-//     and a sum of money per unit — that happen to coincide, and nothing may
-//     rest on the coincidence. Their refusals do print the same digits today,
-//     which is exactly why the tests compare refusals WHOLE rather than looking
-//     for a bound inside a message (see service_bounds_test.go).
-//   - maxSplitRatio is a ratio read as a quantity — a ratio of R turns one unit
-//     into R units — which would put it at maxQuantity as well, except that
-//     split_ratio is NUMERIC(20,10) and keeps ten integer digits: 10^10 is the
-//     first value the column cannot hold. The narrower ceiling wins. A ratio at
-//     or above it is refused as a named field instead of arriving as a database
-//     error about numeric overflow, which no importer can act on.
+// price × quantity is bounded too, as a consistency rule rather than an overflow
+// guard: it is what the trade was for, the same money amount_minor carries.
+// The factors are bounded separately because price is often absent and the read
+// side multiplies by a quote, not by this price.
 //
-// THE PRODUCT of the two factors is bounded as well, and NOT as an overflow
-// guard: an operation's own price is consumed in no money arithmetic anywhere in
-// this program. Nothing computes with its VALUE except the checks below — the
-// store carries it to and from its column, the handler echoes it back as a
-// string (see toAPI in http.go), and the engine values a buy from amount_minor
-// without ever reading a price at all. The product bound is a
-// DATA-CONSISTENCY one — price × quantity is what the trade was for, which is
-// the same money amount_minor carries on the very same row, so it is capped
-// where that already is: two fields describing one sum of money must not
-// disagree about how much money can exist.
+// What this refuses that is real: more than 10^13 units of something worth
+// under a rouble apiece (meme tokens, hyperinflated cash). Nothing here values
+// those today; maxQuantity is the line to revisit if one appears.
 //
-// THE FACTORS ARE BOUNDED SEPARATELY TOO, because the product cannot always be
-// checked: price is optional and many broker exports carry none, and the read
-// path multiplies the quantity by a QUOTE's price rather than by this
-// operation's, so a quantity commonly arrives at the screen with no companion at
-// all. That is the shape #84 actually arrives in.
+// None of this replaces the read-side guards (portfolio.marketValue,
+// rateLookup.applyTo, sumInBase, money.Minor): quotes and rates arrive later,
+// positions sum many rows, splits multiply whole positions, and rows written
+// before the bound are still there.
 //
-// WHAT THESE REFUSE THAT IS REAL: more than 10^13 units of an instrument worth
-// less than a whole rouble apiece — the quantities meme tokens are held in, and
-// what a hyperinflated currency's cash row would look like. The trade is
-// deliberate and one-sided: this program prices neither of those today
-// (portfolio.marketValue values shares, ETFs and bonds and nothing else), the
-// holdings it is built for are shares, bonds and ETFs at Russian and global
-// brokers, and a screen that cannot render is worse than a refusal a holder of
-// sub-rouble units could hit. Should such a holding ever appear, maxQuantity is
-// one line to revisit and the refusal already names the field and the number.
-//
-// NONE OF THIS LETS THE READ-SIDE GUARDS GO (portfolio.marketValue,
-// rateLookup.applyTo, sumInBase, and money.Minor behind them all). What fitted
-// when it was written can stop fitting later: a quote's price and an fx rate are
-// both unbounded from above and both arrive after the fact, a position is the
-// sum of many operations and can pass the bound one accepted buy at a time, a
-// split multiplies a whole position by a ratio no per-operation bound can size,
-// and the rows written before this bound existed are still in the journal — no
-// migration comes with it (see TestRowsWrittenBeforeTheBoundAreStillWorkable).
-// A write-time bound cannot promise the product fits; it only stops one factor
-// from being the reason it does not.
-//
-// maxQuantity and maxPrice are DERIVED from money.MaxAmountMinor rather than written
-// out beside it, so that moving the money cap moves them with it. maxSplitRatio
-// is not: it is the column's ceiling, and the column is what would have to move
-// first.
+// maxQuantity and maxPrice derive from money.MaxAmountMinor so they move with it;
+// maxSplitRatio follows the column.
 var (
 	maxQuantity = decimal.NewFromInt(money.MaxAmountMinor).Shift(-minorUnitScale)
 	maxPrice    = decimal.NewFromInt(money.MaxAmountMinor).Shift(-minorUnitScale)
 
-	// maxSplitRatio is the first ratio split_ratio cannot store, so the check
-	// against it refuses the value ON it rather than past it — unlike every
-	// other bound here, which admits its own edge.
+	// maxSplitRatio is the first ratio the column cannot store, so it is refused
+	// on the value itself, unlike the other bounds, which admit their edge.
 	maxSplitRatio = decimal.New(1, 10)
 
-	// maxAmountMinorDec is money.MaxAmountMinor itself as a decimal, so the product
-	// above is compared against it exactly rather than through an int64
-	// conversion that would have to survive the very overflow being checked for.
+	// maxAmountMinorDec lets the product be compared exactly, without an int64
+	// conversion that would have to survive the overflow being checked for.
 	maxAmountMinorDec = decimal.NewFromInt(money.MaxAmountMinor)
 )
 
-// checkQuantityBound refuses a quantity past maxQuantity. Both doors into the
-// quantity column go through it — an operation's own field (validate) and the
-// quantity a transfer moves (CreateTransfer) — so the two cannot come to refuse
-// at different sizes or in different words.
+// checkQuantityBound refuses a quantity past maxQuantity. An operation's own
+// quantity and the quantity a transfer moves both go through it.
 func checkQuantityBound(q decimal.Decimal) error {
 	if q.Abs().GreaterThan(maxQuantity) {
 		return fmt.Errorf("%w: quantity must be within ±%s", family.ErrValidation, maxQuantity)
@@ -169,21 +98,19 @@ func checkQuantityBound(q decimal.Decimal) error {
 // replaying the account's operations through the portfolio engine.
 type Service struct {
 	store *Store
-	// afterManualWrite, when set, is told which accounts a hand entry has just
-	// changed — after the write is committed. See OnManualWrite.
+	// afterManualWrite is told which accounts a hand entry changed, after the
+	// commit. See OnManualWrite.
 	afterManualWrite func(ctx context.Context, spaceID uuid.UUID, accountIDs []uuid.UUID)
 }
 
 func NewService(store *Store) *Service { return &Service{store: store} }
 
-// OnManualWrite registers what runs after every committed hand entry: a create,
-// a transfer, a replacement, a delete. The corporate-actions registry hangs
-// here, so a purchase dated before a split it already knows gets the split at
-// once instead of at the next daily sweep.
-//
-// The import door does not call it — the registry itself writes through that
-// door. It is set once, while the process is being wired, before anything is
-// served. fn must not fail the request: the entry is already committed.
+// OnManualWrite registers what runs after every committed hand entry (create,
+// transfer, replacement, delete). The corporate-actions registry hangs here, so a
+// purchase dated before a known split gets the split at once rather than at the
+// next daily sweep. The import door does not call it: the registry writes through
+// that door. Set once during wiring; fn must not fail the request, the entry is
+// already committed.
 func (s *Service) OnManualWrite(fn func(ctx context.Context, spaceID uuid.UUID, accountIDs []uuid.UUID)) {
 	s.afterManualWrite = fn
 }
@@ -207,54 +134,25 @@ type TransferParams struct {
 	Note              string
 }
 
-// quantityScale is how many decimal places the journal keeps for a quantity:
-// operations.quantity, operations.split_ratio and
-// operation_transfer_lots.quantity all keep ten (see the migrations).
-//
-// It is defined by the engine, not here, because it is what a POSITION is
-// bound to as well — see portfolio.QuantityScale for why that is the engine's
-// business. This package's use of it is the other half of the same contract:
-// a number on its way into one of those columns must be brought onto the scale
-// deliberately, by code that can decide where the rounding goes, so that the
-// value the consistency check replays is the value the row will hold. Letting
-// Postgres round it silently is what turned a legitimate transfer into an
-// unreadable account (see quantizeLots) and what let a sell be accepted for one
-// quantity and recorded as another (see normalizeForStorage).
+// quantityScale is how many decimal places the journal keeps for a quantity
+// (operations.quantity, split_ratio, operation_transfer_lots.quantity). A number
+// headed for one of those columns is brought onto the scale here, by code that
+// decides where the rounding goes, so the value the consistency check replays is
+// the value the row holds (see quantizeLots and normalizeForStorage).
 const quantityScale = portfolio.QuantityScale
 
-// minOccurredOn is the oldest date an operation may carry.
-//
-// IT IS A TYPO GUARD AND NOTHING MORE, and the comment says so rather than
-// dressing the number up as a rule from somewhere: no law, no broker and no
-// data source here names 1900. It is in particular NOT a claim about the
-// earliest date this program can value — an operation dated 1950 is accepted
-// here, and whether its figures can be shown in the base currency is a
-// separate question about which rates exist, one this bound does not answer
-// and must not be read as answering.
-//
-// What it does buy is the one wrong answer a mistyped year gives silently. A
-// year is four characters and the leading one is the easy one to fumble: 1026
-// for 2026 is one keystroke. The journal's queue is ordered by acquisition date
-// (see the package documentation and internal/family/taxresidency.go), so such
-// a row does not land somewhere visibly odd — it lands at the FRONT, ahead of
-// everything genuine, and the next sale releases it first. The cost basis that
-// comes out is wrong, and nothing on any screen says a date was strange,
-// because a date centuries old is a perfectly ordinary date to a comparison.
-// The refusal is the only place that can notice.
-//
-// Set where no personal-finance journal reaches and every fumbled year lands:
-// the mistake this catches produces a year in the first two digits' worth of
-// wrongness (0226, 1026, 1226), never 1899.
+// minOccurredOn is the oldest date an operation may carry. It is a typo guard
+// and nothing more: no law or data source names 1900. A fumbled year (1026 for
+// 2026) would otherwise land at the front of the acquisition-date queue and be
+// released first by the next sale, with nothing on screen to say a date was
+// odd.
 var minOccurredOn = dates.EarliestRecordable()
 
-// TradeAmountMinor is what a trade of quantity at price comes to in minor units:
-// the product rounded once, half away from zero (money.Minor), negative for a
-// buy — money leaves — and positive for a sell.
-//
-// It is THE implementation of that rounding. The trade dialog previews the same
-// figure with arithmetic of its own, and web/src/lib/testdata/trade-amounts.json holds
-// the two to one table; but what is recorded as a lot's cost is this, not what
-// a browser computed (#194).
+// TradeAmountMinor is what a trade of quantity at price comes to in minor
+// units: the product rounded once, half away from zero, negative for a buy and
+// positive for a sell. The trade dialog previews the same figure with its own
+// arithmetic, and web/src/lib/testdata/trade-amounts.json holds both to one
+// table; what is recorded is this (#194).
 func TradeAmountMinor(typ Type, quantity, price decimal.Decimal) (int64, error) {
 	minor, err := money.Minor(quantity.Mul(price).Shift(minorUnitScale))
 	if err != nil {
@@ -266,14 +164,12 @@ func TradeAmountMinor(typ Type, quantity, price decimal.Decimal) (int64, error) 
 	return minor, nil
 }
 
-// maxSettlementLag is how long after its trade an operation may settle. Markets
-// settle in days; a year is far past any of them and still catches a mistyped
-// year, which is all this bound is for.
+// maxSettlementLag is how long after its trade an operation may settle.
+// Markets settle in days; a year still catches a mistyped year.
 const maxSettlementLag = 366 * 24 * time.Hour
 
-// checkSettledOn holds settled_on, when given, to the only range it can
-// honestly have: not before the trade it settles, and not absurdly long after.
-// The column was accepted unchecked — year 9999 included (#202).
+// checkSettledOn holds settled_on, when given, to on or after the trade and
+// within maxSettlementLag of it (#202).
 func checkSettledOn(o Operation) error {
 	if o.SettledOn == nil {
 		return nil
@@ -287,12 +183,8 @@ func checkSettledOn(o Operation) error {
 	return nil
 }
 
-// checkOccurredOn holds a date to both ends of the range an operation may be
-// entered in. One function rather than two comparisons at each of the two write
-// paths (an ordinary operation and a transfer): they had drifted to the point
-// of checking different things already — the transfer path had the ceiling and
-// not the floor — and a rule about when something happened should not depend on
-// which endpoint recorded it.
+// checkOccurredOn holds a date between minOccurredOn and today. Both write
+// paths (an operation and a transfer) use it so they cannot drift apart again.
 func checkOccurredOn(d time.Time) error {
 	if d.After(dates.LatestRecordable()) {
 		return fmt.Errorf("%w: occurred_on must not be in the future", family.ErrValidation)
@@ -304,17 +196,13 @@ func checkOccurredOn(d time.Time) error {
 	return nil
 }
 
-// validate checks operation fields that are cheap and local — i.e. don't
-// require replaying the journal. See the package's task brief for the
-// per-type contract; note the engine itself does not check amount sign or
-// non-zero-ness for dividend/coupon/tax/fee/interest/deposit/withdrawal, so
-// the service must, or silent corruption of income/fees becomes possible.
+// validate checks the fields of a hand entry that need no journal replay. The
+// engine does not check amount sign or non-zeroness for cash-only types, so this
+// must, or income and fees can be silently corrupted.
 //
-// It is THE HAND-ENTRY PATH'S rule and only that one. The importer has its own
-// (validateImported), because the two differ on exactly two types and agree on
-// everything else; what they agree on lives in the two helpers below, so that
-// the import's arrival cannot quietly move a rule a person's own entry is
-// checked against.
+// The importer has its own rule (validateImported); the two differ on transfers
+// and agree on everything else, which lives in validateFields and
+// validateByType.
 func validate(o Operation) error {
 	if err := validateFields(o); err != nil {
 		return err
@@ -323,41 +211,31 @@ func validate(o Operation) error {
 		return err
 	}
 	if o.Type == TypeTransferIn || o.Type == TypeTransferOut {
-		// Unchanged: hand entry writes a transfer through the endpoint that
-		// records both legs at once, so that the shares and the basis they
-		// carry cannot end up in different accounts. The import path admits a
-		// leg on its own instead (see validateImported), because a broker
-		// reports shares arriving without reporting where they came from.
+		// Hand entry writes a transfer through the endpoint that records both
+		// legs at once. The import path admits a lone leg (see validateImported),
+		// because a broker reports shares arriving without saying from where.
 		return fmt.Errorf("%w: use the transfer endpoint for %s", family.ErrValidation, o.Type)
 	}
 	if o.Type == TypeSpinoffOut || o.Type == TypeSpinoffIn {
-		// A spin-off answers exactly as a conversion does below, and for the
-		// same reason: what a paper did is one fact about the paper, so it is
-		// recorded in the registry once and applied to every account from there
-		// (see Service.CreateSpinoff).
+		// Like a conversion, a spin-off happened to the paper and is recorded
+		// once in the registry (see Service.CreateSpinoff).
 		return fmt.Errorf("%w: a spin-off is recorded in the corporate-actions registry, not entered against an account", family.ErrValidation)
 	}
 	if o.Type == TypeExchangeOut || o.Type == TypeExchangeIn {
-		// A conversion has no hand-entry door AT ALL, and this is not the
-		// transfer's "use the other endpoint" — there is no other endpoint. What
-		// happened to a paper is a fact about the PAPER, true for everyone who
-		// held it, so it is recorded once in the corporate-actions registry and
-		// applied to every account from there (see Service.CreateExchange, whose
-		// only caller that is). A leg typed in against one account would be a
-		// second place the same fact lives, and the two would disagree the first
-		// time one of them was edited.
+		// A conversion has no hand-entry door at all. What happened to a paper
+		// is true for everyone who held it, so it is recorded once in the
+		// corporate-actions registry and applied from there (see
+		// Service.CreateExchange); a leg typed into one account would be a second
+		// copy of the same fact.
 		return fmt.Errorf("%w: a conversion is recorded in the corporate-actions registry, not entered against an account", family.ErrValidation)
 	}
 	return validateByType(o)
 }
 
-// MaxNoteRunes is the longest note a hand entry takes, counted in characters
-// (Unicode code points), as api/openapi.yaml's maxLength counts them. A note
-// is a line or two about a row; the ceiling is there so that what is stored
-// and sent back with every journal page has a size the server chose, not the
-// request body limit. An importer's notes are the broker's own descriptions
-// and are not held to it: refusing a reported row for its wording would lose
-// the row.
+// MaxNoteRunes is the longest note a hand entry takes, in code points, as
+// openapi's maxLength counts them. An importer's notes are the broker's own
+// wording and are not held to it: refusing a reported row for its wording would
+// lose the row.
 const MaxNoteRunes = 1000
 
 // checkNote refuses a hand-entered note longer than MaxNoteRunes.
@@ -368,9 +246,8 @@ func checkNote(note string) error {
 	return nil
 }
 
-// validateFields is every check that looks at a field's own value rather than
-// at what the type means — shape, bounds, and the two money fields agreeing
-// with each other. Both write paths run it, unchanged, before they part ways.
+// validateFields checks each field's own value (shape, bounds, the two money
+// fields agreeing) regardless of type. Both write paths run it.
 func validateFields(o Operation) error {
 	if !o.Type.Valid() {
 		return fmt.Errorf("%w: invalid operation type", family.ErrValidation)
@@ -387,32 +264,16 @@ func validateFields(o Operation) error {
 	if o.FeeMinor < 0 {
 		return fmt.Errorf("%w: fee_minor must be >= 0", family.ErrValidation)
 	}
-	// Bounds are checked with explicit comparisons rather than an abs() so
-	// that math.MinInt64 (whose negation overflows) is rejected too.
+	// Explicit comparisons rather than abs(), so math.MinInt64 is refused too.
 	if o.AmountMinor > money.MaxAmountMinor || o.AmountMinor < -money.MaxAmountMinor {
 		return fmt.Errorf("%w: amount_minor must be within ±%d", family.ErrValidation, money.MaxAmountMinor)
 	}
 	if o.FeeMinor > money.MaxAmountMinor {
 		return fmt.Errorf("%w: fee_minor must be <= %d", family.ErrValidation, money.MaxAmountMinor)
 	}
-	// The two factors, their product, and the ratio (see maxQuantity). Checked
-	// here rather than in the per-type branches below: nothing stops any other
-	// type from carrying a quantity, a price or a ratio, and the columns are the
-	// same columns whichever type wrote them. Magnitudes, not signed values,
-	// because these bounds are about size — a sign that has no business being
-	// negative is the business of the per-type rules below, which is where it is
-	// already caught for buy, sell and split.
-	//
-	// A conversion is checked with everything else, though its row never reaches
-	// a position: the engine skips the type before it touches one, so the product
-	// check can only ever refuse there and cannot protect a valuation. It is kept
-	// because the bound is not a claim about the engine — it is the row's two
-	// money fields agreeing with each other, and the row is published in the
-	// journal whether or not a position was built from it. Exempting one type
-	// would also put back the per-type reasoning this block exists to avoid, on
-	// the very type most likely to grow a price one day: a conversion's rate is a
-	// price per unit in all but name. Keeping the check costs a refusal nothing
-	// would have read; dropping it costs a special case to remember.
+	// Checked for every type, conversions included: any type may carry these
+	// columns, and the product rule is about the row's two money fields agreeing,
+	// not about the engine. Magnitudes here; signs are the per-type rules' business.
 	if o.Quantity != nil {
 		if err := checkQuantityBound(*o.Quantity); err != nil {
 			return err
@@ -426,27 +287,19 @@ func validateFields(o Operation) error {
 			return fmt.Errorf("%w: price × quantity must be within ±%d minor units", family.ErrValidation, money.MaxAmountMinor)
 		}
 	}
-	// The ratio is the one field whose damage is done to a position rather than
-	// to its own row: applySplit multiplies the WHOLE holding, so a ratio no
-	// larger than this can still carry a position built one accepted buy at a
-	// time past anything the read side can value. That is not a reason to leave
-	// it unbounded — it is the reason the read-side guards stay.
+	// A ratio this size can still carry a position, built one buy at a time,
+	// past what the read side can value: applySplit multiplies the whole holding.
+	// That is why the read-side guards stay.
 	if o.SplitRatio != nil && o.SplitRatio.Abs().GreaterThanOrEqual(maxSplitRatio) {
 		return fmt.Errorf("%w: split_ratio must be less than %s", family.ErrValidation, maxSplitRatio)
 	}
 	return nil
 }
 
-// validateByType is the per-type contract for every type the two write paths
-// agree about — which is all of them but transfer_in and transfer_out, where
-// they disagree by design (see validate and validateImported).
-//
-// It has NO branch for those two, deliberately. Each path decides what a
-// transfer leg means to it and says so before delegating here; a branch that
-// also refused them would let one of those decisions be deleted without a
-// single test noticing, since the fall-through would go on refusing in its own
-// words. A type with no branch here is accepted by this function, which is why
-// a caller must never hand it a type it has not already ruled on.
+// validateByType is the per-type contract both write paths share. It has no
+// branch for transfer_in and transfer_out on purpose: each path rules on those
+// itself before delegating, and a refusal here would hide the deletion of one of
+// those rulings. A caller must not hand it a type it has not ruled on.
 func validateByType(o Operation) error {
 	switch o.Type {
 	case TypeBuy, TypeSell, TypeRedemption:
@@ -483,33 +336,20 @@ func validateByType(o Operation) error {
 		if o.AmountMinor != 0 {
 			return fmt.Errorf("%w: split amount_minor must be 0", family.ErrValidation)
 		}
-		// A SPLIT IS WRITTEN FROM THE REGISTRY AND FROM NOWHERE ELSE, and this
-		// rule used to say the opposite — source=manual only, importers
-		// refused. Both halves were right about their own half and wrong
-		// together. An importer must not invent a split, because no broker
-		// reports one; a person must not enter one per account either, because
-		// a split happened to the PAPER and typing it into one account leaves
-		// every other holder of the same paper wrong, with nothing to say so.
-		// So the fact is recorded once, against the ISIN, and carried into
-		// every account that held it (see internal/corporateaction).
-		//
-		// The two paths reach this same line: the hand-entry one refuses
-		// "manual" here, and the import path refuses every source but this one
-		// before it delegates (see validateImported). Nothing else in the
-		// program writes a split.
+		// A split is written by the corporate-actions registry only. No broker
+		// reports one, and a person typing it into one account would leave every
+		// other holder of the paper wrong; the registry records it once against
+		// the ISIN and applies it everywhere. The hand path refuses "manual" here;
+		// the import path refuses every other source before delegating.
 		if o.Source != SourceRegistry {
 			return fmt.Errorf(
 				"%w: a split is recorded once for the security in the corporate-actions registry, not entered on an account",
 				family.ErrValidation)
 		}
 	case TypeExchangeOut, TypeExchangeIn:
-		// Reachable only through the import path's validateImported: the hand
-		// path refuses both types before it delegates here (see validate), and
-		// CreateExchange builds its legs itself. It is written all the same, so
-		// that a future importer teaching itself to project a broker's
-		// conversion is refused by a rule rather than by nobody: a conversion
-		// is the registry's to write, and a leg arriving from anywhere else
-		// would be a second, unsynchronised record of one corporate action.
+		// Reachable only from validateImported: the hand path refuses these
+		// types earlier and CreateExchange builds its own legs. Kept so that an
+		// importer projecting a broker's conversion is refused by a rule.
 		if o.InstrumentID == nil {
 			return fmt.Errorf("%w: %s requires an instrument", family.ErrValidation, o.Type)
 		}
@@ -523,11 +363,9 @@ func validateByType(o Operation) error {
 			return fmt.Errorf("%w: %s is only supported for source=%s", family.ErrValidation, o.Type, SourceRegistry)
 		}
 	case TypeSpinoffOut:
-		// The departing leg is the one type in this journal that touches a
-		// position and carries NO quantity: it moves money out of the parcels
-		// and leaves every unit where it was (see portfolio.TypeSpinoffOut). A
-		// count here would be rendered as units leaving on every screen that
-		// draws a row, which is why it is refused rather than ignored.
+		// The departing leg moves money out of the parcels and leaves every
+		// unit in place (see portfolio.TypeSpinoffOut). A count would be drawn as
+		// units leaving, so it is refused rather than ignored.
 		if o.InstrumentID == nil {
 			return fmt.Errorf("%w: %s requires an instrument", family.ErrValidation, o.Type)
 		}
@@ -554,23 +392,15 @@ func validateByType(o Operation) error {
 			return fmt.Errorf("%w: %s is only supported for source=%s", family.ErrValidation, o.Type, SourceRegistry)
 		}
 	case TypeConversion:
-		// cash-level: any sign is legitimate (buying vs. selling currency).
+		// cash-level: buying and selling currency are both legitimate.
 	}
-	// Instrument requirement for cash-level types beyond buy/sell/split is
-	// intentionally not enforced here: dividend/coupon/tax/fee may be
-	// recorded at the cash level without an instrument.
+	// dividend, coupon, tax and fee may be recorded without an instrument.
 	return nil
 }
 
-// checkJournal replays the account's journal — minus removeIDs, plus add —
-// through the portfolio engine and reports whether it stays consistent.
-// Candidates in add get CreatedAt = time.Now() before sorting, so within
-// their occurred_on date they sort after any existing operation.
-//
-// It takes the store rather than reading through the Service's own because
-// every caller runs it inside Store.WithAccountsLocked and must read through
-// THAT transaction's store: a journal read on the pool while a decision is being
-// made in a transaction is the very gap the lock was taken to close.
+// checkJournal replays the account's journal, minus removeIDs and plus add,
+// through the portfolio engine. It takes the store because every caller runs it
+// inside Store.WithAccountsLocked and must read through that transaction.
 func checkJournal(ctx context.Context, st *Store, spaceID, accountID uuid.UUID,
 	add []Operation, removeIDs map[uuid.UUID]bool,
 ) error {
@@ -582,9 +412,7 @@ func checkJournal(ctx context.Context, st *Store, spaceID, accountID uuid.UUID,
 }
 
 // journalWith assembles the journal as it would stand with add appended and
-// removeIDs gone, in the order the engine folds it. Candidates in add get
-// CreatedAt = time.Now(), so within their occurred_on date they sort after any
-// existing operation.
+// removeIDs gone, in fold order.
 func journalWith(ops []Operation, add []Operation, removeIDs map[uuid.UUID]bool) []Operation {
 	journal := make([]Operation, 0, len(ops)+len(add))
 	for _, o := range ops {
@@ -592,12 +420,10 @@ func journalWith(ops []Operation, add []Operation, removeIDs map[uuid.UUID]bool)
 			journal = append(journal, o)
 		}
 	}
-	// A row being added is recorded after every row already there, so it is
-	// checked in that place. Its moment is NOT simply this process's clock:
-	// the stored rows carry the database's (insertSQL's clock_timestamp()), and
-	// a database clock running even a few milliseconds ahead of this one put a
-	// same-day transfer in front of the purchase it moves — «not enough
-	// quantity: have 0» for shares bought a moment earlier.
+	// A row being added sorts after every stored row of its day. Stored rows
+	// carry the database clock (insertSQL's clock_timestamp()), which may run
+	// ahead of this process; using only the local clock once put a same-day
+	// transfer in front of the purchase it moved.
 	at := time.Now()
 	for _, o := range journal {
 		if !o.CreatedAt.Before(at) {
@@ -613,39 +439,24 @@ func journalWith(ops []Operation, add []Operation, removeIDs map[uuid.UUID]bool)
 	return journal
 }
 
-// sortJournal puts operations in the order the engine folds them, which is the
-// order ListForEngine reads them back in: by the day they happened, then by the
-// rank their source gives them within that day, then by the instant the source
-// gave, then by when they were recorded (see foldsBefore). One function because two paths assemble a journal to fold — this
-// one and the import's (see ApplyImportDelta and prepareCandidate, which sort
-// journals whose rows already carry a created_at) — and an order that differs
-// between the check and the read is the fault this package spends most of its
-// care on.
-//
-// The rank comes from foldRank, which is the same rule the SQL reads (see
-// foldorder.go): a row the corporate-actions registry materialized folds at the
-// START of its day, ahead of trades dated the same day, because it is stamped
-// years after them and would otherwise multiply a quantity that already counts
-// the split.
+// sortJournal puts operations in the order the engine folds them, the order
+// ListForEngine reads them back in (see foldsBefore). The write check and the
+// import both sort through here, so the check and the later read cannot disagree
+// about order.
 func sortJournal(journal []Operation) {
 	sort.SliceStable(journal, func(i, j int) bool { return foldsBefore(journal[i], journal[j]) })
 }
 
-// SortJournal puts a journal held in memory into the order the engine folds it
-// in. It is for a caller that builds a journal by adding rows to one it read —
-// the corporate-actions registry does, one event at a time — and must hand the
-// engine the same order a read of the stored rows would.
+// SortJournal puts an in-memory journal into fold order, for a caller that
+// adds rows to a journal it read (the corporate-actions registry) and must hand
+// the engine what a read of the stored rows would.
 func SortJournal(journal []Operation) { sortJournal(journal) }
 
-// FoldedBefore returns the part of journal that folds BEFORE a new row dated
-// day, written by source and carrying no instant: everything dated earlier, and
-// of the day itself the rows whose source ranks no later (see foldRank). For a
-// registry row that is the journal as it stands when the day begins, plus the
-// registry's own rows of that day; for any other source it is everything up to
-// the day's end, a row without an instant being the youngest of its date.
-//
-// A row's parcels have to be worked out against exactly this, or they describe
-// a holding the row will not find when it is replayed.
+// FoldedBefore returns the part of journal that folds before a new row dated
+// day, written by source and carrying no instant: everything earlier, plus the
+// day's rows whose source ranks no later (see foldRank). A row's parcels must be
+// worked out against exactly this, or they describe a holding the replay will not
+// find.
 func FoldedBefore(journal []Operation, day time.Time, source string) []Operation {
 	rank := foldRank(source)
 	out := make([]Operation, 0, len(journal))
@@ -657,9 +468,7 @@ func FoldedBefore(journal []Operation, day time.Time, source string) []Operation
 	return out
 }
 
-// checkJournalOps is checkJournal over an already-loaded journal, so a caller
-// that has fetched the account's operations for another reason (see
-// CreateTransfer) does not pay for a second round trip.
+// checkJournalOps is checkJournal over a journal the caller already holds.
 func checkJournalOps(ops []Operation, add []Operation, removeIDs map[uuid.UUID]bool) error {
 	if _, err := portfolio.Compute(journalWith(ops, add, removeIDs)); err != nil {
 		return fmt.Errorf("%w: %v", ErrInconsistent, err)
@@ -667,11 +476,9 @@ func checkJournalOps(ops []Operation, add []Operation, removeIDs map[uuid.UUID]b
 	return nil
 }
 
-// journalUpTo returns the prefix of ops that occurred on or before day —
-// the state of the journal a transfer dated day, entered by hand, is replayed
-// against. Same-day operations are kept: a row entered by hand carries no
-// instant and is the youngest of its date, so it folds after all of them (see
-// foldsBefore).
+// journalUpTo returns the rows of ops on or before day: the journal a
+// hand-entered transfer dated day replays against. Same-day rows are kept, since
+// a hand row has no instant and folds last on its date.
 func journalUpTo(ops []Operation, day time.Time) []Operation {
 	out := make([]Operation, 0, len(ops))
 	for _, o := range ops {
@@ -682,9 +489,8 @@ func journalUpTo(ops []Operation, day time.Time) []Operation {
 	return out
 }
 
-// foldedAhead returns the rows of ops that fold before op — the journal as it
-// stands at op's own place, which for an imported row carrying an instant can
-// be the middle of its day.
+// foldedAhead returns the rows of ops that fold before op, which for an
+// imported row with an instant can be the middle of its day.
 func foldedAhead(ops []Operation, op Operation) []Operation {
 	out := make([]Operation, 0, len(ops))
 	for _, o := range ops {
@@ -695,28 +501,19 @@ func foldedAhead(ops []Operation, op Operation) []Operation {
 	return out
 }
 
-// quantizeLots brings every piece of a breakdown onto the quantity scale the
-// journal stores, so that what the write path computes is what the read path
-// gets back. total is the quantity the row moves, itself already on that scale.
+// quantizeLots brings every piece of a breakdown onto the journal's quantity
+// scale so that what is written is what is read back; total is the row's own
+// quantity, already on that scale. The running total is truncated and each piece
+// gets the difference, so the pieces sum to total exactly, as
+// portfolio.CheckTransferLots demands on every read.
 //
-// The allocation is the one releaseFIFO uses for costs, applied to quantities:
-// truncate the RUNNING TOTAL to the scale and give each piece the difference
-// from the previous piece's running total; the last piece that holds any units
-// takes whatever is left of total. Every piece is then exactly representable
-// and the pieces sum to total exactly — the engine checks that sum on every
-// read (portfolio.CheckTransferLots).
-//
-// A PIECE LEFT WITH NO UNITS KEEPS ITS MONEY AND ITS DAY. It arises two ways: a
-// lot whose shares a reverse split rounded away (see portfolio.Lot), or a share
-// of the new paper finer than the scale. Either way the cost is real and belongs
-// to the day it was spent, so the piece is stored as it is — no units, its cost,
-// its date — and arrives as a shareless lot. Folding the cost into a neighbour
-// would move it onto another day, and every figure struck at that day would then
-// be wrong. A piece with neither units nor money describes nothing and is
-// dropped.
+// A piece left with no units keeps its money and its day: its cost is real and
+// belongs to the date it was spent (a reverse split rounded its shares away, or a
+// share of new paper is finer than the scale). Only a piece with neither units
+// nor money is dropped.
 func quantizeLots(pieces []portfolio.ReleasedLot, total decimal.Decimal) []portfolio.ReleasedLot {
-	// The remainder goes to the last piece that has units to begin with: a
-	// shareless piece at the tail must stay shareless.
+	// The remainder goes to the last piece that started with units, so a
+	// shareless tail stays shareless.
 	last := -1
 	for i, pc := range pieces {
 		if pc.Quantity.IsPositive() {
@@ -742,34 +539,14 @@ func quantizeLots(pieces []portfolio.ReleasedLot, total decimal.Decimal) []portf
 	return out
 }
 
-// rescaleLots restates a FIFO breakdown in another paper's units: the pieces
-// that gave up `from` units of the old instrument come back describing `to`
-// units of the new one, each keeping its cost basis and its acquisition date
-// untouched.
+// rescaleLots restates a FIFO breakdown in another paper's units: pieces that
+// gave up from units come back describing to units, each keeping its cost and
+// acquisition date. Only quantities move in a conversion (see
+// portfolio.TypeExchangeOut); scaling the cost would invent a loss.
 //
-// ONLY THE QUANTITIES MOVE, and that is the whole of what a conversion does to a
-// parcel (see portfolio.TypeExchangeOut). Scaling the cost as well would be the
-// mistake this function is easiest to write: the money did not change, only the
-// number of certificates it is spread over, and a basis that shrank with a
-// 1-for-10 conversion would hand the owner a nine-tenths loss the law says did
-// not happen.
-//
-// THE ALLOCATION IS quantizeLots' AND IS NOT REIMPLEMENTED HERE. Each piece is
-// multiplied out at full precision and the running total is what gets truncated
-// to the journal's scale, so the pieces sum to `to` EXACTLY rather than to
-// whatever a piece-by-piece rounding happens to leave — the same rule
-// Position.applySplit follows for the lots of a position, and for the same
-// reason: a breakdown that misses the quantity of the row carrying it is
-// refused by portfolio.CheckTransferLots on every later read, which is the
-// "accepted on write, refused on every read" shape this package has been bitten
-// by twice. Reusing the function rather than copying its five lines is what
-// keeps the two from drifting.
-//
-// The multiplication is per piece — quantity × to ÷ from — rather than by a
-// ratio computed once, so no piece is scaled by a pre-rounded factor. Division
-// is inexact by nature and each piece may land a hair off; the last piece is
-// pinned to `to` by quantizeLots regardless, and the truncation of every running
-// total before it is downward, so no piece can come out negative.
+// Each piece is scaled at full precision and quantizeLots does the allocation, so
+// the pieces sum to exactly to and CheckTransferLots accepts the row on every
+// read.
 func rescaleLots(pieces []ReleasedLot, from, to decimal.Decimal) []ReleasedLot {
 	scaled := make([]ReleasedLot, 0, len(pieces))
 	for _, pc := range pieces {
@@ -783,8 +560,8 @@ func rescaleLots(pieces []ReleasedLot, from, to decimal.Decimal) []ReleasedLot {
 	return quantizeLots(scaled, to)
 }
 
-// mapWriteError translates pgconn constraint violations from Store.Create
-// into domain errors the caller can act on.
+// mapWriteError turns constraint violations from Store.Create into domain
+// errors.
 func mapWriteError(err error) error {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
@@ -799,37 +576,16 @@ func mapWriteError(err error) error {
 	return err
 }
 
-// normalizeForStorage brings the decimal fields the engine replays onto the
-// scale the journal stores them at, BEFORE anything is validated or checked,
-// so that the operation the consistency check folds is bit for bit the row the
-// database will hold.
+// normalizeForStorage truncates quantity and split_ratio to the stored scale
+// before anything is validated, so the operation the consistency check folds is
+// the row the database will hold. Postgres would otherwise round to nearest: a
+// sell of a whole 0.116666666655 position was once checked at that figure, stored
+// as 0.1166666667, and refused as an oversell on every later read.
 //
-// Without it the check and the row are two different operations. A request may
-// carry any number of decimal places; the columns keep ten and Postgres rounds
-// the rest away — to NEAREST, so a quantity can land ABOVE the one that was
-// checked. Selling a whole position of 0.116666666655 was accepted against
-// that exact figure and recorded as 0.1166666667, and from then on every read
-// of the account compared the recorded 0.1166666667 against the position it was
-// supposed to empty and answered "not enough quantity": a 201 followed by a
-// positions screen broken forever, for a row this program wrote itself. The
-// same divergence on split_ratio is subtler and rarer — a ratio rounded up or
-// down changes every later quantity in the position by a factor — but it is the
-// same fault, so both are normalized here.
-//
-// The rounding is DOWN, matching CreateTransfer: rounding a "sell everything I
-// hold" up past the position it empties would answer a perfectly good request
-// with an oversell, which is a loud refusal of healthy data. The response
-// returns the stored row, so the client is always told exactly what was
-// recorded. Down does not always mean "slightly less", though: a split_ratio
-// truncated down shrinks every later quantity in the position, so a release
-// already recorded against the untruncated position can end up larger than
-// what is left and be refused outright. That refusal is loud and the row is
-// recoverable by deleting and re-entering it, which is the trade being made
-// against a rounding that would break the screen instead.
-//
-// Price is deliberately left alone: it is never replayed, never compared
-// against anything, and the row that comes back is the stored one, so a price
-// rounded by the column misstates nothing.
+// Down, as CreateTransfer does: rounding "sell everything" up would turn a good
+// request into an oversell. A truncated split_ratio can still make a later release
+// too large and be refused, which is loud and fixable by re-entering the row.
+// Price is left alone: it is never replayed or compared.
 func normalizeForStorage(op *Operation) error {
 	onScale := func(v *decimal.Decimal, field string) (*decimal.Decimal, error) {
 		if v == nil {
@@ -855,55 +611,31 @@ func normalizeForStorage(op *Operation) error {
 }
 
 // Create validates op, checks that appending it keeps the account's journal
-// consistent under the portfolio engine, and persists it.
+// consistent, and persists it.
 //
-// THE READ, THE CHECK AND THE WRITE ARE ONE TRANSACTION HOLDING THE ACCOUNT'S
-// JOURNAL LOCK (see Store.WithAccountsLocked). They were three separate steps
-// on the pool until issue #17: two sells of one holding submitted at the same
-// moment each replayed a journal without the other, each was told it fitted,
-// and both were written — leaving a journal that replays for nobody and a
-// positions screen answering 422 for good, out of two requests that were each
-// perfectly fine on their own. Under the lock the second request reads the
-// first one's row and is refused exactly as it would have been a second later.
-//
-// Inside it the journal is read once and folded twice: for the check that
-// decides whether the request is accepted, and — with the row as the database
-// actually stored it — for the confirmation that runs before the commit. That
-// second replay is what makes "what was checked is what was written" a property
-// of the code rather than an argument about rounding: if the two ever diverge
-// again, the write is rolled back on the request that caused it instead of
-// silently breaking every later read by someone else. It is the same guard
-// CreatePair applies to a transfer's breakdown.
+// The read, the check and the write run in one transaction holding the account's
+// journal lock (see Store.WithAccountsLocked), so two concurrent sells of one
+// holding cannot both be accepted (#17). The journal is folded twice: once to
+// decide, once more with the row as stored, before the commit, so a stored row
+// that differs from the checked one rolls the write back instead of breaking
+// later reads.
 func (s *Service) Create(ctx context.Context, spaceID uuid.UUID, op Operation) (Operation, error) {
 	return s.CreateReplacing(ctx, spaceID, op, nil)
 }
 
-// CreateReplacing writes op IN PLACE OF the imported rows named by replace: in
-// one transaction the named rows go, op arrives, and the engine is asked about
-// the journal that RESULTS. With an empty replace it is exactly Create, which
-// is why Create is one line — the ordinary case is the empty replacement, and
-// one implementation of "check this journal and write it" is what keeps the two
-// from parting company.
+// CreateReplacing writes op in place of the imported rows named by replace,
+// checking the journal that results in one transaction. With an empty replace it
+// is Create.
 //
-// WHY IT EXISTS. The broker sends no corporate actions at all, so a real event
-// reaches this program as whatever rows carried its money — and some of those
-// rows the importer reads WRONGLY but successfully. On the owner's own account
-// a fund's partial redemption arrived as a withdrawal of 44 380,35 units "to
-// another depositary" (a transfer_out, booked and believed) and, a fortnight
-// later, a payment of 2 559,80 ₽ typed as a bond redemption. The owner accounts
-// for both with one redemption of those units — and until this existed that
-// answer was refused, because the operation was checked while the transfer_out
-// still held the very units it names: «not enough quantity: have 16414.65, need
-// 44380.35». Removing first and writing after would have been two transactions
-// with a window between them where the journal held neither reading of the
-// event, and a failure in the second would have left it there.
+// It exists because the broker sends no corporate actions: a real event arrives
+// as whatever rows carried its money, some misread. A fund's partial redemption
+// reached the owner's account as a transfer_out to another depositary; the
+// owner's own redemption of those units was refused while that transfer_out still
+// held them. Removing and then writing would leave a window with neither reading
+// of the event.
 //
-// WHAT IT REFUSES. A row entered by hand is not an importer's to replace — the
-// owner deletes their own rows on the journal screen, where the refusals are
-// about their own history. A transfer group is replaced whole or not at all,
-// for the reason importRemovals gives: nothing downstream can tell that shares
-// in one account came from a transfer whose other half is gone. And every id
-// must be a row of this space, which is the same read the removal itself does.
+// Refused: replacing a hand-entered row (the owner deletes those on the journal
+// screen), half of a transfer group, and ids outside the space.
 func (s *Service) CreateReplacing(ctx context.Context, spaceID uuid.UUID, op Operation, replace []uuid.UUID) (
 	Operation, error,
 ) {
@@ -913,11 +645,10 @@ func (s *Service) CreateReplacing(ctx context.Context, spaceID uuid.UUID, op Ope
 	if err := validate(op); err != nil {
 		return Operation{}, err
 	}
-	// Which accounts to lock cannot itself be learned under the lock, so the
-	// replaced rows are read once on the pool for their accounts alone and read
-	// again inside — the same two steps Delete takes, for the same reason. This
-	// first read decides nothing: a row that vanishes meanwhile is refused by
-	// the second one.
+	// The accounts to lock cannot be learned under the lock, so the
+	// replaced rows are read on the pool for their accounts only and read again
+	// inside, as Delete does. A row that vanishes meanwhile is refused by the
+	// second read.
 	accountIDs := []uuid.UUID{op.AccountID}
 	if len(replace) > 0 {
 		rows, err := s.store.ByIDs(ctx, spaceID, replace)
@@ -937,12 +668,9 @@ func (s *Service) CreateReplacing(ctx context.Context, spaceID uuid.UUID, op Ope
 		}
 		accounts[op.AccountID] = true
 
-		// Every touched account is asked separately, because the engine answers
-		// about one journal at a time: the account op lands on is asked whether
-		// it replays WITH op and WITHOUT the removed rows, and an account that
-		// only loses rows is asked whether it still replays at all. Without that
-		// second question a replacement could quietly break an account it never
-		// wrote to.
+		// The engine answers about one journal at a time, so each touched
+		// account is asked separately; an account that only loses rows must still
+		// replay.
 		journals := make(map[uuid.UUID][]Operation, len(accounts))
 		for accountID := range accounts {
 			journal, err := st.ListForEngine(ctx, spaceID, accountID)
@@ -960,14 +688,9 @@ func (s *Service) CreateReplacing(ctx context.Context, spaceID uuid.UUID, op Ope
 		}
 
 		stored, err := st.ApplyDelta(ctx, spaceID, []Operation{op}, replace, func(stored []Operation) error {
-			// Not wrapped in ErrInconsistent: the caller's journal was fine a
-			// moment ago and their request was accepted, so reaching this is a
-			// bug in this program, not something they did. It must read as a
-			// server failure rather than as "your history contradicts itself".
-			// A COMPETING WRITE can no longer arrive here now that the check runs
-			// under the lock — it is refused by the check above instead. What is
-			// left for this to catch is the fault it was written for: a row the
-			// columns stored differently from the one that was checked.
+			// Not wrapped in ErrInconsistent: the request was accepted a moment ago,
+			// so a failure here is this program's bug (a stored row differing from
+			// the checked one), not the caller's history.
 			for accountID := range accounts {
 				var add []Operation
 				if accountID == op.AccountID {
@@ -992,9 +715,8 @@ func (s *Service) CreateReplacing(ctx context.Context, spaceID uuid.UUID, op Ope
 	return created, nil
 }
 
-// replacedRows reads the rows a replacement takes out and says which accounts
-// they belong to, refusing what must not be replaced. It runs INSIDE the lock,
-// where its answers are the ones acted on.
+// replacedRows reads the rows a replacement takes out and their accounts,
+// refusing what must not be replaced. It runs inside the lock.
 func replacedRows(ctx context.Context, st *Store, spaceID uuid.UUID, replace []uuid.UUID) (
 	removeIDs map[uuid.UUID]bool, accounts map[uuid.UUID]bool, err error,
 ) {
@@ -1008,9 +730,8 @@ func replacedRows(ctx context.Context, st *Store, spaceID uuid.UUID, replace []u
 		return nil, nil, err
 	}
 	if len(rows) != len(replace) {
-		// An id of another space, an id named twice, or a row already gone. All
-		// three mean the caller computed its replacement against a journal this
-		// is not, so none of it is written.
+		// An id of another space, an id named twice, or a row already gone: the
+		// caller computed against another journal, so nothing is written.
 		return nil, nil, fmt.Errorf("%w: asked to replace %d operations, found %d in this space",
 			family.ErrValidation, len(replace), len(rows))
 	}
@@ -1041,51 +762,34 @@ func replacedRows(ctx context.Context, st *Store, spaceID uuid.UUID, replace []u
 	return removeIDs, accounts, nil
 }
 
-// CreateTransfer moves an in-kind position between two accounts as an
-// atomic transfer_out/transfer_in pair sharing the moved cost basis.
-//
-// Everything that reads a journal, decides on it or writes runs inside ONE
-// transaction holding BOTH accounts' journal locks (see
-// Store.WithAccountsLocked) — the same closure of the check-then-write window
-// Create takes, and it needs it more: the source's FIFO release is resolved
-// against the journal as it stood on the transfer's date, and a sell landing
-// under that read would leave the pair naming lots that are no longer there.
+// CreateTransfer moves an in-kind position between two accounts as an atomic
+// transfer_out/transfer_in pair sharing the moved cost basis. Everything runs in
+// one transaction holding both accounts' journal locks: the source's FIFO release
+// is resolved as of the transfer date, and a sell landing meanwhile would leave
+// the pair naming lots that are gone.
 func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p TransferParams) (out, in Operation, err error) {
 	if p.FromAccountID == p.ToAccountID {
 		return Operation{}, Operation{}, fmt.Errorf("%w: from and to accounts must differ", family.ErrValidation)
 	}
-	// A missing instrument_id is a missing field, and it has to be refused as
-	// one HERE, before the source journal is searched. The search is what used
-	// to answer instead: a request without the field decodes to the nil UUID,
-	// no operation in any journal carries that instrument, and the refusal came
-	// back «no source history for instrument» (#19) — which names a plausible
-	// and entirely different mistake (you hold nothing of this paper on that
-	// account) and sends the reader looking through a journal that is fine.
-	// The status was already right; only the sentence was wrong.
+	// Refused here, before the source journal is searched; otherwise the
+	// nil UUID finds no history and the error names the wrong mistake (#19).
 	if p.InstrumentID == uuid.Nil {
 		return Operation{}, Operation{}, fmt.Errorf("%w: instrument_id is required", family.ErrValidation)
 	}
 	if !p.Quantity.IsPositive() {
 		return Operation{}, Operation{}, fmt.Errorf("%w: quantity must be positive", family.ErrValidation)
 	}
-	// Work with the quantity the journal can actually hold, from here on and
-	// everywhere: the column keeps ten decimal places, and a request with more
-	// of them would otherwise be released and broken down at full precision
-	// while the row landed rounded — leaving the stored breakdown summing to
-	// something the stored operation does not claim (see quantizeLots).
-	// Rounding DOWN, not to nearest: the alternative can round a "move
-	// everything I hold" up past the position it is emptying and answer a
-	// perfectly good request with an oversell.
+	// Truncated to the stored scale up front so the breakdown sums to what
+	// the row stores (see quantizeLots). Down, not nearest: rounding up could
+	// turn "move everything" into an oversell.
 	quantity := p.Quantity.Truncate(quantityScale)
 	if !quantity.IsPositive() {
 		return Operation{}, Operation{}, fmt.Errorf("%w: quantity is finer than the %d decimal places the journal records",
 			family.ErrValidation, quantityScale)
 	}
-	// The same bound the operation's own quantity gets (see maxQuantity), because
-	// this writes the same column and validate never sees these two rows. It is
-	// reachable rather than symmetry for its own sake: the bound is per
-	// operation, a position is the sum of many, so a holding can grow past it one
-	// accepted buy at a time and then be moved in a single transfer.
+	// The bound an operation's own quantity gets (see maxQuantity): a
+	// position grows past it one buy at a time and then moves in one
+	// transfer.
 	if err := checkQuantityBound(quantity); err != nil {
 		return Operation{}, Operation{}, err
 	}
@@ -1118,48 +822,30 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 		cost := int64(0)
 		var lots []ReleasedLot
 		if p.CostMinorOverride != nil {
-			// A basis given by hand is not a release of anything: there are no
-			// source lots behind it and therefore no acquisition dates to carry.
-			// The destination lot gets no date at all — not the transfer's own —
-			// because a lot's date claims to say when its shares were bought, and
-			// nobody recorded that here (see portfolio.Lot.AcquiredOn and
-			// Compute's TypeTransferIn branch, which is where that lot is actually
-			// built). Inventing pieces, or a date, here would fabricate history.
+			// A basis given by hand releases nothing, so there are no acquisition
+			// dates to carry and the arriving lot gets none: inventing a date would
+			// fabricate history (see portfolio.Lot.AcquiredOn).
 			//
-			// THE DEPARTING LEG CARRIES THIS NUMBER TOO, and it is not the basis
-			// that leaves the source: the engine has no breakdown to release, so
-			// it gives up a fresh FIFO slice of the source's own queue and throws
-			// its cost away (see Compute's transfer_out branch). The two legs are
-			// deliberately not reconciled here — the owner said what the parcel
-			// was worth and the journal does not contradict them — and the API
-			// contract says so on both `TransferRequest.cost_minor` and
-			// `Operation.amount_minor` rather than describing every transfer's
-			// amount as one the queue produced (issue #17).
+			// The departing leg carries the same number, though the engine gives up a
+			// fresh FIFO slice of the source and discards its cost. The two are not
+			// reconciled on purpose; the API documents it on
+			// TransferRequest.cost_minor and Operation.amount_minor (#17).
 			cost = *p.CostMinorOverride
 			if cost < 0 || cost > money.MaxAmountMinor {
 				return fmt.Errorf("%w: cost_minor must be within 0..%d", family.ErrValidation, money.MaxAmountMinor)
 			}
 		} else {
-			// The basis must come from the journal as it stood on the transfer's
-			// own date, not from the end state: a backdated transfer is replayed
-			// by the engine at its chronological place, where the FIFO front is
-			// different. Folding the whole journal here would capture the basis
-			// of lots bought (or left over after sells) *after* the transfer and
-			// mint cost out of thin air. Same-date operations count as preceding,
-			// matching checkJournalOps, where the candidate sorts last within its
-			// own date.
-			//
-			// The pieces are taken, not just their total: the destination needs
-			// the day each one was bought to value it at that day's exchange
-			// rate. The carried basis is then the sum of these very pieces — it
-			// is never computed a second way, so the two cannot drift apart.
+			// Released from the journal as it stood on the transfer date, where the
+			// engine will replay it; the end state would carry the basis of lots
+			// bought later. The pieces are kept, not just their total, because the
+			// destination values each at its own day's rate, and the basis is their
+			// sum.
 			lots, err = portfolio.ReleasedLots(journalUpTo(sourceJournal, p.OccurredOn), p.InstrumentID, quantity)
 			if err != nil {
 				return fmt.Errorf("%w: %v", ErrInconsistent, err)
 			}
-			// Quantized before the basis is summed, not after: quantizing can merge
-			// a piece too small to store into its neighbour, and the operation's
-			// amount must be the sum of the pieces that are actually written.
+			// Quantized before the basis is summed, so the amount is the sum of the
+			// pieces actually written.
 			lots = quantizeLots(lots, quantity)
 			cost = portfolio.LotsCost(lots)
 		}
@@ -1168,30 +854,22 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 			AccountID: p.FromAccountID, InstrumentID: &p.InstrumentID, Type: TypeTransferOut,
 			OccurredOn: p.OccurredOn, Quantity: &quantity, AmountMinor: cost,
 			Currency: currency, Note: p.Note,
-			// The departing leg carries the breakdown as well, even though only
-			// the arriving one stores it (CreatePair writes in.TransferLots, and
-			// Store.attachTransferLots hands the same rows to both legs at every
-			// later read). It matters here and not merely for symmetry: the engine
-			// releases the lots this breakdown names rather than a fresh FIFO slice
-			// (see portfolio.Position.releaseRecorded), so a candidate without it
-			// is not the row the check below is supposed to be checking.
+			// The departing leg carries the breakdown too: the engine releases the
+			// lots it names (see portfolio.Position.releaseRecorded), so without it
+			// the candidate is not the row being checked. Only the arriving leg stores
+			// it; Store.attachTransferLots hands it to both on read.
 			TransferLots: lots,
 		}
 		inOp := Operation{
 			AccountID: p.ToAccountID, InstrumentID: &p.InstrumentID, Type: TypeTransferIn,
 			OccurredOn: p.OccurredOn, Quantity: &quantity, AmountMinor: cost,
 			Currency: currency, Note: p.Note,
-			// The breakdown rides on the arriving leg: its account is the one
-			// that would otherwise lose the acquisition dates. CreatePair writes
-			// it in the same transaction as the pair itself.
+			// The breakdown is stored with the arriving leg, whose account would
+			// otherwise lose the acquisition dates.
 			TransferLots: lots,
 		}
 
-		// The two legs touch different accounts' journals, so each is checked
-		// independently: the source loses the position (checked against its own
-		// history), the destination gains a fresh lot (always consistent on its
-		// own, but checked for uniformity and to catch a same-account edge case
-		// earlier logic might have missed).
+		// Each leg is checked against its own account's journal.
 		if err := checkJournalOps(sourceJournal, []Operation{outOp}, nil); err != nil {
 			return err
 		}
@@ -1199,17 +877,10 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 			return err
 		}
 
-		// And the same pair once more, as the database actually kept it — the guard
-		// Create has always had for a single operation, now that the departing leg
-		// replays the STORED pieces rather than a fresh slice of the queue (see
-		// portfolio.Position.releaseRecorded). What was checked above is an
-		// in-memory candidate; what every later read of the source account folds is
-		// the row below, with the quantities the columns rounded to. Twice already a
-		// difference between those two was accepted with a 201 and then refused on
-		// every later read by someone else (see quantizeLots and normalizeForStorage),
-		// and the second leg's release is a third way in. Not wrapped in
-		// ErrInconsistent: the caller's journal was fine and their request was
-		// accepted, so reaching this is a bug in this program, not something they did.
+		// The pair once more as stored, before the commit: the departing leg
+		// replays the stored pieces, so a rounding difference would otherwise be
+		// accepted now and refused on every later read. Not wrapped in
+		// ErrInconsistent; reaching this is this program's bug.
 		cOut, cIn, err = st.CreatePair(ctx, spaceID, outOp, inOp, func(storedOut, _ Operation) error {
 			if _, err := portfolio.Compute(journalWith(sourceJournal, []Operation{storedOut}, nil)); err != nil {
 				return fmt.Errorf("the transfer as stored no longer replays on the source account: %v", err)
@@ -1225,23 +896,17 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 	return cOut, cIn, nil
 }
 
-// SpinoffParams describes a spin-off on ONE account: a share of what was paid
-// for `FromInstrumentID` moves onto `ToInstrumentID`, which appears beside it
-// with `RatioTo` units for every `RatioFrom` of the original.
+// SpinoffParams describes a spin-off on one account: part of what was paid for
+// FromInstrumentID moves onto ToInstrumentID, which appears with RatioTo units per
+// RatioFrom of the original.
 //
-// THE RATIO IS GIVEN AND THE COUNT IS NOT, which is the one place this differs
-// from ExchangeParams and the difference is deliberate. A conversion names how
-// many units left and how many arrived, because the holding is consumed and the
-// caller can state both halves. A spin-off leaves the holding alone, so how many
-// units of the new paper arrive depends on how many of the old are held — and
-// that is decided by folding this account's journal, which happens INSIDE the
-// lock below. A caller passing an absolute count would be a second computation
-// of the same figure, made against a journal that may have moved since; this
-// codebase has watched two such computations drift more than once.
+// The ratio is given, not the count: the arriving count depends on the holding,
+// which is folded inside the lock, and a caller's count would be a second
+// computation against a journal that may have moved.
 //
 // BasisShare is the fraction of the cost that moves: 0 by default, as the broker
-// keeps a carve-out (decision Р-16), or a share the holder's own tax accounting
-// states. It comes from the registry; nothing here can derive it.
+// keeps it (decision Р-16), or what the holder's tax accounting states. It comes
+// from the registry.
 type SpinoffParams struct {
 	AccountID        uuid.UUID
 	FromInstrumentID uuid.UUID
@@ -1255,20 +920,11 @@ type SpinoffParams struct {
 }
 
 // CreateSpinoff records a spin-off as an atomic spinoff_out/spinoff_in pair on
-// one account: the original paper keeps every unit and gives up a share of its
-// money, and the carved-out paper is built from the very parcels that gave it
-// up, each keeping its cost and the day it was acquired (see
-// portfolio.TypeSpinoffOut for the law that fixes all three).
-//
-// IT IS THE REGISTRY'S ENTRY POINT AND NOBODY ELSE'S, exactly as CreateExchange
-// is: what happened to a paper is true for every account that held it, so it is
-// recorded once and applied from there.
-//
-// THE SHAPE IS CreateExchange'S — one account, one lock, one journal, both
-// candidates checked TOGETHER against it — and the two differences are the ones
-// the event itself has: the departing leg carries no quantity because nothing
-// leaves, and the arriving leg's count is worked out here from the holding
-// rather than taken from the caller.
+// one account: the original keeps every unit and gives up part of its money, and
+// the new paper is built from those same parcels with their costs and days (see
+// portfolio.TypeSpinoffOut). Only the registry calls it. The shape is
+// CreateExchange's, except that nothing leaves and the arriving count is derived
+// from the holding.
 func (s *Service) CreateSpinoff(ctx context.Context, spaceID uuid.UUID, p SpinoffParams) (out, in Operation, err error) {
 	var cOut, cIn Operation
 	err = s.store.WithAccountsLocked(ctx, spaceID, []uuid.UUID{p.AccountID}, func(st *Store) error {
@@ -1276,10 +932,8 @@ func (s *Service) CreateSpinoff(ctx context.Context, spaceID uuid.UUID, p Spinof
 		if err != nil {
 			return err
 		}
-		// Every judgement about the event and every figure in it — the share
-		// bounds, the holding on the day, the pieces, the arriving count — comes
-		// from the one builder the registry's materializer also uses (see
-		// BuildSpinoff). Nothing about a spin-off is decided twice.
+		// Every figure comes from BuildSpinoff, which the registry's
+		// materializer also uses.
 		outOp, inOp, err := BuildSpinoff(journal, p)
 		if err != nil {
 			return err
@@ -1303,14 +957,10 @@ func (s *Service) CreateSpinoff(ctx context.Context, spaceID uuid.UUID, p Spinof
 	return cOut, cIn, nil
 }
 
-// ExchangeParams describes a securities conversion on ONE account: `Quantity`
-// units of `FromInstrumentID` become `ToQuantity` units of `ToInstrumentID` on
-// `OccurredOn`.
-//
-// Both counts are given rather than a ratio. A corporate action is announced as
-// "N old for M new", the registry records exactly that (two whole numbers, so
-// nothing is pre-rounded), and this is the one place where those two numbers
-// meet the account's actual holding — which is neither of them.
+// ExchangeParams describes a conversion on one account: Quantity units of
+// FromInstrumentID become ToQuantity units of ToInstrumentID on OccurredOn. Both
+// counts are given because the registry records "N old for M new" as two whole
+// numbers.
 type ExchangeParams struct {
 	AccountID        uuid.UUID
 	FromInstrumentID uuid.UUID
@@ -1322,28 +972,15 @@ type ExchangeParams struct {
 	Note             string
 }
 
-// CreateExchange records a securities conversion as an atomic
-// exchange_out/exchange_in pair on one account: the old paper gives up the very
-// lots named in the breakdown, and the new paper is built from those same lots
-// with their costs and acquisition dates intact and only their quantities
-// restated (see portfolio.TypeExchangeOut for why the law says nothing else may
-// change).
+// CreateExchange records a conversion as an atomic exchange_out/exchange_in pair
+// on one account: the old paper gives up the lots in the breakdown, and the new
+// paper is built from them with costs and dates intact and only quantities
+// restated (see portfolio.TypeExchangeOut).
 //
-// IT IS THE REGISTRY'S ENTRY POINT AND NOBODY ELSE'S. What happened to a paper
-// is true for every account that held it, so it is recorded once in the
-// corporate-actions registry and applied from there; a Source other than
-// SourceRegistry is refused here as well as in validateByType, because this
-// function does not route through validate at all (CreateTransfer does not
-// either — a pair builds its own legs) and a rule only the other path enforces
-// is a rule this path does not have.
-//
-// THE SHAPE IS CreateTransfer'S, with one difference that matters at every
-// step: both legs land on the SAME account. So one lock is taken rather than
-// two, one journal is read rather than two, and — the part that would be easy to
-// get wrong — the two candidates are checked TOGETHER against that one journal.
-// Checking them one at a time would fold a journal in which the old paper had
-// left and the new one had not yet arrived, which is not a state the account is
-// ever in.
+// Only the registry calls it, and Source is checked here because this path does
+// not go through validate. Both legs land on one account, so one lock, one
+// journal, and the two candidates are checked together: one at a time would fold
+// a state the account is never in.
 func (s *Service) CreateExchange(ctx context.Context, spaceID uuid.UUID, p ExchangeParams) (out, in Operation, err error) {
 	var cOut, cIn Operation
 	err = s.store.WithAccountsLocked(ctx, spaceID, []uuid.UUID{p.AccountID}, func(st *Store) error {
@@ -1351,28 +988,21 @@ func (s *Service) CreateExchange(ctx context.Context, spaceID uuid.UUID, p Excha
 		if err != nil {
 			return err
 		}
-		// One arithmetic for both write paths (see BuildExchange): the checks on
-		// the request, the currency read off the history, the release against the
-		// conversion's own date, and the restating of the pieces in the new
-		// paper's units all live there and nowhere else.
+		// BuildExchange holds the whole arithmetic, shared with the registry's
+		// materializer.
 		outOp, inOp, err := BuildExchange(journal, p)
 		if err != nil {
 			return err
 		}
 
-		// BOTH LEGS AT ONCE, against the one journal they both land in — see this
-		// function's doc. The order inside the slice is the order the engine will
-		// fold them in, the departing leg first, which is the order CreatePair then
-		// writes them in (clock_timestamp() per row, see insertSQL).
+		// Both legs together, departing first: the order the engine folds them
+		// and CreatePair writes them.
 		if err := checkJournalOps(journal, []Operation{outOp, inOp}, nil); err != nil {
 			return err
 		}
 
 		cOut, cIn, err = st.CreatePair(ctx, spaceID, outOp, inOp, func(storedOut, storedIn Operation) error {
-			// The pair as the database actually kept it, folded once more before
-			// the commit — the guard every write path here has, and the one that
-			// matters most for a pair whose legs replay the pieces the columns
-			// rounded rather than the ones checked in memory.
+			// The pair as stored, folded once more before the commit.
 			if _, err := portfolio.Compute(journalWith(journal, []Operation{storedOut, storedIn}, nil)); err != nil {
 				return fmt.Errorf("the conversion as stored no longer replays: %v", err)
 			}
@@ -1386,32 +1016,17 @@ func (s *Service) CreateExchange(ctx context.Context, spaceID uuid.UUID, p Excha
 	return cOut, cIn, nil
 }
 
-// Delete removes an operation (or, if it belongs to a transfer group, the
-// whole group) after confirming every affected account's journal stays
-// consistent without it.
+// Delete removes an operation (or its whole transfer group) after confirming
+// every affected account's journal stays consistent without it.
 //
-// AN IMPORTED ROW IS NOT ITS TO DELETE. Rows whose source is not "manual" are
-// a projection of records held elsewhere — the broker's own, kept in the
-// mirror — and the projection is rebuilt from those records rather than from
-// what the journal happens to contain. A row deleted here is therefore written
-// again the next time it is rebuilt, without a word, and "deleted" was a lie
-// this program told. Refusing says who owns the row instead; removing it for
-// real means removing what it is projected from, which goes through the
-// importer's own path (see ApplyImportDelta).
+// An imported row is refused: it is a projection of the broker's records and
+// would be written again at the next rebuild. Removing it goes through the
+// importer (see ApplyImportDelta).
 //
-// IT TAKES THE SAME JOURNAL LOCK THE WRITE PATHS DO, and for the same reason
-// (issue #17 names Create; this is the identical shape). "Would this account
-// still replay without the row" is a question about the journal at a moment, and
-// answering it on the pool let a sell be recorded against the very buy being
-// deleted, each request seeing a journal the other had not touched yet and each
-// being told it was fine. Reading the affected journals under the lock makes the
-// second of the two see the first.
-//
-// The row and its group are read TWICE: once on the pool, only to learn which
-// accounts to lock, and then again inside the lock, where the answers are the
-// ones acted on. The first read decides nothing — a group's legs cannot change
-// accounts, so it can only name too few accounts if the group itself vanished
-// meanwhile, and then the second read finds nothing to delete either.
+// It takes the same journal lock as the write paths, so a sell cannot be
+// recorded against a buy being deleted (#17). The row is read on the pool only to
+// learn which accounts to lock, and again inside the lock, where the answer is
+// acted on.
 func (s *Service) Delete(ctx context.Context, spaceID, id uuid.UUID) error {
 	accountIDs, err := s.deletionAccounts(ctx, spaceID, id)
 	if err != nil {
@@ -1429,9 +1044,7 @@ func (s *Service) Delete(ctx context.Context, spaceID, id uuid.UUID) error {
 		accounts := map[uuid.UUID]bool{op.AccountID: true}
 		removeIDs := map[uuid.UUID]bool{op.ID: true}
 		if op.TransferGroupID != nil {
-			// A transfer group's two legs live on two different accounts; both
-			// must be re-validated, and both must be excluded from either
-			// account's replayed journal.
+			// Both legs' accounts are re-validated, each without either leg.
 			group, err := st.ByTransferGroup(ctx, spaceID, *op.TransferGroupID)
 			if err != nil {
 				return err
@@ -1458,15 +1071,10 @@ func (s *Service) Delete(ctx context.Context, spaceID, id uuid.UUID) error {
 	return nil
 }
 
-// deletionAccounts names every account Delete has to lock: the row's own, and —
-// when the row is one leg of a transfer — the other leg's as well. It is a read
-// with no decision in it, which is what lets it run outside the lock: locking
-// requires knowing which accounts to lock, and that cannot itself be learned
-// under the lock it is choosing.
-//
-// A row that is already gone yields no accounts and no error. The refusal for
-// that belongs to Delete's own read inside the lock, so that "no such operation"
-// is answered once, by the read whose answer is acted on.
+// deletionAccounts names every account Delete must lock: the row's own and,
+// for a transfer leg, the other leg's. It decides nothing, so it runs outside the
+// lock. A row already gone yields no accounts and no error; Delete's own read
+// answers that.
 func (s *Service) deletionAccounts(ctx context.Context, spaceID, id uuid.UUID) ([]uuid.UUID, error) {
 	op, err := s.store.ByID(ctx, spaceID, id)
 	if errors.Is(err, pgx.ErrNoRows) {
