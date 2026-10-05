@@ -12,6 +12,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/portfolio"
+	"babki.my/babki/internal/portfolio/portfoliotest"
 )
 
 var (
@@ -91,8 +92,8 @@ func TestBuySellFIFO(t *testing.T) {
 	}
 	wantReleased := int64(100_010 + 55_005)
 	wantRealized := 180_000 - wantReleased - 18
-	if realizedOf(t, p) != wantRealized {
-		t.Errorf("realized = %d, want %d", realizedOf(t, p), wantRealized)
+	if portfoliotest.Realized(t, p) != wantRealized {
+		t.Errorf("realized = %d, want %d", portfoliotest.Realized(t, p), wantRealized)
 	}
 	// remaining cost = full cost of both lots − released (not a cent of drift)
 	if p.CostMinor != (100_010+110_011)-wantReleased {
@@ -120,8 +121,8 @@ func TestLotDrainNoRoundingDrift(t *testing.T) {
 	if !p.Quantity.IsZero() || p.CostMinor != 0 {
 		t.Errorf("qty=%s cost=%d, want 0/0", p.Quantity, p.CostMinor)
 	}
-	if realizedOf(t, p) != 0 {
-		t.Errorf("realized = %d, want 0", realizedOf(t, p))
+	if portfoliotest.Realized(t, p) != 0 {
+		t.Errorf("realized = %d, want 0", portfoliotest.Realized(t, p))
 	}
 }
 
@@ -142,8 +143,8 @@ func TestDriftRemainderGoesToLastPiece(t *testing.T) {
 	if p.CostMinor != 0 {
 		t.Errorf("cost = %d, want 0", p.CostMinor)
 	}
-	if realizedOf(t, p) != 12_000-10_001 {
-		t.Errorf("realized = %d, want %d", realizedOf(t, p), 12_000-10_001)
+	if portfoliotest.Realized(t, p) != 12_000-10_001 {
+		t.Errorf("realized = %d, want %d", portfoliotest.Realized(t, p), 12_000-10_001)
 	}
 }
 
@@ -216,8 +217,8 @@ func TestAmortizationReducesCost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compute 2: %v", err)
 	}
-	if pos[ofz].CostMinor != 0 || realizedOf(t, pos[ofz]) != 100_000 {
-		t.Errorf("cost=%d realized=%d, want 0/100000", pos[ofz].CostMinor, realizedOf(t, pos[ofz]))
+	if pos[ofz].CostMinor != 0 || portfoliotest.Realized(t, pos[ofz]) != 100_000 {
+		t.Errorf("cost=%d realized=%d, want 0/100000", pos[ofz].CostMinor, portfoliotest.Realized(t, pos[ofz]))
 	}
 }
 
@@ -231,7 +232,7 @@ func TestClosedPositionKeptInResult(t *testing.T) {
 		t.Fatalf("Compute: %v", err)
 	}
 	p := pos[lkoh]
-	if p == nil || !p.Quantity.IsZero() || realizedOf(t, p) != 250_000 {
+	if p == nil || !p.Quantity.IsZero() || portfoliotest.Realized(t, p) != 250_000 {
 		t.Fatalf("closed position = %+v", p)
 	}
 }
@@ -434,7 +435,7 @@ func TestLotsStayExactOverLongSequence(t *testing.T) {
 		}
 	}
 	// realized = proceeds − released − fees, so released is observable from outside
-	releasedMinor := proceedsMinor - sellFeesMinor - realizedOf(t, p)
+	releasedMinor := proceedsMinor - sellFeesMinor - portfoliotest.Realized(t, p)
 	if boughtMinor != p.CostMinor+releasedMinor {
 		t.Errorf("bought %d, but held %d + released %d = %d — %d minor units drifted",
 			boughtMinor, p.CostMinor, releasedMinor, p.CostMinor+releasedMinor,
@@ -543,9 +544,9 @@ func TestUndatedLotBehavesLikeAnyOtherLot(t *testing.T) {
 	if p.Lots[0].CostMinor != 6_668 {
 		t.Errorf("undated lot cost = %d, want 6668 (10001 − floor(10001/3))", p.Lots[0].CostMinor)
 	}
-	if realizedOf(t, p) != 4_000-3_333 {
+	if portfoliotest.Realized(t, p) != 4_000-3_333 {
 		t.Errorf("realized = %d, want %d — the sale must consume the undated lot at ITS cost, not the buy's",
-			realizedOf(t, p), 4_000-3_333)
+			portfoliotest.Realized(t, p), 4_000-3_333)
 	}
 	// 2 units left of the undated lot and 2 bought, both doubled by the split.
 	if !sameAcquisition(p.Lots[1].AcquiredOn, dayp(6)) {
@@ -581,13 +582,13 @@ func TestTransferredLotBoughtEarlierIsSoldFirst(t *testing.T) {
 	}
 	p := pos[sber]
 
-	if realizedOf(t, p) == 400_000-300_000 {
+	if portfoliotest.Realized(t, p) == 400_000-300_000 {
 		t.Fatalf("realized = %d — the day-%d purchase was released because the journal mentions it first; the parcel bought on day %d is the earlier ACQUISITION and the queue is built from that",
-			realizedOf(t, p), 20, 2)
+			portfoliotest.Realized(t, p), 20, 2)
 	}
-	if realizedOf(t, p) != 400_000-100_000 {
+	if portfoliotest.Realized(t, p) != 400_000-100_000 {
 		t.Errorf("realized = %d, want %d (400000 − the day-2 parcel's cost 100000)",
-			realizedOf(t, p), 400_000-100_000)
+			portfoliotest.Realized(t, p), 400_000-100_000)
 	}
 	if !p.Quantity.Equal(d("10")) {
 		t.Fatalf("qty = %s, want 10", p.Quantity)
@@ -757,12 +758,12 @@ func TestUndatedLotLeavesTheQueueFirst(t *testing.T) {
 		t.Fatalf("Compute after the sale: %v", err)
 	}
 	q := after[sber]
-	if realizedOf(t, q) == 100_000-10_000 {
-		t.Fatalf("realized = %d — the day-1 purchase was released; a lot whose acquisition is unknown leaves first", realizedOf(t, q))
+	if portfoliotest.Realized(t, q) == 100_000-10_000 {
+		t.Fatalf("realized = %d — the day-1 purchase was released; a lot whose acquisition is unknown leaves first", portfoliotest.Realized(t, q))
 	}
-	if realizedOf(t, q) != 100_000-90_000 {
+	if portfoliotest.Realized(t, q) != 100_000-90_000 {
 		t.Errorf("realized = %d, want %d (100000 − the undated parcel's 90000)",
-			realizedOf(t, q), 100_000-90_000)
+			portfoliotest.Realized(t, q), 100_000-90_000)
 	}
 	// Selling drains the unknown first, so what is left can be valued again.
 	if len(q.Lots) != 1 || !sameAcquisition(q.Lots[0].AcquiredOn, dayp(1)) {
@@ -1162,9 +1163,9 @@ func checkRealizationsSumToTotal(t *testing.T, p *portfolio.Position) {
 	for _, r := range p.Realizations {
 		sum += r.PnLMinor()
 	}
-	if sum != realizedOf(t, p) {
+	if sum != portfoliotest.Realized(t, p) {
 		t.Errorf("realizations sum to %d, but the position realized %d (off by %d) — every minor unit of the total must be accounted for by an event",
-			sum, realizedOf(t, p), sum-realizedOf(t, p))
+			sum, portfoliotest.Realized(t, p), sum-portfoliotest.Realized(t, p))
 		for i, r := range p.Realizations {
 			t.Logf("  event %d on %s: proceeds %d, fee %d, released %s → %d",
 				i, r.OccurredOn.Format("2006-01-02"), r.ProceedsMinor, r.FeeMinor, releasedText(r.Released), r.PnLMinor())
@@ -1262,8 +1263,8 @@ func TestTransferOutRecordsNoRealization(t *testing.T) {
 				t.Errorf("realizations = %d %+v, want 0 — a transfer between one's own accounts realizes nothing",
 					len(p.Realizations), p.Realizations)
 			}
-			if realizedOf(t, p) != 0 {
-				t.Errorf("realized = %d, want 0", realizedOf(t, p))
+			if portfoliotest.Realized(t, p) != 0 {
+				t.Errorf("realized = %d, want 0", portfoliotest.Realized(t, p))
 			}
 			checkRealizationsSumToTotal(t, p)
 		})
@@ -1307,8 +1308,8 @@ func TestAmortizationRecordsARealization(t *testing.T) {
 	if second.PnLMinor() != 100_000 {
 		t.Errorf("second event result = %d, want 100000", second.PnLMinor())
 	}
-	if realizedOf(t, p) != 100_000 {
-		t.Errorf("realized = %d, want 100000 — unchanged by recording what it was made of", realizedOf(t, p))
+	if portfoliotest.Realized(t, p) != 100_000 {
+		t.Errorf("realized = %d, want 100000 — unchanged by recording what it was made of", portfoliotest.Realized(t, p))
 	}
 	checkRealizationsSumToTotal(t, p)
 }
@@ -1399,8 +1400,8 @@ func TestRealizationsSumToRealizedPnL(t *testing.T) {
 	p := pos[sber]
 	checkLotInvariants(t, p)
 	checkRealizationsSumToTotal(t, p)
-	if realizedOf(t, p) != 1_049_490 {
-		t.Errorf("realized = %d, want 1049490 (see the derivation above)", realizedOf(t, p))
+	if portfoliotest.Realized(t, p) != 1_049_490 {
+		t.Errorf("realized = %d, want 1049490 (see the derivation above)", portfoliotest.Realized(t, p))
 	}
 	if len(p.Realizations) != 7 {
 		t.Fatalf("realizations = %d, want 7 — five sales and two amortizations, and nothing for either transfer", len(p.Realizations))
@@ -1472,8 +1473,8 @@ func TestAmortizationIsAllowedWherePrincipalCanCome(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Compute: %v", err)
 			}
-			if realizedOf(t, pos[ofz]) != tc.wantRealized {
-				t.Errorf("realized = %d, want %d", realizedOf(t, pos[ofz]), tc.wantRealized)
+			if portfoliotest.Realized(t, pos[ofz]) != tc.wantRealized {
+				t.Errorf("realized = %d, want %d", portfoliotest.Realized(t, pos[ofz]), tc.wantRealized)
 			}
 		})
 	}
@@ -1494,19 +1495,9 @@ func TestPaymentsOnAPaperNeverAcquiredStayLegitimate(t *testing.T) {
 	if p.IncomeMinorIn("RUB") != 12_000+3_000-1_500 {
 		t.Errorf("income = %d, want 13500", p.IncomeMinorIn("RUB"))
 	}
-	if realizedOf(t, p) != 0 {
-		t.Errorf("realized = %d, want 0 — payments claim nothing about cost", realizedOf(t, p))
+	if portfoliotest.Realized(t, p) != 0 {
+		t.Errorf("realized = %d, want 0 — payments claim nothing about cost", portfoliotest.Realized(t, p))
 	}
-}
-
-// realizedOf returns the realized result and fails if there is none.
-func realizedOf(t *testing.T, p *portfolio.Position) int64 {
-	t.Helper()
-	minor, inOneCurrency := p.RealizedPnL()
-	if !inOneCurrency {
-		t.Fatalf("position %s has no realized result in one currency: a disposal settled in another", p.InstrumentID)
-	}
-	return minor
 }
 
 // A redemption computes exactly as a sale: every figure is compared with the

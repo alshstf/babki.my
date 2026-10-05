@@ -19,6 +19,7 @@ import (
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/testdb"
 	"babki.my/babki/internal/portfolio"
+	"babki.my/babki/internal/portfolio/portfoliotest"
 )
 
 // mustAcquired asserts a lot knows its purchase date and returns it. The seed
@@ -132,8 +133,8 @@ func TestSeedDemo(t *testing.T) {
 			t.Errorf("Т-Банк %s quantity = %s, want %s", ticker, pos.Quantity.String(), qty)
 		}
 	}
-	if lkoh := tbankPositions["LKOH"]; realizedOf(t, lkoh) <= 0 {
-		t.Errorf("LKOH realized P&L = %d, want > 0", realizedOf(t, lkoh))
+	if lkoh := tbankPositions["LKOH"]; portfoliotest.Realized(t, lkoh) <= 0 {
+		t.Errorf("LKOH realized P&L = %d, want > 0", portfoliotest.Realized(t, lkoh))
 	}
 	// TSLA left Т-Банк whole: the source keeps it as closed history (zero
 	// quantity, cost and lots), as
@@ -478,13 +479,13 @@ func TestSeedDemo(t *testing.T) {
 	default:
 		t.Errorf("NVDA cost_minor = %d, want 150000 ($1 500.00)", nvda.CostMinor)
 	}
-	switch realizedOf(t, nvda) {
+	switch portfoliotest.Realized(t, nvda) {
 	case 100_000:
 		// 200_000 − 100_000: the earliest acquisition was released.
 	case 50_000:
 		t.Errorf("NVDA realized P&L = 50000 (+$500.00): the sale was matched against the later, dearer parcel — arrival order again")
 	default:
-		t.Errorf("NVDA realized P&L = %d, want 100000 (+$1 000.00)", realizedOf(t, nvda))
+		t.Errorf("NVDA realized P&L = %d, want 100000 (+$1 000.00)", portfoliotest.Realized(t, nvda))
 	}
 	if len(nvda.Lots) != 1 {
 		t.Fatalf("NVDA lots = %d, want exactly 1 left after the sale", len(nvda.Lots))
@@ -552,16 +553,16 @@ func TestSeedDemo(t *testing.T) {
 	if len(googl.Realizations) != 1 {
 		t.Fatalf("GOOGL realizations = %d, want exactly 1 (the single sale)", len(googl.Realizations))
 	}
-	if realizedOf(t, googl) != 50_000 {
-		t.Errorf("GOOGL realized P&L = %d, want 50000 (+$500.00 = 1050000 − 1000000)", realizedOf(t, googl))
+	if portfoliotest.Realized(t, googl) != 50_000 {
+		t.Errorf("GOOGL realized P&L = %d, want 50000 (+$500.00 = 1050000 − 1000000)", portfoliotest.Realized(t, googl))
 	}
 	googlBase := realizedInBase(googl, "GOOGL")
 	if googlBase != -13_150_000 {
 		t.Errorf("GOOGL realized P&L in RUB = %d, want -13150000 (68 250 000 − 81 400 000 = −131 500,00 ₽)", googlBase)
 	}
-	if realizedOf(t, googl) <= 0 || googlBase >= 0 {
+	if portfoliotest.Realized(t, googl) <= 0 || googlBase >= 0 {
 		t.Errorf("GOOGL settled result = %d in USD and %d in RUB: the demo must contain one CLOSED deal that is a profit in the position's currency and a loss in rubles — without it plan 7b's consequence cannot be seen on demo data at all",
-			realizedOf(t, googl), googlBase)
+			portfoliotest.Realized(t, googl), googlBase)
 	}
 	// The answer a single-rate conversion of the dollar result would give,
 	// named by value so a seed edit that makes the two agree is unmistakable.
@@ -569,7 +570,7 @@ func TestSeedDemo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rate(USD -> RUB, 2026-06-20): %v", err)
 	}
-	if flat := decimal.NewFromInt(realizedOf(t, googl)).Mul(rateOnSale).Round(0).IntPart(); flat != 3_250_000 || flat <= 0 {
+	if flat := decimal.NewFromInt(portfoliotest.Realized(t, googl)).Mul(rateOnSale).Round(0).IntPart(); flat != 3_250_000 || flat <= 0 {
 		t.Errorf("GOOGL result converted at the sale day's rate alone = %d, want 3250000 (+32 500,00 ₽, a PROFIT) — the point of this deal is that no single rate reproduces −131 500,00 ₽", flat)
 	}
 
@@ -596,7 +597,7 @@ func TestSeedDemo(t *testing.T) {
 	// 	        (+$1 500.00)     (−35 000,00 ₽)
 	var accountUSD, accountRUB int64
 	for ticker, pos := range freedomPositions {
-		accountUSD += realizedOf(t, pos)
+		accountUSD += portfoliotest.Realized(t, pos)
 		accountRUB += realizedInBase(pos, ticker)
 	}
 	if accountUSD != 150_000 || accountRUB != -3_500_000 {
@@ -1084,16 +1085,4 @@ func TestASeedThatFailsPartWayLeavesTheInstanceSeedableAgain(t *testing.T) {
 	if _, p, err := svc.Login(ctx, "demo", "demo1234"); err != nil || p.Role != family.RoleOwner {
 		t.Fatalf("login demo after the second seed: %v %+v", err, p)
 	}
-}
-
-// realizedOf is a position's realized result and fails the test when there is
-// none (settled in another currency), so a missing figure is never read as
-// zero.
-func realizedOf(t *testing.T, p *portfolio.Position) int64 {
-	t.Helper()
-	minor, inOneCurrency := p.RealizedPnL()
-	if !inOneCurrency {
-		t.Fatalf("position %s has no realized result in one currency: a disposal settled in another", p.InstrumentID)
-	}
-	return minor
 }

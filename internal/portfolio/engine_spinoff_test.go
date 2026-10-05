@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/portfolio"
+	"babki.my/babki/internal/portfolio/portfoliotest"
 )
 
 // spinoffLegs builds the registry's pair: the departing leg names lots and
@@ -49,8 +50,8 @@ func TestSpinoffLeavesTheUnitsAndMovesAShareOfTheMoney(t *testing.T) {
 	if old.CostMinor != 151_065-50_354 {
 		t.Errorf("the original paper keeps %d minor of basis, want %d", old.CostMinor, 151_065-50_354)
 	}
-	if realizedOf(t, old) != 0 {
-		t.Errorf("the spin-off realized %d, want 0 — nothing was sold (НК РФ ст. 277 п. 7)", realizedOf(t, old))
+	if portfoliotest.Realized(t, old) != 0 {
+		t.Errorf("the spin-off realized %d, want 0 — nothing was sold (НК РФ ст. 277 п. 7)", portfoliotest.Realized(t, old))
 	}
 
 	carved := pos[sber]

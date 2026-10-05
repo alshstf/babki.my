@@ -11,6 +11,7 @@ import (
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/portfolio"
+	"babki.my/babki/internal/portfolio/portfoliotest"
 )
 
 // imported dresses an operation as an importer hands it over: a non-manual
@@ -989,7 +990,7 @@ func TestApplyImportDeltaJudgesCandidatesInTheOrderTheyHappened(t *testing.T) {
 	if len(ops) != 2 || ops[0].Type != operation.TypeBuy {
 		t.Errorf("journal reads back as %+v, want the buy first", ops)
 	}
-	if pnl := realizedOf(t, positions[f.sberID]); pnl != 20_000 {
+	if pnl := portfoliotest.Realized(t, positions[f.sberID]); pnl != 20_000 {
 		t.Errorf("realized = %d, want 20000", pnl)
 	}
 }
@@ -1074,7 +1075,7 @@ func TestApplyImportDeltaFoldsACandidateAfterWhatItsDateAlreadyHolds(t *testing.
 	if len(ops) != 2 || ops[0].Type != operation.TypeBuy {
 		t.Errorf("journal reads back as %+v, want the buy first", ops)
 	}
-	if pnl := realizedOf(t, positions[f.sberID]); pnl != 20_000 {
+	if pnl := portfoliotest.Realized(t, positions[f.sberID]); pnl != 20_000 {
 		t.Errorf("realized = %d, want 20000", pnl)
 	}
 }
@@ -1205,18 +1206,6 @@ func TestApplyImportDeltaRefusesATimestampItCannotHaveInherited(t *testing.T) {
 	if ops, _ := journalOf(t, f, f.accountID); len(ops) != 0 {
 		t.Errorf("journal holds %d operations, want none written", len(ops))
 	}
-}
-
-// realizedOf is a position's realized result and fails the test when there
-// is none (a disposal settled in another currency), so a zero is never compared
-// with a missing figure.
-func realizedOf(t *testing.T, p *portfolio.Position) int64 {
-	t.Helper()
-	minor, inOneCurrency := p.RealizedPnL()
-	if !inOneCurrency {
-		t.Fatalf("position %s has no realized result in one currency: a disposal settled in another", p.InstrumentID)
-	}
-	return minor
 }
 
 // The lock covers one account, so a delta built under it may write only
