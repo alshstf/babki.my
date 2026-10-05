@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"testing"
 	"time"
+
+	"babki.my/babki/internal/platform/logtest"
 )
 
 // An uncovered query in RatesOn's second pass is a bug in converter.go, and
@@ -18,7 +20,7 @@ func TestResolveQueriesLogsAnUncoveredQueryAsAnError(t *testing.T) {
 	ctx := context.Background()
 	on := time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)
 	queries := []RateQuery{{From: "USD", To: "EUR", On: on}}
-	capture := CaptureLogs(t)
+	capture := logtest.Default(t)
 
 	// An empty prefetch: the first row asked for was never recorded.
 	got, err := resolveQueries(ctx, prefetchedRows{}, queries)
@@ -28,7 +30,7 @@ func TestResolveQueriesLogsAnUncoveredQueryAsAnError(t *testing.T) {
 	if got.Len() != 0 {
 		t.Fatalf("resolveQueries over an empty prefetch returned %d entries, want the zero Rates", got.Len())
 	}
-	AssertOneRecordAt(t, capture, uncoveredQueryMessage, slog.LevelError, "USD")
+	logtest.AssertOne(t, capture, uncoveredQueryMessage, slog.LevelError, "USD")
 }
 
 // A covered batch, even one with a genuine gap, logs nothing.
@@ -43,10 +45,10 @@ func TestResolveQueriesSaysNothingWhenThePrefetchCovers(t *testing.T) {
 	for _, q := range queries {
 		_, _, _ = rateVia(ctx, candidates, q.From, q.To, q.On)
 	}
-	capture := CaptureLogs(t)
+	capture := logtest.Default(t)
 
 	if _, err := resolveQueries(ctx, prefetchedRows{asked: candidates.seen}, queries); err != nil {
 		t.Fatalf("resolveQueries over a complete prefetch: err = %v, want nil", err)
 	}
-	AssertNoRecord(t, capture, uncoveredQueryMessage)
+	logtest.AssertNone(t, capture, uncoveredQueryMessage)
 }

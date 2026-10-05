@@ -25,6 +25,7 @@ import (
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/operation"
 	"babki.my/babki/internal/platform/httpserver"
+	"babki.my/babki/internal/platform/logtest"
 	"babki.my/babki/internal/platform/secretbox"
 	"babki.my/babki/internal/platform/testdb"
 )
@@ -659,7 +660,7 @@ func TestAHalfBuiltConnectionThatCouldNotBeRemovedIsNotScheduled(t *testing.T) {
 	svc := NewService(api.store, strayAccountCreator{}, operation.NewService(strayOps), strayOps, api.box,
 		func(token string) (*Client, error) {
 			return NewClient(http.DefaultClient, api.brokerURL, token, slog.Default()), nil
-		}, api.inserter, slog.New(&logCapture{}))
+		}, api.inserter, slog.New(&logtest.Capture{}))
 
 	_, err := svc.CreateConnection(ctx,
 		family.Principal{SpaceID: api.spaceID, Role: family.RoleOwner}, demoToken,

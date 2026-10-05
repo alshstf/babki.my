@@ -19,6 +19,7 @@ import (
 
 	"babki.my/babki/internal/instrument"
 	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/logtest"
 	"babki.my/babki/internal/platform/secretbox"
 )
 
@@ -31,7 +32,7 @@ const rpcLastPrices = "MarketDataService/GetLastPrices"
 type quotesFixture struct {
 	fixture
 	broker *brokerStub
-	logs   *logCapture
+	logs   *logtest.Capture
 	quotes *recordingQuotes
 	worker river.Worker[RefreshQuotesArgs]
 	now    time.Time
@@ -74,7 +75,7 @@ func newQuotesFixture(t *testing.T) *quotesFixture {
 	qf := &quotesFixture{
 		fixture: f,
 		broker:  newBrokerStub(t),
-		logs:    &logCapture{},
+		logs:    &logtest.Capture{},
 		quotes:  &recordingQuotes{},
 		// A fixed "today", so the future-price guard is asserted against a
 		// literal rather than against whatever day the suite runs on.
@@ -538,7 +539,7 @@ func TestResolveListingPassesOverAListingInAnotherCurrency(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	log := slog.New(&logCapture{})
+	log := slog.New(&logtest.Capture{})
 	client := NewClient(srv.Client(), srv.URL, testToken, log)
 
 	got, price, currency, ok, err := resolveListing(context.Background(), client, log,

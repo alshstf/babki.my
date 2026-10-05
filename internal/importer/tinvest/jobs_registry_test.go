@@ -11,6 +11,7 @@ import (
 
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/operation"
+	"babki.my/babki/internal/platform/logtest"
 	"github.com/google/uuid"
 )
 
@@ -140,7 +141,7 @@ func TestSyncWorkerFinishesTheRunWhenTheRegistryCannotBeApplied(t *testing.T) {
 	if len(runs) != 1 || runs[0].Status != RunOK || runs[0].ReconcileStatus != ReconcileMatched {
 		t.Fatalf("runs = %+v, want one finished and matched", runs)
 	}
-	assertOneRecordAt(t, f.logs,
+	logtest.AssertOne(t, f.logs,
 		"tinvest: the import was written but the registry's rows were not brought into line",
 		slog.LevelError, "the registry is away")
 }
