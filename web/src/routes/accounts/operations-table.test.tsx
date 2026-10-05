@@ -15,25 +15,19 @@ import type { DisplayCurrencyMode } from "@/lib/display-currency";
 import { JOURNAL_PAGE_SIZE, type Operation } from "@/api/operations";
 import type { CostBasisRules } from "@/api/tax-residencies";
 
-// The API client captures globalThis.fetch once, when @/api/client is first
-// imported (openapi-fetch: `fetch: baseFetch = globalThis.fetch`), so the
-// double has to be in place *before* that import — hence vi.hoisted, which
-// runs ahead of the import statements above.
+// The API client captures globalThis.fetch on first import, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// NBSP-insensitive compare: Intl.NumberFormat uses non-breaking spaces
-// (matches the helper in money.test.ts / positions-table.test.tsx). Written
-// with explicit escapes so they can't silently get mangled into plain ASCII
-// spaces by an editing tool.
+// NBSP-insensitive compare, written with escapes.
 const norm = (s: string) => s.replace(/[\u00A0\u202F]/g, " ");
 
-// Serves the given endpoints and 404s everything else, so an unexpected
-// request is loud rather than silent. Routes match on the path's *suffix*,
-// not on a substring (see the same helper in detail.test.tsx).
+// Serves the given endpoints by path suffix and 404s the rest, so an
+// unexpected request is loud.
 function serve(routes: Record<string, { status?: number; body?: unknown }>) {
   const paths = Object.keys(routes);
   fetchMock.mockImplementation((input: RequestInfo | URL) => {
@@ -56,9 +50,7 @@ function makeOperation(overrides: Partial<Operation> = {}): Operation {
     account_id: "acc-1",
     instrument_id: null,
     type: "deposit",
-    // A deliberately old date: the whole point of the journal's conversion is
-    // that it uses the rate of the day the operation happened, so a test date
-    // that could be confused with "today" would prove nothing.
+    // An old date, so "the operation's day" cannot be confused with today.
     occurred_on: "2019-03-14",
     settled_on: null,
     quantity: null,
@@ -71,14 +63,11 @@ function makeOperation(overrides: Partial<Operation> = {}): Operation {
     split_ratio: null,
     source: "manual",
     created_at: "2019-03-14T00:00:00Z",
-    // An ordinary operation's amount belongs to the day it happened, so there
-    // are no purchase dates for it to be missing — see has_undated_lots in the
-    // API contract. Only the transfer tests below set it.
+    // An ordinary operation has no purchase dates to miss; only transfers
+    // set this.
     has_undated_lots: false,
-    // Properties of the OPERATION, not of in_base (see the API contract) —
-    // true only for a transfer whose parcel has a stored breakdown, which is
-    // never the case for these ordinary defaults. The transfer tests below
-    // set it explicitly, because for them it is the whole point.
+    // True only for a transfer with a stored breakdown; set explicitly by
+    // the transfer tests.
     assembled_from_lots: false,
     ...overrides,
   };
@@ -94,9 +83,8 @@ function ToggleProbe() {
   return <div data-testid="toggle">{visible ? "visible" : "hidden"}</div>;
 }
 
-// A country whose rules are not what this application computes, in two
-// separate ways at once — so the caveat, wherever it appears, has two
-// sentences in it and dropping either would be visible.
+// A country whose rules differ in two ways, so the caveat has two
+// sentences and dropping either shows.
 const britain: CostBasisRules = {
   country: "GB",
   method: "average",
@@ -105,9 +93,7 @@ const britain: CostBasisRules = {
   notices: ["method_mismatch", "perimeter_mismatch"],
 };
 
-// A catalog entry, as the instruments endpoint returns it. Only the price
-// tests need one: everything else renders operations with no instrument at
-// all, or lets the name fall back to an id suffix while the catalog loads.
+// A catalog entry; only the price tests need one.
 function makeInstrument(overrides: Partial<Instrument> = {}): Instrument {
   return {
     id: "instr-1",
@@ -134,9 +120,7 @@ function renderTable({
   accountName,
 }: {
   operations: Operation[];
-  // The catalog the table looks names and types up in, served as one whole
-  // page. Empty by default: most tests here render rows with no instrument on
-  // them at all.
+  // The catalog served as one page; empty by default.
   instruments?: Instrument[];
   // Whether the server says the journal continues past this page. Defaults to
   // false — every test that is not about paging is looking at a whole journal.
@@ -194,9 +178,8 @@ describe("OperationsTable: the other account of a move", () => {
   });
 });
 
-// A move whose basis was typed by hand says how much it changed the family's
-// cost of the shares — the server's figure, signed — on each half; a move the
-// queue priced says nothing.
+// A move with a hand-typed basis shows the server's signed change of the
+// family's cost on each half; a queue-priced move shows nothing.
 describe("OperationsTable: a basis typed by hand", () => {
   it("says the change on a typed basis, that it matches, or nothing", async () => {
     renderTable({
@@ -213,9 +196,8 @@ describe("OperationsTable: a basis typed by hand", () => {
   });
 });
 
-// The way back to an arrival's purchases once the paper no longer says its
-// price is unknown: on the journal row of shares from another broker, and only
-// there — a move between own accounts carries the source's purchases.
+// The way back to an arrival's purchases: only on shares from another
+// broker, since a move between own accounts carries the source's.
 describe("OperationsTable: the purchases of an arrival from another broker", () => {
   const ko = { id: "inst-ko", type: "share", name: "Coca-Cola", ticker: "KO", isin: "", figi: "", currency: "USD", frozen: false } as Instrument;
   const arrival = (overrides: Partial<Operation> = {}) =>
@@ -276,17 +258,9 @@ describe("OperationsTable", () => {
   });
 
   it("prints both converted figures of a row in the currency that row's in_base carries, not the session's", async () => {
-    // #106, in the shape the owner meets it: settings changes the base
-    // currency, the session's new answer lands in the cache at once
-    // (useUpdateSpace writes it directly), and this journal still holds
-    // figures the server converted into the OLD base currency until its
-    // refetch comes back. The rubles must keep printing as rubles for that
-    // window — a euro sign over them is not a mislabelling, it is a number
-    // wrong by the whole exchange rate with nothing on screen admitting it.
-    //
-    // Both cells are checked: the amount and the fee are converted and
-    // rounded independently and are resolved by two separate calls, so either
-    // could have been left reading the session.
+    // #106: after a base-currency change the session updates at once while
+    // the journal still holds old-currency figures; amount and fee each keep
+    // their own block's sign.
     renderTable({
       operations: [
         makeOperation({
@@ -381,9 +355,7 @@ describe("OperationsTable", () => {
       });
 
       const amount = await screen.findByTestId("operation-amount");
-      // Journal-specific wording: the rate is the one in effect back then.
-      // The 4d wording ("Пересчитано по текущему курсу (на 14.03.2019)")
-      // names a *current* rate and would misrepresent what this number is.
+      // The rate of the operation's day, not "current".
       expect(amount).toHaveAttribute(
         "title",
         "Пересчитано по курсу на дату операции — 14.03.2019",
@@ -392,9 +364,7 @@ describe("OperationsTable", () => {
         "title",
         "Пересчитано по курсу на дату операции — 14.03.2019",
       );
-      // The rate date lives in the tooltip only, never baked into the money
-      // cell's own text (14.03.2019 legitimately appears elsewhere, in the
-      // pre-existing Date column — that's not what this assertion is about).
+      // The rate date lives in the tooltip, not the cell's text.
       expect(norm(amount.textContent ?? "")).toBe(norm(formatMinor(655_000, "RUB")));
       // And it is emphatically not today's rate.
       const today = formatDate(localToday());
@@ -411,11 +381,8 @@ describe("OperationsTable", () => {
               amount_minor: 655_000,
               fee_minor: 32_750,
               currency: "RUB",
-              // 2019-03-14 is a gap (e.g. weekend/holiday the backfill never
-              // queries — see internal/marketdata/jobs.go) — FxRateOn falls
-              // back to the nearest earlier date that has a rate. Claiming
-              // "on the operation's date" here would be false, and the Date
-              // column right next to it (14.03.2019) would contradict it.
+              // 2019-03-14 has no rate; the nearest earlier is used, so "on the
+              // operation's date" would be false.
               rate_on: "2019-03-12",
               dated_on: "2019-03-14",
             }),
@@ -445,13 +412,9 @@ describe("OperationsTable", () => {
       expect(amount.getAttribute("title")).not.toContain(today);
     });
 
-    // The two tests below are the case the tooltip had no wording for at all,
-    // and they are written the way the demo data actually looks: a transfer of
-    // shares bought on two earlier days, whose ruble figure is assembled from
-    // the rates of those days. rate_on is the newest of them, so a tooltip that
-    // decides its wording by comparing rate_on with occurred_on states
-    // something false whichever way the comparison happens to land — which is
-    // why assembled_from_lots exists and why it must be checked first.
+    // A transfer assembled from two earlier purchases: rate_on is the newest
+    // purchase, so comparing it with occurred_on gives a false sentence either
+    // way; assembled_from_lots is checked first.
     it("says a transfer's figure comes from the purchase dates instead of claiming a nearest-earlier rate", async () => {
       renderTable({
         operations: [
@@ -463,15 +426,11 @@ describe("OperationsTable", () => {
             fee_minor: 0,
             assembled_from_lots: true,
             in_base: inBase({
-              // 118 000,00 ₽: two purchases, each at the rate of its own day —
-              // never 149 150,00 ₽, which is the same shares priced on the day
-              // they changed brokers.
+              // 118 000,00 ₽ from two purchase-day rates, never 149 150,00 ₽.
               amount_minor: 11_800_000,
               fee_minor: 0,
               currency: "RUB",
-              // The newest of the two purchase dates, NOT the transfer's own
-              // date and NOT a fallback for a missing rate: 2026-07-20 has a
-              // rate of its own and it was deliberately not used.
+              // The newest purchase date, not the transfer's (which has a rate).
               rate_on: "2026-06-15",
               // The purchase this figure is dated by. Equal to rate_on here
               // because that day had a rate of its own.
@@ -496,10 +455,8 @@ describe("OperationsTable", () => {
     });
 
     it("keeps saying so when the newest purchase happens to fall on the transfer's own date", async () => {
-      // rate_on === occurred_on here, which is exactly the shape of an ordinary
-      // "converted at the rate of its own day" row. It is still a sum struck at
-      // several rates, so the ordinary wording would be just as false as the
-      // other one — the flag, not the dates, decides.
+      // rate_on equals occurred_on here, yet the sum is still struck at several
+      // rates: the flag decides, not the dates.
       renderTable({
         operations: [
           makeOperation({
@@ -531,20 +488,9 @@ describe("OperationsTable", () => {
     });
 
     it("stays true when every piece of the parcel was bought on the transfer's own day (#same-day)", async () => {
-      // The falsity FINDING 1 caught: the sibling test above only puts the
-      // NEWEST purchase on the transfer's own day — the flag decides the
-      // branch, not the dates, so that fixture proves the branch selection but
-      // not the sentence's truth. Here EVERY piece, and the transfer itself,
-      // share one day. internal/portfolio/engine.go's CheckTransferLots
-      // rejects only a purchase date AFTER the transfer, so buy-then-transfer
-      // on the same calendar day is a row a user can actually create — a
-      // RUB-based space, a USD account, 10 shares bought on 2026-03-10 and the
-      // whole parcel moved that same afternoon. Both legs publish
-      // assembled_from_lots true with dated_on === rate_on === occurred_on,
-      // and the figure genuinely WAS struck at that one day's rate. The old
-      // wording ("...сделанных в другие дни ... а не по курсу дня перевода")
-      // asserted the opposite of both facts; the rule-naming form makes no
-      // claim about which day the purchase fell on, so it stays true here too.
+      // Every piece and the transfer on one day (CheckTransferLots allows buying
+      // and moving the same day): the figure was struck at that day's rate, and
+      // the rule-naming sentence stays true.
       renderTable({
         operations: [
           makeOperation({
@@ -578,13 +524,8 @@ describe("OperationsTable", () => {
     });
 
     it("names the day the purchase happened, not the day the rate came from (#80)", async () => {
-      // The two dates come apart for about a third of the calendar: the CBR
-      // publishes nothing at weekends and holidays, so a parcel whose newest
-      // purchase fell on a Sunday is valued at Friday's rate. The sentence
-      // this caption ends with is about a PURCHASE — «самый поздний из них» —
-      // and `dated_on` is the field that publishes purchase dates, while
-      // `rate_on` publishes the day the rate that answered came from. Naming
-      // the latter as the former printed a day nothing was bought on.
+      // A newest purchase on a Sunday is valued at Friday's rate; the
+      // sentence is about the purchase, so it names dated_on, not rate_on (#80).
       renderTable({
         operations: [
           makeOperation({
@@ -619,18 +560,9 @@ describe("OperationsTable", () => {
     });
 
     it("decides «rate of that very day» against dated_on, not against occurred_on", async () => {
-      // WHICH FIELD IS READ, not what this payload deserves: the contract
-      // makes dated_on equal to occurred_on on every row that is not
-      // assembled from lots (see OperationInBase.dated_on), so no payload the
-      // server can produce tells the two comparisons apart, and this one
-      // cannot occur. It is here because the pair means different things —
-      // dated_on is the day the figure is VALUED at, occurred_on is a
-      // property of the row — and a comparison against the second is a second
-      // source for one answer, which is how the caption came to compare a
-      // purchase date's rate against the day the paperwork moved. The wording
-      // it produces below is therefore not endorsed as true of this
-      // impossible fixture; the assertion is about which of the two fields
-      // the code consulted.
+      // An impossible payload (dated_on is always occurred_on on such rows) to
+      // prove which field is compared: dated_on, the valuation day. The
+      // resulting wording is not claimed true of it.
       renderTable({
         operations: [
           makeOperation({
@@ -689,13 +621,8 @@ describe("OperationsTable", () => {
         "title",
         "Нет курса на дату операции, а сумма считается по курсу того дня. Если курс появится при обновлении курсов, операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
       );
-      // FINDING 2 of the caption-truth review: nothing previously pinned the
-      // fee cell to the SAME per-cause sentence as the amount cell. in_base is
-      // published as a whole or not at all (see rowGapTitle's block comment
-      // above), so a single unvaluable term withholds both money cells of the
-      // row together, and both must carry the one true explanation — never
-      // the fee cell silently downgraded to the vague general phrase while the
-      // amount cell next to it keeps the specific, true one.
+      // The fee cell carries the same per-cause sentence as the amount: in_base
+      // is whole or nothing.
       expect(screen.getByTestId("operation-fee-not-converted")).toHaveAttribute(
         "title",
         "Нет курса на дату операции, а сумма считается по курсу того дня. Если курс появится при обновлении курсов, операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
@@ -705,16 +632,8 @@ describe("OperationsTable", () => {
     });
 
     it("blames the missing purchase dates, not a missing rate, on a transfer that has none", async () => {
-      // The twin of the test above, and the reason the server publishes a
-      // cause at all. Both rows are unconverted; only one of them is
-      // unconverted because no rate has been fetched yet. A transfer whose
-      // parcel was never broken down carries a cost basis assembled on days
-      // nobody recorded — and the transfer's OWN date usually does have a rate
-      // (the demo instance has one for 2026-07-20, the day this fixture is
-      // dated), so "нет курса на дату операции" here is not a vague
-      // explanation but a false one, promising a figure that will never
-      // arrive. The positions screen was taught to tell these two apart in an
-      // earlier plan; the journal says it about the very same shares.
+      // An undated transfer: its own date usually has a rate, so «нет курса на
+      // дату операции» would be false and promise a figure that never comes.
       renderTable({
         operations: [
           makeOperation({
@@ -744,14 +663,9 @@ describe("OperationsTable", () => {
     });
 
     it("says nothing rather than half a sentence when the rate date does not parse", async () => {
-      // Unreachable through the server — rate_on is a date or the object is
-      // not published — but every journal wording ends in the rate date, and a
-      // wording handed nothing to end with produces "…пересчитано по
-      // ближайшему, на " with the sentence cut off mid-air. The rule was in
-      // MoneyCell until callers began supplying their own wordings, at which
-      // point it quietly stopped applying to them; it now belongs to the
-      // caller, which is the only one that knows whether its sentence needs a
-      // date at all.
+      // Unreachable from the server, but a wording handed no date must not
+      // end mid-sentence; the caller decides, since only it knows whether its
+      // sentence needs one.
       renderTable({
         operations: [
           makeOperation({
@@ -816,26 +730,12 @@ describe("OperationsTable", () => {
     });
   });
 
-  // Issues #79 and #80. One phrase — «Нет курса на дату операции» — used to
-  // hang over every unconverted row in this table, including the transfers
-  // whose gap has nothing to do with the operation's date and the ones whose
-  // figure is not waiting for a rate at all. The server now says which term it
-  // stopped on (Operation.in_base_gap) and this table says what the server
-  // said, exactly as the positions screen does.
+  // #79, #80: the server names the term it stopped on (Operation.in_base_gap)
+  // and the table says that, as the positions screen does.
   describe("the unconverted caption", () => {
-    // The one sentence here that is not the server's answer but the absence of
-    // one. Spelled out in full rather than read back out of ru.json, like every
-    // other caption in this file: what is being tested is WHICH sentence a
-    // marker gets, and a test that fetched it through the component's own
-    // lookup would agree with the component whatever it picked.
-    //
-    // Its twin on the positions screen (CAPTION.general there) says the same
-    // thing about a position, in the same two clauses and the same order. The
-    // two differ only where they must — «операция»/«позиция», and each naming
-    // its own screen's native currency, exactly as the four named sentences
-    // already differ between the two tables. They are edited together for the
-    // reason the components' own comments give: both tables are stacked on one
-    // account page, so a reader meets both wordings in one glance.
+    // The general fallback, spelled out like every caption here. Its positions
+    // twin (CAPTION.general) differs only in «операция»/«позиция» and the native
+    // currency named; both are on one page.
     const GENERAL_CAPTION =
       "В базовой валюте эта операция не посчиталась, а причина не названа. Поэтому числа этой строки показаны в валюте операции";
 
@@ -850,9 +750,7 @@ describe("OperationsTable", () => {
         ...overrides,
       });
 
-    // Unmounts whatever a previous call rendered: a case that asks for several
-    // causes in a row would otherwise leave two tables in one document and
-    // every query below would find two markers.
+    // Unmounts any previous render so one table is in the document.
     const captionFor = async (overrides: Partial<Operation>): Promise<string> => {
       cleanup();
       renderTable({
@@ -865,10 +763,8 @@ describe("OperationsTable", () => {
     };
 
     it("blames the purchase day, never the operation's day, when a lot's rate is the one missing", async () => {
-      // The whole of #79. This row's amount is a cost basis assembled from
-      // purchases made on other days; the transfer's own date usually has a
-      // perfectly good rate and is simply not a rate that may value shares
-      // bought on other days.
+      // #79: a basis from purchases on other days; the transfer's date has a
+      // rate that may not value them.
       const title = await captionFor({
         type: "transfer_in",
         occurred_on: "2026-07-20",
@@ -879,11 +775,8 @@ describe("OperationsTable", () => {
       expect(title).toBe(
         "Сумма этой строки — стоимость покупок, и каждая её часть считается по курсу на день своей покупки. Нет курса на день одной из этих покупок. Если курс появится при обновлении курсов, операция посчитается сама. Поэтому пока числа этой строки показаны в валюте операции",
       );
-      // Deliberately NOT «покупок, сделанных в другие дни»: a parcel can hold
-      // a piece bought on the transfer's own day, and this row's rate is
-      // missing for a PURCHASE day whichever day that turns out to be. The
-      // sentence names the rule — each part at the rate of its own purchase —
-      // which holds however the days fall.
+      // Not «в другие дни»: a piece may be bought on the transfer day; the
+      // sentence names the rule.
       expect(title).not.toContain("в другие дни");
       // The sentence this replaces, in the exact shape it had.
       expect(title).not.toContain("Нет курса на дату операции");
@@ -908,12 +801,8 @@ describe("OperationsTable", () => {
     });
 
     it("separates the gap that closes itself from the one that never will", async () => {
-      // The difference this whole field exists for, asserted as a difference
-      // rather than as three separate strings: a missing rate is a gap the
-      // backfill closes and the figure appears later, an unrecorded purchase
-      // date resolves never, because nobody wrote it down. A caption that
-      // promised the second row a figure would be promising one that is not
-      // coming.
+      // Asserted as a difference: a missing rate can close, an unrecorded
+      // purchase date never does.
       const undated = await captionFor({
         has_undated_lots: true,
         in_base_gap: "undated_lot",
@@ -921,13 +810,7 @@ describe("OperationsTable", () => {
       expect(undated).toContain("уже неоткуда");
       expect(undated.toLowerCase()).not.toContain("курс появится");
 
-      // #105's second half, worded exactly as the positions screen words it
-      // (see the twin assertion there for the whole argument): the rate's
-      // ARRIVAL is not this program's to promise — one source, its own list of
-      // currencies, and a pair it publishes no leg of never gets a rate — so
-      // the sentence states the consequence conditionally instead. Both
-      // screens carry the same «Если», because a reader who sees the two
-      // tables stacked on one account page reads one condition, not two.
+      // The same conditional «Если» as the positions screen (#105).
       for (const gap of ["no_rate_operation_date", "no_rate_lot_date"] as const) {
         const temporary = await captionFor({ in_base_gap: gap });
         expect(temporary).toContain("Если курс появится при обновлении курсов");
@@ -938,13 +821,8 @@ describe("OperationsTable", () => {
     });
 
     it("takes the cause from the gap the server published, not from the flag beside it", async () => {
-      // has_undated_lots answers a coarser question and stays published for
-      // the two responses that carry no gap at all, so the two fields are
-      // both on this object and can be read for two different things. The
-      // caption has exactly one source. A row whose parcel is fully dated but
-      // whose FIRST piece has no rate yet is the shape that tells them apart:
-      // the flag says "dateless" is not the story, and the gap says which day
-      // is.
+      // The caption reads in_base_gap only: a fully dated parcel whose first
+      // piece lacks a rate shows the flag and the gap disagreeing.
       const title = await captionFor({
         type: "transfer_in",
         assembled_from_lots: true,
@@ -957,10 +835,7 @@ describe("OperationsTable", () => {
     });
 
     it("degrades to a phrase that names no cause at all for one this build cannot name", async () => {
-      // A server newer than this client. The value is not in the union this
-      // build was compiled against, and the row must still explain itself:
-      // vague but true beats a blank tooltip, and beats a thrown render even
-      // more.
+      // A newer server's unknown value still gets a true, vague sentence.
       const title = await captionFor({
         in_base_gap: "no_rate_next_tuesday" as Operation["in_base_gap"],
       });
@@ -970,15 +845,7 @@ describe("OperationsTable", () => {
       // the fallback names none.
       expect(title).not.toContain("дату операции");
       expect(title).not.toContain("покуп");
-      // #105, and the reason this sentence changed. It used to open «Нет
-      // курса», naming a RATE — on the one path that is reached precisely
-      // because the cause is unknown to this build. `undated_lot` is in
-      // TODAY's enum and is not about a rate at all, so the next date-shaped
-      // cause the server adds would read «нет курса» on every client one
-      // release behind: the defect (#66) the four named sentences exist to
-      // end, returning through the path built to degrade safely. Checked both
-      // as the old opening verbatim and as the word in any form, since what
-      // must be absent is the CAUSE, not one phrasing of it.
+      // #105: the fallback names no rate, in any phrasing.
       expect(title).not.toContain("Нет курса");
       expect(title.toLowerCase()).not.toContain("курс");
       expect(title).toContain("не посчиталась");
@@ -992,11 +859,8 @@ describe("OperationsTable", () => {
     });
   });
 
-  // Issues #61 and the review of its first fix. The statement "the queue that
-  // picked this cost basis is not your country's" is true of a transferred
-  // parcel's amount and of nothing else in the journal, so it hangs on those
-  // amounts. It used to be a banner over the whole table, which put it above
-  // every deposit, purchase and dividend in the window as well.
+  // #61: the cost-basis caveat hangs only on transferred parcels'
+  // amounts, not as a banner over the table.
   describe("the cost basis caveat", () => {
     // The shape the demo data actually has: a parcel with a recorded, dated
     // breakdown, so the server converts it piece by piece and says so.
@@ -1038,19 +902,15 @@ describe("OperationsTable", () => {
       expect(title).toContain("стоимость бумаг");
       // Not a block of prose over the table any more.
       expect(screen.queryByTestId("cost-basis-notice")).not.toBeInTheDocument();
-      // And nothing leaked into the VISIBLE text: the caveat is a tooltip,
-      // plus a copy for a screen reader that the eye never meets (#31) — see
-      // visibleText, which is what keeps this assertion meaning what it meant.
+      // Nothing in the visible text: a tooltip plus a screen-reader copy (#31;
+      // see visibleText).
       expect(norm(visibleText(screen.getByTestId("operation-amount")))).toBe(
         norm(formatMinor(11_800_000, "RUB")),
       );
     });
 
     it("hangs it on the departing leg exactly as on the arriving one", async () => {
-      // The contract raises the flag on BOTH legs — they describe one parcel,
-      // one basis, one set of purchases (see Operation.in_base). The departing
-      // leg is where the cost actually leaves the account, and until this test
-      // existed, a rule that recognised only the arriving one broke nothing.
+      // Both legs carry the flag; the departing one too.
       renderTable({
         operations: [assembledTransfer({ id: "op-transfer-out", type: "transfer_out" })],
         mode: "base",
@@ -1064,10 +924,7 @@ describe("OperationsTable", () => {
     });
 
     it("leaves the rows it is not true of unqualified", async () => {
-      // The whole point of moving it off the table header. A deposit and a
-      // dividend are money that moved on the day they are dated; no queue
-      // picked either of them, and a caveat over them is a false statement
-      // about them, not a cautious one.
+      // No caveat over a deposit or dividend: no queue picked them.
       renderTable({
         operations: [
           assembledTransfer(),
@@ -1083,19 +940,14 @@ describe("OperationsTable", () => {
       expect(screen.getAllByTestId("operation-amount-caveat")).toHaveLength(1);
       // Three rows on screen, one qualified figure.
       expect(screen.getAllByTestId("operation-amount")).toHaveLength(3);
-      // The fee is never a cost basis either: it is a broker's charge on the
-      // day it was charged. (A real transfer carries none; this row has one so
-      // that there is a fee cell to check at all.)
+      // The fee is never a cost basis (this row has one only so the cell
+      // exists).
       expect(screen.queryByTestId("operation-fee-caveat")).not.toBeInTheDocument();
     });
 
     it("asks the server which rows publish a cost basis instead of keeping a list of types", async () => {
-      // assembled_from_lots is set from the presence of a stored breakdown, not
-      // from the operation's type, so a type this screen has never heard of
-      // carries the caveat the day the server starts deriving a basis for it. A
-      // list of types kept here would silently stop matching instead — the
-      // exact failure the caveat exists to prevent, committed by the code that
-      // draws it.
+      // The flag comes from a stored breakdown, not the type, so an unknown type
+      // carries the caveat too.
       renderTable({
         operations: [assembledTransfer({ id: "op-conversion", type: "conversion" })],
         mode: "base",
@@ -1107,17 +959,8 @@ describe("OperationsTable", () => {
     });
 
     it("does not credit a queue rule with a figure no queue produced (#81)", async () => {
-      // The parcel arrived with no breakdown at all: someone typed what it was
-      // worth (POST /operations/transfer's `cost_minor`), nothing was released
-      // from the source to make that number, and no rule of any kind chose it.
-      // The caveat says the opposite in as many words — «её выбрало то же
-      // правило очереди, что и стоимость позиций» — so on this row it is a
-      // sentence about a computation that did not happen, sitting under a
-      // heading about the country whose computation it is not.
-      //
-      // This row USED to carry it, on the strength of has_undated_lots alone.
-      // That flag is true here and true of a breakdown with one dateless piece
-      // in it, and only the second of those was ever picked by the queue.
+      // A hand-typed basis (no breakdown) carries no caveat: no queue chose it.
+      // has_undated_lots is true here too, which is why it no longer decides.
       renderTable({
         operations: [
           makeOperation({
@@ -1135,12 +978,8 @@ describe("OperationsTable", () => {
         costBasisRules: britain,
       });
 
-      // The row's OTHER indicator is untouched and still says what it always
-      // said: the two are separate statements about one figure — which
-      // currency it is shown in, and what the number is — and only the second
-      // was ever wrong. Awaited rather than asserted straight off, so the
-      // caveat's absence below is checked on a rendered row rather than on an
-      // empty screen.
+      // The not-converted indicator is separate and unchanged; awaited so the
+      // caveat's absence is checked on a rendered row.
       expect(await screen.findByTestId("operation-amount-not-converted")).toHaveAttribute(
         "title",
         "Не записано, когда куплена эта партия или часть её, а её стоимость считается по курсам на дни покупок. Восстановить эти даты уже неоткуда: в базовой валюте эта операция сама не посчитается. Поэтому числа этой строки показаны в валюте операции",
@@ -1149,12 +988,7 @@ describe("OperationsTable", () => {
     });
 
     it("keeps it on a breakdown that merely contains a dateless piece", async () => {
-      // The other half of has_undated_lots, and the reason the fix above is a
-      // narrowing rather than a deletion. This parcel DOES have a stored
-      // breakdown — the source account's queue picked every piece of it — and
-      // one of those pieces came in through an earlier undated transfer, so
-      // both flags are true at once. The queue rule produced this figure, the
-      // country's rule would have produced another, and the caveat is exactly
+      // A breakdown with one undated piece: both flags true, and the caveat is
       // true of it.
       renderTable({
         operations: [
@@ -1179,15 +1013,8 @@ describe("OperationsTable", () => {
     });
 
     it("still qualifies a parcel that has a full breakdown but is already in the base currency (#67)", async () => {
-      // The exact hole #67 tracked: the parcel's breakdown is complete and
-      // every purchase date is known (has_undated_lots false), yet in_base is
-      // null for the most ordinary reason there is — currency already equals
-      // baseCurrency, so nothing gets converted and no rate is even asked
-      // for. Before assembled_from_lots moved onto the operation, it lived
-      // only inside in_base and vanished right along with it here, so this
-      // exact row — a RUB transfer in a RUB-based space, the product owner's
-      // own case — published no signal at all that its amount was a cost
-      // basis, and the caveat silently failed to appear.
+      // #67: a RUB transfer in a RUB space has no in_base, yet its amount is a
+      // cost basis and carries the caveat.
       renderTable({
         operations: [
           makeOperation({
@@ -1238,12 +1065,8 @@ describe("OperationsTable", () => {
     });
   });
 
-  // Issue #75. «Цена» means two different quantities in this application: in
-  // the journal it is the money one unit cost, on the positions screen a
-  // bond's is the percentage of face value the exchange quotes. Both are
-  // right, the word is one, and the journal used to print its number bare —
-  // straight off the wire, unformatted, with nothing saying which of the two
-  // it is.
+  // #75: «Цена» here is money per unit; on the positions screen a bond's is
+  // a percentage of face.
   describe("the price cell", () => {
     const trade = (overrides: Partial<Operation> = {}): Operation =>
       makeOperation({
@@ -1267,9 +1090,7 @@ describe("OperationsTable", () => {
     });
 
     it("formats the price instead of printing the wire string", async () => {
-      // A thousands separator and two fraction digits, as everywhere else a
-      // price is shown (the positions screen's quote). "1234.5" used to reach
-      // the screen exactly as typed here.
+      // Formatted like every price: separators and two decimals.
       renderTable({ operations: [trade({ quantity: "1000", price: "1234.5" })] });
 
       const price = await screen.findByTestId("operation-price");
@@ -1277,15 +1098,10 @@ describe("OperationsTable", () => {
       expect(price.textContent).not.toContain("1234.5");
     });
 
-    // Issue #114. The number is money per unit and nothing on the row says in
-    // WHICH money — the amount and the fee beside it convert with the display
-    // toggle and this figure does not, so in the base-currency mode a reader
-    // taking its currency from them takes the wrong one. The four cases the
-    // sign has to be right in are the four tests below.
+    // #114: the price names its currency, since the amount and fee beside it
+    // convert and it does not. Four cases.
     it("names the currency the price is in, so it is not read off the neighbours", async () => {
-      // Case 1: the row's currency and the base currency are the same one, and
-      // nothing on this screen converts. The sign is said all the same — see
-      // the last of these four for why.
+      // 1: same currency, nothing converts; the sign is shown anyway.
       renderTable({ operations: [trade()], baseCurrency: "RUB", mode: "native" });
 
       const price = await screen.findByTestId("operation-price");
@@ -1293,10 +1109,8 @@ describe("OperationsTable", () => {
     });
 
     it("keeps the price in the operation's currency while the amount beside it is converted", async () => {
-      // Case 2, and the reproduction: base-currency mode, a dollar buy whose
-      // amount the server converted. The amount is roubles, the price is
-      // dollars, and before #114 the price was a bare «950,00» standing under
-      // a rouble figure.
+      // 2: base mode, a converted dollar buy: amount in roubles, price in
+      // dollars.
       renderTable({
         operations: [
           trade({
@@ -1324,10 +1138,7 @@ describe("OperationsTable", () => {
     });
 
     it("names the operation's currency even where the row could not be converted at all", async () => {
-      // Case 3: base-currency mode, no in_base — the amount falls back to the
-      // row's own currency with a marker. The price is in that same currency,
-      // and it says so for its own reason rather than by agreeing with the
-      // cell beside it.
+      // 3: base mode, no in_base: the price says its currency on its own.
       renderTable({
         operations: [
           trade({ currency: "USD", amount_minor: -95_000_00, in_base: null, in_base_gap: "no_rate_operation_date" }),
@@ -1342,10 +1153,8 @@ describe("OperationsTable", () => {
     });
 
     it("says the same currency in both display modes", async () => {
-      // Case 4, and the reason the sign is unconditional. A currency that
-      // appeared only where the row's other figures disagreed with it would be
-      // two renderings of one number, each true only in the mode it was last
-      // read in — the decision the positions screen's quote made in #76.
+      // 4: the sign is unconditional, so it does not change with the toggle
+      // (as the positions quote, #76).
       const operation = trade({
         currency: "USD",
         amount_minor: -95_000_00,
@@ -1367,43 +1176,27 @@ describe("OperationsTable", () => {
     });
 
     it("shows a sub-cent price as itself rather than as a fake zero", async () => {
-      // Two fraction digits would print «0,00» here: neither the price nor
-      // zero, one column away from figures this program refuses to fake (#30).
-      // No seeded journal row is this small yet — the demo's WeWork buy is at
-      // $0,40 and the $0,0025 that made #30 is its QUOTE, which the positions
-      // table draws — but a delisted share is bought at the same digits it is
-      // quoted at, and this column takes whatever price was recorded.
+      // A sub-cent price keeps its digits (#30).
       renderTable({
         operations: [trade({ quantity: "500", price: "0.0025", currency: "USD" })],
       });
 
       const price = await screen.findByTestId("operation-price");
-      // Compared whole: «0,00» is a substring of the right answer too. The
-      // significant digits survive the currency sign — one parse decides both,
-      // so #30 cannot be reopened by #114's own fix.
+      // Compared whole: «0,00» is a substring of the right answer.
       expect(norm(price.textContent ?? "")).toBe("0,0025 $");
     });
 
     it("keeps a price it cannot format rather than dropping the number", async () => {
-      // formatPriceIn answers null for anything outside a plain non-negative
-      // decimal. Nothing on the wire is supposed to look like this, and if
-      // something does, the row still records it: an unstyled number says more
-      // than a dash, and hiding it would hide the operation's own data.
+      // Not a plain decimal: shown raw rather than hidden.
       renderTable({ operations: [trade({ price: "1e-12" })] });
 
       const price = await screen.findByTestId("operation-price");
       expect(price.textContent).toBe("1e-12");
-      // And no currency is put on it: this program could not read the string
-      // as a price at all, so dressing it in a sign would vouch for a value it
-      // never checked.
+      // Without a currency: the string was never read as a price.
       expect(price.textContent).not.toContain("₽");
     });
 
-    // FINDING 4 of the caption-truth review: the tooltip lives on the
-    // TableCell (`<td>`), not on the price span, precisely so the "quantity
-    // ×" area — most of the cell's width for a large quantity — is a hover
-    // target too. `.closest("td")` reaches it from the span the content
-    // assertions elsewhere in this block already key off of.
+    // The tooltip is on the cell, so "quantity ×" is a hover target too.
 
     it("says the number is money per unit, in the operation's currency", async () => {
       renderTable({ operations: [trade()], instruments: [makeInstrument()] });
@@ -1416,9 +1209,8 @@ describe("OperationsTable", () => {
     });
 
     it("says a bond's price here is money and not the percentage of face", async () => {
-      // The row the demo stand has: 100 ОФЗ at 950,00 ₽ apiece, whose position
-      // is captioned «95,20 %» in the table directly above this one on the
-      // same screen. One word, two quantities, both on screen at once.
+      // The demo row: 100 ОФЗ at 950,00 ₽, captioned «95,20 %» in the table
+      // above.
       renderTable({
         operations: [trade()],
         instruments: [makeInstrument({ type: "bond", name: "ОФЗ 26238", ticker: "SU26238RMFS4" })],
@@ -1429,10 +1221,7 @@ describe("OperationsTable", () => {
         "title",
         "Цена за единицу — деньги за одну штуку, в валюте операции\nУ облигации это не процент от номинала: биржа котирует облигацию в процентах, и цена в таблице позиций — та самая котировка. Здесь — деньги за одну бумагу",
       );
-      // And the figure is the money one, untouched — never the percentage,
-      // which this screen has no face value to derive and no business deriving.
-      // A percentage would be denominated in nothing and could carry no sign;
-      // this one is money in the operation's currency and carries it (#114).
+      // The money figure, never a derived percentage, with its currency.
       expect(norm(price.textContent ?? "")).toBe("950,00 ₽");
     });
 
@@ -1446,9 +1235,7 @@ describe("OperationsTable", () => {
     });
 
     it("still says what the number is while the catalog has not answered for the row", async () => {
-      // Until the catalog is in hand the lookup finds nothing (see
-      // useInstrumentIndex), and the sentence that survives is the one true of
-      // every priced row whatever the instrument turns out to be.
+      // Before the catalog loads, the general sentence, true of every row.
       renderTable({ operations: [trade({ instrument_id: "instr-off-page" })] });
 
       const price = await screen.findByTestId("operation-price");
@@ -1459,10 +1246,7 @@ describe("OperationsTable", () => {
     });
 
     it("puts the tooltip on the whole cell, not only the price number", async () => {
-      // FINDING 4's reproduction: a large quantity makes "100 ×" most of the
-      // cell's width, and before this fix the title sat only on the price
-      // span — hovering the quantity prefix showed nothing. The cell itself
-      // must carry the title so the whole printed area explains itself.
+      // The title is on the whole cell, quantity included.
       renderTable({ operations: [trade()], instruments: [makeInstrument()] });
 
       const price = await screen.findByTestId("operation-price");
@@ -1472,9 +1256,7 @@ describe("OperationsTable", () => {
         "title",
         "Цена за единицу — деньги за одну штуку, в валюте операции",
       );
-      // The number span itself carries no title of its own any more — a
-      // second, redundant title there would not be wrong, but this pins that
-      // the cell is genuinely the one place the tooltip lives.
+      // And only there.
       expect(price).not.toHaveAttribute("title");
     });
 
@@ -1486,11 +1268,7 @@ describe("OperationsTable", () => {
     });
   });
 
-  // Issue #86. The control that reaches older entries used to appear or not
-  // according to whether the page came back as long as the client asked for —
-  // a comparison that is right until the server clamps the limit, which it
-  // does silently at 200. At the ceiling the journal therefore looked complete
-  // and the older rows had no route in the interface at all.
+  // #86: "show more" follows has_more, not the page length.
   describe("show more", () => {
     it("offers to load more when the server says the journal continues", async () => {
       renderTable({
@@ -1512,9 +1290,7 @@ describe("OperationsTable", () => {
     });
 
     it("appends the next page instead of refetching a wider window", async () => {
-      // Two pages served by offset. A client that grew a single window would
-      // ask for [0, 100) on the second request and get page one again — which
-      // is what the ceiling makes permanent once the window reaches it.
+      // Two pages by offset; a growing window would refetch page one.
       const asked: { limit: string | null; offset: string | null }[] = [];
       fetchMock.mockImplementation((input: RequestInfo | URL) => {
         const url = input instanceof Request ? input.url : String(input);
@@ -1565,9 +1341,7 @@ describe("OperationsTable", () => {
       );
       // And nothing further is offered, because the second page said so.
       expect(screen.queryByRole("button", { name: "Показать еще" })).not.toBeInTheDocument();
-      // The second request starts where the first one ended. An offset that is
-      // anything else either repeats rows already shown or steps over rows
-      // nobody will ever see.
+      // The second request starts where the first ended.
       expect(asked).toEqual([
         { limit: String(JOURNAL_PAGE_SIZE), offset: "0" },
         { limit: String(JOURNAL_PAGE_SIZE), offset: String(JOURNAL_PAGE_SIZE) },
@@ -1577,9 +1351,8 @@ describe("OperationsTable", () => {
 
   describe("screen currency reporting", () => {
     it("makes the toggle appear when only the journal is multi-currency", async () => {
-      // A USD operation on a RUB account with a RUB base currency: the
-      // account and its positions report a single currency, so without the
-      // journal reporting too, the user would have no way to switch.
+      // A USD operation on a RUB account in a RUB space: the journal's report
+      // is what brings up the toggle.
       renderTable({
         operations: [makeOperation({ currency: "USD" })],
         baseCurrency: "RUB",
@@ -1600,10 +1373,8 @@ describe("OperationsTable", () => {
     });
   });
 
-  // The server refuses to delete anything whose source is not "manual" (see
-  // Service.Delete): such a row is a projection of the broker's own records and
-  // is written again the next time the projection is rebuilt. The journal must
-  // not offer an action that cannot happen.
+  // Rows another writer owns cannot be deleted (Service.Delete); the
+  // journal does not offer it.
   describe("rows an import wrote", () => {
     it("says where an imported row came from and offers no way to delete it", async () => {
       renderTable({
@@ -1630,9 +1401,8 @@ describe("OperationsTable", () => {
       expect(screen.queryByText("Загружено извне")).not.toBeInTheDocument();
     });
 
-    // 'csv' is the third value the column allows (migration 0005) and nothing
-    // writes it today. It is not Т-Инвестиции, and it is not deletable either:
-    // the rule is the server's — "manual" and nothing else.
+    // A registry row is neither Т-Инвестиции nor deletable: only rows a person
+    // owns (manual, csv) are.
     it("does not put another writer's rows under the T-Invest name, nor make them deletable", async () => {
       renderTable({
         canDelete: true,
@@ -1644,9 +1414,8 @@ describe("OperationsTable", () => {
       expect(screen.queryByRole("button", { name: "Удалить" })).not.toBeInTheDocument();
     });
 
-    // WHAT IS TRUE OF EVERY ROW ANOTHER WRITER OWNS is that this program will
-    // not delete it. That it comes BACK afterwards is promised for the T-Invest
-    // import alone, which rebuilds its rows from the broker's mirror.
+    // Every other writer's row is undeletable; only T-Invest rows are
+    // promised to come back.
     it("promises a rebuild only where something rebuilds", async () => {
       renderTable({ canDelete: true, operations: [makeOperation({ source: "tinvest" })] });
 
@@ -1687,16 +1456,10 @@ describe("OperationsTable", () => {
   });
 });
 
-// #104 on the journal. The instrument column is a LOOKUP, not a listing: it
-// holds an id and prints a name, and nothing on the row says a name exists and
-// was merely not fetched. While the catalog was a handful of instruments typed
-// in by hand, one page covered it and the fallback «#a1b2c3d4» was a corner
-// case; a broker import brings in around a hundred papers, so it became most of
-// the journal.
+// #104: the instrument column is a lookup, so it walks the whole catalog;
+// a broker import brings a hundred papers.
 describe("OperationsTable — an instrument the first page of the catalog does not hold", () => {
-  // The catalog served by offset, in pages the reader never sees: the table
-  // walks them itself. `asked` records the offsets so that "it walked" is
-  // checked rather than assumed from the name appearing.
+  // The catalog by offset; `asked` records the offsets walked.
   function serveCatalogPages(pages: { instruments: Instrument[]; has_more: boolean }[]) {
     const asked: string[] = [];
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
@@ -1735,9 +1498,7 @@ describe("OperationsTable — an instrument the first page of the catalog does n
   }
 
   it("names it, instead of printing the tail of its id", async () => {
-    // The row's instrument is on the SECOND page, so a lookup that reads one
-    // page prints «#nstr-late» — a string that is not wrong, and tells the
-    // owner nothing about which paper they bought.
+    // The instrument is on page two.
     const asked = serveCatalogPages([
       { instruments: [makeInstrument({ id: "instr-early", name: "Алроса" })], has_more: true },
       { instruments: [makeInstrument({ id: "instr-late", name: "Ветер" })], has_more: false },
@@ -1764,10 +1525,8 @@ describe("OperationsTable — an instrument the first page of the catalog does n
   });
 
   it("does not hammer a catalog page that keeps failing", async () => {
-    // A page that fails does not clear «есть ещё» — the pages already in hand
-    // still say there is more behind them — and it does clear «идёт загрузка».
-    // A walk that reads only those two asks again the instant the failure
-    // lands, for ever, from a screen nobody has to touch.
+    // A failed page keeps «есть ещё» and clears «идёт загрузка»; a walk
+    // reading only those would retry forever.
     const asked: string[] = [];
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : String(input);
@@ -1817,9 +1576,7 @@ describe("OperationsTable — an instrument the first page of the catalog does n
   });
 });
 
-// Примечание — единственное поле строки, которое не число и не код: у
-// импортированной операции это слова самого брокера. Тип говорит «погашение»,
-// а какая именно облигация погашена — только здесь.
+// Примечание: the broker's own words for which bond was redeemed.
 describe("примечание операции", () => {
   it("выводится под инструментом", async () => {
     renderTable({

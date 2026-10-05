@@ -6,40 +6,31 @@ import { TradeDialog } from "./trade-dialog";
 import type { AccountWithBalance } from "@/api/accounts";
 import type { Instrument } from "@/api/instruments";
 
-// The API client captures globalThis.fetch once, when @/api/client is first
-// imported (openapi-fetch: `fetch: baseFetch = globalThis.fetch`), so the
-// double has to be in place *before* that import — hence vi.hoisted, which
-// runs ahead of the import statements above.
+// The API client captures globalThis.fetch on first import, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// The operation body the dialog posted, parsed — null until it posts, which
-// is itself an assertion some tests below make. Captured here rather than
-// dug out of fetchMock.mock.calls afterwards because openapi-fetch calls
-// fetch(new Request(...)): the body is a stream on the Request, readable only
-// once and only asynchronously, so it has to be taken as the call happens.
+// The posted operation body, parsed; null until it posts. Taken as the
+// call happens: openapi-fetch passes a Request whose body is a one-shot
+// stream.
 let posted: Record<string, unknown> | null = null;
 
-// What POST /api/v1/operations answers with. 201 for every test that is about
-// the form itself; the refusal tests below set it to the status they are about,
-// which is the only thing the dialog is allowed to branch on (see isConflict).
+// What POST /api/v1/operations answers; the refusal tests set the status,
+// the one thing the dialog may branch on (see isConflict).
 let operationStatus = 201;
 
-// Every request gets a FRESH Response built inside the implementation:
-// a single Response object handed to mockResolvedValue would work once and
-// then throw on the second read, because a body can only be consumed once.
+// A fresh Response per request: a body can be read only once.
 function serve(instruments: Instrument[]) {
   fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : String(input);
     const path = new URL(url, "http://localhost").pathname;
     if (path.endsWith("/api/v1/instruments")) {
       return Promise.resolve(
-        // The catalog endpoint answers an envelope, not a bare array (#104):
-        // `has_more` false says this fixture is the whole catalog, which is
-        // true of every test in this file.
+        // The catalog envelope (#104); this fixture is the whole catalog.
         new Response(JSON.stringify({ instruments, has_more: false }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -52,9 +43,8 @@ function serve(instruments: Instrument[]) {
           input instanceof Request ? await input.clone().text() : String(init?.body ?? "{}");
         posted = JSON.parse(raw);
         if (operationStatus !== 201) {
-          // The shape a refusal really has: the server's own English prose,
-          // written for a log. Spelled out rather than left empty so a test
-          // asserting the screen does not repeat it has something to fail on.
+          // The server's English log prose, so a test asserting the screen does not
+          // repeat it has something to fail on.
           return new Response(
             JSON.stringify({
               error:
@@ -86,8 +76,7 @@ const account: AccountWithBalance = {
   balance: { as_of: "2026-07-20", amount_minor: 1_000_000 },
 };
 
-// The instrument from the issue: an OFZ with a 1 000,00 ₽ face value, quoted
-// by every exchange and every broker as a percentage of it.
+// An OFZ with a 1 000,00 ₽ face, quoted as a percentage of it.
 function ofz(overrides: Partial<Instrument> = {}): Instrument {
   return {
     id: "instr-bond",
@@ -118,21 +107,17 @@ function share(overrides: Partial<Instrument> = {}): Instrument {
   };
 }
 
-// NBSP-insensitive compare: Intl.NumberFormat separates thousands with a
-// non-breaking space, so "9 800,00 ₽" off the screen is not the "9 800,00 ₽"
-// in this file's source (same helper as positions-table.test.tsx).
+// NBSP-insensitive compare.
 const norm = (s: string) => s.replace(/[  ]/g, " ");
 
-// Opens the dialog with the given instrument in the catalog and selects it,
-// which is the state every assertion below starts from: the dialog only knows
-// an instrument is a bond, and only knows its face value, once one is picked.
+// Opens the dialog and picks the instrument: only then does it know a
+// bond and its face.
 async function openWith(instrument: Instrument) {
   await openCatalog([instrument]);
   await pick(instrument);
 }
 
-// The same, for the tests that need more than one instrument in the catalog
-// because what they are about is switching between them.
+// The same with several instruments, for switching between them.
 async function openCatalog(instruments: Instrument[]) {
   serve(instruments);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -148,11 +133,8 @@ async function pick(instrument: Instrument) {
   fireEvent.click(await screen.findByRole("button", { name: new RegExp(instrument.name) }));
 }
 
-// Typing into a controlled input, the whole value at once. fireEvent.change is
-// what @testing-library/react ships with (user-event is not a dependency of
-// this project and the brief is not a reason to add one); it dispatches the
-// same change event React listens for, which is the only thing these fields
-// react to.
+// Sets a controlled input's whole value with fireEvent.change, the change
+// event React listens for (user-event is not a dependency).
 function typeInto(field: HTMLElement, value: string) {
   fireEvent.change(field, { target: { value } });
 }
@@ -173,12 +155,8 @@ afterEach(() => {
 });
 
 describe("TradeDialog: a bond is quoted in percent of face value (#77)", () => {
-  // THE case the owner will type first, end to end and digit for digit: he
-  // copies 98 out of his broker's terminal, buys 10 bonds of a 1 000,00 ₽
-  // face, and the trade must cost 9 800,00 ₽. The defect this replaces made
-  // it 980,00 ₽ — ten times too little, with nothing on screen to say so,
-  // and that figure became the position's cost basis and the expense side of
-  // the tax calculation.
+  // The owner's case end to end: 98 % of a 1 000,00 ₽ face, ten bonds,
+  // 9 800,00 ₽ (not the ten-times-too-small 980,00 ₽).
   it("turns 98 % of a 1 000 ₽ face into 980 per bond and 9 800,00 ₽ for ten", async () => {
     await openWith(ofz());
 
@@ -189,10 +167,7 @@ describe("TradeDialog: a bond is quoted in percent of face value (#77)", () => {
     expect(total()).toContain("9 800,00");
   });
 
-  // The link runs both ways, which is the shape the owner chose over a
-  // percent-only field: someone who knows a bond cost him 980 ₽ apiece types
-  // that, and the field above tells him what percentage of face his broker
-  // would have called it.
+  // The link runs both ways: 980 ₽ a bond shows as 98 %.
   it("turns 980 per bond back into 98 % and the same total", async () => {
     await openWith(ofz());
 
@@ -203,10 +178,8 @@ describe("TradeDialog: a bond is quoted in percent of face value (#77)", () => {
     expect(total()).toContain("9 800,00");
   });
 
-  // Retyping must not leave a stale partner behind. A pair that updates once
-  // and then stops is worse than no pair at all: the two fields would sit
-  // side by side describing two different trades, and the one that is wrong
-  // is not marked.
+  // Retyping keeps the partner in step: two fields describing two
+  // trades, the wrong one unmarked, is worse than one field.
   it("keeps following the percent field through repeated edits", async () => {
     await openWith(ofz());
 
@@ -220,13 +193,8 @@ describe("TradeDialog: a bond is quoted in percent of face value (#77)", () => {
     expect(perBondField()).toHaveValue("");
   });
 
-  // The correction the previous test does not make: having typed the
-  // percentage, the user fixes the MONEY field instead. The percentage must
-  // give up its own draft and follow — otherwise the two fields sit side by
-  // side saying 98 % and 990 ₽ of a 1 000 ₽ face, which is one trade
-  // described two ways, only one of them true, and neither marked. (A
-  // mutation run found this: dropping the draft-clearing line left every
-  // other assertion in this file green.)
+  // Having typed the percentage, the user fixes the money field: the
+  // percentage drops its draft and follows.
   it("makes the percentage follow the money field even after the percentage was typed first", async () => {
     await openWith(ofz());
 
@@ -237,14 +205,8 @@ describe("TradeDialog: a bond is quoted in percent of face value (#77)", () => {
     expect(percentField()).toHaveValue("99.00");
   });
 
-  // A percentage that stops converting takes the money price with it. «98,5»
-  // — the Russian decimal comma, which this application accepts nowhere — is
-  // not a number this dialog can turn into money, and the money field is the
-  // one that gets recorded: a stale 980,00 left standing beside it would keep
-  // the Buy button enabled over a price the user can see is not the one he
-  // just wrote. Emptied, the trade cannot be submitted until the price is a
-  // price again. (The comma itself is rejected everywhere in this app and is
-  // its own follow-up; this is about what the pair does when it is typed.)
+  // A percentage that stops converting («98,5», the comma is accepted
+  // nowhere) empties the money field, so Buy cannot submit a stale price.
   it("empties the money field when the percentage stops converting", async () => {
     await openWith(ofz());
 
@@ -258,13 +220,9 @@ describe("TradeDialog: a bond is quoted in percent of face value (#77)", () => {
     expect(screen.getByRole("button", { name: "Покупка" })).toBeDisabled();
   });
 
-  // The percentage a user typed belongs to the face value it was typed
-  // against. Picking a different bond changes that face value, and a
-  // percentage left standing beside a price it no longer describes is the
-  // same pair-out-of-step defect as a field that stops updating — only harder
-  // to notice, because both fields still hold plausible numbers. 980 ₽ a
-  // bond is 98 % of a 1 000 ₽ face and 980 % of a 100 ₽ one; the money is
-  // what the user entered and stays, the percentage is what has to move.
+  // A typed percentage belongs to its face value: on another bond the money
+  // stays and the percentage is recomputed (980 ₽ is 980 % of a 100 ₽
+  // face).
   it("re-answers the percentage against the new instrument's face value", async () => {
     const cheaper = ofz({
       id: "instr-bond-2",
@@ -283,12 +241,9 @@ describe("TradeDialog: a bond is quoted in percent of face value (#77)", () => {
     expect(percentField()).toHaveValue("980.00");
   });
 
-  // What actually reaches the journal, and the reason the money field is the
-  // one that gets sent: `price` is money per unit everywhere else in this
-  // application (the journal line renders it as «quantity × price», and that
-  // multiplication has to come out to the amount beside it), so a bond's row
-  // carries 980, not 98. No amount is sent: the server works it out from the
-  // quantity and the price, so a browser's rounding never becomes a lot's cost.
+  // Money per bond is recorded, as `price` is money per unit everywhere. No
+  // amount is sent: the server computes it, so a browser's rounding never
+  // becomes a cost.
   it("records the money price per bond, never the percentage", async () => {
     await openWith(ofz());
 
@@ -302,10 +257,8 @@ describe("TradeDialog: a bond is quoted in percent of face value (#77)", () => {
     expect(posted?.quantity).toBe("10");
   });
 
-  // The convention is stated on the form, not left to be inferred from the
-  // label alone, and it is stated the way the positions screen states it —
-  // the same first clause, word for word, because two screens explaining one
-  // convention differently is how a reader learns to trust neither.
+  // The convention is stated on the form with the positions screen's first
+  // clause, word for word.
   it("says what the percentage is a percentage of, and names the face value", async () => {
     await openWith(ofz());
 
@@ -318,11 +271,8 @@ describe("TradeDialog: a bond is quoted in percent of face value (#77)", () => {
 });
 
 describe("TradeDialog: a bond whose face value cannot be used", () => {
-  // Honesty over silence. Without a face value there is no conversion to
-  // make, and the field that would need one is not left sitting there looking
-  // ready: it is disabled and the reason names the thing that is actually
-  // missing. A plausible number here would be indistinguishable from a real
-  // one, and it would be a cost basis.
+  // No face, no conversion: the field is disabled and the reason names
+  // what is missing.
   it("names the missing face value and refuses to convert", async () => {
     await openWith(ofz({ face_value_minor: null, face_currency: null }));
 
@@ -331,22 +281,15 @@ describe("TradeDialog: a bond whose face value cannot be used", () => {
       "У этой облигации не записан номинал",
     );
 
-    // The money field still works — that is the whole remedy the sentence
-    // offers — and the trade it produces is the ordinary one.
+    // The money field still works, which is the remedy offered.
     typeInto(perBondField(), "980");
     typeInto(quantityField(), "10");
     expect(total()).toContain("9 800,00");
   });
 
-  // The face value the catalog DOES hold and the conversion still cannot use:
-  // zero. Nothing upstream refuses it — instrument creation checks only that a
-  // face value and its currency arrive together, and api/openapi.yaml declares
-  // a plain integer with no minimum — so it reaches this dialog, where every
-  // percentage of it is zero. Without a cause of its own it would fall past
-  // the currency checks and come out looking convertible: an ENABLED percent
-  // field over a hint reading «Номинал — 0,00 ₽», each keystroke in it
-  // silently blanking the money field. That is the "enabled and doing nothing"
-  // state this whole set of refusals exists to make impossible.
+  // A zero face reaches the dialog (nothing upstream refuses it) and needs
+  // its own cause; otherwise the percent field is enabled over «Номинал —
+  // 0,00 ₽», blanking the money field with every keystroke.
   it("names a face value of zero and refuses to convert", async () => {
     await openWith(ofz({ face_value_minor: 0 }));
 
@@ -354,21 +297,13 @@ describe("TradeDialog: a bond whose face value cannot be used", () => {
     expect(screen.getByTestId("trade-bond-gap").textContent).toContain(
       "записан нулевым или отрицательным",
     );
-    // And no face-value hint beside it. That hint names the number the
-    // percentage is a percentage OF, and «0,00 ₽» is not such a number.
+    // No face hint either: «0,00 ₽» is not what the percentage is of.
     expect(screen.queryByTestId("trade-bond-hint")).toBeNull();
   });
 
-  // A face value with no currency at all. A PATCH clearing face_currency used to
-  // leave exactly this behind; #93 closed that door, so no server this client
-  // talks to should produce it any more — which is not a reason to stop coping
-  // with it here. A client is a separate program from the API version in front
-  // of it, and what it does with an instrument it cannot price is its own
-  // business.
-  // It needs a cause of its own, and the sentence is the reason why: fall
-  // through to the currency-mismatch one below and it reads «Номинал в , а
-  // сделка в RUB» — a caption naming a currency that is not there, which in
-  // this repository is not a typo but the defect class itself.
+  // A face with no currency (#93 stopped the API producing it; the client
+  // still copes). It needs its own cause: the mismatch sentence would read
+  // «Номинал в , а сделка в RUB».
   it("names a face value with no currency, and never a currency that is missing", async () => {
     await openWith(ofz({ face_currency: null }));
 
@@ -378,19 +313,9 @@ describe("TradeDialog: a bond whose face value cannot be used", () => {
     expect(gap).not.toContain("а сделка в");
   });
 
-  // A second cause, and a different sentence for it: the face value is
-  // recorded but in another currency than the trade, so the money this
-  // conversion would produce is not money in the operation's currency and no
-  // fx rate is at hand to make it so. Reusing the «номинал не записан»
-  // sentence here would name a cause that is not the cause — the mistake
-  // this project has made four times and now tests for.
-  // The same missing currency wearing a value. An empty string is not null, so
-  // the check above lets it past unless it says so, and the caption then comes
-  // out as «Номинал в , а сделка в RUB» — the currency that is not there, named
-  // as though it were. The API refuses to store one now (checkFacePair in
-  // internal/instrument/http.go, and migration 0012's CHECK constraint), which
-  // is where the refusal belongs; this is the client going on coping with an
-  // instrument it cannot price, exactly as it does for a null.
+  // An empty string is not null, but names no currency either. The API
+  // refuses to store one (checkFacePair, migration 0012); the client copes
+  // as it does for null.
   it("treats an empty face currency as no currency, not as a currency named ''", async () => {
     await openWith(ofz({ face_currency: "" }));
 
@@ -400,6 +325,9 @@ describe("TradeDialog: a bond whose face value cannot be used", () => {
     expect(gap).not.toContain("а сделка в");
   });
 
+  // A face in another currency than the trade: the conversion would not
+  // produce the operation's money, and «номинал не записан» would name the
+  // wrong cause.
   it("names a face value denominated in another currency", async () => {
     await openWith(ofz({ currency: "USD", face_currency: "RUB" }));
 
@@ -410,11 +338,8 @@ describe("TradeDialog: a bond whose face value cannot be used", () => {
   });
 });
 
-// The fee is money on the same operation as the total above it, and it carries
-// the same bound — so it needs the same two sentences told apart. «Проверьте
-// комиссию» over 20 000 000 000 000 sends its author to check a number he can
-// see nothing wrong with: it is positive, it parses, and the only thing against
-// it is a ceiling the field never mentions.
+// The fee carries the same bound as the total, so it needs the same two
+// sentences told apart: «Проверьте комиссию» over a valid number misleads.
 describe("TradeDialog: a fee too large to record", () => {
   const feeField = () => screen.getByLabelText(/Комиссия/);
 
@@ -438,14 +363,8 @@ describe("TradeDialog: a fee too large to record", () => {
     expect(hint).toContain("10 000 000 000 000 ₽");
   });
 
-  // #109.4. The fee travels on the operation this dialog posts, and that
-  // operation's currency follows the INSTRUMENT, never the account — a
-  // USD-denominated fund is perfectly ordinary inside a RUB brokerage account,
-  // and submit() sends `currency: instrument.currency` for exactly that reason
-  // (a position's currency is fixed by its first operation). The ceiling was
-  // formatted in the account's currency all the same, so the field refused a
-  // dollar fee by naming a limit in rubles: the right number wearing the wrong
-  // sign, which on a screen about money is a different number.
+  // #109.4: the operation's currency follows the instrument, not the
+  // account, so the ceiling is named in the instrument's.
   it("names the ceiling in the instrument's currency, not the account's", async () => {
     await openWith(share({ currency: "USD" }));
     typeInto(feeField(), "10000000000000.01");
@@ -459,11 +378,8 @@ describe("TradeDialog: a fee too large to record", () => {
     expect(hint).not.toContain("₽");
   });
 
-  // And when there is no instrument yet there is no currency yet either, so
-  // the sentence names none. Reachable: the fee field is enabled from the
-  // moment the dialog opens, and nothing makes the instrument picker come
-  // first. Falling back to the account's currency here would be the same
-  // wrong sign, just harder to notice.
+  // No instrument, no currency: the fee field is enabled from the start, and
+  // the account's currency would be the wrong sign.
   it("names no currency at all while no instrument has been picked", async () => {
     await openCatalog([share({ currency: "USD" })]);
     typeInto(feeField(), "10000000000000.01");
@@ -495,11 +411,7 @@ describe("TradeDialog: a fee too large to record", () => {
 });
 
 describe("TradeDialog: instruments that are not bonds", () => {
-  // Nothing changes for a share: one field, the label it always had, and a
-  // total that is price × quantity. A percentage field on a share would be
-  // nonsense — a share has no face value to be a percentage of — and a
-  // conversion applied to one would multiply the price by a number that is
-  // not there.
+  // A share: one field, its usual label, total = price × quantity.
   it("shows a single per-unit price field and no percentage", async () => {
     await openWith(share());
 
@@ -525,15 +437,12 @@ describe("TradeDialog: instruments that are not bonds", () => {
   });
 });
 
-// #23: every 409 was captioned «Недостаточно бумаг на счете на эту дату». The
-// server sends that status for several unrelated refusals and gives the client
-// nothing to tell them apart, and the row it refuses need not be the one just
-// posted — see the description of POST /api/v1/operations in api/openapi.yaml
-// and TestConflictIsNotOnlyAnOversell, which posts a BUY and is answered 409
-// over an entry stored on another date.
+// #23: a 409 covers several refusals the client cannot tell apart, and the
+// refused row need not be the posted one (see POST /api/v1/operations and
+// TestConflictIsNotOnlyAnOversell).
 describe("TradeDialog: a journal the server would not replay (#23)", () => {
-  // A buy: the side of the trade that releases nothing at all, so "not enough
-  // securities" cannot be what a refusal of it means.
+  // A buy releases nothing, so "not enough securities" cannot be the
+  // reason.
   async function refuseABuyWith(status: number) {
     operationStatus = status;
     await openWith(share());
@@ -549,17 +458,13 @@ describe("TradeDialog: a journal the server would not replay (#23)", () => {
     expect(norm(alert.textContent ?? "")).toContain(
       "Журнал счёта с этой операцией не сошёлся",
     );
-    // The sentence this replaces, in the words the dictionary held. Asserted
-    // against the whole document rather than the alert, so it fails wherever a
-    // future author puts it back.
+    // The old sentence, checked against the whole document.
     expect(document.body.textContent).not.toContain("Недостаточно бумаг");
     // And still not the server's own English, which is a log line (#95).
     expect(document.body.textContent).not.toContain("journal would become inconsistent");
   });
 
-  // The other half of the branch: a status that is NOT 409 must not borrow the
-  // conflict's sentence, or "the journal did not add up" would be printed over
-  // an outage that says nothing about any journal.
+  // A non-409 must not borrow the conflict's sentence.
   it("says only that something went wrong when the refusal is not a conflict", async () => {
     const alert = await refuseABuyWith(500);
 
