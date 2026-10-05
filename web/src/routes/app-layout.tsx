@@ -14,13 +14,9 @@ import {
   useHasMultipleScreenCurrencies,
 } from "@/lib/screen-currencies";
 
-// Reads the count reported by whichever screen is mounted in <Outlet/>
-// below (via useReportScreenCurrencies) and hides the toggle unless that
-// screen actually has more than one currency in play — there's nothing for
-// "native" vs "base" to differ on otherwise. Split out from AppLayout
-// itself because it must be a *descendant* of ScreenCurrencyCountProvider
-// to read the context; AppLayout renders that provider, so it can't also
-// consume it in the same render pass.
+// HeaderCurrencyToggle shows the toggle only when the mounted screen has
+// more than one currency; split out because it must be inside the provider
+// AppLayout renders.
 function HeaderCurrencyToggle() {
   const visible = useHasMultipleScreenCurrencies();
   return <DisplayCurrencyToggle visible={visible} />;
@@ -48,10 +44,8 @@ export function AppLayout() {
   const [passwordOpen, setPasswordOpen] = useState(false);
 
   return (
-    // The screen-currency-count provider must wrap both the header (which
-    // reads it, via HeaderCurrencyToggle) and <Outlet/> (whose mounted
-    // screen writes it, via useReportScreenCurrencies) — it's the shared
-    // ancestor connecting the two without any direct coupling between them.
+    // The provider wraps both the header (reader) and the Outlet (whose screen
+    // reports).
     <ScreenCurrencyCountProvider>
       {/* A column beside the screen from md up; on a phone the same nav is a
           bar across the top, icons only, so the screen keeps the width. */}
@@ -79,13 +73,8 @@ export function AppLayout() {
                   {t(`roles.${session.role}`)}
                 </Badge>
                 <HeaderCurrencyToggle />
-                {/* Disabled only while a request is actually in flight, which
-                    is the whole of isPending now that this mutation runs with
-                    networkMode "always" (useLogout): with the default it also
-                    covered a request react-query was holding because the
-                    browser said it was offline, and that state ends only when
-                    the connection comes back — a button locked for as long as
-                    the reader has no way to try again. */}
+                {/* Disabled only while a request is in flight: with networkMode
+                   "always" isPending no longer covers a request held offline. */}
                 <Button
                   variant="ghost"
                   size="icon"
@@ -107,12 +96,9 @@ export function AppLayout() {
               </>
             )}
           </header>
-          {/* A sign-out that did not go through is the one failure in this
-              application a reader must not miss: it is invisible in every other
-              way — the screen looks signed in, which is exactly what it is —
-              and the person it misleads is already walking away from the
-              machine. Full width under the header rather than a hint beside the
-              button, and it stays until the next attempt answers. */}
+          {/* A failed sign-out must not be missed: the screen still looks signed
+             in and the person may be walking away. Full width, until the next
+             attempt answers. */}
           {logout.isError && (
             <Alert variant="destructive" className="rounded-none border-x-0 border-t-0">
               <AlertDescription>{t("auth.signOutFailed")}</AlertDescription>

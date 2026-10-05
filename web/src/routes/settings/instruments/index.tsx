@@ -11,18 +11,10 @@ import { useSession } from "@/api/session";
 import { InstrumentEditDialog } from "./edit-dialog";
 import { CorporateActions } from "./corporate-actions";
 
-// THE CATALOG, AND THE FIRST PLACE IT CAN BE CORRECTED. Instruments are created
-// by the trade dialogs and by the importer, and until this screen existed
-// nothing in the interface could change one afterwards: a paper entered by hand
-// with a misspelled ticker, or with no ISIN at all, stayed that way for ever.
-//
-// An absent ISIN is not cosmetic. It is the field the quote worker searches the
-// broker by, so a paper without one is never priced — and an unpriced holding
-// goes into the account's total counted at nought, dragging it down by whatever
-// the paper actually cost.
-//
-// One instance-wide catalog, so this sits in the settings rather than under an
-// account: the same row backs every account that holds the paper.
+// The catalog, and the place to correct it. Instruments come from the trade
+// dialogs and the importer; a missing ISIN means never priced, so the holding
+// counts at nought in the account's total. Under settings because the catalog is
+// instance-wide.
 export function InstrumentsPage() {
   const { t } = useTranslation();
   const { data: session } = useSession();
@@ -32,18 +24,9 @@ export function InstrumentsPage() {
 
   const rows =
     instruments.data?.pages.flatMap((page) => page.instruments) ?? [];
-  // The catalog is shared by the whole instance, and correcting a row changes
-  // it for every member — as does recording a corporate action, which is why
-  // both cards on this screen answer this one question the same way.
-  //
-  // THIS SCREEN IS STRICTER THAN THE SERVER, deliberately and not by accident:
-  // the write endpoints require an EDITOR (family.RequireRole is a floor, so an
-  // owner passes it too), and this offers the controls to the owner alone. A
-  // household's editor can enter their own trades without also rewriting facts
-  // that every other member's figures rest on. The sentence that used to stand
-  // here called this the server's rule and gave 403 as the proof, which was
-  // simply false about an editor: they would have been refused by a screen that
-  // said the server had refused them.
+  // Owner-only controls, stricter than the server (which allows editors): an
+  // editor enters their own trades but does not rewrite facts every member's
+  // figures rest on. Both cards on this screen apply the same rule.
   const isOwner = session?.role === "owner";
 
   return (
@@ -115,15 +98,9 @@ export function InstrumentsPage() {
                       .filter((part) => part !== "")
                       .join(" · ")}
                   </div>
-                  {/* THE ROW THAT CANNOT BE PRICED SAYS SO, beside the field
-                      that is missing. This is the whole reason a reader comes
-                      here: an ISIN is what the quote worker searches by, and a
-                      paper without one is never valued — which shows up on the
-                      positions screen as «Нет котировки» and in the account's
-                      total as a holding counted at nought. Said only for the
-                      types this program values at all: a currency or a metal
-                      has no quote coming either way, and the sentence would be
-                      true of the ISIN and false about the consequence. */}
+                  {/* The row that cannot be priced says so beside the missing ISIN, the
+                     field the quote worker searches by; only for types this program
+                     values. */}
                   {instrument.isin === "" &&
                     (instrument.type === "share" ||
                       instrument.type === "bond" ||

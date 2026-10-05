@@ -47,17 +47,10 @@ export function AccountsPage() {
 
   const isViewer = session?.role === "viewer";
 
-  // Reports the currencies in play on this screen so the header's toggle
-  // can hide itself when there's nothing to convert (see
-  // lib/screen-currencies.tsx), and returns the mode these figures are
-  // actually drawn in — effective, not stored: it only applies while the
-  // toggle is on screen to switch it back off. Includes the base currency
-  // alongside the accounts' own currencies: even a screen where every account
-  // happens to share one *foreign* currency still has something meaningful for
-  // the toggle to convert into, so that case must count as 2, not 1. Must run
-  // unconditionally (before the loading/error returns below) per the Rules
-  // of Hooks — accounts.data/summary.data are simply undefined pre-load, so
-  // this naturally reports 0 currencies (toggle hidden) until data arrives.
+  // The screen's currencies plus the base currency (so one shared foreign
+  // currency still counts as two) for the header toggle; returns the effective
+  // mode. Before the early returns (Rules of Hooks); reports nothing until data
+  // arrives.
   const mode = useScreenCurrencies([
     ...(accounts.data ?? []).map((a) => a.currency),
     ...(summary.data ? [summary.data.base_currency] : []),
@@ -69,10 +62,8 @@ export function AccountsPage() {
   if (state !== "ready") return <QueryGate state={state} />;
 
   const list = accounts.data ?? [];
-  // Defensive fallback only — by this point accounts.isLoading/isError and
-  // summary.isLoading/isError have already gated the render above, so
-  // summary.data is expected to be defined; TS just can't narrow that from
-  // those boolean checks alone.
+  // Defensive: the gates above guarantee summary.data, which TS cannot
+  // narrow.
   const baseCurrency = summary.data?.base_currency ?? "";
 
   const confirmArchive = () => {
@@ -171,10 +162,8 @@ export function AccountsPage() {
           <p className="text-sm text-muted-foreground">
             {t("accounts.archiveConfirm", { name: archiveTarget?.name ?? "" })}
           </p>
-          {/* Names the action that did not happen, and nothing else: the
-              server's own message is English prose written for a log, and it is
-              not part of the contract this client is written against (only the
-              status is — see api/openapi.yaml). */}
+          {/* Names the action that did not happen; the server's English is
+             not part of the contract. */}
           {archiveAccount.isError && (
             <Alert variant="destructive">
               <AlertDescription>{t("accounts.archiveError")}</AlertDescription>
@@ -184,14 +173,9 @@ export function AccountsPage() {
             <Button
               variant="outline"
               onClick={() => {
-                // Reset here too, not just in onOpenChange above: Radix calls
-                // onOpenChange only for its OWN dismiss triggers (Escape,
-                // overlay click, DialogClose), never when a plain button flips
-                // the controlled `open` prop by clearing archiveTarget. Without
-                // this, a refused archive left its alert armed on the mutation,
-                // and the next account's confirmation opened already accusing
-                // the server of refusing something nobody had asked for yet
-                // (#21). Same fix, same reason, as operations-table.tsx.
+                // Reset here too: Radix calls onOpenChange only for its own dismiss
+                // triggers, so a refused archive's alert would greet the next account
+                // (#21), as in operations-table.tsx.
                 setArchiveTarget(null);
                 archiveAccount.reset();
               }}

@@ -12,10 +12,8 @@ import type { StatedPurchase } from "@/api/arrivals";
 // multiplies money (see StatedPurchase in the API contract).
 export type PurchaseRow = {
   id: number;
-  // Whether the owner has typed into the row. A row filled in for them — the
-  // quantity of the shares that arrived — says nothing about what is missing
-  // until they have touched it: a form complaining about a field nobody typed
-  // in reads as an error the reader made.
+  // Whether the owner typed into the row; a prefilled row does not complain
+  // until touched.
   touched: boolean;
   quantity: string;
   price: string;

@@ -6,19 +6,11 @@ import type { components } from "./schema";
 export type TinvestRowExplanation = components["schemas"]["TinvestRowExplanation"];
 export type ExplainRowsBody = components["schemas"]["TinvestExplainRequest"];
 
-// useExplainRows accounts for one or more broker rows with a manual journal
-// operation: the named rows stop being projected and stop counting as
-// unparsed, and the operation is what the journal holds for the event instead.
-//
-// WHY THIS EXISTS AT ALL: the broker's operation enum has no corporate actions
-// of any kind, so a real event — a fund's partial redemption, a conversion —
-// arrives as whatever rows carried its money, and no rule over those rows can
-// see what they were. The owner can.
-//
-// Both lists are invalidated because both change: the unparsed list gains the
-// explanation on those rows and loses them from its count, and the connection
-// screen shows the sync this queues. The linked account's journal is not this
-// module's to invalidate — the account screens key their own queries.
+// useExplainRows accounts for broker rows with one manual journal operation:
+// the rows stop being projected and counted as unparsed. The broker sends no
+// corporate actions, so the owner says what the rows were. Invalidates the
+// unparsed list and the connection (which shows the queued sync); the account
+// screens key their own queries.
 export function useExplainRows(connectionId: string) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -38,10 +30,8 @@ export function useExplainRows(connectionId: string) {
   });
 }
 
-// useRemoveExplanation takes an explanation back. THE MANUAL OPERATION GOES
-// WITH IT — that is the endpoint's whole action rather than a side effect (see
-// DELETE /api/v1/tinvest/explanations/{explanationId}), and the button that
-// calls this has to say so in as many words.
+// useRemoveExplanation takes an explanation back, and its manual operation
+// goes with it; the button must say so.
 export function useRemoveExplanation(connectionId: string) {
   const queryClient = useQueryClient();
   return useMutation({

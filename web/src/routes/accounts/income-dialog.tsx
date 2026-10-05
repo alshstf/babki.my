@@ -42,23 +42,10 @@ import { submitOnEnter } from "@/lib/submit-on-enter";
 const INCOME_TYPES: OperationType[] = ["dividend", "coupon", "amortization"];
 const REQUIRES_INSTRUMENT = new Set<OperationType>(["amortization"]);
 
-// The one type this form records that the ledger does not treat as income
-// (#109). A dividend and a coupon add to Position.IncomeByCurrency; an
-// amortization is written as a DISPOSAL instead — the engine calls
-// p.realize() with the returned principal as proceeds and the basis it
-// retires as the released pieces, and never touches income (the
-// TypeAmortization branch in internal/portfolio/engine.go). So it never
-// reaches the «Доход» column of the positions table, at any size, and this
-// dialog used to be titled «Доход по инструменту» over a picker offering it.
-//
-// The remedy is a narrowing plus a sentence, not a second dialog. The title
-// now says «Выплата», which is true of all three — a dividend, a coupon and a
-// return of principal are all money the issuer pays out — and the note below
-// appears for the one type whose destination would otherwise be guessed
-// wrong. It says where the entry GOES rather than what it will be worth: an
-// amortization's result in the position's own currency is the excess over
-// whatever basis is left, which is usually zero, so promising a figure would
-// be its own false caption.
+// Amortization is the one type here that is not income (#109): the engine
+// books it as a disposal of basis, never as income, so it never reaches «Доход».
+// The title says «Выплата», true of all three, and a note says where an
+// amortization goes without promising a figure.
 const NOT_INCOME = new Set<OperationType>(["amortization"]);
 
 export function IncomeDialog({

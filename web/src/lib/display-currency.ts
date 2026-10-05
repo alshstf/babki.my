@@ -1,21 +1,9 @@
-// Display currency mode: whether money amounts on screen show in each
-// account/position's own ("native") currency or converted into the space's
-// base currency (using the backend's `in_base` figures). This is a
-// per-browser display preference, not app data, so it lives in localStorage
-// rather than on the backend.
-//
-// A tiny module-level store (not a dependency) backs `useSyncExternalStore`
-// so every component using `useDisplayCurrency()` re-renders together when
-// the mode changes — whether the change came from another component in this
-// tab (plain function call) or from another tab (the `storage` event, which
-// browsers only ever fire in tabs *other* than the one that made the write).
-//
-// localStorage access is wrapped defensively throughout: Safari private
-// browsing (older versions) and users with storage disabled can make
-// `getItem`/`setItem` throw on every call, not just return null. On any such
-// failure we fall back to the "native" default and keep serving in-memory
-// updates for the current tab — persistence and cross-tab sync are best
-// effort, but the toggle itself must never crash the app.
+// The display-currency mode: amounts in their own ("native") currency or in
+// the space's base currency (the server's in_base figures). A per-browser
+// preference in localStorage. A small module store behind useSyncExternalStore
+// re-renders every user together, on changes from this tab or another (the
+// `storage` event). Storage access is defensive: where it throws (old Safari
+// private mode, disabled storage) the mode falls back to "native" in memory.
 import { useSyncExternalStore } from "react";
 
 export type DisplayCurrencyMode = "native" | "base";
@@ -59,10 +47,8 @@ function setMode(mode: DisplayCurrencyMode): void {
   notify();
 }
 
-// Cross-tab sync. `storage` fires only in tabs other than the one that made
-// the write, so this is purely the "receive" side; the tab that calls
-// setMode() above already notifies its own listeners directly. Guarded for
-// non-browser environments (there are none in this SPA, but cheap to keep).
+// Cross-tab sync: `storage` fires only in other tabs; this tab notifies
+// its listeners directly in setMode().
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     // event.key === null means the whole storage was cleared (e.g.
