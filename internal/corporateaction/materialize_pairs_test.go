@@ -11,9 +11,8 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// producedISIN is the paper the conversions and spin-offs below produce. It is
-// the owner's own case: the receipts of TCS Group became shares of ТКС Холдинг
-// under this ISIN on 2024-02-27, and the broker reported no operation for it.
+// producedISIN: TCS Group receipts became ТКС Холдинг shares under this ISIN
+// on 2024-02-27, with no broker operation for it.
 const producedISIN = "RU000A107UL4"
 
 // catalogue adds the produced paper to the catalog and returns its id.
@@ -73,11 +72,9 @@ func (f fixture) position(t *testing.T, accountID, instrumentID uuid.UUID) *port
 	return positions[instrumentID]
 }
 
-// TestAConversionMovesTheWholeHoldingOntoTheNewPaper is the owner's own case:
-// four depositary receipts bought on two days in 2021 become four shares of the
-// company that redomiciled, and what was paid for the RECEIPTS is what the
-// shares cost (НК РФ ст. 214.1 п. 13 абз. 17). Nothing is realized, and the days
-// the receipts were bought are the days the shares carry.
+// The owner's case: four receipts bought on two days in 2021 become four
+// shares; the receipts' cost and days carry over and nothing is realized (НК РФ
+// ст. 214.1 п. 13 абз. 17).
 func TestAConversionMovesTheWholeHoldingOntoTheNewPaper(t *testing.T) {
 	f := newFixture(t)
 	produced := f.catalogue(t, producedISIN, "T")
@@ -103,8 +100,7 @@ func TestAConversionMovesTheWholeHoldingOntoTheNewPaper(t *testing.T) {
 	if got.Quantity.String() != "4" {
 		t.Errorf("the new paper holds %s, want 4 at one for one", got.Quantity)
 	}
-	// The money that was paid for the receipts, to the kopeck, and not a
-	// valuation of anything.
+	// The money paid for the receipts, to the kopeck.
 	if got.CostMinor != 2_579_860 {
 		t.Errorf("the new paper cost %d, want 2579860 — the two purchases of the receipts", got.CostMinor)
 	}
@@ -118,11 +114,10 @@ func TestAConversionMovesTheWholeHoldingOntoTheNewPaper(t *testing.T) {
 	}
 }
 
-// TestASpinoffLeavesTheUnitsAndCarvesOutTheirMoney: the original paper keeps
-// every unit and gives up a share of what was paid for it, and the carved-out
-// paper is built from those very parcels (НК РФ ст. 214.1 п. 13 абз. 8 → ст. 277
-// п. 7). The owner's own case is the blocked assets of the Т-Капитал funds,
-// carved into closed funds one unit for one on 2023-12-22.
+// The original keeps every unit and gives up a share of its cost; the new
+// paper is built from those parcels (НК РФ ст. 214.1 п. 13 абз. 8 -> ст. 277
+// п. 7). The owner's case: Т-Капитал's blocked assets carved into closed funds one
+// for one on 2023-12-22.
 func TestASpinoffLeavesTheUnitsAndCarvesOutTheirMoney(t *testing.T) {
 	f := newFixture(t)
 	produced := f.catalogue(t, producedISIN, "TECH2")
@@ -157,31 +152,22 @@ func TestASpinoffLeavesTheUnitsAndCarvesOutTheirMoney(t *testing.T) {
 	if got.CostMinor != 25_000 {
 		t.Errorf("the carved-out paper cost %d, want 25000", got.CostMinor)
 	}
-	// NOT A COINCIDENCE BUT THE INVARIANT: no minor unit is created or lost by a
-	// carve-out, because nothing was bought or sold.
+	// The invariant: a carve-out creates and loses no money.
 	if old.CostMinor+got.CostMinor != 100_000 {
 		t.Errorf("the basis after the spin-off is %d, want the 100000 that was paid",
 			old.CostMinor+got.CostMinor)
 	}
 }
 
-// TestAConversionTakesTheParcelsOfItsOwnDayAndNotTheOnesLeftAtTheEnd. An event
-// is replayed at its chronological place, so the parcels it converts are the
-// parcels the account held THEN — and every other test here has a journal in
-// which those are also the parcels left at the end, which makes the rule
-// invisible. Here they are not: a later purchase and a later sale between them
-// consume the very parcel the conversion took, so resolving against the end
-// state would carry a different day and a different sum onto the new paper.
-//
-// Written because a mutation that resolved the breakdown against the end state
-// passed every test in this file. That is a case nobody wrote, not a weak test.
+// A conversion takes the parcels held on its own day. A later buy and sale
+// consume the parcel it took, so the end state would carry a different day and
+// sum. Elsewhere in this file the two coincide.
 func TestAConversionTakesTheParcelsOfItsOwnDayAndNotTheOnesLeftAtTheEnd(t *testing.T) {
 	f := newFixture(t)
 	produced := f.catalogue(t, producedISIN, "T")
 	f.buy(t, f.accountID, "2021-07-02", "2", -600_000)
 	f.buy(t, f.accountID, "2021-07-05", "2", -900_000)
-	// The sale empties the FIFO front, so at the END of this journal the oldest
-	// parcel is the one bought on the 5th — while on the 3rd it was the 2nd's.
+	// At the end the oldest parcel is the 5th's; on the 3rd it was the 2nd's.
 	f.sell(t, f.accountID, "2021-07-06", "2", 700_000)
 
 	f.conversionEvent(t, "2021-07-03", 1, 1)
@@ -203,19 +189,14 @@ func TestAConversionTakesTheParcelsOfItsOwnDayAndNotTheOnesLeftAtTheEnd(t *testi
 	}
 }
 
-// TestASpinoffCarvesFromTheMoneyHeldOnTheDayOnly is the same rule on the other
-// kind, where it is easier to get wrong and costs more: the share applies to
-// what had been paid BY the carve-out, and a purchase made afterwards is money
-// that was never in the fund when its assets were split off. Resolving against
-// the end state would carve a quarter of every rouble the account ever spent on
-// the paper.
+// A spin-off divides only the money paid by its day; a later purchase was
+// never in the fund when its assets were split off.
 func TestASpinoffCarvesFromTheMoneyHeldOnTheDayOnly(t *testing.T) {
 	f := newFixture(t)
 	produced := f.catalogue(t, producedISIN, "TECH2")
 	f.buy(t, f.accountID, "2020-12-30", "100", -100_000)
 	f.spinoffEvent(t, "2023-12-22", 1, 1, "0.25")
-	// Bought AFTER the carve-out: this money never belonged to the assets that
-	// were split off.
+	// Bought after the carve-out.
 	f.buy(t, f.accountID, "2024-03-01", "100", -900_000)
 
 	if _, err := f.materializer.ForISIN(f.ctx, amazonISIN); err != nil {
@@ -239,9 +220,7 @@ func TestASpinoffCarvesFromTheMoneyHeldOnTheDayOnly(t *testing.T) {
 	}
 }
 
-// TestMaterializingAPairTwiceWritesItOnce. Every run recomputes the rows the
-// registry asks for and diffs them, so a second run over an unchanged world must
-// find nothing to do — not "write it again and let the unique index refuse".
+// A second run over an unchanged world does nothing.
 func TestMaterializingAPairTwiceWritesItOnce(t *testing.T) {
 	f := newFixture(t)
 	f.catalogue(t, producedISIN, "T")
@@ -263,10 +242,8 @@ func TestMaterializingAPairTwiceWritesItOnce(t *testing.T) {
 	}
 }
 
-// TestCorrectingAPairsRatioReplacesBothLegs. A ratio fixed after the fact must
-// reach the journal — and BOTH legs must be rewritten even though only one of
-// them carries a count that changed, because the journal refuses a delta that
-// removes one leg of a group and leaves the other.
+// A corrected ratio rewrites both legs, though only one count changed: the
+// journal refuses removing half a group.
 func TestCorrectingAPairsRatioReplacesBothLegs(t *testing.T) {
 	f := newFixture(t)
 	produced := f.catalogue(t, producedISIN, "T")
@@ -301,9 +278,7 @@ func TestCorrectingAPairsRatioReplacesBothLegs(t *testing.T) {
 	}
 }
 
-// TestDeletingTheEventTakesBothLegsOut. The registry's rows are a projection: an
-// event that no longer exists asks for nothing, and both halves of what it wrote
-// go.
+// A deleted event's two legs both go.
 func TestDeletingTheEventTakesBothLegsOut(t *testing.T) {
 	f := newFixture(t)
 	produced := f.catalogue(t, producedISIN, "T")
@@ -334,12 +309,8 @@ func TestDeletingTheEventTakesBothLegsOut(t *testing.T) {
 	}
 }
 
-// TestAPurchaseBackdatedUnderAConversionRebuildsThePair. The pair names the very
-// parcels it converted, so a purchase that turns up underneath it — a broker
-// history imported after the fact, an operation entered late — changes what
-// those parcels are. The counts and the money may be identical and the pair
-// still has to be rewritten, which is why the breakdown is part of what "the
-// same row" means (see sameRow).
+// A purchase backdated under a conversion changes the parcels it names, so the
+// pair is rewritten even with the same counts and money (see sameRow).
 func TestAPurchaseBackdatedUnderAConversionRebuildsThePair(t *testing.T) {
 	f := newFixture(t)
 	produced := f.catalogue(t, producedISIN, "T")
@@ -349,9 +320,8 @@ func TestAPurchaseBackdatedUnderAConversionRebuildsThePair(t *testing.T) {
 		t.Fatalf("first run: %v", err)
 	}
 
-	// An earlier purchase, entered afterwards. The hand-entry door runs the
-	// registry itself in production; here it is called directly so the test says
-	// what it is testing.
+	// An earlier purchase entered afterwards; production runs the registry
+	// from the hand-entry hook, here it is called directly.
 	f.buy(t, f.accountID, "2021-07-02", "3", -900_000)
 	stats, err := f.materializer.ForISIN(f.ctx, amazonISIN)
 	if err != nil {
@@ -371,22 +341,18 @@ func TestAPurchaseBackdatedUnderAConversionRebuildsThePair(t *testing.T) {
 	if len(got.Lots) != 2 {
 		t.Fatalf("the new paper has %d parcels, want 2", len(got.Lots))
 	}
-	// FIFO order, so the backdated purchase is the FRONT of the queue on the new
-	// paper as it would have been on the old. A pair left standing would have had
-	// one parcel of 2 units here.
+	// FIFO order: the backdated purchase is the front on the new paper too.
 	if got.Lots[0].AcquiredOn == nil || got.Lots[0].AcquiredOn.Format("2006-01-02") != "2021-07-02" {
 		t.Errorf("the first parcel is %v, want the backdated 2021-07-02", got.Lots[0].AcquiredOn)
 	}
 }
 
-// TestAPairIsNotWrittenForAnAccountThatHeldNothing. The event is true about the
-// paper; whether it produces a row is a question about each account.
+// An account that held nothing on the day gets no pair.
 func TestAPairIsNotWrittenForAnAccountThatHeldNothing(t *testing.T) {
 	f := newFixture(t)
 	f.catalogue(t, producedISIN, "T")
 	f.buy(t, f.accountID, "2021-07-02", "4", -1_282_920)
-	// The second account buys only AFTER the conversion, so it held nothing on
-	// the day and there is nothing to convert.
+	// The second account buys only after the conversion.
 	f.buy(t, f.otherID, "2024-03-01", "5", -1_000_000)
 
 	f.conversionEvent(t, "2024-02-27", 1, 1)
@@ -401,11 +367,8 @@ func TestAPairIsNotWrittenForAnAccountThatHeldNothing(t *testing.T) {
 	}
 }
 
-// TestTheProducedPapersOwnRunLeavesThePairAlone is the ownership rule proved
-// from the other side. The arriving leg sits on the PRODUCED paper, so a run for
-// that paper's own ISIN sees a registry row on an instrument it owns — and must
-// not take it for a row of its own that nothing asks for any more. It reads the
-// row's name, which points at the paper the event came FROM.
+// A run for the produced paper's ISIN sees the arriving leg on its own
+// instrument and must leave it: the row's name points at the source paper.
 func TestTheProducedPapersOwnRunLeavesThePairAlone(t *testing.T) {
 	f := newFixture(t)
 	f.catalogue(t, producedISIN, "T")
@@ -428,8 +391,7 @@ func TestTheProducedPapersOwnRunLeavesThePairAlone(t *testing.T) {
 	}
 }
 
-// TestAnAccountSweepAlsoBringsPairsIntoLine: ForAccount is the trigger behind a
-// hand-entered operation, and it must reach a pair exactly as ForISIN does.
+// ForAccount, the hand-entry trigger, reaches pairs as ForISIN does.
 func TestAnAccountSweepAlsoBringsPairsIntoLine(t *testing.T) {
 	f := newFixture(t)
 	produced := f.catalogue(t, producedISIN, "T")
@@ -448,9 +410,7 @@ func TestAnAccountSweepAlsoBringsPairsIntoLine(t *testing.T) {
 	}
 }
 
-// TestBothLegsOfAMaterializedPairShareOneGroup. The group is what makes the two
-// rows one event to everything downstream — the journal refuses to remove half
-// of one, and a screen that shows a conversion shows a pair.
+// Both legs share one group, which makes them one event downstream.
 func TestBothLegsOfAMaterializedPairShareOneGroup(t *testing.T) {
 	f := newFixture(t)
 	f.catalogue(t, producedISIN, "T")
@@ -472,8 +432,7 @@ func TestBothLegsOfAMaterializedPairShareOneGroup(t *testing.T) {
 	if *rows[0].TransferGroupID != *rows[1].TransferGroupID {
 		t.Errorf("the two legs carry different groups, %s and %s", rows[0].TransferGroupID, rows[1].TransferGroupID)
 	}
-	// And the group SURVIVES a recomputation: derived from the event and the
-	// holding, never drawn fresh, or every run would rewrite the pair.
+	// And the group survives a recomputation.
 	was := *rows[0].TransferGroupID
 	if _, err := f.materializer.ForISIN(f.ctx, amazonISIN); err != nil {
 		t.Fatalf("second run: %v", err)
@@ -484,9 +443,8 @@ func TestBothLegsOfAMaterializedPairShareOneGroup(t *testing.T) {
 	}
 }
 
-// TestAConversionWithoutItsProducedPaperWritesNothing. A journal row cannot
-// point at a paper the catalog has no row for, and inventing one would be this
-// program deciding what the owner holds.
+// No catalog row for the produced paper: nothing is written, and the event
+// says why.
 func TestAConversionWithoutItsProducedPaperWritesNothing(t *testing.T) {
 	f := newFixture(t)
 	f.buy(t, f.accountID, "2021-07-02", "4", -1_282_920)
@@ -516,9 +474,8 @@ func TestAConversionWithoutItsProducedPaperWritesNothing(t *testing.T) {
 	}
 }
 
-// TestASplitAndAConversionOfOnePaperApplyInOrder. Events act on the holding the
-// ones before them left, and that is what lets a paper that split in 2022 be
-// converted in 2024 with the multiplied count.
+// A split in 2022 then a conversion in 2024 converts the multiplied
+// count.
 func TestASplitAndAConversionOfOnePaperApplyInOrder(t *testing.T) {
 	f := newFixture(t)
 	produced := f.catalogue(t, producedISIN, "T")

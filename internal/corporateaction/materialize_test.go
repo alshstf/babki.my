@@ -31,10 +31,8 @@ type fixture struct {
 	amazonID     uuid.UUID
 }
 
-// amazonISIN is Amazon's own, and the split below is Amazon's own: twenty for
-// one, first traded in the new quantity on 2022-06-06. The owner's account
-// holds one share and the broker reports twenty — the difference this whole
-// package exists to close.
+// amazonISIN: Amazon's 20-for-1 split, first traded on 2022-06-06. The
+// owner's account holds one share where the broker reports twenty.
 const amazonISIN = "US0231351067"
 
 func newFixture(t *testing.T) fixture {
@@ -152,9 +150,7 @@ func (f fixture) registryRows(t *testing.T, accountID uuid.UUID) []operation.Ope
 	return rows
 }
 
-// TestASplitReachesEveryAccountThatHeldThePaper is the whole point of the
-// registry in one test: the fact is recorded ONCE, against the ISIN, and both
-// accounts holding Amazon are multiplied.
+// One fact, recorded against the ISIN, multiplies both accounts.
 func TestASplitReachesEveryAccountThatHeldThePaper(t *testing.T) {
 	f := newFixture(t)
 	f.buy(t, f.accountID, "2021-05-04", "1", -323_000)
@@ -176,18 +172,8 @@ func TestASplitReachesEveryAccountThatHeldThePaper(t *testing.T) {
 	}
 }
 
-// TestNothingIsWrittenForAnAccountThatHeldNothingOnTheDay is the rule that
-// keeps the registry from inventing holdings.
-//
-// AN ACCOUNT THAT SOLD OUT BEFORE THE SPLIT still shows up in the list of
-// accounts that ever traded the paper — that list is a cheap query over the
-// journal, not a judgement about holdings (see Store.holders) — so the only
-// thing standing between it and a split row is the fold. A split written there
-// multiplies a position of zero, which changes no quantity but puts a row in
-// the journal claiming a corporate action reached an account it did not.
-//
-// The second account, which bought AFTER the split, is the same rule from the
-// other side: it held nothing on the day either.
+// An account that sold out before the split, or bought after it, held nothing
+// on the day and gets no row. Store.holders lists it anyway; the fold decides.
 func TestNothingIsWrittenForAnAccountThatHeldNothingOnTheDay(t *testing.T) {
 	f := newFixture(t)
 	f.buy(t, f.accountID, "2021-05-04", "1", -323_000)
@@ -213,13 +199,8 @@ func TestNothingIsWrittenForAnAccountThatHeldNothingOnTheDay(t *testing.T) {
 	}
 }
 
-// TestTheHoldingIsTakenAtTheSTARTOfTheEffectiveDay pins the one date rule the
-// whole registry rests on.
-//
-// The effective day is the FIRST day the paper trades in the new quantity, so a
-// purchase dated that day is already in post-split shares. Both halves are
-// checked here: the ten held from before are multiplied, and the ten bought on
-// the day are not.
+// The holding is taken at the start of the effective day: ten held before
+// are multiplied, ten bought that day are not.
 func TestTheHoldingIsTakenAtTheSTARTOfTheEffectiveDay(t *testing.T) {
 	f := newFixture(t)
 	f.buy(t, f.accountID, "2022-06-03", "10", -1_000_000)
@@ -235,16 +216,8 @@ func TestTheHoldingIsTakenAtTheSTARTOfTheEffectiveDay(t *testing.T) {
 	}
 }
 
-// TestAnAccountWhoseFirstPurchaseIsTheEffectiveDayGetsNoRow is the case that
-// separates "held at the START of the day" from "held at any point during it".
-//
-// A buyer whose first purchase is dated the effective day bought post-split
-// shares from a post-split market: there is nothing of theirs for the split to
-// multiply, and a row saying otherwise claims a corporate action reached an
-// account that was not in the register when it happened. The QUANTITY does not
-// give it away — multiplying a holding of zero changes nothing, and the day's
-// purchase folds after the split row in any case (see operation.foldRank) — so
-// only the presence of the row itself can.
+// A first purchase on the effective day gets no row: the quantity would not
+// show it (zero times anything), only the row's presence would.
 func TestAnAccountWhoseFirstPurchaseIsTheEffectiveDayGetsNoRow(t *testing.T) {
 	f := newFixture(t)
 	f.buy(t, f.accountID, "2022-06-06", "20", -240_000)
@@ -265,9 +238,7 @@ func TestAnAccountWhoseFirstPurchaseIsTheEffectiveDayGetsNoRow(t *testing.T) {
 	}
 }
 
-// TestTwoSplitsCompoundInDateOrder: each event acts on the holding the ones
-// before it left, so a paper split ten for one and then two for one is held
-// twenty times over.
+// Each event acts on the holding the earlier ones left.
 func TestTwoSplitsCompoundInDateOrder(t *testing.T) {
 	f := newFixture(t)
 	f.buy(t, f.accountID, "2020-01-02", "1", -100_000)
@@ -282,15 +253,8 @@ func TestTwoSplitsCompoundInDateOrder(t *testing.T) {
 	}
 }
 
-// TestRunningTwiceChangesNothing is what makes the materialization safe to
-// trigger from anywhere: it is a difference against what it wrote last time,
-// not an append.
-//
-// It checks the stored ROW is untouched rather than only counting rows: a
-// rewrite that removed and re-inserted the same content would keep the count
-// and move the row's created_at, and within a day the journal folds by
-// created_at — so a run that "changed nothing" could still move where a split
-// sits among that day's operations.
+// A second run leaves the stored row untouched, created_at included, so a
+// no-op cannot move a split within its day.
 func TestRunningTwiceChangesNothing(t *testing.T) {
 	f := newFixture(t)
 	f.buy(t, f.accountID, "2021-05-04", "1", -323_000)
@@ -324,8 +288,7 @@ func TestRunningTwiceChangesNothing(t *testing.T) {
 	}
 }
 
-// TestDeletingTheEventTakesItsJournalRowsWithIt: the journal rows are derived,
-// so a fact withdrawn withdraws them.
+// A withdrawn fact withdraws its rows.
 func TestDeletingTheEventTakesItsJournalRowsWithIt(t *testing.T) {
 	f := newFixture(t)
 	f.buy(t, f.accountID, "2021-05-04", "1", -323_000)
@@ -352,9 +315,7 @@ func TestDeletingTheEventTakesItsJournalRowsWithIt(t *testing.T) {
 	}
 }
 
-// TestCorrectingARatioRewritesTheRowInPlace: the ratio is the one field a
-// person is likeliest to get wrong, and correcting it must correct the journal
-// without moving the row within its day.
+// A corrected ratio rewrites the row without moving it within its day.
 func TestCorrectingARatioRewritesTheRowInPlace(t *testing.T) {
 	f := newFixture(t)
 	f.buy(t, f.accountID, "2021-05-04", "1", -323_000)
@@ -379,9 +340,8 @@ func TestCorrectingARatioRewritesTheRowInPlace(t *testing.T) {
 	}
 }
 
-// TestForAccountFindsTheEventsAPurchaseHasJustEarned is the trigger a manual
-// write fires: the registry has known about the split all along, and a purchase
-// entered today with an old date is the thing that makes it apply here.
+// A purchase entered with an old date picks up a split the registry already
+// knew.
 func TestForAccountFindsTheEventsAPurchaseHasJustEarned(t *testing.T) {
 	f := newFixture(t)
 	f.splitEvent(t, "2022-06-06", 1, 20)
@@ -399,8 +359,7 @@ func TestForAccountFindsTheEventsAPurchaseHasJustEarned(t *testing.T) {
 	}
 }
 
-// TestTheSweepCoversEveryPaperInTheRegistry: the safety net behind the
-// triggers.
+// The sweep covers every paper in the registry.
 func TestTheSweepCoversEveryPaperInTheRegistry(t *testing.T) {
 	f := newFixture(t)
 	f.buy(t, f.accountID, "2021-05-04", "1", -323_000)
@@ -414,34 +373,6 @@ func TestTheSweepCoversEveryPaperInTheRegistry(t *testing.T) {
 		t.Errorf("stats = %+v, want one row written", stats)
 	}
 	if got, want := f.held(t, f.accountID), decimal.RequireFromString("20"); !got.Equal(want) {
-		t.Errorf("holding = %s, want %s", got, want)
-	}
-}
-
-// TestAKindTheJournalCannotHoldYetIsRecordedAndNotMaterialized states the
-// package's own boundary: conversions and spin-offs are storable facts today
-// and produce no journal rows, because the journal has no type for one paper
-// becoming another. Recording them early is deliberate — nobody can go back and
-// ask a registrar what happened in 2023.
-func TestAKindTheJournalCannotHoldYetIsRecordedAndNotMaterialized(t *testing.T) {
-	f := newFixture(t)
-	f.buy(t, f.accountID, "2021-05-04", "1", -323_000)
-	if _, err := f.store.Create(f.ctx, corporateaction.Event{
-		Kind: corporateaction.KindConversion, ISIN: amazonISIN, ResultISIN: "US0231351068",
-		EffectiveOn: date("2024-02-27"), RatioFrom: 1, RatioTo: 1,
-		Source: corporateaction.SourceManual, SourceRef: "https://www.moex.com/n67851",
-	}); err != nil {
-		t.Fatalf("record the conversion: %v", err)
-	}
-
-	stats, err := f.materializer.ForISIN(f.ctx, amazonISIN)
-	if err != nil {
-		t.Fatalf("materialize: %v", err)
-	}
-	if stats.Added != 0 {
-		t.Errorf("stats = %+v, want nothing written — the journal has no type for a conversion yet", stats)
-	}
-	if got, want := f.held(t, f.accountID), decimal.RequireFromString("1"); !got.Equal(want) {
 		t.Errorf("holding = %s, want %s", got, want)
 	}
 }

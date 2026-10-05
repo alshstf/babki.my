@@ -20,18 +20,14 @@ import (
 	"babki.my/babki/internal/platform/httpserver"
 )
 
-// Handler exposes the registry over HTTP.
-//
-// THE ROLES ARE THE CATALOG'S, and deliberately the same ones: a corporate
-// action is a fact about a paper, exactly as a catalog row is, and both are
-// instance-wide rather than a household's. So reading takes a viewer and
-// writing takes an editor — which is to say an editor OR an owner, since
-// family.RequireRole is a floor and Role.AtLeast lets the higher role through.
+// Handler exposes the registry over HTTP. Roles are the catalog's: an event is
+// an instance-wide fact about a paper, so reading needs a viewer and writing an
+// editor or above.
 type Handler struct {
 	store        *Store
 	materializer *Materializer
-	// queue takes the retry of a materialization that failed inside the
-	// request. Nil means there is none, and the daily sweep is the only retry.
+	// queue takes the retry of a materialization that failed in the request;
+	// nil leaves it to the daily sweep.
 	queue jobInserter
 	auth  *family.Auth
 	sm    *scs.SessionManager
@@ -59,10 +55,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("DELETE /api/v1/instrument-events/{eventId}", edit(h.handleDelete))
 }
 
-// toAPI renders one event. resultCataloged says whether the catalog holds the
-// paper this event produces — the caller answers it for a whole list in one
-// query (see Store.CatalogedISINs), because it is what decides the one field
-// here that is about this event rather than about its kind.
+// toAPI renders one event; resultCataloged comes from one query for the whole
+// list (Store.CatalogedISINs).
 func toAPI(e Event, resultCataloged bool) apitypes.InstrumentEvent {
 	out := apitypes.InstrumentEvent{
 		Id:           e.ID,
@@ -127,11 +121,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		EffectiveOn: req.EffectiveOn.Time,
 		RatioFrom:   req.RatioFrom,
 		RatioTo:     req.RatioTo,
-		// ALWAYS manual, never read from the request. An exchange row is
-		// written by the job that reads the exchange and rewritten by it on
-		// every run; a request claiming to be one would produce a row nobody
-		// could check, that the owner could not delete (Store.Delete refuses an
-		// exchange row) and that the next job run would overwrite anyway.
+		// Always manual: exchange rows are written by the job only.
 		Source:    SourceManual,
 		SourceRef: req.SourceRef,
 		CreatedBy: &p.UserID,
@@ -150,12 +140,9 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		e.BasisShare = &share
 	}
-	// Validated here as well as in the store's own callers, because this is the
-	// door a person types at: Validate is the one statement of what an event has
-	// to be, and running it before the insert turns every rule into a 400 that
-	// names it instead of a constraint violation that does not.
-	// A person types an ISIN in whatever case; the registry matches by string.
-	// A malformed one is left as typed for Validate to refuse by name.
+	// Validate here, at the door a person types at, so every rule is a 400
+	// that names it. ISINs are upper-cased first; a malformed one is left for
+	// Validate to refuse.
 	if isin, err := instrument.NormalizeISIN(e.ISIN); err == nil {
 		e.ISIN = isin
 	}
@@ -186,37 +173,23 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		// ErrNotEditable (an exchange row) is a 400 naming the rule, and the
-		// pgx.ErrNoRows that Store.Delete's own read returns for an id nobody
-		// holds is a 404 — both by family.WriteError's table.
+		// ErrNotEditable is a 400, pgx.ErrNoRows a 404 (family.WriteError).
 		family.WriteError(w, err)
 		return
 	}
 	h.writeWithMaterialization(w, r, removed, http.StatusOK)
 }
 
-// writeWithMaterialization carries the registry into the journals and answers
-// with what changed.
-//
-// IT RUNS INSIDE THE REQUEST rather than leaving it to the daily sweep, and the
-// reason is what the owner does next: they record Amazon's 20:1 and go straight
-// to the account to see whether the position is right. A sweep an hour later
-// would mean the screen they open contradicts the row they just wrote, and
-// nothing on it would say why.
-//
-// A FAILURE TO MATERIALIZE IS NOT A FAILURE TO RECORD. The event is stored by
-// the time this runs, and it is the truth about the paper whether or not any
-// journal could take it — a job is queued to try again within minutes, the
-// daily sweep stands behind that, and a refusal a journal makes is logged with
-// the account it was made for. Answering 500 here would tell the owner their
-// fact was not recorded, which would be false; the figures simply say nothing
-// changed, and the log says why.
+// writeWithMaterialization carries the registry into the journals inside the
+// request, so the account the owner opens next already shows the split, and
+// answers with what changed. A failure to materialize is not a failure to record:
+// the event is stored, a retry is queued, the sweep stands behind it, and the
+// refusal is logged; a 500 would falsely say the fact was not recorded.
 func (h *Handler) writeWithMaterialization(w http.ResponseWriter, r *http.Request,
 	e Event, status int,
 ) {
-	// A background context, deliberately: the write below must not be abandoned
-	// half-done because the client hung up between the store's commit and this.
-	// Bounded, because a request handler must not hold a connection for ever.
+	// Detached from the request so a client hanging up cannot abandon the
+	// write midway; bounded so the handler cannot hold a connection forever.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), materializeTimeout)
 	defer cancel()
 
@@ -227,11 +200,8 @@ func (h *Handler) writeWithMaterialization(w http.ResponseWriter, r *http.Reques
 		h.retryLater(ctx, e.ISIN)
 	}
 	queued := h.materializer.RequestRecheck(ctx, stats)
-	// Asked AFTER the materialization rather than before: cataloguing the paper
-	// and recording the event are two requests in either order, and the answer a
-	// person reads on the row they just wrote must describe the world as it is
-	// now. A failure to look it up is not worth failing the response over — the
-	// event is written either way — so the row simply carries no reason.
+	// Asked after materializing so the row describes the catalog as it is
+	// now; a lookup failure just leaves the reason empty.
 	cataloged, err := h.store.CatalogedISINs(ctx, []string{e.ResultISIN})
 	if err != nil {
 		h.log.Error("corporateaction: could not tell whether the paper this event produces is in the catalog",
@@ -246,8 +216,8 @@ func (h *Handler) writeWithMaterialization(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// retryLater queues the paper for another attempt. A queue that will not take
-// the job costs what having no queue costs: the journals wait for the sweep.
+// retryLater queues another attempt; without a queue the sweep is the
+// retry.
 func (h *Handler) retryLater(ctx context.Context, isin string) {
 	if h.queue == nil {
 		return
@@ -258,8 +228,6 @@ func (h *Handler) retryLater(ctx context.Context, isin string) {
 	}
 }
 
-// materializeTimeout bounds the work one request does after its own write. A
-// materialization folds one journal per holding account of one paper, which on
-// the live instance is a handful; the bound is here so that a pathological
-// instance answers slowly rather than never.
+// materializeTimeout bounds the work a request does after its write: one
+// journal per holding account of one paper.
 const materializeTimeout = 30 * time.Second

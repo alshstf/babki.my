@@ -37,10 +37,8 @@ func scan(row pgx.Row) (Event, error) {
 	return e, err
 }
 
-// nullISIN turns the empty result ISIN a split carries into the NULL the
-// column's CHECK constraint requires. The two spellings of "no result paper"
-// are the empty string in Go — where a nil string would make every reader
-// dereference — and NULL in SQL, where the constraint pairs it with the kind.
+// nullISIN turns a split's empty result ISIN into the NULL the column's CHECK
+// requires.
 func nullISIN(s string) *string {
 	if s == "" {
 		return nil
@@ -48,9 +46,8 @@ func nullISIN(s string) *string {
 	return &s
 }
 
-// Create records one event. A duplicate — same paper, same kind, same day —
-// comes back as ErrDuplicate rather than as a bare constraint violation, so the
-// API answers with the rule instead of an internal error.
+// Create records one event; a duplicate (same paper, kind and day) is
+// ErrDuplicate.
 func (s *Store) Create(ctx context.Context, e Event) (Event, error) {
 	created, err := scan(s.db.QueryRow(ctx, `
 		INSERT INTO instrument_events (kind, isin, effective_on, ratio_from, ratio_to,
@@ -65,19 +62,10 @@ func (s *Store) Create(ctx context.Context, e Event) (Event, error) {
 	return created, nil
 }
 
-// Upsert is the exchange job's write: the same event arriving again updates the
-// ratio and the cached secid and leaves everything else standing.
-//
-// IT MATCHES ON (isin, kind, effective_on) — the unique constraint — and never
-// on the secid, because the secid is what the job had to resolve to get here
-// and a paper can change one (a ticker is not an identity; see migration 0020).
-// Matching on the identity means the exchange correcting a ratio corrects the
-// row rather than adding a second one beside it.
-//
-// It refuses to overwrite a HAND-RECORDED event: a person who has written down
-// what a registrar told them, with a link to it, has said something the
-// exchange's table does not know better. The job counts such rows and says so;
-// it does not fight over them.
+// Upsert is the exchange job's write: the same event again updates the ratio
+// and cached secid. It matches on (isin, kind, effective_on), never the secid,
+// which can change. A hand-recorded event is not overwritten: the job counts it
+// and leaves it.
 func (s *Store) Upsert(ctx context.Context, e Event) (Event, bool, error) {
 	row := s.db.QueryRow(ctx, `
 		INSERT INTO instrument_events (kind, isin, effective_on, ratio_from, ratio_to,
@@ -94,9 +82,7 @@ func (s *Store) Upsert(ctx context.Context, e Event) (Event, bool, error) {
 		e.BasisShare, e.Source, e.SourceRef, e.MOEXSecID, e.Note)
 	stored, err := scan(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// The WHERE on the DO UPDATE did not hold: a row is there and it is
-		// somebody's own. Not an error — the caller reports it as a row left
-		// alone.
+		// A row is there and it is someone's own: left alone, not an error.
 		return Event{}, false, nil
 	}
 	if err != nil {
@@ -118,15 +104,11 @@ func (s *Store) ByID(ctx context.Context, id uuid.UUID) (Event, error) {
 	return scan(s.db.QueryRow(ctx, `SELECT `+cols+` FROM instrument_events WHERE id = $1`, id))
 }
 
-// ByISIN returns every event recorded for one paper, oldest first — the order
-// they have to be applied in, since each one acts on the holding the ones
-// before it left.
+// ByISIN returns one paper's events oldest first, the order they apply in.
 func (s *Store) ByISIN(ctx context.Context, isin string) ([]Event, error) {
 	if isin == "" {
-		// Every instrument with no ISIN would otherwise match at once, and the
-		// answer would be a pile of events belonging to papers that have
-		// nothing to do with each other. The same refusal instrument.ByISIN
-		// makes, for the same reason.
+		// An empty ISIN would match every paper without one (as instrument.ByISIN
+		// refuses too).
 		return nil, nil
 	}
 	return s.query(ctx, `SELECT `+cols+` FROM instrument_events
@@ -134,19 +116,9 @@ func (s *Store) ByISIN(ctx context.Context, isin string) ([]Event, error) {
 }
 
 // HasSplitOnOrBefore reports whether the registry holds a split of this paper
-// effective on or before the given day.
-//
-// IT IS A QUESTION ABOUT THE REGISTRY, NOT ABOUT ANY JOURNAL. The caller is the
-// broker reconciliation, which has found a difference that looks exactly like an
-// unrecorded split — the broker holding twenty of what the journal holds one of
-// — and wants to say so only when the registry cannot already account for it.
-// A false answer therefore means "nobody here has recorded such an event", which
-// is a question for a person; it does not mean the difference IS a split.
-//
-// ON OR BEFORE, because an event dated after the check could not have affected
-// today's holding, and pointing at it would send the reader to a row that
-// explains nothing. An empty ISIN is false rather than a match on every paper
-// with no ISIN, the same refusal ByISIN makes.
+// effective on or before day. The broker reconciliation asks it before calling a
+// twenty-to-one difference an unrecorded split; false means nobody recorded one,
+// not that the difference is a split. An empty ISIN is false.
 func (s *Store) HasSplitOnOrBefore(ctx context.Context, isin string, day time.Time) (bool, error) {
 	if isin == "" {
 		return false, nil
@@ -163,9 +135,7 @@ func (s *Store) HasSplitOnOrBefore(ctx context.Context, isin string, day time.Ti
 	return exists, nil
 }
 
-// List returns the whole registry, newest event first — what the settings
-// screen shows. Small by nature: one row per corporate action of every paper
-// anyone here holds, plus whatever the exchange published.
+// List returns the whole registry, newest first, for the settings screen.
 func (s *Store) List(ctx context.Context) ([]Event, error) {
 	return s.query(ctx, `SELECT `+cols+` FROM instrument_events
 		ORDER BY effective_on DESC, created_at DESC, id`)
@@ -190,12 +160,8 @@ func (s *Store) DistinctISINs(ctx context.Context) ([]string, error) {
 	return out, rows.Err()
 }
 
-// CatalogedISINs reports which of the given ISINs the catalog has a row for.
-//
-// ONE QUERY FOR A WHOLE LIST, and that is the point of it: the screen shows
-// every event, and asking the catalog once per row about the paper it produces
-// would be an N+1 over a table the registry already walks. Empty strings are
-// dropped rather than looked up — an event with no result names no paper.
+// CatalogedISINs reports which ISINs the catalog has a row for, in one query
+// for the whole screen. Empty strings are dropped.
 func (s *Store) CatalogedISINs(ctx context.Context, isins []string) (map[string]bool, error) {
 	wanted := make([]string, 0, len(isins))
 	seen := map[string]bool{}
@@ -225,9 +191,9 @@ func (s *Store) CatalogedISINs(ctx context.Context, isins []string) (map[string]
 	return out, rows.Err()
 }
 
-// Delete removes a hand-recorded event. An exchange row is refused by name
-// (ErrNotEditable) and an unknown id by errNoSuchEvent, so the handler can tell
-// a 400 from a 404 without a second read.
+// Delete removes a hand-recorded event; an exchange row is ErrNotEditable and
+// an unknown id errNoSuchEvent, so the handler tells 400 from 404 without a
+// second read.
 func (s *Store) Delete(ctx context.Context, id uuid.UUID) (Event, error) {
 	e, err := s.ByID(ctx, id)
 	if err != nil {
@@ -236,10 +202,8 @@ func (s *Store) Delete(ctx context.Context, id uuid.UUID) (Event, error) {
 	if e.Source != SourceManual {
 		return Event{}, ErrNotEditable
 	}
-	// The source is part of the WHERE and not merely of the read above: between
-	// the two, nothing in this program can change a row's source, but writing
-	// the rule where the deletion happens costs one comparison and means the
-	// rule cannot be bypassed by a future caller that skips the read.
+	// The source is in the WHERE too, so a caller skipping the read cannot
+	// bypass the rule.
 	ct, err := s.db.Exec(ctx, `DELETE FROM instrument_events WHERE id = $1 AND source = $2`, id, SourceManual)
 	if err != nil {
 		return Event{}, err
@@ -267,35 +231,18 @@ func (s *Store) query(ctx context.Context, sql string, args ...any) ([]Event, er
 	return out, rows.Err()
 }
 
-// holder is one account that has ever recorded an operation on a paper, and the
-// catalog row it recorded it against.
-//
-// THE CATALOG ROW IS PART OF THE ANSWER because a journal names an instrument
-// id and the registry names an ISIN: two catalog rows can carry one ISIN only
-// if a database predates migration 0020, but an account can perfectly well hold
-// one paper under a row this instance created and another under a row the
-// importer created, and the split has to reach the rows the journal actually
-// uses.
+// holder is an account that has recorded an operation on a paper, with the
+// catalog row it used: the journal names instrument ids, the registry ISINs.
 type holder struct {
 	spaceID      uuid.UUID
 	accountID    uuid.UUID
 	instrumentID uuid.UUID
 }
 
-// holders finds every (space, account, instrument) that has ever recorded an
-// operation on the paper this ISIN names.
-//
-// IT ASKS THE JOURNAL AND NOT THE ACCOUNT LIST, and that is what keeps a sweep
-// cheap: an instance with forty accounts and one holder of Amazon folds one
-// journal rather than forty. It over-answers on purpose — an account that
-// bought the paper and sold it all is in this list and folds to a holding of
-// zero, which the materialization then declines to write a split for — because
-// the alternative is deciding what is held with a query rather than with the
-// engine, and the engine is the only thing that knows.
-//
-// Rows the registry itself wrote are included in the count of "has ever
-// recorded", which is harmless: a registry row exists only where an operation
-// already did.
+// holders finds every (space, account, instrument) that has recorded an
+// operation on this ISIN. It asks the journal, not the account list, so a sweep
+// folds only holders' journals; an account that sold out is included and folds to
+// zero, because only the engine knows what is held.
 func (s *Store) holders(ctx context.Context, isin string) ([]holder, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT DISTINCT o.space_id, o.account_id, o.instrument_id
@@ -325,9 +272,8 @@ type accountPaper struct {
 	instrumentIDs []uuid.UUID
 }
 
-// eventPapersOfAccount lists the papers of one account's journal that have at
-// least one event in the registry. It runs after every hand entry, so it asks
-// only about this account and only about papers with events — most have none.
+// eventPapersOfAccount lists the papers of one account's journal that have an
+// event; it runs after every hand entry.
 func (s *Store) eventPapersOfAccount(ctx context.Context, spaceID, accountID uuid.UUID) ([]accountPaper, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT DISTINCT i.isin, o.instrument_id

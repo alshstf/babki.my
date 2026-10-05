@@ -10,11 +10,8 @@ import (
 	"babki.my/babki/internal/operation"
 )
 
-// TestAHandEntryIsFollowedByTheRegistryAtOnce: the registry has known about the
-// split all along, so a purchase entered today and dated before it is held in
-// the split quantity as soon as the entry is committed — not at the next daily
-// sweep, which is what it used to wait for (#188). Deleting the purchase takes
-// the split's row away again: nothing is left for it to multiply.
+// A purchase entered today and dated before a known split is split as soon
+// as it is committed (#188); deleting it takes the split row away.
 func TestAHandEntryIsFollowedByTheRegistryAtOnce(t *testing.T) {
 	f := newFixture(t)
 	f.svc.OnManualWrite(f.materializer.AfterManualWrite)
@@ -39,9 +36,7 @@ func TestAHandEntryIsFollowedByTheRegistryAtOnce(t *testing.T) {
 	}
 }
 
-// TestAHandEntryOnAPaperWithNoEventsWritesNothing: most entries are about papers
-// the registry has never heard of, and the hook must cost them nothing and write
-// nothing.
+// An entry on a paper with no events writes nothing.
 func TestAHandEntryOnAPaperWithNoEventsWritesNothing(t *testing.T) {
 	f := newFixture(t)
 	f.svc.OnManualWrite(f.materializer.AfterManualWrite)
@@ -56,13 +51,9 @@ func TestAHandEntryOnAPaperWithNoEventsWritesNothing(t *testing.T) {
 	}
 }
 
-// TestTheRowsAreWorkedOutUnderTheAccountsLock: what the registry writes depends
-// on what the account held, so the holding has to be read under the same lock
-// the rows are written under. Here a hand entry holds the lock and sells the one
-// share before the split's day; a run started meanwhile must wait, and once let
-// in must see the sale and write nothing — the account held nothing on the day.
-// Read before the lock, the journal would still show the share and the run
-// would write a split for a holding that is gone.
+// The holding is read under the account lock. A hand entry holding the lock
+// sells the share before the split's day; a run started meanwhile must wait, see
+// the sale and write nothing.
 func TestTheRowsAreWorkedOutUnderTheAccountsLock(t *testing.T) {
 	f := newFixture(t)
 	f.buy(t, f.accountID, "2021-05-04", "1", -323_000)
@@ -96,8 +87,8 @@ func TestTheRowsAreWorkedOutUnderTheAccountsLock(t *testing.T) {
 		runDone <- err
 	}()
 
-	// Recorded and reported at the end: the hand entry holds a pooled connection
-	// until `release` is closed, and leaving early would hang the package.
+	// Reported at the end: the entry holds a pooled connection until release
+	// is closed.
 	finishedEarly := false
 	var runErr error
 	select {
