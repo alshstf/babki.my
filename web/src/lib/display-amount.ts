@@ -1,50 +1,28 @@
-// Decides which of two backend-supplied numbers to show for a single money
-// value: the native amount (in the row's own currency) or the pre-converted
-// base-currency amount, depending on the user's display-currency mode. This
-// never does money arithmetic itself — it only picks between two numbers
-// the backend already computed (money.ts and the backend own all conversion
-// math), per the project's "frontend does no money arithmetic" rule. Reading
-// which currency a figure is denominated in is not arithmetic either: it is
-// reading a field the server published beside the number.
+// Picks which of two server-supplied numbers to show for one money value: the
+// native amount or the converted base-currency one, by display mode. No money
+// arithmetic happens here; reading a figure's currency off the payload is not
+// arithmetic.
 import type { DisplayCurrencyMode } from "./display-currency";
 
 /**
- * One already-converted money figure, exactly as the server publishes it: the
- * amount, THE CURRENCY IT IS DENOMINATED IN, and the date of the fx rate
- * behind it.
- *
- * The three travel together because they belong to one figure, and that shape
- * is the whole of #106. The currency used to be taken from the session's
- * `base_currency` instead — a second source for one answer, and the two come
- * apart in an ordinary way: change the base currency in settings and the
- * session's answer lands at once (useUpdateSpace writes it into the cache
- * directly) while every cached payload still holds figures converted into the
- * OLD one, until its refetch comes back. For that window the ruble figures
- * printed with the new currency's sign — not a mislabelled number but a number
- * wrong by the whole exchange rate, with nothing on screen saying so. A
- * currency that arrives welded to its own amount cannot drift from it.
- *
- * `currency` is required here because the contract makes it required on every
- * object this stands for — MoneyInBase.currency, OperationInBase.currency,
- * PositionInBase.currency — so if the conversion block is there at all, the
- * currency is there with it. It is trusted exactly as far as `amountMinor` is,
- * which is to say as far as the contract goes: both are JSON typed by
- * assertion rather than validated, and neither is second-guessed here.
+ * One converted money figure as the server publishes it: amount, its currency
+ * and the fx rate date. They travel together because the currency used to come
+ * from the session's base_currency, which changes at once when the base currency
+ * is edited while cached payloads still hold the old conversion (#106): the wrong
+ * sign on a number wrong by the whole rate. `currency` is required, as on every
+ * in-base object in the contract.
  */
 export interface ConvertedFigure {
   /**
-   * The converted amount in `currency`'s minor units, or null/undefined when
-   * the server published the conversion block but not this particular term —
-   * a position's market_value_minor is nullable inside an otherwise complete
-   * PositionInBase.
+   * The amount in `currency`'s minor units, or null/undefined when the block
+   * exists but this term does not (a nullable market_value_minor).
    */
   amountMinor: number | null | undefined;
-  /** The currency `amountMinor` is denominated in, as published beside it. */
+  /** The currency `amountMinor` is in, as published beside it. */
   currency: string;
   /**
-   * Date (YYYY-MM-DD) of the fx rate that produced `amountMinor`, when the
-   * figure has a single one to name. Optional: a position's cost is struck at
-   * one rate per purchase day and names none.
+   * The fx rate date behind `amountMinor` when there is a single one; a
+   * position's cost has one per purchase day and names none.
    */
   rateOn?: string | null;
 }
@@ -53,47 +31,25 @@ export interface ResolvedAmount {
   amountMinor: number;
   currency: string;
   /**
-   * True when mode is "base" and the server published no converted figure for
-   * this cell, so the native amount is shown as an honest fallback instead —
-   * never a dash, never a fabricated zero. Callers should pair it with a small
-   * indicator.
-   *
-   * WHY it published none is not this flag's to say, and the name is older
-   * than that distinction: a missing fx rate is only one of the causes — a
-   * purchase date nobody ever recorded is another, and no rate answers for a
-   * date that does not exist — and only the server knows which one it actually
-   * stopped on (Position.in_base_gap, Operation.in_base_gap). That is why the
-   * two tables pass wordings of their own and only the accounts screens take
-   * the default, `displayCurrency.notConverted`, which does name a rate: for an
-   * account balance the contract leaves no other cause once there is a balance
-   * and the currencies differ.
+   * True when mode is "base" and no converted figure was published, so the
+   * native amount is shown flagged rather than a dash or a zero. Why it is missing
+   * is not this flag's to say: a rate is one cause, an unrecorded purchase date
+   * another, and only the server knows (in_base_gap). The two tables pass their own
+   * wording; only the accounts screens use displayCurrency.notConverted, which
+   * names a rate, the only cause for a balance.
    */
   noRate: boolean;
   /**
-   * True when `amountMinor` is the backend's converted figure rather than the
-   * row's own. False in every other case, and the three are genuinely
-   * different: the mode asks for the native amount, the native currency
-   * already IS the base currency (nothing was converted because nothing needed
-   * to be), or the conversion was unavailable (`noRate`).
-   *
-   * It exists because `rateOn` cannot answer this question. A converted
-   * figure does not always carry a rate date — a position's in_base publishes
-   * `rate_on` only when it holds the market valuation that date belongs to
-   * (see PositionInBase.rate_on in the API contract) — while its cost and
-   * income are converted all the same, at the rates of their own many dates.
-   * A caller keying "was this converted" off `rateOn` therefore drops the
-   * disclosure on figures that WERE converted, which is how the two got
-   * conflated in the first place.
+   * True when `amountMinor` is the server's converted figure. False when the
+   * mode asks for native, the native currency is the base one, or conversion was
+   * unavailable. Not derivable from `rateOn`: a converted cost or income has no
+   * single rate date.
    */
   converted: boolean;
   /**
-   * Date (YYYY-MM-DD) of the fx rate behind `amountMinor`, straight from
-   * the backend's in_base.rate_on / balance_in_base.rate_on — non-null
-   * only when the converted figure is what's actually being shown, so a
-   * caller can disclose how stale that conversion is (MoneyCell puts it in
-   * the cell's tooltip). Null whenever the native amount is shown: no
-   * conversion happened, so there is no rate date to name — and also when a
-   * converted figure has no single rate date to name (see `converted`).
+   * The fx rate date (in_base.rate_on, balance_in_base.rate_on) when the
+   * converted figure is shown, so MoneyCell can disclose it; null when the native
+   * amount is shown or the figure has no single rate date.
    */
   rateOn: string | null;
 }
@@ -110,11 +66,9 @@ export function resolveDisplayAmount(
   mode: DisplayCurrencyMode,
   nativeCurrency: string,
   nativeAmountMinor: number,
-  // The space's base currency, from the session or the summary. It answers one
-  // question and only one: whether there was anything to convert at all. That
-  // question has to be answered when the server published no converted figure,
-  // and a figure that does not exist has no currency to read — which is why
-  // this argument stays even though the currency SHOWN never comes from it.
+  // The space's base currency, used only to answer whether there was anything
+  // to convert when no converted figure exists; the currency shown never comes
+  // from it.
   baseCurrency: string,
   // The server's converted figure for this cell, or null/undefined when it
   // published none.
@@ -148,19 +102,11 @@ export function resolveDisplayAmount(
 }
 
 /**
- * resolveDisplayAmount for a figure that MAY NOT EXIST IN EITHER CURRENCY, and
- * whose two absences are independent.
- *
- * The realized result, the settled result and the total are all like this: a
- * position whose disposal settled in a third currency has no figure in its own
- * currency and a perfectly good one in the base currency, and a position whose
- * fx rates are missing has the reverse. The plain resolver takes a native amount
- * as a required argument and cannot express either case.
- *
- * Returns null only when the figure the CHOSEN MODE would show is missing —
- * which is what the cell renders a dash for. In base mode a missing converted
- * figure still falls back to the native one, exactly as the plain resolver
- * does, so a row keeps saying what it can.
+ * resolveDisplayAmount for a figure that may be missing in either currency
+ * independently (realized, settled, total): a disposal settled in a third
+ * currency has no native figure but a base one; missing rates the reverse.
+ * Returns null only when the chosen mode's figure is missing (a dash); in base
+ * mode a missing converted figure still falls back to the native one.
  */
 export function resolveOptionalDisplayAmount(
   mode: DisplayCurrencyMode,

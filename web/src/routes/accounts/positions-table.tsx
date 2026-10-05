@@ -35,34 +35,13 @@ import type {
 import type { PricedPaper } from "./purchase-price-dialog";
 import type { QuotedPaper } from "./state-price-dialog";
 
-// The one sentence that captions EVERY money cell of a row, chosen from the
-// term the server says it stopped on (Position.in_base_gap). It is the row's
-// only source: has_undated_lots answers the same question for the first of
-// these four causes and cannot disagree with it — both derive from one
-// server-side predicate — but a caption assembled from two sources is a
-// caption that will eventually be assembled from two sources that have drifted.
-//
-// Each sentence explains why the WHOLE row carries no base-currency figures,
-// not why one cell does, and that is what makes it true over all four cells:
-// in_base is published as a whole or not at all, so a single unvaluable term
-// withholds the cost, the income, the profit AND the valuation together. A
-// sentence that named only its own term — «нет курса на день покупки» — would
-// hang over the income and the valuation, which need no purchase date, and
-// that is exactly the defect (#66) this is fixing rather than repeating.
-//
-// The server checks its terms in a fixed order and stops at the first failure,
-// so a named cause also asserts that nothing before it stopped the object; two
-// of these sentences say so out loud («дело не в стоимости»), which is what
-// answers the reader's obvious question about the ruble figure they can see is
-// missing from a cell whose own rates are all there. They claim no more than
-// that on purpose: a term the server never had to value — the cost of a
-// position holding no lot, the income of one that received none — was not
-// checked and found sound, it was simply never in the way, so «курсы на дни
-// покупок нашлись» over a sum with no terms reported a lookup that never
-// happened.
-//
-// Written as a switch over literal keys rather than a lookup table, so every
-// key stays a literal at the t() call site — the only shape
+// The sentence captioning every money cell of a row, from the term the server
+// stopped on (Position.in_base_gap), the row's only source. Each explains why the
+// whole row has no base-currency figures, since in_base is published whole or not
+// at all; a sentence naming only its own term would be false over the other
+// cells (#66). The server checks terms in order, so a named cause also says
+// nothing earlier stopped it, and two sentences say so; they claim no more, since
+// a term never valued was not "found sound". A switch with literal keys, the shape
 // scripts/check-i18n.mjs can verify.
 function rowGapTitle(
   t: (key: string) => string,
@@ -78,59 +57,29 @@ function rowGapTitle(
     case "no_rate_today":
       return t("positions.notConvertedNoRateToday");
     case null:
-      // The contract publishes a cause whenever in_base is null and the
-      // currency differs from the base one, so a row with a marker and no
-      // cause should not occur. It is not left to crash or to say nothing:
-      // the general phrase says only what the payload itself shows — the
-      // base-currency figures were withheld — and it is what an older
-      // server's payload deserves.
+      // A null in_base with a different currency always carries a cause, so
+      // this should not occur; the general phrase claims only what the payload
+      // shows.
       return t("positions.notConverted");
     default:
-      // The other way to reach that phrase, and the one that decided how it
-      // is worded (#105). A server NEWER than this build sends a value outside
-      // the union above; the sentence shown then may claim nothing about the
-      // cause, because not knowing the cause is the very condition that brings
-      // it here. «Нет курса», which is what it used to say, claims exactly
-      // that — and would be false of a value shaped like `undated_lot`, which
-      // is in TODAY's enum and is about a date nobody recorded rather than
-      // about a rate. So a client one release behind a server that adds
-      // another date-shaped cause would caption it «нет курса»: #66's defect,
-      // reappearing through the path built to prevent it.
+      // A server newer than this build sent an unknown cause (#105). The phrase
+      // then claims nothing about the cause: «нет курса» would be false of a
+      // date-shaped cause like undated_lot (#66).
       return unnameableGap(gap, t("positions.notConverted"));
   }
 }
 
-// What the VALUATION cell says, which is the one cell that can have a cause of
-// its own (Position.market_value_gap) — the nearer one, and the one that wins
-// there. It answers for that cell in both of its states, and the two are not
-// the same question, which is why `fallback` is a parameter rather than a
-// constant here:
+// What the valuation cell says: its own cause (Position.market_value_gap) wins
+// there. fallback differs by state:
 //
-//   - the cell HAS a figure that could not be converted. The row's own
-//     sentence is the fallback: when the valuation itself converted fine and
-//     the row's term is what withheld the base-currency block, that sentence is
-//     the true one and already says so. Repeating the valuation's own sentence
-//     there would blame a third currency that is not in play; saying nothing
-//     would leave an unexplained marker on a figure the reader can see is not
-//     in rubles.
-//   - the cell has NO figure and renders a dash. The fallback is then the
-//     general «оценки нет, причина не названа», because the row's sentence is
-//     about the base currency and this dash is not: a valuation this program
+//   - the cell has a figure that did not convert: the row's sentence, which is
+//     then the true one;
+//   - the cell has a dash: «оценки нет, причина не названа», since a valuation
 //     never struck is missing in every currency.
 //
-// The three no-figure causes are the whole of #78. Until it, this switch had
-// one case and the dash was captioned «Нет котировки» from a literal in the
-// markup — an inference from an absent figure, and false on two of the three
-// rows it landed on: a crypto or metal position and a bond with no face value
-// recorded can both carry a perfectly good quote. Their sentences must
-// therefore not send the reader after one, and `type_not_priced`'s must not
-// promise a figure at all: no decision to write such a valuation has been
-// taken, so «пока» would be an invention.
-//
-// An unnameable value degrades to the caller's fallback for the same reason
-// (#105): what is true of the cell is still true, the cause merely is not
-// known, and a build one release behind a server must not answer a cause it
-// cannot read with one it can.
+// The three no-figure causes are #78: «Нет котировки» was false for crypto, metals
+// and a bond without a face value, and type_not_priced must not promise a figure.
+// An unknown cause falls back the same way (#105).
 function valuationGapTitle(
   t: (key: string) => string,
   gap: MarketValueGap | null,
@@ -152,135 +101,15 @@ function valuationGapTitle(
   }
 }
 
-// Renders the price shown under the market value amount. The quote date used
-// to be shown inline too ("274,49 · 28.07.2026") but that's visual noise for
-// a detail nobody reads at a glance — it now lives in the row's `title`
-// tooltip instead (see the caller). When the market value was converted from
-// a different currency (e.g. a bond's face-value currency), the tooltip also
-// names the original, unconverted amount — again tooltip-only, not shown as
-// text, per the same "less visual noise" preference. Returns null unless
-// both the price and the quote date are present and well-formed — a
-// half-rendered hint would be more misleading than no hint at all.
-//
-// WHAT THE DATE IS, and why the tooltip spends two sentences on it. price_on
-// is the trading session the SOURCE attaches this price to — never the day
-// this program fetched it (see TickerQuote.On in
-// internal/marketdata/provider.go; #90 was the fetch day being stored as the
-// price's own, so on a Monday Friday's price was captioned with Monday). With
-// the date now true, the date alone still is not: a bare «Цена на 31.07.2026»
-// read on a Monday says both "this is the market's last word" and "the quotes
-// job stopped a week ago", and nothing on this screen tells the two apart. So
-// the caption states what the date is instead of leaving the reader to infer
-// freshness the server never claimed.
-//
-// The wording is constrained by measurements against live ISS, all of them
-// recorded in the QuotesFor doc block in internal/marketdata/moex/moex.go, and
-// every constraint is a sentence this caption is forbidden to write:
-//   - it is NOT the session's closing price. MOEX publishes that separately as
-//     PREVLEGALCLOSEPRICE and the two are different numbers on the same row.
-//   - it is NOT necessarily a price anything traded at that day. 779 of TQCB's
-//     3021 rows in one measured session carried a price for a paper that did
-//     not trade at all, so «сделки в тот день могло и не быть» is the fact,
-//     and it is stated as a possibility because that is what was proven.
-//   - it is NOT "the previous session" as far as THIS component can know. The
-//     wire carries whatever day the source named; "previous" is a property of
-//     MOEX's PREVPRICE, not of the contract this screen reads, and a caption
-//     that asserted it would be a claim about a provider the frontend has
-//     never heard of.
-//   - it does NOT say the data is fresh. A date in the past is also exactly
-//     what a broken refresh looks like, and reassurance here would cover for
-//     one.
-//
-// The second sentence is the project's "three rates for three questions" rule
-// made legible on this cell: the valuation IS struck from this price (see
-// marketValue in internal/portfolio/market_value.go — every path that publishes
-// Position.price publishes a valuation computed from it, and this hint is only
-// rendered when there is one), while any conversion of that valuation is done
-// at the current rate, never at the quote's date — toAPI converts into the
-// position's currency and positionInBase into the base one, both at the
-// request's `now`. Its conditional shape is load-bearing rather than timid: a
-// position whose valuation is already in its own currency, viewed in native
-// mode, converts nothing at all, and an unconditional «пересчитана по
-// текущему курсу» would name a conversion that never happened. The rate's own
-// DATE is deliberately not repeated here — MoneyCell prints it on the amount
-// itself («Пересчитано по текущему курсу (на 20.07.2026)»), and two places
-// stating one date is two places to drift apart.
-//
-// WHAT THE NUMBER IS depends on the instrument, and that is the whole of #32
-// and #76 — one defect in two halves, a quote printed with nothing saying what
-// its unit is.
-//
-// For a share or an ETF the quote is MONEY PER UNIT, in the currency the QUOTE
-// is denominated in. That is normally the position's own, and nothing enforces
-// it: Position.currency comes from the operation, a quote carries a currency
-// column of its own, and where the two differ the server converts the
-// VALUATION into the position's currency and discloses the original in
-// market_value_source_currency — while Position.price stays exactly as quoted
-// and is never converted. So the price's currency is that source field when it
-// is set and market_value_currency otherwise, which is what the contract says
-// in as many words (Position.price). BOTH readings are needed: on the ordinary
-// row the two agree and either would do, and on the row where a quote is
-// denominated in something other than the position's currency they do not, and
-// market_value_currency then describes the CONVERTED figure above rather than
-// this one.
-//
-// Naming it unconditionally, rather than only where the reader might be
-// confused, is a decision (#76). The bare number was wrong in base mode — the
-// valuation converts with the toggle and this line does not, so «274 950,00 ₽»
-// stood over «305,50», which was dollars — and a mode-aware sign would be a
-// caption whose truth depended on which toggle the reader last touched, silently
-// wrong the moment he flipped it. The suffix has to exist for the mismatched-
-// quote row anyway; having it appear and disappear as well would be two
-// renderings of one number, one of them correct only in context.
-//
-// For a BOND the quote is a PERCENTAGE OF FACE VALUE (the MOEX convention):
-// the server publishes q.Price untouched in Position.price, and marketValue()
-// in internal/portfolio/market_value.go multiplies it as faceValueMinor × price/100 ×
-// quantity. The demo seed's ОФЗ 26238 makes the gap concrete — face value
-// 1 000,00 ₽, quote 95.20, so one bond is worth 952 ₽ while the line under its
-// ruble valuation reads "95,20". Bare, that is a money figure ten times too
-// small, sitting under a money figure. It gets «%» and NO currency sign: a
-// percentage is denominated in nothing, and both of the fields a share reads
-// its currency from are filled in on a bond's row with the FACE value's
-// currency and the position's, neither of which this number is in.
-//
-// The alternative fix — deriving the 952 ₽ and showing THAT — was rejected on
-// two grounds. It is money arithmetic in the browser (face value × percent,
-// with a rounding decision of its own), which this project does everywhere on
-// the server; there is no per-unit price on the wire to render instead. And
-// even done correctly it would replace the number the exchange actually
-// quotes, the one the owner sees in his broker's app, with one no venue
-// prints. So the quote stays as quoted, and says which unit it is in. Reading
-// a currency CODE off the payload is not arithmetic and does not touch that
-// rule: no figure is computed here, only labelled.
-//
-// Any other type keeps a bare number. Today that branch cannot be reached from
-// this server — it prices share, etf and bond and nothing else, so a crypto or
-// metal row carries no valuation, no price, and no hint at all (marketValue's
-// `default`, published as market_value_gap: type_not_priced). It is written
-// out rather than folded into the share/etf case because the day a newer
-// server prices a new type, what its Position.price means will be decided
-// there and not here, and a client one release behind must not answer that
-// question with the valuation's currency. Same rule as the gap captions
-// STALE_PRICE_DAYS is how old a quote has to be before the row says its date out
-// loud instead of keeping it in the tooltip.
-//
-// A month, because that is comfortably past every ordinary reason a price is not
-// today's — a weekend, a holiday run, a bond that trades a few times a month —
-// and nowhere near the four YEARS the owner's frozen funds have stood at. Their
-// valuation is struck from a price dated 25.02.2022 and enters every total as
-// though it were today's: FXIT alone carries 420 280 ₽ of February-2022 money
-// into what the account has supposedly earned.
-//
-// Nothing is recomputed. The price is the last real one there is and no better
-// number exists; what changes is that the reader is not required to hover to
-// find out how old it is.
+// STALE_PRICE_DAYS is how old a quote must be before the row shows its date
+// instead of keeping it in the tooltip: past weekends, holidays and thinly traded
+// bonds, and far short of the four years the owner's frozen funds have stood at
+// (FXIT carries 420 280 ₽ of February-2022 money into the totals). Nothing is
+// recomputed; only the age becomes visible.
 const STALE_PRICE_DAYS = 30;
 
-// staleSince returns the price's date when the quote is old enough to say so,
-// and null otherwise. Comparing the ISO strings would work as well — both are
-// YYYY-MM-DD, where lexical order IS calendar order — but the age is what the
-// threshold is about, so the dates are dates.
+// staleSince returns the price's date when it is old enough to show, else
+// null.
 function staleSince(priceOn: string): string | null {
   const on = new Date(priceOn);
   if (Number.isNaN(on.getTime())) return null;
@@ -288,46 +117,52 @@ function staleSince(priceOn: string): string | null {
   return days > STALE_PRICE_DAYS ? formatDate(priceOn) : null;
 }
 
-// (#105): what is known stays said, what is not stays unsaid.
+// priceHint is the line under the market value: the price, with its date and
+// any unconverted original in the tooltip. Null unless price and date are
+// well-formed.
+//
+// The date is the session the source attaches to the price (TickerQuote.On),
+// never the fetch day (#90). The caption says what the date is without claiming
+// freshness, and avoids what live ISS measurements (see QuotesFor in moex.go)
+// forbid: it is not the closing price (PREVLEGALCLOSEPRICE is separate), not
+// necessarily a traded price (779 of TQCB's 3021 rows had none that day), not
+// "previous session" (a MOEX detail the contract does not carry), and not "fresh".
+// The second sentence says the valuation is struck from this price and converted
+// at the current rate, conditionally, since a native-currency row converts
+// nothing; MoneyCell prints the rate date.
+//
+// What the number is depends on the instrument (#32, #76):
+//
+//   - share or ETF: money per unit in the quote's currency,
+//     market_value_source_currency when set, else market_value_currency (the
+//     contract's rule for Position.price), always named so the line does not
+//     change meaning with the toggle;
+//   - bond: a percentage of face («%», no currency), with the server's
+//     price_money_minor beside it; no money arithmetic happens here;
+//   - anything else: a bare number, since a newer server pricing a new type
+//     decides what its price means (#105).
 function priceHint(
   t: (key: string, opts?: Record<string, string>) => string,
   position: Position,
 ): { price: string; title: string } | null {
   if (!position.price || !position.price_on) return null;
   const formatted = formatPrice(position.price);
-  // price_on, and nothing else on the position: it is the only field that
-  // dates the PRICE. in_base.rate_on is a plausible-looking neighbour that
-  // dates the valuation's fx conversion instead, and putting it here would
-  // print a real date under a sentence about the wrong thing.
+  // price_on, the only field dating the price; in_base.rate_on dates the
+  // valuation's conversion instead.
   const date = formatDate(position.price_on);
   if (formatted === null || !date) return null;
   let price = formatted;
   let title =
     t("positions.priceOn", { date }) + "\n" + t("positions.priceSession");
-  // A switch over the instrument's type rather than "bond or else", so the
-  // claim each branch makes is made only where it has been checked. Written
-  // with literal keys at every t() call site — the only shape
-  // scripts/check-i18n.mjs can verify.
+  // One branch per type, so each claim is made only where checked; literal
+  // t() keys for scripts/check-i18n.mjs.
   switch (position.instrument.type) {
     case "bond": {
-      // MONEY FIRST, THE PERCENT BESIDE IT. A bond is quoted as a percentage
-      // of par, which is what the market trades and what the broker's own app
-      // shows — so the percent stays. But every other figure in the row is
-      // money, and a percent cannot be compared with a basis; the reader was
-      // left multiplying by the face value in their head.
-      //
-      // The face value is a SNAPSHOT taken when the paper was catalogued and
-      // is not refreshed, so on an amortizing bond it drifts. That is not a
-      // new risk introduced here: the market valuation in this very row is
-      // already the same face value times the same percent (see
-      // portfolio.marketValue). This makes an input that was always in use
-      // visible, rather than adding one.
-      //
-      // THE MONEY COMES FROM THE SERVER (price_money_minor), which is where
-      // face x price/100 is multiplied and rounded — once, on the figure that
-      // is published. Multiplying it here would be money arithmetic on the
-      // client, and there is exactly one exemption from that rule in this
-      // program (the profit percentage, which is not money).
+      // Money first, the percent beside it: the percent is the market's quote,
+      // but the row's other figures are money. The face value is a catalog
+      // snapshot and drifts on an amortizing bond, as it already does in the
+      // valuation. The money is the server's price_money_minor, rounded once
+      // there.
       const perUnitMinor = position.price_money_minor;
       const faceCurrency = position.instrument.face_currency;
       const perUnit =
@@ -348,12 +183,8 @@ function priceHint(
     case "etf": {
       const quoteCurrency =
         position.market_value_source_currency ?? position.market_value_currency;
-      // The `?? formatted` is unreachable rather than defensive: this hint is
-      // only built for a row that HAS a valuation, which is a row that has a
-      // market_value_currency, and formatPrice already answered on this very
-      // string. It falls back to the bare number all the same, because the
-      // number is the position's own datum and dropping the line would hide
-      // it to protect a sign.
+      // Unreachable (a valued row has a market_value_currency), but the number
+      // is shown even without its sign.
       if (quoteCurrency)
         price = formatPriceIn(position.price, quoteCurrency) ?? formatted;
       break;
@@ -372,31 +203,12 @@ function priceHint(
   return { price, title };
 }
 
-// The income this position received in currencies OTHER than its own, each
-// figure formatted in the currency it actually arrived in and joined with the
-// same "·" the realized total uses for the same purpose. Returns null when
-// there is none, which is the ordinary row.
-//
-// WHY THE COLUMN NEEDS A SECOND LINE AT ALL. Position.income_minor is only the
-// entry of income_by_currency denominated in the position's own currency (the
-// contract says so in as many words), and a Russian broker routinely pays a
-// yuan bond's coupon and a dollar share's dividend in rubles. On such a row
-// that field is 0 — true to the kopeck, and on its own indistinguishable from a
-// paper that has never paid anything. The whole point of this line is that the
-// money paid in the other currency is DRAWN rather than left out of a figure
-// that then reads as "nothing was paid": it is on the row, not behind a hover.
-//
-// NOTHING IS ADDED HERE, and this is where it would be tempting: two currencies
-// summed into one number are denominated in nothing, and converting them needs
-// rates the browser does not have and this project does not do in the browser
-// anyway. So the entries stay side by side, each under its own sign — the
-// server's order, which is by currency code and is the same for two accounts
-// holding the same payments in a different journal order.
-//
-// The position's own currency is filtered out because the figure above already
-// carries it. Comparing the two codes is not inferring anything the server
-// withheld: `income_minor` IS defined as the entry for `currency`, so the
-// filter removes exactly what is already on screen and nothing else.
+// The income this position received in other currencies, each in its own
+// currency, joined by "·"; null when none. income_minor is only the position
+// currency's entry of income_by_currency, so a yuan bond paid in roubles reads 0
+// there; this line shows the rest. Nothing is summed or converted. The server
+// orders by currency code. The position's own currency is filtered out because
+// income_minor already shows it.
 function otherCurrencyIncome(position: Position): string | null {
   const others = position.income_by_currency.filter(
     (entry) => entry.currency !== position.currency,
@@ -407,13 +219,8 @@ function otherCurrencyIncome(position: Position): string | null {
     .join(" · ");
 }
 
-// Formats the unrealized P&L as a percentage of cost ("+12,3 %" / "-12,3 %").
-// This is a *display* ratio, not a money amount, so it's computed with plain
-// number arithmetic here rather than routed through money.ts (per project
-// convention, money.ts owns minor-unit amounts, not derived percentages).
-// Returns null when cost is 0 — there is no honest percentage to show for a
-// division by zero, so the caller omits the line entirely rather than
-// display "Infinity %" or similarly nonsensical output.
+// Unrealized P&L as a percent of cost ("+12,3 %"). A display ratio, not money,
+// so plain arithmetic is fine. Null at zero cost.
 function unrealizedPercent(
   unrealizedMinor: number,
   costMinor: number,
@@ -439,105 +246,57 @@ export function PositionsTable({
   rowLabel,
 }: {
   positions: Position[];
-  // THE MONEY, AMONG THE PAPERS. Cash is a holding: yuan on the account was
-  // bought at one rate and is worth another today, and that difference is money
-  // made or lost exactly as a share's is. It arrives from the server already
-  // valued, one row per currency the account has ever touched.
-  //
-  // Optional because the rows are new and not every caller has them yet; absent
-  // and empty render the same — no money rows at all.
+  // Cash is a holding: bought at one rate, worth another today. Rows arrive
+  // valued from the server, one per currency ever touched. Optional; absent and
+  // empty render the same.
   cash?: CashPosition[];
   mode: DisplayCurrencyMode;
-  // The space's base currency (Summary.base_currency) — needed to tell
-  // "already in base, nothing to convert" apart from "conversion failed, no
-  // fx rate" when a position's in_base is null (see resolveDisplayAmount).
+  // The space's base currency, to tell "nothing to convert" from "conversion
+  // failed" when in_base is null (see resolveDisplayAmount).
   baseCurrency: string;
-  // What «указать цену» beside a paper with no purchase price opens. Absent for
-  // a reader who cannot write — the note then says the fact and offers nothing.
+  // What «указать цену» beside a paper with no purchase price opens; absent
+  // for a reader who cannot write.
   onPriceUnknown?: (paper: PricedPaper) => void;
-  // What «указать цену» on a paper nobody quotes opens. Absent for a reader
-  // who cannot write.
+  // What «указать цену» on an unquoted paper opens; absent for a reader who
+  // cannot write.
   onStatePrice?: (paper: QuotedPaper) => void;
   // Whether a paper's name leads to its own page. Off where the table is drawn
   // outside the application's router.
   instrumentLinks?: boolean;
-  // ONE PAPER ON SEVERAL ACCOUNTS: the paper's page lists its position on each
-  // account, and there the first column names the account rather than the
-  // paper, which is the same on every row. Absent, it names the paper.
+  // On a paper's page the first column names the account rather than the
+  // paper; absent, it names the paper.
   rowLabel?: (position: Position) => { key: string; label: ReactNode };
 }) {
   const { t } = useTranslation();
-  // A position row's money amounts are denominated in the position's own
-  // currency, the quote's, or a bond face value's — never "the account's",
-  // which is what the default MoneyCell wording says, so every cell below is
-  // handed wording of its own.
-  //
-  // WHICH wording is not this screen's to work out. Five different things
-  // leave a figure unconverted — four that stop the row's whole base-currency
-  // block and one that stops its valuation alone — and they are five different
-  // pieces of news to the person reading the row, one of them about a figure
-  // that is never coming. Only the server knows which of them actually
-  // happened, and it says so in Position.in_base_gap and
-  // Position.market_value_gap; rowGapTitle and valuationGapTitle above turn
-  // those answers into sentences and add nothing. Nothing here infers a cause
-  // from a flag or from comparing two currency codes: an inferred cause is a
-  // second answer waiting to disagree with the server's, and «нет курса» over
-  // a row whose problem is a missing DATE is precisely the disagreement this
-  // screen shipped with (#66).
-  //
-  // Both are per-row, hence resolved inside the map below.
-  //
-  // Only the market value is converted at today's rate, so only it keeps
-  // MoneyCell's default "converted at the current rate (on <date>)" wording.
-  // The ruble basis is built lot by lot at each purchase date's rate and
-  // income operation by operation at each operation date's rate, so those
-  // cells say which historical rates stand behind them instead.
-  //
-  // The date argument MoneyCell offers is deliberately ignored here:
-  // in_base.rate_on is the rate date of the market VALUATION (that is what
-  // the API contract says it is) and describes none of these three figures —
-  // printing it under them would name a date that had no part in the number
-  // above it.
+  // Every cell gets wording of its own: its figures are in the position's,
+  // the quote's or a face currency, never "the account's". The cause comes from the
+  // server (in_base_gap, market_value_gap) through rowGapTitle and
+  // valuationGapTitle; nothing is inferred here (#66). Only the valuation is at
+  // today's rate and keeps MoneyCell's default wording; cost and income name their
+  // historical rates. MoneyCell's date argument is ignored: in_base.rate_on dates
+  // the valuation only.
   const costConvertedTitle = () => t("positions.convertedAtPurchaseRates");
-  // EACH CELL NAMES THE RATES BEHIND ITS OWN NUMBER, and the three answers
-  // differ because the figures are made of different things. The settled figure
-  // is realized result plus income: every term is a past event with a date of
-  // its own, so every rate is that date's. The total adds the unrealized half,
-  // which is today's valuation at today's rate — one sentence over both would
-  // be false about one of them. The income line under the settled cell keeps
-  // the payment-rate wording, which is all it is.
+  // Each cell names the rates behind its own number: settled is all past
+  // events at their own dates' rates; the total adds today's valuation at
+  // today's rate.
   const settledConvertedTitle = () => t("positions.convertedSettled");
   const totalConvertedTitle = () => t("positions.convertedTotal");
   const profitConvertedTitle = () => t("positions.convertedProfitMixed");
 
-  // CLOSED ROWS ARE HIDDEN BY DEFAULT AND NEVER IN SILENCE. A position sold out
-  // of keeps a realized result and income that are real history, so it is not
-  // noise — but it is over, and a portfolio of a few holdings should not open
-  // with a screen of them. The count beside the control is what makes hiding
-  // honest: the reader is told a number is missing from the list rather than
-  // discovering it.
-  //
-  // THE TOTALS ARE NOT FILTERED WITH THE ROWS, and the control says so. They
-  // are the account's, computed on the server over every position, and a header
-  // reading «Реализовано 50 000 ₽» over rows that show none of it would look
-  // like an error rather than like the deliberate answer it is.
+  // Closed rows are hidden by default and counted beside the control. The
+  // totals are the account's, over every position, and are not filtered with the
+  // rows; the control says so.
   const [showClosed, setShowClosed] = useState(false);
-  // WHAT IS HIDDEN IS WHAT THE COUNT MUST NAME. Papers sold out of and
-  // currencies emptied are hidden by the same control, so counting only the
-  // papers would undercount what is missing from the list — and on an account
-  // with no closed papers at all the control would not appear, leaving an
-  // emptied currency's history reachable from nowhere.
+  // Emptied currencies are hidden by the same control, so the control must
+  // appear for them too.
   const emptiedCash = (cash ?? []).filter((c) => c.amount_minor === 0).length;
   const closedCount =
     positions.filter((p) => p.quantity === "0").length + emptiedCash;
   const shown = showClosed
     ? positions
     : positions.filter((p) => p.quantity !== "0");
-  // A currency the account has touched and holds nothing of is hidden by the
-  // same control, for the same reason a paper it has sold out of is — with one
-  // difference: an empty balance is not «closed», so it is not counted in the
-  // control's number. It reappears with the closed rows, since that is the
-  // control a reader reaches for when looking for what is no longer held.
+  // An emptied currency is hidden with closed rows but not counted as
+  // "closed".
   const shownCash = (cash ?? []).filter(
     (c) => showClosed || c.amount_minor !== 0,
   );
@@ -595,26 +354,15 @@ export function PositionsTable({
             const closed = position.quantity === "0";
             const custom = rowLabel?.(position);
             const unconvertedTitle = rowGapTitle(t, position.in_base_gap);
-            // Market value's currency can differ from the position's own
-            // currency (a bond's face-value currency, for instance), so it is
-            // always formatted with market_value_currency, never `currency`.
+            // The market value's currency may differ from the position's (a bond's
+            // face currency), so it uses market_value_currency.
             const marketValueMinor = position.market_value_minor;
             const marketValueCurrency = position.market_value_currency;
             const hasMarketValue =
               marketValueMinor != null && marketValueCurrency != null;
-            // The valuation's own reason, which outranks the row's on its own
-            // cell and nowhere else. The two can be set at once and both be
-            // true — a row stopped by a dateless lot whose valuation is also
-            // stuck in a third currency — and this cell takes the nearer of
-            // them, while the rest of the row keeps the one that is true of it.
-            //
-            // WHICH FALLBACK depends on whether there is a figure in the cell,
-            // and the two cases are answered by the same lookup so that one
-            // vocabulary of causes reaches both. With a figure, an unnamed cause
-            // means the row's own sentence is the true one. With none, the row's
-            // sentence would be false — it is about the base currency, and a
-            // valuation that was never struck is missing in every currency — so
-            // the general "no valuation, cause not named" phrase stands instead.
+            // The valuation's own cause outranks the row's on this cell only. The
+            // fallback depends on whether there is a figure: with one, the row's
+            // sentence; without, the general "no valuation" phrase.
             const valuationUnconvertedTitle = valuationGapTitle(
               t,
               position.market_value_gap,
@@ -623,22 +371,14 @@ export function PositionsTable({
             const hint = hasMarketValue ? priceHint(t, position) : null;
             const unrealizedMinor = position.unrealized_pnl_minor;
             const hasUnrealized = unrealizedMinor != null;
-            // Cost is resolved unconditionally: it's always present (unlike
-            // market value / unrealized P&L), and the profit percentage below
-            // needs it alongside the resolved profit figure. Both numbers in
-            // that ratio must live in the same currency, which the percentage
-            // asserts for itself rather than assuming: in_base carries a null
-            // unrealized_pnl_minor whenever the valuation could not be
-            // expressed in the position's currency, so cost and profit do not
-            // always resolve the same way.
-            // One term of the row's converted block, welded to the currency that
-            // block says its figures are in (PositionInBase.currency, required
-            // by the contract) — never to the session's base currency, which is
-            // a second answer to the same question and comes apart from this one
-            // whenever a cached row outlives a change of base currency (#106).
-            // The term is picked by a function of the block rather than passed
-            // in, so a caller cannot hand over the position's OWN figure by
-            // mistake and have it printed under the base currency's sign.
+            // Cost is always present, and the profit percent needs it in the same
+            // currency as the profit, which it checks: unrealized_pnl_minor can be
+            // null in in_base when cost is not.
+            //
+            // termOf ties a converted term to PositionInBase.currency, never the
+            // session's base currency, which a cached row can outlive (#106), and picks
+            // the term from the block so a native figure cannot be printed under the
+            // base sign.
             const inBase = position.in_base;
             const convertedTerm = (
               term: (
@@ -682,38 +422,17 @@ export function PositionsTable({
               baseCurrency,
               convertedTerm((block) => block.income_minor),
             );
-            // The second line under the income, and WHETHER it is drawn is
-            // decided by what the cell above ended up showing rather than by
-            // which mode the toggle is in — the two are not the same question,
-            // and using the mode would be wrong in both directions.
-            //
-            // The converted figure (in_base.income_minor) is the whole income
-            // already, every payment brought out of the currency it arrived in,
-            // so listing those payments a second time beneath it would show the
-            // same money twice and invite the reader to add it to a sum that
-            // already contains it.
-            //
-            // Everything else shows the position's OWN figure, which carries one
-            // currency and cannot carry the rest — and that is three situations,
-            // not one: the toggle asks for the position's currency; the toggle
-            // asks for the base currency and the row's block could not be struck
-            // (`noRate`, captioned by the row's own sentence); or the position's
-            // currency IS the base currency, so the server publishes no block at
-            // all and never had to. That last one is the case this line exists
-            // for above all: a ruble paper paid a dollar dividend has no
-            // conversion object in EITHER mode, so before this its row showed a
-            // ruble zero in both, with nothing on it saying a dividend had been
-            // paid at all. (The journal below still listed the payment itself —
-            // this is about the position's own row, which is where a reader asks
-            // what the paper has earned.)
+            // The second income line is drawn when the cell above shows the
+            // position's own figure, not by toggle mode: the converted figure already
+            // includes every payment. The own figure appears when the toggle asks for
+            // it, when the block could not be struck, or when the position is in the
+            // base currency and has no block at all (a rouble paper paid a dollar
+            // dividend).
             const otherIncome = resolvedIncome.converted
               ? null
               : otherCurrencyIncome(position);
-            // The three figures that can be missing in ONE currency and present
-            // in the other, which is why they go through the optional resolver:
-            // a disposal settled in a third currency leaves no realized figure
-            // (and so no settled, and so no total) in the position's own
-            // currency, while the converted block has all three.
+            // These three can be missing in one currency and present in the other
+            // (a disposal settled in a third currency), hence the optional resolver.
             const resolvedRealized = resolveOptionalDisplayAmount(
               mode,
               position.currency,
@@ -735,11 +454,7 @@ export function PositionsTable({
               baseCurrency,
               convertedTerm((block) => block.total_minor),
             );
-            // What the settled figure is made of, spelled out where the column
-            // that used to show one of its halves used to be. The income column
-            // is gone and its number lives on here: a reader who wants to know
-            // why «Зафиксировано» is what it is gets the two terms rather than
-            // being told to trust the sum.
+            // The settled figure's two terms, spelled out under it.
             const settledHint = resolvedSettled
               ? t("positions.settledHint", {
                   realized: resolvedRealized
@@ -754,20 +469,10 @@ export function PositionsTable({
                   ),
                 })
               : // WHICH OF THE TWO REASONS IT IS, ASKED OF THE DATA RATHER THAN
-                // GUESSED. The server withholds this figure on two unrelated
-                // grounds — a disposal settled in a currency the position is not
-                // denominated in, or payments that arrived in more than one
-                // currency — and a caption naming the first over a paper nobody
-                // ever sold would be a false reason beside a true dash, which is
-                // the failure this codebase has been caught at four times.
-                //
-                // realized_pnl_minor is null on exactly the first ground (see
-                // Position.realized_pnl_minor in the contract), so the two are
-                // told apart from published fields with nothing inferred. The
-                // dash itself is reached only when the POSITION-currency figure
-                // is missing — a figure present in the base currency is shown
-                // rather than dashed — so the reason is about the position's own
-                // currency in either mode.
+                // Why the realized figure is missing: a disposal settled in another
+                // currency (realized_pnl_minor is null exactly then) or income in several
+                // currencies. Told apart from published fields; the dash appears only when
+                // the position-currency figure is missing.
                 position.realized_pnl_minor == null
                 ? t("positions.settledMissingSale")
                 : t("positions.settledMissingIncome");
@@ -779,37 +484,16 @@ export function PositionsTable({
                     resolvedCost.amountMinor,
                   )
                 : null;
-            // A bare "+10,0 %" means a different thing per mode: in the
-            // position's own currency it is the instrument's move alone, in the
-            // base currency it carries the fx move too, so one position can
-            // honestly read +10 % in one mode and -45 % in the other. Naming
-            // the currency is what makes those two answers legible as answers
-            // to different questions rather than as a discrepancy.
-            //
-            // The currency named is the one the ratio was actually computed in
-            // (resolvedCost's — the guard above already proved the profit's
-            // equal to it), not the one the mode asked for: in base mode with
-            // no converted figure available both figures stay native, and the
-            // label has to follow the numbers.
+            // The percent names its currency: in the position's currency it is the
+            // instrument's move, in the base currency it includes the fx move. It
+            // names the currency actually computed in, which can be native in base
+            // mode.
             const unrealizedPctTitle = t("positions.profitPercentIn", {
               currency: resolvedCost.currency,
             });
-            // Why the profit cell is empty, as ONE string used twice — the
-            // tooltip's and the screen reader's copy are the same value, so
-            // there is no arrangement in which they say different things. The
-            // line break survives in the tooltip and collapses to a space in the
-            // markup, which is the right rendering in each place and needs no
-            // second version to get it.
-            //
-            // Two ways to have no profit, and they are two different sentences.
-            // With a valuation present, the profit is missing because that
-            // valuation is in another currency and cannot be subtracted from the
-            // basis. With none, the profit is missing because one of its two
-            // operands is — so this cell says that in its own words and then
-            // hands over to the valuation's cause, whatever the server said it
-            // was. It used to print «Нет котировки» flat, which is the same false
-            // sentence #78 is about, one column over: a crypto row's profit is
-            // not waiting for a quote either.
+            // Why the profit is empty, one string for tooltip and screen reader. With
+            // a valuation, it is in another currency; without one, the cell says so
+            // and defers to the valuation's cause (not a flat «Нет котировки», #78).
             const profitDashHint = hasMarketValue
               ? t("positions.currencyMismatch")
               : t("positions.profitNeedsValuation") +
@@ -862,11 +546,9 @@ export function PositionsTable({
                     convertedTitle={costConvertedTitle}
                     testId="position-cost"
                   />
-                  {/* Under the cost it is about: shares that arrived with no
-                      purchase price are counted as bought for nothing, so every
-                      profit on this row is higher than the truth by what was
-                      really paid. Said on the paper itself, held or sold, so
-                      the owner knows which price to go and find. */}
+                  {/* Shares that arrived with no purchase price count as bought for
+                     nothing, so every profit on this row is overstated; said on the
+                     paper, held or sold. */}
                   {position.has_unknown_cost && (
                     <div className="text-xs text-amber-600">
                       <span data-testid="position-unknown-cost" title={t("positions.unknownCostHint")}>
@@ -911,10 +593,8 @@ export function PositionsTable({
                           {hint.price}
                         </div>
                       )}
-                      {/* HOW OLD THE PRICE IS, WHERE THE PRICE IS. A quote
-                          months out of date is still what the valuation above
-                          is struck from and still what every total counts, and
-                          until now the only place that said so was a tooltip. */}
+                      {/* A stale quote is still what the valuation and totals use, so its
+                         age is shown on the row. */}
                       {position.price_by_hand && (
                         <div data-testid="position-price-by-hand" className="text-xs text-muted-foreground">
                           {t("positions.priceByHand")}
@@ -957,14 +637,8 @@ export function PositionsTable({
                       className="text-muted-foreground"
                       title={valuationUnconvertedTitle}
                     >
-                      {/* The dash is a drawing of an empty cell and says nothing
-                        on its own, so it is hidden from assistive technology
-                        and the sentence beside it is what gets read (#31). The
-                        other order — announcing "dash" and then leaving the
-                        reason in a `title` no screen reader is obliged to
-                        surface on a non-focusable span — is how this cell told
-                        a sighted reader why the number is missing and told
-                        everyone else nothing. */}
+                      {/* The dash is hidden from assistive technology and the sentence
+                         beside it is read (#31). */}
                       <span aria-hidden="true">—</span>
                       <span className="sr-only">
                         {valuationUnconvertedTitle}
@@ -1019,19 +693,9 @@ export function PositionsTable({
                       <span className="sr-only">{profitDashHint}</span>
                     </span>
                   )}
-                  {/* THE REALIZED RESULT, UNDER THE UNREALIZED ONE AND NOT
-                    INSTEAD OF IT. The column says «Прибыль» and means the
-                    valuation less the basis; a closed position's is honestly
-                    nothing, and before this line such a row showed 0,00 ₽
-                    under that heading for a paper that had made 1 940,42 ₽.
-                    Folding the two into one cell would put two different
-                    figures under one word, which is how a true number ends up
-                    under a false caption — the failure this codebase has been
-                    caught at repeatedly.
-
-                    Drawn only when there IS a realized result, so a position
-                    nobody has ever sold out of does not carry a row of
-                    «реализовано 0,00» it has no use for. */}
+                  {/* The realized result, under the unrealized one rather than
+                     instead of it: one cell, one figure, one caption. Drawn only
+                     when there is one. */}
                   {resolvedRealized && resolvedRealized.amountMinor !== 0 && (
                     <div
                       data-testid="position-realized"
@@ -1106,13 +770,9 @@ export function PositionsTable({
             );
           })}
           {shownCash.map((money) => {
-            // WHAT THE ROW SHOWS DEPENDS ON THE MODE, and the two are not the
-            // same question. In the account's own currencies the money is
-            // simply itself — a thousand yuan, costing a thousand yuan — so the
-            // row prints the balance and leaves the money columns empty rather
-            // than filling three of them with one figure. In the base currency
-            // it has a cost, a value and a profit like any other holding, and
-            // that is the whole reason it is on this screen.
+            // In native mode cash is itself (a thousand yuan cost a thousand yuan),
+            // so only the balance is shown; in base mode it has a cost, value and
+            // profit like any holding.
             const inBase = money.in_base;
             const showInBase =
               mode === "base" && money.currency !== baseCurrency;
@@ -1125,11 +785,8 @@ export function PositionsTable({
                   <div className="text-xs text-muted-foreground">
                     {t("positions.cashKind")}
                   </div>
-                  {/* AN OVERDRAFT SAYS SO WHERE ITS PROFIT WOULD HAVE BEEN.
-                      The server publishes no gain for a balance below nought
-                      (there is nothing held to measure one against), and an
-                      empty cell would read as «не посчиталось» rather than as
-                      the plain fact that the journal is missing operations. */}
+                  {/* An overdraft has no gain to publish; the cell says the journal is
+                     missing operations rather than staying empty. */}
                   {money.amount_minor < 0 && (
                     <div
                       data-testid="cash-overdraft"
@@ -1166,12 +823,9 @@ export function PositionsTable({
                   className="text-right tabular-nums"
                   title={showInBase ? t("positions.cashProfitHint") : undefined}
                 >
-                  {/* AN EMPTY CELL SAYS NOTHING, and there are two different
-                      reasons this one can be empty. An overdraft has its own
-                      line under the name; a missing RATE has nowhere else to
-                      appear at all — the owner's gold sits under a currency the
-                      Bank of Russia does not quote, and its row showed three
-                      blanks and no explanation. */}
+                  {/* An empty cell can mean an overdraft (noted under the name) or a
+                     missing rate, which has nowhere else to appear (gold under a
+                     currency the Bank of Russia does not quote). */}
                   {showInBase &&
                     inBase.unrealized_pnl_minor == null &&
                     money.amount_minor >= 0 && (
@@ -1196,13 +850,8 @@ export function PositionsTable({
                   ) : (
                     ""
                   )}
-                  {/* WHAT THIS MONEY ALREADY EARNED, under what it is earning
-                      now — the same two lines a paper's profit cell carries,
-                      for the same reason. Money exchanged and exchanged back
-                      leaves nothing to revalue, so the figure above it is a
-                      truthful nought and the whole result is here. Drawn only
-                      when there IS one, so an account whose money never moved
-                      does not carry a row of noughts. */}
+                  {/* What this money already earned, under what it earns now, as on a
+                     paper's row. Drawn only when there is one. */}
                   {showInBase &&
                     inBase.realized_pnl_minor != null &&
                     inBase.realized_pnl_minor !== 0 && (
@@ -1220,10 +869,8 @@ export function PositionsTable({
                       </div>
                     )}
                 </TableCell>
-                {/* Settled and total belong to papers: money that was never
-                    sold has locked in nothing and paid nothing. Left empty
-                    rather than written as noughts, which would read as figures
-                    a reader could add up. */}
+                {/* Settled and total belong to papers; left empty, not noughts that
+                   would read as figures. */}
                 <TableCell />
                 <TableCell />
               </TableRow>

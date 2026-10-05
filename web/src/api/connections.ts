@@ -22,14 +22,9 @@ export type TinvestUnparsedOperation = components["schemas"]["TinvestUnparsedOpe
 export type TinvestUnparsedPage = components["schemas"]["TinvestUnparsedResponse"];
 
 /**
- * How often the connection screen re-asks the server while it is open.
- *
- * Fifteen seconds is chosen against what the screen waits for, not against
- * what feels responsive: a sync is a background job that takes minutes, so a
- * faster poll would only ask more often for the same answer. It is slow enough
- * that an idle tab costs four requests a minute against one household's own
- * server, and fast enough that nobody watching the page has to wonder whether
- * it is broken or merely still.
+ * How often the open connection screen polls. A sync takes minutes, so
+ * fifteen seconds asks no more than needed: four requests a minute to one's own
+ * server, and quick enough that the page does not look stuck.
  */
 const CONNECTION_POLL_MS = 15_000;
 
