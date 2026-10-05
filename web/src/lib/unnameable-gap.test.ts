@@ -4,27 +4,16 @@ import { unnameableGap } from "./unnameable-gap";
 
 describe("unnameableGap", () => {
   it("hands back the caller's fallback and invents nothing", () => {
-    // The whole of the function, and the whole of what it is allowed to do: a
-    // value off the wire that this build's union does not contain must reach
-    // the screen as the caller's own sentence, never as a cause guessed here.
-    // The cast is what a client one release behind the server actually gets —
-    // these values are JSON typed by assertion, not validated.
+    // A value off the wire missing from this build's union reaches the
+    // screen as the caller's sentence, never a guessed cause. The cast is what
+    // a client behind the server gets: JSON typed by assertion.
     expect(unnameableGap("no_rate_next_tuesday" as never, "запасная фраза")).toBe("запасная фраза");
   });
 });
 
-// #105. The sentence a row falls back to when nobody can name its cause exists
-// on both screens, and the two must keep saying the same thing. They cannot be
-// the same STRING — one is about a position and one about an operation, and
-// each names its own screen's native currency, exactly as the four named
-// causes already do — so what is pinned here is the skeleton they share.
-//
-// Read out of ru.json rather than spelled out, unlike every caption assertion
-// in the two table tests: those ask WHICH sentence a cell gets, and reading
-// the sentence through the component's own lookup would agree with the
-// component whichever it picked. This one asks whether TWO sentences still
-// agree with each other, and that question has no answer at all unless both
-// are read from where they live.
+// #105: the fallback on both screens differs in its nouns and currency,
+// so the shared skeleton is pinned. Read from ru.json: the question is
+// whether two sentences agree, answerable only where they live.
 describe("the fallback both screens fall back to", () => {
   const positions = ru.positions.notConverted;
   const operations = ru.operations.notConverted;
@@ -38,12 +27,8 @@ describe("the fallback both screens fall back to", () => {
   });
 
   it("names no cause on either screen, least of all a rate", () => {
-    // The defect itself. The sentence used to open «Нет курса» on both
-    // screens, which asserts the cause is a missing RATE — on the one path
-    // that is reached precisely because the cause is unknown. `undated_lot` is
-    // in today's own enum and is about a DATE nobody wrote down; the next
-    // date-shaped cause the server adds would be captioned «нет курса» by
-    // every client compiled before it.
+    // «Нет курса» names a rate on the path reached because the cause is
+    // unknown; `undated_lot` is already about a date.
     for (const sentence of [positions, operations]) {
       expect(sentence).not.toContain("Нет курса");
       expect(sentence.toLowerCase()).not.toContain("курс");
@@ -52,9 +37,8 @@ describe("the fallback both screens fall back to", () => {
   });
 
   it("differs between the screens only in what each screen's row and currency are", () => {
-    // The drift guard. Anything either sentence says beyond the shared
-    // skeleton and its own two nouns is a divergence one screen made alone,
-    // and the reader meets both tables on one account page.
+    // Anything beyond the skeleton and the two nouns is a divergence one
+    // screen made alone.
     const skeleton = (sentence: string) =>
       sentence
         .replace("позиция", "СТРОКА")

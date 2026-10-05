@@ -3,9 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const STORAGE_KEY = "babki.displayCurrency";
 
-// The store keeps its state in a module-level variable read once at import
-// time, so each test that needs a *fresh* store (as if the page had just
-// loaded) must reset the module registry and re-import.
+// The store reads its state once at import, so a fresh store needs a
+// fresh module.
 async function importFreshStore() {
   vi.resetModules();
   return import("./display-currency");
@@ -43,10 +42,8 @@ describe("useDisplayCurrency", () => {
   });
 
   it("falls back to native and does not throw when localStorage.getItem throws", async () => {
-    // Simulates Safari private browsing (older versions) / storage disabled,
-    // where localStorage access throws on every call instead of returning
-    // null. Spying on the instance (rather than a shared Storage.prototype)
-    // matches the in-memory polyfill installed in test-setup.ts.
+    // Storage that throws on every call (old Safari private mode). Spied on
+    // the instance, matching test-setup.ts's in-memory polyfill.
     const spy = vi.spyOn(window.localStorage, "getItem").mockImplementation(() => {
       throw new DOMException("blocked", "SecurityError");
     });
@@ -78,8 +75,7 @@ describe("useDisplayCurrency", () => {
 
   it("a mode change notifies other subscribers in the same tab", async () => {
     const { useDisplayCurrency } = await importFreshStore();
-    // Two independent hook consumers, standing in for two components that
-    // both read the store in the same tab.
+    // Two consumers in one tab.
     const { result: a } = renderHook(() => useDisplayCurrency());
     const { result: b } = renderHook(() => useDisplayCurrency());
     expect(a.current.mode).toBe("native");
@@ -103,9 +99,8 @@ describe("useDisplayCurrency", () => {
 
     act(() => {
       window.localStorage.setItem(STORAGE_KEY, "base");
-      // storageArea is omitted: the store's listener only reads key/newValue,
-      // and jsdom's StorageEvent constructor requires a real jsdom Storage
-      // instance there — the in-memory polyfill from test-setup.ts isn't one.
+      // No storageArea: the listener reads only key/newValue, and jsdom's
+      // constructor rejects the polyfill there.
       window.dispatchEvent(
         new StorageEvent("storage", {
           key: STORAGE_KEY,

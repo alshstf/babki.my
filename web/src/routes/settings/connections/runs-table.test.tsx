@@ -5,21 +5,19 @@ import "@/i18n";
 import { RunsTable } from "./runs-table";
 import type { TinvestLinkedAccount, TinvestSyncRun } from "@/api/connections";
 
-// openapi-fetch captures globalThis.fetch at import time, so the double has to
-// be installed before the imports above run.
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// A fresh Response per call: a body can only be read once, so one shared
-// Response object would fail the second request (the "load more" page).
+// A fresh Response per call: a body can be read only once.
 function servePages(pages: { runs: TinvestSyncRun[]; has_more: boolean }[]) {
   fetchMock.mockImplementation((input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
-    // Paged by the offset the hook sends, so the second press is answered with
-    // the second page rather than the first one over again.
+    // Paged by offset, so the second press gets the second page.
     const offset = Number(url.searchParams.get("offset") ?? "0");
     const index = pages.findIndex((_, i) => i === (offset === 0 ? 0 : 1));
     const page = pages[index] ?? { runs: [], has_more: false };
@@ -95,10 +93,8 @@ describe("RunsTable — what a run is allowed to report", () => {
     expect(screen.getByText("По расписанию")).toBeInTheDocument();
   });
 
-  // The unparsed figure of a failed run is a count taken as the run was being
-  // closed, and it silently becomes zero when that count itself fails (see
-  // syncWorker.unparsedNow). Drawing it would publish a measurement that may
-  // never have been made; the reason it failed is what the row has to say.
+  // A failed run's unparsed count may never have been taken (it falls to
+  // zero, see syncWorker.unparsedNow); the row shows the cause instead.
   it("shows a failed run's cause instead of an unparsed figure nobody can vouch for", async () => {
     serveRuns([
       makeRun({
@@ -112,20 +108,17 @@ describe("RunsTable — what a run is allowed to report", () => {
     renderTable();
 
     expect(await screen.findByText("Ошибка")).toBeInTheDocument();
-    // THE CAUSE ITSELF, not the word in front of it: an assertion on «Причина
-    // отказа» alone stays green while the row stops printing what the server
-    // said, which is the whole of what this cell is for.
+    // The cause itself, not just its label.
     expect(
       screen.getByText("Причина отказа: tinvest: broker answered 500"),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Не разобрано всего по этому счёту/)).not.toBeInTheDocument();
-    // The three that WERE measured stay: a pass that rolled back genuinely
-    // read, added and lost nothing.
+    // The three measured figures stay: the rolled-back pass did read them.
     expect(screen.getByText("Прочитано у брокера: 120")).toBeInTheDocument();
   });
 
-  // Every counter of a running row is the column's own default (migration
-  // 0014), so four zeros there would be four measurements nobody made.
+  // A running row's counters are column defaults (migration 0014), not
+  // measurements.
   it("draws no figures at all for a run that has not finished", async () => {
     serveRuns([
       makeRun({

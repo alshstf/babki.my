@@ -6,9 +6,7 @@ import type { AccountTotal as AccountTotalPayload } from "@/api/positions";
 
 const norm = (s: string) => s.replace(/[  ]/g, " ");
 
-// The account's headline figure exactly as the server publishes it. This
-// component adds nothing to it: every test here is about which of the server's
-// numbers reaches the screen, and what is said beside it.
+// The account's headline figure as published; the component adds nothing.
 function makeTotal(
   overrides: Partial<AccountTotalPayload> = {},
 ): AccountTotalPayload {
@@ -40,9 +38,8 @@ describe("AccountTotal", () => {
   });
 
   it("shows one number per currency in the positions' own currencies", () => {
-    // The owner's decision, and the only honest shape for this mode: an account
-    // holding rubles, dollars and yuan has three answers here and no single one
-    // — adding them would produce an integer denominated in nothing.
+    // The owner's decision: rubles, dollars and yuan are three answers, never
+    // summed into a number in no currency.
     render(
       <AccountTotal
         total={makeTotal({
@@ -63,9 +60,8 @@ describe("AccountTotal", () => {
   });
 
   it("says which currencies have no total at all, instead of dropping them", () => {
-    // A bucket short a term is published as null by the server, and shown as a
-    // sentence here: an account that quietly listed one fewer currency than it
-    // holds would read as a complete answer.
+    // A bucket short a term is null from the server and a sentence here, so
+    // the list does not read as complete.
     render(
       <AccountTotal
         total={makeTotal({
@@ -99,11 +95,9 @@ describe("AccountTotal", () => {
   });
 
   it("names the money it could not value, rather than a bare «нет курса»", () => {
-    // «Нет курса» alone sends a reader to wait for a backfill. A source that
-    // does not quote a currency at all has nothing to fetch — the Bank of
-    // Russia publishes none for XAU, the code the broker uses for gold — and on
-    // the owner's account that one holding took the total off three screens
-    // with nothing saying which money was responsible.
+    // A source that quotes no rate for a currency (no CBR rate for XAU, the
+    // broker's code for gold) has nothing to wait for; the sentence names
+    // the currency.
     render(
       <AccountTotal
         total={makeTotal({
@@ -121,9 +115,8 @@ describe("AccountTotal", () => {
   });
 
   it("names the papers written off, and how much basis went in that way", () => {
-    // The assumption the owner chose, quantified: the total is lower than the
-    // truth by exactly this much, and a reader is told so rather than left to
-    // wonder why a frozen fund seems to have cost them everything.
+    // The owner's chosen assumption, quantified: the total is lower by
+    // exactly this much.
     render(
       <AccountTotal
         total={makeTotal({
@@ -146,9 +139,8 @@ describe("AccountTotal", () => {
   });
 
   it("names the papers left out for want of a purchase date", () => {
-    // A missing RATE resolves itself when the backfill catches up. A missing
-    // DATE never does, so the figure is published without those papers rather
-    // than withheld for ever — and the count is what keeps that honest.
+    // A missing date never resolves, so the figure is published without
+    // those papers and the count says so.
     render(
       <AccountTotal total={makeTotal({ undated_positions: 2 })} mode="base" />,
     );
@@ -161,9 +153,8 @@ describe("AccountTotal", () => {
   });
 
   it("names the papers whose price nobody recorded", () => {
-    // The opposite direction: these push the total UP, because their whole
-    // market value counts as profit. Both marks can be true at once and they
-    // must never be confused for one another.
+    // The opposite direction: these push the total up; the two marks are
+    // never confused.
     render(
       <AccountTotal
         total={makeTotal({ unknown_cost_positions: 3 })}
@@ -191,9 +182,8 @@ describe("AccountTotal", () => {
   });
 });
 
-// Decision Р-5: the currency's share of the figure is named apart, never left
-// inside a number that reads as profit — and only in the base currency, where
-// money in another currency can earn anything at all.
+// Р-5: the currency's share is named apart, and only in the base
+// currency.
 describe("AccountTotal: the currency result on the money", () => {
   it("names the share in base mode", () => {
     render(<AccountTotal total={makeTotal({ cash_fx_in_base: 2_000_000 })} mode="base" />);

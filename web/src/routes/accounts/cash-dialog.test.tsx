@@ -5,18 +5,15 @@ import "@/i18n";
 import { CashDialog } from "./cash-dialog";
 import type { AccountWithBalance } from "@/api/accounts";
 
-// The API client captures globalThis.fetch once, when @/api/client is first
-// imported (openapi-fetch: `fetch: baseFetch = globalThis.fetch`), so the double
-// has to be in place *before* that import — hence vi.hoisted, which runs ahead
-// of the import statements above.
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// A fresh Response per call: a single one handed to mockResolvedValue works once
-// and then throws, because a body can only be consumed once.
+// A fresh Response per call: a body can be read only once.
 fetchMock.mockImplementation(() =>
   Promise.resolve(
     new Response("null", { status: 200, headers: { "Content-Type": "application/json" } }),
@@ -57,14 +54,8 @@ afterEach(() => {
   fetchMock.mockClear();
 });
 
-// The same bound the balance field carries, on the same screen and in the same
-// currency (money.MaxAmountMinor is one number for both — see MAX_AMOUNT_MINOR).
-// What is pinned here is not the refusal but WHICH refusal: this field's own
-// complaint is «Введите положительную сумму», and 20 000 000 000 000 is
-// positive, is a sum, and parses perfectly. A branch that answered it with that
-// sentence would name a cause that is not the cause — the mistake this
-// repository has been caught by more than once, and the one the whole
-// AmountRefusal type exists to prevent.
+// The balance field's bound (MAX_AMOUNT_MINOR) with the right refusal:
+// «Введите положительную сумму» is false of a positive, parseable sum.
 describe("CashDialog: a sum too large to record", () => {
   it("says it is too large rather than asking for a positive number", () => {
     open();
@@ -80,12 +71,8 @@ describe("CashDialog: a sum too large to record", () => {
     open();
     typeAmount("10000000000000,01"); // one kopeck past the bound
 
-    // Ten trillion roubles, written the way this screen writes money — not the
-    // raw count of kopecks the server speaks in, which would tell the person
-    // typing nothing about what to type instead.
-    // \s, not a literal space: Intl separates thousands with a non-breaking one
-    // and puts a narrow one before the sign, neither of which is the character
-    // in this file's source.
+    // Ten trillion roubles as this screen writes money, not raw kopecks. \s,
+    // not a space: Intl uses non-breaking and narrow spaces.
     const hint = (screen.getByText(/Слишком большая сумма/).textContent ?? "").replace(/\s/g, " ");
     expect(hint).toContain("10 000 000 000 000 ₽");
   });
@@ -117,8 +104,7 @@ describe("CashDialog: a sum too large to record", () => {
   });
 });
 
-// Enter in a field saves, as a form would; it saves nothing the button would
-// not, and nothing at all from a field that is not a text field.
+// Enter saves what the button would, and only from a text field.
 describe("CashDialog: Enter", () => {
   const posts = () =>
     fetchMock.mock.calls.filter(([input]) => input instanceof Request && input.method === "POST").length;

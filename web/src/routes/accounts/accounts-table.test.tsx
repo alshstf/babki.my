@@ -14,9 +14,7 @@ import type { AccountWithBalance } from "@/api/accounts";
 import { formatMinor } from "@/lib/money";
 import { announcedText, visibleText } from "@/test-utils";
 
-// AccountsTable renders row links via <Link to="/accounts/$accountId">,
-// which needs a real router context to render at all (throws otherwise) —
-// so wrap with the lightest possible router instead of a bare render.
+// Row links need a router context, so a minimal router wraps the table.
 function wrap(ui: ReactElement) {
   const rootRoute = createRootRoute();
   const testRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: () => ui });
@@ -30,8 +28,7 @@ function wrap(ui: ReactElement) {
   return render(<RouterProvider router={router} />);
 }
 
-// NBSP-insensitive compare: Intl.NumberFormat uses non-breaking spaces
-// (matches the helper in money.test.ts / summary-cards.test.tsx).
+// NBSP-insensitive compare.
 const norm = (s: string) => s.replace(/[\u00A0\u202F]/g, " ");
 
 function makeAccount(overrides: Partial<AccountWithBalance> = {}): AccountWithBalance {
@@ -73,13 +70,8 @@ describe("AccountsTable", () => {
   });
 
   it("prints the converted balance in the currency the balance itself carries, not the session's", async () => {
-    // #106, in the shape the owner meets it: settings changes the base
-    // currency, the session's new answer lands in the cache at once
-    // (useUpdateSpace writes it directly), and this list still holds figures
-    // the server converted into the OLD base currency until its refetch comes
-    // back. The rubles must keep printing as rubles for that window — a euro
-    // sign over them is not a mislabelling, it is a number wrong by the whole
-    // exchange rate with nothing on screen admitting it.
+    // #106: after a base-currency change the list still holds old-currency
+    // figures until refetched; they keep their own currency's sign.
     const account = makeAccount({
       balance_in_base: { amount_minor: 900_000, currency: "RUB", rate_on: "2026-07-20" },
     });
@@ -98,8 +90,7 @@ describe("AccountsTable", () => {
 
     const amount = await screen.findByTestId("account-balance-acc-1");
     expect(amount).toHaveAttribute("title", "Пересчитано по текущему курсу (на 19.07.2026)");
-    // The balance row already shows the balance's own as_of date as text;
-    // the rate date must not join it there.
+    // The balance row shows its own as_of date; the rate date stays out.
     expect(amount.textContent).not.toMatch(/19\.07\.2026/);
   });
 
@@ -141,15 +132,8 @@ describe("AccountsTable", () => {
     expect(screen.queryByTestId("account-balance-acc-1")).not.toBeInTheDocument();
   });
 
-  // #31. This was the one missing figure on either of these two screens with
-  // no hint of any kind attached — not even a tooltip a pointer could find.
-  // Every other cell that cannot show a number says why; this one drew a dash
-  // and left it at that, to every reader alike.
-  //
-  // The sentence says what is absent rather than who failed to enter it: a
-  // broker import writes balance marks as well as a person does, so «не
-  // вносили» would be a guess about how the account got here. That there is no
-  // mark is the part that is certain, and it is the part that is said.
+  // #31: a balance never recorded says so, instead of a bare dash. It names
+  // the absence, not who failed to enter it: an import writes marks too.
   it("says a balance was never recorded, instead of an unexplained dash", async () => {
     const account = makeAccount({ balance: undefined });
     wrap(<AccountsTable accounts={[account]} mode="native" baseCurrency="RUB" />);

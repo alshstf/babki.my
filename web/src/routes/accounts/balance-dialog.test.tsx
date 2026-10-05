@@ -5,18 +5,15 @@ import "@/i18n";
 import { BalanceDialog } from "./balance-dialog";
 import type { AccountWithBalance } from "@/api/accounts";
 
-// The API client captures globalThis.fetch once, when @/api/client is first
-// imported (openapi-fetch: `fetch: baseFetch = globalThis.fetch`), so the double
-// has to be in place *before* that import — hence vi.hoisted, which runs ahead
-// of the import statements above.
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// A fresh Response per call: a single one handed to mockResolvedValue works once
-// and then throws, because a body can only be consumed once.
+// A fresh Response per call: a body can be read only once.
 function serve(status: number, body: unknown) {
   fetchMock.mockImplementation(() =>
     Promise.resolve(
@@ -67,20 +64,16 @@ afterEach(() => {
   fetchMock.mockClear();
 });
 
-// #89: this field was the one door into a balance, and it bounded nothing. What
-// it sent, the server took; what the server took, the accounts screen then could
-// not convert, answering 500 for every account in the space for as long as the
-// row existed. The server refuses now, which is the check that matters — these
-// are about the field refusing at the keystroke, so nobody learns it from a red
-// box, and about the field saying WHICH of the two things is wrong.
+// #89: the field bounded nothing, and an oversized balance made the
+// accounts screen answer 500. The server refuses now; the field refuses at
+// the keystroke and says which problem it is.
 describe("BalanceDialog: a sum too large to record", () => {
   it("does not send it, and says it is too large rather than unreadable", () => {
     open();
     typeAmount("10000000000000,01"); // one kopeck past the bound
 
     expect(saveButton()).toBeDisabled();
-    // The number parses perfectly well, so the parse error would be a caption
-    // naming a cause that is not the cause.
+    // The number parses, so the parse error would be the wrong cause.
     expect(screen.queryByText(/Не удалось разобрать сумму/)).toBeNull();
     expect(screen.getByText(/Слишком большая сумма/)).toBeTruthy();
     expect(fetchMock).not.toHaveBeenCalled();
@@ -90,12 +83,8 @@ describe("BalanceDialog: a sum too large to record", () => {
     open();
     typeAmount("10000000000000,01");
 
-    // Ten trillion roubles, written the way this screen writes money — not the
-    // raw count of kopecks the server speaks in, which would tell the person
-    // typing nothing about what to type instead.
-    // \s, not a literal space: Intl separates thousands with a non-breaking one
-    // and puts a narrow one before the sign, neither of which is the character
-    // in this file's source.
+    // Ten trillion roubles as this screen writes money, not raw kopecks. \s,
+    // not a space: Intl uses non-breaking and narrow spaces.
     const hint = (screen.getByText(/Слишком большая сумма/).textContent ?? "").replace(/\s/g, " ");
     expect(hint).toContain("10 000 000 000 000 ₽");
   });
@@ -127,11 +116,8 @@ describe("BalanceDialog: a sum too large to record", () => {
   });
 });
 
-// #95: the server's refusal was printed exactly as it came — «as_of must not be
-// in the future» in a red panel, English at a Russian-speaking reader, in an
-// application where every other visible string goes through t(). Reachable
-// without any trickery: the date field's `max` stops the picker's arrows and
-// nothing else, and the dialog validated nothing before sending.
+// #95: the server's English refusal was printed as is. The date field's
+// `max` only limits the picker arrows.
 describe("BalanceDialog: a date the account cannot have had", () => {
   it("does not send a date in the future, and says why at the field", () => {
     open();
