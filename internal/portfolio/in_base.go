@@ -83,7 +83,7 @@ func apiInBaseGap(g inBaseGap) (apitypes.InBaseGap, bool) {
 //
 // A missing rate or purchase date nulls only this figure. A non-nil error is a
 // real failure, never shown as null.
-func (h *Handler) realizedInBase(ctx context.Context, p *Position, to string, cache map[rateKey]*rateLookup) (nullable.Nullable[int64], baseGap, error) {
+func (h *Handler) realizedInBase(ctx context.Context, p *Position, to string, rates *marketdata.RateMemo) (nullable.Nullable[int64], baseGap, error) {
 	if minor, inOneCurrency := p.RealizedPnL(); p.Currency == to && inOneCurrency {
 		// Nothing to convert, but only when the position is in the base currency and
 		// every disposal settled in it; otherwise the figure is struck from the terms
@@ -94,7 +94,7 @@ func (h *Handler) realizedInBase(ctx context.Context, p *Position, to string, ca
 	if !dated {
 		return nullable.NewNullNullable[int64](), gapUndated, nil
 	}
-	minor, ok, err := h.sumInBase(ctx, terms, to, cache)
+	minor, ok, err := h.sumInBase(ctx, terms, to, rates)
 	if err != nil {
 		return nullable.Nullable[int64]{}, gapNone, err
 	}
@@ -155,7 +155,7 @@ func incomeByInstrument(ops []Operation) map[uuid.UUID][]Operation {
 // non-nil error is a real failure; the gap beside it means nothing.
 //
 // now is the request's single "today", shared with toAPI.
-func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, income []Operation, baseCurrency string, realizedMinor nullable.Nullable[int64], now time.Time, cache map[rateKey]*rateLookup) (*apitypes.PositionInBase, inBaseGap, error) {
+func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apitypes.Position, income []Operation, baseCurrency string, realizedMinor nullable.Nullable[int64], now time.Time, rates *marketdata.RateMemo) (*apitypes.PositionInBase, inBaseGap, error) {
 	// Nothing to convert unless a disposal settled in a third currency: then the
 	// native realized figure does not exist and this object must carry the base
 	// one, its other figures being identity conversions.
@@ -170,7 +170,7 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 		// rate, so the permanent cause is the one reported.
 		return nil, inBaseUndatedLot, nil
 	}
-	costMinor, ok, err := h.sumInBase(ctx, lots, baseCurrency, cache)
+	costMinor, ok, err := h.sumInBase(ctx, lots, baseCurrency, rates)
 	if err != nil {
 		return nil, inBaseStruck, err
 	}
@@ -179,7 +179,7 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 	}
 
 	// Each payment out of its own currency (see incomeTerms).
-	incomeMinor, ok, err := h.sumInBase(ctx, incomeTerms(income), baseCurrency, cache)
+	incomeMinor, ok, err := h.sumInBase(ctx, incomeTerms(income), baseCurrency, rates)
 	if err != nil {
 		return nil, inBaseStruck, err
 	}
@@ -238,14 +238,14 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 	// valuation's currency against the base one, so a missing face-currency rate
 	// would also null cost and income — unreachable while every rate is quoted in
 	// RUB, since the valuation reached the position's currency.
-	today := h.rateFor(ctx, valuationCurrency, baseCurrency, now, cache)
-	if today.err != nil {
-		if errors.Is(today.err, marketdata.ErrNoRate) {
+	today := rates.Rate(ctx, valuationCurrency, baseCurrency, now)
+	if today.Err != nil {
+		if errors.Is(today.Err, marketdata.ErrNoRate) {
 			return nil, inBaseNoRateToday, nil
 		}
-		return nil, inBaseStruck, today.err
+		return nil, inBaseStruck, today.Err
 	}
-	valuation, err := today.applyTo(*marketValueMinor)
+	valuation, err := applyRate(today, *marketValueMinor)
 	if err != nil {
 		// Too large to state: fail the request rather than join the null, which means
 		// a rate will come.
@@ -268,10 +268,10 @@ func (h *Handler) positionInBase(ctx context.Context, p *Position, apiPos apityp
 	out.TotalMinor = total
 	// An identity conversion has a rate of 1 on the zero date; publish null rather
 	// than "0001-01-01".
-	if today.date.IsZero() {
+	if today.RateDate.IsZero() {
 		out.RateOn = nullable.NewNullNullable[string]()
 	} else {
-		out.RateOn = nullable.NewNullableWithValue(today.date.Format("2006-01-02"))
+		out.RateOn = nullable.NewNullableWithValue(today.RateDate.Format("2006-01-02"))
 	}
 	return out, inBaseStruck, nil
 }

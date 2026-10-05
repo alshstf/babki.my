@@ -11,6 +11,7 @@ import (
 	"github.com/oapi-codegen/nullable"
 	"github.com/shopspring/decimal"
 
+	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/money"
 )
@@ -80,7 +81,7 @@ type valuation struct {
 
 // valuations values the active brokerage accounts that have a journal and
 // reconciles each with its latest balance. Others are counted by balance.
-func (h *Handler) valuations(ctx context.Context, spaceID uuid.UUID, accounts []WithBalance, baseCurrency string, now time.Time, rates map[rateKey]*rateLookup) (map[uuid.UUID]valuation, error) {
+func (h *Handler) valuations(ctx context.Context, spaceID uuid.UUID, accounts []WithBalance, baseCurrency string, now time.Time, rates *marketdata.RateMemo) (map[uuid.UUID]valuation, error) {
 	out := make(map[uuid.UUID]valuation)
 	if h.journals == nil {
 		return out, nil
@@ -109,7 +110,7 @@ func (h *Handler) valuations(ctx context.Context, spaceID uuid.UUID, accounts []
 // a recent mark against today's worth, an older one against the worth on its
 // own day. No verdict when the journal cannot be valued whole that day; nil
 // when there is no mark or no rate.
-func (h *Handler) reconcile(ctx context.Context, a WithBalance, v JournalValue, baseCurrency string, now time.Time, rates map[rateKey]*rateLookup) (*apitypes.AccountReconciliation, error) {
+func (h *Handler) reconcile(ctx context.Context, a WithBalance, v JournalValue, baseCurrency string, now time.Time, rates *marketdata.RateMemo) (*apitypes.AccountReconciliation, error) {
 	if a.Balance == nil {
 		return nil, nil
 	}

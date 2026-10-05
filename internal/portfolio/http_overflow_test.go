@@ -106,14 +106,13 @@ func TestMarketValuePublishesTheLargestValuationThatFits(t *testing.T) {
 	}
 }
 
-func TestApplyToRefusesAConvertedAmountThatWouldWrap(t *testing.T) {
-	rl := &rateLookup{rate: dec("2")}
-	got, err := rl.applyTo(math.MaxInt64)
+func TestApplyRateRefusesAConvertedAmountThatWouldWrap(t *testing.T) {
+	got, err := applyRate(marketdata.RateResult{Rate: dec("2")}, math.MaxInt64)
 	if !errors.Is(err, money.ErrOverflow) {
-		t.Fatalf("applyTo(maxint64) at rate 2 = %d, err = %v; want ErrOverflow", got, err)
+		t.Fatalf("applyRate(maxint64) at rate 2 = %d, err = %v; want ErrOverflow", got, err)
 	}
 	if got != 0 {
-		t.Errorf("applyTo returned %d alongside the refusal, want 0", got)
+		t.Errorf("applyRate returned %d alongside the refusal, want 0", got)
 	}
 }
 
@@ -123,7 +122,7 @@ func TestSumInBaseRefusesATotalThatWouldWrap(t *testing.T) {
 	on := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	terms := []datedMinor{{minor: math.MaxInt64, from: "USD", on: on}, {minor: math.MaxInt64, from: "USD", on: on}}
 
-	minor, ok, err := h.sumInBase(context.Background(), terms, "RUB", map[rateKey]*rateLookup{})
+	minor, ok, err := h.sumInBase(context.Background(), terms, "RUB", marketdata.NewRateMemo(h.conv))
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("sumInBase = (%d, %v), err = %v; want ErrOverflow", minor, ok, err)
 	}
@@ -138,7 +137,7 @@ func TestSumInBaseOverflowIsNotAMissingRate(t *testing.T) {
 	on := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	terms := []datedMinor{{minor: math.MaxInt64, from: "USD", on: on}, {minor: math.MaxInt64, from: "USD", on: on}}
 
-	if _, _, err := h.sumInBase(context.Background(), terms, "RUB", map[rateKey]*rateLookup{}); err == nil {
+	if _, _, err := h.sumInBase(context.Background(), terms, "RUB", marketdata.NewRateMemo(h.conv)); err == nil {
 		t.Fatal("sumInBase answered an overflow with a nil error, which this handler reads as a missing rate and renders as a gap")
 	}
 }
@@ -211,7 +210,7 @@ func TestToAPIRefusesAnUnrealizedFigureThatWouldWrap(t *testing.T) {
 	// 100% of face, so the valuation is the face value itself: -9e18, an int64.
 	quotes := map[uuid.UUID]marketdata.Quote{id: {InstrumentID: id, Price: dec("100"), Currency: "RUB"}}
 
-	out, err := (&Handler{}).toAPI(context.Background(), p, inst, quotes, time.Now(), map[rateKey]*rateLookup{})
+	out, err := (&Handler{}).toAPI(context.Background(), p, inst, quotes, time.Now(), marketdata.NewRateMemo(nil))
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("toAPI = %+v, err = %v; want ErrOverflow: -9e18 minus 1e18 is not an int64, and the wrapped answer is a small positive profit", out, err)
 	}
@@ -236,7 +235,7 @@ func TestPositionInBaseRefusesAnUnrealizedFigureThatWouldWrap(t *testing.T) {
 	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(1)}}
 
 	out, gap, err := h.positionInBase(context.Background(), p, apiPos, nil, "RUB",
-		nullable.NewNullNullable[int64](), time.Now(), map[rateKey]*rateLookup{})
+		nullable.NewNullNullable[int64](), time.Now(), marketdata.NewRateMemo(h.conv))
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("positionInBase = %+v, err = %v; want ErrOverflow: -9e18 minus 1e18 is not an int64 of kopecks", out, err)
 	}
@@ -260,7 +259,7 @@ func TestToAPIRefusesToPublishAPositionWhoseValuationCannotBeStruck(t *testing.T
 	inst := instrument.Instrument{ID: id, Type: instrument.TypeShare, Currency: "USD"}
 	quotes := map[uuid.UUID]marketdata.Quote{id: {InstrumentID: id, Price: dec("100"), Currency: "USD"}}
 
-	out, err := (&Handler{}).toAPI(context.Background(), p, inst, quotes, time.Now(), map[rateKey]*rateLookup{})
+	out, err := (&Handler{}).toAPI(context.Background(), p, inst, quotes, time.Now(), marketdata.NewRateMemo(nil))
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("toAPI = %+v, err = %v; want ErrOverflow: 1e15 shares at 100 is not an int64 of cents, and a position published here would show a null market value instead", out, err)
 	}
@@ -279,7 +278,7 @@ func TestToAPIRefusesAValuationThatCannotBeConvertedToThePositionCurrency(t *tes
 	quotes := map[uuid.UUID]marketdata.Quote{id: {InstrumentID: id, Price: dec("92233720368547758.07"), Currency: "USD"}}
 	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(2)}}
 
-	out, err := h.toAPI(context.Background(), p, inst, quotes, time.Now(), map[rateKey]*rateLookup{})
+	out, err := h.toAPI(context.Background(), p, inst, quotes, time.Now(), marketdata.NewRateMemo(h.conv))
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("toAPI = %+v, err = %v; want ErrOverflow: twice maxint64 is not an int64, and a position published here would show a market value of zero", out, err)
 	}
@@ -305,7 +304,7 @@ func TestPositionInBaseRefusesAValuationThatCannotBeStruckInTheBaseCurrency(t *t
 	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(2)}}
 
 	out, gap, err := h.positionInBase(context.Background(), p, apiPos, nil, "RUB",
-		nullable.NewNullNullable[int64](), time.Now(), map[rateKey]*rateLookup{})
+		nullable.NewNullNullable[int64](), time.Now(), marketdata.NewRateMemo(h.conv))
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("positionInBase = %+v, err = %v; want ErrOverflow: twice maxint64 is not an int64 of kopecks", out, err)
 	}

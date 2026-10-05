@@ -12,6 +12,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/dates"
 	"babki.my/babki/internal/platform/httpjson"
@@ -60,7 +61,7 @@ func (h *Handler) ReturnBasis(ctx context.Context, spaceID, accountID uuid.UUID,
 	if err != nil {
 		return ReturnBasis{}, err
 	}
-	rates := make(map[rateKey]*rateLookup)
+	rates := marketdata.NewRateMemo(h.conv)
 	for _, o := range ops {
 		if !o.OccurredOn.After(from) || o.OccurredOn.After(to) {
 			continue

@@ -10,6 +10,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/family"
+	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/dates"
 	"babki.my/babki/internal/platform/httpjson"
 )
@@ -98,7 +99,7 @@ func (h *Handler) PaperReturnBasis(ctx context.Context, spaceID, instrumentID uu
 		}
 	}
 
-	rates := make(map[rateKey]*rateLookup)
+	rates := marketdata.NewRateMemo(h.conv)
 	for _, ops := range journals {
 		for _, o := range ops {
 			if o.InstrumentID == nil || *o.InstrumentID != instrumentID || !o.OccurredOn.After(from) || o.OccurredOn.After(to) {

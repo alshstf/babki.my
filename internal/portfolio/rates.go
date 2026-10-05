@@ -14,40 +14,14 @@ import (
 	"babki.my/babki/internal/platform/money"
 )
 
-// rateKey identifies one memoized rate lookup: source, target and day. The day
-// is in the key because lots and income are valued at their own dates; the
-// target because a bond's valuation converts into the position's currency
-// while everything else converts into the base one (see
-// TestPositionsSharedRateMemoKeepsTargetsApart). The day is a YYYY-MM-DD string
-// so equal days are equal keys.
-type rateKey struct {
-	from string
-	to   string
-	on   string
-}
-
-// newRateKey is the only place a lookup becomes a key, for both the loop and
-// the prefetch.
-func newRateKey(from, to string, on time.Time) rateKey {
-	return rateKey{from: from, to: to, on: on.Format("2006-01-02")}
-}
-
-// rateLookup memoizes one key's rate, the date it came from and its error,
-// for the request.
-type rateLookup struct {
-	rate decimal.Decimal
-	date time.Time
-	err  error
-}
-
-// applyTo converts amountMinor at this rate, rounding once half away from
+// applyRate converts amountMinor at rl's rate, rounding once half away from
 // zero, as marketdata.Converter.Convert does (only tests hold the two
 // together). An overflow is refused (#27), as a request error rather than a
 // null. Sums of many terms round once for the whole sum instead (sumInBase).
-func (rl *rateLookup) applyTo(amountMinor int64) (int64, error) {
-	minor, err := money.Minor(decimal.NewFromInt(amountMinor).Mul(rl.rate))
+func applyRate(rl marketdata.RateResult, amountMinor int64) (int64, error) {
+	minor, err := money.Minor(decimal.NewFromInt(amountMinor).Mul(rl.Rate))
 	if err != nil {
-		return 0, fmt.Errorf("%w: %d at a rate of %s", err, amountMinor, rl.rate)
+		return 0, fmt.Errorf("%w: %d at a rate of %s", err, amountMinor, rl.Rate)
 	}
 	return minor, nil
 }
@@ -61,36 +35,21 @@ type datedMinor struct {
 	on    time.Time
 }
 
-// rateFor resolves from->to on date on, memoized for the request. The error is
-// carried in the result so callers can tell ErrNoRate (a null) from a real
-// failure. A memo miss is resolved here, so no figure depends on the
-// prefetch.
-func (h *Handler) rateFor(ctx context.Context, from, to string, on time.Time, cache map[rateKey]*rateLookup) *rateLookup {
-	key := newRateKey(from, to, on)
-	rl, ok := cache[key]
-	if !ok {
-		rate, date, err := h.conv.Rate(ctx, from, to, on)
-		rl = &rateLookup{rate: rate, date: date, err: err}
-		cache[key] = rl
-	}
-	return rl
-}
-
 // sumInBase converts every amount at its own date's rate out of its own
 // currency and rounds the total once. ok is false when some rate is missing,
 // and the caller publishes nothing. err is a real failure, including a total
 // too large for int64.
-func (h *Handler) sumInBase(ctx context.Context, amounts []datedMinor, to string, cache map[rateKey]*rateLookup) (minor int64, ok bool, err error) {
+func (h *Handler) sumInBase(ctx context.Context, amounts []datedMinor, to string, rates *marketdata.RateMemo) (minor int64, ok bool, err error) {
 	total := decimal.Zero
 	for _, a := range amounts {
-		rl := h.rateFor(ctx, a.from, to, a.on, cache)
-		if rl.err != nil {
-			if errors.Is(rl.err, marketdata.ErrNoRate) {
+		rl := rates.Rate(ctx, a.from, to, a.on)
+		if rl.Err != nil {
+			if errors.Is(rl.Err, marketdata.ErrNoRate) {
 				return 0, false, nil
 			}
-			return 0, false, rl.err
+			return 0, false, rl.Err
 		}
-		total = total.Add(decimal.NewFromInt(a.minor).Mul(rl.rate))
+		total = total.Add(decimal.NewFromInt(a.minor).Mul(rl.Rate))
 	}
 	minor, err = money.Minor(total)
 	if err != nil {
@@ -239,7 +198,7 @@ func rateQueries(
 			out = appendTermQueries(out, realized, baseCurrency)
 		}
 	}
-	return dedupeQueries(out)
+	return out
 }
 
 // appendTermQueries asks for each term's own date and currency, as sumInBase
@@ -249,37 +208,4 @@ func appendTermQueries(dst []marketdata.RateQuery, terms []datedMinor, to string
 		dst = append(dst, marketdata.RateQuery{From: t.from, To: to, On: t.on})
 	}
 	return dst
-}
-
-// dedupeQueries collapses queries to one per (pair, day), keeping the first,
-// in place. It uses rateKey, the memo's own identity.
-func dedupeQueries(queries []marketdata.RateQuery) []marketdata.RateQuery {
-	seen := make(map[rateKey]bool, len(queries))
-	out := queries[:0]
-	for _, q := range queries {
-		k := newRateKey(q.From, q.To, q.On)
-		if seen[k] {
-			continue
-		}
-		seen[k] = true
-		out = append(out, q)
-	}
-	return out
-}
-
-// prewarmRates resolves queries in one round trip and files the answers in the
-// memo. Nothing here fails the request: rateFor resolves whatever is missing
-// and tells a gap from an outage. Rates.Answered decides what is filed; a
-// failed batch is logged where it dies (#70).
-func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQuery, cache map[rateKey]*rateLookup) {
-	if len(queries) == 0 {
-		return
-	}
-	resolved, err := h.conv.RatesOn(ctx, queries)
-	if err != nil {
-		return
-	}
-	for q, res := range resolved.Answered(queries) {
-		cache[newRateKey(q.From, q.To, q.On)] = &rateLookup{rate: res.Rate, date: res.RateDate, err: res.Err}
-	}
 }

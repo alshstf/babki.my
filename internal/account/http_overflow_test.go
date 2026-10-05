@@ -46,7 +46,7 @@ func withBalance(minor int64) WithBalance {
 func TestBalanceInBaseRefusesABalanceThatWouldWrap(t *testing.T) {
 	h := &Handler{converter: fixedRateConverter{rate: decimal.NewFromInt(2)}}
 
-	got, err := h.balanceInBase(context.Background(), withBalance(math.MaxInt64), "RUB", overflowOn, map[rateKey]*rateLookup{})
+	got, err := h.balanceInBase(context.Background(), withBalance(math.MaxInt64), "RUB", overflowOn, marketdata.NewRateMemo(h.converter))
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("balanceInBase = %+v, err = %v; want ErrOverflow: twice maxint64 is not an int64", got, err)
 	}
@@ -59,7 +59,7 @@ func TestBalanceInBaseRefusesABalanceThatWouldWrap(t *testing.T) {
 func TestBalanceInBaseOverflowIsNotAnUncoveredCurrency(t *testing.T) {
 	h := &Handler{converter: fixedRateConverter{rate: decimal.NewFromInt(2)}}
 
-	if _, err := h.balanceInBase(context.Background(), withBalance(math.MaxInt64), "RUB", overflowOn, map[rateKey]*rateLookup{}); err == nil {
+	if _, err := h.balanceInBase(context.Background(), withBalance(math.MaxInt64), "RUB", overflowOn, marketdata.NewRateMemo(h.converter)); err == nil {
 		t.Fatal("balanceInBase answered an overflow with a nil error, which this screen renders as a currency with no rate")
 	}
 }
@@ -68,7 +68,7 @@ func TestBalanceInBaseOverflowIsNotAnUncoveredCurrency(t *testing.T) {
 func TestBalanceInBasePublishesTheLargestBalanceThatFits(t *testing.T) {
 	h := &Handler{converter: fixedRateConverter{rate: decimal.NewFromInt(1)}}
 
-	got, err := h.balanceInBase(context.Background(), withBalance(math.MaxInt64), "RUB", overflowOn, map[rateKey]*rateLookup{})
+	got, err := h.balanceInBase(context.Background(), withBalance(math.MaxInt64), "RUB", overflowOn, marketdata.NewRateMemo(h.converter))
 	if err != nil {
 		t.Fatalf("balanceInBase at exactly maxint64: %v", err)
 	}

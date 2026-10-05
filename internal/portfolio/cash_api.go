@@ -8,6 +8,7 @@ import (
 
 	"github.com/oapi-codegen/nullable"
 
+	"babki.my/babki/internal/marketdata"
 	"babki.my/babki/internal/platform/apitypes"
 	"babki.my/babki/internal/platform/money"
 )
@@ -46,7 +47,7 @@ func taxWithheldFromAccount(ops []Operation) []apitypes.CurrencyAmount {
 // today's rate, cost at each held parcel's arrival rate. Own-currency figures
 // are not published: money's result exists only against another currency. A
 // negative balance has no cost; its valuation is still struck.
-func (h *Handler) cashToAPI(ctx context.Context, p *CashPosition, base string, now time.Time, cache map[rateKey]*rateLookup) (apitypes.CashPosition, error) {
+func (h *Handler) cashToAPI(ctx context.Context, p *CashPosition, base string, now time.Time, rates *marketdata.RateMemo) (apitypes.CashPosition, error) {
 	out := apitypes.CashPosition{
 		Currency:    p.Currency,
 		AmountMinor: p.Minor,
@@ -55,7 +56,7 @@ func (h *Handler) cashToAPI(ctx context.Context, p *CashPosition, base string, n
 			Gap:      nullable.NewNullNullable[apitypes.CashGap](),
 		},
 	}
-	value, ok, err := h.sumInBase(ctx, []datedMinor{{minor: p.Minor, from: p.Currency, on: now}}, base, cache)
+	value, ok, err := h.sumInBase(ctx, []datedMinor{{minor: p.Minor, from: p.Currency, on: now}}, base, rates)
 	if err != nil {
 		return apitypes.CashPosition{}, err
 	}
@@ -73,7 +74,7 @@ func (h *Handler) cashToAPI(ctx context.Context, p *CashPosition, base string, n
 	for _, l := range p.Lots {
 		terms = append(terms, datedMinor{minor: l.Minor, from: p.Currency, on: l.On})
 	}
-	cost, ok, err := h.sumInBase(ctx, terms, base, cache)
+	cost, ok, err := h.sumInBase(ctx, terms, base, rates)
 	if err != nil {
 		return apitypes.CashPosition{}, err
 	}
@@ -105,7 +106,7 @@ func (h *Handler) cashToAPI(ctx context.Context, p *CashPosition, base string, n
 
 	// What the money has already earned: each departure at its day's rate against
 	// its parcels at theirs. It gaps on its own.
-	realized, ok, err := h.cashRealizedInBase(ctx, p, base, cache)
+	realized, ok, err := h.cashRealizedInBase(ctx, p, base, rates)
 	if err != nil {
 		return apitypes.CashPosition{}, err
 	}
@@ -121,7 +122,7 @@ func (h *Handler) cashToAPI(ctx context.Context, p *CashPosition, base string, n
 // cashRealizedInBase is the banked currency result: each departure's value on
 // its day less its parcels' values on their arrival days, summed and rounded
 // once via sumInBase.
-func (h *Handler) cashRealizedInBase(ctx context.Context, p *CashPosition, to string, cache map[rateKey]*rateLookup) (int64, bool, error) {
+func (h *Handler) cashRealizedInBase(ctx context.Context, p *CashPosition, to string, rates *marketdata.RateMemo) (int64, bool, error) {
 	if len(p.Realizations) == 0 {
 		// Nothing has left: nought, and no rate is asked for.
 		return 0, true, nil
@@ -134,11 +135,11 @@ func (h *Handler) cashRealizedInBase(ctx context.Context, p *CashPosition, to st
 			costs = append(costs, datedMinor{minor: l.Minor, from: p.Currency, on: l.On})
 		}
 	}
-	gotProceeds, ok, err := h.sumInBase(ctx, proceeds, to, cache)
+	gotProceeds, ok, err := h.sumInBase(ctx, proceeds, to, rates)
 	if err != nil || !ok {
 		return 0, false, err
 	}
-	gotCost, ok, err := h.sumInBase(ctx, costs, to, cache)
+	gotCost, ok, err := h.sumInBase(ctx, costs, to, rates)
 	if err != nil || !ok {
 		return 0, false, err
 	}

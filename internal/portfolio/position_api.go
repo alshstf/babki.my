@@ -107,7 +107,7 @@ func incomeByCurrencyToAPI(income []CurrencyMinor) []apitypes.PositionCurrencyIn
 // the position's currency when needed. now is the request's single "today",
 // shared with positionInBase and the prefetch. err is a real failure, never
 // ErrNoRate.
-func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instrument, quotes map[uuid.UUID]marketdata.Quote, now time.Time, cache map[rateKey]*rateLookup) (apitypes.Position, error) {
+func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instrument, quotes map[uuid.UUID]marketdata.Quote, now time.Time, rates *marketdata.RateMemo) (apitypes.Position, error) {
 	out := apitypes.Position{
 		Instrument: instrumentToAPI(inst),
 		Quantity:   p.Quantity.String(),
@@ -174,13 +174,13 @@ func (h *Handler) toAPI(ctx context.Context, p *Position, inst instrument.Instru
 	// A bond's valuation is in its face currency, which may differ from the
 	// position's. Convert it into the position's currency at today's rate, so cost
 	// and value are comparable; the original is kept in market_value_source_* for
-	// the tooltip and for positionInBase. The memo and applyTo give exactly what
+	// the tooltip and for positionInBase. The memo and applyRate give exactly what
 	// Convert did, and let the prefetch cover this pair.
 	if currency != p.Currency {
-		rl := h.rateFor(ctx, currency, p.Currency, now, cache)
-		switch err := rl.err; {
+		rl := rates.Rate(ctx, currency, p.Currency, now)
+		switch err := rl.Err; {
 		case err == nil:
-			converted, convErr := rl.applyTo(minor)
+			converted, convErr := applyRate(rl, minor)
 			if convErr != nil {
 				// Rate found, product overflows: a request error, which must not look like a
 				// missing rate.

@@ -40,27 +40,17 @@ type spaceStore interface {
 	SpaceByID(ctx context.Context, id uuid.UUID) (family.Space, error)
 }
 
-// converter is the part of *marketdata.Converter this handler needs. RatesOn
-// fills the request's memo up front (prewarmRates) and Rate resolves whatever is
-// missing (rateFor), so the figures do not depend on the prefetch. Tests inject a
-// double that fails with a genuine error rather than marketdata.ErrNoRate, which
-// the handler must treat differently.
-type converter interface {
-	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
-	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
-}
-
 // Handler exposes the operations journal (and transfers) over HTTP.
 type Handler struct {
 	svc    *Service
 	store  *Store
 	spaces spaceStore
-	conv   converter
+	conv   marketdata.RateSource
 	auth   *family.Auth
 	sm     *scs.SessionManager
 }
 
-func NewHandler(svc *Service, store *Store, spaces spaceStore, conv converter, auth *family.Auth, sm *scs.SessionManager) *Handler {
+func NewHandler(svc *Service, store *Store, spaces spaceStore, conv marketdata.RateSource, auth *family.Auth, sm *scs.SessionManager) *Handler {
 	return &Handler{svc: svc, store: store, spaces: spaces, conv: conv, auth: auth, sm: sm}
 }
 
@@ -170,48 +160,6 @@ func toAPI(o Operation) apitypes.Operation {
 		out.TransferGroupId = nullable.NewNullableWithValue(*o.TransferGroupID)
 	}
 	return out
-}
-
-// rateKey identifies one memoized fx lookup: source currency, target currency
-// and the date the rate must come from. The journal values each row at its own
-// date, so the date is part of the key; keying by currency alone would reuse the
-// first row's rate for all of them. The date is a YYYY-MM-DD string so equal days
-// compare equal. The target is in the key, though the page converts into one
-// currency today, so a future second target cannot silently collide.
-type rateKey struct {
-	currency string
-	target   string
-	on       string
-}
-
-// newRateKey is the only place a lookup becomes a key, so rateFor and
-// prewarmRates cannot file one answer under two spellings.
-func newRateKey(currency, target string, on time.Time) rateKey {
-	return rateKey{currency: currency, target: target, on: on.Format("2006-01-02")}
-}
-
-// rateLookup memoizes one resolved fx rate: the rate, the date it came from,
-// and the resolution error.
-type rateLookup struct {
-	rate decimal.Decimal
-	date time.Time
-	err  error
-}
-
-// rateFor resolves currency into baseCurrency on date on, memoized for the
-// request. The error rides in the result because callers must tell
-// marketdata.ErrNoRate (in_base goes null) from a genuine failure (the request
-// fails). A memo miss is not an error: whatever the prefetch missed is resolved
-// here, so only the cost depends on the prefetch.
-func (h *Handler) rateFor(ctx context.Context, currency, baseCurrency string, on time.Time, cache map[rateKey]*rateLookup) *rateLookup {
-	key := newRateKey(currency, baseCurrency, on)
-	rl, ok := cache[key]
-	if !ok {
-		rate, date, err := h.conv.Rate(ctx, currency, baseCurrency, on)
-		rl = &rateLookup{rate: rate, date: date, err: err}
-		cache[key] = rl
-	}
-	return rl
 }
 
 // inBaseGap names which term stopped an operation's in_base object, published
@@ -364,7 +312,7 @@ func costless(o Operation) ([]datedMinor, rateDate, bool, error) {
 // failure from the one that happened (#79). An error is a genuine failure (DB,
 // cancelled context, broken breakdown) and must fail the request; the gap beside
 // it means nothing.
-func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency string, cache map[rateKey]*rateLookup) (*apitypes.OperationInBase, inBaseGap, error) {
+func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency string, rates *marketdata.RateMemo) (*apitypes.OperationInBase, inBaseGap, error) {
 	if o.Currency == baseCurrency {
 		return nil, inBaseSameCurrency, nil
 	}
@@ -379,24 +327,24 @@ func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency
 	}
 
 	// The headline rate values the fee and supplies rate_on.
-	rl := h.rateFor(ctx, o.Currency, baseCurrency, headline.on, cache)
-	if rl.err != nil {
-		if errors.Is(rl.err, marketdata.ErrNoRate) {
+	rl := rates.Rate(ctx, o.Currency, baseCurrency, headline.on)
+	if rl.Err != nil {
+		if errors.Is(rl.Err, marketdata.ErrNoRate) {
 			return nil, headline.gap, nil
 		}
-		return nil, inBaseStruck, rl.err
+		return nil, inBaseStruck, rl.Err
 	}
 
 	amount := decimal.Zero
 	for _, t := range terms {
-		tr := h.rateFor(ctx, o.Currency, baseCurrency, t.date.on, cache)
-		if tr.err != nil {
-			if errors.Is(tr.err, marketdata.ErrNoRate) {
+		tr := rates.Rate(ctx, o.Currency, baseCurrency, t.date.on)
+		if tr.Err != nil {
+			if errors.Is(tr.Err, marketdata.ErrNoRate) {
 				return nil, t.date.gap, nil
 			}
-			return nil, inBaseStruck, tr.err
+			return nil, inBaseStruck, tr.Err
 		}
-		amount = amount.Add(decimal.NewFromInt(t.minor).Mul(tr.rate))
+		amount = amount.Add(decimal.NewFromInt(t.minor).Mul(tr.Rate))
 	}
 
 	// Each figure is refused rather than wrapped if it does not fit an int64
@@ -405,7 +353,7 @@ func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency
 	if err != nil {
 		return nil, inBaseStruck, fmt.Errorf("%w: amount of operation %s in %s", err, o.ID, baseCurrency)
 	}
-	feeMinor, err := money.Minor(decimal.NewFromInt(o.FeeMinor).Mul(rl.rate))
+	feeMinor, err := money.Minor(decimal.NewFromInt(o.FeeMinor).Mul(rl.Rate))
 	if err != nil {
 		return nil, inBaseStruck, fmt.Errorf("%w: fee of operation %s in %s", err, o.ID, baseCurrency)
 	}
@@ -413,7 +361,7 @@ func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency
 		AmountMinor: amountMinor,
 		FeeMinor:    feeMinor,
 		Currency:    baseCurrency,
-		RateOn:      rl.date.Format("2006-01-02"),
+		RateOn:      rl.RateDate.Format("2006-01-02"),
 		// The date the headline rate was asked for, beside the one it came
 		// from (#80).
 		DatedOn: headline.on.Format("2006-01-02"),
@@ -424,18 +372,11 @@ func (h *Handler) operationInBase(ctx context.Context, o Operation, baseCurrency
 // for, so one RatesOn call fills the memo (#45). Dates come from amountTerms, the
 // same function operationInBase uses, so there is no second list to drift. Its
 // error is ignored: the loop calls it again and reports it where the figure is
-// built. A missed query only costs a round trip, since rateFor resolves misses,
-// and a wrong one is filed under a key nothing reads. Duplicates are dropped with
-// rateKey, the memo's own identity.
+// built. A missed query only costs a round trip, since the memo resolves
+// misses, and a wrong one is filed under a key nothing reads.
 func rateQueries(ops []Operation, baseCurrency string) []marketdata.RateQuery {
 	var out []marketdata.RateQuery
-	seen := make(map[rateKey]bool, len(ops))
 	add := func(currency string, on time.Time) {
-		key := newRateKey(currency, baseCurrency, on)
-		if seen[key] {
-			return
-		}
-		seen[key] = true
 		out = append(out, marketdata.RateQuery{From: currency, To: baseCurrency, On: on})
 	}
 	for _, o := range ops {
@@ -448,32 +389,14 @@ func rateQueries(ops []Operation, baseCurrency string) []marketdata.RateQuery {
 			// Undatable or broken: the loop publishes nothing for this row.
 			continue
 		}
-		// Asked for in its own right, as operationInBase does; the seen set
-		// drops it when it is already a term date.
+		// Asked for in its own right, as operationInBase does; the memo drops
+		// it when it is already a term date.
 		add(o.Currency, headline.on)
 		for _, t := range terms {
 			add(o.Currency, t.date.on)
 		}
 	}
 	return out
-}
-
-// prewarmRates resolves queries in one round trip and files each answer under
-// the key rateFor looks up. Nothing here fails the request: the batch buys speed
-// only, and rateFor resolves whatever is missing and tells a missing rate from an
-// outage. Which answers get filed is marketdata.Rates.Answered's rule; a batch
-// failure is logged in marketdata.Converter.fetchRates (#70).
-func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQuery, cache map[rateKey]*rateLookup) {
-	if len(queries) == 0 {
-		return
-	}
-	resolved, err := h.conv.RatesOn(ctx, queries)
-	if err != nil {
-		return
-	}
-	for q, res := range resolved.Answered(queries) {
-		cache[newRateKey(q.From, q.To, q.On)] = &rateLookup{rate: res.Rate, date: res.RateDate, err: res.Err}
-	}
 }
 
 // parseDate parses a YYYY-MM-DD date; business rules belong to the service.
@@ -691,10 +614,10 @@ func (h *Handler) writeJournalPage(w http.ResponseWriter, r *http.Request, space
 	}
 
 	// Per request only.
-	rates := make(map[rateKey]*rateLookup)
+	rates := marketdata.NewRateMemo(h.conv)
 
 	// A warm-up only: the loop resolves whatever it misses.
-	h.prewarmRates(r.Context(), rateQueries(ops, sp.BaseCurrency), rates)
+	rates.Prefetch(r.Context(), rateQueries(ops, sp.BaseCurrency))
 
 	ids := make([]uuid.UUID, 0, len(ops))
 	for _, o := range ops {

@@ -47,7 +47,7 @@ func (h *Handler) capital(ctx context.Context, spaceID uuid.UUID, base string, d
 	if err != nil {
 		return nil, err
 	}
-	vals, err := h.valuations(ctx, spaceID, accounts, base, time.Now().UTC(), make(map[rateKey]*rateLookup))
+	vals, err := h.valuations(ctx, spaceID, accounts, base, time.Now().UTC(), marketdata.NewRateMemo(h.converter))
 	if err != nil {
 		return nil, err
 	}

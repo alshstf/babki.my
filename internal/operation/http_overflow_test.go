@@ -42,7 +42,7 @@ func TestOperationInBaseRefusesAnAmountThatWouldWrap(t *testing.T) {
 	h, op := overflowFixture()
 	op.AmountMinor = math.MaxInt64
 
-	got, _, err := h.operationInBase(context.Background(), op, "RUB", map[rateKey]*rateLookup{})
+	got, _, err := h.operationInBase(context.Background(), op, "RUB", marketdata.NewRateMemo(h.conv))
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("operationInBase = %+v, err = %v; want ErrOverflow: twice maxint64 is not an int64", got, err)
 	}
@@ -56,7 +56,7 @@ func TestOperationInBaseRefusesAFeeThatWouldWrap(t *testing.T) {
 	h, op := overflowFixture()
 	op.FeeMinor = math.MaxInt64
 
-	got, _, err := h.operationInBase(context.Background(), op, "RUB", map[rateKey]*rateLookup{})
+	got, _, err := h.operationInBase(context.Background(), op, "RUB", marketdata.NewRateMemo(h.conv))
 	if !errors.Is(err, money.ErrOverflow) {
 		t.Fatalf("operationInBase = %+v, err = %v; want ErrOverflow for the fee", got, err)
 	}
@@ -71,7 +71,7 @@ func TestOperationInBaseOverflowIsNotAMissingRate(t *testing.T) {
 	h, op := overflowFixture()
 	op.AmountMinor = math.MaxInt64
 
-	if _, _, err := h.operationInBase(context.Background(), op, "RUB", map[rateKey]*rateLookup{}); err == nil {
+	if _, _, err := h.operationInBase(context.Background(), op, "RUB", marketdata.NewRateMemo(h.conv)); err == nil {
 		t.Fatal("operationInBase answered an overflow with a nil error, which this page renders as a row that simply has no rate")
 	}
 }
@@ -87,7 +87,7 @@ func TestOperationInBasePublishesTheLargestFigureThatFits(t *testing.T) {
 		OccurredOn:  time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
 	}
 
-	got, _, err := h.operationInBase(context.Background(), op, "RUB", map[rateKey]*rateLookup{})
+	got, _, err := h.operationInBase(context.Background(), op, "RUB", marketdata.NewRateMemo(h.conv))
 	if err != nil {
 		t.Fatalf("operationInBase at exactly maxint64: %v", err)
 	}
