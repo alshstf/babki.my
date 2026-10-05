@@ -947,7 +947,7 @@ describe("PositionsTable", () => {
     const cell = screen.getByTestId("position-settled").closest("td");
     expect(norm(cell?.getAttribute("title") ?? "")).toBe(
       norm(
-        "Свершившееся, которое больше не изменится: реализованная прибыль 100,00 $ плюс доход 10,00 $. Налог с дивиденда или купона уже вычтен из дохода. А тот, что брокер списывает со счёта при выводе средств, тут не вычтен — он берётся с накопленной за год базы, а не с бумаги, и показан отдельной суммой в шапке счёта",
+        "Итог закрытого: реализованная прибыль 100,00 $ плюс доход 10,00 $. От цен рынка он не зависит, а меняется, только если меняется сама история — например, добавили операцию задним числом или стала известна дата расчётов по сделке. Налог с дивиденда или купона уже вычтен из дохода. А тот, что брокер списывает со счёта при выводе средств, тут не вычтен — он берётся с накопленной за год базы, а не с бумаги, и показан отдельной суммой в шапке счёта",
       ),
     );
   });
@@ -1080,14 +1080,22 @@ describe("PositionsTable", () => {
       />,
     );
     expect(screen.getByTestId("position-unknown-cost")).toBeInTheDocument();
-    expect(screen.queryByTestId("position-unknown-cost-action")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("position-unknown-cost-action"),
+    ).not.toBeInTheDocument();
   });
 
   it("says nothing about the purchase price when it is known", () => {
     wrap(
-      <PositionsTable positions={[makePosition()]} mode="native" baseCurrency="RUB" />,
+      <PositionsTable
+        positions={[makePosition()]}
+        mode="native"
+        baseCurrency="RUB"
+      />,
     );
-    expect(screen.queryByTestId("position-unknown-cost")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("position-unknown-cost"),
+    ).not.toBeInTheDocument();
   });
 
   it("says nothing about the age of an ordinary price", () => {
