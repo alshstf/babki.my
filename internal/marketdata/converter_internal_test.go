@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/shopspring/decimal"
 )
 
 // On the all-absent walk the enumeration and the resolution consult exactly
@@ -68,61 +66,9 @@ func TestPrefetchedRowsTellsAbsenceApartFromIgnorance(t *testing.T) {
 	}
 }
 
-// recordedRows answers one fixed row and records each key it is asked, to
-// observe warmRows' fallback.
-type recordedRows struct {
-	row  FxRate
-	ok   bool
-	seen []FxRateKey
-}
-
-func (r *recordedRows) rateOn(_ context.Context, base, quote string, on time.Time) (FxRate, bool, error) {
-	r.seen = append(r.seen, FxRateKey{Base: base, Quote: quote, On: on})
-	return r.row, r.ok, nil
-}
-
-// warmRows answers prefetched keys from the batch, absent or present, and asks
-// the store only about keys the prefetch did not request.
-func TestWarmRowsAsksTheStoreOnlyForWhatWasNotPrefetched(t *testing.T) {
-	ctx := context.Background()
-	on := time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)
-	present := FxRateKey{Base: "USD", Quote: "RUB", On: on}
-	absent := FxRateKey{Base: "EUR", Quote: "RUB", On: on}
-	unasked := FxRateKey{Base: "CHF", Quote: "RUB", On: on}
-
-	prefetched := FxRate{Base: "USD", Quote: "RUB", On: on, Rate: decimal.NewFromInt(90)}
-	fromStore := FxRate{Base: "CHF", Quote: "RUB", On: on, Rate: decimal.NewFromInt(95)}
-	fallback := &recordedRows{row: fromStore, ok: true}
-	w := warmRows{
-		asked:    map[FxRateKey]struct{}{present: {}, absent: {}},
-		rows:     map[FxRateKey]FxRate{present: prefetched},
-		fallback: fallback,
-	}
-
-	got, ok, err := w.rateOn(ctx, present.Base, present.Quote, present.On)
-	if err != nil || !ok || !got.Rate.Equal(prefetched.Rate) {
-		t.Fatalf("prefetched key: (%v, %v, %v), want the batch's own row %s", got.Rate, ok, err, prefetched.Rate)
-	}
-	if _, ok, err = w.rateOn(ctx, absent.Base, absent.Quote, absent.On); ok || err != nil {
-		t.Fatalf("prefetched-but-empty key: ok = %v, err = %v, want an honest absence and no error", ok, err)
-	}
-	if len(fallback.seen) != 0 {
-		t.Fatalf("the store was asked for %v, but both keys were prefetched — a batched pair must never cost a query", fallback.seen)
-	}
-
-	got, ok, err = w.rateOn(ctx, unasked.Base, unasked.Quote, unasked.On)
-	if err != nil || !ok || !got.Rate.Equal(fromStore.Rate) {
-		t.Fatalf("un-prefetched key: (%v, %v, %v), want the store's row %s — a hole in the enumeration must cost a query, not an answer",
-			got.Rate, ok, err, fromStore.Rate)
-	}
-	if len(fallback.seen) != 1 || fallback.seen[0] != unasked {
-		t.Fatalf("the store was asked for %v, want exactly [%v]", fallback.seen, unasked)
-	}
-}
-
-// prewarm enumerates each non-identity currency's whole resolution tree, and
-// nothing for an identity one (#72).
-func TestPrewarmEnumeratesEveryCurrencyItIsGiven(t *testing.T) {
+// The prefetch's enumeration covers each non-identity currency's whole
+// resolution tree, and nothing for an identity one (#72).
+func TestThePrefetchEnumeratesEveryCurrencyItIsGiven(t *testing.T) {
 	ctx := context.Background()
 	on := time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC)
 

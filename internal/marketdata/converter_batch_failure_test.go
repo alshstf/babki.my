@@ -79,7 +79,7 @@ func TestRatesOnLogsADeadBatchAsAWarning(t *testing.T) {
 	assertOneWarning(t, capture, "statement timeout")
 }
 
-// ConvertMany's prewarm swallows the failure; it is still warned about, and
+// ConvertMany's prefetch swallows the failure; it is still warned about, and
 // the total is still right.
 func TestConvertManyLogsADeadBatchAsAWarning(t *testing.T) {
 	boom := errors.New("canceling statement due to statement timeout")

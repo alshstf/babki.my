@@ -41,28 +41,27 @@ func NewConverter(store *Store) *Converter {
 // effect on the date (or the nearest earlier one). The rate is resolved as a
 // direct rate, the inverse of the reverse rate, or a bridge through RUB, else
 // ErrNoRate. Identity conversions return the amount untouched. The result is
-// rounded once, half away from zero, and a product past int64 is
+// rounded once, half away from zero; a product past int64 is
 // money.ErrOverflow.
 func (c *Converter) Convert(ctx context.Context, amountMinor int64, from, to string, on time.Time) (int64, error) {
-	converted, _, err := c.convert(ctx, c.rows(), amountMinor, from, to, on)
-	return converted, err
+	if from == to {
+		return amountMinor, nil
+	}
+	rate, _, err := c.Rate(ctx, from, to, on)
+	if err != nil {
+		return 0, err
+	}
+	return convertAt(amountMinor, rate, from, to, on)
 }
 
-// convert is Convert over a given row source, also returning the date of the
-// rate used (zero for an identity conversion).
-func (c *Converter) convert(ctx context.Context, rows fxRateRows, amountMinor int64, from, to string, on time.Time) (converted int64, rateDate time.Time, err error) {
-	if from == to {
-		return amountMinor, time.Time{}, nil
-	}
-	rate, rateDate, err := rateVia(ctx, rows, from, to, on)
+// convertAt rounds amountMinor at rate once, half away from zero; a product
+// past int64 is money.ErrOverflow.
+func convertAt(amountMinor int64, rate decimal.Decimal, from, to string, on time.Time) (int64, error) {
+	converted, err := money.Minor(decimal.NewFromInt(amountMinor).Mul(rate))
 	if err != nil {
-		return 0, time.Time{}, err
+		return 0, fmt.Errorf("%w: %d %s at the %s rate of %s", err, amountMinor, from, to, on.Format("2006-01-02"))
 	}
-	converted, err = money.Minor(decimal.NewFromInt(amountMinor).Mul(rate))
-	if err != nil {
-		return 0, time.Time{}, fmt.Errorf("%w: %d %s at the %s rate of %s", err, amountMinor, from, to, on.Format("2006-01-02"))
-	}
-	return converted, rateDate, nil
+	return converted, nil
 }
 
 // ConvertMany converts every amount into one currency and sums them.
@@ -72,24 +71,37 @@ func (c *Converter) convert(ctx context.Context, rows fxRateRows, amountMinor in
 // of the oldest rate used — zero if none was — so callers can say how fresh
 // the total is. All rates are prefetched in one round trip (#72).
 func (c *Converter) ConvertMany(ctx context.Context, amounts map[string]int64, to string, on time.Time) (converted int64, missing []string, ratesOn time.Time, err error) {
-	// Prefetch every rate the loop will need; anything missed is looked up as
-	// usual.
-	rows := c.prewarm(ctx, amounts, to, on)
+	rates := NewRateMemo(c)
+	queries := make([]RateQuery, 0, len(amounts))
+	for currency := range amounts {
+		if currency != to {
+			queries = append(queries, RateQuery{From: currency, To: to, On: on})
+		}
+	}
+	rates.Prefetch(ctx, queries)
+
 	total := decimal.Zero
 	for currency, amountMinor := range amounts {
-		got, rateDate, cErr := c.convert(ctx, rows, amountMinor, currency, to, on)
-		if cErr == nil {
-			total = total.Add(decimal.NewFromInt(got))
-			if !rateDate.IsZero() && (ratesOn.IsZero() || rateDate.Before(ratesOn)) {
-				ratesOn = rateDate
-			}
+		if currency == to {
+			total = total.Add(decimal.NewFromInt(amountMinor))
 			continue
 		}
-		if errors.Is(cErr, ErrNoRate) {
+		res := rates.Rate(ctx, currency, to, on)
+		if errors.Is(res.Err, ErrNoRate) {
 			missing = append(missing, currency)
 			continue
 		}
-		return 0, nil, time.Time{}, cErr
+		if res.Err != nil {
+			return 0, nil, time.Time{}, res.Err
+		}
+		got, cErr := convertAt(amountMinor, res.Rate, currency, to, on)
+		if cErr != nil {
+			return 0, nil, time.Time{}, cErr
+		}
+		total = total.Add(decimal.NewFromInt(got))
+		if !res.RateDate.IsZero() && (ratesOn.IsZero() || res.RateDate.Before(ratesOn)) {
+			ratesOn = res.RateDate
+		}
 	}
 	// The total is guarded too: terms that each fit can sum past int64. Each term
 	// is already whole, so only the range check matters here.
@@ -111,7 +123,7 @@ func (c *Converter) Rate(ctx context.Context, from, to string, on time.Time) (ra
 }
 
 // rateVia is the single entry point to resolution: the identity rule, then
-// resolveRate, over the given row source. convert applies the identity rule
+// resolveRate, over the given row source. Convert applies the identity rule
 // itself so an identity amount is never multiplied and rounded.
 func rateVia(ctx context.Context, rows fxRateRows, from, to string, on time.Time) (rate decimal.Decimal, rateDate time.Time, err error) {
 	if from == to {
@@ -173,8 +185,8 @@ func directOrInverse(ctx context.Context, rows fxRateRows, from, to string, on t
 	return decimal.Decimal{}, time.Time{}, false, nil
 }
 
-// fxRateRows is where resolution reads rows from: the store, a prefetched map,
-// or a recorder. The resolution order lives only in resolveRate.
+// fxRateRows is where resolution reads rows from: the store, a prefetched
+// batch, or a recorder. The resolution order lives only in resolveRate.
 type fxRateRows interface {
 	// rateOn answers like Store.FxRateOn: the row on the date or the nearest
 	// earlier one. ok is false when there is none; err is a real failure.
@@ -207,48 +219,6 @@ func (c *Converter) fetchRates(ctx context.Context, keys []FxRateKey) (map[FxRat
 // connection in its own words.
 func canceled(ctx context.Context, err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)
-}
-
-// prewarm prefetches, in one round trip, every row converting amounts may
-// consult, and returns a source that answers from them and falls back to the
-// store. It is a cache: no figure depends on it, and its failure is not an
-// error. The rows are enumerated by running the resolution against
-// recordingRows, so there is no second list of the rules.
-func (c *Converter) prewarm(ctx context.Context, amounts map[string]int64, to string, on time.Time) fxRateRows {
-	store := c.rows()
-	candidates := &recordingRows{}
-	for currency := range amounts {
-		// Run for what it records; over recordingRows every resolution fails.
-		_, _, _ = rateVia(ctx, candidates, currency, to, on)
-	}
-	if len(candidates.keys) == 0 {
-		// Nothing to look up: an empty call or only identity conversions.
-		return store
-	}
-	rows, err := c.fetchRates(ctx, candidates.keys)
-	if err != nil {
-		// Logged by fetchRates; the loop falls back to the store.
-		return store
-	}
-	return warmRows{asked: candidates.seen, rows: rows, fallback: store}
-}
-
-// warmRows answers from a ConvertMany prefetch and asks the store about keys
-// the prefetch did not request. A requested key with no row is an honest "no
-// rate" and is not retried.
-type warmRows struct {
-	asked    map[FxRateKey]struct{}
-	rows     map[FxRateKey]FxRate
-	fallback fxRateRows
-}
-
-func (w warmRows) rateOn(ctx context.Context, base, quote string, on time.Time) (FxRate, bool, error) {
-	key := FxRateKey{Base: base, Quote: quote, On: on}
-	if _, requested := w.asked[key]; !requested {
-		return w.fallback.rateOn(ctx, base, quote, on)
-	}
-	r, found := w.rows[key]
-	return r, found, nil
 }
 
 type storeRows struct{ store *Store }
