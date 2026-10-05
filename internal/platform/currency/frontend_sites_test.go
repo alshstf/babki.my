@@ -9,26 +9,20 @@ import (
 	"babki.my/babki/internal/platform/currency"
 )
 
-// Three frontend dialogs copy currency.Pattern to enable their Save buttons;
-// this holds the copies to the constant.
-var currencyFormSites = []string{
-	"web/src/routes/settings/index.tsx",
-	"web/src/routes/accounts/account-dialog.tsx",
-	"web/src/routes/accounts/instrument-picker.tsx",
-}
+// The frontend's forms enable Save through isCurrencyCode in
+// web/src/lib/currencies.ts; this holds its regex literal to currency.Pattern.
+const currencyCodeSite = "web/src/lib/currencies.ts"
 
 func TestTheCurrencyFormsRefuseAtTheShapeTheServerEnforces(t *testing.T) {
 	// Compared as the JS regex literal text.
 	want := "/" + currency.Pattern + "/"
-	for _, rel := range currencyFormSites {
-		body, err := os.ReadFile(filepath.Join("..", "..", "..", rel))
-		if err != nil {
-			t.Fatalf("read %s: %v", rel, err)
-		}
-		if !strings.Contains(string(body), want) {
-			t.Errorf("%s does not contain the regex literal %s (currency.Pattern): "+
-				"its Save button would enable for a code the server refuses, or stay "+
-				"disabled for one the server would take", rel, want)
-		}
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", currencyCodeSite))
+	if err != nil {
+		t.Fatalf("read %s: %v", currencyCodeSite, err)
+	}
+	if !strings.Contains(string(body), want) {
+		t.Errorf("%s does not contain the regex literal %s (currency.Pattern): "+
+			"a Save button would enable for a code the server refuses, or stay "+
+			"disabled for one the server would take", currencyCodeSite, want)
 	}
 }

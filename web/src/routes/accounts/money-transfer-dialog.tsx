@@ -13,8 +13,7 @@ import { isConflict, useCreateMoneyTransfer } from "@/api/operations";
 import { useAccounts, type AccountWithBalance } from "@/api/accounts";
 import { MAX_NOTE } from "@/lib/text-limits";
 import { submitOnEnter } from "@/lib/submit-on-enter";
-
-const CURRENCY_RE = /^[A-Z]{3}$/;
+import { isCurrencyCode } from "@/lib/currencies";
 
 // Money moved from this account to another of the family's: one transfer, a
 // withdrawal here and a deposit there. What arrives is what left unless the
@@ -60,10 +59,10 @@ export function MoneyTransferDialog({
   const parsed = parseToMinor(amount);
   const amountValid = parsed !== null && parsed > 0;
   const refusal = amountRefusal(amount);
-  const currencyValid = CURRENCY_RE.test(currency);
+  const currencyValid = isCurrencyCode(currency);
   const receivedParsed = parseToMinor(received);
   const receivedValid = !converted || (receivedParsed !== null && receivedParsed > 0);
-  const receivedCurrencyValid = !converted || CURRENCY_RE.test(receivedCurrency);
+  const receivedCurrencyValid = !converted || isCurrencyCode(receivedCurrency);
   const valid =
     target !== undefined && amountValid && currencyValid && receivedValid && receivedCurrencyValid && occurredOn !== "";
 

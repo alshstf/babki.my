@@ -1,16 +1,16 @@
 // The currency codes offered as ready-made choices wherever a currency is
-// picked: the space's base currency (routes/settings) and an account's own
-// (routes/accounts/account-dialog). Both selectors also offer «другая», which
-// takes any three-letter code, so this list is a shortcut and never a limit —
-// nothing here or on the server restricts a currency to these four.
-//
-// One list rather than one per screen, because the two are not independently
-// chosen sets that happen to coincide: they answer the same question about the
-// same user, and a code added for an account but not for the base currency
-// would leave a person able to hold money they cannot total in (#33).
-//
-// Order is what the dropdown shows, so it is kept rather than sorted: the
-// rouble leads because it is the currency every stored rate is quoted against
-// (marketdata's quoteCurrency), and the rest follow in the order both screens
-// have always offered them.
+// picked: the base currency (routes/settings) and an account's own
+// (routes/accounts/account-dialog). Both also offer «другая», so the list is a
+// shortcut, never a limit. One list for both: a code offered for an account
+// but not for the base currency would leave money that cannot be totalled
+// (#33). The rouble leads because every stored rate is quoted against it.
 export const COMMON_CURRENCIES = ["RUB", "USD", "EUR", "KZT"];
+
+// The shape the server accepts for a currency code: currency.Pattern in Go,
+// whose test holds this literal to it.
+const CURRENCY_CODE = /^[A-Z]{3}$/;
+
+// isCurrencyCode is whether a form may send code as a currency.
+export function isCurrencyCode(code: string): boolean {
+  return CURRENCY_CODE.test(code);
+}
