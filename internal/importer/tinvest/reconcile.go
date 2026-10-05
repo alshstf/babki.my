@@ -17,151 +17,79 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// ErrAccountNotInRubles means the babki account a link names is not kept in
-// rubles, so the broker's own ruble figure has no business being filed as its
-// balance mark: a mark carries no currency of its own (see
-// account.Store.SetBalance) and would be read back as whatever the account is
-// denominated in. See ReconcileLink on why the check lives at the write rather
-// than only in the path that creates such accounts.
+// ErrAccountNotInRubles means the linked account is not kept in roubles, so the
+// broker's rouble figure cannot be its balance mark: a mark has no currency of its
+// own (account.Store.SetBalance). Checked at the write (see ReconcileLink).
 var ErrAccountNotInRubles = errors.New("tinvest: the linked account is not kept in rubles")
 
-// ErrBalanceMarkRefused means the broker's ruble balance could not become a
-// balance mark: it is either finer than a minor unit — this program does not
-// round money into place — or larger than any sum it holds. It is its own
-// sentinel rather than the projection's refusal because the two describe
-// different work: nothing was being projected when this happened, a balance
-// mark was being written.
+// ErrBalanceMarkRefused means the broker's figure could not become a balance
+// mark: finer than a minor unit (never rounded) or beyond any sum this program
+// holds.
 var ErrBalanceMarkRefused = errors.New("tinvest: the broker's ruble balance cannot be a balance mark")
 
-// Reconciliation is the point of the whole import: after every sync this
-// program computes the account's positions ITSELF, from the journal it wrote,
-// and compares them with what the broker says it holds. Agreement is stated
-// with the moment it was established; disagreement is shown line by line; and
-// a check that could not be made says so and draws no tick.
+// Reconciliation is the point of the import: after every sync this program
+// computes the account's positions itself from its journal and compares them
+// with what the broker holds. Agreement is stated with its moment, disagreement
+// line by line, and a check that could not be made says so.
 //
-// None of the competing products does this (research of 2026-08-04), and the
-// two complaints their users make most — "the portfolio does not match my
-// broker" and "phantom positions appeared after the import" — are both
-// answered by exactly this comparison.
+// Quantities and cash are compared, never valuations, which honest programs
+// differ on constantly.
 //
-// WHAT IS COMPARED IS QUANTITIES AND CASH, NEVER VALUATIONS. A valuation is
-// the broker's own rates and its own method applied to the same holding, so
-// two honest programs differ on it constantly and the difference means
-// nothing. A difference in the NUMBER OF UNITS of a security, or in the money
-// standing on the account, is a fact: one of the two sides is wrong about
-// what happened.
+// The broker's two "blocked" fields differ in kind:
 //
-// THE BROKER'S TWO "BLOCKED" FIELDS ARE NOT THE SAME KIND OF THING, and this
-// is the trap this file is built around:
+//   - a security's Quantity is the whole position and its Blocked is a bool (the
+//     depository halted it); adding anything overstates halted holdings, such as
+//     the owner's frozen FinEx and SPB paper;
+//   - money's free and blocked figures are two addends of one balance; reading
+//     only the free one misreports every account with an open order.
 //
-//   - A SECURITY's Quantity is already the whole position, and its Blocked is
-//     a BOOLEAN — the paper is halted at the depository. Adding anything for
-//     it would overstate every halted holding, and halted holdings are not a
-//     hypothetical case for this owner: he holds frozen FinEx and SPB paper
-//     (whether any of it sits at this particular broker is not something this
-//     file knows).
-//   - MONEY's two figures are two ADDENDS: the free balance and the amount
-//     held by standing orders together make the balance. Reading only the
-//     free part would report a false difference on every account with an
-//     order open.
-//
-// See PortfolioPosition and MoneyBalance in client.go, whose doc comments
-// carry the wire-level evidence for both halves.
+// The wire evidence is on PortfolioPosition and MoneyBalance in client.go.
 
-// Kinds of difference. Kind is a plain string rather than a named type because
-// it travels into a jsonb column and out of the API, and what reads it there
-// has to tell a security's row from a currency's: the two carry different
-// things (one has an instrument of ours behind it, the other a currency code)
-// and are read differently.
+// Kinds of difference; a plain string because it travels through jsonb and the
+// API, where a security's row and a currency's are read differently.
 const (
-	// MismatchInstrument: a number of units differs, or one side names a
-	// security the other does not. When the broker names one we could not
-	// match, this kind is the evidence that some of its operations did not
-	// project — the security IS one this program accounts for, so the gap is
-	// in the journal.
+	// MismatchInstrument: units differ, or one side names a security the other
+	// does not. A broker security we could not match points at operations that
+	// did not project.
 	MismatchInstrument = "instrument"
 	// MismatchCurrency: a cash balance in one currency differs.
 	MismatchCurrency = "currency"
-	// MismatchUnsupported: the broker holds an asset of a kind this program
-	// does not account for at all — a future, an option, anything whose
-	// instrument_type is outside brokerInstrumentTypes. Cash is the one thing
-	// outside that table which does NOT land here: it is the account's own
-	// money and is compared as money (see compareInstruments).
-	//
-	// A SEPARATE KIND BECAUSE IT IS A SEPARATE STATEMENT: MismatchInstrument
-	// means "part of your history did not parse", which invites looking for
-	// the missing operations, while this one means "this asset is outside
-	// what the program can hold", which no amount of re-importing will
-	// change. Reporting it is not optional — the
-	// owner does hold what it names, and passing over it would be the silence
-	// this comparison exists to replace — but calling it the other thing
-	// would send him looking for operations that are not missing.
+	// MismatchUnsupported: the broker holds an asset kind this program does
+	// not account for (outside brokerInstrumentTypes; cash is compared as
+	// money instead). Reported, but distinct from MismatchInstrument: no
+	// re-import will change it, so the owner should not hunt for missing
+	// operations.
 	MismatchUnsupported = "unsupported"
-	// MismatchUnknownSecurity: the broker holds a security of a kind this
-	// program DOES account for, and nothing of ours corresponds to it — no
-	// operation on that paper has ever reached the journal, so there is no row
-	// in the instrument map to pair it with.
-	//
-	// A THIRD STATEMENT BECAUSE IT IS A THIRD SITUATION, and the label alone
-	// does not tell it from the others. On the owner's own account the broker
-	// reports TECH2, TSPX2 and TUSD2 — funds his TECH and TSPX were converted
-	// into, under new ISINs — and the row read "the broker has it and we do
-	// not", exactly as a paper we both know but count differently does. The
-	// only clue was that the ticker was not one of his, which is a thing to
-	// NOTICE rather than a thing to be told.
-	//
-	// What it invites is a different question, too. MismatchInstrument asks
-	// "which operations are missing"; this one asks "what happened to this
-	// paper" — a corporate action nobody recorded, and an answer that is the
-	// owner's to give rather than a rule's to find.
+	// MismatchUnknownSecurity: the broker holds a supported kind of security
+	// and nothing of ours corresponds to it, since no operation on it ever
+	// reached the journal. On the owner's account: TECH2, TSPX2, TUSD2, funds
+	// his TECH and TSPX were converted into. It asks "what happened to this
+	// paper", an unrecorded corporate action, rather than "which operations
+	// are missing".
 	MismatchUnknownSecurity = "unknown_security"
 )
 
-// The verdicts beyond ReconcileNotChecked, which lives in store.go because a
-// run carries it from the moment it is created.
+// Verdicts beyond ReconcileNotChecked (store.go).
 const (
-	// ReconcileMatched: nothing differed — every security's quantity and
-	// every currency's balance agreed, and the broker named no asset this
-	// program cannot account for.
+	// ReconcileMatched: every security's quantity and currency's balance
+	// agreed, and nothing unsupported was named.
 	ReconcileMatched ReconcileStatus = "matched"
-	// ReconcileMismatched: at least one did not, and ReconcileResult says
-	// which.
+	// ReconcileMismatched: something differed; ReconcileResult says what.
 	ReconcileMismatched ReconcileStatus = "mismatched"
 )
 
-// ReconcileMismatch is one thing the two sides disagree about, carrying BOTH
-// figures: what the broker says and what our journal computes. A row that
-// carried only the difference would leave a person unable to tell which side
-// to go and look at.
+// ReconcileMismatch is one disagreement, with both figures so a person knows
+// which side to check.
 //
-// InstrumentID is nil on a currency row, on an unsupported one, and also on a
-// security the connection's instrument index does not resolve — there is no
-// instrument of ours to name, which is itself the news (see CompareHoldings).
-// Label is what a person reads: our instrument's ticker or name when it is
-// ours (its id, when the catalog gave neither), the broker's own naming of a
-// position that is not ours (see brokerLabel), or a currency code.
+// InstrumentID is nil for a currency row, an unsupported one, and a security the
+// index does not resolve. Label is our ticker or name (or id), the broker's
+// naming of a position not ours (brokerLabel), or a currency code.
 //
-// THE FOUR Broker* FIELDS ARE THE BROKER'S PASSPORT OF A POSITION THAT IS NOT
-// OURS, and they are set on a MismatchUnknownSecurity row alone. Such a row
-// used to carry nothing but the broker's ticker — «TECH2», which is not a
-// ticker of ours and says nothing about WHAT the broker holds — while the
-// check had already asked the broker exactly that (see matchByISIN) and
-// thrown the answer away the moment no catalog row carried its ISIN. They are
-// pointers so that a row can say «the passport was not obtained» (all nil:
-// the broker answered 404, or the position was past the lookup cap) apart
-// from a passport whose field happened to be empty; and so that runs recorded
-// before these fields existed — whose jsonb has no such keys — read back as
-// exactly that, rather than as a passport of empty strings.
-//
-// BrokerType is NOT the broker's own word but this catalog's InstrumentType,
-// translated by brokerInstrumentTypes — the one table the resolver books by
-// and unmatchedKind classifies by. It is set from the position's type, not
-// from the passport's, because the position's type is what made the row an
-// unknown security in the first place (unmatchedKind), so it is in the table
-// by construction; the other three come from the passport and are nil when
-// none was obtained. A client that wants to create the catalog row therefore
-// has every field CreateInstrumentRequest needs, in the shape it needs them,
-// without a second copy of the type table on its side.
+// The Broker* fields are the broker's passport of an unknown-security row only
+// (see matchByISIN): pointers, so "no passport" (404 or past the cap, and runs
+// from before these fields) differs from an empty field. BrokerType is the
+// catalog's InstrumentType via brokerInstrumentTypes, from the position's type,
+// so a client has everything CreateInstrumentRequest needs.
 type ReconcileMismatch struct {
 	Kind           string          `json:"kind"`
 	InstrumentID   *uuid.UUID      `json:"instrument_id,omitempty"`
@@ -173,74 +101,37 @@ type ReconcileMismatch struct {
 	BrokerCurrency *string         `json:"broker_currency,omitempty"`
 	BrokerType     *string         `json:"broker_type,omitempty"`
 
-	// SplitHintFactor is set when the two quantities differ by a whole factor
-	// of two or more AND the corporate-actions registry holds no split of this
-	// paper that could account for it. It carries the factor itself, because
-	// "twenty times" is what makes the guess worth making.
-	//
-	// IT IS A QUESTION AND NOT A FINDING. The owner's own AMZN stands at 1
-	// against the broker's 20 and NVDA at 3 against 30, and both are real
-	// splits nobody recorded — but a whole factor is also what a purchase this
-	// import never saw would leave behind, and nothing here can tell the two
-	// apart. So it is published as the observation it is and nothing acts on
-	// it: no event is written, no journal is touched, and the screen asks
-	// rather than tells.
-	//
-	// ONE FIELD AND NOT TWO. A boolean beside a factor would be two statements
-	// of one thing that could disagree; the factor's presence IS the statement.
+	// SplitHintFactor is set when the quantities differ by a whole factor of
+	// two or more and the registry has no split that could explain it. It is
+	// a question, not a finding: the owner's AMZN (1 vs 20) and NVDA (3 vs
+	// 30) are unrecorded splits, but a missed purchase leaves the same shape.
+	// Nothing acts on it. Its presence is the statement; no separate flag.
 	SplitHintFactor *int64 `json:"split_hint_factor,omitempty"`
 }
 
-// ReconcileResult is one reconciliation's whole verdict.
-//
-// STATUS IS DERIVED FROM MISMATCHES AND NEVER KEPT BESIDE IT: "matched" means
-// the list is empty, by construction rather than by two computations that
-// happen to agree today (the rule this codebase states in its package docs and
-// has been bitten by ignoring). ReconcileNotChecked is the one status the
-// comparison itself does not produce — it means no comparison was made.
-//
-// A value assembled by hand can still say one thing and carry another, so the
-// write refuses that pair rather than storing it: see
-// ErrReconcileVerdictContradictsItself.
+// ReconcileResult is one reconciliation's verdict. Status is derived from
+// Mismatches: matched means the list is empty. ReconcileNotChecked means no
+// comparison was made. A hand-built contradictory pair is refused on write
+// (ErrReconcileVerdictContradictsItself).
 type ReconcileResult struct {
 	Status     ReconcileStatus     `json:"status"`
 	Mismatches []ReconcileMismatch `json:"mismatches"`
 }
 
-// InstrumentIndex is what one connection has already learned about the
-// broker's instruments: which catalog instrument of ours each of the broker's
-// identifiers stands for.
-//
-// THERE ARE TWO MAPS BECAUSE THE BROKER'S IDENTIFIERS DRIFT. An
-// instrument_uid on old operations has already been seen to change (see
-// InstrumentRef), which is the whole reason the resolver looks the map up by
-// instrument_uid and then by figi rather than by one of them. A comparison
-// that knew only the first would answer a drifted position with TWO false
-// lines at once — a phantom "the broker has 100, the journal 0" under the new
-// identifier and a "the broker has 0, the journal 100" under our instrument —
-// while the journal behind them was in perfect order, because the resolver
-// had matched those very operations by figi.
+// InstrumentIndex is which catalog instrument each broker identifier stands
+// for. Two maps because identifiers drift: knowing only instrument_uid would turn
+// one drifted position into two false lines while the journal was fine, since the
+// resolver had matched those operations by figi.
 type InstrumentIndex struct {
 	ByUID  map[string]uuid.UUID
 	ByFIGI map[string]uuid.UUID
 }
 
-// lookup finds the instrument of ours a broker position stands for: by
-// instrument_uid first and by figi second — the order (*Resolver).lookupMap
-// uses, so that a position and the operations behind it are matched by the
-// same identifier and end up on the same instrument.
-//
-// The two are not identical in every case, and the one place they part is
-// deliberate: where several map rows claim one figi against DIFFERENT
-// instruments, the resolver still picks one (the most recently updated row)
-// and this index answers nothing at all — see instrumentMap. Guessing there
-// would put a confident wrong match on the screen, while answering nothing
-// shows the position as a difference, which is what "we could not match this"
-// is supposed to look like.
-//
-// An empty identifier matches nothing rather than looking itself up: an entry
-// under "" would answer for every position that arrived without one, and
-// resolve them all to a single instrument.
+// lookup finds our instrument for a broker position by instrument_uid, then
+// figi, the resolver's order. Where map rows give one figi to different
+// instruments, the resolver picks one and this answers nothing (see
+// instrumentMap): unmatched is better than a confident wrong match. An empty
+// identifier matches nothing.
 func (ix InstrumentIndex) lookup(p PortfolioPosition) (uuid.UUID, bool) {
 	if p.InstrumentUID != "" {
 		if id, ok := ix.ByUID[p.InstrumentUID]; ok {
@@ -255,34 +146,13 @@ func (ix InstrumentIndex) lookup(p PortfolioPosition) (uuid.UUID, bool) {
 	return uuid.Nil, false
 }
 
-// CompareHoldings compares what the broker says an account holds against what
-// our journal says, and is a pure function of its arguments: no database, no
-// clock, no network.
-//
-// SECURITIES ARE MATCHED THROUGH index AND NOTHING ELSE — what the resolver
-// has already built for this connection (decision 2 of the task brief). A
-// broker position that is in neither of its maps is reported as a difference
-// under the broker's own naming, never passed over: nothing of ours
-// corresponds to it, which usually means some of its operations did not
-// project, and a silent skip would turn the most useful evidence this
-// comparison can produce into nothing at all.
-//
-// TWO KINDS OF POSITION ARE NOT SECURITIES OF OURS AND ARE NOT COMPARED AS
-// ONE. A position of type "currency" is the account's own cash, which the
-// money half of this comparison handles instead, and a position whose type
-// this program does not account for at all gets MismatchUnsupported rather
-// than MismatchInstrument. Both are decided in compareInstruments, where the
-// reasoning sits next to the code.
-//
-// labels supply the name to show per instrument of ours; an instrument with no
-// label is named by its id, since a poor label is no reason to withhold a
-// difference.
-//
-// A JOURNAL THE ENGINE REFUSES YIELDS ReconcileNotChecked. Our own side of the
-// comparison could not be computed at all, and the only two other answers
-// available — "agrees" or "here is what differs" — would both be claims about
-// a comparison that never happened. The reason is not lost: the reconciler
-// itself calls compareHoldings, which returns it.
+// CompareHoldings compares the broker's holdings with our journal's, as a pure
+// function. Securities are matched through index only; a broker position in
+// neither map is reported under the broker's naming, never skipped. Cash
+// positions and unsupported kinds are handled in compareInstruments. labels name
+// our instruments, falling back to the id. A journal the engine refuses yields
+// ReconcileNotChecked, since no comparison happened; compareHoldings returns the
+// reason.
 func CompareHoldings(brokerPositions []PortfolioPosition, brokerBalances []MoneyBalance,
 	journal []operation.Operation, index InstrumentIndex,
 	labels map[uuid.UUID]string,
@@ -291,10 +161,8 @@ func CompareHoldings(brokerPositions []PortfolioPosition, brokerBalances []Money
 	return res
 }
 
-// compareHoldings is CompareHoldings with the engine's refusal kept, for the
-// caller inside this package that logs and returns it — and with the
-// passports the check obtained for positions nothing of ours matched, keyed by
-// instrument_uid (see matchByISIN), which CompareHoldings has none of.
+// compareHoldings is CompareHoldings keeping the engine's refusal, and with
+// the passports obtained for unmatched positions (see matchByISIN).
 func compareHoldings(brokerPositions []PortfolioPosition, brokerBalances []MoneyBalance,
 	journal []operation.Operation, index InstrumentIndex,
 	labels map[uuid.UUID]string, passports map[string]InstrumentBrief,
@@ -316,55 +184,33 @@ func compareHoldings(brokerPositions []PortfolioPosition, brokerBalances []Money
 	return ReconcileResult{Status: status, Mismatches: mismatches}, nil
 }
 
-// brokerTypeCurrency is the instrument_type the broker gives its own cash
-// positions. It is deliberately absent from brokerInstrumentTypes (see the
-// long note there on why a currency must never reach the resolver); here it
-// is needed by name, because cash arriving in the list of positions has to be
-// recognized to be left to the half of this comparison that handles it.
+// brokerTypeCurrency is the broker's instrument_type for its cash positions,
+// recognized here to leave them to the cash comparison.
 const brokerTypeCurrency = "currency"
 
-// compareInstruments compares the number of UNITS of every security either
-// side names.
-//
-// passports is what the broker said the unmatched positions ARE, keyed by
-// instrument_uid; nil when nothing was asked (CompareHoldings). It fills the
-// Broker* fields of an unknown-security row and decides nothing: a position
-// is matched or not by the index alone, as before.
+// compareInstruments compares units of every security either side names.
+// passports (by instrument_uid; nil from CompareHoldings) fill an unknown row's
+// Broker* fields and decide nothing.
 func compareInstruments(brokerPositions []PortfolioPosition, positions map[uuid.UUID]*portfolio.Position,
 	index InstrumentIndex, labels map[uuid.UUID]string, passports map[string]InstrumentBrief,
 ) []ReconcileMismatch {
 	out := []ReconcileMismatch{}
-	// What the broker holds of each catalog row, summed: one paper on two
-	// listings is two broker positions and one holding here, and comparing each
-	// listing against the whole journal position reports the paper twice (#135).
-	// order keeps the broker's own sequence so the result is deterministic.
+	// Summed per catalog row: one paper on two listings is two broker
+	// positions and one holding here (#135). order keeps the broker's sequence.
 	held := make(map[uuid.UUID]decimal.Decimal, len(brokerPositions))
 	var order []uuid.UUID
 
 	for _, p := range brokerPositions {
-		// THE BROKER'S LIST OF POSITIONS IS NOT A LIST OF SECURITIES: the
-		// account's cash stands in it too, as a position of type "currency".
-		// Checked on a live sandbox account that was topped up with 50 000 ₽
-		// and never traded — its portfolio came back holding exactly one
-		// position, the rubles (2026-08-05, testdata/portfolio_cash_only.json).
-		//
-		// PASSING IT OVER IS NOT A GAP BUT A DIVISION OF LABOUR: compareCash
-		// below compares this account's cash, currency by currency, against
-		// what the journal accounts for — from GetPositions, the broker's own
-		// statement of the same money. Comparing it here as well would count
-		// the owner's cash twice, once correctly and once as a security
-		// nothing of ours corresponds to, so every account holding any cash
-		// would carry a permanent phantom position and could never reach
-		// "agrees".
+		// Cash stands in the position list as type "currency" (live sandbox,
+		// 2026-08-05, testdata/portfolio_cash_only.json). compareCash compares it
+		// from GetPositions; comparing it here too would leave a phantom position
+		// on every account with cash.
 		if p.InstrumentType == brokerTypeCurrency {
 			continue
 		}
 
-		// THE BROKER'S QUANTITY IS ALREADY THE WHOLE POSITION and its Blocked
-		// is a boolean — the paper is halted at the depository — so nothing is
-		// added for it here. Adding one would overstate every halted holding
-		// by exactly the flag. (Money is the other way round; see
-		// compareCash.)
+		// Quantity is the whole position; Blocked is a flag, so nothing is added
+		// (money is the opposite; see compareCash).
 		brokerQty := p.Quantity.Decimal()
 
 		id, ok := index.lookup(p)
@@ -406,10 +252,8 @@ func compareInstruments(brokerPositions []PortfolioPosition, positions map[uuid.
 	}
 
 	for id, pos := range positions {
-		// A position sold out to the last unit stays in the engine's answer
-		// with a quantity of zero, and the broker does not report such a thing
-		// at all. Calling that a difference would put a permanent false alarm
-		// on the screen of anyone who ever closed a trade.
+		// A sold-out position stays in the engine's answer at zero; the broker
+		// does not report it, and that is no difference.
 		if _, compared := held[id]; compared || pos.Quantity.IsZero() {
 			continue
 		}
@@ -425,49 +269,17 @@ func compareInstruments(brokerPositions []PortfolioPosition, positions map[uuid.
 	return out
 }
 
-// compareCash compares the money standing on the account, currency by
-// currency.
-//
-// BOTH SIDES ARE STATED IN WHOLE CURRENCY UNITS — rubles, not kopecks — which
-// is how the broker states its own and how a person reads the row. Only OUR
-// side crosses over, and that crossing is exact: every journal figure is a
-// whole number of minor units, so shifting the decimal point by minorUnitScale
-// rounds nothing and invents nothing.
-//
-// THE CROSSING IN THE OTHER DIRECTION IS NOT EXACT, which is why this
-// function does not make it: the gateway's amounts carry nine decimal places,
-// and a tenth of a kopeck cannot become a whole number of minor units without
-// a decision this function has no business making. (The balance mark does have
-// to make that crossing, and it refuses outright rather than rounding — see
-// markBalance.)
-//
-// A CURRENCY ONLY ONE SIDE MENTIONS IS COMPARED AGAINST ZERO rather than
-// skipped: the broker's answer is a complete statement of its cash, so a
-// currency absent from it is a currency it holds none of, and our journal
-// claiming otherwise is exactly the kind of difference this exists to show.
-//
-// OUR SIDE IS THE WHOLE ACCOUNT, not the imported part of it. The journal
-// handed over is the account's entire journal (the reconciler reads it through
-// ListForEngine), so a deposit somebody typed in by hand on an imported account
-// stands in this sum, the broker knows nothing about it, and the currency shows
-// up here as a difference — with a label naming the currency and nothing about
-// where the extra money came from. That is right under the precondition this
-// whole importer is built on, which is the owner's own decision: an import
-// feeds ACCOUNTS OF ITS OWN, so everything in one of those accounts is
-// something the broker reported and the comparison is between two statements
-// about the same thing. Summing only the imported rows would be worse under
-// that precondition and no better without it: the sum would agree with the
-// broker while the account itself held money the broker never reported, and
-// nothing anywhere would say so. See the rebuild's own note on the precondition
-// and where it belongs (rebuild.go's heading).
+// compareCash compares cash per currency, in whole currency units: our minor
+// units shift exactly, while the broker's nine-decimal amounts cannot become minor
+// units without a rounding decision (markBalance refuses instead). A currency
+// only one side names is compared against zero. Our side is the whole account's
+// journal, hand entries included, under the precondition that an import feeds
+// accounts of its own (see rebuild.go).
 func compareCash(brokerBalances []MoneyBalance, journal []operation.Operation) []ReconcileMismatch {
 	broker := make(map[string]decimal.Decimal, len(brokerBalances))
 	for _, b := range brokerBalances {
-		// THE MONEY HALF OF THE ASYMMETRY: the free balance and the amount
-		// held by standing orders are two ADDENDS of one balance (see
-		// MoneyBalance), unlike a security's boolean Blocked, which is not a
-		// quantity at all. Summing per currency rather than assigning, because
-		// GetPositions is free to name a currency in either of its two lists.
+		// Free plus blocked: two addends of one balance. Summed, since a currency
+		// may appear in either list.
 		broker[b.Currency] = broker[b.Currency].Add(b.Value).Add(b.Blocked)
 	}
 	ours := journalCashMinor(journal)
@@ -489,40 +301,13 @@ func compareCash(brokerBalances []MoneyBalance, journal []operation.Operation) [
 	return out
 }
 
-// journalCashMinor is the cash the journal accounts for, per currency, in
-// minor units: the sum of the entries' amounts less the sum of their fees.
-//
-// THIS IS A NEW COMPUTATION AND THE ONLY ONE OF ITS KIND HERE. An account's
-// balance on the accounts screen is a mark somebody entered by hand, not
-// anything derived from the journal, so there is no second implementation of
-// this to check against — which is why it is pinned by a test with the
-// figures written out rather than by agreement with something else.
-//
-// A buy carries its commission beside the amount rather than inside it (see
-// the projection's projectTrade), so the fee is subtracted here; a standalone
-// charge — a service fee, a tax — is a negative amount with no fee of its own,
-// and is therefore counted once, by the same formula.
-//
-// TRANSFERS ARE NOT CASH AND ARE LEFT OUT. A transfer's AmountMinor is the
-// cost basis that travelled with the shares, with no cash meaning at all (see
-// portfolio.Operation) — and this importer does produce transfers, for shares
-// moving between the owner's own accounts. Summing that basis as money would
-// invent a balance nobody has and hang a false difference on the account for
-// good.
-//
-// WHICH TYPES THOSE ARE IS NOT DECIDED HERE. portfolio.MovesCash answers it, and
-// this function asks rather than keeping a list of its own: the engine's own
-// cash fold asks the same question, and two hand-maintained lists of "types that
-// are not money" would agree only until one of them learned about a new type.
-// A conversion of one paper into another is the type that arrived after this was
-// written, its two legs both on THIS account, and a list kept here would have
-// counted its basis as cash twice and hung a difference against the broker that
-// nothing on the screen could explain.
-//
-// The running total is a decimal rather than an int64 because a sum of
-// arbitrarily many entries has no bound of its own, and a wrapped int64 is a
-// plausible-looking figure of the wrong sign. Nothing is rounded: every term
-// is a whole number of minor units.
+// journalCashMinor is the cash the journal accounts for per currency, in minor
+// units: amounts less fees. A buy carries its commission beside the amount, a
+// standalone charge is a negative amount without a fee. Rows that are not cash
+// (a transfer's or conversion's basis) are excluded by asking portfolio.MovesCash,
+// the engine's own rule, rather than a local list. Decimal, not int64, so a long
+// sum cannot wrap. Pinned by a test with figures written out, since nothing else
+// computes it.
 func journalCashMinor(journal []operation.Operation) map[string]decimal.Decimal {
 	cash := make(map[string]decimal.Decimal)
 	for _, o := range journal {
@@ -553,20 +338,9 @@ func currencyUnion(broker, ours map[string]decimal.Decimal) []string {
 	return codes
 }
 
-// unmatchedKind decides what a broker position that resolves to no instrument
-// of ours is: a security this program could hold but has never seen an
-// operation on (MismatchUnknownSecurity), or an asset of a kind it does not
-// account for at all (MismatchUnsupported).
-//
-// THE ANSWER IS READ OFF brokerInstrumentTypes AND NOTHING ELSE — the same
-// table the resolver refuses by, so the screen cannot come to call an asset
-// unsupported that the importer would happily book, or the other way round.
-// A second list of "types we do not support" would be exactly the pair of
-// independent computations of one thing that this codebase has watched drift.
-//
-// The type read here comes off the portfolio position and the resolver reads
-// it off the instrument's passport; they are the same field of the same API,
-// the broker's instrument_type, which is why one table can answer for both.
+// unmatchedKind classifies an unmatched broker position as an unknown security
+// or an unsupported kind, by brokerInstrumentTypes alone, the resolver's own
+// table, so the two cannot disagree.
 func unmatchedKind(p PortfolioPosition) string {
 	if _, supported := brokerInstrumentTypes[p.InstrumentType]; supported {
 		return MismatchUnknownSecurity
@@ -574,15 +348,10 @@ func unmatchedKind(p PortfolioPosition) string {
 	return MismatchUnsupported
 }
 
-// attachPassport fills the Broker* fields of an unknown-security row: the
-// type from the position itself, translated by the one table unmatchedKind
-// has just classified it by (so the lookup cannot miss — a type outside the
-// table is MismatchUnsupported and never reaches here; the guard is for the
-// day that invariant is broken, and it then publishes no type rather than an
-// empty one), and ISIN, name and currency from the passport when one was
-// obtained. An empty field of an obtained passport stays nil too: a blank
-// ISIN is nothing a catalog row can be made from, and publishing "" would let
-// a client build one.
+// attachPassport fills an unknown-security row's Broker* fields: the type from
+// the position via brokerInstrumentTypes (it cannot miss; the guard publishes no
+// type if it ever does), ISIN, name and currency from the passport if obtained.
+// Empty fields stay nil so no client builds a row from "".
 func attachPassport(m *ReconcileMismatch, p PortfolioPosition, passports map[string]InstrumentBrief) {
 	if t, ok := brokerInstrumentTypes[p.InstrumentType]; ok {
 		s := string(t)
@@ -605,15 +374,8 @@ func nonEmpty(s string) *string {
 	return &s
 }
 
-// brokerLabel names a broker position that resolves to nothing of ours, in
-// the words a person is likeliest to recognize: the ticker, then the figi,
-// then the identifiers that exist for machines. Ordered this way because such
-// a row is the one thing on this screen with no name of OURS behind it, and an
-// instrument_uid is a bare UUID — true, and unreadable.
-//
-// All four being empty would mean the broker returned a position it did not
-// identify at all; the difference is still reported, because a badly labelled
-// difference is news and a swallowed one is not.
+// brokerLabel names an unmatched broker position by ticker, then figi, then
+// the machine identifiers. Reported even with no identifier at all.
 func brokerLabel(p PortfolioPosition) string {
 	switch {
 	case p.Ticker != "":
@@ -627,8 +389,7 @@ func brokerLabel(p PortfolioPosition) string {
 	}
 }
 
-// instrumentLabel is what to call one of our instruments, falling back to its
-// id when the caller supplied no label for it.
+// instrumentLabel names one of our instruments, falling back to its id.
 func instrumentLabel(labels map[uuid.UUID]string, id uuid.UUID) string {
 	if l := labels[id]; l != "" {
 		return l
@@ -636,11 +397,8 @@ func instrumentLabel(labels map[uuid.UUID]string, id uuid.UUID) string {
 	return id.String()
 }
 
-// sortMismatches puts the differences in an order that does not change between
-// two runs over the same data. Half of them are found by walking the engine's
-// positions, which come out of a map, and Go randomizes map iteration on
-// purpose — so without this the rows would reshuffle on every refresh and each
-// reshuffle would look like news.
+// sortMismatches gives a stable order: half the rows come from map
+// iteration, which Go randomizes, and a reshuffle would look like news.
 func sortMismatches(m []ReconcileMismatch) {
 	sort.Slice(m, func(i, j int) bool {
 		if m[i].Kind != m[j].Kind {
@@ -660,51 +418,36 @@ func idString(id *uuid.UUID) string {
 	return id.String()
 }
 
-// balanceMarker is the balance mark this reconciliation leaves on the account
-// — a narrow local interface for the reason this package declares the others
-// (see journalDelta in rebuild.go). *account.Store satisfies it.
-//
-// IT READS THE ACCOUNT AS WELL AS WRITING THE MARK, because a mark is a bare
-// int64 whose currency is the account's own (see account.Store.SetBalance) and
-// this reconciliation only ever has rubles to file — so what currency the
-// account keeps decides whether the mark may be written at all. An interface
-// with the write and not the read could not ask, and this program would have
-// no way to keep the promise it makes in ReconcileLink's doc comment.
+// balanceMarker reads the account as well as marking it: a mark is in the
+// account's currency, so the account must be checked to be in roubles first.
 type balanceMarker interface {
 	ByID(ctx context.Context, spaceID, id uuid.UUID) (account.WithBalance, error)
 	SetBalance(ctx context.Context, spaceID, accountID uuid.UUID, asOf time.Time, amountMinor int64) error
 }
 
-// engineReader is the journal of one account, in the order the engine reads
-// it. *operation.Store satisfies it.
+// engineReader is one account's journal in engine order.
 type engineReader interface {
 	ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]operation.Operation, error)
 }
 
 // Reconciler compares one linked account against the broker and records what
-// the broker said the account is worth.
+// the broker says the account is worth.
 type Reconciler struct {
 	store    *Store
 	ops      engineReader
 	accounts balanceMarker
-	// catalog answers "which of our rows is this ISIN", which is how a broker
-	// position under a listing this connection never imported is recognized as
-	// a paper the owner does hold (see matchByISIN).
+	// catalog finds our row for an ISIN, recognizing a position under a
+	// listing this connection never imported (see matchByISIN).
 	catalog isinCatalog
-	// registry answers whether a difference that looks like a split is one
-	// nobody has recorded yet. Nil in an instance wired without it, and then no
-	// hint is offered — see attachSplitHints.
+	// registry answers whether a split-shaped difference is unrecorded; nil
+	// offers no hint (see attachSplitHints).
 	registry splitRegistry
 	log      *slog.Logger
-	// now stands in for time.Now so a test can pin the day a mark is filed
-	// under instead of racing the wall clock (the pattern
-	// marketdata.backfillFxWorker uses).
+	// now pins the day a mark is filed under in tests.
 	now func() time.Time
 }
 
-// NewReconciler builds the check. registry may be nil, and then a difference
-// that looks like an unrecorded split is reported without the hint that says so
-// (see attachSplitHints).
+// NewReconciler builds the check. registry may be nil.
 func NewReconciler(store *Store, ops engineReader, accounts balanceMarker, catalog isinCatalog,
 	registry splitRegistry, log *slog.Logger,
 ) *Reconciler {
@@ -717,105 +460,34 @@ func NewReconciler(store *Store, ops engineReader, accounts balanceMarker, catal
 	}
 }
 
-// isinCatalog is the narrow view of instrument.Store the reconciliation needs:
-// one question, asked about a security the broker named and this program may
-// already hold under another of its listings.
+// isinCatalog is the part of instrument.Store the reconciliation needs.
 type isinCatalog interface {
 	ByISIN(ctx context.Context, isin string) (instrument.Instrument, error)
-	// ByIDs answers the other way round, for the split hint: a difference names
-	// one of our catalog rows, and the registry is keyed by ISIN. Batched
-	// because a check can carry several differences and one query per row is
-	// the N+1 this package has a test against (see round_trips).
+	// ByIDs maps differences to ISINs for the split hint, in one query.
 	ByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]instrument.Instrument, error)
 }
 
-// splitRegistry answers whether the corporate-actions registry already knows of
-// a split of this paper on or before a day.
-//
-// NARROW, AND DECLARED HERE rather than imported as a package: what this check
-// wants of the registry is one question, and *corporateaction.Store answers it
-// structurally. The dependency has to run this way round — the registry knows
-// nothing about brokers, and its own materialization already reaches into
-// journals through the operation service.
+// splitRegistry answers whether the registry knows a split of this paper on
+// or before a day. Declared here: the registry knows nothing about brokers.
 type splitRegistry interface {
 	HasSplitOnOrBefore(ctx context.Context, isin string, day time.Time) (bool, error)
 }
 
-// ReconcileLink checks one linked account against the broker and, when the
-// broker answered, marks the account's balance with the figure the broker
-// itself named.
-//
-// THE MARK IS THE BROKER'S OWN RUBLES — free plus blocked — and not any sum of
-// ours (the owner's decision of 2026-08-04). An imported account is one nobody
-// will ever type a balance mark into by hand, and the accounts screen shows
-// that mark and not a derivation, so without this the screen would show an
-// imported account as empty. It is filed under the Moscow day, which is the
-// calendar this importer files its journal entries under.
-//
-// The mark is written whenever the broker ANSWERED and this program got as far
-// as comparing — including when the comparison then found differences, and
-// including when our own journal turned out not to compute: what the broker
-// says it holds is no less true for our side of it being wrong or missing. It
-// is not written when the broker did not answer, because then there is no
-// figure of the broker's to write and the previous mark is better left
-// standing than replaced by a guess; nor when this program's own database
-// refused a read on the way, where the mark's write would fail with it.
-//
-// THE ACCOUNT MUST BE A RUBLE ACCOUNT, AND THAT IS CHECKED HERE rather than
-// trusted. The mark is a bare int64 in the account's own currency (see
-// account.Store.SetBalance), so writing rubles into an account denominated in
-// anything else would file one currency's figure under another's name — a
-// wrong number with nothing on the screen to say so. Accounts for this
-// importer are created by the path that makes a link, and that path is where
-// the requirement belongs; but a precondition only ever written down is one
-// that the caller wiring that path, or a link made against an account that
-// already existed, can break in silence — so this refuses
-// (ErrAccountNotInRubles) instead of marking. (An account's own currency
-// cannot change after it is created: account.Update carries no currency
-// field. What can change is which account a link points at.) Cash in other
-// currencies is not lost from sight either way: it is compared like any other
-// and shows up in the differences.
-//
-// A broker that did not answer yields ReconcileNotChecked and the error, which
-// is a different thing from "no differences" and must be shown as one.
-// passportLookupsPerReconcile bounds how many of the broker's own positions one
-// check asks a passport for. Each is a request; the set is the positions this
-// connection has no mapping for, which on a healthy account is empty and on the
-// owner's is fourteen. Whatever the cap leaves out stays reported as unmatched,
-// which is the honest answer for a position nothing was learned about — and the
-// count that was skipped is logged rather than passed over.
+// passportLookupsPerReconcile bounds the passports one check asks for: the
+// positions this connection has no mapping for (none on a healthy account,
+// fourteen on the owner's). Positions past it stay unmatched and the skipped
+// count is logged.
 const passportLookupsPerReconcile = 40
 
-// matchByISIN teaches the index the broker positions it does not already know,
-// by asking the broker what paper each one IS and looking that paper up in this
-// program's own catalog.
-//
-// ONE PAPER, TWO LISTINGS, TWO ROWS OF NONSENSE. When a foreign share was moved
-// to another venue after trading in it was suspended, the broker's portfolio
-// reports the new listing while the history that built the journal named the old
-// one. Nothing connects the two identifiers, so the check reported the holding
-// TWICE — once as "the broker has 20 and we have none", once as "we have 20 and
-// the broker has none" — for seven of the owner's papers at once, with the
-// quantities agreeing in every one of them. A list like that is not read.
-//
-// THE ISIN IS WHAT IDENTIFIES A SECURITY, which is why it and nothing else is
-// matched on. A ticker is not unique across venues or issuers, and matching on
-// one would file a stranger's position against the owner's paper.
-//
-// NOTHING IS WRITTEN DOWN. The learned pairs live for this one comparison. The
-// instrument map is what the IMPORT resolves operations through, and a pairing
-// put there — however sound — would decide where future trades are booked, on
-// the strength of a check whose whole job is to look and report.
-//
-// THE THIRD VALUE IS THE PASSPORTS THAT PAIRED NOTHING, keyed by
-// instrument_uid: what the broker said a position is when no catalog row of
-// ours carries that ISIN. Before it existed the check asked the question,
-// received the answer, and dropped it — and the row then went to the screen
-// under the broker's bare ticker, leaving the reader to notice that «TECH2»
-// is not a name of ours and to go and look it up by hand. A passport the
-// broker would not give (404) is simply absent from the map, and the row says
-// so by carrying nothing. Positions past the lookup cap are absent for the
-// same reason.
+// matchByISIN teaches the index broker positions it does not know, by asking
+// the broker which paper each is and finding that ISIN in our catalog. A share
+// moved to another venue appears under a new listing while the journal names the
+// old one; without this, seven of the owner's papers showed twice ("broker 20,
+// ours 0" and "ours 20, broker 0"). Only the ISIN identifies a security. Nothing
+// is written: the instrument map decides where future trades are booked, and a
+// check only looks. The third result is the passports that matched nothing, by
+// instrument_uid, so the row can say what the paper is; a 404 or a capped
+// position is absent.
 func (r *Reconciler) matchByISIN(ctx context.Context, c *Client, index InstrumentIndex,
 	labels map[uuid.UUID]string, positions []PortfolioPosition,
 ) (InstrumentIndex, map[uuid.UUID]string, map[string]InstrumentBrief) {
@@ -838,8 +510,7 @@ func (r *Reconciler) matchByISIN(ctx context.Context, c *Client, index Instrumen
 		unknown = unknown[:passportLookupsPerReconcile]
 	}
 
-	// Copies, so a failure halfway leaves the caller's own index untouched and
-	// so nothing learned here can outlive this comparison.
+	// Copies: nothing learned here outlives this comparison.
 	byUID := make(map[string]uuid.UUID, len(index.ByUID)+len(unknown))
 	for k, v := range index.ByUID {
 		byUID[k] = v
@@ -858,17 +529,9 @@ func (r *Reconciler) matchByISIN(ctx context.Context, c *Client, index Instrumen
 			continue
 		}
 		if brief.ISIN == "" {
-			// NOT A GUARD AGAINST A WRONG MATCH — instrument.Store.ByISIN
-			// refuses an empty ISIN itself, and one rule kept in two places is
-			// how the two eventually disagree. This is here so the LOG says
-			// which of two different things happened: the broker would not say
-			// what its own position is, or it said and nothing of ours carries
-			// that ISIN. Those send a reader to different places.
-			//
-			// The passport is kept all the same: a name and a currency are
-			// still what the broker said, and the row is allowed to show them
-			// — it just cannot be turned into a catalog row from them, which
-			// the missing ISIN says on its own.
+			// Not a match guard (ByISIN refuses ""), but the log distinguishes "the
+			// broker would not say" from "nothing of ours has it". The passport is
+			// kept for its name and currency.
 			r.log.Debug("tinvest: the broker names no ISIN for one of its own positions",
 				"instrument_uid", p.InstrumentUID, "ticker", brief.Ticker)
 			unpaired[p.InstrumentUID] = brief
@@ -876,10 +539,7 @@ func (r *Reconciler) matchByISIN(ctx context.Context, c *Client, index Instrumen
 		}
 		inst, err := r.catalog.ByISIN(ctx, brief.ISIN)
 		if err != nil {
-			// Including "no such row": the owner does not hold this paper in
-			// this program at all, which is a real difference and is reported
-			// as one — with the passport on it, so that the report says what
-			// the paper is and not only that it is not ours.
+			// Including no row: a real difference, reported with its passport.
 			r.log.Debug("tinvest: no catalog row carries the ISIN of a broker position",
 				"instrument_uid", p.InstrumentUID, "isin", brief.ISIN, "err", err)
 			unpaired[p.InstrumentUID] = brief
@@ -893,6 +553,20 @@ func (r *Reconciler) matchByISIN(ctx context.Context, c *Client, index Instrumen
 	return grown, grownLabels, unpaired
 }
 
+// ReconcileLink checks one linked account against the broker and, when the
+// broker answered, marks the account's balance with the broker's own figure for
+// it (see markBalance), filed under the Moscow day.
+//
+// The mark is written whenever the broker answered, even if differences were
+// found or our journal did not compute: the broker's statement stands either
+// way. It is not written when the broker did not answer (yesterday's mark is
+// better than a guess) or our database failed a read on the way.
+//
+// The account must be a rouble account, checked here (ErrAccountNotInRubles)
+// rather than trusted to the path that creates links: the mark has no currency
+// of its own, and a link can point at an existing account.
+//
+// A broker that did not answer yields ReconcileNotChecked and the error.
 func (r *Reconciler) ReconcileLink(ctx context.Context, c *Client, conn Connection, link AccountLink) (ReconcileResult, error) {
 	notChecked := ReconcileResult{Status: ReconcileNotChecked}
 
@@ -928,23 +602,14 @@ func (r *Reconciler) ReconcileLink(ctx context.Context, c *Client, conn Connecti
 	res, cmpErr := compareHoldings(brokerPositions, brokerBalances, journal, index, labels, passports)
 	r.attachSplitHints(ctx, res.Mismatches)
 
-	// The mark goes on whatever the verdict was, cmpErr included: it is the
-	// broker's own statement about the account, and a journal of ours that
-	// does not compute says nothing about whether that statement is true.
-	//
-	// BOTH REFUSALS TRAVEL WHEN BOTH HAPPENED. The engine refusing our journal
-	// and the mark failing to be written are two independent accidents with
-	// two different remedies, and returning only the later one would leave the
-	// person who has to act on this looking at half of what went wrong.
+	// The mark is written whatever the verdict: it is the broker's own
+	// statement. Both errors are returned when both happened.
 	if err := r.markBalance(ctx, conn, link, brokerPortfolio.Total); err != nil {
 		return res, errors.Join(cmpErr, err)
 	}
 
-	// THE MESSAGE CLAIMS ONLY WHAT ITS OWN FIELDS CARRY. This line is written
-	// for the run where cmpErr is not nil too — status is then "not checked"
-	// and nothing was compared at all — so it says the attempt ended, and
-	// leaves the fields to say how. Saying "reconciled" over a not-checked
-	// status would be the caption that outruns its number, in a log.
+	// The message claims only what its fields carry; the status may be
+	// "not checked".
 	attrs := []any{
 		"connection", conn.ID, "link", link.ID, "account", link.AccountID,
 		"status", res.Status, "mismatches", len(res.Mismatches),
@@ -956,26 +621,11 @@ func (r *Reconciler) ReconcileLink(ctx context.Context, c *Client, conn Connecti
 	return res, cmpErr
 }
 
-// attachSplitHints marks the differences that look like an unrecorded split.
-//
-// WHAT IT LOOKS FOR is a difference by a whole factor of two or more, in either
-// direction — twenty of ours against one of theirs is a reverse split read the
-// other way — on a paper the registry holds no split for. On the owner's own
-// account that is AMZN (1 against 20, Amazon's 20:1 of June 2022) and NVDA (3
-// against 30, NVIDIA's 10:1 of June 2024), neither of which the broker reports
-// as an operation because no broker does: the T-Invest operation enum has 71
-// values and not one corporate action in it.
-//
-// WHY THE REGISTRY IS CONSULTED AT ALL. Once the event is recorded, the split
-// is in the journal and the difference is gone — so a hint over a paper the
-// registry already knows about could only mean something else is wrong, and
-// pointing at the registry would send the reader to a row that is already
-// there and already right.
-//
-// IT CHANGES NOTHING AND ASKS. No event is written, no journal is touched, and
-// a failure to look is a hint not shown rather than a check not finished: the
-// difference itself is the finding, and this is a suggestion about where to
-// look for its cause.
+// attachSplitHints marks differences by a whole factor of two or more, either
+// way, on papers the registry has no split for (AMZN 1 vs 20 after Amazon's 20:1
+// of June 2022; NVDA 3 vs 30 after NVIDIA's 10:1 of June 2024; no broker reports
+// splits as operations). A recorded split would already be in the journal, so it
+// is not hinted. It changes nothing, and a failed lookup just shows no hint.
 func (r *Reconciler) attachSplitHints(ctx context.Context, mismatches []ReconcileMismatch) {
 	if r.registry == nil || r.catalog == nil {
 		return
@@ -994,9 +644,7 @@ func (r *Reconciler) attachSplitHints(ctx context.Context, mismatches []Reconcil
 		r.log.Debug("tinvest: could not read the papers of the differences, so no split hint is offered", "err", err)
 		return
 	}
-	// The day the hint is about: an event effective after this check could not
-	// have moved today's holding. r.now is the same clock the balance mark is
-	// filed under.
+	// The hint's day: a later event could not have moved today's holding.
 	today := r.now()
 	for i := range mismatches {
 		m := &mismatches[i]
@@ -1009,10 +657,7 @@ func (r *Reconciler) attachSplitHints(ctx context.Context, mismatches []Reconcil
 		}
 		inst, found := rows[*m.InstrumentID]
 		if !found || inst.ISIN == "" {
-			// No ISIN is no question to ask: the registry is keyed by it, so
-			// nothing could be recorded against this paper anyway, and a hint
-			// pointing at a registry that cannot hold the answer would be
-			// advice nobody can act on.
+			// No ISIN: the registry is keyed by it, so nothing could be recorded.
 			continue
 		}
 		known, err := r.registry.HasSplitOnOrBefore(ctx, inst.ISIN, today)
@@ -1029,18 +674,8 @@ func (r *Reconciler) attachSplitHints(ctx context.Context, mismatches []Reconcil
 	}
 }
 
-// wholeFactor reports the whole number one of these quantities is times the
-// other, when there is one and it is at least two.
-//
-// EITHER DIRECTION COUNTS. A forward split leaves the broker holding the
-// multiple of what the journal does; a reverse split leaves the journal holding
-// the multiple. The factor returned is the larger over the smaller in both
-// cases, which is what the screen says ("differs by a factor of N") and is true
-// of both.
-//
-// A ZERO ON EITHER SIDE IS NOT A FACTOR, however tempting: nothing multiplied
-// by anything is still nothing, so a paper held on one side and not the other
-// says nothing about splits.
+// wholeFactor is the whole multiple, at least two, of the larger quantity over
+// the smaller, in either direction; a zero on either side is no factor.
 func wholeFactor(a, b decimal.Decimal) (int64, bool) {
 	if !a.IsPositive() || !b.IsPositive() {
 		return 0, false
@@ -1060,21 +695,11 @@ func wholeFactor(a, b decimal.Decimal) (int64, bool) {
 	return f, true
 }
 
-// markBalance files what the broker says the whole account is worth — its
-// securities at its own prices plus its cash, in rubles — as the account's
-// balance mark for today, after making sure the account is one rubles may be
-// filed under at all (see ReconcileLink).
-//
-// THE WHOLE ACCOUNT AND NOT ITS RUBLES. Until 2026-10-02 the mark was the
-// broker's free and blocked rubles (the owner's rule of 2026-08-04, made while
-// the family total was still a sum of marks). With the owner's ruling on Р-2 —
-// the account is valued from its journal and checked against the broker — the
-// mark is the broker's figure for that check, and a figure that leaves the
-// securities out has nothing to be checked against. The rubles themselves are
-// still compared, currency by currency, by compareHoldings.
-//
-// No total from the broker leaves the previous mark standing: there is no
-// figure of the broker's to write, and a guess would be worse than yesterday's.
+// markBalance files the broker's whole-account worth (securities at its prices
+// plus cash, in roubles) as today's balance mark, after checking the account is a
+// rouble account. Since Р-2 (2026-10-02) the account is valued from its journal
+// and checked against this figure; before that the mark was the broker's roubles
+// alone. No total leaves the previous mark standing.
 func (r *Reconciler) markBalance(ctx context.Context, conn Connection, link AccountLink, total *MoneyValue) error {
 	acc, err := r.accounts.ByID(ctx, conn.SpaceID, link.AccountID)
 	if err != nil {
@@ -1097,11 +722,7 @@ func (r *Reconciler) markBalance(ctx context.Context, conn Connection, link Acco
 
 	minor, refusal := minorFromDecimal(total.Decimal())
 	if refusal != nil {
-		// The refusal's Detail is reused and its Error() is not: the substance
-		// is right — this sum is finer than a minor unit, or larger than any
-		// this program holds — but its wording names the projection ("not
-		// projected"), and nothing was being projected here. What failed was
-		// the writing of a balance mark, and that is what this says.
+		// The refusal's Detail, not its Error(): nothing was being projected.
 		return fmt.Errorf("%w: account %s: %s", ErrBalanceMarkRefused, link.AccountID, refusal.Detail)
 	}
 	if err := r.accounts.SetBalance(ctx, conn.SpaceID, link.AccountID, mskDay(r.now()), minor); err != nil {
@@ -1110,6 +731,5 @@ func (r *Reconciler) markBalance(ctx context.Context, conn Connection, link Acco
 	return nil
 }
 
-// rubCode is the currency the balance mark is written in — see ReconcileLink
-// on why the mark is rubles and what that requires of the account.
+// rubCode is the balance mark's currency.
 const rubCode = "RUB"
