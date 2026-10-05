@@ -9,8 +9,8 @@ import (
 )
 
 // TestAConversionKeepsTheDayOfAParcelItRoundsAway: three parcels become so few
-// units of the new paper that the first no longer holds one. Its money used to
-// move onto the next parcel's day; it now stays a parcel of its own.
+// units of the new paper that the first holds none. Its money stays a parcel of
+// its own, on its own day, rather than moving onto the next parcel's.
 func TestAConversionKeepsTheDayOfAParcelItRoundsAway(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)

@@ -260,10 +260,8 @@ func TestAMoveIsReleasedAgainFromTheFrontAsItNowStands(t *testing.T) {
 	}
 }
 
-// A move an importer recorded is the importer's: it is not released again,
-// and when the restated history can no longer take it the statement is refused
-// with the engine's reason, as before #227, rather than rewriting the
-// importer's rows.
+// A move an importer recorded is not released again; when the restated
+// history cannot take it, the statement is refused with the engine's reason.
 func TestAMoveAnImporterRecordedIsNotRewritten(t *testing.T) {
 	o := newOnward(t)
 	group := uuid.New()

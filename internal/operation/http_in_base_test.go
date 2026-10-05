@@ -21,19 +21,13 @@ type operationInBase struct {
 	FeeMinor    int64  `json:"fee_minor"`
 	Currency    string `json:"currency"`
 	RateOn      string `json:"rate_on"`
-	// DatedOn is the date the headline rate was asked FOR, which RateOn is only
-	// equal to when that very day had a rate (see the API contract). The two are
-	// decoded separately here because a test that read one for the other could
-	// not tell a weekend's fallback from an exact hit — the confusion #80 is
-	// about.
+	// DatedOn is the date the headline rate was asked for; RateOn equals it
+	// only when that day had a rate (#80).
 	DatedOn string `json:"dated_on"`
 }
 
-// journalItem is the subset of apitypes.Operation these tests care about. A
-// nil *operationInBase covers both an omitted key and an explicit JSON null,
-// which is what in_base always is when there is nothing to publish (the
-// handler sets it to either a value or an explicit null, never leaves it
-// unset).
+// journalItem is the part of apitypes.Operation these tests read. A nil
+// *operationInBase is both an omitted key and an explicit null.
 type journalItem struct {
 	ID          string           `json:"id"`
 	OccurredOn  string           `json:"occurred_on"`
@@ -41,26 +35,18 @@ type journalItem struct {
 	FeeMinor    int64            `json:"fee_minor"`
 	Currency    string           `json:"currency"`
 	InBase      *operationInBase `json:"in_base"`
-	// HasUndatedLots says WHY in_base is null when it is: a rate nobody has
-	// fetched yet, or a purchase date nobody ever wrote down. The two must not
-	// be explained to a reader with the same sentence (see the API contract).
+	// HasUndatedLots says in_base is null for an unrecorded purchase date, not
+	// a missing rate.
 	HasUndatedLots bool `json:"has_undated_lots"`
-	// AssembledFromLots says whether amount_minor was assembled piece by piece
-	// from a stored breakdown — a fact about the operation, published here
-	// regardless of whether in_base exists at all (#67; see the API contract).
+	// AssembledFromLots is published whether or not in_base exists (#67).
 	AssembledFromLots bool `json:"assembled_from_lots"`
-	// InBaseGap names WHICH term stopped the conversion, sharper than
-	// HasUndatedLots (#79). Decoded as a plain string rather than the generated
-	// enum so a test can assert on the wire value and would notice a rename of
-	// the constant that never reached the contract.
+	// InBaseGap is decoded as a plain string so a test sees the wire value
+	// (#79).
 	InBaseGap string `json:"in_base_gap"`
 }
 
-// listJournal fetches GET .../operations and returns the page's rows, failing
-// the test on a non-200 or a decode error. The response is an envelope rather
-// than a bare array since #86; tests about the envelope itself (whether the page
-// is the whole journal) go through getJournalPage instead — see
-// http_pagination_test.go.
+// listJournal fetches GET .../operations and returns the page's rows.
+// Envelope tests use getJournalPage (http_pagination_test.go).
 func listJournal(t *testing.T, url string, c *http.Client, accountID string) []journalItem {
 	t.Helper()
 	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/operations", "")
@@ -113,8 +99,7 @@ func mkOperation(t *testing.T, url string, c *http.Client, body string) string {
 	return o.ID
 }
 
-// findOperation picks one operation out of a journal listing by id, so a
-// test never depends on the listing's ordering.
+// findOperation picks an operation by id, so tests do not depend on order.
 func findOperation(t *testing.T, list []journalItem, id string) journalItem {
 	t.Helper()
 	for _, o := range list {
@@ -126,8 +111,7 @@ func findOperation(t *testing.T, list []journalItem, id string) journalItem {
 	return journalItem{}
 }
 
-// mustDate parses a YYYY-MM-DD test fixture date, failing the test on a
-// malformed literal rather than silently building a zero time.Time.
+// mustDate parses a YYYY-MM-DD fixture date.
 func mustDate(t *testing.T, s string) time.Time {
 	t.Helper()
 	d, err := time.Parse("2006-01-02", s)
@@ -147,29 +131,17 @@ func seedFxRate(t *testing.T, mdStore *marketdata.Store, on, rate string) {
 	}
 }
 
-// TestListOperationInBaseConvertsAtOperationDate is the brief's main case: a
-// USD purchase in an RUB-based space, with a rate seeded on exactly the
-// operation's own date, must come back with in_base filled in from THAT
-// date's rate.
+// A USD purchase in a RUB space with a rate on its own date is converted at
+// that rate.
 //
-// Manual arithmetic (rate 65.4567 RUB per USD, a plausible March 2019 CBR
-// quote; the fractional digits are deliberate so both figures actually have
-// something to round):
+// Rate 65.4567 RUB per USD:
 //
-//	amount_minor -123_456 (= -1_234.56 USD, a purchase, so negative)
-//	  -123_456 * 65.4567 = -8_081_022.3552 -> -8_081_022 (= -80_810.22 RUB)
-//	fee_minor 799 (= 7.99 USD)
-//	  799 * 65.4567 = 52_299.9033 -> 52_300 (= 522.99... rounds UP to 523.00 RUB)
+//	amount_minor -123_456 * 65.4567 = -8_081_022.3552 -> -8_081_022
+//	fee_minor        799 * 65.4567 =     52_299.9033 ->     52_300
 //
-// The fee rounds up while the amount rounds down (in magnitude), which is
-// only possible if the two are converted and rounded as independent figures
-// — the brief's requirement. rate_on is the rate's own date, 2019-03-12.
-//
-// A much later rate is seeded as well, so an implementation that converted
-// at TODAY's rate (the way an account balance does, and a position's market
-// valuation — but not a position's basis, which since plan 6 is historical
-// like this) would pick 100 instead of 65.4567 and fail every assertion
-// below — the journal's whole point is that it does not.
+// The fee rounds up while the amount rounds down in magnitude, which needs the
+// two converted separately. rate_on is 2019-03-12. A much later rate of 100 is
+// seeded too, so converting at today's rate would fail every assertion.
 func TestListOperationInBaseConvertsAtOperationDate(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2019-03-12", "65.4567")
@@ -200,24 +172,15 @@ func TestListOperationInBaseConvertsAtOperationDate(t *testing.T) {
 	}
 }
 
-// TestListOperationInBaseFeeIsNotDerivedFromTheCombinedTotal pins the fee as
-// a figure converted in its own right, which the case above cannot do: on its
-// fixture, deriving the fee as convert(amount+fee) - convert(amount) happens
-// to land on the same number, so that implementation would pass unnoticed.
-//
-// Manual arithmetic (rate 65.50, chosen so both products land on exactly
-// half a minor unit and therefore round away from zero):
+// The fee is converted on its own, not derived from the total. At rate 65.50
+// both products land on exactly half a minor unit:
 //
 //	amount_minor 12_345 * 65.50 = 808_597.50 -> 808_598
 //	fee_minor       799 * 65.50 =  52_334.50 ->  52_335
-//	combined     13_144 * 65.50 = 860_932.00 -> 860_932  (nothing to round)
+//	combined     13_144 * 65.50 = 860_932.00 -> 860_932
 //
-// Converted independently the fee is 52_335. Derived from the combined
-// total it is 860_932 - 808_598 = 52_334 — one minor unit adrift, because
-// the two half-unit remainders that each round up on their own are gone by
-// the time the sum is rounded once. A dividend (positive amount) is used so
-// both figures share a sign and the divergence is not masked by the way
-// half-away-from-zero treats a negative amount against a positive fee.
+// Derived from the total the fee would be 52_334. A dividend keeps both figures
+// positive so the sign does not mask the difference.
 func TestListOperationInBaseFeeIsNotDerivedFromTheCombinedTotal(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2019-03-12", "65.50")
@@ -241,20 +204,14 @@ func TestListOperationInBaseFeeIsNotDerivedFromTheCombinedTotal(t *testing.T) {
 	}
 }
 
-// TestListOperationInBaseUsesNearestEarlierRateDate is what separates the
-// journal from balances and positions: the CBR publishes nothing on
-// weekends and holidays, so an operation dated 2019-03-17 (a Sunday) has no
-// rate of its own. Store.FxRateOn then resolves the nearest EARLIER date —
-// Friday 2019-03-15 — and rate_on must report that date, not occurred_on.
-// The next task's tooltip reads exactly this field, so publishing
-// occurred_on here would claim a rate that never existed.
+// An operation on Sunday 2019-03-17 has no rate of its own; FxRateOn falls
+// back to Friday 2019-03-15 and rate_on must say so.
 //
-// Manual arithmetic: -10_000 (= -100.00 USD) * 65 = -650_000 (= -6_500.00 RUB).
+//	-10_000 * 65 = -650_000
 func TestListOperationInBaseUsesNearestEarlierRateDate(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
-	// Friday's rate only. Nothing on the Saturday/Sunday that follow — but a
-	// much later rate exists, so "nearest earlier than the OPERATION" and
-	// "nearest earlier than TODAY" resolve to visibly different rows.
+	// Friday's rate only, plus a much later one, so "nearest before the
+	// operation" and "nearest before today" differ.
 	seedFxRate(t, mdStore, "2019-03-15", "65")
 	seedFxRate(t, mdStore, "2025-01-09", "100")
 
@@ -274,15 +231,11 @@ func TestListOperationInBaseUsesNearestEarlierRateDate(t *testing.T) {
 	}
 }
 
-// TestListOperationInBaseNullWhenBaseCurrency covers: an operation already
-// denominated in the space's base currency (RUB, the setup default) has
-// nothing to convert, so in_base must be null — not a copy of the operation
-// at rate 1, which would imply an fx conversion that never happened and
-// would need a rate_on date it does not have.
+// An operation already in the base currency has nothing to convert:
+// in_base is null, not a copy at rate 1.
 func TestListOperationInBaseNullWhenBaseCurrency(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
-	// A rate exists, so a null here can only come from the base-currency
-	// short-circuit, never from a failed lookup.
+	// A rate exists, so null can only come from the base-currency case.
 	seedFxRate(t, mdStore, "2019-03-12", "65")
 
 	acc := mkAccount(t, url, c, "Рублёвый брокер", "RUB")
@@ -295,14 +248,8 @@ func TestListOperationInBaseNullWhenBaseCurrency(t *testing.T) {
 	}
 }
 
-// TestListOperationInBaseNullWhenNoRateOnOrBeforeDate covers the honest
-// "can't convert" case: the only seeded rate is LATER than the operation, so
-// FxRateOn's nearest-earlier-date lookup finds nothing at all. in_base must
-// be null in its entirety — never partially filled, and never back-filled
-// from a future rate, which would answer "what would this cost today" to a
-// question about 2019 — and the request must still succeed with 200, since a
-// currency the rate history doesn't reach back far enough for is expected,
-// not an error.
+// The only rate is later than the operation: in_base is null as a whole,
+// never filled from a future rate, and the request still answers 200.
 func TestListOperationInBaseNullWhenNoRateOnOrBeforeDate(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	// Seeded AFTER the operation's date: nothing on or before 2019-03-12.
@@ -319,23 +266,16 @@ func TestListOperationInBaseNullWhenNoRateOnOrBeforeDate(t *testing.T) {
 	}
 }
 
-// converterLike mirrors the operation package's unexported converter
-// interface so this external test package can name the type of the double it
-// passes to operation.NewHandler. Assignability is by method set, not by
-// name, so anything satisfying this satisfies the handler's own interface —
-// the same trick account's and portfolio's http_test.go use.
+// converterLike mirrors the handler's unexported converter interface so this
+// package can name the double's type.
 type converterLike interface {
 	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
 	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
 }
 
-// failingConverter is a converter double whose fx lookups always fail with
-// the given error — deliberately NOT marketdata.ErrNoRate, standing in for a
-// genuine outage (a dropped DB connection, a canceled context) rather than
-// the ordinary "this pair has no rate on this date" outcome. A real,
-// Postgres-backed *marketdata.Converter can't be made to fail on demand, so
-// the distinction operationInBase draws between those two cases is only
-// testable through a double.
+// failingConverter fails every lookup with err, standing in for an outage
+// rather than marketdata.ErrNoRate, which a real converter cannot be made to
+// produce on demand.
 type failingConverter struct{ err error }
 
 func (c failingConverter) Rate(_ context.Context, _, _ string, _ time.Time) (decimal.Decimal, time.Time, error) {
@@ -346,30 +286,15 @@ func (c failingConverter) RatesOn(ctx context.Context, queries []marketdata.Rate
 	return ratesFromRate(ctx, c, queries)
 }
 
-// rateResolver is the one-pair half of converterLike, which is all
-// ratesFromRate needs of a double.
+// rateResolver is the one-pair half of converterLike.
 type rateResolver interface {
 	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
 }
 
-// ratesFromRate answers a whole batch by asking the double's OWN Rate once per
-// query. It exists so no test double can answer the batch differently from the
-// pair: marketdata.Converter guarantees the two agree ("no number it produces
-// differs from Rate's" — see RatesOn), and a fake that had to state its
-// behavior twice would eventually state it twice differently, leaving a test
-// that pins a rule the production converter does not follow. Here the batch is
-// derived from the pair, so whatever a test makes Rate say — a rate, a missing
-// rate, an outage — the prewarm says exactly the same.
-//
-// The two kinds of failure are sorted the way RatesOn sorts them:
-// marketdata.ErrNoRate is that one query's answer and the rest of the page
-// stands, anything else voids the whole batch.
-//
-// It is a deliberate twin of portfolio's identically named test helper rather
-// than something shared with it: both are glue for a package's own doubles,
-// and a test fixture shared between two packages' fakes would tie each
-// package's next fake to the other package's needs. There is no production
-// code here to drift.
+// ratesFromRate answers a batch by asking the double's own Rate per query, so
+// a double's batch and pair answers cannot disagree, as RatesOn guarantees for
+// the real converter. ErrNoRate is that query's answer; any other error voids the
+// batch. portfolio's tests have their own twin.
 func ratesFromRate(ctx context.Context, r rateResolver, queries []marketdata.RateQuery) (marketdata.Rates, error) {
 	out := make(map[marketdata.RateQuery]marketdata.RateResult, len(queries))
 	for _, q := range queries {
@@ -386,25 +311,12 @@ func ratesFromRate(ctx context.Context, r rateResolver, queries []marketdata.Rat
 	return marketdata.NewRates(out), nil
 }
 
-// TestListOperationInBaseRealRateErrorFailsRequest pins the distinction the
-// whole in_base contract rests on: a genuine failure while resolving the fx
-// rate (DB down, context canceled) must fail the request, NOT be rendered as
-// in_base: null.
-//
-// Both outcomes look identical on screen otherwise — the journal shows the
-// operation's native amount with a "no rate" marker — so an outage would be
-// presented to the user as ordinary, expected degradation and nobody would
-// ever learn the database had stopped answering. Only the status code tells
-// them apart, which is why this test asserts on it: without it, deleting
-// operationInBase's error propagation (returning null instead of the error)
-// breaks nothing visible and no other test notices. Mirrors
-// account.TestListRealRateErrorFailsRequest and
-// portfolio.TestPositionsRealRateErrorFailsRequest.
+// A genuine failure resolving a rate fails the request rather than becoming
+// in_base: null, or an outage would look like an ordinary missing rate.
 func TestListOperationInBaseRealRateErrorFailsRequest(t *testing.T) {
 	url, c := newAPIWithConverterDouble(t, failingConverter{err: errors.New("connection reset by peer")})
 
-	// USD operation in an RUB-based space: the base-currency short-circuit is
-	// avoided, so the rate lookup really is attempted.
+	// USD in a RUB space, so the lookup really happens.
 	acc := mkAccount(t, url, c, "US брокер", "USD")
 	mkOperation(t, url, c, fmt.Sprintf(`{"account_id":%q,"type":"withdrawal",
 		"occurred_on":"2019-03-12","amount_minor":-10000,"currency":"USD"}`, acc))
@@ -418,40 +330,19 @@ func TestListOperationInBaseRealRateErrorFailsRequest(t *testing.T) {
 }
 
 // countingConverter wraps a real *marketdata.Converter and counts what one
-// request ASKS of the fx layer. It is a counter, not a stub: every call is
-// delegated, so the amounts the handler publishes are the real ones and the
-// memoization assertion can sit next to correctness assertions in the same
-// test. The counts are atomic because the increments happen on the
-// http.Server's handler goroutine while the assertions read them on the test's
-// own goroutine.
+// request asks of the fx layer (atomic: the handler runs on another goroutine).
+// These are not database round trips (#45); journalCost.trips in
+// http_round_trips_test.go measures those.
 //
-// NONE OF THESE IS A COUNT OF DATABASE ROUND TRIPS, and reading them as one is
-// the defect issue #45 names: a single Rate is between one and six statements
-// depending on whether the pair resolves directly, by inversion or through a
-// RUB bridge, and a batch is one statement however many queries it carries —
-// unless it loops internally, which from up here looks identical. What the
-// page costs the database is measured below the converter instead, by
-// journalCost.trips (see http_round_trips_test.go). What these say is what the
-// handler asked for, which is the right question when the memo key or the
-// enumeration is what is under test.
-//
-// keep, when set, filters the batch down to the queries it accepts before
-// passing them on — an enumeration with a hole in it, which is what
-// TestJournalIncompletePrewarmCostsTripsNotNumbers needs and no real converter
-// would ever do.
-//
-// batchErr, when set, fails the batch and only the batch: every one-pair lookup
-// still answers from the real converter. That is the failure #70 is about — a
-// timeout on the one large statement, an array-encoding problem — as opposed to
-// an outage, which takes the fallback down with it and is what failingConverter
-// stands in for.
+// keep filters the batch to an incomplete enumeration
+// (TestJournalIncompletePrewarmCostsTripsNotNumbers). batchErr fails only the
+// batch, leaving one-pair lookups working (#70).
 type countingConverter struct {
 	inner    *marketdata.Converter
 	keep     func(marketdata.RateQuery) bool
 	batchErr error
-	// rate counts one-pair lookups (the fallback), batch counts calls to the
-	// batched resolution, and queries counts the individual rates handed to
-	// those batches — as the handler asked for them, before keep drops any.
+	// rate counts one-pair lookups, batch counts batch calls, queries counts
+	// rates asked for in batches before keep drops any.
 	rate    atomic.Int64
 	batch   atomic.Int64
 	queries atomic.Int64
@@ -466,9 +357,7 @@ func (c *countingConverter) RatesOn(ctx context.Context, queries []marketdata.Ra
 	c.batch.Add(1)
 	c.queries.Add(int64(len(queries)))
 	if c.batchErr != nil {
-		// The zero Rates alongside the error, which is what
-		// marketdata.RatesOn itself returns on a failure and what the handler
-		// must be able to survive being handed.
+		// The zero Rates with the error, as RatesOn returns on failure.
 		return marketdata.Rates{}, c.batchErr
 	}
 	if c.keep == nil {
@@ -483,32 +372,11 @@ func (c *countingConverter) RatesOn(ctx context.Context, queries []marketdata.Ra
 	return c.inner.RatesOn(ctx, kept)
 }
 
-// TestListOperationInBaseMemoizesRatePerCurrencyAndDate pins the cache key.
-// A journal page mixes many dates for the same currency — unlike the account
-// list, which converts everything at today's rate and can therefore key its
-// cache by currency alone. (The position list mixes dates too, since plan 6:
-// each lot and each income payment is valued at its own date, so
-// portfolio.rateKey carries the date for exactly the reason spelled out
-// here.) Keying this cache by
-// currency only would silently reuse the first operation's rate for every
-// later date, which is invisible in the response shape: the numbers would
-// simply be wrong, in the same currency, with a plausible rate_on.
-//
-// So the test asserts both halves at once:
-//
-//   - two USD operations on DIFFERENT dates get DIFFERENT rates (60 vs 70)
-//     and different rate_on values — this is what a currency-only key breaks;
-//   - two USD operations on the SAME date cost exactly one rate lookup, so
-//     three operations across two distinct dates resolve two rates, not three
-//     — this is what dropping the cache entirely breaks.
-//
-// Manual arithmetic:
+// The memo key includes the date: two USD operations on different dates get
+// different rates, and two on the same date share one lookup.
 //
 //	2019-03-12 @ 60: -10_000 * 60 = -600_000 ; -20_000 * 60 = -1_200_000
 //	2019-04-12 @ 70: -10_000 * 70 =  -700_000
-//
-// The two -10_000 operations differ only by date, so their converted amounts
-// (-600_000 vs -700_000) can only both be right if the date is part of the key.
 func TestListOperationInBaseMemoizesRatePerCurrencyAndDate(t *testing.T) {
 	pool, mdStore := newTestPool(t)
 	conv := &countingConverter{inner: marketdata.NewConverter(mdStore)}
@@ -554,17 +422,9 @@ func TestListOperationInBaseMemoizesRatePerCurrencyAndDate(t *testing.T) {
 		}
 	}
 
-	// One rate per distinct (currency, date) — the two 2019-03-12 operations
-	// share a single one — asked for in a single batch, with nothing left over
-	// for the per-pair fallback to resolve.
-	//
-	// This used to count calls to Converter.Rate and nothing else, which is
-	// what issue #45 objects to: it pinned how often the handler asked, never
-	// what the asking cost, so an implementation resolving one rate per
-	// statement passed it unchanged. The cost is now pinned where it can be
-	// seen, below the converter, by TestJournalRoundTripsDoNotGrowWithTheData;
-	// what remains here is the question this test is actually about — which
-	// distinct rates a page of three operations on two dates asks for.
+	// One rate per distinct (currency, date), in one batch, nothing left for
+	// the fallback. Round-trip cost is pinned by
+	// TestJournalRoundTripsDoNotGrowWithTheData.
 	if got := conv.queries.Load(); got != 2 {
 		t.Errorf("rates asked for = %d, want 2 — one per distinct (currency, date), so the two 2019-03-12 operations share a single one", got)
 	}
@@ -576,8 +436,7 @@ func TestListOperationInBaseMemoizesRatePerCurrencyAndDate(t *testing.T) {
 	}
 }
 
-// Decision Р-3: a purchase that says when it settled is converted at that day's
-// rate — the day its money actually moved — and rate_on says so.
+// Р-3: a purchase with a settlement day is converted at that day's rate.
 func TestListOperationInBaseConvertsATradeAtItsSettlementDay(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2019-03-12", "65")

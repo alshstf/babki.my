@@ -8,25 +8,10 @@ import (
 	"babki.my/babki/internal/operation"
 )
 
-// seedSplit records a split the way the only writer of splits does: through the
-// importer's door, carrying the corporate-actions registry's source.
-//
-// IT EXISTS BECAUSE A SPLIT IS NO LONGER SOMETHING A PERSON ENTERS. The rule
-// used to be the opposite — source=manual only — and the tests that exercise
-// split ARITHMETIC (the scale a ratio is stored at, a sell after a reverse
-// split, a transfer of what a split left) went through Service.Create because
-// that was the door. The arithmetic they check is unchanged; the door moved,
-// because a split happens to the PAPER and belongs in the registry once rather
-// than in each account by hand (see internal/corporateaction).
-//
-// It writes through ApplyImportDelta rather than reaching into the store, so
-// those tests keep going through the SAME checks the registry's own writes go
-// through: the engine replays the journal the delta leaves, and the stored rows
-// are replayed once more before the commit.
-//
-// The external id is the caller's line number's worth of uniqueness — a fresh
-// UUID — because the journal holds one row per (account, source, external id)
-// and a test seeding two splits must not collide with itself.
+// seedSplit records a split as the registry does, through ApplyImportDelta
+// with the registry's source, so split-arithmetic tests go through the same
+// checks the registry's writes do. A fresh external id per call keeps two
+// splits from colliding.
 func seedSplit(t *testing.T, f fixture, svc *operation.Service, op operation.Operation) operation.Operation {
 	t.Helper()
 	op.Source = operation.SourceRegistry
@@ -49,14 +34,8 @@ func seedSplit(t *testing.T, f fixture, svc *operation.Service, op operation.Ope
 	return applied[0]
 }
 
-// trySplit is seedSplit for a test that expects the write to be REFUSED: it
-// hands back the error the journal gave, whether that came as a failure of the
-// whole delta or as a refusal of the one candidate in it.
-//
-// The two are different answers in the import path — a delta that contradicts
-// its own contract is fatal, an operation the journal cannot hold comes back in
-// refused — and a test about a rejected split should not have to know which
-// shape its own rejection takes to see that it happened.
+// trySplit is seedSplit for a write expected to be refused: it returns the
+// error whether the delta failed whole or refused its one candidate.
 func trySplit(t *testing.T, f fixture, svc *operation.Service, op operation.Operation) error {
 	t.Helper()
 	op.Source = operation.SourceRegistry

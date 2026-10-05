@@ -25,10 +25,8 @@ func timed(op operation.Operation, externalID string, when *time.Time) operation
 	return op
 }
 
-// A purchase the broker reported late folds at its own instant, not at the end
-// of its day: of two parcels bought on one day, a later sale consumes the one
-// bought first (#198). Before the instant was kept, the late one folded last
-// and the sale took the other, moving the realized result.
+// A purchase the broker reported late folds at its own instant: of two
+// parcels bought one day, a later sale consumes the earlier one (#198).
 func TestALatePurchaseFoldsAtItsInstant(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)

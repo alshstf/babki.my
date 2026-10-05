@@ -13,14 +13,9 @@ import (
 	"babki.my/babki/internal/platform/money"
 )
 
-// The journal's end of #27. An operation's amount and its fee are converted
-// into the base currency independently, so each is its own way past int64, and
-// decimal.IntPart() answers both by wrapping rather than failing.
-//
-// A refusal here is an error, never one of the gaps that render in_base as
-// null: that null tells the reader "no rate for this day", a gap the fx
-// backfill closes on its own. An amount too large to state is not waiting for
-// a backfill.
+// #27 on the journal: amount and fee are converted separately, each can pass
+// int64, and an overflow is an error, never a null in_base, which would read as a
+// rate the backfill will bring.
 
 // fixedRateConverter answers every lookup with the same rate.
 type fixedRateConverter struct{ rate decimal.Decimal }
@@ -56,10 +51,7 @@ func TestOperationInBaseRefusesAnAmountThatWouldWrap(t *testing.T) {
 	}
 }
 
-// TestOperationInBaseRefusesAFeeThatWouldWrap keeps the fee's own guard
-// honest: the amount here converts perfectly well, and only the fee leaves the
-// range. The two are converted separately (a fee is a figure in its own right,
-// not a term of the amount), so one guard cannot stand for the other.
+// Only the fee leaves the range; its guard must hold on its own.
 func TestOperationInBaseRefusesAFeeThatWouldWrap(t *testing.T) {
 	h, op := overflowFixture()
 	op.FeeMinor = math.MaxInt64
@@ -73,10 +65,8 @@ func TestOperationInBaseRefusesAFeeThatWouldWrap(t *testing.T) {
 	}
 }
 
-// TestOperationInBaseOverflowIsNotAMissingRate: a nil object with a nil error
-// is this function's word for "this row has no base-currency figure", which the
-// journal renders as a quiet gap. An overflow must not be able to take that
-// shape.
+// A nil object with a nil error means "no figure", a quiet gap; an overflow
+// must not take that shape.
 func TestOperationInBaseOverflowIsNotAMissingRate(t *testing.T) {
 	h, op := overflowFixture()
 	op.AmountMinor = math.MaxInt64
@@ -86,9 +76,7 @@ func TestOperationInBaseOverflowIsNotAMissingRate(t *testing.T) {
 	}
 }
 
-// TestOperationInBasePublishesTheLargestFigureThatFits is the other side of
-// both guards: at a rate of exactly 1, maxint64 converts to maxint64 and is a
-// real figure. A guard that refused it would withhold a publishable number.
+// At rate 1, maxint64 converts to itself and is published.
 func TestOperationInBasePublishesTheLargestFigureThatFits(t *testing.T) {
 	h := &Handler{conv: fixedRateConverter{rate: decimal.NewFromInt(1)}}
 	op := Operation{

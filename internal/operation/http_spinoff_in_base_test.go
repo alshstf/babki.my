@@ -11,16 +11,13 @@ import (
 	"babki.my/babki/internal/operation"
 )
 
-// TestSpinoffLegsInTheJournalConvertAtThePurchaseDates: both legs of a spin-off
-// carry a cost basis, not money, so the journal converts them piece by piece at
-// the rates of the days the parcels were bought — exactly as it does a
-// transfer's legs — and the listing answers at all. The departing leg has no
-// quantity, which the transfer-shaped check used to dereference.
+// Both spin-off legs carry a basis, so the journal converts them per purchase
+// date, as for a transfer. The departing leg has no quantity.
 //
-//	lot 1:  90 000 minor USD bought 2026-05-13 at 60.00
-//	lot 2: 100 000 minor USD bought 2026-06-15 at 64.00
-//	a quarter moves: 22 500 + 25 000 = 47 500 minor USD
-//	in rubles: 22 500 x 60 + 25 000 x 64 = 2 950 000 kopecks
+//	lot 1:  90 000 USD bought 2026-05-13 at 60.00
+//	lot 2: 100 000 USD bought 2026-06-15 at 64.00
+//	a quarter moves: 22 500 + 25 000 = 47 500 USD
+//	in roubles: 22 500 × 60 + 25 000 × 64 = 2 950 000
 func TestSpinoffLegsInTheJournalConvertAtThePurchaseDates(t *testing.T) {
 	pool, mdStore := newTestPool(t)
 	url, c := newAPIOn(t, pool, marketdata.NewConverter(mdStore))

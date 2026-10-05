@@ -41,34 +41,18 @@ func listPositions(t *testing.T, url string, c *http.Client, accountID string) [
 	return out.Positions
 }
 
-// TestTransferInBaseMatchesThePositionItProduces pins the one number the
-// journal and the positions screen were saying differently for the same
-// shares.
+// A transfer's amount is the basis of shares bought on other days, so the
+// journal converts it per purchase date and agrees with the position. The demo
+// instance's numbers (cmd/babki/seed.go):
 //
-// A transfer's amount_minor is not money that moved on the transfer date: it
-// is the cost basis of shares bought on other days, carried to another account
-// of the same family. The journal used to convert every operation's amount at
-// the rate of its own date, so this one was converted at the rate of the day
-// the shares changed brokers — the one rate that has nothing to do with what
-// they cost. The positions screen has converted each lot at the rate of its own
-// purchase date since plan 6, so the two screens printed different rubles for
-// the same shares, and the journal's was the wrong one.
+//	lot 1: 5 TSLA @ $180.00 on 2026-05-13 ->  90_000 USD, rate 60.00 -> 5_400_000
+//	lot 2: 5 TSLA @ $200.00 on 2026-06-15 -> 100_000 USD, rate 64.00 -> 6_400_000
+//	transferred whole on 2026-07-20 (rate 78.50)
 //
-// The demo instance's own numbers (see cmd/babki/seed.go), which is what makes
-// this checkable by eye:
+//	per purchase date:    5_400_000 + 6_400_000 = 11_800_000
+//	at the transfer day:  190_000 × 78.50       = 14_915_000 (wrong)
 //
-//	lot 1: 5 TSLA @ $180.00 on 2026-05-13 →  90_000 minor USD, rate that day 60.00 →  5_400_000 = 54 000,00 ₽
-//	lot 2: 5 TSLA @ $200.00 on 2026-06-15 → 100_000 minor USD, rate that day 64.00 →  6_400_000 = 64 000,00 ₽
-//	transferred whole on 2026-07-20 (rate that day 78.50)
-//
-//	basis, per purchase date: 5_400_000 + 6_400_000 = 11_800_000 = 118 000,00 ₽
-//	basis at the transfer day: 190_000 × 78.50     = 14_915_000 = 149 150,00 ₽
-//
-// 149 150,00 ₽ is the number README.md and the seed call an invented one and
-// TestPositionInBaseTransferredLotsKeepTheirPurchaseDates names as the wrong
-// answer — and it was sitting in the journal, on the demo data, next to a
-// position saying 118 000,00 ₽. Both figures below must be 11_800_000, and
-// must be equal to each other: they describe the same purchases.
+// Both figures below must be 11_800_000.
 func TestTransferInBaseMatchesThePositionItProduces(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2026-05-13", "60.00")
@@ -109,9 +93,8 @@ func TestTransferInBaseMatchesThePositionItProduces(t *testing.T) {
 		t.Errorf("journal row in_base.amount_minor = %d, want %d (118 000,00 ₽ — each piece at the rate of the day it was bought); %d is the same shares priced at the transfer day's rate",
 			row.InBase.AmountMinor, wantBase, collapsed)
 	}
-	// The figure is struck at two rates, so rate_on names the newer of them —
-	// the most recent purchase in the parcel — and never the transfer's own
-	// date, which is the one rate deliberately not used.
+	// Struck at two rates, rate_on names the newer purchase, never the
+	// transfer day.
 	if row.InBase.RateOn != "2026-06-15" {
 		t.Errorf("journal row in_base.rate_on = %q, want 2026-06-15 (the newest rate behind the figure, not the transfer's 2026-07-20)", row.InBase.RateOn)
 	}
@@ -136,32 +119,12 @@ func TestTransferInBaseMatchesThePositionItProduces(t *testing.T) {
 	}
 }
 
-// TestTransferWithoutBreakdownHasNoRubleEquivalentEither replaces
-// TestTransferWithoutBreakdownStillConvertsOnItsOwnDate, which pinned the
-// opposite rule: it asserted that a hand-typed basis keeps converting on the
-// transfer's own date, on the reasoning that it is the only date the row
-// has. Plan 7c's task-1 review (IMPORTANT 1) overturned that reasoning: the
-// LOT this very transfer creates has never made that claim (see
-// portfolio.Lot.AcquiredOn and Compute's TypeTransferIn branch) — it carries
-// no acquisition date at all, because nobody recorded when these shares were
-// actually bought. Converting the row anyway published a ruble figure the
-// position built from that identical lot refused to publish
-// (TestPositionInBaseNullWhenALotHasNoAcquisitionDate, in package
-// portfolio_test), so the journal and the position disagreed about the same
-// undated parcel — the exact defect plan 7a's cross-screen invariant exists
-// to catch. The fix treats "no breakdown" as "every piece of the parcel is
-// dateless" and nulls the row for it, on both legs, the same way a breakdown
-// with a dateless piece already did.
+// A transfer with no breakdown (a basis given by hand) has no purchase date,
+// so neither leg publishes a base-currency figure, matching the position built
+// from the undated lot (TestPositionInBaseNullWhenALotHasNoAcquisitionDate).
 //
-//	basis 190_000 minor USD given by hand, moved on 2026-07-20 (rate 78.50)
-//	  the number this test used to assert:
-//	  190_000 × 78.50 = 14_915_000 — invented, since no purchase date exists
-//
-// Both legs are checked: the breakdown (or the absence of one) is read onto
-// both (see Store.attachTransferLots), so a fix landing on only the arriving
-// leg would leave the departing one still printing the invented figure —
-// exactly the asymmetry TestBothTransferLegsConvertAtThePurchaseDates exists
-// to rule out for the dated case.
+//	190_000 USD given by hand, moved on 2026-07-20 (rate 78.50)
+//	190_000 × 78.50 = 14_915_000 would be invented
 func TestTransferWithoutBreakdownHasNoRubleEquivalentEither(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2026-05-13", "60.00")
@@ -201,21 +164,9 @@ func TestTransferWithoutBreakdownHasNoRubleEquivalentEither(t *testing.T) {
 	}
 }
 
-// TestBothTransferLegsConvertAtThePurchaseDates is the other half of the same
-// complaint, on the leg the first fix did not reach.
-//
-// The breakdown is stored next to the ARRIVING leg, so while only that leg
-// read it, the departing one went on being converted the old way — at the rate
-// of the day the shares changed brokers. On the demo data the source account's
-// journal printed
-//
-//	transfer_out (Т-Банк):     190 000 × 78.50 = 14 915 000 = 149 150,00 ₽
-//	transfer_in  (Freedom KZ): 5 400 000 + 6 400 000 = 11 800 000 = 118 000,00 ₽
-//
-// for one pair: same instrument, same quantity, same amount_minor, two
-// different ruble figures, and the larger one is the very number README.md and
-// cmd/babki/seed.go call invented. The pieces describe the parcel, not its
-// arrival, so both legs are now converted from them.
+// Both legs are converted from the breakdown. While only the arriving leg read
+// it, the demo's source journal printed 14 915 000 for the departing leg and
+// 11 800 000 for the arriving one: the same pair, two figures.
 func TestBothTransferLegsConvertAtThePurchaseDates(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2026-05-13", "60.00")
@@ -263,34 +214,23 @@ func TestBothTransferLegsConvertAtThePurchaseDates(t *testing.T) {
 		t.Errorf("the source's journal says %d ₽ and the destination's says %d ₽ about one transfer of the same ten shares",
 			outRow.InBase.AmountMinor, inRow.InBase.AmountMinor)
 	}
-	// Same reasoning, same headline date: the newest purchase in the parcel,
-	// never the transfer's own 2026-07-20.
+	// Same headline date on the departing leg.
 	if outRow.InBase.RateOn != "2026-06-15" {
 		t.Errorf("transfer_out in_base.rate_on = %q, want 2026-06-15", outRow.InBase.RateOn)
 	}
-	// And both say out loud that their figure was assembled — published on the
-	// operation itself, not inside in_base (#67) — so the screen that reads
-	// rate_on aloud cannot mistake it for an ordinary conversion date.
+	// Both say their figure was assembled (#67).
 	if !outRow.AssembledFromLots || !inRow.AssembledFromLots {
 		t.Errorf("assembled_from_lots: out = %v, in = %v, want true on both — rate_on here is one of several rates, not the rate",
 			outRow.AssembledFromLots, inRow.AssembledFromLots)
 	}
 }
 
-// TestBothTransferLegsGoNullTogetherWhenAPurchaseDateHasNoRate closes the
-// asymmetry the review flagged as its own finding: with only the arriving leg
-// converted from the pieces, a missing rate for one purchase date nulled that
-// leg's in_base entirely while the departing leg carried on happily converting
-// at the transfer day's rate — the screen showing an honest "not converted"
-// marker next to another screen showing a confident, wrong number.
-//
-// Now that both legs are the same sum of the same terms, they answer the same
-// way: publishing a basis built from only the purchases that happened to
-// convert would be smaller than the truth and indistinguishable from it.
+// A missing rate for one purchase date nulls both legs together; a basis from
+// only the pieces that converted would be smaller than the truth.
 func TestBothTransferLegsGoNullTogetherWhenAPurchaseDateHasNoRate(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
-	// No rate on or before 2026-05-13, the first purchase's date; the second
-	// purchase and the transfer day both have one.
+	// No rate on or before 2026-05-13; the second purchase and the transfer
+	// day have one.
 	seedFxRate(t, mdStore, "2026-06-15", "64.00")
 	seedFxRate(t, mdStore, "2026-07-20", "78.50")
 
@@ -325,27 +265,15 @@ func TestBothTransferLegsGoNullTogetherWhenAPurchaseDateHasNoRate(t *testing.T) 
 	}
 }
 
-// TestBothTransferLegsGoNullTogetherWhenAPieceHasNoAcquisitionDate is the
-// undated twin of the test above, and the journal's share of the change that
-// lets a lot not know when it was acquired.
+// A piece with no purchase date is legitimate and must not fail the request,
+// but it has no day to be valued at, so both legs publish nothing.
 //
-// A piece with no date is not damage and must not fail the request: it is what
-// a parcel looks like once it contains shares that arrived by an earlier
-// transfer carrying no dates, and are then moved on again. But there is no day
-// to strike a rate on for that piece, so the amount cannot be assembled — and
-// the alternatives are exactly the two figures this whole mechanism removed:
-// converting the undatable piece at the transfer day's rate, or summing only
-// the pieces that do have dates and publishing a basis smaller than the truth.
-// Both legs therefore publish nothing, together, like any other term that
-// cannot be valued.
-//
-//	lot 1: 5 @ $180.00 on 2026-05-13 →  90_000 minor USD — date erased below
-//	lot 2: 5 @ $200.00 on 2026-06-15 → 100_000 minor USD, rate 64.00
+//	lot 1: 5 @ $180.00 on 2026-05-13 ->  90_000 USD, date erased below
+//	lot 2: 5 @ $200.00 on 2026-06-15 -> 100_000 USD, rate 64.00
 //	transfer of all 10 on 2026-07-20 (rate 78.50)
 //
-// The two wrong answers are named in the failure messages: 14_915_000 (the
-// whole 190_000 at the transfer day's rate) and 6_400_000 (the datable piece
-// alone).
+// Wrong answers: 14_915_000 (all at the transfer day) and 6_400_000 (the dated
+// piece alone).
 func TestBothTransferLegsGoNullTogetherWhenAPieceHasNoAcquisitionDate(t *testing.T) {
 	pool, mdStore := newTestPool(t)
 	url, c := newAPIOn(t, pool, marketdata.NewConverter(mdStore))
@@ -377,14 +305,12 @@ func TestBothTransferLegsGoNullTogetherWhenAPieceHasNoAcquisitionDate(t *testing
 		t.Fatalf("parse transfer_in id: %v", err)
 	}
 
-	// Both legs convert before the date is removed, so a null below can only
-	// come from the missing date and not from some unrelated setup mistake.
+	// Both legs convert before the date is removed.
 	if row := findOperation(t, listJournal(t, url, c, from), pair.Out.ID); row.InBase == nil {
 		t.Fatalf("fully dated transfer_out in_base = null, want a conversion before erasing anything")
 	}
 
-	// Take the first piece's acquisition date away — the state a piece is in
-	// when the shares behind it arrived without one.
+	// Erase the first piece's purchase date.
 	ct, err := pool.Exec(t.Context(),
 		`UPDATE operation_transfer_lots SET acquired_on = NULL
 		 WHERE operation_id = $1 AND seq = 0`, inID)
@@ -395,9 +321,8 @@ func TestBothTransferLegsGoNullTogetherWhenAPieceHasNoAcquisitionDate(t *testing
 		t.Fatalf("erasing the date affected %d rows, want 1", ct.RowsAffected())
 	}
 
-	// The request still succeeds: an undated piece is legitimate journal data,
-	// unlike a breakdown that no longer sums (see
-	// TestJournalRefusesTransferWithCorruptedBreakdown, which must 5xx).
+	// Still 200: an undated piece is legitimate, unlike a breakdown that no
+	// longer sums (TestJournalRefusesTransferWithCorruptedBreakdown).
 	outRow := findOperation(t, listJournal(t, url, c, from), pair.Out.ID)
 	inRow := findOperation(t, listJournal(t, url, c, to), pair.In.ID)
 
@@ -422,32 +347,14 @@ func TestBothTransferLegsGoNullTogetherWhenAPieceHasNoAcquisitionDate(t *testing
 	}
 }
 
-// TestMixedBreakdownReachedThroughTheAPIGoesNullOnBothLegs is the same rule
-// as the test above, but the mixed breakdown is built entirely through
-// ordinary transfer calls rather than by erasing a stored date directly in
-// the database. The plan-7c task-1 review confirmed this state is not a
-// synthetic edge case: it is exactly what happens when an account holding an
-// undated lot — the residue of an earlier hand-typed or legacy transfer —
-// later transfers on more than that undated lot alone.
+// The same rule with the mixed breakdown built only through the API:
 //
-//	account A: buy 5 TSLA on 2026-01-01 (only feeds the manual transfer below;
-//	  its own date and rate play no part in the assertions)
-//	account B: buy 5 TSLA @ $100.00 on 2026-03-01 -> a dated lot, cost 50_000
-//	transfer A -> B, 5 shares, occurred_on 2026-04-01, cost_minor 70_000 given
-//	  by hand -> B's second lot, undated, cost 70_000 (Service.CreateTransfer's
-//	  CostMinorOverride branch — no source lots released, so no dates carried)
-//	transfer B -> C, all 10 shares, occurred_on 2026-07-20 -> FIFO releases the
-//	  undated lot first (a lot that does not know when it was acquired leads the
-//	  queue, see portfolio.addLot), then the dated one: TransferLots =
-//	  [undated 5 @ 70_000, dated 5 @ 50_000], a genuine mix produced without a
-//	  single direct database write. Which piece comes first changes nothing
-//	  here: both legs must go null because ONE of them has no date, and the sum
-//	  is the same either way.
+//	A: buy 5 TSLA on 2026-01-01
+//	B: buy 5 TSLA @ $100.00 on 2026-03-01 (dated lot, 50_000)
+//	A -> B: 5 on 2026-04-01 with cost_minor 70_000 (undated lot)
+//	B -> C: all 10 on 2026-07-20 -> pieces [undated 70_000, dated 50_000]
 //
-// Both legs of the SECOND transfer must go null together, for the same
-// reason a wholly undated parcel does: one piece of it has no purchase date,
-// so no honest set of rates answers for the sum. The two numbers a wrong
-// implementation would print are named below, mirroring the sibling test.
+// One piece has no date, so both legs of B -> C go null.
 func TestMixedBreakdownReachedThroughTheAPIGoesNullOnBothLegs(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2026-03-01", "60.00")
@@ -511,45 +418,18 @@ func TestMixedBreakdownReachedThroughTheAPIGoesNullOnBothLegs(t *testing.T) {
 	}
 }
 
-// TestTransferInBaseRoundsOnceForTheWholeAmount pins the other half of the
-// "one rounding per published figure" invariant — every term of a multi-term
-// amount is multiplied as a decimal and only the TOTAL is rounded, once (see
-// operationInBase's doc comment). The fee-vs-amount half of that rule is
-// already pinned, by TestListOperationInBaseFeeIsNotDerivedFromTheCombinedTotal;
-// this is the half nothing here checked: that a transfer's amount, which is
-// the ONLY figure on this page ever built from more than one term, is not
-// rounded term by term before being summed.
+// Terms of a multi-term amount are summed as decimals and rounded once, not
+// rounded one by one. Every other fixture multiplies exactly, so this one forces
+// an uneven split:
 //
-// Every existing multi-lot fixture in this file happens to multiply exactly
-// (100000 × 78.50, 10000 × 65.4567 and the like — see
-// TestTransferInBaseMatchesThePositionItProduces and its neighbors), so
-// rounding each lot's ruble figure before adding them and rounding the added
-// total once land on the very same integer either way. A version of
-// operationInBase that rounded per term would pass every one of those tests
-// and this page would still be one minor unit adrift the day a real rate
-// landed on a transfer that split unevenly across two purchase dates — which
-// is what this fixture is built to force:
+//	lot 1: 14 @ $92.56  on 2019-03-01 -> 129584
+//	lot 2:  8 @ $119.89 on 2019-03-02 ->  95912
+//	both resolve to the one seeded rate, 78.4913
 //
-//	lot 1: 14 @ $92.56 on 2019-03-01 -> 129584 minor USD of cost basis
-//	lot 2:  8 @ $119.89 on 2019-03-02 -> 95912 minor USD of cost basis
-//	both dates fall after the one rate seeded below (78.4913), so both
-//	resolve to it via FxRateOn's nearest-earlier-date rule — one rate, two
-//	dates, which keeps this fixture from also exercising rate_on's own
-//	resolution
-//
-// (a transfer's amount_minor, and each ReleasedLot.CostMinor term behind it,
-// is the positive magnitude of the basis moved — not a signed cash flow like
-// an ordinary buy's, which is why both terms below are positive)
-//
-//	129584 × 78.4913 = 10171216.6192 -> rounds ALONE to 10171217
-//	 95912 × 78.4913 =  7528257.5656 -> rounds ALONE to  7528258
-//	summed rounded first: 10171217 + 7528258 = 17699475
-//
-//	summed unrounded, rounded ONCE: 10171216.6192 + 7528257.5656
-//	                               = 17699474.1848 -> 17699474
-//
-// 17699475 is what a term-then-sum implementation publishes; 17699474 is
-// what this test wants.
+//	129584 × 78.4913 = 10171216.6192 -> alone 10171217
+//	 95912 × 78.4913 =  7528257.5656 -> alone  7528258
+//	rounded then summed:       17699475
+//	summed then rounded once:  17699474 (wanted)
 func TestTransferInBaseRoundsOnceForTheWholeAmount(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	seedFxRate(t, mdStore, "2019-01-01", "78.4913")

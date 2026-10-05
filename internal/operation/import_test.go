@@ -13,19 +13,17 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// imported dresses an operation the way an importer must hand it over: a
-// source that is not a person's own entry, and the id of the broker record it
-// was projected from.
+// imported dresses an operation as an importer hands it over: a non-manual
+// source and the broker record's id.
 func imported(op operation.Operation, externalID string) operation.Operation {
 	op.Source = "tinvest"
 	op.ExternalID = &externalID
 	return op
 }
 
-// journalOf reads the account's journal back the way every later read does —
-// through the engine's own listing — and folds it. Assertions go through this
-// rather than through the rows ApplyImportDelta returned, because the fault
-// this whole path guards against is precisely a difference between the two.
+// journalOf reads the account's journal back through the engine's own listing
+// and folds it, so assertions see what later reads see, not what
+// ApplyImportDelta returned.
 func journalOf(t *testing.T, f fixture, accountID uuid.UUID) ([]operation.Operation, map[uuid.UUID]*portfolio.Position) {
 	t.Helper()
 	ops, err := f.store.ListForEngine(f.ctx, f.spaceID, accountID)
@@ -55,10 +53,8 @@ func TestApplyImportDeltaEmptyDeltaWritesNothing(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaIsolatesTheCandidateThatCannotApply is the reason the
-// candidates are checked one at a time before anything is written: a broker
-// operation this program cannot record must become visible on its own, with the
-// real reason, while the rest of the history still loads.
+// A broker operation this program cannot record is refused on its own, with
+// its real reason, while the rest of the history loads.
 func TestApplyImportDeltaIsolatesTheCandidateThatCannotApply(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -106,20 +102,8 @@ func TestApplyImportDeltaIsolatesTheCandidateThatCannotApply(t *testing.T) {
 	}
 }
 
-// TestCreateReplacingWillNotReplaceARowEnteredByHand is the guard that keeps a
-// replacement pointed at the importer's own rows.
-//
-// CreateReplacing exists so that an explanation can take out the reading this
-// program made of a broker's row and put the owner's reading in its place. What
-// it must never take out is a row the owner ENTERED — those are theirs, deleted
-// on the journal screen where the refusals are about their own history, and a
-// caller that named one here would delete it with nothing on any screen saying
-// so. It is the mirror of the rule Service.Delete applies in the other
-// direction, where an imported row is not a person's to remove.
-//
-// Without this case the guard is untested: no fixture anywhere hands a
-// replacement the id of a manual row, so deleting the check outright leaves the
-// whole suite green.
+// A replacement may only take out an importer's rows; a hand-entered row is
+// the owner's, deleted on the journal screen.
 func TestCreateReplacingWillNotReplaceARowEnteredByHand(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -148,26 +132,15 @@ func TestCreateReplacingWillNotReplaceARowEnteredByHand(t *testing.T) {
 		t.Errorf("refusal = %v, want it to name %q rather than whatever the journal would have said next", err, reason)
 	}
 
-	// AND THE ROW IS STILL THERE. A refusal that had already deleted it would
-	// be the very loss this guard exists to prevent, reported politely.
+	// And the row is still there.
 	if _, err := f.store.ByID(f.ctx, f.spaceID, byHand.ID); err != nil {
 		t.Errorf("the hand-entered operation is gone after a refused replacement: %v", err)
 	}
 }
 
-// TestApplyImportDeltaRefusesASplitFromTheImporter pins that a split is
-// refused UNCONDITIONALLY by the import path itself (validateImported's own
-// TypeSplit case) — not merely because validateByType happens to refuse the
-// same candidate for some unrelated reason of its own.
-//
-// The candidate below carries no instrument, which validateByType's TypeSplit
-// case refuses first and for a completely different reason ("split requires
-// an instrument", checked before it ever looks at Source). Checking only
-// errors.Is(err, family.ErrValidation) cannot tell the two apart — both are
-// ErrValidation — so if validateImported ever stopped naming splits itself and
-// fell through to validateByType, this candidate would still be refused, just
-// for the wrong reason. The message is checked for the one phrase only the
-// import path's own refusal carries.
+// A split is refused by validateImported itself. The candidate has no
+// instrument, which validateByType would also refuse, so the message is checked
+// for the import path's own wording.
 func TestApplyImportDeltaRefusesASplitFromTheImporter(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -198,31 +171,17 @@ func TestApplyImportDeltaRefusesASplitFromTheImporter(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaRefusesABreakdownFromAnyoneButTheRegistry pins the ONE
-// hole in "the parcel is computed here, not supplied".
-//
-// The hole was opened for the corporate-actions registry, whose pairs cannot
-// have their breakdown computed from the journal: how many units of the new
-// paper N of the old become, and what share of the basis a spin-off carves
-// out, live in the registry and nowhere else. A transfer between the owner's
-// accounts must keep the old refusal — a broker's transfer names a quantity and
-// the FIFO queue answers the rest, so a breakdown arriving with it is a cost
-// basis somebody invented, and this path exists to make that impossible. (The
-// one other leg that may carry one is an arrival from another broker, with the
-// purchases its owner stated — see the test after this one.)
-//
-// WITHOUT THIS CASE THE GUARD IS UNTESTED: opening it to every caller (the
-// function simply returning true) leaves the whole suite green, because no
-// fixture ever supplies a breakdown it is not entitled to. The mutation is the
-// point of the test.
+// Only the registry may send a pre-computed breakdown. A transfer between the
+// owner's accounts must not: its parcel is released from the journal, and a
+// supplied one would be an invented cost basis. (An arrival from another broker
+// carries the owner's stated purchases; see the next test.)
 func TestApplyImportDeltaRefusesABreakdownFromAnyoneButTheRegistry(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
 
 	on := date("2021-01-08")
 	group := uuid.New()
-	// One leg of a move between the owner's accounts, arriving with a parcel of
-	// its own: the shape the importer is never allowed to send.
+	// One leg of a move between the owner's accounts, carrying a parcel.
 	transfer := imported(operation.Operation{
 		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeTransferIn,
 		OccurredOn: date("2026-07-01"), Quantity: dec("10"), AmountMinor: 100_000,
@@ -235,10 +194,8 @@ func TestApplyImportDeltaRefusesABreakdownFromAnyoneButTheRegistry(t *testing.T)
 	applied, _, err := svc.ApplyImportDelta(f.ctx, f.spaceID, operation.ImportDelta{
 		Add: []operation.Operation{transfer},
 	})
-	// THE WHOLE DELTA FAILS, and this row is not merely refused among others:
-	// a candidate carrying a parcel it did not earn is a caller breaking the
-	// contract, not a row the journal cannot take — the difference between a
-	// bug in the program and news about the broker's data.
+	// The whole delta fails: an unearned parcel is a broken contract, not a
+	// row the journal cannot take.
 	if !errors.Is(err, operation.ErrImportContract) {
 		t.Fatalf("err = %v, want ErrImportContract — a supplied parcel is a cost basis this path did not work out", err)
 	}
@@ -251,10 +208,8 @@ func TestApplyImportDeltaRefusesABreakdownFromAnyoneButTheRegistry(t *testing.T)
 	}
 }
 
-// TestApplyImportDeltaTakesTheStatedPurchasesOfAnArrivalFromOutside: shares
-// arriving from a broker this program does not hold have no source account to
-// work their purchases out from, so the ones the owner stated travel with the
-// row — and come back, dated and priced, as the lots the account holds.
+// Shares from a broker outside this program carry the purchases the owner
+// stated, and come back as dated, priced lots.
 func TestApplyImportDeltaTakesTheStatedPurchasesOfAnArrivalFromOutside(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -285,17 +240,8 @@ func TestApplyImportDeltaTakesTheStatedPurchasesOfAnArrivalFromOutside(t *testin
 	}
 }
 
-// TestApplyImportDeltaTakesATaxThatGaveMoneyBack is the second point on which
-// the import path differs from the hand-entry one, and it is worth its own test
-// because the difference is a single sign.
-//
-// A broker's tax CORRECTION arrives positive: of the nine on the owner's own
-// account seven are. Refused, they were seven real credits missing from the
-// journal for as long as the account existed. Nothing downstream needed
-// teaching — a tax is folded into income by its signed amount, so a refund
-// restores exactly what the withholding took.
-//
-// A ZERO is still refused, because money that did not move corrects nothing.
+// A broker's tax correction arrives positive (seven of nine on the owner's
+// account) and is taken; a zero is still refused.
 func TestApplyImportDeltaTakesATaxThatGaveMoneyBack(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -326,14 +272,8 @@ func TestApplyImportDeltaTakesATaxThatGaveMoneyBack(t *testing.T) {
 	}
 }
 
-// TestCreateStillRefusesATaxThatIsNotACharge is the other half: the hand-entry
-// path keeps the guard the import path drops. There a positive tax is a sign
-// somebody typed wrong, and refusing it catches the mistake while it can still
-// be fixed; here the sign is the broker's own statement about money that moved.
-//
-// The two paths differ on exactly two rules and this is one of them, so a change
-// that "simplified" them into one would take this guard away from the door where
-// it earns its keep.
+// The hand-entry path still refuses a positive tax: there it is most likely a
+// typo.
 func TestCreateStillRefusesATaxThatIsNotACharge(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -347,8 +287,8 @@ func TestCreateStillRefusesATaxThatIsNotACharge(t *testing.T) {
 	}
 }
 
-// pairOfLegs builds the two legs of one transfer, already carrying the shared
-// group id its caller computed — which is how a delta presents a pair.
+// pairOfLegs builds the two legs of one transfer sharing a caller-computed
+// group id.
 func pairOfLegs(f fixture, group uuid.UUID, quantity string, on string) (out, in operation.Operation) {
 	out = imported(operation.Operation{
 		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeTransferOut,
@@ -363,9 +303,7 @@ func pairOfLegs(f fixture, group uuid.UUID, quantity string, on string) (out, in
 	return out, in
 }
 
-// TestApplyImportDeltaRefusesBothLegsWhenOneIsRefused pins that a transfer is
-// one event: a pair half-written would leave shares in an account nothing ever
-// sent them from.
+// A transfer is one event: if one leg is refused, so is the other.
 func TestApplyImportDeltaRefusesBothLegsWhenOneIsRefused(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -405,11 +343,8 @@ func TestApplyImportDeltaRefusesBothLegsWhenOneIsRefused(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaPairCarriesTheDatesItMoved is the property the whole
-// breakdown mechanism exists for, on the import path: the receiving account
-// keeps the day the shares were BOUGHT, not the day they changed accounts —
-// and the breakdown is computed here, from the journal, rather than taken from
-// the caller, which cannot know it.
+// On the import path the arriving account keeps the purchase dates, and the
+// breakdown is computed from the journal rather than taken from the caller.
 func TestApplyImportDeltaPairCarriesTheDatesItMoved(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -443,8 +378,7 @@ func TestApplyImportDeltaPairCarriesTheDatesItMoved(t *testing.T) {
 			storedIn = o
 		}
 	}
-	// The basis is the one the journal holds, computed here — 100 000 minor
-	// units for the lot that was bought — on both legs alike.
+	// The basis is the journal's: 100 000 for the lot bought, on both legs.
 	if storedOut.AmountMinor != 100_000 || storedIn.AmountMinor != 100_000 {
 		t.Errorf("legs carry %d / %d, want the released basis 100000 on both",
 			storedOut.AmountMinor, storedIn.AmountMinor)
@@ -453,9 +387,7 @@ func TestApplyImportDeltaPairCarriesTheDatesItMoved(t *testing.T) {
 		t.Fatalf("legs carry %d / %d pieces, want one on each",
 			len(storedOut.TransferLots), len(storedIn.TransferLots))
 	}
-	// The rows live next to the arriving leg only — the same place CreatePair
-	// puts them, since attachTransferLots resolves the departing leg through
-	// the group at every later read.
+	// Pieces are stored next to the arriving leg only, as CreatePair does.
 	if n := f.lotRows(t, storedIn.ID); n != 1 {
 		t.Errorf("lot rows on the arriving leg = %d, want 1", n)
 	}
@@ -480,10 +412,7 @@ func TestApplyImportDeltaPairCarriesTheDatesItMoved(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaLoneTransferInArrivesUndated covers what the manual path
-// refuses outright and the importer cannot do without: shares that came from
-// another broker have no second leg anywhere in this system, and no purchase
-// dates to recover either.
+// A lone transfer_in (shares from another broker) is accepted, undated.
 func TestApplyImportDeltaLoneTransferInArrivesUndated(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -520,25 +449,10 @@ func TestApplyImportDeltaLoneTransferInArrivesUndated(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaTransfersPartOfAnUndatedLot covers a composition only
-// the import path can produce and nothing had exercised before: a lone
-// transfer_in with no acquisition date (see
-// TestApplyImportDeltaLoneTransferInArrivesUndated — shares that arrived from
-// a broker outside this program, which never says when they were bought),
-// followed by an ordinary import transfer PAIR that moves part of that very
-// lot on to a third account.
-//
-// The path is legal — migration 0008 dropped
-// operation_transfer_lots.acquired_on's NOT NULL, and portfolio.CheckTransferLots
-// admits an empty date outright — but nothing had reached it: the manual path
-// can only ever produce an undated lot through CostMinorOverride, never
-// through a transfer's own FIFO release, so every existing test of a real
-// release (TestApplyImportDeltaPairCarriesTheDatesItMoved,
-// TestApplyImportDeltaLoneTransferOutFreezesWhatLeft) starts from a dated buy.
-// It matters because a lot with no acquisition date is FIRST out of the FIFO
-// queue (see the portfolio package's own doc) — a mistake in carrying the
-// absence through a second transfer would misorder every later sale that
-// touches shares mirrored in from another broker.
+// A lone undated transfer_in, then an import pair moving part of that lot on to
+// a third account. Only the import path produces this, and an undated lot is
+// first out of the FIFO queue, so a mistake here would misorder every later sale
+// of shares mirrored in from another broker.
 func TestApplyImportDeltaTransfersPartOfAnUndatedLot(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -609,9 +523,7 @@ func TestApplyImportDeltaTransfersPartOfAnUndatedLot(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaLoneTransferOutFreezesWhatLeft pins that a departing leg
-// with no sibling still records WHICH lots went, rather than leaving a later
-// read to work it out again from a queue that may have moved on.
+// A departing leg with no sibling still records which lots went.
 func TestApplyImportDeltaLoneTransferOutFreezesWhatLeft(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -656,8 +568,7 @@ func TestApplyImportDeltaLoneTransferOutFreezesWhatLeft(t *testing.T) {
 	if !sameAcquisition(storedOut.TransferLots[0].AcquiredOn, datep("2020-01-05")) {
 		t.Errorf("piece acquired %s, want 2020-01-05", acquired(storedOut.TransferLots[0].AcquiredOn))
 	}
-	// With no sibling to hold them, the pieces are stored next to the departing
-	// leg itself — which is where attachTransferLots looks when there is no peer.
+	// With no sibling, the pieces are stored next to the departing leg.
 	if n := f.lotRows(t, storedOut.ID); n != 1 {
 		t.Errorf("lot rows on the lone departing leg = %d, want 1", n)
 	}
@@ -668,10 +579,8 @@ func TestApplyImportDeltaLoneTransferOutFreezesWhatLeft(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaRefusesADeltaThatRepeatsAnExternalID pins the one class
-// of trouble that is NOT a refused candidate: a delta that names the same
-// broker record twice means the caller computed the difference wrongly, and
-// swallowing it would write half a mistake.
+// A delta naming one broker record twice is the caller's mistake and fails
+// whole.
 func TestApplyImportDeltaRefusesADeltaThatRepeatsAnExternalID(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -694,10 +603,8 @@ func TestApplyImportDeltaRefusesADeltaThatRepeatsAnExternalID(t *testing.T) {
 		t.Fatalf("journal holds %d operations, want 0", len(ops))
 	}
 
-	// It is the delta being wrong that matters, not whether the rows would
-	// have applied: two copies of a candidate the engine refuses anyway are
-	// still a difference computed wrongly, and must not come back as an
-	// ordinary refusal for the owner to puzzle over.
+	// Duplicates fail the delta even when the engine would refuse the rows
+	// anyway.
 	oversell := imported(operation.Operation{
 		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeSell,
 		OccurredOn: date("2026-07-01"), Quantity: dec("10"),
@@ -769,9 +676,8 @@ func TestApplyImportDeltaRefusesACandidateWithoutIdentity(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaRemovesBeforeItAdds is what lets a corrected broker
-// record replace the one it corrects inside a single delta: the two carry the
-// same external id, and the journal will not hold both.
+// A corrected record replaces the one it corrects in a single delta: both
+// carry the same external id, so removals go first.
 func TestApplyImportDeltaRemovesBeforeItAdds(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -808,10 +714,8 @@ func TestApplyImportDeltaRemovesBeforeItAdds(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaBlamesTheRemovalThatBreaksTheJournal pins WHOSE fault a
-// refusal is said to be. A removal that leaves the journal unable to replay is
-// the caller's own difference being wrong; blaming the candidates that happen
-// to be in the same delta would name a reason that is not the reason.
+// A removal that breaks the journal is blamed on the removal, not on
+// candidates that happen to share the delta.
 func TestApplyImportDeltaBlamesTheRemovalThatBreaksTheJournal(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -861,20 +765,10 @@ func TestApplyImportDeltaBlamesTheRemovalThatBreaksTheJournal(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaTakesACorrectionOfTheRowItRemoves is the fault that
-// wedged an import for good, and the reason the delta is judged by the journal
-// it would LEAVE rather than by the one that stands halfway through it.
-//
-// A broker that corrects an operation after the fact — a commission it
-// restated, a description it reworded — produces a difference that says "take
-// the old row out, put the corrected one in". Judging the removals on their own
-// asks a question nobody wanted answered: what would this journal be if the
-// purchase were simply gone? A sale with no purchase behind it is the answer,
-// so the engine refuses, and the refusal was fatal to the whole difference.
-// Nothing then reached the journal — not this hour and not any later one, since
-// every rebuild computes the same difference — and no unparsed row named a
-// cause. The owner could not even repair it by hand: an operation whose source
-// is not a person's own entry is not theirs to delete.
+// A broker correction (remove the old row, add the corrected one) is judged
+// by the journal it leaves. Judging the removal alone leaves a sale with no
+// purchase, and that once wedged the import for good: every rebuild computed the
+// same difference, and the owner could not delete an imported row.
 func TestApplyImportDeltaTakesACorrectionOfTheRowItRemoves(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -902,8 +796,7 @@ func TestApplyImportDeltaTakesACorrectionOfTheRowItRemoves(t *testing.T) {
 		}
 	}
 
-	// The broker restates the purchase's commission. Same record, same
-	// external id, so the row it corrects has to go before it can be written.
+	// The broker restates the purchase's commission; same external id.
 	corrected := imported(operation.Operation{
 		AccountID: f.accountID, InstrumentID: &f.sberID, Type: operation.TypeBuy,
 		OccurredOn: date("2026-01-15"), Quantity: dec("100"),
@@ -929,16 +822,9 @@ func TestApplyImportDeltaTakesACorrectionOfTheRowItRemoves(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaJudgesEveryCandidateBeforeBlamingOne is the same rule one
-// step further: the state that has to hold is the FINAL one, and no candidate
-// is blamed for a journal that only the middle of the difference ever holds.
-//
-// Two purchases cover one sale here, and the broker restates both of them at
-// once. Offering the candidates one at a time — each against the journal the
-// removals left — refuses both: the first replacement covers sixty of the
-// hundred sold, the second forty. Neither is at fault, and refusing them would
-// name a reason ("sold more than the account holds") that is true of no journal
-// this delta was ever going to produce.
+// Two purchases cover one sale and the broker restates both. One at a time,
+// each replacement covers only part of the sale and both would be refused; the
+// final journal is fine, so neither is.
 func TestApplyImportDeltaJudgesEveryCandidateBeforeBlamingOne(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -1029,14 +915,9 @@ func TestApplyImportDeltaWillNotRemoveAManualOperation(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaOrdersWhatItWroteTheWayItCheckedIt is the batch's own
-// version of "what was checked is what is read back". A delta's rows go out
-// back to back in one batch, and a clock left to date them is not a promise
-// that two of them differ — while two operations of the same date sharing one
-// created_at leave the read path's ORDER BY nothing to order them by. The buy
-// and the sell below would then fold in either order, and in one of those
-// orders the sell is an oversell: accepted on write, refused on every later
-// read, which is the fault this project has already met twice.
+// A delta's rows go out in one batch; same-day rows sharing a created_at
+// would fold in either order, and in one the sell is an oversell. The stored
+// order must be the checked one.
 func TestApplyImportDeltaOrdersWhatItWroteTheWayItCheckedIt(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -1078,10 +959,8 @@ func TestApplyImportDeltaOrdersWhatItWroteTheWayItCheckedIt(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaJudgesCandidatesInTheOrderTheyHappened covers the shape a
-// broker's own paging hands over: newest first. The sell arrives in the delta
-// before the buy that covers it, and judging them in that order would refuse a
-// perfectly ordinary week of trading as an oversell.
+// A broker pages newest first, so a sell arrives before its buy; candidates
+// are judged in fold order.
 func TestApplyImportDeltaJudgesCandidatesInTheOrderTheyHappened(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -1115,11 +994,8 @@ func TestApplyImportDeltaJudgesCandidatesInTheOrderTheyHappened(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaWillNotRemoveHalfATransfer covers the one break the
-// engine cannot see. A lone arriving leg is perfectly legal — it is what shares
-// from another broker look like — so an account left holding one after its
-// departing half was removed replays cleanly and for ever, while the shares in
-// it came from nowhere.
+// Removing half of a transfer is refused: a lone arriving leg replays fine,
+// so the engine cannot see the break.
 func TestApplyImportDeltaWillNotRemoveHalfATransfer(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -1163,15 +1039,9 @@ func TestApplyImportDeltaWillNotRemoveHalfATransfer(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaFoldsACandidateAfterWhatItsDateAlreadyHolds pins where a
-// new row lands among the rows its date already carries: after all of them.
-//
-// The seeded buy below is dated today and stamped an hour ahead, which is what
-// a delta's own numbering leaves behind — rows are stamped a microsecond apart
-// from the moment the sync began, so a long one reaches past that moment, and a
-// sync that follows would start underneath it. Ordering by the clock alone
-// would then fold this sell before the buy that covers it and refuse an
-// ordinary sale.
+// A new row folds after everything its date already holds. The seeded buy is
+// stamped an hour ahead, as a previous long sync leaves rows; ordering by the
+// clock alone would put the sell before it.
 func TestApplyImportDeltaFoldsACandidateAfterWhatItsDateAlreadyHolds(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -1209,17 +1079,9 @@ func TestApplyImportDeltaFoldsACandidateAfterWhatItsDateAlreadyHolds(t *testing.
 	}
 }
 
-// TestApplyImportDeltaBasesTimestampsOnWhatSurvivesRemoval pins that the row a
-// delta's own numbering starts AFTER (see base in ApplyImportDelta) is read
-// from the journal as the removals leave it, not as it stood before them. A
-// row this same delta is about to delete must not go on raising that floor —
-// it will not be there to share a date with anything once the delta commits.
-//
-// The seeded pair below makes the two readings disagree by two days: op-young
-// is stamped far in the future and is the one being removed, op-old is
-// stamped in the past and is the one left behind. Basing the floor on the
-// journal before removal would number the replacement row near op-young's
-// stamp, days from now; basing it on what survives numbers it near "now".
+// New stamps start after the youngest row that survives the removals. op-young
+// is stamped far ahead and is being removed; op-old stays. The replacement must be
+// stamped near now, not near op-young.
 func TestApplyImportDeltaBasesTimestampsOnWhatSurvivesRemoval(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -1266,14 +1128,9 @@ func TestApplyImportDeltaBasesTimestampsOnWhatSurvivesRemoval(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaLetsARewrittenRowKeepItsPlace is the write path's half of
-// the rule the importer's rewrite rests on: a row put back in place of one this
-// same delta removes may inherit that row's created_at, and then it folds where
-// it folded before instead of at the end of its day.
-//
-// The two deposits below are one day apart in nothing but their stamps, and the
-// journal reads a day in stamp order. Replacing the FIRST of them without its
-// old stamp moves it behind the second.
+// A row replacing one the delta removes may inherit its created_at and keep
+// its place. The two deposits differ only in their stamps; without the old stamp
+// the first would move behind the second.
 func TestApplyImportDeltaLetsARewrittenRowKeepItsPlace(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -1328,12 +1185,8 @@ func TestApplyImportDeltaLetsARewrittenRowKeepItsPlace(t *testing.T) {
 	}
 }
 
-// TestApplyImportDeltaRefusesATimestampItCannotHaveInherited pins the limit on
-// the rule above. A created_at that belongs to no row this delta removes is not
-// a rewrite keeping its place — it is an importer choosing where in a day an
-// operation folds, which decides which parcel a later sale consumes and
-// therefore what the realized profit is. It is the caller's own doing, so it is
-// fatal to the delta rather than a refusal of the candidate.
+// A created_at from no removed row is refused: it would let an importer
+// choose where a row folds, and so the realized profit.
 func TestApplyImportDeltaRefusesATimestampItCannotHaveInherited(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
@@ -1354,12 +1207,9 @@ func TestApplyImportDeltaRefusesATimestampItCannotHaveInherited(t *testing.T) {
 	}
 }
 
-// realizedOf is a position's realized result, and it FAILS THE TEST when the
-// position has none — a disposal that settled in another currency leaves no
-// figure in any single one (see portfolio.Position.RealizedPnL). Every call
-// below therefore asserts two things at once: the number, and that there is a
-// number, which is what keeps a test from quietly comparing a zero against a
-// zero the moment the currency rule starts refusing to answer.
+// realizedOf is a position's realized result and fails the test when there
+// is none (a disposal settled in another currency), so a zero is never compared
+// with a missing figure.
 func realizedOf(t *testing.T, p *portfolio.Position) int64 {
 	t.Helper()
 	minor, inOneCurrency := p.RealizedPnL()
@@ -1369,9 +1219,8 @@ func realizedOf(t *testing.T, p *portfolio.Position) int64 {
 	return minor
 }
 
-// TestBuildAndApplyImportDeltaIsConfinedToTheAccountItLocked: the lock covers
-// one account, so a delta built under it may write to that account only.
-// Anything else would be judged against a journal nobody locked.
+// The lock covers one account, so a delta built under it may write only
+// there.
 func TestBuildAndApplyImportDeltaIsConfinedToTheAccountItLocked(t *testing.T) {
 	f := newFixture(t)
 	svc := operation.NewService(f.store)
