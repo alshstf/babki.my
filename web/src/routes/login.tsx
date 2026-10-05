@@ -10,7 +10,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { SignInLocked, useLogin } from "@/api/session";
+import { SessionNotKept, SignInLocked, useLogin } from "@/api/session";
 import { isUnauthorized } from "@/api/operations";
 
 export function LoginPage() {
@@ -73,6 +73,8 @@ export function LoginPage() {
                 <AlertDescription>
                   {login.error instanceof SignInLocked ? (
                     <SignInLockedNotice minutesLeft={login.error.minutesLeft} />
+                  ) : login.error instanceof SessionNotKept ? (
+                    t("auth.sessionNotKept")
                   ) : isUnauthorized(login.error) ? (
                     t("auth.invalidCredentials")
                   ) : (

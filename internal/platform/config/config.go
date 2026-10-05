@@ -22,10 +22,11 @@ type Config struct {
 	// secrets it sealed are still stored: it opens them, never seals. Empty
 	// when no key is being replaced.
 	EncryptionKeyPrevious string `env:"BABKI_ENCRYPTION_KEY_PREVIOUS"`
-	// CookieSecure marks the session cookie HTTPS-only. Off by default: a home
-	// install often runs plain http on the local network, where a cookie marked
-	// so would never be sent back. Turn it on behind an HTTPS proxy.
-	CookieSecure bool `env:"BABKI_COOKIE_SECURE" envDefault:"false"`
+	// CookieSecure marks the session cookie HTTPS-only. On by default (decision
+	// Р-15): the cookie is the sign-in, and over plain http it travels in the
+	// clear. An install that runs plain http on a home network turns it off —
+	// the sign-in form says so when a browser drops the cookie.
+	CookieSecure bool `env:"BABKI_COOKIE_SECURE" envDefault:"true"`
 	// SetupCode, when set, is the one-time code first-run setup asks for,
 	// chosen in advance; otherwise the server makes one and writes it to its
 	// log (see cmd/babki setupCode).

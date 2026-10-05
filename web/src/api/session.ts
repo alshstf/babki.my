@@ -68,6 +68,26 @@ export class SignInLocked extends ApiError {
   }
 }
 
+// SessionNotKept is a sign-in the server accepted and the browser did not keep.
+// The session cookie is HTTPS-only by default (BABKI_COOKIE_SECURE), and a page
+// opened over plain http gets one the browser will not store: the next request
+// arrives signed out, and without this the form would simply come back with
+// nothing said.
+export class SessionNotKept extends Error {}
+
+// confirmSessionKept asks the server who is signed in, right after it said
+// someone is. Only a 401 is news: anything else — a slow or dropped answer —
+// says nothing about the cookie, and the sign-in that did succeed goes on.
+async function confirmSessionKept(): Promise<void> {
+  let status: number;
+  try {
+    ({ response: { status } } = await api.GET("/api/v1/auth/me"));
+  } catch {
+    return;
+  }
+  if (status === 401) throw new SessionNotKept("the browser did not keep the session cookie");
+}
+
 export function useLogin() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -84,6 +104,7 @@ export function useLogin() {
         );
       }
       if (!data) throw apiError(response, error);
+      await confirmSessionKept();
       return data;
     },
     onSuccess: (data) => {
@@ -136,6 +157,7 @@ export function useSetup() {
       // by the status the API contract promises rather than by the English
       // sentence it happens to carry.
       if (!data) throw apiError(response, error);
+      await confirmSessionKept();
       return data;
     },
     onSuccess: (data) => {

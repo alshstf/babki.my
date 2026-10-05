@@ -165,3 +165,27 @@ describe("LoginPage", () => {
     expect(screen.queryByText("Неверный логин или пароль")).not.toBeInTheDocument();
   });
 });
+
+// The server accepted the sign-in and the browser did not keep it: the session
+// cookie is HTTPS-only and the page is on plain http. The form says so — and
+// what to do — instead of coming back with nothing said.
+describe("LoginPage — a sign-in the browser did not keep", () => {
+  it("names the cause when the next request arrives signed out", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const signedOut = url.includes("/auth/me");
+      return Promise.resolve(
+        new Response(JSON.stringify(signedOut ? { error: "authentication required" } : { role: "owner" }), {
+          status: signedOut ? 401 : 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+    wrap(<LoginPage />);
+
+    attemptSignIn();
+
+    expect(await screen.findByText(/браузер не сохранил вход/)).toBeInTheDocument();
+    expect(screen.queryByText("Неверный логин или пароль")).toBeNull();
+  });
+});
