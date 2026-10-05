@@ -19,15 +19,9 @@ var migrations embed.FS
 // will do; this one spells "babkimig" in ASCII.
 const migrateLockKey int64 = 0x6261626b696d6967
 
-// Migrate applies all goose migrations and River's own schema migrations.
-// Idempotent.
-//
-// ONE MIGRATION RUN AT A TIME, across processes. Every long-running role
-// migrates at start-up, so an instance split into `api` and `worker` starts two
-// runs against one database after an upgrade, and two runs applying the same
-// file collide half-way through it. The lock is taken on a connection of its
-// own and held until the run ends; the second process waits, then finds nothing
-// left to apply.
+// Migrate applies the goose migrations and River's schema migrations. It is
+// idempotent, and an advisory lock keeps two processes (say api and worker
+// starting together) from migrating at once.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	lock, err := pool.Acquire(ctx)
 	if err != nil {
@@ -37,8 +31,8 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := lock.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrateLockKey); err != nil {
 		return fmt.Errorf("migrate: take the lock: %w", err)
 	}
-	// Released explicitly, and on a context that outlives a cancelled run: the
-	// connection goes back to the pool, and a session lock would go with it.
+	// Unlock explicitly, even after cancellation: the connection returns to the
+	// pool and would carry the session lock with it.
 	defer func() {
 		_, _ = lock.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, migrateLockKey)
 	}()

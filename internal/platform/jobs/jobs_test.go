@@ -27,17 +27,8 @@ import (
 	"babki.my/babki/internal/platform/testdb"
 )
 
-// stubFxProvider and stubQuoteProvider are network-free marketdata provider
-// stand-ins. NewWorkers registers the fx/quotes/backfill periodic jobs with
-// RunOnStart: true, so TestHeartbeat's client.Start also fires all three
-// immediately — these stubs let that happen harmlessly instead of hitting
-// cbr.ru/iss.moex.com from a test. The backfill job finds no operations in
-// this test's empty database and returns before calling either provider, so
-// its history methods need no stub behaviour of their own.
-//
-// stubFxProvider implements marketdata.FxHistoryProvider (not just
-// FxProvider) because that is what NewWorkers takes: the history download
-// needs a source that can deliver a whole date range in one request.
+// Network-free providers. NewWorkers' periodic jobs run on start, and with an
+// empty database the backfill returns before calling them.
 type stubFxProvider struct{}
 
 func (stubFxProvider) RatesOn(_ context.Context, on time.Time) ([]marketdata.FxRate, error) {
@@ -62,18 +53,8 @@ func (stubQuoteProvider) QuotesFor(context.Context, []string) ([]marketdata.Tick
 
 func (stubQuoteProvider) Name() string { return "stub-quotes" }
 
-// stubTinvestDeps is the T-Invest half of the same arrangement. The hourly
-// dispatcher is registered with RunOnStart: true, so client.Start fires it
-// immediately here too.
-//
-// THE CLIENT FACTORY REFUSES TO BUILD ANYTHING, and that is what keeps these
-// tests off the network. In TestHeartbeat it is never reached at all: the
-// database holds no active connection, so the dispatcher says there is nothing
-// to sync and returns, exactly as the backfill job does. In the wiring test
-// below it IS reached — a connection is waiting — and the sync job it was
-// queued for fails there, one step before the first broker request. That is the
-// intended end of that test: what it proves is that the job was queued, not
-// that it could have succeeded.
+// stubTinvestDeps' client factory refuses to build a client, which keeps the
+// tests off the network: a queued sync fails one step before the broker.
 func stubTinvestDeps(t *testing.T, pool *pgxpool.Pool) jobs.TinvestDeps {
 	t.Helper()
 	box, err := secretbox.New(bytes.Repeat([]byte{3}, secretbox.KeySize))
@@ -96,20 +77,15 @@ func stubTinvestDeps(t *testing.T, pool *pgxpool.Pool) jobs.TinvestDeps {
 	}
 }
 
-// TestHeartbeat verifies that the River client starts, the periodic
-// heartbeat job (RunOnStart) executes, and leaves a mark in meta.
-
-// stubCorporateActions is the registry pair NewWorkers needs. REAL stores over
-// the test pool rather than fakes: the periodic jobs registered from them fire
-// on start (RunOnStart), so a nil pair would be a panic in a worker rather than
-// a compile error here, and the tables they read exist in every test database.
-// It returns both values NewWorkers takes, in that order.
+// stubCorporateActions returns real registry stores over the test pool: their
+// periodic jobs run on start, so nil would panic in a worker.
 func stubCorporateActions(pool *pgxpool.Pool) (*corporateaction.Store, *corporateaction.Materializer) {
 	store := corporateaction.NewStore(pool)
 	opStore := operation.NewStore(pool)
 	return store, corporateaction.NewMaterializer(store, operation.NewService(opStore), instrument.NewStore(pool), nil, slog.Default())
 }
 
+// The client starts, the heartbeat runs on start and leaves its mark in meta.
 func TestHeartbeat(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -150,40 +126,9 @@ func TestHeartbeat(t *testing.T) {
 	t.Fatal("heartbeat did not run within 15s")
 }
 
-// THIS IS THE TEST THAT SAYS THE IMPORT IS SWITCHED ON. Everything the T-Invest
-// module does is covered inside that module, against workers a test constructs
-// itself; what no test there can see is whether this application ever runs
-// them. Between "the module works" and "the feature happens" sit exactly three
-// things, all of them here: the periodic job that fires the dispatcher, the
-// workers registered to receive what it queues, and the Enqueuer, whose client
-// is filled in after it was handed to the dispatcher (see NewClient) and
-// through which every queued sync passes.
-//
-// EACH OF THE THREE FAILS SILENTLY IN PRODUCTION AND LOUDLY ONLY HERE. Drop the
-// attachment in NewClient and every hourly dispatch answers "the job queue is
-// not running yet", retries, fails again, and no connection is ever synced —
-// with nothing but Error lines in a log to say so. Drop the periodic job and
-// not even that: the dispatcher simply never runs. Both mutations were made and
-// both turn this test red; nothing else in the repository notices either.
-//
-// A connection is seeded ACTIVE and its token sealed with the same box the
-// workers were built with, so the run gets past the decryption and stops at the
-// client factory, which refuses to build anything. What is waited for is
-// therefore the sync job's ROW — the queue's own record that the dispatcher
-// inserted it — and not its success, which no test may have without a broker.
-// TestStartingTheQueueQueuesTheCorporateActionJobs is the registry's half of
-// the same guard the sync test above is: the workers can be registered, the
-// stores wired and every unit test green, and the feature still be dead —
-// because nothing ever ENQUEUES the two jobs. A split nobody fetches is a
-// split that never happens, and the process looks perfectly healthy while it
-// does not happen. Deleting either periodic job below turns this red; nothing
-// else in the suite notices.
-//
-// BOTH kinds are asserted, because they answer different halves: the refresh
-// is what learns a split from the exchange, and the sweep is what carries an
-// event a person entered by hand into the journals of the accounts that held
-// the paper. A registry with only the first is deaf to the owner; with only
-// the second it never hears the exchange.
+// Starting the queue enqueues both registry jobs: the refresh that learns
+// splits from the exchange and the sweep that applies events to journals.
+// Without the periodic entries nothing else in the suite would notice.
 func TestStartingTheQueueQueuesTheCorporateActionJobs(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -229,6 +174,9 @@ func TestStartingTheQueueQueuesTheCorporateActionJobs(t *testing.T) {
 	}
 }
 
+// Starting the queue syncs an active connection: the periodic dispatcher, the
+// registered workers and the Enqueuer attached in NewClient all have to work.
+// The sync's queued row is the evidence; it fails at the refusing client.
 func TestStartingTheQueueQueuesASyncForAnActiveConnection(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -273,9 +221,7 @@ func TestStartingTheQueueQueuesASyncForAnActiveConnection(t *testing.T) {
 		err := pool.QueryRow(ctx,
 			`SELECT args FROM river_job WHERE kind = 'tinvest.sync' ORDER BY id LIMIT 1`).Scan(&raw)
 		if err == nil {
-			// The arguments too, and not merely a row of the right kind: a sync
-			// queued for nobody, or under a trigger the run log refuses, would
-			// satisfy a count and nothing else.
+			// The arguments too: a count alone would accept a sync queued for nobody.
 			var args struct {
 				ConnectionID string `json:"connection_id"`
 				Trigger      string `json:"trigger"`
@@ -299,15 +245,8 @@ func TestStartingTheQueueQueuesASyncForAnActiveConnection(t *testing.T) {
 	}
 }
 
-// TestAnInsertOnlyClientQueuesWithoutWorkingAnything is what stands behind the
-// "api" role's «синхронизировать сейчас» button. That process registers no
-// workers and starts no queue, and a client built that way is easy to assume
-// cannot insert either — River's own documentation says otherwise and this is
-// the measurement of it.
-//
-// It also checks the second half of the claim: that nothing is worked. The job
-// is still sitting in the queue, unclaimed, a moment later — which is the whole
-// point of the role, since the worker process is what must pick it up.
+// The api role's insert-only client can queue a job, and leaves it unworked
+// for the worker process.
 func TestAnInsertOnlyClientQueuesWithoutWorkingAnything(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -341,15 +280,12 @@ func TestAnInsertOnlyClientQueuesWithoutWorkingAnything(t *testing.T) {
 	if args.ConnectionID != connID.String() || args.Trigger != "manual" {
 		t.Fatalf("queued %+v, want {%s manual}", args, connID)
 	}
-	// Available, not running and not completed: this process inserted the work
-	// and left it for whoever works the queue.
 	if state != "available" {
 		t.Errorf("the job is %q, want available: an api process must not work the jobs it queues", state)
 	}
 }
 
-// gracefulProbeArgs is a job kind that exists only inside the test below: it
-// runs, says so, and then reports how its own context ended.
+// gracefulProbeArgs runs, reports, and then reports how its context ended.
 type gracefulProbeArgs struct{}
 
 func (gracefulProbeArgs) Kind() string { return "test.graceful_probe" }
@@ -371,26 +307,10 @@ func (w *gracefulProbeWorker) Work(ctx context.Context, _ *river.Job[gracefulPro
 	return nil
 }
 
-// TestSigtermLeavesARunningJobItsGracefulWindow measures the one thing
-// jobs.SoftStopTimeout buys, and measures it as behaviour rather than as a
-// field: a job already running when the process is signalled keeps its context
-// for a while instead of losing it on the spot.
-//
-// THE SIGNAL IS MODELLED BY CANCELLING THE CONTEXT PASSED TO Start, because
-// that is precisely what a signal does in this program — cmd/babki's "all" and
-// "worker" roles both hand signal.NotifyContext's context to startJobClient,
-// which hands it to Start. Without SoftStopTimeout set, River makes that
-// context the parent of every job's context, so this cancellation reaches the
-// worker below within microseconds and is indistinguishable from
-// StopAndCancel; with it set, the work context is detached and the job runs on.
-//
-// The wait is a full second against a ten-second window — two orders of
-// magnitude short of the window and three above the microseconds an
-// inherited cancellation takes, so the assertion does not depend on the exact
-// value of either. Deleting SoftStopTimeout from the config turns this red.
-//
-// The job is released rather than left blocking, so the client can stop
-// normally afterwards and the test does not lean on the soft timeout firing.
+// Cancelling Start's context, as a signal does, leaves a running job its
+// context for SoftStopTimeout. Without the setting River cancels it at once.
+// The one-second wait sits far from both the window and an inherited
+// cancellation.
 func TestSigtermLeavesARunningJobItsGracefulWindow(t *testing.T) {
 	pool := testdb.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -442,10 +362,8 @@ func TestSigtermLeavesARunningJobItsGracefulWindow(t *testing.T) {
 	}
 }
 
-// A registry retry queued by a request has a worker to run it. River refuses to
-// queue a kind nobody is registered for only on a client that HAS workers, and
-// the api role's client has none — so a missing registration would show as a
-// job that waits for ever, not as an error anywhere.
+// A registry retry queued by a request has a worker. The api role's client
+// has none, so a missing registration would wait forever silently.
 func TestTheRegistrysRetryJobHasAWorker(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()

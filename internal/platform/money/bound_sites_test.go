@@ -13,39 +13,12 @@ import (
 	"babki.my/babki/internal/platform/money"
 )
 
-// MaxAmountMinor is written down in three places, in three languages, and only
-// one of them is the rule. money.MaxAmountMinor is what the server enforces; the
-// contract states the same bound as minimum/maximum so a client can validate
-// against the document; and web/src/lib/money.ts holds a copy so an amount field
-// refuses at the keystroke instead of after a round trip.
-//
-// Nothing made them agree. Go cannot import a YAML literal and TypeScript cannot
-// import a Go constant, so the two outer copies are typed by hand, and a change
-// to the rule that touched only two of the three would leave a field accepting
-// what the server refuses (or refusing what it takes) with every test in this
-// repository still green. That is the shape of defect this package's own doc
-// comment calls out — "two statements of one rule drift; this codebase has been
-// bitten by that before" — and it had been left standing inside the constant
-// that says so.
-//
-// This test does not remove the duplication; it removes the SILENCE. Change the
-// bound anywhere and this names the other two sites.
-//
-// What it cannot check is the PROSE. All three sites also spell the figure out
-// in words — "ten trillion whole roubles or dollars", "±10^15 minor units" — and
-// those sentences are read by people, not parsers. Whoever moves this number
-// re-reads them by hand; there is no mechanism here that will notice.
+// MaxAmountMinor is stated three times: here, in the OpenAPI contract
+// (minimum/maximum), and in web/src/lib/money.ts for the amount fields. This
+// test holds the other two to it. The prose around each copy is not checked.
 
-// The bound as the contract states it, in every schema that has to state it.
-// Each path is spelled out rather than searched for, so that a bound added
-// elsewhere tomorrow does not silently satisfy this test in place of one it is
-// about — and so that a MISSING declaration is a failure here rather than a
-// schema this test simply never looked at.
-//
-// There are four such fields and not one, which is #100 and #102: the server
-// refuses by this same cap at every door money is written through, and the
-// contract declared it at exactly one of them. A client validating against the
-// document could check its balance and not its deposit.
+// Every contract field bounded by the cap, by explicit path, so a missing
+// declaration fails here (#100, #102).
 type moneyBound struct {
 	Minimum *int64 `yaml:"minimum"`
 	Maximum *int64 `yaml:"maximum"`
@@ -74,9 +47,7 @@ type contractDoc struct {
 	} `yaml:"components"`
 }
 
-// repoFile reads a path relative to the repository root. Tests run with their
-// own package directory as the working directory, and the two files this test is
-// about live outside the Go tree entirely.
+// repoFile reads a file relative to the repository root.
 func repoFile(t *testing.T, rel string) string {
 	t.Helper()
 	body, err := os.ReadFile(filepath.Join("..", "..", "..", rel))
@@ -86,9 +57,7 @@ func repoFile(t *testing.T, rel string) string {
 	return string(body)
 }
 
-// shown writes an optional bound for a person. %v on a *int64 prints the
-// ADDRESS, which is the one thing about it nobody can act on — and the message
-// below exists precisely for the case where one of these is missing.
+// shown formats an optional bound; %v on a pointer would print the address.
 func shown(v *int64) string {
 	if v == nil {
 		return "absent"
@@ -103,15 +72,8 @@ func TestTheContractStatesTheBoundTheServerEnforces(t *testing.T) {
 	}
 	schemas := doc.Components.Schemas
 
-	// THE FLOOR IS NOT THE SAME FIGURE AT EVERY DOOR, and each one below is
-	// written from the code that enforces it rather than from its neighbour. An
-	// amount and a balance are bounded by MAGNITUDE, because an outflow and a
-	// debt are ordinary negative figures; a fee and a hand-given cost basis stop
-	// at zero, because the server refuses a negative one outright and for a
-	// reason of its own. Copying the amount's ±cap onto the fee would publish a
-	// floor of -10^15 for a field the server refuses at -1 — a bound that is
-	// wrong in the direction a client cannot detect, since every request it
-	// wrongly permitted would come back 400.
+	// Floors differ by field: amounts and balances are bounded by magnitude, a fee
+	// and a stated cost basis stop at zero, as the server enforces.
 	for _, site := range []struct {
 		where    string
 		declared moneyBound
@@ -144,10 +106,7 @@ func TestTheContractStatesTheBoundTheServerEnforces(t *testing.T) {
 			floor:    "a cost basis given by hand is refused below zero: `cost_minor must be within 0..10^15`",
 		},
 	} {
-		// Absent, not merely different: a schema that carries no bound leaves the
-		// pointers nil, and comparing a nil-derived zero against the constant
-		// would report "0, want 10^15" — true, but it would send the reader
-		// looking for a wrong number rather than a missing one.
+		// Reported as missing rather than as a wrong number.
 		if site.declared.Maximum == nil || site.declared.Minimum == nil {
 			t.Errorf("api/openapi.yaml %s has minimum=%s maximum=%s; the server refuses past %d..%d (%s), "+
 				"and a client validating against the contract can only check a bound the contract carries",
@@ -167,27 +126,19 @@ func TestTheContractStatesTheBoundTheServerEnforces(t *testing.T) {
 	}
 }
 
-// webMaxAmountRe matches the frontend's copy of the bound. Anchored to the
-// declaration rather than to the digits alone, because the digits also appear in
-// that file's comments, and a test that matched a comment would pass on a file
-// whose actual constant had moved.
+// webMaxAmountRe matches the declaration, not the digits in a comment.
 var webMaxAmountRe = regexp.MustCompile(`export const MAX_AMOUNT_MINOR = ([\d_]+);`)
 
 func TestTheAmountFieldRefusesAtTheBoundTheServerEnforces(t *testing.T) {
 	const rel = "web/src/lib/money.ts"
 	found := webMaxAmountRe.FindStringSubmatch(repoFile(t, rel))
 	if found == nil {
-		// Reported apart from a mismatch on purpose: this is what a rename or a
-		// reformat looks like, and the fix for it is to update the pattern above,
-		// not to change any number.
+		// A rename or reformat, not a different value.
 		t.Fatalf("no `export const MAX_AMOUNT_MINOR = <digits>;` in %s. "+
 			"It holds the frontend's copy of money.MaxAmountMinor (%d); if the declaration was renamed or "+
 			"reformatted, teach webMaxAmountRe its new shape rather than leaving the two untied",
 			rel, money.MaxAmountMinor)
 	}
-	// Go and TypeScript happen to write digit separators the same way, and this
-	// test would be about nothing if it compared the two spellings instead of the
-	// two values.
 	web, err := strconv.ParseInt(strings.ReplaceAll(found[1], "_", ""), 10, 64)
 	if err != nil {
 		t.Fatalf("MAX_AMOUNT_MINOR in %s is %q, which is not an int64: %v", rel, found[1], err)

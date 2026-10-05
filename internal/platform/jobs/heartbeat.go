@@ -9,7 +9,7 @@ import (
 	"github.com/riverqueue/river"
 )
 
-// HeartbeatArgs is a periodic pulse job confirming that a worker is alive.
+// HeartbeatArgs is a periodic job that records that a worker is alive.
 type HeartbeatArgs struct{}
 
 func (HeartbeatArgs) Kind() string { return "heartbeat" }

@@ -1,5 +1,5 @@
-// Package httpserver is the HTTP framework of the application: routing, middleware,
-// healthcheck, graceful shutdown. Domain modules mount their routes here.
+// Package httpserver provides routing, middleware, the health check and
+// graceful shutdown. Domain modules mount their routes on it.
 package httpserver
 
 import (
@@ -26,45 +26,27 @@ type Server struct {
 func New(log *slog.Logger, pool *pgxpool.Pool) *Server {
 	s := &Server{log: log, pool: pool, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /api/healthz", s.handleHealthz)
-	// Catch-all for unmatched API paths: JSON 404 instead of falling through
-	// to the SPA handler mounted at "/".
+	// Unmatched API paths get a JSON 404 rather than the SPA mounted at "/".
 	s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusNotFound, "not found")
 	})
 	return s
 }
 
-// Mount adds a handler (domain modules, UI).
+// Mount registers a handler for pattern.
 func (s *Server) Mount(pattern string, h http.Handler) {
 	s.mux.Handle(pattern, h)
 	s.routes = append(s.routes, pattern)
 }
 
-// Routes lists the patterns Mount has registered, in registration order.
-//
-// THE METHOD IS PART OF A PATTERN ("POST /api/v1/..."), because that is how
-// net/http spells one and two methods on one path are two routes. The routes
-// New registers on itself — the healthcheck and the JSON 404 for unmatched
-// /api/ paths — are not here: they go to the mux directly and belong to the
-// framework rather than to a module.
-//
-// It exists for the tests that have to cover EVERY route of a module: a list of
-// routes typed into a test goes on looking complete the day a route is mounted
-// without a line added there, and the test then passes on the routes it does
-// know while the new one is asked nothing at all. Taking the list from the
-// router turns that into a failure (see
-// TestEveryEndpointRefusesAnEditorAndAViewer in internal/importer/tinvest).
-//
-// The slice is a copy, so a caller appending to what it gets back cannot teach
-// the router a route.
+// Routes returns a copy of the patterns registered with Mount ("POST
+// /api/v1/..."), in order, so tests can cover every route a module mounts.
 func (s *Server) Routes() []string {
 	return slices.Clone(s.routes)
 }
 
-// Handler returns the root handler with all middleware.
-//
-// Order matters: withRequestLog wraps withRecover so that panics recovered
-// deeper in the chain still produce an access log entry (status, duration).
+// Handler returns the root handler with all middleware. Logging wraps
+// recovery, so a recovered panic is still logged as a request.
 func (s *Server) Handler() http.Handler {
 	return withRequestLog(s.log, withRecover(s.log, withSecurityHeaders(withSameOrigin(s.mux))))
 }
@@ -75,11 +57,9 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 		Addr:              addr,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
-		// A request body is at most a megabyte of JSON and an answer at most a
-		// journal page: these are far past either and exist so that a client
-		// sending or reading one byte at a time cannot hold a connection open
-		// for ever. WriteTimeout covers the slowest handler there is — a
-		// recorded corporate action materializing into every journal.
+		// Generous for a megabyte of JSON, but a slow client cannot hold a
+		// connection forever. WriteTimeout covers the slowest handler: a
+		// corporate action applied to every journal.
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 2 * time.Minute,
 		IdleTimeout:  2 * time.Minute,

@@ -14,9 +14,7 @@ import (
 )
 
 func TestMigrate(t *testing.T) {
-	// NewEmpty, not New: this is the one test that has to watch the migrations
-	// build a schema from nothing, so it cannot be handed the pre-migrated
-	// database every other test gets.
+	// NewEmpty: this test builds the schema from nothing.
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
 
@@ -40,29 +38,12 @@ func TestMigrate(t *testing.T) {
 	}
 }
 
-// tickerUniqueMigration is the version that makes instruments.ticker unique.
-// The test below has to stand a database at the version just below it.
+// tickerUniqueMigration makes instruments.ticker unique.
 const tickerUniqueMigration = 11
 
-// TestMigrate_DuplicateTickersStopTheUpgradeAndSayWhatToDo covers the one
-// thing this repository's owner cannot have in his own database but a
-// self-hoster upgrading might: two instruments already carrying the same
-// ticker. A bare CREATE UNIQUE INDEX would fail there with "could not create
-// unique index instruments_ticker_uniq" — a sentence that names a Postgres
-// object, not the problem, and leaves the person running the upgrade with
-// nowhere to start. Merging the rows instead is not on the table: deciding
-// which of two catalog entries is the real one rewrites which instrument the
-// journal's operations point at, and the journal is the source of truth here —
-// no migration gets to edit it unattended.
-//
-// So the upgrade stops, names the rows, and says what to do. This test pins
-// all three: that it stops, that the message is actionable, and that resolving
-// the duplicate lets the very same upgrade through — a wall with no door would
-// be no better than a crash.
-//
-// "Names the rows", not just the ticker: the operator has to look at the two
-// entries to decide which one to keep, and a message saying only "SBER
-// (2 instruments)" starts that with a hunt for them.
+// An upgrade over duplicate tickers stops with a message naming both rows and
+// what to do, and goes through once the duplicate is resolved. Merging rows is
+// not an option: it would repoint journal operations.
 func TestMigrate_DuplicateTickersStopTheUpgradeAndSayWhatToDo(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -84,13 +65,9 @@ func TestMigrate_DuplicateTickersStopTheUpgradeAndSayWhatToDo(t *testing.T) {
 	if err == nil {
 		t.Fatal("Migrate succeeded on a catalog holding two instruments under one ticker; want it to stop")
 	}
-	// The whole diagnosis has to be in the error MESSAGE. Postgres carries
-	// DETAIL and HINT as separate fields and pgconn.PgError.Error() prints
-	// neither, so anything put there would never reach the operator's console.
+	// Postgres DETAIL and HINT are not in PgError.Error(), so the message must carry everything.
 	msg := err.Error()
 	want := []string{"SBER", "same ticker", "start the application again"}
-	// Both rows, by id and by name — either one alone would leave the operator
-	// looking for which two entries are meant.
 	for name, id := range ids {
 		want = append(want, name, id)
 	}
@@ -125,20 +102,9 @@ func TestMigrate_DuplicateTickersStopTheUpgradeAndSayWhatToDo(t *testing.T) {
 	}
 }
 
-// TestMigrate_DuplicatesOutsideTheTradableSetDoNotStopTheUpgrade is the other
-// self-hoster, the one the refusal must not touch. Prices are fetched for
-// shares, bonds and funds alone (instrument.ListTradable), so those are the
-// only rows uniqueness is about — and the only rows migration 0011 refuses. A
-// user tracking one coin on two venues has two crypto rows both reading BTC;
-// gold vaulted at two brokers is two metal rows both reading XAU; cash and
-// hand-made holdings carry no ticker at all, any number of them. None of that
-// was ever priced, none of it was ever a bug, and an upgrade that stopped to
-// lecture about the quotes job would be refusing over pricing that never
-// applied to them.
-//
-// It is also the half of migration 0011 that its refusal query and its index
-// predicate could drift on: they are written out separately, and this test goes
-// red if the query alone widens.
+// Duplicate tickers outside the tradable set (crypto, metals, untickered rows)
+// do not stop the upgrade: only shares, bonds and funds are priced by ticker.
+// Guards the refusal query and the index predicate against drifting apart.
 func TestMigrate_DuplicatesOutsideTheTradableSetDoNotStopTheUpgrade(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -151,8 +117,7 @@ func TestMigrate_DuplicatesOutsideTheTradableSetDoNotStopTheUpgrade(t *testing.T
 		{"metal", "Золото у брокера B", "XAU"},
 		{"custom", "Наличные", ""},
 		{"custom", "Золотой слиток", ""},
-		// A share with a ticker of its own: the upgrade has to go through with
-		// tradable rows present, not only on a catalog it has nothing to check.
+		// A tradable row of its own, so the check runs over something.
 		{"share", "Сбербанк", "SBER"},
 	}
 	for _, r := range rows {
@@ -177,8 +142,7 @@ func TestMigrate_DuplicatesOutsideTheTradableSetDoNotStopTheUpgrade(t *testing.T
 		t.Errorf("instruments left = %d, want %d: the migration must not remove or merge anything", left, len(rows))
 	}
 
-	// And the index goes on tolerating them afterwards, which is what the
-	// running application will be writing against.
+	// The index keeps tolerating them afterwards.
 	for _, r := range []struct{ kind, name, ticker string }{
 		{"crypto", "Биткойн на бирже C", "BTC"},
 		{"metal", "Золото у брокера C", "XAU"},
@@ -192,36 +156,18 @@ func TestMigrate_DuplicatesOutsideTheTradableSetDoNotStopTheUpgrade(t *testing.T
 	}
 }
 
-// faceValueMigration is the version that makes an instrument's face value and
-// its currency an all-or-nothing, positive pair.
+// faceValueMigration makes face value and its currency a positive all-or-nothing pair.
 const faceValueMigration = 12
 
-// TestMigrate_UnsoundFaceValuesStopTheUpgradeAndSayWhatToDo is #93's answer to
-// the rows that are already there. A face value of zero, or one without the
-// currency it is denominated in, was writable until the handler learned to
-// refuse it — and a write-side rule that leaves such rows behind is not an
-// invariant, it is an intention: every reader would still have to derive the
-// check, which is exactly what moving it to the write was for.
-//
-// So the upgrade stops, names the instruments, and says what to do. Repairing
-// them is not on the table for the reason migration 0011 refuses to merge
-// duplicate tickers: a face value decides what every position in that bond is
-// worth, and clearing the pair discards a number somebody entered.
-//
-// This test pins all three: that it stops, that the message is actionable, and
-// that fixing the rows lets the very same upgrade through — a wall with no door
-// would be no better than a crash.
+// Unsound face values (zero, no currency, half a pair) stop the upgrade with a
+// message naming the rows, and the upgrade goes through once they are fixed.
+// Clearing them would discard numbers somebody entered (#93).
 func TestMigrate_UnsoundFaceValuesStopTheUpgradeAndSayWhatToDo(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
 
 	upTo(t, ctx, pool, faceValueMigration-1)
-	// Every shape, because they are separate rules and a migration that caught
-	// only some would leave the rest in the database. The zero is what creation
-	// let through by never checking the value; the empty currency is what it let
-	// through by checking the currency's presence and never its shape — and it is
-	// the one an IS NULL test cannot see, since '' IS NULL is false; the half pair
-	// is what the update let through by checking nothing at all.
+	// Every shape: '' IS NULL is false, so the empty currency needs its own case.
 	staged := []struct{ name, face string }{
 		{"ОФЗ с нулевым номиналом", "0, 'RUB'"},
 		{"ОФЗ с пустой валютой номинала", "100000, ''"},
@@ -242,12 +188,8 @@ func TestMigrate_UnsoundFaceValuesStopTheUpgradeAndSayWhatToDo(t *testing.T) {
 	if err == nil {
 		t.Fatal("Migrate succeeded on a catalog holding a face value that is not one; want it to stop")
 	}
-	// The whole diagnosis has to be in the error MESSAGE: pgconn.PgError.Error()
-	// prints neither DETAIL nor HINT.
 	msg := err.Error()
 	want := []string{"face value", "start the application again"}
-	// Every row, by id and by name — either alone leaves the operator hunting
-	// for which entries are meant.
 	for name, id := range ids {
 		want = append(want, name, id)
 	}
@@ -257,8 +199,7 @@ func TestMigrate_UnsoundFaceValuesStopTheUpgradeAndSayWhatToDo(t *testing.T) {
 		}
 	}
 
-	// Refused, not half-applied: both rows are untouched and the constraint is
-	// absent.
+	// Refused, not half-applied.
 	var rows int
 	if err := pool.QueryRow(ctx,
 		`SELECT count(*) FROM instruments
@@ -293,14 +234,8 @@ func TestMigrate_UnsoundFaceValuesStopTheUpgradeAndSayWhatToDo(t *testing.T) {
 	}
 }
 
-// TestMigrate_SoundFaceValuesDoNotStopTheUpgrade is the other self-hoster, the
-// one the refusal must not touch: an instrument with no face value at all is the
-// ordinary case (every share, every fund, and a bond nobody has recorded one
-// for), and it must go through untouched.
-//
-// The second half is what the constraint is FOR. A rule that only guarded the
-// upgrade would leave the running application free to write the same state back
-// the moment a handler forgot to check.
+// Instruments without a face value pass the upgrade, and the constraint then
+// refuses unsound writes.
 func TestMigrate_SoundFaceValuesDoNotStopTheUpgrade(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -331,11 +266,7 @@ func TestMigrate_SoundFaceValuesDoNotStopTheUpgrade(t *testing.T) {
 		t.Errorf("instruments left = %d, want 5: the migration must not remove or change anything", left)
 	}
 
-	// And the constraint goes on refusing what the handlers refuse, which is
-	// what the running application writes against.
-	// "100000, ''" is the one no IS NULL test catches: an empty string is not
-	// null, so the pairing equality alone reads it as a whole pair while it
-	// denominates the face value in nothing.
+	// "100000, ''" is the case an IS NULL test misses.
 	for _, face := range []string{"0, 'RUB'", "-1, 'RUB'", "100000, NULL", "NULL, 'RUB'", "100000, ''"} {
 		if _, err := pool.Exec(ctx,
 			`INSERT INTO instruments (type, name, ticker, currency, face_value_minor, face_currency)
@@ -353,25 +284,12 @@ func TestMigrate_SoundFaceValuesDoNotStopTheUpgrade(t *testing.T) {
 	}
 }
 
-// inventedQuoteDateMigration is the version that drops the quotes whose date
-// was the day they were fetched rather than the session they belong to.
+// inventedQuoteDateMigration drops quotes dated by the fetch day, not the session (#92).
 const inventedQuoteDateMigration = 13
 
-// TestMigrate_QuotesWithAnInventedDateAreDropped is #92. Until #96 the moex
-// provider stamped a quote with the caller's clock while the price it carried
-// was the previous session's, so the stored date named a day the price does not
-// belong to. Most such rows heal by themselves — the next refresh overwrites
-// them — but an instrument that STOPS being quoted is never written again, so
-// its row would name the wrong day for as long as the database exists. The
-// ordinary way into that shape is a bond redeemed off TQOB or TQCB, or a share
-// delisted from TQBR — not the owner's frozen FinEx and SPB paper, which this
-// provider has never priced at all (see the migration's own comment).
-//
-// The migration deletes every quote the moex provider wrote, and this pins both
-// halves of that: the provider's rows go, and rows from any other source stay.
-// The second half is what keeps the demo stand and any hand-recorded price
-// alive — a provider can refetch what it owns, and nothing can refetch what it
-// does not.
+// The migration deletes the moex provider's quotes, whose dates were the fetch
+// day until #96, and leaves other sources' quotes alone: the provider can
+// refetch its own, nothing can refetch the rest.
 func TestMigrate_QuotesWithAnInventedDateAreDropped(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -383,11 +301,8 @@ func TestMigrate_QuotesWithAnInventedDateAreDropped(t *testing.T) {
 		 VALUES ('share', 'ФинЭкс', 'FXUS', 'RUB') RETURNING id`).Scan(&instrumentID); err != nil {
 		t.Fatalf("insert instrument: %v", err)
 	}
-	// One row per source, all for the one instrument, each on its own day —
-	// (instrument_id, on_date) is the primary key, so one instrument cannot hold
-	// two sources on one date. Two moex rows, because "delete the provider's
-	// quotes" must not be satisfied by deleting the newest one and leaving the
-	// history behind it.
+	// One row per source on its own day ((instrument_id, on_date) is the key), and
+	// two moex rows so deleting only the newest would fail.
 	staged := []struct{ on, source string }{
 		{"2026-07-20", "moex"},
 		{"2026-07-17", "moex"},
@@ -428,8 +343,7 @@ func TestMigrate_QuotesWithAnInventedDateAreDropped(t *testing.T) {
 			strings.Join(left, ", "), strings.Join(want, ", "))
 	}
 
-	// The instrument itself is not collateral. Deleting a price must not delete
-	// the paper it was a price of.
+	// The instrument itself stays.
 	var instruments int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM instruments`).Scan(&instruments); err != nil {
 		t.Fatalf("count instruments: %v", err)
@@ -438,8 +352,7 @@ func TestMigrate_QuotesWithAnInventedDateAreDropped(t *testing.T) {
 		t.Errorf("instruments left = %d, want 1", instruments)
 	}
 
-	// And the table goes on accepting what the provider will write back on its
-	// next refresh: the migration is a one-off cleanup, not a rule.
+	// The table still accepts the provider's next refresh.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO quotes (instrument_id, on_date, price, currency, source)
 		 VALUES ($1, '2026-07-21', 306.00, 'RUB', 'moex')`, instrumentID); err != nil {
@@ -447,12 +360,7 @@ func TestMigrate_QuotesWithAnInventedDateAreDropped(t *testing.T) {
 	}
 }
 
-// TestMigrate_AnEmptyQuotesTableSurvivesTheCleanup is the self-hoster who has
-// never run the quotes job — a fresh install, or one tracking nothing the moex
-// provider covers. A DELETE that matches nothing must be an ordinary no-op, not
-// a stumble on the way up. TestMigrate covers the same claim from the other end
-// (the whole chain over a database with no tables at all); this one puts real
-// rows in the table and leaves every one of them there.
+// The cleanup is a no-op on a quotes table with nothing from moex.
 func TestMigrate_AnEmptyQuotesTableSurvivesTheCleanup(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -482,22 +390,11 @@ func TestMigrate_AnEmptyQuotesTableSurvivesTheCleanup(t *testing.T) {
 	}
 }
 
-// tinvestImportMigration is the version that creates the five tables behind
-// the T-Invest mirror-and-projection import: a connection (one read-only
-// token per space), the accounts it feeds, the raw operation mirror, the
-// instrument id map, and the sync run log.
+// tinvestImportMigration creates the T-Invest import tables.
 const tinvestImportMigration = 14
 
-// TestMigrate_TinvestConnectionDeleteCascadesEverythingButTheAccount pins the
-// first half of the deletion story the design settled on: a connection owns
-// its links, its mirror rows, its instrument map and its sync runs, and
-// removing it must take all four with it — that is what "the link breaks" is
-// supposed to mean when the owner disconnects. It must NOT take the babki
-// account or the instrument catalog entry, because neither is owned by the
-// connection: an account is a first-class thing the owner created (or the
-// import created on their behalf) and can go on holding manually-entered
-// operations after the connection is gone, and the instrument catalog is
-// shared across the whole instance.
+// Deleting a connection removes its links, mirror rows, instrument map and sync
+// runs, but not the account or the shared instrument catalog.
 func TestMigrate_TinvestConnectionDeleteCascadesEverythingButTheAccount(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -569,10 +466,7 @@ func TestMigrate_TinvestConnectionDeleteCascadesEverythingButTheAccount(t *testi
 	}
 }
 
-// TestMigrate_TinvestAccountDeleteCascadesTheLinkButLeavesTheConnection is the
-// other direction: the owner can delete an account (a first-class thing of
-// its own) without that reaching back into the connection or any of its other
-// links. Only the one link that named this account goes.
+// Deleting an account removes only its link, not the connection.
 func TestMigrate_TinvestAccountDeleteCascadesTheLinkButLeavesTheConnection(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -611,9 +505,6 @@ func TestMigrate_TinvestAccountDeleteCascadesTheLinkButLeavesTheConnection(t *te
 	}
 }
 
-// TestMigrate_TinvestConnectionStatusCheckRejectsUnknownValues pins the CHECK
-// on tinvest_connections.status: only the three states the sync worker knows
-// how to act on ('active', 'token_revoked', 'disabled') are storable.
 func TestMigrate_TinvestConnectionStatusCheckRejectsUnknownValues(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -640,11 +531,6 @@ func TestMigrate_TinvestConnectionStatusCheckRejectsUnknownValues(t *testing.T) 
 	}
 }
 
-// TestMigrate_TinvestSyncRunCheckedColumnsRejectUnknownValues covers all three
-// CHECK constraints on tinvest_sync_runs at once: trigger, status and
-// reconcile_status are each a closed set the sync worker and the reconciler
-// hand-code against, and a stray value in any one of them is exactly as
-// dangerous as in the others.
 func TestMigrate_TinvestSyncRunCheckedColumnsRejectUnknownValues(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -687,12 +573,8 @@ func TestMigrate_TinvestSyncRunCheckedColumnsRejectUnknownValues(t *testing.T) {
 	}
 }
 
-// TestMigrate_TinvestMirrorContentKeyIsNotUnique pins the one property the
-// mirror design most depends on getting right: content_key identifies what an
-// operation SAYS, not which operation it is, and two broker operations can
-// legitimately say the same thing (e.g. two identical top-ups in one minute).
-// A unique index here would silently drop the second one — exactly the kind
-// of silent loss "honesty over silence" rules out. The mirror is a multiset.
+// content_key is not unique: two broker operations can say the same thing (two
+// identical top-ups in one minute), and both must be kept.
 func TestMigrate_TinvestMirrorContentKeyIsNotUnique(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -728,13 +610,8 @@ func TestMigrate_TinvestMirrorContentKeyIsNotUnique(t *testing.T) {
 	}
 }
 
-// TestMigrate_TinvestAccountLinkUniqueConstraints pins both uniqueness rules
-// on tinvest_account_links at once, because they guard two different
-// failures: UNIQUE(account_id) keeps one babki account from being fed by two
-// links (which would make "the account this operation belongs to" ambiguous),
-// and UNIQUE(connection_id, broker_account_id) keeps one broker account from
-// being imported twice under the same connection (which would double every
-// operation in it).
+// One babki account per link, and one link per broker account under a
+// connection.
 func TestMigrate_TinvestAccountLinkUniqueConstraints(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -751,8 +628,6 @@ func TestMigrate_TinvestAccountLinkUniqueConstraints(t *testing.T) {
 	connectionID := insertTinvestConnection(t, ctx, pool, spaceID)
 	insertTinvestLink(t, ctx, pool, connectionID, spaceID, account1, "2000000001")
 
-	// account_id UNIQUE: the same babki account cannot be fed by a second link,
-	// even under a different broker account number.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO tinvest_account_links (connection_id, space_id, account_id, broker_account_id, broker_account_name, broker_account_type)
 		 VALUES ($1, $2, $3, '2000000002', 'Другой счёт', 'brokerage')`,
@@ -760,8 +635,6 @@ func TestMigrate_TinvestAccountLinkUniqueConstraints(t *testing.T) {
 		t.Error("the database accepted a second link feeding the same account")
 	}
 
-	// UNIQUE(connection_id, broker_account_id): the same broker account cannot
-	// be linked twice under one connection, even to a different babki account.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO tinvest_account_links (connection_id, space_id, account_id, broker_account_id, broker_account_name, broker_account_type)
 		 VALUES ($1, $2, $3, '2000000001', 'Дубль по номеру брокера', 'brokerage')`,
@@ -769,9 +642,7 @@ func TestMigrate_TinvestAccountLinkUniqueConstraints(t *testing.T) {
 		t.Error("the database accepted a second link with the same broker account id under one connection")
 	}
 
-	// A genuinely different account under a genuinely different broker account
-	// id must go through — the two checks above must not overlap into refusing
-	// this.
+	// A different account under a different broker account goes through.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO tinvest_account_links (connection_id, space_id, account_id, broker_account_id, broker_account_name, broker_account_type)
 		 VALUES ($1, $2, $3, '2000000002', 'Второй счёт', 'brokerage')`,
@@ -780,11 +651,7 @@ func TestMigrate_TinvestAccountLinkUniqueConstraints(t *testing.T) {
 	}
 }
 
-// TestMigrate_TinvestInstrumentMapUniqueConstraint pins UNIQUE(connection_id,
-// instrument_uid) on tinvest_instrument_map: the broker's instrument_uid must
-// resolve to exactly one catalog entry per connection, which is what the
-// instrument resolver (a later task) depends on to look the mapping up
-// without ambiguity.
+// A broker instrument_uid maps to one catalog entry per connection.
 func TestMigrate_TinvestInstrumentMapUniqueConstraint(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -814,18 +681,12 @@ func TestMigrate_TinvestInstrumentMapUniqueConstraint(t *testing.T) {
 		t.Fatalf("insert instrument map row: %v", err)
 	}
 
-	// Same connection, same broker instrument_uid: a second mapping would make
-	// "which catalog entry does this broker id resolve to" ambiguous — even
-	// pointing at a genuinely different instrument must not be allowed to
-	// create that ambiguity.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO tinvest_instrument_map (connection_id, instrument_id, instrument_uid) VALUES ($1, $2, 'uid-1')`,
 		connectionID, instrument2); err == nil {
 		t.Error("the database accepted a second instrument map row with the same (connection_id, instrument_uid)")
 	}
 
-	// Same connection, a genuinely different broker instrument_uid: must go
-	// through — the constraint above must not overlap into refusing this.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO tinvest_instrument_map (connection_id, instrument_id, instrument_uid) VALUES ($1, $2, 'uid-2')`,
 		connectionID, instrument2); err != nil {
@@ -835,15 +696,8 @@ func TestMigrate_TinvestInstrumentMapUniqueConstraint(t *testing.T) {
 
 const tinvestMirrorTickerMigration = 19
 
-// TestMigrate_TinvestTickerIsRecoveredFromTheStoredPayload is the upgrade half
-// of the delisted-paper fix. The mirror kept the broker's payload verbatim from
-// the first day, so an installation that already imported its history recovers
-// every ticker from what it stored — and it matters for exactly the papers the
-// broker will never answer about again.
-//
-// The rows are the two shapes the live mirror holds: an ordinary ticker, and an
-// ISIN in the ticker field, which is what the broker sends for an instrument it
-// has since forgotten (the FinEx funds on the owner's own account).
+// The upgrade recovers tickers from the stored broker payload, including the
+// ISIN the broker puts there for an instrument it has forgotten.
 func TestMigrate_TinvestTickerIsRecoveredFromTheStoredPayload(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -893,15 +747,8 @@ func TestMigrate_TinvestTickerIsRecoveredFromTheStoredPayload(t *testing.T) {
 
 const tinvestQuantityDoneMigration = 16
 
-// TestMigrate_TinvestExecutedQuantityIsRecoveredFromTheStoredPayload is the
-// upgrade half of #131. The mirror kept the broker's payload verbatim from the
-// first day, so an installation that already imported its history recovers
-// every executed size from what it stored — nobody has to go back to the broker
-// for a field that was in the bytes all along.
-//
-// The three rows are the three shapes the live mirror actually holds: a partly
-// filled order, a fully filled one, and an operation the broker sent no such
-// field for at all.
+// The upgrade recovers the executed quantity from the stored payload (#131):
+// partly filled, fully filled, and absent.
 func TestMigrate_TinvestExecutedQuantityIsRecoveredFromTheStoredPayload(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()
@@ -920,8 +767,7 @@ func TestMigrate_TinvestExecutedQuantityIsRecoveredFromTheStoredPayload(t *testi
 		// The owner's own sale of 115 bonds out of an order for 190.
 		{"partly-filled", `{"quantity": "190", "quantityRest": "75", "quantityDone": "115"}`, 115},
 		{"fully-filled", `{"quantity": "100", "quantityRest": "0", "quantityDone": "100"}`, 100},
-		// A payload with no such field: zero, which the projection reads as
-		// "no executed size" and refuses rather than as a size of nothing.
+		// Absent: zero, which the projection refuses rather than reads as nothing.
 		{"no-such-field", `{"quantity": "1000"}`, 0},
 	}
 	for _, r := range rows {
@@ -950,9 +796,8 @@ func TestMigrate_TinvestExecutedQuantityIsRecoveredFromTheStoredPayload(t *testi
 		}
 	}
 
-	// The key that identifies an operation across syncs is deliberately left
-	// alone: rebuilding it around the new column would make every row already
-	// in the mirror look like one that vanished and a new one that arrived.
+	// content_key is left alone: rebuilding it would make every mirror row look
+	// gone and re-added.
 	var key string
 	if err := pool.QueryRow(ctx,
 		`SELECT content_key FROM tinvest_operations_mirror WHERE broker_operation_id = 'partly-filled'`).
@@ -964,8 +809,6 @@ func TestMigrate_TinvestExecutedQuantityIsRecoveredFromTheStoredPayload(t *testi
 	}
 }
 
-// insertTinvestSpace inserts a bare space for the tinvest migration tests to
-// hang connections and accounts off of.
 func insertTinvestSpace(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {
 	t.Helper()
 	var id string
@@ -976,8 +819,6 @@ func insertTinvestSpace(t *testing.T, ctx context.Context, pool *pgxpool.Pool) s
 	return id
 }
 
-// insertTinvestAccount inserts a brokerage account under spaceID, the kind an
-// account link points at.
 func insertTinvestAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, spaceID, name string) string {
 	t.Helper()
 	var id string
@@ -989,9 +830,7 @@ func insertTinvestAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	return id
 }
 
-// insertTinvestConnection inserts a connection with a throwaway ciphertext —
-// its content is never asserted on in these migration tests, only its
-// presence and its NOT NULL shape.
+// insertTinvestConnection inserts a connection with a placeholder ciphertext.
 func insertTinvestConnection(t *testing.T, ctx context.Context, pool *pgxpool.Pool, spaceID string) string {
 	t.Helper()
 	var id string
@@ -1003,8 +842,6 @@ func insertTinvestConnection(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	return id
 }
 
-// insertTinvestLink inserts an account link under connectionID pointing at
-// accountID, with brokerAccountID as the broker's own account number.
 func insertTinvestLink(t *testing.T, ctx context.Context, pool *pgxpool.Pool, connectionID, spaceID, accountID, brokerAccountID string) string {
 	t.Helper()
 	var id string
@@ -1017,8 +854,7 @@ func insertTinvestLink(t *testing.T, ctx context.Context, pool *pgxpool.Pool, co
 	return id
 }
 
-// upTo brings pool's schema to exactly the given migration version, so a test
-// can set up the state a later migration has to deal with.
+// upTo migrates pool to exactly version.
 func upTo(t *testing.T, ctx context.Context, pool *pgxpool.Pool, version int64) {
 	t.Helper()
 	goose.SetBaseFS(db.Migrations)
@@ -1052,11 +888,8 @@ func indexExists(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name str
 	return exists
 }
 
-// TestTwoMigrationRunsAtOnceBothSucceed: every long-running role migrates at
-// start-up, so an instance split into `api` and `worker` starts two runs at
-// once after an upgrade. Unserialized, two runs applying the same file collide
-// half-way through it and one process dies in a restart loop. Each run now waits
-// for the other, and the second finds nothing left to do.
+// Two roles migrating at start-up (api and worker) both succeed: the second
+// waits and finds nothing to do.
 func TestTwoMigrationRunsAtOnceBothSucceed(t *testing.T) {
 	pool := testdb.NewEmpty(t)
 	ctx := context.Background()

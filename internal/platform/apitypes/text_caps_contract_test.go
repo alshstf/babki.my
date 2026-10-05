@@ -15,14 +15,7 @@ import (
 	"babki.my/babki/internal/operation"
 )
 
-// The ceilings on free text are written down twice, as the credential rules
-// are (see internal/family/contract_sites_test.go): once in Go, where the
-// refusal is, and once in api/openapi.yaml as maxLength, where a client reads
-// it before sending anything. This test is the one place both copies meet, so
-// it lives in a package every module's constant can be imported into.
-//
-// Changing a ceiling in Go names the declaration that still states the old
-// one; a new text field on a request is added here along with its ceiling.
+// The contract's maxLength on free-text fields matches the Go ceilings.
 func TestTheContractStatesTheTextCeilingsTheServerEnforces(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join("..", "..", "..", "api", "openapi.yaml"))
 	if err != nil {

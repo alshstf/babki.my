@@ -1,18 +1,6 @@
-// Package testdb hands every test its own PostgreSQL database.
-//
-// One container per test binary, one database per test. The container starts
-// lazily on the first call from the package and is shared by every test in it,
-// so no package has to remember to write a TestMain of its own — a new package
-// gets the sharing for free just by calling New. Teardown is left to the
-// testcontainers reaper (Ryuk), which removes the container when the test
-// process goes away: that covers a clean finish, a panic, a `go test` timeout
-// and a Ctrl-C alike, none of which a TestMain would survive.
-//
-// Isolation is per database, not per schema and not per truncation: a test
-// cannot see, lock or corrupt another test's rows, because its rows live in a
-// database no other test is connected to. Migrations run once per package into
-// a template database, and each test database is a copy of that template, so
-// the schema costs one migration run per package instead of one per test.
+// Package testdb gives every test its own PostgreSQL database: one container
+// per test binary, started lazily and removed by the testcontainers reaper,
+// and one database per test, copied from a template migrated once.
 package testdb
 
 import (
@@ -51,18 +39,16 @@ const (
 	startupTimeout = 90 * time.Second
 )
 
-// New returns a pool to a private, freshly migrated database. The database is
-// dropped and the pool closed when the test ends. If Docker is unavailable the
-// test is skipped; if Docker is there but the database cannot be provisioned,
-// the test fails with a message that says so in as many words.
+// New returns a pool to a private migrated database, dropped when the test
+// ends. Without Docker the test is skipped; any other provisioning failure
+// fails it.
 func New(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	return open(t, templateDatabase)
 }
 
-// NewEmpty returns a pool to a private database with no schema in it at all —
-// for tests of the migrations themselves, which need somewhere to run from
-// scratch. Every other test wants New.
+// NewEmpty returns a pool to a private database with no schema, for testing
+// the migrations themselves.
 func NewEmpty(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	return open(t, "")
@@ -99,18 +85,14 @@ type server struct {
 	admin *pgxpool.Pool
 	seq   atomic.Uint64
 
-	// mu serializes CREATE/DROP DATABASE. Tests in this repository run
-	// sequentially within a package, but nothing here should break the day one
-	// of them calls t.Parallel.
+	// mu serializes CREATE/DROP DATABASE in case tests run in parallel.
 	mu sync.Mutex
 }
 
 type startup struct {
 	srv *server
 	err error
-	// noDocker separates "there is no Docker on this machine", which is a
-	// reason to skip, from "Docker is here and something went wrong", which is
-	// a reason to shout.
+	// noDocker tells "skip: no Docker" apart from "fail: Docker broke".
 	noDocker bool
 }
 
@@ -119,9 +101,8 @@ var (
 	boot startup
 )
 
-// shared starts the container on first use and reports the same outcome to
-// every later caller — including the failures, so a broken environment
-// produces one diagnosis instead of one stalled test per test.
+// shared starts the container on first use and reports the same outcome,
+// failure included, to every later caller.
 func shared(t *testing.T) *server {
 	t.Helper()
 	once.Do(func() { boot = start() })
@@ -181,10 +162,8 @@ func start() startup {
 	return startup{srv: srv}
 }
 
-// prepareTemplate builds the database every test database is copied from: an
-// empty one, migrated once, then sealed off. PostgreSQL refuses to copy a
-// database that somebody is connected to, so the migration pool is closed and
-// the database is closed to new connections before it is ever used as a source.
+// prepareTemplate migrates the template once and closes it to connections:
+// PostgreSQL will not copy a database anyone is connected to.
 func (s *server) prepareTemplate(ctx context.Context) error {
 	if err := s.createDatabase(ctx, templateDatabase, ""); err != nil {
 		return err
@@ -206,9 +185,8 @@ func (s *server) prepareTemplate(ctx context.Context) error {
 	return s.waitIdle(ctx, templateDatabase)
 }
 
-// waitIdle blocks until no backend is left in the named database. pgxpool.Close
-// returns once it has sent the terminations, not once the server has reaped the
-// backends, and a straggler is enough to make CREATE DATABASE ... TEMPLATE fail.
+// waitIdle blocks until the database has no backends: pgxpool.Close returns
+// before the server reaps them, and a straggler fails CREATE DATABASE TEMPLATE.
 func (s *server) waitIdle(ctx context.Context, database string) error {
 	deadline := time.Now().Add(30 * time.Second)
 	for {
@@ -229,8 +207,8 @@ func (s *server) waitIdle(ctx context.Context, database string) error {
 	}
 }
 
-// createDatabase creates name, optionally as a copy of template. An empty
-// template means the server default, i.e. an empty database.
+// createDatabase creates name as a copy of template, or empty when template
+// is "".
 func (s *server) createDatabase(ctx context.Context, name, template string) error {
 	stmt := `CREATE DATABASE ` + ident(name)
 	if template != "" {
@@ -244,9 +222,8 @@ func (s *server) createDatabase(ctx context.Context, name, template string) erro
 	return nil
 }
 
-// dropDatabase removes a finished test's database. FORCE takes care of whatever
-// the test left connected — a River client, a leaked pool — so a test that ends
-// untidily cannot hold the disk hostage for the rest of the run.
+// dropDatabase drops a finished test's database, FORCE disconnecting anything
+// the test left open.
 func (s *server) dropDatabase(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -256,10 +233,7 @@ func (s *server) dropDatabase(name string) error {
 	return err
 }
 
-// connect opens a pool on one database of the container. It uses db.PoolConfig
-// (not pgxpool.New) so the test pool registers the same pgx type codecs as
-// production — notably shopspring/decimal <-> NUMERIC — which store tests rely
-// on when scanning into *decimal.Decimal fields.
+// connect opens a pool on one database with production's codecs.
 func (s *server) connect(ctx context.Context, database string) (*pgxpool.Pool, error) {
 	u := *s.base
 	u.Path = "/" + database
@@ -278,11 +252,8 @@ func (s *server) connect(ctx context.Context, database string) (*pgxpool.Pool, e
 	return pool, nil
 }
 
-// connectionURL asks the container where it listens, retrying the window in
-// which the container is up but the daemon has not published the port mapping
-// yet. That window is what used to surface as `port "5432/tcp" not found`; it
-// is now hit at most once per package rather than once per test, and retried
-// when it is hit.
+// connectionURL asks the container where it listens, retrying while the
+// daemon has not yet published the port.
 func connectionURL(ctx context.Context, ctr *tcpostgres.PostgresContainer) (*url.URL, error) {
 	var last error
 	for attempt := range 30 {
@@ -306,9 +277,8 @@ func connectionURL(ctx context.Context, ctr *tcpostgres.PostgresContainer) (*url
 
 func ident(name string) string { return pgx.Identifier{name}.Sanitize() }
 
-// infraFatal fails the test with a banner nobody can mistake for a bug in the
-// code under test. The old helper failed with a bare `connection string: ...`,
-// which read exactly like a broken assertion.
+// infraFatal fails the test with a banner that marks it as an environment
+// failure, not a broken assertion.
 func infraFatal(t *testing.T, err error) {
 	t.Helper()
 	t.Fatalf("\n"+
@@ -320,10 +290,8 @@ func infraFatal(t *testing.T, err error) {
 		err)
 }
 
-// CheckLiterals returns the quoted values a CHECK constraint names, sorted — the
-// list of an enum-like column as the schema states it. A test compares it with
-// the list the code keeps, so a value added to one and not the other is a test
-// failure rather than a 500 on the first write that uses it.
+// CheckLiterals returns the quoted values a CHECK constraint names, sorted, so
+// a test can hold an enum-like column to the list the code keeps.
 func CheckLiterals(t *testing.T, pool *pgxpool.Pool, constraint string) []string {
 	t.Helper()
 	var def string

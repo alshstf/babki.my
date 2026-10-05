@@ -1,7 +1,6 @@
-// Package xirr finds the annual rate of return of a series of dated cash
-// flows — the rate at which their present values sum to nought, the way a
-// spreadsheet's XIRR does. Flows are signed from the investor's side: money
-// put in is negative, money taken out (and what is left at the end) positive.
+// Package xirr computes the annual rate of return of dated cash flows, like a
+// spreadsheet's XIRR. Money put in is negative; money taken out, and what is
+// left at the end, is positive.
 package xirr
 
 import (
@@ -15,15 +14,11 @@ type Flow struct {
 	Amount float64
 }
 
-// Rate is the annual rate r for which Σ amount / (1+r)^(days/365) = 0, days
-// counted from the first flow. ok is false when there is no such rate: all
-// flows of one sign, or none that the search can find between −99.99% and
-// 1 000 000%.
+// Rate returns the annual rate r for which Σ amount / (1+r)^(days/365) = 0,
+// days counted from the earliest flow. ok is false when all flows share a sign
+// or no rate lies between −99.99% and 1 000 000%.
 //
-// The rate is found by bisection on the net present value, which falls as the
-// rate rises for any series that puts money in before taking it out — the only
-// kind this program asks about. It is slower than Newton's method and never
-// wanders off.
+// Bisection rather than Newton's method: slower, but it cannot diverge.
 func Rate(flows []Flow) (float64, bool) {
 	if len(flows) < 2 {
 		return 0, false

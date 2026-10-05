@@ -1,6 +1,5 @@
-// Package jobs is the background job queue built on River (stored in
-// Postgres, so enqueueing is transactional with business data). Domain
-// modules will register their own workers here in future plans.
+// Package jobs runs the background job queue (River on Postgres) and the
+// schedule of periodic jobs.
 package jobs
 
 import (
@@ -25,37 +24,10 @@ import (
 	"babki.my/babki/internal/platform/secretbox"
 )
 
-// refreshFxInterval and refreshQuotesInterval set how often the fx and
-// quotes periodic jobs enqueue. FX rates only change once per business day
-// at the source (cbr.ru), so a daily refresh is enough; quotes move
-// throughout the trading session, so they refresh more often.
-//
-// backfillFxInterval paces the history download. A run fetches every
-// currency's whole series in one request each, so it needs no continuation
-// and a daily tick is enough: it picks up history newly needed by a
-// backdated operation, and re-running simply overwrites the same rows.
-//
-// tinvestSyncInterval is how often the T-Invest importer looks for new
-// operations. Hourly is a deliberate middle: the products people compare this
-// one with sit either side of it (Intelinvest syncs a couple of times a day,
-// Snowball as often as every fifteen minutes), and personal portfolios do not
-// change faster than that in any way an hour's delay would misrepresent.
-//
-// It is affordable because a run costs so little: reading a whole account's
-// history is single-digit requests (a thousand operations to the page) against
-// a documented limit of 200 a minute for the operations service, and the rebuild
-// that follows makes no broker call at all for instruments it has already seen.
-// So the cadence is bounded by taste rather than by the broker.
-//
-// tinvestQuotesInterval paces the broker's own price feed, and it is the SAME
-// half hour the exchange feed uses on purpose: they price overlapping sets of
-// papers into one table, and two cadences would make which of them a row came
-// from depend on the minute the reader happened to look. What the broker adds
-// is the papers no exchange feed here covers — foreign shares and a delisted
-// fund quoted over the counter — and those move on the same clock as the rest.
-//
-// It costs one request per hundred instruments per connection, against a
-// documented limit for the market-data service far above that.
+// How often each periodic job runs. Rates change once a business day; quotes
+// move during the session. The T-Invest sync is hourly — a run costs a few
+// requests against a limit of 200 a minute — and the broker's quotes share
+// the exchange feed's half hour because both write one table.
 const (
 	refreshFxInterval     = 24 * time.Hour
 	refreshQuotesInterval = 30 * time.Minute
@@ -63,50 +35,19 @@ const (
 	tinvestSyncInterval   = time.Hour
 	tinvestQuotesInterval = 30 * time.Minute
 
-	// corporateActionsInterval paces both registry jobs, and a day is not a
-	// compromise here: a split is announced days ahead and takes effect on a
-	// date, so nothing about it moves within a day. The exchange's own table is
-	// small (56 rows on 2026-08-22) and the sweep that follows writes nothing
-	// unless a journal changed under an event already stored.
+	// Splits are announced days ahead and take effect on a date.
 	corporateActionsInterval = 24 * time.Hour
 )
 
-// SoftStopTimeout is how long a job that is already running gets to finish
-// after shutdown begins, before River cancels its context.
-//
-// WITHOUT IT SET, THERE IS NO SUCH WINDOW AT ALL, and the reason is a piece of
-// River's own semantics rather than anything visible at the call site: the
-// context handed to Start is the parent of the context every job runs under, so
-// cancelling it — which is exactly what SIGTERM does here, the signal context
-// being what "all" and "worker" pass to Start — cancels each running job on the
-// spot, indistinguishably from StopAndCancel. Setting any positive value
-// detaches the work context from the start context and turns that same
-// cancellation into a soft stop: producers stop fetching immediately, jobs
-// already in flight are left alone, and only when this elapses are they
-// cancelled. River states both halves in Config.SoftStopTimeout's own doc.
-//
-// It matters most for the longest-running jobs — the fx history download and a
-// broker sync — which do many external requests in one run and, killed mid-run,
-// leave the work to be redone from the start on the next tick.
-//
-// TEN SECONDS, AND IT MUST STAY BELOW cmd/babki's stopJobClientTimeout, which
-// bounds the graceful Stop that follows. If this were the longer of the two,
-// the outer bound would expire first on a job that was still inside its
-// window, and the process would report a graceful stop that "did not complete
-// in time" and escalate to StopAndCancel — cancelling the very jobs this value
-// exists to protect, on a schedule that would look like a race in the logs.
-// cmd/babki has a test that keeps the two ordered.
+// SoftStopTimeout is how long running jobs get to finish after shutdown
+// begins. Without it River cancels them the moment the start context is
+// cancelled. It must stay below cmd/babki's stopJobClientTimeout (a test
+// holds the order), or the outer stop would cancel jobs still in their window.
 const SoftStopTimeout = 10 * time.Second
 
-// TinvestDeps is everything the T-Invest import workers need, grouped rather
-// than added to NewWorkers' positional list — which is long enough already that
-// two arguments of the same type could be swapped and still compile.
-//
-// NewClient and NewRebuilder are factories and not instances, each for its own
-// reason: a broker client is per token, which is only known once a job has read
-// a connection; and a Rebuilder is per run, because the Resolver it carries
-// caches broker passports in a plain map and is not safe for concurrent use
-// (see tinvest.Rebuilder's own doc).
+// TinvestDeps is what the T-Invest workers need. Clients are made per token
+// and Rebuilders per run (a Resolver's cache is not safe for concurrent use),
+// hence the factories.
 type TinvestDeps struct {
 	Store        *tinvest.Store
 	Box          *secretbox.Box
@@ -115,22 +56,9 @@ type TinvestDeps struct {
 	Reconciler   *tinvest.Reconciler
 }
 
-// Enqueuer is the queue as a worker that queues other jobs sees it.
-//
-// It exists because the T-Invest dispatcher and the River client genuinely need
-// each other: the dispatcher is a worker, workers are registered before a client
-// can be built, and the dispatcher's whole job is to insert through that client.
-// The indirection is filled in by NewClient below, at the one place a client
-// comes into existence, so no caller can forget to do it.
-//
-// Insert before that point is an error and never a nil dereference: a
-// dispatcher that somehow ran against an unattached Enqueuer must say so and be
-// retried, not crash the process.
-//
-// The field is written once, in NewClient, and read from worker goroutines. It
-// needs no lock: those goroutines do not exist until the client is started, and
-// starting it is what the caller does after NewClient has returned — so the
-// write happens before any goroutine that reads it is created.
+// Enqueuer lets a worker insert jobs through the client it is registered
+// with: workers exist before the client, and NewClient fills this in. The
+// field is written before any worker goroutine starts, so it needs no lock.
 type Enqueuer struct{ client *river.Client[pgx.Tx] }
 
 func NewEnqueuer() *Enqueuer { return &Enqueuer{} }
@@ -144,14 +72,8 @@ func (e *Enqueuer) Insert(ctx context.Context, args river.JobArgs, opts *river.I
 	return e.client.Insert(ctx, args, opts)
 }
 
-// NewWorkers registers all of the application's workers. mdStore,
-// instruments, operations, accounts and spaces back the marketdata jobs;
-// fxProvider and quoteProvider are the external sources those jobs pull from
-// (e.g. cbr and moex in production, fakes in tests). fxProvider is an
-// FxHistoryProvider rather than a plain FxProvider because the history
-// download needs a source that can deliver a whole date range at once.
-// tinvest and enqueuer back the T-Invest import jobs; enqueuer must be the same
-// one handed to NewClient, which is what fills it in.
+// NewWorkers registers every worker. enqueuer must be the one later passed to
+// NewClient.
 func NewWorkers(
 	log *slog.Logger,
 	pool *pgxpool.Pool,
@@ -208,18 +130,8 @@ func NewWorkers(
 	return workers
 }
 
-// NewClient creates a River client with the given workers and periodic jobs,
-// and attaches it to enqueuer — the indirection the dispatch worker registered
-// above inserts through. The attaching happens HERE, and not at the call site,
-// because this is the moment the client first exists and there is then nothing
-// left for a caller to forget.
-//
-// THE ATTACHING IS COVERED, and it has to be: without it every dispatch of the
-// import answers "the job queue is not running yet", is retried, answers the
-// same, and no connection is ever synced — while the process looks perfectly
-// healthy. TestStartingTheQueueQueuesASyncForAnActiveConnection is what would
-// notice; deleting the line below turns it red, as does deleting the periodic
-// job that fires the dispatcher.
+// NewClient builds the River client with the workers and the schedule, and
+// attaches it to enqueuer.
 func NewClient(pool *pgxpool.Pool, workers *river.Workers, enqueuer *Enqueuer, log *slog.Logger) (
 	*river.Client[pgx.Tx], error,
 ) {
@@ -231,31 +143,19 @@ func NewClient(pool *pgxpool.Pool, workers *river.Workers, enqueuer *Enqueuer, l
 	return client, nil
 }
 
-// NewInsertOnlyClient builds a River client that can only ENQUEUE jobs, for the
-// "api" role: a process that serves requests and works nothing.
-//
-// NO QUEUES AND NO WORKERS, which is River's own documented shape for this ("an
-// insert-only client can be initialized by omitting Queues, and not calling
-// Start for the client"). It must therefore never be started, and there is
-// nothing to stop: with no queue configured it runs no goroutines of its own.
-//
-// Omitting Workers costs one check River would otherwise make — that a kind
-// being inserted has a worker registered for it — and it is omitted anyway,
-// because in this process the answer would always be no: it registers none. A
-// bundle listing kinds this binary cannot run would be a claim about the worker
-// process rather than about this one.
+// NewInsertOnlyClient builds a client that only enqueues, for the api role. It
+// has no queues or workers and must not be started.
 func NewInsertOnlyClient(pool *pgxpool.Pool, log *slog.Logger) (*river.Client[pgx.Tx], error) {
 	return river.NewClient(riverpgxv5.New(pool), &river.Config{Logger: log})
 }
 
-// scheduledJob is one line of the schedule: what is queued, and how often.
+// scheduledJob is a job queued on a clock.
 type scheduledJob struct {
 	every time.Duration
 	args  river.JobArgs
 }
 
-// schedule is everything this process queues on a clock. Each job also runs
-// once when the process starts.
+// schedule is every periodic job; each also runs once at start.
 func schedule() []scheduledJob {
 	return []scheduledJob{
 		{time.Minute, HeartbeatArgs{}},
@@ -272,9 +172,8 @@ func schedule() []scheduledJob {
 	}
 }
 
-// unfinishedStates are the states a job that has not finished can be in — the
-// four River requires any ByState set to contain, and Retryable, because a job
-// waiting out its backoff is still work in flight.
+// unfinishedStates are the states of a job still in flight, including one
+// waiting to retry.
 var unfinishedStates = []rivertype.JobState{
 	rivertype.JobStateAvailable,
 	rivertype.JobStatePending,
@@ -283,23 +182,9 @@ var unfinishedStates = []rivertype.JobState{
 	rivertype.JobStateScheduled,
 }
 
-// scheduledOpts is how a job of the schedule is queued.
-//
-// ONE OF A KIND AT A TIME. While a job of this kind is queued, running or
-// waiting to be retried, the next tick's insert is skipped. Without it a source
-// that is down for a day collects a job per tick, each with retries of its own,
-// and they all fire together when it comes back.
-//
-// AND IT GIVES UP BEFORE THE NEXT ONE IS DUE. The two rules need each other:
-// River's backoff between attempts grows to hours, and a job parked in it holds
-// the kind's one slot — so with River's default of 25 attempts a half-hourly
-// refresh that failed ten times in a row would next run in three hours, with
-// every tick in between skipped as its duplicate. Bounded this way, the retries
-// cover a brief outage and a longer one is met by the schedule itself.
-//
-// A job a killed process left in "running" holds the slot too, until River
-// rescues it (an hour by default). That is the cost of the first rule, and it
-// only arises when the process dies without being asked to stop.
+// scheduledOpts allows one job of a kind in flight at a time, and bounds its
+// attempts to fit inside the interval: otherwise River's growing backoff would
+// park a failing job, holding the slot, past several ticks.
 func scheduledOpts(every time.Duration) *river.InsertOpts {
 	return &river.InsertOpts{
 		MaxAttempts: attemptsWithin(every),
@@ -307,9 +192,8 @@ func scheduledOpts(every time.Duration) *river.InsertOpts {
 	}
 }
 
-// attemptsWithin is how many attempts fit inside the interval under River's
-// default retry policy, which waits attempt⁴ seconds after each failure (1s,
-// 16s, 81s, 256s, …). A test holds this against the policy itself.
+// attemptsWithin is how many attempts fit in interval under River's default
+// backoff of attempt⁴ seconds.
 func attemptsWithin(interval time.Duration) int {
 	attempts, waited := 1, time.Duration(0)
 	for {

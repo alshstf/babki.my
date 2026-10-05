@@ -33,15 +33,9 @@ func brokerFixture(t *testing.T, name ...string) string {
 	return string(raw)
 }
 
-// TestAnImportInTheQueueGetsTheRegistrysRows pins a piece of WIRING: that the
-// workers as NewWorkers assembles them hand an imported journal to the
-// corporate-actions registry in the same run. The importer's own tests prove
-// the step with a registry passed in by hand; only this proves the queue passes
-// one.
-//
-// The broker reports a purchase of 100 from before a 1:10 split the registry
-// already holds. The split's row must be in the journal once the first sync has
-// run, with no sweep and no hand entry to bring it there.
+// The workers as NewWorkers wires them apply the corporate-actions registry
+// after an import: a purchase of 100 before a recorded 1:10 split gets the
+// split's row from the first sync.
 func TestAnImportInTheQueueGetsTheRegistrysRows(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -121,10 +115,8 @@ func TestAnImportInTheQueueGetsTheRegistrysRows(t *testing.T) {
 		_ = client.Stop(stopCtx)
 	}()
 
-	// The sync's own run log is what says the import has finished. The daily
-	// sweep runs on start as well and would write the same row if it happened to
-	// come after the import, so this test can pass without the step on an
-	// unlucky schedule — it cannot fail with it.
+	// Wait for the sync's run log. The sweep on start could write the same row,
+	// so an unlucky schedule may pass without the step, never fail with it.
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		var finished int

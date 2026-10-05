@@ -14,10 +14,8 @@ import (
 	"babki.my/babki/internal/platform/testdb"
 )
 
-// retriesTake is how long River's own retry policy keeps a job that fails
-// every time, from its first failure to its last attempt. The policy jitters
-// each wait by up to a tenth either way, so the figure differs from run to run;
-// the intervals are far enough from it that the comparison below does not.
+// retriesTake is how long River's retry policy keeps a job that always fails;
+// its ±10% jitter is far from the intervals compared against.
 func retriesTake(maxAttempts int) time.Duration {
 	policy := &river.DefaultClientRetryPolicy{}
 	var total time.Duration
@@ -29,11 +27,8 @@ func retriesTake(maxAttempts int) time.Duration {
 	return total
 }
 
-// Every job of the schedule is queued one of a kind at a time, and a job that
-// fails every time has used up its attempts before the next one is due. The
-// second half is checked against River's own retry policy rather than against
-// the formula this package assumes of it: with the two rules together, a job
-// parked in backoff past its interval would silence the schedule for that kind.
+// Every scheduled job is one of a kind at a time, and an always-failing job
+// exhausts its attempts (by River's real policy) before the next is due.
 func TestEveryScheduledJobIsOneAtATimeAndGivesUpBeforeTheNextIsDue(t *testing.T) {
 	entries := jobs.Schedule()
 	if len(entries) == 0 {

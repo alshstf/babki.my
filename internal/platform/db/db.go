@@ -11,24 +11,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Executor is the part of *pgxpool.Pool the domain stores use. They take one
-// of these instead of a pool so that a store can be built on an OPEN
-// TRANSACTION as easily as on the pool — pgx.Tx implements exactly the same
-// four methods — and several stores can then share one transaction and commit
-// or roll back together.
-//
-// That is what `babki seed` needs and nothing else does yet: it writes a space,
-// two users, six accounts, their balances, a catalogue of instruments, a
-// journal of operations and a demo broker connection, and a failure anywhere
-// after the first of those used to leave an instance that could never be seeded
-// again (the users exist, so setup is no longer "needed", so the command
-// refuses). Everything in production still passes the pool, so this changes no
-// behaviour anywhere else.
-//
-// Begin is part of it because stores already open transactions of their own.
-// On a pool that is a transaction; on a pgx.Tx it is a savepoint — which is the
-// behaviour wanted here, since an inner failure must not take the whole seed
-// down without the outer rollback being what does it.
+// Executor is what domain stores need from a database: satisfied by both
+// *pgxpool.Pool and pgx.Tx, so several stores can share one transaction (as
+// `babki seed` does). Begin on a pgx.Tx opens a savepoint.
 type Executor interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -36,18 +21,14 @@ type Executor interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-// registerCodecs wires pgx type codecs shared by every connection in the
-// pool — currently the shopspring/decimal <-> NUMERIC codec, so
-// *decimal.Decimal fields scan directly from and encode directly to
-// PostgreSQL NUMERIC columns without manual pgtype.Numeric conversion.
+// registerCodecs maps shopspring/decimal to NUMERIC on every connection.
 func registerCodecs(_ context.Context, conn *pgx.Conn) error {
 	pgxdecimal.Register(conn.TypeMap())
 	return nil
 }
 
-// PoolConfig parses url into a pgxpool.Config with the shared codecs wired
-// via AfterConnect. Exported so test helpers (internal/platform/testdb) can
-// build pools that behave identically to production ones.
+// PoolConfig parses url into a pool configuration with the shared codecs.
+// Test pools use it too, so they behave like production ones.
 func PoolConfig(url string) (*pgxpool.Config, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
