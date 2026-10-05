@@ -189,3 +189,56 @@ func TestRebuildTakesThePositionsCurrencyFromWhatFixesIt(t *testing.T) {
 		t.Errorf("the purchase is %d %s, want -27500 USD as the broker reported it", bought.AmountMinor, bought.Currency)
 	}
 }
+
+// The owner's TSPX, October 2025, both halves of Р-13 together: a fund kept in
+// dollars, its units withdrawn under an over-the-counter listing and the payout
+// made in roubles. One redemption in dollars at the payout day's rate, the
+// roubles arriving through the exchange, and a result the position can state
+// in its own currency.
+func TestRebuildRedeemsADollarFundPaidInRoubles(t *testing.T) {
+	const asset = "23ae1f4d-9f4a-4a1e-b471-7e7d81567056"
+	f := newRebuildFixture(t)
+	f.rates.byCode["RUB"] = decimal.RequireFromString("0.0125")
+
+	buy := loadOperationItem(t, "buy.json") // 100 shares
+	buy.AssetUID, buy.InstrumentType = asset, "etf"
+	buy.Payment = MoneyValue{Currency: "usd", Units: -275}
+	buy.Price = MoneyValue{Currency: "usd", Units: 2, Nano: 750000000}
+	buy.Commission = MoneyValue{}
+
+	out := loadOperationItem(t, "output_securities.json")
+	out.InstrumentUID, out.FIGI, out.InstrumentType, out.AssetUID = "uid-otc", "TCS60A102EQ8", "etf", asset
+	out.Payment = MoneyValue{Currency: "rub"}
+	out.Quantity = 100
+	out.Description = "Вывод 100 лотов фонда 500 компаний США в другой депозитарий"
+	out.Date = buy.Date.Add(24 * time.Hour)
+
+	payout := loadOperationItem(t, "bond_repayment_full_no_quantity.json") // 10 000 ₽
+	payout.InstrumentUID, payout.FIGI, payout.InstrumentType, payout.AssetUID = buy.InstrumentUID, buy.FIGI, "etf", asset
+	payout.Date = out.Date.Add(14 * 24 * time.Hour)
+
+	f.sync(t, f.link, buy, out, payout)
+	if stats := f.rebuild(t); stats.Unparsed != 0 {
+		t.Errorf("left %d rows unparsed, want none", stats.Unparsed)
+	}
+	journal := f.journalOf(t, f.accountID)
+	redemption := byExternalID(t, journal, externalIDFor(f.mirrorRow(t, f.link, payout.ID), 1))
+	if redemption.Type != operation.TypeRedemption || redemption.Currency != "USD" || redemption.AmountMinor != 12500 {
+		t.Errorf("the payout is %s %d %s, want redemption 12500 USD — 10 000 ₽ at 80 ₽", redemption.Type, redemption.AmountMinor, redemption.Currency)
+	}
+	cash := cashByCurrency(journal)
+	if cash["RUB"] != 1000000 || cash["USD"] != -27500 {
+		t.Errorf("the account's money moved %v, want +1000000 RUB and -27500 USD", cash)
+	}
+	positions, err := portfolio.Compute(mustListForEngine(t, f, f.accountID))
+	if err != nil {
+		t.Fatalf("the journal does not replay: %v", err)
+	}
+	p := positions[*redemption.InstrumentID]
+	if p == nil || !p.Quantity.IsZero() {
+		t.Fatalf("the fund's position is %+v, want closed", p)
+	}
+	if realized, one := p.RealizedPnL(); !one || realized != -15000 {
+		t.Errorf("the redemption's result is %d (one currency: %v), want -15000 USD — 125 $ for what cost 275 $", realized, one)
+	}
+}
