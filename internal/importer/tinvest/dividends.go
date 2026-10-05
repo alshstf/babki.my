@@ -1,0 +1,282 @@
+package tinvest
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/riverqueue/river"
+
+	"babki.my/babki/internal/marketdata"
+	"babki.my/babki/internal/platform/secretbox"
+)
+
+// THE BROKER'S DIVIDEND CALENDAR, for the tax a foreign dividend lost abroad
+// (decision Р-14).
+//
+// A foreign dividend reaches the account already net of the tax the issuer's
+// country withheld, and the operation says only what arrived. What the issuer
+// declared per share is in the broker's calendar, and the calendar answers for
+// any paper the broker knows — held or not, imported or typed in, at this
+// broker or at a second one — so one connection's token serves every account
+// in its space. That is what this job does with it: once a day, for every
+// foreign paper the space has received a dividend on, it stores the calendar
+// beside the prices, and the journal works the withheld tax out of it.
+
+// DividendSource is what a stored calendar row says it came from.
+const DividendSource = "tinvest"
+
+// dividendHistoryBefore is how far before the space's first dividend on a
+// paper the calendar is asked from: the record date of a payment lies before
+// the payment, by weeks, and by more when the payment was held up.
+const dividendHistoryBefore = 365 * 24 * time.Hour
+
+// dividendHorizon is how far ahead of today the calendar is asked to: a
+// dividend already declared is stored the day it appears, before it is paid.
+const dividendHorizon = 365 * 24 * time.Hour
+
+// brokerIDsPerPaper bounds how many of the broker's identifiers for one paper
+// a run tries before giving up on it: the import's own, the catalog's figi,
+// and the listings a search by ISIN finds.
+const brokerIDsPerPaper = 4
+
+// RefreshDividendsArgs is the daily job that reads the dividend calendar of
+// the foreign papers each connected space has received dividends on.
+type RefreshDividendsArgs struct{}
+
+func (RefreshDividendsArgs) Kind() string { return "tinvest.refresh_dividends" }
+
+// dividendStore is the narrow view of marketdata.Store this job writes to.
+type dividendStore interface {
+	ReplaceDividends(ctx context.Context, instrumentID uuid.UUID, source string,
+		dividends []marketdata.Dividend, fetchedAt time.Time) error
+}
+
+type dividendsWorker struct {
+	river.WorkerDefaults[RefreshDividendsArgs]
+	store     *Store
+	dividends dividendStore
+	box       *secretbox.Box
+	newClient clientFactory
+	log       *slog.Logger
+	now       func() time.Time
+}
+
+// NewDividendsWorker builds the River worker that stores the broker's dividend
+// calendar. now is the clock the horizon is measured from; nil for time.Now.
+func NewDividendsWorker(store *Store, dividends dividendStore, box *secretbox.Box, newClient clientFactory,
+	log *slog.Logger, now func() time.Time,
+) river.Worker[RefreshDividendsArgs] {
+	if now == nil {
+		now = time.Now
+	}
+	return &dividendsWorker{store: store, dividends: dividends, box: box, newClient: newClient, log: log, now: now}
+}
+
+func (w *dividendsWorker) Timeout(*river.Job[RefreshDividendsArgs]) time.Duration {
+	return 5 * time.Minute
+}
+
+// Work reads the calendar for every active connection's space.
+//
+// ONE CONNECTION'S FAILURE DOES NOT STOP THE OTHERS, for the reason the price
+// job gives (see quotesWorker.Work), and a paper one connection has served is
+// not asked about again through the next: the calendar is the broker's, not
+// the connection's.
+func (w *dividendsWorker) Work(ctx context.Context, _ *river.Job[RefreshDividendsArgs]) error {
+	conns, err := w.store.ListActiveConnections(ctx)
+	if err != nil {
+		return fmt.Errorf("tinvest: list active connections: %w", err)
+	}
+	served := map[uuid.UUID]bool{}
+	var lastErr error
+	stored := 0
+	for _, conn := range conns {
+		n, err := w.fillConnection(ctx, conn, served)
+		stored += n
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, ErrTokenInvalid) {
+			w.log.Warn("tinvest: the broker rejected this connection's token while reading dividends",
+				"connection_id", conn.ID)
+			if err := w.store.UpdateConnectionStatus(ctx, conn.ID, StatusTokenRevoked); err != nil {
+				w.log.Error("tinvest: recording a revoked token failed", "connection_id", conn.ID, "err", err)
+			}
+			continue
+		}
+		lastErr = err
+		w.log.Error("tinvest: reading a space's dividend calendar failed", "connection_id", conn.ID, "err", err)
+	}
+	w.log.Info("tinvest: dividend calendars refreshed", "connections", len(conns), "papers", stored)
+	return lastErr
+}
+
+// fillConnection stores the calendar of every foreign paper the connection's
+// space has received dividends on and no earlier connection of this run has
+// served. It returns how many papers it stored.
+func (w *dividendsWorker) fillConnection(ctx context.Context, conn Connection, served map[uuid.UUID]bool) (int, error) {
+	papers, err := w.store.ForeignDividendPapers(ctx, conn.SpaceID, conn.ID)
+	if err != nil {
+		return 0, err
+	}
+	var todo []DividendPaper
+	for _, p := range papers {
+		if !served[p.InstrumentID] {
+			todo = append(todo, p)
+		}
+	}
+	if len(todo) == 0 {
+		return 0, nil
+	}
+	token, err := w.box.Open(conn.TokenCiphertext)
+	if err != nil {
+		return 0, fmt.Errorf("tinvest: open token of connection %s: %w", conn.ID, err)
+	}
+	client, err := w.newClient(string(token))
+	if err != nil {
+		return 0, err
+	}
+
+	now := w.now()
+	stored := 0
+	for _, p := range todo {
+		declared, ok, err := w.calendarOf(ctx, client, p, now)
+		if err != nil {
+			return stored, err
+		}
+		if !ok {
+			continue
+		}
+		rows := make([]marketdata.Dividend, 0, len(declared))
+		for _, d := range declared {
+			rows = append(rows, marketdata.Dividend{
+				InstrumentID: p.InstrumentID,
+				Source:       DividendSource,
+				RecordDate:   d.RecordDate,
+				PaymentDate:  d.PaymentDate,
+				LastBuyDate:  d.LastBuyDate,
+				PerShare:     d.PerShare.Decimal(),
+				Currency:     d.PerShare.Currency,
+			})
+		}
+		if err := w.dividends.ReplaceDividends(ctx, p.InstrumentID, DividendSource, rows, now); err != nil {
+			return stored, err
+		}
+		served[p.InstrumentID] = true
+		stored++
+	}
+	return stored, nil
+}
+
+// calendarOf asks the broker for one paper's dividends under each identifier
+// the broker may know it by, until one answers with any. ok is false — and the
+// stored calendar is left as it was — when none does: the space HAS received
+// dividends on this paper, so an empty calendar says the identifier was not
+// the paper's, not that it pays none.
+func (w *dividendsWorker) calendarOf(ctx context.Context, client *Client, p DividendPaper, now time.Time,
+) ([]DeclaredDividend, bool, error) {
+	from := p.FirstDividendOn.Add(-dividendHistoryBefore)
+	to := now.Add(dividendHorizon)
+	for _, id := range brokerIDsOf(ctx, client, w.log, p) {
+		declared, err := client.Dividends(ctx, id, from, to)
+		switch {
+		case errors.Is(err, ErrTokenInvalid):
+			return nil, false, err
+		case err != nil:
+			w.log.Debug("tinvest: the broker's dividend calendar did not answer for this identifier",
+				"instrument_id", p.InstrumentID, "broker_id", id, "err", err)
+			continue
+		case len(declared) == 0:
+			continue
+		}
+		return declared, true, nil
+	}
+	w.log.Info("tinvest: no dividend calendar found for a paper the space has received dividends on",
+		"instrument_id", p.InstrumentID, "isin", p.ISIN)
+	return nil, false, nil
+}
+
+// brokerIDsOf is every identifier the broker may know a paper by, best first:
+// the listing the import mapped it to, the catalog's figi, and the listings of
+// its ISIN a search finds. A search failure leaves just the first two: the
+// calendar is worth a try with what is in hand.
+func brokerIDsOf(ctx context.Context, client *Client, log *slog.Logger, p DividendPaper) []string {
+	var ids []string
+	add := func(id string) {
+		if id != "" && !slices.Contains(ids, id) && len(ids) < brokerIDsPerPaper {
+			ids = append(ids, id)
+		}
+	}
+	add(p.InstrumentUID)
+	add(p.FIGI)
+	if len(ids) >= brokerIDsPerPaper || p.ISIN == "" {
+		return ids
+	}
+	found, err := client.FindInstruments(ctx, p.ISIN)
+	if err != nil {
+		log.Debug("tinvest: searching the broker for a paper's listings failed",
+			"instrument_id", p.InstrumentID, "isin", p.ISIN, "err", err)
+		return ids
+	}
+	for _, l := range found {
+		if strings.EqualFold(l.ISIN, p.ISIN) {
+			add(l.UID)
+		}
+	}
+	return ids
+}
+
+// DividendPaper is a foreign paper a space has received dividends on, with
+// what the broker may know it by.
+type DividendPaper struct {
+	InstrumentID    uuid.UUID
+	ISIN, FIGI      string
+	InstrumentUID   string
+	FirstDividendOn time.Time
+}
+
+// ForeignDividendPapers lists the papers of a foreign issuer — an ISIN that is
+// not Russian — that any account of the space has a dividend on, with the
+// listing this connection's import mapped each to, if any, and the day of the
+// space's first dividend on it.
+//
+// FOREIGN BY ISIN, which names the issuer's country: a Russian issuer's
+// dividend is taxed in Russia and the broker sends that tax as a line of its
+// own, while a foreign one's is taken abroad, out of sight, and is what the
+// calendar is for.
+func (s *Store) ForeignDividendPapers(ctx context.Context, spaceID, connID uuid.UUID) ([]DividendPaper, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT i.id, i.isin, i.figi,
+		       COALESCE((SELECT m.instrument_uid FROM tinvest_instrument_map m
+		                 WHERE m.connection_id = $2 AND m.instrument_id = i.id
+		                 ORDER BY m.updated_at DESC LIMIT 1), ''),
+		       min(o.occurred_on)
+		FROM operations o
+		JOIN instruments i ON i.id = o.instrument_id
+		WHERE o.space_id = $1 AND o.type = 'dividend'
+		  AND i.isin <> '' AND upper(left(i.isin, 2)) <> 'RU'
+		GROUP BY i.id, i.isin, i.figi
+		ORDER BY i.id`, spaceID, connID)
+	if err != nil {
+		return nil, fmt.Errorf("tinvest: list the foreign papers with dividends: %w", err)
+	}
+	defer rows.Close()
+	var out []DividendPaper
+	for rows.Next() {
+		var p DividendPaper
+		if err := rows.Scan(&p.InstrumentID, &p.ISIN, &p.FIGI, &p.InstrumentUID, &p.FirstDividendOn); err != nil {
+			return nil, fmt.Errorf("tinvest: list the foreign papers with dividends: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tinvest: list the foreign papers with dividends: %w", err)
+	}
+	return out, nil
+}
