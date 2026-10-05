@@ -13,14 +13,8 @@ import (
 	"babki.my/babki/internal/platform/money"
 )
 
-// The accounts screen's end of #27. A balance is an int64 already; multiplied
-// by a rate it need not stay one, and decimal.IntPart() answers that by
-// wrapping rather than failing — a balance published as a small negative
-// number on a screen whose whole job is to say how much there is.
-//
-// The refusal is an error, never the (nil, nil) that renders balance_in_base
-// as null: that null means this currency has no rate the provider covers, and
-// a balance too large to state is a different piece of news entirely.
+// A balance times a rate can overflow int64 (#27); it is an error, never the
+// (nil, nil) that means "no rate".
 
 // fixedRateConverter answers every lookup with the same rate.
 type fixedRateConverter struct{ rate decimal.Decimal }
@@ -33,18 +27,13 @@ func (c fixedRateConverter) ConvertMany(context.Context, map[string]int64, strin
 	panic("fixedRateConverter: ConvertMany not used")
 }
 
-// RatesOn panics rather than answering, because balanceInBase must never reach
-// for the batch: prewarming is handleList's job, and the conversion below is
-// the fallback that has to work with a memo nobody filled (see prewarmRates).
-// A call arriving here would mean the two had swapped roles.
+// RatesOn panics: balanceInBase is the fallback and must never reach for the
+// batch.
 func (c fixedRateConverter) RatesOn(context.Context, []marketdata.RateQuery) (marketdata.Rates, error) {
 	panic("fixedRateConverter: RatesOn not used")
 }
 
-// overflowOn is the date these conversions are asked for. Nothing depends on
-// its value — fixedRateConverter answers the same rate whatever the date — but
-// balanceInBase takes one now, and a fixed date keeps the test independent of
-// the clock.
+// overflowOn is any fixed date; the double ignores it.
 var overflowOn = time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 
 func withBalance(minor int64) WithBalance {
@@ -66,10 +55,7 @@ func TestBalanceInBaseRefusesABalanceThatWouldWrap(t *testing.T) {
 	}
 }
 
-// TestBalanceInBaseOverflowIsNotAnUncoveredCurrency: (nil, nil) is this
-// function's word for a currency the rate provider does not cover, which the
-// screen shows as a quiet null. An overflow must not be able to take that
-// shape.
+// An overflow is an error, not the uncovered-currency null.
 func TestBalanceInBaseOverflowIsNotAnUncoveredCurrency(t *testing.T) {
 	h := &Handler{converter: fixedRateConverter{rate: decimal.NewFromInt(2)}}
 
@@ -78,9 +64,7 @@ func TestBalanceInBaseOverflowIsNotAnUncoveredCurrency(t *testing.T) {
 	}
 }
 
-// TestBalanceInBasePublishesTheLargestBalanceThatFits is the guard's other
-// side: at a rate of 1 the same balance converts exactly, and is a figure the
-// owner is entitled to see.
+// The same balance at a rate of 1 converts exactly.
 func TestBalanceInBasePublishesTheLargestBalanceThatFits(t *testing.T) {
 	h := &Handler{converter: fixedRateConverter{rate: decimal.NewFromInt(1)}}
 

@@ -1,6 +1,4 @@
-// Package instrument owns the global instrument catalog. The catalog is
-// instance-wide (no space scoping): reference data is shared, and in later
-// plans it is auto-populated from market data providers.
+// Package instrument owns the instance-wide instrument catalog.
 package instrument
 
 import (
@@ -46,8 +44,7 @@ type Instrument struct {
 	UpdatedAt      time.Time
 }
 
-// Update describes a partial update; nil = unchanged, double pointers
-// follow the tri-state pattern established in the account module.
+// Update is a partial update; nil fields are unchanged, double pointers clear.
 type Update struct {
 	Name           *string
 	Ticker         *string
@@ -65,13 +62,8 @@ var isinRe = regexp.MustCompile(`^[A-Z]{2}[A-Z0-9]{9}[0-9]$`)
 // ErrBadISIN reports an ISIN that is not one even after NormalizeISIN.
 var ErrBadISIN = errors.New("isin must be two letters, nine letters or digits and a digit, e.g. US0231351067")
 
-// NormalizeISIN brings an ISIN a person typed to the one spelling the catalog
-// and the corporate-actions registry match on: trimmed and upper-cased. Empty
-// stays empty — an instrument need not have one.
-//
-// Matching is by string equality everywhere, so "ru000a101x68" used to be a
-// different paper from "RU000A101X68": a second catalog row, and an event that
-// never found its holders and said nothing about it (#202).
+// NormalizeISIN trims and upper-cases an ISIN, the spelling the catalog and the
+// registry match on (#202). Empty stays empty.
 func NormalizeISIN(s string) (string, error) {
 	s = strings.ToUpper(strings.TrimSpace(s))
 	if s == "" {

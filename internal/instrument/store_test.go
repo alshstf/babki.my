@@ -17,10 +17,7 @@ import (
 	"babki.my/babki/internal/platform/testdb"
 )
 
-// newStore also hands back the pool, unused by most tests but needed by
-// TestByIDs to inspect Stat().AcquireCount() around the batched read — the
-// same technique marketdata.Store's own batch test (FxRatesOn) uses to pin
-// its round-trip count.
+// newStore also returns the pool, for counting round trips.
 func newStore(t *testing.T) (*instrument.Store, context.Context, *pgxpool.Pool) {
 	t.Helper()
 	pool := testdb.New(t)
@@ -88,9 +85,8 @@ func TestInstrumentLifecycle(t *testing.T) {
 	}
 }
 
-// makeCatalog writes n instruments whose names sort as "Бумага 01".."Бумага NN"
-// and hands back their ids in that same order, so a test can say which rows a
-// page ought to hold rather than only how many.
+// makeCatalog writes n instruments named "Бумага 01".."Бумага NN" and returns
+// their ids in that order.
 func makeCatalog(t *testing.T, st *instrument.Store, ctx context.Context, n int) []uuid.UUID {
 	t.Helper()
 	ids := make([]uuid.UUID, 0, n)
@@ -116,14 +112,8 @@ func idsOf(found []instrument.Instrument) []uuid.UUID {
 	return out
 }
 
-// TestSearchPagesPartitionTheCatalog is #104's own property: consecutive
-// offsets hand back the catalog in order, once each, and the flag says when to
-// stop. Before this, the endpoint took no offset at all and anything past the
-// first page was unreachable by any request that could be made.
-//
-// The page sizes are written out as literals (5 rows in pages of 2) rather than
-// derived from a constant, so that the arithmetic below is checked against
-// something and not against itself.
+// Consecutive offsets return the catalog in order, once each, and hasMore says
+// when to stop (#104). Sizes are literals: 5 rows in pages of 2.
 func TestSearchPagesPartitionTheCatalog(t *testing.T) {
 	st, ctx, _ := newStore(t)
 	ids := makeCatalog(t, st, ctx, 5)
@@ -136,8 +126,7 @@ func TestSearchPagesPartitionTheCatalog(t *testing.T) {
 		}
 		walked = append(walked, idsOf(found)...)
 		if !hasMore {
-			// Three pages of 2, 2 and 1: the last one is short, and its
-			// shortness is not what ended the walk — hasMore is.
+			// Pages of 2, 2 and 1; hasMore, not the short page, ends the walk.
 			if page != 2 {
 				t.Errorf("catalog of 5 walked in %d pages of 2, want 3", page+1)
 			}
@@ -155,10 +144,8 @@ func TestSearchPagesPartitionTheCatalog(t *testing.T) {
 	}
 }
 
-// TestSearchAnswersHasMoreFromTheCatalogAndNotFromThePagesLength pins the one
-// thing that cannot be derived afterwards. A full page at the very end of the
-// catalog and a full page with more behind it are the same length, so length
-// answers neither question; the probe row is what tells them apart.
+// hasMore comes from the catalog: a full last page and a full page with more
+// after it have the same length.
 func TestSearchAnswersHasMoreFromTheCatalogAndNotFromThePagesLength(t *testing.T) {
 	st, ctx, _ := newStore(t)
 	makeCatalog(t, st, ctx, 4)
@@ -172,8 +159,7 @@ func TestSearchAnswersHasMoreFromTheCatalogAndNotFromThePagesLength(t *testing.T
 		t.Errorf("hasMore = true on a page holding the whole catalog: nothing is behind it")
 	}
 
-	// The same length, one row short of the catalog: identical evidence to a
-	// reader counting rows, opposite answer.
+	// Same length, one row short of the catalog: the opposite answer.
 	found, hasMore, err = st.Search(ctx, "", 3, 0)
 	if err != nil || len(found) != 3 {
 		t.Fatalf("Search(limit 3) = %d rows, %v", len(found), err)
@@ -183,8 +169,7 @@ func TestSearchAnswersHasMoreFromTheCatalogAndNotFromThePagesLength(t *testing.T
 			"stops asking, and that instrument is then reachable by nothing")
 	}
 
-	// Past the end: an empty page is the end of the catalog, never "there may
-	// be more further on".
+	// Past the end: an empty page with nothing more.
 	found, hasMore, err = st.Search(ctx, "", 2, 4)
 	if err != nil || len(found) != 0 || hasMore {
 		t.Errorf("Search past the end = %d rows, hasMore %v, %v; want 0, false, nil",
@@ -192,17 +177,8 @@ func TestSearchAnswersHasMoreFromTheCatalogAndNotFromThePagesLength(t *testing.T
 	}
 }
 
-// TestSearchOrdersInstrumentsOfOneNameByID is the tie-break, and it is the part
-// of paging that fails invisibly. Nothing holds instrument names unique — the
-// broker importer writes whatever a paper is called — and among equal names an
-// ORDER BY that mentions only the name lets the database return rows in any
-// order it likes, a different one per query. Two pages read from such a catalog
-// repeat one row and skip another while both look perfectly ordinary.
-//
-// The two rows are written with ids CHOSEN so that id order is the reverse of
-// the order they are stored in, which is what makes this test able to tell the
-// two ORDER BYs apart at all: without the tie-break the rows come back in the
-// order they went in, which is the opposite of the one asserted.
+// Equal names are ordered by id, so pages neither repeat nor skip rows. The
+// ids are chosen in the reverse of insertion order to tell the orders apart.
 func TestSearchOrdersInstrumentsOfOneNameByID(t *testing.T) {
 	st, ctx, pool := newStore(t)
 
@@ -226,8 +202,7 @@ func TestSearchOrdersInstrumentsOfOneNameByID(t *testing.T) {
 			"between two queries of the same catalog", idsOf(found), []uuid.UUID{low, high})
 	}
 
-	// And the consequence that matters: read one at a time, each row appears
-	// exactly once.
+	// Read one at a time, each row appears exactly once.
 	first, hasMore, err := st.Search(ctx, "", 1, 0)
 	if err != nil || len(first) != 1 || !hasMore {
 		t.Fatalf("first page = %+v, hasMore %v, %v", idsOf(first), hasMore, err)
@@ -241,12 +216,8 @@ func TestSearchOrdersInstrumentsOfOneNameByID(t *testing.T) {
 	}
 }
 
-// TestSearchRefusesBoundsItCannotHonour covers the two bounds the store
-// enforces for itself. The handler in front of it answers 400 on both, so
-// reaching here with either means the program is wrong — but a limit of zero
-// would otherwise fetch the probe row alone and then trim the page to nothing,
-// publishing an empty page with hasMore true: a list showing nothing behind a
-// control that loads nothing however often it is pressed.
+// The store refuses a zero limit, which would publish an empty page with
+// hasMore true, and a negative offset.
 func TestSearchRefusesBoundsItCannotHonour(t *testing.T) {
 	st, ctx, _ := newStore(t)
 	makeCatalog(t, st, ctx, 2)
@@ -327,13 +298,8 @@ func TestListTradable(t *testing.T) {
 	}
 }
 
-// TestByIDs pins the batched read the positions screen uses in place of one
-// ByID per position: every id that has a row comes back with its full record,
-// an id that has none is simply ABSENT — never a zero-valued Instrument, which
-// would carry an empty name and an invalid type and read exactly like a real
-// catalog row to a caller that skipped the comma-ok — the read costs exactly
-// one round trip for the whole set, and an empty request is answered without
-// asking the database anything.
+// ByIDs returns the full record for every id with a row, omits the rest
+// (never zero-valued), takes one round trip, and none for empty input.
 func TestByIDs(t *testing.T) {
 	st, ctx, pool := newStore(t)
 
@@ -352,9 +318,7 @@ func TestByIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create share: %v", err)
 	}
-	// Created but not asked for: a batch must answer the ids it was given and
-	// nothing else, or a caller indexing by id would silently carry rows it
-	// never requested.
+	// Created but not asked for, so it must not come back.
 	if _, err := st.Create(ctx, instrument.Instrument{
 		Type: instrument.TypeShare, Name: "Лукойл", Ticker: "LKOH", Currency: "RUB",
 	}); err != nil {
@@ -362,13 +326,7 @@ func TestByIDs(t *testing.T) {
 	}
 
 	absent := uuid.New()
-	// Discriminating check: fetching a set of ids must take exactly one round
-	// trip to the database, not one per id — that is the entire reason ByIDs
-	// exists instead of a loop of ByID calls (see marketdata.Store.FxRatesOn's
-	// identical AcquireCount check for the sibling batch primitive this one is
-	// modelled on). AcquireCount is a lifetime counter on the pool, so
-	// comparing before and after catches an implementation that compiles and
-	// returns the right instruments while quietly issuing one query per id.
+	// One round trip for the whole set.
 	before := pool.Stat().AcquireCount()
 	got, err := st.ByIDs(ctx, []uuid.UUID{bond.ID, share.ID, absent})
 	if err != nil {
@@ -384,10 +342,7 @@ func TestByIDs(t *testing.T) {
 		t.Errorf("ByIDs answered for an id with no row: %+v", got[absent])
 	}
 
-	// The whole record, not just the id: the positions screen reads type,
-	// face value and face currency off these rows to value a bond, so a
-	// batch that returned a thinner instrument than ByID would change the
-	// numbers on the page rather than only their cost.
+	// The whole record: bonds are valued from type and face value.
 	gotBond, found := got[bond.ID]
 	if !found {
 		t.Fatalf("ByIDs missing the bond")
@@ -396,9 +351,7 @@ func TestByIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ByID: %v", err)
 	}
-	// DeepEqual rather than ==: the face value and face currency are
-	// pointers, and two reads of one row hold equal values behind different
-	// addresses.
+	// DeepEqual: face value fields are pointers.
 	if !reflect.DeepEqual(gotBond, byID) {
 		t.Errorf("ByIDs bond = %+v, ByID bond = %+v — the two reads must return the identical row", gotBond, byID)
 	}
@@ -406,11 +359,7 @@ func TestByIDs(t *testing.T) {
 		t.Errorf("ByIDs share = %+v, want Сбербанк", got[share.ID])
 	}
 
-	// Empty input -> empty map and not a single round trip to the database.
-	// AcquireCount is a lifetime counter on the pool, so comparing before and
-	// after catches an implementation that dropped the len(ids)==0
-	// short-circuit and queried the database with an empty array instead
-	// (see marketdata.Store.FxRatesOn's identical check for the same claim).
+	// Empty input: empty map, no round trip.
 	beforeEmpty := pool.Stat().AcquireCount()
 	empty, err := st.ByIDs(ctx, nil)
 	if err != nil {
@@ -424,21 +373,9 @@ func TestByIDs(t *testing.T) {
 	}
 }
 
-// TestTickerIsUniqueAmongInstrumentsThatCarryOne pins the constraint the
-// quotes job has always assumed and never had: at most one instrument per
-// ticker. That job maps ticker -> instrument id, because the provider answers
-// with tickers and knows nothing about this catalog; a map holds one value per
-// key, so a second row under the same ticker meant one of the two was
-// overwritten and never priced again — no error, no log line, just a position
-// showing no quote forever. The catalog refuses the second row instead, and
-// says which rule was broken: a 400 the caller can act on, not the 500 a raw
-// unique violation turns into at family.WriteError's default branch.
-//
-// The EMPTY ticker is deliberately outside the constraint. It is how "this
-// instrument has no exchange ticker" is written down — cash, metals, hand-made
-// holdings — those rows are excluded from ListTradable and never looked up by
-// ticker, so a full unique index would forbid the second one of them for
-// nothing.
+// At most one tradable instrument per ticker: the quotes job maps ticker to
+// instrument, and a second row would never be priced. The refusal is a 400.
+// The empty ticker (no exchange ticker) is outside the rule.
 func TestTickerIsUniqueAmongInstrumentsThatCarryOne(t *testing.T) {
 	st, ctx, _ := newStore(t)
 
@@ -454,15 +391,12 @@ func TestTickerIsUniqueAmongInstrumentsThatCarryOne(t *testing.T) {
 	if !errors.Is(err, instrument.ErrTickerTaken) {
 		t.Fatalf("Create a second SBER: err = %v, want ErrTickerTaken", err)
 	}
-	// Wrapping ErrValidation is what makes it a 400 rather than "internal
-	// error": the two assertions are separate because the sentinel could be
-	// defined without it and the caller would still see a 500.
+	// ErrValidation is what makes it a 400; checked separately.
 	if !errors.Is(err, family.ErrValidation) {
 		t.Errorf("Create a second SBER: err = %v, want it to wrap family.ErrValidation so the caller gets a 400", err)
 	}
 
-	// Renaming an existing instrument onto a taken ticker is the same
-	// collision, arrived at through the other write path.
+	// Renaming onto a taken ticker is the same collision.
 	gazp, err := st.Create(ctx, instrument.Instrument{
 		Type: instrument.TypeShare, Name: "Газпром", Ticker: "GAZP", Currency: "RUB",
 	})
@@ -484,26 +418,10 @@ func TestTickerIsUniqueAmongInstrumentsThatCarryOne(t *testing.T) {
 	}
 }
 
-// TestUniqueTickerCoversExactlyTheRowsListTradableReturns holds two spellings
-// of one rule together. The quotes job keys a map on the ticker of every row
-// ListTradable hands it, so each of those rows has to be unique by ticker —
-// which is what migration 0011's partial index enforces, with that reader's
-// filter written out a second time as its predicate. Two spellings drift apart;
-// this fails as soon as they do, in either direction:
-//
-//   - widen the reader without widening the index, and a row it returns turns
-//     out to be duplicable — the silent overwrite of #26 is back, one of the
-//     pair never priced and nothing saying why;
-//   - widen the index without widening the reader, and a duplicate nobody would
-//     ever have priced is refused instead — the create dialog offers all seven
-//     instrument types with a free ticker field, and two crypto rows for one
-//     coin on two venues, or two metal rows both reading XAU for gold vaulted
-//     at two brokers, are things a user legitimately has.
-//
-// The reader itself says which types are which: the test asks the catalog for a
-// duplicate under every type there is and compares refusal against what
-// ListTradable actually returned, never against a third list of types written
-// out here — which would be a third spelling to drift.
+// The unique ticker index (migration 0011) covers exactly the rows ListTradable
+// returns: wider and a legitimately duplicated crypto or metal row is refused,
+// narrower and #26's silent overwrite returns. The split of types is read from
+// ListTradable itself, not from a list written here.
 func TestUniqueTickerCoversExactlyTheRowsListTradableReturns(t *testing.T) {
 	st, ctx, _ := newStore(t)
 
@@ -512,8 +430,7 @@ func TestUniqueTickerCoversExactlyTheRowsListTradableReturns(t *testing.T) {
 		instrument.TypeCurrency, instrument.TypeCrypto, instrument.TypeMetal,
 		instrument.TypeCustom,
 	}
-	// One ticker per type, so a pair can only collide with itself and a refusal
-	// can only mean "this type is covered".
+	// One ticker per type, so a refusal can only mean the type is covered.
 	refused := make(map[instrument.Type]bool, len(types))
 	for _, tp := range types {
 		ticker := "DUP" + strings.ToUpper(string(tp))
@@ -543,9 +460,7 @@ func TestUniqueTickerCoversExactlyTheRowsListTradableReturns(t *testing.T) {
 	for _, inst := range tradable {
 		returned[inst.Type] = true
 	}
-	// The comparison below is against what the reader returned, so it has to
-	// have returned something: an empty list would agree with an index that
-	// refuses nothing at all.
+	// An empty reader result would agree with an index that refuses nothing.
 	if len(returned) == 0 {
 		t.Fatal("ListTradable returned nothing; there would be nothing for the index to be compared against")
 	}
@@ -561,10 +476,7 @@ func TestUniqueTickerCoversExactlyTheRowsListTradableReturns(t *testing.T) {
 		}
 	}
 
-	// The other half of the reader's filter, which the loop above cannot see
-	// because every row in it carries a ticker. Any number of rows may have no
-	// ticker at all, so the reader must not return them: the job's map would
-	// collapse every one of them onto the key "" and price none of them.
+	// Tickerless rows must not be returned: they would all collide on "".
 	for _, name := range []string{"Наличные", "Золотой слиток"} {
 		if _, err := st.Create(ctx, instrument.Instrument{
 			Type: instrument.TypeShare, Name: name, Currency: "RUB",
@@ -584,25 +496,10 @@ func TestUniqueTickerCoversExactlyTheRowsListTradableReturns(t *testing.T) {
 	}
 }
 
-// TestByTickerTradableAnswersOnlyWhereOneRowIsGuaranteed carries the rule of
-// the test above onto the THIRD place that spells the same filter.
-//
-// ByTickerTradable returns a single row with no ORDER BY and no LIMIT, and it
-// may: its WHERE names the very types migration 0011's partial unique index
-// covers, so at most one row can match. That argument is the whole guarantee,
-// and it is an argument about a filter — nothing enforced it. Widen the method
-// by one type and it goes on compiling, goes on returning a row, and starts
-// returning WHICHEVER of several the planner reached first. The caller that
-// would live with that is tinvest's instrument resolver: it hands the broker's
-// ticker to this method and files the broker's trades against whatever comes
-// back, so a widened filter files them against an arbitrary paper.
-//
-// WHICH types are covered is not written out here — only that there are seven
-// of them. The split is read off ListTradable, as the test above reads it, so
-// this stays a comparison between what the reader returns and what this method
-// answers about rather than a fourth list of the covered types to drift. For a
-// type ListTradable does not return, two rows may share a ticker — and this
-// method must then answer nothing rather than one of them.
+// ByTickerTradable, which returns one row without ORDER BY or LIMIT, answers
+// only for the types the index covers (read from ListTradable); for others two
+// rows may share a ticker and it must answer nothing. The T-Invest resolver
+// files trades against what it returns.
 func TestByTickerTradableAnswersOnlyWhereOneRowIsGuaranteed(t *testing.T) {
 	st, ctx, _ := newStore(t)
 
@@ -647,8 +544,7 @@ func TestByTickerTradableAnswersOnlyWhereOneRowIsGuaranteed(t *testing.T) {
 		found, err := st.ByTickerTradable(ctx, tickerOf(tp))
 		switch {
 		case returned[tp]:
-			// The index refused the second row, so exactly one exists and this
-			// method has to be the one that finds it.
+			// The index refused the second row, so this must find the one.
 			if err != nil {
 				t.Errorf("ByTickerTradable(%q) = %v, want the single %s instrument ListTradable also returns",
 					tickerOf(tp), err, tp)
@@ -677,11 +573,7 @@ func TestTypeValid(t *testing.T) {
 	}
 }
 
-// TestByISIN_ExactMatch pins that the lookup is an exact comparison, not a
-// substring search: Search already exists for "found something containing
-// this text" (ILIKE '%...%'), and an importer resolving a broker's ISIN
-// needs the one instrument that IS that ISIN, not every row whose ISIN
-// happens to contain it as a fragment.
+// ByISIN is an exact match, not Search's fragment match.
 func TestByISIN_ExactMatch(t *testing.T) {
 	st, ctx, _ := newStore(t)
 
@@ -698,8 +590,7 @@ func TestByISIN_ExactMatch(t *testing.T) {
 		t.Fatalf("ByISIN(exact) = %+v, %v, want %v", got, err, sber.ID)
 	}
 
-	// A substring of a real ISIN must not match — proves this is not built
-	// on ILIKE '%...%' the way Search is.
+	// A substring of a real ISIN does not match.
 	if _, err := st.ByISIN(ctx, "RU000902954"); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("ByISIN(substring) = %v, want pgx.ErrNoRows", err)
 	}
@@ -709,26 +600,14 @@ func TestByISIN_ExactMatch(t *testing.T) {
 		t.Fatalf("ByISIN(unknown) = %v, want pgx.ErrNoRows", err)
 	}
 
-	// The empty string is not "no filter" here (unlike Search's query
-	// parameter). Uniqueness on isin skips the empty string — any number of
-	// rows may carry none — so a bare `isin = ''` would match every instrument
-	// nobody has entered one for and hand back whichever is oldest: a
-	// plausible-looking wrong answer instead of the honest "no exact match"
-	// this refuses with instead.
+	// The empty ISIN matches nothing: many rows carry none.
 	if _, err := st.ByISIN(ctx, ""); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("ByISIN(\"\") = %v, want pgx.ErrNoRows", err)
 	}
 }
 
-// TestISINIsUnique pins what replaced the tie-break this test used to check.
-//
-// An ISIN identifies a security worldwide, so two rows under one are the same
-// paper entered twice — and until migration 0020 nothing said so: the catalog
-// took them and every importer silently resolved to whichever was created
-// first. The ticker's own uniqueness had been standing in for this, and when
-// identity moved to the ISIN (two companies may share a ticker across
-// exchanges) the protection had to move with it or the race that used to
-// collide on the ticker would quietly produce duplicates instead.
+// ISINs are unique (migration 0020): two rows under one are the same paper
+// twice, and identity moved from ticker to ISIN.
 func TestISINIsUnique(t *testing.T) {
 	st, ctx, _ := newStore(t)
 
@@ -746,9 +625,8 @@ func TestISINIsUnique(t *testing.T) {
 	if !errors.Is(err, instrument.ErrISINTaken) {
 		t.Fatalf("Create of a second row under one ISIN = %v, want ErrISINTaken", err)
 	}
-	// A DIFFERENT type under the same ISIN is refused too, unlike the ticker
-	// rule it replaced: a ticker means something only on an exchange, while an
-	// ISIN names the paper itself whatever this catalog calls its type.
+	// A different type under the same ISIN is refused too: the ISIN names the
+	// paper, not the listing.
 	_, err = st.Create(ctx, instrument.Instrument{
 		Type: instrument.TypeETF, Name: "Дубль, фондом", Ticker: "DUP3",
 		ISIN: "RU0000000001", Currency: "RUB",
@@ -756,8 +634,7 @@ func TestISINIsUnique(t *testing.T) {
 	if !errors.Is(err, instrument.ErrISINTaken) {
 		t.Fatalf("Create of a fund under the same ISIN = %v, want ErrISINTaken", err)
 	}
-	// And rows with NO ISIN go on being as many as anyone likes: the empty
-	// string is how "this paper has none" is written down.
+	// Any number of rows may have no ISIN.
 	if _, err := st.Create(ctx, instrument.Instrument{
 		Type: instrument.TypeShare, Name: "Без ISIN, один", Ticker: "NOI1", Currency: "RUB",
 	}); err != nil {
@@ -779,12 +656,8 @@ func TestISINIsUnique(t *testing.T) {
 	}
 }
 
-// TestByTickerTradable pins the two things ByISIN's sibling method has to
-// get right: an exact match among share/bond/etf, and exclusion of exactly
-// what ListTradable excludes (currency/crypto and tickerless rows) — the
-// partial unique index behind "at most one" (migration 0011) only ever
-// covers the rows ListTradable returns, so this method's WHERE has to name
-// the identical set or its own "at most one" guarantee would not hold.
+// ByTickerTradable matches exactly among share, bond and etf, excluding what
+// ListTradable excludes.
 func TestByTickerTradable(t *testing.T) {
 	st, ctx, _ := newStore(t)
 
@@ -819,9 +692,7 @@ func TestByTickerTradable(t *testing.T) {
 	if _, err := st.ByTickerTradable(ctx, "NOPE"); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("ByTickerTradable(unknown) = %v, want pgx.ErrNoRows", err)
 	}
-	// Empty ticker: never "any tickerless row", for the same reason
-	// ByISIN("") refuses rather than picking one — and here there would be
-	// many candidates, since any number of instruments may carry no ticker.
+	// The empty ticker matches nothing.
 	if _, err := st.ByTickerTradable(ctx, ""); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("ByTickerTradable(\"\") = %v, want pgx.ErrNoRows", err)
 	}

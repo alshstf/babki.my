@@ -26,9 +26,9 @@ type Handler struct {
 	auth  *Auth
 	sm    *scs.SessionManager
 	guard *loginGuard
-	// setupCode, when set, is what first-run setup must be given: the server
-	// writes it to its log at start, so that the owner of the machine — and
-	// not whoever reaches the port first — becomes the owner of the instance.
+	// setupCode, when set, must be given to first-run setup: it is written to the
+	// server log, so the machine's owner, not whoever reaches the port first,
+	// becomes the instance's owner.
 	setupCode string
 }
 
@@ -42,25 +42,10 @@ func NewHandler(svc *Service, store *Store, auth *Auth, sm *scs.SessionManager) 
 	return &Handler{svc: svc, store: store, auth: auth, sm: sm, guard: newLoginGuard()}
 }
 
-// WriteError maps domain errors to HTTP responses. Shared by other modules.
-//
-// An error that matches none of the cases below is not a domain outcome at
-// all: a DB failure, a canceled context, a figure too large to state in minor
-// units (money.ErrOverflow). The client is told "internal error" and nothing
-// more — deliberately, since the text of those errors is server internals —
-// and that leaves the owner with a blank screen and no way to learn WHICH row
-// broke. So the default branch logs the error's own text, which is where every
-// context string the callers build ends up ("balance of account <uuid> in
-// RUB", "%d terms totalling %s %s"). Without this the request log records only
-// method, path, status and duration (see httpserver's withRequestLog), and the
-// diagnosis is unreachable even with server access.
-//
-// It logs through slog.Default() because WriteError takes no logger and is
-// called from forty-odd places across five packages, none of which could hand
-// it one without threading a logger through every one of them. cmd/babki
-// installs the configured logger as the default at startup (see setup in
-// runtime.go), so this line lands in the same stream, level and format as
-// every other rather than in a second, differently shaped one.
+// WriteError maps domain errors to HTTP responses; other modules use it too.
+// Anything else is a 500 "internal error", and its text is logged through
+// slog.Default (configured by cmd/babki), since the request log alone would not
+// say which row broke.
 func WriteError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrValidation):
@@ -102,14 +87,8 @@ func (h *Handler) Mount(srv *httpserver.Server) {
 	srv.Mount("DELETE /api/v1/members/{userId}", authed(h.handleDeleteMember))
 }
 
-// CostBasisRulesAPI renders one country's cost basis rules for the wire. It is
-// exported because the positions response carries the same object (see
-// portfolio.Handler.handleList): the figures and the statement of whose rules
-// they follow must be built from one mapping, or the two payloads could
-// eventually disagree about the same country.
-//
-// Notices never becomes null on the wire — TaxRules.Notices always returns a
-// slice — so a reader can tell "nothing is wrong" from "the field is missing".
+// CostBasisRulesAPI renders a country's rules for the wire; the positions
+// response uses it too, so both payloads agree. Notices is never null.
 func CostBasisRulesAPI(r TaxRules) apitypes.CostBasisRules {
 	out := apitypes.CostBasisRules{
 		Country:   r.Country,
@@ -184,8 +163,8 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if httpjson.Decode(w, r, &req) != nil {
 		return
 	}
-	// Asked before anything is looked up or hashed: an attempt that is refused
-	// here costs nothing and says nothing about whether the username exists.
+	// Checked before any lookup or hash: a refused attempt costs nothing and says
+	// nothing about the username.
 	addr := clientAddr(r)
 	if wait := h.guard.wait(addr, req.Username); wait > 0 {
 		// Whole seconds, rounded up: "0" would invite the retry it refuses.
@@ -195,8 +174,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	u, p, err := h.svc.Login(r.Context(), req.Username, req.Password)
 	if err != nil {
-		// Only a refusal of the credentials counts. A database that is away is
-		// not a wrong password, and must not lock anybody out.
+		// Only a credential refusal counts; a database outage locks nobody out.
 		if errors.Is(err, ErrInvalidCredentials) {
 			h.guard.failed(addr, req.Username)
 		}
@@ -207,21 +185,9 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	h.signInAndAnswer(w, r, u, p, http.StatusOK)
 }
 
-// signInAndAnswer is the tail both doors that hand out a session share: start
-// the session, then answer with what the client needs to know about it. It is
-// one function because the two were the same eleven lines twice, and a session
-// established by one route but described differently by the other is the kind
-// of difference nobody would look for.
-//
-// The status differs and nothing else does: setup CREATED something, login did
-// not.
-//
-// A failure of SignIn after the account already exists leaves a created owner
-// with no cookie, and the answer is a 500 the client recovers from by logging
-// in — deliberately, since the alternative is deleting a real user because a
-// session store hiccuped. Setup's own writes are already atomic (see
-// Store.CreateSpaceWithOwner); what is not, and cannot be, is a session that
-// lives outside that transaction.
+// signInAndAnswer starts a session and describes it, for setup (201) and
+// login (200). If SignIn fails after setup created the owner, the answer is a
+// 500 and the client recovers by logging in; the user is not deleted.
 func (h *Handler) signInAndAnswer(w http.ResponseWriter, r *http.Request, u User, p Principal, status int) {
 	if err := h.auth.SignIn(r.Context(), u.ID); err != nil {
 		WriteError(w, err)
@@ -258,9 +224,8 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, info)
 }
 
-// handleListTaxResidencies publishes the countries this application has cost
-// basis rules for, so a client offers exactly what the server will accept
-// rather than a list of its own that drifts from it.
+// handleListTaxResidencies publishes the countries with cost basis rules, so
+// clients offer exactly what the server accepts.
 func (h *Handler) handleListTaxResidencies(w http.ResponseWriter, r *http.Request) {
 	all := TaxResidencies()
 	out := make([]apitypes.CostBasisRules, 0, len(all))
@@ -270,10 +235,8 @@ func (h *Handler) handleListTaxResidencies(w http.ResponseWriter, r *http.Reques
 	httpjson.Write(w, http.StatusOK, out)
 }
 
-// handleUpdateSpace changes the space's base currency and/or the owner's
-// country of tax residency (owner-only; role, format and known-country checks
-// live in Service.UpdateSpace, matching how the members routes below delegate
-// their owner-only checks to Service).
+// handleUpdateSpace changes the base currency and/or the tax residency; checks
+// live in Service.UpdateSpace.
 func (h *Handler) handleUpdateSpace(w http.ResponseWriter, r *http.Request) {
 	p, _ := PrincipalFromContext(r.Context())
 	var req apitypes.UpdateSpaceRequest
@@ -370,9 +333,8 @@ func (h *Handler) handleDeleteMember(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleChangePassword replaces the caller's password. A wrong current password
-// counts against the same lock the sign-in door keeps, under the caller's own
-// name, and is a 400 rather than a 401: the session is fine, the field is not.
-// The caller's session is renewed and outlives the change; every other is over.
+// counts against the sign-in lock and is a 400: the session is fine, the field
+// is not. The caller's session is renewed; every other one ends.
 func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	p, _ := PrincipalFromContext(r.Context())
 	var req apitypes.ChangePasswordRequest
@@ -423,13 +385,10 @@ func (h *Handler) handleSignOutElsewhere(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// setupCodeAlphabet leaves out the letters and digits read for one another
-// (0/O, 1/I/L), since the code is copied from a log by eye.
+// setupCodeAlphabet omits look-alikes (0/O, 1/I/L): the code is read from a log.
 const setupCodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
-// NewSetupCode is a fresh one-time code for first-run setup: eight characters,
-// about 39 bits, plenty against guessing over a network that the sign-in
-// door's own pace would allow.
+// NewSetupCode returns a fresh eight-character setup code, about 39 bits.
 func NewSetupCode() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)

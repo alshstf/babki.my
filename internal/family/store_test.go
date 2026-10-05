@@ -45,9 +45,7 @@ func TestUserAndSpaceLifecycle(t *testing.T) {
 		t.Errorf("principal = %+v", p)
 	}
 
-	// second member, created the way production creates one: CreateUserInSpace
-	// writes the user and the membership together. The separate AddMember this
-	// used to call existed nowhere else and was removed with it.
+	// A second member, created as production does.
 	u2, err := st.CreateUserInSpace(ctx, sp.ID, "kate", "Kate", "hash2", family.RoleEditor)
 	if err != nil {
 		t.Fatalf("CreateUserInSpace: %v", err)
@@ -78,13 +76,11 @@ func TestUserAndSpaceLifecycle(t *testing.T) {
 	}
 }
 
-// strp is the address of a string literal, for the partial-update arguments of
-// UpdateSpaceSettings, where nil means "leave this column alone".
+// strp returns the address of s, for partial updates.
 func strp(s string) *string { return &s }
 
-// TestBaseCurrency verifies the default, that all Space-scanning methods
-// return base_currency, and that UpdateSpaceSettings persists the change and
-// reports pgx.ErrNoRows for a space that doesn't exist.
+// The default base currency, every space reader returning it, and
+// UpdateSpaceSettings persisting it (pgx.ErrNoRows for a missing space).
 func TestBaseCurrency(t *testing.T) {
 	st, ctx := newStore(t)
 
@@ -119,8 +115,8 @@ func TestBaseCurrency(t *testing.T) {
 		t.Fatalf("base_currency after update = %q, want USD", got.BaseCurrency)
 	}
 
-	// CreateFirstUserWithSpace also scans base_currency. It is the FIRST user's
-	// door and refuses an instance that already has one, so it gets its own.
+	// CreateFirstUserWithSpace refuses a set-up instance, so it gets its own
+	// fixture.
 	fresh, freshCtx := newStore(t)
 	_, sp2, err := fresh.CreateFirstUserWithSpace(freshCtx, "Other", "bob", "Bob", "hash2")
 	if err != nil {
@@ -136,12 +132,8 @@ func TestBaseCurrency(t *testing.T) {
 	}
 }
 
-// TestTaxResidencyColumn covers the migration's promise and the partial update.
-// Every space that existed before the column did was given RU, and every
-// Space-scanning method has to return it — a method that forgot would hand its
-// caller an empty country, which resolves to "unknown" and would make the
-// application announce that it knows nothing about a space it knows everything
-// about.
+// Spaces get RU by default and every space reader returns it; an empty country
+// would read as unknown.
 func TestTaxResidencyColumn(t *testing.T) {
 	st, ctx := newStore(t)
 
@@ -165,8 +157,7 @@ func TestTaxResidencyColumn(t *testing.T) {
 		t.Fatalf("CreateFirstUserWithSpace tax_residency = %q, want %s", sp2.TaxResidency, family.DefaultTaxResidency)
 	}
 
-	// A residency-only update leaves the currency alone, and the other way
-	// round: a nil argument is "unchanged", never "".
+	// Updating one setting leaves the other alone: nil means unchanged.
 	if err := st.UpdateSpaceSettings(ctx, sp.ID, nil, strp("DE")); err != nil {
 		t.Fatalf("UpdateSpaceSettings: %v", err)
 	}
@@ -188,9 +179,8 @@ func TestTaxResidencyColumn(t *testing.T) {
 	}
 }
 
-// TestDistinctBaseCurrencies covers the whole-instance list the fx backfill
-// job consults: deduplicated, sorted, and an empty slice (not an error) when
-// there are no spaces at all.
+// Base currencies are deduplicated and sorted; no spaces gives an empty
+// slice.
 func TestDistinctBaseCurrencies(t *testing.T) {
 	st, ctx := newStore(t)
 
@@ -206,8 +196,7 @@ func TestDistinctBaseCurrencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	// Two spaces on the migration default (RUB) and one switched to USD:
-	// the result must dedupe the two RUB spaces into a single entry.
+	// Two RUB spaces and one USD space.
 	if _, err := st.CreateSpaceWithOwner(ctx, "Family", u.ID); err != nil {
 		t.Fatalf("CreateSpaceWithOwner Family: %v", err)
 	}

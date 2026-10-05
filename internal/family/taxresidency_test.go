@@ -8,9 +8,7 @@ import (
 	"babki.my/babki/internal/family"
 )
 
-// notices is a small helper: the tests below care about the SET of notices, not
-// their order, and comparing sorted copies keeps a reordering of the rule table
-// from failing them for no reason.
+// notices returns the notice codes sorted: tests care about the set.
 func notices(r family.TaxRules) []string {
 	out := make([]string, 0, len(r.Notices()))
 	for _, n := range r.Notices() {
@@ -20,15 +18,8 @@ func notices(r family.TaxRules) []string {
 	return out
 }
 
-// TestFIFOWithinOneAccountIsExactlyTheseCountries pins the countries whose rules
-// the engine already implements AND whose norm behind fifo/account is a
-// checked one: first-in-first-out, queued per account. These must come back
-// supported and SILENT — a notice on any of them would tell the owner their
-// own figures are wrong when they are not, which is as damaging as the
-// silence this whole change removes.
-//
-// KZ is deliberately not in this list even though it reads fifo/account too:
-// see TestKazakhstanNormIsUnverifiedSoItIsNotSilentlyAffirmed.
+// RU, DE and US are fifo/account with a checked norm: supported and silent. KZ
+// is not among them (see the next test).
 func TestFIFOWithinOneAccountIsExactlyTheseCountries(t *testing.T) {
 	for _, country := range []string{"RU", "DE", "US"} {
 		r := family.TaxRulesFor(country)
@@ -44,13 +35,7 @@ func TestFIFOWithinOneAccountIsExactlyTheseCountries(t *testing.T) {
 	}
 }
 
-// TestKazakhstanNormIsUnverifiedSoItIsNotSilentlyAffirmed is IMPORTANT finding
-// 1 from the task-3 review: KZ reads fifo/account — the same values as RU, DE
-// and US — but jurisdiction research never established a mandatory cost basis
-// method for individuals there, so that row is an assumption by analogy, not
-// a checked rule. Matching the implemented computation must NOT be enough to
-// mark a country supported: it also has to say the norm behind the match was
-// confirmed, and for KZ it was not.
+// KZ reads fifo/account but its norm is unverified, so it is not supported.
 func TestKazakhstanNormIsUnverifiedSoItIsNotSilentlyAffirmed(t *testing.T) {
 	r := family.TaxRulesFor("KZ")
 	if r.Method != family.MethodFIFO || r.Perimeter != family.PerimeterAccount {
@@ -67,24 +52,18 @@ func TestKazakhstanNormIsUnverifiedSoItIsNotSilentlyAffirmed(t *testing.T) {
 	}
 }
 
-// TestADifferentMethodIsSaidOutLoud is the point of the task: for a country
-// that matches disposals some other way, the application must state that its
-// cost basis is not that country's, rather than quietly computing FIFO and
-// presenting the result as if it answered.
+// A country that matches disposals another way gets a notice saying so.
 func TestADifferentMethodIsSaidOutLoud(t *testing.T) {
 	cases := map[string]struct {
 		method    family.CostBasisMethod
 		perimeter family.CostBasisPerimeter
 		notices   []string
 	}{
-		// Section 104 pool: one averaged cost per holding, no dated parcels at
-		// all, and the pool spans everything the owner holds.
+		// Section 104 pool: averaged, across everything held.
 		"GB": {family.MethodAverage, family.PerimeterOwner, []string{"method_mismatch", "perimeter_mismatch"}},
-		// ITA s.47 adjusted cost base: averaged over identical property
-		// wherever the owner holds it.
+		// ITA s.47: averaged across all holdings.
 		"CA": {family.MethodAverage, family.PerimeterOwner, []string{"method_mismatch", "perimeter_mismatch"}},
-		// ATO TD 33: the taxpayer nominates the parcel, so there is no queue to
-		// scope and only the method diverges.
+		// ATO TD 33: the taxpayer nominates; only the method diverges.
 		"AU": {family.MethodSpecificLot, family.PerimeterNotApplicable, []string{"method_mismatch"}},
 	}
 	for country, want := range cases {
@@ -101,11 +80,7 @@ func TestADifferentMethodIsSaidOutLoud(t *testing.T) {
 	}
 }
 
-// TestCountriesThatDoNotTaxGainsSayTheFiguresAreInformational covers the other
-// half of the honesty rule. The Netherlands and Switzerland do not tax an
-// individual's capital gains on securities at all, so there is no method to
-// diverge from — saying "method_mismatch" there would be a second falsehood.
-// The one thing to say is that the numbers are for reference.
+// NL and CH do not tax gains: only not_taxed, no method notice.
 func TestCountriesThatDoNotTaxGainsSayTheFiguresAreInformational(t *testing.T) {
 	for _, country := range []string{"NL", "CH"} {
 		r := family.TaxRulesFor(country)
@@ -121,9 +96,7 @@ func TestCountriesThatDoNotTaxGainsSayTheFiguresAreInformational(t *testing.T) {
 	}
 }
 
-// TestAnUnknownCountryIsNotSilentlyRussia is the failure mode the task names by
-// hand: a code with no rules row must not fall through to the default and
-// behave like Russia. Nothing may be claimed about it.
+// An unknown code claims nothing and does not behave like Russia.
 func TestAnUnknownCountryIsNotSilentlyRussia(t *testing.T) {
 	r := family.TaxRulesFor("XX")
 	if r == family.TaxRulesFor("RU") {
@@ -146,10 +119,7 @@ func TestAnUnknownCountryIsNotSilentlyRussia(t *testing.T) {
 	}
 }
 
-// TestTheOwnerWidePerimeterIsRepresentable pins that "the whole of the owner's
-// holdings" exists in the model even though nothing implements it — Britain and
-// Canada need it, and a perimeter that could not be named would have to be
-// approximated by the account perimeter, silently.
+// The owner-wide perimeter can be named though it is not implemented.
 func TestTheOwnerWidePerimeterIsRepresentable(t *testing.T) {
 	for _, country := range []string{"GB", "CA"} {
 		if got := family.TaxRulesFor(country).Perimeter; got != family.PerimeterOwner {
@@ -158,10 +128,7 @@ func TestTheOwnerWidePerimeterIsRepresentable(t *testing.T) {
 	}
 }
 
-// TestTaxResidenciesIsTheOneList checks the published list against the lookup
-// it is published from: same countries, each row describing itself, sorted, and
-// every code a well-formed ISO 3166-1 alpha-2. A list that drifted from the
-// lookup would let a client offer a country the server then refuses.
+// The published list matches the lookup: same countries, sorted, valid codes.
 func TestTaxResidenciesIsTheOneList(t *testing.T) {
 	all := family.TaxResidencies()
 	if len(all) == 0 {
@@ -186,11 +153,7 @@ func TestTaxResidenciesIsTheOneList(t *testing.T) {
 	}
 }
 
-// TestSupportedAndNoticesNeverContradict is the invariant the whole contract
-// rests on: a country is affirmed exactly when there is nothing to warn about.
-// A row affirmed as supported while carrying a notice — or the reverse — would
-// let the interface show a green tick next to a statement that the figures are
-// not this country's cost basis.
+// A country is supported exactly when it has no notices.
 func TestSupportedAndNoticesNeverContradict(t *testing.T) {
 	all := append(family.TaxResidencies(), family.TaxRulesFor("XX"))
 	for _, r := range all {

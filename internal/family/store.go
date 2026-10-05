@@ -13,13 +13,10 @@ import (
 	"babki.my/babki/internal/platform/db"
 )
 
-// pgUniqueViolation is the SQLSTATE code Postgres returns for a unique
-// constraint violation.
+// pgUniqueViolation is Postgres's SQLSTATE for a unique violation.
 const pgUniqueViolation = "23505"
 
-// wrapUsernameConflict maps a unique_violation on users.username to
-// ErrUsernameTaken, so callers get a 409 Conflict instead of an opaque
-// 500 when a chosen username is already in use.
+// wrapUsernameConflict maps a username unique violation to ErrUsernameTaken.
 func wrapUsernameConflict(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation && pgErr.ConstraintName == "users_username_key" {
@@ -47,11 +44,7 @@ func scanUser(row pgx.Row) (User, error) {
 	return u, err
 }
 
-// spaceCols and scanSpace exist so every place that reads a space reads the
-// same columns into the same fields. Before tax_residency there were three
-// hand-written copies of the list; a fourth column would have had to be added
-// to each of them, and the one that was forgotten would have failed at run time
-// on a scan mismatch rather than at compile time.
+// spaceCols and scanSpace are the one way a space is read.
 const spaceCols = `id, name, base_currency, tax_residency, created_at`
 
 func scanSpace(row pgx.Row) (Space, error) {
@@ -97,13 +90,12 @@ func (s *Store) CreateSpaceWithOwner(ctx context.Context, name string, ownerID u
 	return sp, tx.Commit(ctx)
 }
 
-// firstUserLockKey is the advisory lock CreateFirstUserWithSpace takes. Any
-// constant will do; this one spells "babki1st" in ASCII.
+// firstUserLockKey is CreateFirstUserWithSpace's advisory lock ("babki1st").
 const firstUserLockKey int64 = 0x6261626b69317374
 
-// CreateFirstUserWithSpace creates the first user, the family space and the
-// owner membership in a single transaction, so a mid-way failure can never
-// orphan a user row (which would otherwise permanently wedge SetupNeeded).
+// CreateFirstUserWithSpace creates the first user, the space and the owner
+// membership in one transaction, so a failure cannot leave an orphan user that
+// would wedge SetupNeeded.
 func (s *Store) CreateFirstUserWithSpace(ctx context.Context, spaceName, username, displayName, passwordHash string) (User, Space, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -111,11 +103,8 @@ func (s *Store) CreateFirstUserWithSpace(ctx context.Context, spaceName, usernam
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// "No user exists yet" is decided HERE, under a lock, and not by the caller's
-	// earlier count: two setups arriving together both saw an empty instance and
-	// both created an owner, each with a space of their own. The lock is held to
-	// the end of the transaction, so the second waits, counts one user, and is
-	// told the instance is already set up.
+	// Decide "no user yet" under the lock: two simultaneous setups otherwise both
+	// created an owner. The second now waits and is told it is already set up.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, firstUserLockKey); err != nil {
 		return User{}, Space{}, fmt.Errorf("lock the first-user setup: %w", err)
 	}
@@ -156,8 +145,7 @@ func (s *Store) CreateFirstUserWithSpace(ctx context.Context, spaceName, usernam
 	return u, sp, nil
 }
 
-// CreateUserInSpace creates a user and its membership in an existing space in
-// a single transaction, so a mid-way failure can never orphan a user row.
+// CreateUserInSpace creates a user and its membership in one transaction.
 func (s *Store) CreateUserInSpace(ctx context.Context, spaceID uuid.UUID, username, displayName, passwordHash string, role Role) (User, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -192,13 +180,8 @@ func (s *Store) SpaceByID(ctx context.Context, id uuid.UUID) (Space, error) {
 	return scanSpace(s.db.QueryRow(ctx, `SELECT `+spaceCols+` FROM spaces WHERE id = $1`, id))
 }
 
-// DistinctBaseCurrencies returns the sorted set of base currencies across
-// every space in the instance (not scoped to one space: exchange rates are
-// shared market data, so there is no point fetching them per space). The fx
-// backfill job consults it alongside the account and operation currency
-// lists — a space can be displayed in a currency nothing is actually held or
-// spent in, and its rates are needed just the same. Returns an empty slice,
-// not an error, when there are no spaces yet.
+// DistinctBaseCurrencies returns the sorted base currencies of every space, for
+// the rate backfill: a space may display a currency nothing is held in.
 func (s *Store) DistinctBaseCurrencies(ctx context.Context) ([]string, error) {
 	rows, err := s.db.Query(ctx, `SELECT DISTINCT base_currency FROM spaces ORDER BY base_currency`)
 	if err != nil {
@@ -216,14 +199,9 @@ func (s *Store) DistinctBaseCurrencies(ctx context.Context) ([]string, error) {
 	return out, rows.Err()
 }
 
-// UpdateSpaceSettings applies a partial update to the space's settings: a nil
-// argument leaves that column alone. Both are written in one statement, so a
-// request that changes the base currency and the tax residency together can
-// never leave one applied and the other not.
-//
-// The store takes the values as given; whether a currency or a country is
-// acceptable is decided in Service.UpdateSpace, alongside the role check.
-// Returns pgx.ErrNoRows if the space doesn't exist.
+// UpdateSpaceSettings updates the given settings in one statement; nil leaves a
+// column alone. Validation is Service.UpdateSpace's. pgx.ErrNoRows if the space
+// does not exist.
 func (s *Store) UpdateSpaceSettings(ctx context.Context, spaceID uuid.UUID, baseCurrency, taxResidency *string) error {
 	ct, err := s.db.Exec(ctx, `UPDATE spaces
 		SET base_currency = COALESCE($2, base_currency),
@@ -243,9 +221,8 @@ func (s *Store) MembershipFor(ctx context.Context, userID uuid.UUID) (Principal,
 	return p, err
 }
 
-// sessionFor is MembershipFor plus the moment the user's earlier sessions
-// stopped counting (nil when they never did), read in one round trip for every
-// authenticated request.
+// sessionFor is MembershipFor plus the moment the user's earlier sessions were
+// ended (nil if never), in one round trip.
 func (s *Store) sessionFor(ctx context.Context, userID uuid.UUID) (Principal, *time.Time, error) {
 	p := Principal{UserID: userID}
 	var revoked *time.Time
@@ -255,8 +232,7 @@ func (s *Store) sessionFor(ctx context.Context, userID uuid.UUID) (Principal, *t
 	return p, revoked, err
 }
 
-// SetPassword stores a new password hash and ends every session signed in
-// before at.
+// SetPassword stores a new hash and ends sessions signed in before at.
 func (s *Store) SetPassword(ctx context.Context, userID uuid.UUID, hash string, at time.Time) error {
 	ct, err := s.db.Exec(ctx, `UPDATE users SET password_hash = $2, sessions_revoked_at = $3 WHERE id = $1`,
 		userID, hash, at)

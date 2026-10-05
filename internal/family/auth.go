@@ -22,59 +22,28 @@ var (
 	ErrInvalidCredentials = errors.New("invalid username or password")
 	ErrForbidden          = errors.New("forbidden")
 	ErrValidation         = errors.New("validation failed")
-	// ErrUsernameTaken is returned when a username collides with an existing
-	// user (unique_violation on users.username). Distinct from ErrValidation
-	// because the input itself is well-formed; the conflict is with existing
-	// state, so it maps to 409 rather than 400.
+	// ErrUsernameTaken: the username exists. A conflict with state, so 409, not
+	// 400.
 	ErrUsernameTaken = errors.New("username already taken")
 )
 
-// UsernamePattern is the shape of a username, as a regular expression source
-// rather than as a compiled one so the contract-site test can compare it against
-// the `pattern` api/openapi.yaml states on the two request schemas that carry a
-// username, and the frontend-site test against the regex literal the two dialogs
-// hold. Exported for the same reason currency.Pattern is: a rule written down in
-// three languages that nothing keeps in step is this codebase's recurring bug.
-//
-// It is NOT declared on LoginRequest, and that is deliberate: Login checks no
-// shape at all (see it), so declaring one there would describe a refusal that
-// does not exist.
+// UsernamePattern is the shape of a username; the contract and the web dialogs
+// state it too, and tests hold them together. Login checks no shape, so the
+// contract does not declare one there.
 const UsernamePattern = `^[a-z0-9_]{3,32}$`
 
-// MinPasswordRunes is the shortest password the two doors that create a user
-// accept, counted in RUNES.
-//
-// IT USED TO BE COUNTED IN BYTES while the refusal beside it said «characters»,
-// and one of the two was necessarily wrong (#117). The count moved rather than
-// the sentence, because the sentence is what the person reads and because
-// `minLength` in JSON Schema counts characters too — so api/openapi.yaml can now
-// state this floor at all, which with a byte count it could not: «паролям» is
-// seven characters and fourteen bytes, and a document saying `minLength: 8`
-// would have refused what the server took.
-//
-// The interface said the same thing the refusal did, and was wrong in the same
-// way: setup.passwordHint reads «минимум 8 символов». It is true now.
-//
-// Runes rather than bytes therefore makes this door STRICTER, and only for
-// non-ASCII passwords. Nobody is locked out by it: Login never calls
-// validateCredentials — it compares against the stored hash and nothing else —
-// so a password accepted under the old count keeps working for good. What
-// changes is that setting a NEW one now needs eight characters however they are
-// spelled, which is what the refusal has claimed all along.
+// MinPasswordRunes is the shortest password for a new user, in characters as
+// the message and JSON Schema's minLength count them (#117: it was bytes).
+// Login compares hashes only, so older passwords keep working.
 const MinPasswordRunes = 8
 
-// MaxPasswordRunes is the longest password either door accepts, counted the way
-// MinPasswordRunes is. Nobody's password is a thousand characters; the ceiling is
-// there so that what gets hashed has a size this server chose.
+// MaxPasswordRunes caps what gets hashed.
 const MaxPasswordRunes = 1024
 
-// MaxNameRunes is the longest display name and space name, counted the way
-// MinPasswordRunes is. A name is a word or two on a header; the ceiling is there
-// so that what every screen draws has a size this server chose.
+// MaxNameRunes caps display and space names.
 const MaxNameRunes = 100
 
-// checkName refuses an empty name or one past MaxNameRunes; what names the
-// field in the refusal.
+// checkName refuses an empty name or one over MaxNameRunes.
 func checkName(what, name string) error {
 	if name == "" {
 		return fmt.Errorf("%w: %s is required", ErrValidation, what)
@@ -87,27 +56,15 @@ func checkName(what, name string) error {
 
 var usernameRe = regexp.MustCompile(UsernamePattern)
 
-// hashParams are what a password is hashed with.
-//
-// argon2id.DefaultParams as this machine evaluates it: 64 MiB, one pass, and as
-// many lanes as there are CPUs. One name for it, because the hash a new user
-// gets and the hash an unknown username is compared against (see dummyHash)
-// have to cost the same.
+// hashParams are argon2id.DefaultParams: 64 MiB, one pass, a lane per CPU. A
+// new user's hash and dummyHash must cost the same.
 var hashParams = argon2id.DefaultParams
 
-// hashSlots bounds how many passwords are being hashed at once in this process.
-//
-// Every hash takes 64 MiB for as long as it runs. Unbounded, fifty sign-in
-// attempts arriving together take three gigabytes, and a home server falls over
-// before a single password has been refused. Two at a time is 128 MiB at the
-// worst and still more sign-ins a second than a household makes in a day.
-//
-// Package-level, because the memory is the process's however many Services it
-// holds.
+// hashSlots bounds concurrent hashing per process: each hash takes 64 MiB,
+// and fifty simultaneous sign-ins would take three gigabytes.
 var hashSlots = make(chan struct{}, 2)
 
-// withHashSlot runs fn while holding one of the hash slots, or gives up when
-// the request does.
+// withHashSlot runs fn holding a slot, or gives up when the request does.
 func withHashSlot(ctx context.Context, fn func()) error {
 	select {
 	case hashSlots <- struct{}{}:
@@ -119,20 +76,13 @@ func withHashSlot(ctx context.Context, fn func()) error {
 	return nil
 }
 
-// dummyHash is a hash of a password nobody has, made once per process with the
-// very parameters a real one is made with. Login compares against it for a
-// username it does not know, so that branch takes as long as a wrong password
-// does and the response time does not say which usernames exist.
-//
-// It used to be a constant hashed with ten lanes, while real hashes are made
-// with as many lanes as the machine has CPUs — on a two-core server the two
-// branches took measurably different time.
+// dummyHash is a hash of a password nobody has, made with the real parameters,
+// so an unknown username takes as long as a wrong password.
 var dummyHash = sync.OnceValue(func() string {
 	hash, err := argon2id.CreateHash("a password nobody has", hashParams)
 	if err != nil {
-		// Creating a hash fails only when the system's random source does, and
-		// then no real password can be set either. The comparison against an
-		// empty hash fails at once; the timing is the least of it.
+		// Hashing fails only when the random source does; then nothing can be set,
+		// and comparing against "" fails at once.
 		return ""
 	}
 	return hash
@@ -159,8 +109,7 @@ func validateCredentials(username, password string) error {
 
 // validatePassword is the rule every new password is held to.
 func validatePassword(password string) error {
-	// utf8.RuneCountInString, not len: see MinPasswordRunes for why the sentence
-	// below is the rule and the byte count was the bug.
+	// Characters, not bytes: see MinPasswordRunes.
 	runes := utf8.RuneCountInString(password)
 	if runes < MinPasswordRunes {
 		return fmt.Errorf("%w: password must be at least %d characters", ErrValidation, MinPasswordRunes)
@@ -171,8 +120,7 @@ func validatePassword(password string) error {
 	return nil
 }
 
-// HashPassword hashes a password for storage, one of at most len(hashSlots) at
-// a time.
+// HashPassword hashes a password, within the hash slots.
 func (s *Service) HashPassword(ctx context.Context, password string) (string, error) {
 	var hash string
 	var err error
@@ -182,8 +130,7 @@ func (s *Service) HashPassword(ctx context.Context, password string) (string, er
 	return hash, err
 }
 
-// passwordMatches compares a password with a stored hash under the same bound
-// HashPassword works under.
+// passwordMatches compares a password with a hash, within the hash slots.
 func passwordMatches(ctx context.Context, password, hash string) (bool, error) {
 	var ok bool
 	var err error
@@ -228,8 +175,8 @@ func (s *Service) Setup(ctx context.Context, p SetupParams) (User, Principal, er
 	return u, Principal{UserID: u.ID, SpaceID: sp.ID, Role: RoleOwner}, nil
 }
 
-// Login verifies credentials. Unknown user and wrong password return the
-// same ErrInvalidCredentials to avoid user enumeration.
+// Login verifies credentials. An unknown user and a wrong password both return
+// ErrInvalidCredentials.
 func (s *Service) Login(ctx context.Context, username, password string) (User, Principal, error) {
 	if utf8.RuneCountInString(password) > MaxPasswordRunes {
 		// Longer than any password that could have been set, so it is nobody's.
@@ -237,9 +184,8 @@ func (s *Service) Login(ctx context.Context, username, password string) (User, P
 	}
 	u, err := s.store.UserByUsername(ctx, username)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// A real comparison against a hash of nothing, so this branch takes as
-		// long as the wrong-password branch below (see dummyHash). What it
-		// answers is not looked at — only a request that gave up is reported.
+		// Compare against a hash of nothing so this branch takes as long as a wrong
+		// password; only a request that gave up is reported.
 		if _, err := passwordMatches(ctx, password, dummyHash()); err != nil && ctx.Err() != nil {
 			return User{}, Principal{}, err
 		}
@@ -257,8 +203,7 @@ func (s *Service) Login(ctx context.Context, username, password string) (User, P
 	}
 	p, err := s.store.MembershipFor(ctx, u.ID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// User exists without a membership (e.g. orphaned by a partial
-		// failure elsewhere). Don't leak that detail to the caller.
+		// A user with no membership: do not say so.
 		return User{}, Principal{}, ErrInvalidCredentials
 	}
 	if err != nil {
@@ -267,10 +212,9 @@ func (s *Service) Login(ctx context.Context, username, password string) (User, P
 	return u, p, nil
 }
 
-// ChangePassword replaces the user's password once the current one is given,
-// and ends every session signed in before the change; the moment it took
-// effect is returned for the caller's own session to be signed in at (see
-// Auth.SignInAt). A wrong current password is ErrInvalidCredentials.
+// ChangePassword replaces the password given the current one and ends the
+// user's earlier sessions, returning the moment for the caller's own session
+// (see Auth.SignInAt). A wrong current password is ErrInvalidCredentials.
 func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, current, next string) (time.Time, error) {
 	if err := validatePassword(next); err != nil {
 		return time.Time{}, err
@@ -293,14 +237,13 @@ func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, current,
 	if err != nil {
 		return time.Time{}, err
 	}
-	// Whole microseconds, as the column keeps them, so that the moment this
-	// session is signed in at is exactly the one stored, never a hair before.
+	// Whole microseconds, as the column stores them.
 	at := time.Now().Truncate(time.Microsecond)
 	return at, s.store.SetPassword(ctx, userID, hash, at)
 }
 
-// SignOutElsewhere ends every session of the user signed in before now; the
-// moment is returned for the caller's own session to be signed in at.
+// SignOutElsewhere ends the user's sessions signed in before now and returns
+// the moment for the caller's own session.
 func (s *Service) SignOutElsewhere(ctx context.Context, userID uuid.UUID) (time.Time, error) {
 	at := time.Now().Truncate(time.Microsecond)
 	return at, s.store.RevokeSessions(ctx, userID, at)
@@ -359,28 +302,17 @@ func (s *Service) UpdateMemberRole(ctx context.Context, p Principal, targetID uu
 	return Member{User: u, Role: role}, nil
 }
 
-// SpaceSettings is a partial update of the space: a nil field is left
-// unchanged. Pointers rather than empty strings, because "" is a value a caller
-// can send by accident and it must be refused, not read as "leave it alone".
+// SpaceSettings is a partial update of the space; nil leaves a field alone, so
+// an accidental "" is refused rather than ignored.
 type SpaceSettings struct {
 	BaseCurrency *string
 	TaxResidency *string
 }
 
-// UpdateSpace changes the space's base currency and/or the owner's country of
-// tax residency (owner-only).
-//
-// An empty request is REFUSED rather than answered with an unchanged space: a
-// caller that meant to change something and sent nothing would otherwise get a
-// 200 and a response that looks exactly like success.
-//
-// The country is checked against the rules table, not merely against the ISO
-// shape (see KnownTaxResidency). Accepting "XX" — or "FR", a real country this
-// application has no rules for — and then computing FIFO per account for it
-// would tell the owner their figures follow rules that were never consulted.
-// Refusing is the only answer that stays true: the owner learns immediately
-// that this application cannot speak for that country, instead of learning it
-// from a tax authority.
+// UpdateSpace changes the base currency and/or the owner's tax residency
+// (owner only). An empty request is refused rather than answered as success.
+// The country must have a row in the rules table, not just the ISO shape: the
+// application cannot speak for a country it has no rules for.
 func (s *Service) UpdateSpace(ctx context.Context, p Principal, in SpaceSettings) (Space, error) {
 	if p.Role != RoleOwner {
 		return Space{}, ErrForbidden

@@ -76,27 +76,13 @@ func TestSetupValidation(t *testing.T) {
 	}
 }
 
-// TestPasswordLengthIsCountedInCharactersNotBytes is #117's half of the
-// password rule, at both doors that apply it.
-//
-// The refusal has always said «at least 8 characters» and the code counted
-// BYTES, so a seven-letter Cyrillic password was fourteen bytes and went
-// straight through — the server taking what its own sentence said it would
-// not. One of the two had to move, and it was the count (see
-// family.MinPasswordRunes), because the sentence is what the person reads and
-// because a byte count is not something api/openapi.yaml can state at all:
-// `minLength` counts characters, so declaring 8 while the server measured
-// bytes would have made the document refuse what the server accepted.
-//
-// The two literals below are written out, with their byte lengths asserted
-// rather than assumed. Deriving either from utf8.RuneCountInString would take
-// both sides of the comparison from the very function under test, and a test
-// that does that agrees with any counting rule at all.
+// Password length is counted in characters, at both doors (#117): a
+// seven-letter Cyrillic password is fourteen bytes and used to pass. Byte
+// lengths are asserted, not derived from the function under test.
 func TestPasswordLengthIsCountedInCharactersNotBytes(t *testing.T) {
 	svc, ctx := newService(t)
 
-	// Seven Cyrillic letters. Fourteen bytes — comfortably past a byte count of
-	// eight, which is exactly why it used to be accepted.
+	// Seven Cyrillic letters, fourteen bytes.
 	const sevenChars = "паролям"
 	// Eight of them, and the shortest password this door takes.
 	const eightChars = "паролями"
@@ -113,8 +99,7 @@ func TestPasswordLengthIsCountedInCharactersNotBytes(t *testing.T) {
 			"%q is 7 characters and 14 bytes, and counting the bytes is what let a password "+
 			"the refusal calls too short through the door", err, sevenChars)
 	}
-	// The sentence the person reads, not merely some refusal: naming a count
-	// the code does not apply is the whole of #117.
+	// The message's count is the one applied.
 	if !strings.Contains(err.Error(), "at least 8 characters") {
 		t.Errorf("Setup refusal = %q, want it to say «at least 8 characters»", err)
 	}
@@ -126,8 +111,7 @@ func TestPasswordLengthIsCountedInCharactersNotBytes(t *testing.T) {
 		t.Fatalf("Setup with an eight-character password: %v — the floor is refused BELOW, not AT", err)
 	}
 
-	// The second door applies the same rule; it is a separate call and has its
-	// own history of being forgotten.
+	// The member door applies the same rule.
 	if _, err := svc.CreateMember(ctx, owner, "kate", "Kate", sevenChars, family.RoleEditor); !errors.Is(err, family.ErrValidation) {
 		t.Errorf("CreateMember with a seven-character password err = %v, want ErrValidation", err)
 	}
@@ -176,10 +160,8 @@ func TestCreateMemberRoles(t *testing.T) {
 	}
 }
 
-// TestLoginOrphanedUser covers a user row that exists without any
-// membership (e.g. left behind by a partial failure). Login must translate
-// the underlying pgx.ErrNoRows from MembershipFor into ErrInvalidCredentials
-// rather than leaking the raw store error.
+// A user without a membership gets ErrInvalidCredentials, not the store's
+// pgx.ErrNoRows.
 func TestLoginOrphanedUser(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -190,8 +172,7 @@ func TestLoginOrphanedUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
-	// Create the user directly via the store, bypassing Setup/CreateMember,
-	// so it has no space/membership.
+	// Created through the store, so it has no membership.
 	if _, err := store.CreateUser(ctx, "orphan", "Orphan", hash); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
@@ -201,14 +182,8 @@ func TestLoginOrphanedUser(t *testing.T) {
 	}
 }
 
-// TestUnknownCountryRejectionNamesWhatItKnowsNotWhatItAnswersFor is IMPORTANT
-// finding 2 from the task-3 review: the rejection for a well-formed but
-// unlisted tax residency named its list of countries as ones "this
-// application can only answer for". That overclaims — five of those nine
-// rows (GB, CA, AU, NL, CH) carry a mismatch notice, so the application
-// cannot answer for them either; it can only say, honestly, that it cannot.
-// The list must be named for what it actually is: countries whose rules this
-// application knows.
+// An unknown residency is refused naming the countries whose rules are known,
+// not ones the application "answers for": most of them carry notices.
 func TestUnknownCountryRejectionNamesWhatItKnowsNotWhatItAnswersFor(t *testing.T) {
 	svc, ctx := newService(t)
 	_, owner, err := svc.Setup(ctx, family.SetupParams{
@@ -232,10 +207,8 @@ func TestUnknownCountryRejectionNamesWhatItKnowsNotWhatItAnswersFor(t *testing.T
 	}
 }
 
-// TestTwoSetupsAtOnceMakeOneOwner: "no user exists yet" used to be decided by a
-// count taken before the insert, so two setups arriving together both passed it
-// and both became owners, each of a space of their own. The decision is now made
-// under a lock inside the transaction that inserts.
+// Two simultaneous setups make one owner: the check happens under a lock in
+// the inserting transaction.
 func TestTwoSetupsAtOnceMakeOneOwner(t *testing.T) {
 	pool := testdb.New(t)
 	svc := family.NewService(family.NewStore(pool))

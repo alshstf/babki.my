@@ -25,11 +25,8 @@ func newAPI(t *testing.T) (string, *http.Client) {
 	return url, c
 }
 
-// newAPIWithCatalog is newAPI plus the store behind it, for the one kind of
-// test that has to write a row the HTTP door would refuse: a row as it was
-// written BEFORE that door refused it. Reaching past the handler is the only
-// way to set such a state up, and a test that could not set it up could not
-// check that the repair still works.
+// newAPIWithCatalog also returns the store, to write rows as they were before
+// the HTTP door refused them.
 func newAPIWithCatalog(t *testing.T) (string, *http.Client, *instrument.Store) {
 	t.Helper()
 	pool := testdb.New(t)
@@ -73,10 +70,8 @@ func do(t *testing.T, c *http.Client, method, url, body string) *http.Response {
 	return resp
 }
 
-// catalogPage is GET /api/v1/instruments as a client reads it: an envelope,
-// not the bare array it used to be. Decoded into a hand-written struct rather
-// than into apitypes so that a change to the generated types cannot quietly
-// change what this test asserts about the wire.
+// catalogPage is the GET /api/v1/instruments envelope, decoded by hand so
+// generated types cannot change what is asserted.
 type catalogPage struct {
 	Instruments []struct {
 		ID   string `json:"id"`
@@ -208,11 +203,8 @@ func TestInstrumentsCatalog(t *testing.T) {
 	}
 }
 
-// TestCatalogPagingReachesPastTheFirstPage is #104 at the door a client
-// actually knocks on. The endpoint took no `offset` at all, so an instrument
-// past the ceiling could not be reached by any request that could be made — and
-// the frontend asked for fifty, which put the fifty-first out of reach of
-// everything but a text search of a name nobody had to remember.
+// Offsets reach past the first page (#104): before, anything past the ceiling
+// was unreachable except by name search.
 func TestCatalogPagingReachesPastTheFirstPage(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -243,8 +235,7 @@ func TestCatalogPagingReachesPastTheFirstPage(t *testing.T) {
 		t.Errorf("third page = %q, want Бумага 05", third.Instruments[0].Name)
 	}
 
-	// The offset applies to a filtered listing too, not only to the whole
-	// catalog: a query and a page are independent of each other.
+	// The offset applies to a filtered listing too.
 	filtered := searchCatalog(t, c,
 		url+"/api/v1/instruments?query="+neturl.QueryEscape("Бумага")+"&limit=1&offset=2")
 	if len(filtered.Instruments) != 1 || filtered.Instruments[0].Name != "Бумага 03" || !filtered.HasMore {
@@ -252,15 +243,8 @@ func TestCatalogPagingReachesPastTheFirstPage(t *testing.T) {
 	}
 }
 
-// TestCatalogRefusesAPageItCannotHonour is #118 on the endpoint where #118 was
-// found. A ceiling the contract states and the server does not apply is not a
-// rule: the clamp this replaces answered a request for 250 as though it had
-// asked for 200, with nothing in the answer saying that the number sent was not
-// the number applied.
-//
-// The bounds are written as literals here — 200 and 1 — rather than read from
-// the handler's constants, because a test that takes both sides of a comparison
-// from the same declaration moves with it and proves nothing.
+// A limit over 200 or under 1 is a 400, not clamped (#118). The bounds are
+// literals here.
 func TestCatalogRefusesAPageItCannotHonour(t *testing.T) {
 	url, c := newAPI(t)
 

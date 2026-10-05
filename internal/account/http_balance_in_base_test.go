@@ -17,12 +17,8 @@ type moneyInBase struct {
 	RateOn      string `json:"rate_on"`
 }
 
-// accountListItem is the subset of apitypes.AccountWithBalance these tests
-// care about: the account's own currency/balance plus balance_in_base. A nil
-// *moneyInBase covers both an omitted key and an explicit JSON null — which
-// is exactly what balance_in_base always is here (see the handler's
-// balanceInBase: it is always explicitly set to either a value or null,
-// never left unset).
+// accountListItem is the part of an account these tests read; balance_in_base
+// is always set, to a value or null.
 type accountListItem struct {
 	ID       string `json:"id"`
 	Currency string `json:"currency"`
@@ -33,8 +29,7 @@ type accountListItem struct {
 	BalanceInBase *moneyInBase `json:"balance_in_base"`
 }
 
-// listAccounts fetches GET /api/v1/accounts and decodes it into
-// accountListItem, failing the test on a non-200 or a decode error.
+// listAccounts fetches and decodes GET /api/v1/accounts.
 func listAccounts(t *testing.T, url string, c *http.Client) []accountListItem {
 	t.Helper()
 	resp := do(t, c, "GET", url+"/api/v1/accounts", "")
@@ -84,25 +79,12 @@ func findAccount(t *testing.T, list []accountListItem, id string) accountListIte
 	return accountListItem{}
 }
 
-// TestListBalanceInBaseConvertsNonBaseCurrency covers the brief's main case:
-// an account in a non-base currency with a resolvable fx rate must get
-// balance_in_base filled in, converted using today's rate, with currency
-// equal to the space's base currency (RUB, the default) and rate_on equal
-// to the seeded rate's own date.
+// A non-base account with a rate gets balance_in_base at today's rate, in the
+// base currency, dated by the rate. Two USD accounts check the memo stores the
+// rate, not one account's result:
 //
-// A second USD account (different balance) is included to exercise the
-// per-request rate memoization path (see the handler's balanceInBase/
-// rateLookup doc): both accounts share the same currency, so the handler
-// must resolve the USD->RUB rate once and apply it to each account's own
-// balance — not reuse one account's converted amount for the other's. If the
-// cache mixed up accounts (e.g. cached the converted minor amount instead of
-// the rate, or applied the wrong entry), one of these two conversions would
-// come out wrong.
-//
-// Manual arithmetic (rate matches converter_test.go's fixtures):
-//
-//	account 1: 123.45 USD (amount_minor 12345) * 90 RUB/USD = 11110.50 RUB (1111050 minor)
-//	account 2:  50.00 USD (amount_minor  5000) * 90 RUB/USD =  4500.00 RUB ( 450000 minor)
+//	12345 × 90 = 1111050
+//	 5000 × 90 =  450000
 func TestListBalanceInBaseConvertsNonBaseCurrency(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	on := pastOn()
@@ -150,10 +132,7 @@ func TestListBalanceInBaseConvertsNonBaseCurrency(t *testing.T) {
 	}
 }
 
-// TestListBalanceInBaseNullWhenAlreadyBaseCurrency covers: an account
-// already denominated in the space's base currency (RUB, the default) has
-// nothing to convert, so balance_in_base must be null even though the
-// account has a balance.
+// An account already in the base currency has a null balance_in_base.
 func TestListBalanceInBaseNullWhenAlreadyBaseCurrency(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -167,18 +146,13 @@ func TestListBalanceInBaseNullWhenAlreadyBaseCurrency(t *testing.T) {
 	}
 }
 
-// TestListBalanceInBaseNullWhenNoRate covers: an account in a non-base
-// currency with NO resolvable fx rate must still come back with
-// balance_in_base = null — and, crucially, the request as a whole must
-// still succeed (200), not fail just because one account's currency lacks a
-// rate. This mirrors ConvertMany's "missing" handling in handleSummary and
-// toAPI's marketdata.ErrNoRate handling in portfolio/position_api.go.
+// An account with no rate has a null balance_in_base, and the request still
+// succeeds.
 func TestListBalanceInBaseNullWhenNoRate(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	on := pastOn()
 
-	// Only USD has a rate; the account below is in GBP, which has none at
-	// all (no direct, inverse, or RUB-bridge leg).
+	// Only USD has a rate; GBP has none.
 	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
 		{Base: "USD", Quote: "RUB", On: on, Rate: decimal.RequireFromString("90"), Source: "test"},
 	}); err != nil {
@@ -201,10 +175,7 @@ func TestListBalanceInBaseNullWhenNoRate(t *testing.T) {
 	}
 }
 
-// TestListBalanceInBaseNullWhenNoBalance covers: an account with no balance
-// recorded at all (never PUT .../balance) must have balance_in_base = null
-// — there's nothing to convert — even in a non-base currency with a
-// resolvable rate.
+// An account with no balance has a null balance_in_base.
 func TestListBalanceInBaseNullWhenNoBalance(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	on := pastOn()
