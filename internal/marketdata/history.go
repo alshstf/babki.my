@@ -13,15 +13,13 @@ import (
 	"babki.my/babki/internal/instrument"
 )
 
-// BackfillQuotesArgs asks for the closing prices of every paper in the
-// journals, from its first operation to today — what valuing an account on a
-// past day needs.
+// BackfillQuotesArgs downloads the closing prices of every paper in the
+// journals, from its first operation to today.
 type BackfillQuotesArgs struct{}
 
 func (BackfillQuotesArgs) Kind() string { return "marketdata.backfill_quotes" }
 
-// QuoteHistorySource is what the quotes table calls a closing price taken
-// from the exchange's history.
+// QuoteHistorySource marks a closing price from the exchange's history.
 const QuoteHistorySource = "moex_history"
 
 // DayPrice is one day's closing price of a security on an exchange.

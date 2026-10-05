@@ -11,8 +11,8 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// Security is what the exchange says about one paper traded on a board this
-// program takes prices from: enough to put it in the catalog.
+// Security is what the exchange says about a paper on a board this program
+// prices: enough for a catalog entry.
 type Security struct {
 	SecID string
 	ISIN  string
@@ -27,8 +27,7 @@ type Security struct {
 	FaceCurrency string
 }
 
-// kinds maps the exchange's security group to the catalog's kind. Only the
-// groups whose boards this program prices are here.
+// kinds maps the exchange's security group to the catalog's kind.
 var kinds = map[string]string{
 	"stock_shares": "share",
 	"stock_bonds":  "bond",
@@ -36,16 +35,13 @@ var kinds = map[string]string{
 	"stock_ppif":   "etf",
 }
 
-// tradedBoards are the boards this program takes prices from (see boards, and
-// TQTF for funds), each with the currency it settles in.
+// tradedBoards are the priced boards and their settlement currencies.
 var tradedBoards = map[string]string{
 	"TQBR": "RUB", "TQOB": "RUB", "TQCB": "RUB", "TQRD": "RUB", "TQTF": "RUB",
 }
 
-// FindSecurity looks a paper up on the exchange by its ticker or its ISIN and
-// answers only for an exact match that is traded on a board this program
-// takes prices from. ok is false when there is none — a paper of another
-// exchange, a delisted one, a typo.
+// FindSecurity looks a paper up by ticker or ISIN, answering only an exact
+// match traded on a priced board.
 func (c *Client) FindSecurity(ctx context.Context, code string) (Security, bool, error) {
 	code = strings.ToUpper(strings.TrimSpace(code))
 	if code == "" {
@@ -100,8 +96,8 @@ func (c *Client) FindSecurity(ctx context.Context, code string) (Security, bool,
 	return Security{}, false, nil
 }
 
-// bondFace reads a bond's original face value and its currency from the
-// exchange's description of it. The exchange names the ruble SUR.
+// bondFace reads a bond's original face value and currency; the exchange
+// writes roubles as SUR.
 func (c *Client) bondFace(ctx context.Context, sec *Security) error {
 	var body struct {
 		Description struct {

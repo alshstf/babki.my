@@ -11,11 +11,8 @@ import (
 	"babki.my/babki/internal/marketdata/moex"
 )
 
-// The exchange's spot gold is the only source this program has for what gold is
-// worth: the central bank publishes no rate for it at all. These tests are about
-// reading that answer — which board it is read from, which rows are left out,
-// and the unit, which is the one thing here that could be wrong by a factor of
-// thirty-one.
+// The exchange's spot gold is the only gold rate source; these tests cover the
+// board read, the rows left out, and the unit (grams, not ounces).
 
 const goldAnswer = `{"history":{
   "columns":["BOARDID","TRADEDATE","CLOSE"],
@@ -40,12 +37,8 @@ func goldServer(t *testing.T, body string) *httptest.Server {
 	return srv
 }
 
-// TestGoldRatesReadsTheTradedBoardAndSkipsTheFormalities. ISS answers this
-// security on four boards and three of them are formalities: LICU and SPEC
-// report zeros, CNGD a handful of trades a day. A run over every row would take
-// whichever came last, which is a zero often enough — and a rate of nought
-// values every gram at nothing, for that day AND every day after it, since a
-// lookup takes the nearest earlier date.
+// Only CETS is read: LICU and SPEC report zeros, CNGD a few trades, and a zero
+// rate would also answer for every later day.
 func TestGoldRatesReadsTheTradedBoardAndSkipsTheFormalities(t *testing.T) {
 	srv := goldServer(t, goldAnswer)
 	c := moex.New(srv.Client(), srv.URL, nil)
@@ -62,12 +55,7 @@ func TestGoldRatesReadsTheTradedBoardAndSkipsTheFormalities(t *testing.T) {
 	if got[0].Rate.String() != "8422.2" {
 		t.Errorf("first rate = %s, want 8422.2 — CETS's close, not CNGD's 8440", got[0].Rate)
 	}
-	// THE UNIT, pinned as a magnitude rather than as a comment. One gram of
-	// gold cost about eight and a half thousand rubles in October 2024; one
-	// troy OUNCE — which is what ISO 4217 says the code XAU means — cost about
-	// a quarter of a million. The owner's own broker reports an average of
-	// 8654.19 for purchases made around then, and his purchases are of this
-	// instrument.
+	// Per gram (~8 500 ₽ in October 2024), not per troy ounce (~250 000 ₽).
 	if got[0].Rate.IntPart() > 100_000 {
 		t.Errorf("first rate = %s, which is an OUNCE and not a gram: every figure in the journal counts grams", got[0].Rate)
 	}
@@ -82,11 +70,7 @@ func TestGoldRatesReadsTheTradedBoardAndSkipsTheFormalities(t *testing.T) {
 	}
 }
 
-// TestGoldRatesLeavesOutADayWithNoPrice: a null close and a zero close are both
-// "the exchange did not price it that day", and neither may be stored. Nought
-// is the dangerous one — it is a number, so nothing downstream would question
-// it, and the nearest-earlier lookup would answer with it for every later day
-// until a real price arrived.
+// A null or zero close is not stored: a zero would answer for every later day.
 func TestGoldRatesLeavesOutADayWithNoPrice(t *testing.T) {
 	srv := goldServer(t, goldAnswer)
 	c := moex.New(srv.Client(), srv.URL, nil)
@@ -108,10 +92,7 @@ func TestGoldRatesLeavesOutADayWithNoPrice(t *testing.T) {
 	}
 }
 
-// TestGoldRatesNamesItselfToTheExchange: the same header the rest of this
-// program sends, and for the reason recorded on cbr.userAgent — the Bank of
-// Russia answers Go's default agent with 403, and being served on sufferance by
-// an anonymous client is not a thing to rely on anywhere.
+// Requests carry this program's User-Agent.
 func TestGoldRatesNamesItselfToTheExchange(t *testing.T) {
 	var agent string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -129,15 +110,8 @@ func TestGoldRatesNamesItselfToTheExchange(t *testing.T) {
 	}
 }
 
-// TestGoldRatesReadsEveryPage is the defect the owner's own data found within
-// minutes of the first run: ISS caps a history answer at a hundred rows and
-// mentions it only in a cursor block, so six years of gold came back as five
-// weeks of 2020 — and the nearest-earlier lookup then answered every day since
-// with an October-2020 price.
-//
-// The pages here are deliberately of different sizes, and the last one is not
-// empty: a reader that stopped at the first short page, or one that needed an
-// empty page to stop, would each miss something.
+// Every page is read (ISS caps answers at a hundred rows): pages of different
+// sizes, the last one not empty.
 func TestGoldRatesReadsEveryPage(t *testing.T) {
 	pages := map[string]string{
 		"0": `{"history":{"columns":["BOARDID","TRADEDATE","CLOSE"],
@@ -175,11 +149,8 @@ func TestGoldRatesReadsEveryPage(t *testing.T) {
 	}
 }
 
-// TestGoldRatesStopsWhenTheAnswerRepeatsItself is the loop's own safety. A
-// server that ignores `start` — a proxy, a stub, a version that changes its
-// mind — answers the same page for ever, and the first version of this reader
-// stopped only on an empty page and hung its own test. The cursor's TOTAL is
-// what ends it instead.
+// A server ignoring `start` repeats a page forever; the cursor's TOTAL ends
+// the loop.
 func TestGoldRatesStopsWhenTheAnswerRepeatsItself(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

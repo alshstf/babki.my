@@ -125,14 +125,10 @@ func TestFxRatesOnBatch(t *testing.T) {
 		t.Fatalf("UpsertFxRates: %v", err)
 	}
 
-	// The two keys nothing answers sit FIRST and in the MIDDLE on purpose.
-	// FxRatesOn pairs each row with the key the caller asked with by that
-	// key's POSITION in this slice, and the position is assigned before the
-	// join drops the unanswered ones. Numbering after the join instead —
-	// row_number() over the surviving rows — renumbers across the gaps and
-	// hands every later key its neighbour's rate. With both absent keys at the
-	// tail there is nothing to renumber across, the two implementations agree
-	// exactly, and that mistake ships.
+	// The two unanswered keys sit first and in the middle: results are matched by
+	// position before the join drops them, and renumbering after the join would
+	// give later keys their neighbours' rates. Absent keys at the tail would hide
+	// that.
 	keys := []marketdata.FxRateKey{
 		{Base: "GBP", Quote: "RUB", On: date("2026-07-03")}, // unknown pair -> absent
 		{Base: "USD", Quote: "RUB", On: date("2026-07-01")}, // exact match
@@ -143,12 +139,7 @@ func TestFxRatesOnBatch(t *testing.T) {
 		{Base: "EUR", Quote: "RUB", On: date("2026-07-03")}, // exact match
 	}
 
-	// Discriminating check: batching N keys must take exactly one round trip
-	// to the database, not N — that is the entire reason FxRatesOn exists
-	// instead of a loop of FxRateOn calls. AcquireCount is a lifetime
-	// counter on the pool (same technique the empty-input check below uses),
-	// so comparing before and after catches an implementation that compiles
-	// and returns correct rates while quietly issuing one query per key.
+	// Batching N keys takes exactly one round trip.
 	beforeBatch := f.pool.Stat().AcquireCount()
 	got, err := f.store.FxRatesOn(f.ctx, keys)
 	if err != nil {
@@ -158,12 +149,8 @@ func TestFxRatesOnBatch(t *testing.T) {
 		t.Fatalf("FxRatesOn(%d keys) acquired %d connections, want exactly 1", len(keys), afterBatch-beforeBatch)
 	}
 
-	// Discriminating check: every key's outcome must agree with what FxRateOn
-	// returns for that same (base, quote, on) individually — same resolved
-	// date, same rate, same presence/absence. This is what catches a lateral
-	// join missing its ORDER BY (wrong row picked when more than one
-	// candidate qualifies) or a result that reports the requested date
-	// instead of the row's own.
+	// Each key agrees with FxRateOn for it alone: same row, same date (catches a
+	// missing ORDER BY or the requested date reported back).
 	for _, k := range keys {
 		want, wantErr := f.store.FxRateOn(f.ctx, k.Base, k.Quote, k.On)
 		gotRate, ok := got[k]
@@ -185,17 +172,12 @@ func TestFxRatesOnBatch(t *testing.T) {
 		}
 	}
 
-	// 7 keys in, 2 collapse (exact duplicate) and 2 are absent (GBP/RUB has
-	// no rows at all; 2026-06-01 is earlier than every USD/RUB row) -> 4
-	// distinct present keys.
+	// 7 keys: one exact duplicate collapses and two are absent, leaving 4.
 	if len(got) != 4 {
 		t.Fatalf("FxRatesOn len = %d, want 4: %+v", len(got), got)
 	}
 
-	// Empty input -> empty map and not a single round trip to the database.
-	// AcquireCount is a lifetime counter on the pool, so comparing before and
-	// after catches an implementation that forgot the short-circuit and
-	// queried with empty arrays instead.
+	// Empty input: empty map and no round trip.
 	before := f.pool.Stat().AcquireCount()
 	empty, err := f.store.FxRatesOn(f.ctx, nil)
 	if err != nil || len(empty) != 0 {

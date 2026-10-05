@@ -15,19 +15,16 @@ import (
 	"babki.my/babki/internal/platform/testdb"
 )
 
-// newConverterFixture spins up a fresh, migrated DB and returns a Converter
-// wired to it, plus the underlying Store (to seed rates) and a context.
-// fx_rates has no foreign keys, so — unlike newFixture in store_test.go —
-// no user/space/instrument setup is needed here.
+// newConverterFixture returns a Converter over a fresh database, its Store and
+// a context. fx_rates has no foreign keys, so nothing else is set up.
 func newConverterFixture(t *testing.T) (*marketdata.Converter, *marketdata.Store, context.Context) {
 	t.Helper()
 	conv, store, _, ctx := newConverterFixtureWithPool(t)
 	return conv, store, ctx
 }
 
-// newConverterFixtureWithPool is newConverterFixture plus the pool underneath,
-// for tests that count round trips through Stat().AcquireCount() (the
-// technique store_test.go's TestFxRatesOnBatch uses).
+// newConverterFixtureWithPool also returns the pool, for counting round trips
+// through Stat().AcquireCount().
 func newConverterFixtureWithPool(t *testing.T) (*marketdata.Converter, *marketdata.Store, *pgxpool.Pool, context.Context) {
 	t.Helper()
 	pool := testdb.New(t)
@@ -40,8 +37,7 @@ func TestConvertSameCurrencyIsIdentity(t *testing.T) {
 	conv, _, ctx := newConverterFixture(t)
 	on := date("2026-07-01")
 
-	// No rate seeded at all: from == to must short-circuit before any
-	// lookup, positive and negative alike.
+	// No rate seeded: identity must not look anything up.
 	for _, amount := range []int64{12345, -12345, 0} {
 		got, err := conv.Convert(ctx, amount, "USD", "USD", on)
 		if err != nil {
@@ -87,8 +83,7 @@ func TestConvertBridgesThroughRUB(t *testing.T) {
 	conv, store, ctx := newConverterFixture(t)
 	on := date("2026-07-01")
 
-	// Only USD/RUB and EUR/RUB exist (as cbr actually publishes them) — no
-	// direct or inverse USD/EUR row anywhere.
+	// Only USD/RUB and EUR/RUB, as the CBR publishes them.
 	err := store.UpsertFxRates(ctx, []marketdata.FxRate{
 		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90"), Source: "cbr"},
 		{Base: "EUR", Quote: "RUB", On: on, Rate: dec("100"), Source: "cbr"},
@@ -107,11 +102,7 @@ func TestConvertBridgesThroughRUB(t *testing.T) {
 	}
 }
 
-// TestConvertBridgeMatchesDirectRate checks that bridging through RUB is not
-// just "some" answer but the mathematically correct one: converting a pair
-// that only has a RUB bridge must produce the same minor-unit result as
-// converting a different pair whose direct rate equals the bridge's implied
-// rate (90 RUB/AAA * 1/100 EUR/RUB... = 0.9, matched by a direct 0.9 row).
+// The RUB bridge gives the same result as a direct row at the implied rate.
 func TestConvertBridgeMatchesDirectRate(t *testing.T) {
 	conv, store, ctx := newConverterFixture(t)
 	on := date("2026-07-01")
@@ -151,19 +142,14 @@ func TestConvertNoRateReturnsSentinel(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	// GBP and JPY are both unrelated to the only stored pair (USD/RUB): no
-	// direct, no inverse, and no RUB bridge (neither has a RUB leg).
+	// GBP and JPY have no direct, inverse or RUB legs.
 	_, err = conv.Convert(ctx, 10000, "GBP", "JPY", on)
 	if !errors.Is(err, marketdata.ErrNoRate) {
 		t.Fatalf("Convert unrelated pair: err = %v, want ErrNoRate", err)
 	}
 }
 
-// TestConvertRoundingIsHalfAwayFromZero documents and locks in the rounding
-// decision for exact .5 minor units: symmetric half-away-from-zero, applied
-// once at the end. This matters most for negative amounts (debts): a
-// -150.5 minor-unit result rounds to -151, not -150 — rounding never shrinks
-// the magnitude of a debt.
+// Exact halves round away from zero, so a debt never shrinks.
 func TestConvertRoundingIsHalfAwayFromZero(t *testing.T) {
 	conv, store, ctx := newConverterFixture(t)
 	on := date("2026-07-01")
@@ -244,12 +230,8 @@ func TestConvertManyEmptyInput(t *testing.T) {
 	}
 }
 
-// TestConvertManyRatesOnIsOldestRateUsed is fix (1)'s core regression test:
-// a summary must disclose how stale the fx rate behind it is, not silently
-// imply "today's rate". Two currencies convert here — one against a rate
-// dated exactly "on", the other against a rate two days older (FxRateOn's
-// nearest-earlier-date fallback) — so ratesOn must surface that older date,
-// not on, and not today.
+// ratesOn is the date of the oldest rate used — here the nearest-earlier
+// fallback two days back — not on and not today.
 func TestConvertManyRatesOnIsOldestRateUsed(t *testing.T) {
 	conv, store, ctx := newConverterFixture(t)
 	on := date("2026-07-10")
@@ -276,10 +258,7 @@ func TestConvertManyRatesOnIsOldestRateUsed(t *testing.T) {
 	}
 }
 
-// TestConvertManyRatesOnZeroWhenOnlyIdentity covers a base-currency-only
-// summary: every amount is already in the target currency, so no fx rate is
-// ever resolved and ratesOn must stay the zero value (the caller renders
-// that as "null", never as a fabricated date).
+// An all-identity summary resolves no rate, so ratesOn stays zero.
 func TestConvertManyRatesOnZeroWhenOnlyIdentity(t *testing.T) {
 	conv, _, ctx := newConverterFixture(t)
 	on := date("2026-07-01")
@@ -311,8 +290,7 @@ func TestConvertManyPropagatesRealErrors(t *testing.T) {
 	cctx, cancel := context.WithCancel(ctx)
 	cancel()
 
-	// A real DB/context failure must surface as err, not be swallowed into
-	// missing like an ordinary "no rate for this currency" case.
+	// A real failure is err, not a currency in missing.
 	converted, missing, ratesOn, err := conv.ConvertMany(cctx, map[string]int64{"USD": 100}, "RUB", on)
 	if err == nil {
 		t.Fatalf("ConvertMany with canceled context: err = nil (converted=%d, missing=%v, ratesOn=%v), want a real error", converted, missing, ratesOn)
@@ -325,9 +303,7 @@ func TestConvertManyPropagatesRealErrors(t *testing.T) {
 	}
 }
 
-// TestRateIdentityIsOneWithZeroDate documents Rate's identity short-circuit,
-// mirroring TestConvertSameCurrencyIsIdentity: from == to must resolve to
-// rate 1 and a zero rateDate without any DB lookup (no rate seeded at all).
+// Rate's identity short-circuit: rate 1, zero date, no lookup.
 func TestRateIdentityIsOneWithZeroDate(t *testing.T) {
 	conv, _, ctx := newConverterFixture(t)
 	on := date("2026-07-01")
@@ -344,12 +320,8 @@ func TestRateIdentityIsOneWithZeroDate(t *testing.T) {
 	}
 }
 
-// TestRateMatchesConvertResult is Rate's core contract: applying the rate it
-// returns to an amount by hand (decimal.Mul(...).Round(0), the same step
-// convert uses internally) must produce bit-for-bit the same minor-unit
-// result as calling Convert directly, for both a direct/inverse pair and a
-// RUB bridge. This is what lets a caller memoize Rate per currency and apply
-// it to N different amounts instead of calling Convert N times.
+// Applying Rate's answer by hand gives exactly Convert's result, for a direct
+// pair and a bridge — which is what lets callers memoize it.
 func TestRateMatchesConvertResult(t *testing.T) {
 	conv, store, ctx := newConverterFixture(t)
 	on := date("2026-07-01")
@@ -389,9 +361,6 @@ func TestRateMatchesConvertResult(t *testing.T) {
 	}
 }
 
-// TestRateNoRateReturnsSentinel mirrors TestConvertNoRateReturnsSentinel:
-// Rate must surface the same ErrNoRate sentinel Convert does for an
-// unrelated pair, not a bare error or a zero-value rate mistaken for success.
 func TestRateNoRateReturnsSentinel(t *testing.T) {
 	conv, store, ctx := newConverterFixture(t)
 	on := date("2026-07-01")
@@ -425,24 +394,13 @@ func TestConvertPropagatesRealErrors(t *testing.T) {
 	}
 }
 
-// TestRatePropagatesRealErrors is Rate's counterpart to
-// TestConvertPropagatesRealErrors / TestConvertManyPropagatesRealErrors: a
-// genuine DB or context failure must come back as itself, never disguised as
-// ErrNoRate.
-//
-// Every caller of Rate branches on errors.Is(err, ErrNoRate) to decide
-// between "this pair simply has no rate — degrade honestly and carry on"
-// and "something is broken — fail the request" (see
-// account.Handler.balanceInBase and portfolio.Handler.positionInBase). If
-// Rate ever collapsed the second case into the first, both handlers would
-// dutifully render an outage as an ordinary missing rate and the user would
-// never learn anything was wrong.
+// A real DB or context failure comes back as itself, never as ErrNoRate:
+// callers degrade on ErrNoRate and fail on anything else.
 func TestRatePropagatesRealErrors(t *testing.T) {
 	conv, store, ctx := newConverterFixture(t)
 	on := date("2026-07-01")
 
-	// Seed the pair so the failure below can only come from the canceled
-	// context, not from the rate genuinely being absent.
+	// The pair is seeded, so the failure can only come from the canceled context.
 	if err := store.UpsertFxRates(ctx, []marketdata.FxRate{
 		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90"), Source: "cbr"},
 	}); err != nil {
@@ -461,11 +419,9 @@ func TestRatePropagatesRealErrors(t *testing.T) {
 	}
 }
 
-// seedRatesOnFixture seeds the rate table every RatesOn test below shares:
-// two USD/RUB rows (so nearest-earlier-date fallback has something to fall
-// back to), one EUR/RUB row dated the same day as the newer USD/RUB row (a
-// bridge whose legs agree on their date), and one CHF/RUB row dated days
-// earlier (a bridge whose legs disagree — see TestBridgeRateDateIsOlderLeg).
+// seedRatesOnFixture seeds two USD/RUB rows (for the nearest-earlier
+// fallback), an EUR/RUB row on the newer USD date, and an older CHF/RUB row (a
+// bridge whose legs disagree on date).
 func seedRatesOnFixture(t *testing.T, store *marketdata.Store, ctx context.Context) {
 	t.Helper()
 	err := store.UpsertFxRates(ctx, []marketdata.FxRate{
@@ -479,16 +435,9 @@ func seedRatesOnFixture(t *testing.T, store *marketdata.Store, ctx context.Conte
 	}
 }
 
-// TestRatesOnResolvesEveryPathInOneCall pins the values, not just the
-// agreement with Rate: a mutation that breaks a rule in the shared resolution
-// (dropping the 1/rate inversion, say) moves Rate and RatesOn together and so
-// stays invisible to the differential test below. Here the expected rates are
-// spelled out independently of either method.
-//
-// It also pins the whole point of the batch: five queries whose enumeration
-// names thirteen distinct (base, quote, date) rows — USD/RUB, RUB/USD,
-// RUB/RUB, USD/EUR, EUR/USD, RUB/EUR, EUR/RUB, GBP/JPY, JPY/GBP, GBP/RUB,
-// RUB/GBP, RUB/JPY, JPY/RUB — must cost exactly one round trip.
+// The expected rates are spelled out independently of Rate, since a broken
+// shared rule would move both. Five queries naming thirteen distinct rows cost
+// one round trip.
 func TestRatesOnResolvesEveryPathInOneCall(t *testing.T) {
 	conv, store, pool, ctx := newConverterFixtureWithPool(t)
 	seedRatesOnFixture(t, store, ctx)
@@ -543,9 +492,7 @@ func TestRatesOnResolvesEveryPathInOneCall(t *testing.T) {
 		}
 	}
 
-	// The one pair nothing connects fails on its own line only: its four
-	// neighbours above are all resolved in the very same batch. One exotic
-	// holding must not blank out a page.
+	// The unconnected pair fails alone; its neighbours resolve in the same batch.
 	res, err := got.For(unresolvable.From, unresolvable.To, unresolvable.On)
 	if err != nil {
 		t.Fatalf("RatesOn[GBP->JPY]: For returned %v, want the entry carrying ErrNoRate", err)
@@ -555,27 +502,9 @@ func TestRatesOnResolvesEveryPathInOneCall(t *testing.T) {
 	}
 }
 
-// TestRatesOnMatchesRate is the no-drift test: for every shape of input —
-// direct, inverse, bridge, identity, nearest-earlier-date fallback, a date
-// before all data, a pair with only one RUB leg, a pair with none — the
-// batched answer must be the single answer, down to the decimal's own
-// representation, the resolved row's date and the error text. The two paths
-// share one implementation of the rules precisely so this test can never
-// find anything; it exists to notice the day someone forks them.
-//
-// Read what it does NOT cover, because the shape invites over-trusting it: a
-// DIFFERENTIAL TEST BETWEEN TWO PATHS CANNOT POLICE ANY RULE THAT LIVES IN THE
-// CODE THEY SHARE. Break the direct/inverse order, the 1/rate inversion, the
-// bridge's insistence on both legs — the rule sits in resolveRate, both paths
-// move together, and every comparison below still passes while every number is
-// wrong. A reviewer confirmed exactly that: turning resolveRate's `ok1 && ok2`
-// into `ok1 || ok2` left this whole package green. Every rule therefore needs a
-// VALUE assertion somewhere that names its expected answer out loud, with no
-// reference to the other path — TestRatesOnResolvesEveryPathInOneCall for the
-// direct/inverse/bridge rates, TestOneRubLegAloneIsNoRate for the both-legs
-// rule, TestBridgeRateDateIsOlderLeg for the bridge's date,
-// TestDirectRowWinsOverTheInverseOfAReverseRow for the precedence. This test
-// covers agreement, and only agreement.
+// RatesOn agrees with Rate for every shape of input, down to the decimal's
+// representation, the date and the error text. Agreement only: rules live in
+// the shared resolution, so their values are pinned by the tests beside this.
 func TestRatesOnMatchesRate(t *testing.T) {
 	conv, store, _, ctx := newConverterFixtureWithPool(t)
 	seedRatesOnFixture(t, store, ctx)
@@ -618,8 +547,7 @@ func TestRatesOnMatchesRate(t *testing.T) {
 				t.Fatalf("RatesOn[%+v].Err = %q, want %q (Rate's own message)", q, res.Err, wantErr)
 			}
 		}
-		// String, not Equal: "the numbers must not change" means the same
-		// decimal, not merely a numerically equal one.
+		// String, not Equal: the same decimal, not just an equal one.
 		if res.Rate.String() != wantRate.String() {
 			t.Fatalf("RatesOn[%+v].Rate = %s, want %s (Rate's own)", q, res.Rate, wantRate)
 		}
@@ -634,21 +562,8 @@ func TestRatesOnMatchesRate(t *testing.T) {
 	}
 }
 
-// TestOneRubLegAloneIsNoRate is the both-legs rule stated as a value, not as
-// agreement between the two paths: a bridge needs BOTH its legs, and a pair
-// that has exactly one of them is ErrNoRate, never a rate.
-//
-// This is finding (2). Mutating resolveRate's `ok1 && ok2` into `ok1 || ok2`
-// used to leave the entire package green, because the only test that exercised
-// USD->JPY was the differential one above and the rule lives in the code both
-// paths share (see that test's doc). What the mutation actually produced was
-// rate 0 on a zero date with a nil error — a currency that merely lacks its RUB
-// leg converting every amount to nothing, under a caption saying the number is
-// good. Hence a hard-coded expectation here, on Rate and RatesOn alike.
-//
-// USD has a RUB leg in the shared fixture and JPY has none, so USD->JPY is the
-// (ok1, !ok2) case and JPY->USD the (!ok1, ok2) one: neither ordering of the
-// missing leg may resolve.
+// A bridge needs both legs: one RUB leg alone is ErrNoRate, never a rate. The
+// broken `||` returned rate 0 with a nil error. Both orderings are checked.
 func TestOneRubLegAloneIsNoRate(t *testing.T) {
 	conv, store, _, ctx := newConverterFixtureWithPool(t)
 	seedRatesOnFixture(t, store, ctx)
@@ -671,9 +586,7 @@ func TestOneRubLegAloneIsNoRate(t *testing.T) {
 			t.Fatalf("RatesOn[%s->%s].Err = %v, want ErrNoRate: one RUB leg is not a bridge (rate=%s, date=%v)",
 				q.From, q.To, res.Err, res.Rate, res.RateDate)
 		}
-		// Spelled out because this is precisely what the broken version
-		// returned, and a caller reading Rate without checking Err would have
-		// shown it as a real conversion.
+		// Exactly what the broken version returned.
 		if !res.Rate.IsZero() || !res.RateDate.IsZero() {
 			t.Fatalf("RatesOn[%s->%s] failed but carries rate=%s date=%v, want both zero-valued",
 				q.From, q.To, res.Rate, res.RateDate)
@@ -687,15 +600,8 @@ func TestOneRubLegAloneIsNoRate(t *testing.T) {
 	}
 }
 
-// TestBridgeRateDateIsOlderLeg pins the rule that a bridge is only as fresh
-// as its stalest leg, in both directions so that "always take the first leg's
-// date" and "always take the second's" are as red as "take the newer one".
-// USD/RUB is dated 2026-07-03 and CHF/RUB 2026-06-28, so the older leg is the
-// second one for USD->CHF and the first one for CHF->USD.
-//
-// This is checked on Rate and RatesOn alike: they share the rule, so a
-// mutation moves both, and no test that compares them to each other would
-// notice.
+// A bridge is dated by its older leg, whichever leg that is, on Rate and
+// RatesOn alike.
 func TestBridgeRateDateIsOlderLeg(t *testing.T) {
 	conv, store, _, ctx := newConverterFixtureWithPool(t)
 	seedRatesOnFixture(t, store, ctx)
@@ -731,11 +637,7 @@ func TestBridgeRateDateIsOlderLeg(t *testing.T) {
 	}
 }
 
-// TestRatesOnCostsOneRoundTripWhateverTheCount is the count check made
-// independent of the query set: one query and twenty-four cost the same one
-// round trip. An implementation that loops FxRateOn (or FxRatesOn) per query
-// passes every value check above and fails only here — which is the entire
-// reason RatesOn exists.
+// One query and twenty-four cost the same single round trip.
 func TestRatesOnCostsOneRoundTripWhateverTheCount(t *testing.T) {
 	conv, store, pool, ctx := newConverterFixtureWithPool(t)
 	seedRatesOnFixture(t, store, ctx)
@@ -761,22 +663,13 @@ func TestRatesOnCostsOneRoundTripWhateverTheCount(t *testing.T) {
 	}
 }
 
-// TestConvertManyCostsOneRoundTripWhateverTheCurrencies is ConvertMany's own
-// end of #72: what a summary pays must not grow with the number of currencies
-// it holds. The screen it backs has one row per currency and nothing else, so
-// the currencies ARE its size — which is why memoizing by currency, the fix
-// that served the positions and journal screens, buys nothing here.
-//
-// Two runs of different width rather than one magic number: what must be true
-// is not "one", it is "the same however many". One is asserted too, because
-// here — unlike at the HTTP level, where a request makes statements of its own
-// — the whole call is the batch and there is nothing else to count.
+// ConvertMany's cost does not grow with the number of currencies (#72): two
+// widths, one round trip each.
 func TestConvertManyCostsOneRoundTripWhateverTheCurrencies(t *testing.T) {
 	conv, store, pool, ctx := newConverterFixtureWithPool(t)
 	on := date("2026-07-03")
 
-	// A direct <currency>/RUB row each, so every one of them converts and the
-	// unbatched cost would be exactly one lookup per currency.
+	// A direct row each, so every currency converts.
 	currencies := []string{"USD", "EUR", "CHF", "GBP", "SEK", "TRY"}
 	rates := make([]marketdata.FxRate, 0, len(currencies))
 	for i, currency := range currencies {
@@ -800,8 +693,7 @@ func TestConvertManyCostsOneRoundTripWhateverTheCurrencies(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ConvertMany(%d currencies): %v", width, err)
 		}
-		// Otherwise the cheapest call is the one that converts nothing, and a
-		// cost assertion would be satisfied by a total that answers nothing.
+		// Nothing missing: a call converting nothing would be cheapest.
 		if len(missing) != 0 {
 			t.Fatalf("ConvertMany(%d currencies) left %v unconverted, so the trips below bought less than the whole total", width, missing)
 		}
@@ -811,23 +703,14 @@ func TestConvertManyCostsOneRoundTripWhateverTheCurrencies(t *testing.T) {
 	}
 }
 
-// TestConvertManyMatchesConvertOneAtATime is the differential that keeps
-// ConvertMany's batched resolution honest: every entry must come out exactly as
-// converting it on its own would, across all four ways a rate resolves.
-//
-// A batch is the easiest place in this package to change a number by accident,
-// because the change would be uniform — every row on the screen shifted the same
-// way, with nothing beside it to disagree. The fixture therefore covers the
-// direct row, the inverse of a reverse row, a RUB bridge and a pair nothing
-// connects, and checks the SUM against the same amounts run through Convert one
-// by one.
+// ConvertMany equals converting each entry alone, across direct, inverse,
+// bridged and unconnected pairs.
 func TestConvertManyMatchesConvertOneAtATime(t *testing.T) {
 	conv, store, ctx := newConverterFixture(t)
 	on := date("2026-07-03")
 
-	// USD and EUR quote against the hub; converting into GBP therefore bridges
-	// through it, RUB->GBP resolves by inversion of the seeded GBP/RUB row, and
-	// KZT has nothing at all.
+	// USD and EUR bridge to GBP through RUB, RUB->GBP inverts GBP/RUB, KZT has
+	// nothing.
 	if err := store.UpsertFxRates(ctx, []marketdata.FxRate{
 		{Base: "USD", Quote: "RUB", On: on, Rate: dec("91.2"), Source: "cbr"},
 		{Base: "EUR", Quote: "RUB", On: date("2026-07-01"), Rate: dec("100"), Source: "cbr"},
@@ -869,17 +752,13 @@ func TestConvertManyMatchesConvertOneAtATime(t *testing.T) {
 	if !reflect.DeepEqual(missing, wantMissing) {
 		t.Fatalf("ConvertMany missing = %v, want %v", missing, wantMissing)
 	}
-	// A total equal to zero would match a batch that converted nothing, so the
-	// fixture has to be one that actually adds up to something.
+	// A zero total would match a batch that converted nothing.
 	if wantTotal == 0 {
 		t.Fatal("the fixture totals zero, which any broken batch would also produce")
 	}
 }
 
-// TestRatesOnWithoutLookupsNeverTouchesTheStore covers the two inputs that
-// resolve nothing: no queries at all, and queries that are all identity.
-// Neither may cost a round trip — identity is a short-circuit in Rate, and it
-// has to stay one here.
+// No queries, or only identity ones, cost no round trip.
 func TestRatesOnWithoutLookupsNeverTouchesTheStore(t *testing.T) {
 	conv, _, pool, ctx := newConverterFixtureWithPool(t)
 	on := date("2026-07-03")
@@ -910,11 +789,8 @@ func TestRatesOnWithoutLookupsNeverTouchesTheStore(t *testing.T) {
 	}
 }
 
-// TestRatesOnPropagatesRealErrors is RatesOn's counterpart to
-// TestRatePropagatesRealErrors: a DB or context failure fails the whole call
-// (the returned Rates is the zero value and unusable, exactly as
-// ConvertMany's total is), and must never be disguised as the per-query
-// ErrNoRate that callers render as "not converted".
+// A DB or context failure fails the whole call and is never disguised as a
+// per-query ErrNoRate.
 func TestRatesOnPropagatesRealErrors(t *testing.T) {
 	conv, store, _, ctx := newConverterFixtureWithPool(t)
 	seedRatesOnFixture(t, store, ctx)
@@ -933,28 +809,15 @@ func TestRatesOnPropagatesRealErrors(t *testing.T) {
 	if got.Len() != 0 {
 		t.Fatalf("RatesOn with canceled context: %d entries resolved, want none", got.Len())
 	}
-	// And the voided batch stays unreadable: a caller that ignored err above
-	// gets an error out of For, not a zero rate it would render as 0,00.
+	// The voided Rates answers For with an error, not a zero rate.
 	if _, lookupErr := got.For("USD", "RUB", on); !errors.Is(lookupErr, marketdata.ErrNotRequested) {
 		t.Fatalf("For on the voided batch: err = %v, want ErrNotRequested", lookupErr)
 	}
 }
 
-// TestRatesForKeysByCalendarDayNotTimeValue is finding (1)'s regression test.
-//
-// RatesOn used to hand back a map[RateQuery]RateResult, and RateQuery holds a
-// time.Time. Two time.Time values that name the same day but differ in
-// *time.Location or in monotonic reading are DIFFERENT map keys, so a caller
-// that built its query one way and indexed with another — time.Now().UTC()
-// evaluated twice, a date passed through .In() or .Truncate() on only one of
-// the two paths — got Go's zero RateResult back: rate zero, Err nil. Without
-// the comma-ok that is indistinguishable from a pair that resolved to zero,
-// and the handlers this batch exists for would have rendered every row's
-// base-currency amount as 0,00 with no gap marker and no error at all.
-//
-// So the day is the key, and every spelling of one day finds the same entry.
-// Under the old shape each case below except the first returned a silent zero;
-// now each must return the rate that was actually resolved.
+// Rates are keyed by calendar day: every spelling of a day (location,
+// time of day, monotonic reading) finds the same entry rather than Go's zero
+// RateResult.
 func TestRatesForKeysByCalendarDayNotTimeValue(t *testing.T) {
 	conv, store, _, ctx := newConverterFixtureWithPool(t)
 	seedRatesOnFixture(t, store, ctx)
@@ -989,13 +852,8 @@ func TestRatesForKeysByCalendarDayNotTimeValue(t *testing.T) {
 		}
 	}
 
-	// The other side of keying by the day: two spellings of one day in the
-	// SAME call are one query, not two. They collapse onto a single entry, and
-	// that entry is right for both — which holds only because the database is
-	// asked for a `date` and pgx encodes one from the value's own wall-clock
-	// Y/M/D, so a location or a time of day never moves the row that comes
-	// back. If that ever stopped being true, the collapse would start hiding a
-	// real difference, so it is checked here rather than assumed.
+	// Two spellings of one day in one call collapse onto one entry, which is right
+	// for both because the database is asked for a `date`.
 	sameDay := []marketdata.RateQuery{
 		{From: "USD", To: "RUB", On: asked},
 		{From: "USD", To: "RUB", On: time.Date(2026, 7, 3, 0, 0, 0, 0, msk)},
@@ -1018,10 +876,8 @@ func TestRatesForKeysByCalendarDayNotTimeValue(t *testing.T) {
 		}
 	}
 
-	// The monotonic reading is the same hazard from the other direction, and
-	// only time.Now() carries one. Same instant, same wall clock, same
-	// location; the two values differ solely in that reading, which is enough
-	// to make them different map keys and was enough to lose the lookup.
+	// Only time.Now() carries a monotonic reading, which alone makes two
+	// otherwise equal values different map keys.
 	now := time.Now()
 	got, err = conv.RatesOn(ctx, []marketdata.RateQuery{{From: "USD", To: "RUB", On: now}})
 	if err != nil {
@@ -1032,14 +888,8 @@ func TestRatesForKeysByCalendarDayNotTimeValue(t *testing.T) {
 	}
 }
 
-// TestRatesForRefusesATripleNobodyAsked closes the other half of finding (1):
-// a lookup the batch was never given must be a LOUD error, not a zero result.
-//
-// It is the caller-side counterpart of errNotPrefetched, and the distinction
-// matters for the same reason: "nobody worked this out" and "this pair has no
-// rate" are different statements, and only the second is safe to show the user
-// as a gap. A near miss is the realistic case — the right pair on the wrong
-// day, the pair reversed — which is why those are the cases here.
+// A triple the batch was never given is ErrNotRequested, not a zero result.
+// Near misses — the wrong day, the pair reversed — are the realistic cases.
 func TestRatesForRefusesATripleNobodyAsked(t *testing.T) {
 	conv, store, _, ctx := newConverterFixtureWithPool(t)
 	seedRatesOnFixture(t, store, ctx)
@@ -1067,23 +917,14 @@ func TestRatesForRefusesATripleNobodyAsked(t *testing.T) {
 		if !errors.Is(lookupErr, marketdata.ErrNotRequested) {
 			t.Fatalf("For(%s): err = %v, want ErrNotRequested", tc.name, lookupErr)
 		}
-		// ErrNoRate is what a caller renders as an honest gap; a bug must not
-		// borrow that costume.
+		// ErrNoRate would read as an honest gap.
 		if errors.Is(lookupErr, marketdata.ErrNoRate) {
 			t.Fatalf("For(%s): err = %v, want ErrNotRequested and NOT ErrNoRate — those mean different things to the user", tc.name, lookupErr)
 		}
 	}
 }
 
-// TestRatesForMissCarriesErrEvenIfDiscarded pins the hardening of For's miss
-// path: a caller that discards the second return value entirely
-// (res, _ := rates.For(...)) — the exact pattern every caller uses for the
-// non-miss case, since the ordinary outcome lives in res.Err, not in the
-// method's own error — must still be able to tell a miss from a pair that
-// genuinely resolved to zero. Before this fix, the miss branch returned
-// RateResult{} alongside its error: rate zero, RateDate zero, Err nil, so
-// discarding the error handed back exactly the fabricated-zero shape this
-// whole type exists to make impossible.
+// A caller discarding For's error still sees the miss in res.Err.
 func TestRatesForMissCarriesErrEvenIfDiscarded(t *testing.T) {
 	conv, store, _, ctx := newConverterFixtureWithPool(t)
 	seedRatesOnFixture(t, store, ctx)
@@ -1106,14 +947,8 @@ func TestRatesForMissCarriesErrEvenIfDiscarded(t *testing.T) {
 	}
 }
 
-// TestNewRatesMatchesRatesOn is finding (2)'s pin: a Rates built by hand
-// through NewRates must answer For exactly as one RatesOn produced, because
-// NewRates exists specifically so that code outside this package — chiefly
-// the test fakes standing in for the converter interface the position and
-// journal handlers hide behind — can construct one to inject. If NewRates
-// keyed its entries any differently than RatesOn does, a fake built on it
-// would behave differently than the real thing it replaces, in whatever way
-// nobody happened to test.
+// A Rates built by NewRates answers For exactly as RatesOn's own, so fakes
+// behave like the real thing.
 func TestNewRatesMatchesRatesOn(t *testing.T) {
 	conv, store, _, ctx := newConverterFixtureWithPool(t)
 	seedRatesOnFixture(t, store, ctx)
@@ -1128,9 +963,7 @@ func TestNewRatesMatchesRatesOn(t *testing.T) {
 		t.Fatalf("RatesOn: %v", err)
 	}
 
-	// Round-trip RatesOn's own answers through NewRates: this is what a fake
-	// wrapping a real Converter (or hand-picking values, as a fake forcing a
-	// specific failure does) would do.
+	// Round-trip RatesOn's answers through NewRates, as a fake would.
 	results := make(map[marketdata.RateQuery]marketdata.RateResult, len(queries))
 	for _, q := range queries {
 		res, forErr := want.For(q.From, q.To, q.On)
@@ -1158,12 +991,7 @@ func TestNewRatesMatchesRatesOn(t *testing.T) {
 		}
 	}
 
-	// The calendar-day collapse: two different time.Time spellings of one day
-	// in the input map land on the same lookupKey and so on the same entry —
-	// exactly as RatesOn's own resolveQueries collapses them (see
-	// TestRatesForKeysByCalendarDayNotTimeValue). Both spellings carry the
-	// identical RateResult here, so which one the map iteration happens to
-	// keep does not matter to the assertion.
+	// Two spellings of one day collapse onto one entry, as in RatesOn.
 	msk := time.FixedZone("UTC+3", 3*60*60)
 	sharedResult := marketdata.RateResult{Rate: dec("91.2"), RateDate: date("2026-07-03")}
 	collapsed := marketdata.NewRates(map[marketdata.RateQuery]marketdata.RateResult{
@@ -1183,22 +1011,14 @@ func TestNewRatesMatchesRatesOn(t *testing.T) {
 		}
 	}
 
-	// And a triple nobody supplied refuses exactly as RatesOn's own Rates
-	// does: ErrNotRequested, not a silent zero.
+	// An unsupplied triple is ErrNotRequested.
 	if _, forErr := collapsed.For("EUR", "RUB", date("2026-07-03")); !errors.Is(forErr, marketdata.ErrNotRequested) {
 		t.Fatalf("collapsed.For(unasked triple): err = %v, want ErrNotRequested", forErr)
 	}
 }
 
-// TestDirectRowWinsOverTheInverseOfAReverseRow pins the first rule of
-// resolution: when both directions are stored, the direct row is the answer
-// and the reverse row is not consulted at all. The two disagree here on
-// purpose — 1/0.02 is 50, not the 90 the direct row says — because a published
-// pair of rates does not have to be each other's exact reciprocal, and taking
-// the wrong one produces a number that looks entirely plausible.
-//
-// Checked on Rate and RatesOn alike: they share the rule, so a mutation moves
-// both and no test that compares them to each other would notice.
+// When both directions are stored the direct row wins (1/0.02 is 50, the
+// direct row says 90), on Rate and RatesOn alike.
 func TestDirectRowWinsOverTheInverseOfAReverseRow(t *testing.T) {
 	conv, store, _, ctx := newConverterFixtureWithPool(t)
 	on := date("2026-07-03")

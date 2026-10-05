@@ -44,8 +44,7 @@ func (p fakeFxProvider) Name() string { return "fake-fx" }
 type fakeQuoteProvider struct {
 	quotes []marketdata.TickerQuote
 	err    error
-	// calls records the ticker slices this provider was invoked with, so
-	// tests can assert it was (or wasn't) called at all.
+	// calls records each request's tickers.
 	calls *[][]string
 }
 
@@ -111,25 +110,14 @@ func TestFxWorker_ProviderErrorReturnsFromWork(t *testing.T) {
 	}
 }
 
-// TestFxWorker_NonPositiveRateIsDroppedAndTheRestIsStored is the poison-batch
-// half of issue #28. fx_rates.rate carries CHECK (rate > 0) (migration 0006)
-// and the upsert is one pgx batch, which Postgres runs inside a single
-// implicit transaction: before this, ONE non-positive row from the source made
-// the whole call fail and not a single rate was written, so every currency
-// went stale rather than one. River then retried the job, the source answered
-// with the identical set, and it failed again — the same poison, forever.
-//
-// The assertion is therefore both halves at once: the run succeeds AND the
-// sound rates are in the table. Dropping the bad rows without storing the good
-// ones would be the same outage wearing a green log line.
+// A non-positive rate is dropped and the rest are stored (#28): one bad row
+// used to fail the whole batch, forever. Both halves are asserted.
 func TestFxWorker_NonPositiveRateIsDroppedAndTheRestIsStored(t *testing.T) {
 	store, _, ctx := newJobsFixture(t)
 	on := date("2026-07-25")
 	log, records := newRecordingLogger()
 
-	// Zero and negative are both refused by the CHECK, and both are things a
-	// source can emit: zero for a currency it has stopped quoting, a negative
-	// for a parse or sign bug at either end.
+	// Zero and negative: both refused by the CHECK, both possible from a source.
 	provider := fakeFxProvider{rates: []marketdata.FxRate{
 		{Base: "USD", Quote: "RUB", On: on, Rate: dec("90.5"), Source: "fake-fx"},
 		{Base: "XXX", Quote: "RUB", On: on, Rate: dec("0"), Source: "fake-fx"},
@@ -153,10 +141,7 @@ func TestFxWorker_NonPositiveRateIsDroppedAndTheRestIsStored(t *testing.T) {
 		}
 	}
 
-	// The drop is a loss of data, so it is recorded rather than swallowed —
-	// one line per rate, at Warn, naming which pair and which value. Debug
-	// would not do: it is off on a production instance, which is the only
-	// place this can happen.
+	// Each drop is a Warn line naming the pair and value.
 	dropped := linesFor(*records, droppedRateMsg)
 	if len(dropped) != 2 {
 		t.Fatalf("%d dropped-rate lines, want 2 (one per dropped rate):\n%s", len(dropped), showLines(*records))
@@ -189,8 +174,7 @@ func TestQuotesWorker_UpsertsMatchedTickersAndSkipsMissingPrices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create gazp: %v", err)
 	}
-	// yndx is tradable (has a ticker) but the provider won't report a price
-	// for it — must be skipped, not treated as an error.
+	// yndx is tradable but unpriced: skipped, not an error.
 	yndx, err := instStore.Create(ctx, instrument.Instrument{
 		Type: instrument.TypeShare, Name: "Яндекс", Ticker: "YNDX", Currency: "RUB",
 	})
@@ -245,15 +229,8 @@ func TestQuotesWorker_UpsertsMatchedTickersAndSkipsMissingPrices(t *testing.T) {
 	}
 }
 
-// TestQuotesWorker_StoresTheDayTheProviderNamed pins where a stored quote's
-// date comes from: the provider's TickerQuote.On, which is the exchange's own
-// word for which session the price belongs to. The worker used to date every
-// quote time.Now() instead, so the previous session's price was written down
-// as today's and nothing downstream could tell how old it was (#90).
-//
-// The date the provider names here is in the past and cannot be produced by
-// any clock, so an implementation that reached for one fails on the value, not
-// on a comparison that could go either way.
+// A quote is stored under the day the provider named, not the clock's (#90);
+// the date cannot come from any clock.
 func TestQuotesWorker_StoresTheDayTheProviderNamed(t *testing.T) {
 	store, instStore, ctx := newJobsFixture(t)
 
@@ -286,22 +263,15 @@ func TestQuotesWorker_StoresTheDayTheProviderNamed(t *testing.T) {
 			q.On.Format(time.DateOnly), session.Format(time.DateOnly))
 	}
 
-	// And the row really is at that date rather than merely reporting it:
-	// asked for the day before, the store must say there is no quote yet.
+	// The row is at that date: the day before has no quote.
 	if _, err := store.QuoteOn(ctx, sber.ID, session.AddDate(0, 0, -1)); !errors.Is(err, pgx.ErrNoRows) {
 		t.Errorf("QuoteOn(the day before the session) err = %v, want pgx.ErrNoRows: "+
 			"a quote must not exist on a day before the session it belongs to", err)
 	}
 }
 
-// TestQuotesWorker_RowsFollowTheExchangesSessionsNotTheRefreshes covers the
-// side effect of dating quotes by session: repeat refreshes now rewrite one
-// row instead of laying down a new one per calendar day, and a new row appears
-// exactly when the exchange has a new session to report.
-//
-// Both store reads are checked against that, since both are how the rest of
-// the app sees quotes: LatestQuotes must follow the exchange's newest session,
-// and QuoteOn must still find the older one at its own date.
+// Repeat refreshes rewrite one row per session; a new row appears with a new
+// session. LatestQuotes follows the newest; QuoteOn still finds the older.
 func TestQuotesWorker_RowsFollowTheExchangesSessionsNotTheRefreshes(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -335,16 +305,12 @@ func TestQuotesWorker_RowsFollowTheExchangesSessionsNotTheRefreshes(t *testing.T
 
 	friday, monday := date("2026-07-24"), date("2026-07-27")
 
-	// Two refreshes while the exchange still reports the same session: the
-	// half-hourly job must not turn one session into a row per run.
 	refresh("276.52", friday)
 	refresh("276.52", friday)
 	if n := rows(); n != 1 {
 		t.Fatalf("%d rows after two refreshes of the same session, want 1", n)
 	}
 
-	// The exchange moves on: a second row, and the newer one is what the
-	// positions screen reads.
 	refresh("280.85", monday)
 	if n := rows(); n != 2 {
 		t.Fatalf("%d rows after a refresh naming a later session, want 2", n)
@@ -356,8 +322,6 @@ func TestQuotesWorker_RowsFollowTheExchangesSessionsNotTheRefreshes(t *testing.T
 	if q := latest[sber.ID]; !q.On.Equal(monday) || !q.Price.Equal(dec("280.85")) {
 		t.Errorf("LatestQuotes = %s on %s, want 280.85 on %s", q.Price, q.On.Format(time.DateOnly), monday.Format(time.DateOnly))
 	}
-	// The earlier session is still there, at its own date, for anything
-	// valuing a position as of that day.
 	old, err := store.QuoteOn(ctx, sber.ID, friday)
 	if err != nil {
 		t.Fatalf("QuoteOn(friday): %v", err)
@@ -367,13 +331,8 @@ func TestQuotesWorker_RowsFollowTheExchangesSessionsNotTheRefreshes(t *testing.T
 	}
 }
 
-// A price the exchange had been carrying forward was stored under every
-// session's date; once the provider names the day the price was really made,
-// those later rows have to go, or LatestQuotes keeps answering with the newest
-// of them and the price never reads as old as it is.
-//
-// A row another source wrote for a later day stays: the exchange's dates say
-// nothing about the broker's.
+// When the provider dates a carried price to the day it was made, its later
+// rows go; another source's later row stays.
 func TestQuotesWorker_APriceDatedEarlierTakesBackTheLaterRowsOfItsSource(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -423,20 +382,8 @@ func TestQuotesWorker_APriceDatedEarlierTakesBackTheLaterRowsOfItsSource(t *test
 	}
 }
 
-// TestQuotesWorker_RefusesAQuoteDatedZeroOrAfterToday is the worker-side
-// guard against a quote the provider itself cannot be relied on to reject:
-// QuoteProvider.QuotesFor deliberately takes no date argument any more
-// (that is what #90 fixed), which means a provider also has no "today" of
-// its own to compare a price's date against. Only the worker does.
-//
-// The stakes are why this is more than tidiness. LatestQuotes is
-// `DISTINCT ON (instrument_id) ... ORDER BY on_date DESC`, so a single quote
-// wrongly dated in the future would outrank every genuine refresh that
-// follows it until the calendar caught up — for a date far enough out,
-// effectively forever, on every screen showing that instrument, with nothing
-// in any log to say why. The old time.Now()-stamped quotes could not produce
-// this failure at all; it is new precisely because the provider now supplies
-// the date.
+// A quote with no date or dated after today is refused: the provider has no
+// today to check against, and a future row would outrank every refresh.
 func TestQuotesWorker_RefusesAQuoteDatedZeroOrAfterToday(t *testing.T) {
 	tests := []struct {
 		name string
@@ -485,9 +432,7 @@ func TestQuotesWorker_RefusesAQuoteDatedZeroOrAfterToday(t *testing.T) {
 				t.Errorf("ticker attribute = %q, want SBER", got)
 			}
 
-			// The debug line for "no price at all" belongs to a different
-			// ticker in a different state; it must not also fire here, or the
-			// log would carry two different explanations for the one quote.
+			// The "no price" line must not also fire for it.
 			if lines := linesFor(*records, "marketdata: no price for ticker, skipping"); len(lines) != 0 {
 				t.Errorf("also logged the no-price line, want only the refusal above: the provider DID "+
 					"answer for this ticker, just not with a storable date:\n%s", showLines(lines))
@@ -496,12 +441,7 @@ func TestQuotesWorker_RefusesAQuoteDatedZeroOrAfterToday(t *testing.T) {
 	}
 }
 
-// TestQuotesWorker_AcceptsAQuoteDatedExactlyToday pins the boundary the
-// guard above must not overreach past: "today" itself is a real session a
-// quote can legitimately be dated, and only a date strictly AFTER it is
-// refused. A guard written as >= instead of > would reject today's own
-// price along with tomorrow's, which is a second false rejection this test
-// exists to catch on its own.
+// Today itself is accepted: the guard is >, not >=.
 func TestQuotesWorker_AcceptsAQuoteDatedExactlyToday(t *testing.T) {
 	store, instStore, ctx := newJobsFixture(t)
 
@@ -531,19 +471,14 @@ func TestQuotesWorker_AcceptsAQuoteDatedExactlyToday(t *testing.T) {
 	}
 }
 
-// futureDay returns midnight UTC, n calendar days after the real "today" —
-// used to build a date the worker's Work (which reads the wall clock
-// directly, not through an injectable seam) will reliably see as today or
-// later, whatever moment the test happens to run at. n == 0 is today itself.
+// futureDay returns midnight UTC n days after the real today.
 func futureDay(n int) time.Time {
 	now := time.Now().UTC().AddDate(0, 0, n)
 	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 }
 
-// futureOrZeroQuoteDateMsg is the quotes worker's message for a quote it
-// refused for carrying no date, or one dated after today — copied here
-// rather than imported so that rewording the production message turns this
-// test red, the same reasoning behind droppedRateMsg above.
+// Production messages are copied here, not imported, so rewording them
+// breaks these tests.
 const futureOrZeroQuoteDateMsg = "marketdata: provider reported a quote with no date or dated after today, refusing to store it (this instrument keeps whatever earlier quote it already has)"
 
 func TestQuotesWorker_NoTradableInstrumentsSkipsProviderCall(t *testing.T) {
@@ -582,14 +517,8 @@ func TestQuotesWorker_ProviderErrorReturnsFromWork(t *testing.T) {
 
 // --- structured log capture -------------------------------------------------
 
-// logLine is one record a worker logged, kept as structure rather than as
-// rendered text. Matching a substring against a log buffer cannot tell a Warn
-// from a Debug: the same words render either way, so demoting a message —
-// which makes it vanish on a production instance, where the level is info —
-// would leave such a test green while the operator loses the only signal there
-// is. That mistake has been made in this repository before. Here the level and
-// the attributes are separate fields, so an assertion has to name which one it
-// means.
+// logLine is a captured record with its level and attributes kept apart, so
+// a test can tell a Warn from a Debug.
 type logLine struct {
 	level slog.Level
 	msg   string
@@ -602,16 +531,12 @@ type recordingHandler struct {
 	base    []slog.Attr
 }
 
-// newRecordingLogger returns a logger that keeps what it is given, and the
-// slice it keeps it in.
 func newRecordingLogger() (*slog.Logger, *[]logLine) {
 	var records []logLine
 	return slog.New(&recordingHandler{records: &records}), &records
 }
 
-// Enabled is true at every level: a test about a Debug line must be able to
-// see one, and the level a record carries is asserted on directly rather than
-// filtered here.
+// Every level is enabled; tests assert the level directly.
 func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
 
 func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
@@ -631,41 +556,25 @@ func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
 	return nil
 }
 
-// WithAttrs carries the attributes forward rather than dropping them. No
-// worker uses logger.With today; one that started would otherwise lose exactly
-// the attributes these tests assert on, and the failure would point at the
-// code under test instead of at this helper.
+// WithAttrs keeps attributes, in case a worker starts using logger.With.
 func (h *recordingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &recordingHandler{records: h.records, base: append(slices.Clip(h.base), attrs...)}
 }
 
-// WithGroup panics rather than pretending: grouped attributes would land in
-// this flat map under their bare keys, which is not what the caller wrote, and
-// a test passing on a misread record is worse than one that stops.
+// WithGroup panics: grouped attributes would be misread as flat ones.
 func (h *recordingHandler) WithGroup(string) slog.Handler {
 	panic("recordingHandler: grouped attributes are not modelled; teach it if a worker starts using them")
 }
 
-// droppedRateMsg is the message the fx workers log for a rate the fx_rates
-// table would refuse. It is spelled out here rather than imported from the
-// package under test on purpose: a copy is what makes rewording the production
-// message turn these tests red, where a shared constant would let the two move
-// together and pin nothing.
 const droppedRateMsg = "marketdata: source published a rate that is not positive, dropping it (this pair keeps whatever earlier rate it already has)"
 
-// emptySeriesMsg, allRefusedMsg and downloadedMsg are the backfill worker's
-// three verdicts on one currency's series, copied here for the same reason
-// droppedRateMsg is: they name three different causes with the same
-// user-visible outcome, and a test that let them drift would be a test that
-// stopped telling them apart.
+// The backfill's three verdicts on a currency's series.
 const (
 	emptySeriesMsg = "marketdata: source published no rates for currency over the whole range (its amounts stay unconverted)"
 	allRefusedMsg  = "marketdata: every rate the source published for this currency was refused as not positive (its amounts keep whatever earlier rates they already have)"
 	downloadedMsg  = "marketdata: downloaded fx history"
 )
 
-// linesFor returns every captured record carrying this exact message, in the
-// order they were logged.
 func linesFor(records []logLine, msg string) []logLine {
 	var found []logLine
 	for _, r := range records {
@@ -696,16 +605,9 @@ func showLines(records []logLine) string {
 
 // --- ticker collisions ------------------------------------------------------
 
-// fakeInstrumentLister hands the quotes worker a catalog listing directly.
-//
-// The state it exists to produce — two tradable instruments under one ticker —
-// cannot be built through instrument.Store any more: migration 0011 makes
-// the column unique and the store refuses the second row (see
-// instrument.TestTickerIsUniqueAmongInstrumentsThatCarryOne). That is exactly
-// why the worker checks as well: it consumes a LIST, not a table, and a
-// mapping step that silently drops an entry has to say so whatever the list
-// came from — a widened ListTradable, a second catalog source, or an index
-// somebody dropped by hand.
+// fakeInstrumentLister hands the worker a list directly: two tradable rows
+// under one ticker can no longer be stored (migration 0011), but the worker
+// consumes a list and must still handle it.
 type fakeInstrumentLister struct {
 	insts []instrument.Instrument
 	err   error
@@ -719,15 +621,8 @@ func quotesJob() *river.Job[marketdata.RefreshQuotesArgs] {
 	return &river.Job[marketdata.RefreshQuotesArgs]{Args: marketdata.RefreshQuotesArgs{}}
 }
 
-// TestQuotesWorker_OneTickerTwoCurrenciesArePricedApart is the pair the catalog
-// now allows, and the reason it can: AT&T trades as "T" in dollars and
-// Т-Технологии as "T" in rubles. The exchange answering in rubles is answering
-// about the Russian company, and matching on the currency is what says so.
-//
-// Before this, one of the two was priced with the other's number or not priced
-// at all, depending on the order a list came back in — which is why migration
-// 0011 forbade the pair outright and left the owner unable to catalogue the
-// paper his broker reports.
+// One ticker in two currencies is priced apart: AT&T is "T" in dollars,
+// Т-Технологии "T" in rubles.
 func TestQuotesWorker_OneTickerTwoCurrenciesArePricedApart(t *testing.T) {
 	store, instStore, ctx := newJobsFixture(t)
 
@@ -760,8 +655,7 @@ func TestQuotesWorker_OneTickerTwoCurrenciesArePricedApart(t *testing.T) {
 		t.Fatalf("Work: %v", err)
 	}
 
-	// Asked ONCE: the provider's interface speaks in bare tickers, and two rows
-	// sharing one have nothing extra to ask about.
+	// Asked once: the provider speaks bare tickers.
 	if len(calls) != 1 || !slices.Equal(calls[0], []string{"T"}) {
 		t.Errorf("provider was asked for %v, want one T", calls)
 	}
@@ -778,28 +672,13 @@ func TestQuotesWorker_OneTickerTwoCurrenciesArePricedApart(t *testing.T) {
 	}
 }
 
-// TestQuotesWorker_TwoInstrumentsUnderOneTickerAndCurrencyArePricedNeitherWay is
-// issue #26 as it stands now. The worker matches a price to a catalog row by
-// ticker AND currency, so two papers under one ticker on two exchanges are told
-// apart by the currency the provider itself reports — that is what lets AT&T and
-// Т-Технологии both live under "T" (migration 0020).
-//
-// What remains ambiguous is a pair that agrees on BOTH. There nothing separates
-// them, and the price goes to neither: handing it to whichever row was seen
-// first is a coin toss over which company a real number belongs to. Before #26
-// that coin toss happened in silence.
-//
-// WARN, and the run continues. Warn rather than Debug because Debug is off on a
-// production instance, which is precisely where the silence hurt; Warn rather
-// than a failed job because retrying cannot resolve a duplicate — River would
-// retry forever and every other instrument would stop being priced too.
+// Two rows agreeing on ticker and currency are priced neither way (#26), with
+// a Warn, and the run continues: retrying cannot resolve a duplicate.
 func TestQuotesWorker_TwoInstrumentsUnderOneTickerAndCurrencyArePricedNeitherWay(t *testing.T) {
 	store, instStore, ctx := newJobsFixture(t)
 
-	// Two real catalog rows, so the quote written for the winner has an
-	// instrument to point at (quotes.instrument_id is a foreign key). The
-	// collision is then staged in the LIST the worker is handed, which is the
-	// only place it can exist now that the column is unique.
+	// Real catalog rows (quotes reference them); the collision is staged in the
+	// list, the only place it can exist.
 	sber, err := instStore.Create(ctx, instrument.Instrument{
 		Type: instrument.TypeShare, Name: "Сбербанк", Ticker: "SBER", Currency: "RUB",
 	})
@@ -834,8 +713,7 @@ func TestQuotesWorker_TwoInstrumentsUnderOneTickerAndCurrencyArePricedNeitherWay
 		t.Errorf("the collision was logged at %s, want WARN: Debug is off on a production instance, "+
 			"which is exactly where this went unnoticed", line.level)
 	}
-	// The attributes have to name all three things a person needs to fix it:
-	// which ticker, which instrument got the price, which one did not.
+	// The line names the ticker and both instruments.
 	if got := line.attrs["ticker"]; got != "SBER" {
 		t.Errorf("ticker attribute = %q, want SBER", got)
 	}
@@ -854,9 +732,7 @@ func TestQuotesWorker_TwoInstrumentsUnderOneTickerAndCurrencyArePricedNeitherWay
 		t.Errorf("provider was asked for %v, want one SBER: the second row adds nothing to ask for", calls)
 	}
 
-	// NEITHER is priced, which is the outcome the warning exists to explain, so
-	// it has to be the outcome that happens. Being seen first must buy nothing:
-	// the price belongs to one of these two papers and nothing here knows which.
+	// Neither is priced: being seen first buys nothing.
 	latest, err := store.LatestQuotes(ctx, []uuid.UUID{sber.ID, twin.ID})
 	if err != nil {
 		t.Fatalf("LatestQuotes: %v", err)
@@ -869,19 +745,8 @@ func TestQuotesWorker_TwoInstrumentsUnderOneTickerAndCurrencyArePricedNeitherWay
 	}
 }
 
-// TestQuotesWorker_TickerTheCatalogDoesNotHoldIsLoggedAtDebug closes the last
-// silent drop in this worker: a ticker the provider reported that no catalog
-// row carries used to be skipped with no record at all — unlike the sibling
-// case, "we asked and got no price", which has always logged. Silence has to
-// be a decision, so the two now match.
-//
-// DEBUG, deliberately, and the same level as that sibling. Nothing of ours
-// goes unvalued because of it: the provider is asked for a fixed list and is
-// free to answer with whatever it likes (MOEX filters its own boards, so this
-// is empty in practice), and any instrument that did go unpriced says so on
-// its own line. Promoting it to Warn would put lines an operator can do
-// nothing about into every production log; leaving it silent would hide the
-// one thing that explains a ticker spelt differently on the two sides.
+// A ticker the catalog does not hold is logged at Debug, like "no price":
+// nothing of ours goes unpriced over it.
 func TestQuotesWorker_TickerTheCatalogDoesNotHoldIsLoggedAtDebug(t *testing.T) {
 	store, instStore, ctx := newJobsFixture(t)
 
@@ -915,8 +780,7 @@ func TestQuotesWorker_TickerTheCatalogDoesNotHoldIsLoggedAtDebug(t *testing.T) {
 		t.Errorf("provider attribute = %q, want fake-quotes", got)
 	}
 
-	// The known ticker in the same batch is still stored: one unknown name
-	// must not cost the quotes that came with it.
+	// The known ticker in the same batch is still stored.
 	latest, err := store.LatestQuotes(ctx, []uuid.UUID{sber.ID})
 	if err != nil {
 		t.Fatalf("LatestQuotes: %v", err)
@@ -926,16 +790,8 @@ func TestQuotesWorker_TickerTheCatalogDoesNotHoldIsLoggedAtDebug(t *testing.T) {
 	}
 }
 
-// TestQuotesWorker_InstrumentsWithNoTickerAreNotReportedAsACollision is about
-// what the worker SAYS in the one scenario its collision check exists for.
-// That check defends against a list ListTradable would not have produced —
-// including one that stopped excluding tickerless rows. Every such row keys on
-// the empty string, so they would all collide with one another, and the
-// collision line would announce "two instruments share a ticker, only one of
-// them can be priced" with ticker="": they share no ticker, and neither is
-// priced with or without the other. A guard kept for a case it describes
-// wrongly is worse than no guard, so the empty ticker is recognised for what it
-// is, on a line of its own, and nothing is asked of the provider for it.
+// Tickerless rows are reported on a line of their own, not as a collision on
+// the empty ticker, and nothing is asked for them.
 func TestQuotesWorker_InstrumentsWithNoTickerAreNotReportedAsACollision(t *testing.T) {
 	store, instStore, ctx := newJobsFixture(t)
 
@@ -966,8 +822,7 @@ func TestQuotesWorker_InstrumentsWithNoTickerAreNotReportedAsACollision(t *testi
 				"they share the absence of one, and neither is priced either way", r.attrs["ticker"])
 		}
 	}
-	// Each of them is still accounted for — silence is what this worker was
-	// fixed for — and named by id, there being no ticker to name it by.
+	// Each is still logged, by id.
 	var seen []string
 	for _, r := range *records {
 		if r.msg == "marketdata: instrument has no ticker, there is nothing to ask a price for" {
@@ -983,8 +838,7 @@ func TestQuotesWorker_InstrumentsWithNoTickerAreNotReportedAsACollision(t *testi
 		}
 	}
 
-	// And the empty string never reaches the provider: it is not a ticker, and
-	// asking for it would be asking for nothing under a name.
+	// The empty string never reaches the provider.
 	if len(calls) != 1 || len(calls[0]) != 0 {
 		t.Errorf("provider was asked for %q, want one call with nothing in it", calls)
 	}
@@ -992,10 +846,8 @@ func TestQuotesWorker_InstrumentsWithNoTickerAreNotReportedAsACollision(t *testi
 
 // --- historical fx backfill -------------------------------------------------
 
-// cbrIDs stands in for the Bank of Russia's ISO code -> internal identifier
-// map. The identifiers are the real ones (the lira's genuinely carries a
-// letter suffix), so asserting on them also pins that it is the *internal*
-// identifier, not the ISO code, that reaches the history endpoint.
+// cbrIDs uses the bank's real identifiers, so tests also pin that the
+// identifier, not the ISO code, reaches the history endpoint.
 var cbrIDs = map[string]string{
 	"USD": "R01235",
 	"EUR": "R01239",
@@ -1003,19 +855,14 @@ var cbrIDs = map[string]string{
 	"TRY": "R01700J",
 }
 
-// rangeRequest is one call to RatesRange: which currency, under which
-// internal identifier, over which range.
 type rangeRequest struct {
 	code       string
 	currencyID string
 	from, to   time.Time
 }
 
-// recordingHistoryProvider is a network-free stand-in for
-// marketdata.FxHistoryProvider that records every request it receives, so a
-// test can assert both how many requests a run made and what each one
-// covered — the difference between "one request for the whole range" and
-// "the range walked in pieces".
+// recordingHistoryProvider records every request, so tests can tell one
+// request for the whole range from a range walked in pieces.
 type recordingHistoryProvider struct {
 	ids      map[string]string // ISO code -> internal id; absent = not quoted by this source
 	idCalls  int
@@ -1030,9 +877,7 @@ type recordingHistoryProvider struct {
 
 func (p *recordingHistoryProvider) Name() string { return "fake-fx" }
 
-// RatesOn exists only because FxHistoryProvider embeds FxProvider: the
-// backfill job must never fetch history one day at a time, so a call here is
-// itself a failure.
+// RatesOn must never be called: history is never fetched a day at a time.
 func (p *recordingHistoryProvider) RatesOn(context.Context, time.Time) ([]marketdata.FxRate, error) {
 	return nil, errors.New("backfill must not fetch history one day at a time")
 }
@@ -1045,12 +890,8 @@ func (p *recordingHistoryProvider) CurrencyIDs(context.Context) (map[string]stri
 	return p.ids, nil
 }
 
-// RatesRange answers with two rates, one dated at each end of the requested
-// range, so what was stored reflects what was asked for.
-//
-// For zeroFor's code the older of the two carries a zero rate — a value the
-// fx_rates CHECK refuses — while the newer stays sound, so a test can tell
-// "the bad record was dropped" apart from "the series was thrown away".
+// RatesRange answers a rate at each end of the range. For zeroFor the older
+// one is zero, so a dropped record can be told from a dropped series.
 func (p *recordingHistoryProvider) RatesRange(
 	_ context.Context, code, currencyID string, from, to time.Time,
 ) ([]marketdata.FxRate, error) {
@@ -1074,8 +915,6 @@ func (p *recordingHistoryProvider) RatesRange(
 	}, nil
 }
 
-// codesAsked lists the ISO codes the provider was asked for a series of, in
-// call order.
 func (p *recordingHistoryProvider) codesAsked() []string {
 	out := make([]string, len(p.requests))
 	for i, r := range p.requests {
@@ -1084,13 +923,8 @@ func (p *recordingHistoryProvider) codesAsked() []string {
 	return out
 }
 
-// fakeOpStore stands in for the two *operation.Store methods the backfill
-// worker uses, so these tests can set a lower bound and a currency set
-// without building a whole space/account/operation tree. err and
-// currenciesErr are independent so a test can make EarliestRecordedDay
-// succeed while DistinctCurrencies fails (or vice versa) — the two are read
-// at different points in Work, and the read-currencies branch must be
-// reachable without the range-start branch tripping first.
+// fakeOpStore stands in for the operation store; its two errors are
+// independent, so either read can fail on its own.
 type fakeOpStore struct {
 	earliest      time.Time
 	err           error
@@ -1138,10 +972,8 @@ func (s fakeSpaceStore) DistinctBaseCurrencies(context.Context) ([]string, error
 	return s.base, nil
 }
 
-// pinnedToday is the date backfill tests pin the worker's clock to: the upper
-// end of every range it should request. It sits far from the real wall clock
-// on purpose — a worker that read time.Now() instead of its injected clock
-// would ask for a visibly different range.
+// pinnedToday is the backfill tests' clock, far from the wall clock so a worker
+// reading time.Now() asks for a visibly different range.
 var pinnedToday = date("2025-11-20")
 
 func newBackfillFixture(t *testing.T) (*marketdata.Store, *pgxpool.Pool, context.Context) {
@@ -1168,10 +1000,8 @@ func backfillJob() *river.Job[marketdata.BackfillFxArgs] {
 	return &river.Job[marketdata.BackfillFxArgs]{Args: marketdata.BackfillFxArgs{}}
 }
 
-// riverInsertClient wires up an insert-only River client and returns a
-// context carrying it, the way River itself supplies one to a running
-// worker's job context. The backfill job must not enqueue anything at all
-// any more, and a context without a client could hide an attempt to.
+// riverInsertClient returns a context carrying an insert-only River client, as
+// a running job's context would, so an attempt to enqueue would not be hidden.
 func riverInsertClient(t *testing.T, ctx context.Context, pool *pgxpool.Pool) context.Context {
 	t.Helper()
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{Logger: slog.Default()})
@@ -1203,8 +1033,7 @@ func countFxRates(t *testing.T, ctx context.Context, pool *pgxpool.Pool) int {
 	return n
 }
 
-// utcToday is the wall clock's current date at midnight UTC — the upper range
-// bound a worker built by the production constructor must use.
+// utcToday is today at midnight UTC.
 func utcToday() time.Time {
 	n := time.Now().UTC()
 	return time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC)
@@ -1218,8 +1047,7 @@ func showDates(ds []time.Time) string {
 	return strings.Join(out, ",")
 }
 
-// showRequests renders the recorded requests as "CODE(id):from..to", so a
-// failure message says which ranges were actually asked for.
+// showRequests renders requests as "CODE(id):from..to".
 func showRequests(rs []rangeRequest) string {
 	out := make([]string, len(rs))
 	for i, r := range rs {
@@ -1233,8 +1061,7 @@ func TestBackfillFx_NoOperationsSkipsProviderEntirely(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
 	provider := &recordingHistoryProvider{ids: cbrIDs}
-	// Currencies are in use, but with no operations there is no date range to
-	// fetch them over, so the source must not be touched at all.
+	// With no operations there is no range, so the source is not touched.
 	worker := newBackfillWorker(store,
 		fakeOpStore{err: pgx.ErrNoRows, currencies: []string{"USD"}},
 		fakeAccountStore{currencies: []string{"RUB", "USD"}},
@@ -1250,12 +1077,8 @@ func TestBackfillFx_NoOperationsSkipsProviderEntirely(t *testing.T) {
 	}
 }
 
-// TestBackfillFx_EarliestOperationLookupErrorFailsTheJob covers the read
-// failure at jobs.go's rangeStart that is distinct from "no rows": unlike
-// pgx.ErrNoRows, which means "nothing to fetch" and must not fail the job,
-// any other error means the store could not be read at all and must fail
-// it — otherwise the job goes green while the database silently sat there
-// unreadable.
+// A read error other than "no rows" fails the job instead of passing for
+// "nothing to fetch".
 func TestBackfillFx_EarliestOperationLookupErrorFailsTheJob(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
@@ -1281,8 +1104,7 @@ func TestBackfillFx_OnlyTheQuoteCurrencyInUseSkipsProviderEntirely(t *testing.T)
 	store, _, ctx := newBackfillFixture(t)
 
 	provider := &recordingHistoryProvider{ids: cbrIDs}
-	// Rates are stored as "currency -> RUB", so an all-RUB instance needs no
-	// rates at all: the rouble against itself is not a thing to download.
+	// An all-RUB instance needs no rates.
 	worker := newBackfillWorker(store,
 		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"RUB"}},
 		fakeAccountStore{currencies: []string{"RUB"}},
@@ -1301,16 +1123,12 @@ func TestBackfillFx_OnlyTheQuoteCurrencyInUseSkipsProviderEntirely(t *testing.T)
 func TestBackfillFx_RequestsEveryCurrencyInUseExceptTheQuoteCurrency(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
-	// This provider quotes RUB, which the real source does not. Without it, a
-	// RUB request would be dropped for want of an identifier and the "rates
-	// are quoted against RUB, never fetched for it" rule would look enforced
-	// when nothing enforced it.
+	// This provider quotes RUB (the real one does not), so the "never fetched for
+	// RUB" rule is actually exercised.
 	ids := map[string]string{"RUB": "R00000"}
 	maps.Copy(ids, cbrIDs)
 	provider := &recordingHistoryProvider{ids: ids}
-	// USD is deliberately in both lists — an account is denominated in it and
-	// operations are recorded in it — so a currency in use twice is still one
-	// download.
+	// USD is in use twice and still downloaded once.
 	worker := newBackfillWorker(store,
 		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"EUR", "RUB", "USD"}},
 		fakeAccountStore{currencies: []string{"RUB", "USD"}},
@@ -1337,78 +1155,48 @@ func TestBackfillFx_RequestsEveryCurrencyInUseExceptTheQuoteCurrency(t *testing.
 	}
 }
 
-// TestBackfillFx_AccountCurrenciesReadErrorFailsTheJob covers the account
-// currency read in wantedCurrencies. A swallowed error here would let the
-// job report success while silently working from an incomplete (or empty)
-// currency set — rates for currencies only ever held in accounts, never
-// mentioned in an operation or a space base, would quietly stop being
-// fetched.
-func TestBackfillFx_AccountCurrenciesReadErrorFailsTheJob(t *testing.T) {
-	store, _, ctx := newBackfillFixture(t)
-
+// A failed read of any currency source fails the job before the provider is
+// asked anything, so River retries instead of working from a partial set.
+func TestBackfillFx_ACurrencyReadErrorFailsTheJob(t *testing.T) {
 	wantErr := errors.New("db unreachable")
-	provider := &recordingHistoryProvider{ids: cbrIDs}
-	worker := newBackfillWorker(store,
-		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"EUR"}},
-		fakeAccountStore{err: wantErr},
-		fakeSpaceStore{base: []string{"RUB"}},
-		provider, slog.Default())
+	for _, c := range []struct {
+		name     string
+		ops      fakeOpStore
+		accounts fakeAccountStore
+		spaces   fakeSpaceStore
+	}{
+		{
+			"accounts",
+			fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"EUR"}},
+			fakeAccountStore{err: wantErr},
+			fakeSpaceStore{base: []string{"RUB"}},
+		},
+		{
+			"operations",
+			fakeOpStore{earliest: date("2024-01-10"), currenciesErr: wantErr},
+			fakeAccountStore{currencies: []string{"USD"}},
+			fakeSpaceStore{base: []string{"RUB"}},
+		},
+		{
+			"space base currencies",
+			fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"EUR"}},
+			fakeAccountStore{currencies: []string{"USD"}},
+			fakeSpaceStore{err: wantErr},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			store, _, ctx := newBackfillFixture(t)
+			provider := &recordingHistoryProvider{ids: cbrIDs}
+			worker := newBackfillWorker(store, c.ops, c.accounts, c.spaces, provider, slog.Default())
 
-	err := worker.Work(ctx, backfillJob())
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("Work err = %v, want %v so River retries the job", err, wantErr)
-	}
-	if provider.idCalls != 0 || len(provider.requests) != 0 {
-		t.Fatalf("provider: %d currency-id calls, requests [%s]; want none when the account currency read fails",
-			provider.idCalls, showRequests(provider.requests))
-	}
-}
-
-// TestBackfillFx_OperationCurrenciesReadErrorFailsTheJob covers the
-// operation currency read in wantedCurrencies — a different call than the
-// EarliestRecordedDay read rangeStart makes, so both must fail the job on
-// their own, independently of one another.
-func TestBackfillFx_OperationCurrenciesReadErrorFailsTheJob(t *testing.T) {
-	store, _, ctx := newBackfillFixture(t)
-
-	wantErr := errors.New("db unreachable")
-	provider := &recordingHistoryProvider{ids: cbrIDs}
-	worker := newBackfillWorker(store,
-		fakeOpStore{earliest: date("2024-01-10"), currenciesErr: wantErr},
-		fakeAccountStore{currencies: []string{"USD"}},
-		fakeSpaceStore{base: []string{"RUB"}},
-		provider, slog.Default())
-
-	err := worker.Work(ctx, backfillJob())
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("Work err = %v, want %v so River retries the job", err, wantErr)
-	}
-	if provider.idCalls != 0 || len(provider.requests) != 0 {
-		t.Fatalf("provider: %d currency-id calls, requests [%s]; want none when the operation currency read fails",
-			provider.idCalls, showRequests(provider.requests))
-	}
-}
-
-// TestBackfillFx_SpaceBaseCurrenciesReadErrorFailsTheJob covers the space
-// base currency read in wantedCurrencies.
-func TestBackfillFx_SpaceBaseCurrenciesReadErrorFailsTheJob(t *testing.T) {
-	store, _, ctx := newBackfillFixture(t)
-
-	wantErr := errors.New("db unreachable")
-	provider := &recordingHistoryProvider{ids: cbrIDs}
-	worker := newBackfillWorker(store,
-		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"EUR"}},
-		fakeAccountStore{currencies: []string{"USD"}},
-		fakeSpaceStore{err: wantErr},
-		provider, slog.Default())
-
-	err := worker.Work(ctx, backfillJob())
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("Work err = %v, want %v so River retries the job", err, wantErr)
-	}
-	if provider.idCalls != 0 || len(provider.requests) != 0 {
-		t.Fatalf("provider: %d currency-id calls, requests [%s]; want none when the space base currency read fails",
-			provider.idCalls, showRequests(provider.requests))
+			if err := worker.Work(ctx, backfillJob()); !errors.Is(err, wantErr) {
+				t.Fatalf("Work err = %v, want %v so River retries the job", err, wantErr)
+			}
+			if provider.idCalls != 0 || len(provider.requests) != 0 {
+				t.Fatalf("provider: %d currency-id calls, requests [%s]; want none",
+					provider.idCalls, showRequests(provider.requests))
+			}
+		})
 	}
 }
 
@@ -1416,8 +1204,7 @@ func TestBackfillFx_IncludesTheSpaceBaseCurrency(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
 	provider := &recordingHistoryProvider{ids: cbrIDs}
-	// Nothing is held or spent in GBP, but the space totals are displayed in
-	// it, so its rates are needed just the same.
+	// GBP is only a space's base currency and still needed.
 	worker := newBackfillWorker(store,
 		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"RUB"}},
 		fakeAccountStore{currencies: []string{"RUB"}},
@@ -1432,10 +1219,8 @@ func TestBackfillFx_IncludesTheSpaceBaseCurrency(t *testing.T) {
 	}
 }
 
-// TestBackfillFx_AsksForEachSeriesOnceOverTheWholeRange is the point of the
-// whole job: one request per currency, covering the entire range from the
-// oldest operation to today. Any implementation that splits the range into
-// chunks, walks the calendar, or repeats a currency fails here.
+// One request per currency, covering the oldest operation to today: no
+// chunking, no calendar walk, no repeats.
 func TestBackfillFx_AsksForEachSeriesOnceOverTheWholeRange(t *testing.T) {
 	store, pool, ctx := newBackfillFixture(t)
 
@@ -1456,12 +1241,8 @@ func TestBackfillFx_AsksForEachSeriesOnceOverTheWholeRange(t *testing.T) {
 		t.Fatalf("provider got %d requests [%s], want exactly one per currency (2)",
 			len(provider.requests), showRequests(provider.requests))
 	}
-	// A MONTH BEFORE THE OLDEST OPERATION, not the day of it. A rate is looked
-	// up by nearest earlier date, so an operation dated before the first row in
-	// the table can never be converted — and rates are published on business
-	// days, so asking from the operation's own day leaves a purchase on a
-	// Saturday, or on the second of January, with nothing behind it. See
-	// backfillLeadDays.
+	// A month before the oldest operation (see backfillLeadDays), so a weekend
+	// purchase has an earlier rate to resolve to.
 	wantFrom := earliest.AddDate(0, 0, -31)
 	for _, r := range provider.requests {
 		if !r.from.Equal(wantFrom) || !r.to.Equal(pinnedToday) {
@@ -1471,11 +1252,8 @@ func TestBackfillFx_AsksForEachSeriesOnceOverTheWholeRange(t *testing.T) {
 		}
 	}
 
-	// Both ends of both series must have landed in the database — and the older
-	// end is what the lead buys: the oldest operation itself resolves to a rate
-	// dated at or before it, which is the whole reason the range starts before
-	// it. (The fixture's provider answers with the ends of the range it was
-	// asked for, so the older row IS wantFrom.)
+	// Both ends of both series are stored; the older end resolves the oldest
+	// operation.
 	for _, code := range []string{"EUR", "USD"} {
 		got, err := store.FxRateOn(ctx, code, "RUB", earliest)
 		if err != nil {
@@ -1500,12 +1278,8 @@ func TestBackfillFx_AsksForEachSeriesOnceOverTheWholeRange(t *testing.T) {
 	}
 }
 
-// wantWarned asserts that some logged line carries BOTH level=WARN and the
-// given substring. Matching the substring against the whole buffer cannot
-// tell a Warn from a Debug, so demoting one of these messages — which makes
-// it vanish entirely on a production instance, where the default level is
-// info — would leave such a test green while the operator loses the only
-// signal there is.
+// wantWarned asserts a line at WARN carrying substr; a substring match alone
+// cannot tell Warn from Debug.
 func wantWarned(t *testing.T, logs *bytes.Buffer, substr string) {
 	t.Helper()
 	for line := range strings.SplitSeq(logs.String(), "\n") {
@@ -1516,11 +1290,8 @@ func wantWarned(t *testing.T, logs *bytes.Buffer, substr string) {
 	t.Fatalf("no WARN line mentioning %q:\n%s", substr, logs.String())
 }
 
-// TestBackfillFx_CurrencyIDsErrorFailsTheJob covers the one remaining way a
-// run can fail before any series is asked for. Swallowing it would be the
-// worst kind of quiet: River would close the job as successful, no retry
-// would follow, no history would be downloaded for any currency at all, and
-// the log would read like an ordinary run.
+// A CurrencyIDs error fails the job: swallowed, the run would close green
+// with no history downloaded.
 func TestBackfillFx_CurrencyIDsErrorFailsTheJob(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
@@ -1542,12 +1313,8 @@ func TestBackfillFx_CurrencyIDsErrorFailsTheJob(t *testing.T) {
 	}
 }
 
-// TestBackfillFx_EmptySeriesIsWarnedNotReportedAsADownload covers a currency
-// the source has an identifier for yet publishes nothing under, across the
-// whole range — most likely a retired identifier. The user-visible outcome
-// is the same as for a currency the source doesn't quote at all (amounts
-// stay unconverted), so it has to be as visible; an Info line reading
-// "rates=0" looks exactly like a run that worked.
+// A currency with an identifier but nothing published over the range is
+// warned about, not logged as an ordinary download.
 func TestBackfillFx_EmptySeriesIsWarnedNotReportedAsADownload(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
@@ -1564,28 +1331,20 @@ func TestBackfillFx_EmptySeriesIsWarnedNotReportedAsADownload(t *testing.T) {
 		t.Fatalf("Work: %v, want an empty series to be reported, not to fail the run", err)
 	}
 
-	// The other currency still downloads: one silent series must not cost the
-	// rest of the run.
+	// The other currency still downloads.
 	if _, err := store.FxRateOn(ctx, "USD", "RUB", pinnedToday); err != nil {
 		t.Fatalf("USD rates missing after the run: %v", err)
 	}
 	wantWarned(t, &logs, "GBP")
 }
 
-// TestBackfillFx_NonPositiveRateIsDroppedAndTheRestOfTheSeriesStored is the
-// history half of the poison batch (#28). One request brings back a whole
-// multi-year series, and it is upserted as one batch: before this, a single
-// unusable record anywhere in it discarded every other rate in that currency's
-// entire history, and the retry brought the identical series back.
-//
-// A currency that is not the poisoned one is downloaded in the same run, so
-// the test also says that one bad series does not end the run.
+// A non-positive record in a history series is dropped and the rest stored
+// (#28); another currency in the same run is unaffected.
 func TestBackfillFx_NonPositiveRateIsDroppedAndTheRestOfTheSeriesStored(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
 	log, records := newRecordingLogger()
-	// GBP's series carries a zero at its older end and a sound rate at its
-	// newer one; USD's is sound throughout.
+	// GBP's older record is zero; USD's series is sound.
 	provider := &recordingHistoryProvider{ids: cbrIDs, zeroFor: "GBP"}
 	worker := newBackfillWorker(store,
 		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"GBP"}},
@@ -1605,8 +1364,7 @@ func TestBackfillFx_NonPositiveRateIsDroppedAndTheRestOfTheSeriesStored(t *testi
 	if !got.Rate.Equal(dec("91.5")) {
 		t.Fatalf("GBP rate = %s, want 91.5", got.Rate)
 	}
-	// ...and the refused record is not: asking on its own date must fall
-	// through to nothing rather than find a zero.
+	// ...and the refused record is not stored.
 	if got, err := store.FxRateOn(ctx, "GBP", "RUB", date("2024-01-10")); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("FxRateOn(GBP, 2024-01-10) = %+v, err = %v, want pgx.ErrNoRows: the refused record must not be stored", got, err)
 	}
@@ -1625,15 +1383,8 @@ func TestBackfillFx_NonPositiveRateIsDroppedAndTheRestOfTheSeriesStored(t *testi
 	}
 }
 
-// TestBackfillFx_WholeSeriesRefusedIsNotReportedAsAnEmptySeries is the caption
-// half of the same change, and it is the mistake this repository keeps making:
-// the number is right and the stated reason is not.
-//
-// "The source published no rates over the whole range" is a claim about the
-// SOURCE. Checking it after the unusable records have been removed would make
-// it fire for a currency the source published plenty for, naming a cause that
-// is not the cause — while the operator, told the source is silent, goes
-// looking at cbr.ru instead of at the values.
+// A series whose every record is refused is reported as refused, not as "the
+// source published nothing", which would blame the source.
 func TestBackfillFx_WholeSeriesRefusedIsNotReportedAsAnEmptySeries(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
@@ -1661,9 +1412,6 @@ func TestBackfillFx_WholeSeriesRefusedIsNotReportedAsAnEmptySeries(t *testing.T)
 	if line.attrs["currency"] != "GBP" {
 		t.Fatalf("all-refused line names currency=%q, want GBP:\n%s", line.attrs["currency"], showLines(*records))
 	}
-	// An Info line reading "rates=0" would look like an ordinary run, which is
-	// the same trap TestBackfillFx_EmptySeriesIsWarnedNotReportedAsADownload
-	// closes for the other cause.
 	for _, l := range linesFor(*records, downloadedMsg) {
 		if l.attrs["currency"] == "GBP" {
 			t.Fatalf("GBP reported as a download:\n%s", showLines(*records))
@@ -1696,9 +1444,8 @@ func TestBackfillFx_ClampsAbsurdlyEarlyOperationToTheFloor(t *testing.T) {
 		t.Fatalf("requests [%s], want a single USD series starting at the floor %s",
 			showRequests(provider.requests), floor.Format(time.DateOnly))
 	}
-	// The dropped tail must be visible, not silently swallowed. Measured from
-	// the day the request WOULD have started at — a month before the operation
-	// (see backfillLeadDays) — because that is what the clamp actually cut.
+	// The clamped-away days are reported, counted from where the request would
+	// have started.
 	wantDropped := int(floor.Sub(date("1970-01-01").AddDate(0, 0, -31)).Hours() / 24)
 	wantWarned(t, &logs, "days_dropped="+strconv.Itoa(wantDropped))
 }
@@ -1708,8 +1455,7 @@ func TestBackfillFx_UnquotedCurrencyIsSkippedWithALogAndTheRestStillDownloaded(t
 
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	// BYN is deliberately absent from cbrIDs: a source that doesn't quote a
-	// currency has no identifier for it, so its series can't be requested.
+	// BYN has no identifier, so its series cannot be requested.
 	provider := &recordingHistoryProvider{ids: cbrIDs}
 	worker := newBackfillWorker(store,
 		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"BYN"}},
@@ -1734,8 +1480,7 @@ func TestBackfillFx_ProviderErrorFailsTheJobAndKeepsWhatWasStored(t *testing.T) 
 	store, _, ctx := newBackfillFixture(t)
 
 	wantErr := errors.New("cbr unreachable")
-	// EUR is requested before USD, so EUR's series is already stored when the
-	// USD request fails.
+	// EUR is requested first and is stored when USD fails.
 	provider := &recordingHistoryProvider{ids: cbrIDs, failFor: "USD", err: wantErr}
 	worker := newBackfillWorker(store,
 		fakeOpStore{earliest: date("2024-01-10"), currencies: []string{"EUR"}},
@@ -1758,14 +1503,8 @@ func TestBackfillFx_ProviderErrorFailsTheJobAndKeepsWhatWasStored(t *testing.T) 
 	}
 }
 
-// TestBackfillFx_StoreSaveErrorFailsTheJob covers the write side of a run: a
-// series the provider handed over successfully but the store then fails to
-// persist. Swallowing this would be the worst case for "honesty over
-// silence" — the provider call, and therefore the whole run, would report
-// success while nothing landed in the database at all. The pool is closed
-// ahead of the call to force a real Postgres error out of UpsertFxRates,
-// rather than stubbing the store behind an interface it doesn't otherwise
-// need.
+// A store error after a successful fetch fails the job. The closed pool
+// forces a real Postgres error.
 func TestBackfillFx_StoreSaveErrorFailsTheJob(t *testing.T) {
 	store, pool, ctx := newBackfillFixture(t)
 	pool.Close()
@@ -1786,11 +1525,8 @@ func TestBackfillFx_StoreSaveErrorFailsTheJob(t *testing.T) {
 	}
 }
 
-// TestBackfillFx_RepeatRunRefetchesTheRangeWithoutDuplicatingRows pins the
-// deliberate choice behind dropping the old coverage bookkeeping: a re-run
-// asks for the whole range again (which is what heals any hole an outage
-// left), it just overwrites the same rows — and it never queues a follow-up
-// job of its own.
+// A re-run asks for the whole range again, overwrites the same rows, and
+// queues nothing.
 func TestBackfillFx_RepeatRunRefetchesTheRangeWithoutDuplicatingRows(t *testing.T) {
 	store, pool, ctx := newBackfillFixture(t)
 
@@ -1826,10 +1562,8 @@ func TestBackfillFx_RepeatRunRefetchesTheRangeWithoutDuplicatingRows(t *testing.
 	}
 }
 
-// TestBackfillFx_FutureDatedOperationDoesNotInvertTheRange covers a mistyped
-// (or genuinely future-dated) operation: without a clamp the range would run
-// backwards, which the source rejects, and every run would fail for as long
-// as that operation stays in the future.
+// A future-dated operation does not make the range run backwards, which the
+// source would reject on every run.
 func TestBackfillFx_FutureDatedOperationDoesNotInvertTheRange(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
@@ -1855,15 +1589,8 @@ func TestBackfillFx_FutureDatedOperationDoesNotInvertTheRange(t *testing.T) {
 	wantWarned(t, &logs, "future")
 }
 
-// TestBackfillFx_ANearFutureOperationIsStillReported is the case the lead
-// created and nearly hid. The range now starts a month before the earliest
-// operation (backfillLeadDays), so an operation dated a few days ahead no longer
-// makes the range run backwards — and a check written against the padded start
-// would fall silent about a date nobody can have meant. It is asked of the
-// OPERATION's own day for exactly that reason.
-//
-// Five days ahead: well inside the lead, so nothing about the range itself
-// complains.
+// An operation a few days ahead is still reported, though the month's lead
+// keeps the range itself valid: the check uses the operation's own day.
 func TestBackfillFx_ANearFutureOperationIsStillReported(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
@@ -1886,14 +1613,8 @@ func TestBackfillFx_ANearFutureOperationIsStillReported(t *testing.T) {
 	wantWarned(t, &logs, "future")
 }
 
-// TestBackfillFx_FutureDatedOperationWarnsEvenWhenNoCurrencyToFetch covers an
-// instance where every account and operation is in RUB — wantedCurrencies
-// comes back empty and the run skips the provider entirely — while the
-// earliest operation's date is also corrupted into the future. The data
-// problem exists either way, so the warning must fire regardless of whether
-// there happens to be a currency left to fetch; a check order that lets the
-// empty-currency exit skip it would hide the very mistake the warning exists
-// to surface.
+// A future-dated earliest operation is reported even when there is no
+// currency to fetch.
 func TestBackfillFx_FutureDatedOperationWarnsEvenWhenNoCurrencyToFetch(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
@@ -1916,9 +1637,7 @@ func TestBackfillFx_FutureDatedOperationWarnsEvenWhenNoCurrencyToFetch(t *testin
 	wantWarned(t, &logs, "future")
 }
 
-// TestBackfillFx_ProductionConstructorUsesTheWallClock guards the clock the
-// production constructor wires in: every other backfill test pins it, so a
-// missing (or zero) clock there would go unnoticed.
+// The production constructor wires the wall clock; every other test pins it.
 func TestBackfillFx_ProductionConstructorUsesTheWallClock(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
@@ -1952,16 +1671,14 @@ func TestBackfillFx_JobTimeoutOutlastsRiversDefault(t *testing.T) {
 		fakeAccountStore{}, fakeSpaceStore{},
 		&recordingHistoryProvider{ids: cbrIDs}, slog.Default())
 
-	// River's default job timeout is one minute; one currency's twelve-year
-	// series is megabytes of XML, and a run fetches one such series per
-	// currency in use.
+	// River's default timeout is a minute; a run fetches multi-year series for
+	// every currency in use.
 	if got := worker.Timeout(backfillJob()); got <= time.Minute {
 		t.Fatalf("Timeout = %s, want more than River's one-minute default", got)
 	}
 }
 
-// fakeGoldProvider answers the exchange's gold history without a network call,
-// and records the range it was asked for.
+// fakeGoldProvider answers the gold history and records the range asked.
 type fakeGoldProvider struct {
 	rates []marketdata.FxRate
 	err   error
@@ -1976,11 +1693,8 @@ func (p *fakeGoldProvider) GoldRates(_ context.Context, from, to time.Time) ([]m
 	return p.rates, p.err
 }
 
-// TestBackfillGold_StoresTheExchangesGoldHistory is the whole of the gold path:
-// the central bank publishes no rate for it, the exchange does, and the rates
-// land in the same table every other currency's do — so a cash balance in gold
-// is valued by the same lookup a balance in dollars is, and nothing downstream
-// has to know gold is special.
+// Gold rates come from the exchange into the same table as currencies, so a
+// gold balance is valued by the same lookup.
 func TestBackfillGold_StoresTheExchangesGoldHistory(t *testing.T) {
 	store, pool, ctx := newBackfillFixture(t)
 
@@ -1995,10 +1709,7 @@ func TestBackfillGold_StoresTheExchangesGoldHistory(t *testing.T) {
 		t.Fatalf("Work: %v", err)
 	}
 
-	// A MONTH BEFORE THE EARLIEST OPERATION, for the reason rangeStart states:
-	// a rate is looked up by nearest EARLIER date, and gold trades on business
-	// days like everything else, so asking from the operation's own day leaves
-	// a purchase on a Saturday with nothing behind it.
+	// A month before the earliest operation, as for currencies.
 	if want := date("2024-10-25").AddDate(0, 0, -31); !provider.from.Equal(want) {
 		t.Errorf("asked from %s, want %s", provider.from.Format(time.DateOnly), want.Format(time.DateOnly))
 	}
@@ -2015,11 +1726,7 @@ func TestBackfillGold_StoresTheExchangesGoldHistory(t *testing.T) {
 	}
 }
 
-// TestBackfillGold_AnEmptyAnswerIsWarnedAboutRatherThanStoredSilently: the
-// exchange answered and published nothing across the whole range. Amounts in
-// gold then stay unconverted, which is the same outcome the currency backfill
-// warns about for a currency its source does not quote — and it must look like
-// a problem rather than a normal run.
+// An empty gold answer is warned about: gold amounts stay unconverted.
 func TestBackfillGold_AnEmptyAnswerIsWarnedAboutRatherThanStoredSilently(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
@@ -2035,10 +1742,8 @@ func TestBackfillGold_AnEmptyAnswerIsWarnedAboutRatherThanStoredSilently(t *test
 	wantWarned(t, &logs, "no gold prices")
 }
 
-// TestBackfillFx_GoldIsNotAskedOfTheCentralBank. It does not quote gold, and the
-// warning that would fire for it promises the amounts "stay unconverted" — which
-// is false now that the exchange covers them. A true sentence about the wrong
-// source is still the wrong sentence.
+// The CBR is not asked about gold, so no false "stays unconverted" warning
+// fires for it.
 func TestBackfillFx_GoldIsNotAskedOfTheCentralBank(t *testing.T) {
 	store, _, ctx := newBackfillFixture(t)
 
@@ -2064,14 +1769,8 @@ func TestBackfillFx_GoldIsNotAskedOfTheCentralBank(t *testing.T) {
 	}
 }
 
-// TestQuotesWorker_PricesAreMatchedByISINNotByTicker is the owner's own
-// objection, and the reason the ticker+currency answer was not good enough:
-// "придут тебе 2 одинаковых тикера с немецкой и французской бирж, оба в евро —
-// как их будешь отличать?"
-//
-// Nothing about that pair would separate them. The exchange sends the ISIN
-// beside every price and always did — this program simply did not ask for the
-// column — and an ISIN names the SECURITY where a ticker names a listing of one.
+// Prices match by ISIN, not ticker: two euro listings under one ticker on two
+// exchanges would otherwise be indistinguishable (the owner's objection).
 func TestQuotesWorker_PricesAreMatchedByISINNotByTicker(t *testing.T) {
 	store, instStore, ctx := newJobsFixture(t)
 
@@ -2114,10 +1813,7 @@ func TestQuotesWorker_PricesAreMatchedByISINNotByTicker(t *testing.T) {
 	}
 }
 
-// TestQuotesWorker_ARowWithNoISINIsStillPricedByItsTicker keeps the fallback
-// honest. Hand-entered papers carry no ISIN — and neither do some kinds no
-// exchange assigns one to — so the ticker is all such a row has, and dropping
-// the weaker match would simply stop pricing them.
+// A row with no ISIN is still priced by its ticker.
 func TestQuotesWorker_ARowWithNoISINIsStillPricedByItsTicker(t *testing.T) {
 	store, instStore, ctx := newJobsFixture(t)
 
@@ -2148,11 +1844,8 @@ func TestQuotesWorker_ARowWithNoISINIsStillPricedByItsTicker(t *testing.T) {
 	}
 }
 
-// TestQuotesWorker_ARowWithAnISINIsNotPricedByItsTickerAlone is the other side
-// of that fallback, and the case that makes it safe. A row carrying an ISIN
-// that did NOT match is not the paper the exchange answered about — it said so
-// by naming a different security — so matching the letters afterwards would be
-// the very confusion the ISIN settles.
+// A row whose ISIN did not match is not priced by ticker: the exchange named a
+// different security.
 func TestQuotesWorker_ARowWithAnISINIsNotPricedByItsTickerAlone(t *testing.T) {
 	store, instStore, ctx := newJobsFixture(t)
 

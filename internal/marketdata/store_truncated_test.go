@@ -15,28 +15,15 @@ import (
 	"babki.my/babki/internal/marketdata"
 )
 
-// This file covers the one failure a real fixture cannot be asked to produce:
-// a query that starts streaming rows and then fails partway through. Postgres
-// answers every statement these readers send either wholly or not at all, so
-// the only way to reach the code that handles a mid-stream failure is to hand
-// the Store a result set that behaves that way — see
-// marketdata.NewStoreForRows.
-//
-// What is at stake is not the error's wording. A read cut short after its
-// first row, reported as success, comes back as a SHORTER set of quotes or
-// rates, and downstream that reads as "these instruments have no quotes" —
-// an outage printed as the honest gap this application shows a person when
-// data really is missing (#71).
+// Reads that fail mid-stream, which a real Postgres cannot be made to do:
+// reported as success they would return fewer quotes or rates, which reads as
+// "no data" (#71).
 
-// scanRow fills one row's worth of Scan destinations. One per row the fake
-// yields, in the column order of the query being stood in for.
+// scanRow fills one row's Scan destinations.
 type scanRow func(dest ...any) error
 
-// truncatedRows is a pgx.Rows whose iteration ends in a failure rather than in
-// exhaustion: it yields every row in scans, and then Next reports false while
-// Err reports err — which is precisely how pgx surfaces a connection that dies
-// mid-result. A loop that watches only Next cannot tell the two apart, and
-// that is the whole subject of these tests.
+// truncatedRows yields scans and then ends with err, as pgx does when a
+// connection dies mid-result.
 type truncatedRows struct {
 	scans []scanRow
 	err   error
@@ -55,9 +42,8 @@ func (r *truncatedRows) Scan(dest ...any) error { return r.scans[r.i-1](dest...)
 func (r *truncatedRows) Err() error             { return r.err }
 func (r *truncatedRows) Close()                 {}
 
-// The rest of pgx.Rows is not part of what these readers use. Panicking rather
-// than returning a zero value keeps an accidental dependency on one of them
-// visible instead of letting it quietly read as empty data.
+// The rest of pgx.Rows is unused by these readers; panicking keeps an
+// accidental use visible.
 func (r *truncatedRows) CommandTag() pgconn.CommandTag {
 	panic("truncatedRows: CommandTag not used")
 }
@@ -69,9 +55,7 @@ func (r *truncatedRows) Values() ([]any, error) { panic("truncatedRows: Values n
 func (r *truncatedRows) RawValues() [][]byte    { panic("truncatedRows: RawValues not used") }
 func (r *truncatedRows) Conn() *pgx.Conn        { panic("truncatedRows: Conn not used") }
 
-// fixedRows answers every Query with the same result set, whatever the SQL. It
-// stands in for the connection pool, so the reader under test runs its real
-// body over a result set chosen here.
+// fixedRows answers every Query with the same result set.
 type fixedRows struct{ rows pgx.Rows }
 
 func (q fixedRows) Query(context.Context, string, ...any) (pgx.Rows, error) { return q.rows, nil }
@@ -84,16 +68,11 @@ func (q fixedRows) SendBatch(context.Context, *pgx.Batch) pgx.BatchResults {
 	panic("fixedRows: SendBatch not used")
 }
 
-// storeOver builds a Store whose reads come from one result set that yields
-// scans and then fails with err.
 func storeOver(err error, scans ...scanRow) *marketdata.Store {
 	return marketdata.NewStoreForRows(fixedRows{rows: &truncatedRows{scans: scans, err: err}})
 }
 
-// assign copies values into Scan's destinations, checking both the count and
-// each destination's type, so a fake row that stops matching the query it
-// stands in for fails loudly here rather than silently scanning a zero value
-// into the result under test.
+// assign copies values into Scan's destinations, checking count and types.
 func assign(dest []any, values ...any) error {
 	if len(dest) != len(values) {
 		return fmt.Errorf("scan: %d destinations for %d values", len(dest), len(values))
@@ -145,8 +124,7 @@ func fxRateRow(r marketdata.FxRate) scanRow {
 	}
 }
 
-// fxRateByOrdinalRow is one row of the column list Store.FxRatesOn selects:
-// the caller's key position first, then the resolved rate's own columns.
+// fxRateByOrdinalRow is a FxRatesOn row: key position, then the rate.
 func fxRateByOrdinalRow(ord int64, r marketdata.FxRate) scanRow {
 	return func(dest ...any) error {
 		return assign(dest, ord, r.On, r.Rate, r.Source)

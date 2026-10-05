@@ -11,9 +11,8 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// Amortization is one repayment of part of a bond's face value, as the
-// exchange's schedule (bondization) lists it: the day, the amount per bond, and
-// the face value the bond was issued at.
+// Amortization is one partial repayment of a bond's face in the exchange's
+// schedule (bondization).
 type Amortization struct {
 	On          time.Time
 	Value       decimal.Decimal
@@ -21,8 +20,7 @@ type Amortization struct {
 	Currency    string
 }
 
-// faceUnit is the currency code the schedule writes, in ISO-4217: the exchange
-// still writes roubles as SUR or RUR on older issues.
+// faceUnit converts the schedule's currency code (SUR, RUR) to ISO 4217.
 func faceUnit(code string) string {
 	switch c := strings.ToUpper(code); c {
 	case "SUR", "RUR":
@@ -32,8 +30,7 @@ func faceUnit(code string) string {
 	}
 }
 
-// Amortizations reads a bond's whole repayment schedule — past and future —
-// from the exchange, by its exchange code.
+// Amortizations reads a bond's whole repayment schedule by exchange code.
 func (c *Client) Amortizations(ctx context.Context, secID string) ([]Amortization, error) {
 	var body struct {
 		Amortizations struct {
@@ -94,11 +91,10 @@ func decimalOf(v any) (decimal.Decimal, error) {
 	}
 }
 
-// FaceBefore is a bond's outstanding face value per unit just before the
-// repayment the schedule lists nearest to on, within tolerance either side —
-// the broker pays a repayment on its schedule day or a few days after. It is
-// the initial face less every repayment scheduled before that one. Not found
-// when no repayment is that close, or the schedule is empty.
+// FaceBefore is the bond's outstanding face per unit just before the
+// repayment nearest to on, within tolerance either side (brokers pay on the
+// day or a few days later): the initial face less every earlier repayment.
+// Not found when no repayment is that close.
 func FaceBefore(schedule []Amortization, on time.Time, tolerance time.Duration) (decimal.Decimal, string, bool) {
 	best := -1
 	var gap time.Duration
@@ -124,9 +120,8 @@ func FaceBefore(schedule []Amortization, on time.Time, tolerance time.Duration) 
 	return face, schedule[best].Currency, true
 }
 
-// scheduleTTL is how long a bond's repayment schedule is reused before it is
-// asked for again: it changes when an issuer amends it, which is rare, and a
-// sync runs many times a day.
+// scheduleTTL is how long a schedule is cached; issuers rarely amend them, and
+// a sync runs many times a day.
 const scheduleTTL = 12 * time.Hour
 
 type cachedSchedule struct {
@@ -135,10 +130,8 @@ type cachedSchedule struct {
 	found    bool
 }
 
-// FaceBeforeByISIN answers a bond's outstanding face value per unit just before
-// a repayment on day on (see FaceBefore), finding the bond on the exchange by
-// its ISIN. Not found when the exchange does not know the bond or lists no
-// repayment near that day. Schedules are reused for scheduleTTL.
+// FaceBeforeByISIN is FaceBefore for the bond the exchange finds by ISIN, with
+// schedules cached for scheduleTTL.
 func (c *Client) FaceBeforeByISIN(ctx context.Context, isin string, on time.Time) (decimal.Decimal, string, bool, error) {
 	c.mu.Lock()
 	cached, ok := c.schedules[isin]

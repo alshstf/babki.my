@@ -17,10 +17,8 @@ import (
 	"babki.my/babki/internal/marketdata/moex"
 )
 
-// The exact ISS path of every board QuotesFor is expected to query. These
-// are spelled out literally rather than derived from the provider so that a
-// board silently disappearing from (or appearing in) the provider's list
-// shows up here as a failure naming the board.
+// Every board path QuotesFor must query, spelled out so a board dropped from
+// or added to the provider fails by name.
 const (
 	sharesPath = "/iss/engines/stock/markets/shares/boards/TQBR/securities.json"
 	bondsPath  = "/iss/engines/stock/markets/bonds/boards/TQOB/securities.json"
@@ -31,24 +29,14 @@ const (
 // wantBoardPaths is every path QuotesFor must request, exactly once each.
 var wantBoardPaths = []string{sharesPath, bondsPath, corpPath, corpDPath}
 
-// emptyBoard is a well-formed securities response with no rows: the columns
-// the provider asks for are present, so it parses cleanly and contributes
-// nothing. Used to stub boards a test does not care about.
+// emptyBoard is a valid securities response with no rows.
 var emptyBoard = []byte(`{"securities":{"columns":["SECID","PREVPRICE","PREVDATE","CURRENCYID"],"data":[]}}`)
 
-// fixtureDate is the PREVDATE every row of every testdata fixture carries: the
-// session those prices belong to. ISS reports one and the same PREVDATE for
-// every row of a board (checked on 2026-08-03: all 502 TQBR rows, all 62 TQOB,
-// 3019 of 3021 TQCB and all 47 TQRD read 2026-07-31), so the fixtures do the
-// same. It is deliberately a date no test passes in and no clock produces, so
-// an assertion on it cannot be satisfied by "today" or by anything a caller
-// supplied.
+// fixtureDate is the PREVDATE of every fixture row (ISS reports one per
+// board), a date no clock or caller produces.
 var fixtureDate = time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC)
 
-// allBoards fills in every board QuotesFor queries, so a test only has to
-// name the boards it actually cares about; the rest serve emptyBoard. It
-// exists so that adding a board to the provider does not require editing
-// every test — only the tests that assert on board contents.
+// allBoards serves emptyBoard for every board a test does not override.
 func allBoards(overrides map[string]route) map[string]route {
 	routes := make(map[string]route, len(wantBoardPaths))
 	for _, p := range wantBoardPaths {
@@ -76,17 +64,15 @@ type route struct {
 // noHistory is ISS's answer about a security it holds no sessions of.
 const noHistory = `{"history":{"columns":["TRADEDATE","NUMTRADES"],"data":[]}}`
 
-// serve starts an httptest.Server that dispatches by exact URL path to
-// routes, and records the raw query string seen for each path.
+// serve dispatches by exact path to routes and records each path's query.
 func serve(t *testing.T, routes map[string]route) (*httptest.Server, map[string]string) {
 	t.Helper()
 	gotQueries := make(map[string]string)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rt, ok := routes[r.URL.Path]
 		if !ok && strings.HasPrefix(r.URL.Path, "/iss/history/engines/stock/") {
-			// A security whose session history the test has nothing to say
-			// about. ISS answers an unknown one with an empty block, and a
-			// price then keeps its session's date (see lastTradeDay).
+			// Unknown history answers an empty block, so the price keeps its session's
+			// date.
 			rt, ok = route{status: http.StatusOK, body: []byte(noHistory)}, true
 		}
 		if !ok {
@@ -122,22 +108,15 @@ func TestQuotesFor_ParsesFixture(t *testing.T) {
 
 	c := moex.New(srv.Client(), srv.URL, nil)
 
-	// Request a mix of: a plain share (SBER), a share with a null price
-	// (GAZP, must be silently dropped), a share whose price stresses
-	// decimal precision (LKOH), a bond needing SUR->RUB mapping
-	// (SU26238RMFS4), a bond whose currency is not SUR and must pass
-	// through unchanged (RU000A105EX7), and a ticker present on neither
-	// board (NOPE, must be silently absent — not an error).
+	// A plain share, a null price (dropped), a high-precision price, a SUR bond,
+	// a non-SUR bond, and a ticker on no board (absent, not an error).
 	tickers := []string{"SBER", "GAZP", "LKOH", "SU26238RMFS4", "RU000A105EX7", "NOPE"}
 	quotes, err := c.QuotesFor(context.Background(), tickers)
 	if err != nil {
 		t.Fatalf("QuotesFor: %v", err)
 	}
 
-	// PREVDATE is part of the pinned column set, not an incidental addition:
-	// without it every quote would have to be dated by our own clock, which
-	// is the whole of #90. Asking for a column ISS does not send costs
-	// nothing, but NOT asking for this one costs the quote its day.
+	// PREVDATE must be requested: without it the quote has no day (#90).
 	wantQuery := "iss.meta=off&iss.only=securities&securities.columns=SECID,ISIN,PREVPRICE,PREVDATE,CURRENCYID"
 	for _, p := range wantBoardPaths {
 		if gotQueries[p] != wantQuery {
@@ -145,8 +124,7 @@ func TestQuotesFor_ParsesFixture(t *testing.T) {
 		}
 	}
 
-	// GAZP (null price) and NOPE (absent from both boards) must not
-	// appear; every other requested ticker should.
+	// GAZP (null price) and NOPE (absent) do not appear.
 	if len(quotes) != 4 {
 		t.Fatalf("len(quotes) = %d, want 4: %+v", len(quotes), quotes)
 	}
@@ -177,22 +155,13 @@ func TestQuotesFor_ParsesFixture(t *testing.T) {
 	if sber.Currency != "RUB" {
 		t.Errorf("SBER.Currency = %q, want RUB (SUR must map to RUB)", sber.Currency)
 	}
-	// THE ISIN COMES THROUGH, because it is what the price is matched to a
-	// catalog row by (see marketdata.refreshQuotesWorker). A ticker names a
-	// LISTING: two exchanges hand the same one to unrelated companies, and two
-	// inside one currency zone hand it to them in the same currency, so ticker
-	// and currency together settle nothing. The exchange has been sending this
-	// field all along; this program simply did not ask for the column.
+	// The ISIN comes through: prices are matched to the catalog by it.
 	if sber.ISIN != "RU0009029540" {
 		t.Errorf("SBER.ISIN = %q, want RU0009029540", sber.ISIN)
 	}
 
-	// LKOH's fixture price, 1234.567890123456789, has more significant
-	// digits than a float64 can represent exactly. If the response were
-	// decoded through float64 (e.g. json.Unmarshal into interface{} without
-	// UseNumber, or decimal.NewFromFloat) this would silently round to
-	// 1234.567890123457 or similar — a bug this assertion catches by
-	// requiring an exact string match, not just numeric closeness.
+	// More digits than a float64 holds: an exact string match catches decoding
+	// through float64.
 	lkoh, ok := byTicker["LKOH"]
 	if !ok {
 		t.Fatalf("no LKOH quote in %+v", quotes)
@@ -215,11 +184,8 @@ func TestQuotesFor_ParsesFixture(t *testing.T) {
 	if bond.Currency != "RUB" {
 		t.Errorf("SU26238RMFS4.Currency = %q, want RUB (SUR must map to RUB)", bond.Currency)
 	}
-	// ITS SECID IS NOT ITS ISIN, and this bond is in the fixture partly to say
-	// so: the exchange calls it SU26238RMFS4 and its ISIN is RU000A1038V6
-	// (checked against iss.moex.com). A reader that took the security id for
-	// the identifier would be right about every corporate bond on this exchange
-	// — their SECIDs really are ISINs — and wrong about every federal one.
+	// A federal bond's SECID (SU26238RMFS4) is not its ISIN (RU000A1038V6), unlike
+	// corporate bonds'.
 	if bond.ISIN != "RU000A1038V6" {
 		t.Errorf("SU26238RMFS4.ISIN = %q, want RU000A1038V6 — the SECID is not the ISIN here", bond.ISIN)
 	}
@@ -259,9 +225,7 @@ func TestQuotesFor_FiltersToRequestedTickers(t *testing.T) {
 }
 
 func TestQuotesFor_MissingColumn(t *testing.T) {
-	// PREVPRICE column is absent entirely — this must be a hard error, not
-	// a silently-empty result, since the caller has no way to distinguish
-	// "no prices today" from "we can't even find the price column".
+	// A missing PREVPRICE column is an error, not an empty result.
 	body := []byte(`{"securities":{"columns":["SECID","PREVDATE","CURRENCYID"],"data":[["SBER","2026-07-24","SUR"]]}}`)
 	srv, _ := serve(t, allBoards(map[string]route{
 		sharesPath: {status: http.StatusOK, body: body},
@@ -274,15 +238,8 @@ func TestQuotesFor_MissingColumn(t *testing.T) {
 	}
 }
 
-// TestQuotesFor_DateTravelsWithTheRow pins where a quote's date comes from:
-// the PREVDATE cell of the very row the price came from, and nowhere else.
-//
-// The two boards here report different PREVDATEs. That is not a claim about
-// ISS — on 2026-08-03 all four boards read 2026-07-31, one date per board —
-// it is how the test tells apart the three ways a date could be produced. A
-// provider that used the clock, or the caller's argument, or one board-level
-// date for the whole call, gives both quotes the SAME date and fails here;
-// only reading each row's own cell gives two different ones.
+// The date comes from each row's own PREVDATE: the two boards here differ, so
+// a clock, the caller or one date per call would fail.
 func TestQuotesFor_DateTravelsWithTheRow(t *testing.T) {
 	srv, _ := serve(t, allBoards(map[string]route{
 		sharesPath: {status: http.StatusOK, body: []byte(
@@ -308,20 +265,14 @@ func TestQuotesFor_DateTravelsWithTheRow(t *testing.T) {
 		if !q.On.Equal(want[q.Ticker]) {
 			t.Errorf("%s.On = %v, want %v", q.Ticker, q.On.Format(time.RFC3339), want[q.Ticker].Format(time.RFC3339))
 		}
-		// Midnight UTC, because that is what pgx reads a Postgres DATE back
-		// as: a date built in any other zone would not compare equal to the
-		// same day coming out of the quotes table.
+		// Midnight UTC, as pgx reads a DATE back.
 		if h, m, s := q.On.Clock(); h != 0 || m != 0 || s != 0 || q.On.Location() != time.UTC {
 			t.Errorf("%s.On = %v, want midnight UTC", q.Ticker, q.On)
 		}
 	}
 }
 
-// TestQuotesFor_MissingPrevdateColumn is the mirror of the PREVPRICE case
-// above: if ISS stops sending the column the dates come from, that must be an
-// error and not a silent fallback. Anything else — today's date, the previous
-// quote's date, the zero time — is a date this process made up, which is the
-// defect #90 exists for.
+// A missing PREVDATE column is an error, not an invented date (#90).
 func TestQuotesFor_MissingPrevdateColumn(t *testing.T) {
 	body := []byte(`{"securities":{"columns":["SECID","PREVPRICE","CURRENCYID"],"data":[["SBER",305.55,"SUR"]]}}`)
 	srv, _ := serve(t, allBoards(map[string]route{
@@ -338,36 +289,14 @@ func TestQuotesFor_MissingPrevdateColumn(t *testing.T) {
 	}
 }
 
-// unreadableDateMsg is the line a price with no readable date must leave
-// behind. Spelled out here so that demoting or rewording it is a test failure
-// rather than a silent loss of the only trace such a price leaves.
 const unreadableDateMsg = "moex: price came without a readable date, dropping it (this instrument keeps whatever earlier quote it already has)"
 
 // nonPositivePriceMsg is the line a zero or negative price must leave behind.
 const nonPositivePriceMsg = "moex: price is not positive, dropping it (this instrument keeps whatever earlier quote it already has)"
 
-// TestQuotesFor_PriceWithUnreadableDateIsDroppedAndWarned covers the decision
-// this task had to make: a row ISS priced but did not date.
-//
-// ISS ships unreadable dates today. Checked on 2026-08-03: 2 of TQCB's 3021
-// rows carry PREVDATE "0000-00-00" — RU000A10EH19 and RU000A10FT14, both of
-// which ISS's own description block gives an ISSUEDATE of 2026-08-03, i.e.
-// they started trading that morning and have no previous session at all. Both
-// also carry a null PREVPRICE, so today the two conditions coincide; nothing
-// in ISS's contract says they always will, and the price is what this code
-// would otherwise publish under an invented date.
-//
-// The row is dropped, and the ticker is simply absent from the result — which
-// the QuoteProvider contract already defines as "no price available". Storing
-// it is not open to us: on_date is half of the quotes primary key, so every
-// way of storing this price starts by inventing its day. Failing the whole
-// call is worse: one malformed row out of three thousand would un-price every
-// instrument the owner holds, and River would retry into the same poison for
-// as long as ISS kept publishing it.
-//
-// The null-priced row here is the one ISS actually ships, and it must stay
-// silent: it loses nothing, and a line per never-traded instrument would be
-// noise that buries the one line that matters.
+// A priced row with an unreadable date ("0000-00-00", as ISS sends for a
+// security listed that morning) is dropped with a warning; the ticker is
+// absent. A null-priced row stays silent.
 func TestQuotesFor_PriceWithUnreadableDateIsDroppedAndWarned(t *testing.T) {
 	srv, _ := serve(t, allBoards(map[string]route{
 		sharesPath: {status: http.StatusOK, body: []byte(
@@ -410,9 +339,8 @@ func TestQuotesFor_PriceWithUnreadableDateIsDroppedAndWarned(t *testing.T) {
 			return true
 		})
 		warned = append(warned, attrs["ticker"])
-		// The raw cell has to be in the line: "0000-00-00" (a security with no
-		// previous session) and a changed date format are the same failure to
-		// this code and completely different failures to whoever reads the log.
+		// The raw cell is in the line: "0000-00-00" and a changed format are
+		// different problems to whoever reads it.
 		if attrs["prevdate"] != "0000-00-00" {
 			t.Errorf("warning carried prevdate=%q, want the raw cell %q", attrs["prevdate"], "0000-00-00")
 		}
@@ -423,17 +351,8 @@ func TestQuotesFor_PriceWithUnreadableDateIsDroppedAndWarned(t *testing.T) {
 	}
 }
 
-// TestQuotesFor_WhatCountsAsAnUnreadableDate pins the boundary of "readable",
-// one form per case, because each of these is a different way for the column
-// to stop meaning what it means today and each must cost the price rather
-// than produce a day.
-//
-// "0001-01-01" is the one that needs saying out loud: it is a perfectly valid
-// date and parses without complaint, and it is also Go's zero time — the value
-// a forgotten assignment leaves behind. Accepted, it would be stored as a
-// quote from year 1 and would make "this price has a day" indistinguishable
-// from "this price has none", which is the distinction the whole change rests
-// on.
+// Each unreadable form costs the price; "0001-01-01" parses but is Go's zero
+// time and is refused too.
 func TestQuotesFor_WhatCountsAsAnUnreadableDate(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -467,11 +386,7 @@ func TestQuotesFor_WhatCountsAsAnUnreadableDate(t *testing.T) {
 	}
 }
 
-// TestQuotesFor_UnreadableDateDoesNotClaimPrecedence is the same corner
-// TestQuotesFor_NullPriceDoesNotClaimPrecedence guards, for the other reason a
-// row can be unusable. A row that cannot be published must not consume the
-// ticker's one slot, or adding a board could take a priced instrument and
-// un-price it.
+// An undatable row does not take the ticker's slot from a later board.
 func TestQuotesFor_UnreadableDateDoesNotClaimPrecedence(t *testing.T) {
 	srv, _ := serve(t, allBoards(map[string]route{
 		sharesPath: {status: http.StatusOK, body: []byte(
@@ -497,16 +412,8 @@ func TestQuotesFor_UnreadableDateDoesNotClaimPrecedence(t *testing.T) {
 	}
 }
 
-// TestQuotesFor_OneBoardFailingFailsTheWholeCall pins the documented
-// failure policy: a board that errors aborts QuotesFor entirely, and the
-// quotes already gathered from boards that succeeded are NOT returned.
-//
-// The board that fails here is deliberately not the first one — TQBR has
-// already yielded a usable SBER quote by the time TQCB returns 500. A
-// provider that returned that quote alongside a nil error would look, to
-// quotesWorker and then to the position screen, exactly like "TQCB simply
-// has no prices for your bonds today", which is the wrong cause. The whole
-// point of failing is that the caller can tell a breakage from an absence.
+// One failing board fails the whole call, discarding the boards already read:
+// a partial result would read as "no prices" for the failed board.
 func TestQuotesFor_OneBoardFailingFailsTheWholeCall(t *testing.T) {
 	shares := readFixture(t, "shares.json")
 	srv, _ := serve(t, allBoards(map[string]route{
@@ -522,18 +429,13 @@ func TestQuotesFor_OneBoardFailingFailsTheWholeCall(t *testing.T) {
 	if quotes != nil {
 		t.Errorf("QuotesFor returned %+v alongside the error; a partial result must never be published", quotes)
 	}
-	// The error has to name the board that broke, or an operator reading the
-	// job log cannot tell which board to go look at.
+	// The error names the board.
 	if !strings.Contains(err.Error(), "TQCB") {
 		t.Errorf("error %q does not name the failing board TQCB", err)
 	}
 }
 
-// TestQuotesFor_QueriesEveryBoard asserts the exact set of boards requested.
-// It is the guard for a board being dropped from (or quietly added to) the
-// provider's list: the failure message names the individual board, since
-// "an ETF is never priced" is invisible until someone notices the board is
-// not being asked at all.
+// Exactly the expected boards are requested.
 func TestQuotesFor_QueriesEveryBoard(t *testing.T) {
 	srv, gotQueries := serve(t, allBoards(nil))
 
@@ -542,11 +444,7 @@ func TestQuotesFor_QueriesEveryBoard(t *testing.T) {
 		t.Fatalf("QuotesFor: %v", err)
 	}
 
-	// Only the missing direction is checked here. The converse — a board
-	// requested that this test does not list — is already caught by serve,
-	// which fails on any path it has no route for and names that path; a
-	// second check here would be unreachable, since serve never records an
-	// unrouted path in gotQueries.
+	// Only the missing direction: serve already fails on an unrouted path.
 	for _, p := range wantBoardPaths {
 		if _, ok := gotQueries[p]; !ok {
 			t.Errorf("board %s is in the expected set but was never requested", p)
@@ -554,12 +452,7 @@ func TestQuotesFor_QueriesEveryBoard(t *testing.T) {
 	}
 }
 
-// TestQuotesFor_CorporateBondsAreQuoted covers the gap this change closes on
-// the bond side: TQOB carries government bonds (OFZ) only, so a corporate
-// bond was previously asked about on no board at all and could never be
-// priced. Both corporate boards are checked in one test because the claim
-// is the same for each: the bond gets a price, quoted — like every
-// bonds-market board — as a percentage of face value.
+// Corporate bonds are priced on TQCB and TQRD, in percent of face.
 func TestQuotesFor_CorporateBondsAreQuoted(t *testing.T) {
 	srv, _ := serve(t, allBoards(map[string]route{
 		corpPath:  {status: http.StatusOK, body: readFixture(t, "corp_bonds.json")},
@@ -601,21 +494,8 @@ func TestQuotesFor_CorporateBondsAreQuoted(t *testing.T) {
 	}
 }
 
-// TestQuotesFor_TMOSRowRecordsETFOnTQBRDecision does not prove that ISS
-// puts exchange-traded funds on TQBR rather than the dedicated (and
-// currently empty) TQTF board — no offline test can pin a fact about a
-// live third-party API, and a live-network test here would be worse: slow,
-// flaky, and dependent on TMOS still trading whenever CI happens to run.
-// See the shares/TQBR entry in the boards doc comment for the live-checked
-// evidence the decision actually rests on.
-//
-// What this test does is record that decision and guard the fixture it
-// depends on: the only edit that reddens this test alone is deleting the
-// TMOS row from testdata/shares.json. Every code mutation that would break
-// the underlying claim (e.g. filtering out fund tickers, or mishandling a
-// row that happens to be an ETF) also breaks four or more other tests,
-// starting with TestQuotesFor_ParsesFixture, which already pins the same
-// parsing behaviour via SBER.
+// Records the decision that funds trade on TQBR (live evidence is in the
+// boards doc) and guards the TMOS fixture row it rests on.
 func TestQuotesFor_TMOSRowRecordsETFOnTQBRDecision(t *testing.T) {
 	srv, _ := serve(t, allBoards(map[string]route{
 		sharesPath: {status: http.StatusOK, body: readFixture(t, "shares.json")},
@@ -634,14 +514,8 @@ func TestQuotesFor_TMOSRowRecordsETFOnTQBRDecision(t *testing.T) {
 	}
 }
 
-// TestQuotesFor_TickerOnTwoBoardsTakesTheFirst pins the merge rule: boards
-// is a precedence list, and the earliest board reporting a ticker wins.
-//
-// Without a rule the same ticker yields two TickerQuotes, and what reaches
-// the database then depends on which upsert lands last — a coin flip
-// between two different prices, in two different currencies, presented as
-// fact. Here TQBR and TQCB both report COLLIDE at prices that cannot be
-// confused with one another.
+// The first board reporting a ticker wins, rather than whichever upsert lands
+// last.
 func TestQuotesFor_TickerOnTwoBoardsTakesTheFirst(t *testing.T) {
 	srv, _ := serve(t, allBoards(map[string]route{
 		sharesPath: {status: http.StatusOK, body: []byte(
@@ -666,11 +540,7 @@ func TestQuotesFor_TickerOnTwoBoardsTakesTheFirst(t *testing.T) {
 	}
 }
 
-// TestQuotesFor_NullPriceDoesNotClaimPrecedence guards the corner the
-// precedence rule must not swallow: a null PREVPRICE is "no trade
-// recorded", not a value. An earlier board reporting null must therefore
-// leave the ticker open for a later board that has a real price, otherwise
-// adding a board could take a priced instrument and un-price it.
+// A null price on an earlier board leaves the ticker for a later board.
 func TestQuotesFor_NullPriceDoesNotClaimPrecedence(t *testing.T) {
 	srv, _ := serve(t, allBoards(map[string]route{
 		sharesPath: {status: http.StatusOK, body: []byte(
@@ -692,10 +562,8 @@ func TestQuotesFor_NullPriceDoesNotClaimPrecedence(t *testing.T) {
 	}
 }
 
-// TestQuotesFor_NonPositivePriceIsNotAPrice: ISS reports 0 for a suspended
-// issue, and a stored 0 values the whole holding at nothing (#191). A zero or
-// negative PREVPRICE is dropped with a warning, costs no other row its price,
-// and — like a null — leaves the ticker open for a later board's real one.
+// A zero or negative price (a suspended issue, #191) is dropped with a
+// warning and leaves the ticker for a later board.
 func TestQuotesFor_NonPositivePriceIsNotAPrice(t *testing.T) {
 	const cols = `"columns":["SECID","PREVPRICE","PREVDATE","CURRENCYID"]`
 	srv, _ := serve(t, allBoards(map[string]route{
@@ -781,10 +649,7 @@ func TestQuotesFor_NoTickersRequested(t *testing.T) {
 	}
 }
 
-// recordingHandler captures records so a test can assert on the LEVEL and the
-// attributes of a log line rather than on a substring of rendered text — a
-// substring match cannot tell a Warn from a Debug, and this repository has
-// already shipped one test that passed for exactly that wrong reason.
+// recordingHandler captures records so tests assert levels and attributes.
 type recordingHandler struct{ records *[]slog.Record }
 
 func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
@@ -795,20 +660,8 @@ func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
 func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
 func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
 
-// TestQuotesFor_EmptyBoardIsWarned covers the case where ISS answers 200 with
-// no securities at all. That is not a quiet day: securities.json lists what is
-// LISTED, not what has traded, so every board queried here carries hundreds or
-// thousands of rows on any day of the week. Zero rows means the path has
-// stopped naming a live board — ISS answers exactly this way for a board that
-// was renamed or retired, and seven such paths were found while choosing this
-// board list.
-//
-// Without the warning, every instrument on that board simply has no price, and
-// the screen reports that as "no quote" — a statement about the instrument,
-// when the truth is a statement about our URL.
-//
-// The other boards' prices must survive: the response was valid, and failing
-// the call would throw away three boards of correct data over the fourth.
+// A board answering no securities is warned about (it has stopped being a
+// live board), and the other boards' prices survive.
 func TestQuotesFor_EmptyBoardIsWarned(t *testing.T) {
 	shares := readFixture(t, "shares.json")
 	srv, _ := serve(t, allBoards(map[string]route{
@@ -825,9 +678,7 @@ func TestQuotesFor_EmptyBoardIsWarned(t *testing.T) {
 		t.Fatalf("QuotesFor returned %d quotes, want 1: the boards that did answer must still be used", len(quotes))
 	}
 
-	// Three of the four boards served emptyBoard, so exactly three lines, each
-	// naming its own board. Counting them is what catches a warning emitted
-	// once per call instead of once per board.
+	// Three empty boards, three lines, each naming its board.
 	var warned []string
 	for _, r := range records {
 		if r.Message != "moex: board returned no securities at all, everything listed on it will have no price" {
