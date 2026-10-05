@@ -22,9 +22,7 @@ import (
 	"babki.my/babki/internal/platform/secretbox"
 )
 
-// This file is package tinvest so it can reach the worker's own factory and the
-// map table's writer. Everything it asserts is a stored row or a returned
-// error, both of which are public facts.
+// Package tinvest, for the worker's factory and the map writer.
 
 const rpcLastPrices = "MarketDataService/GetLastPrices"
 
@@ -40,10 +38,8 @@ type quotesFixture struct {
 	sealer *secretbox.Box
 }
 
-// recordingQuotes stands in for marketdata.Store. A fake rather than the real
-// store because what is under test is WHICH rows the worker builds — the
-// currency it stamps them with above all — and a fake makes that the assertion
-// instead of a second query.
+// recordingQuotes stands in for marketdata.Store, so the rows the worker builds
+// (their currency above all) are the assertion.
 type recordingQuotes struct {
 	stored []marketdata.Quote
 	err    error
@@ -101,9 +97,8 @@ func (f *quotesFixture) work(t *testing.T) error {
 	})
 }
 
-// mapTo puts one broker listing on the map, with the currency THAT LISTING is
-// denominated in — which is the whole subject of these tests and is deliberately
-// allowed to differ from the catalog row's.
+// mapTo maps a listing with its own currency, which may differ from the
+// catalog row's.
 func (f *quotesFixture) mapTo(t *testing.T, uid string, instrumentID uuid.UUID, listingCurrency string) {
 	t.Helper()
 	if err := f.store.saveMap(f.ctx, f.conn.ID, instrumentID,
@@ -134,15 +129,9 @@ func lastPricesBody(entries ...string) string {
 	return `{"lastPrices":[` + strings.Join(entries, ",") + `]}`
 }
 
-// TestQuotesWorkerStampsThePriceWithTheListingsCurrency is the reason the
-// listing's currency is recorded at all.
-//
-// The broker's price answer carries NO currency. The catalog row does carry
-// one, and reaching for it is the mistake this guards: Apple's catalog row here
-// says rubles — a row that could have been created from any listing of the
-// paper — while the СПБ line the price came from is in dollars. Stamping the
-// price with the row's currency would file 313,25 $ as 313,25 ₽, which is a
-// figure of the right shape and the wrong magnitude by a factor of eighty.
+// The broker's price has no currency, and the catalog row's is not the
+// listing's: Apple's row says roubles, the СПБ line is in dollars, and 313,25 $
+// stamped as roubles is wrong eightyfold.
 func TestQuotesWorkerStampsThePriceWithTheListingsCurrency(t *testing.T) {
 	f := newQuotesFixture(t)
 	inst := f.instrument(t, "AAPL", "RUB")
@@ -178,11 +167,8 @@ func TestQuotesWorkerStampsThePriceWithTheListingsCurrency(t *testing.T) {
 	}
 }
 
-// TestQuotesWorkerKeepsADealersPriceApartFromAnExchangesPins the one thing
-// that distinguishes a delisted fund's only price from a market one. Both are
-// stored — the dealer's is what those units could actually be sold at, and for
-// the owner's eight FinEx funds it is the only price anywhere — and the row
-// says which it is.
+// A dealer's price is stored and marked as such: for the owner's eight FinEx
+// funds it is the only price.
 func TestQuotesWorkerKeepsADealersPriceApartFromAnExchanges(t *testing.T) {
 	f := newQuotesFixture(t)
 	fund := f.instrument(t, "FXGD", "RUB")
@@ -209,10 +195,8 @@ func TestQuotesWorkerKeepsADealersPriceApartFromAnExchanges(t *testing.T) {
 	}
 }
 
-// TestQuotesWorkerStoresNothingForAnInstrumentWithNoPrice. The broker really
-// does answer with an entry carrying a uid and nothing else — no price, no
-// figi, no ticker — and a zero is not what that means. A stored zero would
-// value the whole holding at nought and look exactly like a real collapse.
+// An entry with a uid and nothing else stores nothing: a zero would look
+// like a real collapse.
 func TestQuotesWorkerStoresNothingForAnInstrumentWithNoPrice(t *testing.T) {
 	f := newQuotesFixture(t)
 	inst := f.instrument(t, "FXIT", "RUB")
@@ -228,11 +212,8 @@ func TestQuotesWorkerStoresNothingForAnInstrumentWithNoPrice(t *testing.T) {
 	}
 }
 
-// TestQuotesWorkerKeepsAPriceThatStoppedMoving. A paper that stopped trading
-// still answers, with the day its price was last struck — Tesla's old ruble
-// line answers with 2022-02-25 to this day. The date is the whole of how a
-// stale price announces itself, so it is stored as the broker gave it and not
-// as today.
+// A stopped paper's price keeps the day it was struck (Tesla's old rouble
+// line: 2022-02-25); the date is how staleness shows.
 func TestQuotesWorkerKeepsAPriceThatStoppedMoving(t *testing.T) {
 	f := newQuotesFixture(t)
 	inst := f.instrument(t, "TSLARM", "RUB")
@@ -252,10 +233,7 @@ func TestQuotesWorkerKeepsAPriceThatStoppedMoving(t *testing.T) {
 	}
 }
 
-// TestQuotesWorkerRefusesAPriceDatedInTheFuture. The latest quote is chosen by
-// ORDER BY on_date DESC, so one row dated ahead outranks every genuine refresh
-// after it until that day arrives — silently, on every position the instrument
-// appears in.
+// A future-dated price would outrank every real one until its day.
 func TestQuotesWorkerRefusesAPriceDatedInTheFuture(t *testing.T) {
 	f := newQuotesFixture(t)
 	inst := f.instrument(t, "GLITCH", "RUB")
@@ -271,10 +249,8 @@ func TestQuotesWorkerRefusesAPriceDatedInTheFuture(t *testing.T) {
 	}
 }
 
-// TestQuotesWorkerLeavesAListingItCannotDenominateUnpriced. A mapping written
-// before the currency was kept (migration 0017) has none, and the passport that
-// would supply it is unreachable here. Nothing is guessed: pricing it under the
-// catalog row's currency is the one answer that would look right and be wrong.
+// A listing with no currency (pre-0017) and an unreachable passport stays
+// unpriced; nothing is guessed.
 func TestQuotesWorkerLeavesAListingItCannotDenominateUnpriced(t *testing.T) {
 	f := newQuotesFixture(t)
 	inst := f.instrument(t, "OLDMAP", "RUB")
@@ -325,9 +301,7 @@ func TestQuotesWorkerLearnsAListingsCurrencyOnce(t *testing.T) {
 	}
 }
 
-// TestQuotesWorkerParksAConnectionWhoseTokenTheBrokerRefuses. Retrying cannot
-// un-revoke a token, so the job must not fail over one — the owner is told
-// through the connection's status, the same way the sync worker tells them.
+// A revoked token parks the connection and does not fail the job.
 func TestQuotesWorkerParksAConnectionWhoseTokenTheBrokerRefuses(t *testing.T) {
 	f := newQuotesFixture(t)
 	inst := f.instrument(t, "ANY", "RUB")
@@ -346,20 +320,15 @@ func TestQuotesWorkerParksAConnectionWhoseTokenTheBrokerRefuses(t *testing.T) {
 	}
 }
 
-// TestSavingAMappingWithoutACurrencyKeepsTheOneItHas. A resolution that hit the
-// map has no passport in hand and passes the empty string; the row it refreshes
-// has a currency already, learned by the call that created it. Blanking it
-// would cost that listing its price until a passport happened to be fetched
-// again — silently, since an unpriced listing looks exactly like one the broker
-// has no price for.
+// A map-hit resolution passes "" for the currency and must not blank the one
+// the row has, which would unprice the listing silently.
 func TestSavingAMappingWithoutACurrencyKeepsTheOneItHas(t *testing.T) {
 	f := newQuotesFixture(t)
 	inst := f.instrument(t, "KEEP", "RUB")
 	f.mapTo(t, "uid-keep", inst.ID, "USD")
 
-	// The same listing resolved again, this time from the map: no currency to
-	// offer, and something else about the row genuinely changed so the upsert
-	// does write.
+	// Resolved again from the map, with something else changed so the upsert
+	// writes.
 	if err := f.store.saveMap(f.ctx, f.conn.ID, inst.ID,
 		InstrumentRef{InstrumentUID: "uid-keep", FIGI: "BBG000B9XRY4"}, "US0378331005", "KEEP", ""); err != nil {
 		t.Fatalf("saveMap: %v", err)
@@ -391,11 +360,7 @@ func TestSavingAMappingWithoutACurrencyKeepsTheOneItHas(t *testing.T) {
 	}
 }
 
-// TestCurrencyTradesAreCountedPerLinkAndByReason. The count that explains a
-// cash difference has to be about ONE broker account and about ONE reason:
-// captioning an account's money gap with another account's unimported trades,
-// or with rows unparsed for some unrelated cause, would name a reason that is
-// not the true one.
+// The count explaining a cash gap is per link and per reason.
 func TestCurrencyTradesAreCountedPerLinkAndByReason(t *testing.T) {
 	f := newQuotesFixture(t)
 	other := f.secondLink(t)
@@ -421,10 +386,8 @@ func TestCurrencyTradesAreCountedPerLinkAndByReason(t *testing.T) {
 	}
 }
 
-// markUnparsed writes one mirror row carrying a given reason. Straight to the
-// table: what is under test is the COUNT's grouping, and driving a real
-// projection to produce each reason would make the fixture about something
-// else.
+// markUnparsed writes a mirror row with a given reason straight to the
+// table; the grouping is under test, not the projection.
 func (f *quotesFixture) markUnparsed(t *testing.T, linkID uuid.UUID, key, reason string) {
 	t.Helper()
 	if _, err := f.pool.Exec(f.ctx, `
@@ -439,42 +402,28 @@ func (f *quotesFixture) markUnparsed(t *testing.T, linkID uuid.UUID, key, reason
 	}
 }
 
-// -------------------------------------------------------------------------
-// pricing a holding nobody imported (#137)
-// -------------------------------------------------------------------------
+// Pricing a holding nobody imported (#137).
 
-// listing mirrors what FindInstrument really returns — WITHOUT a currency,
-// which the search does not report (see Listing). Taking one here is what made
-// the first version of these tests pass against a filter that matched nothing
-// in production.
+// listing mirrors FindInstrument, with no currency: giving one here once let
+// these tests pass against a filter that matched nothing in production.
 func listing(uid, isin, ticker, class, kind string) Listing {
 	return Listing{UID: uid, ISIN: isin, Ticker: ticker, ClassCode: class, Kind: kind}
 }
 
-// TestCandidateListingsRefuseEverythingButTheSamePaper. The broker answers a
-// search with whatever matches, and three of the four filters below are the
-// difference between a price and a stranger's price.
+// Only the same paper is a candidate.
 func TestCandidateListingsRefuseEverythingButTheSamePaper(t *testing.T) {
 	want := UnmappedHeldInstrument{ISIN: "US0378331005", Ticker: "AAPL", Type: "share", Currency: "USD"}
 	found := []Listing{
 		listing("uid-spb", "US0378331005", "AAPL", "SPBXM", "INSTRUMENT_TYPE_SHARE"),
 		listing("uid-a25", "US0378331005", "AAPL", "A25", "INSTRUMENT_TYPE_SHARE"),
-		// Same paper, the old ruble line. It IS a candidate here — the search
-		// says nothing about currency — and is stopped later, on the listing
-		// that wins, by its passport (see priceUnmapped). Which is also why it
-		// carries a frozen price in the test below: freshness is what removes
-		// it in practice.
+		// The old rouble line: a candidate (the search has no currency), stopped
+		// later by its passport and in practice by its frozen price.
 		listing("uid-rm", "US0378331005", "AAPL-RM", "FQBR", "INSTRUMENT_TYPE_SHARE"),
-		// SOMEBODY ELSE'S PAPER UNDER THE SAME TICKER, and identical to the
-		// wanted one in every other respect — same kind, same currency. Only
-		// the ISIN tells them apart, which is what makes this row the one that
-		// says the match is on the ISIN and not on the ticker. The broker
-		// really does answer "T" with two issuers.
+		// Another issuer's paper under the same ticker: only the ISIN tells them
+		// apart.
 		listing("uid-other", "RU000A107UL4", "AAPL", "TQBR", "INSTRUMENT_TYPE_SHARE"),
-		// THE SAME PAPER UNDER ANOTHER TICKER, in the wanted currency: kept,
-		// which ticker matching would not do. The frozen foreign lines carry a
-		// "-RM" name of their own, and a rule that dropped them would leave
-		// exactly the holdings this pass exists for unpriced.
+		// The same paper under another ticker ("-RM" lines): kept, which ticker
+		// matching would not do.
 		listing("uid-rm-usd", "US0378331005", "AAPL-RM", "MTQR", "INSTRUMENT_TYPE_SHARE"),
 		// The right ISIN, the wrong kind of asset: a bond's quote is a percent
 		// of par and would be read here as money per share.
@@ -500,9 +449,8 @@ func TestCandidateListingsRefuseEverythingButTheSamePaper(t *testing.T) {
 	}
 }
 
-// TestPickListingTakesTheOneStillBeingQuoted. Apple answers with lines quoted
-// this week and lines frozen since trading in them stopped in 2022. The freshest
-// price is the rule, and it needs no hand-maintained list of venue names.
+// The freshest price wins: Apple's live lines over those frozen since
+// 2022, with no list of venue names.
 func TestPickListingTakesTheOneStillBeingQuoted(t *testing.T) {
 	live := listing("uid-live", "US0378331005", "AAPL", "SPBXM", "INSTRUMENT_TYPE_SHARE")
 	frozen := listing("uid-frozen", "US0378331005", "AAPL-RM", "FQBR", "INSTRUMENT_TYPE_SHARE")
@@ -524,10 +472,8 @@ func TestPickListingTakesTheOneStillBeingQuoted(t *testing.T) {
 	}
 }
 
-// TestPickListingRefusesTwoEqallyFreshPricesThatDisagree is the trap this
-// whole selection exists around: with nothing to choose between two venues,
-// picking one puts its price on the holding and nothing on any screen says
-// which venue it came from.
+// Two equally fresh prices that disagree: refused rather than an unnamed
+// venue's price on the holding.
 func TestPickListingRefusesTwoEqallyFreshPricesThatDisagree(t *testing.T) {
 	at := time.Date(2026, 8, 7, 23, 59, 0, 0, time.UTC)
 	a := listing("uid-a", "US0378331005", "AAPL", "SPBXM", "INSTRUMENT_TYPE_SHARE")
@@ -541,9 +487,7 @@ func TestPickListingRefusesTwoEqallyFreshPricesThatDisagree(t *testing.T) {
 		t.Error("picked one of two same-day prices that disagree, want a refusal")
 	}
 
-	// The same tie with the same price is not a choice at all — it is one fact
-	// reported twice, and refusing it would leave a holding unpriced for no
-	// reason.
+	// The same tie at the same price is one fact twice.
 	agree := map[string]LastPrice{
 		"uid-a": {InstrumentUID: "uid-a", Price: decimal.RequireFromString("313.25"), At: at},
 		"uid-b": {InstrumentUID: "uid-b", Price: decimal.RequireFromString("313.25"), At: at},
@@ -566,9 +510,8 @@ func TestPickListingRefusesWhenNothingIsQuoted(t *testing.T) {
 	}
 }
 
-// A ruble line of Coca-Cola traded last and a dollar line before it: the dollar
-// holding takes the dollar line, asking passports freshest first, rather than
-// going unpriced because the freshest one was in rubles (#261).
+// A rouble line of Coca-Cola traded last and a dollar line before it: the
+// dollar holding gets the dollar line (#261).
 func TestResolveListingPassesOverAListingInAnotherCurrency(t *testing.T) {
 	passports := map[string]string{"uid-ko-rub": "rub", "uid-ko-usd": "usd"}
 	asked := []string{}

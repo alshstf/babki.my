@@ -16,14 +16,9 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// This file is package tinvest (not tinvest_test) so it can reach mskDay,
-// journalQuantity and the wire decoder the fixtures go through — all
-// unexported, and all of them rules this task is about.
-//
-// EVERY EXPECTED VALUE BELOW IS A LITERAL. Not one of them is computed from a
-// constant of the implementation: a projection whose expectations move with
-// the code it checks would stay green through a change of rule, which is the
-// exact way a whole family of window tests in this repository once went blind.
+// Package tinvest, to reach mskDay, journalQuantity and the wire decoder.
+// Every expected value is a literal, never computed from the implementation's
+// constants, so a changed rule cannot drag its expectation along.
 
 // Fixed ids, so an external id can be compared against a literal string.
 var (
@@ -37,10 +32,8 @@ func resolvedShare() *Resolved {
 	return &Resolved{InstrumentID: fixtureInstrID, Type: instrument.TypeShare}
 }
 
-// loadOperationItem reads one fixture the way the client reads the wire: the
-// raw document through wireOperationItem, so the fixtures stay in the shape
-// the gateway actually sends (int64 fields as JSON STRINGS) rather than in
-// whatever shape happens to be convenient for a test.
+// loadOperationItem reads a fixture as the client reads the wire, through
+// wireOperationItem, so fixtures keep the gateway's shape (int64 as strings).
 func loadOperationItem(t *testing.T, name string) OperationItem {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "ops", name))
@@ -58,11 +51,8 @@ func loadOperationItem(t *testing.T, name string) OperationItem {
 	return it
 }
 
-// mirrorRowFor builds the mirror row the store would write for one broker
-// operation. It goes through the same helpers the insert does
-// (upperCurrency, moneyOrNothing, contentKey — see mirrorInsertArgs), so a
-// row cannot reach the projection here in a shape the database would never
-// hold.
+// mirrorRowFor builds the mirror row the store would write, through the insert's
+// own helpers (upperCurrency, moneyOrNothing, contentKey).
 func mirrorRowFor(t *testing.T, name string) MirrorRow {
 	t.Helper()
 	it := loadOperationItem(t, name)
@@ -196,14 +186,8 @@ func TestProjectRowSell(t *testing.T) {
 	}
 }
 
-// TestProjectRowPartialFillIsTheTradeNotTheOrder is the whole of #131 in one
-// row, and it is a row the broker really sent.
-//
-// The two numbers are pinned as LITERALS, not derived from the fixture: an
-// expectation computed from the same field the code reads would move with the
-// mistake instead of catching it. 115 is what was sold and 190 is what was
-// ordered; the payment agrees with the first and not with the second, which is
-// the reason the journal must take that one.
+// #131 on a real broker row: 115 sold of 190 ordered. The payment matches
+// the first, so the journal takes it; both are literals.
 func TestProjectRowPartialFillIsTheTradeNotTheOrder(t *testing.T) {
 	row := mirrorRowFor(t, "sell_partially_filled.json")
 	if row.Quantity != 190 || row.QuantityDone != 115 {
@@ -216,10 +200,8 @@ func TestProjectRowPartialFillIsTheTradeNotTheOrder(t *testing.T) {
 	if op.Quantity == nil || op.Quantity.String() != "115" {
 		t.Errorf("quantity = %v, want 115 — the bonds that were sold, not the 190 the order asked for", op.Quantity)
 	}
-	// The money is untouched by any of this: the payment is what the broker
-	// paid for the part it executed, so it is the whole sum either way. What
-	// the wrong count corrupts is the money PER UNIT, which is why the pair is
-	// checked together.
+	// The money is the same either way; a wrong count corrupts the price per
+	// unit, so the two are checked together.
 	if op.AmountMinor != 12712100 {
 		t.Errorf("amount_minor = %d, want 12712100", op.AmountMinor)
 	}
@@ -228,10 +210,7 @@ func TestProjectRowPartialFillIsTheTradeNotTheOrder(t *testing.T) {
 	}
 }
 
-// TestProjectRowTradeWithoutAFilledQuantityIsRefused pins the other half: when
-// the broker says nothing about what was executed, the order's size is NOT
-// borrowed to stand in for it. Borrowing it is the defect — silently, and by
-// up to two and a half times.
+// A trade with no executed quantity is refused, not measured by its order.
 func TestProjectRowTradeWithoutAFilledQuantityIsRefused(t *testing.T) {
 	row := mirrorRowFor(t, "sell_without_fill.json")
 	if row.Quantity != 190 || row.QuantityDone != 0 {
@@ -256,11 +235,9 @@ func TestProjectRowTradeWithoutAFilledQuantityIsRefused(t *testing.T) {
 	}
 }
 
-// TestProjectRowSplitsOffACommissionChargedInAnotherCurrency pins the second
-// leg: what makes it necessary is that one journal row holds one currency, and
-// what makes it safe is that it carries no instrument (a fee in another
-// currency attached to the same position makes the whole account unreadable —
-// see TestProjectedOperationsFoldThroughTheEngine).
+// A commission in another currency becomes its own entry with no
+// instrument: one row holds one currency, and an instrument would make the
+// account unreadable (see TestProjectedOperationsFoldThroughTheEngine).
 func TestProjectRowSplitsOffACommissionChargedInAnotherCurrency(t *testing.T) {
 	row := mirrorRowFor(t, "buy_fee_in_another_currency.json")
 	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare(), nil)
@@ -302,20 +279,10 @@ func TestProjectRowSplitsOffACommissionChargedInAnotherCurrency(t *testing.T) {
 	}
 }
 
-// TestProjectRowCurrencyTradeStaysUnparsed pins the deliberate departure from
-// the plan's mapping table: a currency purchase does not become two conversion
-// rows, because nothing in the mirror row names the currency that was bought.
-// It refuses even when a caller passes a resolved instrument, since the
-// resolver must never be asked for a currency in the first place.
-//
-// IT INSISTS ON currency_trade RATHER THAN ON "some refusal", and that is the
-// whole point of the reason having its own code. With the branch deleted, a
-// currency trade with nothing resolved still refuses — instrumentRefusal gets
-// there by another road and says unsupported_type, the reason a futures trade
-// gets — so a test that only asked for "a refusal", or for that shared code,
-// would stay green with the rule gone. The two statements are different: a
-// future is not accounted for at all, a currency conversion is not imported
-// YET and for the reason projection.go names.
+// Without the traded currency a currency purchase stays unparsed, even with a
+// resolved instrument passed. The code must be currency_trade specifically: with
+// the branch removed, instrumentRefusal would still refuse with
+// unsupported_type, a different statement.
 func TestProjectRowCurrencyTradeStaysUnparsed(t *testing.T) {
 	row := mirrorRowFor(t, "currency_buy.json")
 	for _, resolved := range []*Resolved{nil, resolvedShare()} {
@@ -350,9 +317,8 @@ func TestProjectRowCashOperations(t *testing.T) {
 		{"dividend_tax.json", resolvedShare(), operation.TypeTax, -17560, "2026-06-05", true},
 		// 21:00Z is midnight in Moscow: the fee falls on the next day.
 		{"service_fee.json", nil, operation.TypeFee, -29900, "2026-03-02", false},
-		// Interest names a share in this fixture and still gets no
-		// instrument: the engine refuses an interest row that carries one, so
-		// the reference is ignored rather than recorded or refused.
+		// Interest names a share here and still gets no instrument: the engine
+		// refuses interest with one.
 		{"overnight.json", nil, operation.TypeInterest, 1234, "2026-04-10", false},
 	}
 	for _, c := range cases {
@@ -381,23 +347,10 @@ func TestProjectRowCashOperations(t *testing.T) {
 	}
 }
 
-// TestProjectRowTaxRefundIsATaxThatGaveMoneyBACK. A broker's tax correction
-// arrives with a positive amount and is an ordinary event — of the nine on the
-// owner's own account seven are positive — so it is recorded as the tax it is,
-// with the sign the broker sent.
-//
-// IT USED TO BE REFUSED, and the refusal cost seven real credits their place in
-// the journal for as long as the account existed. What made the refusal look
-// right was the alternatives: booked as a DEPOSIT it would leave the position's
-// income understated by the refund for good and grow a top-up the owner never
-// made; booked as INCOME it would inflate dividends that were never paid. The
-// answer was neither — it was that a tax is folded into income by its SIGNED
-// amount, so a refund restores exactly what the withholding took, and nothing
-// downstream needed teaching at all.
-//
-// The hand-entry path still refuses a positive tax, and should: there the sign
-// is somebody's typing rather than the broker's statement (see
-// operation.validateImported).
+// A tax correction arrives positive (seven of nine on the owner's account)
+// and is recorded as a tax with that sign: a tax folds into income by its signed
+// amount, so a refund restores what the withholding took. Hand entry still
+// refuses a positive tax (see operation.validateImported).
 func TestProjectRowTaxRefundIsATaxThatGaveMoneyBACK(t *testing.T) {
 	row := mirrorRowFor(t, "tax_correction_refund.json")
 	// Resolved, because the fixture's correction names a paper: an unresolved
@@ -419,9 +372,7 @@ func TestProjectRowTaxRefundIsATaxThatGaveMoneyBACK(t *testing.T) {
 	}
 }
 
-// TestProjectRowTaxKeepsItsSignWhenItIsATax is the other half of the rule
-// above: an ordinary tax stays a tax, so the refusal cannot be mistaken for
-// "corrections are never projected".
+// An ordinary tax stays a tax.
 func TestProjectRowTaxKeepsItsSignWhenItIsATax(t *testing.T) {
 	row := mirrorRowFor(t, "tax_correction_refund.json")
 	row.Payment = decimal.RequireFromString("-320")
@@ -441,11 +392,8 @@ func TestProjectRowTaxKeepsItsSignWhenItIsATax(t *testing.T) {
 	}
 }
 
-// TestProjectRowTaxOfNothingIsHandedToTheJournal pins the sentence projectCash
-// writes about a zero: it is not money given back, so calling it a refund would
-// be a reason that is not the true one. It goes to the journal as a tax, and the
-// journal's own refusal (which this projection does not pre-empt) is what the
-// owner will read.
+// A zero tax is not a refund; it goes to the journal, whose own refusal the
+// owner reads.
 func TestProjectRowTaxOfNothingIsHandedToTheJournal(t *testing.T) {
 	row := mirrorRowFor(t, "tax_correction_refund.json")
 	row.Payment = decimal.Zero
@@ -459,9 +407,7 @@ func TestProjectRowTaxOfNothingIsHandedToTheJournal(t *testing.T) {
 	}
 }
 
-// TestProjectRowAmortizationCarriesNoQuantity pins that the broker's count of
-// bonds is deliberately not written: the engine reads a quantity as units that
-// moved, and an amortization moves none.
+// An amortization records no quantity: no units move.
 func TestProjectRowAmortizationCarriesNoQuantity(t *testing.T) {
 	row := mirrorRowFor(t, "bond_repayment.json")
 	op := projectOne(t, row, &Resolved{InstrumentID: fixtureInstrID, Type: instrument.TypeBond})
@@ -498,11 +444,8 @@ func TestProjectRowFullRedemptionIsItsOwnKindOfDisposal(t *testing.T) {
 	}
 }
 
-// TestProjectRowFullRedemptionKeepsItsCommission pins that a redemption's
-// commission is carried exactly the way a trade's is — into FeeMinor when it is
-// the row's own currency, into an entry of its own when it is not. A redemption
-// that dropped it would make that money disappear from the journal AND from the
-// unparsed list, which is the one thing this file forbids.
+// A redemption's commission goes where a trade's does: FeeMinor in the row's
+// currency, its own entry otherwise.
 func TestProjectRowFullRedemptionKeepsItsCommission(t *testing.T) {
 	bond := &Resolved{InstrumentID: fixtureInstrID, Type: instrument.TypeBond}
 
@@ -561,16 +504,9 @@ func TestProjectRowFullRedemptionKeepsItsCommission(t *testing.T) {
 	})
 }
 
-// TestProjectRowFullRedemptionWithoutQuantityAsksTheJournalForTheCount pins
-// what the live run found: the broker reports a full redemption as a payment
-// and nothing else. The row is READ — the money, the day, the security are all
-// in it — and the one thing missing is the count, which is the position the
-// account holds and therefore not a property of this row at all. So the sale is
-// built without a quantity and the deferral says who owes it; the rebuild
-// fills it in, and only the rebuild can (see closeRedemptions).
-//
-// The commission is in the same entry, on purpose: a redemption that waits for
-// its count must not lose its fee on the way.
+// The live shape: a full redemption reported as money only. The row is read;
+// the sale is built without a quantity and deferred to the rebuild
+// (closeRedemptions). The commission stays on the same entry.
 func TestProjectRowFullRedemptionWithoutQuantityAsksTheJournalForTheCount(t *testing.T) {
 	row := mirrorRowFor(t, "bond_repayment_full_no_quantity.json")
 	ops, deferred, refusal := ProjectRow(row, fixtureAccountID, &Resolved{InstrumentID: fixtureInstrID, Type: instrument.TypeBond}, nil)
@@ -602,10 +538,8 @@ func TestProjectRowFullRedemptionWithoutQuantityAsksTheJournalForTheCount(t *tes
 	}
 }
 
-// TestProjectRowFullRedemptionWithAQuantityIsComplete is the other half: a
-// redemption that DOES name a count is a finished sale and asks the journal for
-// nothing. Without this, a rule that deferred every redemption would still pass
-// the test above.
+// A redemption with a count is complete; without this, deferring every
+// redemption would pass above.
 func TestProjectRowFullRedemptionWithAQuantityIsComplete(t *testing.T) {
 	row := mirrorRowFor(t, "bond_repayment_full.json")
 	ops, deferred, refusal := ProjectRow(row, fixtureAccountID, &Resolved{InstrumentID: fixtureInstrID, Type: instrument.TypeBond}, nil)
@@ -624,9 +558,7 @@ func TestProjectRowFullRedemptionWithAQuantityIsComplete(t *testing.T) {
 	}
 }
 
-// TestProjectRowDividendToCardIsPaidAndWithdrawnTheSameDay pins decision 5:
-// one entry would either lose the income or grow a cash balance that never
-// grew.
+// Decision 5: one entry would lose the income or invent cash.
 func TestProjectRowDividendToCardIsPaidAndWithdrawnTheSameDay(t *testing.T) {
 	row := mirrorRowFor(t, "div_ext.json")
 	ops, _, refusal := ProjectRow(row, fixtureAccountID, resolvedShare(), nil)
@@ -667,9 +599,8 @@ func TestProjectRowDividendToCardIsPaidAndWithdrawnTheSameDay(t *testing.T) {
 	}
 }
 
-// TestProjectRowIncomingSecuritiesSayTheirBasisIsUnknown pins decision 9: the
-// broker does not report what shares cost at the broker they came from, so the
-// basis is zero and the note says why — on THAT case only.
+// Decision 9: shares from another broker have basis zero and say why, on
+// that case only.
 func TestProjectRowIncomingSecuritiesSayTheirBasisIsUnknown(t *testing.T) {
 	row := mirrorRowFor(t, "input_securities.json")
 	op := projectOne(t, row, resolvedShare())
@@ -714,9 +645,8 @@ func TestProjectRowOutgoingSecurities(t *testing.T) {
 	}
 }
 
-// TestProjectRowTransferBetweenOwnAccountsReadsItsDirectionFromTheQuantity
-// pins the assumption named in projectSecuritiesTransfer: the operation type
-// appears on both accounts, so only the sign says which side this row is.
+// A move between own accounts reads its direction from the quantity's sign
+// (see projectSecuritiesTransfer).
 func TestProjectRowTransferBetweenOwnAccountsReadsItsDirectionFromTheQuantity(t *testing.T) {
 	in := projectOne(t, mirrorRowFor(t, "trans_bs_bs_in.json"), resolvedShare())
 	if in.Type != operation.TypeTransferIn {
@@ -740,9 +670,7 @@ func TestProjectRowTransferBetweenOwnAccountsReadsItsDirectionFromTheQuantity(t 
 	}
 }
 
-// TestProjectRowTransferOfNothingIsRefused pins the reason as well as the
-// refusal: a zero is perfectly representable, and what is missing is the
-// DIRECTION — the only thing that says which side of the move this row is.
+// A zero move between own accounts is refused for its missing direction.
 func TestProjectRowTransferOfNothingIsRefused(t *testing.T) {
 	row := mirrorRowFor(t, "trans_bs_bs_in.json")
 	row.Quantity = 0
@@ -759,16 +687,9 @@ func TestProjectRowTransferOfNothingIsRefused(t *testing.T) {
 	}
 }
 
-// TestProjectRowTransferReadsAFractionFromTheDescriptionWithProof is the
-// owner's own two rows. Every quantity field the broker sends is an integer,
-// so 0.24 of a share of Warner Bros. Discovery arrived as a nought in all of
-// them, and 44 380,35 units of a fund as 44 380 — and the real number survives
-// in the Russian prose of the description and nowhere else.
-//
-// The prose is read WITH THE FIELD AS PROOF: the fraction is taken because its
-// whole part is the field's own number. A rule that read the prose without
-// the proof would pass the first case here and is caught by the contradiction
-// test below; a rule that ignored the prose is caught here.
+// The owner's two rows: 0.24 of a Warner Bros. Discovery share arrived as 0 in
+// every field, 44 380,35 fund units as 44 380; the real number is only in the
+// description. The fraction is taken because its whole part equals the field.
 func TestProjectRowTransferReadsAFractionFromTheDescriptionWithProof(t *testing.T) {
 	t.Run("a part of a share the field reports as nought", func(t *testing.T) {
 		row := mirrorRowFor(t, "input_securities.json")
@@ -783,13 +704,9 @@ func TestProjectRowTransferReadsAFractionFromTheDescriptionWithProof(t *testing.
 		}
 	})
 
-	// A FRACTION PAST THE HALF, whose whole part is still the field's nought.
-	// The proof is the WHOLE PART and not the nearest whole number, and the two
-	// part company exactly here: rounding 0.75 gives 1, which the field's 0
-	// does not equal, and this transfer would be refused as a contradiction
-	// though the broker's two statements agree perfectly. Every other fixture
-	// in this file has a fraction below a half, where truncation and rounding
-	// answer alike and the rule under test is invisible.
+	// 0.75 against a field of 0: the proof is the whole part, not the nearest
+	// integer; rounding would give 1 and refuse an agreeing pair. Other fixtures
+	// are below a half, where the two agree.
 	t.Run("a part of a share past the half the field still reports as nought", func(t *testing.T) {
 		row := mirrorRowFor(t, "input_securities.json")
 		row.Quantity = 0
@@ -814,10 +731,8 @@ func TestProjectRowTransferReadsAFractionFromTheDescriptionWithProof(t *testing.
 	})
 }
 
-// TestProjectRowTransferWhoseDescriptionContradictsTheFieldIsRefused is the
-// proof failing: the description names a fraction whose whole part is not the
-// field's number. Neither is taken, and the reason names the disagreement
-// rather than a missing number — the broker sent two, and they differ.
+// A fraction whose whole part is not the field's number: refused as a
+// contradiction.
 func TestProjectRowTransferWhoseDescriptionContradictsTheFieldIsRefused(t *testing.T) {
 	row := mirrorRowFor(t, "output_securities.json")
 	row.Quantity = 44381
@@ -840,20 +755,9 @@ func TestProjectRowTransferWhoseDescriptionContradictsTheFieldIsRefused(t *testi
 	}
 }
 
-// TestProjectRowOneSidedTransferOfNothingNamesTheMissingNumber is what is
-// left when the field is nought and the description has no fraction to read:
-// a transfer of no units as far as the broker's message goes. The reason says
-// the broker never sent the number, which is the difference between a bug to
-// report and a line to enter by hand.
-//
-// A one-sided transfer, deliberately: the two-sided kind reads its DIRECTION
-// from the same sign and refuses a zero earlier, for a reason of its own (see
-// the test above), and that refusal must keep its own wording.
-//
-// The comma case pins a documented limit rather than a wish: the broker has
-// never been seen to write a fraction with a comma, so one is not read, and
-// the row is refused for want of a number instead of on a guess at what the
-// comma means.
+// A zero field and no readable fraction: a one-sided transfer refused for
+// the missing number (the two-sided kind refuses earlier for direction). A comma
+// is not read: the broker has never been seen to write one.
 func TestProjectRowOneSidedTransferOfNothingNamesTheMissingNumber(t *testing.T) {
 	for _, description := range []string{
 		"Завод акций Warner Bros. Discovery из другого депозитария",
@@ -878,9 +782,7 @@ func TestProjectRowOneSidedTransferOfNothingNamesTheMissingNumber(t *testing.T) 
 			default:
 				t.Errorf("reason = %q, want transfer_without_quantity", refusal.Reason)
 			}
-			// The description is carried into the detail: whatever number it
-			// holds that this program could not read, a reader retyping the
-			// line by hand needs to see.
+			// The description goes into the detail for whoever retypes the row.
 			if !strings.Contains(refusal.Detail, description) {
 				t.Errorf("detail = %q, want the broker's own description in it", refusal.Detail)
 			}
@@ -888,11 +790,7 @@ func TestProjectRowOneSidedTransferOfNothingNamesTheMissingNumber(t *testing.T) 
 	}
 }
 
-// TestProjectRowTransferWithAWholeFigureKeepsTheField pins the edge of the
-// rule: a whole number in the prose is not compared with the field, and the
-// field is taken as it stands. Without this a later reader could "tighten"
-// the proof to whole numbers too and turn the broker's own restatement of a
-// count into a contradiction.
+// A whole number in the prose is not compared; the field stands.
 func TestProjectRowTransferWithAWholeFigureKeepsTheField(t *testing.T) {
 	for _, tc := range []struct {
 		field int64
@@ -911,21 +809,17 @@ func TestProjectRowTransferWithAWholeFigureKeepsTheField(t *testing.T) {
 	}
 }
 
-// TestProjectRowPayoutOnAFundIsRefusedNotBookedAsARedemption is the owner's
-// own case (2026-08-22): Т-Капитал redeemed 73 % of a fund's units and the
-// broker sent the money as BOND_REPAYMENT_FULL. Booked by the bond rule, the
-// payout closed the 27 % the broker still shows as held. The catalog's type is
-// what decides, and the bond fixtures are reused on purpose: the ROW is the
-// same shape either way, the security it resolved to is what differs.
+// The owner's case (2026-08-22): Т-Капитал redeemed 73 % of a fund and the
+// broker sent BOND_REPAYMENT_FULL; the bond rule closed the 27 % still held. The
+// catalog type decides; bond fixtures are reused because the row looks the
+// same.
 func TestProjectRowPayoutOnAFundIsRefusedNotBookedAsARedemption(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		fixture string
 		typ     instrument.Type
-		// The fixture's own payment, written out rather than read back off
-		// the row: the detail has to carry the money, and a value taken from
-		// the same field the code copies would agree with itself however
-		// wrong both were.
+		// The fixture's payment written out, not read back from the field the
+		// code copies.
 		payment string
 	}{
 		{"a full redemption of an etf without a count", "bond_repayment_full_no_quantity.json", instrument.TypeETF, "10000"},
@@ -968,20 +862,9 @@ func TestProjectRowPayoutOnAFundIsRefusedNotBookedAsARedemption(t *testing.T) {
 	})
 }
 
-// TestProjectRowShapeWithNoBranchRefusesInsteadOfVanishing pins the switch's
-// default arm — the one case in this file that cannot be reached through any
-// input, because it is reached through a change to the code instead: a shape
-// added to the mapping table tomorrow with no branch built for it.
-//
-// It is checked by putting exactly that in the table for the length of this
-// test. Without the default arm the row projects to nothing at all and says
-// nothing about why, which is the silent drop the file's own heading forbids.
-// TestBrokerOpTypesPairShapeWithDirection checks the mapping table's one
-// cross-field invariant: a transfer kind belongs to a transfer shape and to no
-// other, in both directions. A securities move without a kind would fall
-// through projectSecuritiesTransfer's switch to transfer_in and file a
-// departure as an arrival; a kind on any other shape would be a direction
-// nothing reads, quietly suggesting the row was thought about as a transfer.
+// A transfer kind belongs to a transfer shape and to no other: a move without
+// one would file a departure as an arrival; a kind elsewhere would be read by
+// nothing.
 func TestBrokerOpTypesPairShapeWithDirection(t *testing.T) {
 	moves := 0
 	for opType, r := range brokerOpTypes {
@@ -996,14 +879,14 @@ func TestBrokerOpTypesPairShapeWithDirection(t *testing.T) {
 			t.Errorf("%s is not a securities move but carries direction %d", opType, r.transfer)
 		}
 	}
-	// The four the broker has: in, out, and the two between the owner's own
-	// accounts. Typed out so that a fifth added without a direction, or a
-	// fourth deleted, fails here.
+	// In, out, and the two own-account moves.
 	if moves != 4 {
 		t.Errorf("%d securities-move types in the table, want 4", moves)
 	}
 }
 
+// A shape added to the table with no branch must refuse rather than project to
+// nothing; reachable only through a change to the code, so the test adds one.
 func TestProjectRowShapeWithNoBranchRefusesInsteadOfVanishing(t *testing.T) {
 	const opType = "OPERATION_TYPE_A_SHAPE_ADDED_WITHOUT_A_BRANCH"
 	if _, taken := brokerOpTypes[opType]; taken {
@@ -1027,16 +910,9 @@ func TestProjectRowShapeWithNoBranchRefusesInsteadOfVanishing(t *testing.T) {
 	}
 }
 
-// TestProjectRowBrokerFeeIsBuiltAndHeld. A commission the broker charged as an
-// operation of its own is now BUILT here and marked as owing a verdict, rather
-// than dropped on the spot as a duplicate.
-//
-// The reason is a single row out of the owner's 311: one purchase carries no
-// commission field at all, so there the separate operation is the only record
-// of that money and dropping it lost the charge outright. Which case a fee is
-// in is a question about another row, and this function sees one row — hence
-// the deferral rather than an answer (see DeferredBrokerFeeVerdict and
-// Rebuilder.settleBrokerFees).
+// A broker fee charged as its own operation is built and deferred, not dropped:
+// one of the owner's 311 is the only record of its charge (see
+// DeferredBrokerFeeVerdict).
 func TestProjectRowBrokerFeeIsBuiltAndHeld(t *testing.T) {
 	ops, deferred, refusal := ProjectRow(mirrorRowFor(t, "broker_fee.json"), fixtureAccountID, nil, nil)
 	if refusal != nil {
@@ -1054,9 +930,8 @@ func TestProjectRowBrokerFeeIsBuiltAndHeld(t *testing.T) {
 }
 
 func TestProjectRowUnknownTypesStayVisible(t *testing.T) {
-	// A fixture for the documented futures settlement, and four types typed
-	// out here: the whole repo-tax family, the expirations, the enum's own
-	// "unspecified", and a value the broker has not invented yet.
+	// A futures delivery fixture plus four typed types: repo taxes,
+	// expirations, "unspecified", and an invented one.
 	row := mirrorRowFor(t, "delivery_buy.json")
 	ops, _, refusal := ProjectRow(row, fixtureAccountID, nil, nil)
 	if len(ops) != 0 || refusal == nil || refusal.Reason != ReasonUnsupportedType {
@@ -1085,11 +960,8 @@ func TestProjectRowUnknownTypesStayVisible(t *testing.T) {
 	}
 }
 
-// TestProjectRowSkipsWhatDidNotHappen pins the one place where "no operations
-// and no refusal" is the right answer: an operation that was cancelled, is
-// still in progress, or that the broker has stopped reporting. Calling those
-// unparsed would fill the owner's list of things this program could not read
-// with orders that simply did not happen.
+// Cancelled, in-progress and withdrawn operations produce nothing and no
+// refusal.
 func TestProjectRowSkipsWhatDidNotHappen(t *testing.T) {
 	cancelled := mirrorRowFor(t, "cancelled_buy.json")
 	ops, _, refusal := ProjectRow(cancelled, fixtureAccountID, resolvedShare(), nil)
@@ -1138,9 +1010,7 @@ func TestProjectRowRefusesAnAmountBeyondTheBound(t *testing.T) {
 	}
 }
 
-// TestProjectRowRefusesACommissionItCannotExpress pins that the commission is
-// converted with the same care as the payment: a trade whose commission is
-// finer than a kopeck is refused rather than recorded with the fee rounded.
+// A commission finer than a kopeck refuses the trade.
 func TestProjectRowRefusesACommissionItCannotExpress(t *testing.T) {
 	row := mirrorRowFor(t, "buy.json")
 	fraction := decimal.RequireFromString("-8.255")
@@ -1155,14 +1025,8 @@ func TestProjectRowRefusesACommissionItCannotExpress(t *testing.T) {
 	}
 }
 
-// TestProjectRowCommissionSign pins that the SIGN of a commission is read
-// rather than discarded.
-//
-// The magnitude is what FeeMinor holds — the journal's own rule — so a
-// commission the broker sent back, i.e. positive, would be recorded as a
-// commission charged: the owner would be shown a fee where a refund happened,
-// wrong by twice the money and with nothing anywhere saying so. It refuses with
-// a reason of its own instead. A zero is an ordinary trade with no commission.
+// A positive commission (a refund) is refused rather than booked as a charge;
+// zero is ordinary.
 func TestProjectRowCommissionSign(t *testing.T) {
 	t.Run("money leaving is the fee", func(t *testing.T) {
 		op := projectOne(t, mirrorRowFor(t, "buy.json"), resolvedShare())
@@ -1313,11 +1177,8 @@ func TestMinorFromDecimal(t *testing.T) {
 	}
 }
 
-// TestMskDay is the day rule on its own, including the two boundaries a zone
-// mistake moves: 21:00Z, which is midnight in Moscow, and the second before
-// it. The expected days are typed out — not computed from the offset the
-// implementation uses — so a wrong offset cannot drag the expectation along
-// with it.
+// The Moscow day rule at its boundaries (21:00Z and the second before), with
+// typed-out days.
 func TestMskDay(t *testing.T) {
 	cases := []struct{ instant, wantDay string }{
 		{"2026-03-14T21:30:00Z", "2026-03-15"},
@@ -1348,10 +1209,7 @@ func TestMskDay(t *testing.T) {
 	}
 }
 
-// TestAcceptsInstrumentAgreesWithTheEngine is what keeps acceptsInstrument
-// from drifting away from portfolio.Compute, which is the authority on the
-// question. It asks the engine directly, type by type, with an operation that
-// is otherwise well-formed, and compares the answers.
+// acceptsInstrument asks portfolio.Compute type by type.
 func TestAcceptsInstrumentAgreesWithTheEngine(t *testing.T) {
 	instrumentID := fixtureInstrID
 	on := day(t, "2026-03-15")
@@ -1381,10 +1239,8 @@ func TestAcceptsInstrumentAgreesWithTheEngine(t *testing.T) {
 		operation.TypeInterest:     {AmountMinor: 10000},
 		operation.TypeConversion:   {AmountMinor: -10000},
 	}
-	// Fourteen is every type the journal has (portfolio.validTypes and the
-	// operations table's own CHECK). The count and the validity are both
-	// checked so that a type added to the journal tomorrow fails here rather
-	// than quietly going unasked, and so that a typo cannot pass for one.
+	// Every journal type, counted and validated, so a new one is not
+	// skipped.
 	if len(candidates) != 14 {
 		t.Fatalf("this table holds %d types; the journal has 14", len(candidates))
 	}
@@ -1408,17 +1264,9 @@ func TestAcceptsInstrumentAgreesWithTheEngine(t *testing.T) {
 	}
 }
 
-// TestProjectedOperationsFoldThroughTheEngine checks the projection's output
-// by VALUE rather than by shape: a purchase, its sale, a dividend, and a trade
-// in another currency whose commission was charged in this one all go into the
-// engine together, and the position that comes out is the one the broker's own
-// numbers describe.
-//
-// It is the test that would fail if the foreign-currency commission leg ever
-// carried an instrument: the engine holds a position's cost and its fees in one
-// currency — income is the one figure exempt from that, and a commission is not
-// income — so such a leg makes the whole account unreadable rather than
-// recording a fee.
+// A purchase, its sale, a dividend and a foreign trade with a local
+// commission fold through the engine into the broker's figures. It fails if the
+// commission leg carries an instrument.
 func TestProjectedOperationsFoldThroughTheEngine(t *testing.T) {
 	rub := resolvedShare()
 	usd := &Resolved{InstrumentID: otherInstrID, Type: instrument.TypeShare}
@@ -1485,22 +1333,9 @@ func TestProjectedOperationsFoldThroughTheEngine(t *testing.T) {
 	}
 }
 
-// TestJournalQuantity pins what the quantization does, and says plainly what
-// this test does NOT do.
-//
-// IT DOES NOT REACH THE REFUSAL, AND NOTHING CAN. journalQuantity takes an
-// int64, and truncating a whole number to ten decimal places returns the same
-// whole number for every value the type holds, the extremes included — so
-// `units > 0 && !q.IsPositive()` has no input that satisfies it, and deleting
-// the refusal would leave this file green. That is a statement about the
-// parameter's type rather than about the test's thoroughness, which is why it
-// is written here instead of being papered over with a case that only looks
-// like it exercises the branch. Why the refusal is nonetheless kept is in
-// journalQuantity's own note; ReasonUnrepresentableQty is a live code because
-// it is what a positive quantity truncated to nothing WOULD be called.
-//
-// The extremes are typed out rather than computed so that a change of scale
-// (portfolio.QuantityScale) cannot drag the expectation along with it.
+// journalQuantity's quantization. The refusal is unreachable with an int64
+// input, and this test does not pretend otherwise (see journalQuantity). The
+// extremes are typed out.
 func TestJournalQuantity(t *testing.T) {
 	cases := []struct {
 		units int64
@@ -1529,10 +1364,8 @@ func decimalPtr(s string) *decimal.Decimal {
 	return &d
 }
 
-// TestProjectCurrencyTradeSignsBothLegsBySide is the case the buy fixture
-// cannot reach: a SALE of currency. The money goes the other way on both legs —
-// rubles in, dollars out — and a rule that signed only the payment would say the
-// owner received rubles AND received dollars, which is money from nowhere.
+// A currency sale: both legs flip, or the owner would receive roubles and
+// dollars at once.
 func TestProjectCurrencyTradeSignsBothLegsBySide(t *testing.T) {
 	row := mirrorRowFor(t, "currency_buy.json")
 	// The same trade seen from the other side: the broker pays 90 000 ₽ for the
@@ -1560,11 +1393,9 @@ func TestProjectCurrencyTradeSignsBothLegsBySide(t *testing.T) {
 	}
 }
 
-// TestProjectCurrencyTradeMultipliesByTheNominal is the hundredfold case, and
-// the reason the nominal is fetched at all. One unit of the Kyrgyz som
-// instrument is a HUNDRED som, so ten units bought is a thousand som — not ten.
-// Every currency the owner actually trades has a nominal of one, which is
-// exactly why no fixture of his would ever catch this.
+// The nominal case: ten units of the Kyrgyz som instrument are a thousand som,
+// not ten. The owner's currencies all have nominal one, so his data would never
+// catch this.
 func TestProjectCurrencyTradeMultipliesByTheNominal(t *testing.T) {
 	row := mirrorRowFor(t, "currency_buy.json")
 	row.QuantityDone = 10
@@ -1596,12 +1427,8 @@ func TestProjectCurrencyTradeMultipliesByTheNominal(t *testing.T) {
 	}
 }
 
-// TestProjectCurrencyTradeAllowsTheBrokersOwnRounding is the live case the
-// first version of the check got wrong. The broker sends six decimals of price
-// and a payment rounded to the kopeck, so the product almost never lands
-// exactly: 942 yuan at 12.341497 ₽ is 11 625.690174 ₽ and is paid as
-// 11 625.69. An exact comparison refused 44 of the owner's own trades over
-// that fraction. The numbers here are one of those rows.
+// Live rounding: 942 yuan at 12.341497 ₽ is 11 625.690174, paid 11 625.69;
+// an exact check refused 44 of the owner's trades.
 func TestProjectCurrencyTradeAllowsTheBrokersOwnRounding(t *testing.T) {
 	row := mirrorRowFor(t, "currency_buy.json")
 	row.Quantity, row.QuantityDone = 942, 942
@@ -1626,12 +1453,8 @@ func TestProjectCurrencyTradeAllowsTheBrokersOwnRounding(t *testing.T) {
 	}
 }
 
-// TestProjectCurrencyTradeRefusesMoneyThatDoesNotDivide is the guard against the
-// mistake this codebase has already made once with a broker's quantity field:
-// `quantity` turned out to be the size of the ORDER, and fifteen trades went
-// into the journal at up to two and a half times their real size. If the money
-// does not divide by the units at the stated price, this row does not mean what
-// the rule assumes, and it becomes visible instead of projected.
+// Money that does not divide by units at the price is refused, as the
+// order-size misreading would be.
 func TestProjectCurrencyTradeRefusesMoneyThatDoesNotDivide(t *testing.T) {
 	row := mirrorRowFor(t, "currency_buy.json")
 	row.QuantityDone = 400 // the payment says 1 000 units at 90 ₽

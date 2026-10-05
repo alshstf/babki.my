@@ -29,17 +29,13 @@ import (
 	"babki.my/babki/internal/platform/testdb"
 )
 
-// demoToken is the token every test here pastes. It is a value with no digits
-// in common with anything else in these tests, so a search for it in a response
-// body cannot match by accident — see TestNoResponseEverCarriesTheToken, which
-// is the reason it is a constant rather than "t".
+// demoToken is the token every test pastes, distinctive enough that a search
+// for it in a response cannot match by accident (TestNoResponseEverCarriesTheToken).
 const demoToken = "t.zZq7Xv91LkPmWn4TokenSecretValue"
 
-// brokerAccountsBody is what the fake gateway answers GetAccounts with: an
-// ordinary brokerage account, an ИИС, an «инвесткопилка» this program does not
-// import, and a CLOSED brokerage account, which it does — the contract says the
-// list is filtered by kind and not by status, and the fourth row is what makes
-// that claim checkable rather than merely written down.
+// brokerAccountsBody: a brokerage account, an ИИС, an «инвесткопилка» (not
+// imported) and a closed brokerage account (imported: the list filters by kind,
+// not status).
 const brokerAccountsBody = `{"accounts":[
 	{"id":"2000000001","type":"ACCOUNT_TYPE_TINKOFF","name":"Брокерский счёт",
 	 "status":"ACCOUNT_STATUS_OPEN","openedDate":"2019-03-14T00:00:00Z"},
@@ -51,9 +47,8 @@ const brokerAccountsBody = `{"accounts":[
 	 "status":"ACCOUNT_STATUS_CLOSED","openedDate":"2017-06-01T00:00:00Z"}
 ]}`
 
-// fakeBroker stands in for the T-Invest gateway. status 0 means "answer
-// normally"; anything else is the status it answers with instead, which is how
-// a refused token (401) and an unwell gateway (500) are told apart.
+// fakeBroker stands in for the gateway; a non-zero status replaces the normal
+// answer (401 refused token, 500 unwell gateway).
 type fakeBroker struct {
 	mu     sync.Mutex
 	status int
@@ -87,9 +82,8 @@ func (b *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, brokerAccountsBody)
 }
 
-// fakeInserter records what the request path queued, without a River client or
-// a queue behind it. dup makes the next insert report the answer River gives
-// when a sync for this connection is already queued.
+// fakeInserter records queued jobs; dup makes the next insert report an
+// already-queued sync.
 type fakeInserter struct {
 	mu   sync.Mutex
 	args []SyncArgs
@@ -115,9 +109,8 @@ func (f *fakeInserter) queued() []SyncArgs {
 	return append([]SyncArgs(nil), f.args...)
 }
 
-// testAPI is the whole stack under test: the real HTTP server, a real database,
-// three signed-in members of one space, and doubles for the two things this
-// package must not reach in a test — the broker and the job queue.
+// testAPI is the real HTTP server and database with three signed-in members of
+// one space, and doubles for the broker and the queue.
 type testAPI struct {
 	url       string
 	owner     *http.Client
@@ -252,9 +245,7 @@ func (a *testAPI) createConnection(t *testing.T) (uuid.UUID, string) {
 	return out.ID, body
 }
 
-// -------------------------------------------------------------------------
-// the owner-only rule, on every single endpoint
-// -------------------------------------------------------------------------
+// The owner-only rule, on every endpoint.
 
 // endpoint is one request to this module: a method, a path with the connection
 // id already filled in, and a body the handler will accept.
@@ -266,10 +257,8 @@ type endpoint struct {
 // server's in mountedRoutes below.
 const tinvestPathPrefix = "/api/v1/tinvest/"
 
-// mountedRoutes is every route THIS MODULE mounted, taken from the router the
-// test server was built with. See httpserver.Server.Routes: the patterns come
-// back with their method attached, which is how net/http spells a route and how
-// guardedRequests keys them.
+// mountedRoutes is every route this module mounted, from the router itself
+// (httpserver.Server.Routes), with methods.
 func (a *testAPI) mountedRoutes(t *testing.T) []string {
 	t.Helper()
 	var out []string
@@ -285,21 +274,10 @@ func (a *testAPI) mountedRoutes(t *testing.T) []string {
 	return out
 }
 
-// guardedRequests is one request per route this module mounts, keyed by the
-// pattern Handler.Mount registers that route under.
-//
-// IT IS NOT THE LIST OF ROUTES UNDER TEST, and the difference is the whole point
-// of the arrangement. That list comes from the router (mountedRoutes above): a
-// list of routes typed into a test goes on looking complete the day another
-// route is mounted without a line added here, and the one route nobody thought
-// about would be the one nobody checked. What this map adds is the only part a
-// router cannot supply — a body the handler will get past its own decoding, and
-// a real connection id in place of the {connectionId} the pattern carries. A
-// route mounted with no entry here has no request to send, and the test says so
-// and fails rather than skipping it.
-//
-// The method is NOT repeated in the value: it is read off the key, so the two
-// cannot come to disagree.
+// guardedRequests gives one request per mounted route: a body that decodes and
+// a real connection id. The route list comes from the router, so a newly mounted
+// route without an entry here fails the test instead of going unchecked. The
+// method is read off the key.
 func guardedRequests(id uuid.UUID) map[string]struct{ path, body string } {
 	conn := "/api/v1/tinvest/connections/" + id.String()
 	return map[string]struct{ path, body string }{
@@ -315,10 +293,8 @@ func guardedRequests(id uuid.UUID) map[string]struct{ path, body string } {
 		"POST /api/v1/tinvest/connections/{connectionId}/sync":    {conn + "/sync", ""},
 		"GET /api/v1/tinvest/connections/{connectionId}/runs":     {conn + "/runs", ""},
 		"GET /api/v1/tinvest/connections/{connectionId}/unparsed": {conn + "/unparsed", ""},
-		// The two explanation routes take ids of their own — a link and an
-		// explanation. Any well-formed uuid does: what is under test is that the
-		// role is refused BEFORE anything is looked up, so a row that does not
-		// exist must not be what answers.
+		// Any well-formed uuid: the role is refused before anything is looked
+		// up.
 		"POST /api/v1/tinvest/links/{linkId}/explanations": {
 			"/api/v1/tinvest/links/" + id.String() + "/explanations",
 			`{"content_keys":["k"],"operation":{"account_id":"` + id.String() +
@@ -335,10 +311,7 @@ func TestEveryEndpointRefusesAnEditorAndAViewer(t *testing.T) {
 	id, _ := api.createConnection(t)
 
 	mounted := api.mountedRoutes(t)
-	// Not a count of routes — that is exactly what this test must not state for
-	// itself — but proof that the filter matched the module at all. A prefix that
-	// matched nothing would leave the loop below with nothing to do, and a test
-	// that checks nothing passes.
+	// Not a route count, but proof the filter matched something.
 	if len(mounted) == 0 {
 		t.Fatalf("no route of this module was found among the router's %v", api.srv.Routes())
 	}
@@ -381,9 +354,7 @@ func TestEveryEndpointRefusesAnEditorAndAViewer(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// the token never leaves
-// -------------------------------------------------------------------------
+// The token never leaves.
 
 func TestNoResponseEverCarriesTheToken(t *testing.T) {
 	api := newTestAPI(t)
@@ -437,9 +408,7 @@ func TestTheTokenTailIsTheLastFourCharacters(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// creating a connection
-// -------------------------------------------------------------------------
+// Creating a connection.
 
 func TestCreatingAConnectionMakesRubleBrokerageAccountsAndQueuesTheFirstSync(t *testing.T) {
 	api := newTestAPI(t)
@@ -461,9 +430,8 @@ func TestCreatingAConnectionMakesRubleBrokerageAccountsAndQueuesTheFirstSync(t *
 		t.Fatalf("accounts = %d, want 2", len(accounts))
 	}
 	for _, a := range accounts {
-		// RUB is not decoration: the reconciliation refuses to write the
-		// broker's balance mark onto an account kept in anything else (see
-		// ErrAccountNotInRubles).
+		// RUB matters: the reconciliation refuses a balance mark on anything else
+		// (ErrAccountNotInRubles).
 		if a.Currency != "RUB" {
 			t.Errorf("account %q currency = %q, want RUB", a.Name, a.Currency)
 		}
@@ -526,9 +494,8 @@ func TestCreatingAConnectionMakesRubleBrokerageAccountsAndQueuesTheFirstSync(t *
 	if queued[0].ConnectionID != out.ID || queued[0].Trigger != string(TriggerInitial) {
 		t.Errorf("queued %+v, want connection %s with trigger %q", queued[0], out.ID, TriggerInitial)
 	}
-	// The insert options are the shared ones, not options built here: the
-	// button, the schedule and this first import must fall in one class of
-	// uniqueness or two of them could run over a connection at once.
+	// The shared insert options, so the first import, the schedule and the
+	// button share one uniqueness class.
 	if len(api.inserter.opts) != 1 || api.inserter.opts[0] == nil ||
 		!api.inserter.opts[0].UniqueOpts.ByArgs {
 		t.Errorf("the first sync was queued with %+v, want SyncInsertOpts()", api.inserter.opts)
@@ -546,12 +513,8 @@ func TestCreatingAConnectionRefusesWhatItCannotImport(t *testing.T) {
 		mustSay    string
 	}{
 		{
-			// 422 AND NOT 400, and the difference is the whole reason this row
-			// is here twice over: the token in this request is the demo token,
-			// which works, and the body is exactly the shape the contract
-			// declares. What is wrong is the account, and a client told 400
-			// would caption it as a refused token and send the owner to
-			// re-issue one that never stopped working (see writeError).
+			// 422, not 400: the token works and the body is well formed; only the
+			// account is wrong (see writeError).
 			"an account the token cannot see",
 			`{"token":"` + demoToken + `","accounts":[{"broker_account_id":"9999","account_name":"X"}]}`,
 			http.StatusUnprocessableEntity, "",
@@ -578,14 +541,9 @@ func TestCreatingAConnectionRefusesWhatItCannotImport(t *testing.T) {
 			http.StatusBadRequest, "",
 		},
 		{
-			// The REASON and not just the code: an empty broker account id is
-			// also one the token cannot see, so deleting validatePicks' refusal
-			// of it would leave the next check answering — with the same 400, and
-			// with a sentence telling the owner to pick a different account
-			// rather than that they sent an empty field. A test reading the
-			// status alone would stay green through that deletion; this one does
-			// not, and the emptiness is a bound the contract publishes
-			// (TinvestAccountPick.broker_account_id, minLength 1).
+			// The reason, not just the code: an empty id is also one the token cannot
+			// see, so without validatePicks' check the answer would be the same 400
+			// with a misleading sentence. minLength 1 is in the contract.
 			"an empty broker account id",
 			`{"token":"` + demoToken + `","accounts":[{"broker_account_id":"","account_name":"X"}]}`,
 			http.StatusBadRequest, "broker_account_id must not be empty",
@@ -619,18 +577,10 @@ func TestCreatingAConnectionRefusesWhatItCannotImport(t *testing.T) {
 	}
 }
 
-// TestCreateTellsARefusedTokenFromAnAccountItCannotImport is the pair a client
-// branches on, both legs of it on ONE endpoint and with everything else held
-// still. It is the whole reason ErrBrokerAccountNotImportable stopped sharing
-// ErrTokenRejected's 400.
-//
-// Why the second leg is not a made-up case: creating a connection asks the
-// broker for its account list AFRESH, and that list is a live answer. An account
-// closed between the wizard's token-check and its create, or a token whose
-// access was narrowed, produces exactly this — a request whose token still
-// works, naming an account the broker no longer offers. Under one status code
-// the client had to caption that as a refused token and send the owner off to
-// re-issue a working one.
+// The pair a client branches on, on one endpoint: a refused token (400) and an
+// account the token cannot import (422). The broker's account list is asked
+// afresh on create, so an account closed or a token narrowed since the wizard's
+// check produces the second with a working token.
 func TestCreateTellsARefusedTokenFromAnAccountItCannotImport(t *testing.T) {
 	api := newTestAPI(t)
 	base := api.url + "/api/v1/tinvest/connections"
@@ -646,9 +596,7 @@ func TestCreateTellsARefusedTokenFromAnAccountItCannotImport(t *testing.T) {
 		t.Errorf("a refused token: status %d (body %s), want 400", code, body)
 	}
 
-	// The same endpoint, the same token, the broker answering normally again.
-	// Now the token works and the request is well formed, and the only thing
-	// wrong is the account — which must NOT be answered with the token's code.
+	// Same endpoint and token, broker normal again: only the account is wrong.
 	api.broker.set(0, "")
 	code, body := do(t, api.owner, "POST", base, pick("9999"))
 	if code == http.StatusBadRequest {
@@ -660,12 +608,8 @@ func TestCreateTellsARefusedTokenFromAnAccountItCannotImport(t *testing.T) {
 	}
 }
 
-// TestAnEmptyTokenIsRefusedBeforeTheBrokerIsAsked covers the other end of the
-// same class: the token check's own refusal of an empty token. The broker
-// refusing a token is a 400 as well (see
-// TestARefusedTokenAndAnUnreachableBrokerAreDifferentAnswers), so the status
-// code cannot tell the two apart — what can is that this one never left the
-// process.
+// An empty token is refused before the broker is asked; the status matches
+// the broker's refusal, so the proof is that no call was made.
 func TestAnEmptyTokenIsRefusedBeforeTheBrokerIsAsked(t *testing.T) {
 	api := newTestAPI(t)
 
@@ -682,10 +626,8 @@ func TestAnEmptyTokenIsRefusedBeforeTheBrokerIsAsked(t *testing.T) {
 	}
 }
 
-// strayAccountCreator answers with an account that exists nowhere, which makes
-// the NEXT write — the link onto it — fail with ErrLinkOutsideSpace. That is a
-// failure in the middle of the writes rather than before them, which is the
-// only way to reach the state the test below is about.
+// strayAccountCreator returns an account that exists nowhere, so the link
+// write fails mid-way with ErrLinkOutsideSpace.
 type strayAccountCreator struct{}
 
 func (strayAccountCreator) Create(_ context.Context, _ uuid.UUID, _ *uuid.UUID,
@@ -694,23 +636,14 @@ func (strayAccountCreator) Create(_ context.Context, _ uuid.UUID, _ *uuid.UUID,
 	return account.Account{ID: uuid.New(), Name: name}, nil
 }
 
-// TestAHalfBuiltConnectionThatCouldNotBeRemovedIsNotScheduled is the fourth
-// outcome CreateConnection's doc names: a write fails, and the compensating
-// removal fails too (it is a best effort — undoConnection logs its own failure
-// and returns the original one). What survives must be a connection the
-// scheduler passes over, because an active one would be synced hourly, with a
-// working token, into accounts the owner was told had not been made.
-//
-// Read through ListActiveConnections and not through the space's own list: that
-// is the read the hourly dispatcher makes, and it is the one whose answer
-// decides whether the leftover is dangerous.
+// A write fails and the cleanup fails too: what remains must not be scheduled
+// (an active leftover would sync hourly into accounts the owner was told were not
+// made). Read through ListActiveConnections, the dispatcher's read.
 func TestAHalfBuiltConnectionThatCouldNotBeRemovedIsNotScheduled(t *testing.T) {
 	api := newTestAPI(t)
 	ctx := context.Background()
 
-	// The cleanup cannot succeed: the DELETE is refused by the database itself.
-	// Nothing in the schema produces that on its own, and a stubbed store would
-	// prove only that a stub was called.
+	// The cleanup's DELETE is refused by the database itself.
 	for _, stmt := range []string{
 		`CREATE FUNCTION refuse_the_delete() RETURNS trigger LANGUAGE plpgsql AS $$
 			BEGIN RAISE EXCEPTION 'the cleanup cannot remove this connection'; END $$`,
@@ -731,9 +664,7 @@ func TestAHalfBuiltConnectionThatCouldNotBeRemovedIsNotScheduled(t *testing.T) {
 	_, err := svc.CreateConnection(ctx,
 		family.Principal{SpaceID: api.spaceID, Role: family.RoleOwner}, demoToken,
 		[]AccountPick{{BrokerAccountID: "2000000001", AccountName: "Брокерский"}})
-	// The failure is the one this test set up — a link that could not be written
-	// — and not something that happened before the first write, which would make
-	// the state below prove nothing.
+	// The failure is the one set up, after the writes began.
 	if !errors.Is(err, ErrLinkOutsideSpace) {
 		t.Fatalf("CreateConnection failed with %v, want %v", err, ErrLinkOutsideSpace)
 	}
@@ -779,9 +710,7 @@ func TestABrokerAccountCannotBeImportedTwice(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// the broker's two different failures
-// -------------------------------------------------------------------------
+// The broker's two different failures.
 
 func TestARefusedTokenAndAnUnreachableBrokerAreDifferentAnswers(t *testing.T) {
 	api := newTestAPI(t)
@@ -824,9 +753,7 @@ func TestTokenCheckOffersOnlyTheAccountsThisProgramImports(t *testing.T) {
 	if out.Accounts[0].BrokerAccountID != "2000000001" || out.Accounts[1].BrokerAccountID != "2000000002" {
 		t.Errorf("accounts = %+v, want the brokerage account and the ИИС first", out.Accounts)
 	}
-	// The closed one is on the list, and that is the contract's claim rather
-	// than an accident: a closed account's history is as real as an open one's,
-	// and its settled results are the part worth importing.
+	// The closed account is listed: its history is as real as an open one's.
 	if out.Accounts[2].BrokerAccountID != "2000000004" {
 		t.Errorf("accounts = %+v, want the closed brokerage account listed too", out.Accounts)
 	}
@@ -846,9 +773,7 @@ func TestTokenCheckOffersOnlyTheAccountsThisProgramImports(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// updating and deleting
-// -------------------------------------------------------------------------
+// Updating and deleting.
 
 func TestANewTokenTheBrokerAcceptsBringsARevokedConnectionBack(t *testing.T) {
 	api := newTestAPI(t)
@@ -962,11 +887,8 @@ func TestSwitchingAConnectionOffAsksTheBrokerNothing(t *testing.T) {
 	}
 }
 
-// seedImportedOperation writes one journal operation of the kind the import
-// writes — this importer's own source, on the account a link feeds — through
-// the journal's own store. Without it the test below would check half of its
-// own title: an account with no operations in it says nothing about whether
-// operations survive a disconnect.
+// seedImportedOperation writes one import-style operation on a linked
+// account, so the disconnect test can check that operations survive.
 func (a *testAPI) seedImportedOperation(t *testing.T, accountID uuid.UUID) uuid.UUID {
 	t.Helper()
 	externalID := "seeded-operation"
@@ -1007,9 +929,8 @@ func TestDeletingAConnectionLeavesTheAccountsAndTheirOperations(t *testing.T) {
 		t.Errorf("accounts after the disconnect = %+v, want the same one: an account is the "+
 			"owner's data and withdrawing a token does not take it away", after)
 	}
-	// And what the import wrote INTO that account is the owner's data too. The
-	// migration's cascades reach the mirror, the links and the run log; they must
-	// not reach the journal, which holds no foreign key back to the connection.
+	// The imported operations stay: cascades reach mirror, links and run log,
+	// never the journal.
 	ops, _, err := operation.NewStore(api.pool).ListByAccount(ctx, api.spaceID, before[0].ID, 10, 0, operation.JournalFilter{})
 	if err != nil {
 		t.Fatalf("list operations: %v", err)
@@ -1030,9 +951,7 @@ func TestDeletingAConnectionLeavesTheAccountsAndTheirOperations(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// syncing now
-// -------------------------------------------------------------------------
+// Syncing now.
 
 func TestSyncingNowQueuesOneAndSaysSoWhenItDidNot(t *testing.T) {
 	api := newTestAPI(t)
@@ -1077,9 +996,7 @@ func TestSyncingNowRefusesAConnectionTheSchedulerWouldSkip(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// paging
-// -------------------------------------------------------------------------
+// Paging.
 
 // seedRunsAndUnparsed writes runs finished ok and mirror rows the projection
 // could not read, through the very stores the sync worker writes them with.
@@ -1184,17 +1101,9 @@ func TestBothListsSayWhetherThereIsMoreBehindThePage(t *testing.T) {
 	}
 }
 
-// TestUnparsedOperationsCarryTheWordsOfWhatRefusedThem: the code alone was the
-// whole answer for 134 of the owner's rows, and «Операцию отклонил движок
-// журнала» is the same sentence over a sale with nothing behind it, an amount
-// the journal will not hold and a transfer whose other leg failed. The detail
-// is what tells them apart, so it has to travel the whole way — mirror column,
-// service, response body — and not stop at a log line.
-//
-// The empty case is asserted from the SAME response and matters as much: the
-// field is required by the contract, so a row with nothing written down must
-// come back as "" rather than be left out, which is what a client rendering it
-// conditionally depends on.
+// The refuser's detail travels to the response: the code alone covered 134
+// of the owner's rows with one sentence. An empty detail comes back as "", since
+// the field is required.
 func TestUnparsedOperationsCarryTheWordsOfWhatRefusedThem(t *testing.T) {
 	api := newTestAPI(t)
 	id, _ := api.createConnection(t)
@@ -1295,9 +1204,7 @@ func TestAPageBeyondTheCeilingIsRefusedAndNotQuietlyShortened(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// what a run and a connection publish about the check against the broker
-// -------------------------------------------------------------------------
+// What a run and a connection publish about the check.
 
 func TestARunNobodyCheckedIsNotARunThatFoundNothing(t *testing.T) {
 	api := newTestAPI(t)
@@ -1382,9 +1289,8 @@ func TestARunNobodyCheckedIsNotARunThatFoundNothing(t *testing.T) {
 	}
 }
 
-// accountReconcile is TinvestAccountReconcile as the wire carries it, decoded
-// by hand: what this file checks is the JSON the owner's browser receives, not
-// the Go value the handler assembled.
+// accountReconcile is TinvestAccountReconcile decoded by hand, to check the
+// JSON the browser receives.
 type accountReconcile struct {
 	LinkID            uuid.UUID         `json:"link_id"`
 	AccountID         uuid.UUID         `json:"account_id"`
@@ -1409,11 +1315,9 @@ func connectionReconciles(t *testing.T, api *testAPI, id uuid.UUID) []accountRec
 	return conn.Reconciles
 }
 
-// THE CASE A SINGLE CONNECTION-WIDE VERDICT GOT WRONG. Two accounts checked in
-// one sync: the first differs, the second agrees a moment later. Publishing the
-// connection's newest check drew a tick over the difference, and — because the
-// differing account's check is forever the older of the two — its verdict could
-// never be seen at all.
+// Two accounts checked in one sync, the first differing and the second
+// agreeing: each keeps its own verdict. A connection-wide newest verdict drew a
+// tick over the difference.
 func TestEachLinkedAccountCarriesItsOwnVerdict(t *testing.T) {
 	api := newTestAPI(t)
 	ctx := context.Background()
@@ -1547,9 +1451,7 @@ func TestTheUnparsedListCarriesTheBrokersOwnRecord(t *testing.T) {
 	if op.Payment != "-100" || op.Currency != "RUB" {
 		t.Errorf("payment=%q currency=%q, want -100 RUB exactly as the broker gave it", op.Payment, op.Currency)
 	}
-	// Compared as a document rather than as bytes: the column is jsonb, which
-	// normalizes whitespace and key order on the way in (see MirrorRow.Raw), so
-	// a byte comparison here would be a test of PostgreSQL's formatting.
+	// Compared as a document: jsonb normalizes whitespace and key order.
 	var raw map[string]any
 	if err := json.Unmarshal(op.Raw, &raw); err != nil {
 		t.Fatalf("raw is not the broker's own document: %s: %v", op.Raw, err)
@@ -1559,10 +1461,9 @@ func TestTheUnparsedListCarriesTheBrokersOwnRecord(t *testing.T) {
 	}
 }
 
-// A row the broker has stopped returning says since when; one it still returns
-// says null rather than leaving the field out — the screen marks the first
-// kind, and an explained row so marked is where a rewrite the sync could not
-// recognize shows itself (#196).
+// A disappeared row says since when; a live one says null explicitly.
+// An explained row so marked is where an unrecognized rewrite shows
+// (#196).
 func TestTheUnparsedListSaysWhichRowsTheBrokerStoppedReturning(t *testing.T) {
 	api := newTestAPI(t)
 	id, _ := api.createConnection(t)
@@ -1604,9 +1505,7 @@ func TestTheUnparsedListSaysWhichRowsTheBrokerStoppedReturning(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// one space cannot reach another's connection
-// -------------------------------------------------------------------------
+// One space cannot reach another's connection.
 
 func TestAnUnknownConnectionIsNotFoundRatherThanForbidden(t *testing.T) {
 	api := newTestAPI(t)

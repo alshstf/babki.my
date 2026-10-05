@@ -132,11 +132,8 @@ func TestCreateConnectionStoresWhatItWasGiven(t *testing.T) {
 	}
 }
 
-// TestAConnectionIsCreatedWithTheStatusItWasAskedFor is the storage half of the
-// parking Service.CreateConnection depends on. The column's own default is
-// 'active', so an INSERT that left the status out would still write a row — a
-// row the hourly dispatcher picks up — and only asking for the other status and
-// reading it back says which of the two the statement actually used.
+// The status asked for is the status stored; the column defaults to
+// active, which the dispatcher would pick up.
 func TestAConnectionIsCreatedWithTheStatusItWasAskedFor(t *testing.T) {
 	f := newFixture(t)
 
@@ -328,11 +325,8 @@ func TestCreateLinkAndLinksByConnection(t *testing.T) {
 	}
 }
 
-// A link names three things — a space, a connection and a babki account — and
-// the space it names has to be the space the other two are in. Neither of
-// those two carries the space it belongs to on the argument, so nothing but
-// this check stands between a mistaken caller and a link that files one
-// space's broker operations into another's account.
+// A link's space must be the space of its connection and account, or one
+// space's operations would land in another's account.
 func TestCreateLinkRefusesToCrossSpaces(t *testing.T) {
 	f := newFixture(t)
 
@@ -500,13 +494,9 @@ func (f fixture) finishedRun(t *testing.T, linkID uuid.UUID, outcome RunOutcome)
 	return run
 }
 
-// A VERDICT BELONGS TO THE ACCOUNT IT WAS MADE FOR. A run is made for one
-// (connection, link) pair and the check happens inside it, so its verdict says
-// nothing about the connection's other accounts. The arrangement below is the
-// one that used to be published as the connection's own answer: the account
-// that differs is checked FIRST, the account that agrees a moment later —
-// so "the newest check of this connection" is the tick, and the difference
-// never surfaces.
+// A verdict belongs to its account. The differing account is checked first and
+// the agreeing one a moment later, the arrangement where a connection-wide newest
+// verdict hid the difference.
 func TestTheLastCheckIsKeptPerLinkedAccount(t *testing.T) {
 	f := newFixture(t)
 	second := f.secondLink(t)
@@ -547,10 +537,8 @@ func TestTheLastCheckIsKeptPerLinkedAccount(t *testing.T) {
 	}
 }
 
-// A link nobody checked is ABSENT rather than present with an empty verdict:
-// "no entry" is what the caller turns into `not_checked`, and a run that
-// failed before it could look leaves the previous check of ITS OWN account
-// standing.
+// An unchecked link is absent (the caller's not_checked), and a failed run
+// does not erase its account's previous check.
 func TestAnUncheckedAccountHasNoVerdictAndAFailedRunErasesNone(t *testing.T) {
 	f := newFixture(t)
 	second := f.secondLink(t)
@@ -679,10 +667,8 @@ func TestUnparsedRowsAreListedSetAndCleared(t *testing.T) {
 	}
 }
 
-// The ids handed to SetUnparsedVerdicts were read from this very table a
-// moment ago. One that no longer matches a row means the mirror moved under
-// the caller, and writing the part that still matches would leave a projection
-// half-marked.
+// An id no longer in the table means the mirror moved; nothing is
+// half-written.
 func TestSetUnparsedVerdictsRefusesAnIDThatIsNotThere(t *testing.T) {
 	f := newFixture(t)
 	now := wireTime(t, "2026-03-16T00:00:00Z")

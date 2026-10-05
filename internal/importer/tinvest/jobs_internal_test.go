@@ -30,30 +30,15 @@ import (
 	"babki.my/babki/internal/platform/secretbox"
 )
 
-// This file is package tinvest (not tinvest_test) so it can reach the worker's
-// own unexported types — clientFactory, rebuilderFactory, the store's
-// worker-only reads — and so that a test can drive Work directly rather than
-// through a running queue.
-//
-// EVERY EXPECTED VALUE IS A LITERAL, for the reason the other files in this
-// package state: an expectation derived from the implementation moves with it
-// and stays green through a change of rule.
+// Package tinvest, to reach the worker's unexported factories and reads and
+// drive Work directly. Expected values are literals.
 
-// -------------------------------------------------------------------------
-// capturing log records whole
-// -------------------------------------------------------------------------
+// Capturing log records whole.
 
-// logCapture is an slog.Handler that keeps every record, so a test can assert
-// the LEVEL a line was written at rather than merely that some line was
-// written. A substring match against a buffer cannot tell a Warn from a Debug,
-// and a Debug is invisible at the level this application runs at — so a test
-// that only greps for the text goes on passing after the line has been demoted
-// into silence. (The same handler exists in internal/marketdata for the same
-// reason; it lives in that package's own test files and cannot be imported.)
-//
-// Enabled answers true for every level on purpose: the point is to observe the
-// level, and a handler that filtered would make a demoted line disappear
-// instead of being reported at the wrong level.
+// logCapture keeps every record so a test can assert a line's level, not just
+// its text: a line demoted to Debug is invisible in production. Enabled is true
+// for every level so a demotion shows up as the wrong level. (marketdata has its
+// own copy.)
 type logCapture struct {
 	mu      sync.Mutex
 	records []slog.Record
@@ -79,15 +64,9 @@ func (c *logCapture) all() []slog.Record {
 	return out
 }
 
-// assertOneRecordAt fails unless exactly one captured record carries msg, that
-// record was written at want, and its attributes name cause. The level is
-// compared for EQUALITY rather than "at least want": a demotion buries the line
-// under the production level and a promotion makes it read as news of a kind it
-// is not, and "at least" would pass for half of those.
-//
-// It returns the record it matched, for callers that then have something to say
-// about a particular attribute — see assertAttrIs, and why a substring is not
-// enough for a number.
+// assertOneRecordAt fails unless exactly one record carries msg, at exactly
+// want, with attributes naming cause. It returns the record (see
+// assertAttrIs).
 func assertOneRecordAt(t *testing.T, c *logCapture, msg string, want slog.Level, cause string) slog.Record {
 	t.Helper()
 	records := c.all()
@@ -112,12 +91,8 @@ func assertOneRecordAt(t *testing.T, c *logCapture, msg string, want slog.Level,
 	return matched[0]
 }
 
-// assertAttrIs fails unless the record carries key with exactly want.
-//
-// IT IS NOT assertOneRecordAt's SUBSTRING, and the difference matters wherever
-// the value is a number: "0" is a substring of "connections=10" as much as of
-// "connections=0", so a substring check on a count proves nothing at all. (This
-// project's own rules name that trap; it had already been walked into here.)
+// assertAttrIs checks an attribute's exact value: "0" is a substring of
+// "connections=10".
 func assertAttrIs(t *testing.T, r slog.Record, key, want string) {
 	t.Helper()
 	var got string
@@ -165,9 +140,7 @@ func attrsOf(r slog.Record) string {
 	return b.String()
 }
 
-// -------------------------------------------------------------------------
-// a broker to sync against
-// -------------------------------------------------------------------------
+// A broker to sync against.
 
 const (
 	rpcOperations  = "OperationsService/GetOperationsByCursor"
@@ -176,10 +149,9 @@ const (
 	rpcInstrumentB = "InstrumentsService/GetInstrumentBy"
 )
 
-// brokerStub is an httptest server answering the four calls one sync run can
-// make. Each rpc has a canned status and body a test may replace, and every
-// request is counted and its "from" remembered — which is how the tests below
-// state what the broker was ASKED, not only what it answered.
+// brokerStub is an httptest server for the calls a sync makes, with replaceable
+// status and body per rpc; it counts requests and remembers each "from", so tests
+// can state what the broker was asked.
 type brokerStub struct {
 	srv *httptest.Server
 
@@ -188,15 +160,13 @@ type brokerStub struct {
 	body   map[string]string
 	calls  map[string]int
 	froms  []string
-	// opsByAccount answers the operations call per broker account, for the
-	// tests where the two links must not see the same history. An account with
-	// no entry gets the shared body.
+	// opsByAccount answers operations per broker account; others get the
+	// shared body.
 	opsByAccount map[string]string
 
-	// arrive, when set, runs before an operations page is answered and is told
-	// which call this is (1-based). It is how the concurrency test holds two
-	// runs at the same point instead of hoping they overlap, and how the
-	// second-link test switches the answer on between two calls of one run.
+	// arrive runs before an operations page is answered, told the 1-based
+	// call number: it holds two runs at one point, or switches an answer
+	// between two calls.
 	arrive func(call int)
 }
 
@@ -289,9 +259,8 @@ func (b *brokerStub) askedFroms() []string {
 	return append([]string(nil), b.froms...)
 }
 
-// opJSON is one executed operation as the REST gateway sends it — written out
-// by hand rather than marshalled from OperationItem, so that the worker's path
-// runs through the client's real parsing.
+// opJSON is one executed operation as the gateway sends it, written by
+// hand so the client's real parsing runs.
 func opJSON(id, opType, at string, units int64) string {
 	return fmt.Sprintf(`{"id":%q,"type":%q,"state":"OPERATION_STATE_EXECUTED",`+
 		`"date":%q,"payment":{"currency":"rub","units":"%d","nano":0},"quantity":"0",`+
@@ -307,9 +276,7 @@ func operationsPage(items ...string) string {
 	return `{"hasNext":false,"nextCursor":"","items":[` + strings.Join(items, ",") + `]}`
 }
 
-// opFixture is one of testdata/ops's documents, verbatim, for a page. The
-// fixtures are what the gateway sends, so they go onto the wire unchanged
-// rather than through a Go type and back.
+// opFixture is a testdata/ops document, put on the wire verbatim.
 func opFixture(t *testing.T, name string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "ops", name))
@@ -323,9 +290,7 @@ func moneyPositions(currency string, units int64) string {
 	return fmt.Sprintf(`{"money":[{"currency":%q,"units":"%d","nano":0}],"blocked":[]}`, currency, units)
 }
 
-// -------------------------------------------------------------------------
-// the worker under test
-// -------------------------------------------------------------------------
+// The worker under test.
 
 // testToken is the broker token the fixture seals into the connection. The
 // worker must hand exactly this to its client factory.
@@ -347,10 +312,8 @@ func newWorkerFixture(t *testing.T) *workerFixture {
 	return newWorkerFixtureWith(t, false)
 }
 
-// newWorkerFixtureWith builds the worker with or without the corporate-actions
-// registry behind it. With it, the registry is the real one over the same
-// database, so a test states what one run leaves in the journal rather than
-// which method was called.
+// newWorkerFixtureWith builds the worker with or without the real
+// corporate-actions registry over the same database.
 func newWorkerFixtureWith(t *testing.T, withRegistry bool) *workerFixture {
 	t.Helper()
 	f := newFixture(t)
@@ -448,14 +411,11 @@ func (f *workerFixture) setOpenedOn(t *testing.T, day string) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// the pipeline, end to end
-// -------------------------------------------------------------------------
+// The pipeline, end to end.
 
-// One run carries the broker's history into the mirror, the mirror into the
-// journal, and the broker's own ruble figure onto the account — and says so in
-// the run log. It is the whole point of this worker, so it is asserted at every
-// one of those four places rather than at the last one.
+// One run carries the history into the mirror, the mirror into the journal,
+// the broker's figure onto the account, and a run log entry; all four are
+// asserted.
 func TestSyncWorkerCarriesOneRunFromTheBrokerToTheJournal(t *testing.T) {
 	f := newWorkerFixture(t)
 	f.broker.answer(rpcOperations, http.StatusOK,
@@ -512,9 +472,8 @@ func TestSyncWorkerCarriesOneRunFromTheBrokerToTheJournal(t *testing.T) {
 	}
 }
 
-// A second run over an unchanged broker changes nothing and adds nothing: the
-// mirror confirms its rows and the projection asks the journal for no
-// difference at all. This is the property the hourly schedule rests on.
+// A second run over an unchanged broker changes nothing; the hourly schedule
+// rests on it.
 func TestSyncWorkerRunTwiceLeavesOneMirrorAndOneJournal(t *testing.T) {
 	f := newWorkerFixture(t)
 	f.broker.answer(rpcOperations, http.StatusOK,
@@ -536,9 +495,7 @@ func TestSyncWorkerRunTwiceLeavesOneMirrorAndOneJournal(t *testing.T) {
 	if len(second) != 1 {
 		t.Fatalf("journal holds %d operations after two runs, want 1", len(second))
 	}
-	// The row's own id, not merely the count: a rebuild that deleted the
-	// operation and wrote it back would leave one row here too, and would break
-	// every reference to it.
+	// The same row id, not merely the same count.
 	if first[0].ID != second[0].ID {
 		t.Errorf("the journal operation was rewritten: %s became %s", first[0].ID, second[0].ID)
 	}
@@ -547,16 +504,9 @@ func TestSyncWorkerRunTwiceLeavesOneMirrorAndOneJournal(t *testing.T) {
 	}
 }
 
-// THE PROJECTION IS REBUILT ONCE, OVER EVERY LINK, AFTER EVERY MIRROR IS UP TO
-// DATE — and this is what that order is for. A move between two accounts of one
-// connection is two mirror rows filed under two different links, and a rebuild
-// that ran per link would see one leg at a time and pair nothing: the owner
-// would get two unrelated entries where one event happened, the arriving
-// account would be told its cost basis is unknown, and the departing one would
-// have released shares to nowhere.
-//
-// A worker that rebuilt inside the per-link loop passes every other test in
-// this file.
+// The projection is rebuilt once, over every link, after every mirror: the two
+// legs of a move between the owner's accounts sit under two links, and a
+// per-link rebuild would pair nothing.
 func TestSyncWorkerRebuildsTheWholeConnectionSoTransfersPair(t *testing.T) {
 	f := newWorkerFixture(t)
 	second := f.secondLink(t)
@@ -595,14 +545,8 @@ func TestSyncWorkerRebuildsTheWholeConnectionSoTransfersPair(t *testing.T) {
 	}
 }
 
-// A RUN'S UNPARSED COUNT IS ITS OWN ACCOUNT'S, not the connection's. The
-// rebuild reports one figure for the whole connection, and writing that onto
-// every link's run would tell the owner that the account with nothing wrong
-// with it has an unreadable operation — the caption that does not match the
-// figure beside it.
-//
-// One link is given an operation of a type this program has never heard of; the
-// other is given nothing at all.
+// A run's unparsed count is its own account's, not the connection's. One
+// link gets an unknown operation type, the other nothing.
 func TestSyncWorkerCountsUnparsedRowsPerLinkAndNotPerConnection(t *testing.T) {
 	f := newWorkerFixture(t)
 	second := f.secondLink(t)
@@ -633,19 +577,11 @@ func TestSyncWorkerCountsUnparsedRowsPerLinkAndNotPerConnection(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// how far back a run reads
-// -------------------------------------------------------------------------
+// How far back a run reads.
 
-// EVERY RUN READS THE WHOLE HISTORY, FROM THE DAY THE ACCOUNT WAS OPENED. The
-// broker rewrites old operations after the fact, so a run bounded by the last
-// successful sync would never see a correction — and worse, SyncMirror marks
-// everything it does not find as gone, so the first bounded run would bury the
-// entire history before its own window.
-//
-// The assertion is on the SECOND run's request: after a successful run there is
-// a last-successful-sync time to narrow by, and that is exactly the moment the
-// mistake would be made.
+// Every run reads the whole history from the account's opening: the broker
+// rewrites old operations, and SyncMirror marks what it does not find as gone.
+// Asserted on the second run, when a last-sync time exists to narrow by.
 func TestSyncWorkerAsksForTheWholeHistoryOnEveryRun(t *testing.T) {
 	f := newWorkerFixture(t)
 	f.setOpenedOn(t, "2021-03-15")
@@ -687,13 +623,10 @@ func TestSyncWorkerFallsBackToTheYearTheBrokersAPIOpened(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// what stops a run, and what it does about it
-// -------------------------------------------------------------------------
+// What stops a run, and what it does about it.
 
-// A connection the owner switched off is left completely alone: no broker call,
-// no run row, no error. The line is Debug because a disabled connection is a
-// routine state, not news.
+// A switched-off connection: no broker call, no run, no error, a Debug
+// line.
 func TestSyncWorkerLeavesAConnectionThatIsSwitchedOffAlone(t *testing.T) {
 	f := newWorkerFixture(t)
 	if err := f.store.UpdateConnectionStatus(f.ctx, f.conn.ID, StatusDisabled); err != nil {
@@ -712,10 +645,8 @@ func TestSyncWorkerLeavesAConnectionThatIsSwitchedOffAlone(t *testing.T) {
 	assertOneRecordAt(t, f.logs, connectionNotActiveMessage, slog.LevelDebug, "disabled")
 }
 
-// A TOKEN THE BROKER REFUSES IS NOT A REASON TO RETRY. The connection is parked
-// as needing a new token, the run is recorded failed — and Work returns NIL, so
-// the queue stops instead of hammering the broker with a credential that will
-// never work again.
+// A refused token parks the connection, records the run failed and returns
+// nil, so the queue stops.
 func TestSyncWorkerParksAConnectionWhoseTokenTheBrokerRefuses(t *testing.T) {
 	f := newWorkerFixture(t)
 	f.broker.answer(rpcOperations, http.StatusUnauthorized,
@@ -742,9 +673,8 @@ func TestSyncWorkerParksAConnectionWhoseTokenTheBrokerRefuses(t *testing.T) {
 	}
 }
 
-// Any other failure IS worth retrying, so it comes back out of Work and River
-// takes it from there. The connection keeps its status: a broker that answered
-// 500 has said nothing whatever about the token.
+// Any other failure comes back out of Work for River to retry, and the
+// connection keeps its status.
 func TestSyncWorkerReturnsAnyOtherFailureSoTheQueueRetries(t *testing.T) {
 	f := newWorkerFixture(t)
 	f.broker.answer(rpcOperations, http.StatusInternalServerError, `{"code":13,"message":"internal"}`)
@@ -765,15 +695,12 @@ func TestSyncWorkerReturnsAnyOtherFailureSoTheQueueRetries(t *testing.T) {
 	}
 }
 
-// EVERY RUN THIS WORKER STARTED IS CLOSED, including the ones that had already
-// succeeded when a later link failed. A run left "running" for good is how the
-// store reports a crash, and a failure this worker saw and handled is not one.
+// Every started run is closed, including ones that succeeded before a later
+// link failed; "running" forever means a crash.
 func TestSyncWorkerClosesEveryRunItStartedWhenALaterLinkFails(t *testing.T) {
 	f := newWorkerFixture(t)
 	second := f.secondLink(t)
-	// The first link's page is answered; the second one's request is what
-	// fails, because the stub answers per rpc and the failure is switched on
-	// after the first call has been served.
+	// The first link's page is served, then the failure is switched on.
 	f.broker.mu.Lock()
 	f.broker.arrive = func(call int) {
 		if call == 2 {
@@ -804,14 +731,9 @@ func TestSyncWorkerClosesEveryRunItStartedWhenALaterLinkFails(t *testing.T) {
 	}
 }
 
-// THE SUMMARY IS THE RECORD OF THE WORK, AND THE WORK HAPPENED. A run that
-// carried the whole history across and then could not close its own log entry
-// has done everything a sync is for; leaving it with no summary line would make
-// the one run that most needs explaining the only one that says nothing at all.
-//
-// The run's log row is deleted while the run waits at the broker's door — the
-// one moment it is certainly open and certainly not being written to — so that
-// closing it afterwards fails for a reason the worker cannot dodge.
+// A run that did its work but could not close its log entry still writes its
+// summary. The log row is deleted while the run waits at the broker, so the
+// close must fail.
 func TestSyncWorkerStillSummarisesARunWhoseLogEntryCannotBeClosed(t *testing.T) {
 	f := newWorkerFixture(t)
 	f.broker.answer(rpcOperations, http.StatusOK,
@@ -837,17 +759,9 @@ func TestSyncWorkerStillSummarisesARunWhoseLogEntryCannotBeClosed(t *testing.T) 
 	assertAttrIs(t, rec, "added", "1")
 }
 
-// A FAILED RUN PUBLISHES THE UNPARSED COUNT IT TOOK, NOT THE ZERO IT STARTED
-// WITH. The figure is filled in by the reconciliation loop, and a run that
-// fails before that loop never reaches it — so a worker that simply wrote out
-// what it was holding would file "0 unreadable operations" on a run that never
-// counted any, in the same column, in the same shape, as a run that counted and
-// found none. That is the confusion the reconciliation has a whole "not
-// checked" verdict to avoid, and this column has no such state to hide in.
-//
-// The run below is stopped at the reconciliation — past the mirror and past the
-// rebuild, which is what marks a row unreadable in the first place — with one
-// operation of a type this program has never heard of already in it.
+// A failed run records the unparsed count it took, not a zero that would read
+// as "counted, none". The run stops at reconciliation, after the rebuild marked
+// one unknown operation.
 func TestSyncWorkerRecordsTheUnparsedCountItTookOnARunThatFailed(t *testing.T) {
 	f := newWorkerFixture(t)
 	f.broker.answer(rpcOperations, http.StatusOK,
@@ -869,23 +783,14 @@ func TestSyncWorkerRecordsTheUnparsedCountItTookOnARunThatFailed(t *testing.T) {
 		t.Errorf("the failed run reports %d unreadable operations, want 1 — the mirror holds one, "+
 			"and a zero here would be a measurement nobody made", got)
 	}
-	// The neighbouring figure, for contrast: the reconciliation says "not
-	// checked" rather than "everything agrees", which is the very distinction
-	// the count above now keeps as well.
+	// For contrast, the reconciliation says "not checked".
 	if runs[0].ReconcileStatus != ReconcileNotChecked {
 		t.Errorf("reconcile = %q, want %q", runs[0].ReconcileStatus, ReconcileNotChecked)
 	}
 }
 
-// A trigger the run log's own CHECK constraint would refuse is refused before a
-// run is opened, rather than at the INSERT — where it would surface as a
-// database error from inside a worker, on the one run that used it.
-//
-// AND IT IS NOT HANDED TO THE RETRY MACHINE. A queued job's arguments never
-// change, so returning the error would buy every further attempt at
-// exactly the same word, each one shouting at Error level, spread over River's
-// growing backoff — the same waste a refused token was singled out to avoid.
-// The line is written once and the job is let go.
+// A trigger the run log cannot store is refused before a run opens, and not
+// retried: the arguments never change. One line, then the job is let go.
 func TestSyncWorkerDropsAJobNamingATriggerTheRunLogCannotStore(t *testing.T) {
 	f := newWorkerFixture(t)
 
@@ -898,18 +803,15 @@ func TestSyncWorkerDropsAJobNamingATriggerTheRunLogCannotStore(t *testing.T) {
 	if runs := f.runs(t); len(runs) != 0 {
 		t.Errorf("%d runs recorded, want 0", len(runs))
 	}
-	// Dropped is not the same as unnoticed: the one line about it has to be
-	// visible at the level this application runs at, and has to name the word
-	// nothing could read — it is the only record the job leaves anywhere.
+	// That line is visible at the production level and names the word: it is
+	// the only record.
 	assertOneRecordAt(t, f.logs,
 		"tinvest: a sync job names a trigger the run log cannot store, dropping it",
 		slog.LevelError, `unknown sync trigger: "whenever"`)
 }
 
-// A connection whose owner has not yet chosen which broker accounts to import
-// is the ordinary state between "the token was accepted" and "the accounts were
-// picked". There is nothing to sync and nothing has gone wrong, so the broker is
-// not called at all.
+// A connection with no accounts picked yet: nothing to sync, no broker
+// call.
 func TestSyncWorkerSaysThereIsNothingToSyncWithoutLinkedAccounts(t *testing.T) {
 	f := newWorkerFixture(t)
 	if _, err := f.pool.Exec(f.ctx,
@@ -940,16 +842,8 @@ func TestSyncWorkerSaysNothingIsThereWhenTheConnectionIsGone(t *testing.T) {
 	assertOneRecordAt(t, f.logs, connectionGoneMessage, slog.LevelDebug, f.conn.ID.String())
 }
 
-// A PLANNED STOP IS NOT A BREAKAGE, AND NEITHER HALF OF THIS FILE MAY SAY IT
-// IS. Shutting the process down cancels the running job's context, and every
-// read underneath it fails at once — the dispatcher's listing of connections
-// and the sync worker's reading of one alike. At Error level those would be the
-// loudest lines of an ordinary restart, and would train the owner to read
-// "error" as "ignore".
-//
-// Both workers are exercised here because the rule lives in a helper each of
-// them has to remember to call, and a rule that has to be remembered gets
-// forgotten: these two lines are two of the several it had been forgotten at.
+// A cancelled pass (shutdown) is logged as routine, not Error, in both
+// workers; the rule lives in a helper each must remember to call.
 func TestACancelledPassIsLoggedAsRoutineAndNotAsAFailure(t *testing.T) {
 	f := newWorkerFixture(t)
 	ctx, cancel := context.WithCancel(f.ctx)
@@ -973,32 +867,14 @@ func TestACancelledPassIsLoggedAsRoutineAndNotAsAFailure(t *testing.T) {
 		"tinvest: read the connection to sync failed", slog.LevelDebug, "context canceled")
 }
 
-// -------------------------------------------------------------------------
-// two runs of one connection at once
-// -------------------------------------------------------------------------
+// Two runs of one connection at once.
 
-// TWO SIMULTANEOUS RUNS OF ONE CONNECTION LEAVE ONE MIRROR AND ONE JOURNAL.
-//
-// This is the property the whole task turns on, and BOTH HALVES OF IT REST ON
-// THE MIRROR'S LOCK. SyncMirror's transaction takes a lock on the connection row
-// before it reads anything, so the comparison that decides what to insert cannot
-// run twice against the same stored state.
-//
-// The journal's dedup index (operations_dedup_idx over
-// account_id/source/external_id, migration 0005) is a second line and not a
-// substitute: it catches two runs that agree on WHICH mirror rows exist, because
-// then the entries they build carry the same names and the loser's whole delta —
-// one transaction — is refused entire. It catches nothing when the two runs each
-// inserted the operation into the mirror, because the two rows have different
-// ids and so the two journal entries have different names. Measured: with the
-// lock removed this test reports two mirror rows AND two journal operations.
-//
-// So ONE of the two runs may legitimately fail (the loser's delta refused, the
-// run recorded failed, River retrying it against a journal that is by then
-// already right); what may not happen is a duplicate. Both are asserted.
-//
-// The two runs are held at the broker's door until both have arrived, so that
-// the overlap is observed rather than hoped for.
+// Two simultaneous runs leave one mirror and one journal. SyncMirror's lock on
+// the connection is what ensures it. The journal's dedup index only catches runs
+// that agree on the mirror rows; two runs that each inserted the operation give
+// entries different names (with the lock removed: two mirror rows and two
+// operations). One run may fail; no duplicate may appear. Both runs are held at
+// the broker until both arrive.
 func TestTwoSimultaneousRunsOfOneConnectionLeaveOneMirrorAndOneJournal(t *testing.T) {
 	f := newWorkerFixture(t)
 	f.broker.answer(rpcOperations, http.StatusOK,
@@ -1053,9 +929,7 @@ func TestTwoSimultaneousRunsOfOneConnectionLeaveOneMirrorAndOneJournal(t *testin
 	}
 }
 
-// -------------------------------------------------------------------------
-// the dispatcher
-// -------------------------------------------------------------------------
+// The dispatcher.
 
 // recordingInserter remembers what was queued instead of queueing it.
 type recordingInserter struct {
@@ -1075,9 +949,7 @@ func (r *recordingInserter) Insert(_ context.Context, args river.JobArgs, opts *
 	return &rivertype.JobInsertResult{Job: &rivertype.JobRow{ID: int64(len(r.args))}}, nil
 }
 
-// The dispatcher queues one job per ACTIVE connection and nothing for the
-// others — a connection whose token was refused would otherwise be asked again
-// every hour for as long as it existed.
+// One job per active connection; a refused token is not asked again hourly.
 func TestDispatchWorkerQueuesOneJobForEachActiveConnection(t *testing.T) {
 	f := newFixture(t)
 	parked, err := f.store.CreateConnection(f.ctx, f.spaceID, []byte("sealed"), "1234", StatusActive)
@@ -1100,19 +972,9 @@ func TestDispatchWorkerQueuesOneJobForEachActiveConnection(t *testing.T) {
 	if inserter.args[0] != (SyncArgs{ConnectionID: f.conn.ID, Trigger: "schedule"}) {
 		t.Errorf("queued %+v, want {%s schedule}", inserter.args[0], f.conn.ID)
 	}
-	// THE WHOLE OPTIONS VALUE, not one flag of it. ByArgs alone says the job is
-	// unique by its arguments and says nothing about ACROSS WHICH STATES, which
-	// is where the entire schedule lives: River's default set includes
-	// `completed`, and a dispatcher that queued with the default would have
-	// every hour after the first skipped as a duplicate of a job long finished.
-	// A comparison that stopped at ByArgs would call that correct.
-	//
-	// AND WRITTEN OUT RATHER THAN TAKEN FROM SyncInsertOpts. Comparing what was
-	// queued against the very function that built it proves the dispatcher and
-	// the owner's button agree — and proves nothing whatever about what they
-	// agree ON, because a change to that function moves both sides together.
-	// Measured: with ByState deleted from SyncInsertOpts, a DeepEqual against
-	// SyncInsertOpts() stays green and this literal goes red.
+	// The whole options value, written out: ByState is what keeps completed jobs
+	// from blocking the next hour (River's default includes completed), and
+	// comparing with SyncInsertOpts() itself would move with it.
 	want := &river.InsertOpts{MaxAttempts: 7, UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
 		rivertype.JobStateAvailable,
 		rivertype.JobStatePending,
@@ -1158,17 +1020,11 @@ func TestDispatchWorkerReturnsAQueueThatWillNotTakeTheJob(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// uniqueness, against the real queue
-// -------------------------------------------------------------------------
+// Uniqueness, against the real queue.
 
-// THE UNIQUENESS COVERS THE CONNECTION AND NOT THE TRIGGER. River hashes the
-// encoded args, so a plain ByArgs would put the schedule's job and the owner's
-// button in two different unique classes and let them run at once over one
-// connection — which is precisely the overlap the uniqueness exists to prevent.
-// The `river:"unique"` tag on ConnectionID alone is what narrows it, and this
-// test is against the real queue because that tag's effect lives in River, not
-// in this package.
+// Uniqueness is per connection, not per trigger: the `river:"unique"` tag on
+// ConnectionID puts the schedule's job and the button's in one class. Against
+// the real queue, since the tag's effect lives in River.
 func TestSyncJobsAreUniquePerConnectionWhateverTriggeredThem(t *testing.T) {
 	f := newFixture(t)
 	ctx := f.ctx
@@ -1214,16 +1070,9 @@ func (w *doneWorker) Work(context.Context, *river.Job[SyncArgs]) error {
 	return nil
 }
 
-// THE SCHEDULE HAS TO KEEP WORKING AFTER THE FIRST RUN. Uniqueness is what
-// stops two syncs of one connection overlapping; it must not stop the NEXT
-// hour's sync of a connection whose previous one is over and done with.
-//
-// This is not a hypothetical: River's own default set of unique states includes
-// `completed`, so a finished job goes on holding its unique key until the job
-// cleaner removes the row — hours later — and every dispatch in between is
-// skipped. The job is therefore taken through the real queue to completion here
-// rather than simulated, because what is being checked is exactly how River
-// treats a job it has finished.
+// The next hour's sync is queued after the first finishes: River's default
+// unique states include completed, which would block it until the cleaner ran.
+// Taken through the real queue to completion.
 func TestASecondSyncIsQueuedOnceTheFirstHasFinished(t *testing.T) {
 	f := newFixture(t)
 	ctx := f.ctx
@@ -1292,9 +1141,7 @@ func waitForJobState(t *testing.T, f fixture, want string) {
 	}
 }
 
-// -------------------------------------------------------------------------
-// the shapes the rest of the application depends on
-// -------------------------------------------------------------------------
+// Shapes the rest of the application depends on.
 
 func TestJobKindsAreNamespacedToThisModule(t *testing.T) {
 	if got := (SyncArgs{}).Kind(); got != "tinvest.sync" {
@@ -1315,21 +1162,13 @@ func TestSyncWorkerAsksForMoreThanTheDefaultMinute(t *testing.T) {
 	}
 }
 
-// The queue this package declares for itself must stay the real client's own
-// method: a signature moving under it is a compile error here rather than a
-// wiring failure in cmd/babki.
+// jobInserter must stay the real client's method.
 var _ jobInserter = (*river.Client[pgx.Tx])(nil)
 
-// A token that will not decrypt is a different fault from a token the broker
-// refused — the key changed under the ciphertext, most plainly when a database
-// backup is restored onto a host whose BABKI_ENCRYPTION_KEY was generated
-// afresh. The REMEDY is the same one, though: a token pasted now is sealed with
-// the key this process holds. So the connection is parked where a revoked token
-// parks, which is the only state the screen offers the owner a new token from.
-//
-// Before this, the worker returned the error and left the connection "active":
-// the queue retried hourly for a key it could not conjure, and every screen
-// went on saying the import was fine while it had silently stopped.
+// A token that will not decrypt (the key changed, e.g. a backup restored onto
+// a host with a new BABKI_ENCRYPTION_KEY) parks the connection like a revoked
+// token: pasting a token is the remedy either way, and that state is where the
+// screen offers it.
 func TestSyncWorkerParksAConnectionWhoseTokenWillNotDecrypt(t *testing.T) {
 	f := newWorkerFixture(t)
 

@@ -30,11 +30,9 @@ func findByExternalID(ops []operation.Operation, id string) (operation.Operation
 // carries — the case this whole feature exists for.
 const uidTechFund = "7c3f9a2e-1111-4222-8333-abcdefabcdef"
 
-// techFundRows builds the three broker rows of the owner's live October 2025:
-// a purchase, the withdrawal of the redeemed units ("вывод в другой
-// депозитарий", the fraction only in the prose), and the money a fortnight
-// later under the bond-redemption type. The last two are ONE partial
-// redemption and no rule can see it — which is what the owner explains.
+// techFundRows builds the owner's October 2025 rows: a purchase, the withdrawal
+// of the redeemed units (the fraction only in prose), and the money a fortnight
+// later as a bond redemption. The last two are one partial redemption.
 func techFundRows(t *testing.T, f *rebuildFixture) (buy, out, payout OperationItem) {
 	t.Helper()
 	f.src.instruments[uidTechFund] = InstrumentBrief{
@@ -95,11 +93,9 @@ func (f *rebuildFixture) manualRedemption(t *testing.T, instrumentID uuid.UUID) 
 	return op
 }
 
-// TestRebuildSkipsExplainedRowsAndStopsCountingThemUnparsed is the whole
-// feature end to end, on the owner's own shape: the withdrawal and the payout
-// are explained by one manual redemption, so the rebuild writes neither of
-// them, leaves neither on the unparsed count, and the position afterwards is
-// what the owner's own operation says it is.
+// End to end on the owner's shape: both rows explained by one manual
+// redemption are not written, not counted unparsed, and the position is what the
+// owner's operation says.
 func TestRebuildSkipsExplainedRowsAndStopsCountingThemUnparsed(t *testing.T) {
 	f := newRebuildFixture(t)
 	buy, out, payout := techFundRows(t, f)
@@ -161,12 +157,8 @@ func TestRebuildSkipsExplainedRowsAndStopsCountingThemUnparsed(t *testing.T) {
 	}
 }
 
-// TestUnparsedListShowsExplainedRowsTheCountDoesNot pins the pair this feature
-// has to keep in step: an explained row is NOT counted as unparsed (it carries
-// no reason) and IS on the list (this is the only screen it appears on, and the
-// only place the answer can be taken back). Both halves are asserted against
-// the same two rows, because it is the DIFFERENCE between them that a reader
-// would otherwise take for a bug.
+// An explained row is not counted as unparsed and is on the list, the only
+// screen where it can be seen or taken back; both halves on the same rows.
 func TestUnparsedListShowsExplainedRowsTheCountDoesNot(t *testing.T) {
 	f := newRebuildFixture(t)
 	buy, out, payout := techFundRows(t, f)
@@ -221,11 +213,8 @@ func TestUnparsedListShowsExplainedRowsTheCountDoesNot(t *testing.T) {
 	}
 }
 
-// TestDeletingTheManualOperationUnexplainsItsRows is the un-explaining rule,
-// asserted where it is implemented — the foreign key. Nothing in this package
-// deletes an explanation beside the operation, so this is what guarantees that
-// an explanation cannot outlive what it names, whether the operation goes
-// through this feature's own DELETE or through the journal screen.
+// Deleting the manual operation removes its explanations through the foreign
+// key, however it is deleted.
 func TestDeletingTheManualOperationUnexplainsItsRows(t *testing.T) {
 	f := newRebuildFixture(t)
 	buy, out, payout := techFundRows(t, f)
@@ -258,12 +247,9 @@ func TestDeletingTheManualOperationUnexplainsItsRows(t *testing.T) {
 	}
 }
 
-// TestBrokerFeeOfAnExplainedTradeIsItsOwnUnparsedRow is the fourth answer to
-// "is this commission a duplicate": its trade is neither in the journal nor on
-// the unparsed list, because the owner accounted for it by hand. Dropping the
-// fee on the strength of the unparsed-trade rule would lose the money in
-// silence — that rule leans on the trade's own row reporting it, and an
-// explained row reports nothing.
+// A fee whose trade the owner explained is its own unparsed row: the
+// explained trade reports nothing, so dropping the fee would lose money
+// silently.
 func TestBrokerFeeOfAnExplainedTradeIsItsOwnUnparsedRow(t *testing.T) {
 	f := newRebuildFixture(t)
 	trade := loadOperationItem(t, "buy.json")
@@ -359,10 +345,7 @@ func TestExplainRowsRefusesWhatItCannotAccountFor(t *testing.T) {
 	}
 }
 
-// TestRemoveExplanationTakesTheOperationWithIt is the DELETE half: the point
-// of the endpoint is that the journal entry goes too, since an operation left
-// behind would be an entry explaining nothing, invisible on this screen and
-// double-counting the event on the account.
+// Removing an explanation removes its journal entry too.
 func TestRemoveExplanationTakesTheOperationWithIt(t *testing.T) {
 	f := newRebuildFixture(t)
 	buy, out, payout := techFundRows(t, f)

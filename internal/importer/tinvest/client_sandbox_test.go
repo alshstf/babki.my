@@ -1,12 +1,8 @@
 package tinvest_test
 
-// This file is package tinvest_test (external, exported-API only)
-// deliberately: SandboxService's mutating calls (open an account, fund it,
-// place an order) are test scaffolding for exercising the real client's
-// read methods against a live sandbox account, not something the importer
-// itself ever needs — the importer only reads a broker's history, it never
-// trades. Those calls therefore live only in this test file, built as raw
-// requests, rather than being added to Client's public surface.
+// External test package: the SandboxService calls that open, fund and trade
+// are scaffolding for exercising the real client's reads against a live sandbox.
+// The importer never trades, so they live here as raw requests, not on Client.
 
 import (
 	"bytes"
@@ -24,22 +20,12 @@ import (
 	"babki.my/babki/internal/importer/tinvest"
 )
 
-// sberFIGI is Sberbank ordinary shares' FIGI — a liquid, always-tradable
-// instrument used here only so PostSandboxOrder has something to buy one
-// unit of. It is a well-known identifier reused across T-Invest API
-// examples; this test has not independently re-verified it via a live
-// instrument lookup (InstrumentByUID takes a UID, not a FIGI, and this test
-// deliberately does not add a FIGI-lookup method to the client just to
-// self-check a constant used only here).
+// sberFIGI is Sberbank ordinary shares, bought only so the sandbox has an
+// operation; the widely published FIGI, not re-verified here.
 const sberFIGI = "BBG004730N88"
 
-// sandboxRPC performs one raw POST call against a SandboxService method,
-// following the same wire convention Client itself uses (POST
-// {base}/tinkoff.public.invest.api.contract.v1.<Service>/<Method>, Bearer
-// auth, JSON body in and out) — duplicated here rather than reusing Client
-// internals, since this package-external test file has no access to them
-// and, per the task brief, should not: these calls are not part of the
-// client's public API.
+// sandboxRPC is one raw POST to a SandboxService method, using Client's wire
+// convention.
 func sandboxRPC(ctx context.Context, hc *http.Client, token, method string, reqBody, respBody any) error {
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
@@ -75,27 +61,15 @@ func sandboxRPC(ctx context.Context, hc *http.Client, token, method string, reqB
 	return nil
 }
 
-// TestSandboxLiveRoundTrip exercises the real client against T-Invest's
-// live sandbox gateway. It is gated on BABKI_TINVEST_SANDBOX_TOKEN, read
-// only from the environment and never written anywhere — see the task
-// brief for why the token must not reach the repository in any form.
-//
-// Run it explicitly with:
+// TestSandboxLiveRoundTrip runs the real client against the live sandbox,
+// gated on BABKI_TINVEST_SANDBOX_TOKEN from the environment only:
 //
 //	BABKI_TINVEST_SANDBOX_TOKEN='...' go test ./internal/importer/tinvest/ -run Sandbox -v
 //
-// What this proves, live: the embedded certificate and TLS transport
-// actually complete a handshake against sandbox-invest-public-api.tinkoff.ru
-// (not just against an httptest.Server using the test binary's own trust),
-// that GetAccounts and OperationsAll — the client's own public methods —
-// work against the sandbox host, and that OperationsAll's cursor walk
-// terminates on an empty history rather than looping.
-//
-// What it does not and cannot prove: the sandbox only ever produces
-// BUY/SELL operations with a flat 0.05% commission (see the task brief) —
-// no dividends, no taxes, no BROKER_FEE — so it says nothing about how this
-// client (or a later task) handles those. That gap is intentional, not an
-// oversight: the sandbox itself cannot exercise it.
+// It proves the embedded certificate completes a live handshake, GetAccounts and
+// OperationsAll work, and the cursor walk ends on an empty history. The sandbox
+// produces only buys and sells with a flat 0.05% commission, so nothing else is
+// covered.
 func TestSandboxLiveRoundTrip(t *testing.T) {
 	token := os.Getenv("BABKI_TINVEST_SANDBOX_TOKEN")
 	if token == "" {
@@ -111,10 +85,8 @@ func TestSandboxLiveRoundTrip(t *testing.T) {
 	}
 	client := tinvest.NewClient(hc, tinvest.SandboxBaseURL, token, nil)
 
-	// A fresh account per run, rather than reusing whatever already exists
-	// on this token: the sandbox docs themselves say accounts are not
-	// guaranteed to persist, and a fresh account also guarantees the empty-
-	// history check below actually starts from zero operations.
+	// A fresh account per run: sandbox accounts are not guaranteed to persist,
+	// and the history must start empty.
 	var openResp struct {
 		AccountID string `json:"accountId"`
 	}
@@ -183,15 +155,8 @@ func TestSandboxLiveRoundTrip(t *testing.T) {
 		"orderId":      uuid.NewString(),
 	}
 	if err := sandboxRPC(ctx, hc, token, "SandboxService/PostSandboxOrder", order, nil); err != nil {
-		// A market order can be legitimately refused for a reason outside
-		// this client's control — observed live on 2026-08-04 at ~01:30
-		// Moscow time, outside MOEX's trading session: both a SBER limit
-		// order and a USDRUB market order came back "Instrument is not
-		// available for trading" (broker error 30079). That is the exchange
-		// being closed, not a defect in this request, so it is reported as
-		// a skip (with the broker's own error surfaced) rather than a
-		// failure — a real trading-hours outage should not read the same as
-		// a broken client.
+		// Outside trading hours the exchange refuses orders (error 30079, seen at
+		// ~01:30 Moscow on 2026-08-04); that is a skip, not a broken client.
 		t.Skipf("PostSandboxOrder: %v (if this is broker error 30079 / \"Instrument is not available for "+
 			"trading\", it most likely means the exchange session is closed right now — rerun during MOEX "+
 			"trading hours to exercise the BUY-visibility check below)", err)
