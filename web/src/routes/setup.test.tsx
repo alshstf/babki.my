@@ -12,17 +12,15 @@ import {
 import "@/i18n";
 import { SetupPage } from "./setup";
 
-// openapi-fetch captures globalThis.fetch at import time
-// (`fetch: baseFetch = globalThis.fetch`), so the double has to be installed
-// *before* the imports above run — hence vi.hoisted.
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// A fresh Response per call: a single one handed to mockResolvedValue works
-// once and then throws, because a body can only be consumed once.
+// A fresh Response per call: a body can be read only once.
 function serve(status: number, body: unknown) {
   fetchMock.mockImplementation(() =>
     Promise.resolve(
@@ -34,9 +32,7 @@ function serve(status: number, body: unknown) {
   );
 }
 
-// What a browser with no connection does: fetch rejects and no status is ever
-// read — a failure that carries no answer at all. Separate from serve() above
-// rather than a flag on it, so the two existing callers stay as they read.
+// fetch rejects, as a browser with no connection does.
 function serveNetworkError() {
   fetchMock.mockImplementation(() => Promise.reject(new TypeError("Failed to fetch")));
 }
@@ -61,8 +57,7 @@ async function fillAndSubmit() {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
-  // The router mounts its matched route asynchronously, so the form is not in
-  // the document on the render call's own tick.
+  // The router mounts the route asynchronously.
   fireEvent.change(await screen.findByLabelText("Название пространства"), {
     target: { value: "Наша семья" },
   });
@@ -73,22 +68,16 @@ async function fillAndSubmit() {
 }
 
 afterEach(() => {
-  // react-query's onlineManager is a module-level singleton, so a test that
-  // takes the browser offline has to put it back or every later test in the
-  // run inherits it.
+  // onlineManager is a module-level singleton: put it back.
   onlineManager.setOnline(true);
   fetchMock.mockReset();
 });
 
-// The sentence that tells the reader to reload and sign in instead of filling
-// this form again used to be chosen by looking for an English phrase inside the
-// server's error text. The status is what the API promises (409 on
-// POST /api/v1/setup, see api/openapi.yaml); the prose is not.
+// The refusal is recognised by status (409 on POST /api/v1/setup), which
+// the API promises, not by the prose, which it does not.
 describe("SetupPage — which refusal it recognises", () => {
   it("recognises an instance that is already set up", async () => {
-    // The refusal the server sends today, REWORDED: a client that recognises
-    // it by its prose passes this only by accident, and stops recognising it
-    // the day the sentence is edited.
+    // The prose reworded: recognising it by text would pass only by accident.
     serve(409, { error: "this instance has already been configured" });
     await fillAndSubmit();
 
@@ -105,40 +94,31 @@ describe("SetupPage — which refusal it recognises", () => {
   });
 });
 
-// Issue #111. This is the only screen a brand-new instance can show, and it was
-// the one mutation in session.ts left on react-query's default networkMode,
-// "online" — which PAUSES a mutation while the browser reports itself offline.
+// #111: the only screen a new instance shows; offline, the default
+// networkMode "online" would pause the mutation.
 describe("SetupPage — a browser that reports no connection", () => {
   it("says so, sends the request anyway, and lets the reader try again", async () => {
-    // Held rather than failed was the whole defect: nothing went out, isError
-    // stayed false so the alert had nothing to show, and isPending stayed true
-    // so the button that would try again was disabled. The reader pressed
-    // «Создать», saw nothing happen and nothing said — and then, whenever the
-    // connection returned, the held request went out and the instance set
-    // itself up on its own, an arbitrary time after anyone asked.
+    // Held, the button stayed disabled with nothing said, and the instance
+    // set itself up whenever the connection returned.
     onlineManager.setOnline(false);
     serveNetworkError();
 
     await fillAndSubmit();
 
-    // The sentence claims nothing about the cause, which is what makes it true
-    // here: «Проверьте поля», the wording until this fix, is a verdict on what
-    // was typed, and the fields are perfectly good on a dead connection.
-    // Compared whole so that reintroducing that clause reddens this.
+    // The sentence claims no cause: «Проверьте поля» would blame good
+    // fields. Compared whole so that clause cannot come back.
     expect(
       await screen.findByText("Не удалось выполнить настройку. Попробуйте ещё раз"),
     ).toBeInTheDocument();
-    // Attempted, not held: the browser's own idea of being offline does not get
-    // to decide this one, and it is the request that reports the answer.
+    // Attempted, not held.
     expect(fetchMock).toHaveBeenCalled();
     // And the reader can try again — a locked button is the same silence.
     expect(createButton()).not.toBeDisabled();
   });
 });
 
-// A running server asks for the one-time code it wrote to its log: the form
-// shows the field, sends what was typed, and says plainly when the code was
-// not the right one.
+// A running server asks for the one-time code it logged: the form sends
+// it and says when it was wrong.
 describe("SetupPage — the one-time code from the server's log", () => {
   it("asks for the code, sends it, and names a wrong one", async () => {
     const sent: unknown[] = [];
@@ -156,8 +136,7 @@ describe("SetupPage — the one-time code from the server's log", () => {
     });
     const codeField = async () => screen.findByLabelText("Код первого запуска");
     const renderAndFill = fillAndSubmit;
-    // fillAndSubmit fills the four fields and presses «Создать»; with a code
-    // required and none typed, the button stays disabled and nothing is sent.
+    // With a code required and none typed, the button stays disabled.
     await renderAndFill();
     expect(sent).toHaveLength(0);
     fireEvent.change(await codeField(), { target: { value: " k7m2p9qx " } });

@@ -17,18 +17,15 @@ import { useDisplayCurrency } from "@/lib/display-currency";
 import type { SessionInfo } from "@/api/session";
 import type { AccountWithBalance, Summary } from "@/api/accounts";
 
-// The API client captures globalThis.fetch once, when @/api/client is first
-// imported (openapi-fetch: `fetch: baseFetch = globalThis.fetch`), so the
-// double has to be in place *before* that import — hence vi.hoisted, which
-// runs ahead of the import statements above.
+// The API client captures globalThis.fetch on first import, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// Serves the given endpoints (matched as URL substrings) and 404s the rest,
-// so an unexpected request is loud rather than silently hanging.
+// Serves the given endpoints by URL substring and 404s the rest.
 function serve(routes: Record<string, { status?: number; body?: unknown }>) {
   fetchMock.mockImplementation((input: RequestInfo | URL) => {
     const url = input instanceof Request ? input.url : String(input);
@@ -91,9 +88,8 @@ function makeSummary(overrides: Partial<Summary> = {}): Summary {
   };
 }
 
-// Renders AccountsPage the way AppLayout does: inside the screen-currency
-// provider (which the page reports into) and a router (its rows link to the
-// detail route).
+// As AppLayout renders it: inside the screen-currency provider and a
+// router (rows link to the detail route).
 function renderPage(role: SessionInfo["role"] = "owner") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(["session"], makeSession(role));
@@ -128,8 +124,8 @@ function renderPage(role: SessionInfo["role"] = "owner") {
   };
 }
 
-// Sets the user's stored display-currency choice the way the header toggle
-// does (the store is module-level, shared by every consumer in the process).
+// Writes the stored choice as the header toggle does; the store is
+// module-level.
 function storeMode(mode: "native" | "base") {
   const { result, unmount } = renderHook(() => useDisplayCurrency());
   act(() => result.current.setMode(mode));
@@ -150,10 +146,8 @@ describe("AccountsPage — display currency mode", () => {
   });
 
   it("keeps showing the per-currency breakdown when only one currency is on screen, even with base mode stored", async () => {
-    // The reviewer's trap: the user turns on "base" on a multi-currency
-    // screen, later lands on a screen with a single currency — where the
-    // toggle hides itself — and the breakdown cards disappear with no
-    // control anywhere on screen to bring them back.
+    // "Base" chosen on a multi-currency screen, then a single-currency one
+    // hides the toggle: the breakdown cards must not vanish with no way back.
     storeMode("base");
     renderPage();
 
@@ -190,14 +184,11 @@ describe("AccountsPage — display currency mode", () => {
   });
 });
 
-// #95: this confirmation printed whatever the server put in its error body,
-// which is English written for a developer reading a log.
+// #95: the confirmation printed the server's English log prose.
 describe("AccountsPage — an archive the server refused", () => {
   it("says it in Russian and does not repeat the server's own words", async () => {
-    // Method-aware: the archive is a DELETE to the very path the accounts list
-    // is read from, so a mock keyed on the path alone would answer it with the
-    // list — a 200, i.e. a success — and the dialog under test would never see
-    // a refusal at all.
+    // Method-aware: the archive DELETE goes to the list's path, so a
+    // path-only mock would answer it with a 200.
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : String(input);
       const method = input instanceof Request ? input.method : (init?.method ?? "GET");
@@ -215,8 +206,7 @@ describe("AccountsPage — an archive the server refused", () => {
     });
     renderPage();
 
-    // Radix's menu opens on pointerdown, and jsdom has no PointerEvent to fire;
-    // the trigger's own keyboard path opens the same menu.
+    // Radix's menu opens on pointerdown, which jsdom lacks; Enter opens it too.
     fireEvent.keyDown(await screen.findByRole("button", { name: "Действия" }), { key: "Enter" });
     fireEvent.click(await screen.findByRole("menuitem", { name: "Архивировать" }));
     const dialog = await screen.findByRole("dialog");
@@ -226,11 +216,8 @@ describe("AccountsPage — an archive the server refused", () => {
     expect(document.body.textContent).not.toContain("account has operations");
   });
 
-  // #21: the alert lives on the mutation, and Cancel is a plain button that
-  // clears archiveTarget — Radix calls onOpenChange only for its OWN dismiss
-  // triggers (Escape, overlay, DialogClose), so the reset written there never
-  // ran on this path. The next confirmation opened already saying an archive
-  // had failed, about an account nobody had tried to archive yet.
+  // #21: Cancel is a plain button and Radix calls onOpenChange only for its
+  // own dismiss triggers, so the refusal stayed for the next account.
   it("opens clean afterwards instead of carrying the refusal to the next account", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : String(input);
@@ -268,9 +255,8 @@ describe("AccountsPage — an archive the server refused", () => {
 });
 
 describe("AccountsPage — bringing an account back from the archive", () => {
-  // An archived account takes no entries until it is brought back (the server
-  // refuses them), so its menu offers the way back where «Архивировать» was —
-  // a PATCH of its status, not the DELETE that archived it.
+  // An archived account takes no entries, so its menu offers the way back:
+  // a PATCH of its status.
   it("offers «Вернуть из архива» on an archived row and sends the account back as active", async () => {
     const sent: { method: string; url: string; body: unknown }[] = [];
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -311,17 +297,9 @@ describe("AccountsPage — bringing an account back from the archive", () => {
   });
 });
 
-// buttonNames is every button this screen currently offers, by the name a
-// person actually reads off it — the accessible name, so an icon-only control
-// is named by its aria-label rather than by an empty string.
-//
-// It exists so the assertions below can be about the DIFFERENCE between two
-// roles' screens instead of about a list of controls typed into a test. A
-// hand-written list goes on looking complete the day somebody adds a control it
-// does not mention, which is exactly the day the test stops being worth
-// anything; a diff cannot, because the new control turns up in it by itself
-// (the same reason the T-Invest role tests take their route list from the
-// router rather than from a literal — see internal/importer/tinvest).
+// Every button by accessible name, so the tests compare two roles'
+// screens: a new control shows up in the diff by itself, where a
+// hand-written list would miss it.
 function buttonNames(): string[] {
   return screen
     .queryAllByRole("button")
@@ -330,10 +308,8 @@ function buttonNames(): string[] {
     .sort();
 }
 
-// #14: every one of these was verified by hand and by nothing else. A viewer is
-// a member who may read the family's money and change none of it, and the
-// server enforces that — but a screen offering controls that always fail is its
-// own defect, and nothing here noticed when one appeared.
+// #14: a viewer may read and change nothing; the server enforces it, and
+// the screen must not offer controls that always fail.
 describe("AccountsPage — what a viewer may do", () => {
   beforeEach(() => {
     serve({
@@ -353,23 +329,19 @@ describe("AccountsPage — what a viewer may do", () => {
     await screen.findByTestId("account-balance-acc-1");
     const asViewer = buttonNames();
 
-    // Written out rather than derived from the page: the point of the literal
-    // is that a control gated in a NEW place has to be added to it deliberately,
-    // by somebody who then has to say why it belongs there.
+    // Written out so a newly gated control is added deliberately.
     expect(asOwner.filter((name) => !asViewer.includes(name))).toEqual([
       "Действия",
       "Добавить счет",
     ]);
-    // And nothing the other way round: a viewer must not be offered a control
-    // the owner is not, which is what a mis-negated condition looks like.
+    // Nothing the other way: a mis-negated condition shows here.
     expect(asViewer.filter((name) => !asOwner.includes(name))).toEqual([]);
     // The screen is still a screen: the figures a viewer came for are there.
     expect(screen.getByText("Наличные")).toBeInTheDocument();
   });
 
   it("gives an editor the write controls a viewer does not get", async () => {
-    // Otherwise "a viewer sees no write controls" would also pass on a page
-    // that shows them to nobody at all.
+    // Otherwise a page showing write controls to nobody would pass.
     renderPage("editor");
     await screen.findByTestId("account-balance-acc-1");
     expect(screen.getByRole("button", { name: "Добавить счет" })).toBeInTheDocument();
@@ -377,10 +349,8 @@ describe("AccountsPage — what a viewer may do", () => {
   });
 });
 
-// #200: the screen has an answer to show as soon as it holds one, and a refresh
-// that fails afterwards does not take it away. It used to replace the whole
-// list with «Что-то пошло не так» — over data it still held — whenever a
-// background refetch failed: the laptop waking up before the server did.
+// #200: a failed background refresh must not replace the data on screen
+// with «Что-то пошло не так».
 describe("AccountsPage — data already on screen survives a failed refresh", () => {
   it("keeps the list and says the refresh failed", async () => {
     serve({

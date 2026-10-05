@@ -13,18 +13,16 @@ import "@/i18n";
 import { Gate, ScreenCrashed, routeTree, router as appRouter } from "./router";
 import type { SessionInfo } from "@/api/session";
 
-// openapi-fetch captures globalThis.fetch at import time
-// (`fetch: baseFetch = globalThis.fetch`), so the double has to be installed
-// *before* the imports above run — hence vi.hoisted.
+// openapi-fetch captures globalThis.fetch at import time, so the double is
+// installed with vi.hoisted, ahead of the imports.
 const fetchMock = vi.hoisted(() => {
   const fn = vi.fn();
   globalThis.fetch = fn as unknown as typeof fetch;
   return fn;
 });
 
-// Serves the given endpoints (matched on the path's suffix) and 404s the rest.
-// A fresh Response per call: a single one handed to mockResolvedValue works
-// once and then throws, because a body can only be consumed once.
+// Serves the given endpoints by path suffix and 404s the rest; a fresh
+// Response per call, since a body can be read only once.
 function serve(routes: Record<string, { status?: number; body?: unknown }>) {
   const paths = Object.keys(routes);
   fetchMock.mockImplementation((input: RequestInfo | URL) => {
@@ -59,13 +57,9 @@ function makeSession(): SessionInfo {
   };
 }
 
-// The gate under a router that has the three destinations it can send a reader
-// to, each reduced to a marker: what the gate decided is then simply which
-// marker is on screen.
-//
-// Returns the QueryClient alongside the render result so a test can drive a
-// refetch directly (`qc.refetchQueries`) instead of only ever observing the
-// gate's first answer.
+// The gate under a router whose three destinations are markers, so the
+// decision is which marker shows. Returns the QueryClient so a test can
+// drive a refetch.
 function renderGate(wants: "app" | "login" | "setup" = "app") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -107,10 +101,8 @@ afterEach(() => {
   onlineManager.setOnline(true);
 });
 
-// #88: `setup_needed ?? false` turned «нам ещё не ответили» into «настройка не
-// нужна», so an instance nobody had set up answered a login form for a user
-// who does not exist — and the person on the other side has no way to guess
-// that the right screen was the setup wizard.
+// #88: an unanswered setup_needed must not read as "setup not needed",
+// which showed a login form for a user who does not exist.
 describe("Gate — what it does before it knows", () => {
   it("does not decide the instance is set up when nothing answered", async () => {
     serve({
@@ -122,9 +114,8 @@ describe("Gate — what it does before it knows", () => {
     expect(await screen.findByText(/не знает, с какого экрана начать/i)).toBeInTheDocument();
     expect(screen.queryByTestId("login-screen")).not.toBeInTheDocument();
     expect(screen.queryByTestId("setup-screen")).not.toBeInTheDocument();
-    // …and does not say the server was silent about it. The server answered
-    // this test — with a 500. The reason in a notice has to be the real reason,
-    // or the notice is the same kind of invention as the screen it prevents.
+    // The server answered, with a 500, so the notice must not say it was
+    // silent.
     expect(screen.queryByText(/сервер не ответил/i)).not.toBeInTheDocument();
   });
 
@@ -135,18 +126,14 @@ describe("Gate — what it does before it knows", () => {
     });
     renderGate();
 
-    // Which screen is unknown here is only the second one: whether the instance
-    // is set up HAS been answered, so the notice may not say the choice starts
-    // at «первый запуск».
+    // Setup has been answered, so the notice may not start at «первый
+    // запуск».
     expect(await screen.findByText(/не удалось узнать, выполнен ли вход/i)).toBeInTheDocument();
     expect(screen.queryByTestId("login-screen")).not.toBeInTheDocument();
   });
 
   it("still goes to the wizard when the session query failed on a fresh instance", async () => {
-    // Both answers are in, and they are not both needed: an instance with no
-    // owner yet has one screen it can show whatever the session says, because
-    // there is no account to be signed in to. Saying «не знает, с какого экрана
-    // начать» here would be a false caption over a decision already made.
+    // No owner yet: setup is the only screen whatever the session says.
     serve({
       "/api/v1/setup/status": { body: { setup_needed: true } },
       "/api/v1/auth/me": { status: 500, body: { error: "internal error" } },
@@ -158,10 +145,8 @@ describe("Gate — what it does before it knows", () => {
   });
 
   it("does not decide anything while the browser is offline", async () => {
-    // Paused, not failed and not loading: react-query holds the request
-    // (networkMode "online", the default), so status stays "pending" while
-    // fetchStatus is "paused" — and isLoading, which is isPending && isFetching,
-    // is false. The old gate's only guard was isLoading.
+    // Paused, not failed: status "pending", fetchStatus "paused", and
+    // isLoading false.
     onlineManager.setOnline(false);
     serve({
       "/api/v1/setup/status": { body: { setup_needed: true } },
@@ -193,8 +178,7 @@ describe("Gate — what it does before it knows", () => {
   });
 });
 
-// The routing that was already right, pinned here so that teaching the gate to
-// wait cannot quietly stop it from ever moving.
+// The routing that already worked, pinned so waiting cannot stop it.
 describe("Gate — what it does once it knows", () => {
   it("sends a fresh instance to the setup wizard", async () => {
     serve({
@@ -227,17 +211,9 @@ describe("Gate — what it does once it knows", () => {
   });
 });
 
-// A regression on the base commit: the gate's guard there was
-// `session.isLoading`, which goes false the moment data exists, so a failed
-// background refresh fell straight through it and rendered from cache — by
-// accident, not by a check that said so. `session.isError` alone is not that
-// check either: react-query sets it whenever the LAST attempt failed, even
-// with an earlier success still sitting in the cache, so a naive fix here
-// would throw a signed-in reader out over a refresh failing — the laptop
-// waking from sleep and firing `online` while the server is still coming up,
-// or the owner restarting the docker stand with the tab open — with a caption
-// that is false in exactly this state: the client did know a moment ago and
-// still holds the answer.
+// With an earlier success cached, a failed refresh (a laptop waking, the
+// stand restarting) keeps rendering from cache. isError alone is set by
+// the last attempt and would throw a signed-in reader out.
 describe("Gate — a failed refresh does not discard what it already knows", () => {
   it("keeps a signed-in reader on screen when a background refresh of the session fails", async () => {
     serve({
@@ -247,21 +223,16 @@ describe("Gate — a failed refresh does not discard what it already knows", () 
     const { qc } = renderGate();
     expect(await screen.findByTestId("app-screen")).toBeInTheDocument();
 
-    // The cache now holds a successful answer. Fail the next attempt without
-    // touching that cache entry, then trigger the same refetch a background
-    // refresh performs.
+    // Fail the next attempt without touching the cache, then refetch as a
+    // background refresh would.
     serve({
       "/api/v1/setup/status": { body: { setup_needed: false } },
       "/api/v1/auth/me": { status: 500, body: { error: "internal error" } },
     });
     await qc.refetchQueries({ queryKey: ["session"] });
 
-    // The refetch's rejection is handled by a subscriber callback the query
-    // client notifies asynchronously, so the re-render it may trigger has not
-    // necessarily landed yet the instant the promise above settles — hence
-    // `waitFor` rather than a synchronous assertion, which would pass here
-    // even against the bug this pins simply by observing the DOM before React
-    // caught up.
+    // The rejection reaches the client's subscribers asynchronously, so the
+    // assertion waits for React.
     await waitFor(() => {
       expect(screen.getByTestId("app-screen")).toBeInTheDocument();
     });
@@ -269,15 +240,9 @@ describe("Gate — a failed refresh does not discard what it already knows", () 
   });
 });
 
-// #15: the application was one file, so every screen — the whole T-Invest
-// connection wizard included — had to arrive before the login form could be
-// drawn. The screens are now fetched when they are first visited, and the risk
-// that introduces is not a bigger download but a screen that never appears: an
-// import path that resolves to nothing, an export named wrong, a boundary that
-// waits for ever.
-//
-// So this walks the APPLICATION'S OWN route tree rather than a stand-in built
-// out of eager components, which could not show the thing in question at all.
+// #15: screens load on first visit, so the risk is one that never
+// appears (bad path, wrong export, endless boundary). This walks the
+// application's own route tree.
 describe("the router — screens fetched when they are visited", () => {
   it("renders a screen that is not part of the first download", async () => {
     serve({
@@ -300,17 +265,14 @@ describe("the router — screens fetched when they are visited", () => {
 
     // The family screen's own heading, from the family screen's own chunk.
     expect(await screen.findByRole("heading", { name: "Семья" })).toBeInTheDocument();
-    // And the shell around it, which is NOT deferred: it is on the way to every
-    // signed-in screen, so putting it behind a second round trip would only
-    // delay the first one that matters.
+    // The shell is not deferred: it is on the way to every signed-in screen.
     expect(screen.getByRole("link", { name: /Счета/ })).toBeInTheDocument();
   });
 });
 
-// #201: after the server is upgraded, a tab still open on the old build asks
-// for a chunk that is gone. The route then throws, and with no error component
-// React unmounts everything and leaves a blank page. The screen that replaces it
-// has to say what happened and offer the one thing that helps.
+// #201: a tab on the old build asks for a chunk that is gone after an
+// upgrade. The error screen says so and offers a reload instead of a
+// blank page.
 describe("the router — a screen that fails to load", () => {
   it("shows a reload offer instead of a blank page", async () => {
     const rootRoute = createRootRoute({ component: () => <Outlet /> });

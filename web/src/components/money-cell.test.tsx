@@ -70,9 +70,8 @@ describe("MoneyCell", () => {
   });
 
   it("uses a caller-supplied not-converted wording when the native currency is not an account's", () => {
-    // Position rows show amounts in the position's / quote's / bond face
-    // value's currency, none of which is "the account's currency" — so the
-    // default wording would name the wrong thing.
+    // Position rows show the position's, quote's or face's currency, not the
+    // account's, so the default wording would name the wrong thing.
     render(
       <MoneyCell
         resolved={{ amountMinor: 100_00, currency: "EUR", noRate: true, converted: false, rateOn: null }}
@@ -88,9 +87,8 @@ describe("MoneyCell", () => {
   });
 
   it("uses a caller-supplied converted-title wording when the rate is not today's", () => {
-    // The operations journal converts at the rate in effect on the operation's
-    // own date, so the default wording — which describes a current rate —
-    // would misrepresent the number.
+    // The journal converts at the operation date's rate; the default wording
+    // describes a current rate.
     render(
       <MoneyCell
         resolved={{ amountMinor: 655_000, currency: "RUB", noRate: false, converted: true, rateOn: "2019-03-12" }}
@@ -106,13 +104,9 @@ describe("MoneyCell", () => {
   });
 
   it("still uses the caller-supplied converted-title wording when the converted figure has no rate date", () => {
-    // A converted figure does not always have ONE date behind it: a position's
-    // cost is struck at one rate per purchase day, and the object carrying it
-    // publishes rate_on only when it also carries the market valuation that
-    // date belongs to (see PositionInBase.rate_on in the API contract). The
-    // wording here says nothing about a date, so a null one is no reason to
-    // withhold it — and withholding it is exactly what keying the tooltip off
-    // the date used to do, silently, on every position without a quote.
+    // A position's cost has no single date (rate_on is published only with a
+    // market valuation). This wording names no date, so a null one does not
+    // withhold it.
     render(
       <MoneyCell
         resolved={{ amountMinor: 9_000_000, currency: "RUB", noRate: false, converted: true, rateOn: null }}
@@ -128,9 +122,7 @@ describe("MoneyCell", () => {
   });
 
   it("omits the default converted wording when the converted figure has no rate date", () => {
-    // The twin of the test above, for the fallback wording: "converted at the
-    // current rate (on <date>)" has nowhere to put a date it does not have, and
-    // a dangling sentence reads worse than silence.
+    // The fallback wording names a date, so without one it is withheld.
     render(
       <MoneyCell
         resolved={{ amountMinor: 9_000_000, currency: "RUB", noRate: false, converted: true, rateOn: null }}
@@ -142,12 +134,8 @@ describe("MoneyCell", () => {
   });
 
   it("hands the caller a null date, not an empty string, when the rate date does not parse", () => {
-    // The caller decides what an unusable date means for ITS wording: one that
-    // interpolates the date has to withhold the whole sentence, one that never
-    // mentions a date carries on. Only a value it can actually test lets it
-    // choose — an empty string reads as a date that formatted to nothing, and
-    // the wordings that must stay silent are exactly the ones that would
-    // otherwise print a dangling dash.
+    // The caller decides what an unusable date means for its wording, so it
+    // gets null rather than an empty string.
     const seen: (string | null)[] = [];
     render(
       <MoneyCell
@@ -165,10 +153,7 @@ describe("MoneyCell", () => {
   });
 
   it("shows a caveat about what the figure is alongside the one about its currency", () => {
-    // Two statements about one number — "this is in dollars because no rate was
-    // found" and "this is a cost basis your country's rules would have picked
-    // differently" — each with its own indicator. Merging them into one tooltip
-    // would be the same conflation this component avoids elsewhere.
+    // Two statements about one number, each with its own indicator.
     render(
       <MoneyCell
         resolved={{ amountMinor: 190_000, currency: "USD", noRate: true, converted: false, rateOn: null }}
@@ -223,20 +208,10 @@ describe("MoneyCell", () => {
     expect(screen.getByTestId("amt").className).toContain("text-2xl");
   });
 
-  // #31. Both indicators are icons: an <svg> with no text, inside a <span>
-  // nothing can focus. A tooltip on a roleless, textless span is not something
-  // assistive technology is obliged to announce, and there is no keyboard
-  // route to one outside the tab order either, so every
-  // one of these sentences — and they are the sentences that say a figure is
-  // not in the currency the reader asked for, or is not the kind of figure it
-  // looks like — reached a pointer and nobody else. The glyph is marked
-  // decorative and the sentence is spelled out for a screen reader beside it;
-  // `title` stays, because it is what works for a pointer.
-  //
-  // visibleText and announcedText are asserted as a pair on purpose (see
-  // test-utils): the first alone would pass on a cell that printed the whole
-  // paragraph next to the number, the second alone on the arrangement this
-  // replaced.
+  // #31: an icon's title on a focusless, roleless span reaches a pointer
+  // only. The glyph is decorative and the sentence is spelled out for a
+  // screen reader; `title` stays for the pointer. visibleText and
+  // announcedText are asserted as a pair (see test-utils).
   it("spells the not-converted sentence out for a screen reader, not only in a title", () => {
     render(
       <MoneyCell
@@ -249,8 +224,8 @@ describe("MoneyCell", () => {
     expect(visibleText(indicator)).toBe("");
     expect(announcedText(indicator)).toBe("Нет курса — показано в валюте счёта");
     expect(indicator).toHaveAttribute("title", "Нет курса — показано в валюте счёта");
-    // The caller's own wording is what gets said when there is one — this
-    // component never decides which cause a cell names.
+    // The caller's wording is what gets said: this component never picks
+    // the cause.
     expect(visibleText(screen.getByTestId("amt"))).toBe(formatMinor(100_00, "USD"));
   });
 

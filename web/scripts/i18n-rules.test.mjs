@@ -10,23 +10,9 @@ import {
   stringLiteralMask,
 } from "./i18n-rules.mjs";
 
-// #113. `npm run i18n:check` is the only thing standing between the interface
-// and an English string on a screen, and its rules were covered by nothing.
-//
-// The concrete failure that prompted this: the script's comment claimed
-// `t(cond ? "a" : "b")`, `t(key)` and `t("a" + b)` were all caught as
-// unverifiable, and for the concatenation that was not true — the call either
-// passed in silence or was reported under the wrong reason. Reintroduce it and
-// the script still exits 0 with every other test green. So the cases below are
-// not a sampler; they are one per shape the rule has to tell apart, and each
-// asserts the REASON it reports, not merely that something was reported. A test
-// that only counted findings would pass on a script that reported every call as
-// missing.
-//
-// Fixtures are written as source text rather than read off the tree: a rule
-// tested against the real tree is tested against whatever the tree happens to
-// contain today, and the shapes that matter most are precisely the ones nobody
-// has written yet.
+// #113: the i18n:check rules. One case per shape the rule must tell
+// apart, each asserting the reason reported, not just a count. Fixtures
+// are source text, so shapes nobody has written yet are covered.
 
 /** ru.json as these tests use it, flattened the way the runner flattens it. */
 function dictionary(obj) {
@@ -71,9 +57,8 @@ describe("checkKeysInSource: keys it can read", () => {
 });
 
 describe("checkKeysInSource: keys it cannot read are failures, not silence", () => {
-  // The three shapes named in the script's own comment. Each must land in
-  // `unverifiable`, and NOT in `missing`: "missing" would send the author
-  // looking for a key nobody wrote, which is a wrong reason, not a wrong count.
+  // The three shapes the script names land in `unverifiable`, not in
+  // `missing`, which would send the author after a key nobody wrote.
   it("reports a bare identifier key", () => {
     const found = check(`const a = t(key);`);
     expect(found.missing).toEqual([]);
@@ -88,12 +73,9 @@ describe("checkKeysInSource: keys it cannot read are failures, not silence", () 
     expect(found.unverifiable[0]).toContain("the key is not a literal");
   });
 
-  // THE REGRESSION #113 NAMES. A literal glued to more text with "+" opens with
-  // a quote, so the literal regex matches its leading segment and the call
-  // sails past every other rule. The two ways it went wrong are both covered:
-  // here the segment is a real key (so it would pass in silence), and below the
-  // segment is a fragment (so it would be reported as a missing key nobody
-  // meant to write).
+  // A literal glued with "+" matches the literal regex on its leading
+  // segment: here a real key (it would pass silently), below a fragment (it
+  // would be reported missing).
   it("reports concatenation whose leading segment is a real key", () => {
     const found = check(`const a = t("positions.title" + suffix);`);
     expect(found.missing).toEqual([]);
@@ -206,8 +188,7 @@ describe("findErrorTextInSource", () => {
   });
 
   it("does not accuse a comment that merely describes the rule", () => {
-    // The rule's own documentation used to fail CI. Blanking comments is what
-    // fixed it, and this is the case that keeps it fixed.
+    // Comments are blanked, so the rule's own documentation does not fail.
     expect(
       findErrorTextInSource("src/d.tsx", `// never render err.message here\nreturn null;`),
     ).toEqual([]);
@@ -281,8 +262,8 @@ describe("extractEnumMembers", () => {
   });
 
   it("returns null for a type the schema does not declare", () => {
-    // Null and not [] on purpose: the caller skips the cross-check entirely
-    // rather than concluding the enum is empty and every key covered.
+    // Null, not []: the caller skips the cross-check instead of reading an
+    // empty enum as fully covered.
     expect(extractEnumMembers(SCHEMA, "NoSuchType")).toBeNull();
   });
 });

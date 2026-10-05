@@ -25,8 +25,7 @@ const fetchMock = vi.hoisted(() => {
   return fn;
 });
 
-// A fresh Response on every call — a single mockResolvedValue breaks on the
-// second one, because a body can only be read once.
+// A fresh Response per call: a body can be read only once.
 function serve(routes: { path: string; status?: number; body?: unknown }[]) {
   fetchMock.mockImplementation((input: RequestInfo | URL) => {
     const url = input instanceof Request ? input.url : String(input);
@@ -41,8 +40,7 @@ function serve(routes: { path: string; status?: number; body?: unknown }[]) {
   });
 }
 
-// The accounts list answers too: the panel names the babki account each verdict
-// belongs to, the same way the connection's list of accounts does.
+// The panel names the babki account of each verdict.
 const ACCOUNTS = [
   { id: "acc-1", name: "Т-Инвестиции: брокерский" },
   { id: "acc-2", name: "Т-Инвестиции: ИИС" },
@@ -97,8 +95,8 @@ function makeReconcile(
   };
 }
 
-// The panel links to an account, so it is rendered under a router — the same
-// pathless "app" layout the production tree nests these screens in.
+// Under a router, in the pathless "app" layout, since the panel links to
+// an account.
 function renderPanel(reconciles: TinvestAccountReconcile[]) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -146,10 +144,8 @@ beforeEach(() => {
 });
 
 describe("ReconcilePanel — a verdict belongs to one account", () => {
-  // THE CASE THAT USED TO LIE. Two accounts, checked in one sync: the first
-  // differs, the second agrees a moment later. A single verdict for the
-  // connection was the newest of the two, so the screen drew a tick — and the
-  // differing account's verdict, being older, could never be shown at all.
+  // Two accounts in one sync: the first differs, the second agrees later.
+  // One verdict per connection would show only the newer tick.
   it("shows both accounts' verdicts and claims no agreement for the connection", async () => {
     renderPanel([
       makeReconcile({
@@ -229,9 +225,8 @@ describe("ReconcilePanel — a verdict belongs to one account", () => {
     expect(screen.getByText("Не проверено")).toBeInTheDocument();
   });
 
-  // The contract says a time and a `not_checked` verdict cannot arrive
-  // together. If they ever did, the verdict is what this panel believes: a
-  // rendered timestamp under «Не проверено» would be the screen saying both.
+  // The contract forbids a time with `not_checked`; if both arrive, the
+  // verdict wins.
   it("believes an account's own «not_checked» over a time printed beside it", async () => {
     renderPanel([
       makeReconcile({ status: "not_checked", at: "2026-08-04T09:15:00Z" }),
@@ -350,11 +345,9 @@ describe("ReconcilePanel — the connection's own line is derived", () => {
 
 describe("ReconcilePanel — the kinds of difference read differently", () => {
   it("gives a paper the journal never saw its own sentence, not the one about unparsed operations", async () => {
-    // The owner's own case: the broker reports TECH2, the fund his TECH was
-    // converted into under a new ISIN. Nothing of ours pairs with it, and the
-    // row used to read exactly like a paper both sides know but count
-    // differently — the only clue being that the label was not one of his
-    // tickers. That is a thing to notice rather than a thing to be told.
+    // The owner's case: the broker reports TECH2, the fund TECH became under
+    // a new ISIN. It must say so, not read like an ordinary count
+    // difference.
     serveUnparsed([makeUnparsed("u-1")]);
     renderPanel([
       makeReconcile({
@@ -379,10 +372,8 @@ describe("ReconcilePanel — the kinds of difference read differently", () => {
     ).toBe(
       "У брокера есть бумаги, о которых в журнале нет ни одной операции, — поэтому сопоставить их не с чем, и в таблице показано название брокера, а не тикер из вашего каталога. Обычно так выглядит корпоративное действие: фонд превратили в другой под новым ISIN, и операцией это не приходит. Что именно произошло с бумагой, знаете только вы — это вносится вручную",
     );
-    // And NOT the sentence about unparsed operations: there is an unparsed row
-    // in this fixture, so that sentence would have printed if the kind were
-    // read as a plain security difference — sending the reader to a list that
-    // has nothing to do with a fund conversion.
+    // Not the unparsed-operations sentence, though this fixture has an
+    // unparsed row.
     expect(
       screen.queryByText(
         "Расхождение по бумаге чаще всего значит, что часть операций брокера не удалось разобрать: они перечислены ниже",
@@ -434,10 +425,8 @@ describe("ReconcilePanel — the kinds of difference read differently", () => {
     ).toBeInTheDocument();
   });
 
-  // «ОНИ ПЕРЕЧИСЛЕНЫ НИЖЕ» IS A CLAIM ABOUT THE LIST BELOW. A security
-  // difference needs no unreadable operation at all — a plain difference in
-  // quantities is one — and the sentence used to be printed directly above
-  // «Неразобранных операций нет».
+  // «Они перечислены ниже» is a claim about the list below; a plain
+  // quantity difference needs no unparsed operation.
   it("does not promise a list of unreadable operations when there are none", async () => {
     serveUnparsed([]);
     renderPanel([
@@ -518,11 +507,9 @@ describe("ReconcilePanel — the unparsed counter says only what was counted", (
   });
 
   it("не считает объяснённые строки, хотя список ниже их показывает", async () => {
-    // Одна строка не разобрана, вторая учтена ручной операцией владельца.
-    // Счётчик обязан назвать ОДНУ: объяснённая строка — не операция, которую
-    // программа не смогла прочитать, и «Неразобранных операций: 2» было бы про
-    // неё ложью. Признак берётся из explained_by, а не из пустой причины:
-    // пустая причина бывает и у строки, которую ещё пересобирают.
+    // Одна строка не разобрана, вторая объяснена ручной операцией: счётчик
+    // называет одну. Признак — explained_by, а не пустая причина (она бывает
+    // и у пересобираемой строки).
     serveUnparsed([
       makeUnparsed("u-1"),
       {
@@ -587,9 +574,8 @@ describe("ReconcilePanel — the unparsed counter says only what was counted", (
   });
 });
 
-// Расхождение по деньгам, которое не сойдётся никогда, обязано назвать причину:
-// иначе оно стоит рядом с расхождениями по бумагам как та же новость, а
-// сигнал, который всегда красный, перестают читать.
+// Денежное расхождение, которое не сойдётся никогда, называет причину,
+// иначе вечно красный сигнал перестают читать.
 describe("причина денежного расхождения", () => {
   const cashMismatch = {
     kind: "currency" as const,
@@ -618,8 +604,7 @@ describe("причина денежного расхождения", () => {
     expect(note).toHaveTextContent("79");
   });
 
-  // Обе половины проверяются по отдельности: подпись без своего числа и число
-  // без своей подписи — два разных способа соврать.
+  // Подпись и число проверяются по отдельности.
   it("молчит, когда валютных сделок нет, а деньги всё равно разошлись", async () => {
     renderPanel([
       makeReconcile({
@@ -628,8 +613,8 @@ describe("причина денежного расхождения", () => {
         currency_trades_unparsed: 0,
       }),
     ]);
-    // Ждём саму строку расхождения, иначе «ничего не нарисовано» прошло бы за
-    // «подписи нет» — тест, зеленеющий по неверной причине.
+    // Ждём строку расхождения, чтобы «ничего не нарисовано» не сошло за
+    // «подписи нет».
     expect(await screen.findByText("RUB")).toBeInTheDocument();
     expect(screen.queryByTestId("reconcile-currency-trades-note")).toBeNull();
   });
@@ -651,8 +636,8 @@ describe("причина денежного расхождения", () => {
 // Паспорт бумаги, которой нет в каталоге, и кнопка «завести по нему»
 // ---------------------------------------------------------------------------
 
-// Фонд, в который превратился TECH: у брокера он есть, в каталоге строки нет,
-// и брокер сам говорит, что это за бумага.
+// Фонд, в который превратился TECH: в каталоге строки нет, брокер
+// описывает бумагу сам.
 const TECH2: TinvestReconcileMismatch = {
   kind: "unknown_security",
   instrument_id: null,
@@ -665,10 +650,8 @@ const TECH2: TinvestReconcileMismatch = {
   broker_type: "etf",
 };
 
-// Метод РАЗЛИЧАЕТСЯ: по одному и тому же пути /api/v1/instruments идут и поиск
-// (GET), и заведение (POST), и тест, который их путает, доказал бы не то.
-// Свежий Response на каждый вызов — общий с serve() резон: тело читается один
-// раз, и один mockResolvedValue сломался бы на втором обращении.
+// Поиск (GET) и заведение (POST) идут по одному пути, и тест их
+// различает. Свежий Response на каждый вызов, как в serve().
 function serveCatalog(options: {
   found?: unknown[];
   createStatus?: number;
@@ -727,9 +710,8 @@ function serveCatalog(options: {
   );
 }
 
-// Обращения, ушедшие методом `method` на путь `path`. Отдельно от их тел:
-// у запроса синхронизации тела нет вовсе, и разбор пустой строки как JSON
-// уронил бы тест по причине, к предмету проверки отношения не имеющей.
+// Обращения методом `method` на путь `path`, без разбора тел: у запроса
+// синхронизации тела нет.
 function callsTo(method: string, path: string) {
   return fetchMock.mock.calls.filter(([input, init]) => {
     const url = input instanceof Request ? input.url : String(input);
@@ -745,8 +727,7 @@ function callsTo(method: string, path: string) {
   });
 }
 
-// Тела, ушедшие методом `method` на путь `path`, по порядку — то, что экран
-// ПОПРОСИЛ у сервера, а не то, что нарисовал после.
+// Тела, отправленные методом `method` на путь `path`, по порядку.
 async function bodiesSentTo(
   method: string,
   path: string,
@@ -768,8 +749,7 @@ describe("ReconcilePanel — бумага, которой нет в катало
     serveCatalog({});
     renderPanel([makeReconcile({ status: "mismatched", mismatches: [TECH2] })]);
 
-    // Тикер брокера сам по себе — «TECH2», и он не говорит НИЧЕГО о том, что
-    // это за бумага: ровно поэтому паспорт и печатается рядом.
+    // Тикер «TECH2» ничего не говорит о бумаге, поэтому рядом паспорт.
     expect(await screen.findByText("TECH2")).toBeInTheDocument();
     const passport = await screen.findByText(/RU000A1071G8/);
     expect(passport).toHaveTextContent(
@@ -779,9 +759,8 @@ describe("ReconcilePanel — бумага, которой нет в катало
     expect(passport).toHaveTextContent("RUB");
   });
 
-  // Прогон, записанный до того, как сервер стал публиковать паспорт: ключей в
-  // его jsonb нет вовсе. Экран обязан не нарисовать НИЧЕГО, а не пустые скобки
-  // и не «—», которые читались бы как «брокер говорит, что имени нет».
+  // Старый прогон без паспорта: экран не рисует ничего, ни пустых скобок,
+  // ни «—».
   it("ничего не выдумывает по строке старого прогона, где паспорта не было", async () => {
     serveCatalog({});
     const old: TinvestReconcileMismatch = {
@@ -795,16 +774,14 @@ describe("ReconcilePanel — бумага, которой нет в катало
 
     expect(await screen.findByText("TSPX2")).toBeInTheDocument();
     expect(screen.queryByText(/Брокер о ней/)).toBeNull();
-    // И кнопки нет: заводить не из чего, а сопоставляется бумага только по
-    // ISIN — строка без него не закрыла бы расхождение.
+    // И кнопки нет: сопоставление идёт только по ISIN.
     expect(
       screen.queryByRole("button", { name: /Завести в каталог/ }),
     ).toBeNull();
   });
 
-  // Паспорт брокер не отдал (404 — так у него отвечают «забытые» бумаги), но
-  // ТИП всё равно известен: он взят из самой позиции. Кнопки быть не должно —
-  // без ISIN заведённая строка ни с чем не спарится.
+  // Паспорта нет (404 на «забытые» бумаги), тип известен из позиции, но
+  // без ISIN кнопки нет: строка ни с чем не спарится.
   it("не предлагает завести бумагу, когда брокер не назвал её ISIN", async () => {
     serveCatalog({});
     const noPassport: TinvestReconcileMismatch = {
@@ -845,8 +822,7 @@ describe("ReconcilePanel — бумага, которой нет в катало
       currency: "RUB",
     });
 
-    // Заведение само по себе расхождение не закрывает: спарить позицию с новой
-    // строкой может только следующая сверка, и подпись обещает ровно это.
+    // Расхождение закроет только следующая сверка; подпись обещает это.
     expect(
       await screen.findByText(/Синхронизация поставлена в очередь/),
     ).toBeInTheDocument();
@@ -882,16 +858,14 @@ describe("ReconcilePanel — бумага, которой нет в катало
       ),
     ).toBeInTheDocument();
     expect(await bodiesSentTo("POST", "/api/v1/instruments")).toHaveLength(0);
-    // И синхронизацию не просим: строка была там и до нажатия, сверка уже
-    // ходила по ней.
+    // Синхронизацию не просим: строка уже была, сверка по ней ходила.
     expect(
       callsTo("POST", "/api/v1/tinvest/connections/conn-1/sync"),
     ).toHaveLength(0);
   });
 
-  // Поиск по ISIN совпадает по ПОДСТРОКЕ имени, тикера или ISIN, поэтому чужая
-  // бумага в ответе не должна сойти за эту: иначе кнопка молча сказала бы «уже
-  // в каталоге» и не завела ничего.
+  // Поиск совпадает по подстроке, поэтому чужая бумага в ответе не должна
+  // сойти за эту.
   it("не принимает чужую бумагу из ответа поиска за эту", async () => {
     serveCatalog({
       found: [
@@ -932,10 +906,9 @@ describe("ReconcilePanel — бумага, которой нет в катало
     ).toBeInTheDocument();
   });
   it("спрашивает про дробление, когда количество отличается ровно в целое число раз", async () => {
-    // Живой случай владельца: AMZN — 1 против 20 у брокера, дробление Amazon
-    // 20:1 июня 2022 года, которого никто не записал. Брокер о корпоративных
-    // действиях не сообщает вовсе, поэтому единственный способ, которым это
-    // становится вопросом, — заметить форму расхождения.
+    // Случай владельца: AMZN 1 против 20 у брокера, незаписанное дробление
+    // Amazon 20:1 (июнь 2022). Брокер о корпоративных действиях не сообщает,
+    // поэтому подсказка выводится из формы расхождения.
     renderPanel([
       makeReconcile({
         status: "mismatched",
@@ -954,8 +927,7 @@ describe("ReconcilePanel — бумага, которой нет в катало
 
     const hint = await screen.findByTestId("mismatch-split-hint");
     expect(hint).toHaveTextContent("в 20 раз(а)");
-    // ПОДСКАЗКА, А НЕ ДЕЙСТВИЕ: записать событие — решение, и принимается оно
-    // в каталоге, а не кнопкой рядом с расхождением.
+    // Подсказка, а не действие: событие записывают в каталоге.
     expect(hint.querySelector("button")).toBeNull();
   });
 
