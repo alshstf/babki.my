@@ -30,18 +30,14 @@ func day(n int) time.Time {
 	return time.Date(2026, 7, n, 0, 0, 0, 0, time.UTC)
 }
 
-// dayp is day as an acquisition date a lot actually knows (portfolio.Lot and
-// portfolio.ReleasedLot hold it as a pointer, nil meaning "not knowable" —
-// see Lot.AcquiredOn).
+// dayp is day as a known acquisition date.
 func dayp(n int) *time.Time {
 	t := day(n)
 	return &t
 }
 
 // acquired renders an acquisition date for a failure message, naming the
-// unknown case rather than printing a stand-in date for it. Every assertion
-// below reports through this, so a test that fails because a date went missing
-// says so instead of showing 0001-01-01 or a nil pointer.
+// unknown case.
 func acquired(t *time.Time) string {
 	if t == nil {
 		return "unknown"
@@ -49,11 +45,8 @@ func acquired(t *time.Time) string {
 	return t.Format("2006-01-02")
 }
 
-// sameAcquisition compares two acquisition dates including the unknown case:
-// two unknowns match, and an unknown never matches a date. Assertions must go
-// through it rather than calling Equal on a pointer, which panics on an
-// unknown date and would turn "the lot lost its date" into a crash in the
-// test's own reporting code.
+// sameAcquisition compares acquisition dates, unknown equal to unknown,
+// without dereferencing nil.
 func sameAcquisition(a, b *time.Time) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -133,10 +126,8 @@ func TestLotDrainNoRoundingDrift(t *testing.T) {
 }
 
 func TestDriftRemainderGoesToLastPiece(t *testing.T) {
-	// Lot of 3 at 100.01 (cost 10001; fee 0) and three sells of 1 each.
-	// Step by step: floor(10001*1/3)=3333 (lot: cost 6668, qty 2);
-	// floor(6668*1/2)=3334 (lot: cost 3334, qty 1); the last piece
-	// takes the lot's remaining cost 3334. Sum 3333+3334+3334 = 10001 — exact.
+	// A lot of 3 at 100.01 sold one by one: 3333, then 3334, then the remaining
+	// 3334 — summing to 10001 exactly.
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 1, &sber, "3", "", -10_001, 0),
 		op(portfolio.TypeSell, 2, &sber, "1", "", 4_000, 0),
@@ -174,8 +165,7 @@ func TestOversellRejected(t *testing.T) {
 func TestConversionWithInstrumentNoGhost(t *testing.T) {
 	// A conversion operation with instrument_id should not create a ghost position
 	ops := []portfolio.Operation{
-		// Create a conversion op with instrument — it's cash-level and should be ignored,
-		// not creating an empty position in the result map
+		// A conversion is cash-level: no position is created for it.
 		op(portfolio.TypeConversion, 1, &sber, "", "", 0, 0),
 	}
 	pos, err := portfolio.Compute(ops)
@@ -246,16 +236,9 @@ func TestClosedPositionKeptInResult(t *testing.T) {
 	}
 }
 
-// TestCurrencyMismatchRejected pins the per-position currency invariant: an
-// entry that puts money into a figure holding ONE currency has to repeat that
-// currency, because mixing another one in would sum unrelated minor units into
-// a single int64.
-//
-// THE EXEMPTIONS ARE ELSEWHERE ON PURPOSE and are as much a rule as these
-// refusals — income (engine_income_currency_test.go), a commission, a sale, and
-// any entry that moves no money at all (engine_position_currency_test.go, which
-// carries the whole enum). What belongs in THIS table is every entry that does
-// reach such a figure, so an exemption widened by one case fails here.
+// An entry reaching a single-currency figure must repeat the position's
+// currency. The exemptions (income, fees, sales, moneyless entries) are pinned
+// in their own files.
 func TestCurrencyMismatchRejected(t *testing.T) {
 	inCurrency := func(o portfolio.Operation, cur string) portfolio.Operation {
 		o.Currency = cur
@@ -274,8 +257,7 @@ func TestCurrencyMismatchRejected(t *testing.T) {
 			t.Errorf("%s: err = %v, want ErrBadOperation", name, err)
 			continue
 		}
-		// The message must name both currencies and the instrument so the
-		// user can find the offending row.
+		// The message names both currencies and the instrument.
 		for _, want := range []string{"RUB", bad.Currency, sber.String()} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("%s: error %q missing %q", name, err, want)
@@ -294,8 +276,8 @@ func TestCurrencyMismatchRejected(t *testing.T) {
 	}
 }
 
-// lotSums totals the position's remaining lots. The engine must keep these
-// totals exactly equal to the position's own Quantity and CostMinor.
+// lotSums totals the remaining lots, which must equal the position's quantity
+// and cost.
 func lotSums(p *portfolio.Position) (decimal.Decimal, int64) {
 	qty := decimal.Zero
 	var cost int64
@@ -373,9 +355,7 @@ func TestSellingWholeLotDropsIt(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestPartialSellKeepsLotDate pins the rule that a partial sale only shrinks
-// the lot: what is left over was acquired on the very same day as the part
-// that was sold.
+// A partial sale shrinks the lot; the remainder keeps its day.
 func TestPartialSellKeepsLotDate(t *testing.T) {
 	ops := []portfolio.Operation{
 		// 3 units for 100.01 total — deliberately not divisible by 3
@@ -422,11 +402,8 @@ func TestClosedPositionHasNoLots(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestLotsStayExactOverLongSequence is the discriminating one: through a long
-// mix of buys and sells with awkward, non-divisible amounts the lot costs must
-// still sum to the position cost to the last minor unit, and the total money
-// spent on buys must equal what is still held plus what was released on sells.
-// An implementation that loses a minor unit on a partial release fails here.
+// Through a long mix of awkward buys and sells, lot costs sum exactly to the
+// position cost, and money spent equals what is held plus what was released.
 func TestLotsStayExactOverLongSequence(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 1, &sber, "7", "", -100_003, 7),
@@ -481,9 +458,8 @@ func TestLotsStayExactOverLongSequence(t *testing.T) {
 	}
 }
 
-// TestLotInvariantsUnderSplitAndAmortization covers the two operations that
-// rewrite lots without buying or selling: a split scales quantities, an
-// amortization drains cost. Both must leave the totals matching the position.
+// Splits scale quantities and amortizations drain cost, keeping the lot
+// totals equal to the position.
 func TestLotInvariantsUnderSplitAndAmortization(t *testing.T) {
 	split := op(portfolio.TypeSplit, 4, &ofz, "", "", 0, 0)
 	split.SplitRatio = dp("3")
@@ -509,23 +485,9 @@ func TestLotInvariantsUnderSplitAndAmortization(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestTransferInWithoutBreakdownHasNoAcquisitionDate is the behavioural change
-// this file exists to pin. A transfer_in with no stored FIFO breakdown
-// (Operation.TransferLots) carries only a cost snapshot — its basis was typed
-// in by hand, or it was recorded before breakdowns were kept — and no
-// acquisition dates come with such a number.
-//
-// The engine used to date that lot on the transfer itself and call it "the
-// best available answer". It is not an answer to the question the field asks.
-// The field says when the shares were BOUGHT; the transfer day is when they
-// changed brokers, which is a fact about paperwork. Written into the same slot
-// as a real purchase date, in the same format, it became a fact: the ruble
-// basis converted it at that day's fx rate and published the product, and
-// nothing downstream could tell it from a date somebody actually recorded.
-//
-// So the lot now knows nothing about its date, and says so. The transfer day
-// is asserted by name below, because it is the one wrong value this code has
-// ever produced and the one a regression would produce again.
+// A transfer_in without a breakdown creates an undated lot. The transfer day,
+// which the engine used to put there, is a fact about paperwork, not a
+// purchase, and is asserted against by name.
 func TestTransferInWithoutBreakdownHasNoAcquisitionDate(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeTransferIn, 5, &sber, "4", "", 40_000, 0),
@@ -546,27 +508,16 @@ func TestTransferInWithoutBreakdownHasNoAcquisitionDate(t *testing.T) {
 		t.Errorf("transferred lot acquired on %s, want unknown: a transfer with no breakdown has no purchase dates behind it, and any date here is invented",
 			acquired(p.Lots[0].AcquiredOn))
 	}
-	// The rest of the lot is untouched: only the date is unknown, the money and
-	// the shares are as real as any other lot's.
+	// Only the date is unknown; quantity and cost are real.
 	if !p.Lots[0].Quantity.Equal(d("4")) || p.Lots[0].CostMinor != 40_000 {
 		t.Errorf("lot = {qty %s cost %d}, want {4 40000}", p.Lots[0].Quantity, p.Lots[0].CostMinor)
 	}
 	checkLotInvariants(t, p)
 }
 
-// TestUndatedLotBehavesLikeAnyOtherLot pins that "no date" costs the lot
-// nothing but the date: it is a full member of the FIFO queue, released in its
-// turn, a partial release splits its cost the usual way and leaves the
-// remainder still undated, and a split rescales it. A representation that
-// treated the absence as a lesser kind of lot — dropped, merged into a
-// neighbour, held back from a release — would change what the position is
-// worth, which no missing date should ever do.
-//
-// Its PLACE in the queue is the one thing an unknown date does decide, and it
-// decides it in the direction this fixture already had: the undated lot leads
-// (see TestUndatedLotLeavesTheQueueFirst). Here it entered first as well, so
-// nothing below distinguishes the two reasons — that is deliberate, this test
-// is about the arithmetic and not about the ordering.
+// An undated lot is a full member of the queue: released in turn, split
+// proportionally, rescaled by a split. (Its place, first, is pinned
+// elsewhere.)
 func TestUndatedLotBehavesLikeAnyOtherLot(t *testing.T) {
 	split := op(portfolio.TypeSplit, 8, &sber, "", "", 0, 0)
 	split.SplitRatio = dp("2")
@@ -585,8 +536,7 @@ func TestUndatedLotBehavesLikeAnyOtherLot(t *testing.T) {
 	if len(p.Lots) != 2 {
 		t.Fatalf("lots = %+v, want 2 (the undated remainder, then the buy)", p.Lots)
 	}
-	// The sale took its share of the UNDATED lot, first in the queue, not of
-	// the dated buy behind it: floor(10001 * 1/3) = 3333 released, 6668 left.
+	// The sale took from the undated lot at the head: 3333 released, 6668 left.
 	if p.Lots[0].AcquiredOn != nil {
 		t.Errorf("first lot acquired on %s, want unknown — a release must not date what it leaves behind", acquired(p.Lots[0].AcquiredOn))
 	}
@@ -608,32 +558,13 @@ func TestUndatedLotBehavesLikeAnyOtherLot(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestTransferredLotBoughtEarlierIsSoldFirst is the case this change exists
-// for, and the one the old engine got wrong.
+// A transferred lot bought earlier than the account's own is sold first: FIFO
+// is by acquisition (НК РФ ст. 214.1 п. 13, 26 CFR 1.1012-1(c)(1)(i)).
 //
-// The queue is built from the day each lot was ACQUIRED, not from the order the
-// journal happened to mention it. Every jurisdiction the owner files in says so
-// in the same words: НК РФ ст. 214.1 п. 13 releases "по стоимости первых по
-// времени ПРИОБРЕТЕНИЙ" — the word "зачисление" does not appear in the norm —
-// and 26 CFR 1.1012-1(c)(1)(i) names "the earliest lot the taxpayer purchased
-// or acquired". Moving shares between one's own accounts is nowhere a sale and
-// nowhere resets that day.
-//
-// Here the account holds 10 shares bought on day 20 for $3 000,00 when a
-// transfer arrives on day 25 carrying 10 shares bought on day 2 for $1 000,00 —
-// older than anything on this account. Ten shares are then sold for $4 000,00.
-//
-//	arrival order (what the engine used to do): the day-20 lot is released
-//	  realized 400 000 − 300 000 = 100 000; what stays is the day-2 parcel, 100 000
-//	acquisition order (the law): the day-2 parcel is released
-//	  realized 400 000 − 100 000 = 300 000; what stays is the day-20 lot, 300 000
-//
-// Three times the realized profit and three times the remaining basis, and the
-// remainder is now dated on a different day — which is what picks the fx rate
-// that turns it into rubles (see Handler.positionInBase). At 60,00 ₽/$ on day 2
-// and 90,00 ₽/$ on day 20 the ruble basis left on the books moves from
-// 60 000,00 ₽ to 270 000,00 ₽, four and a half times, on the same shares and
-// the same money.
+//	day 20: buy 10 for 300 000; day 25: transfer in 10 bought on day 2 for
+//	100 000; then sell 10 for 400 000
+//	  arrival order:     realized 100 000, remaining 300 000 (day 2)
+//	  acquisition order: realized 300 000, remaining 300 000 (day 20)
 func TestTransferredLotBoughtEarlierIsSoldFirst(t *testing.T) {
 	inUSD := func(o portfolio.Operation) portfolio.Operation {
 		o.Currency = "USD"
@@ -671,12 +602,9 @@ func TestTransferredLotBoughtEarlierIsSoldFirst(t *testing.T) {
 	}
 	checkLotInvariants(t, p)
 
-	// And the remainder in rubles, which is the number that reaches a tax
-	// return. The engine knows nothing about rates — it only says which lot is
-	// left and when it was bought, and that day is what selects the rate. The
-	// table below is the arithmetic Handler.positionInBase performs:
-	//   before: $1 000,00 (100000) × 60,00 =  60 000,00 ₽ (6000000)
-	//   now:    $3 000,00 (300000) × 90,00 = 270 000,00 ₽ (27000000)
+	// The remainder in roubles, as Handler.positionInBase computes it:
+	// 	  before: 100000 × 60 =  6000000
+	// 	  now:    300000 × 90 = 27000000
 	rubPerUSD := map[int]decimal.Decimal{2: d("60"), 20: d("90")}
 	rate, ok := rubPerUSD[left.AcquiredOn.Day()]
 	if !ok {
@@ -691,34 +619,13 @@ func TestTransferredLotBoughtEarlierIsSoldFirst(t *testing.T) {
 	}
 }
 
-// TestAmortizationDrainsTheOlderTransferredLotFirst pins that amortization
-// follows the queue's ACQUISITION order exactly like releaseFIFO does — a gap
-// left by the change that reordered the queue (see addLot). drainLotsCost
-// reduces cost basis front-to-back, and whichever lot loses that cost is the
-// one later multiplied by ITS OWN historical fx rate when a position is
-// valued in rubles (see Handler.positionInBase): draining the wrong lot does
-// not round a number, it moves the whole amortized amount onto the wrong
-// day's rate.
+// Amortization drains by acquisition order too: an older transferred lot is
+// drained before a newer purchase the journal mentions first.
 //
-// All three existing amortization tests — TestAmortizationReducesCost,
-// TestLotInvariantsUnderSplitAndAmortization, and the split/amortization case
-// inside TestUndatedLotBehavesLikeAnyOtherLot — build their fixtures out of
-// purchases in chronological order, where arrival order and acquisition order
-// agree, so none of them can tell the two rules apart. This one can: the
-// account holds a purchase from day 20 ($3 000,00) when a transfer on day 25
-// brings shares bought on day 2 ($1 000,00) — older than anything already on
-// the account — and an amortization of $400,00 then lands.
-//
-//	arrival order (what addLot used to do): the day-20 lot is drained,
-//	  because the journal mentions the buy before the transfer
-//	acquisition order (the rule this queue now keeps): the day-2 lot is
-//	  drained, because it is the older ACQUISITION
-//
-// At 60,00 ₽/$ on day 2 and 90,00 ₽/$ on day 20, valuing what is left after
-// the correct drain gives 600,00×60 + 3 000,00×90 = 306 000,00 ₽; draining the
-// day-20 lot instead would give 2 600,00×90 + 1 000,00×60 = 294 000,00 ₽ — the
-// $400,00 amortization landing on the wrong day's rate is a 12 000,00 ₽
-// difference on the books, not a rounding error.
+//	day 20 buy $3 000; day 25 transfer of shares bought day 2, $1 000;
+//	then a $400 amortization drains the day-2 lot
+//	at 60 (day 2) and 90 (day 20): 600×60 + 3 000×90 = 306 000 ₽, not
+//	2 600×90 + 1 000×60 = 294 000 ₽
 func TestAmortizationDrainsTheOlderTransferredLotFirst(t *testing.T) {
 	inUSD := func(o portfolio.Operation) portfolio.Operation {
 		o.Currency = "USD"
@@ -754,8 +661,7 @@ func TestAmortizationDrainsTheOlderTransferredLotFirst(t *testing.T) {
 	}
 	checkLotInvariants(t, p)
 
-	// The ruble base, which is the number Handler.positionInBase publishes:
-	// each lot valued at its own day's rate.
+	// The rouble basis: each lot at its own day's rate.
 	rubPerUSD := map[int]decimal.Decimal{2: d("60"), 20: d("90")}
 	inRubles := decimal.Zero
 	for _, l := range p.Lots {
@@ -773,26 +679,12 @@ func TestAmortizationDrainsTheOlderTransferredLotFirst(t *testing.T) {
 	}
 }
 
-// TestAmortizationSkipsAnEmptyUndatedLot pins the safeguard in drainLotsCost
-// that treats a lot with nothing left to give (CostMinor == 0) as producing NO
-// piece at all — see drainLotsCost's own doc for why an empty piece would
-// misreport a lot as having taken part in an event it took no part in.
-//
-// The safeguard is not cosmetic. A zero-basis parcel that arrived by transfer
-// with no breakdown is undated (see TestUndatedLotLeavesTheQueueFirst) AND
-// sits at the very head of the queue, ahead of every dated lot. Without the
-// guard, an amortization that has to walk past such a lot to reach real cost
-// would emit an empty piece carrying that lot's own (missing) acquisition
-// date — and realizedTerms (see http.go) bails out the instant ANY released
-// piece has no date, even though an expense of exactly zero needs no fx rate
-// to be valued at all. The position's ruble realized figure, and the account
-// total riding on it, would go silently and permanently null — not because
-// anything is actually unknown, but because an empty piece pretended to be
-// one.
+// A lot with nothing to give yields no amortization piece. Otherwise the
+// undated zero-basis lot at the head would emit an undated empty piece and
+// null the rouble realized figure for nothing.
 func TestAmortizationSkipsAnEmptyUndatedLot(t *testing.T) {
 	ops := []portfolio.Operation{
-		// Zero-basis parcel, no breakdown: undated, gives up nothing, and
-		// stands ahead of the dated purchase below.
+		// A zero-basis parcel without a breakdown: undated, at the head.
 		op(portfolio.TypeTransferIn, 1, &sber, "5", "", 0, 0),
 		// A real, dated purchase.
 		op(portfolio.TypeBuy, 20, &sber, "10", "300", -300_000, 0),
@@ -828,20 +720,9 @@ func TestAmortizationSkipsAnEmptyUndatedLot(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestUndatedLotLeavesTheQueueFirst pins the second half of the ordering rule:
-// a lot that does not know when it was acquired goes out BEFORE every dated
-// one, however old the dated ones are.
-//
-// This is not an invention of ours. 26 CFR 1.6045A-1(b)(10) settles exactly
-// this situation for transferred securities whose acquisition date did not come
-// with them: such lots are treated as sold first, ahead of every lot with a
-// known date. It is also the only answer that does not require making a date
-// up: any other placement in the queue has to compare the unknown against real
-// days, which means silently choosing a day for it.
-//
-// Here the account holds a purchase from day 1 — earlier than anything else in
-// this file — and then receives a parcel with no breakdown at all, whose basis
-// was typed in by hand and whose purchase dates were never recorded.
+// An undated lot leaves the queue before every dated one, however old: the
+// head is the only place needing no invented date (cf. 26 CFR
+// 1.6045A-1(b)(10)).
 func TestUndatedLotLeavesTheQueueFirst(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 1, &sber, "10", "10", -10_000, 0),
@@ -868,9 +749,7 @@ func TestUndatedLotLeavesTheQueueFirst(t *testing.T) {
 	}
 	checkLotInvariants(t, p)
 
-	// The queue is not decoration: a sale of ten units takes the undated
-	// parcel whole and leaves the old purchase untouched. Nine times the
-	// realized profit separates the two answers.
+	// Selling ten takes the undated parcel whole and leaves the old purchase.
 	sold := append(append([]portfolio.Operation{}, ops...),
 		op(portfolio.TypeSell, 6, &sber, "10", "", 100_000, 0))
 	after, err := portfolio.Compute(sold)
@@ -885,41 +764,24 @@ func TestUndatedLotLeavesTheQueueFirst(t *testing.T) {
 		t.Errorf("realized = %d, want %d (100000 − the undated parcel's 90000)",
 			realizedOf(t, q), 100_000-90_000)
 	}
-	// A welcome consequence: selling drains the unknown out of the account
-	// first, so what is left can be valued again (see Handler.positionInBase,
-	// which publishes nothing at all while one lot has no date).
+	// Selling drains the unknown first, so what is left can be valued again.
 	if len(q.Lots) != 1 || !sameAcquisition(q.Lots[0].AcquiredOn, dayp(1)) {
 		t.Errorf("lots after the sale = %+v, want only the day-%d purchase", q.Lots, 1)
 	}
 	checkLotInvariants(t, q)
 }
 
-// TestQueueOrderIsStableUnderTies pins the tie-break, which matters more than
-// it looks: these numbers go into a tax return, so two runs must agree, and
-// "two runs" includes two builds of the engine that resolve ties differently.
-// The law names no rule finer than the day — НК РФ ст. 214.1 п. 13 and 26 CFR
-// 1.1012-1(c)(1)(i) both stop at "first by time of acquisition" — so the
-// tie-break is ours to choose, and the choice is the order the lots entered the
-// account, which is the journal's own order: it is total, it is recorded rather
-// than derived, and it is what the queue already did before dates entered the
-// picture.
-//
-// The fixture is built to catch the failure that a three-lot example cannot.
-// Two purchases open the account, on day 2 and day 4; then seven transfers
-// arrive, each carrying three pieces at once — one with no date, one bought on
-// day 2, one bought on day 4 — so lots keep being inserted into the MIDDLE of
-// the queue, alternating between three groups. Sorting such an arrangement with
-// Go's sort.Slice, which is not stable, visibly permutes the ties; a stable
-// order does not. Every cost below is distinct, so any permutation is named in
-// the failure.
+// Same-day lots keep journal order, deterministically: the law says nothing
+// finer than the day. Seven transfers each insert an undated, a day-2 and a
+// day-4 piece into the middle of the queue, which an unstable sort would
+// permute; every cost is distinct.
 func TestQueueOrderIsStableUnderTies(t *testing.T) {
 	const parcels = 7
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 2, &sber, "1", "", -1_000, 0),
 		op(portfolio.TypeBuy, 4, &sber, "1", "", -2_000, 0),
 	}
-	// wantUndated/wantEarly/wantLate accumulate the costs in the order the lots
-	// entered the account; the queue must be the three lists concatenated.
+	// The costs in order of entry; the queue is the three lists concatenated.
 	wantUndated := []int64{}
 	wantEarly := []int64{1_000}
 	wantLate := []int64{2_000}
@@ -969,10 +831,7 @@ func TestQueueOrderIsStableUnderTies(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestBuyIsAlwaysDated is the other half of the rule: absence is reserved for
-// what genuinely cannot be known. A purchase is recorded with the day it
-// happened, so its lot always carries that day and a nil here would mean the
-// engine had stopped distinguishing "not knowable" from "not bothered".
+// A purchase's lot always carries its day.
 func TestBuyIsAlwaysDated(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 3, &sber, "10", "100", -100_000, 10),
@@ -990,9 +849,7 @@ func TestBuyIsAlwaysDated(t *testing.T) {
 	}
 }
 
-// TestReleasedLotsSingleLot pins the simple case: a release that fits
-// entirely inside the oldest lot yields exactly one piece, carrying that
-// lot's own acquisition date.
+// A release inside the oldest lot yields one piece with that lot's date.
 func TestReleasedLotsSingleLot(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 2, &sber, "10", "100", -100_000, 10),
@@ -1017,9 +874,8 @@ func TestReleasedLotsSingleLot(t *testing.T) {
 	}
 }
 
-// TestReleasedLotsCrossesTwoLots pins the multi-lot case: a release larger
-// than the oldest lot must yield one piece per lot it touches, in FIFO
-// order, each with its own cost and acquisition date.
+// A release across two lots yields a piece per lot, in order, each with its
+// own cost and date.
 func TestReleasedLotsCrossesTwoLots(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 2, &sber, "10", "100", -100_000, 10),
@@ -1040,10 +896,7 @@ func TestReleasedLotsCrossesTwoLots(t *testing.T) {
 	}
 }
 
-// TestReleasedLotsPartialLot pins the partial-release rule: the piece takes
-// a floored share of the lot's cost and inherits the lot's own acquisition
-// date, exactly like the internal releaseFIFO behavior already pinned by
-// TestPartialSellKeepsLotDate.
+// A partial release takes a floored share of the lot's cost and its date.
 func TestReleasedLotsPartialLot(t *testing.T) {
 	ops := []portfolio.Operation{
 		// 3 units for 100.01 total — deliberately not divisible by 3
@@ -1069,13 +922,8 @@ func TestReleasedLotsPartialLot(t *testing.T) {
 	}
 }
 
-// TestReleasedLotsSumMatchesReleasedCost is the discriminating test: across a
-// long, awkward mix of buys and sells (leftover lots with non-divisible
-// costs) the sum of the pieces ReleasedLots returns must equal, to the last
-// minor unit, what ReleasedCost returns for the very same release. An
-// implementation that computes the pieces separately from the total — and
-// drifts by even one minor unit on a partial piece — fails here. It also
-// checks the pieces' quantities sum back to the requested release quantity.
+// Over an awkward mix, ReleasedLots' pieces sum to ReleasedCost and to the
+// requested quantity.
 func TestReleasedLotsSumMatchesReleasedCost(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 1, &sber, "7", "", -100_003, 7),
@@ -1089,10 +937,8 @@ func TestReleasedLotsSumMatchesReleasedCost(t *testing.T) {
 		op(portfolio.TypeBuy, 9, &sber, "5", "", -12_345, 2),
 		op(portfolio.TypeSell, 10, &sber, "2", "", 9_991, 1),
 	}
-	// 6 units remain after this sequence (see TestLotsStayExactOverLongSequence):
-	// a 1-unit tail of the day-6 lot plus all 5 units of the day-9 lot. Exercise
-	// release sizes that stay inside the first lot, cross the boundary with a
-	// clean fraction, cross it with an awkward fraction, and drain everything.
+	// Six units remain: a 1-unit tail of the day-6 lot and the day-9 lot.
+	// Releases stay inside, cross cleanly, cross awkwardly, and drain all.
 	for _, qty := range []string{"1", "3", "4.5", "6"} {
 		wantCost, err := portfolio.ReleasedCost(ops, sber, d(qty))
 		if err != nil {
@@ -1117,9 +963,7 @@ func TestReleasedLotsSumMatchesReleasedCost(t *testing.T) {
 	}
 }
 
-// TestReleasedLotsOversellRejected pins that ReleasedLots fails exactly like
-// the plain-cost ReleasedCost/releaseFIFO path when asked to release more
-// than is held.
+// ReleasedLots refuses an oversell like the other release paths.
 func TestReleasedLotsOversellRejected(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 2, &sber, "10", "100", -100_000, 10),
@@ -1144,22 +988,9 @@ func TestBadOperations(t *testing.T) {
 	}
 }
 
-// TestSplitKeepsQuantitiesTheJournalCanRecord is the root fix of the whole
-// "sell everything and break the account forever" family, at the level where
-// the unrecordable number was born.
-//
-// A split is the only thing the engine does that can produce a quantity the
-// journal cannot hold: it multiplies. 0.35 shares by a 1:3 reverse split
-// (0.3333333333, the natural way anyone records one) is 0.116666666655 —
-// eleven decimal places for a lot that arrived with two, in a ledger that keeps
-// ten. A position holding that number is a position nobody can close: "sell all
-// of it" names a quantity the sell row cannot store, so what is checked and
-// what is written are two different quantities, and the write path rounds to
-// NEAREST, which is up here.
-//
-// Every quantity below must therefore be expressible in the journal, and none
-// of them may exceed the exact product — a ledger may lose a ten-billionth of a
-// share to arithmetic it cannot express, but must never invent one.
+// A split keeps quantities the journal can record (ten places): a 1:3 reverse
+// split of 0.35 is 0.116666666655, which no sell row could name. Every
+// quantity is recordable and none exceeds the exact product.
 func TestSplitKeepsQuantitiesTheJournalCanRecord(t *testing.T) {
 	split := op(portfolio.TypeSplit, 3, &sber, "", "", 0, 0)
 	split.SplitRatio = dp("0.3333333333")
@@ -1174,9 +1005,7 @@ func TestSplitKeepsQuantitiesTheJournalCanRecord(t *testing.T) {
 	}
 	p := pos[sber]
 
-	// 0.7 × 0.3333333333 = 0.23333333331 exactly; the journal can hold
-	// 0.2333333333 of that and the last ten-billionth of a share is lost, not
-	// rounded up into existence.
+	// 0.7 × 0.3333333333 = 0.23333333331; the journal keeps 0.2333333333.
 	if want := d("0.2333333333"); !p.Quantity.Equal(want) {
 		t.Errorf("position quantity = %s, want %s", p.Quantity, want)
 	}
@@ -1193,10 +1022,8 @@ func TestSplitKeepsQuantitiesTheJournalCanRecord(t *testing.T) {
 				i, l.Quantity, portfolio.QuantityScale)
 		}
 	}
-	// The lost ten-billionth comes off ONE lot, not each of them: the running
-	// total is what gets truncated, so the pieces still add up to the position
-	// exactly rather than approximately (checkLotInvariants), and the split
-	// does not silently re-date anything.
+	// The lost fraction comes off one lot (the running total is truncated), so
+	// lots still sum exactly; no date moves.
 	want := []portfolio.Lot{
 		{Quantity: d("0.1166666666"), CostMinor: 3_500, AcquiredOn: dayp(1)},
 		{Quantity: d("0.1166666667"), CostMinor: 7_000, AcquiredOn: dayp(2)},
@@ -1214,8 +1041,7 @@ func TestSplitKeepsQuantitiesTheJournalCanRecord(t *testing.T) {
 	}
 	checkLotInvariants(t, p)
 
-	// And the whole position can now be released in one entry the journal can
-	// actually record — the thing that was impossible before.
+	// The whole position can now be sold in one recordable entry.
 	sold := make([]portfolio.Operation, 0, len(ops)+1)
 	sold = append(sold, ops...)
 	sold = append(sold, op(portfolio.TypeSell, 4, &sber, p.Quantity.String(), "", 10_000, 0))
@@ -1229,14 +1055,7 @@ func TestSplitKeepsQuantitiesTheJournalCanRecord(t *testing.T) {
 	}
 }
 
-// TestSplitThatRoundsALotAwayKeepsItsCost pins the edge the rule above creates:
-// a reverse split deep enough that a lot's entire holding rounds away.
-//
-// The shares are gone — that is what the ledger can express and no rounding
-// rule can conjure them back — but the money spent on them is not, and neither
-// is the day it was spent, which is what values it in another currency. The lot
-// stays, holding no shares and all of its cost, rather than having that cost
-// swept onto some other lot's date.
+// A reverse split that rounds a lot's holding away keeps its cost and day.
 func TestSplitThatRoundsALotAwayKeepsItsCost(t *testing.T) {
 	split := op(portfolio.TypeSplit, 2, &sber, "", "", 0, 0)
 	split.SplitRatio = dp("0.0000000001")
@@ -1266,19 +1085,8 @@ func TestSplitThatRoundsALotAwayKeepsItsCost(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestSplitLeavesTheDateCostMapUnchangedOverAReorderedQueue pins, in code,
-// what a reviewer confirmed by hand while reading the acquisition-ordering
-// change: applySplit rewrites quantities only (see its doc comment), so which
-// lot sits at which INDEX in the queue cannot move a single unit of cost from
-// one acquisition date to another. The cost each date owns before a split is
-// exactly what it owns after, no matter what reordered the queue meant the
-// index-to-date mapping now was.
-//
-// The fixture is the reordering case this whole change exists for: a purchase
-// from day 20 already on the account, then a transfer on day 25 carrying
-// shares bought on day 2 — older, so it leads the queue (see addLot) instead
-// of trailing behind the purchase the journal happened to mention first. A
-// 1:2 reverse split then runs over that reordered queue.
+// A split over a queue reordered by an older transferred lot moves no cost
+// between acquisition days.
 func TestSplitLeavesTheDateCostMapUnchangedOverAReorderedQueue(t *testing.T) {
 	split := op(portfolio.TypeSplit, 26, &sber, "", "", 0, 0)
 	split.SplitRatio = dp("0.5")
@@ -1295,14 +1103,12 @@ func TestSplitLeavesTheDateCostMapUnchangedOverAReorderedQueue(t *testing.T) {
 	if len(p.Lots) != 2 {
 		t.Fatalf("lots = %+v, want 2", p.Lots)
 	}
-	// The queue itself is untouched by the split: the older, transferred
-	// parcel still leads.
+	// The older transferred parcel still leads.
 	if !sameAcquisition(p.Lots[0].AcquiredOn, dayp(2)) || !sameAcquisition(p.Lots[1].AcquiredOn, dayp(20)) {
 		t.Fatalf("lots dated %s then %s, want %s then %s — a split must not reorder the queue",
 			acquired(p.Lots[0].AcquiredOn), acquired(p.Lots[1].AcquiredOn), day(2).Format("2006-01-02"), day(20).Format("2006-01-02"))
 	}
-	// Quantities are halved by the 1:2 reverse split; costs are the split's
-	// business to leave alone entirely.
+	// Quantities halve; costs are untouched.
 	if !p.Lots[0].Quantity.Equal(d("5")) || !p.Lots[1].Quantity.Equal(d("5")) {
 		t.Errorf("quantities after the split = %s and %s, want 5 and 5", p.Lots[0].Quantity, p.Lots[1].Quantity)
 	}
@@ -1325,9 +1131,7 @@ func TestSplitLeavesTheDateCostMapUnchangedOverAReorderedQueue(t *testing.T) {
 
 // --- What each realized result was made of -------------------------------
 
-// releasedText renders a realization's released pieces for a failure message,
-// naming the unknown acquisition date rather than printing a stand-in for it
-// (see acquired).
+// releasedText renders a realization's pieces for a failure message.
 func releasedText(pieces []portfolio.ReleasedLot) string {
 	parts := make([]string, 0, len(pieces))
 	for _, pc := range pieces {
@@ -1336,9 +1140,7 @@ func releasedText(pieces []portfolio.ReleasedLot) string {
 	return "[" + strings.Join(parts, "; ") + "]"
 }
 
-// checkReleased compares a realization's pieces against what they must be,
-// reporting the whole breakdown on any mismatch so a failure says which piece
-// moved rather than only that something did.
+// checkReleased compares pieces and reports the whole breakdown on mismatch.
 func checkReleased(t *testing.T, got, want []portfolio.ReleasedLot) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -1352,12 +1154,8 @@ func checkReleased(t *testing.T, got, want []portfolio.ReleasedLot) {
 	}
 }
 
-// checkRealizationsSumToTotal is the invariant every realization test ends
-// with: the events must account for the running total to the last minor unit.
-// A total larger than the events means something was realized without saying
-// what it was made of — a figure the ruble layer cannot convert and cannot even
-// see it is missing; a total smaller means an event was recorded twice or
-// carries basis the position never gave up.
+// checkRealizationsSumToTotal checks the realizations account exactly for
+// the realized total.
 func checkRealizationsSumToTotal(t *testing.T, p *portfolio.Position) {
 	t.Helper()
 	var sum int64
@@ -1374,15 +1172,8 @@ func checkRealizationsSumToTotal(t *testing.T, p *portfolio.Position) {
 	}
 }
 
-// TestSaleRecordsWhatItWasMadeOf is the change this section exists for.
-//
-// A single accumulated number in the position's currency cannot be turned into
-// rubles: the proceeds belong to the day of the sale and each parcel of basis
-// belongs to the day THAT parcel was bought (НК РФ ст. 210 п. 5), so the fold
-// has to keep the parts rather than only their difference. Here one sale
-// crosses a lot boundary — 15 shares out of a lot of 10 bought on day 2 and a
-// lot of 10 bought on day 3 — and the event must carry both pieces with their
-// own dates, not one piece dated on the sale.
+// A sale records what it was made of: 15 shares across lots bought on days 2
+// and 3 yield two pieces with their own dates (НК РФ ст. 210 п. 5).
 func TestSaleRecordsWhatItWasMadeOf(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 2, &sber, "10", "100", -100_000, 10),
@@ -1405,8 +1196,7 @@ func TestSaleRecordsWhatItWasMadeOf(t *testing.T) {
 	if r.ProceedsMinor != 180_000 || r.FeeMinor != 18 {
 		t.Errorf("proceeds/fee = %d/%d, want 180000/18", r.ProceedsMinor, r.FeeMinor)
 	}
-	// The whole day-2 lot (100 000 + 10 fee capitalized) and half of the day-3
-	// lot (floor(110 011 / 2) = 55 005), each keeping its own purchase day.
+	// The whole day-2 lot (100 000 + 10 fee) and half the day-3 lot (55 005).
 	checkReleased(t, r.Released, []portfolio.ReleasedLot{
 		{Quantity: d("10"), CostMinor: 100_010, AcquiredOn: dayp(2)},
 		{Quantity: d("5"), CostMinor: 55_005, AcquiredOn: dayp(3)},
@@ -1417,11 +1207,8 @@ func TestSaleRecordsWhatItWasMadeOf(t *testing.T) {
 	checkRealizationsSumToTotal(t, p)
 }
 
-// TestEachDisposalGetsItsOwnRealization pins that the events are a series and
-// not a running summary: three sales of the same lot on three days produce
-// three records, in journal order, each carrying its own day and its own
-// proceeds. Merging them would lose the dates the ruble conversion is struck
-// at, which is the whole reason the breakdown is kept.
+// Three sales on three days make three realizations, in order, each with its
+// own day and proceeds.
 func TestEachDisposalGetsItsOwnRealization(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 1, &sber, "9", "100", -90_000, 0),
@@ -1447,25 +1234,13 @@ func TestEachDisposalGetsItsOwnRealization(t *testing.T) {
 		if r.ProceedsMinor != wantProceeds[i] || r.FeeMinor != wantFee[i] {
 			t.Errorf("event %d proceeds/fee = %d/%d, want %d/%d", i, r.ProceedsMinor, r.FeeMinor, wantProceeds[i], wantFee[i])
 		}
-		// Each third of a 9-share lot costing 90 000 releases exactly 30 000,
-		// and every piece keeps the one day the shares were bought.
+		// Each third of a 90 000 lot releases 30 000, on the lot's day.
 		checkReleased(t, r.Released, []portfolio.ReleasedLot{{Quantity: d("3"), CostMinor: 30_000, AcquiredOn: dayp(1)}})
 	}
 	checkRealizationsSumToTotal(t, p)
 }
 
-// TestTransferOutRecordsNoRealization pins the decision, rather than leaving it
-// to a comment: the departing leg of a transfer produces NO event.
-//
-// Moving shares between the family's own accounts is a disposal in none of the
-// seven jurisdictions this series was researched against, and the leg has no
-// proceeds to record — its AmountMinor is the basis that travelled, not money
-// received. It also adds nothing to RealizedPnL and never has, so leaving
-// it out costs the events-sum-to-the-total invariant nothing.
-//
-// Both shapes are covered, because they take different branches: a transfer
-// with a stored breakdown gives up the lots it recorded, one without gives up a
-// fresh slice of the queue.
+// A transfer out produces no realization, with or without a breakdown.
 func TestTransferOutRecordsNoRealization(t *testing.T) {
 	for name, ops := range map[string][]portfolio.Operation{
 		"with a recorded breakdown": {
@@ -1495,17 +1270,8 @@ func TestTransferOutRecordsNoRealization(t *testing.T) {
 	}
 }
 
-// TestAmortizationRecordsARealization covers the OTHER place the running total
-// grows, and the reason it must produce an event even when it adds nothing to
-// that total.
-//
-// A return of principal retires cost basis, and in the position's own currency
-// only the excess over what is left of that basis is a result. In rubles the
-// covered part is not neutral either: the principal comes back at the rate of
-// the day it was paid, the basis it retires was struck at the rates of the days
-// those lots were bought, and that difference is as much of a taxable result as
-// any sale's. So the covered amortization below has a result of zero here and
-// still has to say what it was made of.
+// An amortization records a realization even when its result is zero here:
+// in roubles the covered part is not neutral.
 func TestAmortizationRecordsARealization(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 1, &ofz, "10", "950", -950_000, 0),
@@ -1520,9 +1286,8 @@ func TestAmortizationRecordsARealization(t *testing.T) {
 	if len(p.Realizations) != 2 {
 		t.Fatalf("realizations = %d, want 2 (two amortizations, two events)", len(p.Realizations))
 	}
-	// Fully covered by the basis: nothing realized in this currency, and the
-	// 250 000 retired belongs to the day the bond was bought. The pieces carry
-	// NO quantity — an amortization returns principal without moving a share.
+	// Fully covered: nothing realized here; 250 000 retired on the purchase day,
+	// pieces without quantity.
 	first := p.Realizations[0]
 	if !first.OccurredOn.Equal(day(10)) || first.ProceedsMinor != 250_000 || first.FeeMinor != 0 {
 		t.Errorf("first event = %s/%d/%d, want %s/250000/0",
@@ -1532,8 +1297,7 @@ func TestAmortizationRecordsARealization(t *testing.T) {
 	if first.PnLMinor() != 0 {
 		t.Errorf("first event result = %d, want 0", first.PnLMinor())
 	}
-	// Beyond what the basis can cover: 700 000 left retires, the remaining
-	// 100 000 is realized.
+	// Beyond the basis: 700 000 retires, 100 000 is realized.
 	second := p.Realizations[1]
 	if !second.OccurredOn.Equal(day(20)) || second.ProceedsMinor != 800_000 {
 		t.Errorf("second event = %s/%d, want %s/800000",
@@ -1549,15 +1313,8 @@ func TestAmortizationRecordsARealization(t *testing.T) {
 	checkRealizationsSumToTotal(t, p)
 }
 
-// TestRealizationMayNotKnowWhenItsBasisWasAcquired pins that an event whose
-// basis has no purchase date behind it is LEGITIMATE and recorded as it is.
-//
-// A transfer with no stored breakdown creates a lot that does not know when it
-// was bought (see Lot.AcquiredOn), such a lot leads the release queue, and
-// selling it produces an event whose expense side cannot be converted into
-// rubles at all. That is a fact about the journal, not damage: the engine must
-// carry the absence through instead of substituting the transfer day or the
-// sale day, and what to publish for such an event is the caller's decision.
+// A realization may carry an undated basis piece (sold from a transfer
+// without a breakdown); the absence is carried, not replaced.
 func TestRealizationMayNotKnowWhenItsBasisWasAcquired(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeTransferIn, 1, &sber, "10", "", 100_000, 0),
@@ -1572,8 +1329,7 @@ func TestRealizationMayNotKnowWhenItsBasisWasAcquired(t *testing.T) {
 	if len(p.Realizations) != 1 {
 		t.Fatalf("realizations = %d, want 1", len(p.Realizations))
 	}
-	// The undated parcel leads the queue and goes whole; the rest comes out of
-	// the day-2 purchase, floor(150 000 × 5 / 10) = 75 000.
+	// The undated parcel goes whole; the rest is floor(150 000 × 5/10) = 75 000.
 	checkReleased(t, p.Realizations[0].Released, []portfolio.ReleasedLot{
 		{Quantity: d("10"), CostMinor: 100_000, AcquiredOn: nil},
 		{Quantity: d("5"), CostMinor: 75_000, AcquiredOn: dayp(2)},
@@ -1584,26 +1340,9 @@ func TestRealizationMayNotKnowWhenItsBasisWasAcquired(t *testing.T) {
 	checkRealizationsSumToTotal(t, p)
 }
 
-// TestRealizationsSumToRealizedPnL is the discriminating one.
-//
-// The invariant is not "the events roughly explain the total" but "the events
-// ARE the total": a ruble figure is built by converting each event and adding
-// them up, so a single minor unit realized outside an event is a unit that
-// silently never reaches rubles, and one counted twice is money the family
-// never made. It has to hold through everything the journal can do, not through
-// sales alone — splits rewrite the quantities the pieces are proportioned from,
-// transfers move lots in and out and reorder the queue by acquisition date, an
-// undated parcel leads that queue, and amortization drains basis without moving
-// a share.
-//
-// So the sequence below mixes all of them, with awkward, non-divisible amounts
-// so that every floor division has a remainder to lose. The transfer out
-// resolves its own breakdown from the journal exactly as the write path does
-// (portfolio.ReleasedLots), rather than being written by hand into agreement.
-//
-// Both totals are pinned as well as their equality. Equality alone would
-// survive a change that broke the events and the total the same way; the
-// numbers below were derived by hand from the sequence:
+// The realizations are the realized total, through splits, transfers in and
+// out (resolved like the write path), an undated parcel and amortizations,
+// with awkward amounts. Both totals are pinned by hand:
 //
 //	day  3 sell:  12 345 − 30 011 −  11 =  −17 677
 //	day  7 sell: 130 007 − 36 680 −  13 =   93 314
@@ -1612,12 +1351,9 @@ func TestRealizationMayNotKnowWhenItsBasisWasAcquired(t *testing.T) {
 //	day 13 sell:  40 000 − 25 000 −   7 =   14 993
 //	day 14 amrt: 900 000 − 155 010      =  744 990
 //	day 15 sell: 200 000 −      0 −   3 =  199 997
-//	                                      ─────────
 //	                                      1 049 490
 //
-// Seven events for five sales and two amortizations — and none for the
-// transfers, which is the count that pins the decision that a transfer out
-// realizes nothing.
+// Seven realizations, none for the transfers.
 func TestRealizationsSumToRealizedPnL(t *testing.T) {
 	var ops []portfolio.Operation
 	add := func(o portfolio.Operation) { ops = append(ops, o) }
@@ -1626,8 +1362,8 @@ func TestRealizationsSumToRealizedPnL(t *testing.T) {
 		o.SplitRatio = dp(ratio)
 		return o
 	}
-	// moveOut is a departing leg whose breakdown is resolved against the
-	// journal so far, the way the transfer service resolves it.
+	// moveOut is a departing leg with its breakdown resolved as the transfer
+	// service does.
 	moveOut := func(dayN int, qty string) portfolio.Operation {
 		pieces, err := portfolio.ReleasedLots(ops, sber, d(qty))
 		if err != nil {
@@ -1641,16 +1377,14 @@ func TestRealizationsSumToRealizedPnL(t *testing.T) {
 	add(op(portfolio.TypeSell, 3, &sber, "3", "", 12_345, 11))
 	add(split(4, "3"))
 	add(op(portfolio.TypeBuy, 5, &sber, "5", "", -77_777, 5))
-	// A transfer in carrying shares older than some of what is already held, so
-	// the queue is reordered by acquisition rather than by arrival.
+	// Shares older than some held ones reorder the queue.
 	add(transferIn(6, "9", 90_009, piece("4", 40_004, 1), piece("5", 50_005, 4)))
 	add(op(portfolio.TypeSell, 7, &sber, "11", "", 130_007, 13))
 	add(moveOut(8, "7"))
 	add(op(portfolio.TypeAmortization, 9, &sber, "", "", 5_000, 0))
 	add(split(10, "0.5"))
 	add(op(portfolio.TypeSell, 11, &sber, "4", "", 60_001, 9))
-	// A transfer whose basis was typed in by hand: the lot it creates knows no
-	// purchase date, leads the queue, and is sold into on day 13.
+	// A hand-given basis: undated, at the head, sold into on day 13.
 	add(op(portfolio.TypeTransferIn, 12, &sber, "6", "", 30_000, 0))
 	add(op(portfolio.TypeSell, 13, &sber, "5", "", 40_000, 7))
 	// More principal returned than the basis can cover: the excess is realized.
@@ -1671,9 +1405,7 @@ func TestRealizationsSumToRealizedPnL(t *testing.T) {
 	if len(p.Realizations) != 7 {
 		t.Fatalf("realizations = %d, want 7 — five sales and two amortizations, and nothing for either transfer", len(p.Realizations))
 	}
-	// The mix really did carry a parcel whose purchase day nobody recorded all
-	// the way into an event: without this the invariant above could be holding
-	// over a sequence where the hard case never arose.
+	// An undated parcel did reach a realization.
 	var undated int
 	for _, r := range p.Realizations {
 		for _, pc := range r.Released {
@@ -1687,20 +1419,8 @@ func TestRealizationsSumToRealizedPnL(t *testing.T) {
 	}
 }
 
-// TestAmortizationOnAPaperNeverAcquiredIsRefused pins the refusal that closes
-// the phantom amortization of issue #17.
-//
-// The mechanics of the fault are two lines of arithmetic: with nothing acquired
-// there is no basis, the amortization retires min(amount, 0) = 0 of it, and the
-// event's result is the WHOLE payment. So a single mistyped instrument turned
-// 4 000,00 ₽ of somebody's coupon schedule into 4 000,00 ₽ of realized profit
-// under a position with no shares, no cost and no purchase behind it — a figure
-// that goes into a tax return, with nothing on any screen to tell it from a real
-// one.
-//
-// The literal below is the number the OLD engine published, written out rather
-// than derived: it is what the test is against, and computing it from the
-// fixture would let the fixture and the claim move together.
+// An amortization on a paper never acquired here is refused (#17): it would
+// credit the whole payment as profit. The literal is the old engine's figure.
 func TestAmortizationOnAPaperNeverAcquiredIsRefused(t *testing.T) {
 	_, err := portfolio.Compute([]portfolio.Operation{
 		op(portfolio.TypeAmortization, 10, &ofz, "", "", 400_000, 0),
@@ -1713,45 +1433,36 @@ func TestAmortizationOnAPaperNeverAcquiredIsRefused(t *testing.T) {
 	}
 }
 
-// TestAmortizationIsAllowedWherePrincipalCanCome checks the three shapes the
-// refusal above must NOT reach, each of which is a journal this program itself
-// writes. A guard that refuses those is worse than the phantom it prevents: it
-// takes the whole account's positions screen down for healthy data.
+// Amortizations the refusal must allow, each a journal this program writes.
 func TestAmortizationIsAllowedWherePrincipalCanCome(t *testing.T) {
-	// Same-day maturity: the redemption empties the position (quantity 0, cost
-	// 0) and the final partial repayment is folded AFTER it, because within one
-	// date the journal folds by the order it was recorded in. This is the shape
-	// the importer produces from what a broker sends on a maturity date.
+	// A final repayment folded after the same-day redemption that emptied the
+	// position, as the importer writes it.
 	redeemedThenRepaid := []portfolio.Operation{
 		op(portfolio.TypeBuy, 1, &ofz, "10", "950", -950_000, 0),
 		op(portfolio.TypeSell, 10, &ofz, "10", "1000", 1_000_000, 0),
 		op(portfolio.TypeAmortization, 10, &ofz, "", "", 30_000, 0),
 	}
-	// A bond still held whose basis earlier amortizations have used up: further
-	// principal really is pure gain, and that is deliberately supported.
+	// A held bond whose basis earlier amortizations spent: further principal is
+	// gain.
 	basisSpent := []portfolio.Operation{
 		op(portfolio.TypeBuy, 1, &ofz, "10", "950", -950_000, 0),
 		op(portfolio.TypeAmortization, 5, &ofz, "", "", 950_000, 0),
 		op(portfolio.TypeAmortization, 6, &ofz, "", "", 40_000, 0),
 	}
-	// A parcel that arrived by transfer is an acquisition too — the account did
-	// not buy it here, but a lot of it exists and the principal has somewhere to
-	// come from.
+	// An arriving transfer is an acquisition too.
 	arrivedByTransfer := []portfolio.Operation{
 		{
 			Type: portfolio.TypeTransferIn, OccurredOn: day(1), InstrumentID: &ofz,
 			Currency: "RUB", Quantity: dp("10"), AmountMinor: 950_000,
 		},
-		// Past the 950 000 the parcel carried, so the excess is realized and the
-		// figure below cannot come out right by the operation being ignored.
+		// Past the parcel's 950 000, so the excess is realized.
 		op(portfolio.TypeAmortization, 5, &ofz, "", "", 990_000, 0),
 	}
 	for name, tc := range map[string]struct {
 		ops          []portfolio.Operation
 		wantRealized int64
 	}{
-		// 50 000 from the sale, then the repayment is realized whole: the basis
-		// left after the redemption is nothing, which is the truth here.
+		// 50 000 from the sale, then the repayment realized whole.
 		"repayment folded after the same-day redemption": {redeemedThenRepaid, 50_000 + 30_000},
 		"basis already fully amortized":                  {basisSpent, 40_000},
 		"parcel acquired by transfer":                    {arrivedByTransfer, 40_000},
@@ -1768,13 +1479,8 @@ func TestAmortizationIsAllowedWherePrincipalCanCome(t *testing.T) {
 	}
 }
 
-// TestPaymentsOnAPaperNeverAcquiredStayLegitimate is the other half of the
-// boundary: an amortization is the ONE payment the engine turns into a claim
-// about cost, and the refusal must not spread to the payments that make no such
-// claim. A dividend, a coupon and the tax withheld from either are booked as
-// income in the currency they arrived in and say nothing about what the paper
-// cost — a journal that opens with payments alone is ordinary (the paper was
-// bought before the import window, or arrived by a transfer nobody recorded).
+// Dividends, coupons and taxes on a paper never acquired here stay legitimate:
+// they claim nothing about cost.
 func TestPaymentsOnAPaperNeverAcquiredStayLegitimate(t *testing.T) {
 	pos, err := portfolio.Compute([]portfolio.Operation{
 		op(portfolio.TypeCoupon, 10, &ofz, "", "", 12_000, 0),
@@ -1793,12 +1499,7 @@ func TestPaymentsOnAPaperNeverAcquiredStayLegitimate(t *testing.T) {
 	}
 }
 
-// realizedOf is a position's realized result, and it FAILS THE TEST when the
-// position has none — a disposal that settled in another currency leaves no
-// figure in any single one (see portfolio.Position.RealizedPnL). Every call
-// below therefore asserts two things at once: the number, and that there is a
-// number, which is what keeps a test from quietly comparing a zero against a
-// zero the moment the currency rule starts refusing to answer.
+// realizedOf returns the realized result and fails if there is none.
 func realizedOf(t *testing.T, p *portfolio.Position) int64 {
 	t.Helper()
 	minor, inOneCurrency := p.RealizedPnL()
@@ -1808,15 +1509,8 @@ func realizedOf(t *testing.T, p *portfolio.Position) int64 {
 	return minor
 }
 
-// TestRedemptionComputesExactlyAsASale is the load-bearing test of the new
-// type, and it is a DIFFERENTIAL one on purpose: a redemption differs from a
-// sale in what happened, not in what it comes to, so the only way the change
-// can go wrong is by the two drifting apart.
-//
-// Every figure is compared against the same journal with the disposal recorded
-// as a sale — cost, quantity, realized result, the released parcels and their
-// dates — rather than against literals of its own. Literals would pin today's
-// arithmetic; this pins the identity, which is the actual claim.
+// A redemption computes exactly as a sale: every figure is compared with the
+// same journal recorded as a sale.
 func TestRedemptionComputesExactlyAsASale(t *testing.T) {
 	journal := func(disposal portfolio.Type) []portfolio.Operation {
 		return []portfolio.Operation{
@@ -1850,23 +1544,18 @@ func TestRedemptionComputesExactlyAsASale(t *testing.T) {
 	if len(sale.Realizations) != 1 || len(redeemed.Realizations) != 1 {
 		t.Fatalf("realizations: sale %d, redemption %d", len(sale.Realizations), len(redeemed.Realizations))
 	}
-	// The parcels the queue gave up, piece by piece with their purchase days:
-	// this is what a ruble result is struck from, so a difference here would
-	// move money even where the totals above happened to agree.
+	// The released parcels, piece by piece with their days.
 	if !reflect.DeepEqual(sale.Realizations[0], redeemed.Realizations[0]) {
 		t.Errorf("the disposal itself differs:\n sale       %+v\n redemption %+v",
 			sale.Realizations[0], redeemed.Realizations[0])
 	}
-	// And a positive result really was produced, so the comparison above is not
-	// two empty answers agreeing.
+	// A positive result was produced, so the comparison is not empty.
 	if !saleOK || saleRealized == 0 {
 		t.Fatalf("the fixture realized nothing (%d, %v): the equality above would be vacuous", saleRealized, saleOK)
 	}
 }
 
-// TestRedemptionRefusesWhatASaleRefuses. The refusals are part of the identity
-// too, and the message has to name the type the owner wrote rather than the one
-// the branch is shared with.
+// A redemption refuses what a sale refuses, naming its own type.
 func TestRedemptionRefusesWhatASaleRefuses(t *testing.T) {
 	_, err := portfolio.Compute([]portfolio.Operation{
 		op(portfolio.TypeBuy, 1, &sber, "10", "100", -100_000, 0),
@@ -1880,13 +1569,8 @@ func TestRedemptionRefusesWhatASaleRefuses(t *testing.T) {
 	}
 }
 
-// TestSellingTheLastShareTakesAShareLessLotsMoneyWithIt: a lot a reverse split
-// rounded away keeps its cost and its day, and waits in the queue. When it stood
-// BEHIND the lots a full sale consumed, the release stopped before reaching it:
-// the position closed with no shares and 400 of basis nothing could ever
-// release, shown as a loss on a closed row for good. Had it stood in front, the
-// same 400 would have been part of the sale's result. One fact, one answer
-// (#193).
+// Selling the last share takes a shareless lot's money with it, wherever it
+// stood in the queue (#193).
 func TestSellingTheLastShareTakesAShareLessLotsMoneyWithIt(t *testing.T) {
 	split := op(portfolio.TypeSplit, 3, &sber, "", "", 0, 0)
 	split.SplitRatio = dp("0.0000000001")
@@ -1923,8 +1607,7 @@ func TestSellingTheLastShareTakesAShareLessLotsMoneyWithIt(t *testing.T) {
 	}
 }
 
-// TestAPartialSaleLeavesAShareLessLotWaiting: only the release that EMPTIES the
-// position takes the shareless lots along. While shares remain, so does the lot.
+// A partial sale leaves a shareless lot waiting.
 func TestAPartialSaleLeavesAShareLessLotWaiting(t *testing.T) {
 	split := op(portfolio.TypeSplit, 3, &sber, "", "", 0, 0)
 	split.SplitRatio = dp("0.0000000001")
@@ -1945,9 +1628,8 @@ func TestAPartialSaleLeavesAShareLessLotWaiting(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestATransferRecordNamesAShareLessParcelByItsOwnDay: a piece of no units and
-// real money is a legitimate piece — it is the shareless lot travelling with the
-// position — and both legs fold it under its own day.
+// A shareless piece in a transfer record is legitimate; both legs fold it
+// under its own day.
 func TestATransferRecordNamesAShareLessParcelByItsOwnDay(t *testing.T) {
 	split := op(portfolio.TypeSplit, 2, &sber, "", "", 0, 0)
 	split.SplitRatio = dp("0.0000000001")
@@ -1987,9 +1669,7 @@ func TestATransferRecordNamesAShareLessParcelByItsOwnDay(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestAShareLessPieceWithNoParcelBehindItIsRefused: the record says a shareless
-// parcel of a given day left, and replaying the account finds none. Taking the
-// money from some other parcel would re-date it; the refusal is loud.
+// A shareless piece with no matching parcel is refused loudly.
 func TestAShareLessPieceWithNoParcelBehindItIsRefused(t *testing.T) {
 	out := op(portfolio.TypeTransferOut, 5, &sber, "5", "", 50_400, 0)
 	out.TransferLots = []portfolio.ReleasedLot{

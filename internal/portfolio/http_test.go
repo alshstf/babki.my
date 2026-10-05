@@ -28,30 +28,20 @@ import (
 	"babki.my/babki/internal/portfolio"
 )
 
-// quoteStoreLike mirrors portfolio's unexported quoteStore interface so this
-// external test package can name the parameter type of setupAPI. Any value
-// satisfying it (a real *marketdata.Store or a test fake) is structurally
-// assignable to portfolio.NewHandler's quoteStore parameter — Go interface
-// assignability is by method set, not by the interface's (unexported) name.
+// quoteStoreLike mirrors the handler's unexported quoteStore so this external
+// package can name setupAPI's parameter.
 type quoteStoreLike interface {
 	LatestQuotes(ctx context.Context, instrumentIDs []uuid.UUID) (map[uuid.UUID]marketdata.Quote, error)
 }
 
-// converterLike mirrors portfolio's unexported converter interface, for the
-// same reason quoteStoreLike does: it lets this external test package name
-// setupAPI's parameter type. A real *marketdata.Converter (backed by the
-// same pool as the rest of the fixture, so tests can seed fx_rates directly
-// via mdStore.UpsertFxRates and see them picked up here) satisfies it
-// structurally.
+// converterLike mirrors the handler's unexported converter, as above.
 type converterLike interface {
 	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
 	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
 }
 
 // journalStoreLike, instrumentStoreLike and spaceStoreLike mirror the rest of
-// portfolio's unexported dependency interfaces, for the same reason
-// quoteStoreLike and converterLike do. A *operation.Store, an
-// *instrument.Store and a *family.Store satisfy them structurally.
+// the handler's dependencies.
 type (
 	journalStoreLike interface {
 		ListForEngine(ctx context.Context, spaceID, accountID uuid.UUID) ([]portfolio.Operation, error)
@@ -64,31 +54,18 @@ type (
 	}
 )
 
-// portfolioStores are the three stores setupAPI hands the portfolio handler
-// besides the quotes and the converter. They are named here — rather than
-// built and passed straight in — so a test can interpose a double between the
-// handler and the real store: the round-trip counters in
-// http_round_trips_test.go wrap each one to count how often a single request
-// reaches for it, and nothing outside this package can observe that otherwise.
+// portfolioStores are the stores setupAPI hands the handler, named so a test
+// can interpose counting doubles.
 type portfolioStores struct {
 	ops         journalStoreLike
 	instruments instrumentStoreLike
 	spaces      spaceStoreLike
 }
 
-// setupAPI wires the full stack: family + account + instrument + operation +
-// portfolio modules, mirroring how cmd/babki/root.go's mountModules
-// assembles them (same fixture shape as operation/http_test.go's newAPI).
-// quotes backs the portfolio handler's market-quote lookups. pool is
-// provided by the caller (rather than created here) so tests that need
-// direct DB access for setup, or that just want the default real
-// marketdata.Store, can share the same pool the HTTP stack runs on.
-//
-// wrap, when given, is handed the real stores the portfolio handler would
-// have received and returns whatever should stand in their place (see
-// portfolioStores). Only the portfolio handler sees the substitution — every
-// other module keeps the real store, so a counting double counts one screen's
-// round trips and not the fixture's own writes.
+// setupAPI wires family, account, instrument, operation and portfolio as
+// cmd/babki does. The caller provides pool and quotes. wrap, when given,
+// replaces the portfolio handler's stores only, so a double counts one
+// screen's round trips and not the fixture's writes.
 func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv converterLike, wrap ...func(portfolioStores) portfolioStores) (string, *http.Client) {
 	t.Helper()
 	famStore := family.NewStore(pool)
@@ -104,10 +81,8 @@ func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv conv
 	family.NewHandler(famSvc, famStore, auth, sm).Mount(srv)
 	account.NewHandler(account.NewStore(pool), famStore, marketdata.NewConverter(marketdata.NewStore(pool)), nil, auth, sm).Mount(srv)
 	instrument.NewHandler(instStore, auth, sm).Mount(srv)
-	// The operation handler gets its own real converter rather than conv:
-	// these tests substitute conv to control the PORTFOLIO handler's fx
-	// behavior, and the journal's own in_base conversion is covered by
-	// package operation's tests.
+	// The operation handler gets its own real converter; conv controls only the
+	// portfolio handler.
 	operation.NewHandler(opSvc, opStore, famStore, marketdata.NewConverter(marketdata.NewStore(pool)), auth, sm).Mount(srv)
 
 	stores := portfolioStores{ops: opStore, instruments: instStore, spaces: famStore}
@@ -129,10 +104,8 @@ func setupAPI(t *testing.T, pool *pgxpool.Pool, quotes quoteStoreLike, conv conv
 	return ts.URL, client
 }
 
-// newAPI is setupAPI backed by a real (empty) marketdata.Store and a real,
-// unseeded Converter, for tests that don't care about market valuation: no
-// quotes ever exist, so all positions come back with null
-// market_value_minor/price/price_on regardless of the converter.
+// newAPI is setupAPI with an empty quote store and an unseeded converter: no
+// quotes, so no valuations.
 func newAPI(t *testing.T) (string, *http.Client) {
 	t.Helper()
 	pool := testdb.New(t)
@@ -230,30 +203,20 @@ type positionResp struct {
 	HasUndatedRealizations    bool             `json:"has_undated_realizations"`
 	HasUnknownCost            bool             `json:"has_unknown_cost"`
 	InBase                    *positionInBase  `json:"in_base"`
-	// InBaseGap and MarketValueGap are pointers so a test can tell an explicit
-	// null — nothing stopped the object, or nothing was withheld from the
-	// valuation — apart from a named cause, which the empty string could not:
-	// "" is also what a decoder writes for a key that is absent, and the
-	// contract requires both keys on every position.
+	// Pointers, so an explicit null can be told from a cause; the contract
+	// requires both keys.
 	InBaseGap      *string `json:"in_base_gap"`
 	MarketValueGap *string `json:"market_value_gap"`
 }
 
-// currencyIncome mirrors apitypes.PositionCurrencyIncome for decoding in tests
-// (see http_income_currency_test.go). The whole point of the field is that a
-// position's income need not be denominated in the position's own currency, so
-// a test asserts the pairs — the amount alone would say nothing.
+// currencyIncome mirrors apitypes.PositionCurrencyIncome.
 type currencyIncome struct {
 	Currency    string `json:"currency"`
 	IncomeMinor int64  `json:"income_minor"`
 }
 
-// positionInBase mirrors apitypes.PositionInBase for decoding in tests (see
-// http_position_in_base_test.go). A nil *positionInBase on positionResp
-// covers both an omitted key and an explicit JSON null — which is exactly
-// what in_base always is (see the handler's positionInBase: it is always
-// explicitly set to either a value or null, never left unset, mirroring
-// account.Handler.balanceInBase).
+// positionInBase mirrors apitypes.PositionInBase; nil covers absent and null
+// alike.
 type positionInBase struct {
 	CostMinor          int64  `json:"cost_minor"`
 	MarketValueMinor   *int64 `json:"market_value_minor"`
@@ -261,9 +224,7 @@ type positionInBase struct {
 	IncomeMinor        int64  `json:"income_minor"`
 	RealizedPnlMinor   *int64 `json:"realized_pnl_minor"`
 	Currency           string `json:"currency"`
-	// RateOn is a pointer so a test can tell an explicit null — this object
-	// carries no figure struck at a single date, because it carries no market
-	// valuation — apart from a date, which the zero string could not.
+	// A pointer, so null (no valuation) can be told from a date.
 	RateOn *string `json:"rate_on"`
 }
 
@@ -274,10 +235,8 @@ type positionsResp struct {
 	Cash          []cashPositionResp `json:"cash"`
 }
 
-// cashPositionResp mirrors apitypes.CashPosition for decoding in tests (see
-// http_cash_test.go). The three base-currency figures are pointers because each
-// can be an explicit null with a named gap beside it, and a zero value could not
-// be told from one.
+// cashPositionResp mirrors apitypes.CashPosition; base figures are pointers,
+// since each may be null beside a gap.
 type cashPositionResp struct {
 	Currency    string `json:"currency"`
 	AmountMinor int64  `json:"amount_minor"`
@@ -291,11 +250,8 @@ type cashPositionResp struct {
 	} `json:"in_base"`
 }
 
-// accountTotalResp mirrors apitypes.AccountTotal for decoding in tests (see
-// http_account_total_test.go). InBase, InBaseGap and each bucket's amount are
-// pointers for the same reason realizedTotalResp's are: a zero value cannot be
-// told apart from an explicit null, and the difference between "the account
-// made nothing" and "the account has no figure at all" is the whole subject.
+// accountTotalResp mirrors apitypes.AccountTotal; pointers tell "made nothing"
+// from "no figure".
 type accountTotalResp struct {
 	ByCurrency               []accountCurrencyTotalResp `json:"by_currency"`
 	BaseCurrency             string                     `json:"base_currency"`
@@ -314,10 +270,8 @@ type accountCurrencyTotalResp struct {
 	AmountMinor *int64 `json:"amount_minor"`
 }
 
-// realizedTotalResp mirrors apitypes.RealizedTotal for decoding in tests (see
-// http_realized_total_test.go). InBase and InBaseGap are pointers so that a
-// test can tell an explicit null — the account has no publishable total, and
-// the gap says why — apart from a figure, which a zero value could not.
+// realizedTotalResp mirrors apitypes.RealizedTotal; pointers tell null from a
+// figure.
 type realizedTotalResp struct {
 	ByCurrency            []realizedCurrencyTotalResp `json:"by_currency"`
 	TaxWithheldByCurrency []currencyAmountResp        `json:"tax_withheld_by_currency"`
@@ -339,12 +293,9 @@ type realizedCurrencyTotalResp struct {
 	RealizedPnlMinor *int64 `json:"realized_pnl_minor"`
 }
 
-// TestPositionsEndpoint covers three scenarios on the GET
-// /api/v1/accounts/{accountId}/positions endpoint: a real, still-open
-// position folded from a mixed journal; an account with no operations at
-// all (must yield an empty array, not null); and a fully closed position
-// (bought and sold in full), which must still appear with quantity "0"
-// since realized P&L on it remains meaningful.
+// Positions endpoint: an open position from a mixed journal; an account with
+// no operations (an empty array, not null); a fully closed position, still
+// listed with quantity "0".
 func TestPositionsEndpoint(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -355,25 +306,15 @@ func TestPositionsEndpoint(t *testing.T) {
 	sber := createInstrument(t, c, url, `{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`)
 	lkoh := createInstrument(t, c, url, `{"type":"share","name":"Лукойл","ticker":"LKOH","currency":"RUB"}`)
 
-	// --- acc1: deposit, 2 buys, 1 partial sell, dividend ---
+	// acc1: deposit, two buys, a partial sell, a dividend.
 	//
-	// Manual computation (matches the engine's FIFO rules, see
-	// portfolio/engine.go and engine_test.go):
-	//
-	//   deposit          amount 1_000_000               (cash-level, ignored by the engine)
-	//   buy  10 @ 100.00 amount -100_000 fee 10          lot1: qty 10, cost 100_010
-	//   buy  10 @ 110.00 amount -110_000 fee 11          lot2: qty 10, cost 110_011
-	//   sell  5 @ 120.00 amount  60_000  fee  5
-	//       released = floor(100_010 * 5/10) = 50_005 (partial piece of lot1)
-	//       lot1 remainder: qty 5, cost 100_010-50_005 = 50_005
-	//       realized += 60_000 - 50_005 - 5 = 9_990
-	//   dividend         amount 5_000 (tagged to SBER)   income += 5_000
-	//
-	//   quantity    = 10 + 10 - 5              = 15
-	//   cost_minor  = (100_010+110_011)-50_005 = 160_016
-	//   realized    = 9_990
-	//   income      = 5_000
-	//   fees        = 10 + 11 + 5              = 26
+	// 	deposit          1_000_000              (cash-level, ignored)
+	// 	buy  10 @ 100.00 −100_000 fee 10        lot1: 10, 100_010
+	// 	buy  10 @ 110.00 −110_000 fee 11        lot2: 10, 110_011
+	// 	sell  5 @ 120.00   60_000 fee  5        releases floor(100_010×5/10) = 50_005
+	// 	                                        realized 60_000 − 50_005 − 5 = 9_990
+	// 	dividend 5_000                          income 5_000
+	// 	quantity 15, cost 160_016, realized 9_990, income 5_000, fees 26
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"deposit",
 		"occurred_on":"2026-07-01","amount_minor":1000000,"currency":"RUB"}`, acc1.ID))
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
@@ -423,19 +364,13 @@ func TestPositionsEndpoint(t *testing.T) {
 	if p.Currency != "RUB" {
 		t.Errorf("acc1 position currency = %q, want RUB", p.Currency)
 	}
-	// newAPI backs this handler with a real, empty marketdata.Store — no
-	// quote was ever ingested for sber, so all three valuation fields (plus
-	// the unrealized P&L derived from them) must come back null (see
-	// TestPositionsMarketValuation and TestPositionsUnrealizedPnl for the
-	// priced cases).
+	// No quote, so the valuation fields are null.
 	if p.MarketValueMinor != nil || p.Price != nil || p.PriceOn != nil || p.UnrealizedPnlMinor != nil {
 		t.Errorf("acc1 position with no quote = %+v, want market_value_minor/price/price_on/unrealized_pnl_minor all null", p)
 	}
 
-	// --- acc2: no operations at all -> positions is [], not null. The
-	// cost_basis_rules declaration rides along even here (see
-	// TestAnEmptyAccountStillDeclaresTheRules), so the assertion is on the
-	// positions key rather than on the whole body. ---
+	// acc2: no operations: positions is [], not null (the rules declaration is
+	// still present, so only that key is checked).
 	resp = do(t, c, "GET", url+"/api/v1/accounts/"+acc2.ID+"/positions", "")
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET positions acc2 = %d", resp.StatusCode)
@@ -445,15 +380,9 @@ func TestPositionsEndpoint(t *testing.T) {
 		t.Errorf("acc2 positions body = %s, want an empty positions array (not null)", body)
 	}
 
-	// --- acc3: buy then sell the full quantity -> closed position (qty 0)
-	// still present, since realized P&L on it is meaningful history.
-	//
-	//   buy 3 @ 200.00 amount -60_000 fee 0    lot: qty 3, cost 60_000
-	//   sell 3 @ 210.00 amount 63_000 fee 0
-	//       released = full lot cost = 60_000
-	//       realized += 63_000 - 60_000 - 0 = 3_000
-	//
-	//   quantity = 0, cost_minor = 0, realized = 3_000, income = 0, fees = 0
+	// acc3: bought and sold in full, still listed.
+	// 	buy 3 @ 200.00 −60_000; sell 3 @ 210.00 63_000
+	// 	quantity 0, cost 0, realized 3_000
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-07-01","quantity":"3","price":"200",
 		"amount_minor":-60000,"currency":"RUB"}`, acc3.ID, lkoh.ID))
@@ -486,12 +415,8 @@ func TestPositionsEndpoint(t *testing.T) {
 	}
 }
 
-// fakeQuoteStore is a minimal, in-memory quoteStore double. It counts calls
-// to LatestQuotes so tests can assert positions are valued with exactly one
-// batched round trip — never one call per position (N+1) — and it echoes
-// back only the quotes it was seeded with for the requested IDs, mirroring
-// marketdata.Store.LatestQuotes's real contract that an instrument with no
-// quote is simply absent from the result map, not zero-valued.
+// fakeQuoteStore is an in-memory quoteStore that counts LatestQuotes calls and
+// omits instruments without a seeded quote, like the real store.
 type fakeQuoteStore struct {
 	byInstrument map[uuid.UUID]marketdata.Quote
 	calls        int
@@ -508,33 +433,21 @@ func (f *fakeQuoteStore) LatestQuotes(_ context.Context, instrumentIDs []uuid.UU
 	return out, nil
 }
 
-// TestPositionsMarketValuation covers the market-value calculation added to
-// GET /api/v1/accounts/{id}/positions: a share priced at quote × quantity
-// (exercising half-up rounding at the exact .5 boundary), a bond priced as
-// a percentage of its face value, an instrument with no quote at all, and
-// an instrument whose type (custom) has no defined valuation model even
-// though a quote exists for it — all four resolved from a single batched
-// LatestQuotes call, not one per position.
+// Market valuation: a share at quote × quantity (rounding at .5), a bond at a
+// percentage of face, an instrument without a quote, and a custom one with a
+// quote but no model — all from one batched LatestQuotes call.
 func TestPositionsMarketValuation(t *testing.T) {
 	pool := testdb.New(t)
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
-	// No fx_rates seeded on this pool: the bond fixture below deliberately
-	// has a face_currency (USD) that differs from its position currency
-	// (RUB), so its market valuation exercises the no-rate-available
-	// fallback path (see toAPI) — the same null-unrealized/raw-currency
-	// behavior this test already asserted before conversion existed. The
-	// conversion-succeeds path has its own dedicated test,
-	// TestPositionsMarketValueConvertsToPositionCurrency.
+	// No rates: the bond's face currency (USD) differs from its position's (RUB),
+	// so it takes the no-rate fallback.
 	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(marketdata.NewStore(pool)))
 
 	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
 
 	share := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"RUB"}`)
-	// face_currency (USD) deliberately differs from the quote's own currency
-	// (RUB, set below): a bond's price is a dimensionless percent-of-face, so
-	// quote.Currency carries no real currency meaning for a bond — fix (2)'s
-	// regression case. If market_value_currency ever regressed to echoing
-	// quote.Currency for bonds, this test would catch it (RUB != USD).
+	// The face currency differs from the quote's own currency: a bond's quote is a
+	// percentage, so the valuation must be in the face currency.
 	bond := createInstrument(t, c, url,
 		`{"type":"bond","name":"Облигация","ticker":"BOND1","currency":"RUB","face_value_minor":100000,"face_currency":"USD"}`)
 	noQuote := createInstrument(t, c, url, `{"type":"share","name":"Без Котировки","ticker":"NOQ","currency":"RUB"}`)
@@ -553,22 +466,17 @@ func TestPositionsMarketValuation(t *testing.T) {
 		t.Fatalf("parse custom id: %v", err)
 	}
 
-	// share: price 100.005 (major RUB) x quantity 1 = 100.005 major = 10000.5
-	// minor exactly at the half-unit boundary. Half-away-from-zero rounds a
-	// positive amount up, so market_value_minor must be 10001, not 10000.
+	// 100.005 × 1 = 10000.5 minor: rounds up to 10001.
 	quotes.byInstrument[shareID] = marketdata.Quote{
 		InstrumentID: shareID, On: mustDate(t, "2026-07-20"),
 		Price: decimal.RequireFromString("100.005"), Currency: "RUB", Source: "test",
 	}
-	// bond: price is a percent of face value. face_value_minor 100000 (=
-	// 1000.00 RUB) x 95.20% x quantity 100 = 100000 * 0.952 * 100 =
-	// 9_520_000 minor units exactly — the worked example from the task brief.
+	// 100000 × 95.2% × 100 = 9_520_000.
 	quotes.byInstrument[bondID] = marketdata.Quote{
 		InstrumentID: bondID, On: mustDate(t, "2026-07-21"),
 		Price: decimal.RequireFromString("95.20"), Currency: "RUB", Source: "test",
 	}
-	// custom: a quote exists, but "custom" has no defined valuation model,
-	// so it must still come back null despite the quote being present.
+	// Custom has no valuation model despite the quote.
 	quotes.byInstrument[customID] = marketdata.Quote{
 		InstrumentID: customID, On: mustDate(t, "2026-07-22"),
 		Price: decimal.RequireFromString("50"), Currency: "RUB", Source: "test",
@@ -615,9 +523,7 @@ func TestPositionsMarketValuation(t *testing.T) {
 	if sharePos.MarketValueMinor == nil || *sharePos.MarketValueMinor != 10001 {
 		t.Errorf("share market_value_minor = %v, want 10001", sharePos.MarketValueMinor)
 	}
-	// share/etf valuation is in the quote's own currency (RUB here) — see
-	// fix (2): a share's price and instrument currency always agree, so
-	// this is the trivial case, but the field must still be populated.
+	// A share's valuation is in the quote's currency.
 	if sharePos.MarketValueCurrency == nil || *sharePos.MarketValueCurrency != "RUB" {
 		t.Errorf("share market_value_currency = %v, want RUB (the quote's currency)", sharePos.MarketValueCurrency)
 	}
@@ -627,18 +533,11 @@ func TestPositionsMarketValuation(t *testing.T) {
 	if sharePos.PriceOn == nil || *sharePos.PriceOn != "2026-07-20" {
 		t.Errorf("share price_on = %v, want 2026-07-20", sharePos.PriceOn)
 	}
-	// unrealized = market_value_minor(10001) - cost_minor(10000) = 1. Both
-	// currencies are RUB (the quote's currency and the buy operation's
-	// currency agree for a share), so the field must be populated, not null
-	// — see TestPositionsUnrealizedPnl for dedicated profit/loss/null cases.
+	// Unrealized = 10001 − 10000 = 1.
 	if sharePos.UnrealizedPnlMinor == nil || *sharePos.UnrealizedPnlMinor != 1 {
 		t.Errorf("share unrealized_pnl_minor = %v, want 1", sharePos.UnrealizedPnlMinor)
 	}
-	// Regression: market_value_currency already equals the position's own
-	// currency here (RUB == RUB), so no conversion ever happens and the
-	// source fields — which exist purely to disclose a conversion that
-	// occurred — must stay null. Wiring in a converter must not perturb the
-	// already-matching-currency case.
+	// No conversion happened, so the source fields stay null.
 	if sharePos.MarketValueSourceCurrency != nil || sharePos.MarketValueSourceMinor != nil {
 		t.Errorf("share market_value_source_currency/_minor = %v/%v, want both null (currency already matched, no conversion)",
 			sharePos.MarketValueSourceCurrency, sharePos.MarketValueSourceMinor)
@@ -651,48 +550,32 @@ func TestPositionsMarketValuation(t *testing.T) {
 	if bondPos.MarketValueMinor == nil || *bondPos.MarketValueMinor != 9520000 {
 		t.Errorf("bond market_value_minor = %v, want 9520000", bondPos.MarketValueMinor)
 	}
-	// The valuation is denominated in the instrument's face_currency (USD),
-	// never the quote's currency (RUB) — see fix (2)'s doc comment on
-	// marketValue.
+	// The bond's valuation is in its face currency, not the quote's.
 	if bondPos.MarketValueCurrency == nil || *bondPos.MarketValueCurrency != "USD" {
 		t.Errorf("bond market_value_currency = %v, want USD (face_currency, not the quote's RUB)", bondPos.MarketValueCurrency)
 	}
-	// shopspring/decimal normalizes trailing zeros on parse, so the quote's
-	// price round-trips through Quote.Price.String() as "95.2", not "95.20".
+	// decimal normalizes trailing zeros: "95.2".
 	if bondPos.Price == nil || *bondPos.Price != "95.2" {
 		t.Errorf("bond price = %v, want 95.2", bondPos.Price)
 	}
 	if bondPos.PriceOn == nil || *bondPos.PriceOn != "2026-07-21" {
 		t.Errorf("bond price_on = %v, want 2026-07-21", bondPos.PriceOn)
 	}
-	// What ONE bond costs in money: 1 000,00 of face at 95.2 % = 952,00, in the
-	// FACE VALUE's currency (USD here — deliberately not the quote's RUB and
-	// not the position's RUB, the same distinction market_value_currency makes
-	// two checks above). Written as a literal rather than derived from the
-	// 9520000 valuation: this figure is struck on its own and rounded on its
-	// own, and dividing that one by the quantity is exactly the second rounding
-	// it exists to avoid.
+	// One bond's money price: 1 000,00 face at 95.2% = 952,00, in the face currency;
+	// a literal, since dividing the valuation would round twice.
 	if bondPos.PriceMoneyMinor == nil || *bondPos.PriceMoneyMinor != 95200 {
 		t.Errorf("bond price_money_minor = %v, want 95200", bondPos.PriceMoneyMinor)
 	}
-	// The share beside it gets none: its quote is already money per unit, and a
-	// second field restating it would be one more number to keep in agreement.
+	// A share's quote is already money; no price_money_minor.
 	if sharePos.PriceMoneyMinor != nil {
 		t.Errorf("share price_money_minor = %v, want null (a share's price is already money)", sharePos.PriceMoneyMinor)
 	}
-	// The bond's buy operation (and therefore position.Currency) is RUB, but
-	// market_value_currency is USD (face_currency) — different currencies,
-	// so unrealized_pnl_minor must be null even though market_value_minor
-	// itself is populated. See TestPositionsUnrealizedPnl for the dedicated
-	// case.
+	// The bond's currencies differ, so unrealized is null.
 	if bondPos.UnrealizedPnlMinor != nil {
 		t.Errorf("bond unrealized_pnl_minor = %v, want null (market_value_currency USD != position currency RUB)", bondPos.UnrealizedPnlMinor)
 	}
-	// No USD->RUB fx_rates row exists on this test's pool, so the currency
-	// mismatch above hits the ErrNoRate fallback (see toAPI): market_value_*
-	// stay in the raw face_currency (USD) and, since no conversion actually
-	// happened, the source fields must stay null too — they are not just "the
-	// raw value repeated", they mean "a conversion occurred".
+	// No USD->RUB rate: the raw valuation is published and, since nothing was
+	// converted, the source fields stay null.
 	if bondPos.MarketValueSourceCurrency != nil || bondPos.MarketValueSourceMinor != nil {
 		t.Errorf("bond market_value_source_currency/_minor = %v/%v, want both null (no fx rate, nothing converted)",
 			bondPos.MarketValueSourceCurrency, bondPos.MarketValueSourceMinor)
@@ -705,9 +588,7 @@ func TestPositionsMarketValuation(t *testing.T) {
 	if noQuotePos.MarketValueMinor != nil || noQuotePos.MarketValueCurrency != nil || noQuotePos.Price != nil || noQuotePos.PriceOn != nil || noQuotePos.UnrealizedPnlMinor != nil {
 		t.Errorf("noQuote position = %+v, want market_value_minor/market_value_currency/price/price_on/unrealized_pnl_minor all null", noQuotePos)
 	}
-	// And the empty cell says which of the three absences it is (#78). This is
-	// the one the word «котировка» is true of: a share, with everything else
-	// the valuation needs already in the catalog.
+	// The empty cell says which absence it is (#78): no quote.
 	if noQuotePos.MarketValueGap == nil || *noQuotePos.MarketValueGap != "no_quote" {
 		t.Errorf("noQuote market_value_gap = %v, want no_quote", noQuotePos.MarketValueGap)
 	}
@@ -719,53 +600,24 @@ func TestPositionsMarketValuation(t *testing.T) {
 	if customPos.MarketValueMinor != nil || customPos.MarketValueCurrency != nil || customPos.Price != nil || customPos.PriceOn != nil || customPos.UnrealizedPnlMinor != nil {
 		t.Errorf("custom position (quote present, unsupported type) = %+v, want market_value_minor/market_value_currency/price/price_on/unrealized_pnl_minor all null", customPos)
 	}
-	// The same nulls as the row above, for a reason that is its opposite: the
-	// quote seeded for this instrument is present and fresh, and this program
-	// computes no value from it. Saying «no quote» over this row is #78.
+	// Same nulls for the opposite reason: a fresh quote, no model (#78).
 	if customPos.MarketValueGap == nil || *customPos.MarketValueGap != "type_not_priced" {
 		t.Errorf("custom market_value_gap = %v, want type_not_priced: a quote exists for this instrument", customPos.MarketValueGap)
 	}
 }
 
-// pastOn returns a date safely before "today" (mirroring
-// account/http_summary_test.go's helper of the same name) so a seeded fx
-// rate is always found by Store.FxRateOn's nearest-earlier-date lookup
-// regardless of when the test actually runs, since production code converts
-// using time.Now().UTC() as the "on" date (see toAPI).
+// pastOn returns a date safely before today, so a seeded rate is always
+// found.
 func pastOn() time.Time {
 	return time.Now().UTC().AddDate(0, -1, 0).Truncate(24 * time.Hour)
 }
 
-// TestPositionsMarketValueConvertsToPositionCurrency is the owner-requested
-// fix at the center of this change: a bond whose raw market valuation
-// (face_currency) differs from its position's own currency must have that
-// valuation converted into the position's currency — via the real
-// marketdata.Converter, exercising an actual fx_rates round trip, not a
-// fake — rather than leaving unrealized_pnl_minor permanently null just
-// because a rate happens to exist.
+// A bond valued in its face currency is converted into the position's
+// currency through a real fx row.
 //
-// Manual arithmetic, chosen so every step is exact (no rounding to verify
-// separately from marketdata.Converter's own rounding tests):
-//
-//	bond: face_value_minor 100_000 (1_000.00 USD face), face_currency USD,
-//	      quantity 1, quote price 100.00 (=100% of face, i.e. priced at par)
-//	  market_value_source_minor (raw, USD) = 100_000 * (100.00/100) * 1
-//	                                       = 100_000  (= $1_000.00)
-//
-//	fx rate USD->RUB = 90 (RUB per 1 USD)
-//	  market_value_minor (converted, RUB) = 100_000 * 90 = 9_000_000
-//	                                      (= 90_000.00 RUB, i.e. $1_000 * 90)
-//
-//	buy 1 @ (amount_minor -80_000, fee 0) -> cost_minor = 80_000 (800.00 RUB)
-//	  unrealized_pnl_minor = 9_000_000 - 80_000 = 8_920_000 (89_200.00 RUB)
-//
-// If this test is run against a handler that still nulls out
-// market_value/unrealized_pnl on any currency mismatch (the pre-fix
-// behavior), every assertion below fails: market_value_minor would be
-// 100_000/USD instead of 9_000_000/RUB, unrealized_pnl_minor would be null
-// instead of 8_920_000, and the source fields wouldn't exist at all. That
-// was confirmed by hand during development (temporarily reverting toAPI's
-// conversion branch) before this test was finalized.
+//	bond: face 1 000 USD at par, quantity 1 -> source 100_000 USD
+//	USD->RUB 90 -> market_value_minor 9_000_000 RUB
+//	cost 80_000 RUB -> unrealized 8_920_000
 func TestPositionsMarketValueConvertsToPositionCurrency(t *testing.T) {
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
@@ -805,8 +657,7 @@ func TestPositionsMarketValueConvertsToPositionCurrency(t *testing.T) {
 	}
 	p := got.Positions[0]
 
-	// market_value_minor/currency are now in the POSITION's currency (RUB),
-	// directly comparable to cost_minor — not the raw face_currency (USD).
+	// The valuation is now in the position's currency.
 	if p.MarketValueMinor == nil || *p.MarketValueMinor != 9000000 {
 		t.Errorf("market_value_minor = %v, want 9000000 (converted to RUB)", p.MarketValueMinor)
 	}
@@ -826,44 +677,16 @@ func TestPositionsMarketValueConvertsToPositionCurrency(t *testing.T) {
 	}
 }
 
-// TestPositionsConvertedValuationRoundsHalfAwayFromZero pins the rounding of
-// three figures this handler strikes, each from its own single multiplication:
-// a bond's raw valuation (marketValue itself), that valuation brought into the
-// position's currency (toAPI), and the SAME raw valuation carried into the base
-// currency (positionInBase). The latter two go through rateLookup.applyTo;
-// marketValue rounds inline. All three must round exactly as
-// marketdata.Converter.Convert does — once, at the end, half-away-from-zero.
+// Three figures each round once, half away from zero, like Convert: the raw
+// valuation, its conversion into the position's currency and its conversion
+// into the base. The price and rates put all three on a half unit:
 //
-// It exists because that arithmetic used to BE Convert's, covered by
-// marketdata's own tests, and now lives here: without this, replacing the
-// rounding with truncation changes real money on the screen and no test in
-// this package notices (confirmed by hand — Round -> Truncate passed the whole
-// suite before this test was written).
+//	face 1 000 USD, quoted 99.9995% -> 99 999.5 -> 100 000 (truncation 99 999)
+//	USD->EUR 0.900005 -> 90 000.5 -> 90 001 (truncation 90 000)
+//	USD->RUB 0.440005 -> 44 000.5 -> 44 001 (truncation 44 000)
 //
-// The bond's own price and all three rates are chosen to land every one of the
-// three products exactly on the half-unit boundary, which is the only place
-// Round and Truncate differ:
-//
-//	bond: face 1 000,00 USD, quantity 1, quoted at 99,9995% of face (not par)
-//	  raw valuation (marketValue)    =  99 999,5 -> 100 000 minor USD (truncation: 99 999)
-//	  USD -> EUR 0,900005            = 100 000 * 0,900005 = 90 000,5 -> 90 001  (truncation: 90 000)
-//	  in_base, USD -> RUB 0,440005   = 100 000 * 0,440005 = 44 000,5 -> 44 001  (truncation: 44 000)
-//
-// The price is deliberately not a round number either: at an exact par quote
-// the raw valuation is already an integer number of minor units (100000 *
-// 100.00 / 100 = 100000,00 exactly), so marketValue's own Round(0) has nothing
-// to round and Round -> Truncate there passes unnoticed even though the two
-// downstream conversions still catch a mutation of their own roundings. All of
-// the price and the rates are chosen purely to sit on a boundary; the
-// arithmetic is what is under test, not a plausible market quote.
-//
-// The three rates form no consistent triangle ON PURPOSE, and undoing that
-// would blind this test: 0,900005 * 0,5 is not 0,440005, so the base valuation
-// this fixture expects (44 001) is unreachable by any route through the EUR
-// figure — the old chained conversion would have produced 90 001 * 0,5 = 45 001
-// here. A fixture whose direct rate happened to equal the product of the other
-// two would pass whether the valuation was converted once or twice, which is
-// exactly what #39 was about.
+// The rates form no consistent triangle on purpose: a chained conversion
+// would give 45 001 (#39).
 func TestPositionsConvertedValuationRoundsHalfAwayFromZero(t *testing.T) {
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
@@ -887,8 +710,7 @@ func TestPositionsConvertedValuationRoundsHalfAwayFromZero(t *testing.T) {
 	}
 	quotes.byInstrument[bondID] = marketdata.Quote{
 		InstrumentID: bondID, On: mustDate(t, "2026-07-21"),
-		// 99.9995, not par: see the doc comment above for why the raw
-		// valuation itself must land on a half-unit boundary too.
+		// Not par: the raw valuation must land on a half unit too.
 		Price: decimal.RequireFromString("99.9995"), Currency: "EUR", Source: "test",
 	}
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
@@ -915,13 +737,8 @@ func TestPositionsConvertedValuationRoundsHalfAwayFromZero(t *testing.T) {
 	}
 }
 
-// TestPositionsMarketValueFallsBackWithoutRate is
-// TestPositionsMarketValueConvertsToPositionCurrency's negative twin: same
-// currency-mismatched bond, but with NO USD->RUB fx_rates row seeded on this
-// test's own pool, so marketdata.Converter.Convert resolves to ErrNoRate.
-// The handler must fall back to exactly the pre-conversion behavior — the
-// raw valuation in its own (face) currency, no unrealized P&L, no source
-// fields — rather than erroring the whole request or fabricating a rate.
+// Without a rate, the bond's valuation falls back to its raw face-currency
+// figure, with no unrealized profit and no source fields.
 func TestPositionsMarketValueFallsBackWithoutRate(t *testing.T) {
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
@@ -956,9 +773,7 @@ func TestPositionsMarketValueFallsBackWithoutRate(t *testing.T) {
 	}
 	p := got.Positions[0]
 
-	// Same raw figure as market_value_source_minor in the conversion test
-	// above (100000/USD) — but here it's published as market_value_minor
-	// itself, since nothing could be converted.
+	// The raw figure is published as market_value_minor itself.
 	if p.MarketValueMinor == nil || *p.MarketValueMinor != 100000 {
 		t.Errorf("market_value_minor = %v, want 100000 (raw USD valuation, unconverted)", p.MarketValueMinor)
 	}
@@ -974,29 +789,16 @@ func TestPositionsMarketValueFallsBackWithoutRate(t *testing.T) {
 	}
 }
 
-// A bond carrying a face_value_minor but no face_currency used to be tested
-// here, end to end, because PATCHing face_currency to null was how it was
-// reached. #93 closed that door — an update now refuses to touch one half of the
-// pair without the other, and migration 0012 makes the state unstorable — so
-// there is no longer a request sequence that produces it, and the case moved to
-// where it can still be exercised: TestMarketValueNeedsBothHalvesOfTheFacePair,
-// over marketValue itself. The read-side guard it pins stays exactly as it was;
-// only the route to it changed.
+// The face-value-without-currency case can no longer be reached through the
+// API (#93); TestMarketValueNeedsBothHalvesOfTheFacePair covers it directly.
 
-// TestPositionsUnrealizedPnl covers unrealized_pnl_minor end to end: a share
-// position in profit, one in a loss (unrealized_pnl_minor negative), a
-// position with no quote at all (null, same as market_value_minor), a bond
-// whose market valuation is denominated in a different currency than the
-// position (market_value_minor present, unrealized_pnl_minor still null),
-// and a fully closed position (quantity/cost both zero) that still has a
-// quote — its unrealized_pnl_minor must come back as the integer 0, not
-// null, since a valid subtraction (0 - 0) did happen.
+// Unrealized profit end to end: profit, loss, no quote (null), a bond valued
+// in another currency (null), and a closed position with a quote (0, not
+// null).
 func TestPositionsUnrealizedPnl(t *testing.T) {
 	pool := testdb.New(t)
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
-	// No fx_rates seeded: the bond fixture below keeps exercising the
-	// no-rate fallback (see TestPositionsMarketValuation's comment) so
-	// unrealized_pnl_minor null on that currency mismatch stays covered.
+	// No rates, so the bond stays on the fallback.
 	url, c := setupAPI(t, pool, quotes, marketdata.NewConverter(marketdata.NewStore(pool)))
 
 	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
@@ -1025,36 +827,23 @@ func TestPositionsUnrealizedPnl(t *testing.T) {
 		t.Fatalf("parse closed id: %v", err)
 	}
 
-	// profit: buy 10 @ 100.00 (cost_minor = 100_000, no fee), quote 150.00.
-	// market_value_minor = 150.00 * 10 = 1_500.00 major = 150_000 minor.
-	// unrealized_pnl_minor = 150_000 - 100_000 = 50_000 (profit).
+	// profit: cost 100_000, quote 150 -> value 150_000, unrealized 50_000.
 	quotes.byInstrument[profitID] = marketdata.Quote{
 		InstrumentID: profitID, On: mustDate(t, "2026-07-22"),
 		Price: decimal.RequireFromString("150.00"), Currency: "RUB", Source: "test",
 	}
-	// loss: buy 10 @ 100.00 (cost_minor = 100_000, no fee), quote 60.00.
-	// market_value_minor = 60.00 * 10 = 600.00 major = 60_000 minor.
-	// unrealized_pnl_minor = 60_000 - 100_000 = -40_000 (loss, negative).
+	// loss: cost 100_000, quote 60 -> value 60_000, unrealized −40_000.
 	quotes.byInstrument[lossID] = marketdata.Quote{
 		InstrumentID: lossID, On: mustDate(t, "2026-07-22"),
 		Price: decimal.RequireFromString("60.00"), Currency: "RUB", Source: "test",
 	}
-	// bond: buy 100 @ 950.00 (cost_minor = 9_500_000, no fee), quote 95.20%
-	// of face. market_value_minor = 100_000 * 0.952 * 100 = 9_520_000, but
-	// denominated in face_currency USD while the position (from the buy
-	// operation's currency) is RUB — different currencies, so
-	// unrealized_pnl_minor must be null despite market_value_minor existing.
+	// bond: value 9_520_000 in USD against a RUB position, so unrealized is null.
 	quotes.byInstrument[bondID] = marketdata.Quote{
 		InstrumentID: bondID, On: mustDate(t, "2026-07-22"),
 		Price: decimal.RequireFromString("95.20"), Currency: "RUB", Source: "test",
 	}
-	// closed: buy 4 @ 100.00 then sell 4 @ 100.00, fully closing the
-	// position. quantity = 0, cost_minor = 0. A quote still exists (70.00),
-	// so market_value_minor = 70.00 * 0 = 0 (ok=true, not absent). Both
-	// currencies are RUB, so unrealized_pnl_minor = 0 - 0 = 0: a real
-	// integer result, not null — this pins that closed positions still get
-	// a computed (zero) unrealized_pnl_minor rather than one suppressed by
-	// some qty==0 special case.
+	// closed: quantity 0, cost 0, quote 70 -> value 0 and unrealized 0, not
+	// null.
 	quotes.byInstrument[closedID] = marketdata.Quote{
 		InstrumentID: closedID, On: mustDate(t, "2026-07-22"),
 		Price: decimal.RequireFromString("70.00"), Currency: "RUB", Source: "test",
@@ -1146,8 +935,7 @@ func TestPositionsUnrealizedPnl(t *testing.T) {
 	}
 }
 
-// mustDate parses a YYYY-MM-DD date for test fixtures, failing the test on
-// a malformed literal rather than silently building a zero time.Time.
+// mustDate parses a YYYY-MM-DD fixture date.
 func mustDate(t *testing.T, s string) time.Time {
 	t.Helper()
 	d, err := time.Parse("2006-01-02", s)
@@ -1157,12 +945,7 @@ func mustDate(t *testing.T, s string) time.Time {
 	return d
 }
 
-// failingConverter is a converter double whose fx lookups always fail with
-// the given error — deliberately NOT marketdata.ErrNoRate, standing in for a
-// genuine outage (a dropped DB connection, a canceled context) rather than
-// the ordinary "this pair has no rate" outcome. It exists so a test can pin
-// that the handler tells those two apart; a real *marketdata.Converter can't
-// be made to fail on demand.
+// failingConverter fails every lookup with a real error, not ErrNoRate.
 type failingConverter struct{ err error }
 
 func (c failingConverter) Rate(_ context.Context, _, _ string, _ time.Time) (decimal.Decimal, time.Time, error) {
@@ -1173,24 +956,14 @@ func (c failingConverter) RatesOn(ctx context.Context, queries []marketdata.Rate
 	return ratesFromRate(ctx, c, queries)
 }
 
-// rateResolver is the one-pair half of converterLike, which is all
-// ratesFromRate needs of a double.
+// rateResolver is the one-pair half of converterLike.
 type rateResolver interface {
 	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
 }
 
-// ratesFromRate answers a whole batch by asking the double's OWN Rate once per
-// query. It exists so no test double can answer the batch differently from the
-// pair: marketdata.Converter guarantees the two agree ("no number it produces
-// differs from Rate's" — see RatesOn), and a fake that had to state its
-// behavior twice would eventually state it twice differently, leaving a test
-// that pins a rule the production converter does not follow. Here the batch is
-// derived from the pair, so whatever a test makes Rate say — a rate, a missing
-// rate, an outage — the prewarm says exactly the same.
-//
-// The two kinds of failure are sorted the way RatesOn sorts them:
-// marketdata.ErrNoRate is that one query's answer and the rest of the page
-// stands, anything else voids the whole batch.
+// ratesFromRate answers a batch from the double's own Rate, so a double cannot
+// answer the batch and the pair differently. ErrNoRate stays with its query;
+// anything else voids the batch, as RatesOn does.
 func ratesFromRate(ctx context.Context, r rateResolver, queries []marketdata.RateQuery) (marketdata.Rates, error) {
 	out := make(map[marketdata.RateQuery]marketdata.RateResult, len(queries))
 	for _, q := range queries {
@@ -1207,26 +980,13 @@ func ratesFromRate(ctx context.Context, r rateResolver, queries []marketdata.Rat
 	return marketdata.NewRates(out), nil
 }
 
-// TestPositionsRealRateErrorFailsRequest pins the distinction the whole
-// in_base contract rests on: a genuine failure while resolving the fx rate
-// (DB down, context canceled) must fail the request, NOT be rendered as
-// in_base: null.
-//
-// Both outcomes look identical on screen otherwise — the frontend shows the
-// native amount with a "no rate" marker — so an outage would be presented to
-// the user as ordinary, expected degradation, and nobody would ever learn
-// the database had stopped answering. Only the status code tells them apart,
-// which is why this test asserts on it: without it, deleting positionInBase's
-// error propagation (returning null instead of the error) breaks nothing
-// visible and no other test notices.
+// A real rate failure fails the request rather than showing in_base: null.
 func TestPositionsRealRateErrorFailsRequest(t *testing.T) {
 	pool := testdb.New(t)
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := setupAPI(t, pool, quotes, failingConverter{err: errors.New("connection reset by peer")})
 
-	// USD account in an RUB-based space: the position's currency differs
-	// from the base currency, so in_base conversion is actually attempted
-	// (Rate is called) instead of being short-circuited.
+	// A USD account in a RUB space, so conversion is attempted.
 	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
 	share := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
@@ -1241,16 +1001,8 @@ func TestPositionsRealRateErrorFailsRequest(t *testing.T) {
 	}
 }
 
-// realizedFigure dereferences a realized figure the payload publishes, and
-// FAILS THE TEST when the payload published a null instead.
-//
-// The null means the position (or the currency bucket) sold into another
-// currency and has no result in one currency at all — see
-// Position.realized_pnl_minor in the contract. Every caller of this helper is
-// asserting a case where a figure exists, so meeting the null here is a real
-// failure rather than something to paper over with a zero: nought is also a
-// perfectly ordinary realized result, and a helper that returned it would let
-// the two cases pass for each other.
+// realizedFigure dereferences a realized figure and fails on null, which means
+// no figure in one currency, not zero.
 func realizedFigure(t *testing.T, minor *int64) int64 {
 	t.Helper()
 	if minor == nil {

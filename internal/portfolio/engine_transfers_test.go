@@ -85,36 +85,18 @@ func transferIn(dayN int, qty string, amount int64, lots ...portfolio.ReleasedLo
 	return o
 }
 
-// transferOut builds the departing leg of the same parcel. Both legs of a pair
-// carry one breakdown (see portfolio.Operation.TransferLots), which is why the
-// tests below hand the very same pieces to both.
+// transferOut builds the departing leg; both legs carry one breakdown.
 func transferOut(dayN int, qty string, amount int64, lots ...portfolio.ReleasedLot) portfolio.Operation {
 	o := op(portfolio.TypeTransferOut, dayN, &sber, qty, "", amount, 0)
 	o.TransferLots = lots
 	return o
 }
 
-// TestTransferOutReleasesTheLotsItRecorded is issue #60, folded.
-//
-// A transfer freezes what it moved: the pieces, their basis, and the day each
-// was bought. The departing leg used to ignore all of that and work out a
-// release of its own from the queue — which reproduced the frozen answer only
-// while the rule building the queue stayed put. Ordering the queue by
-// acquisition instead of by arrival (plan 7c) moved it, and every transfer
-// already in the journal began releasing lots other than the ones it had
-// recorded, with nobody editing anything.
-//
-// The fixture is the smallest account where the two rules disagree: shares
-// bought here on day 20, and shares bought on day 2 that arrived later. The
-// transfer recorded the day-20 parcel as the one that left. Replayed by
-// arrival, that is also what the queue's head held; replayed by acquisition,
-// the head is the day-2 parcel, so the departing leg gave away a parcel the
-// record does not mention while the destination went on holding the one it
-// does — the SAME lot on both accounts, the other one gone, and 200 000 minor
-// units of basis conjured out of nothing (50 % of what the family had spent).
-//
-// The test therefore asserts the family, not just an account: what the two
-// accounts hold together must be what was actually paid.
+// The departing leg releases the lots its record names (#60). Shares bought
+// here on day 20 and shares bought on day 2 arriving later: the record names
+// the day-20 parcel, while the acquisition-ordered queue's head is the day-2
+// one. Releasing by the queue put one lot on both accounts and lost the other
+// (200 000 of invented basis). The family's total is asserted.
 func TestTransferOutReleasesTheLotsItRecorded(t *testing.T) {
 	moved := piece("10", 300_000, 20)
 	source := []portfolio.Operation{
@@ -158,11 +140,8 @@ func TestTransferOutReleasesTheLotsItRecorded(t *testing.T) {
 	checkLotInvariants(t, to)
 }
 
-// TestTransferOutTakesOnlyPartOfTheLotItRecorded is the partial case of the
-// same rule: a breakdown that names half of a lot leaves the other half where
-// it was, dated as it was, while a parcel standing AHEAD of it in the queue is
-// not touched at all. Releasing by the queue instead would empty the head first
-// and never reach the lot the record names.
+// A breakdown naming half a lot leaves the other half, and a parcel ahead in
+// the queue untouched.
 func TestTransferOutTakesOnlyPartOfTheLotItRecorded(t *testing.T) {
 	moved := piece("5", 150_000, 20)
 	ops := []portfolio.Operation{
@@ -194,15 +173,8 @@ func TestTransferOutTakesOnlyPartOfTheLotItRecorded(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestTransferOutWithoutBreakdownReleasesByTheQueue pins the other half of the
-// rule, and it is not a leftover: a transfer whose basis was typed in by hand,
-// or written down before breakdowns were kept, records NOTHING about which lots
-// went. There is nothing to honour for it, so the queue decides — which is a
-// legitimate answer for such a transfer and not a fallback to be closed off.
-//
-// The fixture is the one above with the record removed, so the two tests
-// differ in exactly one thing: with a breakdown the day-20 parcel leaves,
-// without one the head of the queue does.
+// Without a breakdown (a hand-given basis, or pre-breakdown) the queue
+// decides — legitimately. Same fixture as above, record removed.
 func TestTransferOutWithoutBreakdownReleasesByTheQueue(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
@@ -221,23 +193,15 @@ func TestTransferOutWithoutBreakdownReleasesByTheQueue(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestTransferOutRefusesAParcelTheAccountDoesNotHold is the loud half of the
-// matching rule. A piece is matched to a lot by the DAY IT WAS ACQUIRED, and
-// when the replayed journal holds no such shares at all, the record and the
-// history contradict each other: the source was edited after the transfer, or
-// the shares were released twice. Every quiet answer is worse than saying so —
-// taking the quantity off some other day's lot re-dates shares that are still
-// held and reprices them at a rate from a day they were never bought on, and
-// taking nothing leaves the family holding one parcel's basis twice.
+// A piece whose day has no shares left is refused: taking another day's lot
+// would re-date held shares, taking nothing would double the basis.
 func TestTransferOutRefusesAParcelTheAccountDoesNotHold(t *testing.T) {
 	for name, ops := range map[string][]portfolio.Operation{
 		"no lot was ever acquired on that day": {
 			op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
 			transferOut(22, "10", 300_000, piece("10", 300_000, 5)),
 		},
-		// The account holds enough shares overall — so this is not an oversell
-		// and no total would notice — but a sale has since eaten into the very
-		// parcel the record says departed.
+		// Enough shares overall, but a sale has eaten into the recorded parcel.
 		"the day is right but too little of it is left": {
 			op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
 			op(portfolio.TypeBuy, 21, &sber, "10", "", -100_000, 0),
@@ -258,17 +222,8 @@ func TestTransferOutRefusesAParcelTheAccountDoesNotHold(t *testing.T) {
 	}
 }
 
-// checkNamesBothCausesAndTheWayOut pins what the owner is actually told when a
-// recorded parcel cannot be found.
-//
-// The message used to state ONE cause as a fact — "its history was edited after
-// the transfer was recorded" — and that is the cause it almost never is. Every
-// write path replays the journal before storing anything (see
-// operation.Service), so rows written by this build cannot reach this refusal
-// through the API at all; what reaches it is a journal written under an earlier
-// queue rule, where nobody edited anything. The owner got a blank positions
-// screen, an account they could no longer write to, and an accusation about an
-// edit that never happened, with no way out named.
+// checkNamesBothCausesAndTheWayOut pins the message: both causes (an edit, or
+// an earlier build's queue rule — the usual one) and the way out.
 func checkNamesBothCausesAndTheWayOut(t *testing.T, name string, err error) {
 	t.Helper()
 	for _, want := range []string{
@@ -283,16 +238,9 @@ func checkNamesBothCausesAndTheWayOut(t *testing.T, name string, err error) {
 	}
 }
 
-// TestTransferOutRefusesAParcelAnEarlierQueueRuleRecorded is the refusal above
-// on data nobody touched — the only way it is actually reachable.
-//
-// The journal is one an older build wrote: the queue was ordered by ARRIVAL
-// then, so the sale on day 22 took the parcel bought on day 20 (which was on
-// the account first) and left the day-2 parcel for the transfer to record.
-// Today the queue is ordered by ACQUISITION, so the same sale takes the day-2
-// parcel instead and the recorded one is not there to be given up. No edit, no
-// second release — just a rule that moved under a frozen record, which is issue
-// #60 seen from the other side.
+// The refusal on untouched data: an older build's arrival-ordered queue let a
+// day-22 sale take the day-20 parcel and the transfer record the day-2 one;
+// today's queue takes the day-2 parcel instead (#60 from the other side).
 func TestTransferOutRefusesAParcelAnEarlierQueueRuleRecorded(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
@@ -308,11 +256,8 @@ func TestTransferOutRefusesAParcelAnEarlierQueueRuleRecorded(t *testing.T) {
 	checkNamesBothCausesAndTheWayOut(t, "recorded under the arrival-order rule", err)
 }
 
-// TestTransferOutRefusesToMoveMoreThanTheAccountHolds pins the oversell check
-// that runs before any piece is matched. Without it the shortfall still gets
-// caught — the pieces run out of lots to come from — but as "your record and
-// your history disagree, delete the transfer and record it again", which is the
-// wrong thing to tell someone whose account simply never held that many shares.
+// Moving more than is held is an oversell, refused before matching with the
+// right message.
 func TestTransferOutRefusesToMoveMoreThanTheAccountHolds(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
@@ -323,12 +268,9 @@ func TestTransferOutRefusesToMoveMoreThanTheAccountHolds(t *testing.T) {
 	}
 }
 
-// TestTransferOutRefusesABreakdownCarryingBasisTheAccountDoesNotHold pins the
-// other guard: the cost a breakdown could not take out of the lots of its own
-// dates is drained from the front of the queue, and there has to be that much
-// money there. Without the check the drain takes what it finds, the position's
-// basis goes NEGATIVE, and nothing says a word — a positions screen showing
-// less than nothing invested, from a journal that replays "successfully".
+// Basis a breakdown carries beyond its lots is drained from the queue's head,
+// and there must be that much: otherwise the basis would go negative
+// silently.
 func TestTransferOutRefusesABreakdownCarryingBasisTheAccountDoesNotHold(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 2, &sber, "10", "", -100_000, 0),
@@ -344,12 +286,8 @@ func TestTransferOutRefusesABreakdownCarryingBasisTheAccountDoesNotHold(t *testi
 	checkNamesBothCausesAndTheWayOut(t, "more basis than the account holds", err)
 }
 
-// TestTransferOutRefusesABreakdownThatDoesNotAddUp extends the arriving leg's
-// guard (see TestTransferInBreakdownMismatchRejected) to the departing one.
-// The two legs read ONE set of stored pieces, so pieces that no longer sum to
-// the operation carrying them are damage on both sides; and now that the
-// departing leg releases those pieces, letting them through would take a
-// quantity or a basis out of the source that no operation claims.
+// The departing leg checks the breakdown sums too: both legs read one set of
+// pieces.
 func TestTransferOutRefusesABreakdownThatDoesNotAddUp(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 20, &sber, "10", "", -300_000, 0),
@@ -364,31 +302,14 @@ func TestTransferOutRefusesABreakdownThatDoesNotAddUp(t *testing.T) {
 	}
 }
 
-// TestTransferOutTakesTheBasisOfAShareLessLotItsPieceCarries is the case that
-// decides whether the matching rule may be strict about MONEY the way it is
-// about shares. It may not — and it also decides which lot the difference
-// comes out of.
+// A piece may carry more basis than its own lot holds — a shareless lot's
+// money folded in by operation.quantizeLots — and the excess must come from
+// that shareless lot, not from an untouched lot of the same day.
 //
-// A reverse split deep enough to round a lot's whole holding away leaves it
-// with no shares and its cost intact (see portfolio.Lot). A release consumes
-// such a lot as a piece of nothing, and operation.quantizeLots — the table
-// cannot store a piece with no quantity — folds that piece's cost into the next
-// piece along. So a perfectly healthy breakdown, written by this program, can
-// name a piece carrying MORE basis than the lot its day points at holds, with
-// the remainder sitting in a SHARELESS LOT AHEAD OF IT.
-//
-// The fixture is that, with one lot more: the shareless lot bought on day 1,
-// the lot the piece is dated by on day 2, and a THIRD lot bought on day 2 as
-// well that the transfer never touched. Two ways of getting it wrong are ruled
-// out at once. Refusing the piece because its own lot holds less money than it
-// names would refuse a transfer CreateTransfer itself wrote. And taking the
-// difference off the untouched day-2 lot — the nearest lot that shares the
-// piece's date — would leave the departed shareless lot still sitting there
-// holding 30000 the destination now holds too, while an innocent parcel quietly
-// lost the same amount of its own basis.
+//	day 1: 3 units, 30 000 (rounded to no shares by the split)
+//	day 2: two lots; the piece takes one of them and carries the 30 000
 func TestTransferOutTakesTheBasisOfAShareLessLotItsPieceCarries(t *testing.T) {
-	// 3e-11 rounds the day-1 lot's 3 units away entirely and leaves each day-2
-	// lot with 3e-10 — the running-total allocation applySplit uses.
+	// 3e-11 rounds the day-1 lot away and leaves each day-2 lot with 3e-10.
 	split := op(portfolio.TypeSplit, 3, &sber, "", "", 0, 0)
 	split.SplitRatio = dp("0.00000000003")
 	ops := []portfolio.Operation{
@@ -396,9 +317,8 @@ func TestTransferOutTakesTheBasisOfAShareLessLotItsPieceCarries(t *testing.T) {
 		op(portfolio.TypeBuy, 2, &sber, "10", "", -100_000, 0),
 		op(portfolio.TypeBuy, 2, &sber, "10", "", -900_000, 0),
 		split,
-		// What CreateTransfer records for moving the first two lots: one
-		// storable piece, dated by the first lot that still has shares,
-		// carrying the shareless lot's 30000 as well.
+		// What CreateTransfer records for the first two lots: one piece dated by the
+		// first lot with shares, carrying the shareless lot's 30 000.
 		transferOut(4, "0.0000000003", 130_000, piece("0.0000000003", 130_000, 2)),
 	}
 	pos, err := portfolio.Compute(ops)
@@ -420,26 +340,12 @@ func TestTransferOutTakesTheBasisOfAShareLessLotItsPieceCarries(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestTransferOutTakesAShareLessLotsBasisWhenItsPieceTakesOnlyPartOfALot is the
-// test above with one thing changed: the piece takes the lot it is dated by IN
-// PART instead of whole. That difference is the whole point.
+// The same with the piece taking its lot only in part: clamping by the lot's
+// whole cost would take the 30 000 from the fraction's own parcel and leave the
+// shareless lot holding money the destination holds too. Totals would still
+// balance; only the parcels would be wrong.
 //
-// A piece may carry more basis than the lot of its date holds, because
-// operation.quantizeLots folded a shareless lot's money into it (see the test
-// above). Taking "whatever the lot still holds" for such a piece answers
-// correctly only while the piece empties that lot: the moment it takes a
-// fraction, the lot's whole cost exceeds what the piece asks for, so the clamp
-// never binds, nothing is carried, and the shareless lot's 30000 comes quietly
-// out of the fraction's own parcel — which had nothing to do with the transfer —
-// while the shareless lot stays on the account holding 30000 the destination
-// holds too.
-//
-// Nothing sums wrong when that happens. The account gives up the 330000 its
-// record names, the family holds the 930000 it paid, and both totals agree with
-// themselves; only the parcels are wrong, and every figure struck at a lot's own
-// date afterwards is wrong with them. The fixture is the reviewer's: 3 units on
-// day 1 for 30000, 10 on day 2 for 900000, a reverse split that rounds the day-1
-// lot's shares away, and a third of what is left departing.
+//	day 1: 3 for 30 000; day 2: 10 for 900 000; reverse split; a third departs
 func TestTransferOutTakesAShareLessLotsBasisWhenItsPieceTakesOnlyPartOfALot(t *testing.T) {
 	// 3e-11 leaves the day-1 lot with no shares and the day-2 lot with 3e-10.
 	split := op(portfolio.TypeSplit, 3, &sber, "", "", 0, 0)
@@ -448,9 +354,7 @@ func TestTransferOutTakesAShareLessLotsBasisWhenItsPieceTakesOnlyPartOfALot(t *t
 		op(portfolio.TypeBuy, 1, &sber, "3", "", -30_000, 0),
 		op(portfolio.TypeBuy, 2, &sber, "10", "", -900_000, 0),
 		split,
-		// What CreateTransfer records for moving a third of the position: the
-		// shareless lot's whole 30000 plus a third of the day-2 lot's 900000,
-		// in the single storable piece its date is taken from.
+		// The record: the shareless 30 000 plus a third of 900 000, in one piece.
 		transferOut(4, "0.0000000001", 330_000, piece("0.0000000001", 330_000, 2)),
 	}
 	pos, err := portfolio.Compute(ops)
@@ -472,11 +376,8 @@ func TestTransferOutTakesAShareLessLotsBasisWhenItsPieceTakesOnlyPartOfALot(t *t
 	checkLotInvariants(t, p)
 }
 
-// TestTransferOutMatchesPiecesToLotsOfTheSameDay covers two lots bought on ONE
-// day — the tie the queue breaks by journal order (see addLot). The breakdown
-// then holds two pieces with the same date, and each must find its own lot
-// rather than both draining the first: the account moved 15 of its 20 shares
-// and must be left with 5 and the basis that goes with them.
+// Two same-day lots: each of two same-dated pieces finds its own lot; 15 of 20
+// move and 5 stay with their basis.
 func TestTransferOutMatchesPiecesToLotsOfTheSameDay(t *testing.T) {
 	ops := []portfolio.Operation{
 		op(portfolio.TypeBuy, 2, &sber, "10", "", -100_000, 0),
@@ -497,18 +398,9 @@ func TestTransferOutMatchesPiecesToLotsOfTheSameDay(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestBackdatedSplitLeavesTheSourceWithSharesAndNoBasis pins the one skew
-// honouring the record cannot undo, so that the README's description of it and
-// the engine's behaviour cannot drift apart.
-//
-// A split entered AFTER a transfer but dated BEFORE it doubles the lot the
-// breakdown points at. The recorded basis is still honoured in full — that is
-// the point of reading the release off the record — so it comes off twice the
-// shares it was struck against, and the source keeps shares carrying none of it.
-// The family holds exactly what it paid and the money is where the record says
-// it went, which is why this is accepted rather than refused; it is simply all
-// on one side. Deleting the transfer, recording the split and recording the
-// transfer again is the way to even it out.
+// A split entered after a transfer but dated before it doubles the recorded
+// lot; the record is honoured, so the source keeps shares with no basis. The
+// family total is right; re-entering the transfer evens it.
 func TestBackdatedSplitLeavesTheSourceWithSharesAndNoBasis(t *testing.T) {
 	split := op(portfolio.TypeSplit, 3, &sber, "", "", 0, 0)
 	split.SplitRatio = dp("2")
@@ -529,13 +421,8 @@ func TestBackdatedSplitLeavesTheSourceWithSharesAndNoBasis(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestTransferInRebuildsLotsFromBreakdown is the core of this change. The
-// arriving leg carries the FIFO breakdown of what the source account released
-// (see Operation.TransferLots), so the destination rebuilds exactly those
-// lots — each with its own quantity, its own cost, and the day it was actually
-// bought — instead of collapsing them into one lot dated on the transfer day.
-// The dates are the point: every lot is later valued at the fx rate of the day
-// it was acquired, so a collapsed lot misprices the whole arrived position.
+// The arriving leg rebuilds the breakdown's lots, each with its quantity,
+// cost and purchase day, instead of one lot dated on the transfer.
 func TestTransferInRebuildsLotsFromBreakdown(t *testing.T) {
 	ops := []portfolio.Operation{
 		transferIn(20, "15", 155_015, piece("10", 100_010, 2), piece("5", 55_005, 9)),
@@ -567,10 +454,7 @@ func TestTransferInRebuildsLotsFromBreakdown(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestTransferredLotsReleaseInFIFOOrder pins that the rebuilt lots are real
-// lots and not just a display detail: a later sale in the destination account
-// consumes them front-to-back, taking the oldest piece's cost first and
-// leaving the younger piece — with its own date — behind.
+// Rebuilt lots are real: a later sale consumes them oldest first.
 func TestTransferredLotsReleaseInFIFOOrder(t *testing.T) {
 	ops := []portfolio.Operation{
 		transferIn(20, "15", 155_015, piece("10", 100_010, 2), piece("5", 55_005, 9)),
@@ -581,9 +465,7 @@ func TestTransferredLotsReleaseInFIFOOrder(t *testing.T) {
 		t.Fatalf("Compute: %v", err)
 	}
 	p := pos[sber]
-	// The whole first piece is released, so realized P&L is measured against
-	// that piece's cost alone — not against a share of one merged lot, which
-	// for this fixture would be floor(155015*10/15) = 103_343 and give 16_657.
+	// The first piece is released whole; a merged lot would give 16 657.
 	if realizedOf(t, p) == 120_000-103_343 {
 		t.Fatalf("realized = %d — that is a proportional share of ONE merged lot; the sale must consume the first piece of the breakdown whole",
 			realizedOf(t, p))
@@ -602,13 +484,8 @@ func TestTransferredLotsReleaseInFIFOOrder(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestTransferInBreakdownMismatchRejected pins the loud refusal. A breakdown
-// that does not add up to the operation it rides on is a corrupted journal:
-// the write path derives the operation's own totals by summing these very
-// pieces, so the two can only disagree if the stored rows were damaged. Both
-// readings are then unreliable, and quietly falling back to a single lot dated
-// on the transfer day would replace corrupt data with a plausible-looking
-// invention that nobody would ever notice.
+// A breakdown that does not add up to its operation is refused: the write path
+// sums these very pieces, so a mismatch is damage.
 func TestTransferInBreakdownMismatchRejected(t *testing.T) {
 	for name, tc := range map[string]struct {
 		op   portfolio.Operation
@@ -626,9 +503,8 @@ func TestTransferInBreakdownMismatchRejected(t *testing.T) {
 			op:   transferIn(20, "15", 155_015, piece("10", 100_010, 2), piece("5", 55_000, 9)),
 			want: []string{"155010", "155015"},
 		},
-		// No units WITH money is a shareless parcel and is accepted (see
-		// TestATransferRecordNamesAShareLessParcelByItsOwnDay); no units and no
-		// money describes nothing.
+		// No units with money is a shareless parcel; no units and no money is
+		// nothing.
 		"piece with neither units nor cost": {
 			op:   transferIn(20, "15", 100_010, piece("15", 100_010, 2), portfolio.ReleasedLot{Quantity: d("0"), CostMinor: 0, AcquiredOn: dayp(9)}),
 			want: []string{"neither units nor cost"},
@@ -643,12 +519,8 @@ func TestTransferInBreakdownMismatchRejected(t *testing.T) {
 			op:   transferIn(20, "15", 155_015, piece("10", 200_020, 2), piece("5", -45_005, 9)),
 			want: []string{"-45005"},
 		},
-		// The acquisition date is the only field the table itself does not
-		// constrain, and it is the one the whole breakdown exists to carry: an
-		// IMPOSSIBLE date turns into a lot revalued at a rate from a day it was
-		// never held on. A date that is simply absent is a different thing
-		// entirely and is accepted — see
-		// TestTransferInAcceptsPieceWithoutAcquisitionDate.
+		// An impossible acquisition date (after the transfer) is refused; an absent one
+		// is accepted.
 		"piece acquired after the transfer": {
 			op:   transferIn(20, "15", 155_015, piece("10", 100_010, 2), piece("5", 55_005, 25)),
 			want: []string{"after the transfer"},
@@ -667,27 +539,8 @@ func TestTransferInBreakdownMismatchRejected(t *testing.T) {
 	}
 }
 
-// TestTransferInAcceptsPieceWithoutAcquisitionDate is the rule this task
-// reverses. CheckTransferLots used to refuse a piece with no acquisition date
-// outright, on the grounds that "the date is what a carried lot is for". That
-// refusal quietly required every piece to name a day — and for shares whose
-// purchase day is not knowable, the only day on hand is the transfer's own,
-// which is precisely the invention the breakdown exists to prevent.
-//
-// Such pieces are real. They arise the moment a parcel that arrived without
-// dates (a hand-entered basis, or a transfer written down before breakdowns
-// were kept) is moved on again: the release yields pieces with nothing to
-// date them by, mixed in with pieces that do know their day. The breakdown
-// must carry that mixture faithfully, and the lots it rebuilds must too.
-//
-// The rebuilt lots are asserted in QUEUE order, and the queue is ordered by
-// acquisition (see Position.Lots and addLot), so the undated lot stands at the
-// head even though its piece is the second one in the breakdown. That is the
-// only part of this test the acquisition-ordering change moved: it used to read
-// the pieces off in the order they were listed, because the queue used to be
-// arrival order. What the test is here to pin is unchanged and still asserted —
-// a dateless piece is accepted rather than refused, it becomes a lot of its
-// own, and no date is invented for it, least of all the transfer's own.
+// A piece without an acquisition date is accepted and becomes an undated lot
+// of its own, at the head of the queue; no date is invented.
 func TestTransferInAcceptsPieceWithoutAcquisitionDate(t *testing.T) {
 	undated := portfolio.ReleasedLot{Quantity: d("5"), CostMinor: 55_005}
 	ops := []portfolio.Operation{
@@ -721,11 +574,7 @@ func TestTransferInAcceptsPieceWithoutAcquisitionDate(t *testing.T) {
 	checkLotInvariants(t, p)
 }
 
-// TestUndatedPieceStillCheckedForSums pins that accepting a dateless piece
-// relaxes ONLY the date rule. Everything else CheckTransferLots guards — the
-// pieces summing to the quantity that moved and to the basis that moved — is
-// unchanged for such a piece, so a breakdown cannot smuggle a mismatch through
-// by omitting a date.
+// An undated piece is still checked for sums.
 func TestUndatedPieceStillCheckedForSums(t *testing.T) {
 	ops := []portfolio.Operation{
 		transferIn(20, "15", 155_015,
@@ -759,13 +608,9 @@ func TestReleasedCostHelper(t *testing.T) {
 	}
 }
 
-// TestARecordedPieceIsNotTakenFromADearerParcelOfTheSameDay: two parcels bought
-// on one day at different prices are NOT interchangeable. The transfer recorded
-// five units of the cheap one (50 000); a sale entered later and dated before
-// the transfer consumes the cheap parcel, and the record then finds only the
-// dear one. Taking five units from it for 50 000 left the source holding the
-// rest at 170 000 a unit and the destination at 10 000 — the family total
-// balanced and each account's basis was off by 400 000, silently (#197).
+// Two same-day parcels at different prices are not interchangeable: when a
+// backdated sale took the cheap one, the record's five units are refused
+// rather than taken from the dear one at the cheap price (#197).
 func TestARecordedPieceIsNotTakenFromADearerParcelOfTheSameDay(t *testing.T) {
 	out := op(portfolio.TypeTransferOut, 5, &sber, "5", "", 50_000, 0)
 	out.TransferLots = []portfolio.ReleasedLot{piece("5", 50_000, 2)}

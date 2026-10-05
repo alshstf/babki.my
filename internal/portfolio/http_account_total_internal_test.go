@@ -10,16 +10,9 @@ import (
 	"babki.my/babki/internal/platform/apitypes"
 )
 
-// The account total's two MARKS are tested here rather than through HTTP for
-// one reason: the shape that raises the first of them cannot be created through
-// the manual door at all. A holding that does not know what it cost arrives by
-// a transfer the broker sent with no price, and the operations endpoint refuses
-// a bare transfer_in outright ("use the transfer endpoint") while the transfer
-// endpoint derives the basis from the source account's own lots. Only the
-// importer writes such a row, through operation.ApplyImportDelta.
-//
-// So the marks are exercised where the decision is taken. What the numbers mean
-// end to end is pinned in http_account_total_test.go, over real journals.
+// The account total's marks are tested directly: an unknown-cost holding can
+// only be written by the importer. http_account_total_test.go covers the
+// numbers end to end.
 
 func minor(v int64) nullable.Nullable[int64] { return nullable.NewNullableWithValue(v) }
 
@@ -43,11 +36,8 @@ func pos(currency, quantity string, cost int64, total, settled nullable.Nullable
 	return p
 }
 
-// TestAccountTotalCountsAHoldingThatDoesNotKnowWhatItCost: shares counted as
-// bought for nothing (Position.has_unknown_cost — which basis that is, is
-// decided by hasUnknownCost and tested there). Their whole market value counts
-// as profit, so the total is HIGHER than the truth by whatever was really paid —
-// and the count is the only thing that says so.
+// A holding counted as bought for nothing raises the count: its whole value is
+// profit, overstating the total.
 func TestAccountTotalCountsAHoldingThatDoesNotKnowWhatItCost(t *testing.T) {
 	at := newAccountTotals("RUB")
 	row := pos("RUB", "10", 0, minor(120_000), minor(0), false)
@@ -68,11 +58,7 @@ func TestAccountTotalCountsAHoldingThatDoesNotKnowWhatItCost(t *testing.T) {
 	}
 }
 
-// TestAccountTotalDoesNotCallASoldOutPositionCostless is the boundary the count
-// above must not cross. A position sold out of also carries a basis of nought —
-// there is nothing left to hold — and it is not a paper whose price nobody
-// recorded. Counting it would put a warning on every account that ever closed a
-// deal, which is the fastest way to make a real warning invisible.
+// A sold-out position (basis nought) is not counted as costless.
 func TestAccountTotalDoesNotCallASoldOutPositionCostless(t *testing.T) {
 	at := newAccountTotals("RUB")
 	if err := at.addPosition(pos("RUB", "0", 0, minor(49_500), minor(49_500), false), nil, inBaseSameCurrency, gapNone); err != nil {
@@ -83,13 +69,8 @@ func TestAccountTotalDoesNotCallASoldOutPositionCostless(t *testing.T) {
 	}
 }
 
-// TestAccountTotalSeparatesTheTwoReasonsABaseFigureIsMissing is the pair the
-// account's total must not confuse. A row with no settled result in the base
-// currency is stopped either by a disposal whose parcels have no acquisition
-// day — which no job will ever supply, so the paper is left out and counted —
-// or by a missing RATE, which the backfill supplies on its own. Leaving a paper
-// out for the second reason would publish a figure that silently changes the
-// day the rate lands.
+// A row without a base settled result is left out and counted when the cause
+// is undated parcels, and withholds the total when it is a missing rate.
 func TestAccountTotalSeparatesTheTwoReasonsABaseFigureIsMissing(t *testing.T) {
 	// A row with a valuation (no gap) and no settled result: rowTotal cannot
 	// answer, and what happens next is decided by the realized gap alone.
@@ -124,9 +105,7 @@ func TestAccountTotalSeparatesTheTwoReasonsABaseFigureIsMissing(t *testing.T) {
 	})
 }
 
-// TestAccountTotalRowContribution is the whole rule of what one row adds, case
-// by case, as a table — because the four answers differ in kind and three of
-// them are easy to reach by accident.
+// One row's contribution, case by case.
 func TestAccountTotalRowContribution(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -147,9 +126,8 @@ func TestAccountTotalRowContribution(t *testing.T) {
 			wantMinor: -50_000, wantOK: true, wantAtZero: true,
 		},
 		{
-			// A valuation exists and simply cannot be compared with this row's
-			// own currency — a bond whose face value is in another. Writing it
-			// off would be a lie about a paper that has a perfectly good price.
+			// A valuation in an incomparable currency contributes nothing rather than
+			// being written off.
 			name: "a row with a valuation it cannot compare has no contribution",
 			p:    pos("RUB", "10", 50_000, noFigure(), minor(0), false),
 		},
@@ -190,9 +168,8 @@ func TestAccountTotalRowContribution(t *testing.T) {
 	}
 }
 
-// hasUnknownCost reads the lots, not the position's total basis: a paper is
-// "bought for nothing" when some of its basis arrived with no price, held or
-// already sold — and not merely because nothing is left to hold.
+// hasUnknownCost reads the lots: any basis that arrived with no price, held or
+// sold.
 func TestWhichBasisCountsAsBoughtForNothing(t *testing.T) {
 	day := func(s string) *time.Time {
 		d, err := time.Parse(time.DateOnly, s)
@@ -236,9 +213,8 @@ func TestWhichBasisCountsAsBoughtForNothing(t *testing.T) {
 	}
 }
 
-// The count follows the paper's own flag, not its total basis: a paper with one
-// priced lot and one unpriced is counted, and so is one sold out of shares that
-// had no price — the old test "held, and a basis of nought" missed both.
+// The count follows the paper's flag: a mixed paper and a sold-out costless
+// one are both counted.
 func TestAccountTotalCountsEveryPaperWithUnpricedBasis(t *testing.T) {
 	at := newAccountTotals("RUB")
 	partly := pos("RUB", "10", 50_000, minor(120_000), minor(0), false)

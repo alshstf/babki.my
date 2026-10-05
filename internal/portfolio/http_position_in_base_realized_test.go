@@ -16,48 +16,23 @@ import (
 	"babki.my/babki/internal/platform/testdb"
 )
 
-// Dates the realized-profit fixtures below share. They are laid out so that a
-// disposal falls strictly BETWEEN the rate that values its basis and the rate
-// that values "today": a purchase on earlyBuyOn resolves to earlyRateOn's rate,
-// the disposal on sellOn to midRateOn's, and today's lookup to the newest row
-// the fixture seeds. Three distinct rates are what make "at the rates of its own
-// days", "times the sale day's rate" and "times today's rate" three different
-// numbers — with only two, two of the three answers coincide and a test cannot
-// tell the implementations apart.
+// Dates for the realized fixtures: purchase at the early rate, sale at the mid
+// rate, today at the newest, so "own days", "sale day" and "today" give three
+// different numbers.
 const (
 	midRateOn = "2026-05-01"
 	sellOn    = "2026-05-10"
 )
 
-// TestPositionInBaseRealizedUsesTheRatesOfItsOwnDays is the core of this
-// change. A settled result is struck at the rates of the days it actually
-// happened on: the proceeds and the fee at the day of the sale, the basis at the
-// day the shares were BOUGHT (НК РФ ст. 210 п. 5). It is therefore not the
-// position-currency result times any one rate, and the fixture is built so that
-// the two rates a wrong implementation would reach for produce two other,
-// visibly different numbers.
+// A realized result is struck at its own days' rates: proceeds and fee at the
+// sale's, basis at the purchase's (НК РФ ст. 210 п. 5).
 //
-//	fx USD->RUB: 50 from 2026-02-01, 80 from 2026-05-01, 90 from 2026-07-01
-//	  (nothing newer is seeded, so today's lookup resolves to 90)
-//	buy  10 @ $100.00 on 2026-03-10 -> lot cost 100_000 minor USD, rate 50
-//	sell 10 @ $120.00 on 2026-05-10, fee $5.00 -> proceeds 120_000, fee 500, rate 80
+//	USD->RUB 50 (02-01), 80 (05-01), 90 (07-01)
+//	buy 10 @ $100 on 03-10 -> basis 100_000 at 50
+//	sell 10 @ $120 on 05-10, fee $5 -> 120_000 and 500 at 80
+//	realized USD 19_500; base 120_000×80 − 500×80 − 100_000×50 = 4_560_000
 //
-//	realized_pnl_minor (USD)  = 120_000 - 500 - 100_000            =    19_500
-//	in_base.realized_pnl_minor = 120_000*80 - 500*80 - 100_000*50  = 4_560_000
-//
-// The three numbers this must NOT be, each asserted by name:
-//
-//	19_500 * 90 = 1_755_000  the USD result at TODAY's rate
-//	19_500 * 80 = 1_560_000  the USD result at the SALE DAY's rate — the subtler
-//	                         mistake: it dates the whole result correctly for a
-//	                         tax authority and still values the basis on the
-//	                         wrong day
-//	4_600_000                the same computation with the fee dropped
-//
-// 4_560_000 is 2.9 times the sale-day answer. Almost none of that is the
-// instrument: of the 4_560_000 rubles, 1_560_000 came from the shares rising in
-// dollars and 3_000_000 from the dollar rising from 50 to 80 between the day
-// they were bought and the day they were sold (100_000 * (80-50)).
+// Not: 1_755_000 (today), 1_560_000 (sale day), 4_600_000 (fee dropped).
 func TestPositionInBaseRealizedUsesTheRatesOfItsOwnDays(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes,
@@ -97,33 +72,18 @@ func TestPositionInBaseRealizedUsesTheRatesOfItsOwnDays(t *testing.T) {
 			t.Errorf("in_base.realized_pnl_minor = %d, want 4560000 (120000*80 - 500*80 - 100000*50)", got)
 		}
 	}
-	// The other figures answer their own questions from their own dates and are
-	// untouched by any of this: the position is fully closed, so its basis is a
-	// sum over no lots.
+	// Closed: the basis is a sum over no lots.
 	if p.InBase.CostMinor != 0 {
 		t.Errorf("in_base.cost_minor = %d, want 0 (everything was sold)", p.InBase.CostMinor)
 	}
 }
 
-// TestPositionInBaseRealizedProfitInPositionCurrencyLossInBase pins the
-// consequence the owner accepted for unrealized profit and which holds just as
-// firmly once the deal is done: a sale can be a profit measured in the
-// position's own currency and a LOSS measured in rubles. The dollars went up;
-// the dollar went down harder. Both answers are honest answers to two different
-// questions — "did the instrument gain" and "did the deal grow my rubles" — and
-// a version that kept the signs in step would be hiding the currency loss from
-// the person who took it.
+// A deal can profit in dollars and lose in roubles; no positive rate turns
+// +10_000 negative.
 //
-// This is also the one arrangement where the realized figure cannot be mistaken
-// for a scaled copy of the position-currency one: no positive rate turns +10_000
-// into a negative number.
-//
-//	fx USD->RUB: 100 from 2026-02-01, 50 from 2026-05-01 (the ruble doubles)
-//	buy  10 @ $100.00 on 2026-03-10 -> basis 100_000 minor USD at 100 = 10_000_000
-//	sell 10 @ $110.00 on 2026-05-10 -> proceeds 110_000 at 50         =  5_500_000
-//
-//	realized_pnl_minor (USD)   =    110_000 -    100_000 =    +10_000  (profit)
-//	in_base.realized_pnl_minor =  5_500_000 - 10_000_000 = -4_500_000  (loss)
+//	USD->RUB 100, then 50
+//	buy 10 @ $100 -> 10_000_000; sell 10 @ $110 -> 5_500_000
+//	realized +10_000 USD, −4_500_000 RUB
 func TestPositionInBaseRealizedProfitInPositionCurrencyLossInBase(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes, datedRate{earlyRateOn, "100"}, datedRate{midRateOn, "50"})
@@ -152,34 +112,20 @@ func TestPositionInBaseRealizedProfitInPositionCurrencyLossInBase(t *testing.T) 
 	if *p.InBase.RealizedPnlMinor != -4_500_000 {
 		t.Errorf("in_base.realized_pnl_minor = %d, want -4500000 (110000*50 - 100000*100)", *p.InBase.RealizedPnlMinor)
 	}
-	// The point of the test, stated as its own assertion so the failure message
-	// says what broke rather than merely which number moved.
+	// The point of the test, as its own assertion.
 	if realizedFigure(t, p.RealizedPnlMinor) <= 0 || *p.InBase.RealizedPnlMinor >= 0 {
 		t.Errorf("realized_pnl_minor = %d (USD) and in_base.realized_pnl_minor = %d (RUB): want opposite signs — a deal can be a profit in the position's currency and a loss in the base currency, and both answers must be published as they are",
 			realizedFigure(t, p.RealizedPnlMinor), *p.InBase.RealizedPnlMinor)
 	}
 }
 
-// TestPositionInBaseRealizedIncludesAmortization covers the second kind of
-// disposal, and it is the case that makes the whole design visible: a covered
-// return of principal is EXACTLY neutral in the position's own currency, and is
-// nonetheless a real result in rubles. The principal comes back at the rate of
-// the day it was paid while the basis it retires was struck at the rate of the
-// day the bond was bought, and the gap between those two rates is money.
+// A covered amortization is neutral in dollars and a real result in roubles,
+// so no rate turns the native zero into the answer.
 //
-// Because the position-currency result is zero, no rate whatsoever turns it into
-// the right answer: an implementation that folds only sales into this figure
-// prints 0 here, and 0 is exactly "realized_pnl_minor times any rate you like".
-//
-//	fx USD->RUB: 50 from 2026-02-01, 80 from 2026-05-01
-//	buy 1 bond @ $1000.00 on 2026-03-10 -> basis 100_000 minor USD, rate 50
-//	amortization $300.00 on 2026-05-10  -> returns 30_000 minor USD, rate 80,
-//	  retiring 30_000 of basis bought on 2026-03-10
-//
-//	realized_pnl_minor (USD)   = 30_000 - 30_000        =         0
-//	in_base.realized_pnl_minor = 30_000*80 - 30_000*50  =   900_000
-//	cost_minor (USD)           = 100_000 - 30_000       =    70_000
-//	in_base.cost_minor         = 70_000 * 50            = 3_500_000
+//	USD->RUB 50 (02-01), 80 (05-01)
+//	buy 1 bond @ $1 000 on 03-10 -> basis 100_000 at 50
+//	amortization $300 on 05-10 -> 30_000 at 80, retiring 30_000 bought at 50
+//	realized 0 USD; base 900_000; cost 70_000 USD -> 3_500_000
 func TestPositionInBaseRealizedIncludesAmortization(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes, datedRate{earlyRateOn, "50"}, datedRate{midRateOn, "80"})
@@ -215,37 +161,17 @@ func TestPositionInBaseRealizedIncludesAmortization(t *testing.T) {
 	if *p.InBase.RealizedPnlMinor != 900_000 {
 		t.Errorf("in_base.realized_pnl_minor = %d, want 900000 (30000*80 - 30000*50)", *p.InBase.RealizedPnlMinor)
 	}
-	// The retired basis really left, and what remains is still valued at the
-	// rate of the day it was bought.
+	// The retired basis left; the rest keeps its purchase-day rate.
 	if p.InBase.CostMinor != 3_500_000 {
 		t.Errorf("in_base.cost_minor = %d, want 3500000 (70000 * 50)", p.InBase.CostMinor)
 	}
 }
 
-// TestPositionInBaseRealizedRoundsOnceForTheWholePosition pins WHERE the
-// rounding happens. The published quantity is one number per position, so it is
-// rounded once, at the end, over every term of every disposal — the same
-// contract cost_minor and income_minor already keep (see the handler's
-// sumInBase, and TestPositionInBaseCostRoundsOnceForTheWholeBasis).
+// The realized result is rounded once over every term of every disposal.
 //
-// Two other shapes are tempting and both drift. Rounding each EVENT's result
-// before adding reads like "convert each deal"; rounding each TERM reads like
-// "convert each amount". Each is off by a minor unit here, and the error grows
-// with the number of disposals.
-//
-//	fx USD->RUB = 90.5, one rate for every date, so this test says nothing about
-//	  WHICH date's rate is used (that is pinned above) — only about rounding
-//	two buys of $123.45  -> two lots of 12_345 minor USD
-//	two sells of $246.90 -> two disposals, proceeds 24_690 each, basis 12_345 each
-//
-//	terms, as decimals:  24_690 * 90.5 =  2_234_445.0
-//	                    -12_345 * 90.5 = -1_117_222.5   (twice each)
-//
-//	rounding once, at the end: 2 * 1_117_222.5 = 2_234_445.0 -> 2_234_445
-//	rounding per event:        2 * 1_117_223                 =  2_234_446
-//	rounding per term:         2 * (2_234_445 - 1_117_223)   =  2_234_444
-//
-// All three are distinct, and both wrong ones are asserted by name.
+//	USD->RUB 90.5; two buys of $123.45, two sells of $246.90
+//	terms 24_690×90.5 = 2_234_445.0 and −12_345×90.5 = −1_117_222.5, twice
+//	once: 2_234_445; per event: 2_234_446; per term: 2_234_444
 func TestPositionInBaseRealizedRoundsOnceForTheWholePosition(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes, datedRate{"2026-01-01", "90.5"})
@@ -286,39 +212,16 @@ func TestPositionInBaseRealizedRoundsOnceForTheWholePosition(t *testing.T) {
 	}
 }
 
-// TestPositionInBaseRealizedNullWhenAReleasedParcelHasNoAcquisitionDate is the
-// honesty rule on the realized side: a parcel that does not know when it was
-// bought (it arrived by a transfer whose per-lot breakdown was never recorded —
-// see portfolio.Lot.AcquiredOn) has no date to ask the fx table about, so no
-// ruble expense can be struck for it and the realized figure is not publishable
-// at all.
+// A sold parcel with no acquisition date nulls only the realized figure; the
+// rest of the object stands (unlike an undated lot still held).
 //
-// What must NOT happen is the rest of the object going with it. cost_minor,
-// income_minor and the valuation are answers to their own questions, computed
-// from their own dates, and none of them depends on a parcel that has already
-// been sold. This is the difference from an undated lot STILL HELD, which does
-// null the whole object (TestPositionInBaseNullWhenALotHasNoAcquisitionDate):
-// there the missing date sits inside cost_minor's own sum.
+//	source buys 10 @ $100 (03-10) and 10 @ $200 (07-10), transfers all 20
+//	(breakdown dropped -> undated lot, cost 300_000)
+//	destination buys 3 @ $40 (07-25) -> dated lot 12_000
+//	destination sells 20 @ $200 (07-28), releasing the undated lot
+//	realized USD 100_000; base null; cost 12_000 × 90 = 1_080_000
 //
-//	fx USD->RUB: 60 from 2026-02-01, 90 from 2026-07-01
-//	source: buy 10 @ $100.00 on 2026-03-10, buy 10 @ $200.00 on 2026-07-10
-//	transfer all 20 to the destination on 2026-07-20, then its breakdown is
-//	  dropped -> destination lot 1: 20 units, cost 300_000, NO date
-//	destination: buy 3 @ $40.00 on 2026-07-25 -> lot 2: 3 units, cost 12_000, dated
-//	destination: sell 20 @ $200.00 on 2026-07-28 -> the queue hands over the
-//	  undated lot first (undated lots sort ahead of every dated one), so the
-//	  disposal releases exactly the 300_000 nobody has a purchase date for
-//
-//	realized_pnl_minor (USD)   = 400_000 - 300_000 = 100_000
-//	in_base.realized_pnl_minor = null
-//	in_base.cost_minor         = 12_000 * 90       = 1_080_000  (the dated lot,
-//	                                                  still perfectly convertible)
-//
-// The two numbers a wrong implementation prints are asserted by name:
-// 100_000 * 90 = 9_000_000 dates the retired parcel on the day of the SALE — a
-// figure nothing downstream could tell from a real one — and 400_000 * 90 =
-// 36_000_000 drops the parcel from the sum and publishes the proceeds as if they
-// had cost nothing.
+// Not 9_000_000 (dated by the sale) nor 36_000_000 (parcel dropped).
 func TestPositionInBaseRealizedNullWhenAReleasedParcelHasNoAcquisitionDate(t *testing.T) {
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
@@ -344,15 +247,12 @@ func TestPositionInBaseRealizedNullWhenAReleasedParcelHasNoAcquisitionDate(t *te
 	createTransfer(t, c, url, fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,
 		"quantity":"20","occurred_on":%q}`, from.ID, to.ID, share.ID, transferOn))
 
-	// Turn the transfer into one recorded before breakdowns were kept: the basis
-	// survives on the operation, the dates behind it do not.
+	// Make it a pre-breakdown transfer: basis kept, dates gone.
 	if _, err := pool.Exec(t.Context(), `DELETE FROM operation_transfer_lots`); err != nil {
 		t.Fatalf("drop the stored breakdown: %v", err)
 	}
 
-	// A dated lot of the destination's own, so that what survives the sale below
-	// is a real, convertible basis rather than an empty one — a zero would prove
-	// nothing about the rest of the object staying up.
+	// A dated lot of its own, so the surviving basis is real.
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-07-25","quantity":"3","price":"40",
 		"amount_minor":-12000,"currency":"USD"}`, to.ID, share.ID))
@@ -373,11 +273,8 @@ func TestPositionInBaseRealizedNullWhenAReleasedParcelHasNoAcquisitionDate(t *te
 	if p.HasUndatedLots {
 		t.Fatalf("has_undated_lots = true, want false: the undated lot has been sold and is not among the lots still held — which is exactly why it cannot be the thing that explains the null below")
 	}
-	// has_undated_lots being false while realized_pnl_minor is null is exactly
-	// the gap has_undated_realizations exists to close: the parcel that
-	// stopped the sum has already been sold, so no flag about HELD lots can
-	// name it, and a reader is left to guess "no rate" about a date that will
-	// never arrive. This is the "raised" half of that flag's coverage.
+	// has_undated_realizations is raised: no flag about held lots could name the
+	// sold parcel.
 	if !p.HasUndatedRealizations {
 		t.Errorf("has_undated_realizations = false, want true: the sale above retired the undated parcel — a piece of basis whose acquisition date was never recorded — and that is exactly the condition this flag exists to report")
 	}
@@ -400,18 +297,9 @@ func TestPositionInBaseRealizedNullWhenAReleasedParcelHasNoAcquisitionDate(t *te
 	}
 }
 
-// oneDateConverter answers every fx lookup with one flat rate except on a
-// single date, where it answers with err instead. A real *marketdata.Converter
-// cannot produce that: Store.FxRateOn resolves to the nearest date on or before
-// the one asked for, so a date that has no rate is always OLDER than every date
-// that does — and a sale is by construction later than the purchase whose basis
-// it retires. A hole under exactly one disposal is therefore only reachable
-// through a double, and it is the hole worth testing: it separates the two
-// figures that get their rates from different days.
-//
-// The one date is matched as its YYYY-MM-DD string so it compares the calendar
-// date rather than two time.Time values that merely mean the same day (the same
-// reason the handler's rateKey holds a string).
+// oneDateConverter answers one flat rate except on one date, where it returns
+// err — a hole under one disposal, which a real converter (nearest earlier
+// date) cannot produce. The date is compared as YYYY-MM-DD.
 type oneDateConverter struct {
 	rate   decimal.Decimal
 	rateOn time.Time
@@ -426,26 +314,18 @@ func (c oneDateConverter) Rate(_ context.Context, _, _ string, on time.Time) (de
 	return c.rate, c.rateOn, nil
 }
 
-// RatesOn answers the batch from this double's own Rate, so the hole under the
-// one date is in the prewarm too and not only in the fallback (see
-// ratesFromRate).
+// RatesOn answers from this double's Rate, so the hole is in the prewarm too.
 func (c oneDateConverter) RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error) {
 	return ratesFromRate(ctx, c, queries)
 }
 
-// realizedRateHoleAPI wires the fixture the two tests below share: a USD
-// position that bought 20 shares and sold 10 of them, against a converter that
-// answers everything at 90 except on the day of the sale, where it answers with
-// err.
+// realizedRateHoleAPI: a USD position bought 20 and sold 10, against a
+// converter answering 90 except on the sale day.
 //
-//	buy  20 @ $100.00 on 2026-03-10 -> lot 20 units, cost 200_000 minor USD
-//	sell 10 @ $120.00 on 2026-05-10 -> releases half the lot, 100_000 of basis
-//	  remaining lot: 10 units, cost 100_000, dated 2026-03-10
+//	buy 20 @ $100 (03-10) -> 200_000; sell 10 @ $120 (05-10) releases 100_000
+//	held: 10 units, 100_000, dated 03-10
 //
-// Only the realized figure needs the sale day's rate. The basis needs 2026-03-10
-// and rate_on needs today, both of which resolve — so whatever the handler does
-// with err shows up in exactly one field, and the rest of the object stands there
-// as the control.
+// Only the realized figure needs the sale day's rate.
 func realizedRateHoleAPI(t *testing.T, err error) (url string, c *http.Client, accountID string) {
 	t.Helper()
 	pool := testdb.New(t)
@@ -468,18 +348,9 @@ func realizedRateHoleAPI(t *testing.T, err error) (url string, c *http.Client, a
 	return url, c, acc.ID
 }
 
-// TestPositionInBaseRealizedNullWhenTheDisposalDateHasNoRate is the second half
-// of the honesty rule: a missing RATE on a date the realized sum needs nulls
-// that figure, exactly as a missing purchase DATE does, and leaves the rest of
-// the object standing. The two causes differ only in whether the date is unknown
-// or the rate for it is; both make one term of the sum unstrikeable, and a sum
-// missing a term is an invented number.
+// A missing rate on the sale day nulls the realized figure only.
 //
-//	every rate resolves at 90 except on the day of the sale, which has none
-//	realized_pnl_minor (USD)   = 120_000 - 100_000 = 20_000
-//	in_base.realized_pnl_minor = null
-//	in_base.cost_minor         = 100_000 * 90      = 9_000_000 (the lot that is
-//	                                                  still held, unaffected)
+//	realized USD 20_000; base null; cost 100_000 × 90 = 9_000_000
 func TestPositionInBaseRealizedNullWhenTheDisposalDateHasNoRate(t *testing.T) {
 	url, c, accountID := realizedRateHoleAPI(t, fmt.Errorf("%w: USD -> RUB on %s", marketdata.ErrNoRate, sellOn))
 
@@ -488,12 +359,7 @@ func TestPositionInBaseRealizedNullWhenTheDisposalDateHasNoRate(t *testing.T) {
 	if realizedFigure(t, p.RealizedPnlMinor) != 20000 {
 		t.Fatalf("realized_pnl_minor = %d, want 20000 (120000 - 100000, in USD)", realizedFigure(t, p.RealizedPnlMinor))
 	}
-	// Every parcel here — the one retired and the one still held — has a
-	// recorded purchase date; only a fx rate is missing, and that is a gap
-	// the backfill job closes on its own. has_undated_realizations must stay
-	// false here, or a reader would be told a permanent, unrecoverable gap
-	// where the true story is "the number will appear later" — the "lowered"
-	// half of this flag's coverage, the mirror of the raised case above.
+	// Only a rate is missing, so has_undated_realizations stays false.
 	if p.HasUndatedRealizations {
 		t.Errorf("has_undated_realizations = true, want false: every parcel this position ever held or retired has a recorded acquisition date — only the fx rate for the day of the sale is missing")
 	}
@@ -511,35 +377,14 @@ func TestPositionInBaseRealizedNullWhenTheDisposalDateHasNoRate(t *testing.T) {
 	}
 }
 
-// TestPositionInBaseRealizedNullWhenThePurchaseDateHasNoRate is the mirror of
-// the test above: the missing rate sits under the day a retired parcel was
-// BOUGHT instead of the day it was SOLD. The honesty rule treats the two
-// identically — a term the sum needs has no rate, so the sum is not
-// strikeable — and it is the same code path either way (sumInBase walks every
-// term the same way regardless of which date it carries). What differs is how
-// the hole is reached: a hole under the SALE day needs oneDateConverter,
-// because a real Converter's Store.FxRateOn falls back to the nearest EARLIER
-// date and a sale is by construction later than the purchase whose basis it
-// retires (see oneDateConverter's doc comment) — but a hole under the
-// PURCHASE day needs no double at all. Buying before every rate the fixture
-// seeds leaves Store.FxRateOn nothing earlier to fall back to, so the same
-// real converter used everywhere else in this file already produces exactly
-// this gap.
+// A missing rate under the purchase day of a sold parcel also nulls the
+// realized figure; a real converter produces this hole when the buy predates
+// every rate.
 //
-//	fx USD->RUB: one rate, 80 from 2026-05-01
-//	buy  10 @ $100.00 on 2026-01-05 (before the only seeded rate) -> lot cost
-//	  100_000 minor USD; no rate resolves for this date at all
-//	sell 10 @ $200.00 on 2026-05-10 (after the seeded rate) -> proceeds
-//	  200_000, releasing the whole lot above; the sale's OWN day resolves fine
-//	buy   3 @ $40.00  on 2026-07-25 (after the sale, untouched by it) -> lot
-//	  12_000 minor USD, held, dated and rated same as the sibling fixture in
-//	  TestPositionInBaseRealizedNullWhenAReleasedParcelHasNoAcquisitionDate
-//
-//	realized_pnl_minor (USD)   = 200_000 - 100_000 = 100_000
-//	in_base.realized_pnl_minor = null (the retired parcel's OWN day has no rate)
-//	in_base.cost_minor         = 12_000 * 80       = 960_000 (the held lot,
-//	                                                  unaffected — its own day
-//	                                                  resolves fine)
+//	USD->RUB 80 from 05-01
+//	buy 10 @ $100 on 01-05 (no rate); sell 10 @ $200 on 05-10
+//	buy 3 @ $40 on 07-25 (held)
+//	realized USD 100_000; base null; cost 12_000 × 80 = 960_000
 func TestPositionInBaseRealizedNullWhenThePurchaseDateHasNoRate(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes, datedRate{midRateOn, "80"})
@@ -562,10 +407,7 @@ func TestPositionInBaseRealizedNullWhenThePurchaseDateHasNoRate(t *testing.T) {
 	if realizedFigure(t, p.RealizedPnlMinor) != 100000 {
 		t.Fatalf("realized_pnl_minor = %d, want 100000 (200000 - 100000, in USD)", realizedFigure(t, p.RealizedPnlMinor))
 	}
-	// The retired parcel's purchase date IS on record (2026-01-05); only its
-	// fx rate is missing. has_undated_realizations reports an unrecorded
-	// DATE, not a missing rate, and must stay false here — a missing rate is
-	// a gap the backfill job closes on its own.
+	// The date is on record; only the rate is missing, so the flag stays false.
 	if p.HasUndatedRealizations {
 		t.Errorf("has_undated_realizations = true, want false: the retired parcel's purchase date is recorded (2026-01-05) — only its fx rate is missing, which is not the condition this flag reports")
 	}
@@ -583,20 +425,8 @@ func TestPositionInBaseRealizedNullWhenThePurchaseDateHasNoRate(t *testing.T) {
 	}
 }
 
-// TestPositionInBaseRealizedRateErrorFailsRequest draws, for the realized
-// figure, the distinction the rest of this handler already draws: a genuine
-// failure — a dropped connection, a canceled context — must fail the request,
-// never be served as a 200 with a null in it. The two look identical at the call
-// site and mean opposite things: "no rate for this day" is a fact about the
-// world that the fx backfill may never change, while an outage is a fact about
-// this server that will be gone in a minute, and rendering the second as the
-// first tells the owner their sale is unconvertible when it is not.
-//
-// The fixture is the one above with a different error, so the ONLY difference
-// between a null field and a failed request is which error the lookup returned —
-// which is precisely the distinction under test. Without it, wrapping the
-// realized sum in a "treat any error as no rate" shortcut would pass every other
-// test in this file.
+// A real failure on the sale day's rate fails the request instead of
+// publishing a null.
 func TestPositionInBaseRealizedRateErrorFailsRequest(t *testing.T) {
 	url, c, accountID := realizedRateHoleAPI(t, errors.New("connection reset by peer"))
 
@@ -608,38 +438,15 @@ func TestPositionInBaseRealizedRateErrorFailsRequest(t *testing.T) {
 	}
 }
 
-// TestRealizedInBaseSurvivesASaleSettledInAnotherCurrency is what the whole
-// currency change is FOR, seen from the screen.
+// A dollar bond redeemed for roubles has no native result (null) but an exact
+// rouble one: the roubles need no rate, the basis takes its purchase day's.
 //
-// A dollar bond redeemed for rubles: the proceeds arrive in one currency and
-// the basis they retire is in another. In the position's own currency there is
-// no result to publish and the payload says so with a null — the difference
-// between 60 000 ₽ and $1 000 is a quantity of neither. In RUBLES there is, and
-// it is exact: the rubles are already rubles and need no rate at all, and the
-// basis is converted at the rate of the day the bonds were BOUGHT, which is the
-// rule НК РФ ст. 210 п. 5 states and the one this handler already applied to
-// every other disposal.
+//	USD->RUB 50 (02-01), 80 (05-01), 90 (07-01)
+//	buy 10 @ $100 on 03-10 -> 100_000 at 50
+//	sell 10 for 60 000 ₽ on 05-10
+//	base 6_000_000 − 100_000×50 = 1_000_000
 //
-//	fx USD->RUB: 50 from 2026-02-01, 80 from 2026-05-01, 90 from 2026-07-01
-//	buy  10 @ $100.00 on 2026-03-10 -> basis 100_000 minor USD, rate 50
-//	sell 10 for 60 000,00 ₽ on 2026-05-10 -> proceeds 6_000_000 kopecks, NO rate
-//
-//	in_base.realized_pnl_minor = 6_000_000 - 100_000*50 = 1_000_000
-//
-// The numbers a wrong implementation reaches for, each different and each
-// asserted by name below:
-//
-//	6_000_000 - 100_000*80 = -2_000_000  the basis at the SALE day's rate — and
-//	                                     it even changes the SIGN of the result
-//	6_000_000 - 100_000*90 = -3_000_000  the basis at TODAY's rate
-//	5_900_000                            the proceeds converted as if they were
-//	                                     dollars would be absurd; what is real is
-//	                                     the shortcut this test exists against —
-//	                                     answering "nothing to convert, here is
-//	                                     the position's own figure" for a
-//	                                     position that HAS no own figure, which
-//	                                     published a null where 1 000 000 was
-//	                                     computable.
+// Not −2_000_000 (sale-day basis) nor −3_000_000 (today's).
 func TestRealizedInBaseSurvivesASaleSettledInAnotherCurrency(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes,
@@ -652,8 +459,7 @@ func TestRealizedInBaseSurvivesASaleSettledInAnotherCurrency(t *testing.T) {
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":%q,"quantity":"10","price":"100",
 		"amount_minor":-100000,"currency":"USD"}`, acc.ID, bond.ID, earlyBuyOn))
-	// The redemption: the issuer settles in rubles at its own rate, which is
-	// what the owner's own account holds seven of.
+	// The redemption settles in roubles.
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
 		"occurred_on":%q,"quantity":"10","amount_minor":6000000,"currency":"RUB"}`,
 		acc.ID, bond.ID, sellOn))
@@ -675,8 +481,7 @@ func TestRealizedInBaseSurvivesASaleSettledInAnotherCurrency(t *testing.T) {
 		t.Errorf("in_base.realized_pnl_minor = %d, want 1000000 (6000000 - 100000*50)", got)
 	}
 
-	// And the account's total, which must not quietly report the USD bucket as
-	// a zero it never computed.
+	// The USD bucket of the account total is not a fake zero.
 	total := realizedTotalOf(t, c, url, acc.ID)
 	if len(total.ByCurrency) != 1 || total.ByCurrency[0].Currency != "USD" {
 		t.Fatalf("by_currency = %+v, want one USD bucket", total.ByCurrency)
@@ -685,32 +490,17 @@ func TestRealizedInBaseSurvivesASaleSettledInAnotherCurrency(t *testing.T) {
 		t.Errorf("by_currency[USD].realized_pnl_minor = %d, want null — its only position has no figure in one currency",
 			*total.ByCurrency[0].RealizedPnlMinor)
 	}
-	// The base total is unaffected: it is struck from the disposals' own terms
-	// and every one of them converted.
+	// The base total is unaffected.
 	if total.InBase == nil || *total.InBase != 1_000_000 {
 		t.Errorf("in_base = %v, want 1000000 — the ruble answer survives what the dollar answer cannot", total.InBase)
 	}
 }
 
-// TestARubleBondSoldForDollarsStillPublishesItsResult is the same rule seen
-// from the side that has no second currency to fall back on: the position is
-// already denominated in the base currency, so nothing would normally be
-// converted — and this is the one case where something must be, because the
-// figure the position would otherwise publish does not exist.
+// A rouble bond sold for dollars publishes its realized result in in_base,
+// though the position is in the base currency.
 //
-// Without the exception, such a position published a realized result NOWHERE:
-// a null in its own currency, and no `in_base` object beside it to carry the
-// answer, on an account where the answer is exactly computable.
-//
-//	base currency RUB, position in RUB
-//	fx USD->RUB: 50 from 2026-02-01, 80 from 2026-05-01, 90 from 2026-07-01
-//	buy  10 for 100 000,00 ₽ on 2026-03-10 -> basis 10_000_000 kopecks, no rate
-//	sell 10 for $2 000.00   on 2026-05-10 -> proceeds 200_000 cents, rate 80
-//
-//	in_base.realized_pnl_minor = 200_000*80 - 10_000_000 = 6_000_000
-//
-// Not 200_000*90 - 10_000_000 = 8_000_000, which values the sale at today's
-// rate instead of the day it happened.
+//	buy 10 for 100 000 ₽ (03-10); sell 10 for $2 000 (05-10, rate 80)
+//	base 200_000×80 − 10_000_000 = 6_000_000 (today's rate would give 8_000_000)
 func TestARubleBondSoldForDollarsStillPublishesItsResult(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes,
@@ -742,23 +532,17 @@ func TestARubleBondSoldForDollarsStillPublishesItsResult(t *testing.T) {
 	if got := *p.InBase.RealizedPnlMinor; got != 6_000_000 {
 		t.Errorf("in_base.realized_pnl_minor = %d, want 6000000 (200000*80 - 10000000)", got)
 	}
-	// The rest of the object is the position's own figures under the same sign,
-	// which is what an identity conversion has to produce.
+	// The rest is the native figures under the same sign.
 	if p.InBase.CostMinor != 0 {
 		t.Errorf("in_base.cost_minor = %d, want 0 — everything was sold", p.InBase.CostMinor)
 	}
 }
 
-// Decision Р-3 (НК РФ ст. 210 п. 5): the rate is the one of the day the money
-// actually moved — the settlement day — when the operation says it. The same
-// purchase and sale as above, each settled the next day across a change of
-// rate:
+// Decision Р-3 (НК РФ ст. 210 п. 5): the settlement day's rate when known.
 //
-//	buy  on 2026-04-30, settled 2026-05-01 -> basis at 80, not 50
-//	sell on 2026-06-30, settled 2026-07-01 -> proceeds and fee at 90, not 80
-//
-//	in_base.realized_pnl_minor = 120_000*90 - 500*90 - 100_000*80 = 2_755_000
-//	(by the trade days it would be 4_560_000)
+//	buy 04-30, settled 05-01 -> basis at 80, not 50
+//	sell 06-30, settled 07-01 -> proceeds and fee at 90, not 80
+//	base 120_000×90 − 500×90 − 100_000×80 = 2_755_000 (trade days: 4_560_000)
 func TestPositionInBaseRealizedUsesTheSettlementDays(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes,
@@ -786,12 +570,10 @@ func TestPositionInBaseRealizedUsesTheSettlementDays(t *testing.T) {
 	}
 }
 
-// The rest of decision Р-3 on one account: shares still held are valued at the
-// rate of the day their purchase settled, and they keep that day when they move
-// to another of the family's accounts.
+// Held shares are valued at their purchase's settlement-day rate, kept when
+// they move between accounts.
 //
-//	buy on 2026-04-30 (rate 50), settled 2026-05-01 (rate 80)
-//	in_base.cost_minor = 100_000 * 80 = 8_000_000, here and after the move
+//	buy 04-30 (50), settled 05-01 (80): cost 100_000 × 80 = 8_000_000
 func TestPositionInBaseCostUsesTheSettlementDayAndKeepsItOnAMove(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes,
@@ -814,8 +596,8 @@ func TestPositionInBaseCostUsesTheSettlementDayAndKeepsItOnAMove(t *testing.T) {
 	}
 }
 
-// And the money: dollars that arrived at 50 and left for a purchase that
-// settled at 80 banked the dollar's move up to the settlement day.
+// Dollars that arrived at 50 and left for a purchase settled at 80 banked the
+// dollar's move up to the settlement day.
 func TestCashResultUsesTheSettlementDayOfWhatSpentIt(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes,

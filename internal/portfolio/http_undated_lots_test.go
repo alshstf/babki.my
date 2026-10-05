@@ -13,9 +13,7 @@ import (
 	"babki.my/babki/internal/platform/testdb"
 )
 
-// positionsByTicker fetches an account's positions keyed by ticker, for
-// fixtures that hold several instruments at once and need to compare how the
-// SAME response describes each of them.
+// positionsByTicker fetches an account's positions keyed by ticker.
 func positionsByTicker(t *testing.T, c *http.Client, url, accountID string) map[string]positionResp {
 	t.Helper()
 	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
@@ -32,31 +30,12 @@ func positionsByTicker(t *testing.T, c *http.Client, url, accountID string) map[
 	return out
 }
 
-// TestPositionSaysWhenALotHasNoAcquisitionDate is what lets the interface
-// explain a missing ruble figure instead of guessing at it.
+// has_undated_lots tells a reader why in_base is null: an undated lot never
+// resolves, a missing rate does. Three positions in one response:
 //
-// A position whose in_base is null already tells a reader that no base-currency
-// figure could be published; it does not tell them WHY, and the two reasons are
-// not interchangeable. "No fx rate for one of the days" is a gap the fx backfill
-// job closes on its own — the number will appear later. "One of the lots does
-// not know when it was bought" never resolves: nobody recorded that date and
-// nothing can recover it (see portfolio.Lot.AcquiredOn). A screen that says
-// "нет курса" over the second case states something false about a permanent
-// condition, which is precisely the silence this whole change exists to remove.
-//
-// So the fact travels as a fact about the position, not as an inference from a
-// null: has_undated_lots is true exactly when at least one lot still held has no
-// acquisition date. THREE positions in ONE response pin that, and each kills a
-// different wrong implementation:
-//
-//	ACME  — arrived by a transfer whose breakdown was dropped: undated lot.
-//	        has_undated_lots true, in_base null.
-//	BETA  — an ordinary dated buy with a rate available.
-//	        has_undated_lots false, in_base present. (Kills "always true".)
-//	GAMMA — an ordinary dated buy on a day EARLIER than any seeded rate.
-//	        has_undated_lots false, in_base null. (Kills "has_undated_lots is
-//	        just in_base == null renamed" — the row that most needs the two to
-//	        be told apart is exactly this one.)
+//	ACME  — transfer with its breakdown dropped: true, in_base null
+//	BETA  — dated buy with a rate: false, in_base present
+//	GAMMA — dated buy before every rate: false, in_base null
 func TestPositionSaysWhenALotHasNoAcquisitionDate(t *testing.T) {
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)

@@ -8,38 +8,10 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// TestIncomeByInstrumentMatchesEngineIncomeTypes guards against
-// incomeByInstrument's hardcoded type switch drifting from Compute's own,
-// separate switch over the same Type enum (engine.go's TypeDividend/
-// TypeCoupon/TypeTax cases, which are the only ones that touch
-// Position.IncomeByCurrency). The two switches live in different files and
-// nothing but this test ties them together — package portfolio's own test
-// suite (http_test.go, http_position_in_base_test.go) never notices a
-// mismatch because every fixture happens to use the same three types both
-// switches already agree on.
-//
-// For every operation Type in the enum, it builds one operation (with
-// whatever setup operations are needed for the engine to accept it, e.g. a
-// prior buy before a sell) and runs it through Compute, then checks that the
-// resulting position booked income if and only if
-// incomeByInstrument groups that same operation under its instrument. If a
-// reviewer ever widens engine.go's income-affecting switch (adds a case, or
-// folds another type into an existing one) without widening
-// incomeByInstrument's switch to match, Compute starts booking income for
-// that type while incomeByInstrument silently keeps excluding it — the exact
-// drift the doc comment on incomeByInstrument warns about, and the exact
-// thing this test is built to turn red for. See that doc comment.
-//
-// Deposit, withdrawal, interest and conversion are exercised as cash-level
-// operations (no InstrumentID) rather than attributed to the test
-// instrument: engine.go's instrument-scoped switch has no case for any of
-// them today, so attaching an instrument would make Compute itself fail with
-// ErrBadOperation, which is a pre-existing engine limitation unrelated to
-// this test's purpose. Left cash-level, they never reach an instrument's
-// income at all (Compute skips straight past them, and
-// incomeByInstrument skips any operation with a nil InstrumentID), so both
-// sides trivially agree — the four types are included here only so every
-// Type constant is accounted for.
+// incomeByInstrument's type switch matches the engine's: for every type, an
+// operation books income in Compute exactly when incomeByInstrument groups it.
+// Deposit, withdrawal, interest and conversion run cash-level, where both
+// sides trivially agree.
 func TestIncomeByInstrumentMatchesEngineIncomeTypes(t *testing.T) {
 	on := func(daysAfterEpoch int) time.Time {
 		return time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, daysAfterEpoch)
@@ -51,9 +23,7 @@ func TestIncomeByInstrumentMatchesEngineIncomeTypes(t *testing.T) {
 
 	tests := []struct {
 		typ Type
-		// build returns the operations to run through Compute for this
-		// case, all sharing instID as their InstrumentID except where the
-		// type is cash-level only (see the function doc comment).
+		// build returns the operations for the case.
 		build func(instID uuid.UUID) []Operation
 	}{
 		{TypeBuy, func(id uuid.UUID) []Operation {
@@ -120,10 +90,7 @@ func TestIncomeByInstrumentMatchesEngineIncomeTypes(t *testing.T) {
 				{Type: TypeTransferOut, InstrumentID: &id, OccurredOn: on(2), Currency: "USD", Quantity: qty("5"), AmountMinor: 0},
 			}
 		}},
-		// A conversion's two legs, built the way the service builds them: the
-		// departing one gives up the recorded lots and the arriving one rebuilds
-		// them under the new paper. Neither is income, and the point of having
-		// them here is that incomeByInstrument must agree.
+		// A conversion's two legs, built as the service builds them.
 		{TypeExchangeOut, func(id uuid.UUID) []Operation {
 			acquired := on(1)
 			return []Operation{
@@ -143,9 +110,7 @@ func TestIncomeByInstrumentMatchesEngineIncomeTypes(t *testing.T) {
 				},
 			}
 		}},
-		// A spin-off's two legs. The departing one carries no quantity — it moves
-		// no units — and the arriving one is an ordinary parcel of the new paper.
-		// Neither is income, which is the whole of what this table asserts.
+		// A spin-off's two legs.
 		{TypeSpinoffOut, func(id uuid.UUID) []Operation {
 			acquired := on(1)
 			return []Operation{
@@ -199,13 +164,7 @@ func TestIncomeByInstrumentMatchesEngineIncomeTypes(t *testing.T) {
 			}
 			gotIncome := false
 			if p, ok := positions[id]; ok {
-				// Whether income was BOOKED, not whether it came to a nonzero
-				// total: income is kept per currency, and an entry exists as
-				// soon as one payment lands in that currency — including one
-				// that cancels against another. That is the sharper question
-				// and it is the one this test wants, since a type folded into
-				// income for zero would still be a type incomeByInstrument has
-				// to know about.
+				// Whether income was booked, not its total: a zero-sum entry still counts.
 				gotIncome = len(p.IncomeByCurrency) > 0
 			}
 

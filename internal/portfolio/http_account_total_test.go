@@ -11,18 +11,10 @@ import (
 	"babki.my/babki/internal/platform/testdb"
 )
 
-// The account's TOTAL — what the whole account has made, all in — is added up
-// by the server for the same reason its realized total is: a figure the
-// interface shows has one definition, in one place.
-//
-// What separates it from the realized total is what it reaches for beyond the
-// rows: interest credited on the cash, commissions booked as operations of
-// their own, and the tax the broker took from the account rather than from a
-// payment. None of those belongs to any position, and all of them are money the
-// owner actually gained or lost.
+// The account's total is summed on the server like the realized one. Beyond
+// the rows it adds interest, standalone commissions and account-level tax.
 
-// accountFigure reads a bucket's amount, failing the test on the null that
-// means "this currency has no total at all".
+// accountFigure reads a bucket's amount, failing on null.
 func accountFigure(t *testing.T, minor *int64) int64 {
 	t.Helper()
 	if minor == nil {
@@ -31,25 +23,14 @@ func accountFigure(t *testing.T, minor *int64) int64 {
 	return *minor
 }
 
-// TestAccountTotalAddsThePositionsAndTheAccountsOwnCharges is the arithmetic in
-// one fixture, in one currency, with every kind of term present at once.
+// Every kind of term in one currency:
 //
-//	ACME  buy 10 @ 100,00 ₽              lot cost  100_000
-//	      sell 5 @ 150,00 ₽                proceeds  75_000, basis 50_000 -> realized 25_000
-//	      dividend 50,00 ₽                                               -> income    5_000
-//	      quote 120,00 ₽, 5 shares left    value 60_000 - basis 50_000   -> unrealized 10_000
-//	      the row's own «Всего»                                          =   40_000
+//	ACME buy 10 @ 100 ₽; sell 5 @ 150 ₽ -> realized 25_000; dividend 5_000;
+//	     5 left at 120 ₽ -> unrealized 10_000; row total 40_000
+//	own charges: commission −1_500, tax −3_000, interest +700
+//	account total = 36_200
 //
-//	the account's own charges, which no row carries:
-//	      a commission booked on its own            -1_500
-//	      tax taken from the account                -3_000
-//	      interest credited on the cash                700
-//
-//	account total = 40_000 - 1_500 - 3_000 + 700   =   36_200
-//
-// The numbers a wrong implementation prints are named by hand below: 40_000 is
-// the rows alone with every charge forgotten, and 30_000 is the settled result
-// with the unrealized half dropped.
+// Wrong answers: 40_000 (charges forgotten), 30_000 (unrealized dropped).
 func TestAccountTotalAddsThePositionsAndTheAccountsOwnCharges(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes)
@@ -96,8 +77,7 @@ func TestAccountTotalAddsThePositionsAndTheAccountsOwnCharges(t *testing.T) {
 			t.Errorf("total = %d, want 36200 (40000 - 1500 - 3000 + 700)", total)
 		}
 	}
-	// The base currency IS this account's currency here, so the one figure and
-	// the bucket must agree — a base sum computed from other terms would drift.
+	// The base currency is the account's, so both figures agree.
 	if got.InBase == nil || *got.InBase != 36_200 {
 		t.Errorf("in_base = %v, want 36200 — the space's base currency is RUB, so nothing was converted and the two forms are one number", got.InBase)
 	}
@@ -110,17 +90,9 @@ func TestAccountTotalAddsThePositionsAndTheAccountsOwnCharges(t *testing.T) {
 	}
 }
 
-// TestAccountTotalDoesNotChargeATradesCommissionTwice pins the one exclusion
-// that is easy to get wrong and impossible to see on screen. A commission
-// charged ON a trade is already inside the row: a purchase capitalizes it into
-// the lot's cost, a disposal subtracts it from the proceeds. Taking every
-// commission again at the account level would charge the owner twice for one
-// charge, and the result would still look like an ordinary number.
+// A trade's commission is already in the row and is not charged again.
 //
-//	buy  10 @ 1000,00 ₽ with a 2,00 ₽ commission -> lot cost 100_200
-//	sell 10 @ 1500,00 ₽ with a 3,00 ₽ commission -> 150_000 - 300 - 100_200 = 49_500
-//
-// The account has no charges of its own, so its total IS the row's.
+//	buy 10 @ 1 000 ₽ + 2 ₽ -> 100_200; sell 10 @ 1 500 ₽ − 3 ₽ -> 49_500
 func TestAccountTotalDoesNotChargeATradesCommissionTwice(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -146,24 +118,18 @@ func TestAccountTotalDoesNotChargeATradesCommissionTwice(t *testing.T) {
 			t.Errorf("total = %d, want 49500 (150000 - 300 - 100200)", total)
 		}
 	}
-	// A position sold out of has no basis left, so it is not one of the papers
-	// counted at nought — that mark is about money still held, not about a row
-	// with a valuation of zero because there is nothing left to value.
+	// A sold-out position has no basis, so it is not counted at nought.
 	if got.ZeroValuedPositions != 0 {
 		t.Errorf("zero_valued_positions = %d, want 0: nothing is held here, so nothing was written off", got.ZeroValuedPositions)
 	}
 }
 
-// TestAccountTotalCountsAnUnpricedHoldingAtNoughtAndSaysSo is the owner's
-// decision made visible. A holding nothing prices goes in at a value of nought
-// — its basis counted as spent, nothing counted as held — rather than
-// suppressing the account's total altogether while a single frozen fund sits in
-// it. The alternative was silence, and the owner chose the conservative number
-// with the assumption published beside it.
+// An unpriced holding counts at nought, with the count published (the owner's
+// decision).
 //
-//	ACME  buy 10 @ 100,00 ₽, quote 120,00 ₽    -> the row's total  +20_000
-//	DARK  buy 10 @  50,00 ₽, nothing prices it -> counted at nought, -50_000
-//	account total                                                 -30_000
+//	ACME buy 10 @ 100 ₽, quoted 120 ₽ -> +20_000
+//	DARK buy 10 @ 50 ₽, unpriced -> −50_000
+//	account total −30_000
 func TestAccountTotalCountsAnUnpricedHoldingAtNoughtAndSaysSo(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes)
@@ -206,24 +172,14 @@ func TestAccountTotalCountsAnUnpricedHoldingAtNoughtAndSaysSo(t *testing.T) {
 	}
 }
 
-// TestAccountTotalInBaseConvertsEachChargeOnItsOwnDay carries the rule the rest
-// of this screen already follows down to the account's own charges: a commission
-// taken in one year was that many rubles in that year, not at today's rate.
+// Each account charge converts at its own day's rate, and the dollars left on
+// the account are a holding too.
 //
-//	fx USD->RUB: 50 from 2026-02-01, 80 from 2026-05-01, 90 from 2026-07-01
-//	buy  10 @ $100.00 on 2026-03-10 (rate 50)  -> basis    100_000 USD
-//	sell 10 @ $120.00 on 2026-05-10 (rate 80)  -> proceeds 120_000 USD
-//	      realized  20_000 USD; in_base 120_000*80 - 100_000*50 = 4_600_000
-//	a commission of $50.00 booked on 2026-05-10 (rate 80)  -> -5_000 USD, -400_000 ₽
-//
-//	account in USD  =    20_000 -   5_000 =    15_000
-//
-// And the DOLLARS THEMSELVES are a holding: the 15 000 left on the account
-// arrived with the sale on 2026-05-10 (rate 80) and are worth today's 90, so the
-// currency has made 15_000 * (90 - 80) = 150_000 while they sat there. That term
-// is the whole reason this total is not just the papers.
-//
-//	account in base = 4_600_000 - 400_000 + 150_000 = 4_350_000
+//	USD->RUB 50 (02-01), 80 (05-01), 90 (07-01)
+//	buy 10 @ $100 (03-10), sell 10 @ $120 (05-10): 4_600_000
+//	commission $50 on 05-10: −400_000
+//	$15 000 held since 05-10 (80), worth 90 today: +150_000
+//	base total 4_350_000
 func TestAccountTotalInBaseConvertsEachChargeOnItsOwnDay(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes,
@@ -263,22 +219,13 @@ func TestAccountTotalInBaseConvertsEachChargeOnItsOwnDay(t *testing.T) {
 	}
 }
 
-// TestAccountTotalCountsTheCurrencyResultAlreadyBanked is the case that decided
-// the shape of this whole figure. Money exchanged and exchanged BACK leaves
-// nothing behind to revalue — the balances afterwards are rubles bought today
-// and no dollars at all — so a total built from balances alone reports a gain
-// of exactly nought on an account that plainly made money.
+// Money exchanged and exchanged back made money though nothing is left to
+// revalue: the result is in the departure.
 //
-//	fx USD->RUB: 50 from 2026-02-01, 80 from 2026-05-01, 90 from 2026-07-01
-//	deposit 1 000,00 $ on 2026-03-10 (rate 50) -> the dollars arrive worth 50 000
-//	convert them away on 2026-05-10 (rate 80)  -> they leave worth 80 000
+//	USD->RUB 50 (02-01), 80 (05-01)
+//	deposit $1 000 on 03-10, converted away on 05-10: +30_000
 //
-//	the account made                              30_000
-//
-// Nothing is held at the end and the unrealized half is nought; the whole result
-// is in the departure. The 80 000 ₽ that arrived in exchange are NOT income —
-// they are the same money in another currency, and the ruble side of a
-// conversion is why they are not counted twice.
+// The roubles received are the same money, not income.
 func TestAccountTotalCountsTheCurrencyResultAlreadyBanked(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes,
@@ -316,17 +263,13 @@ func TestAccountTotalCountsTheCurrencyResultAlreadyBanked(t *testing.T) {
 	default:
 		t.Errorf("in_base = %d, want 3000000", *got.InBase)
 	}
-	// And all of it is the currency's (decision Р-5): said as its own part, so
-	// the screen can name it rather than pass it off as a trade's result.
+	// All of it is the currency's (decision Р-5).
 	if got.CashFxInBase == nil || *got.CashFxInBase != 3_000_000 {
 		t.Errorf("cash_fx_in_base = %v, want 3000000 — the whole result is the dollars' move", got.CashFxInBase)
 	}
 }
 
-// TestAccountTotalAddsNoCurrencyResultOnItsOwnBaseCurrency: rubles in a ruble
-// space cost rubles and are worth rubles, whatever they do. The total must not
-// pick up a term for them — not because the term would be wrong, but because
-// asking a rate of one to say something is how a rounding becomes a result.
+// Base-currency money adds no currency result.
 func TestAccountTotalAddsNoCurrencyResultOnItsOwnBaseCurrency(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -348,14 +291,8 @@ func TestAccountTotalAddsNoCurrencyResultOnItsOwnBaseCurrency(t *testing.T) {
 	}
 }
 
-// TestAccountTotalNamesTheMoneyItCouldNotValue is the difference between a gap
-// that closes on its own and one that never closes at all.
-//
-// «Нет курса» alone sends a reader to wait for a backfill. But a rate SOURCE may
-// not quote a currency at all — the Bank of Russia publishes none for XAU, the
-// code the broker uses for gold — and on the owner's account that one holding
-// took the total off three screens with nothing saying which money was
-// responsible. The currency named turns "wait" into "this one is not coming".
+// The total names the currency it could not value: the CBR publishes no XAU
+// rate, so "wait" would be false.
 func TestAccountTotalNamesTheMoneyItCouldNotValue(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	// USD has rates; nothing anywhere quotes XAU.
@@ -380,9 +317,7 @@ func TestAccountTotalNamesTheMoneyItCouldNotValue(t *testing.T) {
 	}
 }
 
-// TestAccountTotalNamesNoCurrencyWhenNothingWasStoppedByARate: the list is about
-// rates and nothing else, so an account whose total is missing for another
-// reason entirely must not put a currency's name under a sentence about rates.
+// No currency is named when nothing was stopped by a rate.
 func TestAccountTotalNamesNoCurrencyWhenNothingWasStoppedByARate(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes, datedRate{earlyRateOn, "50"}, datedRate{lateRateOn, "90"})
@@ -398,24 +333,13 @@ func TestAccountTotalNamesNoCurrencyWhenNothingWasStoppedByARate(t *testing.T) {
 	}
 }
 
-// TestAccountTotalLeavesOutAPaperNobodyKnowsTheDatesOf is the difference between
-// a gap that can close and one that cannot.
+// A paper with unknown purchase dates is left out and counted, not allowed to
+// blank the account (five of the owner's six accounts were blank).
 //
-// A missing RATE resolves itself: the backfill catches up and the figure
-// appears. A missing purchase DATE never does — the shares arrived by a transfer
-// the broker sent without one, and no job will ever supply it. Suppressing the
-// account's whole figure over such a paper answered nothing and answered it for
-// ever: on the owner's own journal it left five accounts of six blank.
-//
-// So the paper is left out and COUNTED, which is the same bargain he struck for
-// a holding nothing prices — publish the figure, and say what it rests on.
-//
-//	fx USD->RUB: 60 from 2026-02-01, 90 from 2026-07-01
-//	ACME transferred in with no dates behind its basis -> left out
-//	BETA bought for $2 000.00 on 2026-07-10 (rate 90), no quote
-//	     -> counted at nought: settled 0 less a basis of 200_000 * 90
-//
-//	in_base = -18_000_000, over one paper, with the other named as left out
+//	USD->RUB 60 (02-01), 90 (07-01)
+//	ACME transferred in without dates -> left out
+//	BETA bought $2 000 on 07-10, no quote -> nought: −200_000 × 90
+//	in_base −18_000_000
 func TestAccountTotalLeavesOutAPaperNobodyKnowsTheDatesOf(t *testing.T) {
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
@@ -438,15 +362,11 @@ func TestAccountTotalLeavesOutAPaperNobodyKnowsTheDatesOf(t *testing.T) {
 		"amount_minor":-100000,"currency":"USD"}`, from.ID, acme.ID, earlyBuyOn))
 	createTransfer(t, c, url, fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,
 		"quantity":"10","occurred_on":%q}`, from.ID, to.ID, acme.ID, transferOn))
-	// A transfer recorded before breakdowns were kept: the basis survives on the
-	// operation, the dates behind it do not.
+	// A pre-breakdown transfer: basis kept, dates gone.
 	if _, err := pool.Exec(t.Context(), `DELETE FROM operation_transfer_lots`); err != nil {
 		t.Fatalf("drop the stored breakdown: %v", err)
 	}
-	// Funded before it spends, so the MONEY contributes nothing of its own: the
-	// deposit and the purchase land on the same day at the same rate, and the
-	// balance ends at nought. Without it the account is overdrawn by two
-	// thousand dollars — a real answer, and a second term this test is not about.
+	// Funded first, so the money ends at nought and adds nothing.
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"type":"deposit",
 		"occurred_on":%q,"amount_minor":200000,"currency":"USD"}`, to.ID, lateBuyOn))
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",

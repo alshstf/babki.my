@@ -13,22 +13,11 @@ import (
 	"babki.my/babki/internal/platform/testdb"
 )
 
-// The account's realized total is added up by the SERVER and rendered by
-// whoever reads it. These tests are about that total: what it adds, what it
-// refuses to add, and what it says when it refuses.
-//
-// The rule the total exists to keep is the project's own — money arithmetic
-// happens once, on the server — and the reason it matters here is not that
-// int64 addition is dangerous (it is not; the terms are already converted and
-// already rounded) but that a figure the interface shows must have exactly one
-// definition. The alternative, every client adding the rows itself, makes the
-// rounding policy, the gap policy and "which positions count" three decisions
-// re-taken in every reader.
+// The account's realized total is summed by the server so the figure has one
+// definition: what it adds, refuses, and says when it refuses.
 
-// accountPositions fetches the whole positions payload — the total lives on the
-// response, next to cost_basis_rules, because it describes the list rather than
-// any one row (see PositionsResponse in the API contract), so the tests below
-// need more than onlyPosition/positionsByTicker hand back.
+// accountPositions fetches the whole positions payload, where the total
+// lives.
 func accountPositions(t *testing.T, c *http.Client, url, accountID string) positionsResp {
 	t.Helper()
 	resp := do(t, c, "GET", url+"/api/v1/accounts/"+accountID+"/positions", "")
@@ -41,8 +30,7 @@ func accountPositions(t *testing.T, c *http.Client, url, accountID string) posit
 	return got
 }
 
-// gapOf renders in_base/in_base_gap as one short string for error messages:
-// "4560000", "null (undated)", "null (no gap named)".
+// gapOf renders in_base and its gap as one string for messages.
 func gapOf(rt realizedTotalResp) string {
 	if rt.InBase != nil {
 		return fmt.Sprintf("%d", *rt.InBase)
@@ -53,19 +41,9 @@ func gapOf(rt realizedTotalResp) string {
 	return fmt.Sprintf("null (%s)", *rt.InBaseGap)
 }
 
-// TestRealizedTotalAddsEachCurrencyOnItsOwn pins the by-currency form: one
-// figure per currency the account's positions are denominated in, each an exact
-// sum inside that currency, and never one integer made of two.
-//
-// A dollar result and a euro result cannot be added: the sum would be a number
-// denominated in nothing, and it would look exactly like a real total on
-// screen. The fixture makes that visible — 15_000 + 2_000 = 17_000 is the
-// number a single accumulator prints, and it is the answer to no question.
-//
-// The second account pins the other end: an account with no positions gets an
-// empty by_currency, which is how a reader tells "there is nothing to say here"
-// apart from a genuine zero. A zero over an empty account answers a question
-// nobody asked.
+// One figure per currency, never one integer of two (15_000 USD + 2_000 EUR
+// would be 17_000 of nothing). An account without positions gets an empty
+// by_currency, not a zero.
 func TestRealizedTotalAddsEachCurrencyOnItsOwn(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -89,8 +67,7 @@ func TestRealizedTotalAddsEachCurrencyOnItsOwn(t *testing.T) {
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"sell",
 		"occurred_on":"2026-05-10","quantity":"5","price":"90",
 		"amount_minor":45000,"currency":"USD"}`, acc.ID, beta.ID))
-	// +2_000 EUR, in the same account: the currency of a position is the
-	// currency of its operations, not of the account it sits in.
+	// +2_000 EUR in the same account: a position's currency is its operations'.
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-03-10","quantity":"10","price":"10",
 		"amount_minor":-10000,"currency":"EUR"}`, acc.ID, euro.ID))
@@ -138,27 +115,14 @@ func TestRealizedTotalAddsEachCurrencyOnItsOwn(t *testing.T) {
 	}
 }
 
-// TestRealizedTotalInBaseAddsTheConvertedFigures is the heart of the
-// base-currency form. The account's total is the sum of the positions' OWN
-// base-currency figures — each struck at the rates of its own days — and not
-// the position-currency total scaled by any single rate.
+// The base total is the sum of the positions' own base figures.
 //
-//	fx USD->RUB: 50 from 2026-02-01, 80 from 2026-05-01, 90 from 2026-07-01
-//	  (nothing newer, so today's lookup lands on 90)
-//	ACME  buy 10 @ $100.00 on 2026-03-10 (rate 50); sell 10 @ $120.00 on
-//	      2026-05-10 with a $5.00 fee (rate 80)
-//	      realized  19_500 USD;  in_base 120_000*80 - 500*80 - 100_000*50 = 4_560_000
-//	BETA  buy 10 @ $50.00 on 2026-03-10 (rate 50); sell 10 @ $60.00 on
-//	      2026-05-10 (rate 80)
-//	      realized  10_000 USD;  in_base  60_000*80 - 50_000*50           = 2_300_000
+//	USD->RUB 50 (02-01), 80 (05-01), 90 (07-01)
+//	ACME buy 10 @ $100 (03-10), sell 10 @ $120 fee $5 (05-10): 4_560_000
+//	BETA buy 10 @ $50 (03-10), sell 10 @ $60 (05-10):           2_300_000
+//	account in_base = 6_860_000
 //
-//	account in_base = 4_560_000 + 2_300_000 = 6_860_000
-//
-// The numbers a scaled implementation prints instead are named by hand:
-// 29_500 * 90 = 2_655_000 (the USD total at today's rate) and 29_500 * 80 =
-// 2_360_000 (at the sale day's). Both are less than half the truth, because
-// most of the result is the dollar's own move between purchase and sale — and
-// both look exactly like ordinary numbers on screen.
+// Scaled answers: 2_655_000 (today), 2_360_000 (sale day).
 func TestRealizedTotalInBaseAddsTheConvertedFigures(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes,
@@ -203,8 +167,7 @@ func TestRealizedTotalInBaseAddsTheConvertedFigures(t *testing.T) {
 		}
 	}
 
-	// The same figure, reached the other way: the total IS the sum of the
-	// per-position figures published one field away in this same response.
+	// The total is the sum of the per-position figures in the same response.
 	var sum int64
 	for _, p := range resp.Positions {
 		if p.InBase == nil || p.InBase.RealizedPnlMinor == nil {
@@ -217,28 +180,16 @@ func TestRealizedTotalInBaseAddsTheConvertedFigures(t *testing.T) {
 	}
 }
 
-// TestRealizedTotalInBaseCountsAPositionAlreadyInTheBaseCurrency covers the
-// term a reader of `in_base` alone would silently lose. A position denominated
-// in the base currency carries no in_base block at all — there is nothing to
-// convert — and its realized result is not unknown, it is already the
-// base-currency figure. A total assembled only from in_base blocks drops it and
-// under-reports the account by exactly that amount.
+// A base-currency position has no in_base block, but its realized result is
+// the base figure and must count.
 //
-//	fx USD->RUB: 90, one rate for every date this test touches
-//	ACME (USD)  buy $1000.00, sell $1200.00 -> realized  20_000 USD
-//	                                           in_base  (120_000-100_000)*90 = 1_800_000
-//	RUBL (RUB)  arrives by a transfer whose per-lot breakdown was never kept,
-//	            then sells for 1300.00₽  -> realized 30_000 RUB, and that IS the
-//	            base-currency figure
+//	USD->RUB 90
+//	ACME (USD) buy $1 000, sell $1 200: 1_800_000
+//	RUBL (RUB) from a transfer without dates, sold for 1 300 ₽: 30_000
+//	account in_base = 1_830_000
 //
-//	account in_base = 1_800_000 + 30_000 = 1_830_000
-//
-// The ruble position deliberately retires a parcel with no purchase date. That
-// is what makes the fixture discriminating: a total assembled by converting
-// every position without first asking whether a conversion is needed reports an
-// unrecorded purchase as the gap that stopped it — over a figure that never
-// needed a rate for any date at all, and which the same response publishes in
-// full one field away.
+// The rouble position's undated parcel catches a total that converts without
+// asking whether it must.
 func TestRealizedTotalInBaseCountsAPositionAlreadyInTheBaseCurrency(t *testing.T) {
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
@@ -277,9 +228,8 @@ func TestRealizedTotalInBaseCountsAPositionAlreadyInTheBaseCurrency(t *testing.T
 	resp := accountPositions(t, c, url, acc.ID)
 	got := resp.RealizedTotal
 
-	// Pin the fixture: the ruble position publishes no in_base — and that null
-	// means "nothing to convert", not "unknown" — while the parcel its sale
-	// retired really does have no purchase date.
+	// The rouble position has no in_base (nothing to convert), and its sold parcel
+	// really is undated.
 	for _, p := range resp.Positions {
 		if p.Instrument.Ticker != "RUBL" {
 			continue
@@ -311,27 +261,14 @@ func TestRealizedTotalInBaseCountsAPositionAlreadyInTheBaseCurrency(t *testing.T
 	}
 }
 
-// TestRealizedTotalLeavesOutWhatCanNeverBeValuedAndWaitsForWhatCan: the two
-// reasons a position's base figure is missing are not the same news, and the
-// account's total treats them differently.
+// A missing rate withholds the total (no_rate: it will come); a missing
+// purchase day leaves the position out and counts it (#195, #158).
 //
-// A missing RATE is on its way — the backfill brings it — so the total is
-// withheld and `in_base_gap` says `no_rate`: published without that term, the
-// figure would quietly change later.
-//
-// A missing PURCHASE DAY never arrives. A total withheld over it is withheld for
-// good: one sale of a parcel that came by a transfer with no dates used to blank
-// the account's realized figure for ever, long after the position was closed.
-// Such a position is left out and COUNTED (the owner's ruling, #195 — the same
-// bargain the account's own total has had since #158).
-//
-//	fx USD->RUB: 60 from 2026-02-01, 90 from 2026-07-01 (nothing earlier)
-//	undated — 10 shares in by a transfer with no stored breakdown, then sold
-//	norate  — bought 2026-01-05, before the fx table begins, then sold
-//	both    — one position of each kind
-//	mixed   — the undated position and an ordinary one: bought at $100.00 and
-//	          sold at $150.00, both under the rate of 90 -> (150 000 - 100 000)
-//	          x 90 = 4 500 000
+//	USD->RUB 60 (02-01), 90 (07-01)
+//	undated — shares in by a transfer without dates, sold
+//	norate  — bought 2026-01-05, before the rates, sold
+//	both    — one of each
+//	mixed   — undated plus an ordinary $100 -> $150 at 90 = 4 500 000
 func TestRealizedTotalLeavesOutWhatCanNeverBeValuedAndWaitsForWhatCan(t *testing.T) {
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
@@ -362,8 +299,7 @@ func TestRealizedTotalLeavesOutWhatCanNeverBeValuedAndWaitsForWhatCan(t *testing
 		createTransfer(t, c, url, fmt.Sprintf(`{"from_account_id":%q,"to_account_id":%q,"instrument_id":%q,
 			"quantity":"10","occurred_on":%q}`, src.ID, in.to, in.instrument, transferOn))
 	}
-	// Turn the transfers into ones recorded before breakdowns were kept: the
-	// basis survives on the operation, the dates behind it do not.
+	// Make the transfers pre-breakdown: basis kept, dates gone.
 	if _, err := pool.Exec(t.Context(), `DELETE FROM operation_transfer_lots`); err != nil {
 		t.Fatalf("drop the stored breakdowns: %v", err)
 	}
@@ -437,14 +373,11 @@ func TestRealizedTotalLeavesOutWhatCanNeverBeValuedAndWaitsForWhatCan(t *testing
 			if got.UndatedPositions != tc.wantUndated {
 				t.Errorf("undated_positions = %d, want %d: %s", got.UndatedPositions, tc.wantUndated, tc.why)
 			}
-			// Every parcel here was bought for real money: none counts as
-			// bought for nothing, so none is counted as such.
+			// Nothing was bought for nothing.
 			if got.UnknownCostPositions != 0 {
 				t.Errorf("unknown_cost_positions = %d, want 0: every sale here knew its cost", got.UnknownCostPositions)
 			}
-			// Whatever the conversion is missing, the positions' own currency
-			// always has a complete answer: an unrecorded purchase date costs
-			// no money and no shares.
+			// The native currency always has a complete answer.
 			if len(got.ByCurrency) != 1 || realizedFigure(t, got.ByCurrency[0].RealizedPnlMinor) != tc.wantNative {
 				t.Errorf("by_currency = %+v, want one USD entry of %d — the by-currency form has no gaps and must not be withheld along with the converted one", got.ByCurrency, tc.wantNative)
 			}
@@ -452,27 +385,12 @@ func TestRealizedTotalLeavesOutWhatCanNeverBeValuedAndWaitsForWhatCan(t *testing
 	}
 }
 
-// TestRealizedTotalStandsWhenAPositionsConversionBlockIsAbsent pins the choice
-// that separates this total from a client-side sum over `in_base` blocks.
+// The total stands when a position's in_base object is absent for reasons
+// unrelated to disposals (here an undated held lot).
 //
-// A position's in_base object goes null as a whole for reasons that have
-// nothing to do with disposals already made: no rate for today, no quote, or —
-// as here — a lot still HELD whose purchase date was never recorded, which sits
-// inside cost_minor's sum and takes the object down with it. A settled result
-// does not become unknowable because of any of that, and suppressing the
-// account's total over it would be silence about a figure the server has in
-// hand.
-//
-// It is also the only way to avoid explaining a realized gap with
-// `has_undated_lots`, a flag that speaks about lots still held and can never be
-// the true cause of a missing realized figure.
-//
-//	fx USD->RUB: 60 from 2026-02-01, 90 from 2026-07-01
-//	ACME — 10 shares in by a transfer with no stored breakdown, never sold:
-//	       has_undated_lots true, in_base null, realized 0
-//	BETA — an ordinary buy at $100.00 and sale at $150.00, both dated after
-//	       2026-07-01: realized 5_000 USD, in_base (150_000-100_000)*90 = 4_500_000
-//
+//	USD->RUB 60 (02-01), 90 (07-01)
+//	ACME — undated held lot, never sold: in_base null, realized 0
+//	BETA — $100 -> $150 after 07-01: 4_500_000
 //	account in_base = 4_500_000, no gap
 func TestRealizedTotalStandsWhenAPositionsConversionBlockIsAbsent(t *testing.T) {
 	pool := testdb.New(t)
@@ -509,8 +427,7 @@ func TestRealizedTotalStandsWhenAPositionsConversionBlockIsAbsent(t *testing.T) 
 
 	resp := accountPositions(t, c, url, acc.ID)
 
-	// Pin the fixture: ACME really is the position whose whole conversion
-	// block is gone, and really is held rather than sold.
+	// ACME's whole block is gone and it is held, not sold.
 	byTicker := make(map[string]positionResp, len(resp.Positions))
 	for _, p := range resp.Positions {
 		byTicker[p.Instrument.Ticker] = p
@@ -529,25 +446,12 @@ func TestRealizedTotalStandsWhenAPositionsConversionBlockIsAbsent(t *testing.T) 
 	}
 }
 
-// TestRealizedTotalIsTheSumOfTheFiguresItStandsOver pins the rounding decision,
-// which is the one place this total could honestly have been computed two ways.
+// The total is the exact sum of the rounded per-position figures, so the
+// header matches its rows (and, like НК РФ ст. 210 п. 5, sums per-disposal
+// bases).
 //
-// Rounding once for the whole account — multiplying every disposal's terms as
-// decimals and rounding the account's total at the end — is the more accurate
-// single number, and it is deliberately NOT what this is. Each position's
-// figure is itself published in this same response; the total is defined as
-// their sum, and a header a minor unit away from the rows one field below it
-// would be a number nobody could check. The residual is at most half a minor
-// unit per position, and it errs the way НК РФ ст. 210 п. 5 does: a base is
-// struck per disposal and the disposals are summed, not the reverse.
-//
-//	fx USD->RUB = 90.5 for every date, so this test says nothing about WHICH
-//	  date's rate is used (that is pinned elsewhere) — only about rounding
-//	two instruments, each bought for $123.45 and sold for $246.90
-//	  per position: 24_690*90.5 - 12_345*90.5 = 1_117_222.5 -> 1_117_223
-//
-//	sum of the published figures:  1_117_223 + 1_117_223 = 2_234_446
-//	rounded once for the account:  1_117_222.5 + 1_117_222.5 = 2_234_445
+//	USD->RUB 90.5; two instruments bought $123.45, sold $246.90
+//	each 1_117_222.5 -> 1_117_223; sum 2_234_446 (once for the account: 2_234_445)
 func TestRealizedTotalIsTheSumOfTheFiguresItStandsOver(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes, datedRate{earlyRateOn, "90.5"})
@@ -589,24 +493,9 @@ func TestRealizedTotalIsTheSumOfTheFiguresItStandsOver(t *testing.T) {
 	}
 }
 
-// TestRealizedTotalRefusesToPublishASumThatWouldWrap stands at the CALL SITE of
-// the guard on realizedTotals.add, which the guard is only as good as: neutered,
-// the addition wraps, the request finishes 200, and the account header shows a
-// figure of the wrong magnitude and quite possibly the wrong sign — over rows
-// that are each perfectly correct.
-//
-// The fixture is deliberately built in two steps. One position proves the term
-// itself is publishable: ~5×10^18 kopecks is an ordinary int64 and the response
-// carries it. The second position is its identical twin, and only their sum
-// leaves the range — which is the whole claim, that a total of publishable
-// figures need not be publishable.
-//
-// The rate is 5000 ₽/$ and no such rate exists. It is the shortest way to reach
-// the edge from amounts the journal accepts: an operation is capped at 10^15
-// minor units (operation.maxAmountMinor) and an fx rate is capped at nothing, so
-// this is what the arithmetic actually looks like when the two meet. Real
-// hyperinflation would take longer to write down and would fail here in exactly
-// the same place.
+// Two positions each with a publishable ~5×10^18 figure sum past int64; the
+// request fails rather than publishing a wrapped header. The 5000 ₽/$ rate is
+// fictional: amounts are capped, rates are not.
 func TestRealizedTotalRefusesToPublishASumThatWouldWrap(t *testing.T) {
 	quotes := &fakeQuoteStore{byInstrument: map[uuid.UUID]marketdata.Quote{}}
 	url, c := fxRateAPI(t, quotes, datedRate{earlyRateOn, "5000"})
@@ -615,9 +504,7 @@ func TestRealizedTotalRefusesToPublishASumThatWouldWrap(t *testing.T) {
 	acme := createInstrument(t, c, url, `{"type":"share","name":"Акция","ticker":"ACME","currency":"USD"}`)
 	beta := createInstrument(t, c, url, `{"type":"share","name":"Бета","ticker":"BETA","currency":"USD"}`)
 
-	// No price on either leg: what this test is about is amount_minor, and a
-	// price would only have to be kept consistent with it (see
-	// operation.maxPrice) without changing anything here.
+	// No price: only amount_minor matters here.
 	sellAndBuy := func(instrumentID string) {
 		createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 			"occurred_on":%q,"quantity":"1","amount_minor":-12345,"currency":"USD"}`, acc.ID, instrumentID, earlyBuyOn))
@@ -642,16 +529,15 @@ func TestRealizedTotalRefusesToPublishASumThatWouldWrap(t *testing.T) {
 	}
 }
 
-// TestSettledIsRealizedPlusIncome is the column «Зафиксировано»: what the
-// position has locked in and will not change again.
+// «Зафиксировано» is realized result plus income.
 func TestSettledIsRealizedPlusIncome(t *testing.T) {
 	url, c := newAPI(t)
 	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
 	bond := createInstrument(t, c, url,
 		`{"type":"bond","name":"Селектел","ticker":"SEL1","currency":"RUB","face_value_minor":100000,"face_currency":"RUB"}`)
 
-	// The owner's own bond, to the kopeck: bought 200 for 197 980,70 ₽ with
-	// 78,88 ₽ of commission, one coupon of 13 264,00 ₽, redeemed at par.
+	// The owner's own bond: 200 for 197 980,70 ₽ with 78,88 ₽ commission, one
+	// coupon of 13 264,00 ₽, redeemed at par.
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"buy",
 		"occurred_on":"2026-02-20","quantity":"200","amount_minor":-19798070,"fee_minor":7888,"currency":"RUB"}`, acc.ID, bond.ID))
 	createOperation(t, c, url, fmt.Sprintf(`{"account_id":%q,"instrument_id":%q,"type":"coupon",
@@ -668,18 +554,14 @@ func TestSettledIsRealizedPlusIncome(t *testing.T) {
 	if p.IncomeMinor != 1326400 {
 		t.Fatalf("income_minor = %d, want 1326400", p.IncomeMinor)
 	}
-	// 1 940,42 + 13 264,00 = 15 204,42 ₽. A literal, not the sum of the two
-	// fields above: an expectation computed from what the server sent would
-	// agree with any arithmetic the server chose.
+	// 1 940,42 + 13 264,00 = 15 204,42 ₽, as a literal.
 	if p.SettledMinor == nil || *p.SettledMinor != 1520442 {
 		t.Errorf("settled_minor = %v, want 1520442 (1940,42 ₽ realized plus 13 264,00 ₽ of coupon)", p.SettledMinor)
 	}
 }
 
-// TestSettledIsWithheldWhenIncomeArrivedInAnotherCurrency. income_minor carries
-// only the payments denominated in the position's own currency, so a position
-// paid in another has income this sum cannot see — and a figure named «all of
-// it» that is missing a term is the failure this null exists against.
+// Settled is null when income arrived in another currency: a sum named "all of
+// it" would miss a term.
 func TestSettledIsWithheldWhenIncomeArrivedInAnotherCurrency(t *testing.T) {
 	url, c := newAPI(t)
 	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"USD"}`)
@@ -702,11 +584,8 @@ func TestSettledIsWithheldWhenIncomeArrivedInAnotherCurrency(t *testing.T) {
 	}
 }
 
-// TestAccountTaxIsTheWithholdingNoPositionSees. A tax the broker tied to a
-// paper is already inside that position's income; what this figure carries is
-// the tax charged against the ACCOUNT, which nothing on the positions screen
-// could otherwise account for. Counting the attributed one here as well would
-// take the same money twice.
+// The account tax figure carries only tax charged to the account; tax tied to
+// a paper is already in that position's income.
 func TestAccountTaxIsTheWithholdingNoPositionSees(t *testing.T) {
 	url, c := newAPI(t)
 	acc := createAccount(t, c, url, `{"name":"Брокер","type":"brokerage","currency":"RUB"}`)
@@ -740,15 +619,9 @@ func TestAccountTaxIsTheWithholdingNoPositionSees(t *testing.T) {
 	}
 }
 
-// TestAPaperThatArrivedWithNoPriceCountsAsBoughtForNothingInEveryCurrency is
-// the owner's ruling for shares a broker passed on without their cost (#195):
-// count them as bought for nothing, the way the broker does, in rubles as well
-// as in the paper's own currency, and say so on the paper and on both totals.
-//
-// The parcel arrives with no price AND no date. Nought needs no date to be
-// converted, so it is not left out of the ruble figures as undated — that is
-// kept for a parcel whose cost is known and whose day is not (see the test
-// above).
+// Shares passed on without their cost count as bought for nothing (#195), in
+// roubles too, and say so on the paper and both totals. Nought needs no date,
+// so they are not left out as undated.
 func TestAPaperThatArrivedWithNoPriceCountsAsBoughtForNothingInEveryCurrency(t *testing.T) {
 	pool := testdb.New(t)
 	mdStore := marketdata.NewStore(pool)
@@ -800,8 +673,7 @@ func TestAPaperThatArrivedWithNoPriceCountsAsBoughtForNothingInEveryCurrency(t *
 		t.Errorf("unknown_cost_positions = %d, want 1: the result is higher than the truth by what was really paid, and only this says so", rt.UnknownCostPositions)
 	}
 
-	// The account's whole result: the sale, plus six shares at 250 $ that cost
-	// nothing, valued at today's 90 ₽.
+	// The sale plus six cost-free shares at $250, valued at today's 90 ₽.
 	at := got.AccountTotal
 	if at.InBase == nil || *at.InBase != 7_200_000+13_500_000 {
 		t.Errorf("account in_base = %v, want 20700000 (7200000 realized + 150000 × 90 held): the holding with no price is in the figure, not left out", at.InBase)

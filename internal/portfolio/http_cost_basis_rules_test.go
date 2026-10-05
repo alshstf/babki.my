@@ -44,11 +44,8 @@ func patchSpace(t *testing.T, c *http.Client, url, body string) {
 	}
 }
 
-// TestPositionsDeclareWhoseCostBasisRulesTheyFollow is the reason the
-// declaration sits on this response and not only in the session: this is the
-// payload the numbers are read from. A Russian resident sees the figures
-// affirmed as their country's basis; a British one sees the same figures
-// accompanied by the statement that they are not.
+// The positions response declares whose cost basis rules its figures follow:
+// affirmed for RU, disclaimed for GB.
 func TestPositionsDeclareWhoseCostBasisRulesTheyFollow(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -86,10 +83,7 @@ func TestPositionsDeclareWhoseCostBasisRulesTheyFollow(t *testing.T) {
 	}
 }
 
-// TestAnEmptyAccountStillDeclaresTheRules: the declaration describes how this
-// application computes, not what it happened to find, so an account with no
-// operations carries it just the same. Attaching it to positions instead would
-// let the one screen that shows nothing also say nothing.
+// An empty account still carries the declaration.
 func TestAnEmptyAccountStillDeclaresTheRules(t *testing.T) {
 	url, c := newAPI(t)
 	acc := createAccount(t, c, url, `{"name":"Пустой","type":"brokerage","currency":"RUB"}`)
@@ -100,9 +94,7 @@ func TestAnEmptyAccountStillDeclaresTheRules(t *testing.T) {
 	if len(got.Positions) != 0 {
 		t.Fatalf("positions = %d, want 0", len(got.Positions))
 	}
-	// The Netherlands does not tax an individual's capital gains on securities,
-	// so the figures are reference material — that, and nothing about a method
-	// diverging, since there is no method to diverge from.
+	// NL does not tax gains: not supported, with not_taxed only.
 	if got.CostBasisRules.Supported {
 		t.Error("supported = true for NL, want false")
 	}
