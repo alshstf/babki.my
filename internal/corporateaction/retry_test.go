@@ -31,9 +31,8 @@ func workISIN(t *testing.T, f apiFixture, args river.JobArgs) error {
 	})
 }
 
-// An event recorded while the journals could not be written is still recorded,
-// and its paper is queued for another attempt — one that brings the journals
-// into line and asks for the fresh broker check the request could not.
+// An event recorded while the journals could not be written is queued for
+// another attempt, which also asks for the recheck.
 func TestAnEventTheJournalsCouldNotTakeIsQueuedForAnotherAttempt(t *testing.T) {
 	f := newAPIFixture(t)
 	f.buy(t, f.accountID, "2021-05-04", "1", -320_000)
@@ -57,8 +56,7 @@ func TestAnEventTheJournalsCouldNotTakeIsQueuedForAnotherAttempt(t *testing.T) {
 		t.Errorf("queued with %+v, want one job per paper and a bounded number of attempts", opts)
 	}
 
-	// Still away: the attempt fails and says so, which is what makes the queue
-	// try again.
+	// Still away: the attempt fails, so the queue retries.
 	if err := workISIN(t, f, f.queue.args[0]); err == nil {
 		t.Fatal("the job reported success with the journal still away")
 	}
@@ -75,8 +73,7 @@ func TestAnEventTheJournalsCouldNotTakeIsQueuedForAnotherAttempt(t *testing.T) {
 	}
 }
 
-// Deleting is the same two steps: the event is gone at once, and the rows it
-// left in the journals are taken out by the retry.
+// A deleted event's rows are taken out by the retry.
 func TestADeletedEventTheJournalsCouldNotDropIsQueuedForAnotherAttempt(t *testing.T) {
 	f := newAPIFixture(t)
 	f.buy(t, f.accountID, "2021-05-04", "1", -320_000)
@@ -123,9 +120,8 @@ func TestAnEventTheJournalsTookQueuesNothing(t *testing.T) {
 	}
 }
 
-// The daily sweep changes journals like every other path, and a verdict struck
-// against the journal as it was is stale after it. A sweep that changes nothing
-// asks for nothing.
+// The sweep asks for a recheck of what it changed, and nothing if it
+// changed nothing.
 func TestTheSweepAsksForAFreshCheckOfWhatItChanged(t *testing.T) {
 	f := newAPIFixture(t)
 	f.buy(t, f.accountID, "2021-05-04", "1", -320_000)
@@ -164,9 +160,8 @@ func (e exchangeSplits) ISINBySecID(_ context.Context, secid string) (string, er
 	return "", nil
 }
 
-// A split the exchange publishes is recorded, carried into the journals of the
-// accounts that held the paper, and followed by a request for a fresh broker
-// check of those accounts — the same three steps a hand-recorded one takes.
+// An exchange split is recorded, materialized and followed by a recheck,
+// like a hand-recorded one.
 func TestASplitTheExchangePublishesReachesTheJournalAndAsksForAFreshCheck(t *testing.T) {
 	f := newAPIFixture(t)
 	f.buy(t, f.accountID, "2021-05-04", "1", -320_000)

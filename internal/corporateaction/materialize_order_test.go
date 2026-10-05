@@ -8,11 +8,8 @@ import (
 	"babki.my/babki/internal/operation"
 )
 
-// TestASecondEventSeesTheTradesBetweenItAndTheFirst: one share, split ten for
-// one in 2021, five of the ten sold in 2022, split two for one in 2024 — ten
-// held. The first split's row used to be appended to the END of the working
-// journal, so the second event read "bought one, sold five, split" and the
-// account was dropped as one that does not replay (#187).
+// One share, split 10:1 in 2021, five sold in 2022, split 2:1 in 2024: ten
+// held. The second event sees the trades between the two (#187).
 func TestASecondEventSeesTheTradesBetweenItAndTheFirst(t *testing.T) {
 	f := newFixture(t)
 	f.buy(t, f.accountID, "2020-01-02", "1", -100_000)
@@ -36,14 +33,11 @@ func TestASecondEventSeesTheTradesBetweenItAndTheFirst(t *testing.T) {
 	}
 }
 
-// TestOneAccountThatDoesNotReplayDoesNotStopTheOthers: the registry is shared by
-// every account that holds the paper, and a journal broken on one of them is
-// news about that account. The others still get their rows, and the failure is
-// still reported.
+// A journal broken on one account does not stop the others' rows, and the
+// failure is reported.
 func TestOneAccountThatDoesNotReplayDoesNotStopTheOthers(t *testing.T) {
 	f := newFixture(t)
-	// The first account's journal is broken behind the service's back: a sale
-	// of a paper it never bought.
+	// Broken behind the service's back: a sale of a paper never bought.
 	if _, err := f.ops.Create(f.ctx, f.spaceID, operation.Operation{
 		AccountID: f.accountID, InstrumentID: &f.amazonID, Type: operation.TypeSell,
 		OccurredOn: date("2021-05-04"), Quantity: dec("3"), AmountMinor: 900_000, Currency: "USD",
@@ -62,11 +56,8 @@ func TestOneAccountThatDoesNotReplayDoesNotStopTheOthers(t *testing.T) {
 	}
 }
 
-// TestASpinoffOnADayTheAccountAlsoBoughtIsStruckAgainstTheMorning: registry rows
-// fold at the START of their day, so the parcels a spin-off divides are the ones
-// held when the day began. The pair used to be built against the END of the day
-// — two parcels — and replayed against one, which the engine refuses; for such
-// an account the spin-off could not be written at all (#189).
+// Registry rows fold at the start of their day, so a spin-off divides the
+// parcels held that morning (#189).
 func TestASpinoffOnADayTheAccountAlsoBoughtIsStruckAgainstTheMorning(t *testing.T) {
 	f := newFixture(t)
 	produced := f.catalogue(t, producedISIN, "TECH2")
@@ -95,9 +86,7 @@ func TestASpinoffOnADayTheAccountAlsoBoughtIsStruckAgainstTheMorning(t *testing.
 	}
 }
 
-// TestASpinoffOnADayTheAccountAlsoSoldIsStruckAgainstTheMorning is the same day
-// from the other side: the sale folds after the spin-off, so the whole morning
-// holding gives up its share and the sale releases what is left of it.
+// The same day with a sale: the sale folds after the spin-off.
 func TestASpinoffOnADayTheAccountAlsoSoldIsStruckAgainstTheMorning(t *testing.T) {
 	f := newFixture(t)
 	produced := f.catalogue(t, producedISIN, "TECH2")
@@ -123,9 +112,7 @@ func TestASpinoffOnADayTheAccountAlsoSoldIsStruckAgainstTheMorning(t *testing.T)
 	}
 }
 
-// Decision Р-16 through the registry: a carve-out recorded with a share of 0,
-// the broker's way. The new paper arrives in every holder's journal at no cost
-// and the original keeps its whole basis.
+// Р-16 through the registry: a share of 0 gives the new paper no cost.
 func TestASpinoffWithNoShareGivesTheNewPaperNoCost(t *testing.T) {
 	f := newFixture(t)
 	produced := f.catalogue(t, producedISIN, "TECH2")

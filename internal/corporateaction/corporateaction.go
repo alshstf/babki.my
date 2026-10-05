@@ -1,53 +1,26 @@
-// Package corporateaction is the registry of what happened to a SECURITY —
-// splits, conversions, spin-offs — and the machinery that carries those facts
+// Package corporateaction is the registry of what happened to a security
+// (splits, conversions, spin-offs) and the machinery that carries those facts
 // into the journals of the accounts that held it.
 //
-// # Why it exists
+// Brokers report operations, and a corporate action is not one: T-Invest's
+// operation enum has no split, conversion or spin-off, and its FAQ says a split
+// arrives through no method a client can poll. Without this registry an importer
+// holds one Amazon share where the broker holds twenty.
 //
-// A broker reports operations. A corporate action is not an operation, and the
-// broker's API says so itself: T-Invest's operation enum carries 71 values and
-// none of them is a split, a conversion or a spin-off, while their own FAQ
-// states that a split changes the quantity in the portfolio, changes no
-// identifier, and arrives through no method a client can poll. So an importer
-// that reads operations faithfully still ends up holding one Amazon share where
-// the broker holds twenty — wrong by exactly the ratio, with nothing anywhere
-// saying why.
+// A split happens to the paper, so the fact is stored once, keyed by ISIN, and
+// each account's share of it is derived: journal rows with source "registry" in
+// every account that held the paper at the start of the effective day. A split
+// writes one row; a conversion or a spin-off writes a pair built by
+// operation.BuildExchange or operation.BuildSpinoff.
 //
-// # Why it is not per account
+// Materialize is not incremental: it computes the rows the registry asks for,
+// compares them with the rows it wrote last time, and applies the difference, so
+// a changed rule, a corrected event and a newly bought paper all take one path.
 //
-// A split happens to the paper. Every holder of it, at every broker, in every
-// household, wakes up to the same multiplied quantity on the same day. So the
-// fact is stored once, keyed by the ISIN (the identity the catalog itself moved
-// to — see migration 0020), and what each account does about it is DERIVED: a
-// journal row of type split, carrying source "registry", written into every
-// account that held the paper at the start of the effective day.
-//
-// # Derived, and therefore recomputable
-//
-// Nothing here is incremental. Materialize computes the journal rows the
-// registry now asks for, compares them against the rows it wrote last time, and
-// applies the difference — the same shape the T-Invest rebuild uses against its
-// mirror, and for the same reason: a rule that changes, an event that is
-// corrected, and an account that only now bought the paper all reach the journal
-// by one path instead of three.
-//
-// # What is here and what is not
-//
-// All three kinds are materialized. A split writes one row; a conversion and a
-// spin-off write a PAIR — one leg giving up and one receiving, on the same
-// account and the same day, built by the journal's own arithmetic (see
-// operation.BuildExchange and operation.BuildSpinoff) and applied through the
-// same difference the split goes through.
-//
-// The one thing that still stops a recorded event from reaching a journal is a
-// catalog with no row for the paper the event PRODUCES: a journal row points at
-// a catalog row, and inventing one would be this program deciding what somebody
-// holds. That is a waiting state rather than a failure — the fact was recorded
-// the moment it was known, which is the whole reason the registry stores things
-// it cannot yet apply (the owner's own funds converted in 2023 and nobody can go
-// back and ask the registrar again) — and the event says so on its own row (see
-// Event.NotCountedReason). Cataloguing the paper is what completes it: the next
-// materialization writes the pair, against the same event, unchanged.
+// An event whose resulting paper has no catalog row waits rather than fails
+// (Event.NotCountedReason): the fact is kept, since it may not be recoverable
+// later, and cataloguing the paper lets the next materialization write the
+// pair.
 package corporateaction
 
 import (
@@ -69,46 +42,31 @@ import (
 type Kind string
 
 const (
-	// KindSplit rewrites the quantity of one paper and nothing else: the
-	// holding is multiplied, the money spent on it is not touched, and the
-	// acquisition dates of the parcels stand. Tax-neutral everywhere this
-	// program models (see internal/family/taxresidency.go).
+	// KindSplit rewrites one paper's quantity: the holding is multiplied, the
+	// money and acquisition dates stand. Tax-neutral everywhere this program
+	// models (see internal/family/taxresidency.go).
 	KindSplit Kind = "split"
 
-	// KindConversion turns one paper into another — a depositary receipt into
-	// the share it represented, a fund into its successor. The basis and the
-	// acquisition dates travel with it and nothing is realized (НК РФ
-	// ст. 214.1 п. 13: the expenses on shares received when receipts are
-	// redeemed are the price the receipts were acquired at).
+	// KindConversion turns one paper into another (a receipt into its share,
+	// a fund into its successor). Basis and acquisition dates travel with it and
+	// nothing is realized (НК РФ ст. 214.1 п. 13).
 	KindConversion Kind = "conversion"
 
-	// KindSpinOff leaves the original standing and hands out a second paper
-	// beside it. A share of the basis moves across, in the proportion BasisShare
-	// carries — 0 by default, as the broker keeps it (decision Р-16): no rule of
-	// the tax code divides the basis for an individual, so the broker's own
-	// accounting is the figure there is to agree with.
+	// KindSpinOff leaves the original standing and adds a second paper.
+	// BasisShare of the basis moves across: 0 by default, as the broker keeps it
+	// (Р-16), since the tax code does not divide it for an individual.
 	KindSpinOff Kind = "spin_off"
 )
 
-// kinds is every kind there is. The schema's CHECK on instrument_events.kind
-// names the same ones, and a test holds the two together.
+// kinds is every kind; the schema's CHECK names the same, held together by a
+// test.
 var kinds = []Kind{KindSplit, KindConversion, KindSpinOff}
 
 func (k Kind) Valid() bool { return slices.Contains(kinds, k) }
 
-// Materialized reports whether this program carries this KIND into journals.
-//
-// ALL THREE ARE, SINCE THE PAIRS LANDED — a split writes one row, a conversion
-// and a spin-off write two (see Materializer.rowsFor). So this answers true for
-// every kind Valid does today, and it is kept as a question of its own rather
-// than deleted for the same reason it was written: a fourth kind will be
-// recordable before it is applicable, and on that day it must be able to say so
-// here instead of somewhere a screen would have to be taught about.
-//
-// IT SAYS NOTHING ABOUT ONE EVENT. Whether a particular event produced anything
-// depends on the accounts (nobody held the paper) and on the catalog (the paper
-// it produces has no row here) — see NotCountedReason, which is the per-event
-// answer and the one a screen should show beside a row.
+// Materialized reports whether this program carries this kind into journals.
+// All three are today; a future kind may be recordable before it is applicable.
+// Whether one event produced anything is NotCountedReason's question.
 func (k Kind) Materialized() bool {
 	switch k {
 	case KindSplit, KindConversion, KindSpinOff:
@@ -121,19 +79,13 @@ func (k Kind) Materialized() bool {
 type NotCounted string
 
 // NotCountedResultMissing: the event produces a paper the catalog has no row
-// for, so no journal row could point at it. It is not a failure and not a
-// refusal — the registry deliberately records facts about papers nobody here
-// holds — but it IS the difference between "recorded and applied" and "recorded
-// and waiting", and a reader who has just entered a conversion is owed it.
-// Cured by cataloguing the paper: the next materialization writes the pair.
+// for, so no journal row can point at it. Not a failure: the event waits until
+// the paper is catalogued.
 const NotCountedResultMissing NotCounted = "result_not_in_catalog"
 
-// NotCountedReason answers, for one event, why it is not carried into journals —
-// or "" when nothing stands in the way.
-//
-// resultCataloged says whether the catalog holds the paper this event produces;
-// the caller looks that up in one query for a whole list rather than one per row
-// (see Store.CatalogedISINs).
+// NotCountedReason says why one event is not carried into journals, or "" if
+// nothing stands in the way. resultCataloged comes from one query for a whole list
+// (Store.CatalogedISINs).
 func (e Event) NotCountedReason(resultCataloged bool) NotCounted {
 	if e.ResultISIN != "" && !resultCataloged {
 		return NotCountedResultMissing
@@ -143,39 +95,32 @@ func (e Event) NotCountedReason(resultCataloged bool) NotCounted {
 
 // Source is where a fact came from.
 const (
-	// SourceMOEX marks a row the exchange job wrote. Not a person's to edit or
-	// delete: it is rewritten from the exchange on every run, so an edit would
-	// last until the next one and no longer.
+	// SourceMOEX marks a row the exchange job wrote. It is rewritten on every
+	// run, so it is not a person's to edit or delete.
 	SourceMOEX = "moex_iss"
 	// SourceManual marks a row a person recorded, with the evidence in
 	// SourceRef.
 	SourceManual = "manual"
 )
 
-// JournalSource is what the journal rows this package materializes carry in
-// their source column. It is the string operation.SourceRegistry holds; the two
-// are checked against each other by TestJournalSourceMatchesTheJournalsOwnName
-// rather than one importing the other, because the journal must be able to
-// name its sources without importing every package that writes one.
+// JournalSource is the source the materialized journal rows carry, the same
+// string as operation.SourceRegistry; TestJournalSourceMatchesTheJournalsOwnName
+// holds them together so the journal need not import every writer.
 const JournalSource = "registry"
 
 // Event is one thing that happened to one paper.
 type Event struct {
 	ID   uuid.UUID
 	Kind Kind
-	// ISIN of the paper it happened to. Not an instrument id: the fact
-	// outlives any catalog row, and the exchange job records splits of papers
-	// nobody here holds.
+	// ISIN of the paper, not an instrument id: the fact outlives catalog rows
+	// and covers papers nobody here holds.
 	ISIN string
-	// EffectiveOn is the first day the paper trades in the new quantity at the
-	// venue where it is held. The event applies at the START of it: what was
-	// held at the close of the day before is multiplied, and a trade dated
-	// this day is already in the new quantity. See the migration for the three
-	// live events this was checked against.
+	// EffectiveOn is the first day the paper trades in the new quantity. The
+	// event applies at the start of it: the previous close is multiplied, and a
+	// trade dated this day is already in the new quantity.
 	EffectiveOn time.Time
-	// RatioFrom/RatioTo: one unit becomes RatioTo/RatioFrom units. Whole
-	// numbers, the shape the exchange publishes, so that 1:3 is 1 and 3 rather
-	// than 0.3333333333.
+	// One unit becomes RatioTo/RatioFrom units; whole numbers, as the exchange
+	// publishes them.
 	RatioFrom, RatioTo int64
 	// ResultISIN is the paper a conversion or a spin-off produces; empty for a
 	// split.
@@ -191,61 +136,38 @@ type Event struct {
 	CreatedBy  *uuid.UUID
 }
 
-// Ratio is the factor a quantity is multiplied by: RatioTo / RatioFrom.
-//
-// It is computed on demand from the pair rather than stored, so there is one
-// number to trust rather than two that can disagree. DivisionPrecision is what
-// decimal uses for a division that does not terminate — 1:3 is a real ratio (a
-// reverse split of three into one is 1 -> 3 read the other way) and its factor
-// has no exact decimal form, so it is quantized to the same scale the journal
-// stores a split ratio at (numeric(20,10), see the migrations). The engine
-// quantizes the RESULT of applying it as well (portfolio.applySplit), so a
-// truncated tail here cannot leave a position on a finer scale than the column.
+// Ratio is RatioTo / RatioFrom, quantized to the journal's split_ratio scale
+// (numeric(20,10)), since ratios like 1:3 do not terminate. The engine quantizes
+// the result of applying it too (portfolio.applySplit).
 func (e Event) Ratio() decimal.Decimal {
 	return decimal.NewFromInt(e.RatioTo).DivRound(decimal.NewFromInt(e.RatioFrom), ratioScale)
 }
 
-// ratioScale is the number of decimal places a split ratio is kept at, and it
-// is the journal column's own scale (operations.split_ratio is
-// numeric(20,10)). Written as the engine's constant rather than as 10, because
-// the reason it is ten is that the journal stores it that way.
+// ratioScale is operations.split_ratio's scale.
 const ratioScale = 10
 
-// ErrNotEditable is what a caller gets for trying to remove a row the exchange
-// wrote. Wrapping family.ErrValidation makes it a 400 that names the rule,
-// rather than the generic 500 an unmapped error becomes.
+// ErrNotEditable refuses removing a row the exchange wrote: a 400 naming the
+// rule.
 var ErrNotEditable = fmt.Errorf(
 	"%w: this event came from the exchange and is refreshed from it; only a hand-recorded event can be removed",
 	family.ErrValidation)
 
-// ErrDuplicate means the registry already holds an event of this kind for this
-// paper on this day. It is a validation error for the same contract reason
-// instrument.ErrTickerTaken is one: POST /api/v1/instrument-events declares 400
-// and 403 and no 409.
+// ErrDuplicate: an event of this kind for this paper on this day already
+// exists. A validation error because the endpoint declares 400 and 403, not
+// 409.
 var ErrDuplicate = fmt.Errorf(
 	"%w: the registry already holds an event of this kind for this paper on this date",
 	family.ErrValidation)
 
-// maxRatio bounds each half of the ratio.
-//
-// THE BOUND IS THE JOURNAL'S, not a judgement about corporate actions: the
-// factor these two produce lands in operations.split_ratio, and the write path
-// refuses a ratio at or above 10^10 (see operation.maxSplitRatio) because a
-// split multiplies a whole position and a mis-scaled field carries an ordinary
-// holding past anything a screen can value. Bounding each half at 10^9 keeps
-// every ratio this table can express inside that: the largest is 10^9/1, an
-// order of magnitude below the refusal, and the smallest is 1/10^9, which
-// rounds to zero at ten decimal places and is refused by validate below rather
-// than stored as a factor of nothing.
-//
-// The real ones are nowhere near: the deepest reverse split this program has
-// met is VTBR's 5000:1 (MOEX ISS, 2024-07-15).
+// maxRatio bounds each half of the ratio by the journal's limit, not a view on
+// corporate actions: split_ratio refuses 10^10 and above (operation.maxSplitRatio),
+// so 10^9/1 stays inside it, and 1/10^9 rounds to zero and is refused by Validate.
+// The deepest real reverse split met so far is VTBR's 5000:1 (MOEX ISS,
+// 2024-07-15).
 const maxRatio = 1_000_000_000
 
-// Validate is what an event has to be, wherever it comes from. Both doors run
-// it — the API and the exchange job — so a fact the exchange publishes is held
-// to the same rules a person's is, and a row that could not be materialized
-// cannot be stored in the first place.
+// Validate is what an event must be, from the API or the exchange job alike,
+// so nothing stored is unmaterializable.
 func (e Event) Validate() error {
 	if !e.Kind.Valid() {
 		return fmt.Errorf("%w: kind must be one of split, conversion, spin_off", family.ErrValidation)
@@ -253,8 +175,8 @@ func (e Event) Validate() error {
 	if e.ISIN == "" {
 		return fmt.Errorf("%w: isin is required", family.ErrValidation)
 	}
-	// Matching is by string equality, so an ISIN in another spelling is another
-	// paper: it would be stored and never find its holders.
+	// Matching is by string equality, so another spelling would be another
+	// paper.
 	if normal, err := instrument.NormalizeISIN(e.ISIN); err != nil || normal != e.ISIN {
 		return fmt.Errorf("%w: isin must be an ISIN in upper case, e.g. US0231351067", family.ErrValidation)
 	}
@@ -267,18 +189,12 @@ func (e Event) Validate() error {
 	if e.EffectiveOn.IsZero() {
 		return fmt.Errorf("%w: effective_on is required", family.ErrValidation)
 	}
-	// The same ceiling the journal holds an operation to, and for the same
-	// reason: this event becomes a journal row dated this day, and a date the
-	// journal would refuse is a fact that could never be carried into it. There
-	// is deliberately no floor of its own — the journal's own (1900) applies at
-	// the moment the row is written, and a registry that refused an older date
-	// would be inventing a second rule about how far back history goes.
+	// The journal's ceiling, since the event becomes a journal row on this day.
 	if e.EffectiveOn.After(dates.LatestRecordable()) {
 		return fmt.Errorf("%w: effective_on must not be in the future", family.ErrValidation)
 	}
-	// The rows an event becomes are operations, and the journal refuses one
-	// dated before this — so an earlier event would be stored and then refused,
-	// silently, on every sweep.
+	// The journal's floor: an earlier event would be stored and then refused on
+	// every sweep.
 	if e.EffectiveOn.Before(dates.EarliestRecordable()) {
 		return fmt.Errorf("%w: effective_on must not be earlier than %s",
 			family.ErrValidation, dates.EarliestRecordable().Format(time.DateOnly))
@@ -287,28 +203,15 @@ func (e Event) Validate() error {
 		return fmt.Errorf("%w: ratio_from and ratio_to must be whole numbers from 1 to %d",
 			family.ErrValidation, maxRatio)
 	}
-	// EQUAL SIDES ARE EMPTY ONLY FOR A SPLIT, whose whole content is the ratio:
-	// a split of 1 to 1 multiplies every holding by one and would be a row
-	// saying nothing happened, materialized into every holder's journal.
-	//
-	// FOR THE OTHER TWO IT IS THE COMMONEST SHAPE THERE IS, and refusing it
-	// refused the very events this registry was built for. A conversion of 1
-	// to 1 is a paper becoming ANOTHER paper unit for unit — a depositary
-	// receipt redeemed for the share it represented, a fund reissued under a
-	// new ISIN — where the count is unchanged and the identity is not: the
-	// owner's TCS Group receipts became shares of МКПАО «ТКС Холдинг» one for
-	// one on 2024-02-27 (moex.com/n67851), and until this rule was narrowed
-	// that fact could not be recorded at all. A spin-off of 1 to 1 is the same
-	// story with the money: each unit of the fund yielded one unit of the
-	// carved-out fund while a share of the basis moved across, which is what
-	// Т-Капитал did to TECH, TSPX and TUSD.
+	// A 1:1 split says nothing happened. A 1:1 conversion or spin-off is the
+	// common case: TCS Group receipts became МКПАО «ТКС Холдинг» shares one for
+	// one on 2024-02-27 (moex.com/n67851), and Т-Капитал's TECH, TSPX and TUSD
+	// spin-offs were one for one.
 	if e.Kind == KindSplit && e.RatioFrom == e.RatioTo {
 		return fmt.Errorf("%w: a split of %d to %d changes nothing", family.ErrValidation, e.RatioFrom, e.RatioTo)
 	}
-	// A factor that rounds away at the scale the journal keeps would multiply
-	// every holding by zero — the position would vanish and the money spent on
-	// it would stay, which is the one shape the engine cannot express (see
-	// portfolio.applySplit).
+	// A factor that rounds to zero would empty every position and keep its
+	// money, which the engine cannot express.
 	if e.Ratio().IsZero() {
 		return fmt.Errorf("%w: %d to %d is smaller than the journal can record (%d decimal places)",
 			family.ErrValidation, e.RatioFrom, e.RatioTo, ratioScale)
@@ -360,12 +263,9 @@ func (e Event) Validate() error {
 	return nil
 }
 
-// MaxSourceRefRunes and MaxNoteRunes are the longest evidence link and note a
-// hand-recorded event takes, counted in characters (Unicode code points) as
-// api/openapi.yaml's maxLength counts them. A link is a line and a note a line
-// or two; the ceilings are there so that what the registry stores has a size
-// the server chose, not the request body limit. An event the exchange
-// reported carries the exchange's own texts and is not held to them.
+// MaxSourceRefRunes and MaxNoteRunes bound a hand-recorded event's link and
+// note, in code points as openapi counts them. The exchange's own texts are not
+// held to them.
 const (
 	MaxSourceRefRunes = 500
 	MaxNoteRunes      = 1000

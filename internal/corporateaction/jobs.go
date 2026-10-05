@@ -12,42 +12,32 @@ import (
 	"babki.my/babki/internal/marketdata/moex"
 )
 
-// RefreshMoexSplitsArgs asks the exchange what securities have been divided,
-// and records what it says in the registry. Kind is namespaced with the
-// module's name so job kinds from different modules cannot collide in the
-// shared queue.
+// RefreshMoexSplitsArgs asks the exchange which securities were split and
+// records the answer in the registry.
 type RefreshMoexSplitsArgs struct{}
 
 func (RefreshMoexSplitsArgs) Kind() string { return "corporateaction.refresh_moex_splits" }
 
-// MaterializeAllArgs re-derives every journal row the registry asks for. See
-// Materializer.All: it is the safety net behind the synchronous triggers, not
-// the normal path.
+// MaterializeAllArgs re-derives every registry row (see Materializer.All).
 type MaterializeAllArgs struct{}
 
 func (MaterializeAllArgs) Kind() string { return "corporateaction.materialize_all" }
 
-// MaterializeISINArgs carries one paper's events into the journals of its
-// holders. It is queued when that could not be done on the spot — the request
-// that recorded or deleted an event has already answered, and the event is
-// stored either way — so that the journals do not wait for the daily sweep.
-//
-// ISIN carries the `river:"unique"` tag: two failures over one paper are one
-// job, since a run recomputes everything the registry holds about it.
+// MaterializeISINArgs carries one paper's events into its holders' journals
+// when the request that recorded or deleted an event could not. Unique by ISIN:
+// a run recomputes the whole paper.
 type MaterializeISINArgs struct {
 	ISIN string `json:"isin" river:"unique"`
 }
 
 func (MaterializeISINArgs) Kind() string { return "corporateaction.materialize_isin" }
 
-// materializeISINAttempts bounds the retries: River waits attempt⁴ seconds
-// after each failure, so eight attempts span about 78 minutes. A journal that
-// still cannot take the rows after that is not going to on a ninth try, and
-// the daily sweep remains behind it.
+// materializeISINAttempts: River waits attempt⁴ seconds, so eight attempts
+// span about 78 minutes; the daily sweep stands behind them.
 const materializeISINAttempts = 8
 
-// MaterializeISINInsertOpts is how the job is queued: one per paper among the
-// jobs that have not finished, with bounded attempts.
+// MaterializeISINInsertOpts queues one job per paper among unfinished jobs,
+// with bounded attempts.
 func MaterializeISINInsertOpts() *river.InsertOpts {
 	return &river.InsertOpts{
 		MaxAttempts: materializeISINAttempts,
@@ -61,8 +51,7 @@ func MaterializeISINInsertOpts() *river.InsertOpts {
 	}
 }
 
-// jobInserter is the queue as this package uses it. *river.Client[pgx.Tx]
-// satisfies it structurally.
+// jobInserter is the queue as this package uses it.
 type jobInserter interface {
 	Insert(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) (*rivertype.JobInsertResult, error)
 }
@@ -84,10 +73,8 @@ func (w *materializeISINWorker) Timeout(*river.Job[MaterializeISINArgs]) time.Du
 	return refreshTimeout
 }
 
-// Work brings the paper's holders into line. An account that failed is tried
-// again by the queue; the accounts that succeeded are found already in line by
-// that attempt, and their fresh broker check is asked for now rather than held
-// back for the one that failed.
+// Work brings the paper's holders into line. A failed account is retried by
+// the queue; recheck is requested now for the accounts that succeeded.
 func (w *materializeISINWorker) Work(ctx context.Context, job *river.Job[MaterializeISINArgs]) error {
 	stats, err := w.materializer.ForISIN(ctx, job.Args.ISIN)
 	w.materializer.RequestRecheck(ctx, stats)
@@ -101,19 +88,14 @@ func (w *materializeISINWorker) Work(ctx context.Context, job *river.Job[Materia
 	return nil
 }
 
-// SplitsProvider is the slice of the exchange client this worker needs;
-// *moex.Client satisfies it structurally. Narrow and local for the same reason
-// marketdata declares its own: what this package wants of the exchange is two
-// calls.
+// SplitsProvider is the part of *moex.Client this worker needs.
 type SplitsProvider interface {
 	Splits(ctx context.Context) ([]moex.Split, error)
 	ISINBySecID(ctx context.Context, secid string) (string, error)
 }
 
-// refreshTimeout overrides River's one-minute default. A run reads one small
-// table and then asks the exchange to identify each security it has not
-// identified before — 56 rows on 2026-08-22, so at most 56 small requests on
-// the very first run and none at all on a run that learns nothing new.
+// refreshTimeout overrides River's one-minute default: a first run may resolve
+// every unseen secid (56 rows on 2026-08-22).
 const refreshTimeout = 10 * time.Minute
 
 type refreshMoexSplitsWorker struct {
@@ -137,22 +119,11 @@ func (w *refreshMoexSplitsWorker) Timeout(*river.Job[RefreshMoexSplitsArgs]) tim
 	return refreshTimeout
 }
 
-// Work records every split the exchange publishes and then brings the journals
-// of the papers that changed into line.
-//
-// THE SECID IS RESOLVED THROUGH THE EXCHANGE, NEVER THROUGH THIS CATALOG. See
-// moex.ISINBySecID: a ticker is not an identity, and the owner's own catalog
-// holds AT&T and Т-Технологии both under "T".
-//
-// The resolution is cached in the row it produced, so a secid the registry has
-// already seen costs nothing on later runs. The cache is read from the registry
-// itself rather than kept in memory: a worker is per run, and the whole point
-// is that the second run is cheap.
-//
-// A security the exchange will not identify is skipped and counted. Recording
-// the split against the secid instead is exactly the wrong repair — it would
-// key a fact about a security to a code that names a different security on
-// another exchange.
+// Work records every split the exchange publishes and brings the changed
+// papers' journals into line. Secids are resolved through the exchange, never
+// this catalog (a ticker is not an identity: AT&T and Т-Технологии are both "T"),
+// and cached in the rows they produced. A security the exchange will not identify
+// is skipped and counted.
 func (w *refreshMoexSplitsWorker) Work(ctx context.Context, _ *river.Job[RefreshMoexSplitsArgs]) error {
 	splits, err := w.provider.Splits(ctx)
 	if err != nil {
@@ -160,10 +131,9 @@ func (w *refreshMoexSplitsWorker) Work(ctx context.Context, _ *river.Job[Refresh
 		return err
 	}
 	if len(splits) == 0 {
-		// The table has held tens of rows since 2021 and only ever grows, so
-		// an empty answer is a changed endpoint rather than a quiet quarter.
-		// Warn and record nothing: an empty registry silently un-splits every
-		// holding it had been correcting.
+		// The table has only grown since 2021, so an empty answer means a changed
+		// endpoint. Record nothing: an empty registry would un-split every
+		// holding.
 		w.log.Warn("corporateaction: the exchange published no splits at all, which its table has never done")
 		return nil
 	}
@@ -205,10 +175,8 @@ func (w *refreshMoexSplitsWorker) Work(ctx context.Context, _ *river.Job[Refresh
 			MOEXSecID:   s.SecID,
 		}
 		if err := e.Validate(); err != nil {
-			// The exchange's own rules are not this program's, and a row it
-			// publishes that this registry would refuse from a person is
-			// refused from the exchange too — a ratio of 1 to 1, a date in the
-			// future. Skipped and counted rather than stored unchecked.
+			// A row this registry would refuse from a person (1:1, a future date)
+			// is refused from the exchange too.
 			w.log.Debug("corporateaction: the exchange published a split this registry will not hold",
 				"secid", s.SecID, "isin", isin, "err", err)
 			skipped++
@@ -220,9 +188,7 @@ func (w *refreshMoexSplitsWorker) Work(ctx context.Context, _ *river.Job[Refresh
 			return err
 		}
 		if !written {
-			// A hand-recorded event of the same paper, kind and day is already
-			// there. Somebody wrote down what a registrar told them, with a
-			// link to it; the exchange's table does not overrule that.
+			// A hand-recorded event of the same paper, kind and day is kept.
 			kept++
 			continue
 		}
@@ -230,8 +196,7 @@ func (w *refreshMoexSplitsWorker) Work(ctx context.Context, _ *river.Job[Refresh
 		touched[isin] = true
 	}
 
-	// Every paper is carried as far as it goes; what failed is reported at the
-	// end, so one account that cannot take a split does not hold up the rest.
+	// Every paper goes as far as it can; failures are reported at the end.
 	var totals Stats
 	var failed []error
 	for isin := range touched {
@@ -251,13 +216,11 @@ func (w *refreshMoexSplitsWorker) Work(ctx context.Context, _ *river.Job[Refresh
 	return errors.Join(failed...)
 }
 
-// splitsSourceRef is what a row written from the exchange links to as its
-// evidence: the very table it was read from.
+// splitsSourceRef is the evidence link of an exchange row: the table it
+// came from.
 const splitsSourceRef = "/iss/statistics/engines/stock/splits.json"
 
-// knownISINs is the secid -> ISIN cache, read back from the rows earlier runs
-// wrote. Only rows the exchange job itself wrote carry a secid, so nothing a
-// person recorded can teach this cache anything.
+// knownISINs is the secid -> ISIN cache, read from rows earlier runs wrote.
 func (w *refreshMoexSplitsWorker) knownISINs(ctx context.Context) (map[string]string, error) {
 	events, err := w.store.List(ctx)
 	if err != nil {
@@ -291,16 +254,14 @@ func (w *materializeAllWorker) Timeout(*river.Job[MaterializeAllArgs]) time.Dura
 
 func (w *materializeAllWorker) Work(ctx context.Context, _ *river.Job[MaterializeAllArgs]) error {
 	stats, err := w.materializer.All(ctx)
-	// Asked before the error is looked at: a sweep that failed on one account
-	// still changed the others, and their verdicts are stale either way.
+	// Before the error check: a sweep that failed on one account changed the
+	// others.
 	w.materializer.RequestRecheck(ctx, stats)
 	if err != nil {
 		w.log.Error("corporateaction: the registry sweep failed", "err", err)
 		return err
 	}
-	// Debug when it did nothing, which is what a healthy instance does every
-	// day: the sweep exists to catch a trigger that failed, and a daily Info
-	// line saying "nothing" would bury the day it says something.
+	// Debug on a no-op day, so the day it does something stands out.
 	if stats.Added == 0 && stats.Removed == 0 && stats.Refused == 0 {
 		w.log.Debug("corporateaction: the registry sweep found every journal already in line")
 		return nil

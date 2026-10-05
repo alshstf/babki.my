@@ -26,9 +26,7 @@ import (
 	"babki.my/babki/internal/platform/testdb"
 )
 
-// queuedRecheck is a rechecker that records what it was asked for. A real one
-// needs a job queue and a broker link; what every test here is about is whether
-// the ask happens at all and with which accounts.
+// queuedRecheck records what it was asked for.
 type queuedRecheck struct {
 	calls    int
 	accounts []uuid.UUID
@@ -41,13 +39,9 @@ func (q *queuedRecheck) QueueRecheckForAccounts(_ context.Context, accountIDs []
 	return q.answer, nil
 }
 
-// apiFixture is the registry behind its own HTTP door, signed in as the owner.
-//
-// It builds its own space through /api/v1/setup rather than reusing
-// newFixture's, because that one seeds a user with a hash no password matches —
-// perfectly good for the store-level tests and useless for a session. The rest
-// of the fixture is assembled to be the same shape, so every helper on it
-// (buy, held, splitEvent, registryRows) works here unchanged.
+// apiFixture is the registry behind its HTTP door, signed in as the owner. It
+// builds its space through /api/v1/setup, since newFixture's user has no usable
+// password, and is otherwise shaped like the fixture so its helpers work.
 type apiFixture struct {
 	fixture
 	url     string
@@ -57,8 +51,7 @@ type apiFixture struct {
 	queue   *recordedQueue
 }
 
-// flakyJournal is the journal's importer door with a switch on it: while away
-// is set every write fails, as it does when the database is briefly gone.
+// flakyJournal fails every write while away is set.
 type flakyJournal struct {
 	real *operation.Service
 	away bool
@@ -165,10 +158,7 @@ func (a *apiFixture) do(t *testing.T, method, path, body string) (*http.Response
 	return resp, out
 }
 
-// TestRecordingASplitReachesTheJournalBeforeItAnswers is the whole point of
-// materializing inside the request: the owner records Amazon's 20:1 and the
-// position is already right when the answer comes back, rather than an hour
-// later when the sweep runs.
+// The journal is already split when the request answers.
 func TestRecordingASplitReachesTheJournalBeforeItAnswers(t *testing.T) {
 	f := newAPIFixture(t)
 	f.buy(t, f.accountID, "2021-05-04", "1", -320_000)
@@ -205,8 +195,7 @@ func TestRecordingASplitReachesTheJournalBeforeItAnswers(t *testing.T) {
 		t.Errorf("rows_added = %d, accounts_touched = %d, want 1 and 1",
 			written.RowsAdded, written.AccountsTouched)
 	}
-	// The figure the answer describes, read back from the journal itself: one
-	// share bought before the split is twenty after it.
+	// One share bought before the split is twenty after it.
 	if held := f.held(t, f.accountID); held.String() != "20" {
 		t.Errorf("the account holds %s after the answer came back, want 20", held)
 	}
@@ -216,9 +205,8 @@ func TestRecordingASplitReachesTheJournalBeforeItAnswers(t *testing.T) {
 	}
 }
 
-// TestASplitNoEvidenceBacksIsRefused: a ratio nobody can check would be carried
-// into every holder's journal on one person's word, so the link is the one field
-// of this request that is not optional.
+// The evidence link is required: a ratio nobody can check would reach every
+// holder's journal.
 func TestASplitNoEvidenceBacksIsRefused(t *testing.T) {
 	f := newAPIFixture(t)
 	resp, body := f.do(t, http.MethodPost, "/api/v1/instrument-events", `{
@@ -237,10 +225,7 @@ func TestASplitNoEvidenceBacksIsRefused(t *testing.T) {
 	}
 }
 
-// TestTheExchangesOwnRowCannotBeDeleted: the job that wrote it reads the
-// exchange's table on every run and would write it back, so a deletion would
-// last until the next run and no longer. Refused by name rather than accepted
-// and quietly undone.
+// An exchange row cannot be deleted: the next run would write it back.
 func TestTheExchangesOwnRowCannotBeDeleted(t *testing.T) {
 	f := newAPIFixture(t)
 	e, err := f.store.Create(f.ctx, corporateaction.Event{
@@ -261,9 +246,8 @@ func TestTheExchangesOwnRowCannotBeDeleted(t *testing.T) {
 	}
 }
 
-// TestDeletingAHandRecordedEventTakesItsJournalRowsWithIt: the same
-// materialization runs, finds the registry no longer asks for those rows, and
-// removes them before the answer — so the position is back to what it was.
+// Deleting a hand-recorded event removes its journal rows before the
+// answer.
 func TestDeletingAHandRecordedEventTakesItsJournalRowsWithIt(t *testing.T) {
 	f := newAPIFixture(t)
 	f.buy(t, f.accountID, "2021-05-04", "1", -320_000)
@@ -298,14 +282,10 @@ func TestDeletingAHandRecordedEventTakesItsJournalRowsWithIt(t *testing.T) {
 	}
 }
 
-// TestAMaterializationThatChangesNothingAsksForNoRecheck. A sweep walks every
-// holder of every paper and almost always writes nothing; asking for a fresh
-// broker comparison each time would turn a no-op into a broker read per
-// connection, daily, for ever.
+// A run that changes nothing asks for no recheck.
 func TestAMaterializationThatChangesNothingAsksForNoRecheck(t *testing.T) {
 	f := newAPIFixture(t)
-	// Nobody held Amazon on the effective day: the only purchase is after it,
-	// and a purchase made after a split is already in the new quantity.
+	// The only purchase is after the split, already in the new quantity.
 	f.buy(t, f.accountID, "2023-01-10", "5", -500_000)
 
 	resp, body := f.do(t, http.MethodPost, "/api/v1/instrument-events", `{
@@ -336,14 +316,8 @@ func TestAMaterializationThatChangesNothingAsksForNoRecheck(t *testing.T) {
 	}
 }
 
-// TestASplitOfOneToOneIsRefused keeps the emptiness rule where it is true.
-//
-// A split has nothing to say but its ratio, so one for one multiplies every
-// holding by one: a row claiming an event, carried into the journal of every
-// account holding the paper, saying nothing happened. The other two kinds are
-// not like that at all — see TestAConversionWaitsForThePaperItProducesToBeCatalogued,
-// where one for one is the owner's own case — and this test exists so that the
-// narrowing cannot be widened back by accident.
+// A 1:1 split is refused; 1:1 conversions and spin-offs are not (see
+// TestAConversionWaitsForThePaperItProducesToBeCatalogued).
 func TestASplitOfOneToOneIsRefused(t *testing.T) {
 	f := newAPIFixture(t)
 
@@ -358,14 +332,9 @@ func TestASplitOfOneToOneIsRefused(t *testing.T) {
 	}
 }
 
-// TestAConversionWaitsForThePaperItProducesToBeCatalogued. The facts are
-// perishable — a fund converted in 2023 and nobody can go back and ask the
-// registrar again — so a conversion is recorded whether or not anything here can
-// yet act on it. What it cannot do is point a journal row at a paper the catalog
-// has no row for, and THAT is the only thing standing between the record and the
-// journal now that both legs of a conversion exist. So the row says which of the
-// two it is, in a field of its own, and the moment the paper is catalogued the
-// very same event writes the pair.
+// A conversion is recorded even when its produced paper is not catalogued,
+// says so in its own field, and writes the pair as soon as the paper is
+// catalogued.
 func TestAConversionWaitsForThePaperItProducesToBeCatalogued(t *testing.T) {
 	f := newAPIFixture(t)
 	f.buy(t, f.accountID, "2021-05-04", "4", -320_000)
@@ -376,13 +345,8 @@ func TestAConversionWaitsForThePaperItProducesToBeCatalogued(t *testing.T) {
 		"effective_on": "2024-02-27", "ratio_from": 1, "ratio_to": 1,
 		"source_ref": "https://www.moex.com/n67851"
 	}`)
-	// ONE FOR ONE IS ACCEPTED HERE, and the exact request above is the reason:
-	// it is the owner's own case — TCS Group receipts became shares of МКПАО
-	// «ТКС Холдинг» unit for unit on 2024-02-27 — and it is what a conversion
-	// most often looks like, since a redomiciliation or an ISIN change moves
-	// the identity and leaves the count alone. Equal sides are empty only for a
-	// SPLIT, which has nothing but the ratio to say; that refusal has a test of
-	// its own (see TestASplitOfOneToOneIsRefused).
+	// 1:1 is accepted: TCS Group receipts became МКПАО «ТКС Холдинг»
+	// shares unit for unit on 2024-02-27.
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status %d, want 201 — one for one is what a conversion usually is: %s", resp.StatusCode, body)
 	}
@@ -398,8 +362,7 @@ func TestAConversionWaitsForThePaperItProducesToBeCatalogued(t *testing.T) {
 	if err := json.Unmarshal(body, &written); err != nil {
 		t.Fatalf("decode %s: %v", body, err)
 	}
-	// The KIND is carried into journals; THIS event is not, and the two answers
-	// are separate fields because they are separate questions.
+	// The kind is materialized; this event is not. Separate questions.
 	if !written.Event.Materialized {
 		t.Errorf("materialized = false on a conversion, though conversions are carried into journals now")
 	}
@@ -417,10 +380,7 @@ func TestAConversionWaitsForThePaperItProducesToBeCatalogued(t *testing.T) {
 		t.Errorf("the rechecker was asked %d times though no journal changed, want 0", f.recheck.calls)
 	}
 
-	// Now catalogue the paper the conversion produces and let the registry run
-	// again. NOTHING ABOUT THE EVENT CHANGES — it is the same row, recorded
-	// before the paper existed here — and that is the point: the fact was always
-	// true and only this program's ability to express it was missing.
+	// Catalogue the produced paper and run again; the event is unchanged.
 	if _, err := instrument.NewStore(f.pool).Create(f.ctx, instrument.Instrument{
 		Type: instrument.TypeShare, Name: "Т-Технологии", Ticker: "T", ISIN: producedISIN, Currency: "USD",
 	}); err != nil {
@@ -486,9 +446,8 @@ func TestTheRegistryListsWhatItHolds(t *testing.T) {
 	}
 }
 
-// TestAnEventsISINIsStoredInOneSpelling: the registry finds an event's holders
-// by matching its ISIN against the catalog's, as strings. Typed in lower case
-// the event used to be stored as typed, find nobody, and say nothing (#202).
+// An ISIN typed in lower case is stored upper-cased, or it would match
+// no holder (#202).
 func TestAnEventsISINIsStoredInOneSpelling(t *testing.T) {
 	f := newAPIFixture(t)
 	f.buy(t, f.accountID, "2021-05-04", "1", -323_000)
@@ -504,9 +463,8 @@ func TestAnEventsISINIsStoredInOneSpelling(t *testing.T) {
 	}
 }
 
-// TestAnEventIsRefusedForWhatWouldMakeItSilentlyUseless: a malformed ISIN can
-// match no paper, and a date before the journal's own floor produces rows the
-// journal refuses on every sweep.
+// A malformed ISIN matches nothing, and a date before the journal's floor
+// makes rows the journal refuses.
 func TestAnEventIsRefusedForWhatWouldMakeItSilentlyUseless(t *testing.T) {
 	f := newAPIFixture(t)
 	for name, body := range map[string]string{
