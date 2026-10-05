@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"babki.my/babki/internal/account"
+	"babki.my/babki/internal/background"
 	"babki.my/babki/internal/corporateaction"
 	"babki.my/babki/internal/export"
 	"babki.my/babki/internal/family"
@@ -97,7 +98,7 @@ func mountModules(srv *httpserver.Server, r *rt, inserter *river.Client[pgx.Tx])
 	operation.NewHandler(opSvc, opStore, famStore, converter, famAuth, famSM).Mount(srv)
 	positions := portfolio.NewHandler(opStore, instStore, mdStore, converter, famStore, famAuth, famSM)
 	positions.Mount(srv)
-	jobs.NewStatusHandler(r.pool, famAuth, famSM).Mount(srv)
+	background.NewStatusHandler(r.pool, famAuth, famSM).Mount(srv)
 	accStore := account.NewStore(r.pool)
 	account.NewHandler(accStore, famStore, converter, journalValues{positions}, famAuth, famSM).Mount(srv)
 	table.NewHandler(table.NewService(accStore, instStore, opStore, opSvc, table.NewStore(r.pool),
@@ -158,13 +159,13 @@ const tinvestHTTPTimeout = 30 * time.Second
 // not safe for concurrent use). The transport is built once and shared.
 func newTinvestDeps(r *rt, instStore *instrument.Store, opStore *operation.Store,
 	accStore *account.Store, converter *marketdata.Converter,
-) (jobs.TinvestDeps, error) {
+) (background.TinvestDeps, error) {
 	store := tinvest.NewStore(r.pool)
 	newClient, err := newTinvestClientFactory(r)
 	if err != nil {
 		// This stops every background job, not just the import, so the message
 		// says so. Fatal anyway: it means the binary was built wrong.
-		return jobs.TinvestDeps{}, fmt.Errorf(
+		return background.TinvestDeps{}, fmt.Errorf(
 			"the background job queue does not start at all and nothing else it runs — "+
 				"exchange rates, quotes — will run either; nothing about this instance's "+
 				"configuration causes it: %w", err)
@@ -172,7 +173,7 @@ func newTinvestDeps(r *rt, instStore *instrument.Store, opStore *operation.Store
 	// One exchange client for every rebuild, so its schedules are
 	// remembered.
 	faces := moex.New(newMoexHTTPClient(), "", r.log)
-	return jobs.TinvestDeps{
+	return background.TinvestDeps{
 		Store:     store,
 		Box:       r.box,
 		NewClient: newClient,
@@ -228,9 +229,9 @@ func startJobClient(ctx context.Context, r *rt) (*river.Client[pgx.Tx], error) {
 	caMaterializer := corporateaction.NewMaterializer(
 		caStore, operation.NewService(opStore), instStore,
 		tinvest.NewRechecker(tinvest.NewStore(r.pool), enqueuer, r.log), r.log)
-	workers := jobs.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, accStore, famStore,
+	workers := background.NewWorkers(r.log, r.pool, mdStore, instStore, opStore, accStore, famStore,
 		fxProvider, quoteProvider, tinvestDeps, caStore, caMaterializer, enqueuer)
-	client, err := jobs.NewClient(r.pool, workers, enqueuer, r.log)
+	client, err := background.NewClient(r.pool, workers, enqueuer, r.log)
 	if err != nil {
 		return nil, err
 	}

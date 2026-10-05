@@ -1,4 +1,4 @@
-package jobs_test
+package background_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 
+	"babki.my/babki/internal/background"
 	"babki.my/babki/internal/importer/tinvest"
 	"babki.my/babki/internal/platform/jobs"
 	"babki.my/babki/internal/platform/testdb"
@@ -30,18 +31,18 @@ func retriesTake(maxAttempts int) time.Duration {
 // Every scheduled job is one of a kind at a time, and an always-failing job
 // exhausts its attempts (by River's real policy) before the next is due.
 func TestEveryScheduledJobIsOneAtATimeAndGivesUpBeforeTheNextIsDue(t *testing.T) {
-	entries := jobs.Schedule()
+	entries := background.Schedule()
 	if len(entries) == 0 {
 		t.Fatal("the schedule is empty")
 	}
 	for _, e := range entries {
-		kind := e.Args.Kind()
-		if e.Opts == nil || len(e.Opts.UniqueOpts.ByState) == 0 {
+		kind, opts := e.Args.Kind(), jobs.ScheduledOpts(e.Every)
+		if opts == nil || len(opts.UniqueOpts.ByState) == 0 {
 			t.Errorf("%s is queued with no uniqueness: a source that is down collects a job per tick", kind)
 			continue
 		}
 		states := map[rivertype.JobState]bool{}
-		for _, s := range e.Opts.UniqueOpts.ByState {
+		for _, s := range opts.UniqueOpts.ByState {
 			states[s] = true
 		}
 		if !states[rivertype.JobStateRetryable] {
@@ -50,25 +51,12 @@ func TestEveryScheduledJobIsOneAtATimeAndGivesUpBeforeTheNextIsDue(t *testing.T)
 		if states[rivertype.JobStateCompleted] {
 			t.Errorf("%s is unique across COMPLETED jobs: a finished run would block every later tick until the cleaner removed it", kind)
 		}
-		if e.Opts.MaxAttempts < 2 {
-			t.Errorf("%s gets %d attempts, want at least one retry", kind, e.Opts.MaxAttempts)
+		if opts.MaxAttempts < 2 {
+			t.Errorf("%s gets %d attempts, want at least one retry", kind, opts.MaxAttempts)
 		}
-		if took := retriesTake(e.Opts.MaxAttempts); took >= e.Every {
+		if took := retriesTake(opts.MaxAttempts); took >= e.Every {
 			t.Errorf("%s: %d attempts take %s under River's retry policy, which is not inside its %s interval",
-				kind, e.Opts.MaxAttempts, took.Round(time.Second), e.Every)
-		}
-	}
-}
-
-func TestAttemptsWithin(t *testing.T) {
-	for interval, want := range map[time.Duration]int{
-		time.Minute:      3,
-		30 * time.Minute: 6,
-		time.Hour:        7,
-		24 * time.Hour:   13,
-	} {
-		if got := jobs.AttemptsWithin(interval); got != want {
-			t.Errorf("AttemptsWithin(%s) = %d, want %d", interval, got, want)
+				kind, opts.MaxAttempts, took.Round(time.Second), e.Every)
 		}
 	}
 }
@@ -77,9 +65,9 @@ func TestAttemptsWithin(t *testing.T) {
 // it: its attempts have to fit inside the hour between two dispatches.
 func TestASyncGivesUpBeforeTheNextDispatch(t *testing.T) {
 	opts := tinvest.SyncInsertOpts()
-	if opts.MaxAttempts != jobs.AttemptsWithin(jobs.TinvestSyncInterval) {
+	if opts.MaxAttempts != jobs.AttemptsWithin(background.TinvestSyncInterval) {
 		t.Errorf("a sync gets %d attempts, want %d — what fits inside the %s between two dispatches",
-			opts.MaxAttempts, jobs.AttemptsWithin(jobs.TinvestSyncInterval), jobs.TinvestSyncInterval)
+			opts.MaxAttempts, jobs.AttemptsWithin(background.TinvestSyncInterval), background.TinvestSyncInterval)
 	}
 }
 
@@ -92,18 +80,19 @@ func TestASecondJobOfAScheduledKindIsSkippedWhileTheFirstIsUnfinished(t *testing
 	if err != nil {
 		t.Fatalf("NewInsertOnlyClient: %v", err)
 	}
-	for _, e := range jobs.Schedule() {
-		first, err := client.Insert(ctx, e.Args, e.Opts)
+	for _, e := range background.Schedule() {
+		opts := jobs.ScheduledOpts(e.Every)
+		first, err := client.Insert(ctx, e.Args, opts)
 		if err != nil {
 			t.Fatalf("%s: first insert: %v", e.Args.Kind(), err)
 		}
 		if first.UniqueSkippedAsDuplicate {
 			t.Fatalf("%s: the first insert into an empty queue was skipped as a duplicate", e.Args.Kind())
 		}
-		if first.Job.MaxAttempts != e.Opts.MaxAttempts {
-			t.Errorf("%s: queued with %d attempts, want %d", e.Args.Kind(), first.Job.MaxAttempts, e.Opts.MaxAttempts)
+		if first.Job.MaxAttempts != opts.MaxAttempts {
+			t.Errorf("%s: queued with %d attempts, want %d", e.Args.Kind(), first.Job.MaxAttempts, opts.MaxAttempts)
 		}
-		second, err := client.Insert(ctx, e.Args, e.Opts)
+		second, err := client.Insert(ctx, e.Args, opts)
 		if err != nil {
 			t.Fatalf("%s: second insert: %v", e.Args.Kind(), err)
 		}

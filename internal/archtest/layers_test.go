@@ -29,10 +29,10 @@ var layers = map[string]int{
 	"internal/export":          4,
 	"cmd/":                     5,
 	// The background jobs register the workers of every module, so they sit
-	// with the binary that wires the modules, not with the platform.
-	"internal/platform/jobs": 5,
-	"web":                    5,
-	"internal/archtest":      5,
+	// with the binary that wires the modules.
+	"internal/background": 5,
+	"web":                 5,
+	"internal/archtest":   5,
 }
 
 // layerOf is the layer of a package: the longest entry of layers that is the
