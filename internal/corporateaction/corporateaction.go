@@ -83,8 +83,10 @@ const (
 	KindConversion Kind = "conversion"
 
 	// KindSpinOff leaves the original standing and hands out a second paper
-	// beside it. Part of the basis moves across, in the proportion BasisShare
-	// carries (НК РФ ст. 277 п. 7).
+	// beside it. A share of the basis moves across, in the proportion BasisShare
+	// carries — 0 by default, as the broker keeps it (decision Р-16): no rule of
+	// the tax code divides the basis for an individual, so the broker's own
+	// accounting is the figure there is to agree with.
 	KindSpinOff Kind = "spin_off"
 )
 
@@ -336,8 +338,8 @@ func (e Event) Validate() error {
 		if e.BasisShare == nil {
 			return fmt.Errorf("%w: a spin-off must say what share of the cost basis moves across", family.ErrValidation)
 		}
-		if !e.BasisShare.IsPositive() || !e.BasisShare.LessThan(decimal.NewFromInt(1)) {
-			return fmt.Errorf("%w: basis_share must be greater than 0 and less than 1", family.ErrValidation)
+		if e.BasisShare.IsNegative() || !e.BasisShare.LessThan(decimal.NewFromInt(1)) {
+			return fmt.Errorf("%w: basis_share must be at least 0 and less than 1", family.ErrValidation)
 		}
 	}
 	switch e.Source {

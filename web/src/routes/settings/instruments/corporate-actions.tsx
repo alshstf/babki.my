@@ -43,7 +43,8 @@ export function CorporateActions({ canEdit }: { canEdit: boolean }) {
   const [ratioFrom, setRatioFrom] = useState("1");
   const [ratioTo, setRatioTo] = useState("");
   const [resultIsin, setResultIsin] = useState("");
-  const [basisShare, setBasisShare] = useState("");
+  // 0 by default: the broker keeps a carve-out at no cost (decision Р-16).
+  const [basisShare, setBasisShare] = useState("0");
   const [sourceRef, setSourceRef] = useState("");
   const [note, setNote] = useState("");
 

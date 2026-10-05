@@ -122,3 +122,27 @@ func TestASpinoffOnADayTheAccountAlsoSoldIsStruckAgainstTheMorning(t *testing.T)
 		t.Errorf("the original is %+v, want 60 units costing 45000", old)
 	}
 }
+
+// Decision Р-16 through the registry: a carve-out recorded with a share of 0,
+// the broker's way. The new paper arrives in every holder's journal at no cost
+// and the original keeps its whole basis.
+func TestASpinoffWithNoShareGivesTheNewPaperNoCost(t *testing.T) {
+	f := newFixture(t)
+	produced := f.catalogue(t, producedISIN, "TECH2")
+	f.buy(t, f.accountID, "2020-12-30", "100", -100_000)
+	f.spinoffEvent(t, "2023-12-22", 1, 1, "0")
+
+	stats, err := f.materializer.ForISIN(f.ctx, amazonISIN)
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	if stats.Refused != 0 {
+		t.Fatalf("stats = %+v, want the pair written", stats)
+	}
+	if got := f.position(t, f.accountID, produced); got == nil || got.CostMinor != 0 || got.Quantity.String() != "100" {
+		t.Errorf("the carved-out paper is %+v, want 100 units at no cost", got)
+	}
+	if old := f.position(t, f.accountID, f.amazonID); old == nil || old.CostMinor != 100_000 {
+		t.Errorf("the original is %+v, want its whole 100000", old)
+	}
+}

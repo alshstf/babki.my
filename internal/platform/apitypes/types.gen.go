@@ -1155,7 +1155,7 @@ type CreateArrivalRequest struct {
 
 // CreateInstrumentEventRequest A corporate action recorded by hand. Its `source` is always `manual`: the exchange's own rows are written by the job that reads the exchange, and a request claiming to be one would be a row nobody could check and the job would overwrite.
 type CreateInstrumentEventRequest struct {
-	// BasisShare Decimal as string, greater than 0 and less than 1. Required for a spin-off, refused on the other two. See InstrumentEvent.basis_share.
+	// BasisShare Decimal as string, at least 0 and less than 1. Required for a spin-off, refused on the other two. See InstrumentEvent.basis_share.
 	BasisShare nullable.Nullable[string] `json:"basis_share,omitempty"`
 
 	// EffectiveOn See InstrumentEvent.effective_on — the first day the paper trades in the new quantity at the venue where it is held, NOT the record date. Refused if later than today or earlier than 1900-01-01, the floor the journal sets for the operations an event becomes.
@@ -1587,7 +1587,7 @@ type Instrument struct {
 
 // InstrumentEvent One recorded corporate action. Keyed by the ISIN of the paper it happened to rather than by a catalog row: the fact outlives any row, and the exchange job records splits of papers nobody here holds.
 type InstrumentEvent struct {
-	// BasisShare Decimal as string: the fraction of the original's cost basis a spin-off moves across (НК РФ ст. 277 п. 7 — the share of the fund's assets that was carved out). Greater than 0 and less than 1. Required on a spin-off and refused on the other two, where the whole basis either stays or travels.
+	// BasisShare Decimal as string: the fraction of the original's cost basis a spin-off moves across. At least 0 and less than 1; 0 — the new paper arrives bought for nothing and the whole basis stays on the original — is how the broker keeps a carve-out and the program's default. Required on a spin-off and refused on the other two, where the whole basis either stays or travels.
 	BasisShare nullable.Nullable[string] `json:"basis_share,omitempty"`
 	CreatedAt  time.Time                 `json:"created_at"`
 

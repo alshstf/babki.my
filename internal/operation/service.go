@@ -1238,10 +1238,9 @@ func (s *Service) CreateTransfer(ctx context.Context, spaceID uuid.UUID, p Trans
 // of the same figure, made against a journal that may have moved since; this
 // codebase has watched two such computations drift more than once.
 //
-// BasisShare is the fraction of the cost that moves (НК РФ ст. 277 п. 7): the
-// value of the carved-out assets over the fund's net assets before the
-// carve-out. It comes from the registry, which got it from whoever published
-// it; nothing here can derive it.
+// BasisShare is the fraction of the cost that moves: 0 by default, as the broker
+// keeps a carve-out (decision Р-16), or a share the holder's own tax accounting
+// states. It comes from the registry; nothing here can derive it.
 type SpinoffParams struct {
 	AccountID        uuid.UUID
 	FromInstrumentID uuid.UUID
