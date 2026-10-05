@@ -16,59 +16,27 @@ import (
 	"babki.my/babki/internal/operation"
 )
 
-// The rebuild is what makes the mirror worth keeping: it turns the broker's
-// operations into journal entries, and it can do it AGAIN — over a mirror that
-// changed under it, or under a projection rule that changed above it — without
-// asking the broker for anything.
+// The rebuild turns the mirror into journal entries, and can do it again over a
+// changed mirror or a changed projection rule without the broker: the broker
+// rewrites its history, and the rules will be corrected. It computes the whole
+// desired journal from the whole mirror and diffs it; it never asks "what is new
+// since last time".
 //
-// Both halves of that are needed, because both halves happen. The broker
-// rewrites history after the fact (its own documentation says an operation's id
-// is not to be relied on as a key, and old operations have had their
-// identifiers rewritten), and the rules in projection.go are written against
-// data this session has largely not seen live, so they will be corrected. Each
-// is answered the same way: the mirror is the record of what the broker said,
-// the projection is a pure function of it, and this file computes the
-// difference between the journal as it is and the journal that function now
-// asks for.
+// It runs per connection, not per link: a move between the owner's accounts is
+// two rows under two links (see pairTransfers).
 //
-// WHAT IT IS NOT is an incremental writer. It never asks "what is new since
-// last time" — that question cannot be answered against a source that rewrites
-// its own past. It computes the whole desired journal from the whole mirror and
-// diffs it, so an operation whose commission the broker corrected, an operation
-// the broker withdrew, and a rule this program changed all reach the journal by
-// the same one path.
-//
-// IT IS PER CONNECTION, NOT PER LINK, and that is a requirement rather than a
-// convenience: a move of shares between two of the owner's own accounts is two
-// mirror rows filed under two different links, and the only way to see that
-// they are one event is to look at every link of the connection at once (see
-// pairTransfers).
-//
-// PRECONDITION: the babki accounts these links name must be fed by this
-// connection and nothing else. The difference is computed per (account,
-// source), so an operation written into one of these accounts by ANOTHER
-// connection looks to this rebuild like a journal row no mirror asks for, and
-// it would be removed. Two links of the SAME connection on one account are
-// fine: their rows are all in the same desired set.
-//
-// Nothing checks that precondition today, here or anywhere — Store.CreateLink
-// files a link against any account of the space. It cannot be checked here,
-// where the links of other connections are not visible, and it follows from the
-// owner's own decision that an import goes into ACCOUNTS OF ITS OWN, so the
-// place for it is the path that creates a link (task 11).
+// Precondition: the accounts these links name are fed by this connection alone.
+// The difference is per (account, source), so another connection's rows in one
+// of them would be removed. Nothing enforces this yet; it belongs where links are
+// created.
 
-// nsTinvest is the UUID namespace this importer derives the identifiers it has
-// to invent under (RFC 4122's name-based version 5). It is a constant and it
-// must stay one: changing it renames every transfer group this importer has
-// ever produced, and a rebuild would then remove and rewrite every paired
-// transfer in the journal.
+// nsTinvest is the UUID v5 namespace of the identifiers this importer
+// invents. Changing it renames every transfer group and rewrites every paired
+// transfer.
 var nsTinvest = uuid.MustParse("55c16945-9170-4eff-a3c3-b8886b38f8fb")
 
-// journalDelta is the write path this rebuild hands its difference to — one
-// transaction for the whole difference, with the per-candidate refusals coming
-// back rather than taking the rest down. A narrow local interface for the same
-// reason marketdata declares its own (internal/marketdata/jobs.go): this
-// package commits to the one method it calls. *operation.Service satisfies it.
+// journalDelta is the write path the difference goes to: one transaction,
+// with per-candidate refusals returned. *operation.Service satisfies it.
 type journalDelta interface {
 	ApplyImportDelta(ctx context.Context, spaceID uuid.UUID, d operation.ImportDelta) (
 		[]operation.Operation, []operation.ImportRefusal, error)
@@ -84,37 +52,24 @@ type journalReader interface {
 
 // RebuildStats is what one rebuild changed.
 //
-//   - Added: journal entries written and KEPT.
-//   - Removed: journal entries that were there before this rebuild and are not
-//     there now — including a half event this rebuild took back out (see
-//     apply), which was there before and is not now like any other removal.
-//   - Withdrawn: journal entries this rebuild wrote and took back again within
-//     itself, because the other half of their event was refused. They are in
-//     neither Added nor Removed — the journal is where it was, so counting them
-//     as a change would be untrue — but they are not nothing either: they are
-//     work this run did and will do again on every run while the refusal
-//     stands, and a summary of zeroes over an hour of that would be a summary
-//     that hides it.
-//   - Unparsed: mirror rows of this connection that carry a reason once this
-//     rebuild is done — the same set UnparsedByConnection lists, not merely the
-//     rows this run newly marked.
+//   - Added: entries written and kept.
+//   - Removed: entries there before and gone now, including a half event this
+//     rebuild took out (see apply).
+//   - Withdrawn: entries this rebuild wrote and took back because the other half
+//     of their event was refused. Not a change, but repeated work on every run
+//     while the refusal stands, so reported.
+//   - Unparsed: rows carrying a reason after the rebuild, the set
+//     UnparsedByConnection lists.
 type RebuildStats struct{ Added, Removed, Withdrawn, Unparsed int }
 
-// projection is ProjectRow's own signature. The Rebuilder holds one as a field
-// so that a test can put another rule in its place and watch the journal follow
-// — which is the property this whole file exists for, and one that cannot be
-// demonstrated by calling the only rule there is.
+// projection is ProjectRow's signature, a field so a test can swap the rule
+// and watch the journal follow.
 type projection func(row MirrorRow, accountID uuid.UUID, resolved *Resolved, traded *TradedCurrency) ([]operation.Operation, Deferred, *UnparsedError)
 
-// Rebuilder turns one connection's mirror into journal operations. Build one
-// per sync run: the Resolver it carries caches the broker's instrument
-// passports for the life of the run, and the run is what bounds that cache.
-//
-// NOT SAFE FOR CONCURRENT USE, for the reason Resolver is not. Two rebuilds of
-// one connection must not overlap for a stronger reason than that: each reads
-// the journal, decides a difference against it and then writes, so two of them
-// would both compute their difference against the same journal and both apply
-// it. Serializing runs per connection is the scheduler's job (task 10).
+// Rebuilder turns one connection's mirror into journal operations. One per
+// sync run, since its Resolver caches passports for the run. Not safe for
+// concurrent use; two rebuilds of one connection must not overlap either, as both
+// would diff against the same journal. The scheduler serializes them.
 type Rebuilder struct {
 	store    *Store
 	resolver *Resolver
@@ -122,13 +77,13 @@ type Rebuilder struct {
 	reader   journalReader
 	log      *slog.Logger
 	project  projection
-	// faces measures a bond's repayments against its outstanding face value
-	// (see fillFaceBefore); nil leaves every repayment to the old rule.
+	// faces measures repayments against outstanding face value
+	// (fillFaceBefore); nil keeps the old rule.
 	faces faceSchedule
 }
 
-// faceSchedule answers a bond's outstanding face value per unit just before a
-// repayment on day on, by the bond's ISIN.
+// faceSchedule answers a bond's outstanding face per unit just before a
+// repayment on day on, by ISIN.
 type faceSchedule interface {
 	FaceBeforeByISIN(ctx context.Context, isin string, on time.Time) (decimal.Decimal, string, bool, error)
 }
@@ -146,25 +101,16 @@ func NewRebuilder(store *Store, resolver *Resolver, ops journalDelta, reader jou
 	return &Rebuilder{store: store, resolver: resolver, ops: ops, reader: reader, log: log, project: ProjectRow}
 }
 
-// Rebuild brings the journal into agreement with the mirror of one connection.
+// Rebuild brings the journal into agreement with one connection's mirror.
 //
-// links must be every link of conn. A subset does not simply leave the missing
-// accounts alone: a transfer already paired with one of them would be projected
-// as a lone leg, and removing one leg of a stored pair is a thing the write path
-// refuses outright — so such a rebuild fails rather than half-writing. (Shares
-// moving to an account that is not linked AT ALL are a different case entirely,
-// and a lone leg is the right answer there — see pairTransfers.)
+// links must be every link of conn: a transfer paired with a missing one would be
+// projected as a lone leg, and the write path refuses removing one leg of a pair.
 //
-// src is the broker, and it is used for ONE thing: the
-// passport of an instrument neither this connection's map nor the shared
-// catalog has seen before. A rebuild over a mirror whose instruments are all
-// known makes no broker call at all.
+// src is used only for passports of instruments neither the map nor the catalog
+// knows.
 //
-// It is not one transaction. The journal's difference is applied in one (the
-// write path's own), and the mirror's verdicts are written in another, so a
-// crash between them leaves a journal that is right and a verdict that is stale
-// — which the next rebuild corrects, because it computes everything from the
-// mirror again and states every verdict afresh.
+// Not one transaction: the difference is applied in one and verdicts written in
+// another; a crash between leaves a stale verdict the next rebuild corrects.
 func (r *Rebuilder) Rebuild(ctx context.Context, conn Connection, links []AccountLink, src passportSource) (RebuildStats, error) {
 	for _, link := range links {
 		if link.ConnectionID != conn.ID {
@@ -182,27 +128,22 @@ func (r *Rebuilder) Rebuild(ctx context.Context, conn Connection, links []Accoun
 		return RebuildStats{}, err
 	}
 	sortDesired(p.want)
-	// After the sort and before anything reads the entries: the number a
-	// redemption is waiting for is the position built by the entries in front
-	// of it, and that is only a number once they are in order.
+	// After the sort: a redemption's count is the position built by the
+	// entries before it.
 	if err := r.closeRedemptions(p); err != nil {
 		return RebuildStats{}, err
 	}
-	// After the redemptions have their counts and before anything pairs or
-	// writes: an entry restated in its position's currency is what every later
-	// step must see.
+	// Restated before anything pairs or writes.
 	if err := r.convertToPositionCurrency(ctx, p); err != nil {
 		return RebuildStats{}, err
 	}
-	// After the restating: the face value a repayment is measured against is
-	// the bond's own, in the currency the entry is now in.
+	// After restating: the face is measured in the entry's currency.
 	if err := r.fillFaceBefore(ctx, p); err != nil {
 		return RebuildStats{}, err
 	}
 	r.settleBrokerFees(p)
 	pairTransfers(p.want)
-	// After the pairing, which is what says which arrivals have no sibling:
-	// only those can carry purchases the owner stated.
+	// After pairing, which says which arrivals have no sibling.
 	if err := r.applyStatedPurchases(ctx, conn.SpaceID, accountsOf(links), p.want); err != nil {
 		return RebuildStats{}, err
 	}
@@ -232,35 +173,25 @@ func (r *Rebuilder) Rebuild(ctx context.Context, conn Connection, links []Accoun
 	return stats, nil
 }
 
-// desired is one journal entry the mirror asks the journal to hold, with the
-// little about its mirror row that the steps after the projection need.
+// desired is one entry the mirror asks for, with what later steps need of its
+// row.
 type desired struct {
 	op    operation.Operation
 	rowID uuid.UUID
-	// at is the broker's own instant, which orders the entries within a day
-	// (see sortDesired). It is not the journal's date — that is op.OccurredOn,
-	// the Moscow calendar day.
+	// at is the broker's instant, ordering entries within a day (see
+	// sortDesired); op.OccurredOn is the Moscow day.
 	at time.Time
-	// leg is which entry of its row this is, 0-based, so that the two entries
-	// of one row keep the order the projection built them in.
+	// leg keeps one row's entries in the order the projection built them.
 	leg int
-	// pairable is whether the broker's own operation type for this row says the
-	// move is between two accounts of this owner — the only kind of leg that
-	// may be joined to another (see pairTransfers). It is read off the row
-	// rather than off the journal entry because the journal entry does not know:
-	// transfer_in is what shares arriving from a stranger's depositary and
-	// shares arriving from the owner's other account both become.
+	// pairable: the row's broker type says the move is between the owner's
+	// accounts, the only kind of leg that may be joined (pairTransfers). Read
+	// off the row because transfer_in is the same either way.
 	pairable bool
-	// deferred is what this entry is still missing and the journal owes it (see
-	// Deferred). It is carried per entry rather than per row because a row's
-	// entries are not one thing: a redemption's sale waits for a count, and the
-	// commission beside it does not.
+	// deferred is what this entry still owes (see Deferred), per entry: a
+	// redemption's sale waits for a count, its commission does not.
 	deferred Deferred
-	// linkID and parentBrokerID are what a deferred broker fee is settled by:
-	// which broker account this row belongs to, and which of that account's
-	// operations it names as its own parent (see settleBrokerFees). Carried
-	// here rather than looked up again because the row is in hand at this point
-	// and is not afterwards.
+	// linkID and parentBrokerID settle a deferred broker fee: the row's
+	// account and the trade it names (see settleBrokerFees).
 	linkID         uuid.UUID
 	parentBrokerID string
 }
@@ -268,56 +199,38 @@ type desired struct {
 // projected is everything one pass over the mirror produced.
 type projected struct {
 	want []desired
-	// verdicts is what this rebuild decided about the mirror rows it RULED ON:
-	// the zero verdict for a row that became journal entries, a code — and,
-	// where the refuser had more to say than its code, that too — for one that
-	// could not. A row that is not in here was not ruled on and keeps whatever
-	// it carries, detail included, because that pair is still a true statement
-	// about it — see projectAll.
+	// verdicts is what this rebuild decided about the rows it ruled on: zero
+	// for a row that became entries, a code and detail for one that did not. A
+	// row not in here keeps its stored verdict (see projectAll).
 	verdicts map[uuid.UUID]UnparsedVerdict
-	// stored is every mirror row's verdict as it stands in the database, for
-	// every row read. It is what makes "write only what changed" possible, and
-	// its Reason is what Unparsed is counted over.
+	// stored is every read row's verdict as in the database, so only changes
+	// are written; Unparsed counts its reasons.
 	stored map[uuid.UUID]UnparsedVerdict
-	// rowOf maps a journal entry's external id back to the mirror row it came
-	// from. The mapping is REMEMBERED rather than parsed back out of the name:
-	// the name's shape is the projection's business, and a second reader of it
-	// here would be a second implementation of one rule.
+	// rowOf maps an entry's external id to its mirror row, remembered rather
+	// than parsed from the name.
 	rowOf map[string]uuid.UUID
-	// seen and feeBooked answer the two questions a deferred broker fee asks
-	// about the trade it names: is that trade in this mirror at all, and did it
-	// put a commission of its own into the journal. Keyed by the broker's own
-	// operation id WITHIN A LINK, because that is the only scope the broker's
-	// ids are meaningful in — nothing says two accounts cannot reuse one.
-	//
-	// They are filled during the pass and read after it, because a fee and the
-	// trade it names arrive in whatever order the mirror lists them.
+	// seen and feeBooked answer a deferred fee's questions about its trade:
+	// is it in the mirror, and did it book its own commission. Keyed by broker
+	// id within a link, the only scope those ids mean anything in. Filled
+	// during the pass, read after.
 	seen      map[brokerRef]bool
 	feeBooked map[brokerRef]bool
-	// explained says the owner accounted for the operation by hand, so it
-	// produced no journal entries ON PURPOSE. It is a third answer to the
-	// question a deferred broker fee asks, and it has to be one: the other two
-	// are "the trade is on the unparsed list with its own reason" — which an
-	// explained row is not, it carries no reason — and "the trade is in the
-	// journal", which it is not either. See settleBrokerFees.
+	// explained: the owner accounted for the operation by hand, so it
+	// produced no entries on purpose; a third answer for a deferred fee (see
+	// settleBrokerFees).
 	explained map[brokerRef]bool
-	// projected says the operation became journal entries at all. A trade that
-	// did NOT — refused as a currency trade, or for an instrument this program
-	// does not account for — has no commission in the journal to duplicate AND
-	// no gap to report: its own unparsed row is already the report, and a
-	// second row for its commission tells the owner nothing they are not
-	// already looking at.
+	// projected: the operation became entries at all. A trade that did not
+	// has its own unparsed row, which already covers its commission.
 	projected map[brokerRef]bool
 }
 
-// brokerRef names one of the broker's operations the way the mirror does: by
-// the broker's own id, within one linked account.
+// brokerRef names a broker operation by its id within one link.
 type brokerRef struct {
 	linkID   uuid.UUID
 	brokerID string
 }
 
-// unparsed is how many of the connection's mirror rows carry a reason now.
+// unparsed is how many of the connection's rows carry a reason now.
 func (p *projected) unparsed() int {
 	n := 0
 	for rowID, was := range p.stored {
@@ -332,17 +245,9 @@ func (p *projected) unparsed() int {
 	return n
 }
 
-// projectAll runs the projection over every mirror row of every link.
-//
-// A ROW THAT DID NOT HAPPEN IS SKIPPED AND LEFT ALONE. An order the broker
-// cancelled, or one it has stopped reporting, produces no journal entries —
-// ProjectRow says so itself, and the skip here is the caller-side half its
-// documentation asks for, which saves resolving an instrument for an operation
-// that never took place. Such a row's REASON IS NOT TOUCHED either way. If it
-// carries one, that reason is a true statement about the row — this program
-// could not read it — and it stays on the owner's list with the row's own
-// DisappearedAt beside it, which is what UnparsedByConnection deliberately
-// keeps them for. If it carries none, there is nothing to say.
+// projectAll projects every row of every link. A row that did not happen
+// (cancelled or withdrawn) is skipped and its verdict left alone: a stored reason
+// is still true of it, and UnparsedByConnection lists it with DisappearedAt.
 func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []AccountLink, src passportSource) (*projected, error) {
 	p := &projected{
 		verdicts:  map[uuid.UUID]UnparsedVerdict{},
@@ -353,11 +258,8 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 		explained: map[brokerRef]bool{},
 		projected: map[brokerRef]bool{},
 	}
-	// One run's answers about instruments. The Resolver caches the broker's
-	// passports; this caches the resolutions themselves, so a history that
-	// names one paper a thousand times costs one lookup instead of a thousand.
-	// It is local to the call rather than a field: a Rebuilder outliving a run
-	// would otherwise answer from a catalog that has since changed.
+	// One run's resolutions, so a paper named a thousand times is looked up
+	// once. Local, so a later run sees catalog changes.
 	resolutions := map[InstrumentRef]Resolved{}
 
 	for _, link := range links {
@@ -370,9 +272,8 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 			return nil, err
 		}
 		paidFor, withdrawn := pairFundRedemptions(rows)
-		// The days the broker report says each trade settled on (decision Р-3),
-		// read by the sync and kept beside the mirror. Empty until a report has
-		// been read, and then every trade keeps its trade day.
+		// Settlement days from the broker report (Р-3); empty until one is
+		// read.
 		settledDays, err := r.store.tradeSettlementsByLink(ctx, link.ID)
 		if err != nil {
 			return nil, err
@@ -380,31 +281,13 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 		for _, row := range rows {
 			p.stored[row.ID] = UnparsedVerdict{Reason: row.UnparsedReason, Detail: row.UnparsedDetail}
 			if explained[row.ContentKey] {
-				// THE OWNER HAS ANSWERED FOR THIS ROW. A manual operation on
-				// the linked account stands for what happened, so this row
-				// produces no journal entries — writing them too would record
-				// the event twice — and carries NO REASON, because "could not
-				// be read" is not what is true of it. That cleared verdict is
-				// the whole mechanism by which every count of unparsed rows
-				// stops including it: the count is over reasons, and this row
-				// no longer has one. The screen still shows it, from the
-				// explanations table rather than from a reason (see
-				// UnparsedByConnection).
-				//
-				// BEFORE THE STATE CHECK BELOW, and deliberately: an
-				// explanation is a statement about the row whatever the broker
-				// has since done with it. A row explained while it was live and
-				// then withdrawn would otherwise fall through to that check,
-				// which leaves a row's verdict alone — and the reason it
-				// carried before it was explained would come back, counted
-				// again, with the owner's operation still standing beside it.
+				// The owner explained this row: it produces no entries and carries no
+				// reason, which is how every unparsed count drops it; the screen shows
+				// it from the explanations table. Checked before the state check, so a
+				// row explained and later withdrawn does not get its old reason back.
 				p.verdicts[row.ID] = UnparsedVerdict{}
 				if row.State == stateExecuted && row.DisappearedAt == nil {
-					// Recorded exactly as a projected row is, so that a
-					// BROKER_FEE naming this operation as its parent finds it
-					// (see settleBrokerFees): the trade IS in the mirror, and
-					// it produced no journal entries — but for a reason of its
-					// own, which that function has to tell from the others.
+					// Recorded so a fee naming this trade finds it (settleBrokerFees).
 					ref := brokerRef{link.ID, row.BrokerOperationID}
 					p.seen[ref] = true
 					p.explained[ref] = true
@@ -412,17 +295,14 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 				continue
 			}
 			if row.State != stateExecuted || row.DisappearedAt != nil {
-				// Deliberately not recorded as seen below: a cancelled order is
-				// not a trade whose commission anything could be duplicating,
-				// and counting it would let a fee be dropped against a trade
-				// whose commission never entered the journal at all.
+				// Not recorded as seen: a cancelled order's commission never entered
+				// the journal.
 				continue
 			}
 			p.seen[brokerRef{link.ID, row.BrokerOperationID}] = true
 			if withdrawn[row.ID] {
-				// The units left for the redemption their payout books (see
-				// pairFundRedemptions): they are part of that entry, not a
-				// transfer of their own, and this row is read.
+				// Units withdrawn for a paired fund redemption belong to that entry
+				// (pairFundRedemptions); this row is read.
 				p.verdicts[row.ID] = UnparsedVerdict{}
 				continue
 			}
@@ -430,27 +310,20 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 			if err != nil {
 				return nil, err
 			}
-			// What a currency row TRADES, which the row itself does not say —
-			// asked of the broker once per pair and handed to the projection so
-			// the rule stays a pure function of its inputs. A broker that cannot
-			// answer leaves the trade a visible unparsed row naming exactly that,
-			// rather than a conversion of an unnamed currency.
+			// What a currency row trades, asked of the broker once per pair, so the
+			// projection stays pure. Without an answer the trade stays unparsed.
 			var traded *TradedCurrency
 			if refusal == nil && row.InstrumentType == brokerCurrencyInstrumentType && row.InstrumentUID != "" {
-				// What the OPERATION says about the pair, for the one case the
-				// broker cannot answer: a delisted dollar or euro pair, of
-				// which the owner's history holds two dozen. The price per unit
-				// is the trade's own, and it is the thing the official rate is
-				// checked against (see Resolver.currencyFromHint).
+				// What the operation says about the pair, for a delisted dollar or euro
+				// pair the broker cannot answer about (two dozen in the owner's
+				// history). The price is checked against the official rate (see
+				// Resolver.currencyFromHint).
 				hint := CurrencyHint{
 					Ticker:     row.Ticker,
 					Settlement: row.Currency,
 					On:         row.OccurredAt,
 				}
-				// The price is nullable in the mirror — the broker leaves it out
-				// of a row that is not a trade — and an absent one simply leaves
-				// the hint unprovable, which currencyFromHint answers with "not
-				// settled here".
+				// No price leaves the hint unprovable.
 				if row.Price != nil {
 					hint.PricePerUnit = *row.Price
 				}
@@ -477,11 +350,8 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 				ops, deferred, refusal = r.project(row, link.AccountID, resolved, traded)
 			}
 			if refusal != nil {
-				// The detail goes to the mirror as well as to the log. It is the
-				// difference between "the engine refused this" — which 134 of the
-				// owner's rows said, and which no one could act on — and the
-				// engine's own sentence about the one row in front of the reader.
-				// A log line answers that only for whoever still has the log.
+				// The detail goes to the mirror too: "the engine refused this" on 134 of
+				// the owner's rows helped nobody; the engine's own sentence does.
 				p.verdicts[row.ID] = UnparsedVerdict{Reason: string(refusal.Reason), Detail: refusal.Detail}
 				r.log.Debug("tinvest: a broker operation did not become journal entries",
 					"mirror_row", row.ID, "op_type", row.OpType, "reason", refusal.Reason, "detail", refusal.Detail)
@@ -493,27 +363,21 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 			settled := settlementDay(row.Raw, settledDays)
 			for i := range ops {
 				if ops[i].FeeMinor != 0 {
-					// This row put a commission of its own into the journal,
-					// which is the whole question a BROKER_FEE naming it asks.
-					// Read off the ENTRY rather than off the mirror row's
-					// commission column: what matters is the money that reached
-					// the journal, and a commission charged in another currency
-					// leaves the trade and becomes an entry of its own (see
-					// tradeCommission).
+					// This row booked its own commission, which is what a fee naming it
+					// asks. Read off the entry: a commission in another currency becomes its
+					// own entry (tradeCommission).
 					p.feeBooked[brokerRef{link.ID, row.BrokerOperationID}] = true
 				}
 				if ops[i].ExternalID == nil || *ops[i].ExternalID == "" {
 					return nil, fmt.Errorf("tinvest: the projection produced an entry with no external id for mirror row %s", row.ID)
 				}
 				p.rowOf[*ops[i].ExternalID] = row.ID
-				// A deferral is about the FIRST entry — the projection's own
-				// convention, stated at Deferred and not re-derived here.
+				// A deferral is about the first entry (see Deferred).
 				owed := DeferredNothing
 				if i == 0 {
 					owed = deferred
 				}
-				// The broker's instant goes onto the entry too: within a day
-				// the journal folds by it (see operation.foldsBefore).
+				// The broker's instant orders the day (operation.foldsBefore).
 				at := row.OccurredAt
 				ops[i].OccurredAt = &at
 				settleOn(&ops[i], settled)
@@ -523,53 +387,25 @@ func (r *Rebuilder) projectAll(ctx context.Context, conn Connection, links []Acc
 					linkID: link.ID, parentBrokerID: row.ParentOperationID,
 				})
 			}
-			// Every row that reaches here is one the projection READ, so whatever
-			// reason it carried goes — and the detail with it, in the same
-			// verdict, since a detail outliving its code would explain a refusal
-			// that is no longer being made. A broker fee later dropped as a
-			// duplicate was read too, which is why settleBrokerFees leaves this
-			// verdict alone.
+			// Every row here was read, so its verdict is cleared, detail included.
+			// settleBrokerFees leaves a dropped duplicate fee's verdict alone too.
 			p.verdicts[row.ID] = UnparsedVerdict{}
 		}
 	}
 	return p, nil
 }
 
-// resolve finds the catalog instrument a mirror row's security means, or says
-// why there is none.
+// resolve finds the catalog instrument a row's security means, or why not.
 //
-// IT SKIPS THE RESOLVER FOR A KIND OF ASSET THE OPERATION ITSELF NAMES AND THE
-// RESOLVER DOES NOT ACCOUNT FOR, and the reason is not thrift, though it saves
-// a broker call per futures contract. For those the PROJECTION has the truer
-// word, and it is the projection's word the owner reads: a currency trade is
-// refused as a currency trade — a thing this journal has a type for and lacks
-// the data to build — rather than as "an asset kind this program does not
-// account for", which is the only thing the resolver could say about it.
-// Handing the projection no resolution and letting it name the fault is what
-// keeps those two statements from collapsing into one (see ReasonCurrencyTrade,
-// and instrumentRefusal, which reads this same map for the same question).
+// It skips the resolver for asset kinds the operation names and the resolver does
+// not support, so the projection gives the truer reason (a currency trade, not
+// "unsupported asset kind"; see ReasonCurrencyTrade). A row naming no type is
+// still resolved: brokerInstrumentTypes is a passport vocabulary, and the broker
+// warns that old operations can lack it.
 //
-// A ROW THAT NAMES NO TYPE AT ALL IS STILL RESOLVED, and the difference
-// matters: brokerInstrumentTypes is a set of PASSPORT types, and what an
-// operation row carries is not a passport. The broker's own documentation
-// warns that history after a corporate action can be incomplete and that
-// identifiers on old operations have been rewritten, so a row with an empty
-// instrument_type and a perfectly resolvable instrument_uid is a real shape —
-// and refusing it would tell the owner "the broker calls this instrument type
-// """, which the passport is about to disprove. Silence is not a claim about
-// the asset, so nothing is saved by acting on it. The currency case that this
-// skip exists for loses nothing either: a currency trade is refused by the
-// projection on the OPERATION's own type before it ever looks at a resolved
-// instrument (see ProjectRow).
-//
-// A RESOLVER REFUSAL IS A REASON; ANYTHING ELSE IS FATAL. The four sentinels
-// below are statements about the data, and they become the row's visible
-// reason — including the broker's own "no such instrument", which is the
-// answer a delisted paper gives for ever and would otherwise stop this
-// connection from ever syncing again. A database failure, or a broker that
-// could not be reached at all, is not: recording it as "the security was not
-// matched" would blame the operation for the network, and the mark would sit
-// there until something happened to rebuild the row again.
+// A resolver sentinel becomes the row's reason, including the broker's "no such
+// instrument" for a delisted paper; a database or network failure is fatal, not
+// blamed on the operation.
 func (r *Rebuilder) resolve(ctx context.Context, connID uuid.UUID, src passportSource, row MirrorRow,
 	resolutions map[InstrumentRef]Resolved,
 ) (*Resolved, *UnparsedError, error) {
@@ -582,9 +418,8 @@ func (r *Rebuilder) resolve(ctx context.Context, connID uuid.UUID, src passportS
 	ref := InstrumentRef{
 		InstrumentUID: row.InstrumentUID, FIGI: row.FIGI,
 		PositionUID: row.PositionUID, AssetUID: row.AssetUID,
-		// What the operation itself called the paper. Used only when the broker
-		// no longer knows the instrument, where it is the last identifier left
-		// (see Resolver.resolveOne).
+		// What the operation called the paper; used only when the broker has
+		// forgotten the instrument (Resolver.resolveOne).
 		Ticker: row.Ticker,
 	}
 	if known, ok := resolutions[ref]; ok {
@@ -604,23 +439,11 @@ func (r *Rebuilder) resolve(ctx context.Context, connID uuid.UUID, src passportS
 	return nil, nil, err
 }
 
-// sortDesired puts the entries in the order the journal will fold them.
-//
-// THE BROKER'S INSTANT IS THE ORDER, not the order the rows were first seen.
-// Both are stable, and only one is right: a whole first import shares one
-// first_seen_at, leaving the rows behind it ordered by a random uuid, so a sale
-// could be offered to the engine before the purchase that covers it and be
-// refused for a reason that is not true. The journal keeps a DAY, and the write
-// path folds one day's operations in the order they are listed here (see
-// operation.importCandidates), so this is the only place the time of day
-// survives to say anything.
-//
-// The mirror row's id breaks a tie between two operations of the same instant,
-// and the leg keeps the two entries of one row in the order the projection
-// built them (income before the withdrawal that follows it; a trade before its
-// commission). Both are properties of stored data, so the order is the same on
-// every rebuild — which is what keeps a rebuild that changed nothing from
-// renumbering the journal.
+// sortDesired puts entries in fold order: the broker's instant, then mirror
+// row id, then leg. Not first-seen order: a first import shares one first_seen_at,
+// leaving rows in random uuid order, and a sale could precede its purchase. The
+// same mirror always sorts the same way, so an unchanged rebuild does not
+// renumber.
 func sortDesired(want []desired) {
 	sort.Slice(want, func(i, j int) bool {
 		if !want[i].at.Equal(want[j].at) {
@@ -633,62 +456,33 @@ func sortDesired(want []desired) {
 	})
 }
 
-// errHoldingUnreadable is a rebuild that stopped because it would otherwise
-// have closed a redemption with a count taken through an entry whose effect on
-// a position it cannot state. It is unexported because nothing outside this
-// package can act on it differently — the sync run fails and says so — and it
-// is a sentinel rather than a phrase because a test must be able to tell this
-// failure from any other without reading its wording.
+// errHoldingUnreadable stops a rebuild that would close a redemption with a
+// count taken through an entry whose effect it cannot state. A sentinel so tests
+// can tell it apart.
 var errHoldingUnreadable = errors.New("tinvest: a position this rebuild cannot count")
 
-// holdingKey is one position as this file counts it: one security on one
-// account.
+// holdingKey is one security on one account.
 type holdingKey struct{ account, instrument uuid.UUID }
 
-// holding is how many units of one security the entries so far have put on one
-// account, and whether that number can be trusted at all.
+// holding is the units the entries so far put on one account, and whether
+// that count is trustworthy.
 type holding struct {
 	units decimal.Decimal
-	// unreadable: one of the entries changed the count in a way unitsMoved
-	// cannot state, so the total below it means nothing. Once set it stays
-	// set — everything after such an entry is counted from an unknown base.
+	// unreadable: an entry changed the count in a way unitsMoved cannot
+	// state; it stays set.
 	unreadable bool
 }
 
-// closeRedemptions gives every entry that was projected without a quantity the
-// one the journal holds for it, or takes its row off the list with a reason.
-//
-// WHAT IT IS FOR: the broker reports a bond's full redemption as a payment and
-// nothing else — no quantity, no price (see projectRedemption, and the live
-// run that found 23 of them). The count of bonds it retired is the position
-// the account holds at that moment, which is a fact about the whole journal
-// and not about the row, so the projection names what it needs and this is
-// where the number comes from.
-//
-// THE ORDER IS THE JOURNAL'S OWN. sortDesired has already put the entries in
-// the order the write path files them — the broker's instant, then the mirror
-// row's id, then the leg — and the journal folds a day by the same instant,
-// which every entry carries (operation.foldsBefore). So the running total below
-// is the same number the engine will have in front of it when it reaches the
-// sale, computed from the same entries in the same order — an operation the
-// broker reported late included, since it folds at its instant and not where
-// it arrived. It also makes the number a function of the mirror alone: the
-// same mirror sorts the same way and yields the same count on every rebuild,
-// which is what keeps a rebuild that changed nothing from rewriting the sale.
-//
-// PRECONDITION, the same one the head of this file states: the accounts these
-// links feed are fed by this import and by nothing else. A purchase entered by
-// hand into one of them is not in this set — it is not even read, since the
-// difference below reads only what this source wrote — so the sale built here
-// would close the part of the position this import knows about and leave the
-// hand-entered bonds in the journal after the bond had been redeemed. Nothing
-// checks it here, for the reason given there.
+// closeRedemptions gives each entry projected without a quantity the position
+// held at that point, or refuses its row. The broker reports a bond's full
+// redemption as a payment only (see projectRedemption). The running total walks
+// sortDesired's order, the order the engine folds in, so it is the number the
+// engine will see, and the same on every rebuild. The file's precondition
+// applies: a hand-entered purchase in one of these accounts is not counted.
 func (r *Rebuilder) closeRedemptions(p *projected) error {
 	held := map[holdingKey]holding{}
-	// The rows whose entries have to go: a redemption with nothing to redeem is
-	// an unparsed row, and an unparsed row leaves NO journal entry — not even
-	// the commission beside it, which alone would be a fee for a sale that is
-	// not there.
+	// A redemption with nothing to redeem is unparsed, and leaves no entry,
+	// not even its commission.
 	refused := map[uuid.UUID]bool{}
 	for i := range p.want {
 		d := &p.want[i]
@@ -699,13 +493,8 @@ func (r *Rebuilder) closeRedemptions(p *projected) error {
 		if d.deferred == DeferredRedeemedQuantity {
 			h := held[key]
 			if h.unreadable {
-				// Not reachable from any broker data: every entry this
-				// projection builds is one unitsMoved reads. It is reachable
-				// from a change to this program — a shape that moves units
-				// another way — and then a redemption of that security would
-				// otherwise close a number counted from an unknown base. The
-				// whole rebuild stops instead, the same answer this file gives
-				// an entry with no external id.
+				// Unreachable from broker data; a future shape moving units another way
+				// would otherwise close a count from an unknown base.
 				return fmt.Errorf(
 					"%w: mirror row %s is a full redemption waiting for the position on account %s, "+
 						"and an entry before it changes that position in a way this rebuild cannot read",
@@ -723,15 +512,11 @@ func (r *Rebuilder) closeRedemptions(p *projected) error {
 				refused[d.rowID] = true
 				continue
 			}
-			// The whole position, which is what a FULL redemption retires. The
-			// copy is so the entry does not point at this walk's own running
-			// total.
+			// The whole position, copied.
 			qty := h.units
 			d.op.Quantity = &qty
 		}
-		// The sale just completed goes through this the same as any other: one
-		// place decides what an entry does to a position, so a filled-in
-		// redemption cannot be counted by a rule of its own.
+		// The filled-in sale is counted by the same rule as every entry.
 		moved, readable := unitsMoved(d.op)
 		h := held[key]
 		if readable {
@@ -747,8 +532,7 @@ func (r *Rebuilder) closeRedemptions(p *projected) error {
 	kept := p.want[:0]
 	for _, d := range p.want {
 		if refused[d.rowID] {
-			// The name goes too: nothing may offer this entry, so nothing may
-			// look it up as one the journal answered about.
+			// And its name, so nothing looks it up.
 			delete(p.rowOf, *d.op.ExternalID)
 			continue
 		}
@@ -758,39 +542,20 @@ func (r *Rebuilder) closeRedemptions(p *projected) error {
 	return nil
 }
 
-// settleBrokerFees decides, for each commission the broker charged as an
-// operation of its own, whether it is money the journal already has.
+// settleBrokerFees decides, for each fee charged as its own operation, whether
+// the journal already has that money. The test is whether the named trade booked
+// a commission (in its fee or in an entry of its own); comparing amounts would
+// misjudge equal or differently rounded charges.
 //
-// THE TEST IS WHETHER THE TRADE IT NAMES BOOKED A COMMISSION, and that is a
-// question about the journal rather than about the broker's fields: a trade
-// whose commission arrived in another currency puts it in an entry of its own
-// (see tradeCommission), and that money is in the journal just the same.
-// Comparing the two AMOUNTS was considered and rejected — it would drop a fee
-// that happens to equal a genuinely separate charge, and keep one the broker
-// rounded differently in its two reports, both silently.
+//   - The trade booked one: the fee is a duplicate and is dropped; its row stays
+//     read.
+//   - The trade booked none, or the fee names none: the fee is the only record
+//     and stays (11,34 ₽ on one of the owner's 311).
+//   - The trade is itself unparsed: its row already reports the money (79 of the
+//     owner's currency trades would otherwise each get a second row).
+//   - The trade is not in this mirror: the fee is unparsed rather than guessed.
 //
-// FOUR ANSWERS, and only the first was ever obvious:
-//
-//   - the trade booked a commission: this fee is that same money reported a
-//     second time. Dropped, and the mirror row keeps its clean verdict — it was
-//     read, not refused.
-//   - the trade booked none, or the fee names no trade at all: the fee is the
-//     only record of that charge and it stays. On the owner's account this is
-//     one purchase out of 311, worth 11,34 ₽, and before this rule existed that
-//     money was in neither the journal nor the unparsed list.
-//   - the trade is in the mirror and became no journal entries at all — it is
-//     itself unparsed, for a reason of its own. Its commission is not money
-//     that went missing; it is part of what that row already reports. Keeping
-//     it gave each of the owner's 79 unimported currency trades a second
-//     unparsed row saying nothing the first did not.
-//   - the trade is not in this mirror: nothing here can tell the cases apart,
-//     so the row becomes a visible unparsed entry rather than a guess in either
-//     direction. Dropping it could lose real money; keeping it could charge a
-//     commission twice.
-//
-// The entries are dropped in place rather than filtered into a new slice
-// because the sort above put them in the order everything downstream reads them
-// in, and rebuilding the slice would be a second place that has to know it.
+// Entries are dropped in place to keep sortDesired's order.
 func (r *Rebuilder) settleBrokerFees(p *projected) {
 	kept := p.want[:0]
 	for _, d := range p.want {
@@ -801,32 +566,24 @@ func (r *Rebuilder) settleBrokerFees(p *projected) {
 		ref := brokerRef{d.linkID, d.parentBrokerID}
 		switch {
 		case d.parentBrokerID == "":
-			// Names no trade, so there is nothing it could be a second copy of.
+			// Names no trade: nothing to duplicate.
 			kept = append(kept, d)
 		case p.feeBooked[ref]:
 			r.log.Debug("tinvest: a broker fee repeats the commission its trade already booked",
 				"mirror_row", d.rowID, "parent", d.parentBrokerID)
 			delete(p.rowOf, *d.op.ExternalID)
 		case p.explained[ref]:
-			// The trade is accounted for by hand, and this commission is not:
-			// the owner explained one row and this is another. Dropping it here
-			// on the strength of the branch below would lose the money in
-			// silence — that branch's justification is that the trade's OWN
-			// unparsed row already reports it, and an explained row reports
-			// nothing, it carries no reason at all. So this one says what
-			// happened and lets the owner decide: explain it too, into the
-			// same operation or another, or leave it.
+			// The trade is explained by hand and this fee is not; dropping it would
+			// lose the money silently, since an explained row reports nothing. The
+			// owner decides.
 			p.verdicts[d.rowID] = UnparsedVerdict{
 				Reason: string(ReasonBrokerFeeParentExplained),
 				Detail: fmt.Sprintf("the operation this commission names (%s) is accounted for by a manual entry, and this commission is not part of it unless it was entered there too", d.parentBrokerID),
 			}
 			delete(p.rowOf, *d.op.ExternalID)
 		case p.seen[ref] && !p.projected[ref]:
-			// The trade itself is not in the journal — it is on the unparsed
-			// list, with its own reason. Its commission is not money that went
-			// missing: it is part of what that row already reports, and 79 of
-			// the owner's currency trades would otherwise each grow a second
-			// unparsed row saying nothing the first did not.
+			// The trade is on the unparsed list with its own reason, which covers
+			// its commission.
 			r.log.Debug("tinvest: a broker fee belongs to a trade that is itself unparsed, so it goes with it",
 				"mirror_row", d.rowID, "parent", d.parentBrokerID)
 			delete(p.rowOf, *d.op.ExternalID)
@@ -843,28 +600,12 @@ func (r *Rebuilder) settleBrokerFees(p *projected) {
 	p.want = kept
 }
 
-// unitsMoved is what one journal entry does to the number of units of a
-// security an account holds, and whether this file can say at all.
-//
-// IT IS A SECOND STATEMENT OF WHAT THE ENGINE DOES, which this codebase avoids
-// where it can and cannot avoid here: portfolio exposes no answer to ask. What
-// keeps the two from drifting is a test that folds a journal through the ENGINE
-// and compares the position it hands back with the sum of this — see
-// TestUnitsMovedAgreesWithTheEngine.
-//
-// A TYPE IT CANNOT READ IS NOT A ZERO. A split multiplies a position instead of
-// adding to it, and the rounding it does that with is the engine's rule rather
-// than this file's; copying it here would be a second implementation of one
-// rule, and calling it "moves nothing" would leave a redemption after a split
-// closing a pre-split number of bonds. No shape in this package produces one
-// today. The honest answer is "cannot say", and the caller treats a position
-// built through such an entry as unusable rather than as a number.
-//
-// The types that move nothing are listed rather than defaulted for the same
-// reason: a dividend, a coupon, a tax, a fee and an amortization can all carry
-// an instrument and none of them moves a unit — the engine's own arms say so,
-// and an amortization says it loudest (it deliberately carries no quantity at
-// all, see projectAmortization).
+// unitsMoved is what one entry does to the units an account holds, and
+// whether that can be said. A second statement of the engine's rule, since
+// portfolio exposes none; TestUnitsMovedAgreesWithTheEngine keeps them
+// together. A split multiplies with the engine's rounding and is "cannot say",
+// not zero; nothing here produces one. Types that move nothing are listed, not
+// defaulted.
 func unitsMoved(op operation.Operation) (decimal.Decimal, bool) {
 	switch op.Type {
 	case operation.TypeBuy, operation.TypeTransferIn:
@@ -884,43 +625,14 @@ func unitsMoved(op operation.Operation) (decimal.Decimal, bool) {
 	return decimal.Zero, false
 }
 
-// transferPair is the description of one parcel, as far as recognizing the two
-// halves of a move goes: one paper, one number of units, one day, one currency.
-//
-// IT IS EVERY EQUALITY THE WRITE PATH REQUIRES OF A PAIR, and it is that list
-// because of what the write path does when one of them fails. The check there
-// (operation.pairedLegs) asks for exactly these four — the same instrument,
-// the same day, the same quantity, the same currency — and for three that are not
-// equalities and are settled elsewhere here: two accounts that DIFFER (the
-// loop in pairTransfers checks it), one leg leaving against one arriving (that
-// is how the two sides are collected there), and exactly two legs in the group
-// (a group is named after the two legs it joins, so no third leg can carry it
-// — see transferGroupID).
-//
-// A pair this code proposes and pairedLegs then refuses is not a refused
-// CANDIDATE: it is a violation of the delta's contract, and the write path
-// answers it by refusing the whole difference (ErrImportContract). Every other
-// operation of the connection would be lost with it, on this rebuild and on
-// every rebuild after, with no unparsed row anywhere naming a cause. So a leg
-// that cannot be paired must fail to match HERE, where the answer is two lone
-// legs — which is what the day does for a departure timestamped at 23:59 and an
-// arrival after midnight.
-//
-// THE CURRENCY CANNOT SEPARATE TWO LEGS OF ONE PAPER, and is in this key
-// anyway. A securities transfer takes its currency from the resolved
-// instrument rather than from the zero payment beside it (see
-// projectSecuritiesTransfer), and the instrument is already compared, so two
-// legs equal on paper are equal on currency too. It stays because this key's
-// job is to be pairedLegs' list of equalities and not a shorter one that
-// happens to imply it today: the day a leg's currency comes from somewhere
-// else again, the pairing has to notice by itself rather than hand the write
-// path a pair it refuses whole.
-//
-// The quantity is a string because a decimal is not a comparable value: two
-// decimals equal in value can differ in representation. String() is the
-// canonical form — checked, not assumed: a 5 truncated to ten places and a
-// parsed "5.0000000000" both print "5" — and the two legs are built by one and
-// the same code (journalQuantity) besides.
+// transferPair is what makes two legs one parcel: paper, units, day and
+// currency, exactly operation.pairedLegs' equalities (it also needs different
+// accounts, one out and one in, and two legs, settled in pairTransfers and
+// transferGroupID). A pair the write path refused would break the delta's
+// contract and fail the whole difference, so a doubtful pair must fail to match
+// here and stay two lone legs. Currency is implied by the paper today and kept
+// anyway. The quantity is its canonical String(), since decimals equal in value
+// can differ in form.
 type transferPair struct {
 	instrument uuid.UUID
 	quantity   string
@@ -928,73 +640,28 @@ type transferPair struct {
 	currency   string
 }
 
-// pairableLeg reports whether a mirror row's own operation type says the move
-// it describes is between two accounts of this owner — TRANS_IIS_BS and
-// TRANS_BS_BS, which is what transferBetweenOwnAccounts holds and the only
-// place that list is read from, so the two cannot come apart. Everything else
-// this journal turns into a transfer leg is a move with the outside world by
-// the name of its own type (see pairTransfers).
+// pairableLeg: the row's type is TRANS_IIS_BS or TRANS_BS_BS, read from
+// transferBetweenOwnAccounts.
 func pairableLeg(row MirrorRow) bool {
 	return brokerOpTypes[row.OpType].transfer == transferBetweenOwnAccounts
 }
 
-// pairTransfers finds the moves between two accounts of ONE connection and
-// makes each of them a single event of the journal.
+// pairTransfers joins the two legs of a move between two accounts of one
+// connection into one event.
 //
-// ONLY A MOVE BETWEEN THE OWNER'S OWN ACCOUNTS IS EVER PAIRED, by the broker's
-// own operation type (see pairableLeg). Shares leaving for a depositary
-// outside this program and shares arriving from one are, by the names of those
-// types, transactions with the outside world; two of them that happen to agree
-// on paper, count, day and currency are two unrelated parcels, and joining
-// them would invent an event nobody reported. What the invention costs is
-// specific rather than theoretical: the arriving account would be handed a
-// cost basis and acquisition dates released from ANOTHER account's queue — a
-// tax basis that is not its own — and the honest mark saying the cost of those
-// shares is unknown would be wiped off in the bargain.
+// Only moves between the owner's own accounts (by broker type, pairableLeg) are
+// paired. Two outside-world legs that happen to agree are two parcels; joining
+// them would hand the arriving account another account's basis and dates and wipe
+// the "cost unknown" mark. If the broker reports own-account moves under
+// outside-world types, they stay lone legs with the mark, the safe error. No
+// TRANS_* operation exists on the owner's account, so this rests on the docs.
 //
-// If the broker turns out to report a move between two of the owner's own
-// accounts under those outside-world types as well, such a move stays two lone
-// legs, each with the honest mark. That is the safe side of the error, and it
-// is STILL UNASKED rather than answered: the owner's account holds not one
-// TRANS_* operation, so nothing there can say what the broker does with them.
-// The rule below, and the direction read off the sign of a quantity in
-// projectSecuritiesTransfer, rest on the documentation alone until an account
-// with such a move appears.
-//
-// TWO LEGS ARE ONE MOVE when one leaves and one arrives, both of a pairable
-// type, on the same paper, the same number of units, the same day and the same
-// currency, on two DIFFERENT accounts. The broker does not say so: it reports a
-// departure on one account and an arrival on the other, with nothing tying them
-// together (the operation ids that might have are the ones its own
-// documentation says not to rely on), and its type does not say WHICH move
-// either — TRANS_BS_BS appears on both sides. So within that type the legs are
-// matched on what they SAY.
-//
-// A LEG THAT FINDS NOBODY STAYS ALONE, and that is the ordinary case rather
-// than a failure: shares that came from a broker this program knows nothing
-// about, or left for one, have no second leg in existence anywhere.
-//
-// THE GROUP IS DERIVED FROM THE TWO LEGS' OWN NAMES and from nothing else, so a
-// rebuild that changed nothing produces the same group and the journal is left
-// alone. A group drawn at random would make every rebuild rewrite every
-// transfer in the history.
-//
-// WHAT AMBIGUITY IS LEFT, now that the outside world is out: the same paper,
-// the same count and the same day moving twice between the same two accounts.
-// Then more than two legs match one key, and the pairing is by the order
-// sortDesired put them in — the broker's own instant, then the mirror row's id.
-// It is deterministic, which is what matters: two parcels alike in paper,
-// count, day, currency and pair of accounts are indistinguishable in the
-// journal too, so no assignment of them is more true than another. The map
-// below is walked in whatever order Go hands it out, and that changes nothing:
-// two different parcels never compete for one leg, so each key is settled on
-// its own.
-//
-// NOTHING HERE HAS TO TAKE A NOTE BACK, and the absence is worth a sentence
-// because it used to. The mark saying a parcel's cost is unknown is put only on
-// shares arriving from another broker (see noteBasisUnknown) — a leg this
-// function now never pairs — so a paired arrival carries the broker's own
-// description and nothing else, which is what it carried before it was paired.
+// Two legs pair when one leaves and one arrives, both pairable, same paper, units,
+// day and currency, on different accounts; the broker links them by nothing else
+// reliable. An unmatched leg stays alone, which is ordinary. The group is derived
+// from the legs' names, so an unchanged rebuild changes nothing. Two identical
+// moves on one day pair in sortDesired order, which is deterministic and no less
+// true than any other assignment.
 func pairTransfers(want []desired) {
 	type sides struct{ out, in []int }
 	byParcel := map[transferPair]*sides{}
@@ -1045,20 +712,15 @@ func pairTransfers(want []desired) {
 	}
 }
 
-// transferGroupID names the event two legs share, out of the two legs' own
-// names, sorted so that either leg can be named first and the answer is the
-// same.
-//
-// The separator is "|", which an external id cannot contain: it is a uuid and a
-// small number joined by "/" (see withExternalIDs).
+// transferGroupID names the event from the two legs' names, sorted. "|"
+// cannot appear in an external id (see withExternalIDs).
 func transferGroupID(a, b string) uuid.UUID {
 	pair := []string{a, b}
 	sort.Strings(pair)
 	return uuid.NewSHA1(nsTinvest, []byte(strings.Join(pair, "|")))
 }
 
-// accountsOf is the babki accounts these links feed, each once and in the order
-// the links were given.
+// accountsOf is the links' babki accounts, each once, in order.
 func accountsOf(links []AccountLink) []uuid.UUID {
 	seen := make(map[uuid.UUID]bool, len(links))
 	out := make([]uuid.UUID, 0, len(links))
@@ -1072,39 +734,14 @@ func accountsOf(links []AccountLink) []uuid.UUID {
 	return out
 }
 
-// difference is what has to change for the journal to say what the mirror says.
-//
-// IT IS BY EXTERNAL ID AND THEN BY VALUE. The id says which journal row a
-// broker operation became; the values say whether that row still describes it.
-// A mirror row holds the broker's LATEST word — a commission it corrected, a
-// description it reworded — so a difference that stopped at "this id is already
-// there" would leave the old number in the journal for good. A row whose values
-// moved is removed and written again rather than updated in place: the write
-// path takes a difference, not an edit, and a rewritten row is also how the
-// engine's own replay gets to judge the new values.
-//
-// A TRANSFER IS DIFFED AS ONE EVENT, both legs together, because that is how
-// the journal takes it and how it gives it back: it refuses to write one leg of
-// a pair alone and refuses to remove one leg of a pair alone
-// (operation.pairedLegs, operation.importRemovals). So if either leg of a pair
-// has to move, both are removed and both are written again.
-//
-// THAT IS THE WHOLE MECHANISM, and no separate rule follows a stored group
-// around, which is worth writing down because the absence looks like an
-// omission. A stored leg is left in place only when the entry that names it
-// matches it — and a matching entry carries the same transfer group, whose name
-// is derived from the two legs' own names (see transferGroupID), so its sibling
-// is the other member of the very unit being compared. A leg whose sibling has
-// to move cannot therefore be a leg that matched. If that ever stops holding,
-// the write path refuses the whole delta and nothing is written; it does not
-// write half a pair.
-//
-// IT ALSO REPORTS WHAT IT LEFT IN PLACE, per mirror row. Leaving a matching
-// entry alone is right until the OTHER entry of its row is refused, and then
-// the row's two entries are the two halves of one event with only one half in
-// the journal. apply is what puts that right, and it can only do so if it is
-// told which stored rows this difference decided not to touch — which is
-// knowable here and nowhere else.
+// difference is what must change for the journal to say what the mirror says.
+// Rows match by external id and then by value: the mirror holds the broker's
+// latest word, so a changed row is removed and written again, which also lets the
+// engine judge the new values. A transfer is diffed as one event, both legs moving
+// together, since the journal refuses half a pair either way; a matching leg
+// carries the same derived group, so its sibling is in the same unit. It also
+// reports which stored rows it left in place per mirror row, which apply needs
+// when the row's other entry is refused.
 func (r *Rebuilder) difference(ctx context.Context, spaceID uuid.UUID, accounts []uuid.UUID, want []desired) (
 	operation.ImportDelta, map[uuid.UUID][]uuid.UUID, error,
 ) {
@@ -1119,10 +756,7 @@ func (r *Rebuilder) difference(ctx context.Context, spaceID uuid.UUID, accounts 
 
 	byName := make(map[string]operation.Operation, len(stored))
 	for _, o := range stored {
-		// A row with no name is not one this importer's projection wrote — every
-		// entry it hands over carries the id of the record it came from, and the
-		// write path refuses one that does not. It is treated as a row nothing
-		// asks for, which is what the loop over leftovers below does with it.
+		// No name: not this projection's row; treated as unwanted.
 		if o.ExternalID == nil || *o.ExternalID == "" {
 			continue
 		}
@@ -1132,10 +766,8 @@ func (r *Rebuilder) difference(ctx context.Context, spaceID uuid.UUID, accounts 
 	}
 
 	var remove []uuid.UUID
-	// dropped is what keeps one id out of the removal list twice — which the
-	// write path reads as a difference computed against a journal this is not,
-	// and refuses whole (operation.importRemovals counts what it found against
-	// what it was asked for).
+	// No id twice in the removal list, or the write path refuses the whole
+	// delta (operation.importRemovals).
 	dropped := map[uuid.UUID]bool{}
 	drop := func(o operation.Operation) {
 		if dropped[o.ID] {
@@ -1167,26 +799,11 @@ func (r *Rebuilder) difference(ctx context.Context, spaceID uuid.UUID, accounts 
 		for _, d := range unit {
 			if s, ok := byName[*d.op.ExternalID]; ok {
 				drop(s)
-				// THE REPLACEMENT KEEPS THE ROW'S PLACE IN ITS DAY. A rewrite is
-				// a removal and an insertion, and an insertion stamped afresh is
-				// the youngest row of its instant — so of two operations the
-				// broker reports at one instant, the one merely reworded would
-				// move behind the other. The journal folds such rows in stamp
-				// order, that order is how the FIFO queue breaks ties between
-				// parcels bought together, and the queue decides which parcel a
-				// later sale consumes.
-				// A description nobody asked about would then move the realized
-				// profit of the account, and the tax figure with it. The write
-				// path takes the stamp only because this row is one it is
-				// removing in the same breath (see operation.ImportDelta).
-				//
-				// Only from a row of the SAME account, which is what the write
-				// path will accept: a place in a day belongs to the journal it
-				// is a place in. The two agree today — an external id names a
-				// mirror row, a mirror row belongs to one link, and a link feeds
-				// one account — so this guard costs a comparison and never
-				// fires. It is here because the alternative to it firing is
-				// ErrImportContract taking the whole difference down.
+				// The replacement inherits the removed row's stamp, so a reworded
+				// operation keeps its place in the day; within an instant the stamp
+				// breaks FIFO ties and so decides realized profit (see
+				// operation.ImportDelta). Only from the same account, which always
+				// holds today; otherwise ErrImportContract would fail the delta.
 				if s.AccountID == d.op.AccountID {
 					d.op.CreatedAt = s.CreatedAt
 				}
@@ -1204,10 +821,8 @@ func (r *Rebuilder) difference(ctx context.Context, spaceID uuid.UUID, accounts 
 	return operation.ImportDelta{Add: add, Remove: remove}, keptByRow, nil
 }
 
-// unitsOf groups the desired entries into the events the journal accepts or
-// refuses whole: the two legs of a transfer are one, everything else is one on
-// its own. The order of the units, and of the entries inside them, is the order
-// sortDesired settled.
+// unitsOf groups entries into events accepted or refused whole: a transfer's
+// two legs, otherwise one each, in sortDesired order.
 func unitsOf(want []desired) [][]desired {
 	out := make([][]desired, 0, len(want))
 	at := map[uuid.UUID]int{}
@@ -1226,28 +841,11 @@ func unitsOf(want []desired) [][]desired {
 	return out
 }
 
-// sameJournalRow reports whether the journal row already says what the
-// projection now says.
-//
-// EVERY COLUMN THE PROJECTION COULD SET IS COMPARED, including the ones no rule
-// sets today (a settlement day, a split ratio): a field that stopped being
-// compared would be a field the mirror could no longer correct, and silently.
-// The external id is not among them because it is what the two rows were
-// matched BY.
-//
-// THE ONE EXCLUSION IS A BASIS THE JOURNAL OWNS. The amount of a departing leg,
-// and of an arriving leg that has a sibling, is not the projection's to state —
-// operation.checkImportContract refuses one outright, because a FIFO basis is a
-// property of the account's history rather than of the broker's message, and
-// the write path fills it in from that history. So the zero handed over is
-// compared against a figure the journal computed, and comparing them would
-// report a difference on every rebuild for ever. The condition is
-// checkImportContract's own, and it is read off the DESIRED row on purpose:
-// the type and the group have already been compared equal by the time it is
-// asked, so the two rows agree about which shape this is.
-//
-// TransferLots are not compared for the same reason and one more: they are the
-// parcel the write path released, and the projection never has them.
+// sameJournalRow reports whether the stored row already says what the
+// projection says. Every settable column is compared, even ones no rule sets yet,
+// or the mirror could not correct it. Excluded: the external id (the match key),
+// a basis the journal owns (journalOwnsBasis, as checkImportContract), and
+// TransferLots, which the write path releases.
 func sameJournalRow(want, stored operation.Operation) bool {
 	if want.AccountID != stored.AccountID ||
 		want.Type != stored.Type ||
@@ -1266,12 +864,7 @@ func sameJournalRow(want, stored operation.Operation) bool {
 	if !sameTime(want.SettledOn, stored.SettledOn) {
 		return false
 	}
-	// The trading mode is compared like every other column the projection
-	// sets: a broker that corrects the board an operation was executed in has
-	// corrected this journal row, and a column left out of this comparison is
-	// a column the mirror can no longer fix. It is also what carries the mode
-	// onto the rows imported before this column existed — they hold nothing,
-	// the projection now asks for something, and the difference rewrites them.
+	// Compared like every column; also fills the mode into older rows.
 	if !sameString(want.TradingMode, stored.TradingMode) {
 		return false
 	}
@@ -1286,9 +879,8 @@ func sameJournalRow(want, stored operation.Operation) bool {
 	if journalOwnsBasis(want) {
 		return true
 	}
-	// An arrival's breakdown is what the owner stated for it, and only the
-	// pieces say which: two statements can add up to the same basis on
-	// different days.
+	// An arrival's stated breakdown: equal bases can come from different
+	// days.
 	if want.Type == operation.TypeTransferIn && !sameLots(want.TransferLots, stored.TransferLots) {
 		return false
 	}
@@ -1308,15 +900,10 @@ func sameLots(a, b []operation.ReleasedLot) bool {
 	return true
 }
 
-// applyStatedPurchases puts back the purchases the owner stated for shares that
-// arrived from another broker (see operation.Service.StatePurchases). The
-// broker's record does not have them, so a projection made from it alone would
-// take them off the journal on every sync.
-//
-// A statement that no longer adds up to the shares the broker now reports — it
-// rewrote the row with another quantity — is not applied: the shares count as
-// bought for nothing again, which the paper says, until the owner states them
-// anew. Applying it would put lots on the journal for shares that are not there.
+// applyStatedPurchases restores the owner's stated purchases for arrivals from
+// another broker (operation.Service.StatePurchases), which the broker's record
+// lacks. A statement that no longer adds up to the reported shares is not applied;
+// the shares count as bought for nothing until restated.
 func (r *Rebuilder) applyStatedPurchases(ctx context.Context, spaceID uuid.UUID, accounts []uuid.UUID, want []desired) error {
 	stated, err := r.reader.StatedPurchases(ctx, spaceID, accounts, Source)
 	if err != nil {
@@ -1350,9 +937,8 @@ func (r *Rebuilder) applyStatedPurchases(ctx context.Context, spaceID uuid.UUID,
 	return nil
 }
 
-// journalOwnsBasis reports whether the amount of this entry is the write path's
-// to compute rather than the projection's to state — the same condition
-// operation.checkImportContract refuses a supplied amount on.
+// journalOwnsBasis: the write path computes this entry's amount, the same
+// condition operation.checkImportContract uses.
 func journalOwnsBasis(op operation.Operation) bool {
 	return op.Type == operation.TypeTransferOut ||
 		(op.Type == operation.TypeTransferIn && op.TransferGroupID != nil)
@@ -1365,9 +951,7 @@ func sameID(a, b *uuid.UUID) bool {
 	return *a == *b
 }
 
-// sameString compares two optional strings, where "nobody said" and "said an
-// empty string" are different answers — the distinction trading_mode's own
-// column keeps (see migration 0026).
+// sameString compares optional strings; nil and "" differ (migration 0026).
 func sameString(a, b *string) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -1383,8 +967,7 @@ func sameMinor(a, b *int64) bool {
 	return *a == *b
 }
 
-// sameTime compares two optional moments — a day or an instant — by the moment
-// they name, not by how they are written down.
+// sameTime compares optional moments by the moment named.
 func sameTime(a, b *time.Time) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -1392,9 +975,8 @@ func sameTime(a, b *time.Time) bool {
 	return a.Equal(*b)
 }
 
-// sameNumber compares by VALUE, not by representation: the column is
-// NUMERIC(30,10) and gives back a number carrying its scale, so the 100 that
-// went in comes back as 100.0000000000 and is the same number.
+// sameNumber compares by value: NUMERIC(30,10) returns 100 as
+// 100.0000000000.
 func sameNumber(a, b *decimal.Decimal) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -1402,57 +984,29 @@ func sameNumber(a, b *decimal.Decimal) bool {
 	return a.Equal(*b)
 }
 
-// written is what one rebuild's difference actually did to the journal, told
-// apart because the three are three different pieces of news.
+// written is what the difference did to the journal, in three parts.
 type written struct {
-	// added: entries written and still there when the rebuild finished.
+	// added: written and still there.
 	added int
-	// withdrawn: entries this same rebuild wrote and took back again, because
-	// the other half of their event was refused. They changed nothing about the
-	// journal in the end — and they are still work that happened, and that will
-	// happen again on every run while the refusal stands, so a run that did it
-	// must not report itself as a run that did nothing.
+	// withdrawn: written and taken back this run; no net change, but repeated
+	// work while the refusal stands.
 	withdrawn int
-	// retracted: entries that were in the journal BEFORE this rebuild and were
-	// taken back for the same reason. Unlike the ones above, these did change
-	// the journal, so they belong in RebuildStats.Removed.
+	// retracted: entries from before this rebuild taken back the same way;
+	// these count in RebuildStats.Removed.
 	retracted int
 }
 
-// apply hands the difference to the journal and turns what it would not take
-// into reasons the owner can read.
+// apply hands the difference to the journal and turns refusals into reasons.
 //
-// AN EVENT IS WRITTEN WHOLE OR NOT AT ALL. The write path decides one candidate
-// at a time, and the two entries of ONE mirror row — a dividend paid to a card
-// and the same money leaving the account, a trade and the commission charged in
-// another currency — are two candidates to it, so it can take one and refuse
-// the other. Half an event in the journal is a lie: a fee for a trade that is
-// not there, money leaving for a dividend that never arrived. Which half a
-// journal will take is not knowable without offering it, so the entry that was
-// taken is withdrawn afterwards.
+// An event is written whole or not at all. The write path judges candidates one
+// by one, and a row's two entries (a dividend to a card and its withdrawal, a
+// trade and its other-currency commission) are two candidates; half of one is a
+// lie, so the accepted half is withdrawn afterwards. So is a half this rebuild
+// left untouched because it already matched (see difference).
 //
-// AND SO IS THE HALF THIS REBUILD NEVER OFFERED. The two entries of one row are
-// two units of the difference and need not both move: when only one of them
-// changes, the other matches what the journal holds and is left in place (see
-// difference, which reports what it left). If the changed one is then refused,
-// that untouched half is the very same lie, and it is the one a withdrawal
-// looking only at what it just wrote would leave sitting there for good. Both
-// halves go.
-//
-// The cost is a row written and withdrawn again on every rebuild for as long as
-// the refusal stands — a refused row is offered afresh each time, since the
-// journal's answer is about the journal as it is and changes when the missing
-// history arrives. It is accepted deliberately: only the two shapes that
-// produce two entries can split at all (a dividend paid to a card, and a trade
-// whose commission was charged in another currency), and only when the journal
-// takes one of them and refuses the other. The alternative is the half event.
-//
-// IF THE WITHDRAWAL ITSELF FAILS, the rebuild fails with part of an event in
-// the journal — and the next rebuild takes it back rather than living with it.
-// That half now MATCHES what the projection asks for, so it is left in place;
-// its sibling is offered again and refused again; the row is refused again; and
-// the rule above withdraws the half that was left in place. The lie is
-// therefore bounded by the interval between runs, not permanent.
+// The cost is a write and withdrawal every run while the refusal stands, only for
+// those two shapes. If the withdrawal fails the rebuild fails, and the next one
+// takes the half back.
 func (r *Rebuilder) apply(ctx context.Context, spaceID uuid.UUID, delta operation.ImportDelta,
 	keptByRow map[uuid.UUID][]uuid.UUID, p *projected,
 ) (written, error) {
@@ -1474,13 +1028,9 @@ func (r *Rebuilder) apply(ctx context.Context, spaceID uuid.UUID, delta operatio
 				ref.ExternalID, ref.Err)
 		}
 		refusedRows[rowID] = true
-		// The journal's OWN sentence, kept rather than reduced to the code
-		// beside it: "engine_refused" is true of a sale with nothing behind it,
-		// of an amount the journal will not hold and of a transfer whose other
-		// leg failed alike, and the owner staring at one of 134 such rows has no
-		// way to tell which. What goes in is an error this program's own journal
-		// wrote about its own journal — no broker token, no request, nothing
-		// that ever met a credential (see operation.ImportRefusal).
+		// The journal's own sentence, not just the code: "engine_refused" covers
+		// many faults. It is this program's text about its own journal, nothing
+		// from the broker or any credential.
 		p.verdicts[rowID] = UnparsedVerdict{Reason: string(ReasonEngineRefused), Detail: ref.Err.Error()}
 		r.log.Warn("tinvest: the journal refused an operation the projection built",
 			"mirror_row", rowID, "external_id", ref.ExternalID, "err", ref.Err)
@@ -1508,19 +1058,9 @@ func (r *Rebuilder) apply(ctx context.Context, spaceID uuid.UUID, delta operatio
 	return written{added: len(applied) - fresh, withdrawn: fresh, retracted: len(orphans) - fresh}, nil
 }
 
-// writeVerdicts records the projection's verdicts on the mirror, and writes only
-// the ones that changed.
-//
-// Only what changed, because the whole history is stated afresh on every
-// rebuild and an unconditional write would rewrite every row of a decade-old
-// account every hour to say what it already said. The comparison is against the
-// value read at the start of this same rebuild, which is sound because the two
-// columns have exactly one writer — this, through SetUnparsedVerdicts — and runs
-// of one connection do not overlap.
-//
-// CHANGED MEANS EITHER HALF CHANGED. A row whose code stands and whose detail
-// now names a different security is a row whose stored answer is wrong, and
-// comparing codes alone would leave that stale sentence under it for ever.
+// writeVerdicts writes only the verdicts that changed, code or detail, compared
+// with what this rebuild read at its start; sound because SetUnparsedVerdicts is
+// the only writer and runs of a connection do not overlap.
 func (r *Rebuilder) writeVerdicts(ctx context.Context, p *projected) error {
 	changed := map[uuid.UUID]UnparsedVerdict{}
 	for rowID, verdict := range p.verdicts {
