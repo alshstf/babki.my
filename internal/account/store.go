@@ -16,32 +16,18 @@ import (
 
 const (
 	pgForeignKeyViolation = "23503"
-	// accountsOwnerFK is the constraint behind accounts.owner_user_id, named
-	// by Postgres itself when migration 0003 declared the reference.
+	// accountsOwnerFK is the constraint behind accounts.owner_user_id.
 	accountsOwnerFK = "accounts_owner_user_id_fkey"
 )
 
-// ErrOwnerNotFound means owner_user_id names nobody. It is what turns a request
-// carrying a stale or mistyped user id into a 400 saying so, instead of the
-// "internal error" an unmapped foreign-key violation produces — a 500 blames
-// the server for a value the client chose.
-//
-// "of this instance" and not "of this space" is the whole truth today and will
-// have to be revisited: an instance holds exactly one space (setup succeeds
-// once; see family.ErrAlreadySetUp), so every user there is a member of the
-// only space there is. The day that stops being true, this check stops being
-// enough on its own — a user id belonging to another space would satisfy the
-// foreign key and this message — and the handler will need a membership check
-// beside it.
+// ErrOwnerNotFound means owner_user_id names no user: a 400 rather than an
+// opaque 500. An instance holds one space today; with several, a membership
+// check would be needed too.
 var ErrOwnerNotFound = fmt.Errorf("%w: owner_user_id does not name a user of this instance", family.ErrValidation)
 
-// wrapOwnerFK maps a foreign-key violation on accounts.owner_user_id to
-// ErrOwnerNotFound. Every other error passes through untouched — the same shape
-// as instrument.wrapTickerConflict and family.wrapUsernameConflict, each of
-// which translates exactly the constraints its own writes can trip and nothing
-// else. A violation on accounts.space_id is deliberately not translated: the
-// space id never comes from the request, so that one really would be this
-// program's own fault and belongs in the 500 it produces.
+// wrapOwnerFK maps the owner foreign-key violation to ErrOwnerNotFound. A
+// space_id violation is not translated: the space never comes from the
+// request.
 func wrapOwnerFK(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) &&
@@ -176,14 +162,8 @@ func (s *Store) SetBalance(ctx context.Context, spaceID, accountID uuid.UUID, as
 	return nil
 }
 
-// DistinctCurrencies returns the sorted set of currencies used by any
-// account in the instance (not scoped to a space: exchange rates are shared
-// market data, so there is no point fetching them per space). Deciding which
-// currencies to actually backfill rates for is not this method's job — that
-// belongs to the fx backfill job, which also consults operation.Store's
-// currencies. Returns an empty slice, not an error, when there are no
-// accounts: unlike EarliestRecordedDay, "no currencies in use" is itself a
-// meaningful answer, not a missing value.
+// DistinctCurrencies returns the sorted currencies of every account, for the
+// rate backfill; empty when there are none.
 func (s *Store) DistinctCurrencies(ctx context.Context) ([]string, error) {
 	rows, err := s.db.Query(ctx, `SELECT DISTINCT currency FROM accounts ORDER BY currency`)
 	if err != nil {
@@ -201,14 +181,9 @@ func (s *Store) DistinctCurrencies(ctx context.Context) ([]string, error) {
 	return out, rows.Err()
 }
 
-// SummaryByCurrency aggregates latest balances of active accounts per currency,
-// leaving out the accounts named in byJournal: those are counted by their
-// journal instead (see Handler.handleSummary).
-//
-// Which types count as debt is a PARAMETER and not a literal in the statement:
-// the list comes from LiabilityTypes, which derives it from Type.IsLiability,
-// so the query cannot go on splitting by an older idea of what a debt is than
-// the rest of the package holds.
+// SummaryByCurrency sums the latest balances of active accounts per currency,
+// excluding byJournal (counted by journal). The debt types are a parameter
+// from LiabilityTypes, so the query follows Type.IsLiability.
 func (s *Store) SummaryByCurrency(ctx context.Context, spaceID uuid.UUID, byJournal []uuid.UUID) ([]CurrencyTotal, error) {
 	if byJournal == nil {
 		byJournal = []uuid.UUID{}
@@ -240,8 +215,7 @@ func (s *Store) SummaryByCurrency(ctx context.Context, spaceID uuid.UUID, byJour
 	return out, rows.Err()
 }
 
-// BalanceHistory is every balance mark of the space's accounts, oldest first
-// within each account.
+// BalanceHistory is every balance mark of the space's accounts, oldest first.
 func (s *Store) BalanceHistory(ctx context.Context, spaceID uuid.UUID) (map[uuid.UUID][]BalancePoint, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT b.account_id, b.as_of, b.amount_minor FROM account_balances b

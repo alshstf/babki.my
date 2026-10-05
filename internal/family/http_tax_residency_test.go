@@ -51,9 +51,7 @@ func patchSpace(t *testing.T, c *http.Client, url, body string) *http.Response {
 	return resp
 }
 
-// TestTaxResidencyDefaultsToRussiaAndTravelsWithTheSession pins what an
-// existing space reads back: RU, with the rules the engine actually implements
-// and nothing to warn about.
+// An existing space reads back RU, supported and silent.
 func TestTaxResidencyDefaultsToRussiaAndTravelsWithTheSession(t *testing.T) {
 	url, owner := setupOwner(t)
 
@@ -69,10 +67,8 @@ func TestTaxResidencyDefaultsToRussiaAndTravelsWithTheSession(t *testing.T) {
 	}
 }
 
-// TestChangingResidencyToBritainMakesTheSessionSayTheBasisIsNotBritish is the
-// user-visible half of the honesty rule: the owner picks a country whose rules
-// this application does not follow, and the session says so immediately —
-// method AND perimeter, both wrong for Britain, both reported.
+// Switching to GB makes the session report both the method and the perimeter
+// mismatch.
 func TestChangingResidencyToBritainMakesTheSessionSayTheBasisIsNotBritish(t *testing.T) {
 	url, owner := setupOwner(t)
 
@@ -111,10 +107,8 @@ func TestChangingResidencyToBritainMakesTheSessionSayTheBasisIsNotBritish(t *tes
 	}
 }
 
-// TestUnknownOrMalformedResidencyIsRefused covers the substitution the task
-// names by hand. A country this application has no rules for must be rejected
-// outright, and the stored value must be exactly what it was — accepting it and
-// behaving like Russia is the silent wrongness the whole change removes.
+// An unknown or malformed residency is refused and the stored value is
+// unchanged.
 func TestUnknownOrMalformedResidencyIsRefused(t *testing.T) {
 	url, owner := setupOwner(t)
 
@@ -137,8 +131,7 @@ func TestUnknownOrMalformedResidencyIsRefused(t *testing.T) {
 	}
 }
 
-// TestResidencyAndCurrencyAreIndependentAndOwnerOnly pins that the two space
-// settings can be changed together or apart, and that only the owner may.
+// The two settings change together or apart, and only by the owner.
 func TestResidencyAndCurrencyAreIndependentAndOwnerOnly(t *testing.T) {
 	url, owner := setupOwner(t)
 
@@ -180,9 +173,7 @@ func TestResidencyAndCurrencyAreIndependentAndOwnerOnly(t *testing.T) {
 	}
 }
 
-// TestTaxResidenciesEndpointServesTheOneList checks that the list a client
-// offers comes from the server. A client shipping its own copy would drift and
-// eventually offer a country the server refuses.
+// The endpoint serves the same list the server validates against.
 func TestTaxResidenciesEndpointServesTheOneList(t *testing.T) {
 	url, owner := setupOwner(t)
 

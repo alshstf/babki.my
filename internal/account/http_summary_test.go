@@ -54,9 +54,7 @@ func TestSummaryEndpoint(t *testing.T) {
 		t.Fatalf("summary = %+v", sum)
 	}
 
-	// Single currency, already the space's default base currency (RUB) — no
-	// fx lookup needed, so it must convert trivially: total == net, nothing
-	// unconverted.
+	// Already in the base currency: no lookup, total equals net.
 	if sum.BaseCurrency != "RUB" {
 		t.Fatalf("base_currency = %q, want RUB", sum.BaseCurrency)
 	}
@@ -66,31 +64,22 @@ func TestSummaryEndpoint(t *testing.T) {
 	if sum.Unconverted == nil || len(*sum.Unconverted) != 0 {
 		t.Fatalf("unconverted = %v, want []", sum.Unconverted)
 	}
-	// Both accounts are already RUB (the base currency): every conversion is
-	// an identity, which resolves no fx rate at all, so rates_on must be
-	// null — not today's date, and not fabricated.
+	// Identity conversions resolve no rate, so rates_on is null.
 	if sum.RatesOn != nil {
 		t.Fatalf("rates_on = %v, want null (no cross-currency conversion happened)", *sum.RatesOn)
 	}
 }
 
-// pastOn returns a date safely before "today" so Store.FxRateOn's
-// nearest-earlier-date lookup always finds it regardless of when the test
-// runs, without hardcoding a specific calendar date.
+// pastOn is a date safely before today, so the nearest-earlier lookup finds it.
 func pastOn() time.Time {
 	return time.Now().UTC().AddDate(0, -1, 0).Truncate(24 * time.Hour)
 }
 
-// TestSummaryTotalInBaseCurrencyTwoCurrencies converts two non-base
-// currencies into RUB and checks the sum against a manually computed
-// expectation.
+// Two non-base currencies converted into RUB:
 //
-// Manual arithmetic (rates match converter_test.go's fixtures for an
-// easy cross-check):
-//
-//	USD account: 100.00 USD (amount_minor 10000) * 90 RUB/USD  = 9000.00 RUB (900000 minor)
-//	EUR account:  50.00 EUR (amount_minor  5000) * 100 RUB/EUR = 5000.00 RUB (500000 minor)
-//	total_in_base_minor = 900000 + 500000 = 1400000 (14000.00 RUB)
+//	USD 100.00 (10000) × 90  = 9000.00 RUB (900000)
+//	EUR  50.00 (5000)  × 100 = 5000.00 RUB (500000)
+//	total = 1400000
 func TestSummaryTotalInBaseCurrencyTwoCurrencies(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	on := pastOn()
@@ -135,18 +124,14 @@ func TestSummaryTotalInBaseCurrencyTwoCurrencies(t *testing.T) {
 	if sum.Unconverted == nil || len(*sum.Unconverted) != 0 {
 		t.Fatalf("unconverted = %v, want []", sum.Unconverted)
 	}
-	// Both seeded rates are dated exactly "on" (pastOn(), about a month ago),
-	// so rates_on must surface that date, not today's.
+	// Both rates are dated on, so rates_on is that date.
 	wantRatesOn := on.Format("2006-01-02")
 	if sum.RatesOn == nil || *sum.RatesOn != wantRatesOn {
 		t.Fatalf("rates_on = %v, want %q", sum.RatesOn, wantRatesOn)
 	}
 }
 
-// balanceFor returns the amount_minor used for each currency's account in
-// TestSummaryTotalInBaseCurrencyTwoCurrencies, kept in one place so the
-// values in the request bodies and the manual arithmetic in the doc comment
-// can't silently drift apart.
+// balanceFor is each currency's balance, shared by the requests and the arithmetic.
 func balanceFor(currency string) string {
 	switch currency {
 	case "USD":
@@ -158,10 +143,8 @@ func balanceFor(currency string) string {
 	}
 }
 
-// TestSummaryPartialConversionReportsUnconverted covers the "some currencies
-// have a rate, one doesn't" case: total_in_base_minor must still be a
-// number — the sum of whatever did convert — and the currency lacking a
-// rate must show up in unconverted rather than failing the whole request.
+// A currency without a rate goes to unconverted; the total is the sum of what
+// converted.
 func TestSummaryPartialConversionReportsUnconverted(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	on := pastOn()
@@ -204,18 +187,15 @@ func TestSummaryPartialConversionReportsUnconverted(t *testing.T) {
 	if sum.Unconverted == nil || len(*sum.Unconverted) != 1 || (*sum.Unconverted)[0] != "KZT" {
 		t.Fatalf("unconverted = %v, want [KZT]", sum.Unconverted)
 	}
-	// KZT never converted (no rate at all), so it can't affect rates_on: only
-	// the USD leg's rate date should surface.
+	// KZT never converted, so only USD's rate date counts.
 	wantRatesOn := on.Format("2006-01-02")
 	if sum.RatesOn == nil || *sum.RatesOn != wantRatesOn {
 		t.Fatalf("rates_on = %v, want %q (USD leg only)", sum.RatesOn, wantRatesOn)
 	}
 }
 
-// TestSummaryNoRatesAtAllYieldsNullTotal covers the total absence of fx
-// data: every currency lacks a rate, so total_in_base_minor must be null
-// (not 0 — 0 would misleadingly claim a known zero net worth) and every
-// currency present in totals must show up in unconverted.
+// With no rates at all the total is null, not 0, and every currency is
+// unconverted.
 func TestSummaryNoRatesAtAllYieldsNullTotal(t *testing.T) {
 	url, c, _ := newAPIWithConverter(t)
 
@@ -246,18 +226,14 @@ func TestSummaryNoRatesAtAllYieldsNullTotal(t *testing.T) {
 	if sum.Unconverted == nil || len(*sum.Unconverted) != 1 || (*sum.Unconverted)[0] != "USD" {
 		t.Fatalf("unconverted = %v, want [USD]", sum.Unconverted)
 	}
-	// Nothing converted at all (USD is the only currency and it's
-	// unconverted), so rates_on must be null too, matching total_in_base_minor.
+	// Nothing converted, so rates_on is null.
 	if sum.RatesOn != nil {
 		t.Fatalf("rates_on = %v, want null (nothing converted)", *sum.RatesOn)
 	}
 }
 
-// TestSummaryBaseCurrencyComesFromSpace proves base_currency in the response
-// reflects the space's configured base currency rather than a hardcoded
-// "RUB": after changing the space's base currency to USD, an empty space
-// (no accounts at all) must report base_currency=USD, total_in_base_minor=0
-// (there's nothing to fail to convert), and unconverted=[].
+// base_currency follows the space's setting: an empty USD space reports USD,
+// 0 and no unconverted currencies.
 func TestSummaryBaseCurrencyComesFromSpace(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -288,16 +264,8 @@ func TestSummaryBaseCurrencyComesFromSpace(t *testing.T) {
 	}
 }
 
-// TestSummaryZeroBalanceCurrencyIgnored verifies that currencies with zero net
-// minor amounts are excluded from fx rate lookup and do not appear in the
-// unconverted list, even when their rate is unavailable. This covers the
-// regression case: a newly created account in a rare currency without fx rates
-// and with no balance (net_minor=0) should not poison the summary of accounts
-// in base currency or other convertible currencies.
-//
-// Test setup: a KZT account with zero balance (no fx rate for KZT exists) +
-// a RUB account (base currency) with 100 RUB. Expected: total_in_base_minor=100000,
-// unconverted=[], KZT account still shows in totals with net_minor=0.
+// A zero-balance currency needs no rate and never appears in unconverted: a
+// new empty KZT account must not spoil the summary.
 func TestSummaryZeroBalanceCurrencyIgnored(t *testing.T) {
 	url, c, _ := newAPIWithConverter(t)
 
@@ -338,8 +306,7 @@ func TestSummaryZeroBalanceCurrencyIgnored(t *testing.T) {
 	if sum.BaseCurrency != "RUB" {
 		t.Fatalf("base_currency = %q, want RUB", sum.BaseCurrency)
 	}
-	// The total should be 100000 (RUB only), not null. The KZT account exists
-	// but has zero balance, so it should not require an fx rate.
+	// RUB only: 100000, not null.
 	if sum.TotalInBaseMinor == nil || *sum.TotalInBaseMinor != 100000 {
 		t.Fatalf("total_in_base_minor = %v, want 100000 (RUB leg only)", sum.TotalInBaseMinor)
 	}
@@ -351,19 +318,14 @@ func TestSummaryZeroBalanceCurrencyIgnored(t *testing.T) {
 	if len(sum.Totals) != 2 {
 		t.Fatalf("totals has %d currencies, want 2", len(sum.Totals))
 	}
-	// The only currency actually converted (RUB) is the base currency itself
-	// — an identity conversion, no rate resolved — so rates_on must be null.
+	// Only identity conversions, so rates_on is null.
 	if sum.RatesOn != nil {
 		t.Fatalf("rates_on = %v, want null (only identity RUB->RUB was converted)", *sum.RatesOn)
 	}
 }
 
-// TestSummaryRatesOnReflectsStaleRateNotToday is fix (1)'s core regression
-// test: a summary must disclose how old the fx rate behind
-// total_in_base_minor actually is, rather than silently implying "today's
-// rate". A USD rate dated two days ago (FxRateOn's nearest-earlier-date
-// fallback, since no rate exists for today) must surface as rates_on's
-// exact date — not today.
+// rates_on discloses a stale rate: a USD rate two days old surfaces as that
+// date, not today.
 func TestSummaryRatesOnReflectsStaleRateNotToday(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	twoDaysAgo := time.Now().UTC().AddDate(0, 0, -2).Truncate(24 * time.Hour)
@@ -407,36 +369,14 @@ func TestSummaryRatesOnReflectsStaleRateNotToday(t *testing.T) {
 	}
 }
 
-// TestSummaryConvertsViaInverseRate closes a gap left by plan 4a's review:
-// every summary test above with a non-base currency has a fx_rates row in
-// the DIRECT direction (currency -> base). This test picks the base
-// currency to be USD (not RUB) and holds a balance in RUB, while fx_rates
-// only ever carries a USD->RUB row — never RUB->USD. Converting the RUB
-// balance to USD therefore has no direct row to use at all; it can only
-// succeed through directOrInverse's inverse branch (1 / (USD->RUB rate)).
-// This is the main owner-facing feature (net worth total) exercised on the
-// less-common but equally load-bearing code path, at the HTTP layer.
-//
-// Manual arithmetic (chosen so the inverse divides out exactly, leaving no
-// rounding ambiguity that could mask a bug in either direction):
-//
-//	fx_rates row: Base=USD, Quote=RUB, rate 78.50 (i.e. 1 USD = 78.50 RUB)
-//	RUB account balance: 7850.00 RUB (amount_minor 785000)
-//	inverse rate (RUB -> USD) = 1 / 78.50
-//	total_in_base_minor = round(785000 * (1 / 78.50)) = round(785000 / 78.50) = 10000
-//	                      (785000 / 78.50 = 10000 exactly: 78.50 * 10000 = 785000)
-//	                      i.e. 100.00 USD
-//
-// If the inverse branch were broken (e.g. resolveRate only ever tried the
-// direct from->to direction), the RUB balance could not convert at all: it
-// would land in unconverted and total_in_base_minor would be nil, not 10000.
+// Conversion through the inverse rate: base USD, a RUB balance, and only a
+// USD->RUB row (78.50). 785000 / 78.50 = 10000 exactly. A broken inverse would
+// leave the total null.
 func TestSummaryConvertsViaInverseRate(t *testing.T) {
 	url, c, mdStore := newAPIWithConverter(t)
 	on := pastOn()
 
-	// Only base(USD) -> quote(RUB) is seeded — never RUB -> USD directly —
-	// so the summary can only convert the RUB account via directOrInverse's
-	// inverse leg (1 / rate), not a direct lookup.
+	// Only USD->RUB is seeded.
 	if err := mdStore.UpsertFxRates(t.Context(), []marketdata.FxRate{
 		{Base: "USD", Quote: "RUB", On: on, Rate: decimal.RequireFromString("78.50"), Source: "test"},
 	}); err != nil {

@@ -33,21 +33,14 @@ type Space struct {
 	ID           uuid.UUID
 	Name         string
 	BaseCurrency string
-	// TaxResidency is the OWNER'S country of tax residency, ISO 3166-1
-	// alpha-2. It decides which cost basis rules the space's figures must be
-	// judged against (see TaxRulesFor).
-	//
-	// It sits on the space rather than on the account because residency is a
-	// property of the person: a Russian resident declares a foreign broker's
-	// account by Russian rules just the same, so one country governs every
-	// account in the family. A per-account country would let one family claim
-	// several rulebooks at once, which no tax authority recognises.
+	// TaxResidency is the owner's country of tax residency (ISO 3166-1 alpha-2),
+	// deciding which cost basis rules apply. It belongs to the space because
+	// residency is the person's: one country governs every account.
 	TaxResidency string
 	CreatedAt    time.Time
 }
 
-// CostBasisRules is what TaxResidency implies, resolved through the one table
-// in taxresidency.go.
+// CostBasisRules is what TaxResidency implies (see TaxRulesFor).
 func (s Space) CostBasisRules() TaxRules { return TaxRulesFor(s.TaxResidency) }
 
 type Member struct {

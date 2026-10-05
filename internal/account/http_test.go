@@ -30,17 +30,14 @@ func newAPI(t *testing.T) (string, *http.Client) {
 	return url, c
 }
 
-// newAPIWithConverter is newAPI plus the *marketdata.Store backing the
-// account handler's fx converter, so summary tests can seed fx_rates
-// (marketdata.Store.UpsertFxRates, as converter_test.go does) without a
-// separate DB fixture.
+// newAPIWithConverter also returns the marketdata store, for seeding rates.
 func newAPIWithConverter(t *testing.T) (string, *http.Client, *marketdata.Store) {
 	t.Helper()
 	return newAPIWithJournals(t, nil)
 }
 
-// newAPIWithJournals is newAPIWithConverter with brokerage accounts valued
-// from their journals by journals, which stands in for the portfolio engine.
+// newAPIWithJournals values brokerage accounts with journals, a stand-in for
+// the portfolio engine.
 func newAPIWithJournals(t *testing.T, journals *fakeJournals) (string, *http.Client, *marketdata.Store) {
 	t.Helper()
 	pool := testdb.New(t)
@@ -113,14 +110,8 @@ func TestAccountsCRUDAndBalance(t *testing.T) {
 		`{"name":"","type":"cash","currency":"RUB"}`,
 		`{"name":"X","type":"nope","currency":"RUB"}`,
 		`{"name":"X","type":"cash","currency":"russian rubles"}`,
-		// A LOWERCASE CODE, which the line above does not cover: a currency's
-		// name is refused by anything that looks at the string at all, while
-		// "rub" is refused only by the shape this door actually applies
-		// (currency.Pattern, declared on CreateAccountRequest.currency in the
-		// contract since #102). Without this case, loosening the shared pattern
-		// to accept either case left this package green while three others
-		// reddened — and a stored "rub" matches no rate row, so the account
-		// would simply never convert.
+		// A lowercase code is refused by the shape alone (currency.Pattern, #102); a
+		// stored "rub" would match no rate.
 		`{"name":"X","type":"cash","currency":"rub"}`,
 	} {
 		if resp = do(t, c, "POST", url+"/api/v1/accounts", bad); resp.StatusCode != 400 {
@@ -146,8 +137,7 @@ func TestAccountsCRUDAndBalance(t *testing.T) {
 		t.Fatalf("list = %+v", list)
 	}
 
-	// bad balance payloads. Day-after-tomorrow (UTC) is always out of the
-	// +1 day TZ slack, so it's a reliable "too far in the future" case.
+	// Two days ahead is beyond the one-day time-zone slack.
 	dayAfterTomorrow := time.Now().UTC().AddDate(0, 0, 2).Format("2006-01-02")
 	for _, bad := range []string{
 		`{"as_of":"20.07.2026","amount_minor":1}`,
@@ -167,8 +157,7 @@ func TestAccountsCRUDAndBalance(t *testing.T) {
 		t.Errorf("balance as_of=today = %d, want 200: %s", resp.StatusCode, b)
 	}
 
-	// tomorrow (UTC) is within the +1 day TZ slack and must be accepted, so
-	// users east of UTC can record "today" in their own timezone.
+	// Tomorrow (UTC) is within the slack and accepted.
 	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
 	if resp = do(t, c, "PUT", url+"/api/v1/accounts/"+acc.ID+"/balance",
 		fmt.Sprintf(`{"as_of":%q,"amount_minor":1}`, tomorrow)); resp.StatusCode != 200 {
@@ -211,15 +200,14 @@ func TestAccountsCRUDAndBalance(t *testing.T) {
 	}
 }
 
-// accountOwner captures just the owner_user_id field of an AccountWithBalance
-// response: nil means the JSON value was null, a set pointer means a UUID.
+// accountOwner reads owner_user_id: nil for JSON null.
 type accountOwner struct {
 	ID          string  `json:"id"`
 	OwnerUserId *string `json:"owner_user_id"`
 }
 
-// TestAccountOwnerUserIDNullable verifies PATCH can distinguish an absent
-// owner_user_id (leave unchanged) from an explicit null (clear to shared).
+// PATCH tells an absent owner_user_id (unchanged) from an explicit null
+// (shared).
 func TestAccountOwnerUserIDNullable(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -274,24 +262,16 @@ func TestAccountOwnerUserIDNullable(t *testing.T) {
 	}
 }
 
-// converterLike mirrors the account package's unexported converter
-// interface so this external test package can name the type of the double
-// it passes to account.NewHandler. Assignability is by method set, not by
-// name, so anything satisfying this satisfies the handler's own interface —
-// the same trick portfolio's http_test.go uses for converterLike.
+// converterLike mirrors the handler's unexported converter interface so the
+// external test package can name it.
 type converterLike interface {
 	ConvertMany(ctx context.Context, amounts map[string]int64, to string, on time.Time) (int64, []string, time.Time, error)
 	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
 	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
 }
 
-// failingConverter is a converter double whose fx lookups always fail with
-// the given error — deliberately NOT marketdata.ErrNoRate, standing in for a
-// genuine outage (a dropped DB connection, a canceled context) rather than
-// the ordinary "this pair has no rate" outcome. A real, Postgres-backed
-// *marketdata.Converter can't be made to fail on demand, so the distinction
-// balanceInBase draws between those two cases is only testable through a
-// double.
+// failingConverter fails every lookup with a real error, not ErrNoRate: an
+// outage a real converter cannot be made to have.
 type failingConverter struct{ err error }
 
 func (c failingConverter) ConvertMany(_ context.Context, _ map[string]int64, _ string, _ time.Time) (int64, []string, time.Time, error) {
@@ -302,19 +282,13 @@ func (c failingConverter) Rate(_ context.Context, _, _ string, _ time.Time) (dec
 	return decimal.Decimal{}, time.Time{}, c.err
 }
 
-// RatesOn fails the whole batch, which is what an outage does to it: the
-// zero Rates is returned alongside, and per marketdata.RatesOn it must be
-// ignored. The prewarm ignores it (it ignores every batch failure), so this
-// double leaves the memo empty and the outage has to be discovered — and
-// reported — by the per-currency fallback, which is precisely what
-// TestListRealRateErrorFailsRequest asserts.
+// RatesOn fails the whole batch; the prewarm ignores it, so the per-currency
+// fallback has to discover and report the outage.
 func (c failingConverter) RatesOn(_ context.Context, _ []marketdata.RateQuery) (marketdata.Rates, error) {
 	return marketdata.Rates{}, c.err
 }
 
-// newAPIWithConverterDouble is newAPI with the account handler's fx
-// converter replaced by conv, for tests that need a specific failure mode
-// out of it. Everything else is wired exactly as newAPIWithConverter does.
+// newAPIWithConverterDouble wires conv as the account handler's converter.
 func newAPIWithConverterDouble(t *testing.T, conv converterLike) (string, *http.Client) {
 	t.Helper()
 	pool := testdb.New(t)
@@ -340,24 +314,13 @@ func newAPIWithConverterDouble(t *testing.T, conv converterLike) (string, *http.
 	return ts.URL, client
 }
 
-// TestListRealRateErrorFailsRequest pins the distinction the whole
-// balance_in_base contract rests on: a genuine failure while resolving the
-// fx rate (DB down, context canceled) must fail the request, NOT be
-// rendered as balance_in_base: null.
-//
-// Both outcomes look identical on screen otherwise — the frontend shows the
-// account's native balance with a "no rate" marker — so an outage would be
-// presented to the user as ordinary, expected degradation, and nobody would
-// ever learn the database had stopped answering. Only the status code tells
-// them apart, which is why this test asserts on it: without it, deleting
-// balanceInBase's error propagation (returning null instead of the error)
-// breaks nothing visible and no other test notices.
+// A real rate failure fails the request rather than showing balance_in_base:
+// null, which would look like an ordinary missing rate. Only the status tells
+// them apart.
 func TestListRealRateErrorFailsRequest(t *testing.T) {
 	url, c := newAPIWithConverterDouble(t, failingConverter{err: errors.New("connection reset by peer")})
 
-	// USD account in an RUB-based space (the setup default), with a balance:
-	// all three of balanceInBase's early "nothing to convert" exits are
-	// avoided, so the rate lookup really is attempted.
+	// A USD account with a balance in a RUB space, so the lookup is attempted.
 	id := mkAccount(t, url, c, "US cash", "USD")
 	setBalance(t, url, c, id, 12345)
 
@@ -369,19 +332,9 @@ func TestListRealRateErrorFailsRequest(t *testing.T) {
 	}
 }
 
-// TestAnUnknownOwnerIsA400OnBothDoors covers the mapping of the foreign key on
-// accounts.owner_user_id: a user id that names nobody is the client's mistake,
-// so it must come back as a 400 saying which field is wrong — not as the
-// "internal error" an untranslated 23503 produces, which blames the server for
-// a value the request chose.
-//
-// BOTH DOORS, because they fail in different places: create passes the id
-// straight to the INSERT, while patch reaches it through the tri-state that
-// tells "set the owner" apart from "leave it alone", and only one of the three
-// branches carries a value at all.
-//
-// The id is a well-formed random UUID, so nothing upstream can reject it on its
-// shape and the refusal can only come from the database not finding the row.
+// An owner id naming nobody is a 400 on create and on patch (each reaches the
+// foreign key differently), not a 500. The id is a valid UUID, so only the
+// database can refuse it.
 func TestAnUnknownOwnerIsA400OnBothDoors(t *testing.T) {
 	url, c := newAPI(t)
 	stranger := uuid.New().String()

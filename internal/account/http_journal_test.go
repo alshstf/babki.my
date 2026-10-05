@@ -16,9 +16,8 @@ import (
 	"babki.my/babki/internal/marketdata"
 )
 
-// fakeJournals stands in for the portfolio engine: what each account is worth
-// by its journal today, and on past days. An account it has no entry for has
-// no operations.
+// fakeJournals stands in for the portfolio engine: each account's journal worth
+// today and on past days; no entry means no operations.
 type fakeJournals struct {
 	byAccount map[string]account.JournalValue
 	onDay     map[string]account.JournalValue // account id + "@" + day
@@ -122,11 +121,9 @@ func rowOf(t *testing.T, rows []journalRow, id string) journalRow {
 	return journalRow{}
 }
 
-// The family from the Р-2 memo: one broker whose journal agrees with the
-// broker's own figure, one whose journal is missing operations, a deposit and a
-// credit card on their balances. A brokerage account counts by its journal
-// unless the family pins it to its balance; the total says what it owes to
-// journals and how far the disagreeing one is off.
+// The Р-2 family: a broker whose journal agrees, one missing operations, a
+// deposit and a card. Brokerage accounts count by journal unless pinned, and
+// the total says what it owes to journals.
 func TestTheTotalCountsABrokerageAccountByItsJournal(t *testing.T) {
 	journals := &fakeJournals{byAccount: map[string]account.JournalValue{}}
 	url, c, _ := newAPIWithJournals(t, journals)
@@ -191,8 +188,7 @@ func TestTheTotalCountsABrokerageAccountByItsJournal(t *testing.T) {
 		}
 	}
 
-	// Pinned, Альфа is counted by its balance and still says what its journal
-	// comes to.
+	// Pinned, Альфа counts by its balance and still reports its journal.
 	resp := do(t, c, "PATCH", url+"/api/v1/accounts/"+alfa, `{"valued_by_balance":true}`)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("pin = %d", resp.StatusCode)
@@ -219,9 +215,8 @@ func TestTheTotalCountsABrokerageAccountByItsJournal(t *testing.T) {
 	}
 }
 
-// A journal holding several currencies is totalled under each, a currency the
-// account is short of among the debts, and converted with the rest; a balance
-// in a foreign currency is reconciled at today's rate.
+// A multi-currency journal is totalled under each currency, a shortfall as
+// debt; a foreign balance is reconciled at today's rate.
 func TestAJournalInSeveralCurrenciesIsTotalledUnderEach(t *testing.T) {
 	journals := &fakeJournals{byAccount: map[string]account.JournalValue{}}
 	url, c, md := newAPIWithJournals(t, journals)
@@ -267,10 +262,8 @@ func TestAJournalInSeveralCurrenciesIsTotalledUnderEach(t *testing.T) {
 	}
 }
 
-// A balance mark more than three days old is set against the journal as it
-// stood on the mark's own day — not against today's worth, which the market
-// has moved since. Where the journal cannot be valued whole on that day, no
-// verdict is given.
+// A mark older than three days is compared with the journal on its own day;
+// no verdict when the journal cannot be valued whole then.
 func TestAnOldBalanceIsComparedOnItsOwnDay(t *testing.T) {
 	journals := &fakeJournals{byAccount: map[string]account.JournalValue{}, onDay: map[string]account.JournalValue{}}
 	url, c, md := newAPIWithJournals(t, journals)
@@ -293,8 +286,7 @@ func TestAnOldBalanceIsComparedOnItsOwnDay(t *testing.T) {
 	before := createAccount(t, url, c, "Раньше журнала", "brokerage", "RUB")
 	for _, id := range []string{agrees, differs, unpriced, before} {
 		balanceOn(t, url, c, id, march, 54_000_000)
-		// Today's worth is far from March's balance for all of them: the
-		// market has moved, and that must not be the verdict.
+		// Today's worth is far from March's balance: the market moved.
 		journals.byAccount[id] = account.JournalValue{
 			Currency: "RUB", Minor: 70_000_000, ByCurrency: map[string]int64{"RUB": 70_000_000}, Operations: 9,
 		}
@@ -337,10 +329,9 @@ type capitalSeries struct {
 	} `json:"points"`
 }
 
-// The family's worth by month: a brokerage account by its journal as it
-// stood each month's end, a deposit by its latest balance mark by then (and
-// nothing before its first), a dollar card at that day's rate. A month the
-// journal could not be valued whole is marked incomplete.
+// The family's worth at month ends: a broker by its journal then, a deposit by
+// its latest mark by then, a dollar card at that day's rate; an incomplete
+// month is marked.
 func TestTheFamilysWorthIsSeriesOfMonthEnds(t *testing.T) {
 	journals := &fakeJournals{byAccount: map[string]account.JournalValue{}, onDay: map[string]account.JournalValue{}}
 	url, c, md := newAPIWithJournals(t, journals)
@@ -399,10 +390,8 @@ func TestTheFamilysWorthIsSeriesOfMonthEnds(t *testing.T) {
 	}
 }
 
-// The family's return is reckoned over its brokerage accounts kept by their
-// journal: their worth added up at both ends, their flows together — a move of
-// shares from one of them to another cancelling out. A deposit, with a balance
-// and no record of what crossed its edge, is not in it.
+// The family's return is over its journal-valued accounts; moves between them
+// cancel, and a deposit is not included.
 func TestTheFamilysReturnIsReckonedOverItsJournals(t *testing.T) {
 	journals := &fakeJournals{byAccount: map[string]account.JournalValue{}, periods: map[string]account.ReturnBasis{}}
 	url, c, _ := newAPIWithJournals(t, journals)

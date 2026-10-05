@@ -14,22 +14,12 @@ import (
 	"babki.my/babki/internal/platform/money"
 )
 
-// An instrument's face value was written unchecked (#93). Creation asked only
-// that the value and its currency arrive TOGETHER, so a face value of zero went
-// in; the update asked nothing at all, so a PATCH could clear the currency and
-// leave the value behind.
-//
-// Neither is a cosmetic gap. An exchange quotes a bond as a PERCENTAGE OF FACE,
-// so the face value is what turns that quote into money: at zero, every price
-// values the whole holding at nothing, and the positions screen publishes 0,00
-// for a bond that is worth something. The trade dialog already says, honestly,
-// which of the two is missing when it cannot convert a percentage into roubles
-// (plan 11) — but that is a reader coping with a state the write let through,
-// and every future reader would have to cope with it again.
+// Face value rules at both write doors (#93): a bond's quote is a percentage
+// of face, so a zero face value values the holding at nothing, and a pair
+// broken by a PATCH cannot be priced.
 
-// wantFaceRefusal asserts the WHOLE refusal. Both rules are about the same pair
-// of fields, so a message that named the other rule would still look plausible
-// beside the request that provoked it; only the whole sentence tells them apart.
+// wantFaceRefusal asserts the whole message: the rules concern the same
+// fields, so only the full sentence tells them apart.
 func wantFaceRefusal(t *testing.T, resp *http.Response, want, sent string) {
 	t.Helper()
 	body, _ := io.ReadAll(resp.Body)
@@ -55,10 +45,7 @@ var (
 	faceCurrencyRule = "face_currency must be ISO-4217 uppercase"
 )
 
-// faceBondOnlyRule is the refusal for a face value on something that is not a
-// bond, and it NAMES THE TYPE it found — spelled out here as a format so every
-// assertion below compares the whole sentence including that type. A message
-// that named the wrong type would send an importer to fix the wrong row.
+// faceBondOnlyRule is the non-bond refusal, naming the type it found.
 func faceBondOnlyRule(instrumentType string) string {
 	return fmt.Sprintf("face_value_minor and face_currency belong to a bond; this instrument is a %s", instrumentType)
 }
@@ -86,9 +73,8 @@ type facePair struct {
 	FaceCurrency   *string `json:"face_currency"`
 }
 
-// readFacePair fetches the instrument through the catalog search and returns
-// the pair as it is actually stored — the only way to tell a refusal that
-// changed nothing from one that refused after writing.
+// readFacePair reads the stored pair, to tell a refusal that changed nothing
+// from one that wrote first.
 func readFacePair(t *testing.T, url string, c *http.Client, id string) facePair {
 	t.Helper()
 	resp := do(t, c, "GET", url+"/api/v1/instruments", "")
@@ -116,8 +102,7 @@ func readFacePair(t *testing.T, url string, c *http.Client, id string) facePair 
 func TestCreateRefusesAFaceValueThatIsNotAValue(t *testing.T) {
 	url, c := newAPI(t)
 
-	// Zero: the state the trade dialog names as bad_face_value, and the one that
-	// prices a whole holding at nothing.
+	// Zero prices the whole holding at nothing.
 	wantFaceRefusal(t, do(t, c, "POST", url+"/api/v1/instruments",
 		`{"type":"bond","name":"X","currency":"RUB","face_value_minor":0,"face_currency":"RUB"}`),
 		facePositiveRule, "create with a face value of zero")
@@ -128,9 +113,7 @@ func TestCreateRefusesAFaceValueThatIsNotAValue(t *testing.T) {
 		facePositiveRule, "create with a negative face value")
 }
 
-// TestCreateTakesTheSmallestRealFaceValue fixes the edge: one minor unit is a
-// face value, and a rule that refused it would withhold a perfectly recordable
-// instrument.
+// One minor unit is a valid face value.
 func TestCreateTakesTheSmallestRealFaceValue(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -142,12 +125,7 @@ func TestCreateTakesTheSmallestRealFaceValue(t *testing.T) {
 	}
 }
 
-// TestCreateTakesTheLargestRealFaceValue fixes the other edge: a face value at
-// money.MaxAmountMinor is exactly as recordable as one just under it — the same
-// cap an operation's amount and an account's balance are written against (see
-// its doc comment), and a rule that refused the cap itself rather than what
-// lies past it would be a different, stricter bound than the one this
-// codebase states everywhere else.
+// money.MaxAmountMinor itself is accepted, as for amounts and balances.
 func TestCreateTakesTheLargestRealFaceValue(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -160,13 +138,8 @@ func TestCreateTakesTheLargestRealFaceValue(t *testing.T) {
 	}
 }
 
-// TestCreateRefusesAFaceValueTooLarge is #93's own gap, found by this branch's
-// own sweep: creation and update both bounded a face value from below and
-// never from above, so math.MaxInt64 went in as readily as a real bond's
-// 1 000,00. Verified end to end (see checkFacePair's doc comment): such an
-// instrument bought into a position answers 500 on every later GET of that
-// account's positions, forever, which is exactly the failure this whole branch
-// exists to turn into a rejected field instead.
+// A face value above money.MaxAmountMinor is refused: unbounded, it made the
+// positions screen fail forever.
 func TestCreateRefusesAFaceValueTooLarge(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -183,10 +156,7 @@ func TestCreateRefusesAFaceValueTooLarge(t *testing.T) {
 	}
 }
 
-// TestUpdateRefusesAFaceValueTooLarge is TestCreateRefusesAFaceValueTooLarge's
-// twin at the other door: a PATCH is the only way an instrument created sound
-// can be made to carry a face value the write side would have refused on
-// creation, and it must refuse it exactly the same way.
+// The same bound on update.
 func TestUpdateRefusesAFaceValueTooLarge(t *testing.T) {
 	url, c := newAPI(t)
 	id := mkBond(t, url, c)
@@ -201,9 +171,7 @@ func TestUpdateRefusesAFaceValueTooLarge(t *testing.T) {
 	}
 }
 
-// TestCreateStillTakesAnInstrumentWithNoFaceValue: the pair is optional, and a
-// bond whose face value nobody has recorded yet is an ordinary catalog row. It
-// simply cannot be priced until one is.
+// A bond with no face value yet is an ordinary row.
 func TestCreateStillTakesAnInstrumentWithNoFaceValue(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -219,22 +187,9 @@ func TestCreateStillTakesAnInstrumentWithNoFaceValue(t *testing.T) {
 	}
 }
 
-// TestCreateRefusesAFaceCurrencyThatNamesNoCurrency is the gap the contract
-// described and nothing enforced: face_currency was declared ISO-4217 and
-// checked only for PRESENCE, so `"face_currency": ""` was created, stored, and
-// returned with a 201.
-//
-// An empty string is the interesting one because it is invisible to the checks
-// that were there. It is not null, so the pairing rule reads the pair as whole,
-// and an empty string is not NULL either, so the CHECK constraint behind it
-// passed the row too. What comes out is a bond whose face value is denominated
-// in nothing: portfolio.marketValue prices it in face_currency and publishes a
-// figure with an empty currency beside it — a bare number, which
-// TestMarketValueNeedsBothHalvesOfTheFacePair argues is worse than no valuation
-// at all — and the trade dialog captions it «Номинал в , а сделка в RUB».
-//
-// The instrument's own currency has been held to currencyRe at this same door
-// from the start. This is that rule reaching the other currency column.
+// An empty face currency is refused: it is neither null nor NULL, so the
+// pair rule and the CHECK both passed it, and a bond would be valued in no
+// currency.
 func TestCreateRefusesAFaceCurrencyThatNamesNoCurrency(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -250,10 +205,8 @@ func TestCreateRefusesAFaceCurrencyThatNamesNoCurrency(t *testing.T) {
 	}
 }
 
-// TestUpdateRefusesAFaceCurrencyThatNamesNoCurrency: the same rule at the other
-// door, and reached with BOTH halves named so that the mention rule is not what
-// answers. A PATCH is the only way an instrument that was created sound can
-// become one that is not.
+// The same rule on update, with both halves named so the mention rule does not
+// answer.
 func TestUpdateRefusesAFaceCurrencyThatNamesNoCurrency(t *testing.T) {
 	url, c := newAPI(t)
 	id := mkBond(t, url, c)
@@ -275,21 +228,9 @@ func TestUpdateRefusesAFaceCurrencyThatNamesNoCurrency(t *testing.T) {
 	}
 }
 
-// TestUpdateRefusesToBreakThePair is #93's second half: PATCH validated nothing
-// whatsoever, so either half of the pair could be cleared or set on its own.
-//
-// The rule is stated about the REQUEST, not about the row it lands on: to touch
-// either half, send both. That is deliberately stricter than "the result must be
-// sound" — it needs no read of the stored row, so it cannot be raced by a
-// concurrent PATCH that changes the other half between the read and the write.
-//
-// And it refuses in its OWN sentence, which is what this test pins by asserting
-// the whole string. Creation's «must be set together or not at all» would be a
-// true statement here and still a useless one: PATCH {"face_value_minor":200000}
-// lands on a bond that stores "RUB", where the two ARE set together both before
-// the request and after it, so the sentence describes nothing the client did
-// wrong and names nothing for it to do. The thing to do is resend the currency,
-// and only a rule about the request can say it.
+// A PATCH touching either half must send both, in a message of its own:
+// creation's "set together" would be true and useless here. The rule is about
+// the request, so a concurrent PATCH cannot race it.
 func TestUpdateRefusesToBreakThePair(t *testing.T) {
 	url, c := newAPI(t)
 	id := mkBond(t, url, c)
@@ -304,10 +245,7 @@ func TestUpdateRefusesToBreakThePair(t *testing.T) {
 			faceMentionRule, tc.what)
 	}
 
-	// Mentioning both and VALUING only one is the other rule, and the one
-	// creation shares: both halves are named, so the mention rule has nothing to
-	// say, and what is left is a face value with no currency. Without a case here
-	// the update side of the shared rule would be pinned by nothing at all.
+	// Both named, one valued: the shared value-and-currency rule answers.
 	for _, tc := range []struct{ what, body string }{
 		{"null the value while naming a currency", `{"face_value_minor":null,"face_currency":"USD"}`},
 		{"null the currency while naming a value", `{"face_value_minor":200000,"face_currency":null}`},
@@ -342,8 +280,7 @@ func TestUpdateRefusesAFaceValueThatIsNotAValue(t *testing.T) {
 	}
 }
 
-// TestUpdateTakesBothHalvesTogether is the other side of the pairing rule: what
-// it asks for has to be possible, or it is not a rule but a wall.
+// Both halves together are accepted.
 func TestUpdateTakesBothHalvesTogether(t *testing.T) {
 	url, c := newAPI(t)
 	id := mkBond(t, url, c)
@@ -360,8 +297,7 @@ func TestUpdateTakesBothHalvesTogether(t *testing.T) {
 		t.Fatalf("face pair = %+v, want 200000 USD", pair)
 	}
 
-	// And both cleared at once, which is how a face value recorded by mistake is
-	// taken back.
+	// Both cleared at once is accepted.
 	if resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
 		`{"face_value_minor":null,"face_currency":null}`); resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
@@ -372,10 +308,7 @@ func TestUpdateTakesBothHalvesTogether(t *testing.T) {
 	}
 }
 
-// TestUpdateOfSomethingElseLeavesThePairAlone: a PATCH that mentions neither
-// half must not have to mention them. This is the case every other field's
-// update is, and a pairing rule written about the resulting ROW rather than
-// about the request would be tempted to demand them here.
+// A PATCH of other fields need not mention the pair.
 func TestUpdateOfSomethingElseLeavesThePairAlone(t *testing.T) {
 	url, c := newAPI(t)
 	id := mkBond(t, url, c)
@@ -392,27 +325,10 @@ func TestUpdateOfSomethingElseLeavesThePairAlone(t *testing.T) {
 	}
 }
 
-// A face value was accepted on ANY type of instrument, though the contract has
-// said all along that it is null for anything that is not a bond (#101).
-// Verified before this test existed: `{"type":"share", ...}` with a face value
-// came back 201 and GET published the field.
-//
-// Nothing computed a wrong figure from it — portfolio.marketValue branches on
-// the type and never reads a share's face value, and the trade dialog's
-// faceGapOf returns early for a non-bond — so this is not a broken screen. It
-// is the document promising one thing and the server accepting another, which
-// is what the next client writes its code against.
-//
-// The CHECK moved to the write rather than the promise being weakened, for the
-// reason a face value is already bounded, positive and pair-checked there: a
-// bond's quote is a percentage of face, so the pair MEANS something on a bond
-// and means nothing anywhere else, and a field that means nothing is one a
-// reader will one day read anyway.
+// A face value belongs only to a bond (#101): it was accepted on any type,
+// though the contract says null otherwise. The check sits at the write.
 
-// TestCreateRefusesAFaceValueOnAnythingButABond covers every type the catalog
-// has, not just the share the issue reported: nothing about the rule is about
-// shares, and a check written as `!= bond` and one written as `== share` differ
-// on five types nobody would have tested by hand.
+// Every non-bond type is refused, not just a share.
 func TestCreateRefusesAFaceValueOnAnythingButABond(t *testing.T) {
 	url, c := newAPI(t)
 
@@ -422,10 +338,8 @@ func TestCreateRefusesAFaceValueOnAnythingButABond(t *testing.T) {
 			faceBondOnlyRule(kind), "create a "+kind+" carrying a face value")
 	}
 
-	// HALF a pair is refused by this rule too, and by this rule rather than by
-	// the pairing one: on a non-bond neither half belongs, so "set them
-	// together" would tell the client to send MORE of what it may not send at
-	// all.
+	// Half a pair on a non-bond gets the bond-only refusal, not "set them
+	// together".
 	for _, tc := range []struct{ what, body string }{
 		{"create a share with a face value alone", `{"type":"share","name":"X","currency":"RUB","face_value_minor":100000}`},
 		{"create a share with a face currency alone", `{"type":"share","name":"X","currency":"RUB","face_currency":"RUB"}`},
@@ -435,18 +349,14 @@ func TestCreateRefusesAFaceValueOnAnythingButABond(t *testing.T) {
 	}
 }
 
-// TestCreateStillTakesANonBondWithNoFaceValue is the other side: the rule
-// refuses a face value on a non-bond, not the non-bond. Every ordinary catalog
-// row is one of these.
+// A non-bond without a face value is accepted.
 func TestCreateStillTakesANonBondWithNoFaceValue(t *testing.T) {
 	url, c := newAPI(t)
 
 	for _, body := range []string{
 		`{"type":"share","name":"Сбербанк","ticker":"SBER","currency":"RUB"}`,
 		`{"type":"crypto","name":"Bitcoin","currency":"USD"}`,
-		// Explicit nulls are absence, exactly as they are for a bond: a client
-		// that sends the whole shape of the object with two nulls in it has not
-		// asked for a face value.
+		// Explicit nulls are absence.
 		`{"type":"etf","name":"Фонд","currency":"RUB","face_value_minor":null,"face_currency":null}`,
 	} {
 		if resp := do(t, c, "POST", url+"/api/v1/instruments", body); resp.StatusCode != http.StatusCreated {
@@ -474,17 +384,8 @@ func mkShare(t *testing.T, url string, c *http.Client) string {
 	return share.ID
 }
 
-// TestUpdateRefusesAFaceValueOnAnythingButABond closes the other door, and it
-// is the door that matters most: an instrument's type cannot be changed
-// (UpdateInstrumentRequest has no type and the UPDATE statement does not touch
-// the column), so a PATCH is the only way a row created sound could have
-// acquired a face value it may not have.
-//
-// The type comes from the STORED row, which is the one thing a PATCH cannot
-// tell the server itself. That read cannot be raced by a concurrent write the
-// way a read of the face pair could: there is no code path in this program that
-// changes an instrument's type, so what this read sees is what the write will
-// land on.
+// The update refuses it too, judging the type from the stored row, which no
+// writer can change.
 func TestUpdateRefusesAFaceValueOnAnythingButABond(t *testing.T) {
 	url, c := newAPI(t)
 	id := mkShare(t, url, c)
@@ -498,15 +399,8 @@ func TestUpdateRefusesAFaceValueOnAnythingButABond(t *testing.T) {
 		t.Errorf("face pair after the refusal = %+v, want both still null", pair)
 	}
 
-	// HALF a pair pins the ORDER handleUpdate's two blocks run in, not just
-	// their outcomes. The type check has to run before the mention check: a
-	// share sent one half of the pair alone belongs to neither rule's row, and
-	// checkFaceType is what says "belongs to a bond" rather than checkFaceUpdate
-	// saying "send both" — which would tell a client to send MORE of a field it
-	// may not send at all, exactly what checkFaceType's own doc comment names as
-	// the reason the two are ordered this way. Swapping the two blocks in
-	// handleUpdate leaves every other case in this file green; only this one
-	// would answer with faceMentionRule instead.
+	// Half a pair on a share pins the order of the checks: the type rule answers
+	// before the mention rule.
 	wantFaceRefusal(t, do(t, c, "PATCH", url+"/api/v1/instruments/"+id,
 		`{"face_value_minor":100000}`),
 		faceBondOnlyRule("share"), "patch a face value alone onto a share")
@@ -517,21 +411,13 @@ func TestUpdateRefusesAFaceValueOnAnythingButABond(t *testing.T) {
 	}
 }
 
-// TestUpdateStillClearsAFaceValueRecordedBeforeTheRule is the repair path, and
-// the reason no migration comes with this rule. Rows written before it are
-// untouched — the catalog is not rewritten and the server is not stopped over a
-// state that computes nothing wrong — so the API has to keep the one action
-// that fixes such a row: clearing the pair.
-//
-// It is why the rule is written about SETTING a face value rather than about
-// carrying one. A check that refused any PATCH of the pair on a non-bond would
-// leave every such row unfixable through the API, which is a worse state than
-// the one it set out to prevent.
+// A row written before the rule can still have its pair cleared: the rule is
+// about setting a face value, so the repair stays possible without a
+// migration.
 func TestUpdateStillClearsAFaceValueRecordedBeforeTheRule(t *testing.T) {
 	url, c, store := newAPIWithCatalog(t)
 
-	// Straight through the store, which is how such a row got there: the rule
-	// lives at the HTTP door, and the door is what did not have it.
+	// Through the store, as such rows were written.
 	value := int64(100000)
 	code := "RUB"
 	legacy, err := store.Create(t.Context(), instrument.Instrument{
@@ -551,8 +437,7 @@ func TestUpdateStillClearsAFaceValueRecordedBeforeTheRule(t *testing.T) {
 		t.Errorf("face pair after clearing = %+v, want both null", pair)
 	}
 
-	// And every other field of such a row stays editable: the rule is about the
-	// face pair, not about the instrument.
+	// Other fields of such a row stay editable.
 	if resp := do(t, c, "PATCH", url+"/api/v1/instruments/"+legacy.ID.String(),
 		`{"name":"Переименована"}`); resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
@@ -560,9 +445,7 @@ func TestUpdateStillClearsAFaceValueRecordedBeforeTheRule(t *testing.T) {
 	}
 }
 
-// TestUpdateOfABondsFaceValueIsUnaffected: the rule must not have closed the
-// door it exists to keep open. A bond is the one type these two fields belong
-// to, and its own PATCH still works.
+// A bond's own face value update still works.
 func TestUpdateOfABondsFaceValueIsUnaffected(t *testing.T) {
 	url, c := newAPI(t)
 	id := mkBond(t, url, c)
@@ -579,10 +462,7 @@ func TestUpdateOfABondsFaceValueIsUnaffected(t *testing.T) {
 	}
 }
 
-// TestUpdateOfAMissingInstrumentIsStill404: the type rule needs the stored row,
-// and a rule that reads a row has to say the ordinary thing when there is none.
-// A 400 about bonds for an id that does not exist would be a sentence about a
-// row the client never had.
+// A missing instrument is still a 404, not a bond rule.
 func TestUpdateOfAMissingInstrumentIsStill404(t *testing.T) {
 	url, c := newAPI(t)
 

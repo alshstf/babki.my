@@ -15,19 +15,16 @@ import (
 	"babki.my/babki/internal/platform/money"
 )
 
-// JournalValue is what a brokerage account is worth by its operations journal,
-// as the portfolio engine values it (portfolio.Handler.ValueFromJournal).
-// cmd/babki hands the engine in, so this package does not import it.
+// JournalValue is what a brokerage account is worth by its journal, as the
+// portfolio engine values it; cmd/babki wires the engine in.
 type JournalValue struct {
 	// Currency is the space's base currency, the one Minor is in.
 	Currency string
 	// Minor is the holdings at market value plus the cash, converted.
 	Minor int64
-	// ByCurrency is the same worth before conversion, by the currency it is
-	// struck in.
+	// ByCurrency is that worth by currency, before conversion.
 	ByCurrency map[string]int64
-	// Operations is how many operations the journal holds; nought means the
-	// account is not kept by its operations at all.
+	// Operations is the journal's size; zero means the account has no journal.
 	Operations int
 	// Unpriced counts the holdings with no valuation, counted as nothing.
 	Unpriced int
@@ -39,19 +36,16 @@ type JournalValue struct {
 
 type journalValuer interface {
 	ValueFromJournal(ctx context.Context, spaceID, accountID uuid.UUID) (JournalValue, error)
-	// ValueOn is the same worth as the journal stood at the end of day, at
-	// that day's prices and rates.
+	// ValueOn is the worth as of the end of day, at that day's prices and rates.
 	ValueOn(ctx context.Context, spaceID, accountID uuid.UUID, day time.Time) (JournalValue, error)
 	// ValuesOn is ValueOn for several days.
 	ValuesOn(ctx context.Context, spaceID, accountID uuid.UUID, days []time.Time) ([]JournalValue, error)
-	// ReturnBasis is what the account's period from (exclusive) to to
-	// (inclusive) is reckoned from.
+	// ReturnBasis is what the period (from, to] is reckoned from.
 	ReturnBasis(ctx context.Context, spaceID, accountID uuid.UUID, from, to time.Time) (ReturnBasis, error)
 }
 
-// ReturnBasis mirrors the engine's: an account's worth at a period's two ends
-// and the money that crossed its edge in between, signed from the investor's
-// side and in the base currency.
+// ReturnBasis is an account's worth at a period's two ends and the money that
+// crossed its edge, from the investor's side, in the base currency.
 type ReturnBasis struct {
 	Start, End JournalValue
 	Flows      []ReturnFlow
@@ -64,18 +58,15 @@ type ReturnFlow struct {
 	Minor int64
 }
 
-// How far the journal may stand from the balance and still be said to agree
-// with it. A broker strikes its figure at the last trade and this program at
-// the previous session's close, so a gap of a percent or two is normal and is
-// named as such; past five percent the likelier cause is operations missing
-// from the journal. Thresholds are this program's own choice (the owner left
-// them to it, Р-2, 2026-10-02), not anybody's standard.
+// How far the journal may be from the balance and still agree: brokers price
+// at the last trade and this program at the previous close, so a percent or
+// two is normal; past five, operations are likelier missing. The thresholds
+// are this program's choice (Р-2).
 const (
 	agreesWithinPercent = 1
 	closeWithinPercent  = 5
-	// A balance mark older than this is compared with the journal as it stood
-	// on the mark's own day, at that day's prices: the market has moved since,
-	// and comparing it with today's worth would blame the journal for that.
+	// A balance mark older than this is compared with the journal as of the mark's
+	// own day, so market moves since are not blamed on the journal.
 	staleAfterDays = 3
 )
 
@@ -87,9 +78,8 @@ type valuation struct {
 	reconciliation *apitypes.AccountReconciliation
 }
 
-// valuations values from their journals the active brokerage accounts that
-// have one, and reconciles each against its latest balance mark. An account
-// with no entry here is counted by its balance.
+// valuations values the active brokerage accounts that have a journal and
+// reconciles each with its latest balance. Others are counted by balance.
 func (h *Handler) valuations(ctx context.Context, spaceID uuid.UUID, accounts []WithBalance, baseCurrency string, now time.Time, rates map[rateKey]*rateLookup) (map[uuid.UUID]valuation, error) {
 	out := make(map[uuid.UUID]valuation)
 	if h.journals == nil {
@@ -115,12 +105,10 @@ func (h *Handler) valuations(ctx context.Context, spaceID uuid.UUID, accounts []
 	return out, nil
 }
 
-// reconcile sets the journal's figure against a's latest balance mark, both in
-// the base currency. A recent mark is compared with today's worth at today's
-// rate; an older one with the journal's worth on the mark's own day, at that
-// day's prices and rate — and when the journal cannot be valued whole on that
-// day (no operations yet, a paper with no price, a currency with no rate) no
-// verdict is given. Nil when there is no mark, or no rate for it.
+// reconcile compares the journal with a's latest balance in the base currency:
+// a recent mark against today's worth, an older one against the worth on its
+// own day. No verdict when the journal cannot be valued whole that day; nil
+// when there is no mark or no rate.
 func (h *Handler) reconcile(ctx context.Context, a WithBalance, v JournalValue, baseCurrency string, now time.Time, rates map[rateKey]*rateLookup) (*apitypes.AccountReconciliation, error) {
 	if a.Balance == nil {
 		return nil, nil
@@ -162,8 +150,8 @@ func (h *Handler) reconcile(ctx context.Context, a WithBalance, v JournalValue, 
 	}, nil
 }
 
-// reconciliationStatus grades a difference against the balance it is a
-// difference from. A balance of nought agrees only with a journal of nought.
+// reconciliationStatus grades a difference against its balance; a zero
+// balance agrees only with a zero journal.
 func reconciliationStatus(diff, balance int64) apitypes.AccountReconciliationStatus {
 	gap := decimal.NewFromInt(diff).Abs().Mul(decimal.NewFromInt(100))
 	of := decimal.NewFromInt(balance).Abs()
@@ -208,10 +196,8 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// addJournals folds the accounts counted by their journal into the per-currency
-// totals of the ones counted by their balance: what an account holds in a
-// currency goes among the assets, or among the debts where its cash in that
-// currency is below zero by more than its holdings in it.
+// addJournals adds journal-valued accounts to the per-currency totals: holdings
+// count as assets, and cash below zero beyond the holdings as debt.
 func addJournals(totals []CurrencyTotal, vals map[uuid.UUID]valuation) ([]CurrencyTotal, error) {
 	byCurrency := make(map[string]CurrencyTotal, len(totals))
 	for _, t := range totals {

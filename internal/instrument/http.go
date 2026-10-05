@@ -19,30 +19,16 @@ import (
 	"babki.my/babki/internal/platform/money"
 )
 
-// defaultSearchLimit/maxSearchLimit bound the GET /instruments listing, and
-// they are the figures api/openapi.yaml states as `default` and `maximum` on it
-// (contract_sites_test.go is what keeps the two spellings in step).
-//
-// A LIMIT ABOVE THE MAXIMUM IS REFUSED, NOT CLAMPED, and this used to say the
-// opposite — that a catalog search is a best-effort listing a client should not
-// have to reason about. It was wrong twice over. A ceiling the contract states
-// and the server does not apply is not a rule at all (#118): a client that sent
-// 250 was answered as though it had asked for 200, with nothing in the answer
-// saying that the number it sent was not the number applied. And the answer it
-// got back was a bare array, so the same page also could not say whether
-// anything was left behind — which, on an endpoint that took no offset either,
-// made the catalog past this ceiling unreachable by any request at all (#104).
-// Refusing says it once, in the only channel a client may read — the status
-// code — and costs a round trip on a request that was outside the contract to
-// begin with.
+// defaultSearchLimit and maxSearchLimit bound GET /instruments as the contract
+// states them. A limit above the maximum is refused, not clamped (#118): a
+// silently smaller page would misreport what was applied.
 const (
 	defaultSearchLimit = 50
 	maxSearchLimit     = 200
 )
 
-// Handler exposes the instrument catalog over HTTP. The catalog is
-// instance-wide (see package doc), so handlers only require a valid family
-// session and role — no space scoping.
+// Handler exposes the instance-wide catalog over HTTP; it needs a valid session
+// and role, no space.
 type Handler struct {
 	store *Store
 	auth  *family.Auth
@@ -76,11 +62,7 @@ func toAPI(i Instrument) apitypes.Instrument {
 		Currency: i.Currency,
 		Frozen:   i.Frozen,
 	}
-	// face_value_minor/face_currency are left unspecified (omitted from the
-	// response body) for non-bond instruments. Unlike account.owner_user_id
-	// there is no "server didn't return it" ambiguity to resolve here: GET
-	// always returns the full instrument, so "absent" unambiguously means
-	// "not applicable to this instrument".
+	// Face value is omitted for non-bonds: absent means not applicable.
 	if i.FaceValueMinor != nil {
 		out.FaceValueMinor = nullable.NewNullableWithValue(*i.FaceValueMinor)
 	}
@@ -99,16 +81,9 @@ func pathInstrumentID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) 
 	return id, true
 }
 
-// parsePage reads `limit` and `offset` and enforces the bounds the contract
-// states. See defaultSearchLimit for why an over-large limit is a 400 rather
-// than a quietly smaller page.
-//
-// It is written the same way as the importer's parsePage
-// (internal/importer/tinvest/http.go) rather than shared with it. What the two
-// have in common is a shape; what they do not have in common is the numbers,
-// and each package's ceiling is tied to its own contract path by its own
-// contract-site test. A shared parser would hold one set of bounds for both, so
-// raising one endpoint's ceiling would silently raise the other's.
+// parsePage reads limit and offset within the contract's bounds. It mirrors
+// the importer's parsePage but is not shared: each endpoint's bounds are tied
+// to its own contract.
 func parsePage(w http.ResponseWriter, r *http.Request) (limit, offset int, ok bool) {
 	limit = defaultSearchLimit
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -137,10 +112,8 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// hasMore comes back from the query rather than from anything measured
-	// here: the page's own length answers a different question (see
-	// Store.Search), and taking it for this one is what left the catalog with
-	// no way to say it had been cut short.
+	// hasMore comes from the query; the page's length cannot tell a full last page
+	// from a cut one.
 	found, hasMore, err := h.store.Search(r.Context(), query, limit, offset)
 	if err != nil {
 		family.WriteError(w, err)
@@ -153,102 +126,26 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, apitypes.InstrumentsResponse{Instruments: out, HasMore: hasMore})
 }
 
-// What a face value has to be, in one place, so that the two doors into those
-// two columns — creation and update — cannot come to refuse different things or
-// in different words (#93). Creation checked only that the pair arrived whole,
-// which let a face value of ZERO and a currency of "" through; the update
-// checked nothing whatsoever, so a PATCH could clear the currency and leave the
-// value behind. Everything they can BOTH break is stated once, below; the update
-// adds one rule of its own, which only it can break (see checkFaceUpdate).
-//
-// None of those states is cosmetic. An exchange quotes a bond as a PERCENTAGE OF FACE
-// (see portfolio.marketValue, and bondPriceFromPercent in the frontend), so the
-// face value is the factor that turns a quote into money. At zero the whole
-// holding is valued at 0,00 — a published figure that is not the truth, which is
-// the one thing this program refuses to do — and a negative one would value it
-// below nothing. Half a pair is milder, because every reader requires both
-// halves before it values anything, but it is still a bond that silently cannot
-// be priced.
-//
-// A face value had no UPPER bound either, until this paragraph's own sweep
-// found it: creation and update both stopped at "positive", so math.MaxInt64
-// went in as readily as a real bond's 1 000,00. That is every other money
-// field this branch bounds — an operation's amount and price×quantity, an
-// account's balance — and this one was the single field of its own subject
-// the branch had left open. Verified end to end: POST an instrument with
-// face_value_minor = math.MaxInt64, 201; buy two of it at par, 201; GET the
-// account's positions, 500 forever — portfolio.marketValue multiplies the
-// face value by a price and a quantity, and money.Minor refuses a product
-// that does not fit in an int64 of minor units (#27) rather than publish a
-// wrapped figure, so the position that holds it can never be drawn again
-// without deleting the row by hand. Bounded at money.MaxAmountMinor, the same
-// cap and the same reasoning as the operation amount and the account balance
-// (see its doc comment): far above any bond ever issued, far enough below
-// math.MaxInt64 that this factor cannot be the reason a valuation overflows on
-// its own, and one constant instead of a fourth copy of a figure that has
-// already drifted apart from itself once in this codebase.
-//
-// DELIBERATELY NOT A CHECK CONSTRAINT, unlike the pair-and-sign rule migration
-// 0012 added for this same column. That constraint exists because a broken
-// pair or a non-positive value makes EVERY reader of the row wrong in the same
-// way, with no per-query way to guard against it — the database is the only
-// place such an invariant can be made to hold for certain. This bound is a
-// different kind of rule: neither operation.amount_minor nor
-// account_balances.amount_minor, the two fields it is copied from, carries a
-// matching CHECK either, and for the same reason — it is a write-time ceiling
-// on ordinary input, not an invariant a reader depends on to be correct, and
-// money.MaxAmountMinor already lives in exactly one place (this package's
-// import of it). A CHECK restating it in SQL would be a second spelling of the
-// same number, the very drift this constant exists to prevent one of.
+// Face value rules, shared by creation and update (#93). An exchange quotes a
+// bond in percent of face, so the face value turns a quote into money: zero
+// values the holding at nothing, a negative below nothing, and half a pair
+// cannot be priced. It is bounded above by money.MaxAmountMinor like every
+// other money field: an unbounded one made the positions screen fail forever
+// (the product overflows). The bound is not a CHECK constraint — it is a
+// write-time ceiling on input, like the operation and balance amounts, and
+// the constant lives in one place.
 //
 
-// It also closes a second, related gap the sweep found but did not need a
-// fix of its own for: face_value_minor is the only money field in this API
-// that could have exceeded JavaScript's Number.MAX_SAFE_INTEGER (2^53-1), and
-// the frontend's bond price↔percent conversion (bondPriceFromPercent /
-// bondPercentFromPrice in web/src/lib/money.ts) both refuse to convert a face
-// value that fails Number.isSafeInteger — so no WRONG number could have come
-// of it — but nothing in trade-dialog.tsx's faceGapOf named that as a reason
-// the field is disabled, so a bond carrying such a value would have shown an
-// enabled percent field that simply produced nothing, with no caption saying
-// why. money.MaxAmountMinor is, by construction, safely below
-// MAX_SAFE_INTEGER (web/src/lib/money.ts's own MAX_AMOUNT_MINOR doc comment
-// states the same property for the identical constant), so bounding
-// face_value_minor here at the one door that writes it makes that state
-// unreachable rather than merely silent: no instrument can ever carry a face
-// value the browser cannot represent exactly, and no case needs adding to
-// faceGapOf for a state the write side no longer produces. This was never
-// live — the upper bound this comment adds and the missing bound it replaces
-// were both introduced on this same unmerged branch (e9daddf), so no row in
-// any deployed instance was ever written through the unbounded door.
+// The cap also keeps a face value within JavaScript's safe integers, which the
+// web's percent conversion requires.
 //
-// A currency that names no currency is the same failure wearing a value. The
-// contract calls face_currency ISO-4217 and the readers take it at its word: a
-// bond's market value is denominated in it (portfolio.marketValue), so an empty
-// string there publishes a bare number with no currency on it, and the trade
-// dialog writes «Номинал в , а сделка в RUB». The instrument's own currency has
-// been held to currencyRe at this same door all along; its face value's currency
-// simply was not — and since an empty string is not NULL, neither the pair check
-// here nor the CHECK constraint behind it ever looked.
+// An empty face currency is not NULL, so neither the pair check nor the CHECK
+// constraint saw it; it is held to the currency shape like the instrument's
+// own currency.
 //
-// The messages name the fields and the rule. Nothing in the frontend writes a
-// face value or PATCHes an instrument at all, so whoever reads one of them is
-// holding a request they sent themselves.
-//
-// THIS DOOR IS NO LONGER THE ONLY WAY INTO THOSE COLUMNS, and the sentence that
-// used to stand here said it was. Store enforces none of the rules in this file
-// — not the name, not the currency, not any of the face-value ones — and the
-// T-Invest importer's resolver creates and updates catalog rows against Store
-// directly, with no handler anywhere on that path
-// (internal/importer/tinvest/resolver.go). It therefore
-// restates for itself the rules it could otherwise break: a passport with no
-// name or no ISO-4217 currency creates nothing, and a bond's nominal is held to
-// the same bounds this file holds a face value to. The database backs up only
-// part of that for every writer at once — migration 0012's CHECK covers the
-// pair, the sign and an empty face currency — while the upper bound and the
-// "a face value is a bond's" rule are deliberately not constraints (argued
-// above and just below the var block respectively), so they hold exactly where
-// they are written down and nowhere else.
+// The T-Invest resolver writes catalog rows through Store, bypassing these
+// handlers, and restates the rules it could break. Migration 0012's CHECK
+// covers the pair, the sign and an empty currency for every writer.
 var (
 	errFacePair     = errors.New("face_value_minor and face_currency must be set together or not at all")
 	errFaceMention  = errors.New("face_value_minor and face_currency must be sent together, even to change one")
@@ -257,64 +154,18 @@ var (
 	errFaceCurrency = errors.New("face_currency must be ISO-4217 uppercase")
 )
 
-// A FACE VALUE IS A BOND'S, and nothing enforced it (#101). The contract has
-// said since the field existed that it is null for anything that is not a bond;
-// both doors took one on a share, an ETF, a currency or a crypto row alike and
-// published it back with a 201.
-//
-// Nothing computed a wrong number from that. portfolio.marketValue branches on
-// the type — a share and an ETF are valued at the quote's price per unit and
-// the face value is never read — and the trade dialog's faceGapOf returns early
-// for a non-bond, so the percent field it guards is not even rendered. So this
-// is not a broken screen; it is the document promising one thing and the server
-// accepting another.
-//
-// THE CHECK MOVED TO THE WRITE RATHER THAN THE PROMISE BEING WEAKENED, and the
-// argument is the pair's meaning rather than today's damage. An exchange quotes
-// a bond as a PERCENTAGE OF FACE, which is what makes the face value the factor
-// that turns a quote into money; on every other type a quote is money already
-// and the pair answers no question at all. A field that means nothing on a row
-// is a field a reader will one day read anyway — this program has been bitten by
-// exactly that, most recently by an empty face currency that no check looked at
-// (#93) — and the cheapest moment to make it unreachable is the one where a
-// person is still holding the request. Weakening the description would have been
-// the other honest option and buys nothing: it would leave the state reachable,
-// leave every future reader to decide what a share's face value means, and cost
-// the same words to write down.
-//
-// DELIBERATELY NOT A CHECK CONSTRAINT, unlike the pair-and-sign rule of
-// migration 0012, and this is the point where the two rules genuinely differ. A
-// broken pair makes every reader of the row wrong in the same way, so the
-// database is the only place it can be made to hold for certain. A face value on
-// a share makes no reader wrong today, and a constraint would come with a
-// migration that either stops a running instance over a harmless row or clears a
-// number somebody typed. Neither is a migration's decision to make (0012 says
-// the same about repairing rows), so rows written before this rule are left
-// exactly as they stand — and the rule is written about SETTING the pair rather
-// than about carrying it, so clearing such a row through the API keeps working.
-// That is the repair, and a rule that refused every PATCH of the pair on a
-// non-bond would have taken it away.
-//
-// The type is not in an UpdateInstrumentRequest and cannot be: nothing in this
-// program changes an instrument's type — the request has no such field and the
-// UPDATE statement does not touch the column — so the update door reads it from
-// the stored row. That read is not the kind checkFaceUpdate refuses to do: what
-// it reads cannot change between the read and the write, because no writer
-// exists that could change it.
+// errFaceBondOnly: a face value belongs to a bond (#101). On other types a quote
+// is already money and the pair means nothing; it is refused at the write
+// rather than weakened in the contract. Not a CHECK constraint: rows written
+// before the rule stay, and clearing the pair on them still works. The update
+// reads the type from the stored row, which no writer can change.
 func errFaceBondOnly(t Type) error {
 	return fmt.Errorf("face_value_minor and face_currency belong to a bond; this instrument is a %s", t)
 }
 
-// checkFaceType refuses a face value, or its currency, on an instrument that is
-// not a bond. "Present" means carrying a value, as it does in checkFacePair: an
-// omitted field and an explicit null are both absent, so clearing the pair is
-// never what this refuses.
-//
-// EITHER HALF ALONE IS REFUSED BY THIS RULE RATHER THAN BY THE PAIRING ONE, and
-// that ordering is deliberate at both doors: on a non-bond neither half belongs,
-// so "set them together" would answer a client that may not send them at all by
-// asking it to send more. On a bond the pairing rule is reached exactly as
-// before.
+// checkFaceType refuses either half of the pair on a non-bond; clearing it is
+// always allowed. It runs before the pairing rule, so a non-bond is not told
+// to send more.
 func checkFaceType(t Type, value nullable.Nullable[int64], code nullable.Nullable[string]) error {
 	if facePairCarriesAValue(value, code) && t != TypeBond {
 		return errFaceBondOnly(t)
@@ -322,29 +173,15 @@ func checkFaceType(t Type, value nullable.Nullable[int64], code nullable.Nullabl
 	return nil
 }
 
-// facePairCarriesAValue reports whether a request actually SETS one half of the
-// pair or the other, as against leaving it alone or clearing it. It is one
-// statement rather than two because the update door asks the same question
-// before it goes to the database for the row's type: if these two ever came to
-// answer differently, the door would fetch a row it then refuses to judge, or
-// judge one it never fetched.
+// facePairCarriesAValue reports whether a request sets either half of the
+// pair; the update door asks it before reading the row's type.
 func facePairCarriesAValue(value nullable.Nullable[int64], code nullable.Nullable[string]) bool {
 	return value.IsSpecified() && !value.IsNull() || code.IsSpecified() && !code.IsNull()
 }
 
-// checkFacePair judges the pair as the request STATES it, and is what both doors
-// share: the value and its currency are present together or not at all, a
-// present value is within (0, money.MaxAmountMinor], and a present currency is
-// a currency code. "Present" means carrying a value — an omitted field and an
-// explicit null both count as absent, which is what they mean on a creation.
-//
-// The value's own rules are tried before its currency's, so that the field a
-// reader is told about is the one nearer the money: a face value of zero prices
-// the whole holding at nothing and one past the cap breaks the very screen that
-// reads it (see the doc comment above), while a misspelled currency merely
-// stops it being priced at all. Between the value's own two rules, positive is
-// tried first because it is the cheaper mistake to make — a negative or zero
-// face value is one keystroke away from an ordinary one, math.MaxInt64 is not.
+// checkFacePair: the value and its currency are set together or not at all,
+// the value within (0, money.MaxAmountMinor], the currency a valid code. Value
+// rules are checked before the currency's, positivity first.
 func checkFacePair(value nullable.Nullable[int64], code nullable.Nullable[string]) error {
 	valuePresent := value.IsSpecified() && !value.IsNull()
 	currencyPresent := code.IsSpecified() && !code.IsNull()
@@ -363,40 +200,11 @@ func checkFacePair(value nullable.Nullable[int64], code nullable.Nullable[string
 	return nil
 }
 
-// checkFaceUpdate is checkFacePair plus the one rule that only an update can
-// break: on a PATCH, MENTIONING a field is itself an action — an explicit null
-// clears the column while an omitted field leaves it alone — so the two halves
-// have to be mentioned together as well as valued together. Without this,
-// {"face_currency": null} reads as "both absent", passes the shared rule, and
-// clears one half of a stored pair.
-//
-// It refuses in a sentence of its own, and that is not decoration. Answering
-// {"face_value_minor": 200000} on a bond that already stores "RUB" with the
-// shared rule's "must be set together or not at all" states something TRUE of
-// that row before the request and after it, which leaves the client no wiser
-// about why it was turned away; what it has to do is resend the currency, and
-// only a rule about the REQUEST can say so. The contract has described the
-// mention rule correctly on the field all along — this is the runtime catching
-// up with it.
-//
-// It is a rule about the REQUEST rather than about the row the request lands on,
-// and that is the deliberate part — though the row is not unread here: handleUpdate
-// reads it just above this call, for its TYPE, before checkFaceType. That read
-// cannot be raced, because a type is not a column any writer in this program can
-// ever change. The PAIR is different, and it is what this comment is about:
-// judging the RESULT would mean reading the pair's own two columns before
-// writing them — and between that read and the write another PATCH can move the
-// half this one is not touching, so two requests that each looked sound against
-// what they read would leave a broken pair behind. This rule reads neither half
-// of the pair; it judges the request alone, so it cannot be raced that way.
-// Creation cannot break this particular rule at all — there is no stored half
-// for it to leave behind — so between the two doors every accepted write leaves
-// the pair whole, and every row is whole by induction from a catalog that starts
-// whole (migration 0012).
-//
-// What it costs: a client changing only the face value of a bond has to repeat
-// its currency. No screen does this today — nothing in the frontend PATCHes an
-// instrument — and the contract says so on the field.
+// checkFaceUpdate adds the rule only a PATCH can break: mentioning a field is
+// an action (null clears it), so both halves must be mentioned together.
+// Otherwise {"face_currency": null} would clear half a stored pair. It judges
+// the request alone, so concurrent PATCHes cannot race it into a broken pair.
+// A client changing only the face value repeats its currency.
 func checkFaceUpdate(value nullable.Nullable[int64], code nullable.Nullable[string]) error {
 	if value.IsSpecified() != code.IsSpecified() {
 		return errFaceMention
@@ -404,20 +212,15 @@ func checkFaceUpdate(value nullable.Nullable[int64], code nullable.Nullable[stri
 	return checkFacePair(value, code)
 }
 
-// The longest name, ticker and FIGI a hand-made catalog row takes, counted in
-// characters (Unicode code points) as api/openapi.yaml's maxLength counts
-// them. A ticker is a few letters and a FIGI twelve; the ceilings are loose on
-// purpose, there so that what every screen draws has a size the server chose
-// rather than the request body limit. Rows a catalog sync writes do not pass
-// through here: their texts are the exchange's.
+// Ceilings on a hand-made row's name, ticker and FIGI, in characters as the
+// contract's maxLength counts them. Synced rows use the exchange's texts.
 const (
 	MaxNameRunes   = 200
 	MaxTickerRunes = 32
 	MaxFIGIRunes   = 32
 )
 
-// checkTexts refuses a name, ticker or FIGI past its ceiling; a nil one was
-// not sent and fits.
+// checkTexts refuses a given text over its ceiling.
 func checkTexts(name, ticker, figi *string) error {
 	for _, f := range []struct {
 		field string
@@ -445,9 +248,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// The type rule first: it says the pair does not belong on this row at all,
-	// which is a more useful answer than a rule about the value inside it, and
-	// it is the same order the update door takes.
+	// The type rule first, as on update.
 	if err := checkFaceType(Type(req.Type), req.FaceValueMinor, req.FaceCurrency); err != nil {
 		httpjson.Error(w, http.StatusBadRequest, err.Error())
 		return
@@ -510,13 +311,8 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// The type rule is the one thing here that cannot be judged from the request:
-	// a PATCH carries no type, and nothing in this program can change one, so the
-	// stored row answers for it (see errFaceBondOnly). The row is read only when
-	// the request actually SETS a face value — a PATCH that touches other fields,
-	// or one that clears the pair, costs no extra query and is never refused by
-	// this rule. A missing row falls out here as the ordinary 404 rather than as
-	// a sentence about bonds.
+	// A PATCH carries no type, so the stored row answers for it — read only when
+	// the request sets a face value. A missing row is the ordinary 404.
 	if facePairCarriesAValue(req.FaceValueMinor, req.FaceCurrency) {
 		stored, err := h.store.ByID(r.Context(), id)
 		if err != nil {

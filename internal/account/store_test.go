@@ -127,22 +127,9 @@ func TestSummaryByCurrency(t *testing.T) {
 	}
 }
 
-// TestSummarySplitsEveryTypeTheWayIsLiabilitySays walks ALL SEVEN account
-// types through the summary in one currency and checks each one landed on the
-// side Type.IsLiability puts it on. It exists because that split lives in SQL,
-// where the Go method cannot be called: the query takes the list as a
-// parameter built by LiabilityTypes, and this is what would notice if the two
-// ever stopped agreeing — an account created, listed and edited perfectly, and
-// silently summed on the wrong side.
-//
-// The classification is WRITTEN OUT rather than derived from IsLiability, on
-// purpose: a table that asked the method what to expect would move with any
-// change to it and could never fail. Written out, it fails twice over —
-// LiabilityTypes stops matching the literal pair below, and the account whose
-// class changed lands in the wrong total.
-//
-// Every balance is a different number, so a type counted on the wrong side
-// moves both totals by an amount that names it.
+// Every account type lands on the side Type.IsLiability puts it, through the
+// SQL's LiabilityTypes parameter. The classification is written out, and every
+// balance differs so a misplaced type is identifiable.
 func TestSummarySplitsEveryTypeTheWayIsLiabilitySays(t *testing.T) {
 	st, spaceID, _, ctx := newStore(t)
 

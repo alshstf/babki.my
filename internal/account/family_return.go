@@ -18,11 +18,9 @@ import (
 	"babki.my/babki/internal/platform/xirr"
 )
 
-// familyReturn reckons the period over the accounts the total counts by their
-// journal — the brokerage accounts; a deposit or a card has a balance and no
-// record of what crossed its edge. A move of shares between two of these
-// accounts needs no special case: its legs are valued on the same day at the
-// same price, and what one puts in the other takes out.
+// familyReturn reckons the period over the journal-valued brokerage accounts;
+// other accounts have no record of what crossed their edge. Moves between them
+// cancel out: both legs are valued on the same day at the same price.
 func (h *Handler) familyReturn(ctx context.Context, spaceID uuid.UUID, base string, from, to time.Time) (ReturnBasis, int, error) {
 	accounts, err := h.store.ListWithBalance(ctx, spaceID)
 	if err != nil {

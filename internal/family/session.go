@@ -88,9 +88,8 @@ func (a *Auth) RequireAuth(next http.Handler) http.Handler {
 			httpjson.Error(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		// A session signed in before the user's password changed, or before they
-		// signed out everywhere else, is over. One from before signed-in times
-		// were kept reads as signed in at zero, and is over too.
+		// A session signed in before the user's password change or sign-out
+		// elsewhere is over; one with no recorded time counts as signed in at zero.
 		if revoked != nil && a.sm.GetInt64(r.Context(), sessionSignedInKey) < revoked.UnixNano() {
 			_ = a.sm.Destroy(r.Context())
 			httpjson.Error(w, http.StatusUnauthorized, "session ended")
