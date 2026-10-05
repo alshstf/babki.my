@@ -1473,6 +1473,11 @@ export interface components {
             transfer_group_id: string | null;
             /** @description Decimal as string */
             split_ratio: string | null;
+            /**
+             * Format: int64
+             * @description On an amortization: the outstanding face value per unit before it, in minor units
+             */
+            face_before_minor: number | null;
             source: string;
             external_id: string | null;
             /** Format: date-time */
@@ -1828,6 +1833,11 @@ export interface components {
             /** @description Decimal as string */
             split_ratio?: string | null;
             /**
+             * Format: int64
+             * @description On an amortization: the bond's outstanding face value per unit just before the repayment, in minor units of `currency`, when it is known (see CreateOperationRequest.face_before_minor). Null on every other row.
+             */
+            face_before_minor?: number | null;
+            /**
              * @description Who wrote this row. `manual` is a person, through this API; `registry` is the corporate-actions registry, which materializes one recorded fact about an INSTRUMENT (a split, a conversion) into a row on every account that held it; anything else is an importer, and the set is closed by a CHECK constraint on the column rather than only by the code that writes it, which is why it is enumerated on a response at all. It is not decoration: an operation whose source is not `manual` cannot be deleted (see deleteOperation) because the importer that owns it would write it back on its next rebuild, so a client must not offer a delete control on such a row.
              * @enum {string}
              */
@@ -1895,6 +1905,11 @@ export interface components {
             note?: string;
             /** @description Decimal as string: how many units one unit becomes. Must be positive and strictly less than 10^10 (10000000000) — the first value the column cannot hold — or 400. A split multiplies the whole position's quantity, so a ratio that is a mis-scaled field rather than a corporate action carries an ordinary holding past what any screen can value; the bound refuses it by name instead of letting the database answer with an overflow. */
             split_ratio?: string | null;
+            /**
+             * Format: int64
+             * @description On an amortization only: the bond's outstanding face value per unit just before this repayment, in minor units of `currency`. With it the repayment retires the cost basis in the share of principal it returns — amount ÷ (face before × units held), at most all of it — as НК РФ ст. 214.1 п. 13 has it (decision Р-4), and only the excess over that share is a result; without it the repayment retires basis equal to its own amount. Refused on any other type. On an update it replaces the stored value, and omitting it clears it.
+             */
+            face_before_minor?: number | null;
         };
         TransferRequest: {
             /** Format: uuid */

@@ -221,7 +221,8 @@ func exportOperation(o operation.Operation) apitypes.ExportOperation {
 		Quantity: nullable.NewNullNullable[string](), Price: nullable.NewNullNullable[string](),
 		AmountMinor: o.AmountMinor, Currency: o.Currency, FeeMinor: o.FeeMinor, Note: o.Note,
 		TradingMode: nullable.NewNullNullable[string](), TransferGroupId: nullable.NewNullNullable[uuid.UUID](),
-		SplitRatio: nullable.NewNullNullable[string](), Source: o.Source, ExternalId: nullable.NewNullNullable[string](),
+		SplitRatio: nullable.NewNullNullable[string](), FaceBeforeMinor: nullable.NewNullNullable[int64](),
+		Source: o.Source, ExternalId: nullable.NewNullNullable[string](),
 		CreatedAt: o.CreatedAt, Lots: []apitypes.ExportLot{},
 	}
 	if o.SettledOn != nil {
@@ -244,6 +245,9 @@ func exportOperation(o operation.Operation) apitypes.ExportOperation {
 	}
 	if o.SplitRatio != nil {
 		out.SplitRatio = nullable.NewNullableWithValue(o.SplitRatio.String())
+	}
+	if o.FaceBeforeMinor != nil {
+		out.FaceBeforeMinor = nullable.NewNullableWithValue(*o.FaceBeforeMinor)
 	}
 	if o.ExternalID != nil {
 		out.ExternalId = nullable.NewNullableWithValue(*o.ExternalID)

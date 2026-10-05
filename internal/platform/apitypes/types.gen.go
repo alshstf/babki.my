@@ -1226,6 +1226,9 @@ type CreateOperationRequest struct {
 	// Currency ISO-4217 uppercase, e.g. RUB. Three uppercase letters is the SHAPE of a code and it is the whole of what the server checks: it holds no register, so a well-formed code it has never met is accepted, and a lowercase spelling or a currency's name is a 400.
 	Currency string `json:"currency"`
 
+	// FaceBeforeMinor On an amortization only: the bond's outstanding face value per unit just before this repayment, in minor units of `currency`. With it the repayment retires the cost basis in the share of principal it returns — amount ÷ (face before × units held), at most all of it — as НК РФ ст. 214.1 п. 13 has it (decision Р-4), and only the excess over that share is a result; without it the repayment retires basis equal to its own amount. Refused on any other type. On an update it replaces the stored value, and omitting it clears it.
+	FaceBeforeMinor nullable.Nullable[int64] `json:"face_before_minor,omitempty"`
+
 	// FeeMinor What this operation cost to make, in `currency`, as a POSITIVE figure whichever way `amount_minor` went — it is money charged, never money returned. That is why the floor here is 0 rather than the -10^15 the amount gets: a negative fee is refused by a rule of its own. Omitted or 0 means no fee. The ceiling is the same 10^15 minor units the amount stops at, for the same reason — it is money in the same currency on the same row. Past either end, 400.
 	FeeMinor     *int64                                `json:"fee_minor,omitempty"`
 	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id,omitempty"`
@@ -1398,13 +1401,16 @@ type ExportMember struct {
 
 // ExportOperation defines model for ExportOperation.
 type ExportOperation struct {
-	AmountMinor  int64                                 `json:"amount_minor"`
-	CreatedAt    time.Time                             `json:"created_at"`
-	Currency     string                                `json:"currency"`
-	ExternalId   nullable.Nullable[string]             `json:"external_id"`
-	FeeMinor     int64                                 `json:"fee_minor"`
-	Id           openapi_types.UUID                    `json:"id"`
-	InstrumentId nullable.Nullable[openapi_types.UUID] `json:"instrument_id"`
+	AmountMinor int64                     `json:"amount_minor"`
+	CreatedAt   time.Time                 `json:"created_at"`
+	Currency    string                    `json:"currency"`
+	ExternalId  nullable.Nullable[string] `json:"external_id"`
+
+	// FaceBeforeMinor On an amortization: the outstanding face value per unit before it, in minor units
+	FaceBeforeMinor nullable.Nullable[int64]              `json:"face_before_minor"`
+	FeeMinor        int64                                 `json:"fee_minor"`
+	Id              openapi_types.UUID                    `json:"id"`
+	InstrumentId    nullable.Nullable[openapi_types.UUID] `json:"instrument_id"`
 
 	// Lots The purchases a move carried — quantity, cost and day bought — when it carried any
 	Lots []ExportLot `json:"lots"`
@@ -1772,7 +1778,10 @@ type Operation struct {
 	CounterpartAccountId nullable.Nullable[openapi_types.UUID] `json:"counterpart_account_id,omitempty"`
 	CreatedAt            time.Time                             `json:"created_at"`
 	Currency             string                                `json:"currency"`
-	FeeMinor             int64                                 `json:"fee_minor"`
+
+	// FaceBeforeMinor On an amortization: the bond's outstanding face value per unit just before the repayment, in minor units of `currency`, when it is known (see CreateOperationRequest.face_before_minor). Null on every other row.
+	FaceBeforeMinor nullable.Nullable[int64] `json:"face_before_minor,omitempty"`
+	FeeMinor        int64                    `json:"fee_minor"`
 
 	// HasUndatedLots True when this operation's amount_minor is a cost basis whose purchase dates are not all known: an in-kind transfer whose per-lot breakdown was never recorded (a basis given by hand, or one predating breakdowns), or one whose breakdown contains at least one dateless piece — shares that reached it through an earlier undated transfer. Both legs of such a pair answer the same way; they describe one parcel. False for every ordinary operation, whose amount belongs to the day it happened and needs no purchase date at all. This is the journal's twin of Position.has_undated_lots and exists for the identical reason: in_base being null has several causes, and they are not the same news to the person reading the row. A missing fx rate is a gap the backfill job closes on its own and the figure appears later; an unrecorded purchase date never resolves, because nobody wrote it down and nothing can recover it. Here the distinction is sharper still than on a position: a transfer's own date usually DOES have a rate — the demo instance has one for every transfer it records — so a client saying "no rate for this date" about such a row does not merely fail to explain it, it states something false, and promises a figure that will never arrive. `in_base_gap` draws the same line finer, separating a missing rate for the operation's own date from one for a purchase date, and is the field to caption a journal row with; this one remains the standing fact about the operation, published on the create and transfer responses too, where nothing was ever converted and no gap is published at all. Always present, never inferred by the reader from in_base being null. It changes nothing about the figures: an unknown purchase date costs no money and no shares, and amount_minor and fee_minor are published in the operation's own currency exactly as usual. Together with assembled_from_lots, published alongside it on this same object, the two fields answer completely for whether amount_minor is a cost basis at all: a full, dated breakdown makes assembled_from_lots true, a missing or partial one makes this field true, and a breakdown with one dateless piece among dated ones makes both true at once. Neither field ever needs the other to make sense of it, and neither depends on in_base — a client that reads only in_base for this answer will miss every case where the breakdown could not be converted, which is the bug both fields exist to prevent.
 	HasUndatedLots bool               `json:"has_undated_lots"`

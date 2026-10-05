@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@/i18n";
 import { IncomeDialog } from "./income-dialog";
 import type { AccountWithBalance } from "@/api/accounts";
+import type { Instrument } from "@/api/instruments";
+import type { Operation } from "@/api/operations";
 
 // openapi-fetch captures globalThis.fetch at import time, so the double is
 // installed with vi.hoisted, ahead of the imports.
@@ -154,5 +156,105 @@ describe("IncomeDialog: an amortization is not income", () => {
     chooseType("купон");
 
     expect(screen.queryByTestId("income-amortization-note")).toBeNull();
+  });
+});
+
+// Р-4: an amortization may carry the bond's face value before it, so the
+// repayment retires the same share of the cost. Optional; asked of nothing else.
+describe("IncomeDialog: the face value before an amortization", () => {
+  const ofz: Instrument = {
+    id: "instr-ofz",
+    type: "bond",
+    name: "ОФЗ 26238",
+    ticker: "SU26238RMFS4",
+    isin: "RU000A1038V6",
+    figi: "",
+    currency: "RUB",
+    frozen: false,
+    face_value_minor: 100_000,
+    face_currency: "RUB",
+  } as Instrument;
+
+  const amortization = (overrides: Partial<Operation> = {}): Operation =>
+    ({
+      id: "op-9",
+      account_id: "acc-1",
+      instrument_id: "instr-ofz",
+      type: "amortization",
+      occurred_on: "2026-04-01",
+      amount_minor: 25_000,
+      currency: "RUB",
+      fee_minor: 0,
+      note: "",
+      source: "manual",
+      created_at: "2026-04-01T10:00:00Z",
+      has_undated_lots: false,
+      assembled_from_lots: false,
+      ...overrides,
+    }) as Operation;
+
+  const sent: unknown[] = [];
+  function openEditing(editing: Operation) {
+    sent.length = 0;
+    fetchMock.mockImplementation(async (input: Request) => {
+      if (input.method !== "GET") {
+        sent.push(await input.clone().json());
+        return new Response(JSON.stringify({ ...editing, id: editing.id }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ instruments: [], has_more: false }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <IncomeDialog open onOpenChange={() => {}} account={account} editing={editing} editingInstrument={ofz} />
+      </QueryClientProvider>,
+    );
+  }
+  const faceField = () => screen.getByLabelText(/Номинал одной облигации до этой выплаты/);
+
+  it("is not asked of a dividend", () => {
+    open();
+
+    expect(screen.queryByLabelText(/Номинал одной облигации/)).toBeNull();
+  });
+
+  it("shows the stored value and the catalog's face beside it", () => {
+    openEditing(amortization({ face_before_minor: 100_000 }));
+
+    expect(faceField()).toHaveValue("1000");
+    expect(screen.getByTestId("income-face-catalog").textContent?.replace(/\s/g, " ")).toBe(
+      "В каталоге номинал — 1 000,00 ₽",
+    );
+  });
+
+  it("sends what was typed", async () => {
+    openEditing(amortization());
+    fireEvent.change(faceField(), { target: { value: "800" } });
+    fireEvent.click(saveButton());
+
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ type: "amortization", face_before_minor: 80_000 });
+  });
+
+  it("sends nothing when left empty", async () => {
+    openEditing(amortization());
+    fireEvent.click(saveButton());
+
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).not.toHaveProperty("face_before_minor");
+  });
+
+  it("refuses a face value that is not a positive number", () => {
+    openEditing(amortization());
+    fireEvent.change(faceField(), { target: { value: "0" } });
+
+    expect(saveButton()).toBeDisabled();
+    expect(screen.getByText("Введите положительный номинал")).toBeInTheDocument();
   });
 });

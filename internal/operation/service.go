@@ -293,6 +293,14 @@ func validateFields(o Operation) error {
 	if o.SplitRatio != nil && o.SplitRatio.Abs().GreaterThanOrEqual(maxSplitRatio) {
 		return fmt.Errorf("%w: split_ratio must be less than %s", family.ErrValidation, maxSplitRatio)
 	}
+	if o.FaceBeforeMinor != nil {
+		if o.Type != TypeAmortization {
+			return fmt.Errorf("%w: face_before_minor is only for an amortization", family.ErrValidation)
+		}
+		if *o.FaceBeforeMinor <= 0 || *o.FaceBeforeMinor > money.MaxAmountMinor {
+			return fmt.Errorf("%w: face_before_minor must be from 1 to %d", family.ErrValidation, money.MaxAmountMinor)
+		}
+	}
 	return nil
 }
 

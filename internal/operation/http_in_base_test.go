@@ -41,7 +41,8 @@ type journalItem struct {
 	AssembledFromLots bool `json:"assembled_from_lots"`
 	// InBaseGap is decoded as a plain string so a test sees the wire value
 	// (#79).
-	InBaseGap string `json:"in_base_gap"`
+	InBaseGap       string `json:"in_base_gap"`
+	FaceBeforeMinor *int64 `json:"face_before_minor"`
 }
 
 // listJournal fetches GET .../operations and returns the page's rows.

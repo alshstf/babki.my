@@ -68,20 +68,26 @@ func OperationFromCreateRequest(req apitypes.CreateOperationRequest) (Operation,
 	if req.Note != nil {
 		note = *req.Note
 	}
+	var faceBefore *int64
+	if req.FaceBeforeMinor.IsSpecified() && !req.FaceBeforeMinor.IsNull() {
+		v := req.FaceBeforeMinor.MustGet()
+		faceBefore = &v
+	}
 
 	return Operation{
-		AccountID:    req.AccountId,
-		InstrumentID: instrumentID,
-		Type:         Type(req.Type),
-		OccurredOn:   occurredOn,
-		SettledOn:    settledOn,
-		Quantity:     quantity,
-		Price:        price,
-		AmountMinor:  amountMinor,
-		Currency:     req.Currency,
-		FeeMinor:     feeMinor,
-		Note:         note,
-		SplitRatio:   splitRatio,
+		AccountID:       req.AccountId,
+		InstrumentID:    instrumentID,
+		Type:            Type(req.Type),
+		OccurredOn:      occurredOn,
+		SettledOn:       settledOn,
+		Quantity:        quantity,
+		Price:           price,
+		AmountMinor:     amountMinor,
+		Currency:        req.Currency,
+		FeeMinor:        feeMinor,
+		Note:            note,
+		SplitRatio:      splitRatio,
+		FaceBeforeMinor: faceBefore,
 	}, nil
 }
 
