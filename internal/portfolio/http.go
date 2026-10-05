@@ -11,7 +11,6 @@ import (
 	"github.com/alexedwards/scs/v2"
 	"github.com/google/uuid"
 	"github.com/oapi-codegen/nullable"
-	"github.com/shopspring/decimal"
 
 	"babki.my/babki/internal/family"
 	"babki.my/babki/internal/instrument"
@@ -40,15 +39,6 @@ type instrumentStore interface {
 	ByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]instrument.Instrument, error)
 }
 
-// converter is what the handler needs from marketdata.Converter: RatesOn to
-// prefetch the screen's rates, Rate for whatever the prefetch missed. Convert
-// is unused: conversions go through the memo (rateLookup.applyTo). Local so
-// tests can force ErrNoRate for chosen pairs.
-type converter interface {
-	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
-	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
-}
-
 // spaceStore reads the space's base currency.
 type spaceStore interface {
 	SpaceByID(ctx context.Context, id uuid.UUID) (family.Space, error)
@@ -58,13 +48,13 @@ type Handler struct {
 	ops         journalStore
 	instruments instrumentStore
 	quotes      quoteStore
-	conv        converter
+	conv        marketdata.RateSource
 	spaces      spaceStore
 	auth        *family.Auth
 	sm          *scs.SessionManager
 }
 
-func NewHandler(ops journalStore, instruments instrumentStore, quotes quoteStore, conv converter, spaces spaceStore, auth *family.Auth, sm *scs.SessionManager) *Handler {
+func NewHandler(ops journalStore, instruments instrumentStore, quotes quoteStore, conv marketdata.RateSource, spaces spaceStore, auth *family.Auth, sm *scs.SessionManager) *Handler {
 	return &Handler{ops: ops, instruments: instruments, quotes: quotes, conv: conv, spaces: spaces, auth: auth, sm: sm}
 }
 
@@ -167,7 +157,7 @@ func (h *Handler) positionsResponse(ctx context.Context, spaceID, accountID uuid
 	now := time.Now().UTC()
 
 	// Both per request.
-	rates := make(map[rateKey]*rateLookup)
+	rates := marketdata.NewRateMemo(h.conv)
 	income := incomeByInstrument(ops)
 
 	// The account's money, folded from the same journal before the warm-up so its
@@ -176,7 +166,7 @@ func (h *Handler) positionsResponse(ctx context.Context, spaceID, accountID uuid
 	if err != nil {
 		return apitypes.PositionsResponse{}, 0, err
 	}
-	h.prewarmRates(ctx, rateQueries(positions, instruments, quotes, income, cashPositions, sp.BaseCurrency, now), rates)
+	rates.Prefetch(ctx, rateQueries(positions, instruments, quotes, income, cashPositions, sp.BaseCurrency, now))
 
 	totals := newRealizedTotals(sp.BaseCurrency)
 	account := newAccountTotals(sp.BaseCurrency)

@@ -29,13 +29,11 @@ type spaceStore interface {
 }
 
 // converter is what the handler needs from marketdata.Converter: ConvertMany
-// for the summary total, RatesOn to prefetch a request's rates and Rate for
-// whatever the prefetch missed. Tests substitute one whose lookups fail with a
-// real error rather than ErrNoRate.
+// for the summary total, and a RateSource for the request's memo. Tests
+// substitute one whose lookups fail with a real error rather than ErrNoRate.
 type converter interface {
 	ConvertMany(ctx context.Context, amounts map[string]int64, to string, on time.Time) (converted int64, missing []string, ratesOn time.Time, err error)
-	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
-	RatesOn(ctx context.Context, queries []marketdata.RateQuery) (marketdata.Rates, error)
+	marketdata.RateSource
 }
 
 type Handler struct {
@@ -172,31 +170,6 @@ func pathAccountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	return id, true
 }
 
-// rateKey identifies one memoized rate lookup: currency, target and day. Only
-// the currency varies on this screen, but the memo has two writers (the loop
-// and the prefetch), and keying all three parts means a prefetched answer for
-// the wrong day or target is filed where nothing looks for it — a round trip
-// lost, not a wrong number. The day is a YYYY-MM-DD string so equal days are
-// equal keys.
-type rateKey struct {
-	currency string
-	target   string
-	on       string
-}
-
-// newRateKey is the only place a lookup becomes a key.
-func newRateKey(currency, target string, on time.Time) rateKey {
-	return rateKey{currency: currency, target: target, on: on.Format("2006-01-02")}
-}
-
-// rateLookup memoizes one resolved rate, its date or its error, for the
-// duration of a request.
-type rateLookup struct {
-	rate decimal.Decimal
-	date time.Time
-	err  error
-}
-
 // needsRate reports whether a's balance needs converting; both the loop and
 // the prefetch ask it.
 func needsRate(a WithBalance, baseCurrency string) bool {
@@ -204,38 +177,31 @@ func needsRate(a WithBalance, baseCurrency string) bool {
 }
 
 // balanceInBase converts a's balance into baseCurrency at the rate of on,
-// memoized per request. A memo miss is resolved here, so no figure depends on
-// the prefetch.
+// through the request's memo.
 //
 // It returns (nil, nil) — a null balance_in_base — when there is no balance,
 // nothing to convert, or no rate (ErrNoRate). Any other error is a real
 // failure the caller must report.
-func (h *Handler) balanceInBase(ctx context.Context, a WithBalance, baseCurrency string, on time.Time, cache map[rateKey]*rateLookup) (*apitypes.MoneyInBase, error) {
+func (h *Handler) balanceInBase(ctx context.Context, a WithBalance, baseCurrency string, on time.Time, rates *marketdata.RateMemo) (*apitypes.MoneyInBase, error) {
 	if !needsRate(a, baseCurrency) {
 		return nil, nil
 	}
-	key := newRateKey(a.Currency, baseCurrency, on)
-	rl, ok := cache[key]
-	if !ok {
-		rate, date, err := h.converter.Rate(ctx, a.Currency, baseCurrency, on)
-		rl = &rateLookup{rate: rate, date: date, err: err}
-		cache[key] = rl
-	}
-	if rl.err != nil {
-		if errors.Is(rl.err, marketdata.ErrNoRate) {
+	rl := rates.Rate(ctx, a.Currency, baseCurrency, on)
+	if rl.Err != nil {
+		if errors.Is(rl.Err, marketdata.ErrNoRate) {
 			return nil, nil
 		}
-		return nil, rl.err
+		return nil, rl.Err
 	}
 	// Rounded once; an overflow is an error, not the "no rate" null (#27).
-	minor, err := money.Minor(decimal.NewFromInt(a.Balance.AmountMinor).Mul(rl.rate))
+	minor, err := money.Minor(decimal.NewFromInt(a.Balance.AmountMinor).Mul(rl.Rate))
 	if err != nil {
 		return nil, fmt.Errorf("%w: balance of account %s in %s", err, a.ID, baseCurrency)
 	}
 	return &apitypes.MoneyInBase{
 		AmountMinor: minor,
 		Currency:    baseCurrency,
-		RateOn:      rl.date.Format("2006-01-02"),
+		RateOn:      rl.RateDate.Format("2006-01-02"),
 	}, nil
 }
 
@@ -257,9 +223,9 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 
 	// Scoped to this request.
-	rates := make(map[rateKey]*rateLookup)
+	rates := marketdata.NewRateMemo(h.converter)
 	// Prefetch every rate the loop will need in one round trip.
-	h.prewarmRates(r.Context(), rateQueries(accounts, sp.BaseCurrency, now), rates)
+	rates.Prefetch(r.Context(), rateQueries(accounts, sp.BaseCurrency, now))
 	vals, err := h.valuations(r.Context(), p.SpaceID, accounts, sp.BaseCurrency, now, rates)
 	if err != nil {
 		family.WriteError(w, err)
@@ -291,34 +257,12 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 // where nothing looks.
 func rateQueries(accounts []WithBalance, baseCurrency string, on time.Time) []marketdata.RateQuery {
 	var out []marketdata.RateQuery
-	// Deduplicated by the memo's own key.
-	seen := make(map[rateKey]bool, len(accounts))
 	for _, a := range accounts {
-		key := newRateKey(a.Currency, baseCurrency, on)
-		if !needsRate(a, baseCurrency) || seen[key] {
-			continue
+		if needsRate(a, baseCurrency) {
+			out = append(out, marketdata.RateQuery{From: a.Currency, To: baseCurrency, On: on})
 		}
-		seen[key] = true
-		out = append(out, marketdata.RateQuery{From: a.Currency, To: baseCurrency, On: on})
 	}
 	return out
-}
-
-// prewarmRates resolves queries in one round trip and files each answer in
-// the memo. Nothing here fails the request: balanceInBase resolves whatever is
-// missing and tells a missing rate from an outage. Rates.Answered decides what
-// is filed; a failed batch is logged where it dies (#70).
-func (h *Handler) prewarmRates(ctx context.Context, queries []marketdata.RateQuery, cache map[rateKey]*rateLookup) {
-	if len(queries) == 0 {
-		return
-	}
-	resolved, err := h.converter.RatesOn(ctx, queries)
-	if err != nil {
-		return
-	}
-	for q, res := range resolved.Answered(queries) {
-		cache[newRateKey(q.From, q.To, q.On)] = &rateLookup{rate: res.Rate, date: res.RateDate, err: res.Err}
-	}
 }
 
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -487,7 +431,7 @@ func (h *Handler) writeOne(w http.ResponseWriter, r *http.Request, spaceID uuid.
 		return
 	}
 	vals, err := h.valuations(r.Context(), spaceID, []WithBalance{a}, sp.BaseCurrency,
-		time.Now().UTC(), make(map[rateKey]*rateLookup))
+		time.Now().UTC(), marketdata.NewRateMemo(h.converter))
 	if err != nil {
 		family.WriteError(w, err)
 		return
@@ -522,7 +466,7 @@ func (h *Handler) handleSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	vals, err := h.valuations(r.Context(), p.SpaceID, accounts, sp.BaseCurrency, now, make(map[rateKey]*rateLookup))
+	vals, err := h.valuations(r.Context(), p.SpaceID, accounts, sp.BaseCurrency, now, marketdata.NewRateMemo(h.converter))
 	if err != nil {
 		family.WriteError(w, err)
 		return

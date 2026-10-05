@@ -66,7 +66,7 @@ const minorUnitScale = 2
 // those today; maxQuantity is the line to revisit if one appears.
 //
 // None of this replaces the read-side guards (portfolio.marketValue,
-// rateLookup.applyTo, sumInBase, money.Minor): quotes and rates arrive later,
+// portfolio.applyRate, sumInBase, money.Minor): quotes and rates arrive later,
 // positions sum many rows, splits multiply whole positions, and rows written
 // before the bound are still there.
 //

@@ -87,7 +87,7 @@ func (h *Handler) ValueFromJournal(ctx context.Context, spaceID, accountID uuid.
 	}
 
 	now := time.Now().UTC()
-	rates := make(map[rateKey]*rateLookup)
+	rates := marketdata.NewRateMemo(h.conv)
 	currencies := make([]string, 0, len(byCurrency))
 	for currency := range byCurrency {
 		currencies = append(currencies, currency)
@@ -246,7 +246,7 @@ func (h *Handler) valueOn(ctx context.Context, history quoteHistory, base string
 		}
 	}
 
-	rates := make(map[rateKey]*rateLookup)
+	rates := marketdata.NewRateMemo(h.conv)
 	currencies := make([]string, 0, len(byCurrency))
 	for currency := range byCurrency {
 		currencies = append(currencies, currency)
