@@ -51,25 +51,16 @@ export function useConnection(id: string) {
       return data;
     },
     enabled: id !== "",
-    // The screen this feeds is the only place an import reports on itself, and
-    // the work it reports on happens in a background worker minutes after the
-    // owner arrives — the wizard lands here while the first sync is still
-    // queued. Without a poll every sentence on the page ("синхронизаций ещё не
-    // было", "сверки ещё не было") stays frozen at what was true on arrival and
-    // is quietly false for the rest of the session; refetchOnWindowFocus is off
-    // globally, so even leaving and returning does not repair it. The interval
-    // is deliberately slower than a person's patience rather than faster: this
-    // is one household's own instance, and the run it waits for takes minutes.
+    // Polled: the screen reports on a background sync that runs minutes after the
+    // owner arrives, and refetchOnWindowFocus is off globally, so without a poll its
+    // sentences stay frozen at arrival.
     refetchInterval: CONNECTION_POLL_MS,
   });
 }
 
-// useInvalidateConnections refetches everything keyed on connections: the list
-// AND every single connection, because react-query matches a query key by
-// PREFIX unless told otherwise, and ["tinvest-connections"] is the prefix of
-// ["tinvest-connections", id]. Naming the second key as well would invalidate
-// nothing the first did not, while reading as though one connection needed its
-// own line.
+// useInvalidateConnections refetches the list and every single connection:
+// react-query matches keys by prefix, so ["tinvest-connections"] covers
+// ["tinvest-connections", id].
 function useInvalidateConnections() {
   const queryClient = useQueryClient();
   return () => {
@@ -77,13 +68,9 @@ function useInvalidateConnections() {
   };
 }
 
-// useCheckToken asks the broker which accounts a read-only token can see —
-// the wizard's step 2 — and stores nothing: see POST /api/v1/tinvest/token-check
-// in the API contract. networkMode "always" for the reason session.ts's
-// useLogin documents at length: this is a "now" action, and react-query's
-// default "online" mode would instead hold the request silently while the
-// browser believes itself offline, leaving the button spinning forever with
-// nothing on screen to say why.
+// useCheckToken asks which accounts a read-only token sees (the wizard's step
+// 2) and stores nothing. networkMode "always": the default would hold the request
+// silently while the browser thinks it is offline (see useLogin).
 export function useCheckToken() {
   return useMutation({
     networkMode: "always",
@@ -97,13 +84,9 @@ export function useCheckToken() {
   });
 }
 
-// useCreateConnection stores the token, links the picked broker accounts to
-// brand-new babki accounts and queues the first sync in one request (see
-// POST /api/v1/tinvest/connections). It navigates to the new connection's own
-// screen on success, the same way useLogin and useSetup already do for their
-// own "create, then go there" actions — the wizard has nowhere else useful to
-// send the owner once the connection exists. networkMode "always" for the
-// same reason as useCheckToken.
+// useCreateConnection stores the token, links the picked accounts to new babki
+// accounts and queues the first sync in one request, then navigates to the new
+// connection. networkMode "always" as above.
 export function useCreateConnection() {
   const invalidate = useInvalidateConnections();
   const navigate = useNavigate();
@@ -125,16 +108,9 @@ export function useCreateConnection() {
 }
 
 // useUpdateConnection replaces the token, switches the connection on or off, or
-// both (PATCH .../connections/{id}).
-//
-// networkMode "always" for the reason useCheckToken documents, and this is the
-// place it matters most: replacing a token is a REPAIR — it is reached from a
-// connection the server has already parked at `token_revoked` — so it is used
-// exactly when something is known to be broken. react-query's default would
-// park the request while the browser believes itself offline: nothing sent,
-// isError false, isPending true, and a screen where pressing the button does
-// nothing at all and says nothing about why. That is #111 on the setup form,
-// and there is no reason it should read differently here.
+// both. networkMode "always" matters most here: replacing a token is a repair of a
+// connection parked at token_revoked, and a request held offline would leave the
+// button doing nothing (#111).
 export function useUpdateConnection() {
   const invalidate = useInvalidateConnections();
   return useMutation({
@@ -157,14 +133,8 @@ export function useUpdateConnection() {
   });
 }
 
-// useDeleteConnection withdraws the connection (DELETE .../connections/{id}).
-// The accounts and their operations stay — see the contract; what goes is the
-// stored token and everything the import kept beside it.
-//
-// networkMode "always" for the same reason as useUpdateConnection: the owner
-// pressed a button and is waiting for it to be over, and a request parked until
-// the browser changes its mind about the network leaves the screen saying
-// nothing while the connection is still there.
+// useDeleteConnection withdraws the connection; the accounts and operations
+// stay. networkMode "always" as above.
 export function useDeleteConnection() {
   const invalidate = useInvalidateConnections();
   return useMutation({
@@ -180,17 +150,9 @@ export function useDeleteConnection() {
   });
 }
 
-// useTriggerSync asks for this connection to be synced now (POST .../sync).
-// networkMode "always": the owner pressed a button expecting something to
-// happen right now, not a request parked until the browser's own belief about
-// the network changes its mind.
-//
-// The response's `queued` field is not «синхронизация уже идёт» when false —
-// see TinvestSyncAcceptedResponse in the API contract: a sync already waiting
-// out a failed attempt's backoff (which can run into hours) occupies the same
-// uniqueness slot as one actually running, and this hook must not be read by
-// a caller as saying more than the contract does. Callers render `queued`
-// through their own copy, not through a caption this hook invents.
+// useTriggerSync asks for a sync now (networkMode "always"). queued=false does
+// not mean «синхронизация уже идёт»: a sync waiting out a backoff of hours holds
+// the same slot (TinvestSyncAcceptedResponse); callers word it themselves.
 export function useTriggerSync() {
   const invalidate = useInvalidateConnections();
   const queryClient = useQueryClient();
@@ -204,13 +166,8 @@ export function useTriggerSync() {
       if (!data) throw apiError(response, error);
       return data;
     },
-    // The connection AND its run log: the log is where a queued sync becomes
-    // visible, and it is keyed by ["tinvest-sync-runs", id, …] — a prefix the
-    // connections key above does not cover, so without this line the screen
-    // kept showing the log it had loaded and the new run appeared only after a
-    // page reload. What the refetch finds is the worker's business: the row is
-    // written when the run STARTS, so a log that comes back unchanged means the
-    // job is still waiting, which is exactly what the log should then show.
+    // The run log too: its key is not under the connections prefix, and the new
+    // run appears there when it starts.
     onSuccess: (_data, id) => {
       invalidate();
       void queryClient.invalidateQueries({ queryKey: ["tinvest-sync-runs", id] });
@@ -218,11 +175,9 @@ export function useTriggerSync() {
   });
 }
 
-// SYNC_RUNS_PAGE_SIZE / useSyncRuns follow the journal's own paging pattern
-// (see JOURNAL_PAGE_SIZE / useOperations in operations.ts): `has_more` is
-// fetched, never inferred from a page's length, and each further page is a
-// fresh request at the next offset rather than one window that grows past the
-// endpoint's own ceiling (200 here, same as the journal).
+// SYNC_RUNS_PAGE_SIZE and useSyncRuns page like the journal (JOURNAL_PAGE_SIZE,
+// useOperations): has_more is fetched, each page a request at the next offset
+// (the endpoint's ceiling is 200).
 export const SYNC_RUNS_PAGE_SIZE = 50;
 
 export function useSyncRuns(connectionId: string, pageSize = SYNC_RUNS_PAGE_SIZE) {
@@ -242,13 +197,9 @@ export function useSyncRuns(connectionId: string, pageSize = SYNC_RUNS_PAGE_SIZE
         ? allPages.reduce((rows, page) => rows + page.runs.length, 0)
         : undefined,
     enabled: connectionId !== "",
-    // Polled for the same reason the connection itself is: a queued run appears
-    // here minutes after the owner pressed the button, and a log frozen at
-    // "синхронизаций ещё не было" is the screen lying about the only evidence
-    // it exists to show. This refetches every page already loaded, not just the
-    // newest — acceptable because a reader is almost always on the first page,
-    // and the alternative (refetching the head alone) would renumber the offsets
-    // under the pages below it.
+    // Polled like the connection, refetching every loaded page; readers are
+    // almost always on the first, and refetching only the head would renumber
+    // the pages below.
     refetchInterval: CONNECTION_POLL_MS,
   });
 }
@@ -272,64 +223,41 @@ export function useUnparsed(connectionId: string, pageSize = UNPARSED_PAGE_SIZE)
         ? allPages.reduce((rows, page) => rows + page.operations.length, 0)
         : undefined,
     enabled: connectionId !== "",
-    // Polled with the connection and the run log, and for a sharper reason than
-    // either: the counters beside this list DO refresh, so a list that does not
-    // ends up contradicting them on the same screen — «не разобрано: 148» above
-    // «Неразобранных операций нет». That is what happened on the first real
-    // import: the page was opened while the sync was still running, this query
-    // answered "none" truthfully at that instant, and then never asked again.
+    // Polled with the counters beside it, or the list would contradict them
+    // («не разобрано: 148» above «Неразобранных операций нет», as on the first
+    // real import).
     refetchInterval: CONNECTION_POLL_MS,
   });
 }
 
-// Error branching helpers — status only, per the .tsx rule
-// (checkErrorTextInMarkup in scripts/check-i18n.mjs): a component picks its
-// Russian sentence from the HTTP status the API contract declares, never from
-// the English prose the server happened to write for its own log.
+// Error helpers branch on status only (checkErrorTextInMarkup in
+// scripts/check-i18n.mjs), never on the server's English.
 
-// isTokenRejected: the broker itself refused the token (token-check, create,
-// update all answer this way — see api/openapi.yaml). Distinct from
-// isBrokerUnreachable below, which is a different piece of news: one is worth
-// retrying, the other needs a different token.
+// isTokenRejected: the broker refused the token (400 on token-check, create
+// and update). Needs a different token, unlike isBrokerUnreachable.
 export function isTokenRejected(err: unknown): boolean {
   return err instanceof ApiError && err.status === 400;
 }
 
-// isBrokerAccountNotImportable: a broker account that was picked is not one this
-// token can import (422, and POST /api/v1/tinvest/connections is the only path
-// that declares it — no other call takes picks).
-//
-// IT IS THE ONE ANSWER FROM THIS CALL THAT SAYS THE TOKEN IS FINE. The broker's
-// account list moved under the wizard — an account closed, or a token's access
-// narrowed, between the token-check and the create, which asks for that list
-// afresh. It used to arrive as the same 400 a refused token does, where the only
-// sentence a screen could show sent the owner to re-issue a token that never
-// stopped working.
-//
-// Nothing about the ORDER of the checks at a call site rides on this: 400 and
-// 422 are different codes, so isTokenRejected and this one can never both be
-// true of one error. What rides on it is that the two get different sentences.
+// isBrokerAccountNotImportable: a picked account this token cannot import
+// (422, only on POST /api/v1/tinvest/connections). The token is fine: the broker's
+// account list changed since the token check. 400 and 422 never coincide, so the
+// two get different sentences.
 export function isBrokerAccountNotImportable(err: unknown): boolean {
   return err instanceof ApiError && err.status === 422;
 }
 
-// isConnectionMissing: there is no such connection in the caller's space (404 —
-// every path under a connection id declares it). Its own sentence rather than
-// the general one, because it is the one failure that is not a fault: a
-// connection deleted in another tab, or a link followed after it was withdrawn,
-// leaves nothing to fix and nothing to retry.
+// isConnectionMissing: no such connection in this space (404). Its own
+// sentence: deleted in another tab, nothing to fix or retry.
 export function isConnectionMissing(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
 }
 
-// isBrokerUnreachable: this server could not reach T-Invest, or could not use
-// what it answered (502 on the same three endpoints).
+// isBrokerUnreachable: the server could not reach T-Invest or use its answer
+// (502).
 export function isBrokerUnreachable(err: unknown): boolean {
   return err instanceof ApiError && err.status === 502;
 }
 
-// A 409 is `isConflict` from api/operations.ts (no new helper here — the same
-// status code, checked the same way): on POST .../connections it means a
-// picked broker account is already imported by another connection; on
-// POST .../sync it means the connection is not `active`. Which one a caller
-// is looking at is not this module's to know, only its status.
+// A 409 is isConflict from api/operations.ts: on create, an account already
+// imported; on sync, a connection not active.

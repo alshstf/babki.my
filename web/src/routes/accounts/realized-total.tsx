@@ -7,33 +7,17 @@ import type {
   RealizedTotal as RealizedTotalPayload,
 } from "@/api/positions";
 
-// assertUnreachable is gapWording's runtime backstop for a RealizedGap value
-// this build cannot name. TypeScript proves the switch below exhaustive over
-// the union it knows about — a NEW member added to the contract's enum
-// without a case here fails to compile, because `gap` at the default branch
-// would no longer narrow to `never`. But `gap` is JSON off the wire, typed by
-// assertion rather than validated, so a client running slightly behind the
-// server it talks to can still receive a literal outside the union it was
-// built with; that must degrade at runtime, not throw or fabricate a label.
+// assertUnreachable backs gapWording's switch at runtime: TypeScript proves it
+// exhaustive, but `gap` is unvalidated JSON, and a newer server's value must
+// degrade, not throw.
 function assertUnreachable(_: never): undefined {
   return undefined;
 }
 
-// The wording for a gap: what is shown instead of the sum, and the tooltip that
-// says why no partial sum is shown in its place. The gap itself arrives named
-// from the server (RealizedTotal.in_base_gap) — this screen never works it out
-// from the positions' flags, because the two kinds are not the same news to the
-// reader and only the server knows which one actually stopped the sum.
-//
-// Written as a switch over literal keys rather than a lookup table, so every
-// key stays a literal at the t() call site — that is the only shape
-// scripts/check-i18n.mjs can verify.
-//
-// Returns undefined for a gap value outside the three named above (see
-// assertUnreachable) — the caller must then show nothing rather than the
-// label over an empty amount, which is what happens if the label's row
-// renders as soon as ANY gap is non-null without checking that wording for
-// it actually exists.
+// The wording for a gap: what stands in for the sum and why no partial sum is
+// shown. The gap comes named from the server (RealizedTotal.in_base_gap), never
+// worked out from positions. Literal t() keys for scripts/check-i18n.mjs.
+// Undefined for an unnamed value, and the caller then shows nothing.
 function gapWording(
   t: (key: string) => string,
   gap: RealizedGap,
@@ -49,29 +33,12 @@ function gapWording(
   }
 }
 
-// The account header's "Реализованная прибыль" line: what the closed deals have
-// actually locked in, across every position of the account.
-//
-// It adds nothing. The server publishes both forms of the total — one figure
-// per position currency, and one in the space's base currency — and this
-// component picks the one the display-currency toggle asks for. Money
-// arithmetic lives on the server even when it would be exact here, so that the
-// figure has a single definition and the rounding and gap policies behind it
-// can change in one place (see RealizedTotal in the API contract).
-//
-// It is the ACCOUNT's figure, and the reason it is not the same word as the
-// table's "Зафиксировано" column is that it is not the same quantity: this is
-// closed deals alone, while that column adds the payments the paper made. The
-// row below does show its own realized result, as a second line under the
-// profit rather than a column of its own — the owner removed a "Реализовано"
-// column once as visual noise, and that decision is what keeps it off the
-// header row here.
-//
-// What separates it from the profit in the table is that both of its ends are
-// past events with dates of their own: it will never move again, and in the
-// base currency it carries the currency's own move between purchase and sale.
-// That is exactly the kind of mechanics the owner wants disclosed on demand
-// rather than printed as text, so it lives in the label's tooltip.
+// The account's realized line: what closed deals have locked in, across every
+// position. It adds nothing: the server publishes per-currency and base-currency
+// totals and this picks by mode. It is closed deals only, unlike the table's
+// «Зафиксировано», which adds payments. Both ends are past events, so it never
+// moves and in base currency carries the currency's move; that is explained in
+// the label's tooltip.
 export function RealizedTotal({
   total,
   mode,
@@ -81,26 +48,15 @@ export function RealizedTotal({
 }) {
   const { t } = useTranslation();
 
-  // In the base currency the response carries either the figure or the reason
-  // there is none, never both.
+  // In base currency the response carries the figure or its gap, never
+  // both. In the positions' currencies a bucket can be null too: a position sold
+  // into another currency has no single-currency total. It is dropped rather than
+  // drawn as zero; if nothing remains, the line disappears and base mode still has
+  // the figure.
   //
-  // IN THE POSITIONS' OWN CURRENCY A BUCKET CAN BE NULL TOO, and it is not a
-  // gap of the same kind: nothing is missing and no rate would help — one of
-  // the positions in it sold into another currency, so the bucket has no total
-  // in ONE currency to state (see Position.realized_pnl_minor in the contract).
-  // Such a bucket is dropped from the line rather than drawn as a zero, which
-  // is the one rendering that would be a lie: nought is an ordinary realized
-  // result and the two would be indistinguishable. If that leaves nothing at
-  // all, the line disappears exactly as it does for an account with no
-  // positions, and the base-currency mode is where that money is still a
-  // figure.
-  // AN ACCOUNT WITH NO CLOSED DEALS AT ALL SAYS NOTHING ABOUT THEM — not even
-  // the base currency's nought, which the server does publish (the sum of no
-  // deals is 0, honestly) and which would otherwise print as a realized result
-  // over an account that has never sold anything. by_currency is empty exactly
-  // in that case, and it is the one field that distinguishes it: a real zero
-  // across real positions has a bucket and IS shown, because nought is a fact
-  // and hiding it would be the silence this screen is not allowed to keep.
+  // An account with no closed deals says nothing, not even the server's base-currency
+  // zero: by_currency is empty exactly then. A real zero across real positions
+  // has a bucket and is shown.
   const anyRealized = total.by_currency.length > 0;
   const gap = anyRealized && mode === "base" ? total.in_base_gap : null;
   const figures = !anyRealized
@@ -117,47 +73,23 @@ export function RealizedTotal({
           }));
 
   const wording = gap ? gapWording(t, gap) : undefined;
-  // Positions whose result in the base currency can never be struck — a parcel
-  // sold without a recorded purchase day — are left out of the figure by the
-  // server and counted. A statement about the base-currency figure alone: in
-  // the positions' own currency they are counted in full.
+  // Positions sold without a recorded purchase day have no base-currency result;
+  // the server leaves them out and counts them. Base mode only.
   const undated = anyRealized && mode === "base" ? total.undated_positions : 0;
-  // Sales of shares that arrived with no purchase price, counted as bought for
-  // nothing: the whole proceeds are in the figure as profit. True of every
-  // currency, so said in every mode.
+  // Sales of shares that arrived with no price: the whole proceeds count as
+  // profit. True in every currency.
   const unknownCost = anyRealized ? total.unknown_cost_positions : 0;
-  // THE TAX THE ACCOUNT ITSELF WAS CHARGED, beside the result it was charged
-  // against. It is not part of any position's figures and never can be — the
-  // broker takes it against the year's accumulated base, not against a paper —
-  // so it stands as its own line rather than being folded into the total above.
-  //
-  // Shown in EVERY mode, unconverted, because that is what it is: money taken
-  // in the currency it was taken in. The realized total beside it converts;
-  // this one has no per-payment dates to convert by and the contract says so.
+  // The tax the account was charged, beside the result: taken against the
+  // year's base, not a paper, so its own line. Shown unconverted in every mode:
+  // it has no per-payment dates to convert by.
   const tax = total.tax_withheld_by_currency.filter(
     (entry) => entry.amount_minor !== 0,
   );
 
-  // NOTHING TO SAY, SAID BY SAYING NOTHING. Three ways this line can be empty
-  // and all three are checked together: no figure, no wording for the gap that
-  // stopped one, and no tax withheld. An account with no positions at all
-  // arrives here with all three empty — a "0,00" over an empty account is an
-  // answer to a question nobody asked — while a real zero across real positions
-  // IS a figure and IS shown, because nought is a fact and hiding it would be
-  // the silence this screen is not allowed to keep.
-  //
-  // The tax is checked BESIDE the figures rather than after them, which is the
-  // whole reason this is one guard: the two are independent. A broker that
-  // records the tax on a dividend as its own operation with no paper attached
-  // gives an account a withholding with no realized result anywhere — and an
-  // earlier version of this component returned before it ever looked, so that
-  // money was on the screen nowhere at all.
-  //
-  // Checked against wording rather than gap itself — a gap can be non-null yet
-  // unnameable (see assertUnreachable), and a reason invented here is exactly
-  // what the named gap exists to prevent, so that case must fall through to the
-  // same blank as no gap at all rather than render the label over an empty
-  // amount.
+  // Nothing to say: no figure, no wording for a gap, no tax, nothing
+  // undated or unpriced. A real zero is shown. Tax is checked alongside the
+  // figures, since a withholding can exist with no realized result. Checked
+  // against the wording, not the gap, so an unnamed gap shows nothing.
   if (!wording && figures.length === 0 && tax.length === 0 && undated === 0 && unknownCost === 0)
     return null;
   return (

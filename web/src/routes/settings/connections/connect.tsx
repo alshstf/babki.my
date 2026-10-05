@@ -18,39 +18,18 @@ import {
   type TinvestBrokerAccount,
 } from "@/api/connections";
 
-// The T-Invest settings page an owner issues an API token from. Read-only
-// navigation, never pre-filled with anything of the owner's — just the page the
-// instructions step sends them to.
-//
-// THIS EXACT ADDRESS AND NOT A DEEPER ONE, because a deeper one cannot be
-// checked: the broker's host answers 200 to ANY path under it, so a wrong guess
-// would never show up as a broken link — the owner would simply land somewhere
-// else with nothing saying so. This is the address the broker's own developer
-// documentation gives for issuing a token, which is why the link is captioned
-// as the investment settings rather than as an API section: what the page holds
-// beyond that is not something this file can verify.
+// The T-Invest settings page where an API token is issued, as the broker's
+// developer docs give it. Not a deeper path: the host answers 200 to any path,
+// so a wrong guess would never look broken.
 const TOKEN_SETTINGS_URL = "https://www.tbank.ru/invest/settings/";
 
 type Step = "instructions" | "token" | "accounts";
 
-// ConnectWizardPage walks the owner through connecting a T-Invest account:
-// read the instructions, paste a read-only token and have it checked against
-// the broker, then pick which of the accounts it can see to import.
-//
-// WHERE THE TOKEN LIVES, both places. Chiefly in this component's own state
-// (`token` below), for as long as the wizard is open. But a mutation keeps the
-// variables it was called with, so a copy also sits in react-query's cache —
-// which outlives this screen, since the cache belongs to the app and not to the
-// wizard, until the mutation is garbage-collected or the tab is closed.
-//
-// Both places are memory of this one page load, and neither survives the tab.
-// What does NOT happen, and is what would matter: it never goes into the URL,
-// never into router state, never into browser storage — the one key this
-// application keeps there is the display-currency preference, written from
-// lib/display-currency.ts and nowhere near this screen — and this file never
-// logs it. It leaves the browser only as a request body, and only to the two
-// endpoints below: token-check, which stores nothing, and — if the owner goes
-// through with it — the one that creates the connection.
+// ConnectWizardPage connects a T-Invest account: instructions, a read-only token
+// checked against the broker, then the accounts to import. The token lives in this
+// component's state and in react-query's mutation cache for this page load; it
+// never goes into the URL, router state, browser storage or a log, and leaves only
+// as a request body to token-check (stores nothing) and the create endpoint.
 export function ConnectWizardPage() {
   const { t } = useTranslation();
   const { data: session } = useSession();
@@ -85,21 +64,15 @@ export function ConnectWizardPage() {
         setAccounts(data.accounts);
         setSelected(initialSelected);
         setNames(initialNames);
-        // Only if the wizard is still where the check was started from. The
-        // answer can arrive after the owner has pressed «Назад», and moving
-        // them forward then is the screen deciding on its own to leave the page
-        // they chose — read as a step, not as a late answer. The functional
-        // form is what makes this the CURRENT step rather than the one captured
-        // when the request went out.
+        // Only if the wizard is still on that step: the answer may arrive after
+        // «Назад», and moving forward then would override the owner's choice. The
+        // functional form reads the current step.
         setStep((current) => (current === "token" ? "accounts" : current));
       },
     });
   };
 
-  // One guarded read of `names` for both the rule that enables the button and
-  // what the button then sends. They used to differ — the rule guarded the
-  // missing key, the send did not — and two readings of one map are two
-  // readings that can disagree.
+  // One guarded read of `names` for both the button's rule and what it sends.
   const nameOf = (id: string) => (names[id] ?? "").trim();
 
   const pickedIds = accounts
@@ -171,11 +144,8 @@ export function ConnectWizardPage() {
                 }}
               />
             </div>
-            {/* By status, never by the broker's own sentence (that string is
-                English prose meant for a log — see api/openapi.yaml on
-                POST /api/v1/tinvest/token-check). 400 is the broker refusing
-                the token itself; 502 is this server failing to reach the
-                broker at all — different news, worth a different sentence. */}
+            {/* By status, not the broker's English: 400 the broker refused the
+               token, 502 the broker could not be reached. */}
             {checkToken.isError && (
               <Alert variant="destructive">
                 <AlertDescription>
@@ -206,10 +176,8 @@ export function ConnectWizardPage() {
           </CardHeader>
           <CardContent className="grid gap-4">
             {accounts.length === 0 ? (
-              // Empty means the token works and there is nothing to import
-              // through it — a different answer from a refused token, and it
-              // must not be captioned as one (see TinvestTokenCheckResponse.accounts
-              // in the API contract).
+              // Empty means the token works and has nothing to import, not a refused
+              // token (TinvestTokenCheckResponse.accounts).
               <p className="text-sm text-muted-foreground">
                 {t("connections.wizard.noAccounts")}
               </p>
@@ -253,18 +221,10 @@ export function ConnectWizardPage() {
                 })}
               </div>
             )}
-            {/* Same rule as the token step's error above: status, not prose.
-                409 means one of the picked broker accounts is already imported
-                by another connection (isConflict — the journal's own helper,
-                since it is the same status code checked the same way). 422
-                means the token is fine and the broker's account list is no
-                longer the one this step is showing: creating asks for it
-                afresh, so an account closed since the check, or a token whose
-                access was narrowed, lands here. It is captioned as what it is
-                and NOT as a refused token — that was one 400 for both, and the
-                owner was told to re-issue a token that never stopped working.
-                The token captions below still cover the two ways creating can
-                refuse the token itself. */}
+            {/* By status: 409 a picked account is already imported elsewhere
+               (isConflict); 422 the token works but the broker's account list
+               changed since the check (create asks afresh), not a refused token.
+               The token captions below cover create refusing the token itself. */}
             {createConnection.isError && (
               <Alert variant="destructive">
                 <AlertDescription>

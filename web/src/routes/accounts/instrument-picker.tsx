@@ -30,22 +30,12 @@ const INSTRUMENT_TYPES: InstrumentType[] = [
   "custom",
 ];
 
-// InstrumentPicker: a search box + result list standing in for shadcn's
-// Command/Popover (not present in this project's component set — the brief
-// explicitly says not to add new deps for this). No debounce: each keystroke
-// re-runs one page of an already-cheap local query.
-//
-// THIS IS THE ONLY PLACE THE CATALOG IS SHOWN AS A LIST — there is no catalog
-// screen; the three dialogs that pick an instrument (trade, income, transfer)
-// all render this component and nothing else displays a catalog row. That is
-// why «показать ещё» lands here rather than somewhere more list-shaped. With an
-// empty box the list IS the catalog, and it used to stop dead at the fiftieth
-// instrument: the fifty-first could be reached only by typing enough of a name
-// to pull it into the first fifty, which is no help at all to the reader this
-// box exists for — the one who does not remember what the paper is called.
-// Worse, the control directly under the list is «Создать инструмент», and the
-// duplicate it makes is something this application can neither merge nor
-// delete, so a list that silently ends is a list that invites one (#104).
+// InstrumentPicker: a search box and result list (no Command/Popover in this
+// project's components). No debounce: each keystroke reads one page. It is the
+// only place the catalog is shown as a list, used by the trade, income and
+// transfer dialogs, so «показать ещё» lives here (#104): with an empty box the
+// list is the catalog, and a list that stopped at fifty invited duplicates that
+// cannot be merged or deleted.
 export function InstrumentPicker({
   value,
   onChange,
@@ -79,31 +69,15 @@ export function InstrumentPicker({
 
   const newValid = newName.trim() !== "" && /^[A-Z]{3}$/.test(newCurrency.toUpperCase());
 
-  // Has THIS query answered? `data !== undefined` is not that question:
-  // useInstruments carries the previous key's rows over to the new key
-  // (placeholderData: keepPreviousData), so after any answer at all the next
-  // keystroke starts with rows already in hand and react-query only says so
-  // through isPlaceholderData. Both verdicts below — «ничего не найдено» and
-  // the offline notice — are claims about the text in the box right now, so
-  // they are decided by this and not by whether there is anything to show.
+  // Has this query answered? Rows from the previous key stay as placeholder
+  // data, so the two verdicts below (nothing found, offline) use
+  // isPlaceholderData rather than `data`.
   const answered = !instruments.isPlaceholderData && instruments.data !== undefined;
-  // Rows carried over from the previous query stay on screen (that is what
-  // keepPreviousData is for), but they never decide a verdict: they are real
-  // instruments, correctly named, and picking one is right whatever query
-  // fetched them.
+  // Carried-over rows stay visible and pickable; they never decide a
+  // verdict.
   const rows = instrumentsOf(instruments.data);
-  // The server's own answer, never the page's length. A page shorter than the
-  // one asked for could mean the end of the catalog or a limit the server cut
-  // down, and reading the length picks between them by guessing — the mistake
-  // #86 made on the journal.
-  //
-  // Nothing here excludes the rows carried over from the previous query, and
-  // nothing needs to: while they are on screen react-query reports no next page
-  // at all (hasNextPage goes false the moment isPlaceholderData goes true —
-  // measured, not assumed), so the control cannot offer to page through a
-  // search nobody is running any more. A guard of our own saying the same thing
-  // would be a line that never runs, and the test below pins the behaviour
-  // rather than the guard.
+  // The server's answer, not the page length (#86). While placeholder rows
+  // are shown, react-query reports no next page.
   const canLoadMore = instruments.hasNextPage;
 
   const submitCreate = () => {
@@ -195,9 +169,8 @@ export function InstrumentPicker({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
-      {/* A search that did not answer, said outside the scrolling list on
-          purpose: the warning it carries — do not create what may already be
-          there — is worth nothing if it can be scrolled out of sight. */}
+      {/* Outside the scrolling list: a warning that can scroll away warns
+         nobody. */}
       {instruments.isError && (
         <Alert variant="destructive">
           <AlertDescription className="grid gap-2">
@@ -215,15 +188,9 @@ export function InstrumentPicker({
       )}
       <div className="grid max-h-48 gap-1 overflow-y-auto">
         {instruments.isError ? null : !answered && instruments.fetchStatus === "paused" ? (
-          // The request has not been sent: "paused" is react-query holding it
-          // because the browser reports itself offline (networkMode "online",
-          // the default), and it will go out on its own once the connection
-          // returns. Said even when rows from the previous query are in hand:
-          // those rows answer a question the reader has already typed past, and
-          // deciding this branch on `data` alone is exactly how «Ничего не
-          // найдено» reached the screen for a request nobody had sent (#88).
-          // Not keyed on isLoading either, which is isPending && isFetching and
-          // is therefore FALSE while paused.
+          // The request is paused (offline); said even with old rows in hand,
+          // which answer a query already typed past (#88). isLoading is false while
+          // paused.
           <div className="px-2 py-1.5 text-sm text-muted-foreground">
             {t("instrumentPicker.searchOffline")}
           </div>
@@ -245,11 +212,7 @@ export function InstrumentPicker({
                 <span className="text-xs text-muted-foreground">{instrument.currency}</span>
               </button>
             ))}
-            {/* At the end of the rows it extends, inside the scrolling box:
-                the reader meets it exactly where the list stops, which is the
-                moment the question «это всё?» comes up. The failure notice
-                above stays outside for the opposite reason — a warning that can
-                be scrolled out of sight warns nobody. */}
+            {/* At the end of the rows, where «это всё?» comes up. */}
             {canLoadMore && (
               <Button
                 variant="outline"
@@ -263,10 +226,8 @@ export function InstrumentPicker({
             )}
           </>
         ) : answered ? (
-          // Nothing found — and this is the one caption the reader acts on:
-          // what follows it is «Создать инструмент», and the duplicate it makes
-          // is something this application can neither merge nor delete. So it
-          // is said only about a query that came back empty itself.
+          // Nothing found: said only about a query that answered empty, since
+          // «Создать инструмент» follows.
           <div className="px-2 py-1.5 text-sm text-muted-foreground">
             {t("instrumentPicker.empty")}
           </div>

@@ -10,31 +10,17 @@ export type InstrumentsPage = components["schemas"]["InstrumentsResponse"];
 export type CreateInstrumentBody = components["schemas"]["CreateInstrumentRequest"];
 export type UpdateInstrumentBody = components["schemas"]["UpdateInstrumentRequest"];
 
-// CATALOG_PAGE_SIZE is how many instruments one page of the picker's list
-// holds. Comfortably under the endpoint's own ceiling (200), which matters more
-// here than it does for the journal: past that ceiling the request is REFUSED
-// rather than quietly cut down, so a page size chosen carelessly would not be a
-// wasted round trip but a search box that answers nothing at all.
+// CATALOG_PAGE_SIZE is one page of the picker, well under the endpoint's
+// ceiling of 200, past which the request is refused rather than trimmed.
 export const CATALOG_PAGE_SIZE = 50;
 
-// CATALOG_INDEX_PAGE_SIZE is what useInstrumentIndex asks for, and it is the
-// ceiling itself: nothing there shows a page to anybody, so the only thing the
-// size decides is how many round trips the whole catalog costs.
+// CATALOG_INDEX_PAGE_SIZE is the ceiling itself: useInstrumentIndex shows no
+// page, so only the number of round trips depends on it.
 const CATALOG_INDEX_PAGE_SIZE = 200;
 
-// useInstruments reads the catalog one page at a time and keeps the pages it
-// has read, so "показать ещё" appends rather than refetches.
-//
-// It used to be a single query for the first fifty rows and nothing else. The
-// endpoint took no `offset` at all, so there was no second page to ask for even
-// if the hook had wanted one: the fifty-first instrument was reachable only by
-// typing enough of a name to bring it into the first fifty, and only by someone
-// who already knew the name to type (#104). Both halves of that are gone —
-// `offset` continues the listing, and whether to offer the control is
-// `has_more`, which only the server can answer.
-//
-// Always fetches (no `enabled` gate): an empty query lists the catalog from the
-// start, which is what a picker wants before the user has typed anything.
+// useInstruments reads the catalog a page at a time and keeps the pages, so
+// «показать ещё» appends (#104); has_more is the server's. Always enabled: an
+// empty query lists from the start.
 export function useInstruments(query: string, pageSize = CATALOG_PAGE_SIZE) {
   return useInfiniteQuery({
     queryKey: ["instruments", query, pageSize],
@@ -46,76 +32,42 @@ export function useInstruments(query: string, pageSize = CATALOG_PAGE_SIZE) {
       if (!data) throw apiError(response, error);
       return data;
     },
-    // The next offset is where the rows already in hand end, and it is asked
-    // for only when the server says something is there. Counted from the rows
-    // received rather than multiplied out of the page count, the same as the
-    // journal's: the two agree only while every page comes back full, and a
-    // page shorter than asked for is exactly where multiplying would skip rows.
+    // The next offset is where the rows in hand end, asked only when the
+    // server says more exists; counted from rows, not pages, so a short page
+    // cannot skip rows.
     getNextPageParam: (lastPage, allPages) =>
       lastPage.has_more
         ? allPages.reduce((rows, page) => rows + page.instruments.length, 0)
         : undefined,
-    // Keep the previous result list visible while a new query (e.g. each
-    // keystroke in the picker's search box) is in flight, instead of
-    // collapsing to a loading state and flashing the list away.
-    //
-    // What that means for whoever reads the result: the rows arrive under the
-    // NEW query key while belonging to the previous one, so `data !== undefined`
-    // no longer means "this query has answered". react-query flags them with
-    // isPlaceholderData, and the picker decides its two verdicts — «ничего не
-    // найдено» and the offline notice — off that flag rather than off `data`,
-    // because both verdicts are about the query in the box now
+    // Keeps the previous list visible while a new query runs. Its rows then sit
+    // under the new key, so `data` no longer means "answered"; the picker uses
+    // isPlaceholderData for «ничего не найдено» and the offline notice
     // (instrument-picker.tsx).
     placeholderData: keepPreviousData,
   });
 }
 
-// instrumentsOf flattens the pages a paged catalog query has loaded so far.
-// One statement rather than one per reader, because "the rows in hand" is a
-// question two screens ask and neither should answer differently.
+// instrumentsOf flattens the loaded pages, one rule for every reader.
 export function instrumentsOf(pages?: { pages: InstrumentsPage[] }): Instrument[] {
   return pages?.pages.flatMap((page) => page.instruments) ?? [];
 }
 
-// useInstrumentIndex answers "what is this instrument called", by id, for a
-// screen that holds instrument ids and shows names — the journal, today.
-//
-// IT READS THE WHOLE CATALOG, page after page, and that is the difference
-// between a lookup and a listing. A listing may honestly stop where the reader
-// stopped scrolling; a lookup that stops there prints «#a1b2c3d4» in place of a
-// name for every row past the cut, with nothing on the screen saying that a
-// name exists and simply was not fetched. That was tolerable while the catalog
-// was a handful of instruments typed in by hand and is not now: one broker
-// import brings in a hundred papers and more arrive with every sync.
-//
-// The cost is bounded and small: pages of 200, so a catalog of a few hundred is
-// one or two requests, cached for as long as react-query holds the key. The
-// page size is part of that key, so this walk and the picker's own paging of
-// the same catalog never share a cache entry — one cannot leave the other with
-// pages it did not ask for, or with «показать ещё» already spent.
-//
-// While the walk is still going the map is incomplete, and a caller gets
-// `undefined` for a name that is on its way. That is the ordinary loading state
-// every reader here already has to handle, not a new kind of silence.
+// useInstrumentIndex answers "what is this instrument called" by id, for the
+// journal. It reads the whole catalog: a lookup that stopped at a page would
+// print «#a1b2c3d4» for every row past it, and a broker import brings a hundred
+// papers. Pages of 200, cached; the page size is in the key, so it never shares
+// pages with the picker. Until the walk finishes a name may be undefined, the
+// ordinary loading state.
 export function useInstrumentIndex() {
   const catalog = useInstruments("", CATALOG_INDEX_PAGE_SIZE);
   const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = catalog;
 
   useEffect(() => {
-    // `hasNextPage` is the server's answer, not a count of anything here, so
-    // the walk stops where the catalog ends and not where a page happens to
-    // look short.
-    //
-    // isFetchNextPageError IS LOAD-BEARING AND NOT BELT-AND-BRACES. A page that
-    // fails does NOT clear hasNextPage — the pages already in hand still say
-    // there is more behind them — and it does clear isFetchingNextPage, so
-    // without this term the effect asks again the instant the failure lands,
-    // for ever: a tight loop against a server that is already answering badly,
-    // from a screen nobody has to touch. react-query does the retrying (with
-    // backoff, and it gives up), and when it has given up this stays out of the
-    // way. The failure is not silent: the rows already fetched keep their
-    // names, and a row whose instrument never arrived shows the id fallback
-    // this hook has always had for a catalog still loading.
+    // hasNextPage is the server's answer. isFetchNextPageError stops the
+    // walk after a failure: a failed page keeps hasNextPage true and clears
+    // isFetchingNextPage, so without it the effect would retry in a tight
+    // loop; react-query does the retrying. Rows already fetched keep their
+    // names.
     if (hasNextPage && !isFetchingNextPage && !isFetchNextPageError) void fetchNextPage();
   }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
 
@@ -135,19 +87,10 @@ function useInvalidateInstruments() {
   };
 }
 
-// useUpdateInstrument corrects a row of the catalog.
-//
-// IT EXISTS BECAUSE A PAPER ENTERED BY HAND COULD NOT BE CORRECTED AT ALL. The
-// endpoint has always been there; nothing in the interface reached it, so an
-// instrument created through a trade dialog — with whatever was typed into it —
-// stayed that way for ever. The owner's Apple and Tesla have no ISIN, which is
-// the field the quote worker searches by, so neither has ever been priced, and
-// their positions go into the account's total counted at nought.
-//
-// `networkMode: "always"` for the reason every mutation the user pressed a
-// button for carries it (#111): offline, react-query would otherwise hold the
-// call in a pending state that looks exactly like a slow server, and the form
-// would hang instead of saying what happened.
+// useUpdateInstrument corrects a catalog row, which nothing in the interface
+// could reach before: the owner's Apple and Tesla had no ISIN, the field the
+// quote worker searches by, so they were never priced. networkMode "always"
+// (#111).
 export function useUpdateInstrument() {
   const invalidate = useInvalidateInstruments();
   const queryClient = useQueryClient();
@@ -167,18 +110,12 @@ export function useUpdateInstrument() {
       if (!data) throw apiError(response, error);
       return data;
     },
-    // The catalog AND the positions computed from it. A position row carries
-    // the instrument's own fields — its name, its ticker, whether it is frozen
-    // — so a correction that did not reach that query would leave the old
-    // spelling on screen beside the new one until something else refetched.
-    // (The VALUATION does not appear on the next render either way: the quote
-    // worker has to run and find the paper first, which is a job and not a
-    // request.)
+    // The catalog and the positions, which carry the instrument's name,
+    // ticker and frozen flag. A new valuation waits for the quote worker.
     onSuccess: () => {
       invalidate();
       void queryClient.invalidateQueries({ queryKey: ["positions"] });
-      // And the paper's own page, which names it from the same row and is
-      // where its ticker can be corrected from.
+      // And the paper's own page.
       void queryClient.invalidateQueries({ queryKey: ["instrument-holdings"] });
     },
   });
@@ -196,37 +133,22 @@ export function useCreateInstrument() {
   });
 }
 
-// What useAddInstrumentByISIN did: it either created the row or found the ISIN
-// was already catalogued. The caller says which happened; nothing here decides
-// how to word it.
+// What useAddInstrumentByISIN did: created the row or found the ISIN
+// already catalogued; the caller words it.
 export type AddInstrumentResult = {
   created: boolean;
   instrument: Instrument;
 };
 
-// useAddInstrumentByISIN files a paper the reconciliation found at the broker
-// and this catalog has no row for, out of the broker's own passport of it.
-//
-// IT LOOKS BEFORE IT WRITES, and that is not a nicety. A duplicate ISIN is
-// refused by the server with 400 (instrument.ErrISINTaken) — the same status a
-// malformed currency or an empty name gets, and the only thing that tells them
-// apart is the English sentence in the body, which a screen may not read (the
-// i18n check forbids it, and rightly: a caption picked from a server's log
-// sentence is a caption that changes when the log does). So the ISIN is looked
-// up first, and «уже в каталоге» is then something this client KNOWS rather
-// than something it inferred from a refusal it could not classify.
-//
-// The search endpoint matches a substring of name, ticker OR isin, so the
-// answer is filtered down to an exact ISIN here: a query that happens to appear
-// inside another paper's name must not be taken for the same paper. One page is
-// asked for and no more — an exact ISIN cannot be catalogued twice (the server's
-// own unique index), so a second page cannot hold a match the first missed.
+// useAddInstrumentByISIN files a paper the reconciliation found at the broker,
+// from the broker's passport. It looks first: a duplicate ISIN is a 400 like any
+// other bad field, and only the English body tells them apart, which a screen may
+// not read. The search matches substrings of name, ticker or ISIN, so the result
+// is filtered to an exact ISIN; one page suffices, since an ISIN is unique.
 export function useAddInstrumentByISIN() {
   const invalidate = useInvalidateInstruments();
   return useMutation({
-    // The owner pressed a button and is waiting for an answer now; offline,
-    // react-query would otherwise park the call in a pending state that looks
-    // exactly like a slow server (#111).
+    // A button press waits for an answer now (#111).
     networkMode: "always",
     mutationFn: async (body: CreateInstrumentBody & { isin: string }): Promise<AddInstrumentResult> => {
       const { isin } = body;
