@@ -188,6 +188,14 @@ func (r *Rebuilder) Rebuild(ctx context.Context, conn Connection, links []Accoun
 	if err := r.closeRedemptions(p); err != nil {
 		return RebuildStats{}, err
 	}
+	// After the redemptions have their counts and before anything pairs or
+	// writes: an entry restated in its position's currency is what every later
+	// step must see.
+	if err := r.convertToPositionCurrency(ctx, p); err != nil {
+		return RebuildStats{}, err
+	}
+	// After the restating: the face value a repayment is measured against is
+	// the bond's own, in the currency the entry is now in.
 	if err := r.fillFaceBefore(ctx, p); err != nil {
 		return RebuildStats{}, err
 	}

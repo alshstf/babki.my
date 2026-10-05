@@ -226,6 +226,10 @@ const (
 	// units pairs with it, and then the two are one redemption (see
 	// pairFundRedemptions).
 	ReasonFundPayoutUnitsUnknown UnparsedReason = "fund_payout_units_unknown"
+	// ReasonForeignCurrencyNoRate: an operation on a paper in a currency other
+	// than its position's, on a day the official rate it is restated at is not
+	// known yet (see convertToPositionCurrency). The rates catch up on their own.
+	ReasonForeignCurrencyNoRate UnparsedReason = "foreign_currency_no_rate"
 	// ReasonCommissionRefund: the broker's commission on this operation is
 	// POSITIVE, i.e. money that came back. FeeMinor is a magnitude by the
 	// journal's own rule, so recording this one would turn a refund into a
