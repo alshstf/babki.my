@@ -42,12 +42,12 @@
 
 | Слой | Пакеты |
 |---|---|
-| 0 | `internal/platform/*` (кроме `jobs`) |
+| 0 | `internal/platform/*` |
 | 1 | `family` |
 | 2 | `instrument`, `marketdata`, `account` |
 | 3 | ядро учёта: `portfolio`, `operation`, `corporateaction` |
 | 4 | `importer/*`, `export` |
-| 5 | сборка: `cmd/babki`, `internal/platform/jobs`, `web` |
+| 5 | сборка: `cmd/babki`, `internal/background`, `web` |
 
 Это проверяет тест `internal/archtest`: зависимость вверх по слоям и пакет,
 не поставленный ни на какой слой, его роняют.

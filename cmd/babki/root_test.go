@@ -107,7 +107,7 @@ func freePort(t *testing.T) string {
 // cleanly when its context ends. It covers cmd/babki's wiring, not module
 // behaviour. "worker" and "all" are not run here: their periodic jobs start at
 // once against the production cbr.ru and iss.moex.com; the queue's startup is
-// tested against stubs in internal/platform/jobs.
+// tested against stubs in internal/background.
 func TestAPIRoleServesHealthzAndStopsCleanly(t *testing.T) {
 	pool := testdb.New(t)
 	addr := roleEnv(t, pool)

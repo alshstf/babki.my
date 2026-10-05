@@ -9,10 +9,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
-
-	"babki.my/babki/internal/corporateaction"
-	"babki.my/babki/internal/importer/tinvest"
-	"babki.my/babki/internal/marketdata"
 )
 
 // maxErrorRunes is how much of a failure's text is kept: enough to say what
@@ -77,30 +73,14 @@ func (s Source) Stale(now time.Time) bool {
 	return now.Sub(*s.LastSuccessAt) > 3*s.Every
 }
 
-// sources are the jobs that fetch data from outside, in the order a reader
-// would look for them, with how often each runs.
-func sources() []struct {
-	kind  string
-	every time.Duration
-} {
-	return []struct {
-		kind  string
-		every time.Duration
-	}{
-		{marketdata.RefreshQuotesArgs{}.Kind(), refreshQuotesInterval},
-		{marketdata.BackfillQuotesArgs{}.Kind(), backfillFxInterval},
-		{marketdata.RefreshFxArgs{}.Kind(), refreshFxInterval},
-		{marketdata.BackfillFxArgs{}.Kind(), backfillFxInterval},
-		{tinvest.SyncArgs{}.Kind(), tinvestSyncInterval},
-		{tinvest.RefreshQuotesArgs{}.Kind(), tinvestQuotesInterval},
-		{tinvest.BackfillQuotesArgs{}.Kind(), backfillFxInterval},
-		{tinvest.RefreshDividendsArgs{}.Kind(), tinvestDividendsInterval},
-		{corporateaction.RefreshMoexSplitsArgs{}.Kind(), corporateActionsInterval},
-	}
+// SourceKind is a job that fetches data from outside, with how often it runs.
+type SourceKind struct {
+	Kind  string
+	Every time.Duration
 }
 
-// Sources reads how each source's jobs last ended.
-func Sources(ctx context.Context, pool *pgxpool.Pool) ([]Source, error) {
+// Sources reads how each of kinds last ended, in the order given.
+func Sources(ctx context.Context, pool *pgxpool.Pool, kinds []SourceKind) ([]Source, error) {
 	rows, err := pool.Query(ctx, `SELECT kind, last_success_at, last_failure_at, last_error FROM job_outcomes`)
 	if err != nil {
 		return nil, err
@@ -117,10 +97,10 @@ func Sources(ctx context.Context, pool *pgxpool.Pool) ([]Source, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	out := make([]Source, 0, len(sources()))
-	for _, src := range sources() {
-		s := byKind[src.kind]
-		s.Kind, s.Every = src.kind, src.every
+	out := make([]Source, 0, len(kinds))
+	for _, k := range kinds {
+		s := byKind[k.Kind]
+		s.Kind, s.Every = k.Kind, k.Every
 		out = append(out, s)
 	}
 	return out, nil
