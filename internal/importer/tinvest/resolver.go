@@ -17,34 +17,19 @@ import (
 	"babki.my/babki/internal/platform/money"
 )
 
-// InstrumentRef is the broker's four identifiers for one instrument, taken
-// off a single operation. All four drift independently over the
-// instrument's lifetime — the task brief's own research into the API: an
-// id may be reused or reassigned, and figi/instrument_uid on old operations
-// have already been seen to change. Resolve is built to survive any one of
-// them changing; this type exists so a caller hands it whichever set one
-// operation happened to carry, rather than four loose strings whose order
-// at the call site is easy to get wrong.
+// InstrumentRef is the broker's identifiers for one instrument as one operation
+// carried them. They drift independently (figi and instrument_uid on old
+// operations have changed); Resolve survives any one changing.
 type InstrumentRef struct {
 	InstrumentUID, FIGI, PositionUID, AssetUID string
-	// Ticker is what the OPERATION called the paper, and it is here for one
-	// case: a broker that has forgotten the instrument. See resolveOne.
+	// Ticker is what the operation called the paper, used only when the broker
+	// has forgotten the instrument (see resolveOne).
 	Ticker string
 }
 
-// Resolved is what Resolve found: this instance's catalog id for the
-// broker's instrument, and the catalog's own type and currency for it. Both
-// ride along so a caller that needs them (a projection deciding how to book a
-// trade, or one stating what money a parcel of shares is denominated in) does
-// not need a second round trip to get them.
-//
-// Currency is the catalog's, which is the broker's passport for a row this
-// import created and a person's own entry for one it matched. It is what a
-// journal entry about the PAPER rather than about a payment has to use: the
-// engine fixes a position's currency by the first operation on that instrument
-// that touches cost or quantity, and a securities transfer moves no money
-// while being exactly such an operation, so the currency
-// standing beside its zero payment says nothing about the paper (see
+// Resolved is what Resolve found: the catalog id, type and currency. Currency
+// is the catalog's (the passport for a row this import created), which an entry
+// about the paper rather than a payment must use (see
 // projectSecuritiesTransfer).
 type Resolved struct {
 	InstrumentID uuid.UUID
@@ -52,53 +37,26 @@ type Resolved struct {
 	Currency     string
 }
 
-// ErrUnsupportedInstrumentType means this program cannot account for the
-// broker's instrument_type at all — see brokerInstrumentTypes for the three
-// it can (share, bond, etf). Futures, options, structured bonds, currency and
-// everything else outside that set refuse rather than being filed as some
-// generic "other" row: an operation against one becomes a visible unparsed
-// entry instead of a catalog row nothing in this program can value (the
-// task brief's decision 3).
+// ErrUnsupportedInstrumentType: the broker's instrument_type is not one this
+// program accounts for (share, bond, etf; see brokerInstrumentTypes). The
+// operation becomes a visible unparsed row rather than an unvaluable catalog
+// row.
 var ErrUnsupportedInstrumentType = errors.New("tinvest: unsupported instrument type")
 
-// ErrDifferentSecurity means the catalog row that carries the broker's ticker
-// is a DIFFERENT security, so resolving to it would file the broker's trades
-// against somebody else's paper.
-//
-// It is its own sentinel and not a flavour of ErrUnsupportedInstrumentType
-// because the two say opposite things to the person reading the unparsed
-// entry this refusal becomes: one means "this program does not account for
-// this kind of asset at all", the other means "a row in your catalog and the
-// broker's passport disagree about which paper this is, and one of them has
-// to be corrected".
-//
-// THERE IS NOTHING ELSE THIS CASE COULD DO — and since migration 0020 that is
-// no longer because of the ticker. Two papers may now share one across
-// exchanges (AT&T and Т-Технологии both trade as "T"), so a second row is
-// creatable; what stops it here is that this row was reached BY TICKER and the
-// passport's ISIN says it is somebody else's. Taking it would attach the
-// broker's operations to another company, and inventing a row instead would
-// need identifiers the passport just contradicted. See refuseContradiction for
-// the case that found this.
+// ErrDifferentSecurity: the catalog row found by the broker's ticker is a
+// different security, by ISIN or type. Unlike ErrUnsupportedInstrumentType it
+// means the catalog and the passport disagree and one must be corrected. Reached
+// only on the ticker-race path, where a second row is not available (see
+// contradicts).
 var ErrDifferentSecurity = errors.New("tinvest: the catalog row with this ticker is a different security")
 
-// ErrIncompletePassport means the broker's own answer about an instrument
-// does not carry what a catalog row requires, so no row can honestly be
-// created from it — see checkPassport and the bond nominal in
-// createInstrument.
+// ErrIncompletePassport: the broker's passport lacks what a catalog row needs
+// (see checkPassport and the bond nominal in createInstrument).
 var ErrIncompletePassport = errors.New("tinvest: broker passport is missing what a catalog row requires")
 
-// instrumentCatalog is the subset of instrument.Store the resolver needs —
-// the same locally declared interface pattern as marketdata's
-// instrumentLister (internal/marketdata/jobs.go): committing to four methods
-// rather than the whole store keeps this package free of anything it does
-// not call. *instrument.Store satisfies it structurally.
-//
-// resolver_test.go wraps the real store rather than faking it from scratch:
-// tinvest_instrument_map carries a real foreign key to instruments(id)
-// (migration 0014), so an instrument id this interface hands back has to
-// name an actual row there or (*Store).saveMap's own write fails — an
-// in-memory fake that never writes one cannot satisfy that.
+// instrumentCatalog is the part of instrument.Store the resolver needs. Tests
+// wrap the real store, since tinvest_instrument_map has a foreign key to
+// instruments.
 type instrumentCatalog interface {
 	ByISIN(ctx context.Context, isin string) (instrument.Instrument, error)
 	ByTickerTradable(ctx context.Context, ticker string) (instrument.Instrument, error)
@@ -107,123 +65,68 @@ type instrumentCatalog interface {
 	ByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]instrument.Instrument, error)
 }
 
-// passportSource is the broker calls Resolve needs to identify an
-// instrument neither this connection's map nor the shared catalog already
-// knows. It is a parameter of Resolve rather than a field NewResolver takes,
-// because it is bound to one connection's token (see *Client) while the
-// resolver is not — one Resolver, and the passport cache it carries, serves
-// every connection a sync run touches.
-//
-// BondNominalByUID is declared here even though the task brief's own
-// interface sketch names InstrumentByUID alone: GetInstrumentBy (behind
-// InstrumentByUID) does not carry a bond's nominal at all (see
-// InstrumentBrief's doc comment in client.go — this was checked against the
-// live API and the field simply is not in that response), and a bond cannot
-// be created without one. Leaving it out of this interface would make
-// creating a bond impossible to implement at all, so it is added here as a
-// deliberate, necessary correction rather than an oversight. *Client
-// satisfies both methods already.
-//
-// CurrencyNominalByUID is here for the same reason and by the same argument: a
-// currency instrument's nominal is not in GetInstrumentBy either, and without it
-// a currency trade cannot name the money it acquired. It is kept as its own
-// one-method interface below so ResolveCurrency commits to nothing else.
+// passportSource is the broker calls that identify an instrument nothing local
+// knows. A Resolve parameter, not a field, because it is bound to one
+// connection's token while one Resolver serves a whole run. BondNominalByUID is
+// here because GetInstrumentBy carries no bond nominal (checked live) and a bond
+// cannot be created without one.
 type passportSource interface {
 	InstrumentByUID(ctx context.Context, uid string) (InstrumentBrief, error)
 	BondNominalByUID(ctx context.Context, uid string) (MoneyValue, error)
 	currencySource
 }
 
-// currencySource is the one call ResolveCurrency needs, kept as narrow as every
-// other dependency in this package.
+// currencySource is the one call ResolveCurrency needs.
 type currencySource interface {
 	CurrencyNominalByUID(ctx context.Context, uid string) (MoneyValue, error)
 }
 
-// brokerInstrumentTypes maps the broker's own instrument_type strings (see
-// InstrumentBrief.InstrumentType) to this catalog's Type. Only the types an
-// imported operation can be booked against are listed. Absence from this map
-// IS the refusal (ErrUnsupportedInstrumentType) — there is deliberately no
-// second list of excluded types to keep in step with this one.
+// brokerInstrumentTypes maps the broker's instrument_type to the catalog's
+// Type; absence is the refusal (ErrUnsupportedInstrumentType).
 //
-// CURRENCY IS NOT HERE, AND THAT IS THE POINT rather than an omission. A
-// currency trade needs no instrument from this resolver: it becomes a pair of
-// "conversion" entries, which are cash and name no instrument at all, and the
-// engine skips a conversion whole — moving on to the next operation before it
-// ever asks which instrument the row names (engine.go, `if o.Type ==
-// TypeConversion { continue }`). What such a trade DOES need from the broker is
-// the traded currency and its nominal, and that is ResolveCurrency, which
-// touches the catalog nowhere.
-//
-// Listing currency here would have made a wrong call silent and expensive
-// instead. Neither lookup below can find a currency row: ByTickerTradable
-// covers share/bond/etf and would not return one even when the catalog holds
-// it, and an ISIN identifies a security rather than a currency, so the exact
-// lookup has nothing to match on either. Creation is then the only outcome
-// left — and unlike a share, a fund or a bond, a duplicate currency row is not
-// stopped by anything, because the unique ticker index covers exactly those
-// three types and leaves currency outside it (migration 0011). Measured rather
-// than reasoned about: with currency accepted, two connections resolving one
-// currency left TWO rows for it in the instance-wide catalog. Refusing loudly
-// is the difference between one visible unparsed entry and a catalog that
-// grows a duplicate per connection per currency.
+// Currency is deliberately absent. A currency trade becomes conversion entries,
+// which name no instrument (the engine skips conversions), and needs only
+// ResolveCurrency. Accepted here, a currency could never be found by ISIN or
+// tradable ticker and would be created, and the unique ticker index does not
+// cover currencies (migration 0011): two connections left two rows for one
+// currency when this was tried.
 var brokerInstrumentTypes = map[string]instrument.Type{
 	"share": instrument.TypeShare,
 	"bond":  instrument.TypeBond,
 	"etf":   instrument.TypeETF,
 }
 
-// minorScale is this codebase's fixed decimal-to-minor-units factor: every
-// money figure this program stores is two decimal digits scaled up to a
-// whole number, the same convention the frontend hardcodes
-// (web/src/lib/money.ts's parseAmount, `wholeAbs * 100 + fracPadded`) and
-// the one instrument/http_face_value_test.go's own fixture exercises (a
-// 1 000 RUB bond nominal stored as face_value_minor 100000). No currency in
-// this catalog carries a different number of minor-unit digits — there is
-// no such table anywhere in this codebase — so a bond nominal quoted in any
-// currency scales the same way.
+// minorScale is the two-decimal minor-unit factor every money figure uses,
+// bond nominals in any currency included.
 var minorScale = decimal.New(1, 2)
 
-// Resolver turns a broker instrument reference into this instance's catalog
-// id, creating a catalog row the first time this exact instrument is seen
-// anywhere in the instance. Build one per sync run with NewResolver and
-// reuse it across every operation the run resolves — see passports.
-//
-// NOT SAFE FOR CONCURRENT USE: passports is a plain map, and a sync run
-// resolves one operation at a time.
+// Resolver turns a broker instrument reference into this instance's catalog id,
+// creating a catalog row the first time the instrument is seen anywhere. One per
+// sync run, reused across its operations. Not safe for concurrent use.
 type Resolver struct {
 	store     *Store
 	catalog   instrumentCatalog
 	log       *slog.Logger
 	passports map[string]InstrumentBrief
-	// currencies memoizes ResolveCurrency's answers for the run, the way
-	// passports does for Resolve's. A yuan account trades the same pair a
-	// hundred times.
+	// currencies memoizes ResolveCurrency for the run.
 	currencies map[string]TradedCurrency
-	// forgotten holds, for the run, the broker's "no such instrument" — per
-	// call, since a uid GetInstrumentBy has forgotten is not therefore one
-	// CurrencyBy has. That answer does not change between one operation and
-	// the next, and a paper the broker has forgotten is exactly the one a
-	// history is full of operations on (see resolveOne): without this each of
-	// them asked again. Only that answer is kept — a call that failed for any
-	// other reason is asked again, since the next attempt may well succeed.
+	// forgotten remembers the broker's "no such instrument" per call and uid for
+	// the run: a forgotten paper is one a history is full of operations on.
+	// Other failures are asked again.
 	forgotten map[forgottenKey]error
-	// rates answers what a currency was officially worth on a day, and is used
-	// for one thing only: proving what a pair the broker has FORGOTTEN trades
-	// (see ResolveCurrency). nil disables that fallback entirely — such a pair
-	// then stays unparsed, which is where it was before this existed.
+	// rates proves what a forgotten currency pair trades (see
+	// ResolveCurrency); nil disables that fallback.
 	rates rateOracle
 }
 
-// rateOracle is the narrow slice of marketdata.Converter this package needs:
-// the official rate of one currency against another on a given day.
+// rateOracle is the official rate of one currency against another on a
+// day.
 type rateOracle interface {
 	Rate(ctx context.Context, from, to string, on time.Time) (decimal.Decimal, time.Time, error)
 }
 
-// NewResolver builds a Resolver. store owns the per-connection instrument
-// map (tinvest_instrument_map); catalog is this instance's shared
-// instrument catalog.
+// NewResolver builds a Resolver over the connection map (store) and the
+// shared catalog.
 func NewResolver(store *Store, catalog instrumentCatalog, log *slog.Logger) *Resolver {
 	if log == nil {
 		log = slog.Default()
@@ -235,58 +138,36 @@ func NewResolver(store *Store, catalog instrumentCatalog, log *slog.Logger) *Res
 	}
 }
 
-// WithRates hands the resolver an oracle of official rates, which is what lets
-// it work out a currency pair the broker has forgotten (see ResolveCurrency).
-// Without one that fallback does not happen at all.
+// WithRates enables working out a forgotten currency pair (see
+// ResolveCurrency).
 func (r *Resolver) WithRates(rates rateOracle) *Resolver {
 	r.rates = rates
 	return r
 }
 
-// Resolve turns one broker instrument reference into this instance's
-// catalog id and type, going as far as it has to and no further:
+// Resolve turns one broker instrument reference into a catalog id and type,
+// going no further than it must:
 //
-//  1. tinvest_instrument_map, by instrument_uid then by figi — this
-//     connection's own memory of what it has already resolved. The common
-//     case once a connection has synced once: no broker call, no catalog
-//     call, one query.
-//  2. failing that, the broker's passport (InstrumentByUID), cached on this
-//     Resolver for the life of the run — the expensive step, and the one
-//     every earlier step exists to avoid paying for twice (see passports).
-//  3. the passport's instrument_type, checked against
-//     brokerInstrumentTypes; anything outside share/bond/etf refuses with
-//     ErrUnsupportedInstrumentType before any catalog call.
-//  4. the catalog, by ISIN (exact) — the catalog is shared across the whole
-//     instance, so a human may have entered this instrument by hand
-//     already, or another connection may have resolved it first.
-//  5. the catalog, by ticker among tradable instruments — a MUCH weaker match
-//     than an ISIN, so the row it finds is accepted only if nothing already
-//     in hand contradicts it (see refuseContradiction). An accepted row that
-//     is missing an ISIN or a FIGI the passport has gets that gap backfilled
-//     (see backfillIdentifiers): the catalog is shared, and leaving it empty
-//     would cost the next lookup a hit it should have had.
-//  6. creation, if nothing above found a row — see createInstrument.
+//  1. tinvest_instrument_map by instrument_uid, then figi: one query, no broker.
+//  2. the broker's passport, cached for the run.
+//  3. its instrument_type against brokerInstrumentTypes.
+//  4. the catalog by ISIN, shared instance-wide.
+//  5. the catalog by tradable ticker, a weak match taken only if nothing
+//     contradicts it (contradicts), then backfilled (backfillIdentifiers).
+//  6. creation (createInstrument).
 //
-// Every path that reaches a resolution — a map hit as much as a freshly
-// created row — ends by writing the map (see (*Store).saveMap) with ref's
-// CURRENT four identifiers, UNLESS ref carries no instrument_uid at all (see
-// the guard in the body below): a hit refreshes the row with what THIS call
-// sees, so a drift in any one of the four identifiers, not only the one
-// this call happened to match on, is captured rather than left to make the
-// row stale. That write leaves alone whatever a resolution does not carry —
-// see (*Store).saveMap, which is also the reason a resolution that changes
-// nothing writes nothing at all.
+// Every resolution then writes the map with ref's current identifiers, unless ref
+// has no instrument_uid, so a drift in any of them is captured; saveMap skips the
+// write when nothing changed.
 func (r *Resolver) Resolve(ctx context.Context, connectionID uuid.UUID, src passportSource, ref InstrumentRef) (Resolved, error) {
 	resolved, isin, ticker, listingCurrency, err := r.resolveOne(ctx, connectionID, src, ref)
 	if err != nil {
 		return Resolved{}, err
 	}
 
-	// A ref with no instrument_uid at all cannot be written to the map: the
-	// table's uniqueness is per (connection_id, instrument_uid), and writing
-	// under the empty string would let two unrelated instruments' figi-only
-	// refs collide on the same row the next time either was resolved. Such a
-	// ref is resolved fresh on every call instead of remembered.
+	// No instrument_uid: the map is unique per (connection, uid), and an
+	// empty key would let unrelated figi-only refs collide. Resolved fresh each
+	// time instead.
 	if ref.InstrumentUID != "" {
 		if err := r.store.saveMap(ctx, connectionID, resolved.InstrumentID, ref, isin, ticker, listingCurrency); err != nil {
 			return Resolved{}, err
@@ -295,46 +176,27 @@ func (r *Resolver) Resolve(ctx context.Context, connectionID uuid.UUID, src pass
 	return resolved, nil
 }
 
-// resolveOne is steps 1-6 of Resolve's own doc comment: find or create the
-// instrument, without touching the map. It also returns the ISIN/ticker the
-// resolution settled on, since Resolve's final write needs them and a map
-// hit already has them from the same query that found the id (see
-// mapMatch) — reading the catalog a second time just to learn them again
-// would be exactly the extra round trip checking the map first exists to
-// avoid.
+// resolveOne is steps 1-6 without writing the map. It returns the ISIN and
+// ticker for Resolve's write, which a map hit already has.
 func (r *Resolver) resolveOne(ctx context.Context, connectionID uuid.UUID, src passportSource, ref InstrumentRef) (resolved Resolved, isin, ticker, listingCurrency string, err error) {
 	m, ok, err := r.lookupMap(ctx, connectionID, ref)
 	if err != nil {
 		return Resolved{}, "", "", "", err
 	}
 	if ok {
-		// No passport was fetched, so this call has nothing to say about the
-		// LISTING's currency and passes the empty string rather than the
-		// catalog row's — see (*Store).saveMap, which leaves the stored one
-		// alone, and the migration for why the two are not the same answer.
+		// No passport, so no listing currency: "" leaves the stored one alone
+		// (see saveMap).
 		return Resolved{InstrumentID: m.InstrumentID, Type: m.Type, Currency: m.Currency}, m.ISIN, m.Ticker, "", nil
 	}
 
 	brief, err := r.passport(ctx, src, ref.InstrumentUID)
 	if err != nil {
-		// THE BROKER FORGETS PAPERS IT ONCE TRADED. A fund wound up, a company
-		// redomiciled, and the passport answers 404 for ever after — while the
-		// owner's history is full of operations on it. The operation itself is
-		// then the only description of the paper left, and one of its fields
-		// identifies it exactly: for such an instrument the broker puts the
-		// ISIN in the TICKER field ("IE00BD3QJN10", "RU000A101X68" — the
-		// FinEx funds on the owner's own account), and an ISIN is a globally
-		// unique security identifier, so an exact match against the catalog is
-		// proof rather than a guess.
-		//
-		// NOT BY FIGI, which is the identifier one would reach for first and is
-		// the wrong one: the broker re-issues it per listing, so the catalog
-		// holds TCS20A101X68 for the very paper whose operations carry
-		// TCS33A101X68. Only the ISIN survives the move.
-		//
-		// Nothing is CREATED here. A paper the catalog does not already know
-		// stays unresolved with the broker's own reason, because everything
-		// else about it — its currency above all — would have to be invented.
+		// The broker forgets papers it once traded (a fund wound up, a company
+		// redomiciled): the passport answers 404 for good. For those it puts the
+		// ISIN in the operation's ticker field ("IE00BD3QJN10", "RU000A101X68",
+		// the FinEx funds), and an exact catalog match by ISIN is proof. Not by
+		// figi: it is reissued per listing (TCS20A101X68 vs TCS33A101X68).
+		// Nothing is created: a paper the catalog does not know stays unresolved.
 		if errors.Is(err, ErrInstrumentNotFound) && ref.Ticker != "" {
 			if inst, found, ferr := r.catalogByISIN(ctx, ref.Ticker); ferr != nil {
 				return Resolved{}, "", "", "", ferr
@@ -348,13 +210,8 @@ func (r *Resolver) resolveOne(ctx context.Context, connectionID uuid.UUID, src p
 
 	typ, ok := brokerInstrumentTypes[brief.InstrumentType]
 	if !ok {
-		// Debug, not Error, even though this IS a refusal. It is a refusal by
-		// design and the owner already sees it: the projection turns it into a
-		// visible unparsed entry with this reason on it. A history that trades
-		// futures would otherwise write one Error line per operation about a
-		// state nobody can act on from a log — the same reasoning marketdata
-		// gives for its own routine "the catalog does not hold this" line
-		// (internal/marketdata/jobs.go).
+		// Debug: a designed refusal the owner sees as an unparsed row; an Error
+		// per futures operation would flood the log.
 		r.log.Debug("tinvest: the broker's instrument type is not one this program accounts for",
 			"instrument_type", brief.InstrumentType, "ticker", brief.Ticker, "instrument_uid", brief.UID)
 		return Resolved{}, "", "", "", fmt.Errorf("%w: %s", ErrUnsupportedInstrumentType, brief.InstrumentType)
@@ -364,16 +221,12 @@ func (r *Resolver) resolveOne(ctx context.Context, connectionID uuid.UUID, src p
 	if err != nil {
 		return Resolved{}, "", "", "", err
 	}
-	// brief.Currency, not inst.Currency: the first is what THIS LISTING is
-	// denominated in and the second what the catalog row is. They agree on the
-	// row this call just created and need not on a row found by ISIN — one
-	// paper, two venues, two currencies.
+	// brief.Currency: the listing's currency, which a row found by ISIN may
+	// not share (one paper, two venues).
 	return Resolved{InstrumentID: inst.ID, Type: inst.Type, Currency: inst.Currency}, inst.ISIN, inst.Ticker, brief.Currency, nil
 }
 
-// lookupMap is step 1: instrument_uid first, figi second. Both are guarded
-// against an empty ref field by (*Store).mapByInstrumentUID/mapByFIGI
-// themselves, so this only decides the ORDER and stops at the first hit.
+// lookupMap is step 1: instrument_uid, then figi.
 func (r *Resolver) lookupMap(ctx context.Context, connectionID uuid.UUID, ref InstrumentRef) (mapMatch, bool, error) {
 	m, err := r.store.mapByInstrumentUID(ctx, connectionID, ref.InstrumentUID)
 	switch {
@@ -394,44 +247,19 @@ func (r *Resolver) lookupMap(ctx context.Context, connectionID uuid.UUID, ref In
 	return mapMatch{}, false, nil
 }
 
-// passport returns the broker's instrument passport for uid, calling src at
-// most once per uid for the life of this Resolver (decision 5 of the task
-// brief: a run's history can carry the same instrument hundreds of times,
-// and a hundred identical requests would spend the broker's per-minute
-// limit on nothing new).
-// TradedCurrency is what a currency instrument actually trades: the ISO code of
-// the money that changes hands, and how many of its units one instrument unit
-// buys.
-//
-// BOTH HALVES COME FROM THE PASSPORT'S NOMINAL, and both are needed. An
-// operation row for a currency trade names its own PAYMENT currency (the rubles
-// handed over) and nothing at all about the money acquired — that lives only in
-// the broker's opaque identifiers for the pair. And one unit is not always one:
-// a unit of the Kyrgyz som instrument is a hundred som, a unit of the Uzbek sum
-// instrument ten thousand (checked against the broker's live instrument service
-// on 2026-08-05). Multiplying by the wrong nominal is wrong by exactly that
-// factor, which is the shape of the most expensive defect this program has had.
+// TradedCurrency is what a currency instrument trades: the ISO code acquired
+// and how many of its units one instrument unit buys, both from the nominal. A
+// currency trade row names only its payment currency, and a unit is not always
+// one (Kyrgyz som: 100, Uzbek sum: 10 000; live, 2026-08-05).
 type TradedCurrency struct {
 	Code           string
 	NominalPerUnit decimal.Decimal
 }
 
-// ResolveCurrency answers what a currency instrument trades, from the broker's
-// CurrencyBy call and nothing else. It is memoized for the run, so a hundred
-// yuan trades ask the broker once.
-//
-// NOT from the general passport: GetInstrumentBy supplies no nominal at all
-// (see InstrumentBrief), which is the same reason a bond's face value has a
-// call of its own.
-//
-// It does NOT touch the catalog. A currency trade becomes a pair of conversion
-// entries, which are cash and name no instrument — there is nothing for a
-// catalog row to be, and creating one would put a paper in the owner's
-// instrument list that no screen can value (see brokerInstrumentTypes).
-//
-// ErrIncompletePassport when the nominal carries no currency or no positive
-// value: the whole point of asking was those two fields, and a trade projected
-// without them would move an invented amount of an unnamed currency.
+// ResolveCurrency answers what a currency instrument trades, from CurrencyBy
+// (GetInstrumentBy has no nominal), memoized for the run. It does not touch the
+// catalog: conversions name no instrument. ErrIncompletePassport when the nominal
+// lacks a currency or a positive value.
 func (r *Resolver) ResolveCurrency(ctx context.Context, src currencySource, uid string, hint CurrencyHint) (TradedCurrency, error) {
 	if known, ok := r.currencies[uid]; ok {
 		return known, nil
@@ -463,9 +291,8 @@ func (r *Resolver) ResolveCurrency(ctx context.Context, src currencySource, uid 
 	return traded, nil
 }
 
-// CurrencyHint is everything the OPERATION itself says about the pair it
-// traded: what the broker calls the instrument, how many rubles one unit cost
-// on that trade, and the day it happened.
+// CurrencyHint is what the operation says about its pair: the instrument's
+// name, the rouble price per unit and the day.
 type CurrencyHint struct {
 	Ticker       string
 	Settlement   string
@@ -473,46 +300,18 @@ type CurrencyHint struct {
 	On           time.Time
 }
 
-// tradedFromTickerBand is how far the price a trade was struck at may sit from
-// the central bank's official rate for the same day and still be taken as the
-// same currency, in either direction.
-//
-// A FACTOR OF TWO, which sounds enormous and is not. What this has to settle is
-// the NOMINAL: the broker quotes some pairs per unit and some per hundred or
-// per ten thousand units (a Kyrgyz som, an Uzbek sum), and reading one for the
-// other is wrong by exactly that factor — 100 or 10000, never 1.5. Meanwhile the
-// market rate legitimately runs far from the official one: in March 2022 the
-// two stood tens of percent apart for days, and those are precisely the trades
-// this fallback exists to recover.
-//
-// So the band is drawn where nothing legitimate falls outside it and no
-// misreading of the nominal falls inside.
+// tradedFromTickerBand is how far a trade's price may sit from the official
+// rate that day and still be the same currency, either way. A factor of two
+// separates nominal misreadings (100 or 10 000) from legitimate market spread
+// (tens of percent in March 2022).
 const tradedFromTickerBand = 2
 
-// currencyFromHint works out what a pair trades when the broker no longer
-// knows the instrument at all — a delisted dollar or euro pair, of which the
-// owner's history holds two dozen.
-//
-// THE TICKER IS THE HYPOTHESIS AND THE OFFICIAL RATE IS THE PROOF. The pair's
-// own name carries the code in its first three letters (USD000UTSTOM,
-// EUR_RUB__TOM, CNYRUB_TOM), which is a guess; what settles it is that the
-// price the trade was actually struck at agrees with what the central bank
-// published for that currency that day. A pair quoted per hundred units — the
-// case this whole refusal was written for — misses by a hundredfold and is
-// refused.
-//
-// A NAME THAT IS NOT A CURRENCY IS STOPPED BY THE RATE, not by the shape of it.
-// currency.Valid checks three uppercase letters and nothing else, so GLDRUB_TOM
-// passes it — and then no rate table has a GLD, and the pair stays unparsed.
-// The shape check is worth keeping for what it is: a cheap refusal of a name too
-// short or too odd to be a code, made before anything is asked of the database.
-//
-// The nominal that follows is therefore 1: it is what the agreement PROVED,
-// not an assumption laid on top of it.
-//
-// ok=false means "not settled here", and the caller falls back to the broker's
-// own refusal — the honest outcome this had before, and the one for a rate the
-// fx table does not hold.
+// currencyFromHint works out what a forgotten pair trades (a delisted dollar or
+// euro pair; two dozen in the owner's history). The ticker's first three letters
+// (USD000UTSTOM, EUR_RUB__TOM) are the hypothesis; the trade price agreeing with
+// that day's official rate is the proof. A per-hundred pair misses a hundredfold;
+// a name that is not a currency (GLDRUB_TOM) has no rate. The proven nominal is 1.
+// ok=false means not settled here.
 func (r *Resolver) currencyFromHint(ctx context.Context, hint CurrencyHint) (TradedCurrency, bool, error) {
 	if r.rates == nil || len(hint.Ticker) < 3 || !hint.PricePerUnit.IsPositive() || hint.On.IsZero() {
 		return TradedCurrency{}, false, nil
@@ -523,9 +322,7 @@ func (r *Resolver) currencyFromHint(ctx context.Context, hint CurrencyHint) (Tra
 	}
 	official, _, err := r.rates.Rate(ctx, code, hint.Settlement, hint.On)
 	if err != nil {
-		// A rate the table does not hold yet is not a refusal of its own: the
-		// backfill may bring it, and until then this pair stays exactly as
-		// unparsed as it was.
+		// A rate not held yet is not a refusal: the backfill may bring it.
 		r.log.Debug("tinvest: no official rate to check a forgotten currency pair against",
 			"ticker", hint.Ticker, "code", code, "on", hint.On.Format(time.DateOnly), "err", err)
 		return TradedCurrency{}, false, nil
@@ -547,6 +344,9 @@ func (r *Resolver) currencyFromHint(ctx context.Context, hint CurrencyHint) (Tra
 	return TradedCurrency{Code: code, NominalPerUnit: decimal.NewFromInt(1)}, true, nil
 }
 
+// passport returns uid's instrument passport, asking src at most once per uid
+// for the Resolver's life: a history can name one instrument hundreds of
+// times, and the broker's limit is per minute.
 func (r *Resolver) passport(ctx context.Context, src passportSource, uid string) (InstrumentBrief, error) {
 	if brief, ok := r.passports[uid]; ok {
 		return brief, nil
@@ -576,9 +376,8 @@ const (
 	forgottenCurrency = "currency"
 )
 
-// remembered makes a broker call about uid unless the broker has already said,
-// this run, that it has no such instrument — then that answer is given again
-// without asking (see Resolver.forgotten).
+// remembered makes a broker call about uid unless the broker already said
+// this run that it has no such instrument (Resolver.forgotten).
 func remembered[T any](r *Resolver, call, uid string, ask func() (T, error)) (T, error) {
 	key := forgottenKey{call, uid}
 	if err, ok := r.forgotten[key]; ok {
@@ -592,9 +391,7 @@ func remembered[T any](r *Resolver, call, uid string, ask func() (T, error)) (T,
 	return v, err
 }
 
-// catalogByISIN looks one row up by ISIN, telling "no such row" apart from a
-// failure: the first is an answer this resolver acts on, the second must not be
-// mistaken for one.
+// catalogByISIN looks a row up by ISIN, telling "none" from a failure.
 func (r *Resolver) catalogByISIN(ctx context.Context, isin string) (instrument.Instrument, bool, error) {
 	inst, err := r.catalog.ByISIN(ctx, isin)
 	switch {
@@ -607,20 +404,15 @@ func (r *Resolver) catalogByISIN(ctx context.Context, isin string) (instrument.I
 	}
 }
 
-// findOrCreate is steps 4-6 of Resolve's doc comment: the catalog by ISIN,
-// then by ticker (checked against the passport, then backfilled), then
-// creation.
+// findOrCreate is steps 4-6: by ISIN, by ticker (checked, then
+// backfilled), then creation.
 func (r *Resolver) findOrCreate(ctx context.Context, src passportSource, typ instrument.Type, brief InstrumentBrief) (instrument.Instrument, error) {
 	if brief.ISIN != "" {
 		inst, err := r.catalog.ByISIN(ctx, brief.ISIN)
 		switch {
 		case err == nil:
-			// The catalog carries no uniqueness on isin, so this is the OLDEST
-			// row bearing it (see instrument.Store.ByISIN) and there may be
-			// more. Naming the row that was chosen is the whole value of this
-			// line to somebody looking at a duplicate later; claiming here how
-			// many rows there were would be a sentence this code has no way to
-			// know the truth of.
+			// The oldest row with this ISIN (ByISIN); there may be more, and naming
+			// the chosen one is what helps later.
 			r.log.Debug("tinvest: instrument matched a catalog row by isin",
 				"isin", brief.ISIN, "instrument_id", inst.ID, "instrument_uid", brief.UID)
 			return inst, nil
@@ -633,17 +425,8 @@ func (r *Resolver) findOrCreate(ctx context.Context, src passportSource, typ ins
 		inst, err := r.catalog.ByTickerTradable(ctx, brief.Ticker)
 		switch {
 		case err == nil:
-			// A CONTRADICTION IS NO LONGER A DEAD END. The row this ticker
-			// found is somebody else — a different ISIN, or a type this paper
-			// is not — and since identity moved to the ISIN (migration 0020) a
-			// second row under one ticker is a thing the catalog holds. So the
-			// answer is to make one, which is what AT&T and Т-Технологии, both
-			// trading as "T", need in order to exist at the same time.
-			//
-			// It used to be a refusal, and had to be: with tickers unique, the
-			// only two moves were to take a stranger's row or to fail, and
-			// taking it stamped Т-Технологии's identifiers onto AT&T for every
-			// space in the instance.
+			// A contradiction leads to a row of its own: since migration 0020 two
+			// papers may share a ticker (AT&T and Т-Технологии are both "T").
 			if r.contradicts(inst, typ, brief) {
 				r.log.Info("tinvest: the catalog row under this ticker is a different security, creating a row of our own",
 					"ticker", brief.Ticker, "catalog_isin", inst.ISIN, "broker_isin", brief.ISIN,
@@ -659,50 +442,22 @@ func (r *Resolver) findOrCreate(ctx context.Context, src passportSource, typ ins
 	return r.createInstrument(ctx, src, typ, brief)
 }
 
-// refuseContradiction is the guard on every route that reaches a catalog row
-// by TICKER — step 5 above and the re-lookup after a lost ticker race, which
-// are the only two, and both of them lead on to backfillIdentifiers.
+// contradicts reports whether a catalog row reached by ticker is a different
+// security from the passport: two non-empty ISINs that differ, or two types that
+// differ (valuation branches on type). Missing ISINs decide nothing.
 //
-// A ticker is not an identity. Different exchanges assign the same one to
-// unrelated companies, and this program's catalog is where those meet — the
-// case this rule was written from is the owner's own: AT&T entered by hand
-// under ticker "T" (a foreign share, no ISIN recorded — exactly the row
-// backfilling exists for), while Т-Технологии trade on MOEX under ticker "T"
-// too, with ISIN RU000A107UL4. Without this check the lookup by ISIN misses,
-// the lookup by ticker hands back AT&T, and backfillIdentifiers then stamps
-// Т-Технологии's ISIN and figi onto AT&T's row — permanently, for every space
-// in the instance, with every one of Т-Технологии's trades booked against AT&T
-// from then on. If AT&T's ISIN happened to be recorded already, the backfill
-// would write nothing and the wrong answer would simply be silent.
+// A ticker is not an identity: AT&T was entered by hand as "T" without an ISIN,
+// and Т-Технологии trade on MOEX as "T" (RU000A107UL4). Accepting the ticker
+// match would stamp Т-Технологии's identifiers onto AT&T for every space.
 //
-// WHAT IT COMPARES IS WHAT THIS MOMENT ALREADY HOLDS. Two authoritative
-// answers about which paper this is are both in hand here — the broker's
-// passport and the catalog row — and the defect was that nothing put them
-// next to each other. Two identifiers can settle it:
-//
-//   - Two non-empty ISINs that differ. An ISIN names one security; two
-//     different ones cannot name the same one. Either side missing decides
-//     nothing (that is the ordinary case this whole ticker path exists for),
-//     so silence is never read as agreement.
-//   - Two types that differ. The catalog's type is what every valuation
-//     branches on (a bond is priced as a percentage of face, a share is not),
-//     so a bond's trades filed against an ETF row are mispriced even when the
-//     ticker genuinely is the same string.
-//
-// WHAT THE ANSWER TO A CONTRADICTION IS depends on which door asked. Step 5 can
-// make a row of its own and does — two papers may share a ticker now (migration
-// 0020), and refusing there would keep AT&T and Т-Технологии from existing at
-// the same time, which is the whole reason that migration exists. The re-lookup
-// after a lost TICKER race cannot: the ticker it would need is the one it just
-// lost, and it is only ever lost to a row with no ISIN, so a second row is not
-// available. There it refuses, and the refusal becomes a visible unparsed entry
-// naming both sides — a question only the owner can answer.
+// Step 5 answers a contradiction with a new row. The re-lookup after a lost
+// ticker race cannot (the ticker went to a row without an ISIN), so it refuses
+// with ErrDifferentSecurity, naming both sides.
 func (r *Resolver) contradicts(inst instrument.Instrument, typ instrument.Type, brief InstrumentBrief) bool {
 	return inst.ISIN != "" && brief.ISIN != "" && inst.ISIN != brief.ISIN || inst.Type != typ
 }
 
-// refuseContradiction is contradicts with the refusal attached, for the one
-// caller that has nothing else to do about it.
+// refuseContradiction is contradicts with the refusal attached.
 func (r *Resolver) refuseContradiction(inst instrument.Instrument, typ instrument.Type, brief InstrumentBrief) error {
 	if inst.ISIN != "" && brief.ISIN != "" && inst.ISIN != brief.ISIN {
 		r.log.Error("tinvest: refusing to resolve an instrument to a catalog row with a different isin",
@@ -721,12 +476,9 @@ func (r *Resolver) refuseContradiction(inst instrument.Instrument, typ instrumen
 	return nil
 }
 
-// backfillIdentifiers fills an ISIN or a FIGI the catalog row is missing
-// with what the passport carries, and leaves either field alone if the row
-// already has one (the task brief's decision 2: the catalog is shared
-// across the whole instance, and an empty ISIN there costs the next
-// connection's exact lookup a hit it should have had). A row that already
-// has both is returned unchanged, with no write at all.
+// backfillIdentifiers fills a missing ISIN or FIGI on the row from the
+// passport, leaving existing ones alone, so the next exact lookup hits. A row
+// with both is returned unchanged.
 func (r *Resolver) backfillIdentifiers(ctx context.Context, inst instrument.Instrument, brief InstrumentBrief) (instrument.Instrument, error) {
 	var upd instrument.Update
 	dirty := false
@@ -749,31 +501,18 @@ func (r *Resolver) backfillIdentifiers(ctx context.Context, inst instrument.Inst
 			"instrument_id", inst.ID, "ticker", inst.Ticker, "err", err)
 		return instrument.Instrument{}, fmt.Errorf("tinvest: backfill instrument identifiers: %w", err)
 	}
-	// Info rather than Debug because this writes to the catalog every space in
-	// the instance shares, and it is the one write here that a person did not
-	// ask for by hand.
+	// Info: a write to the shared catalog nobody asked for by hand.
 	r.log.Info("tinvest: filled in a catalog row's missing identifiers from the broker",
 		"instrument_id", inst.ID, "ticker", inst.Ticker,
 		"isin", updated.ISIN, "figi", updated.FIGI, "instrument_uid", brief.UID)
 	return updated, nil
 }
 
-// checkPassport is what a catalog row requires and a passport is not
-// guaranteed to carry.
-//
-// THIS DOOR HAS NO OTHER GUARD. instrument.Store.Create runs no validation of
-// its own: name and currency are NOT NULL columns with no CHECK behind them
-// (migration 0004), so the empty string satisfies both, and every rule about
-// them — a name that is there, a currency shaped like an ISO-4217 code — lives
-// in the catalog's HTTP handler (instrument.Handler.handleCreate), which an
-// importer does not go through. A passport that arrived with an empty name
-// would therefore have created a nameless catalog row, indistinguishable on a
-// screen from a real one and impossible to search for; an empty currency would
-// have created a row whose every figure is published without a currency on it
-// — the exact state migration 0012 and #93 were about, one door further along.
-//
-// The shape is checked, not the register (see the currency package): "XYZ"
-// passes here as it does everywhere else in this program.
+// checkPassport is what a catalog row needs and a passport may lack.
+// instrument.Store.Create validates nothing (name and currency are NOT NULL with
+// no CHECK), and the rules live in the catalog's HTTP handler, which an importer
+// bypasses: an empty name or currency would create an unsearchable or
+// currency-less row. The currency shape is checked, not the ISO register.
 func checkPassport(brief InstrumentBrief) error {
 	if brief.Name == "" {
 		return fmt.Errorf("%w: instrument %s has no name", ErrIncompletePassport, brief.UID)
@@ -785,19 +524,9 @@ func checkPassport(brief InstrumentBrief) error {
 	return nil
 }
 
-// createInstrument is Resolve's last resort: the broker knows an instrument
-// neither this connection's map nor the shared catalog has seen before.
-//
-// A bond additionally needs its face value, which GetInstrumentBy (brief)
-// does not carry at all — see InstrumentBrief's own doc comment — so this
-// makes the one further broker call that does, BondNominalByUID, before
-// creating the row.
-//
-// Frozen is always false and is NEVER derived from anything the broker
-// sends: the API carries no field meaning "frozen by sanctions" (only a
-// depositary-halt flag for a different reason entirely, per the task
-// brief), so nothing here could set it truthfully. The owner marks freezing
-// by hand.
+// createInstrument creates a row for an instrument nothing local knows. A
+// bond also needs BondNominalByUID. Frozen is always false: the broker has no
+// sanctions-freeze field; the owner marks it by hand.
 func (r *Resolver) createInstrument(ctx context.Context, src passportSource, typ instrument.Type, brief InstrumentBrief) (instrument.Instrument, error) {
 	if err := checkPassport(brief); err != nil {
 		r.log.Error("tinvest: refusing to create a catalog row from an incomplete passport",
@@ -833,16 +562,8 @@ func (r *Resolver) createInstrument(ctx context.Context, src passportSource, typ
 
 	created, err := r.catalog.Create(ctx, inst)
 	if errors.Is(err, instrument.ErrISINTaken) {
-		// THE RACE THIS ONE ACTUALLY LOSES NOW. Another writer created the
-		// paper between findOrCreate's lookup and this insert — another
-		// connection's sync, or a person entering it by hand — and the ISIN is
-		// what the two collide on since identity moved there (migration 0020).
-		//
-		// Nothing is checked against the winner beyond finding it: they agree
-		// on the ISIN, which IS the identity of a security, so there is no
-		// stranger to refuse. That is the whole difference from the ticker race
-		// below, where the winner may be an unrelated company that happens to
-		// trade under the same letters.
+		// Another writer created the paper first, colliding on the ISIN (the
+		// identity since migration 0020), so there is no stranger to refuse.
 		r.log.Warn("tinvest: another writer created this security first, taking their catalog row",
 			"isin", brief.ISIN, "instrument_uid", brief.UID)
 		found, ferr := r.catalog.ByISIN(ctx, brief.ISIN)
@@ -853,12 +574,8 @@ func (r *Resolver) createInstrument(ctx context.Context, src passportSource, typ
 		return r.backfillIdentifiers(ctx, found, brief)
 	}
 	if errors.Is(err, instrument.ErrTickerTaken) {
-		// Someone else created this ticker between findOrCreate's lookup and
-		// this insert — another connection's sync running concurrently, or a
-		// person entering the same instrument by hand in between (the task
-		// brief's decision 4). The row that won the race is the one to use;
-		// this does not retry the insert, which would only lose the race
-		// again.
+		// Another writer created this ticker first (a concurrent sync or a
+		// person); use their row rather than retry.
 		r.log.Warn("tinvest: another writer created this ticker first, taking their catalog row",
 			"ticker", brief.Ticker, "instrument_uid", brief.UID)
 		found, ferr := r.catalog.ByTickerTradable(ctx, brief.Ticker)
@@ -866,11 +583,8 @@ func (r *Resolver) createInstrument(ctx context.Context, src passportSource, typ
 			return instrument.Instrument{}, fmt.Errorf(
 				"tinvest: instrument create lost the ticker race and the re-lookup failed: %w", ferr)
 		}
-		// The row that won the race is a row reached by TICKER, which is the
-		// weak match refuseContradiction exists for, and it leads to the same
-		// backfill. The race is in fact the likelier way to meet a stranger
-		// here than step 5 is: whoever won may have been a person typing an
-		// unrelated paper under this ticker a second earlier.
+		// The race winner was reached by ticker, so it is checked like step 5;
+		// a person typing an unrelated paper is the likelier stranger here.
 		if err := r.refuseContradiction(found, typ, brief); err != nil {
 			return instrument.Instrument{}, err
 		}
@@ -881,9 +595,7 @@ func (r *Resolver) createInstrument(ctx context.Context, src passportSource, typ
 			"instrument_uid", brief.UID, "ticker", brief.Ticker, "err", err)
 		return instrument.Instrument{}, fmt.Errorf("tinvest: create instrument: %w", err)
 	}
-	// Info, and deliberately the loudest line in this file: this is the one
-	// place an import adds a row to the catalog the whole instance shares,
-	// without anybody having asked for that row by hand.
+	// Info: the one place an import adds a row to the shared catalog.
 	r.log.Info("tinvest: created a catalog row for an instrument the broker knows",
 		"instrument_id", created.ID, "type", created.Type, "ticker", created.Ticker,
 		"isin", created.ISIN, "figi", created.FIGI, "currency", created.Currency,
@@ -891,37 +603,12 @@ func (r *Resolver) createInstrument(ctx context.Context, src passportSource, typ
 	return created, nil
 }
 
-// faceValue turns a bond's nominal into the minor units the catalog stores,
-// refusing anything the catalog cannot hold BEFORE the insert rather than
-// letting the database say it.
-//
-// Every rule here is one that migration 0012's CHECK constraint or the
-// catalog's HTTP door already states, and neither of those speaks to this
-// caller. The constraint refuses the insert with a raw
-// "instruments_face_value_sound" violation naming a constraint and no
-// instrument (seen, not assumed: with these checks removed, that is verbatim
-// what a zero nominal produces here). The upper bound is worse than that,
-// because the database does not carry it at all — it is stated only at the
-// HTTP door, which this path never goes through, so an unbounded face value
-// simply inserts and the account's positions screen answers 500 from then on,
-// the failure instrument/http.go's own sweep describes. What this adds is the
-// sentence naming which bond and what was wrong with its nominal.
-//
-// A zero nominal is the case that makes this more than tidiness: it is what a
-// broker answering "no nominal for this instrument" looks like once it has
-// been parsed into a MoneyValue, and it would otherwise reach the database as
-// a plain constraint failure in the middle of a sync.
-//
-// NOTHING HERE IS ROUNDED, for the reason the projection gives on the other
-// figures that arrive from this broker (see minorFromDecimal): the gateway's
-// MoneyValue carries nine decimal places, this program holds money in whole
-// minor units, and a program that quietly rounds the difference is a program
-// whose numbers nobody can check. A nominal finer than a minor unit is refused
-// by that name. Rounding it would also walk straight back into the failure this
-// function exists to prevent: a positive nominal below half a minor unit
-// rounds to zero, passes the positivity check above it — which asks about the
-// decimal, not about the result — and reaches the database as the very
-// constraint violation named at the top of this comment.
+// faceValue turns a bond's nominal into stored minor units, refusing what the
+// catalog cannot hold before the insert: zero (a "no nominal" answer, which would
+// fail migration 0012's CHECK mid-sync with no bond named), and anything over the
+// HTTP door's upper bound, which the database does not enforce and which breaks
+// the positions screen. Nothing is rounded (see minorFromDecimal): a nominal finer
+// than a minor unit is refused, and rounding could turn a tiny one into zero.
 func (r *Resolver) faceValue(nominal MoneyValue, brief InstrumentBrief) (int64, error) {
 	refuse := func(what string) error {
 		err := fmt.Errorf("%w: bond %s has a nominal of %s in %q, %s",
